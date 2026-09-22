@@ -14,7 +14,7 @@ use super::request_encoding::{
     validate_request_policy, validate_request_projection_guards_before_encoding,
 };
 use super::request_headers::execution_headers;
-use super::response_body::read_bounded_response_text;
+use super::response_body::read_bounded_response_text_with_capture;
 use super::response_metadata::{
     allowlisted_rate_limit_headers, parse_retry_after_headers, provider_request_id_from_headers,
 };
@@ -25,7 +25,8 @@ use super::transport_diagnostics::{
 };
 use super::wire_capture::{
     ProviderWireRequestCaptureTarget, ProviderWireRequestTraceDispatch,
-    provider_wire_request_capture, publish_wire_request_capture,
+    ProviderWireResponseCapture, ProviderWireResponseCaptureGuard, provider_wire_request_capture,
+    publish_wire_request_capture,
 };
 use super::{ProviderExecutionClient, ProviderExecutionRoute};
 use crate::CredentialExecutionSecret;
@@ -121,7 +122,7 @@ impl ProviderExecutionClient {
     ) -> Result<ResponsesCompactResult, ProviderExecutionFailure> {
         // stream preserves the same one-attempt transport contract for non-session callers.
         // stream 为非会话调用方保留同一单次尝试传输契约。
-        let mut stream = self.stream_responses_compact(route, request, secret, None);
+        let mut stream = self.stream_responses_compact(route, request, secret, None, None);
         while let Some(event) = stream.next().await {
             if let ResponsesCompactEvent::Completed(result) = event? {
                 return Ok(result);
@@ -136,9 +137,12 @@ impl ProviderExecutionClient {
     /// 暴露恰好一次 compact HTTP 尝试，不进行 OAuth 刷新或重试。
     ///
     /// `route`, `request`, and `secret` freeze the admitted request; `wire_request_capture`
-    /// optionally records its final encoded body using the ordinary best-effort trace contract.
+    /// optionally records its final encoded body using the ordinary best-effort trace contract,
+    /// and `wire_response_capture` optionally retains the same pre-parser response bytes the
+    /// ordinary HTTP execution retains.
     /// `route`、`request` 与 `secret` 冻结已准入请求；`wire_request_capture` 可选地通过
-    /// 普通尽力追踪契约记录其最终编码正文。
+    /// 普通尽力追踪契约记录其最终编码正文，`wire_response_capture` 可选地保留与普通 HTTP
+    /// 执行相同的解析前响应字节。
     ///
     /// Returns a lazy stream. Session callers must obtain durable admission before polling it,
     /// persist each observation, and obtain a fresh admission before any subsequent attempt.
@@ -149,6 +153,7 @@ impl ProviderExecutionClient {
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
         wire_request_capture: Option<oneshot::Sender<ProviderWireRequestTraceDispatch>>,
+        wire_response_capture: Option<oneshot::Sender<ProviderWireResponseCapture>>,
     ) -> ResponsesCompactStream {
         // client is immutable transport ownership retained until this attempt ends or is dropped.
         // client 是保留至本次尝试结束或析构的不可变传输所有权。
@@ -171,13 +176,22 @@ impl ProviderExecutionClient {
         // stream owns one physical request and suspends after headers for host durability.
         // stream 持有一次物理请求，并在响应头后暂停以等待宿主持久化。
         let stream = try_stream! {
+            // wireResponseCapture publishes every raw byte already received on early return,
+            // cancellation, and transport failure, exactly like ordinary HTTP execution.
+            // wireResponseCapture 与普通 HTTP 执行一样，在提前返回、取消与传输失败时发布已收到的原始字节。
+            let mut wire_response_capture = ProviderWireResponseCaptureGuard::new(
+                "responses_compact",
+                wire_response_capture,
+            );
             emit_provider_transport_trace(
                 trace_id.as_str(), "responses_compact", "execution_started", &trace_started_at,
             );
             if route.protocol_route.protocol_profile_id != OPENAI_CODEX_RESPONSES_PROFILE_ID {
-                Err(pre_dispatch_failure(
+                let failure = pre_dispatch_failure(
                     "Standalone remote compaction requires the Codex Responses protocol.",
-                ))?;
+                );
+                wire_response_capture.observe_failure("dispatch", &failure);
+                Err(failure)?;
             }
             // request freezes the same route-owned tool input contract used by ordinary HTTP and WebSocket dispatch.
             // request 冻结与普通 HTTP 和 WebSocket 分派相同的路由自有工具输入契约。
@@ -193,15 +207,18 @@ impl ProviderExecutionClient {
             let transport = client
                 .protocols
                 .transport_profile(route.protocol_route.protocol_profile_id.as_str())
-                .map_err(llm_core_protocol_failure)?;
+                .map_err(llm_core_protocol_failure)
+                .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
                 "protocol_ready",
                 &trace_started_at,
             );
-            validate_request_policy(&route, &request)?;
-            validate_request_projection_guards_before_encoding(&route, &request)?;
+            validate_request_policy(&route, &request)
+                .inspect_err(|failure| wire_response_capture.observe_failure("request_policy", failure))?;
+            validate_request_projection_guards_before_encoding(&route, &request)
+                .inspect_err(|failure| wire_response_capture.observe_failure("request_policy", failure))?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -212,7 +229,8 @@ impl ProviderExecutionClient {
             // encoded 在压缩专用字段过滤执行前保留普通请求的投影顺序。
             let encoded = encode_codex_responses_request(&request).map_err(|error| {
                 pre_dispatch_failure(format!("LLM core request encoding failed: {error}"))
-            })?;
+            })
+            .inspect_err(|failure| wire_response_capture.observe_failure("request_encoding", failure))?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -221,7 +239,8 @@ impl ProviderExecutionClient {
             );
             // encoded applies provider-owned model and request overrides without credential material.
             // encoded 应用供应商持有的模型与请求覆盖，但不包含凭据材料。
-            let encoded = project_provider_request(&route, &request, encoded)?;
+            let encoded = project_provider_request(&route, &request, encoded)
+                .inspect_err(|failure| wire_response_capture.observe_failure("request_projection", failure))?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -230,7 +249,8 @@ impl ProviderExecutionClient {
             );
             // encoded adds the exact credential projection only after all public request checks pass.
             // encoded 仅在全部公共请求检查通过后加入精确凭据投影。
-            let mut encoded = project_credential_request(&route, &secret, encoded)?;
+            let mut encoded = project_credential_request(&route, &secret, encoded)
+                .inspect_err(|failure| wire_response_capture.observe_failure("request_projection", failure))?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -238,10 +258,12 @@ impl ProviderExecutionClient {
                 &trace_started_at,
             );
             if encoded.path != "/responses" {
-                Err(pre_dispatch_failure(format!(
+                let failure = pre_dispatch_failure(format!(
                     "Codex Responses compaction requires the `/responses` endpoint, got `{}`.",
                     encoded.path
-                )))?;
+                ));
+                wire_response_capture.observe_failure("request_projection", &failure);
+                Err(failure)?;
             }
             emit_provider_transport_trace(
                 trace_id.as_str(),
@@ -249,7 +271,8 @@ impl ProviderExecutionClient {
                 "endpoint_validated",
                 &trace_started_at,
             );
-            prepare_responses_compact_body(&mut encoded.body)?;
+            prepare_responses_compact_body(&mut encoded.body)
+                .inspect_err(|failure| wire_response_capture.observe_failure("request_projection", failure))?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -263,7 +286,8 @@ impl ProviderExecutionClient {
                 &encoded.headers,
                 &secret,
                 request.cache_scope_id.as_deref(),
-            )?;
+            )
+            .inspect_err(|failure| wire_response_capture.observe_failure("request_headers", failure))?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -278,7 +302,8 @@ impl ProviderExecutionClient {
                     provider_wire_request_capture(
                         "responses_compact", "POST", url.as_str(), &encoded, &headers,
                     ),
-                ).await?;
+                ).await
+                .inspect_err(|failure| wire_response_capture.observe_failure("request_trace", failure))?;
             }
             // transport freezes the same profile's response limits for the unary HTTP call.
             // transport 为一元 HTTP 调用冻结同一协议实现的响应限制。
@@ -319,13 +344,15 @@ impl ProviderExecutionClient {
                     "Provider compaction request to `{url}` exceeded the registered {} ms response-header timeout.",
                     transport.response_headers_timeout_ms
                 ))
-            })?
+            })
+            .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?
             .map_err(|error| {
                 http_send_transport_failure(
                     &error,
                     format!("Provider compaction request to `{url}` failed: {error}"),
                 )
-            })?;
+            })
+            .inspect_err(|failure| wire_response_capture.observe_failure("dispatch", failure))?;
             emit_provider_transport_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -333,6 +360,7 @@ impl ProviderExecutionClient {
                 &trace_started_at,
             );
             let status = response.status();
+            wire_response_capture.observe_http_headers(status.as_u16(), response.headers());
             // Headers are emitted even for 401 so retrying cannot erase a rejected physical request.
             // 即使是 401 也产出响应头，避免重试抹去被拒绝的物理请求。
             yield ResponsesCompactEvent::TransportObserved {
@@ -361,14 +389,20 @@ impl ProviderExecutionClient {
                     retry_after.clone(),
                     compact_request_started_at,
                     compact_request_timeout,
+                    Some(&mut wire_response_capture),
                 )
-                .await?;
+                .await
+                .inspect_err(|failure| wire_response_capture.observe_failure("error_response_body", failure))?;
                 let body = project_response_record_text(
                     &route.response_projection_profiles,
                     body.as_str(),
                 )
-                .map_err(protocol_failure)?;
-                Err(http_failure(status.as_u16(), retry_after, body.as_str()))?;
+                .map_err(protocol_failure)
+                .inspect_err(|failure| wire_response_capture.observe_failure("error_response_body", failure))?;
+                wire_response_capture.set_outcome("responses_compact_http_error");
+                let failure = http_failure(status.as_u16(), retry_after, body.as_str());
+                wire_response_capture.observe_failure("headers", &failure);
+                Err(failure)?;
             } else {
             let content_type = response
                 .headers()
@@ -380,9 +414,11 @@ impl ProviderExecutionClient {
                 .next()
                 .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
             {
-                Err(compact_protocol_failure(format!(
+                let failure = compact_protocol_failure(format!(
                     "Provider compaction response from `{url}` must use application/json, got `{content_type}`."
-                )))?;
+                ));
+                wire_response_capture.observe_failure("headers", &failure);
+                Err(failure)?;
             }
             let body = read_responses_compact_body_with_timeout(
                 response,
@@ -392,28 +428,34 @@ impl ProviderExecutionClient {
                 None,
                 compact_request_started_at,
                 compact_request_timeout,
+                Some(&mut wire_response_capture),
             )
-            .await?;
+            .await
+            .inspect_err(|failure| wire_response_capture.observe_failure("body_transport", failure))?;
             let mut value: Value = serde_json::from_str(body.as_str()).map_err(|error| {
                 compact_protocol_failure(format!(
                     "Provider compaction response from `{url}` is invalid JSON: {error}"
                 ))
-            })?;
+            })
+            .inspect_err(|failure| wire_response_capture.observe_failure("response_projection", failure))?;
             crate::provider_manifest::validate_runtime_json_bounds(
                 &value,
                 "Provider compaction response",
             )
-            .map_err(|error| compact_protocol_failure(error.to_string()))?;
+            .map_err(|error| compact_protocol_failure(error.to_string()))
+            .inspect_err(|failure| wire_response_capture.observe_failure("response_projection", failure))?;
             apply_response_projection_profiles(&route.response_projection_profiles, &mut value)
-                .map_err(protocol_failure)?;
+                .map_err(protocol_failure)
+                .inspect_err(|failure| wire_response_capture.observe_failure("response_projection", failure))?;
             emit_responses_compact_response_shape_trace(
                 trace_id.as_str(),
                 &value,
                 &trace_started_at,
             );
-            yield ResponsesCompactEvent::Completed(
-                decode_responses_compact_result(&value, url.as_str())?,
-            );
+            let result = decode_responses_compact_result(&value, url.as_str())
+                .inspect_err(|failure| wire_response_capture.observe_failure("response_projection", failure))?;
+            wire_response_capture.set_outcome_if_unresolved("responses_compact_completed");
+            yield ResponsesCompactEvent::Completed(result);
             }
         };
         Box::pin(stream.map(move |result| {
@@ -532,9 +574,11 @@ fn decode_responses_compact_result(
 /// # Parameters
 /// 参数
 /// `response`, `max_bytes`, `url`, `status`, and `retry_after` retain the normal bounded body
-/// contract; `request_started_at` and `request_timeout` cover the entire dispatched unary request.
+/// contract; `request_started_at` and `request_timeout` cover the entire dispatched unary request;
+/// `capture` optionally retains every raw transport chunk before this reader consumes it.
 /// `response`、`max_bytes`、`url`、`status` 与 `retry_after` 保留常规有界正文契约；
-/// `request_started_at` 与 `request_timeout` 覆盖完整的已分派一元请求。
+/// `request_started_at` 与 `request_timeout` 覆盖完整的已分派一元请求；`capture` 可选地在读取器
+/// 消费前保留每个原始传输 chunk。
 ///
 /// # Returns
 /// 返回值
@@ -548,6 +592,7 @@ async fn read_responses_compact_body_with_timeout(
     retry_after: Option<RetryAfterHint>,
     request_started_at: Instant,
     request_timeout: Duration,
+    capture: Option<&mut ProviderWireResponseCaptureGuard>,
 ) -> Result<String, ProviderExecutionFailure> {
     // remaining prevents a successful header response from resetting the official unary deadline.
     // remaining 避免成功收到响应头后重新计算官方一元请求截止时间。
@@ -556,13 +601,14 @@ async fn read_responses_compact_body_with_timeout(
     // result 区分完整正文、有界正文读取失败与完整请求截止超时。
     let result = tokio::time::timeout(
         remaining,
-        read_bounded_response_text(
+        read_bounded_response_text_with_capture(
             response,
             max_bytes,
             url,
             status,
             retry_after,
             request_timeout,
+            capture,
         ),
     )
     .await;
@@ -584,3 +630,5 @@ async fn read_responses_compact_body_with_timeout(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_negative_chain;
