@@ -175,6 +175,47 @@ fn transient_reappearance_allocates_a_new_occurrence_id() {
     );
 }
 
+/// Verifies a session-scoped transient insert still projects a turn-scoped host block.
+/// 验证会话作用域的临时插入仍投影为回合作用域的宿主块。
+///
+/// V1 provider projection rejects any transient host block whose scope is not `turn`, and the expiry
+/// event for the same item already declares `turn`; the projected insertion must agree with it.
+/// V1 供应商投影拒绝作用域非 `turn` 的临时宿主块，而同一项的实效事件已经声明 `turn`；
+/// 投影出的插入必须与其一致。
+#[test]
+fn session_scoped_transient_insert_projects_turn_scoped_host_block() {
+    let mut state = ContextInjectionState::default();
+    // The default insert scope is the session, which is how producers actually insert.
+    // 默认插入作用域为会话，这是生产者的实际插入方式。
+    let inserted = transient_insert("hooked", "hook-provided instruction", 1);
+    assert_eq!(inserted.scope, InjectionScope::Session);
+    state.apply_insert(inserted, "1");
+    state.apply_insert(persistent_insert("profile_delta", "profile memory"), "1");
+    let view = state.resolve_view();
+    let transient_block = view
+        .host_blocks
+        .iter()
+        .find(|block| block.transient)
+        .expect("transient host block");
+    assert_eq!(transient_block.scope, String::from("turn"));
+    // A persistent block keeps its declared group lifetime; only the transient block is normalized.
+    // 持久块保留其声明的分组生命周期；只有临时块被归一化。
+    let mut project_insert = persistent_insert("profile_project", "project body");
+    project_insert.scope = InjectionScope::Project;
+    state.apply_insert(project_insert, "2");
+    let view = state.resolve_view();
+    let project_block = view
+        .host_blocks
+        .iter()
+        .find(|block| block.body == "project body")
+        .expect("project-scoped persistent host block");
+    assert_eq!(project_block.scope, String::from("project"));
+    assert!(
+        !project_block.transient,
+        "project block must stay persistent"
+    );
+}
+
 /// Verifies expired transient injections are removed before compaction drafts are rendered.
 /// 验证已失效临时注入会在压缩候选状态渲染前被移除。
 #[test]

@@ -13,6 +13,20 @@ use crate::types::{
 use crate::util::{normalize_content, normalize_renderer_id, normalize_tag, stable_content_hash};
 use serde_json::Value;
 
+/// Provider-visible scope of one turn-lifetime transient injection block.
+/// 单条回合生命周期临时注入块的供应商可见作用域。
+///
+/// A transient item is consumed once per logical turn and invalidated with the same turn identity
+/// that its expiry event carries, so its host block must declare the turn scope even when the
+/// producer inserted it into a session-scoped group.
+/// 临时项每个逻辑回合消费一次，并与其实效事件携带同一回合身份失效，因此即使生产者把它插入
+/// 会话作用域分组，其宿主块也必须声明回合作用域。
+pub const TRANSIENT_TURN_SCOPE: &str = "turn";
+
+/// Provider-visible scope of one session-lifetime persistent injection block.
+/// 单条会话生命周期持久注入块的供应商可见作用域。
+pub const PERSISTENT_SESSION_SCOPE: &str = "session";
+
 /// Builds one deterministic append-only marker for an expired injection item.
 /// 为已失效注入内容构建一个确定性的追加式标记。
 fn expiry_event_for_item(
@@ -473,13 +487,23 @@ impl ContextInjectionState {
                         .clone()
                         .or_else(|| item.last_consumed_turn_id.clone()),
                     transient: group.kind == InjectionKind::Transient,
-                    scope: match group.scope {
-                        InjectionScope::Global => "global",
-                        InjectionScope::Project => "project",
-                        InjectionScope::Session => "session",
-                        InjectionScope::Turn => "turn",
-                    }
-                    .to_string(),
+                    // A transient block is turn-lifetime by construction: its expiry event is keyed by
+                    // the same logical turn and consumed once per turn boundary, so it must declare the
+                    // turn scope even when the producer inserted it into a session-scoped group.
+                    // Persistent blocks keep the declared group lifetime unchanged.
+                    // 临时块按构造即为回合生命周期：其实效事件以同一逻辑回合为键，且每回合边界消费
+                    // 一次，因此即使生产者把它插入会话作用域分组也必须声明回合作用域。
+                    // 持久块保留声明的分组生命周期不变。
+                    scope: match group.kind {
+                        InjectionKind::Transient => TRANSIENT_TURN_SCOPE.to_string(),
+                        InjectionKind::Persistent => match group.scope {
+                            InjectionScope::Global => "global",
+                            InjectionScope::Project => "project",
+                            InjectionScope::Session => PERSISTENT_SESSION_SCOPE,
+                            InjectionScope::Turn => TRANSIENT_TURN_SCOPE,
+                        }
+                        .to_string(),
+                    },
                     body: item_body,
                 });
             }
