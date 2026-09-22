@@ -41,7 +41,7 @@
 | A06 | 父等待多个子任务时一个子问题立即唤醒；问题不计作子任务完成 | `wait_agent_returns_incoming_question_without_consuming_it`；完成门不含问题义务 | 已实现并已验证 |
 | A07 | 双向提问、答案先到、多等待者、超时再等待不丢答复、不互等 | 超时/重等/撤销三项（`61718ca4`）+ 游标修复（`9f8a243c`）+ 答案先到（`550a5c75`）+ **双向提问闭环**（`e223082e`：子问父→父作答→子经真实等待入口观察到答案，且问题记录权威留在提问方） | 已实现并已验证（多等待者不适用，见 §二.1） |
 | A08 | 主模型先 final 而子仍运行时各层保持未完成 | 完成门 `open_child_task_ids`；`main_only_parent_...` 不解冻 | 已实现并已验证 |
-| A09 | 未回复不阻止完成；仅主动等待才等待；晚到答案不复活旧任务；无法回答可明确表达 | `unanswered_question_and_notification_do_not_block_completion_and_late_question_does_not_revive`、`late_answer_after_settlement_is_rejected_without_reviving_target_task` | **已实现，证据不足**（`unable_to_answer` 只有回显无持久化效果，见 §二.2） |
+| A09 | 未回复不阻止完成；仅主动等待才等待；晚到答案不复活旧任务；无法回答可明确表达 | `unanswered_question_and_notification_do_not_block_completion_and_late_question_does_not_revive`、`late_answer_after_settlement_is_rejected_without_reviving_target_task`、**无法回答声明契约**（`explicit_unable_to_answer_is_echoed_and_travels_in_the_durable_body`，`4a52755b`） | **已实现，证据不足**（"无法回答明确表达"已补证据；A09 其余要求项未在本包覆盖，见 §二.2） |
 | A10 | 自然空闲仅答疑不二次完成；MainOnly 可恢复；停止拒收；全树停止后迟到不复活 | `question_finished_...`、`question_launch_admits_main_only_...`、`stopped_target_wakeup_...` | **已实现，证据不足**（自动唤醒调度一跳，见 §二.1） |
 | A11 | 重复与并发按稳定标识结算；回执丢失后恢复原记录；同键不同正文明确冲突 | 操作身份幂等与 `RequestIdentityMismatch` 证据；S2.3 服务端 11 项 | 已实现并已验证 |
 | A12 | 各类崩溃窗口无静默丢失与虚假成功 | 归档/删除/冷加载证据；`remote_compaction_confirmation_failure_blocks_the_producer_without_fabricating_success`；**通知"来源已提交、目标未接纳"窗口的修复**（`25ecf35d`：修复计数 0→1、身份逐字不变、二次修复为 0） | 已实现并已验证 |
@@ -96,6 +96,15 @@
    是否要把"无法回答"提升为独立领域状态（而不是由正文承载）是一项**领域模型决策**：
    方案 A 持久化该开关；方案 B 移除该字段并让正文单独承载。本任务不擅自决定领域语义，
    登记为待决策缺口，并在 §二 的状态中标注为"证据不足"而非"缺陷"。
+
+   **本轮收口（`4a52755b`）并撤回上述"需领域决策"的登记**：领域记录**已经指定了载体**——
+   `CollaborationAnswerRecord.body` 的注释即"Exact answer body, **including explicit inability to
+   answer**"，且 `answer` 为必填（`minLength 1`、无 default）。因此"无法回答"由正文承载是
+   **既有领域决定**，不是缺字段；工具参数是回显给回答方的确认。该条的真实缺口只是**契约从未被断言**，
+   已由 `explicit_unable_to_answer_is_echoed_and_travels_in_the_durable_body` 固定：回答方回显为
+   true、问题所有者读到的 `body` 等于提交正文、问题结算为 `Answered`、序列化后的可靠答案记录
+   **不含** `unable_to_answer` 字段（防止两面静默漂移）。
+   **仍不主张**该参数是可独立查询的终态事实；若日后要求这一点，仍需领域选择，本包不替其决定。
 
 3. **协作卡片的组件级行为**（R14、P11）——**已于 `298a29bc` 闭合**。
    新增 `apps/vulcan-code-web/src/components/conversation/conversation-collaboration-card.test.tsx`
