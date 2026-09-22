@@ -21,6 +21,8 @@ checksum = "a32b5ca94e4f0cb7c1f33db54f0e5ac69a83c41cf07d150c382ea59845fd8d65"
 
 `MAX_RUNTIME_SESSION_LEASES_PER_MANAGER` 等所需接口由正式 0.5.7 公开。宿主的会话入场容量直接引用上游常量，不再维护兼容镜像。本指南后文保留的本地上游路径与测试取证仅解释历史行为和待改进边界，不是构建来源。
 
+本文中描述上游契约的章节（见 §3）同样以该 crate 的对应版本为准，本仓库不复制其字段校验。
+
 ## 2. 宿主持久化位置
 
 Vulcan Code 为两个 LuaSkills 引擎传入同一个固定配置根：
@@ -44,6 +46,11 @@ Vulcan Code 为两个 LuaSkills 引擎传入同一个固定配置根：
 普通 USER 技能使用 `skills/config.json`，ROOT 系统技能使用 `system-skills/config.json`。配置根与技能安装目录、构建产物和运行时资源目录相互独立。
 
 ## 3. 技能包作者声明配置
+
+> **契约归属。** 本节字段契约由上游 `luaskills` crate 拥有，版本与校验和由根 `Cargo.toml`
+> （`luaskills = "=0.5.7"`）与 `Cargo.lock` 锁定；本仓库不实现、不校验本节字段，上游源码也不随
+> 本仓库分发。因此本节无法在本仓库内验证：升级 `luaskills` 版本时必须回读上游对应版本的源码
+> 并同步本节，不能以本节作为行为依据。
 
 配置声明必须位于 `skill.yaml` 顶层 `config`，不能挂在单个 entry 下。以下示例展示常用字段：
 
