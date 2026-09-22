@@ -197,7 +197,11 @@ fn session_scoped_transient_insert_projects_turn_scoped_host_block() {
         .iter()
         .find(|block| block.transient)
         .expect("transient host block");
-    assert_eq!(transient_block.scope, String::from("turn"));
+    assert_eq!(
+        transient_block.scope,
+        crate::TRANSIENT_TURN_SCOPE,
+        "a session-scoped transient insert must project the turn scope"
+    );
     // A persistent block keeps its declared group lifetime; only the transient block is normalized.
     // 持久块保留其声明的分组生命周期；只有临时块被归一化。
     let mut project_insert = persistent_insert("profile_project", "project body");
@@ -209,7 +213,11 @@ fn session_scoped_transient_insert_projects_turn_scoped_host_block() {
         .iter()
         .find(|block| block.body == "project body")
         .expect("project-scoped persistent host block");
-    assert_eq!(project_block.scope, String::from("project"));
+    assert_eq!(
+        project_block.scope,
+        String::from("project"),
+        "a project-scoped persistent block must keep its declared group scope"
+    );
     assert!(
         !project_block.transient,
         "project block must stay persistent"

@@ -14,9 +14,10 @@ pub use render::{
     InjectionItemRenderer, InjectionPanelCard, InjectionPanelItem, InjectionRenderOptions,
     InjectionRendererRegistry, ResolvedInjectionHostBlock, ResolvedInjectionView,
 };
+pub use state::{PERSISTENT_SESSION_SCOPE, TRANSIENT_TURN_SCOPE};
 pub use types::{
-    ContextInjectionState, InjectionCompactionPolicy, InjectionHelper, InjectionInsert,
-    InjectionExpiryEvent, InjectionInsertItem, InjectionKind, InjectionPruneReport, InjectionScope,
+    ContextInjectionState, InjectionCompactionPolicy, InjectionExpiryEvent, InjectionHelper,
+    InjectionInsert, InjectionInsertItem, InjectionKind, InjectionPruneReport, InjectionScope,
     InjectionStateGroup, InjectionStateItem,
 };
 
