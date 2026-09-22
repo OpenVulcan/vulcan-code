@@ -28,7 +28,7 @@
 
 - [x] S1.1 历史编辑清除来源尚未确认的目标回执：已复现并修复。编辑准入改为同时锁住目标会话与全部同伴，并在持锁期间完成发布，未确认回执不再可能被丢弃。证据：`history_edit_preserves_unacknowledged_target_settlement`、`history_edit_succeeds_after_source_settlement_acknowledgement`、`edit_admission_holds_target_lifecycle_gate`。提交 `680a54cd`、`6cf4a777`。
 - [x] S1.2 归档后实际模型回答的服务链验证：归档保留开放回合、辅助执行与已接纳投递，模型回答经 `reply_question` 完成可靠结算并回写来源确认。证据：`archived_target_model_answer_completes_durable_settlement`（断言来源 `question_state == answered`、出站投递带 `settlement_ack`，归档目标保留入站 `settlement`）。提交 `6cf4a777`。
-- [ ] S1.3 对照 A08—A12、A17 销项停止、MainOnly、仅答疑和迟到消息组合；优先使用已有证据，只补真实缺口。本轮已新增真实服务入口驱动的三项组合证据（停止目标排队任务终态失败且不自动恢复、已停止主会话只接纳所属子问题、未回答问题与通知不阻塞完成且迟到问题不复活任务），待核对整合。
+- [x] S1.3 对照 A08—A12、A17 销项停止、MainOnly、仅答疑和迟到消息组合。四个场景中只有三个存在真实缺口，仅答疑结束已有 5 项真实收尾器证据，**未为凑数新增测试**。新增 4 项真实服务级证据：`stopped_target_wakeup_fails_queued_task_without_resuming_business`（驱动真实自动恢复入口，证明全树停止不自动恢复旧任务）、`main_only_parent_admits_owned_child_question_without_resuming_goal_or_task`（真实嵌入子任务经原生端口送达 MainOnly 父会话，断言模式/运行控制/回合/输入计数四元组不变且不扩大到无关发送者）、`unanswered_question_and_notification_do_not_block_completion_and_late_question_does_not_revive`（真实完成门返回完成分支，且迟到问题不复活已完成任务）、`late_answer_after_settlement_is_rejected_without_reviving_target_task`（服务端口拒绝已结算问题的迟到回答，双方修订不变且磁盘重载一致）。提交 `3ce58418`。**未验证边界**：非确定性异常退出的机制未定证（候选：不可取消的阻塞生命周期写入器与运行时析构等待；已给出定证方法）；未驱动真实 WebUI/RPC 与运行中的真实 provider 流；未驱动真实停止事务；MainOnly 用例未创建 Active Goal（生产 Goal 分发权威还要求活动回合来源为 Goal 续跑，普通用户回合下该谓词恒为空）。
 
 ### S2 压缩收尾
 
@@ -45,7 +45,7 @@
 
 ### S4 协作与界面
 
-- [ ] S4.1 双向等待、先到答案、多等待者、超时重等及问题／通知恢复逐项对应既有测试，补未覆盖组合。
+- [ ] S4.1 双向等待、先到答案、多等待者、超时重等及问题／通知恢复逐项对应既有测试，补未覆盖组合。已覆盖：超时不消费问题且后续等待仍可观察（两次等待持有独立操作身份）、调用方游标选择等待基线且不推进问题（**实测纠正**：上报修订是所属会话的可靠修订，因此以它重新等待返回快照而非超时，原断言把实现假设当成了产品契约，已改写为检验真实语义）、超时后撤销结算问题并使后续等待不再报告待处理。证据：`question_wait_timeout_does_not_consume_the_question_for_a_later_wait`、`question_wait_cursor_selects_the_baseline_without_advancing_the_question`、`cancel_after_timeout_settles_the_question_and_blocks_further_waiting`。提交 `61718ca4`。**剩余**：答案先到、多等待者、双向互问、通知恢复四项仍未覆盖。
 - [x] S4.2 目录、读取、发送、回复及实际正文交付逐动作核对授权。已核实六种授权动作逐项匹配、跨项目必需授权、撤销即时生效；补 Ask/Notify 端口级逐动作与撤销证据。提交 `6a65e457`。
 - [ ] S4.3 当前界面、分页、多窗口重连及消息类型展示复验。已有证据（本轮实测）：`conversation-event-display-projection.test.ts`（16 项，含"协作信封在 HostOnly 时间线上保持严格可见"与"通知信封是独立 HostOnly 时间线节点"）、`conversation-event-window-store.test.ts`（47 项）、`conversation-event-window-controller.test.ts`（39 项，含分页）、`selected-conversation-event-window-registry.test.ts`（17 项，含多窗口隔离）、`conversation-event-window-react.test.tsx`（4 项），共 123 项通过；`tsc -b` 类型检查通过。**未覆盖**：`conversation-collaboration-card.tsx` 组件本身没有任何导入它的测试，其挂载、回调与渲染行为只有类型检查，没有行为证据。
 - [ ] S4.4 工具注册、模式过滤、执行、结果投影完整暴露链复核。已完成 G1（Plan 可见性过期断言）、G2（七条协作命令端口级分发测试）、G3（`wait_agent` 身份重复定义）、G8（协作工具文档注释不可逆损坏）。剩余 G4（`reply_question.unable_to_answer` 只有回显、无持久化效果，需领域模型决策）、G5（仅答疑模式工具收窄范围）、G6/G9（低优先级）。
