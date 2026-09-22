@@ -16,6 +16,7 @@ use crate::agent_runtime::provider_request_telemetry::{
 use crate::agent_runtime::provider_runtime_context::RuntimePromptLayers;
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_vulcan::{
+    ProviderApiTraceAttemptCapture, ProviderApiTraceAttemptState, ProviderApiTraceRenderIdentity,
     VulcanPublicContractAdapter, resolved_public_output_token_limit,
 };
 use tokio::sync::mpsc::UnboundedSender;
@@ -222,6 +223,7 @@ pub(super) async fn execute_durable(
     candidate: ProviderRequestPreparationCandidate,
     plan: &CompactionPlan,
     events: &UnboundedSender<PromptCompactionStreamEvent>,
+    provider_request_trace_enabled: bool,
 ) -> Result<PromptCompactionExecution, String> {
     // The tracker retains a distinct request identity and independent usage for each admitted attempt.
     // 跟踪器为每次准入尝试保留不同的请求身份及独立用量。
@@ -230,6 +232,9 @@ pub(super) async fn execute_durable(
         &preparation,
         None,
     )?);
+    // traceAttemptState preserves the ordinary per-API physical-attempt numbering across retries.
+    // traceAttemptState 跨重试保留普通请求相同的按 API 物理尝试编号。
+    let trace_attempt_state = std::sync::Mutex::new(ProviderApiTraceAttemptState::default());
     let mut oauth_replay_used = false;
     let mut request_count = 0usize;
     loop {
@@ -261,13 +266,42 @@ pub(super) async fn execute_durable(
                 });
             }
         };
-        let (request, snapshot, budget) = match permit {
+        let (request, snapshot, budget, trace_capture) = match permit {
             PreparedPhysicalApi::SessionV1 {
                 exact_request,
+                controller_snapshot,
                 request_snapshot,
                 context_budget,
+                core_start,
+                provider_api_trace_store,
                 ..
-            } => (exact_request, request_snapshot, context_budget),
+            } => {
+                // The native compaction attempt reuses the ordinary session trace owner carried by
+                // its own physical permit; it never infers the frozen opt-in decision from it.
+                // 原生压缩尝试复用自身物理许可携带的普通会话追踪 owner；绝不据此推断冻结开关决策。
+                let trace_capture = ProviderApiTraceAttemptCapture::start(
+                    provider_request_trace_enabled,
+                    &trace_attempt_state,
+                    provider_api_trace_store,
+                    core_start.api_call_id,
+                    ProviderApiTraceRenderIdentity {
+                        provider_id: execution.route.provider.id.clone(),
+                        session_scope_id: preparation.session_id.to_string(),
+                        model_id: execution.model.id.clone(),
+                        route: execution.route.clone(),
+                    },
+                    controller_snapshot
+                        .messages
+                        .last()
+                        .map(|message| message.id.clone()),
+                );
+                (
+                    exact_request,
+                    request_snapshot,
+                    context_budget,
+                    trace_capture,
+                )
+            }
             PreparedPhysicalApi::RequestConfigurationChanged => {
                 tracker.reject_prepared_request();
                 return Err(String::from(
@@ -301,11 +335,20 @@ pub(super) async fn execute_durable(
             }
         };
         let rejected_revision = secret.revision();
+        // traceEndpoints exist only when the frozen opt-in is enabled and the session owner
+        // reserved one sequence; disabled tracing keeps the compact dispatch byte-for-byte opaque.
+        // traceEndpoints 仅在冻结开关启用且会话 owner 预留了一个序号时存在；关闭追踪时压缩分派保持
+        // 与之前完全一致。
+        let (trace_request_endpoint, trace_response_endpoint) = match trace_capture {
+            Some(capture) => (Some(capture.request), Some(capture.response)),
+            None => (None, None),
+        };
         let mut stream = execution.client.stream_responses_compact(
             execution.route.clone(),
             request,
             secret,
-            None,
+            trace_request_endpoint,
+            trace_response_endpoint,
         );
         let mut terminal = None;
         while let Some(event) = stream.next().await {

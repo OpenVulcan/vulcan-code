@@ -38,7 +38,12 @@ pub(crate) use message_projection::build_responses_compaction_messages;
 pub(crate) use request::{
     VulcanPublicContractRequest, project_public_tool_definitions, resolve_public_native_tools,
 };
-use trace::ProviderApiTraceAttemptState;
+// The session-owned trace owner is reusable by every physical Provider dispatch, including the
+// native compaction path that owns no controller adapter instance.
+// 会话所属追踪 owner 可被每一次真实 Provider 分派复用，包括没有控制器适配器实例的原生压缩路径。
+pub(crate) use trace::{
+    ProviderApiTraceAttemptCapture, ProviderApiTraceAttemptState, ProviderApiTraceRenderIdentity,
+};
 
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。

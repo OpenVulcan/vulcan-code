@@ -98,8 +98,16 @@ async fn verify_compact_attempt_boundary(status: u16) {
     });
     // stream exposes one attempt and has no access to OAuth renewal.
     // stream 暴露一次尝试且无法访问 OAuth 续期。
-    let mut stream =
-        client.stream_responses_compact(route, minimal_request(), secret, Some(capture_sender));
+    let mut stream = client.stream_responses_compact(
+        route,
+        minimal_request(),
+        secret,
+        Some(capture_sender),
+        // This fixture observes the request wire boundary only; paired artifact capture is covered
+        // by the session-owned compaction trace regression.
+        // 本夹具只观察请求线路边界；成对制品捕获由会话持有的压缩追踪回归覆盖。
+        None,
+    );
     // observed must arrive while the response body is still unavailable.
     // observed 必须在响应正文仍不可用时到达。
     let observed = tokio::time::timeout(Duration::from_secs(5), stream.next())
