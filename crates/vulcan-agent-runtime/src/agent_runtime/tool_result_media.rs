@@ -507,4 +507,52 @@ mod tests {
         });
         assert!(canonicalize_tool_model_output(invalid_base64).is_err());
     }
+
+    /// Verifies an envelope from an unknown contract version is refused instead of being reinterpreted.
+    /// 验证来自未知契约版本的信封会被拒绝，而不是被重新解释。
+    ///
+    /// # Notes
+    /// 说明
+    /// The version is read before any content block is parsed, so a future version must fail on the
+    /// version boundary itself and must never be treated as the current shape. A future version is used
+    /// rather than a past one because this contract is unreleased and keeps no historical form.
+    /// 版本在任何内容块被解析之前读取，因此未来版本必须在版本边界本身失败，绝不能被当成当前形态。
+    /// 这里取未来版本而非过去版本，因为本契约尚未发布、不保留历史形态。
+    #[test]
+    fn media_output_rejects_unknown_envelope_version() {
+        let canonical = canonicalize_tool_model_output(mcp_media_result())
+            .expect("valid MCP media should canonicalize");
+        let mut envelope: Value =
+            serde_json::from_str(canonical.as_str().expect("media output should be a string"))
+                .expect("the durable envelope must be JSON");
+        // The declared version of the exact canonical bytes, before any mutation.
+        // 精确规范字节在被修改之前所声明的版本。
+        let declared = envelope[TOOL_RESULT_MEDIA_MARKER].clone();
+        // Control: these exact bytes at their declared version do project, so a later refusal is
+        // attributable to the version and not to the fixture being malformed.
+        // 对照：这些精确字节在其声明版本下确实可以投影，因此后续拒绝可归因于版本而非夹具本身畸形。
+        assert!(
+            project_tool_result_content(
+                envelope.to_string().as_str(),
+                vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID,
+            )
+            .is_ok(),
+            "the unmodified canonical envelope must project"
+        );
+        envelope[TOOL_RESULT_MEDIA_MARKER] =
+            Value::from(u64::from(TOOL_RESULT_MEDIA_ENVELOPE_VERSION) + 1);
+        let error = project_tool_result_content(
+            envelope.to_string().as_str(),
+            vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID,
+        )
+        .expect_err("an unknown envelope version must be refused");
+        assert!(
+            error.contains("unsupported"),
+            "the refusal must name the version boundary: {error}"
+        );
+        assert_ne!(
+            declared, envelope[TOOL_RESULT_MEDIA_MARKER],
+            "the mutation must actually change the declared version"
+        );
+    }
 }
