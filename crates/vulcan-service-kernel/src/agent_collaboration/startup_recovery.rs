@@ -261,3 +261,65 @@ pub(crate) fn start_collaboration_recovery(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vulcan_session_core::v1::collaboration::{
+        CollaborationDeliveryId, CollaborationInboundNotificationRecord,
+        CollaborationNotificationId, CollaborationNotificationState, CollaborationOperationId,
+        CollaborationParticipant,
+    };
+
+    /// A stuck inbound notification alone must be visible to the session-level recovery gate.
+    /// 单独滞留的入站通知必须能被会话级恢复闸门看见。
+    ///
+    /// # Notes
+    /// 说明
+    /// `project_collaboration_before_api` selects `Accepted` inbound notifications that were never
+    /// projected, so that state is reachable and is meant to be projected. This test pins whether the
+    /// startup gate that decides to load a session at all also notices it. It deliberately asserts the
+    /// **current** behaviour so a later change is a conscious decision rather than a silent one.
+    /// `project_collaboration_before_api` 会选取已接纳但从未投影的入站通知，因此该状态可达且本应被投影。
+    /// 本测试固定"决定是否加载会话"的启动闸门是否也注意到它，并刻意断言**当前**行为，
+    /// 使日后改变成为有意识的决定而非静默漂移。
+    #[test]
+    fn accepted_but_unprojected_inbound_notification_is_not_a_session_level_recovery_trigger() {
+        let participant = |session: &str| CollaborationParticipant {
+            session_id: session.to_owned(),
+            root_session_id: session.to_owned(),
+            project_id: String::from("project-1"),
+            segment_generation: 1,
+            turn_id: None,
+            task_id: None,
+        };
+        let mut collaboration = CollaborationState::default();
+        // The record is accepted by the target but carries no projection proof.
+        // 该记录已被目标接纳，但不带任何投影证明。
+        collaboration.inbound_notifications.insert(
+            CollaborationNotificationId::try_new("notification-1").unwrap(),
+            CollaborationInboundNotificationRecord {
+                notification_id: CollaborationNotificationId::try_new("notification-1").unwrap(),
+                delivery_id: CollaborationDeliveryId::try_new("delivery-1").unwrap(),
+                source_operation_id: CollaborationOperationId::try_new("operation-source").unwrap(),
+                operation_id: CollaborationOperationId::try_new("operation-accept").unwrap(),
+                source: participant("session-source"),
+                target: participant("session-target"),
+                body: String::from("child reached validation"),
+                state: CollaborationNotificationState::Accepted,
+                failure: None,
+                target_revision: 3,
+                projected_seq: None,
+                projected_input_id: None,
+                projected_turn_id: None,
+                accepted_at_ms: 10,
+                updated_at_ms: 11,
+            },
+        );
+        assert!(
+            !needs_delivery_recovery(&collaboration),
+            "current behaviour: an accepted-but-unprojected notification does not by itself make the \
+             startup gate load this session; if this changes, update S5 §三 which records it"
+        );
+    }
+}
