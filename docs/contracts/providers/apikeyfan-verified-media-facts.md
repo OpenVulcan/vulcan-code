@@ -57,7 +57,22 @@
 
 - 结论：`size` 主要决定目标宽高比，不承诺按请求像素原尺寸输出；横屏、方图、竖屏都稳定在约 157 万像素预算；`quality: "high"` 被接受但不突破该预算；最终宽高必须以解码后的实际文件为准。
 - **带参考图的生成尚未验证**：其在 apikey.fun 上的实际入口、图片字段与请求格式未知，**禁止由图片编辑接口反向推导**。
-- 供应商 skill 包补充：其默认图片模型 ID 为 `gpt-image-2.5-sunburst`，并允许通过 `--model` 传入网关上其他图片模型（如 `grok-imagine-image-quality`、`grok-imagine-image`）；`gpt-image-2.5-flare` 由用户提供，尚无第三方佐证。
+**两个 2.5 姊妹模型（官方资料 + 用户确认）**
+
+`gpt-image-2.5-sunburst` 与 `gpt-image-2.5-flare` 是同一代的两个模型，能力相同，差别只在质量与耗时的权衡：
+
+| 模型 | 官方定位 | 质量 | 耗时 | 单价 |
+| --- | --- | --- | --- | --- |
+| `gpt-image-2.5-sunburst` | 编辑精度与精细控制（premium visual workflows） | 更高 | **明显更长** | 与 flare 相同 |
+| `gpt-image-2.5-flare` | 高频日常生成（fast, high-quality everyday） | 略低 | 更快 | 与 sunburst 相同 |
+
+- 官方文档原话：*"Choose Sunburst for workflows where editing precision matters most, and Flare for fast, high-quality everyday image generation."*
+- 两者 token 单价相同，**代价是时间而不是费用**；官方在 2.5 上重标了质量档位（2.5 `high` 的 token 预算约等于 `gpt-image-2` 的 `medium`，2.5 `max` 约等于旧的 `high`，并新增 `xhigh`）。
+- 供应商 skill 包默认使用 `gpt-image-2.5-sunburst`，并允许 `--model` 传入其他网关图片模型（如 `grok-imagine-image-quality`、`grok-imagine-image`）。
+- **未验证**：中转侧是否接受 2.5 新增的 `xhigh` / `max` 质量档位，以及 2.5 系列在中转侧的实际尺寸行为。
+
+官方依据：[GPT-Image-2.5 Sunburst 模型页](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst)、[ChatGPT Images 2.5 发布公告](https://openai.com/index/introducing-chatgpt-images-2-5)。
+第三方对比（非官方，其中社区延迟与排行榜数据已标注为社区来源）：[GPT-Image-2.5 Flare vs Sunburst vs gpt-image-2](https://apidog.com/blog/gpt-image-2-5-flare-vs-sunburst-vs-gpt-image-2/)。
 
 <a id="edit-boundary"></a>
 ## 四、图片编辑：为何本仓库不暴露（证据 + 决策）
@@ -106,6 +121,6 @@
 - `grok-imagine-video-1.5` 在中转侧的真实可用性：`/v1/models` 未返回该 ID，当前声明仅依据用户确认，尚无真实调用样例。
 - `grok-imagine-video` 的多参考图、参考音频、15 秒边界与 `480p` 输出的真实调用结果，以及失败、取消、超时与内容下载的错误格式。
 - `grok-imagine-image` 与 `grok-imagine-image-quality` 除单样本、原始计费刻度之外的稳定能力差异。
-- `gpt-image-2.5-sunburst` 与 `gpt-image-2.5-flare` 的官方能力与尺寸行为，除「供应商 skill 包将其作为默认图片模型」之外。
+- `gpt-image-2.5-sunburst` 与 `gpt-image-2.5-flare` 在中转侧的**实际尺寸行为**，以及中转侧是否接受 2.5 新增的 `xhigh` / `max` 质量档位。（两者的官方定位与相对质量、耗时已由官方资料确认，见 §三。）
 
 在取得真实调用样例或完成实际请求验证之前，以上内容必须保持未知。

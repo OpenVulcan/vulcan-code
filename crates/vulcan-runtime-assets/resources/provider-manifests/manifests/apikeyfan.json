@@ -622,7 +622,7 @@
         "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfan.image-gen-skill.2026-09-22"
+        "evidence_revision": "apikeyfan.gpt-image-2.5-sunburst.official-and-skill.2026-09-22"
       }
     },
     {
@@ -636,7 +636,7 @@
         "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfan.gpt-image-2.5-flare.user-confirmed.2026-09-22"
+        "evidence_revision": "apikeyfan.gpt-image-2.5-flare.official-and-user.2026-09-22"
       }
     },
     {
@@ -1097,7 +1097,7 @@
     },
     {
       "target_id": "gpt-image-2.5-sunburst.generate",
-      "description": "Generate one image with GPT Image 2.5 Sunburst through the verified APIKEY.FAN SSE endpoint.",
+      "description": "Generate one image with GPT Image 2.5 Sunburst, the higher-quality sibling tuned for editing precision and tighter multi-turn control, at substantially longer latency than GPT Image 2.5 Flare.",
       "service_entry_id": "gpt-image", "credential_profile_ids": ["api-key"],
       "upstream_target_id": "gpt-image-2.5-sunburst", "availability_model_ids_any": ["gpt-image-2.5-sunburst"],
       "display_name": "GPT Image 2.5 Sunburst", "tool_id": "image_generate", "capability": "image_generate",
@@ -1115,13 +1115,13 @@
         "required": ["prompt"]
       },
       "extension_profile": {
-        "summary": "Generate a new image with GPT Image 2.5 Sunburst, which the provider image-gen skill package ships as its default image model.",
-        "characteristics": ["Streaming base64 image delivery over the verified /images/generations route."],
+        "summary": "Generate a new image with GPT Image 2.5 Sunburst, the higher-quality GPT Image 2.5 sibling: it is tuned for editing precision and premium visual workflows and is what the provider image-gen skill package ships as its default image model. Generation takes substantially longer than GPT Image 2.5 Flare, while per-token pricing is identical.",
+        "characteristics": ["Streaming base64 image delivery over the verified /images/generations route.", "Higher visual quality than GPT Image 2.5 Flare, at substantially longer generation time.", "Per-token pricing is identical to GPT Image 2.5 Flare, so the difference is latency rather than cost."],
         "input_modes": ["text_to_image"],
         "resolution_policy": {"mode": "provider_managed", "aspect_ratios": ["custom_size_ratio"]},
         "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
         "constraints": ["Exactly one image is requested.", "Reference-image and masked-edit inputs are not exposed."],
-        "limitations": ["Requested size is not a pixel guarantee; output dimensions remain provider-managed."],
+        "limitations": ["Requested size is not a pixel guarantee; output dimensions remain provider-managed.", "Prefer GPT Image 2.5 Flare when turnaround time matters more than the last increment of quality."],
         "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#generation-contract"]
       },
       "output": {
@@ -1143,7 +1143,7 @@
     },
     {
       "target_id": "gpt-image-2.5-flare.generate",
-      "description": "Generate one image with GPT Image 2.5 Flare through the verified APIKEY.FAN SSE endpoint.",
+      "description": "Generate one image with GPT Image 2.5 Flare, the fast everyday sibling intended for high-volume generation, at slightly lower quality than GPT Image 2.5 Sunburst.",
       "service_entry_id": "gpt-image", "credential_profile_ids": ["api-key"],
       "upstream_target_id": "gpt-image-2.5-flare", "availability_model_ids_any": ["gpt-image-2.5-flare"],
       "display_name": "GPT Image 2.5 Flare", "tool_id": "image_generate", "capability": "image_generate",
@@ -1161,13 +1161,13 @@
         "required": ["prompt"]
       },
       "extension_profile": {
-        "summary": "Generate a new image with GPT Image 2.5 Flare, a supported image model of the provider image-gen skill package.",
-        "characteristics": ["Streaming base64 image delivery over the verified /images/generations route."],
+        "summary": "Generate a new image with GPT Image 2.5 Flare, the fast GPT Image 2.5 sibling intended for high-volume everyday image generation. Quality is slightly below GPT Image 2.5 Sunburst, while per-token pricing is identical.",
+        "characteristics": ["Streaming base64 image delivery over the verified /images/generations route.", "Faster generation than GPT Image 2.5 Sunburst at slightly lower quality.", "Per-token pricing is identical to GPT Image 2.5 Sunburst, so the difference is latency rather than cost."],
         "input_modes": ["text_to_image"],
         "resolution_policy": {"mode": "provider_managed", "aspect_ratios": ["custom_size_ratio"]},
         "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
         "constraints": ["Exactly one image is requested.", "Reference-image and masked-edit inputs are not exposed."],
-        "limitations": ["Requested size is not a pixel guarantee; output dimensions remain provider-managed."],
+        "limitations": ["Requested size is not a pixel guarantee; output dimensions remain provider-managed.", "Prefer GPT Image 2.5 Sunburst when editing precision matters more than turnaround time."],
         "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#generation-contract"]
       },
       "output": {
