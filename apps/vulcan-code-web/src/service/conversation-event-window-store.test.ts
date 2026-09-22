@@ -970,4 +970,45 @@ describe("conversation-event-window-store V1 diagnostics", () => {
       }),
     ).toContain("illegal tool_call evolution");
   });
+
+  /** Two windows over one session must not consume or restate each other's single message.
+   * 同一会话上的两个窗口不得消费或改写彼此的那一条消息。 */
+  it("keeps two windows over one session independent for the same single event", () => {
+    // The baseline is the one authoritative snapshot both windows hydrate from.
+    // 该基线是两个窗口共同水合的同一份权威快照。
+    const baseline = batch([summary(1, userInput(1)), summary(2, assistantText(5))]);
+    const first = new ConversationEventWindowStore();
+    const second = new ConversationEventWindowStore();
+    first.hydrate(baseline);
+    second.hydrate(baseline);
+
+    // A live append of one message reaches both windows with the same identity and revision.
+    // 一条消息的实时追加以相同身份与修订到达两个窗口。
+    const appended = livePatch([summary(3, userInput(3), 1_700_000_000_500, 2)], { revision: 2 });
+    first.applyLive(appended);
+    second.applyLive(appended);
+
+    // Both windows observe the message exactly once: neither consumed it from the other.
+    // 两个窗口各观察到该消息恰好一次：没有任何一方从另一方消费掉它。
+    expect(first.render().map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(second.render().map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(first.render().filter((event) => event.seq === 3)).toHaveLength(1);
+    expect(second.render().filter((event) => event.seq === 3)).toHaveLength(1);
+    // The same single event must not be restated with a different body in either window.
+    // 同一条消息不得在任一窗口中以不同正文被复述。
+    expect(first.render()[2]).toEqual(second.render()[2]);
+
+    // One window advancing further is a rendering change that must not reach the other window.
+    // 一个窗口继续前进属于渲染变化，不得传递到另一个窗口。
+    first.applyLive(livePatch([summary(4, assistantText(6), 1_700_000_000_900, 3)], { revision: 3 }));
+    expect(first.render().map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+    expect(second.render().map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(second.getOwner()).toEqual(first.getOwner());
+
+    // A window may re-apply the identical revision idempotently without touching the other window.
+    // 一个窗口可以幂等地重复应用同一修订，而不影响另一个窗口。
+    second.applyLive(appended);
+    expect(second.render().map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(first.render().map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+  });
 });
