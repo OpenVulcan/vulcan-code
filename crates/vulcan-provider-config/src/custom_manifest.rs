@@ -1769,6 +1769,7 @@ mod tests {
                     response_projection_profiles: Vec::new(),
                     provider_request_id_headers: Vec::new(),
                     verified: true,
+                    reasoning_replay_contract: None,
                 }],
                 default_usage_scopes: BTreeSet::new(),
             }],
