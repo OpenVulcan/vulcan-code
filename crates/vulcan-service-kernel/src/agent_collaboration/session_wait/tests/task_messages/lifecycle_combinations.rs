@@ -55,12 +55,24 @@ async fn admit_real_tool_call(
             }
         })
         .unwrap();
-    let api_call_id = invocation
+    // Reuse the turn's already admitted API when one exists; a second physical API while one is active
+    // is a domain error, and unlike the older single-call helpers this one may be called repeatedly.
+    // 存在已准入 API 时复用它；在已有活动 API 时再启动一个属于领域错误，而本辅助可被多次调用。
+    let api_call_id = match invocation
         .source_handle
-        .prepare_and_start_api_durable(input)
+        .read(|document| document.active_api().map(|api| api.api_call_id))
         .unwrap()
-        .value
-        .api_call_id;
+    {
+        Some(existing) => existing,
+        None => {
+            invocation
+                .source_handle
+                .prepare_and_start_api_durable(input)
+                .unwrap()
+                .value
+                .api_call_id
+        }
+    };
     let request_stream_id = RequestStreamId::try_new(stream_label).unwrap();
     let tool_call_id = invocation
         .source_handle
