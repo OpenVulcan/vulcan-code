@@ -85,8 +85,13 @@
    **"多等待者"不适用**：`wait_question` 只授权问题的来源或目标，一个问题只有一个来源，因此同一
    问题不存在多个独立等待者；"父等待多个子任务"属 A06，已由 `wait_agent_returns_incoming_question_...`
    与 `session_wait_returns_incoming_question_without_consuming_it` 覆盖（保留原目标与游标）。
-   **未证明**：子代理提问真正触发调度（需要知识访问解析、WebUI 准备代次所有者、Agent 运行时桥
-   与宿主句柄，本层无法构造）；工具回复后子代理收到答案；父子交叉互问。
+   **"工具回复后子代理收到答案"这一旧登记已失效（本轮更正）**：同一测试
+   `child_question_to_parent_round_trips_the_answer_back_to_the_child` 已经覆盖它——父代理经
+   `ReplyQuestion` 作答后，子代理**通过真实等待入口** `WaitQuestion` 观察，断言 `status == "ok"`、
+   `question_state == "answered"`、且 `answer.body` **逐字等于**父代理产出的正文；
+   该断言之前确实缺一条，现已记入。
+   **未证明（据实收敛为两项）**：子代理提问真正触发调度（需要知识访问解析、WebUI 准备代次所有者、
+   Agent 运行时桥与宿主句柄，本层无法构造）；父子交叉互问（已定位到可复现矛盾点但未定论）。
    通知投递丢失后恢复已由 `25ecf35d` 补齐（原为**实现缺口**而非证据不足）。
 
 2. **`reply_question` 的 `unable_to_answer`**（A09）。
