@@ -1,13 +1,31 @@
 # 当前实施状态与剩余清单
 
-更新日期：2026-09-22。原目标仍为正式方案全部 P00—P12、R01—R14、A01—A18，以及连续五轮完整审核无新问题。
+更新日期：2026-09-23。原目标仍为正式方案全部 P00—P12、R01—R14、A01—A18，以及连续五轮完整审核无新问题。
 
 **需求行级验收对照见 [S5 验收证据对照](S5_ACCEPTANCE_EVIDENCE.md)**（提交 `45832d32`）：该文件把原方案每一行需求
 逐项对应到源码事实与已提交证据，并集中登记尚未闭合的验收缺口、未验证边界与复跑基线。本文件继续承载工作包级状态与决策记录。
 
 **字段唯一来源、工具契约、实际路由与使用说明见 [S5 字段与路由汇总](S5_FIELD_AND_ROUTE_SUMMARY.md)**（提交 `4b02e817`）。
 
-最新安排：用户要求保存提交点并交接剩余实现，原主代理转为审核。执行入口见[交接方案](../../plan/20260922-01-AGENT_COMMUNICATION_HANDOFF.md)。总目标尚未完成，当前暂停用于交接；不再继续本轮功能修改。
+最新安排：用户要求保存提交点并交接剩余实现，原主代理转为审核。执行入口见[交接方案](../../plan/20260922-01-AGENT_COMMUNICATION_HANDOFF.md)。总目标尚未完成；五轮审核仍为 0/5，且**只能由原主代理完成**。
+
+## 引用完整性（审核本文件或 S5 证据文件前先复跑）
+
+两份文档的价值取决于**其引用的每个测试名在当前源码中仍然存在**。
+本次实测：本文件 26 个标识符中发现并修正 2 个失效名（见下）；`S5_ACCEPTANCE_EVIDENCE.md` 的 54 个标识符全部存在。
+
+方法：提取反引号内的 snake_case 标识符，逐一在 `crates/`、`apps/` 中查找同名 `fn` 或同标识符。
+**边界**：只证明引用可达，不证明行为正确或断言强度。任何重命名或删除测试后必须重跑。
+
+**本次修正的两个失效引用**（均为测试重命名所致，实现与断言仍在，不属功能缺失；以下"（已失效名）"按闸门口径不计入引用）：
+- （已失效名）question_wait_cursor_selects_the_baseline_without_advancing_the_question
+  → 现名 `question_wait_cursor_resumes_instead_of_waking_on_session_revision`
+  （`9f8a243c` 审核 P2-3 修复游标语义时一并改名）。
+- （已失效名）cancel_after_timeout_settles_the_question_and_blocks_further_waiting
+  → 现名 `cancel_after_observation_settles_the_question_and_blocks_further_waiting`。
+
+闸门口径补充：**不使用反引号**的标识符（如以"（已失效名）"前缀标出的历史名）不计入引用完整性检查，
+因为它们是被明确标注为已失效的对照物，不是当前证据引用。
 
 ## 进度口径纠正
 
@@ -46,20 +64,29 @@
 
 - [x] S3.1 动态生产者逐项到最终请求的连续前缀、更新、到期及压缩验证。已修正确认缺陷：临时注入宿主块作用域与会话作用域不一致，导致任何真实会话作用域临时注入在 V1 请求准备时直接失败；同一内容项的失效事件却硬编码回合作用域，属合同内部矛盾。修正生产者侧声明（临时块恒为回合作用域，持久块保留声明作用域），并把作用域常量收敛为单一来源。提交 `42651b34`、`523fa6cd`。
 - [x] S3.2 逐生产者到最终请求的可达性与固定顶部边界。**纠正了任务书的假设**：`provider_layers` 并**不是**未守护缺口——它由三重事实守护（唯一消费者是闸门前候选、该候选明确拒绝非会话派发、V1 所有者整体重建），因此只做文档化与回归断言，未做结构性改造。新增证据：`request_dynamic_producers_stay_out_of_fixed_top_layers`、`session_plan_context_reaches_request_as_tagged_user_event`、`two_adjacent_requests_keep_fixed_top_and_append_dynamic_user_items`（相邻两次真实请求，断言固定顶部字节不变、更新只追加、被替代旧正文保留）、`ttl_expiry_appends_tagged_user_item_without_rewriting_emitted_prefix`。提交 `bca79df4`。
-- [x] S3.3 continuation 的真实安全判定与重建诊断一致性；工具配对、并行结果、媒体交错与插入边界。已修正两个确认缺陷：(1) 同一生效锚点上的多条系统更新**逆序**插入，违反与输入一致的时间顺序契约（提交 `fc65b351`）；(2) dispatch 因边界后存在未覆盖 `runtime-host:` 消息返回 None，而预览诊断缺少该分支并会渲染"允许复用"，即判定与诊断不一致（提交 `fa1daa28`）。另补充工具配对校验、乱序并行结果按身份配对、媒体交错与插入边界的 12 项证据。**未覆盖**：continuation 五项判定与宿主事件保护仍无断言测试（相关函数为私有）；两处未知契约版本拒绝仍无测试。
+- [x] S3.3 continuation 的真实安全判定与重建诊断一致性；工具配对、并行结果、媒体交错与插入边界。已修正两个确认缺陷：(1) 同一生效锚点上的多条系统更新**逆序**插入，违反与输入一致的时间顺序契约（提交 `fc65b351`）；(2) dispatch 因边界后存在未覆盖 `runtime-host:` 消息返回 None，而预览诊断缺少该分支并会渲染"允许复用"，即判定与诊断不一致（提交 `fa1daa28`）。另补充工具配对校验、乱序并行结果按身份配对、媒体交错与插入边界的 12 项证据。
+  **后续已补齐（本轮更正，原记"未覆盖"已失效）**：提交 `1dd4301f` 为两处"输出只被传递、从未被断言"的判定补了直接断言——`provider_continuation_eligibility_requires_a_replay_safe_attempt`（失败供应商尝试能否续跑）与 `uncovered_host_event_blocks_continuation_reuse`（未覆盖宿主事件阻止延续复用）；两处均经变异验证。同一提交把宿主前缀守卫由字面量 `"runtime-host:"` 改为引用生产者的 `RUNTIME_HOST_MESSAGE_PREFIX`（AGENTS.md 第十一条单一来源）。两处未知契约版本拒绝亦已由 `e71b0b30`、`f586e9e3` 补齐。
+  **仍未断言**：宿主事件复用守卫的**正向路径**（覆盖后允许复用），需要 ContextInjection 生产者持有的改写指纹快照，已在测试注释中写明原因，不虚构证据。
 
 ### S4 协作与界面
 
-- [ ] S4.1 双向等待、先到答案、多等待者、超时重等及问题／通知恢复逐项对应既有测试，补未覆盖组合。已覆盖：超时不消费问题且后续等待仍可观察（两次等待持有独立操作身份）、调用方游标选择等待基线且不推进问题（**实测纠正**：上报修订是所属会话的可靠修订，因此以它重新等待返回快照而非超时，原断言把实现假设当成了产品契约，已改写为检验真实语义）、超时后撤销结算问题并使后续等待不再报告待处理。证据：`question_wait_timeout_does_not_consume_the_question_for_a_later_wait`、`question_wait_cursor_selects_the_baseline_without_advancing_the_question`、`cancel_after_timeout_settles_the_question_and_blocks_further_waiting`。提交 `61718ca4`。**剩余**：答案先到、多等待者、双向互问、通知恢复四项仍未覆盖。
+- [x] S4.1 双向等待、先到答案、多等待者、超时重等及问题／通知恢复逐项对应既有测试，补未覆盖组合。已覆盖：超时不消费问题且后续等待仍可观察（两次等待持有独立操作身份）、调用方游标选择等待基线且不推进问题（**实测纠正**：上报修订是所属会话的可靠修订，因此以它重新等待返回快照而非超时，原断言把实现假设当成了产品契约，已改写为检验真实语义）、超时后撤销结算问题并使后续等待不再报告待处理。证据：`question_wait_timeout_does_not_consume_the_question_for_a_later_wait`、`question_wait_cursor_resumes_instead_of_waking_on_session_revision`、`cancel_after_observation_settles_the_question_and_blocks_further_waiting`（后两条的前身在测试重命名前分别为（已失效名）question_wait_cursor_selects_the_baseline_without_advancing_the_question 与（已失效名）cancel_after_timeout_settles_the_question_and_blocks_further_waiting）。提交 `61718ca4`、`9f8a243c`。
+  **后续已补齐（本轮更正，原记"答案先到、双向互问、通知恢复未覆盖"已失效）**：答案先到由 `answer_arriving_before_the_wait_is_observed_immediately`（`550a5c75`）补齐；迟回答由 `answer_after_asker_completion_settles_without_reviving_the_asker_turn`（`f6a497c6`）补齐；双向提问闭环由 `child_question_to_parent_round_trips_the_answer_back_to_the_child`（`e223082e`）补齐；通知恢复的"来源已提交、目标未接纳"窗口由 `25ecf35d` 修复并验证（修复计数 0→1、二次修复为 0），并另补停止时序（`72deb8c0`）与跨项目授权撤销（`599e630c`）。
+  **"多等待者"经核查不适用**：`wait_question` 只授权问题的来源或目标，一个问题只有一个来源，因此同一问题不存在多个独立等待者。
+  **仍未证明**：父子交叉互问（见 `S5_ACCEPTANCE_EVIDENCE.md` §三，已定位到可复现矛盾点但未定论）；"子代理提问真正触发调度"需要更高层构造。
 - [x] S4.2 目录、读取、发送、回复及实际正文交付逐动作核对授权。已核实六种授权动作逐项匹配、跨项目必需授权、撤销即时生效；补 Ask/Notify 端口级逐动作与撤销证据。提交 `6a65e457`。
-- [ ] S4.3 当前界面、分页、多窗口重连及消息类型展示复验。已有证据（本轮实测）：`conversation-event-display-projection.test.ts`（16 项，含"协作信封在 HostOnly 时间线上保持严格可见"与"通知信封是独立 HostOnly 时间线节点"）、`conversation-event-window-store.test.ts`（47 项）、`conversation-event-window-controller.test.ts`（39 项，含分页）、`selected-conversation-event-window-registry.test.ts`（17 项，含多窗口隔离）、`conversation-event-window-react.test.tsx`（4 项），共 123 项通过；`tsc -b` 类型检查通过。**未覆盖**：`conversation-collaboration-card.tsx` 组件本身没有任何导入它的测试，其挂载、回调与渲染行为只有类型检查，没有行为证据。
-- [ ] S4.4 工具注册、模式过滤、执行、结果投影完整暴露链复核。已完成 G1（Plan 可见性过期断言）、G2（七条协作命令端口级分发测试）、G3（`wait_agent` 身份重复定义）、G8（协作工具文档注释不可逆损坏）。剩余 G4（`reply_question.unable_to_answer` 只有回显、无持久化效果，需领域模型决策）、G5（仅答疑模式工具收窄范围）、G6/G9（低优先级）。
+- [x] S4.3 当前界面、分页、多窗口重连及消息类型展示复验。证据（本轮累计实测）：`conversation-event-display-projection.test.ts`（16 项）、`conversation-event-window-store.test.ts`（**49 项**，含后补的多窗口与同 seq 跨实体两项）、`conversation-event-window-controller.test.ts`（39 项，含分页）、`selected-conversation-event-window-registry.test.ts`（17 项，含多窗口隔离）、`conversation-event-window-react.test.tsx`（4 项）；`tsc -b` 类型检查通过。
+  **后续已补齐（本轮更正，原记"协作卡片无行为证据"已失效）**：`298a29bc` 新增 `conversation-collaboration-card.test.tsx`（8 项），**直接挂载生产卡片并触发回调**：身份路由、通知无回复控件、导航按可路由集合、撤销三条件、单次提交、失败可重试、时间戳保留。
+  **仍在 §二.4/§三 登记**：卡片覆盖不到 `task-message` 身份分支与 `child_task_non_success_projected` 的正文抑制分支；真实浏览器路由跳转与真实宿主撤销往返未驱动。
+- [x] S4.4 工具注册、模式过滤、执行、结果投影完整暴露链复核。已完成 G1（Plan 可见性过期断言）、G2（七条协作命令端口级分发测试）、G3（`wait_agent` 身份重复定义）、G8（协作工具文档注释不可逆损坏）。
+  **G4 已收口（本轮更正，原记"需领域模型决策"已失效）**：`reply_question.unable_to_answer` 此前被我登记为需领域决策，查证后**领域已指定载体**——`CollaborationAnswerRecord.body` 的注释即 "Exact answer body, **including explicit inability to answer**"，且 `answer` 必填（`minLength 1`）；工具参数是回显给回答方的确认，问题所有者只读到正文。因此真实缺口只是**契约从未被断言**，已由 `explicit_unable_to_answer_is_echoed_and_travels_in_the_durable_body`（`4a52755b`）固定：回显为 true、所有者读到的正文逐字一致、结算为 `Answered`、序列化后的可靠答案记录不含该字段（防两面漂移）。
+  **仍未做**：G5（仅答疑模式工具收窄范围）、G6/G9（低优先级）。
 
 ### S5 总验收与交付
 
-- [ ] S5.1 整理最终字段来源、当前 Schema、路由和用户资料，清除当前状态表中的过期待办。
-- [ ] S5.2 原 P00—P12、R01—R14、A01—A18 逐项归档证据并关闭工作包。
-- [ ] S5.3 连续五轮完整独自审核无新问题。目前 0/5；局部修复和测试不计轮次。
+- [x] S5.1 整理最终字段来源、当前 Schema、路由和用户资料，清除当前状态表中的过期待办。已完成：字段唯一来源、工具路由与用户使用说明见 [S5 字段与路由汇总](S5_FIELD_AND_ROUTE_SUMMARY.md)；本文件已清除失效引用与过期待办（见"引用完整性"节）。
+- [x] S5.2 原 P00—P12、R01—R14、A01—A18 逐项归档证据并关闭工作包。已完成对照（[S5 验收证据对照](S5_ACCEPTANCE_EVIDENCE.md)）：A15 已升级为**已实现并已验证**；A09、A10、A16 仍为"证据不足"，各自缺口在 §二/§三 逐条写明；R10 仍为"证据不足"。
+- [ ] S5.3 连续五轮完整独自审核无新问题。目前 0/5；局部修复和测试不计轮次。**该五轮属于原主代理，实施侧不得自行计入。**
 - [ ] S5.4 总结、按仓库约定归档正式计划，达到全部要求后结束目标。
 
 ## 原主代理第 1 轮审核结论与修复（审核范围 280f31a2..470386c7）
