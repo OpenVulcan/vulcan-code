@@ -149,12 +149,21 @@
   `recover_rejected_oauth_credential`（`provider_transport_vulcan/streaming.rs`）。
   因此若生产者不再发出该标记，运行时测试仍会通过。真实编排需要可续期凭据租约 + 凭据刷新服务 +
   回环 HTTP，尚未构造。
-- **"父子交叉互问"（A07 的更强组合）未取得证据**：构造到"父代理向自有嵌入子代理提问"时，
-  `resolve_authorized_target` 的自有子代理分支未生效，回退到 `verified_direct_parent` 并报
-  "ask_parent requires an embedded child session"。**原因未定位到确定结论**——可能是夹具缺少某个
-  生产步骤，也可能是该路径本身不支持，因此在定位前**不据此断言生产缺陷**。
-  尝试补 `initialize_root_usage` 会替换生产创建器已建立的父子绑定，已回退；相关半成品测试已从
-  工作树移除，未留下失败测试。
+- **"父子交叉互问"（A07 的更强组合）未取得证据，且已定位到一处具体矛盾点**。
+  本轮探针在 `resolve_authorized_target` 内实测到：
+  - 解析器**确实进入内嵌目标分支**（`locate_optional_session_v1_storage(child)` 为 `None`），
+    即该函数文档注释描述的路径成立；
+  - 该分支内 `invocation.source_session_id == usage.root_session_id`，且等于夹具父会话的
+    `session_id`，与"只有来源是索引根才接纳内嵌目标"的前置一致；
+  - 但父文档中预留下的 `record.child.root_session_id` 与该 `usage.root_session_id`
+    **是不同的 UUID**，因此 `owned` 的根比较不成立，回退到 `verified_direct_parent`，
+    在父子之间报出 "ask_parent requires an embedded child session"；
+  - 另实测父句柄的 `lifetime_usage_snapshot().children_by_session_id` 为**空**，
+    而子会话的绑定记录发生在**子句柄**上，两者未在同一棵树上往返。
+  **结论边界**：这是可复现的**夹具与生产创建序列不一致**，但**未证明生产路径本身有缺陷**——
+  也可能要求子会话由"真正的根会话"创建，而本夹具的父会话虽自视为根，却不是子记录所引用的根。
+  在定位到确定结论前**不据此断言生产缺陷**。尝试补 `initialize_root_usage` 会替换生产创建器
+  已建立的绑定，已回退；半成品测试与全部探针/调试代码均已从工作树移除，未留下失败测试。
 - **准备许可失败的生产者阻断**：缺少 preparation barrier 的 test-support 构造器
   （既有同层构造器为 `pub(crate)`），属缺构造器而非缺证据。
 - **continuation 判定与宿主事件保护**：相关函数为私有，无断言测试。
