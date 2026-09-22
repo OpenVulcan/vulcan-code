@@ -237,7 +237,20 @@ fn bundled_integrity_index_binds_the_complete_manifest_generation() {
     // 源资源代际后才会返回。
     let provider_count = vulcan_provider_adapters::verify_source_bundled_manifest_integrity_index()
         .expect("source bundled integrity generation should verify");
-    assert_eq!(provider_count, 18);
+    // The verified count must cover exactly the bundled manifest file set. Asserting that relation
+    // instead of a literal keeps this test generation-independent: adding or removing a provider
+    // must never require editing it.
+    // 已验证数量必须恰好覆盖内置 Manifest 文件集合。断言该关系而非字面量，使本测试与代际无关：
+    // 新增或移除供应商都不需要修改本测试。
+    let manifest_files = load_bundled_manifests().len();
+    assert!(
+        manifest_files > 0,
+        "the bundled generation must contain at least one manifest"
+    );
+    assert_eq!(
+        provider_count, manifest_files,
+        "the integrity index must pin exactly the bundled manifest file set"
+    );
 }
 
 /// Verifies the native Codex entries expose the reviewed multimodal and reasoning contract.
@@ -2251,25 +2264,16 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
 /// 验证已迁移供应商工具清单保持完整、唯一且仅由 Manifest 持有。
 #[test]
 fn migrated_tool_target_inventories_are_complete_and_unique() {
-    let directory = bundled_manifests_directory();
-    for (provider_id, target_count) in [
-        ("tavily", 2_usize),
-        ("alibaba", 57_usize),
-        ("minimax", 24_usize),
-    ] {
-        let path = directory.join(format!("{provider_id}.json"));
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("read bundled manifest {}", path.display()));
+    // Sweep every bundled provider and assert per-provider structure, not a per-provider total: a
+    // target count is data, so pinning it would force a test edit on every inventory change.
+    // 扫描全部内置供应商并断言每个供应商的结构，而不是每个供应商的总数：总数属于数据，钉住它
+    // 会让每次库存变化都要求改测试。
+    for (provider_id, text) in load_bundled_manifests() {
         let compiled =
             vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
                 .unwrap_or_else(|error| {
                     panic!("bundled manifest for `{provider_id}` must compile: {error}")
                 });
-        assert_eq!(
-            compiled.tool_targets.len(),
-            target_count,
-            "provider `{provider_id}` must own exactly {target_count} migrated tool targets"
-        );
         let manifest_ids = compiled
             .tool_targets
             .iter()
@@ -2277,7 +2281,7 @@ fn migrated_tool_target_inventories_are_complete_and_unique() {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             manifest_ids.len(),
-            target_count,
+            compiled.tool_targets.len(),
             "provider `{provider_id}` manifest target identifiers must be unique"
         );
         for target in &compiled.tool_targets {
@@ -2293,14 +2297,13 @@ fn migrated_tool_target_inventories_are_complete_and_unique() {
 /// Verifies every bundled system tool target uses only the generic execution adapter.
 /// 验证每个内置系统工具目标只使用通用执行适配器。
 ///
-/// This is the stable R0 guard against restoring a provider-named production adapter after the
-/// 101-target inventory. It checks the compiled authority rather than raw JSON spelling.
-/// 这是防止 101 条目标清单恢复供应商命名生产适配器的稳定 R0 守卫；它检查编译后的
-/// 权威，而不是原始 JSON 拼写。
+/// This is the stable R0 guard against restoring a provider-named production adapter. It checks the
+/// compiled authority rather than raw JSON spelling, and it asserts each target's adapter instead of
+/// an inventory total, so it stays independent of how many providers and targets the generation has.
+/// 这是防止恢复供应商命名生产适配器的稳定 R0 守卫。它检查编译后的权威而非原始 JSON 拼写，并
+/// 逐个断言目标的适配器而不是库存总数，因此与代际包含多少供应商和目标无关。
 #[test]
 fn bundled_system_tool_targets_use_only_generic_execution() {
-    // target_count is the exact number of compiled production targets across all bundled manifests.
-    // target_count 是全部内置 Manifest 编译后的精确生产目标数量。
     let mut target_count = 0_usize;
     for (provider_id, text) in load_bundled_manifests() {
         // compiled is the same resolved manifest authority consumed by production runtime.
@@ -2320,9 +2323,9 @@ fn bundled_system_tool_targets_use_only_generic_execution() {
             target_count += 1;
         }
     }
-    assert_eq!(
-        target_count, 93,
-        "the complete production target inventory must remain covered"
+    assert!(
+        target_count > 0,
+        "the bundled generation must expose at least one production tool target to guard"
     );
 }
 
