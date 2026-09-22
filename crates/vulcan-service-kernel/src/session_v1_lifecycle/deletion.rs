@@ -2,10 +2,7 @@
 //! 删除索引会话根前封存全部物理后代。
 
 use super::*;
-use std::collections::BTreeMap;
 use vulcan_workspace_store::workspace_store::SessionV1StorageLocator;
-
-mod settlement;
 
 /// Loads the exact `id` from `locator`, rejecting a replaced identity or a stale canonical location.
 /// 从 `locator` 加载精确 `id`，拒绝被替换身份或过期规范位置。
@@ -57,43 +54,6 @@ fn canonical_owner(
     Ok(handle)
 }
 
-/// Resolves the declared physical tree of `root` into globally ordered immutable identities.
-/// 将 `root` 声明的物理树解析为全局有序的不可变身份。
-/// Returns an error for any malformed identity, duplicated owner or unreadable embedded metadata.
-/// 任何畸形身份、重复所有者或不可读嵌入元数据均返回错误。
-fn members(
-    root: &SessionV1StorageLocator,
-    root_id: SessionId,
-) -> Result<BTreeMap<SessionId, SessionV1StorageLocator>, SessionV1LifecycleError> {
-    // Keep the root in the same ordered lock set as its physically owned descendants.
-    // 将根与其物理归属后代保留在同一有序锁集合中。
-    let mut tree = BTreeMap::from([(root_id, root.clone())]);
-    for locator in root.embedded_task_tree_locators()? {
-        // Service identities are UUIDs, while lower-level storage validates its own name contract.
-        // 服务身份为 UUID，底层存储则校验自身名称契约。
-        let id = locator
-            .session_id()
-            .parse::<SessionId>()
-            .map_err(|error| invalid(root_id, error.to_string()))?;
-        if tree.insert(id, locator).is_some() {
-            return Err(invalid(
-                root_id,
-                "Physical tree repeats a session identity.",
-            ));
-        }
-    }
-    Ok(tree)
-}
-
-/// Returns an explicit deletion error for `root` without converting corruption into missing data.
-/// 为 `root` 返回明确删除错误，不将损坏转换为数据缺失。
-fn invalid(root: SessionId, detail: impl Into<String>) -> SessionV1LifecycleError {
-    SessionV1LifecycleError::InvalidDeletionTree {
-        session_id: root,
-        detail: detail.into(),
-    }
-}
-
 /// Rolls back all `sealed` owners before physical deletion, preserving any cleanup errors with `primary`.
 /// 物理删除前回滚全部 `sealed` 所有者，将清理错误与 `primary` 一同保留。
 /// Returns the original error when every owner reopens; otherwise returns the complete diagnostic.
@@ -143,10 +103,10 @@ pub(super) async fn delete_tree(
     let root = locate_session_v1_storage(controller, &root_id.to_string()).await?;
     // First discovery determines the ordered lifecycle lock set without holding an out-of-order root lock.
     // 首次发现确定有序生命周期锁集合，不预先持有破坏顺序的根锁。
-    let tree = members(&root, root_id)?;
+    let tree = deletion_members(&root, root_id)?;
     // Source and source-root gates preserve terminal receipts while checking their durable acknowledgement.
     // 来源及来源根锁在检查可靠确认期间保留终态回执。
-    let peers = settlement::peer_ids(registry, &tree)?;
+    let peers = guards::peer_ids(registry, &tree)?;
     // Physical deletion members and read-only peers share one global lock order.
     // 物理删除成员与只读对端共享同一全局锁顺序。
     let identities = tree
@@ -160,13 +120,13 @@ pub(super) async fn delete_tree(
     for id in &identities {
         lifecycles.push(registry.acquire_lifecycle_transition(*id).await?);
     }
-    if members(&root, root_id)? != tree {
+    if deletion_members(&root, root_id)? != tree {
         return Err(invalid(
             root_id,
             "Embedded membership changed before lifecycle admission; retry deletion.",
         ));
     }
-    if settlement::peer_ids(registry, &tree)? != peers {
+    if guards::peer_ids(registry, &tree)? != peers {
         return Err(invalid(
             root_id,
             "Settlement peer membership changed before admission; retry deletion.",
@@ -184,7 +144,7 @@ pub(super) async fn delete_tree(
         }
         handles.push(handle);
     }
-    settlement::require_source_acknowledgements(controller, registry, &handles).await?;
+    guards::require_source_acknowledgements(controller, registry, &handles).await?;
     // Seal every owner before unregistering any member or deleting a byte.
     // 注销任何成员或删除任何字节之前，先封存每个所有者。
     let mut sealed = Vec::with_capacity(handles.len());
@@ -209,7 +169,7 @@ pub(super) async fn delete_tree(
     }
     // Revalidate physical membership after sealing and flushing every admitted writer.
     // 封存并刷出全部已准入写入者后，再次校验物理成员集合。
-    match members(&root, root_id) {
+    match deletion_members(&root, root_id) {
         Ok(current) if current == tree => {}
         Ok(_) => {
             return Err(rollback(

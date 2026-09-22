@@ -2,11 +2,16 @@
 //! 归档协作结算与删除使用实际 SQLite 和已发布会话文件。
 
 use super::*;
+use crate::ServiceEventEmitter;
+use crate::agent_collaboration::reconcile_session_v1_collaboration_outbox;
 use crate::session_v1_lifecycle::{
     SessionV1LifecycleError, archive_session_lifecycle_v1, delete_session_lifecycle_v1,
+    guards::admit_edit_generation, publish_guarded_edit_generation,
 };
-use vulcan_session_core::v1::document::SessionDocument;
-use vulcan_session_core::v1::event::TurnOutcome;
+use vulcan_session_core::v1::document::{
+    EditGenerationInput, RootInputReplacement, SessionDocument,
+};
+use vulcan_session_core::v1::event::{TurnOutcome, UserInputSource};
 
 /// Deleting the target first must preserve missing source acknowledgement and allow settled cleanup.
 /// 先删目标必须保留缺失的来源确认，并允许已结算清理。
@@ -295,29 +300,22 @@ async fn run_archived_settlement_deletion(source_first: bool) {
     );
 }
 
-/// Replacing target history must not discard the terminal receipt still needed by its source.
-/// 替换目标历史不得丢弃来源仍需要的终态回执。
-/// Uses actual session files and the same generation publisher called by the production edit service.
-/// 使用实际会话文件，以及生产编辑服务调用的同一代次发布器。
-#[tokio::test]
-async fn history_edit_preserves_unacknowledged_target_settlement() {
-    // Both canonical documents contain the committed settlement gap, with no active business turn.
-    // 双方规范文档包含已提交结算间隙，且没有活动业务回合。
-    let (_storage, _invocation, target, _question_id, _operation) =
-        unacknowledged_settlement_fixture().await;
-    // Capture the real root event and generation instead of assuming allocator values.
-    // 捕获真实根事件和代次，不假定分配器值。
-    let (generation, target_seq) = target
+/// Captures the target's real generation, durable revision and first root seq without guessing values.
+/// 捕获目标真实代次、可靠修订与首个根 seq，不假定分配器值。
+fn target_edit_frontier(
+    target: &Arc<SessionHandle>,
+) -> (u64, u64, vulcan_session_core::v1::ids::Seq) {
+    target
         .read(|document| {
             (
                 document.segment_generation(),
+                document.durable_revision(),
                 document
                     .events()
                     .iter()
                     .find_map(|event| match &event.event {
                         vulcan_session_core::v1::event::EventBody::UserInput(input)
-                            if input.input_source
-                                == vulcan_session_core::v1::event::UserInputSource::Root =>
+                            if input.input_source == UserInputSource::Root =>
                         {
                             Some(event.seq)
                         }
@@ -326,26 +324,170 @@ async fn history_edit_preserves_unacknowledged_target_settlement() {
                     .unwrap(),
             )
         })
-        .unwrap();
-    // The existing service calls this exact publisher without a cross-session receipt guard.
-    // 既有服务直接调用此精确发布器，没有跨会话回执保护。
-    let result = target.publish_edit_generation(
+        .unwrap()
+}
+
+/// Replacing target history must not discard the terminal receipt still needed by its source.
+/// 替换目标历史不得丢弃来源仍需要的终态回执。
+/// Uses actual session files and the same protected admission the production edit service now calls.
+/// 使用实际会话文件，以及生产编辑服务当前调用的同一受保护准入。
+#[tokio::test]
+async fn history_edit_preserves_unacknowledged_target_settlement() {
+    // Both canonical documents contain the committed settlement gap, with no active business turn.
+    // 双方规范文档包含已提交结算间隙，且没有活动业务回合。
+    let (_storage, invocation, target, _question_id, _operation) =
+        unacknowledged_settlement_fixture().await;
+    let (generation, durable_revision, target_seq) = target_edit_frontier(&target);
+    // The production edit service now takes this exact protected admission before publishing.
+    // 生产编辑服务当前在发布前取得此精确受保护准入。
+    let result = publish_guarded_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &target,
         generation,
-        vulcan_session_core::v1::document::EditGenerationInput {
-            target_seq,
-            replacement: vulcan_session_core::v1::document::RootInputReplacement::new(
-                "Edited target",
-                vec![],
-            ),
-            now_ms: 9,
-        },
-    );
+        edit_input(target_seq),
+    )
+    .await;
+    // The missing durable source acknowledgement must reject the edit, not merely its generation CAS.
+    // 缺失的可靠来源确认必须拒绝编辑，而不只是其 generation CAS。
     assert!(
-        result.is_err(),
+        matches!(
+            result,
+            Err(SessionV1LifecycleError::UnsettledCollaboration(id))
+                if id == target.session_id()
+        ),
         "History edit discarded the peer settlement receipt: {result:?}"
     );
     assert_eq!(
         target.read(SessionDocument::segment_generation).unwrap(),
         generation
     );
+    assert_eq!(
+        target.read(|document| document.durable_revision()).unwrap(),
+        durable_revision
+    );
+    // The only receipt the source still needs must survive the rejected replacement.
+    // 来源仍需要的唯一回执必须在被拒的替换后保留。
+    let retained = target
+        .read(|document| {
+            document
+                .collaboration_state()
+                .inbound_deliveries
+                .values()
+                .filter(|delivery| delivery.settlement.is_some())
+                .count()
+        })
+        .unwrap();
+    assert_eq!(retained, 1);
+    // The local target condition alone is false here; only the peer acknowledgement guard rejects.
+    // 此处仅本地目标条件为假；只有对端确认守卫会拒绝。
+    assert!(
+        !target
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    // A warm target still owns its peer set, so the guard must not depend on a cold registry.
+    // 驻留目标仍持有其对端集合，因此守卫不得依赖冷态注册表。
+    assert!(Arc::ptr_eq(
+        &invocation.registry.get(target.session_id()).unwrap(),
+        &target
+    ));
+    let admission = admit_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &target,
+    )
+    .await;
+    assert!(
+        matches!(
+            admission,
+            Err(SessionV1LifecycleError::UnsettledCollaboration(id))
+                if id == target.session_id()
+        ),
+        "the receipt admission independently admitted a lost receipt: {admission:?}"
+    );
+    assert_eq!(
+        target.read(SessionDocument::segment_generation).unwrap(),
+        generation
+    );
+}
+
+/// A settled source acknowledgement must still allow the same legitimate history edit.
+/// 已结算的来源确认之后，同一合法历史编辑仍必须成功。
+/// Uses the production outbox repair as the only writer of that acknowledgement.
+/// 使用生产出站箱修复作为该确认的唯一写入者。
+#[tokio::test]
+async fn history_edit_succeeds_after_source_settlement_acknowledgement() {
+    // The fixture withholds exactly the durable source acknowledgement.
+    // 夹具精确保留来源确认尚未写入。
+    let (_storage, invocation, target, _question_id, _operation) =
+        unacknowledged_settlement_fixture().await;
+    let (generation, _, target_seq) = target_edit_frontier(&target);
+    // The real production repair entry point writes the missing acknowledgement from durable facts.
+    // 实际生产修复入口依据可靠事实写入缺失确认。
+    let repaired = reconcile_session_v1_collaboration_outbox(
+        &ServiceEventEmitter::new(Vec::new()),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .unwrap();
+    assert!(repaired > 0, "the outbox repair wrote nothing durable");
+    let source_ack = invocation
+        .source_handle
+        .read(|document| {
+            document
+                .collaboration_state()
+                .outbound_deliveries
+                .values()
+                .filter(|delivery| delivery.settlement_ack.is_some())
+                .count()
+        })
+        .unwrap();
+    assert_eq!(source_ack, 1);
+    // The same protected admission now owns a fully acknowledged receipt and must permit the edit.
+    // 同一受保护准入当前持有完整确认的回执，必须允许该编辑。
+    let receipt = publish_guarded_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &target,
+        generation,
+        edit_input(target_seq),
+    )
+    .await
+    .unwrap();
+    assert_eq!(receipt.target_seq, target_seq);
+    assert_eq!(receipt.segment_generation, generation + 1);
+    assert_eq!(
+        target.read(SessionDocument::segment_generation).unwrap(),
+        generation + 1
+    );
+    // The edited durable document must physically retain the replaced root text.
+    let edited_text = target
+        .read(|document| {
+            document
+                .events()
+                .iter()
+                .find_map(|event| match &event.event {
+                    vulcan_session_core::v1::event::EventBody::UserInput(input)
+                        if event.seq == target_seq =>
+                    {
+                        Some(input.text.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        })
+        .unwrap();
+    assert_eq!(edited_text, "Edited target");
+}
+
+/// Builds one deterministic root replacement for the fixture's exact root seq.
+/// 为夹具的精确根 seq 构建一份确定性的根替换。
+fn edit_input(target_seq: vulcan_session_core::v1::ids::Seq) -> EditGenerationInput {
+    EditGenerationInput {
+        target_seq,
+        replacement: RootInputReplacement::new("Edited target", vec![]),
+        now_ms: 9,
+    }
 }

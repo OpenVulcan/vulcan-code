@@ -33,6 +33,52 @@ use crate::session_runtime_registry_v1::{
 };
 
 mod deletion;
+pub(crate) mod guards;
+
+pub(crate) use guards::publish_guarded_edit_generation;
+
+/// Returns an explicit lifecycle error for `root` without converting corruption into missing data.
+/// 为 `root` 返回明确生命周期错误，不将损坏转换为数据缺失。
+fn invalid(root: SessionId, detail: impl Into<String>) -> SessionV1LifecycleError {
+    SessionV1LifecycleError::InvalidDeletionTree {
+        session_id: root,
+        detail: detail.into(),
+    }
+}
+
+/// Resolves the declared physical tree of `root` into globally ordered immutable identities.
+/// 将 `root` 声明的物理树解析为全局有序的不可变身份。
+/// Returns an error for any malformed identity, duplicated owner or unreadable embedded metadata.
+/// 任何畸形身份、重复所有者或不可读嵌入元数据均返回错误。
+fn deletion_members(
+    root: &vulcan_workspace_store::workspace_store::SessionV1StorageLocator,
+    root_id: SessionId,
+) -> Result<
+    std::collections::BTreeMap<
+        SessionId,
+        vulcan_workspace_store::workspace_store::SessionV1StorageLocator,
+    >,
+    SessionV1LifecycleError,
+> {
+    // Keep the root in the same ordered lock set as its physically owned descendants.
+    // 将根与其物理归属后代保留在同一有序锁集合中。
+    let mut tree = std::collections::BTreeMap::from([(root_id, root.clone())]);
+    for locator in root.embedded_task_tree_locators()? {
+        // Service identities are UUIDs, while lower-level storage validates its own name contract.
+        // 服务身份为 UUID，底层存储则校验自身名称契约。
+        let id = locator
+            .session_id()
+            .parse::<SessionId>()
+            .map_err(|error| invalid(root_id, error.to_string()))?;
+        if tree.insert(id, locator).is_some() {
+            return Err(invalid(
+                root_id,
+                "Physical tree repeats a session identity.",
+            ));
+        }
+    }
+    Ok(tree)
+}
 
 /// Complete caller-resolved facts required to create one root V1 session.
 /// 创建一个根 V1 会话所需的完整调用方已解析事实。
@@ -127,6 +173,13 @@ pub(crate) enum SessionV1LifecycleError {
     /// Physical deletion is blocked while the canonical session has unsettled collaboration.
     /// 当规范会话仍有未结协作义务时，阻止物理删除。
     UnsettledCollaboration(SessionId),
+    /// One claimed session handle is not the registered canonical owner of its indexed root.
+    /// 一个声明的会话句柄不是其索引根的已注册规范所有者。
+    CanonicalOwnerUnavailable {
+        /// Exact session whose canonical owner could not be proven.
+        /// 无法证明其规范所有者的精确会话。
+        session_id: SessionId,
+    },
     /// Physical membership or canonical ownership changed before a deletion could be sealed.
     /// 删除封存前，物理成员集合或规范归属发生变化。
     InvalidDeletionTree {
@@ -231,6 +284,10 @@ impl fmt::Display for SessionV1LifecycleError {
                 formatter,
                 "V1 session {session_id} cannot be physically deleted while collaboration is unsettled"
             ),
+            Self::CanonicalOwnerUnavailable { session_id } => write!(
+                formatter,
+                "V1 session {session_id} history edit requires its registered canonical indexed root owner"
+            ),
             Self::InvalidDeletionTree { session_id, detail } => write!(
                 formatter,
                 "V1 session {session_id} deletion tree rejected: {detail}"
@@ -296,6 +353,7 @@ impl std::error::Error for SessionV1LifecycleError {
             | Self::InvalidTaskAdmissionTimestamp { .. }
             | Self::MissingInitialFlushCandidate(_)
             | Self::UnsettledCollaboration(_)
+            | Self::CanonicalOwnerUnavailable { .. }
             | Self::InvalidDeletionTree { .. }
             | Self::RestoreStorageMissing { .. }
             | Self::InvalidIndexedSessionId { .. }

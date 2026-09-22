@@ -17,6 +17,7 @@ use crate::session_goal_lifecycle::current_v1_goal_unix_millis;
 use crate::session_runtime_registry_v1::{SessionHandle, SessionRuntimeRegistry};
 use crate::session_v1_lifecycle::{
     CreateForkSessionV1Request, create_or_get_forked_session_v1, get_or_load_session_v1,
+    publish_guarded_edit_generation,
 };
 use crate::state::SharedServiceBridgeState;
 use crate::webui_turn_chaining::start_exact_v1_user_root_turn;
@@ -53,20 +54,20 @@ pub(crate) async fn service_edit_conversation_generation_v1(
     // clientActionId 将精确的编辑客户端保留为重写 generation 的所有者。
     let client_action_id =
         ClientActionId::try_new(request.client_action_id).map_err(|error| error.to_string())?;
-    let receipt = handle
-        .publish_edit_generation(
-            request.expected_window_generation,
-            EditGenerationInput {
-                target_seq,
-                replacement: RootInputReplacement::new(
-                    request.replacement_text,
-                    ordered_resource_ids,
-                )
+    let receipt = publish_guarded_edit_generation(
+        &controller,
+        &registry,
+        &handle,
+        request.expected_window_generation,
+        EditGenerationInput {
+            target_seq,
+            replacement: RootInputReplacement::new(request.replacement_text, ordered_resource_ids)
                 .with_client_action_id(client_action_id),
-                now_ms: current_v1_goal_unix_millis()?,
-            },
-        )
-        .map_err(|error| error.to_string())?;
+            now_ms: current_v1_goal_unix_millis()?,
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     // The edited generation is now the durable session authority. Refresh the retained process
     // projection before physical admission so the exact new root is never checked against the
     // pre-edit Workbench generation.
