@@ -262,12 +262,32 @@ fn uncovered_host_event_blocks_continuation_reuse() {
         "an uncovered host event must block continuation reuse"
     );
 
-    // The builder rejects exactly for this reason: the only difference that would let it proceed is
-    // the host event's presence, and the remaining proofs (rewrite fingerprint and context-reuse
-    // policy) are identical for both the host and the ordinary fixture, so no remedy assertion is
-    // added here: proving the positive path would require reproducing the full rewrite-fingerprint
-    // snapshot, which the ContextInjection producer owns rather than this layer.
-    // 构建器正是因为这个原因拒绝：唯一能放行的差别就是该宿主事件是否存在，而其余证明（改写指纹与
-    // 上下文复用策略）在宿主夹具与普通夹具上完全相同。因此这里不加"反证通过"断言：证明正向路径需要
-    // 复现完整的改写指纹快照，它由 ContextInjection 生产者持有，而不属于本层。
+    // Remedy: with the host message absent and the rewrite fingerprint taken from the same config,
+    // the builder must reach a proven continuation. This is what makes the refusal above attributable
+    // to the host-event boundary rather than to a proof that fails for both fixtures.
+    // 反证：在宿主消息缺席、且改写指纹取自同一 config 时，构建器必须给出已证明的延续。正因如此，
+    // 上面的拒绝才能归因于宿主事件边界，而不是两个夹具都失败的某一项证明。
+    let config = vulcan_core::types::ControllerConfig::default();
+    let mut proven = uncovered.clone();
+    proven.messages = vec![
+        text_message("covered-message"),
+        text_message("later-message"),
+        text_message("ordinary-trailing-message"),
+    ];
+    proven.continuation = ProviderContinuation {
+        context_rewrite_fingerprint: Some(config.provider_rewrite_fingerprint()),
+        ..frozen("covered-message")
+    };
+    assert!(
+        request::build_public_continuation(
+            &proven,
+            &config,
+            PROVIDER_ID,
+            PROTOCOL_PROFILE_ID,
+            MODEL_ID,
+            0,
+        )
+        .is_some(),
+        "an ordinary uncovered suffix with a matching fingerprint must reuse the continuation"
+    );
 }
