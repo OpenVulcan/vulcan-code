@@ -260,14 +260,17 @@
      `outbound_deliveries` 的状态/结算确认；
   3. 该闸门在 `startup_recovery.rs:126` 为假时 `continue`，**整会话跳过修复**。
   **推论**：若某会话的待办**仅**为"已接纳但未投影的入站通知"，重启后该会话不会被修复。
+  **已由测试固定当前行为**：`accepted_but_unprojected_inbound_notification_is_not_a_session_level_recovery_trigger`
+  （`startup_recovery.rs` 的 `#[cfg(test)] mod tests`）构造仅含该状态的 `CollaborationState`，
+  断言 `needs_delivery_recovery` 为**假**。**变异验证**：在闸门中加入
+  `inbound_notifications ... == Accepted` 后该测试 FAILED（失败信息点明"若此行为改变，请更新 S5 §三"），
+  证明它确实锁定该行为；生产改动已回退（`git diff` 无删除行）。
   **我没有断言的是**：(a) 该通知被永久丢失——下一次物理 API 准备仍会经
   `project_collaboration_before_api` 投影它，所以更可能是**延迟到下一次请求**；(b) 这是缺陷——
   也可能是有意的成本取舍（避免为一条通知加载整个会话）。
-  **复现方法**：构造仅含 `state == Accepted` 入站通知的会话文档，断言
-  `needs_delivery_recovery(&collaboration) == false`，再断言恢复遍历跳过该会话。
-  **为什么本轮不修**：修改会话级闸门的成本/收益与它是否属既有并行边界均需判断，且
-  `25ecf35d` 已修复的是**同一功能的相邻**窗口，直接扩大闸门有改变启动恢复成本特征的风险。
-  据实登记为**待领域判断的具体点**，不启动修复、不弱化任何守卫。
+  **为什么本轮不修**：会话级闸门的成本/收益与是否属既有并行边界均需判断，且
+  `25ecf35d` 修的是同一功能的相邻窗口，直接扩大闸门有改变启动恢复成本特征的风险。
+  据实登记为**待领域判断的具体点**，不弱化任何守卫、不改生产代码。
 - **通知恢复的其余窗口**（`25ecf35d` 修复 `Recorded` 未接纳窗口；`72deb8c0` 补齐"目标停止后拒绝
   且记录完整保留、恢复运行后成功投递"这一跨越停止的时序；`599e630c` 补齐"跨项目授权撤销后拒绝、
   重新授权后投递同一条保留记录"这一授权时序）：目标接纳后来源进度写入失败、
