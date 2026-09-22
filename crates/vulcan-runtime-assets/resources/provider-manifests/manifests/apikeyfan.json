@@ -809,6 +809,57 @@
       }
     },
     {
+      "operation_id": "apikeyfan.grok-imagine-video-1.5.generate",
+      "operation": "video_generate",
+      "carrier": "provider_tool",
+      "input_resources": ["image"], "output_resources": ["video"],
+      "tool_target_refs": ["grok-imagine-video-1.5.generate"],
+      "request_profile_refs": [], "response_profile_refs": [],
+      "upload_channel_refs": ["inline.image-data-url"],
+      "upload_bindings": [
+        {
+          "source_path": "/image/path", "target_path": "/image/url",
+          "upload_channel_refs": ["inline.image-data-url"],
+          "mime_types_by_extension": {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"},
+          "required": false, "remove_source": true
+        },
+        {
+          "source_path": "/reference_images", "target_path": "/reference_images",
+          "item_source_path": "/path", "item_target_path": "/url",
+          "upload_channel_refs": ["inline.image-data-url"],
+          "mime_types_by_extension": {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"},
+          "required": false, "remove_source": true
+        }
+      ],
+      "timeout_ms": 900000, "idempotent": false,
+      "async_execution": {
+        "poll_interval_ms": 5000,
+        "max_backoff_ms": 15000,
+        "timeout_ms": 900000,
+        "cancellation_supported": false,
+        "generic_json": {
+          "poll_endpoint_path": "/videos",
+          "poll_method": "get",
+          "task_id_pointer": "/request_id",
+          "task_id_in_path": true,
+          "status_pointer": "/status",
+          "queued_statuses": ["pending"],
+          "running_statuses": [],
+          "success_statuses": ["done", "completed", "succeeded"],
+          "failure_statuses": ["failed", "error"],
+          "cancelled_statuses": ["cancelled"],
+          "success_follow_up": {
+            "endpoint_path": "/videos",
+            "method": "get",
+            "identifier_source": "provider_task_id",
+            "identifier_in_path": true,
+            "identifier_path_suffix": "content",
+            "response_body": "binary_resource"
+          }
+        }
+      }
+    },
+    {
       "operation_id": "apikeyfan.gpt-image-2.5-sunburst.generate",
       "operation": "image_generate",
       "carrier": "provider_tool",
@@ -987,6 +1038,55 @@
         "format_policy": {"input_formats": ["text", "image/jpeg", "image/png", "image/webp", "reference_voice_id"], "output_formats": ["video/mp4", "video:h264", "audio:aac"]},
         "constraints": ["Single-image mode must omit aspect_ratio.", "Multi-reference mode accepts at most seven images and three voice IDs and requires prompt plus aspect_ratio.", "Video editing and extension endpoints are not exposed."],
         "limitations": ["The ordinary 15-second ceiling must not be interpreted as a verified 15-second multi-reference guarantee.", "480p is supported by configuration evidence; the completed live samples used 720p and two seconds."],
+        "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#grok-media"]
+      },
+      "output": {
+        "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "video", "mime_types": ["video/mp4"],
+        "resource_decoders": [{"source_path": "/", "encoding": "binary_body", "resource_kind": "video", "mime_type": "video/mp4", "max_bytes": 104857600, "output_id_prefix": "video"}]
+      },
+      "execution": {"endpoint_path": "/videos/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_async_poll"}
+    },
+    {
+      "target_id": "grok-imagine-video-1.5.generate",
+      "description": "Generate a Grok Imagine Video 1.5 video through the APIKEY.FAN asynchronous start, poll, and authenticated content route. Relay acceptance of this exact model ID is not yet verified.",
+      "service_entry_id": "grok-media", "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "grok-imagine-video-1.5", "availability_model_ids_any": ["grok-imagine-video-1.5"],
+      "display_name": "Grok Imagine Video 1.5", "tool_id": "video_generate", "capability": "video_generate",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "model": {"type": "string", "const": "grok-imagine-video-1.5", "default": "grok-imagine-video-1.5"},
+          "prompt": {"type": "string", "minLength": 1},
+          "image": {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}}, "required": ["path"]},
+          "reference_images": {"type": "array", "minItems": 1, "maxItems": 7, "items": {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}}, "required": ["path"]}},
+          "reference_audios": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "object", "additionalProperties": false, "properties": {"voice_id": {"type": "string", "minLength": 1}}, "required": ["voice_id"]}},
+          "aspect_ratio": {"type": "string", "enum": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]},
+          "duration": {"type": "integer", "minimum": 1, "maximum": 15, "default": 8},
+          "resolution": {"type": "string", "enum": ["480p", "720p"], "default": "480p"}
+        },
+        "anyOf": [
+          {"required": ["prompt"]},
+          {"required": ["image"]},
+          {"required": ["reference_images"]},
+          {"required": ["reference_audios"]}
+        ],
+        "allOf": [
+          {"not": {"required": ["image", "reference_images"]}},
+          {"not": {"required": ["image", "reference_audios"]}},
+          {"if": {"anyOf": [{"required": ["reference_images"]}, {"required": ["reference_audios"]}]}, "then": {"required": ["prompt", "aspect_ratio"]}},
+          {"if": {"required": ["image"]}, "then": {"not": {"required": ["aspect_ratio"]}}}
+        ]
+      },
+      "extension_profile": {
+        "summary": "Generate text-to-video, single-image-to-video, or reviewed multi-reference video with Grok Imagine Video 1.5.",
+        "characteristics": ["Asynchronous generation with authenticated binary content download.", "Single-image mode preserves the input image aspect ratio."],
+        "input_modes": ["text_to_video", "image_to_video", "multi_reference_video"],
+        "resolution_policy": {"mode": "fixed_presets", "presets": [{"value": "480p"}, {"value": "720p"}], "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]},
+        "duration_policy": {"minimum_seconds": 1, "maximum_seconds": 15, "default_seconds": 8},
+        "format_policy": {"input_formats": ["text", "image/jpeg", "image/png", "image/webp", "reference_voice_id"], "output_formats": ["video/mp4", "video:h264", "audio:aac"]},
+        "constraints": ["Single-image mode must omit aspect_ratio.", "Multi-reference mode accepts at most seven images and three voice IDs and requires prompt plus aspect_ratio.", "Video editing and extension endpoints are not exposed."],
+        "limitations": ["Relay acceptance of this exact model ID is not yet verified.", "The ordinary 15-second ceiling must not be interpreted as a verified 15-second multi-reference guarantee.", "480p is supported by configuration evidence; the completed live samples used 720p and two seconds."],
         "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#grok-media"]
       },
       "output": {

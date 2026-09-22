@@ -3,7 +3,8 @@
   "fixture_id": "apikeyfan-grok-video-async",
   "base_manifest": "tavily.json",
   "production_target_refs": [
-    "apikeyfan::grok-imagine-video.generate"
+    "apikeyfan::grok-imagine-video.generate",
+    "apikeyfan::grok-imagine-video-1.5.generate"
   ],
   "tool_target": {
     "target_id": "public-api.fixture-apikeyfan-grok-video",

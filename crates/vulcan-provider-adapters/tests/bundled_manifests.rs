@@ -2238,6 +2238,7 @@ fn apikeyfan_manifest_is_a_closed_group_intersection() {
             "gpt-image-2.5-sunburst.generate",
             "grok-imagine-image.generate",
             "grok-imagine-image-quality.generate",
+            "grok-imagine-video-1.5.generate",
             "grok-imagine-video.generate",
         ])
     );
