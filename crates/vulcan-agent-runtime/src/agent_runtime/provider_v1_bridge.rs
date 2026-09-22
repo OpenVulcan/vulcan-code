@@ -1683,4 +1683,124 @@ mod tests {
             })
         ));
     }
+
+    /// Builds one provider failure with the exact dispatch facts the eligibility rule inspects.
+    /// 构建一个供应商失败，其分派事实正是可续期规则所检查的内容。
+    fn eligibility_error(
+        category: AiErrorCategory,
+        dispatch_outcome: DispatchOutcome,
+        semantic_output_observed: bool,
+        side_effect_observed: bool,
+    ) -> AiExecutionError {
+        AiExecutionError {
+            category,
+            subcategory: None,
+            stage: String::from("response"),
+            http_status: Some(500),
+            transport: None,
+            websocket_close_code: None,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message: String::from("provider failed"),
+            dispatch_outcome,
+            semantic_output_observed,
+            side_effect_observed,
+            terminal: true,
+            retryable: false,
+            retry_after: None,
+        }
+    }
+
+    /// Verifies provider errors only resume when the failed attempt is proven replay-safe.
+    /// 验证供应商错误仅在失败尝试被证明可安全重放时才允许续跑。
+    ///
+    /// # Notes
+    /// 说明
+    /// This rule decides whether a failed provider attempt may be resumed at all, yet it previously had
+    /// no direct assertion: its result was only carried into terminal facts. The unsafe directions are
+    /// asserted first because silently allowing a continuation after visible output or an observed side
+    /// effect would replay work the provider may already have performed.
+    /// 本规则决定失败尝试能否续跑，但此前没有任何直接断言：其返回值只被带进终态事实。这里先断言不安全
+    /// 方向，因为在已产生可见输出或已观测副作用后静默允许续跑会重放供应商可能已完成的工作。
+    #[test]
+    fn provider_continuation_eligibility_requires_a_replay_safe_attempt() {
+        // Any visible semantic output or observed side effect forbids resumption regardless of category.
+        // 任何可见语义输出或已观测副作用都会禁止续跑，与类别无关。
+        for (semantic, side_effect) in [(true, false), (false, true), (true, true)] {
+            assert_eq!(
+                provider_failure_continuation_eligibility(
+                    Some(&eligibility_error(
+                        AiErrorCategory::ProviderUnavailable,
+                        DispatchOutcome::Dispatched,
+                        semantic,
+                        side_effect,
+                    )),
+                    false,
+                ),
+                ContinuationEligibility::Forbidden,
+                "replay-unsafe attempt must forbid continuation (semantic={semantic}, side_effect={side_effect})"
+            );
+        }
+        // An unknown dispatch outcome cannot prove the attempt was never performed.
+        // 未知分派结果无法证明该尝试从未被执行。
+        assert_eq!(
+            provider_failure_continuation_eligibility(
+                Some(&eligibility_error(
+                    AiErrorCategory::ProviderUnavailable,
+                    DispatchOutcome::Unknown,
+                    false,
+                    false,
+                )),
+                false,
+            ),
+            ContinuationEligibility::Forbidden,
+            "an unknown dispatch outcome must forbid continuation"
+        );
+        // A dispatched, replay-safe provider error may resume.
+        // 已分派且可安全重放的供应商错误可以续跑。
+        assert_eq!(
+            provider_failure_continuation_eligibility(
+                Some(&eligibility_error(
+                    AiErrorCategory::ProviderUnavailable,
+                    DispatchOutcome::Dispatched,
+                    false,
+                    false,
+                )),
+                false,
+            ),
+            ContinuationEligibility::Allowed,
+            "a replay-safe provider error must allow continuation"
+        );
+        // Exhausted retries and interrupted attempts remain resumable, and a missing error never is.
+        // 重试耗尽与被打断的尝试仍可续跑，而缺失错误一律不可续跑。
+        assert_eq!(
+            provider_failure_continuation_eligibility(None, true),
+            ContinuationEligibility::Allowed,
+            "exhausted retries must allow continuation"
+        );
+        assert_eq!(
+            provider_failure_continuation_eligibility(
+                Some(&eligibility_error(
+                    AiErrorCategory::Cancelled,
+                    DispatchOutcome::Dispatched,
+                    false,
+                    false,
+                )),
+                false,
+            ),
+            ContinuationEligibility::Forbidden,
+            "a completed cancellation must forbid continuation"
+        );
+        assert_eq!(
+            provider_failure_continuation_eligibility(None, false),
+            ContinuationEligibility::Forbidden,
+            "an absent error cannot authorize continuation"
+        );
+    }
 }

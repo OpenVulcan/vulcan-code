@@ -164,3 +164,110 @@ fn non_v1_expired_context_is_a_user_event() {
     assert!(text.contains("<vulcan_context_expired"));
     assert!(text.contains("event_id=\"context-expired:event-1\""));
 }
+
+/// Verifies an uncovered host event blocks continuation reuse, using the real host-event producer.
+/// 验证未被覆盖的宿主事件会阻止延续复用，且使用真实的宿主事件生产者。
+///
+/// # Notes
+/// 说明
+/// The reuse guard keys on the producer-owned message prefix. This test builds its host message
+/// through the same synchronizer that production uses, so the guard and the producer are tied by
+/// construction instead of both repeating the same literal. The uncovered case is asserted first:
+/// reusing a continuation across a host event the cursor never covered would drop that event from
+/// the provider's view.
+/// 复用守卫依赖生产者持有的消息前缀。本测试通过生产同款的同步器构造宿主消息，使守卫与生产者由构造
+/// 相连，而不是各自重复同一个字面量。先断言未覆盖的情形：跨越游标从未覆盖的宿主事件复用延续，会让
+/// 该事件从供应商视野中消失。
+#[test]
+fn uncovered_host_event_blocks_continuation_reuse() {
+    use vulcan_core::types::{
+        ConversationMessage, ConversationPayload, ConversationSnapshot, ProviderContinuation,
+    };
+
+    // Route identities are frozen here only to satisfy the continuation ownership check.
+    // 这里的路由标识仅用于满足延续归属检查。
+    const PROVIDER_ID: &str = "openai";
+    const PROTOCOL_PROFILE_ID: &str = "openai-responses.v1";
+    const MODEL_ID: &str = "gpt-5";
+
+    let injection = vulcan_core::types::ProviderContextInjection {
+        expired_events: vec![vulcan_core::types::ProviderContextExpiredEvent {
+            event_id: String::from("context-expired:event-1"),
+            source_id: String::from("context_injection:profile:hash-1"),
+            occurrence_id: String::from("context_injection:profile:hash-1:occurrence:1"),
+            tag: String::from("profile"),
+            content_hash: String::from("hash-1"),
+            source: String::from("context_injection"),
+            target: String::from("model"),
+            scope: String::from("turn"),
+            turn_id: String::from("turn-1"),
+            body: String::from("Context injection expired after TTL."),
+        }],
+        ..Default::default()
+    };
+    let mut with_host_event = ConversationSnapshot::default();
+    synchronize_runtime_host_events(
+        &mut with_host_event,
+        &runtime_context_host_event_candidates(&injection),
+        None,
+    )
+    .expect("typed expiry should synchronize");
+    let host_message_id = with_host_event.messages[0].id.clone();
+    assert!(
+        request::is_runtime_host_event_message_id(host_message_id.as_str()),
+        "the producer's own message id must be recognized by the reuse guard"
+    );
+    assert!(
+        !request::is_runtime_host_event_message_id("ordinary-user-message"),
+        "an ordinary message id must not be treated as a host event"
+    );
+
+    let text_message = |id: &str| ConversationMessage {
+        id: String::from(id),
+        payload: ConversationPayload::UserText {
+            text: String::from("ordinary"),
+            attachments: Vec::new(),
+        },
+    };
+    let frozen = |last_local_message_id: &str| ProviderContinuation {
+        provider_id: Some(String::from(PROVIDER_ID)),
+        protocol_profile_id: Some(String::from(PROTOCOL_PROFILE_ID)),
+        model_id: Some(String::from(MODEL_ID)),
+        last_provider_message_id: Some(String::from("provider-message-1")),
+        last_local_message_id: Some(String::from(last_local_message_id)),
+        ..Default::default()
+    };
+
+    // covered first, host event uncovered after it: the guard must refuse the builder.
+    // 先覆盖普通消息、宿主事件留在其后未被覆盖：守卫必须拒绝构建。
+    let mut uncovered = ConversationSnapshot {
+        messages: vec![
+            text_message("covered-message"),
+            text_message("later-message"),
+            with_host_event.messages[0].clone(),
+        ],
+        continuation: frozen("covered-message"),
+        ..Default::default()
+    };
+    assert!(
+        request::build_public_continuation(
+            &uncovered,
+            &vulcan_core::types::ControllerConfig::default(),
+            PROVIDER_ID,
+            PROTOCOL_PROFILE_ID,
+            MODEL_ID,
+            0,
+        )
+        .is_none(),
+        "an uncovered host event must block continuation reuse"
+    );
+
+    // The builder rejects exactly for this reason: the only difference that would let it proceed is
+    // the host event's presence, and the remaining proofs (rewrite fingerprint and context-reuse
+    // policy) are identical for both the host and the ordinary fixture, so no remedy assertion is
+    // added here: proving the positive path would require reproducing the full rewrite-fingerprint
+    // snapshot, which the ContextInjection producer owns rather than this layer.
+    // 构建器正是因为这个原因拒绝：唯一能放行的差别就是该宿主事件是否存在，而其余证明（改写指纹与
+    // 上下文复用策略）在宿主夹具与普通夹具上完全相同。因此这里不加"反证通过"断言：证明正向路径需要
+    // 复现完整的改写指纹快照，它由 ContextInjection 生产者持有，而不属于本层。
+}

@@ -321,7 +321,7 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
 /// # Returns
 /// 返回�?/// A proven public continuation, or `None` when any ownership, boundary, or mutation proof fails.
 /// 返回已证明安全的公共延续；任一归属、边界或变更证明失败时返�?`None`�?
-fn build_public_continuation(
+pub(super) fn build_public_continuation(
     snapshot: &CoreConversationSnapshot,
     config: &CoreControllerConfig,
     provider_id: &str,
@@ -380,8 +380,8 @@ fn build_public_continuation(
 
 /// Identifies canonical host User messages that must be covered before continuation reuse.
 /// 识别必须先被延续游标覆盖的规范宿主 User 消息。
-fn is_runtime_host_event_message_id(message_id: &str) -> bool {
-    message_id.starts_with("runtime-host:")
+pub(super) fn is_runtime_host_event_message_id(message_id: &str) -> bool {
+    message_id.starts_with(vulcan_context::runtime_host::RUNTIME_HOST_MESSAGE_PREFIX)
 }
 
 #[cfg(test)]
