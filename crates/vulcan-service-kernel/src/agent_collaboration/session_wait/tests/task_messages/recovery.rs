@@ -3,8 +3,9 @@
 
 use super::*;
 use vulcan_session_core::v1::collaboration::{
-    CollaborationDeliveryId, CollaborationNotificationId, CollaborationNotificationState,
-    CollaborationTaskMessage, SendNotificationInput, SetRunControlInput,
+    CollaborationDeliveryId, CollaborationGrantAction, CollaborationNotificationId,
+    CollaborationNotificationState, CollaborationTaskMessage, SendNotificationInput,
+    SetRunControlInput,
 };
 use vulcan_session_core::v1::document::SessionDocument;
 
@@ -727,17 +728,31 @@ async fn session_task_outbox_recovery_isolates_obsolete_turns() {
 /// 撤销授权阻止首次投递，但允许复制已有接纳且不新增输入。
 /// Builds both participant coordinates from the actual durable documents, never from labels.
 /// 从实际可靠文档构建双方参与者坐标，绝不依赖标签。
+///
+/// # Notes
+/// 说明
+/// Each participant takes its project from its **own** locator, so a cross-project pair keeps the
+/// genuinely different scopes that authorize a cross-project delivery.
+/// 每个参与者的项目取自**自身**定位器，因此跨项目组合保留真正不同的项目范围，跨项目投递正是
+/// 依此授权。
 async fn notification_participants(
     invocation: &ValidatedInvocation,
     source: &Arc<SessionHandle>,
     target: &Arc<SessionHandle>,
 ) -> (CollaborationParticipant, CollaborationParticipant) {
+    let source_project_id = invocation.source_locator.project_id().to_string();
+    let target_project_id = target
+        .storage_locator()
+        .map_err(|error| error.to_string())
+        .unwrap()
+        .project_id()
+        .to_string();
     let source_participant = source
         .read(|document| {
             CollaborationParticipant::new(
                 source.session_id().to_string(),
                 source.session_id().to_string(),
-                invocation.source_locator.project_id(),
+                source_project_id.clone(),
                 document.segment_generation(),
                 document
                     .active_turn()
@@ -753,7 +768,7 @@ async fn notification_participants(
             CollaborationParticipant::new(
                 target.session_id().to_string(),
                 target.session_id().to_string(),
-                invocation.source_locator.project_id(),
+                target_project_id.clone(),
                 document.segment_generation(),
                 document
                     .active_turn()
@@ -897,6 +912,153 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
         .expect("the restarted target must hold the acceptance");
     assert_eq!(inbound.body, body);
     assert_eq!(inbound.delivery_id, delivery_id);
+}
+
+/// A cross-project notification stranded before acceptance must obey a revoked notify grant.
+/// 停留在接纳之前的跨项目通知必须遵守已撤销的通知授权。
+///
+/// # Notes
+/// 说明
+/// `deliver_recorded_notification` re-evaluates the cross-project `Notify` grant before it accepts on
+/// the target. A revoke that lands inside the stranded window must therefore block recovery, and
+/// re-granting must deliver the exact same retained record rather than a reconstructed one.
+/// `deliver_recorded_notification` 在目标接纳之前会重新判定跨项目 `Notify` 授权。因此落在滞留窗口
+/// 内的撤销必须阻断恢复，而重新授权必须投递**同一条**被保留的记录，而不是重建一条。
+#[tokio::test]
+async fn revoked_cross_project_grant_blocks_stranded_notification_recovery() {
+    let (_root, invocation, target, _) = message_fixture(true).await;
+    let source = invocation.source_handle.clone();
+    let (source_participant, target_participant) =
+        notification_participants(&invocation, &source, &target).await;
+    // Cross-project delivery is not implied by a shared root, so the participant scopes must differ.
+    assert_ne!(
+        source_participant.project_id, target_participant.project_id,
+        "this test requires a genuinely cross-project target"
+    );
+    // The user grants Notify first, which is the authority the crash window is entered under.
+    // 用户先授予 Notify，这正是进入崩溃窗口时所依据的权威。
+    let grant = crate::project_conversation_services::service_add_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        target.session_id().to_string(),
+        format!("user-grant-add:v1:{}", Uuid::new_v4()),
+        [CollaborationGrantAction::Notify].into_iter().collect(),
+    )
+    .await
+    .unwrap();
+    let notification_id = CollaborationNotificationId::try_new("revoked-notification").unwrap();
+    let delivery_id = CollaborationDeliveryId::try_new("revoked-delivery").unwrap();
+    let body = "Sent while the cross-project grant was valid.";
+    source
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.send_notification(SendNotificationInput {
+                    operation_id: CollaborationOperationId::try_new("revoked-send").unwrap(),
+                    notification_id: notification_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    source: source_participant.clone(),
+                    target: target_participant.clone(),
+                    body: body.into(),
+                    created_at_ms: 5,
+                })
+            },
+        )
+        .unwrap();
+    // The user revokes before the acceptance half runs, through the same service surface as a real host.
+    // 用户在接纳一半执行之前，通过与真实宿主相同的服务入口撤销授权。
+    crate::project_conversation_services::service_remove_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        grant["grant"]["grant_id"].as_str().unwrap().to_owned(),
+        format!("user-grant-remove:v1:{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    // Recovery must refuse instead of delivering under the revoked authority.
+    // 恢复必须拒绝，而不是在已撤销的授权下投递。
+    let failure = reconcile_session_v1_collaboration_outbox(
+        &crate::ServiceEventEmitter::new(vec![]),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .expect_err("recovery must not deliver under a revoked cross-project grant");
+    assert!(
+        failure.contains(notification_id.as_str()),
+        "the refusal must name the exact notification it could not deliver: {failure}"
+    );
+    // The revoked target must remain untouched.
+    // 已撤销授权的目标必须未被改动。
+    assert!(
+        target
+            .read(|document| document
+                .collaboration_state()
+                .inbound_notifications
+                .get(&notification_id)
+                .is_none())
+            .unwrap(),
+        "a revoked grant must keep the notification off the target"
+    );
+    let retained = source
+        .read(|document| {
+            document
+                .collaboration_state()
+                .notifications
+                .get(&notification_id)
+                .cloned()
+        })
+        .unwrap()
+        .expect("the recorded notification must survive a refused recovery");
+    assert_eq!(retained.state, CollaborationNotificationState::Recorded);
+    assert_eq!(retained.body, body);
+    // Re-granting the same authority delivers that exact retained record.
+    // 重新授予同一授权会投递那条被精确保留的记录。
+    crate::project_conversation_services::service_add_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        target.session_id().to_string(),
+        format!("user-grant-add:v1:{}", Uuid::new_v4()),
+        [CollaborationGrantAction::Notify].into_iter().collect(),
+    )
+    .await
+    .unwrap();
+    let repaired = reconcile_session_v1_collaboration_outbox(
+        &crate::ServiceEventEmitter::new(vec![]),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .expect("a re-granted authority must deliver the retained notification");
+    assert_eq!(
+        repaired, 1,
+        "the retained notification must be delivered exactly once after re-granting"
+    );
+    let inbound = target
+        .read(|document| {
+            document
+                .collaboration_state()
+                .inbound_notifications
+                .get(&notification_id)
+                .cloned()
+        })
+        .unwrap()
+        .expect("the re-granted target must hold the acceptance");
+    assert_eq!(inbound.body, body);
+    assert_eq!(inbound.delivery_id, delivery_id);
+    assert_eq!(
+        source
+            .read(|document| {
+                document
+                    .collaboration_state()
+                    .notifications
+                    .get(&notification_id)
+                    .map(|record| record.state)
+            })
+            .unwrap(),
+        Some(CollaborationNotificationState::Accepted)
+    );
 }
 
 #[tokio::test]
