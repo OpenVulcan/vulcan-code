@@ -394,13 +394,10 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
             .saturating_mul(usize::from(window_policy.effective_context_window_percent))
             .saturating_div(100)
     });
-    // Historical UI percentages follow the session node; provider admission retains the model limit.
-    // 历史界面百分比遵循会话节点；Provider 准入仍保留模型上限。
-    let provider_request_hard_limit = context_limit.map(|limit| {
-        limit
-            .saturating_mul(usize::from(window_policy.effective_context_window_percent))
-            .saturating_div(100)
-    });
+    // Historical reconstruction preserves the real model limit for Provider admission; the
+    // configured percentage remains scoped to the planning window above.
+    // 历史重建为 Provider 准入保留模型真实上限；配置百分比仍只作用于上方规划窗口。
+    let provider_request_hard_limit = context_limit;
     let auto_compact_limit = context_limit.map(|raw_window| {
         // compressionWindow is session-scoped while rawWindow remains the effective hard model window.
         // compressionWindow 只作用于会话压缩，而 rawWindow 仍是模型有效硬窗口。

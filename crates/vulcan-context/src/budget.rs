@@ -286,12 +286,10 @@ pub fn build_request_context_budget_snapshot_with_options(
         let percentage = usize::from(window_policy.effective_context_window_percent);
         limit.saturating_mul(percentage).saturating_div(100).max(1)
     });
-    // The selected session node changes compaction planning, never the real provider limit.
-    // 所选会话节点只改变压缩规划，不改变真实 Provider 上限。
-    let provider_request_hard_limit = raw_context_limit.map(|limit| {
-        let percentage = usize::from(window_policy.effective_context_window_percent);
-        limit.saturating_mul(percentage).saturating_div(100).max(1)
-    });
+    // Provider admission uses the model's real input limit. Availability percentages and the
+    // selected session node belong only to planning and automatic compaction.
+    // Provider 准入使用模型真实输入上限；可用百分比与所选会话节点仅属于规划和自动压缩。
+    let provider_request_hard_limit = raw_context_limit;
     let percentage_limit =
         compression_window_limit
             .or(raw_context_limit)
@@ -770,7 +768,7 @@ mod tests {
 
         assert_eq!(budget.context_limit, Some(1_000_000));
         assert_eq!(budget.effective_context_window, Some(258_400));
-        assert_eq!(budget.provider_request_hard_limit, Some(950_000));
+        assert_eq!(budget.provider_request_hard_limit, Some(1_000_000));
         assert_eq!(budget.auto_compact_limit, Some(244_800));
         assert!(budget.should_compact());
         assert!(budget.active_context_tokens < budget.provider_request_hard_limit.unwrap());
@@ -804,7 +802,7 @@ mod tests {
             RequestContextBudgetSnapshotOptions::default(),
         );
 
-        assert_eq!(budget.provider_request_hard_limit, Some(237_500));
+        assert_eq!(budget.provider_request_hard_limit, Some(250_000));
         assert!(budget.active_context_tokens >= budget.provider_request_hard_limit.unwrap());
     }
 
