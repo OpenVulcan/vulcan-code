@@ -590,3 +590,69 @@ fn every_bundled_target_input_schema_is_an_object() {
         }
     }
 }
+
+/// Asserts every declared rule protocol is a route the same manifest speaks.
+/// 断言规则声明的每个协议都是同一清单真实具备的路由协议，规则不得超出入口路由。
+#[test]
+fn every_declared_rule_protocol_is_served_by_its_own_manifest() {
+    for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
+        let document = parse_manifest(&stem, &text);
+        let mut served = BTreeSet::new();
+        for service in document["services"].as_array().expect("services array") {
+            let Some(routes) = service["protocol_routes"].as_array() else {
+                continue;
+            };
+            for route in routes {
+                if let Some(protocol) = route["protocol_profile_id"].as_str() {
+                    served.insert(protocol.to_string());
+                }
+            }
+        }
+        for rule in document["model_rules"].as_array().expect("model_rules array") {
+            let rule_id = rule["rule_id"].as_str().unwrap_or("(anonymous)");
+            for protocol in rule["supported_protocols"]
+                .as_array()
+                .expect("supported_protocols array")
+            {
+                let protocol = protocol.as_str().expect("protocol identifier");
+                assert!(
+                    served.contains(protocol),
+                    "rule `{rule_id}` in manifest `{stem}` declares protocol `{protocol}` that no entry route serves"
+                );
+            }
+        }
+    }
+}
+
+/// Asserts every tool target and its owning operation agree on the capability they expose.
+/// 断言每个工具目标与其所属 operation 对同一能力的声明一致。
+#[test]
+fn every_bundled_target_capability_matches_its_operation() {
+    for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
+        let document = parse_manifest(&stem, &text);
+        let mut capabilities = BTreeMap::new();
+        for target in document["tool_targets"].as_array().expect("tool_targets array") {
+            capabilities.insert(
+                target["target_id"].as_str().expect("target identifier").to_string(),
+                target["capability"].as_str().map(str::to_string),
+            );
+        }
+        for operation in document["operations"].as_array().expect("operations array") {
+            let operation_id = operation["operation_id"].as_str().expect("operation id");
+            let declared = operation["operation"].as_str().expect("operation kind");
+            let Some(references) = operation["tool_target_refs"].as_array() else {
+                continue;
+            };
+            for reference in references {
+                let reference = reference.as_str().expect("target reference");
+                let Some(Some(capability)) = capabilities.get(reference) else {
+                    continue;
+                };
+                assert_eq!(
+                    capability, declared,
+                    "target `{reference}` in manifest `{stem}` must expose capability `{declared}` declared by operation `{operation_id}`"
+                );
+            }
+        }
+    }
+}
