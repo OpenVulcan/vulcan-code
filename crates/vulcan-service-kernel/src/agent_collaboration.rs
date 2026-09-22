@@ -56,12 +56,10 @@ mod child_question_launch;
 mod child_question_request;
 #[cfg(test)]
 mod execution_binding_tests;
-#[cfg(test)]
-mod native_dispatch_tests;
-#[cfg(test)]
-pub(crate) mod test_support;
 mod launch;
 pub(crate) mod lifecycle_write;
+#[cfg(test)]
+mod native_dispatch_tests;
 mod notifications;
 mod participants;
 mod projection;
@@ -71,6 +69,8 @@ mod startup_recovery;
 mod task_delivery;
 mod task_launch;
 mod task_results;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) use projection::project_collaboration_before_api;
 pub(crate) use startup_recovery::start_collaboration_recovery;
 pub(crate) use task_launch::wake_session_tasks_if_idle;
@@ -3252,12 +3252,12 @@ async fn wait_question(
             "wait caller is not authorized for the question",
         ));
     }
-    let baseline = match after_revision {
-        Some(revision) => revision,
-        None => source_handle
-            .read(|document| document.memory_revision())
-            .map_err(|error| format!("failed to read question wait baseline: {error}"))?,
-    };
+    // The cursor tracks the question's own collaboration state, never the owning session's revision.
+    // A caller-supplied cursor resumes from that exact content position; a caller without one declares
+    // no baseline and therefore observes the moment it resumes, which is a timeout when nothing moved.
+    // 游标跟踪问题自身的协作状态，绝不使用所属会话的修订号。调用方给出游标时从该精确内容位置恢复；
+    // 未给出时不声明任何基线，因此它观察到的是恢复的那一刻——问题没有变化时即为超时。
+    let baseline = after_revision;
     let deadline = tokio::time::Instant::now()
         .checked_add(std::time::Duration::from_millis(timeout_ms))
         .ok_or_else(|| String::from("question wait timeout exceeds runtime instant range"))?;
@@ -3278,14 +3278,20 @@ async fn wait_question(
             }
             return Ok(incoming);
         }
-        let (question, delivery, revision) = read_question_for_model(&source_handle, &question_id)?;
+        let (question, delivery, _) = read_question_for_model(&source_handle, &question_id)?;
+        let cursor = question_wait_cursor(&question, &delivery)?;
         if caller_is_source || caller_is_target {
-            if question.state != CollaborationQuestionState::Pending || revision > baseline {
+            // A settled question and a genuinely advanced cursor both end the wait; a cursor that the
+            // waiter's own ToolCall advanced no longer can, because it never enters this cursor.
+            // 已结算问题与真实推进的游标都会结束等待；被等待者自身工具调用推进的会话修订不再能结束
+            // 等待，因为它从不进入该游标。
+            let resumed = baseline.is_some_and(|previous| previous != cursor);
+            if question.state != CollaborationQuestionState::Pending || resumed {
                 return question_value(
                     &invocation.operation_id,
                     &question,
                     Some(&delivery),
-                    revision,
+                    cursor,
                     "ok",
                 );
             }
@@ -3300,13 +3306,51 @@ async fn wait_question(
                 &invocation.operation_id,
                 &question,
                 Some(&delivery),
-                revision,
+                cursor,
                 "timeout",
             );
         }
         let remaining = deadline.saturating_duration_since(now);
         tokio::time::sleep(remaining.min(std::time::Duration::from_millis(50))).await;
     }
+}
+
+/// Returns the stable content cursor of one question and its delivery.
+/// 返回单个问题及其投递的稳定内容游标。
+///
+/// # Parameters
+/// 参数
+/// `question` is the durable question record and `delivery` its exact delivery record.
+/// `question` 是可靠问题记录，`delivery` 是其精确投递记录。
+///
+/// # Returns
+/// 返回值
+/// Returns a deterministic 64-bit FNV-1a digest of the two serialized records. The value changes only
+/// when those collaboration facts change, so a wait resumed from a returned cursor keeps waiting while
+/// nothing moved, and a session revision advanced by the caller's own ToolCall cannot wake it.
+/// 返回两条序列化记录的确定性 64 位 FNV-1a 摘要。只有这些协作事实变化时该值才变化，因此以上次返回
+/// 的游标恢复的等待在没有变化时继续等待，而调用方自身工具调用推进的会话修订不会唤醒它。
+///
+/// # Notes
+/// 说明
+/// The digest is deliberately local: it is an opaque resume token for one waiter, never a durable
+/// identity and never persisted, so its exact value carries no cross-version contract.
+/// 该摘要刻意保持本地语义：它是单个等待者的不透明恢复令牌，不是可靠身份也从不持久化，因此其具体取值
+/// 不构成跨版本契约。
+fn question_wait_cursor(
+    question: &vulcan_session_core::v1::collaboration::CollaborationQuestionRecord,
+    delivery: &vulcan_session_core::v1::collaboration::CollaborationDeliveryRecord,
+) -> Result<u64, String> {
+    let encoded = serde_json::to_vec(&(question, delivery))
+        .map_err(|error| format!("failed to encode the question wait cursor: {error}"))?;
+    // Offset basis and prime are the canonical FNV-1a 64-bit constants.
+    // 偏移基与质数是 FNV-1a 64 位的规范常量。
+    let mut digest = 0xcbf2_9ce4_8422_2325u64;
+    for byte in encoded {
+        digest ^= u64::from(byte);
+        digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Ok(digest)
 }
 
 /// Finds one accepted inbound question without changing its delivery state.

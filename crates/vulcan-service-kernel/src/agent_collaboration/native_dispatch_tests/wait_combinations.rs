@@ -32,10 +32,12 @@ async fn question_wait_timeout_does_not_consume_the_question_for_a_later_wait() 
         }))
         .await
         .unwrap();
+    // A cursorless wait declares no baseline, so it observes the moment it resumes and reports timeout.
+    // 无游标等待不声明基线，因此它观察到恢复的那一刻并报告超时。
     assert_eq!(first["status"], "timeout");
     assert_eq!(first["question_id"], question_id);
-    // The timeout must not settle, cancel or otherwise consume the question.
-    // 超时不得结算、撤销或以其它方式消费该问题。
+    // Observing the question must not settle, cancel or otherwise consume it.
+    // 观察该问题不得结算、撤销或以其它方式消费它。
     let after_timeout = dispatch
         .source()
         .read(|document| {
@@ -54,14 +56,15 @@ async fn question_wait_timeout_does_not_consume_the_question_for_a_later_wait() 
             false
         ))
     );
-    // A second wait reuses an independent real ToolCall and still observes the same question.
-    // 第二次等待复用一条独立的真实工具调用，并仍能观察到同一问题。
+    // Resuming from the returned cursor keeps waiting, so this wait must end on its own timeout and
+    // still report the unchanged question.
+    // 从返回的游标恢复会继续等待，因此本次等待必须在其自身超时后结束，并仍报告未变化的问题。
     let dispatch = dispatch.retool(WAIT_QUESTION_TOOL_ID).await;
     let second = dispatch
         .invoke(AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
             question_id: question_id.clone(),
-            after_revision: None,
-            timeout_ms: 1,
+            after_revision: first["revision"].as_u64(),
+            timeout_ms: 50,
         }))
         .await
         .unwrap();
@@ -75,56 +78,57 @@ async fn question_wait_timeout_does_not_consume_the_question_for_a_later_wait() 
     );
 }
 
-/// A caller-supplied cursor is the wait baseline: a baseline below the current revision returns
-/// the snapshot immediately, while a timeout reports the revision it reached without advancing it.
-/// 调用方给出的游标即等待基线：低于当前修订的基线立即返回快照；超时则报告其到达的修订且不推进它。
+/// A returned cursor resumes the wait instead of waking it: an unchanged question keeps waiting.
+/// 返回的游标用于恢复等待而不是立刻唤醒：问题没有变化时必须持续等待。
 ///
-/// The reported revision is the owning session's durable revision, so re-waiting from it is not a
-/// replay of an already-observed question revision; the observable contract is that a timeout never
-/// mutates the question and never advances the caller's cursor on its own.
-/// 上报的修订是所属会话的可靠修订，因此以它重新等待并不是对已观察问题修订的重放；可观察契约是
-/// 超时绝不修改问题，也不自行推进调用方的游标。
+/// # Notes
+/// 说明
+/// The cursor is the question's own collaboration state, never the owning session's revision. A session
+/// revision is advanced by the waiter's own ToolCall, so the previous revision-based cursor made every
+/// resumed wait return an unchanged pending snapshot immediately.
+/// 游标是问题自身的协作状态，绝不是所属会话的修订号。会话修订会被等待者自身的工具调用推进，因此
+/// 先前的基于修订号的游标会让每次恢复的等待都立即返回未变化的待处理快照。
 #[tokio::test]
-async fn question_wait_cursor_selects_the_baseline_without_advancing_the_question() {
+async fn question_wait_cursor_resumes_instead_of_waking_on_session_revision() {
     let dispatch = native_dispatch_fixture(false, ASK_QUESTION_TOOL_ID).await;
     let asked = dispatch
         .invoke(AgentCollaborationCommand::AskQuestion(AskQuestionArgs {
             target_session_id: dispatch.target.session_id().to_string(),
-            question: "A cursor below the current revision returns at once.".into(),
+            question: "A returned cursor must keep waiting.".into(),
         }))
         .await
         .unwrap();
     let question_id = asked["question_id"].as_str().unwrap().to_owned();
+    // A cursorless wait declares no baseline, so it ends on its own deadline.
+    // 无游标等待不声明基线，因此在其自身截止时间结束。
     let dispatch = dispatch.retool(WAIT_QUESTION_TOOL_ID).await;
-    // A zero baseline is below the owning session's current revision, so the snapshot returns now.
-    // 零基线低于所属会话的当前修订，因此立即返回快照。
-    let immediate = dispatch
+    let first = dispatch
         .invoke(AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
             question_id: question_id.clone(),
-            after_revision: Some(0),
-            timeout_ms: 1,
+            after_revision: None,
+            timeout_ms: 50,
         }))
         .await
         .unwrap();
-    assert_eq!(immediate["status"], "ok");
-    assert_eq!(immediate["question_id"], question_id);
-    let immediate_revision = immediate["revision"].as_u64().expect("question revision");
-    assert!(
-        immediate_revision > 0,
-        "the reported revision is the owning session's durable revision, not a zero cursor"
-    );
-    // Re-waiting from that exact revision keeps the question untouched and still reports the snapshot.
-    // 从该精确修订重新等待不修改问题，并仍上报快照。
+    assert_eq!(first["status"], "timeout");
+    assert_eq!(first["question_id"], question_id);
+    let cursor = first["revision"].as_u64().expect("question wait cursor");
+    // Resuming from that exact cursor must keep waiting while the question has not moved.
+    // 从该精确游标恢复时，问题未发生任何变化，因此必须继续等待。
     let dispatch = dispatch.retool(WAIT_QUESTION_TOOL_ID).await;
     let resumed = dispatch
         .invoke(AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
             question_id: question_id.clone(),
-            after_revision: Some(immediate_revision),
-            timeout_ms: 1,
+            after_revision: Some(cursor),
+            timeout_ms: 50,
         }))
         .await
         .unwrap();
-    assert_eq!(resumed["question_id"], question_id);
+    assert_eq!(
+        resumed["status"], "timeout",
+        "an unchanged question must not wake a resumed wait"
+    );
+    assert_eq!(resumed["revision"].as_u64(), Some(cursor));
     assert_eq!(
         resumed["question_state"],
         serde_json::to_value(
@@ -134,7 +138,26 @@ async fn question_wait_cursor_selects_the_baseline_without_advancing_the_questio
     );
     // Neither wait may settle, answer or cancel the question.
     // 两次等待都不得结算、回答或撤销该问题。
-    let untouched = dispatch
+    assert_eq!(
+        dispatch
+            .source()
+            .read(|document| {
+                document
+                    .collaboration_state()
+                    .questions
+                    .values()
+                    .next()
+                    .map(|question| (question.state.clone(), question.answer.is_some()))
+            })
+            .unwrap(),
+        Some((
+            vulcan_session_core::v1::collaboration::CollaborationQuestionState::Pending,
+            false
+        ))
+    );
+    // A real collaboration change advances the cursor, so the resumed wait returns at once.
+    // 真实的协作变化会推进游标，因此恢复的等待立即返回。
+    let question_source = dispatch
         .source()
         .read(|document| {
             document
@@ -142,22 +165,63 @@ async fn question_wait_cursor_selects_the_baseline_without_advancing_the_questio
                 .questions
                 .values()
                 .next()
-                .map(|question| (question.state.clone(), question.answer.is_some()))
+                .unwrap()
+                .source
+                .clone()
         })
         .unwrap();
+    dispatch
+        .source()
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.cancel_question(CancelQuestionInput {
+                    operation_id:
+                        vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(
+                            "wait-cursor-cancel",
+                        )
+                        .unwrap(),
+                    question_id:
+                        vulcan_session_core::v1::collaboration::CollaborationQuestionId::try_new(
+                            question_id.clone(),
+                        )
+                        .unwrap(),
+                    requester: question_source,
+                    reason: String::from("Cursor must advance on a real change"),
+                    cancelled_at_ms: 30,
+                })
+            },
+        )
+        .unwrap();
+    let dispatch = dispatch.retool(WAIT_QUESTION_TOOL_ID).await;
+    let changed = dispatch
+        .invoke(AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
+            question_id: question_id.clone(),
+            after_revision: Some(cursor),
+            timeout_ms: 50,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(changed["status"], "ok");
+    assert_ne!(
+        changed["revision"].as_u64(),
+        Some(cursor),
+        "a settled question must advance the wait cursor"
+    );
     assert_eq!(
-        untouched,
-        Some((
-            vulcan_session_core::v1::collaboration::CollaborationQuestionState::Pending,
-            false
-        ))
+        changed["question_state"],
+        serde_json::to_value(
+            vulcan_session_core::v1::collaboration::CollaborationQuestionState::Cancelled
+        )
+        .unwrap()
     );
 }
 
-/// Cancelling after a timed-out wait must settle the question and end every later wait.
-/// 超时等待之后撤销必须结算该问题，并结束其后的每次等待。
+/// Cancelling after an observed wait must settle the question and end every later wait.
+/// 观察等待之后撤销必须结算该问题，并结束其后的每次等待。
 #[tokio::test]
-async fn cancel_after_timeout_settles_the_question_and_blocks_further_waiting() {
+async fn cancel_after_observation_settles_the_question_and_blocks_further_waiting() {
     let dispatch = native_dispatch_fixture(false, ASK_QUESTION_TOOL_ID).await;
     let asked = dispatch
         .invoke(AgentCollaborationCommand::AskQuestion(AskQuestionArgs {
@@ -168,17 +232,20 @@ async fn cancel_after_timeout_settles_the_question_and_blocks_further_waiting() 
         .unwrap();
     let question_id = asked["question_id"].as_str().unwrap().to_owned();
     let waiting = dispatch.retool(WAIT_QUESTION_TOOL_ID).await;
-    let timed_out = waiting
+    // A cursorless wait ends on its own deadline and still returns the cursor for later resumes.
+    // 无游标等待在其自身截止时间结束，并仍返回供后续恢复使用的游标。
+    let observed = waiting
         .invoke(AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
             question_id: question_id.clone(),
             after_revision: None,
-            timeout_ms: 1,
+            timeout_ms: 50,
         }))
         .await
         .unwrap();
-    assert_eq!(timed_out["status"], "timeout");
-    // The source owns the question and may cancel it after its own wait timed out.
-    // 来源拥有该问题，因此可在自己的等待超时后撤销它。
+    assert_eq!(observed["status"], "timeout");
+    let observed_cursor = observed["revision"].as_u64();
+    // The source owns the question and may cancel it after its own observation.
+    // 来源拥有该问题，因此可在自己观察之后撤销它。
     let cancelling = waiting.retool(CANCEL_QUESTION_TOOL_ID).await;
     let cancelled = cancelling
         .invoke(AgentCollaborationCommand::CancelQuestion(
@@ -206,21 +273,22 @@ async fn cancel_after_timeout_settles_the_question_and_blocks_further_waiting() 
         settled,
         Some(vulcan_session_core::v1::collaboration::CollaborationQuestionState::Cancelled)
     );
-    // A later wait on the settled question returns the settled snapshot instead of pending.
-    // 对已结算问题的后续等待返回已结算快照，而不是待处理状态。
+    // A later wait resumed from the pre-cancellation cursor returns the settled snapshot at once.
+    // 从撤销前游标恢复的后续等待立即返回已结算快照。
     let after_cancel = cancelling.retool(WAIT_QUESTION_TOOL_ID).await;
-    let observed = after_cancel
+    let observed_after_cancel = after_cancel
         .invoke(AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
             question_id: question_id.clone(),
-            after_revision: None,
-            timeout_ms: 1,
+            after_revision: observed_cursor,
+            timeout_ms: 50,
         }))
         .await
         .unwrap();
-    assert_eq!(observed["status"], "ok");
-    assert_eq!(observed["question_id"], question_id);
+    assert_eq!(observed_after_cancel["status"], "ok");
+    assert_eq!(observed_after_cancel["question_id"], question_id);
+    assert_ne!(observed_after_cancel["revision"].as_u64(), observed_cursor);
     assert_eq!(
-        observed["question_state"],
+        observed_after_cancel["question_state"],
         serde_json::to_value(
             vulcan_session_core::v1::collaboration::CollaborationQuestionState::Cancelled
         )
