@@ -41,8 +41,8 @@ pub(crate) struct PublicAiConnectionModelAccessPolicyRecord {
     /// Whether models without an individual choice inherit their signed or manual default.
     /// 未单独选择的模型是否继承签名或手工默认值。
     inherit_model_defaults: bool,
-    /// Sparse exact model decisions that differ from the account default.
-    /// 与账号默认值不同的稀疏精确模型决定。
+    /// Explicit exact model decisions, including choices equal to the display baseline.
+    /// 显式精确模型决定，包括与展示基线相同的选择。
     model_enabled_overrides: BTreeMap<String, bool>,
     /// Closed model-directory kind resolved by the backend registry.
     /// 后端注册表解析出的封闭模型目录类型。

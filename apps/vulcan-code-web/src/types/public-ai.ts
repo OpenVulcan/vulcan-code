@@ -499,8 +499,8 @@ export interface PublicAiCustomModelConnectionAvailabilityRecord {
 // PublicAiModelDirectoryKind 标识一个账号模型列表是固定、动态、手工还是不可用。
 export type PublicAiModelDirectoryKind = "fixed" | "dynamic" | "manual" | "unavailable";
 
-// PublicAiConnectionModelAccessPolicyRecord carries one account's inherited and sparse model decisions.
-// PublicAiConnectionModelAccessPolicyRecord 承载一个账号的继承状态与稀疏模型决定。
+// PublicAiConnectionModelAccessPolicyRecord carries one account's inheritance mode and explicit model decisions.
+// PublicAiConnectionModelAccessPolicyRecord 承载一个账号的继承模式与显式模型决定。
 export interface PublicAiConnectionModelAccessPolicyRecord {
   connectionId: string;
   defaultEnabled: boolean;
