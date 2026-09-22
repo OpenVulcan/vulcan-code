@@ -416,8 +416,7 @@ fn every_availability_gate_stays_inside_its_own_manifest() {
 
 /// Returns the common model catalog document shipped beside this crate.
 /// 返回与本 crate 一同发布的通用模型目录文档。
-fn common_model_catalog() -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn common_model_catalog() -> Value {    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join("common_model_capabilities.json");
     let text = std::fs::read_to_string(&path)
@@ -505,5 +504,89 @@ fn the_common_catalog_contains_only_configured_models() {
             identities.contains(&key) || tails.contains(tail.as_str()),
             "common model catalog record `{key}` is not a model any bundled manifest configures"
         );
+    }
+}
+
+/// Asserts every user-facing bundled declaration carries a non-empty display name.
+/// 断言每条面向用户的内置声明都带有非空的显示名。
+///
+/// Service entries and provider tool targets are user-facing and always name themselves; model
+/// rules, profiles, and upload channels are internal declaration ids and may omit the field.
+/// 服务入口与供应商工具目标面向用户，必须自报名称；模型规则、Profile 与上传通道是内部声明标识，
+/// 允许省略该字段。
+#[test]
+fn every_user_facing_bundled_declaration_carries_a_display_name() {
+    for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
+        let document = parse_manifest(&stem, &text);
+        for (array_field, key) in [
+            ("services", "service_entry_id"),
+            ("tool_targets", "target_id"),
+        ] {
+            let Some(items) = document[array_field].as_array() else {
+                continue;
+            };
+            for item in items {
+                let identifier = item[key].as_str().unwrap_or(array_field);
+                assert!(
+                    item["display_name"]
+                        .as_str()
+                        .is_some_and(|name| !name.trim().is_empty()),
+                    "`{array_field}` declaration `{identifier}` in manifest `{stem}` must declare a display name"
+                );
+            }
+        }
+    }
+}
+
+/// Asserts every profile and channel reference resolves inside its own manifest.
+/// 断言每个 Profile 与上传通道引用都在同一清单内可解析。
+#[test]
+fn every_bundled_reference_resolves_inside_its_manifest() {
+    for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
+        let document = parse_manifest(&stem, &text);
+        let mut declared = BTreeSet::new();
+        for (array_field, key) in [
+            ("usage_profiles", "profile_id"),
+            ("request_profiles", "profile_id"),
+            ("response_profiles", "profile_id"),
+            ("upload_channels", "upload_channel_id"),
+        ] {
+            declared.extend(object_key(&document, array_field, key));
+        }
+        let mut reference_arrays = Vec::new();
+        for field in [
+            "usage_profile_refs",
+            "request_profile_refs",
+            "response_profile_refs",
+            "upload_channel_refs",
+        ] {
+            collect_arrays(&document, field, &mut reference_arrays);
+        }
+        for references in reference_arrays {
+            for reference in references {
+                let reference = reference.as_str().expect("declaration reference");
+                assert!(
+                    declared.contains(reference),
+                    "manifest `{stem}` references undeclared declaration `{reference}`"
+                );
+            }
+        }
+    }
+}
+
+/// Asserts every tool target declares an object-shaped input schema.
+/// 断言每个工具目标都声明对象形态的输入 schema。
+#[test]
+fn every_bundled_target_input_schema_is_an_object() {
+    for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
+        let document = parse_manifest(&stem, &text);
+        for target in document["tool_targets"].as_array().expect("tool_targets array") {
+            let target_id = target["target_id"].as_str().expect("target identifier");
+            assert_eq!(
+                target["input_schema"]["type"].as_str(),
+                Some("object"),
+                "target `{target_id}` in manifest `{stem}` must declare an object input schema"
+            );
+        }
     }
 }
