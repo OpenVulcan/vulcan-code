@@ -208,6 +208,25 @@ const COMMANDCODE_MODELS: &[&str] = &[
     "xai/grok-4.6",
 ];
 
+/// Returns one bundled service entry by its stable `service_entry_id`.
+///
+/// A service position is data, not contract: regenerating a manifest can insert or reorder entries,
+/// so contract assertions locate the reviewed service by identity instead of by array index.
+/// 按稳定 `service_entry_id` 返回一个内置服务入口。服务位置属于数据而非契约：清单重新生成时
+/// 可能插入或重排条目，因此契约断言按身份定位被审查的服务，而不是按数组下标。
+fn bundled_service_entry<'a>(document: &'a Value, service_entry_id: &str) -> &'a Value {
+    document["services"]
+        .as_array()
+        .and_then(|services| {
+            services
+                .iter()
+                .find(|service| service["service_entry_id"] == service_entry_id)
+        })
+        .unwrap_or_else(|| {
+            panic!("bundled manifest no longer declares service entry `{service_entry_id}`")
+        })
+}
+
 /// Verifies the packaged integrity index binds the complete bundled manifest generation.
 /// 验证打包完整性 Index 绑定完整的内置 Manifest 代际。
 #[test]
@@ -907,15 +926,16 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
     // document exposes route paths and authentication exactly as declared on the wire.
     // document 以声明的 Wire 形态公开精确路由路径与认证方式。
     let document: Value = serde_json::from_str(&text).expect("parse OpenCode Go manifest JSON");
+    let service = bundled_service_entry(&document, "go-api");
     assert_eq!(
-        document.pointer("/services/0/credential_profiles/0/default_usage_scopes"),
+        service.pointer("/credential_profiles/0/default_usage_scopes"),
         Some(&serde_json::json!(["interactive_agent"])),
         "OpenCode Go must keep conversation-only as its initial default, not an internal-use ceiling"
     );
     // routes is the only OpenCode Go conversation service route collection.
     // routes 是唯一的 OpenCode Go 会话服务路由集合。
-    let routes = document
-        .pointer("/services/0/protocol_routes")
+    let routes = service
+        .pointer("/protocol_routes")
         .and_then(Value::as_array)
         .expect("OpenCode Go protocol routes must exist");
     // route finds one exact protocol route without accepting aliases or fallback candidates.
@@ -937,7 +957,7 @@ fn opencode_go_manifest_matches_source_derived_model_contracts() {
     );
     assert_eq!(route("openai-responses.v1")["endpoint_path"], "/responses");
     assert_eq!(
-        document.pointer("/services/0/session_header"),
+        service.pointer("/session_header"),
         Some(&serde_json::json!("x-opencode-session")),
         "OpenCode Go must project the current session through its configured header"
     );
@@ -1279,24 +1299,25 @@ fn tokenrhythm_manifest_freezes_the_reviewed_provider_contract() {
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|_| panic!("read bundled manifest {}", path.display()));
     let document: Value = serde_json::from_str(&text).expect("parse Token Rhythm manifest JSON");
+    let service = bundled_service_entry(&document, "public-api");
 
     assert_eq!(
-        document.pointer("/services/0/base_url"),
+        service.pointer("/base_url"),
         Some(&Value::String(String::from(
             "https://tokenrhythm.studio/v1"
         )))
     );
     assert_eq!(
-        document.pointer("/services/0/request_headers/http-referer"),
+        service.pointer("/request_headers/http-referer"),
         Some(&Value::String(String::from("https://opensquilla.ai")))
     );
     assert_eq!(
-        document.pointer("/services/0/request_headers/x-title"),
+        service.pointer("/request_headers/x-title"),
         Some(&Value::String(String::from("OpenSquilla")))
     );
     // request_headers freezes provider-owned headers without overriding the shared User-Agent.
     // request_headers 冻结供应商自有请求头，且不覆盖共享 User-Agent。
-    let request_headers = document["services"][0]["request_headers"]
+    let request_headers = service["request_headers"]
         .as_object()
         .expect("Token Rhythm fixed request headers must exist");
     assert_eq!(
@@ -1305,14 +1326,14 @@ fn tokenrhythm_manifest_freezes_the_reviewed_provider_contract() {
         "Token Rhythm must leave User-Agent ownership to the shared runtime"
     );
     assert_eq!(
-        document.pointer("/services/0/model_catalog/source_policy"),
+        service.pointer("/model_catalog/source_policy"),
         Some(&Value::String(String::from("manifest_only")))
     );
     assert_eq!(
-        document.pointer("/services/0/model_catalog/discovery_kind"),
+        service.pointer("/model_catalog/discovery_kind"),
         Some(&Value::String(String::from("manifest_static")))
     );
-    let routes = document["services"][0]["protocol_routes"]
+    let routes = service["protocol_routes"]
         .as_array()
         .expect("Token Rhythm protocol routes must exist");
     assert_eq!(
@@ -1646,32 +1667,33 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
     // document exposes exact wire paths and matcher kinds.
     // document 公开精确 Wire 路径与匹配器种类。
     let document: Value = serde_json::from_str(&text).expect("parse CommandCode manifest JSON");
+    let service = bundled_service_entry(&document, "provider-api");
     assert_eq!(
-        document.pointer("/services/0/base_url"),
+        service.pointer("/base_url"),
         Some(&Value::String(String::from(
             "https://api.commandcode.ai/provider/v1"
         )))
     );
     assert_eq!(
-        document.pointer("/services/0/request_projector"),
+        service.pointer("/request_projector"),
         Some(&Value::String(String::from("direct")))
     );
     assert_eq!(
-        document.pointer("/services/0/credential_profiles/0/key_prefix"),
+        service.pointer("/credential_profiles/0/key_prefix"),
         None,
         "CommandCode validates API keys remotely instead of enforcing a local prefix"
     );
     assert_eq!(
-        document.pointer("/services/0/credential_profiles/1/key_prefix"),
+        service.pointer("/credential_profiles/1/key_prefix"),
         None,
         "browser-delivered CommandCode keys must not be rejected by an obsolete prefix rule"
     );
     assert_eq!(
-        document.pointer("/services/0/credential_profiles/0/account_usage_query"),
+        service.pointer("/credential_profiles/0/account_usage_query"),
         Some(&Value::String(String::from("command_code_usage")))
     );
-    let routes = document
-        .pointer("/services/0/protocol_routes")
+    let routes = service
+        .pointer("/protocol_routes")
         .and_then(Value::as_array)
         .expect("CommandCode protocol routes must exist");
     assert_eq!(
