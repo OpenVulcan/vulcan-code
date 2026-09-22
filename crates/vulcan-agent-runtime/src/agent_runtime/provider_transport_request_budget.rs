@@ -585,14 +585,16 @@ impl ProviderRequestBudgetGuard {
     /// Validates one already-built budget snapshot before dispatch.
     /// 在分派前校验一份已经构建的预算快照。
     fn validate_budget(&self, budget: &ContextBudgetSnapshot) -> Result<(), VulcanCoreError> {
-        let hard_window_exceeded = matches!(
-            budget.severity,
-            vulcan_context::ContextBudgetSeverity::Overflow
-        );
-        if hard_window_exceeded || budget.should_compact() {
+        // Automatic compaction is attempted before this final gate. A session planning threshold
+        // must not reject a request that still fits the real model after that attempt.
+        // 自动压缩先于最终准入；压缩尝试后会话规划阈值不能拒绝仍适配真实模型的请求。
+        let hard_window_exceeded = budget
+            .provider_request_hard_limit
+            .is_some_and(|limit| budget.active_context_tokens >= limit);
+        if hard_window_exceeded {
             return Err(VulcanCoreError::ContextCompactionRequired {
                 message: format!(
-                    "请求预算门阻止发送：{}。请先执行上下文压缩后重新组装请求。",
+                    "当前请求已达到所选模型的真实请求窗口：{}。请选择容量足够的模型或减少上下文。",
                     budget.summary_note()
                 ),
             });
@@ -1093,10 +1095,10 @@ mod tests {
         ));
     }
 
-    /// Verifies an explicit absolute compaction line works without a declared model window.
-    /// 验证模型未声明窗口时显式绝对压缩线仍然生效。
+    /// Verifies an absolute planning line does not become a fictitious provider limit.
+    /// 验证绝对规划阈值不会变成虚构的 Provider 上限。
     #[test]
-    fn absolute_compaction_limit_works_without_model_window() {
+    fn absolute_compaction_limit_does_not_block_unknown_model_window() {
         let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
@@ -1131,10 +1133,10 @@ mod tests {
             budget.severity,
             vulcan_context::ContextBudgetSeverity::CompactSoon
         );
-        assert!(matches!(
-            guard.validate_budget(&budget),
-            Err(VulcanCoreError::ContextCompactionRequired { .. })
-        ));
+        assert_eq!(budget.provider_request_hard_limit, None);
+        guard
+            .validate_budget(&budget)
+            .expect("a planning line cannot reject a request without a declared model limit");
     }
 
     /// Verifies a prompt already present in canonical history is measured exactly once.

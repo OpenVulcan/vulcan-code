@@ -388,7 +388,15 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
     let window_policy = runtime_state
         .active_context_window_policy
         .unwrap_or_default();
-    let effective_context_window = context_limit.map(|limit| {
+    let planning_context_limit = compression_window_limit.or(context_limit);
+    let effective_context_window = planning_context_limit.map(|limit| {
+        limit
+            .saturating_mul(usize::from(window_policy.effective_context_window_percent))
+            .saturating_div(100)
+    });
+    // Historical UI percentages follow the session node; provider admission retains the model limit.
+    // 历史界面百分比遵循会话节点；Provider 准入仍保留模型上限。
+    let provider_request_hard_limit = context_limit.map(|limit| {
         limit
             .saturating_mul(usize::from(window_policy.effective_context_window_percent))
             .saturating_div(100)
@@ -438,6 +446,7 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         context_limit,
         effective_input_limit: effective_context_window,
         effective_context_window,
+        provider_request_hard_limit,
         auto_compact_limit,
         auto_compact_scope: window_policy.auto_compact_scope,
         auto_compact_prefill_input_tokens: runtime_state.auto_compact_prefill_input_tokens,

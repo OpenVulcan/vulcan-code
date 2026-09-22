@@ -107,7 +107,7 @@ pub(crate) fn context_compaction_input_budget_from_snapshot(
     budget: Option<&ContextBudgetSnapshot>,
 ) -> Option<CompactionInputBudget> {
     context_compaction_input_budget_from_limit(
-        budget.and_then(|budget| budget.context_limit.or(budget.effective_input_limit)),
+        budget.and_then(|budget| budget.effective_context_window.or(budget.context_limit)),
     )
 }
 

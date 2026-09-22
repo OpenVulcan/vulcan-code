@@ -548,9 +548,12 @@ pub struct ContextBudgetSnapshot {
     /// Effective input budget limit used by host estimation.
     /// 宿主估算使用的生效输入预算上限。
     pub effective_input_limit: Option<usize>,
-    /// Effective hard context window after the Codex availability percentage is applied.
-    /// 应用 Codex 可用百分比后的有效硬上下文窗口。
+    /// Session planning window after the configured availability percentage is applied.
+    /// 应用配置的可用百分比后的会话规划窗口。
     pub effective_context_window: Option<usize>,
+    /// Provider admission window derived from the real model limit, independent of the session node.
+    /// 从真实模型上限推导的 Provider 准入窗口，不受会话节点影响。
+    pub provider_request_hard_limit: Option<usize>,
     /// Automatic-compaction threshold resolved for the active turn.
     /// 为当前回合解析出的自动压缩阈值。
     pub auto_compact_limit: Option<usize>,
@@ -640,6 +643,7 @@ impl Default for ContextBudgetSnapshot {
             context_limit: None,
             effective_input_limit: None,
             effective_context_window: None,
+            provider_request_hard_limit: None,
             auto_compact_limit: None,
             auto_compact_scope: ContextWindowUsageScope::Total,
             auto_compact_prefill_input_tokens: None,

@@ -91,6 +91,18 @@ async fn maybe_auto_compact_webui_session_with_mode(
             Ok(None)
         };
     };
+    // A model whose real request window is already exceeded cannot use a session-node
+    // compaction attempt to make an incompatible model switch appear admissible.
+    // 真实请求窗口已超出的模型不能借会话节点压缩尝试掩盖不兼容的模型切换。
+    if context_budget
+        .provider_request_hard_limit
+        .is_some_and(|limit| context_budget.active_context_tokens >= limit)
+    {
+        return Err(format!(
+            "当前上下文 {} Token 已达到所选模型的真实请求上限；请先选择容量足够的模型或缩短上下文。",
+            context_budget.active_context_tokens
+        ));
+    }
     // VMM pressure is eligible only when the request and the current configured service are both ready.
     // 仅当请求准入事实与当前已配置服务都就绪时，VMM 压力才可参与压缩决策。
     let vmm_runtime_ready =

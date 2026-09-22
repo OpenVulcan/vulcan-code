@@ -281,7 +281,14 @@ pub fn build_request_context_budget_snapshot_with_options(
         .saturating_add(reserved_output_tokens)
         .saturating_add(reserved_compaction_tokens);
     let raw_context_limit = capabilities.effective_input_limit();
-    let effective_context_window = raw_context_limit.map(|limit| {
+    let planning_context_limit = compression_window_limit.or(raw_context_limit);
+    let effective_context_window = planning_context_limit.map(|limit| {
+        let percentage = usize::from(window_policy.effective_context_window_percent);
+        limit.saturating_mul(percentage).saturating_div(100).max(1)
+    });
+    // The selected session node changes compaction planning, never the real provider limit.
+    // 所选会话节点只改变压缩规划，不改变真实 Provider 上限。
+    let provider_request_hard_limit = raw_context_limit.map(|limit| {
         let percentage = usize::from(window_policy.effective_context_window_percent);
         limit.saturating_mul(percentage).saturating_div(100).max(1)
     });
@@ -334,6 +341,7 @@ pub fn build_request_context_budget_snapshot_with_options(
         context_limit: capabilities.context_limit,
         effective_input_limit: effective_context_window,
         effective_context_window,
+        provider_request_hard_limit,
         auto_compact_limit,
         auto_compact_scope: window_policy.auto_compact_scope,
         auto_compact_prefill_input_tokens: prefill_input_tokens,
@@ -722,20 +730,21 @@ mod tests {
         }
     }
 
-    /// Verifies a 256K session node changes the 90% compaction line without shrinking a 1M hard window.
-    /// 验证 256K 会话节点会改变 90% 压缩线，但不会缩小 1M 硬窗口。
+    /// Verifies a session node sets planning lines while retaining the real model request limit.
+    /// 验证会话节点决定规划阈值，同时保留模型真实请求上限。
     #[test]
-    fn session_node_changes_only_the_compaction_window_base() {
+    fn session_node_changes_planning_window_without_changing_provider_limit() {
         let capabilities = ContextBudgetCapabilities {
             context_limit: Some(1_000_000),
+            output_limit: Some(32_000),
             ..ContextBudgetCapabilities::default()
         };
         let request_snapshot = test_request_snapshot();
         let policy = ContextCompactionPolicy {
             compression_window_node_id: Some(
-                crate::ContextCompactionWindowNodeId::CompressionWindow2,
+                crate::ContextCompactionWindowNodeId::CompressionWindow3,
             ),
-            compression_window_limit: Some(256_000),
+            compression_window_limit: Some(272_000),
             ..ContextCompactionPolicy::default()
         };
 
@@ -748,7 +757,7 @@ mod tests {
                 reasoning: ContextReasoningEffort::None,
                 request_snapshot: &request_snapshot,
                 observed_usage: None,
-                accounted_input_tokens: Some(1),
+                accounted_input_tokens: Some(500_000),
                 accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
                 accounting_warning_code: Some("test"),
                 provider_anchor_call_id: None,
@@ -760,8 +769,43 @@ mod tests {
         );
 
         assert_eq!(budget.context_limit, Some(1_000_000));
-        assert_eq!(budget.effective_context_window, Some(950_000));
-        assert_eq!(budget.auto_compact_limit, Some(230_400));
+        assert_eq!(budget.effective_context_window, Some(258_400));
+        assert_eq!(budget.provider_request_hard_limit, Some(950_000));
+        assert_eq!(budget.auto_compact_limit, Some(244_800));
+        assert!(budget.should_compact());
+        assert!(budget.active_context_tokens < budget.provider_request_hard_limit.unwrap());
+    }
+
+    /// Verifies a smaller selected model exposes its own hard admission line before compaction.
+    /// 验证切换到较小模型时先暴露其自身的硬准入线。
+    #[test]
+    fn smaller_model_limit_is_exceeded_before_any_session_compaction() {
+        let capabilities = ContextBudgetCapabilities {
+            context_limit: Some(250_000),
+            output_limit: Some(32_000),
+            ..ContextBudgetCapabilities::default()
+        };
+        let request_snapshot = test_request_snapshot();
+        let budget = build_request_context_budget_snapshot_with_options(
+            RequestContextBudgetSnapshotInput {
+                provider_id: "provider",
+                model_id: "smaller-model",
+                protocol_profile_id: "protocol",
+                capabilities: &capabilities,
+                reasoning: ContextReasoningEffort::None,
+                request_snapshot: &request_snapshot,
+                observed_usage: None,
+                accounted_input_tokens: Some(500_000),
+                accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
+                accounting_warning_code: None,
+                provider_anchor_call_id: None,
+                prefill_input_tokens: None,
+            },
+            RequestContextBudgetSnapshotOptions::default(),
+        );
+
+        assert_eq!(budget.provider_request_hard_limit, Some(237_500));
+        assert!(budget.active_context_tokens >= budget.provider_request_hard_limit.unwrap());
     }
 
     /// Verifies Chinese text is estimated close to one token per visible character.
