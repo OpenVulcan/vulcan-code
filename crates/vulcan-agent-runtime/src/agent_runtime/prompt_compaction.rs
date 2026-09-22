@@ -54,6 +54,7 @@ use vulcan_workbench_model::SessionProviderToolTargetSelection;
 
 mod pruning;
 mod remote;
+pub(crate) mod standalone_owner;
 
 #[cfg(test)]
 mod tests;
@@ -1581,6 +1582,22 @@ pub fn stream_prompt_compaction_foundation_job(
                 Err(error) => {
                     yield PromptCompactionStreamEvent::Finished(Err(format!(
                         "Prompt compaction Provider request continuation validation failed: {error}"
+                    )));
+                    return;
+                }
+            };
+            // A RuntimeOnly compaction owns no V1 session document, so its launch must declare its
+            // Provider requests outside the session ledger before the transport publishes typed facts.
+            // RuntimeOnly 压缩不持有 V1 会话文档，因此其启动必须在传输层发布强类型事实之前声明
+            // 其 Provider 请求位于会话账本之外。
+            let launch = match standalone_owner::declare_launch_provider_ownership(
+                launch,
+                request.ownership,
+            ) {
+                Ok(launch) => launch,
+                Err(error) => {
+                    yield PromptCompactionStreamEvent::Finished(Err(format!(
+                        "Prompt compaction standalone Provider ownership declaration failed: {error}"
                     )));
                     return;
                 }

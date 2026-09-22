@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent_runtime::prompt_compaction::ChildTaskCompactionPhase;
+use crate::agent_runtime::prompt_compaction::{ChildTaskCompactionPhase, standalone_owner};
 
 /// Owns cleanup for one detached execution stream until the background finalizer takes over.
 /// 在后台终态处理器接管前，持有一条分离执行流的清理责任。
@@ -1597,35 +1597,97 @@ pub(crate) async fn run_task_session_context_compaction(
         foundation: Arc::clone(&context.foundation),
         luaskills_runtime: context.luaskills_runtime.clone(),
     });
+    // The standalone owner consumed every mandatory Provider barrier while this stream ran; the
+    // returned ledger is the exact confirmation evidence for that attempt sequence.
+    // 独立所有者已在该流运行期间消费全部强制 Provider 屏障；返回的账本即该尝试序列的精确确认证据。
+    let (execution, _standalone_confirmation) =
+        drive_standalone_prompt_compaction_stream(stream, request.task_id).await?;
+    let summary_message_id = format!("task-summary-{}", execution.compaction_result.compaction_id);
+    vulcan_context_compaction::compact_conversation_with_compaction_result(
+        &mut conversation_state,
+        summary_message_id.clone(),
+        &execution.compaction_result,
+    )
+    .map_err(|error| error.to_string())?;
+    vulcan_context_compaction::append_remote_responses_compaction_context(
+        &mut conversation_state,
+        &summary_message_id,
+        &execution.compaction_result,
+    )
+    .map_err(|error| error.to_string())?;
+    vulcan_context_compaction::compact_conversation_records_after_summary(
+        &mut conversation_state,
+        &summary_message_id,
+        execution.compaction_result.policy,
+        |value| Some(value.clone()),
+    );
+    Ok(Some(build_core_conversation_snapshot(&conversation_state)?))
+}
+
+/// Drives one standalone RuntimeOnly prompt-compaction stream as its explicit Provider confirmation owner.
+/// 作为显式 Provider 确认所有者驱动单个独立 RuntimeOnly 提示词压缩流。
+///
+/// # Parameters
+/// 参数
+/// `stream` is the exact standalone compaction stream; `session_id` identifies its mirrored telemetry.
+/// `stream` 是精确的独立压缩流；`session_id` 标识其镜像遥测。
+///
+/// # Returns
+/// 返回值
+/// The terminal execution with its confirmation ledger, or an explicit terminal diagnostic.
+/// 返回终态执行及其确认账本，或显式终态诊断。
+///
+/// # Contract
+/// 契约
+/// Every mandatory Provider barrier is completed exactly once; no event that carries a completion
+/// handle may be dropped, and a vanished consumer is reported by the waiting transport instead of
+/// silently rewinding the attempt.
+/// 每个强制 Provider 屏障都恰好完成一次；任何携带完成句柄的事件都不得被丢弃，消费方消失会由等待中的
+/// 传输层报告，而不是静默回退本次尝试。
+pub(crate) async fn drive_standalone_prompt_compaction_stream<S>(
+    stream: S,
+    session_id: SessionId,
+) -> Result<
+    (
+        crate::agent_runtime::prompt_compaction::PromptCompactionExecution,
+        standalone_owner::StandalonePromptCompactionOwner,
+    ),
+    String,
+>
+where
+    S: futures_util::Stream<Item = PromptCompactionStreamEvent>,
+{
+    let mut owner = standalone_owner::StandalonePromptCompactionOwner::new(session_id);
     futures_util::pin_mut!(stream);
     while let Some(event) = stream.next().await {
-        let PromptCompactionStreamEvent::Finished(result) = event else {
-            continue;
-        };
-        let execution = result?;
-        let summary_message_id =
-            format!("task-summary-{}", execution.compaction_result.compaction_id);
-        vulcan_context_compaction::compact_conversation_with_compaction_result(
-            &mut conversation_state,
-            summary_message_id.clone(),
-            &execution.compaction_result,
-        )
-        .map_err(|error| error.to_string())?;
-        vulcan_context_compaction::append_remote_responses_compaction_context(
-            &mut conversation_state,
-            &summary_message_id,
-            &execution.compaction_result,
-        )
-        .map_err(|error| error.to_string())?;
-        vulcan_context_compaction::compact_conversation_records_after_summary(
-            &mut conversation_state,
-            &summary_message_id,
-            execution.compaction_result.policy,
-            |value| Some(value.clone()),
-        );
-        return Ok(Some(build_core_conversation_snapshot(&conversation_state)?));
+        match event {
+            PromptCompactionStreamEvent::Finished(result) => {
+                let execution = result?;
+                // A successful standalone run must have admitted a physical request and consumed its
+                // terminal boundary before the producer could report a terminal execution.
+                // 成功的独立运行必须已准入物理请求并在生产者报告终态执行前消费其终态边界。
+                owner.verify_terminal_accounting()?;
+                return Ok((execution, owner));
+            }
+            PromptCompactionStreamEvent::Stream(event) => owner.observe(event)?,
+            PromptCompactionStreamEvent::RemoteCompleted { completion, .. } => {
+                // A RuntimeOnly stream owns no session remote-compaction terminal; refuse it and
+                // release the waiting producer instead of leaving its barrier open.
+                // RuntimeOnly 流不持有会话远端压缩终态；拒绝它并放行等待中的生产者，避免其屏障一直开放。
+                let error = String::from(
+                    "A standalone RuntimeOnly compaction stream cannot own a session remote compaction terminal.",
+                );
+                let _ = completion.complete(Err(error.clone()));
+                return Err(error);
+            }
+            PromptCompactionStreamEvent::PreparedRemoteSource { .. }
+            | PromptCompactionStreamEvent::PreparedSource { .. }
+            | PromptCompactionStreamEvent::Progress(_) => {}
+        }
     }
-    Ok(None)
+    Err(String::from(
+        "The standalone prompt compaction stream ended without a terminal execution report.",
+    ))
 }
 
 /// Resolves the original child's exact provider preparation and summary target for either durable or standalone execution.
@@ -1812,5 +1874,624 @@ mod mid_turn_compaction_tests {
         assert_eq!(cumulative.audio_input_tokens, Some(7));
         assert_eq!(cumulative.audio_output_tokens, Some(7));
         assert_eq!(last.and_then(|usage| usage.total_tokens), Some(4));
+    }
+}
+
+#[cfg(test)]
+mod standalone_compaction_tests {
+    //! Standalone `RuntimeOnly` prompt-compaction confirmation-contract tests.
+    //! 独立 `RuntimeOnly` 提示词压缩确认契约测试。
+
+    use super::*;
+    use crate::agent_runtime::events::{
+        PreparedPhysicalApi, ProviderRequestPreparationCandidate,
+        provider_request_durability_barrier, provider_request_preparation_barrier,
+    };
+    use crate::agent_runtime::execution_models::ExecutionPreparation;
+    use crate::agent_runtime::prompt_compaction::standalone_owner::{
+        StandalonePromptCompactionOwner, declare_launch_provider_ownership,
+        declares_standalone_provider_ownership, standalone_provider_telemetry_context,
+    };
+    use crate::agent_runtime::prompt_compaction::{
+        PromptCompactionExecution, PromptCompactionExecutionProfile, PromptCompactionOwnership,
+    };
+    use crate::agent_runtime::provider_request_telemetry::{
+        ProviderRequestTelemetryContext, ProviderRequestTelemetryEventKind,
+        ProviderRequestTelemetryTracker,
+    };
+    use crate::agent_runtime::provider_stream::ProviderStreamDelta;
+    use crate::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
+    use crate::agent_runtime::runtime_stream_delta::{
+        RuntimeStreamDeltaState, process_provider_stream_delta,
+    };
+    use crate::agent_runtime::runtime_stream_launch_payload::{
+        RuntimeStreamLaunch, RuntimeStreamTurnStartMode,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+    use vulcan_ai_contract::AiTransportKind;
+    use vulcan_context_compaction::{CompactionPlan, CompactionResult};
+    use vulcan_core::types::{
+        ProviderContinuation, ProviderPromptLayers, ProviderRequestSnapshot as CoreRequestSnapshot,
+    };
+
+    /// Builds the exact compaction execution preparation consumed by the standalone launch.
+    /// 构建独立启动消费的精确压缩执行准备。
+    fn compaction_preparation() -> ExecutionPreparation {
+        ExecutionPreparation {
+            session_id: SessionId::from_u128(0x51),
+            session_storage_directory: None,
+            conversation_hook_turn_id: None,
+            continuation_action_id: None,
+            session_title: String::from("standalone compaction"),
+            agent_id: String::from("default-agent"),
+            agent_name: String::from("Default Agent"),
+            agent_kind: String::from("builtin"),
+            agent_prompt_snapshot: None,
+            subagent_prompt_context: None,
+            model_blueprint: crate::agent_runtime::provider::ProviderRuntimeBlueprint {
+                provider_id: String::from("openai"),
+                service_entry_id: String::from("public-api"),
+                connection_id: String::from("test-connection"),
+                provider_name: String::from("OpenAI"),
+                runtime_label: String::from("OpenAI"),
+                model_id: String::from("gpt-test"),
+                model_name: String::from("GPT Test"),
+                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                manifest_revision: 0,
+                frozen_selection: None,
+                route_revision: String::from("sha256:test-route"),
+                secondary_route: Default::default(),
+                public_capabilities: vulcan_ai_contract::ModelCapabilities::default(),
+                base_url: Some(String::from("https://api.example.test/v1")),
+                supports_remote_model_refresh: true,
+                credential_source: String::from("environment"),
+                reasoning: Default::default(),
+            },
+            prompt_preview: String::from("summarize the child request context"),
+            workspace_path: String::from(r"D:\workspace"),
+            conversation_attachments: Vec::new(),
+            context_history_count: 1,
+            execution_mode: String::from("Build"),
+            temperature: Some(0.2),
+            prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
+            output_style_snapshot: None,
+            // The standalone compaction purpose is the declared workload under test.
+            // 独立压缩用途是本次测试声明的负载。
+            prompt_purpose:
+                crate::agent_runtime::ExecutionPromptPurpose::ContextCompactionCachePreserving,
+            prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            implicit_luaskill_prompt_entries: Vec::new(),
+            additional_developer_segments: Vec::new(),
+            skill_names: Vec::new(),
+            tool_descriptors: Vec::new(),
+            tool_request_rejection_reason: None,
+            tool_request_rejection_all_tools: false,
+            tool_request_rejection_tool_ids: Vec::new(),
+            delegate_agents: Vec::new(),
+            enabled_mcp_servers: Vec::new(),
+            warnings: Vec::new(),
+            provider_request_preview_markdown: String::new(),
+            provider_request_snapshot_json: None,
+            provider_wire_request_json: None,
+            context_budget: None,
+            context_compaction_policy: None,
+            context_budget_override: None,
+            context_assembly: None,
+            context_baseline: None,
+            context_request_mode: None,
+            context_injection: None,
+            system_prompt_hook_blocks: Vec::new(),
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
+            vmm_runtime_ready: false,
+            boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
+            session_goal_context: None,
+            session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
+        }
+    }
+
+    /// Builds one minimal provider-neutral request snapshot using the real protocol shape.
+    /// 使用真实协议形态构建一份最小 Provider 中立请求快照。
+    fn request_snapshot() -> CoreRequestSnapshot {
+        CoreRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            system_prompt: String::new(),
+            prompt_layers: ProviderPromptLayers::default(),
+            prompt: String::from("summarize the child request context"),
+            prompt_in_history: true,
+            history: Vec::new(),
+            temperature: Some(0.2),
+            max_turns: 1,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: ProviderContinuation::default(),
+        }
+    }
+
+    /// Builds one pre-gate preparation candidate for the exact snapshot.
+    /// 为精确快照构建一份闸门前准备候选。
+    fn preparation_candidate(
+        snapshot: &CoreRequestSnapshot,
+    ) -> ProviderRequestPreparationCandidate {
+        ProviderRequestPreparationCandidate {
+            source_message_positions: Default::default(),
+            media_context: None,
+            exact_request: vulcan_ai_contract::AiExecutionRequest {
+                operation: vulcan_ai_contract::AiOperation::ConversationRespond,
+                model_id: String::from("gpt-test"),
+                cache_scope_id: None,
+                continuation: None,
+                messages: Vec::new(),
+                tools: Vec::new(),
+                native_tools: Vec::new(),
+                tool_choice: Default::default(),
+                parallel_tool_calls: Default::default(),
+                structured_output: Default::default(),
+                stop_sequences: Vec::new(),
+                prompt_cache: Default::default(),
+                reasoning_effort: None,
+                reasoning_output: Default::default(),
+                model_parameters: Default::default(),
+                resources: Vec::new(),
+                output_token_limit: None,
+            },
+            controller_config: Default::default(),
+            controller_snapshot: Default::default(),
+            request_snapshot: snapshot.clone(),
+            context_budget: None,
+            request_budget_guard: None,
+            locked_baseline: vulcan_session_core::v1::context::LockedBaselineProjection::empty(),
+            dynamic_prompt_layers: Default::default(),
+        }
+    }
+
+    /// Builds one tracker whose standalone ownership declaration is explicit when `declared`.
+    /// 构建一个跟踪器；`declared` 为真时其独立所有权声明是显式的。
+    fn compaction_tracker(
+        preparation: &ExecutionPreparation,
+        declared: bool,
+    ) -> ProviderRequestTelemetryTracker {
+        let mut tracker = ProviderRequestTelemetryTracker::default();
+        // The production declaration is the only difference between both legs of this suite.
+        // 生产声明是本测试组两条分支之间唯一的差异。
+        let context = if declared {
+            standalone_provider_telemetry_context(preparation)
+                .expect("the standalone declaration must derive from real preparation")
+        } else {
+            ProviderRequestTelemetryContext::from_preparation(preparation, None)
+                .expect("the session preparation context must derive")
+        };
+        tracker.install_context(context);
+        tracker
+    }
+
+    /// Builds one minimal compaction plan for the terminal execution fixture.
+    /// 为终态执行夹具构建一份最小压缩计划。
+    fn compaction_plan() -> CompactionPlan {
+        let policy = vulcan_context::ContextCompactionPolicy::default();
+        CompactionPlan {
+            source_messages: vec![vulcan_context::SessionMessageEntry::new(
+                vulcan_context::SessionMessageKind::User,
+                "",
+                "summarize the child request context",
+            )],
+            source_until_message_id: None,
+            source_until_turn_index: None,
+            retained_tail_start_turn_index: None,
+            compaction_id: String::from("standalone-compaction"),
+            created_at: String::from("t1"),
+            policy,
+            tail_selection: vulcan_context_compaction::CompactionTailSelectionReport {
+                context_limit: policy.tail_context_limit,
+                policy_source: policy.tail_policy_source,
+                nominal_token_budget: policy.preserve_recent_tokens,
+                segment_limit: policy.tail_turns,
+                retained_segment_count: 0,
+                retained_message_ids: Vec::new(),
+                retained_token_estimate: 0,
+                previewed_tool_output_count: 0,
+                omitted_tool_output_token_estimate: 0,
+                newest_segment_exceeds_nominal_budget: false,
+            },
+        }
+    }
+
+    /// Builds the terminal execution the standalone stream reports after a successful summary.
+    /// 构建独立流在成功摘要后报告的终态执行。
+    fn compaction_execution() -> PromptCompactionExecution {
+        PromptCompactionExecution {
+            compaction_result: CompactionResult::from_legacy_plan(&compaction_plan()),
+            fallback_used: false,
+            provider_request_count: 1,
+            last_successful_provider_usage: Some(vulcan_core::types::ProviderUsageSnapshot {
+                input_tokens: Some(40),
+                output_tokens: Some(8),
+                total_tokens: Some(48),
+                ..Default::default()
+            }),
+            provider_id: Some(String::from("openai")),
+            model_id: Some(String::from("gpt-test")),
+            execution_profile: PromptCompactionExecutionProfile::PrunedMinimal,
+            input_prune_report: None,
+        }
+    }
+
+    /// Verifies a supported standalone RuntimeOnly compaction entry completes normally once every
+    /// mandatory Provider barrier is confirmed with the standalone owner's typed result.
+    /// 验证一次受支持的独立 RuntimeOnly 压缩入口在每个强制 Provider 屏障都使用独立所有者的强类型
+    /// 结果确认后正常完成。
+    #[tokio::test(flavor = "current_thread")]
+    async fn standalone_runtime_only_compaction_confirms_every_mandatory_provider_barrier() {
+        let preparation = compaction_preparation();
+        let session_id = preparation.session_id;
+        let snapshot = request_snapshot();
+        let mut tracker = compaction_tracker(&preparation, true);
+
+        // The standalone declaration must publish no session fact while keeping compaction accounting.
+        // 独立声明必须不发布任何会话事实，同时保留压缩记账。
+        let prepared = tracker
+            .prepare_request(&snapshot, None)
+            .expect("the preparation identity must build");
+        assert_eq!(prepared.kind, ProviderRequestTelemetryEventKind::Started);
+        assert_eq!(
+            prepared.v1_lifecycle,
+            Some(ProviderV1LifecycleFacts::ExcludedNonSession)
+        );
+        assert_eq!(prepared.payload["owner_kind"], "context_compaction");
+        assert_eq!(prepared.payload["operation"], "compact");
+
+        // transcript records how far the real transport-side barrier sequence advanced.
+        // transcript 记录真实传输侧屏障序列推进到何处。
+        let transcript = Rc::new(RefCell::new(Vec::<String>::new()));
+        let record = Rc::clone(&transcript);
+        // The generator is the exact barrier order of `provider_transport_vulcan/streaming.rs`,
+        // driven against the real production standalone consumer.
+        // 该生成器就是 `provider_transport_vulcan/streaming.rs` 的精确屏障顺序，
+        // 并由真实生产独立消费方驱动。
+        let stream = async_stream::stream! {
+            let (completion, receiver) = provider_request_preparation_barrier();
+            yield PromptCompactionStreamEvent::Stream(
+                ExecutionStreamEvent::ProviderRequestPreparationBoundary {
+                    event: prepared,
+                    candidate: preparation_candidate(&snapshot),
+                    completion,
+                },
+            );
+            let permit = receiver
+                .await
+                .expect("the standalone owner must complete the preparation barrier")
+                .expect("the standalone owner must admit the declared standalone request");
+            let (request_snapshot, context_budget) = match permit {
+                PreparedPhysicalApi::ExcludedNonSession {
+                    request_snapshot,
+                    context_budget,
+                    ..
+                } => (request_snapshot, context_budget),
+                other => panic!(
+                    "standalone compaction must release an excluded non-session permit, got {other:?}"
+                ),
+            };
+            record.borrow_mut().push(String::from("permit"));
+
+            let started = tracker
+                .confirm_prepared_request(&request_snapshot, context_budget.as_ref())
+                .expect("the permitted request must promote its prepared identity");
+            assert_eq!(started.kind, ProviderRequestTelemetryEventKind::Started);
+            yield PromptCompactionStreamEvent::Stream(
+                ExecutionStreamEvent::ProviderRequestTelemetry(started),
+            );
+            if let Some(first_token) = tracker.observe_first_token() {
+                yield PromptCompactionStreamEvent::Stream(
+                    ExecutionStreamEvent::ProviderRequestTelemetry(first_token),
+                );
+            }
+
+            let dispatched = tracker
+                .observe_transport(
+                    AiTransportKind::Http,
+                    2_000,
+                    Some(2_000),
+                    Some(200),
+                    Some(String::from("provider-request-1")),
+                    Default::default(),
+                )
+                .expect("an admitted request must produce one dispatch fact");
+            let (completion, receiver) = provider_request_durability_barrier();
+            yield PromptCompactionStreamEvent::Stream(
+                ExecutionStreamEvent::ProviderRequestDurabilityBoundary {
+                    event: dispatched,
+                    completion,
+                },
+            );
+            receiver
+                .await
+                .expect("the standalone owner must complete the dispatch barrier")
+                .expect("the standalone owner must acknowledge the dispatch boundary");
+            record.borrow_mut().push(String::from("dispatched"));
+
+            let usage = vulcan_core::types::ProviderUsageSnapshot {
+                input_tokens: Some(40),
+                output_tokens: Some(8),
+                total_tokens: Some(48),
+                ..Default::default()
+            };
+            let completed = tracker
+                .complete_success(
+                    Some(&usage),
+                    vulcan_session_core::v1::event::ProviderSourceInput {
+                        provider: String::from("openai"),
+                        profile: None,
+                        model: String::from("gpt-test"),
+                        connection_id: None,
+                        message_id: None,
+                        response_id: None,
+                        replay: None,
+                    },
+                    0,
+                )
+                .expect("an active request must reach one terminal");
+            let (completion, receiver) = provider_request_durability_barrier();
+            yield PromptCompactionStreamEvent::Stream(
+                ExecutionStreamEvent::ProviderRequestDurabilityBoundary {
+                    event: completed,
+                    completion,
+                },
+            );
+            receiver
+                .await
+                .expect("the standalone owner must complete the terminal barrier")
+                .expect("the standalone owner must acknowledge the terminal boundary");
+            record.borrow_mut().push(String::from("terminal"));
+
+            yield PromptCompactionStreamEvent::Finished(Ok(compaction_execution()));
+        };
+
+        let (execution, owner) = drive_standalone_prompt_compaction_stream(stream, session_id)
+            .await
+            .expect("a supported standalone compaction entry must complete normally");
+        assert_eq!(execution.provider_request_count, 1);
+        assert_eq!(owner.admitted_request_count(), 1);
+        assert_eq!(owner.terminal_request_count(), 1);
+        // The producer advanced past every mandatory barrier instead of losing its permit.
+        // 生产者越过了每个强制屏障，而不是丢失其许可。
+        assert_eq!(
+            transcript.borrow().as_slice(),
+            [
+                String::from("permit"),
+                String::from("dispatched"),
+                String::from("terminal")
+            ]
+        );
+    }
+
+    /// Verifies an undeclared session request is refused with a typed error and that a vanished
+    /// consumer is reported within finite bounds instead of waiting forever.
+    /// 验证未声明的会话请求被强类型错误拒绝，且消费方消失会在有限边界内被报告，而不是无限等待。
+    #[tokio::test(flavor = "current_thread")]
+    async fn standalone_confirmation_refusal_and_vanished_consumer_fail_within_bounds() {
+        let preparation = compaction_preparation();
+        let session_id = preparation.session_id;
+        let snapshot = request_snapshot();
+
+        // Without the standalone declaration the real derivation still publishes session request facts.
+        // 没有独立声明时，真实派生仍会发布会话请求事实。
+        let mut session_tracker = compaction_tracker(&preparation, false);
+        let session_prepared = session_tracker
+            .prepare_request(&snapshot, None)
+            .expect("the session preparation identity must build");
+        let Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) =
+            session_prepared.v1_lifecycle.clone()
+        else {
+            panic!("a compaction preparation must publish typed session request facts");
+        };
+        assert_eq!(
+            facts.purpose,
+            vulcan_session_core::v1::event::ApiPurposeKind::Compaction
+        );
+
+        let (completion, receiver) = provider_request_preparation_barrier();
+        let mut owner = StandalonePromptCompactionOwner::new(session_id);
+        let error = owner
+            .observe(ExecutionStreamEvent::ProviderRequestPreparationBoundary {
+                event: session_prepared,
+                candidate: preparation_candidate(&snapshot),
+                completion,
+            })
+            .expect_err("the standalone owner must refuse session Provider preparation facts");
+        // The refusal names the exact typed fact so the mismatch stays diagnosable.
+        // 该拒绝会指明精确强类型事实，使不一致保持可诊断。
+        assert!(error.contains("request_prepared"), "{error}");
+        assert!(error.contains("Compaction"), "{error}");
+        // The waiting producer receives the typed refusal instead of a dropped permit.
+        // 等待中的生产者收到强类型拒绝，而不是被丢弃的许可。
+        let refusal = tokio::time::timeout(Duration::from_secs(5), receiver)
+            .await
+            .expect("the refusal must complete the barrier within finite bounds")
+            .expect("the refusal must reach the waiting producer");
+        assert_eq!(
+            refusal.expect_err("a refused preparation cannot release a permit"),
+            error
+        );
+
+        // A stream that ends without any terminal report is the vanished-consumer case: the real
+        // production consumer fails closed and the waiting producer observes a closed barrier instead
+        // of an unbounded wait. `provider_transport_vulcan/streaming.rs:145` maps that closed receiver
+        // into "The host dropped the typed Provider preparation permit before dispatch.".
+        // 未给出任何终态报告即结束的流就是消费方消失的情形：真实生产消费方失败关闭，等待中的生产者观测到
+        // 已关闭的屏障，而不是无限等待。`provider_transport_vulcan/streaming.rs:145` 会把该已关闭接收端
+        // 映射为 “The host dropped the typed Provider preparation permit before dispatch.”。
+        let (abandoned_completion, abandoned_receiver) = provider_request_preparation_barrier();
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            drive_standalone_prompt_compaction_stream(
+                futures_util::stream::empty::<PromptCompactionStreamEvent>(),
+                session_id,
+            ),
+        )
+        .await
+        .expect("an empty standalone stream must fail closed within finite bounds")
+        .expect_err("an empty standalone stream cannot report a terminal execution");
+        assert!(
+            error.contains("without a terminal execution report"),
+            "{error}"
+        );
+        drop(abandoned_completion);
+        let vanished = tokio::time::timeout(Duration::from_secs(5), abandoned_receiver).await;
+        assert!(
+            vanished
+                .expect("a vanished consumer must resolve the barrier within finite bounds")
+                .is_err()
+        );
+    }
+
+    /// Builds one minimal runtime-stream launch carrying the fixture compaction preparation.
+    /// 构建一份携带夹具压缩准备的最小运行时流启动载荷。
+    fn test_launch() -> RuntimeStreamLaunch {
+        let preparation = compaction_preparation();
+        let controller = vulcan_core::controller::VulcanCoreController::new(
+            vulcan_core::types::ControllerConfig {
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-test"),
+                system_prompt: String::from("system"),
+                prompt_layers: ProviderPromptLayers::from_system_prompt(String::from("system")),
+                temperature: Some(0.2),
+                max_turns: 1,
+                additional_params: None,
+                context_injection: None,
+            },
+            Default::default(),
+        )
+        .expect("the launch fixture conversation must be valid");
+        // The initial telemetry context is derived exactly as the production launch assembler does.
+        // 初始遥测上下文完全按生产启动装配器的方式派生。
+        let stream_state = RuntimeStreamDeltaState::new(
+            controller,
+            String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        )
+        .with_tool_request_stream(&[])
+        .with_provider_request_telemetry_context(
+            ProviderRequestTelemetryContext::from_preparation(&preparation, None)
+                .expect("the fixture preparation must derive a telemetry context"),
+        );
+        RuntimeStreamLaunch {
+            task_execution_context: None,
+            session_id: preparation.session_id,
+            effective_prompt: String::from("summarize the child request context"),
+            turn_start_mode: RuntimeStreamTurnStartMode::UserPrompt,
+            preparation,
+            active_agent: None,
+            task_runtime: Arc::new(TaskRuntime::new()),
+            tools_manager: Default::default(),
+            resolved_tool_definitions: Vec::new(),
+            discovery_events: Vec::new(),
+            discovery_rows: Vec::new(),
+            discovery_errors: Vec::new(),
+            warnings: Vec::new(),
+            system_preamble: String::new(),
+            locked_baseline: vulcan_session_core::v1::context::LockedBaselineProjection::empty(),
+            dynamic_prompt_layers: Default::default(),
+            core_snapshot: Default::default(),
+            stream_state,
+            lowering_repair_events: Vec::new(),
+            public_ai_runtime: None,
+        }
+    }
+
+    /// Verifies the launch declaration matches the declared owner through the real delta projector.
+    /// 验证启动声明通过真实增量投影器与已声明所有者一致。
+    #[tokio::test(flavor = "current_thread")]
+    async fn launch_provider_ownership_declaration_matches_the_declared_owner() {
+        assert!(!declares_standalone_provider_ownership(
+            PromptCompactionOwnership::SessionV1
+        ));
+        assert!(declares_standalone_provider_ownership(
+            PromptCompactionOwnership::RuntimeOnly
+        ));
+        let snapshot = request_snapshot();
+
+        // RuntimeOnly must publish an explicitly excluded non-session request that the standalone
+        // owner can admit through the real preparation barrier.
+        // RuntimeOnly 必须发布一个显式排除的非会话请求，使独立所有者可以通过真实准备屏障准入。
+        let launch = declare_launch_provider_ownership(
+            test_launch(),
+            PromptCompactionOwnership::RuntimeOnly,
+        )
+        .expect("the standalone declaration must derive from the launch preparation");
+        let session_id = launch.session_id;
+        let mut stream_state = launch.stream_state;
+        let (completion, receiver) = provider_request_preparation_barrier();
+        let mut events = process_provider_stream_delta(
+            session_id,
+            &mut stream_state,
+            Ok(ProviderStreamDelta::RequestPrepared {
+                candidate: preparation_candidate(&snapshot),
+                completion,
+            }),
+        );
+        assert_eq!(events.len(), 1);
+        let ExecutionStreamEvent::ProviderRequestPreparationBoundary {
+            event,
+            candidate,
+            completion,
+        } = events.remove(0)
+        else {
+            panic!("the prepared delta must publish one preparation boundary");
+        };
+        assert_eq!(
+            event.v1_lifecycle,
+            Some(ProviderV1LifecycleFacts::ExcludedNonSession)
+        );
+        let mut owner = StandalonePromptCompactionOwner::new(session_id);
+        owner
+            .observe(ExecutionStreamEvent::ProviderRequestPreparationBoundary {
+                event,
+                candidate,
+                completion,
+            })
+            .expect("the standalone owner must admit the declared standalone request");
+        assert!(matches!(
+            receiver
+                .await
+                .expect("the standalone owner must complete the preparation barrier"),
+            Ok(PreparedPhysicalApi::ExcludedNonSession { .. })
+        ));
+        assert_eq!(owner.admitted_request_count(), 1);
+
+        // The SessionV1 launch keeps the V1 session fact every V1 consumer still confirms.
+        // SessionV1 启动保留每个 V1 消费方仍然确认的 V1 会话事实。
+        let v1_launch =
+            declare_launch_provider_ownership(test_launch(), PromptCompactionOwnership::SessionV1)
+                .expect("a V1 launch keeps its own telemetry context");
+        let v1_session_id = v1_launch.session_id;
+        let mut v1_stream_state = v1_launch.stream_state;
+        let (v1_completion, _v1_receiver) = provider_request_preparation_barrier();
+        let mut v1_events = process_provider_stream_delta(
+            v1_session_id,
+            &mut v1_stream_state,
+            Ok(ProviderStreamDelta::RequestPrepared {
+                candidate: preparation_candidate(&snapshot),
+                completion: v1_completion,
+            }),
+        );
+        assert_eq!(v1_events.len(), 1);
+        let ExecutionStreamEvent::ProviderRequestPreparationBoundary { event, .. } =
+            v1_events.remove(0)
+        else {
+            panic!("the prepared delta must publish one preparation boundary");
+        };
+        let Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) = event.v1_lifecycle else {
+            panic!("the V1 launch must publish typed session request facts");
+        };
+        assert_eq!(
+            facts.purpose,
+            vulcan_session_core::v1::event::ApiPurposeKind::Compaction
+        );
     }
 }
