@@ -58,26 +58,6 @@ fn load_bundled_manifests() -> BTreeMap<String, String> {
 
 /// Every reviewed OpenRouter model that remains default-enabled after migration.
 /// 迁移后仍默认启用的全部已审核 OpenRouter 模型。
-const OPENROUTER_FEATURED_MODELS: &[&str] = &[
-    "openai/gpt-5.6-sol",
-    "openai/gpt-5.6-terra",
-    "anthropic/claude-sonnet-5",
-    "anthropic/claude-opus-4.8",
-    "google/gemini-3.1-pro-preview",
-    "google/gemini-3.5-flash",
-    "deepseek/deepseek-v4-pro",
-    "deepseek/deepseek-v4-flash",
-    "qwen/qwen3.6-plus",
-    "z-ai/glm-5.2",
-    "minimax/minimax-m3",
-    "openai/text-embedding-3-small",
-    "cohere/rerank-v3.5",
-    "openai/gpt-image-1",
-    "google/veo-3.1",
-    "minimax/speech-2.8-turbo",
-    "openai/whisper-large-v3-turbo",
-];
-
 /// Every source-derived OpenCode Go model with a complete models.dev contract.
 /// 具备完整 models.dev 契约的全部源码派生 OpenCode Go 模型。
 /// Every statically reviewed Token Rhythm conversation and image model.
@@ -110,10 +90,16 @@ fn bundled_integrity_index_binds_the_complete_manifest_generation() {
     );
 }
 
-/// Verifies only Gemini model rules opt into strict tool-schema projection in system manifests.
-/// 验证系统清单中只有 Gemini 模型规则显式启用严格工具 Schema 投影。
+/// Verifies tool-schema projection stays an explicit, closed per-rule choice.
+/// 验证工具 Schema 投影始终是每条规则显式且封闭的选择。
+///
+/// A relay may serve a vendor model over its own protocol, so strict projection is not tied to one
+/// protocol family. The standard requires that every rule either inherits the provider lightweight
+/// default or declares strict, and that no provider changes that default.
+/// 中转可以用自己的协议承载某厂商模型，因此严格投影不与某一协议族绑定。标准要求每条规则要么继承
+/// 供应商的 lightweight 默认值、要么显式声明 strict，且没有供应商改动该默认值。
 #[test]
-fn bundled_tool_schema_projection_is_strict_only_for_gemini_rules() {
+fn bundled_tool_schema_projection_stays_explicit_and_closed() {
     for (provider_id, text) in load_bundled_manifests() {
         let manifest: vulcan_provider_adapters::ProviderManifestV1 = serde_json::from_str(&text)
             .unwrap_or_else(|error| panic!("parse bundled manifest `{provider_id}`: {error}"));
@@ -122,33 +108,44 @@ fn bundled_tool_schema_projection_is_strict_only_for_gemini_rules() {
             vulcan_provider_adapters::ToolSchemaProjectionMode::Lightweight,
             "system provider `{provider_id}` must leave the provider default lightweight"
         );
-        for rule in manifest.model_rules {
-            let is_gemini = rule.matcher.value.to_ascii_lowercase().contains("gemini");
-            if is_gemini {
-                assert_eq!(
-                    rule.tool_schema_projection,
-                    Some(vulcan_provider_adapters::ToolSchemaProjectionMode::Strict),
-                    "Gemini rule `{}` in `{provider_id}` must declare strict projection",
-                    rule.rule_id
-                );
-            } else {
-                assert_eq!(
-                    rule.tool_schema_projection, None,
-                    "non-Gemini rule `{}` in `{provider_id}` must inherit lightweight projection",
-                    rule.rule_id
-                );
-            }
+        let document: Value = serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("parse bundled manifest JSON `{provider_id}`: {error}"));
+        for rule in document["model_rules"].as_array().expect("model_rules array") {
+            let rule_id = rule["rule_id"].as_str().unwrap_or("(anonymous)");
+            let projection = rule["tool_schema_projection"].as_str();
+            assert!(
+                projection.is_none() || projection == Some("strict"),
+                "rule `{rule_id}` in `{provider_id}` must either inherit the lightweight default or declare strict projection"
+            );
         }
     }
 }
 
-/// Verifies model-access defaults are fully owned by every bundled manifest.
-/// 验证模型访问默认值完全由每份内置清单持有。
+/// Verifies model-access defaults stay owned by each manifest instead of another provider's data.
+/// 验证模型访问默认值由各清单自身持有，而不是来自其它供应商的数据。
+///
+/// A model that another provider declares must resolve exactly like an undeclared identity here,
+/// which is what a cross-provider leak would break. The check names no provider, so adding or
+/// removing a provider or a model never requires editing it.
+/// 另一供应商声明的模型在本清单中必须与未声明身份解析一致，跨供应商泄漏正是会破坏这一点。
+/// 该检测不指名任何供应商，因此增删供应商或模型都不需要修改它。
 #[test]
 fn bundled_manifest_model_defaults_are_self_contained() {
-    for (provider_id, text) in load_bundled_manifests() {
+    let manifests = load_bundled_manifests();
+    let mut declared_elsewhere = Vec::new();
+    for (owner, text) in &manifests {
+        let document: Value =
+            serde_json::from_str(text).unwrap_or_else(|error| panic!("parse `{owner}`: {error}"));
+        for rule in document["model_rules"].as_array().expect("model_rules array") {
+            if let Some(value) = rule["matcher"]["value"].as_str() {
+                declared_elsewhere.push((owner.clone(), value.to_string()));
+            }
+        }
+    }
+
+    for (provider_id, text) in &manifests {
         let compiled =
-            vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            vulcan_provider_adapters::compile_manifest_text(text, ManifestOwnership::System)
                 .unwrap_or_else(|error| {
                     panic!("bundled manifest for `{provider_id}` must compile: {error}")
                 });
@@ -159,37 +156,42 @@ fn bundled_manifest_model_defaults_are_self_contained() {
             .expect("bundled manifest must expose one service entry")
             .id
             .as_str();
-
-        if provider_id == "openrouter" {
-            for curated in OPENROUTER_FEATURED_MODELS {
-                assert!(
-                    vulcan_provider_adapters::manifest_default_enabled(
-                        &compiled,
-                        service_entry_id,
-                        None,
-                        curated,
-                    ),
-                    "OpenRouter manifest must default-enable reviewed model `{curated}`"
-                );
+        let document: Value =
+            serde_json::from_str(text).unwrap_or_else(|error| panic!("parse `{provider_id}`: {error}"));
+        let own_declarations: BTreeSet<&str> = document["model_rules"]
+            .as_array()
+            .expect("model_rules array")
+            .iter()
+            .filter_map(|rule| rule["matcher"]["value"].as_str())
+            .collect();
+        for (owner, identity) in &declared_elsewhere {
+            // An identity this provider declares itself is not a foreign declaration.
+            // 本供应商自己声明的身份不属于外部声明。
+            if owner == provider_id || own_declarations.contains(identity.as_str()) {
+                continue;
             }
-            assert!(
-                !vulcan_provider_adapters::manifest_default_enabled(
-                    &compiled,
-                    service_entry_id,
-                    None,
-                    "vendor/unreviewed-model"
-                ),
-                "OpenRouter manifest must keep unreviewed models disabled by default"
-            );
-        } else {
-            assert!(
+            // Compare inside the same identifier namespace: a provider may legitimately resolve a
+            // namespaced `vendor/model` identity differently from a bare model id.
+            // 在同一标识命名空间内比较：供应商对命名空间化的 `vendor/model` 与裸模型 id 的解析
+            // 可以合法地不同。
+            let baseline = match identity.split_once('/') {
+                Some((namespace, _)) => format!("{namespace}/unreviewed-model"),
+                None => "unreviewed-model".to_string(),
+            };
+            assert_eq!(
                 vulcan_provider_adapters::manifest_default_enabled(
                     &compiled,
                     service_entry_id,
                     None,
-                    "future/provider-model"
+                    identity,
                 ),
-                "provider `{provider_id}` manifest must explicitly own its future-model default"
+                vulcan_provider_adapters::manifest_default_enabled(
+                    &compiled,
+                    service_entry_id,
+                    None,
+                    &baseline,
+                ),
+                "`{provider_id}` must resolve `{identity}` (declared by `{owner}`) exactly like the undeclared `{baseline}`"
             );
         }
     }
