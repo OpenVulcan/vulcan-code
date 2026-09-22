@@ -48,7 +48,7 @@
 | A13 | 压缩与尾段加载后仍能确定问题双方/状态/授权/未结事项；失效提示不被恢复成当前指令 | S3.1 作用域修正（`42651b34`、`523fa6cd`）；压缩前后协作证据 | 已实现并已验证 |
 | A14 | 标签伪造、错误收件人、跨树、未授权跨项目、撤销后发送均不能越权 | `cross_project_*` 三项 + `document_grant_allows` 逐动作（`6a65e457`） | 已实现并已验证 |
 | A15 | 仅支持当前新契约；未知版本明确拒绝；写入中断有可恢复边界 | 严格版本读取与拒绝路径；**两处未知版本拒绝已补齐**（`persisted_route_lease_with_unknown_schema_version_is_refused`、`media_output_rejects_unknown_envelope_version`，`e71b0b30`/`f586e9e3`，均经变异验证）；**写入中断可恢复边界**由既有 `question_finished_storage_failure_recovers_committed_outcome` 与 `question_finished_persists_queued_successor_and_recovers_failed_publication` 覆盖（脚本化刷写故障注入） | 已实现并已验证 |
-| A16 | 多窗口/分页重连按 ID/游标恢复；结果/答案/回执不互相冒充；消耗只计一次 | 前端窗口注册表 17 项 + 分页 39 项；`terminal_report_*` 用量分离（**失败已修正**，`2bf00026`） | **已实现，证据不足**（用量分离失败已消除；仍缺多窗口/分页重连与"不互相冒充"的直接证据，见 §二.4） |
+| A16 | 多窗口/分页重连按 ID/游标恢复；结果/答案/回执不互相冒充；消耗只计一次 | 前端窗口注册表 17 项 + 事件窗口存储 48 项（含 **多窗口不抢唯一消息** `keeps two windows over one session independent for the same single event`，`5c848967`）；`terminal_report_*` 用量分离（失败已修正，`2bf00026`） | **已实现，证据不足**（多窗口唯一消息已补直接证据；"结果/答案/回执不互相冒充"的跨协作实体直接证据与完整分页重连组合仍未逐项断言，见 §二.4） |
 | A17 | 归档仍可结算；未结时删除受阻；取消/结算后删除及重启时迟到操作有确定状态 | 归档/删除生命周期 19 项 + 编辑准入修复（`ca83e0c2`） | 已实现并已验证 |
 | A18 | 子代理可继续工作；主代理在合法边界收到通知且无回答义务；交互框区分 | 通知投影与独立节点证据；前端 123 项 | 已实现并已验证 |
 
@@ -249,7 +249,7 @@
 | `cargo test -p vulcan-context-injection --lib` | 20 passed / 0 failed |
 | `npx vitest run src/components/conversation/conversation-collaboration-card.test.tsx` | 8 passed / 0 failed |
 | `npx tsc -b`（`apps/vulcan-code-web`） | 0 错误 |
-| `npx vitest run`（`apps/vulcan-code-web` 全量） | 1842 passed / **4 failed**（§二.5）/ 1 skipped |
+| `npx vitest run`（`apps/vulcan-code-web` 全量） | 1842 passed / **4 failed**（§二.5）/ 1 skipped；本轮全量运行时另见 1 次环境抖动，单独复跑通过 |
 
 ## 五、引用完整性闸门（本轮新增，建议原主代理审核前复跑）
 
