@@ -20,6 +20,7 @@ import {
   orderProvidersByPriority,
 } from "@/components/features/settings/provider-ordering"
 import { CustomProviderModelsDialog } from "@/components/features/settings/custom-provider-models-dialog"
+import { SystemProviderModelsDialog } from "@/components/features/settings/system-provider-models-dialog"
 import { parseCustomProviderHeaderDraft } from "./custom-provider-header-draft"
 import { persistAndApplyCustomProviderSnapshot } from "@/components/features/settings/custom-provider-save-state"
 import { ProviderManifestStatusPanel } from "@/components/features/settings/provider-manifest-status"
@@ -366,6 +367,7 @@ export function ProviderManagementArea() {
             heading={t("settings.providers.system")}
             loading={!snapshot}
             onAddCredential={setCredentialProviderId}
+            onManageModels={openModels}
             onSavePriority={(providerId, priority) => void saveProviderPriority(providerId, priority)}
             priorities={snapshot?.providerPriorities ?? {}}
             providers={systemProviders}
@@ -450,6 +452,15 @@ export function ProviderManagementArea() {
       />
       {modelsProvider?.kind === "custom" ? (
         <CustomProviderModelsDialog
+          onOpenChange={setModelsDialogOpen}
+          onSaved={setSnapshot}
+          open={modelsDialogOpen}
+          provider={modelsProvider}
+          snapshot={snapshot}
+        />
+      ) : null}
+      {modelsProvider?.kind === "system" && snapshot ? (
+        <SystemProviderModelsDialog
           onOpenChange={setModelsDialogOpen}
           onSaved={setSnapshot}
           open={modelsDialogOpen}
@@ -742,6 +753,7 @@ function SystemProviderTable(props: {
   heading: string
   loading: boolean
   onAddCredential: (providerId: string) => void
+  onManageModels?: (provider: PublicAiProviderDescriptor) => void
   onSavePriority: (providerId: string, priority: number) => void
   priorities: Readonly<Record<string, number>>
   providers: PublicAiProviderDescriptor[]
@@ -859,16 +871,27 @@ function SystemProviderTable(props: {
                       />
                     </TableCell>
                     <TableCell data-label={t("settings.providers.table.operation")} className="py-3 text-right align-middle">
-                      <Button
-                        disabled={props.busyProviderId !== null}
-                        onClick={() => props.onAddCredential(provider.id)}
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                      >
-                        <KeyRound className="mr-1 size-3.5" />
-                        {t("settings.providerOnboarding.addCredential")}
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        {props.variant === "system" && props.onManageModels ? <Button
+                          aria-label={t("settings.customProviders.manageModelsFor").replace("{provider}", providerName)}
+                          disabled={props.busyProviderId !== null}
+                          onClick={() => props.onManageModels?.(provider)}
+                          size="icon-sm"
+                          title={t("settings.customProviders.manageModels")}
+                          type="button"
+                          variant="outline"
+                        ><ListTree className="size-4" /></Button> : null}
+                        <Button
+                          disabled={props.busyProviderId !== null}
+                          onClick={() => props.onAddCredential(provider.id)}
+                          size="sm"
+                          type="button"
+                          variant="outline"
+                        >
+                          <KeyRound className="mr-1 size-3.5" />
+                          {t("settings.providerOnboarding.addCredential")}
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 )

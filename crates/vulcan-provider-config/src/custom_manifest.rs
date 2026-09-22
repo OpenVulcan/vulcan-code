@@ -1840,6 +1840,7 @@ mod tests {
             capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
             request_projection: vulcan_provider_adapters::CustomModelRequestProjection::default(),
             tool_schema_projection: vulcan_provider_adapters::ToolSchemaProjectionMode::default(),
+            system_binding: None,
         }
     }
 

@@ -94,6 +94,9 @@ export interface PublicAiProtocolRoute {
     remote_compaction: PublicAiResponsesRemoteCompactionPolicy;
     websocket: PublicAiResponsesWebsocketPolicy;
   };
+  // Route-owned input declarations determine whether user-added models may enable video input.
+  // 路由自有输入声明决定用户新增模型能否启用视频输入。
+  input_resource_constraints?: { resource_kind: PublicAiResourceKind }[];
   verified: boolean;
 }
 
@@ -325,6 +328,9 @@ export interface PublicAiCustomModelDefinition {
   capabilities: PublicAiModelCapabilities;
   request_projection: PublicAiCustomModelRequestProjection;
   tool_schema_projection: PublicAiToolSchemaProjectionMode;
+  // system_binding scopes a user-added system model to one verified entry and protocol.
+  // system_binding 将用户新增系统模型限制到一个已验证入口和协议。
+  system_binding?: { service_entry_id: string; protocol_profile_id: string };
 }
 
 // PublicAiModelCapabilityOverrides stores only user differences from immutable capability data.
@@ -742,7 +748,7 @@ export interface PublicAiModelRouteRecord {
   availableProtocols: string[];
   // Stable backend binding-source identifier when a binding exists.
   // 存在绑定时的稳定后端绑定来源标识。
-  bindingSource?: "system_manifest" | "custom_user" | "custom_auto_default";
+  bindingSource?: "system_manifest" | "system_user" | "custom_user" | "custom_auto_default";
   // Stable manifest rule identifier when present.
   // 存在时的稳定 Manifest 规则标识。
   bindingRuleId?: string;

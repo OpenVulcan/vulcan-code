@@ -416,7 +416,8 @@ fn every_availability_gate_stays_inside_its_own_manifest() {
 
 /// Returns the common model catalog document shipped beside this crate.
 /// 返回与本 crate 一同发布的通用模型目录文档。
-fn common_model_catalog() -> Value {    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn common_model_catalog() -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join("common_model_capabilities.json");
     let text = std::fs::read_to_string(&path)
@@ -424,8 +425,8 @@ fn common_model_catalog() -> Value {    let path = PathBuf::from(env!("CARGO_MAN
     serde_json::from_str(&text).expect("common model catalog must parse")
 }
 
-/// Returns every exact model identity our provider manifests configure.
-/// 返回我们所有供应商清单配置的精确模型身份。
+/// Returns every identity the catalog generator reads from exact rules and static catalogs.
+/// 返回目录生成器从精确规则及静态目录读取的全部模型身份。
 fn configured_model_identities() -> BTreeSet<String> {
     let mut identities = BTreeSet::new();
     for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
@@ -439,28 +440,35 @@ fn configured_model_identities() -> BTreeSet<String> {
             let value = rule["matcher"]["value"]
                 .as_str()
                 .expect("exact matcher value")
+                .trim()
                 .to_lowercase();
-            identities.insert(value);
+            if !value.is_empty() {
+                identities.insert(value);
+            }
+        }
+        // The generator also includes explicitly cataloged identities covered by prefix rules.
+        // 生成器也纳入由前缀规则覆盖、但已在静态目录中明确列出的模型身份。
+        for service in document["services"].as_array().expect("services array") {
+            let Some(models) = service["model_catalog"]["models"].as_array() else {
+                continue;
+            };
+            for model in models {
+                let value = model["model_id"]
+                    .as_str()
+                    .expect("catalog model identifier")
+                    .trim()
+                    .to_lowercase();
+                if !value.is_empty() {
+                    identities.insert(value);
+                }
+            }
         }
     }
     assert!(
         !identities.is_empty(),
-        "bundled manifests must configure at least one exact model identity"
+        "bundled manifests must configure at least one model identity"
     );
     identities
-}
-
-/// Returns every catalog lookup key, including declared aliases.
-/// 返回目录的全部查询键，含已声明的别名。
-fn catalog_lookup_keys(catalog: &Value) -> BTreeSet<String> {
-    let mut keys = BTreeSet::new();
-    for model in catalog["models"].as_array().expect("catalog models array") {
-        keys.insert(model["key"].as_str().expect("catalog key").to_lowercase());
-        for alias in model["aliases"].as_array().expect("catalog aliases array") {
-            keys.insert(alias.as_str().expect("catalog alias").to_lowercase());
-        }
-    }
-    keys
 }
 
 /// Asserts the common model catalog resolves every model our manifests configure.
@@ -473,12 +481,16 @@ fn catalog_lookup_keys(catalog: &Value) -> BTreeSet<String> {
 /// 失败直到目录被重新生成，而重新生成目录永远不需要修改本文件。
 #[test]
 fn every_configured_model_is_resolvable_in_the_common_catalog() {
-    let lookup = catalog_lookup_keys(&common_model_catalog());
+    let lookup = common_model_catalog()["models"]
+        .as_array()
+        .expect("catalog models array")
+        .iter()
+        .map(|model| model["key"].as_str().expect("catalog key").to_lowercase())
+        .collect::<BTreeSet<_>>();
     for identity in configured_model_identities() {
-        let tail = identity.rsplit('/').next().unwrap_or(identity.as_str());
         assert!(
-            lookup.contains(&identity) || lookup.contains(tail),
-            "configured model `{identity}` must be resolvable in the common model catalog"
+            lookup.contains(&identity),
+            "configured model `{identity}` must have its own common catalog record"
         );
     }
 }
@@ -492,16 +504,11 @@ fn every_configured_model_is_resolvable_in_the_common_catalog() {
 #[test]
 fn the_common_catalog_contains_only_configured_models() {
     let identities = configured_model_identities();
-    let tails = identities
-        .iter()
-        .map(|identity| identity.rsplit('/').next().unwrap_or(identity.as_str()))
-        .collect::<BTreeSet<_>>();
     let catalog = common_model_catalog();
     for model in catalog["models"].as_array().expect("catalog models array") {
         let key = model["key"].as_str().expect("catalog key").to_lowercase();
-        let tail = key.rsplit('/').next().unwrap_or(key.as_str()).to_string();
         assert!(
-            identities.contains(&key) || tails.contains(tail.as_str()),
+            identities.contains(&key),
             "common model catalog record `{key}` is not a model any bundled manifest configures"
         );
     }

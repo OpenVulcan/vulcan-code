@@ -215,6 +215,7 @@ impl ProviderRequestTelemetryContext {
                 vulcan_provider_adapters::ModelProtocolBindingSource::SystemManifest => {
                     "system_manifest"
                 }
+                vulcan_provider_adapters::ModelProtocolBindingSource::SystemUser => "system_user",
                 vulcan_provider_adapters::ModelProtocolBindingSource::CustomUser => "custom_user",
                 vulcan_provider_adapters::ModelProtocolBindingSource::CustomAutoDefault => {
                     "custom_auto_default"

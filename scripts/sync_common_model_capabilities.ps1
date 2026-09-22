@@ -82,7 +82,9 @@ function Get-ProviderConfiguredModelRecords {
             $contextWindow = if ($null -ne $rule.capabilities.context_limit -and [long]$rule.capabilities.context_limit -gt 0) {
                 [long]$rule.capabilities.context_limit
             } else {
-                200000
+                # Preserve unknown here so a remote cross reference can fill it before fallback.
+                # 此处保留未知状态，使远端交叉参照可在最终回退前补全。
+                0
             }
             $tail = ($key -split "/")[-1]
             $aliases = if ($tail -ne $key) { @($tail) } else { @() }

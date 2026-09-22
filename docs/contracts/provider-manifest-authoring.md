@@ -401,6 +401,9 @@ LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把�
 
 - 命中规则时必须得到一个 `selected_protocol`；
 - 未命中规则时，只有 `default_binding_allowed` 和显式默认协议才能绑定；
+- 用户单独新增的文本输出会话模型是独立的用户授权来源：仅在精确系统服务入口、已验证协议路由
+  和显式模型绑定一致时参与目录；不把用户声明改写成 Manifest 规则，命中签名规则时仍以签名协议
+  为准；
 - 旧连接上的 `selected_protocol` 不参与系统模型绑定；
 - 一个服务可以同时声明多个协议 route，但当上游按模型系列分配入口时，每条 Exact 模型规则仍只能
   声明该系列真实支持的单一协议；服务级 route 集合不是模型级可任选协议集合；
@@ -408,6 +411,16 @@ LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把�
   protocol_profile_id + manifest_revision`；
 - retry 只允许使用冻结身份，协议或清单修订变化直接报错；
 - 失败后不测试第二协议、不降级、不静默切换。
+
+用户新增会话模型须明确声明正数上下文与输出上限，输出上限不得超过上下文窗口。输入音频先由
+所选协议的实际编码器门禁；Anthropic Messages 没有原生音频输入投影。视频输入除编码器能力外，
+还须由所选供应商路由声明视频输入约束。自定义供应商目前不生成视频输入路由约束，因此其用户
+模型及供应商默认值不能声明视频输入。当前 OpenAI Chat 与 Gemini 编码器允许音频输入，标准
+OpenAI Responses 编码器尚未确认音频 Wire 形状，暂时失败关闭；不能把 Chat 的 `input_audio`
+形状直接套到 Responses。用户新增模型不进入随包通用模型能力目录。
+上述 OpenAI 输入形状以上游 [Responses 请求参考](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
+和 [官方 Python SDK 的消息内容联合类型](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_input_content_param.py)
+为契约；升级 OpenAI API/SDK 或新增 Responses 音频实现时，须重新核对联合类型和实际请求编码。
 
 自定义供应商遵循用户确认的规则：
 

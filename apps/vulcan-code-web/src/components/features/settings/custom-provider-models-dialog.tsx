@@ -137,9 +137,9 @@ const EMPTY_PROJECTION: PublicAiCustomModelRequestProjection = {
   delete: [],
 }
 
-// RESOURCE_KINDS is the closed non-text modality set accepted by the public contract.
-// RESOURCE_KINDS 是公共契约接受的封闭非文本模态集合。
-const RESOURCE_KINDS: PublicAiResourceKind[] = ["image", "audio", "video", "file"]
+// RESOURCE_KINDS excludes video until custom routes can declare provider-specific video input.
+// RESOURCE_KINDS 在自定义路由能够声明供应商专属视频输入前排除视频。
+const RESOURCE_KINDS: PublicAiResourceKind[] = ["image", "audio", "file"]
 
 // RESOURCE_LABEL_KEYS maps resource kinds to localized labels without dynamic translation keys.
 // RESOURCE_LABEL_KEYS 将资源类型映射到本地化标签且不使用动态翻译键。

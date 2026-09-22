@@ -662,6 +662,7 @@ fn credential_free_manual_model_accepts_direct_capability_settings() {
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                system_binding: None,
             },
         )]),
     );
@@ -791,6 +792,7 @@ fn connection_catalog_membership_tracks_manual_definition_removal() {
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                system_binding: None,
             },
         );
 
@@ -845,6 +847,7 @@ fn connection_catalog_membership_retains_discovered_model_after_overlay_removal(
                 capabilities: ModelCapabilities::default(),
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                system_binding: None,
             },
         );
 
@@ -894,6 +897,7 @@ fn runtime_model_is_enabled_follows_manifest_first_precedence() {
                 capabilities: ModelCapabilities::default(),
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                system_binding: None,
             },
         )]),
     );

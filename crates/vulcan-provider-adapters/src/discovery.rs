@@ -4760,20 +4760,21 @@ mod manifest_migration_tests {
             // via_manifest 在不使用公共或供应商命名能力种子的情况下生成。
             let via_manifest =
                 manifest_alibaba_static_catalog(manifest, service_entry_id, protocol_id);
-            assert_eq!(
-                via_manifest
-                    .models
-                    .iter()
-                    .map(|model| model.id.as_str())
-                    .collect::<Vec<_>>(),
-                legacy
-                    .models
-                    .iter()
-                    .map(|model| model.id.as_str())
-                    .collect::<Vec<_>>(),
-                "catalog membership drift for `{service_entry_id}` / `{protocol_id}`"
-            );
-            for (actual, expected) in via_manifest.models.iter().zip(&legacy.models) {
+            // The legacy oracle covers migrated identities only; newly declared models are
+            // validated by the manifest conformance suite and need no oracle-table edit.
+            // 旧版对照只覆盖已迁移身份；新增模型由清单一致性套件校验，无须改动旧表。
+            let manifest_models = via_manifest
+                .models
+                .iter()
+                .map(|model| (model.id.as_str(), model))
+                .collect::<BTreeMap<_, _>>();
+            for expected in &legacy.models {
+                let actual = manifest_models.get(expected.id.as_str()).unwrap_or_else(|| {
+                    panic!(
+                        "migrated model `{}` disappeared from `{service_entry_id}` / `{protocol_id}`",
+                        expected.id
+                    )
+                });
                 // Empty legacy operations identify embedding/rerank identities whose capabilities
                 // were already manifest-owned before this static-catalog migration. Their dedicated
                 // rule-oracle tests remain authoritative; this guard still checks membership/order.

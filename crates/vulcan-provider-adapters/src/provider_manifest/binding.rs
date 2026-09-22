@@ -21,6 +21,9 @@ pub enum ModelProtocolBindingSource {
     /// Resolved from a system manifest rule or provider default.
     /// 从系统清单规则或供应商默认解析。
     SystemManifest,
+    /// Explicit user choice for an additional system model on a verified manifest route.
+    /// 用户为系统供应商新增模型在已验证清单路由上作出的显式选择。
+    SystemUser,
     /// Explicit user choice for a custom provider model.
     /// 自定义供应商模型的显式用户选择。
     CustomUser,

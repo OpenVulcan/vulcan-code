@@ -33,6 +33,7 @@ fn custom_discovery_catalog_unions_absent_manual_model_unless_explicitly_disable
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                system_binding: None,
             },
         );
     let source = crate::parse_openai_model_catalog(
@@ -90,6 +91,7 @@ fn empty_custom_discovery_catalog_retains_manual_model_unless_explicitly_disable
                 },
                 request_projection: crate::CustomModelRequestProjection::default(),
                 tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                system_binding: None,
             },
         );
     let source = crate::parse_openai_model_catalog("custom-account", 1, r#"{"data":[]}"#)
@@ -201,12 +203,6 @@ fn model_source_policies_control_runtime_identity_union() {
                         "matcher": {"kind": "exact", "value": "discovery-model"},
                         "supported_protocols": [OPENAI_CHAT_PROFILE_ID],
                         "selected_protocol": OPENAI_CHAT_PROFILE_ID
-                    },
-                    {
-                        "rule_id": "manual-model",
-                        "matcher": {"kind": "exact", "value": "manual-model"},
-                        "supported_protocols": [OPENAI_CHAT_PROFILE_ID],
-                        "selected_protocol": OPENAI_CHAT_PROFILE_ID
                     }
                 ],
                 "provenance": {"status": "migrated", "sources": []}
@@ -246,10 +242,16 @@ fn model_source_policies_control_runtime_identity_union() {
                         enabled: true,
                         capabilities: ModelCapabilities {
                             operations: vec![AiOperation::ConversationRespond],
+                            context_limit: Some(200_000),
+                            output_limit: Some(8_000),
                             ..ModelCapabilities::default()
                         },
                         request_projection: Default::default(),
                         tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                        system_binding: Some(crate::SystemManualModelBinding {
+                            service_entry_id: String::from("public-api"),
+                            protocol_profile_id: OPENAI_CHAT_PROFILE_ID.to_string(),
+                        }),
                     },
                 )]),
             );
@@ -305,9 +307,9 @@ fn model_source_policies_control_runtime_identity_union() {
                     expected_model_ids.insert(String::from("unmatched-discovery-model"));
                 }
             }
-            if source_policy.includes_manual() {
-                expected_model_ids.insert(String::from("manual-model"));
-            }
+            // Explicit system-user identity is independent from the Manifest's source policy.
+            // 系统用户显式身份独立于 Manifest 的来源策略。
+            expected_model_ids.insert(String::from("manual-model"));
             let actual_model_ids = source_catalog
                 .models
                 .iter()
@@ -317,19 +319,25 @@ fn model_source_policies_control_runtime_identity_union() {
                 actual_model_ids, expected_model_ids,
                 "source {source_policy:?}, membership {membership_policy:?}"
             );
-            if source_policy.includes_manual() {
-                let manual_model = source_catalog
-                    .models
-                    .iter()
-                    .find(|model| model.id == "manual-model")
-                    .expect("manual source policy must admit the manual identity");
-                assert!(
-                    manual_model
-                        .protocol_variants
-                        .contains_key(OPENAI_CHAT_PROFILE_ID),
-                    "signed Manifest rule must produce the manual model's executable variant"
-                );
-            }
+            let manual_model = source_catalog
+                .models
+                .iter()
+                .find(|model| model.id == "manual-model")
+                .expect("explicit user source must admit the manual identity");
+            assert!(
+                manual_model
+                    .protocol_variants
+                    .contains_key(OPENAI_CHAT_PROFILE_ID),
+                "explicit user choice must produce the manual model's executable variant"
+            );
+            assert_eq!(
+                manual_model
+                    .resolved_protocol_binding
+                    .as_ref()
+                    .expect("manual model binding")
+                    .source,
+                crate::ModelProtocolBindingSource::SystemUser,
+            );
         }
     }
 }

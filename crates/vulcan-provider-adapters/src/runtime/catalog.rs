@@ -872,7 +872,14 @@ impl PublicAiRuntime {
                         failure_kind,
                         error_message.as_str(),
                     )?;
-                    if publish_effective_catalog && source_policy.includes_manual() {
+                    if publish_effective_catalog
+                        && (source_policy.includes_manual()
+                            || super::catalog_policy::has_system_manual_models_for_entry(
+                                configuration,
+                                provider.id.as_str(),
+                                entry.id.as_str(),
+                            ))
+                    {
                         self.install_manual_custom_catalog_without_discovery(
                             configuration,
                             &connection,

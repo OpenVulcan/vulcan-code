@@ -37,6 +37,55 @@ pub(super) use capabilities::{
     validate_resolved_catalog_limits, validate_resolved_model_capability_limits,
 };
 
+/// Adds the one explicitly selected user protocol variant for an unsigned system model identity.
+/// 为未签名的系统模型身份加入用户明确选择的唯一协议变体。
+///
+/// # Parameters
+/// 参数
+/// `provider_id`, `service_entry_id`, and `generation` identify the catalog scope; `definition`
+/// supplies the user declaration; `model` receives its exact executable variant.
+/// `provider_id`、`service_entry_id` 与 `generation` 标识目录作用域；`definition` 提供用户声明；
+/// `model` 接收精确可执行变体。
+///
+/// # Returns
+/// 返回值
+/// Updates only the selected variant without claiming remote discovery or a signed model rule.
+/// 仅更新所选变体，不伪称远端发现或签名模型规则。
+fn project_system_manual_variant(
+    provider_id: &str,
+    service_entry_id: &str,
+    generation: u64,
+    definition: &crate::CustomModelDefinition,
+    model: &mut ConnectionModel,
+) {
+    let binding = definition
+        .system_binding
+        .as_ref()
+        .expect("validated system manual model must have a binding");
+    let capabilities = definition.capabilities.clone();
+    let capability_evidence = manual_model_capability_evidence(&capabilities);
+    let material = format!(
+        "system-manual\0{provider_id}\0{service_entry_id}\0{}\0{}",
+        definition.id, binding.protocol_profile_id
+    );
+    model.display_name = definition.display_name.clone();
+    model.capabilities = capabilities.clone();
+    model.capability_evidence = capability_evidence.clone();
+    model.protocol_variants.clear();
+    model.protocol_variants.insert(
+        binding.protocol_profile_id.clone(),
+        ProtocolModelVariant {
+            capabilities,
+            capability_evidence,
+            discovery_signature: format!(
+                "sha256:{}",
+                hex::encode(Sha256::digest(material.as_bytes()))
+            ),
+            catalog_generation: generation,
+        },
+    );
+}
+
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -45,6 +94,37 @@ pub(super) use test_support::apply_model_catalog_overlays;
 /// Stable schema marker for a source catalog that contains only user-managed manual identities.
 /// 仅包含用户管理手工身份的源目录稳定 Schema 标记。
 pub(super) const MANUAL_MODEL_CATALOG_SCHEMA_REVISION: &str = "manual.models.v1";
+
+/// Reports whether a system provider has a user model explicitly bound to this service entry.
+/// 报告系统供应商是否有明确绑定到该服务入口的用户模型。
+///
+/// # Parameters
+/// 参数
+/// `configuration` owns user definitions; provider and entry select one exact route scope.
+/// `configuration` 持有用户定义；供应商与入口共同选定一个精确路由作用域。
+///
+/// # Returns
+/// 返回值
+/// `true` only for at least one explicit user binding within the selected entry.
+/// 仅当所选入口至少存在一个显式用户绑定时返回 `true`。
+pub(super) fn has_system_manual_models_for_entry(
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+    service_entry_id: &str,
+) -> bool {
+    !provider_id.starts_with("custom:")
+        && configuration
+            .custom_models
+            .get(provider_id)
+            .is_some_and(|models| {
+                models.values().any(|model| {
+                    model
+                        .system_binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.service_entry_id == service_entry_id)
+                })
+            })
+}
 
 /// Builds an empty discovery baseline only when one provider owns manual model definitions.
 /// 仅在某个供应商拥有手工模型定义时构建空的发现基线。
@@ -176,6 +256,10 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
         service_entry_id.to_string()
     };
     let service_entry_id = resolved_service_entry_id.as_str();
+    // systemManualSource is an explicit user-owned identity source scoped to one signed entry.
+    // systemManualSource 是限定在一个签名入口的显式用户自有身份来源。
+    let system_manual_source =
+        has_system_manual_models_for_entry(configuration, provider_id, service_entry_id);
     let source_is_manifest = catalog.discovery_schema_revision
         == crate::client::MANIFEST_STATIC_DISCOVERY_SCHEMA_REVISION;
     let source_is_manual =
@@ -187,7 +271,7 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
     let source_allowed = if source_is_manifest {
         source_policy.includes_manifest()
     } else if source_is_manual {
-        source_policy.includes_manual()
+        source_policy.includes_manual() || system_manual_source
     } else {
         source_policy.includes_discovery()
     };
@@ -401,11 +485,35 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
             (model.id.clone(), model)
         })
         .collect::<BTreeMap<_, _>>();
-    if source_policy.includes_manual()
+    if (source_policy.includes_manual() || system_manual_source)
         && let Some(custom_models) = configuration.custom_models.get(provider_id)
     {
         for definition in custom_models.values() {
-            definition.validate()?;
+            if custom_provider {
+                definition.validate()?;
+                if definition.system_binding.is_some() {
+                    return Err(format!(
+                        "Custom provider model `{}` cannot declare a system service binding.",
+                        definition.id
+                    ));
+                }
+            } else {
+                let binding = definition.system_binding.as_ref().ok_or_else(|| {
+                    format!(
+                        "System manual model `{}` requires an explicit service binding.",
+                        definition.id
+                    )
+                })?;
+                if binding.service_entry_id != service_entry_id {
+                    continue;
+                }
+                crate::validate_system_manual_model_definition(
+                    manifest.ok_or_else(|| {
+                        format!("System provider `{provider_id}` has no active Manifest.")
+                    })?,
+                    definition,
+                )?;
+            }
             let availability = configuration.custom_model_connection_enabled_override(
                 catalog.connection_id.as_str(),
                 definition.id.as_str(),
@@ -418,12 +526,48 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
             if availability == Some(false) {
                 continue;
             }
+            // signedRule keeps an existing Manifest model binding authoritative even when the
+            // user adds its identity to a manual source. An unmatched user identity uses only
+            // the explicitly selected verified route.
+            // signedRule 保持已存在的 Manifest 模型绑定权威；未命中规则的用户身份仅使用
+            // 明确选定且已验证的路由。
+            let signed_rule = if let Some(manifest) = manifest.filter(|_| !custom_provider) {
+                let connection = configuration
+                    .connection_graph
+                    .connections
+                    .get(catalog.connection_id.as_str())
+                    .ok_or_else(|| {
+                        format!(
+                            "Credential connection `{}` is not configured for manual model projection.",
+                            catalog.connection_id
+                        )
+                    })?;
+                manifest
+                    .rule_for_model(
+                        service_entry_id,
+                        Some(connection.credential_profile_id.as_str()),
+                        definition.id.as_str(),
+                    )
+                    .is_some()
+            } else {
+                false
+            };
             // A successful provider catalog remains authoritative for identity, limits, modalities,
             // and operations. The manual declaration may still add explicit advanced behavior that
             // `/models` cannot describe, such as reasoning projections and model parameters.
             // 成功的供应商目录仍是身份、限制、多模态和操作的权威来源。手工声明仍可补充
             // `/models` 无法表达的显式高级行为，例如思考投影和模型参数。
             if let Some(discovered_model) = models.get_mut(definition.id.as_str()) {
+                if !custom_provider && !signed_rule {
+                    project_system_manual_variant(
+                        provider_id,
+                        service_entry_id,
+                        catalog.generation,
+                        definition,
+                        discovered_model,
+                    );
+                    continue;
+                }
                 discovered_model.display_name = definition.display_name.clone();
                 apply_custom_model_advanced_declaration(
                     &definition.capabilities,
@@ -513,13 +657,23 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
                             catalog.connection_id
                         )
                     })?;
-                project_manifest_protocol_variants_for_connection(
-                    manifest,
-                    connection,
-                    catalog.generation,
-                    &mut model,
-                    true,
-                )?;
+                if signed_rule {
+                    project_manifest_protocol_variants_for_connection(
+                        manifest,
+                        connection,
+                        catalog.generation,
+                        &mut model,
+                        true,
+                    )?;
+                } else {
+                    project_system_manual_variant(
+                        provider_id,
+                        service_entry_id,
+                        catalog.generation,
+                        definition,
+                        &mut model,
+                    );
+                }
                 apply_custom_model_advanced_declaration(
                     &definition.capabilities,
                     &mut model.capabilities,
@@ -641,15 +795,32 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
             // of provider-purpose model rules; explicit account choices always win.
             // 清单基础默认关闭时，账号初始勾选取自精确规则；其他基础默认开启的供应商
             // 保持账号全开，不受供应商用途模型规则影响；显式账号选择始终优先。
-            let inherited_default = manifest.is_none_or(|manifest| {
-                manifest.default_enabled
-                    || crate::provider_manifest::manifest_default_enabled(
-                        manifest,
-                        service_entry_id,
-                        Some(account_connection.credential_profile_id.as_str()),
-                        model_id,
-                    )
-            });
+            let system_manual_definition = configuration
+                .custom_model(provider_id, model_id)
+                .filter(|definition| {
+                    definition
+                        .system_binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.service_entry_id == service_entry_id)
+                });
+            // A provider-level manual disable must not be reversed by an old account opt-in.
+            // 用户在供应商级禁用手工模型后，旧账号启用记录不能把它重新放行。
+            if system_manual_definition.is_some_and(|definition| !definition.enabled) {
+                return false;
+            }
+            let inherited_default = system_manual_definition
+                .map(|definition| definition.enabled)
+                .unwrap_or_else(|| {
+                    manifest.is_none_or(|manifest| {
+                        manifest.default_enabled
+                            || crate::provider_manifest::manifest_default_enabled(
+                                manifest,
+                                service_entry_id,
+                                Some(account_connection.credential_profile_id.as_str()),
+                                model_id,
+                            )
+                    })
+                });
             configuration.connection_model_is_enabled_with_default(
                 catalog.connection_id.as_str(),
                 model_id,
@@ -717,7 +888,12 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
                     catalog.connection_id
                 )
             })?;
-        freeze_system_provider_protocol_bindings(manifest, connection, &mut catalog.models)?;
+        freeze_system_provider_protocol_bindings(
+            configuration,
+            manifest,
+            connection,
+            &mut catalog.models,
+        )?;
     }
     // Effective output ceilings must fit the effective context window after every policy layer.
     // 所有策略层应用完成后，有效输出上限必须收敛到有效上下文窗口内。

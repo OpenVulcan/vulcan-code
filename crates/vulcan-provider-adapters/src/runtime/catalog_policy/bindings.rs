@@ -230,11 +230,38 @@ fn ensure_manual_custom_bound_variant(
 /// Success after every model is either exactly bound or explicitly non-executable.
 /// 每个模型都被精确绑定或被明确标记为不可执行后返回成功。
 pub(super) fn freeze_system_provider_protocol_bindings(
+    configuration: &PersistedAiConfiguration,
     manifest: &ResolvedProviderManifest,
     connection: &CredentialConnection,
     models: &mut [ConnectionModel],
 ) -> Result<(), String> {
     for model in models {
+        // An unmatched identity may bind only through a persisted user declaration for this
+        // exact service entry. Signed rules retain precedence when they exist.
+        // 未命中规则的身份只能通过属于此精确服务入口的持久化用户声明绑定；已有签名规则优先。
+        let manual_binding = configuration
+            .custom_model(connection.provider_id.as_str(), model.id.as_str())
+            .and_then(|definition| definition.system_binding.as_ref())
+            .filter(|binding| binding.service_entry_id == connection.service_entry_id);
+        let signed_rule = manifest.rule_for_model(
+            connection.service_entry_id.as_str(),
+            Some(connection.credential_profile_id.as_str()),
+            model.id.as_str(),
+        );
+        if signed_rule.is_none()
+            && let Some(binding) = manual_binding
+        {
+            model.resolved_protocol_binding =
+                Some(crate::provider_manifest::ModelProtocolBinding {
+                    protocol_profile_id: binding.protocol_profile_id.clone(),
+                    source: crate::provider_manifest::ModelProtocolBindingSource::SystemUser,
+                    manifest_revision: manifest.revision,
+                    rule_id: String::new(),
+                    codex_behavior: None,
+                });
+            project_frozen_model_binding_compatibility(model)?;
+            continue;
+        }
         match crate::provider_manifest::resolve_system_model_protocol_binding(
             manifest,
             connection.service_entry_id.as_str(),

@@ -4639,6 +4639,7 @@ mod tests {
                     },
                     request_projection: Default::default(),
                     tool_schema_projection: Default::default(),
+                    system_binding: None,
                 },
             )]),
         );
@@ -4701,6 +4702,7 @@ mod tests {
                     capabilities: ModelCapabilities::default(),
                     request_projection: Default::default(),
                     tool_schema_projection: Default::default(),
+                    system_binding: None,
                 },
             )]),
         );
@@ -4938,6 +4940,7 @@ mod tests {
                     capabilities: ModelCapabilities::default(),
                     request_projection: Default::default(),
                     tool_schema_projection: Default::default(),
+                    system_binding: None,
                 },
             )]),
         );
@@ -5056,6 +5059,7 @@ mod tests {
                     capabilities: ModelCapabilities::default(),
                     request_projection: Default::default(),
                     tool_schema_projection: Default::default(),
+                    system_binding: None,
                 },
             )]),
         );
@@ -5070,6 +5074,7 @@ mod tests {
                     capabilities: ModelCapabilities::default(),
                     request_projection: Default::default(),
                     tool_schema_projection: Default::default(),
+                    system_binding: None,
                 },
             )]),
         );
@@ -5311,6 +5316,7 @@ mod tests {
             },
             request_projection: Default::default(),
             tool_schema_projection: Default::default(),
+            system_binding: None,
         };
         historical.custom_models.insert(
             String::from("custom-provider"),
@@ -5404,6 +5410,7 @@ mod tests {
                         },
                         request_projection: Default::default(),
                         tool_schema_projection: Default::default(),
+                        system_binding: None,
                     },
                 )]),
             )]),
@@ -5477,6 +5484,7 @@ mod tests {
                         },
                         request_projection: Default::default(),
                         tool_schema_projection: Default::default(),
+                        system_binding: None,
                     },
                 )]),
             )]),
@@ -5538,6 +5546,7 @@ mod tests {
             },
             request_projection: Default::default(),
             tool_schema_projection: Default::default(),
+            system_binding: None,
         };
         let mut historical = PersistedAiConfiguration {
             schema_version: 3,
@@ -5599,6 +5608,7 @@ mod tests {
             },
             request_projection: Default::default(),
             tool_schema_projection: Default::default(),
+            system_binding: None,
         };
         let mut historical = PersistedAiConfiguration {
             schema_version: 3,

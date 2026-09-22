@@ -1008,12 +1008,30 @@ fn manifest_variant_authorization_is_model_and_policy_scoped() {
     let openrouter = manifests
         .manifest("openrouter")
         .expect("OpenRouter manifest must exist");
-    assert!(!manifest_protocol_authorizes_model_variant(
+    // OpenRouter explicitly allows unknown models on its declared default protocols.
+    // OpenRouter 明确允许未知模型使用默认声明的协议。
+    assert!(manifest_protocol_authorizes_model_variant(
         openrouter,
         "public-api",
         "api-key",
         OPENAI_CHAT_PROFILE_ID,
         "vendor/unmapped-model",
+    ));
+    // The default policy still cannot authorize an undeclared protocol.
+    // 默认策略仍不能授权未声明的协议。
+    assert!(!manifest_protocol_authorizes_model_variant(
+        openrouter,
+        "public-api",
+        "api-key",
+        vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+        "vendor/unmapped-model",
+    ));
+    assert!(!manifest_protocol_authorizes_model_variant(
+        deepseek,
+        "official-api",
+        "api-key",
+        OPENAI_CHAT_PROFILE_ID,
+        "deepseek-unmapped-model",
     ));
 }
 

@@ -6,10 +6,88 @@ use crate::runtime::test_support::{connection, install_source_catalog, with_prot
 use crate::{PersistedAiConfiguration, parse_openai_model_catalog, parse_openrouter_model_catalog};
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use vulcan_ai_contract::ModelCapabilities;
+use vulcan_ai_contract::{AiOperation, ModelCapabilities};
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
+
+/// Verifies an unknown user model reaches execution through its chosen signed service route.
+/// 验证未知用户模型通过其选定的签名服务路由进入执行选择。
+#[test]
+fn system_user_model_binds_without_remote_discovery_or_signed_model_rule() {
+    let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+    let mut configuration = PersistedAiConfiguration::default();
+    let mut deepseek_connection = connection("one");
+    deepseek_connection.provider_id = String::from("deepseek");
+    deepseek_connection.service_entry_id = String::from("official-api");
+    configuration
+        .connection_graph
+        .add_connection(&runtime.providers().expect("registry"), deepseek_connection)
+        .expect("connection should register");
+    configuration.custom_models.insert(
+        String::from("deepseek"),
+        std::collections::BTreeMap::from([(
+            String::from("manual-probe"),
+            crate::CustomModelDefinition {
+                id: String::from("manual-probe"),
+                display_name: String::from("Manual Probe"),
+                enabled: true,
+                capabilities: ModelCapabilities {
+                    operations: vec![AiOperation::ConversationRespond],
+                    context_limit: Some(128_000),
+                    output_limit: Some(8_000),
+                    ..ModelCapabilities::default()
+                },
+                request_projection: Default::default(),
+                tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                system_binding: Some(crate::SystemManualModelBinding {
+                    service_entry_id: String::from("official-api"),
+                    protocol_profile_id: String::from(OPENAI_CHAT_PROFILE_ID),
+                }),
+            },
+        )]),
+    );
+    let source = parse_openai_model_catalog("one", 1, r#"{"data":[]}"#)
+        .expect("empty remote catalog should parse");
+    install_source_catalog(&runtime, source.clone());
+    runtime
+        .replace_catalog(source)
+        .expect("source catalog should install");
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("manual identity should survive empty discovery");
+    let selection = runtime
+        .resolve_connection_model_selection(&configuration, "one", "deepseek", "manual-probe")
+        .expect("system user model should be executable");
+    assert_eq!(
+        selection.route.protocol_route.protocol_profile_id,
+        OPENAI_CHAT_PROFILE_ID
+    );
+    assert_eq!(
+        selection
+            .model
+            .resolved_protocol_binding
+            .expect("frozen binding")
+            .source,
+        crate::ModelProtocolBindingSource::SystemUser,
+    );
+    configuration.set_model_enabled("deepseek", "manual-probe", true);
+    configuration
+        .custom_models
+        .get_mut("deepseek")
+        .expect("manual provider")
+        .get_mut("manual-probe")
+        .expect("manual model")
+        .enabled = false;
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("disabled manual model should rebuild cleanly");
+    assert!(
+        runtime
+            .resolve_connection_model_selection(&configuration, "one", "deepseek", "manual-probe")
+            .is_err()
+    );
+}
 
 /// Verifies model-level protocol routing: two models on one credential bind to their own
 /// manifest-declared protocols.

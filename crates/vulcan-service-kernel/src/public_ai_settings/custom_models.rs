@@ -10,7 +10,7 @@ use vulcan_ai_contract::{
 use vulcan_provider_adapters::{
     CommonModelTemplateSuggestion, CustomModelDefinition, CustomModelProtocolPreference,
     CustomModelTemplateDecision, CustomProviderModelDefaults, PersistedAiConfiguration,
-    ProviderKind, PublicAiRuntime,
+    ProviderKind, PublicAiRuntime, validate_system_manual_model_definition,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -365,8 +365,8 @@ pub(crate) async fn service_validate_public_ai_custom_model(
     })
 }
 
-/// Replaces the user-owned model definitions for one custom provider.
-/// 替换一个自定义供应商的用户自有模型定义。
+/// Replaces the user-owned model definitions for one configured provider.
+/// 替换一个已配置供应商的用户自有模型定义。
 ///
 /// # Parameters
 /// 参数
@@ -388,25 +388,45 @@ pub(crate) async fn service_save_public_ai_custom_models(
     validate_non_empty("providerId", request.provider_id.as_str())?;
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    let provider = current_configuration
-        .custom_providers
-        .get(request.provider_id.as_str())
-        .ok_or_else(|| {
-            format!(
-                "Custom provider `{}` is not configured.",
+    let system_manifest = runtime.system_manifest(request.provider_id.as_str());
+    if system_manifest.is_none() {
+        let provider = current_configuration
+            .custom_providers
+            .get(request.provider_id.as_str())
+            .ok_or_else(|| format!("Provider `{}` is not configured.", request.provider_id))?;
+        if provider.kind != ProviderKind::Custom {
+            return Err(format!(
+                "Provider `{}` is not a user-defined provider.",
                 request.provider_id
-            )
-        })?;
-    if provider.kind != ProviderKind::Custom {
-        return Err(format!(
-            "Provider `{}` is not a user-defined provider.",
-            request.provider_id
-        ));
+            ));
+        }
     }
 
     let mut replacement = BTreeMap::new();
     for model in request.models {
-        model.validate()?;
+        if let Some(manifest) = system_manifest.as_deref() {
+            validate_system_manual_model_definition(manifest, &model)?;
+        } else {
+            model.validate()?;
+            if model.system_binding.is_some() {
+                return Err(format!(
+                    "Custom provider model `{}` cannot declare a system service binding.",
+                    model.id
+                ));
+            }
+            // Custom-provider routes currently publish no provider-specific video input contract.
+            // 自定义供应商路由目前不发布供应商专属的视频输入契约。
+            if model
+                .capabilities
+                .input_resources
+                .contains(&vulcan_ai_contract::ResourceKind::Video)
+            {
+                return Err(format!(
+                    "Custom provider model `{}` cannot enable video input without a declared provider route.",
+                    model.id
+                ));
+            }
+        }
         let model_id = model.id.clone();
         if replacement.insert(model_id.clone(), model).is_some() {
             return Err(format!(
@@ -414,6 +434,11 @@ pub(crate) async fn service_save_public_ai_custom_models(
                 request.provider_id
             ));
         }
+    }
+    if system_manifest.is_some() && !request.template_decisions.is_empty() {
+        return Err(String::from(
+            "System manual models do not accept custom-provider template decisions.",
+        ));
     }
     // seen_template_decisions rejects ambiguous duplicate decisions before persistence begins.
     // seen_template_decisions 在开始持久化前拒绝含义不明确的重复决策。

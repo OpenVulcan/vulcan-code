@@ -325,7 +325,13 @@ pub(super) fn resolve_model_catalog_overlays_from_inputs(
                 1,
                 crate::client::MANIFEST_STATIC_DISCOVERY_SCHEMA_REVISION,
             ),
-            None if source_policy.includes_manual() => {
+            None if source_policy.includes_manual()
+                || super::catalog_policy::has_system_manual_models_for_entry(
+                    configuration,
+                    connection.provider_id.as_str(),
+                    connection.service_entry_id.as_str(),
+                ) =>
+            {
                 let Some(catalog) = manual_custom_catalog(configuration, connection, 1) else {
                     continue;
                 };

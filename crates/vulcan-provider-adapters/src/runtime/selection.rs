@@ -469,10 +469,20 @@ impl PublicAiRuntime {
                             "Model `{model_id}` is not executable: no system protocol binding was frozen at the active catalog boundary."
                         )
                     })?;
-                    if binding.source
-                        != crate::provider_manifest::ModelProtocolBindingSource::SystemManifest
-                        || binding.manifest_revision != manifest.revision
-                    {
+                    let source_is_current = match binding.source {
+                        crate::provider_manifest::ModelProtocolBindingSource::SystemManifest => true,
+                        crate::provider_manifest::ModelProtocolBindingSource::SystemUser => {
+                            configuration
+                                .custom_model(provider_id, model_id)
+                                .and_then(|definition| definition.system_binding.as_ref())
+                                .is_some_and(|manual| {
+                                    manual.service_entry_id == connection.service_entry_id
+                                        && manual.protocol_profile_id == binding.protocol_profile_id
+                                })
+                        }
+                        _ => false,
+                    };
+                    if !source_is_current || binding.manifest_revision != manifest.revision {
                         return Err(format!(
                             "Model `{model_id}` frozen binding does not belong to active manifest revision {}.",
                             manifest.revision

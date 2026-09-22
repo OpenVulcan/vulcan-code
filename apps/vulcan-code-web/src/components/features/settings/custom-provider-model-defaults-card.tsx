@@ -41,9 +41,9 @@ interface CustomProviderModelDefaultsCardProps {
   providerId: string
 }
 
-// CUSTOM_INPUT_RESOURCES is the complete non-text input set editable by compatible providers.
-// CUSTOM_INPUT_RESOURCES 是兼容供应商可编辑的完整非文本输入集合。
-const CUSTOM_INPUT_RESOURCES: PublicAiResourceKind[] = ["image", "audio", "video", "file"]
+// CUSTOM_INPUT_RESOURCES lists input kinds with a declared compatible route contract.
+// CUSTOM_INPUT_RESOURCES 列出兼容路由已声明契约的输入类型。
+const CUSTOM_INPUT_RESOURCES: PublicAiResourceKind[] = ["image", "audio", "file"]
 
 // REASONING_EFFORT_LABEL_KEYS maps each OpenAI level to one stable translation key.
 // REASONING_EFFORT_LABEL_KEYS 将每个 OpenAI 档位映射到稳定翻译键。

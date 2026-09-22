@@ -133,6 +133,11 @@ impl CustomProviderModelDefaults {
                 "Non-text output cannot be configured for a custom conversation provider.",
             ));
         }
+        if self.input_resources.contains(&ResourceKind::Video) {
+            return Err(String::from(
+                "Custom provider defaults cannot enable video input without a declared provider route.",
+            ));
+        }
         validate_custom_provider_reasoning_settings(
             self.reasoning,
             self.reasoning_control,
@@ -517,6 +522,19 @@ pub enum CustomModelProtocolPreference {
     },
 }
 
+/// Binds one user-added system model to a verified service entry and protocol route.
+/// 将一个用户新增的系统模型绑定到已验证的服务入口和协议路由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemManualModelBinding {
+    /// Exact system service entry that owns this model.
+    /// 持有此模型的精确系统服务入口。
+    pub service_entry_id: String,
+    /// Exact verified protocol profile selected by the user.
+    /// 用户选择的精确已验证协议 Profile。
+    pub protocol_profile_id: String,
+}
+
 impl CustomModelProtocolPreference {
     /// Returns the explicitly selected protocol, or `None` for automatic resolution.
     /// 返回显式选定的协议；自动解析时返回 `None`。
@@ -554,6 +572,10 @@ pub struct CustomModelDefinition {
     /// 在高级设置中选择的 Provider 可见工具 Schema 投影。
     #[serde(default)]
     pub tool_schema_projection: ToolSchemaProjectionMode,
+    /// Explicit route for a user-added system-provider model; absent for custom providers.
+    /// 用户新增系统供应商模型的显式路由；自定义供应商不设置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_binding: Option<SystemManualModelBinding>,
 }
 
 impl CustomModelDefinition {
@@ -595,6 +617,15 @@ impl CustomModelDefinition {
             return Err(String::from(
                 "Custom conversation models cannot declare non-text output resources.",
             ));
+        }
+        if let Some(binding) = &self.system_binding {
+            if binding.service_entry_id.trim().is_empty()
+                || binding.protocol_profile_id.trim().is_empty()
+            {
+                return Err(String::from(
+                    "System manual model binding requires a service entry and protocol profile.",
+                ));
+            }
         }
         self.validate_model_parameter_definitions()?;
         for effort in self.request_projection.reasoning.keys() {
@@ -649,6 +680,175 @@ impl CustomModelDefinition {
         }
         Ok(())
     }
+}
+
+/// Validates a user-added conversation model against one active signed system provider route.
+/// 按一个已激活的系统供应商签名路由校验用户新增的会话模型。
+///
+/// # Parameters
+/// 参数
+/// `manifest` owns the service and verified wire declarations; `model` supplies the explicit
+/// user identity, capabilities, and selected service/protocol binding.
+/// `manifest` 持有服务及已验证线协议声明；`model` 提供用户明确指定的身份、能力和服务/协议绑定。
+///
+/// # Returns
+/// 返回值
+/// Success only when this is a text-output conversation model with a usable exact route.
+/// 仅当模型是文本输出的会话模型且具有可用精确路由时成功。
+pub fn validate_system_manual_model_definition(
+    manifest: &crate::provider_manifest::ResolvedProviderManifest,
+    model: &CustomModelDefinition,
+) -> Result<(), String> {
+    model.validate()?;
+    let binding = model.system_binding.as_ref().ok_or_else(|| {
+        format!(
+            "System manual model `{}` requires an explicit service entry and protocol profile.",
+            model.id
+        )
+    })?;
+    let entry = manifest
+        .descriptor
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == binding.service_entry_id)
+        .ok_or_else(|| {
+            format!(
+                "System provider `{}` has no service entry `{}` for manual model `{}`.",
+                manifest.descriptor.id, binding.service_entry_id, model.id
+            )
+        })?;
+    if entry.kind != crate::ServiceEntryKind::Conversation {
+        return Err(format!(
+            "Service entry `{}` does not accept manual conversation models.",
+            binding.service_entry_id
+        ));
+    }
+    let route = entry
+        .protocol_routes
+        .iter()
+        .find(|route| route.protocol_profile_id == binding.protocol_profile_id && route.verified)
+        .ok_or_else(|| {
+            format!(
+                "Service entry `{}` has no verified protocol route `{}` for manual model `{}`.",
+                binding.service_entry_id, binding.protocol_profile_id, model.id
+            )
+        })?;
+    for profile in &entry.credential_profiles {
+        if manifest
+            .rule_for_model(
+                entry.id.as_str(),
+                Some(profile.id.as_str()),
+                model.id.as_str(),
+            )
+            .is_some()
+        {
+            // Compare the compiled effective binding because a signed rule may inherit its
+            // protocol from the manifest default rather than declaring selected_protocol.
+            // 比较编译后的有效绑定，因为签名规则可能继承清单默认协议而非单独声明。
+            let signed = crate::provider_manifest::resolve_system_model_protocol_binding(
+                manifest,
+                entry.id.as_str(),
+                Some(profile.id.as_str()),
+                model.id.as_str(),
+            )
+            .map_err(|error| error.to_string())?;
+            if signed.protocol_profile_id != binding.protocol_profile_id {
+                return Err(format!(
+                    "System manual model `{}` cannot replace the signed protocol selected for credential profile `{}`.",
+                    model.id, profile.id
+                ));
+            }
+        }
+    }
+    if model.capabilities.operations.as_slice()
+        != [vulcan_ai_contract::AiOperation::ConversationRespond]
+    {
+        return Err(format!(
+            "System manual model `{}` must declare only the conversation_respond operation.",
+            model.id
+        ));
+    }
+    if model
+        .capabilities
+        .context_limit
+        .is_none_or(|limit| limit == 0)
+        || model
+            .capabilities
+            .output_limit
+            .is_none_or(|limit| limit == 0)
+    {
+        return Err(format!(
+            "System manual model `{}` requires explicit positive context and output limits.",
+            model.id
+        ));
+    }
+    if model.capabilities.output_limit > model.capabilities.context_limit {
+        return Err(format!(
+            "System manual model `{}` output limit cannot exceed its context limit.",
+            model.id
+        ));
+    }
+    // System request projections are owned by the signed route; accepting a user projection
+    // here would silently discard it in the current execution path.
+    // 系统请求投影由签名路由持有；当前执行链会静默丢弃用户投影，因此在入口明确拒绝。
+    if model.request_projection != CustomModelRequestProjection::default() {
+        return Err(format!(
+            "System manual model `{}` cannot override the signed request projection.",
+            model.id
+        ));
+    }
+    if model.tool_schema_projection != ToolSchemaProjectionMode::Lightweight {
+        return Err(format!(
+            "System manual model `{}` cannot override the signed tool-schema projection.",
+            model.id
+        ));
+    }
+    for resource in &model.capabilities.input_resources {
+        // A model declaration cannot make a wire projector encode a modality it does not own.
+        // 模型声明不能让 Wire 投影器编码其本身不支持的输入模态。
+        let mime = match resource {
+            vulcan_ai_contract::ResourceKind::Image => "image/png",
+            vulcan_ai_contract::ResourceKind::Audio => "audio/wav",
+            vulcan_ai_contract::ResourceKind::Video => "video/mp4",
+            vulcan_ai_contract::ResourceKind::File => "application/pdf",
+        };
+        let protocol_can_encode = [
+            vulcan_ai_contract::ResourceSourceKind::InlineData,
+            vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
+            vulcan_ai_contract::ResourceSourceKind::ProviderFileId,
+        ]
+        .into_iter()
+        .any(|source| {
+            vulcan_ai_protocols::protocol_profile_supports_media_source(
+                binding.protocol_profile_id.as_str(),
+                *resource,
+                mime,
+                source,
+            )
+        });
+        if !protocol_can_encode {
+            return Err(format!(
+                "Protocol `{}` cannot encode {resource:?} input for manual model `{}`.",
+                binding.protocol_profile_id, model.id
+            ));
+        }
+        match resource {
+            vulcan_ai_contract::ResourceKind::Video => {
+                if !route
+                    .input_resource_constraints
+                    .iter()
+                    .any(|constraint| constraint.resource_kind == *resource)
+                {
+                    return Err(format!(
+                        "Service entry `{}` protocol `{}` does not declare video input for manual model `{}`.",
+                        binding.service_entry_id, binding.protocol_profile_id, model.id
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 impl CustomModelRequestProjection {
@@ -949,6 +1149,83 @@ mod tests {
     use super::*;
     use vulcan_ai_contract::ModelParameterDefault;
 
+    /// Verifies user system models keep route authority and reject undeclared media input.
+    /// 验证用户系统模型遵守路由权威，并拒绝未声明的媒体输入。
+    #[test]
+    fn system_manual_model_requires_exact_verified_media_route() {
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        let manifest = catalog
+            .manifest("deepseek")
+            .expect("bundled DeepSeek manifest");
+        let mut model = CustomModelDefinition {
+            id: String::from("deepseek-manual-probe"),
+            display_name: String::from("Manual Probe"),
+            enabled: true,
+            capabilities: ModelCapabilities {
+                operations: vec![vulcan_ai_contract::AiOperation::ConversationRespond],
+                context_limit: Some(128_000),
+                output_limit: Some(8_000),
+                ..ModelCapabilities::default()
+            },
+            request_projection: CustomModelRequestProjection::default(),
+            tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
+            system_binding: Some(SystemManualModelBinding {
+                service_entry_id: String::from("official-api"),
+                protocol_profile_id: String::from("openai-chat-completions.v1"),
+            }),
+        };
+        validate_system_manual_model_definition(manifest, &model)
+            .expect("verified text route should admit a user model");
+        model.capabilities.output_limit = Some(256_000);
+        assert!(
+            validate_system_manual_model_definition(manifest, &model)
+                .expect_err("output must fit the declared context")
+                .contains("cannot exceed its context limit")
+        );
+        model.capabilities.output_limit = Some(8_000);
+        model
+            .request_projection
+            .defaults
+            .insert(String::from("temperature"), serde_json::json!(0.3));
+        assert!(
+            validate_system_manual_model_definition(manifest, &model)
+                .expect_err("system request projection remains manifest-owned")
+                .contains("cannot override the signed request projection")
+        );
+        model.request_projection.defaults.clear();
+        model.capabilities.input_resources = vec![vulcan_ai_contract::ResourceKind::Video];
+        assert!(
+            validate_system_manual_model_definition(manifest, &model)
+                .expect_err("video needs an entry-level declaration")
+                .contains("does not declare video input")
+        );
+        model.capabilities.input_resources = vec![vulcan_ai_contract::ResourceKind::Audio];
+        model
+            .system_binding
+            .as_mut()
+            .expect("manual binding")
+            .protocol_profile_id = String::from("anthropic-messages.v1");
+        assert!(
+            validate_system_manual_model_definition(manifest, &model)
+                .expect_err("Anthropic has no native audio encoder")
+                .contains("cannot encode Audio input")
+        );
+    }
+
+    /// Verifies custom-provider defaults do not imply a video route they cannot declare.
+    /// 验证自定义供应商默认值不能暗示一条无法声明的视频路由。
+    #[test]
+    fn custom_provider_defaults_reject_undeclared_video_input() {
+        let mut defaults = CustomProviderModelDefaults::default();
+        defaults.input_resources.push(ResourceKind::Video);
+        assert!(
+            defaults
+                .validate()
+                .expect_err("custom route has no video input declaration")
+                .contains("cannot enable video input")
+        );
+    }
+
     /// Verifies legacy-free custom model JSON still uses the declared lightweight default when the advanced field is absent.
     /// 验证自定义模型 JSON 缺少高级字段时仍使用已声明的轻量默认值。
     #[test]
@@ -1053,6 +1330,7 @@ mod tests {
             },
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
+            system_binding: None,
         };
 
         let error = model
@@ -1077,6 +1355,7 @@ mod tests {
             },
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
+            system_binding: None,
         };
 
         model
@@ -1095,6 +1374,7 @@ mod tests {
             capabilities: ModelCapabilities::default(),
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
+            system_binding: None,
         };
         assert!(oversized.validate().is_err());
 
@@ -1105,6 +1385,7 @@ mod tests {
             capabilities: ModelCapabilities::default(),
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
+            system_binding: None,
         };
         assert!(controlled.validate().is_err());
     }
@@ -1250,6 +1531,7 @@ mod tests {
             },
             request_projection: CustomModelRequestProjection::default(),
             tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
+            system_binding: None,
         };
 
         let error = model
