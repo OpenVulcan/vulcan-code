@@ -614,39 +614,12 @@ impl PublicAiRuntime {
             let scoped_manifest = generation
                 .manifests
                 .manifest(connection.provider_id.as_str());
-            let default_enabled = scoped_manifest.is_none_or(|manifest| manifest.default_enabled);
-            let mut model_enabled_overrides = BTreeMap::new();
-            if let Some(manifest) = scoped_manifest.filter(|_| !default_enabled) {
-                // Exact signed choices stay inherited even when an account is edited before
-                // every featured model appears in its remote discovery response.
-                // 即使账号在远端发现全部精选模型前已被编辑，精确签名选择仍继续继承。
-                for rule in &manifest.rule_instances {
-                    if rule.service_entry_id != connection.service_entry_id
-                        || rule.matcher.kind != crate::provider_manifest::MatcherKind::Exact
-                        || (!rule.credential_profile_ids.is_empty()
-                            && !rule
-                                .credential_profile_ids
-                                .contains(&connection.credential_profile_id))
-                    {
-                        continue;
-                    }
-                    let rule_default = crate::provider_manifest::manifest_default_enabled(
-                        manifest,
-                        connection.service_entry_id.as_str(),
-                        Some(connection.credential_profile_id.as_str()),
-                        rule.matcher.value.as_str(),
-                    );
-                    if rule_default != default_enabled {
-                        model_enabled_overrides.insert(rule.matcher.value.clone(), rule_default);
-                    }
-                }
-            }
             connection_model_initial_policies.insert(
                 connection.id.clone(),
-                ConnectionModelAccessPolicy {
-                    default_enabled,
-                    model_enabled_overrides,
-                },
+                scoped_manifest.map_or_else(ConnectionModelAccessPolicy::default, |manifest| {
+                    configuration
+                        .initial_connection_model_access_policy_from_manifest(manifest, connection)
+                }),
             );
         }
         for (connection_id, catalog) in &model_support_catalogs {

@@ -2597,6 +2597,70 @@ impl PersistedAiConfiguration {
         }
     }
 
+    /// Builds one account's signed initial policy and remaining manual-model defaults.
+    /// 构建一个账号的签名初始策略及其余手工模型默认值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `manifest` owns signed defaults and `connection` selects the exact service and credential.
+    /// `manifest` 持有签名默认值，`connection` 选择精确服务与凭据。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The policy that applies before this account has an explicit user decision.
+    /// 返回该账号尚无显式用户决定时适用的策略。
+    pub fn initial_connection_model_access_policy_from_manifest(
+        &self,
+        manifest: &crate::provider_manifest::ResolvedProviderManifest,
+        connection: &crate::CredentialConnection,
+    ) -> ConnectionModelAccessPolicy {
+        // default_enabled is the signed account baseline for this provider generation.
+        // default_enabled 是当前供应商代际的签名账号基线。
+        let default_enabled = manifest.default_enabled;
+        // model_enabled_overrides retains signed exact choices and manual declarations.
+        // model_enabled_overrides 保留签名精确选择与手工声明。
+        let mut model_enabled_overrides = BTreeMap::new();
+        if !default_enabled {
+            for rule in &manifest.rule_instances {
+                if rule.service_entry_id != connection.service_entry_id
+                    || rule.matcher.kind != crate::provider_manifest::MatcherKind::Exact
+                    || (!rule.credential_profile_ids.is_empty()
+                        && !rule
+                            .credential_profile_ids
+                            .contains(&connection.credential_profile_id))
+                {
+                    continue;
+                }
+                // enabled resolves the exact service and credential rule before persistence.
+                // enabled 在持久化前解析精确服务与凭据规则。
+                let enabled = crate::provider_manifest::manifest_default_enabled(
+                    manifest,
+                    connection.service_entry_id.as_str(),
+                    Some(connection.credential_profile_id.as_str()),
+                    rule.matcher.value.as_str(),
+                );
+                if enabled {
+                    model_enabled_overrides.insert(rule.matcher.value.clone(), true);
+                }
+            }
+            if let Some(models) = self.custom_models.get(connection.provider_id.as_str()) {
+                for model in models.values() {
+                    if model.enabled
+                        && model.system_binding.as_ref().is_some_and(|binding| {
+                            binding.service_entry_id == connection.service_entry_id
+                        })
+                    {
+                        model_enabled_overrides.insert(model.id.clone(), true);
+                    }
+                }
+            }
+        }
+        ConnectionModelAccessPolicy {
+            default_enabled,
+            model_enabled_overrides,
+        }
+    }
+
     /// Replaces colliding user model definitions with signed identities while keeping switches.
     /// 用签名身份接管冲突的用户模型定义，同时保留开关状态。
     ///
@@ -2631,31 +2695,49 @@ impl PersistedAiConfiguration {
                 .enabled;
             let model_key = Self::provider_model_key(provider_id, model_id);
             let provider_enabled = self.model_enabled_overrides.get(&model_key).copied();
+            // account_decisions captures effective manual access before owner cleanup removes it.
+            // account_decisions 在归属清理移除原记录前捕获手工模型的有效账号访问状态。
             let account_decisions = self
                 .connection_graph
                 .connections
                 .values()
                 .filter(|connection| connection.provider_id == provider_id)
-                .filter_map(|connection| {
-                    let explicit_decision = self
+                .map(|connection| {
+                    // inherited_decision is the account switch before manual availability gates it.
+                    // inherited_decision 是应用手工可用性门控前的账号开关。
+                    let inherited_decision = self
                         .connection_model_access_policies
                         .get(connection.id.as_str())
-                        .and_then(|policy| policy.model_enabled_overrides.get(model_id))
-                        .copied();
-                    let manual_decision = self.custom_model_connection_enabled_override(
-                        connection.id.as_str(),
-                        model_id.as_str(),
-                    );
-                    explicit_decision
-                        .or(manual_decision)
-                        .map(|enabled| (connection.id.clone(), enabled))
+                        .map_or(manual_enabled, |policy| policy.model_is_enabled(model_id));
+                    // enabled preserves the effective account check across signed takeover.
+                    // enabled 在签名接管时保留账号的有效勾选状态。
+                    let enabled = self
+                        .custom_model_connection_enabled_override(
+                            connection.id.as_str(),
+                            model_id.as_str(),
+                        )
+                        .map_or(inherited_decision, |available| {
+                            available && inherited_decision
+                        });
+                    (connection.clone(), enabled)
                 })
                 .collect::<Vec<_>>();
             self.remove_model_owned_settings(provider_id, model_id);
             self.model_enabled_overrides
                 .insert(model_key, provider_enabled.unwrap_or(manual_enabled));
-            for (connection_id, enabled) in account_decisions {
-                self.set_connection_model_enabled(connection_id.as_str(), model_id, enabled);
+            for (connection, enabled) in account_decisions {
+                if !self
+                    .connection_model_access_policies
+                    .contains_key(connection.id.as_str())
+                {
+                    // initial_policy seeds other signed and manual choices before restoring this one.
+                    // initial_policy 先播种其他签名及手工选择，再恢复当前模型状态。
+                    let initial_policy = self
+                        .initial_connection_model_access_policy_from_manifest(manifest, &connection);
+                    self.connection_model_access_policies
+                        .insert(connection.id.clone(), initial_policy);
+                }
+                self.set_connection_model_enabled(connection.id.as_str(), model_id, enabled);
             }
         }
         if self
@@ -4736,12 +4818,20 @@ mod tests {
     #[test]
     fn signed_model_takeover_preserves_enabled_decisions() {
         let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
-        let manifest = catalog
+        let mut manifest = catalog
             .manifest("openrouter")
-            .expect("bundled OpenRouter manifest");
+            .expect("bundled OpenRouter manifest")
+            .clone();
         let model_id = "openai/gpt-5.6-sol";
+        // The signed account default can differ from the previously enabled manual model.
+        // 签名账号默认值可以与此前已启用的手工模型不同。
+        for rule in &mut manifest.rule_instances {
+            if rule.matcher.value == model_id {
+                rule.default_enabled = false;
+            }
+        }
         let mut configuration = PersistedAiConfiguration::default();
-        for connection_id in ["one", "two"] {
+        for connection_id in ["one", "two", "three"] {
             configuration.connection_graph.connections.insert(
                 connection_id.to_string(),
                 custom_provider_connection(connection_id, "openrouter"),
@@ -4779,7 +4869,7 @@ mod tests {
         );
 
         assert_eq!(
-            configuration.reconcile_signed_manual_model_collisions(manifest),
+            configuration.reconcile_signed_manual_model_collisions(&manifest),
             vec![model_id]
         );
         assert!(configuration.custom_model("openrouter", model_id).is_none());
@@ -4791,6 +4881,8 @@ mod tests {
         assert!(configuration.model_is_enabled("openrouter", model_id));
         assert!(!configuration.connection_model_is_enabled("one", model_id));
         assert!(!configuration.connection_model_is_enabled("two", model_id));
+        assert!(configuration.connection_model_is_enabled("three", model_id));
+        assert!(configuration.connection_model_is_enabled("three", "openai/gpt-5.6-terra"));
         assert!(
             configuration
                 .custom_model_connection_enabled_overrides
@@ -4798,7 +4890,7 @@ mod tests {
         );
         assert!(
             configuration
-                .reconcile_signed_manual_model_collisions(manifest)
+                .reconcile_signed_manual_model_collisions(&manifest)
                 .is_empty()
         );
     }
