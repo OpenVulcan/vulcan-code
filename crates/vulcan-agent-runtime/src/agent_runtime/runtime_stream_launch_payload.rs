@@ -1304,4 +1304,203 @@ mod tests {
             seeded_messages
         );
     }
+
+    /// Builds one request-dynamic system hook block without baseline provenance.
+    /// 构建一个不声明基线来源的请求动态系统 Hook 块。
+    fn dynamic_request_hook(content: &str) -> vulcan_hooks::SystemPromptHookBlock {
+        vulcan_hooks::SystemPromptHookBlock {
+            tag: String::from("vmm_profile"),
+            description: String::from("Dynamic profile details"),
+            content: content.to_string(),
+            source: Some(String::from("adjacent-request-test")),
+            phase: vulcan_hooks::SystemPromptHookPhase::FirstSession,
+            baseline_provenance: None,
+        }
+    }
+
+    /// Returns the indexes of projected runtime-host User items whose envelope carries `marker`.
+    /// 返回渲染信封中携带 `marker` 的已投影运行时宿主 User 条目下标。
+    fn runtime_host_user_item_indexes(
+        messages: &[CoreConversationMessage],
+        marker: &str,
+    ) -> Vec<usize> {
+        messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message
+                    .id
+                    .starts_with(vulcan_context::runtime_host::RUNTIME_HOST_MESSAGE_PREFIX)
+                    && matches!(
+                        &message.payload,
+                        CoreConversationPayload::UserText { text, .. }
+                            if text.contains(marker) && text.contains("<vulcan_context_update ")
+                    )
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Verifies two adjacent real requests keep one stable fixed top and only append tagged User items.
+    /// 验证相邻两次真实请求保持唯一稳定的固定顶部，且仅追加带标签 User 条目。
+    ///
+    /// The second request reuses the first request's produced history as its canonical state, so this
+    /// compares two real assemblies rather than one encoder fixture. Every dynamic producer body
+    /// changes between the pair while the environment producer stays identical.
+    /// 第二次请求复用第一次请求产出的历史作为规范状态，因此比较两次真实装配而不是单次编码器夹具。
+    /// 两次请求之间每个动态生产者正文都发生变化，环境生产者保持相同。
+    #[test]
+    fn two_adjacent_requests_keep_fixed_top_and_append_dynamic_user_items() {
+        // A workspace-free preparation isolates this test from project-owned prompt sources.
+        // 无工作区的执行准备把本测试与项目自有提示来源隔离。
+        let mut preparation = build_test_preparation();
+        preparation.workspace_path = String::new();
+        preparation.agent_prompt_snapshot =
+            crate::agent_runtime::execution_models::ExecutionAgentPromptSnapshot::fixed_parent_runtime(
+                "dynamic agent instructions V1",
+            );
+        preparation.session_plan_context = Some(String::from("dynamic plan context V1"));
+        preparation.system_prompt_hook_blocks = vec![dynamic_request_hook("dynamic hook body V1")];
+
+        // The first real user input is admitted but not yet sent, so host context precedes it.
+        // 第一条真实用户输入已准入但尚未发送，因此宿主上下文位于其前方。
+        let mut first_request = build_test_request();
+        vulcan_context::append_user_text_message(
+            &mut first_request.conversation_state,
+            "user-1",
+            "first real user input",
+            Vec::new(),
+        )
+        .expect("first real user input should be admitted");
+
+        let first = build_runtime_bootstrap_core(&preparation, &first_request, None)
+            .expect("first request should assemble through the production bootstrap");
+        let superseded_markers = [
+            "dynamic agent instructions V1",
+            "dynamic plan context V1",
+            "dynamic hook body V1",
+        ];
+        for marker in superseded_markers {
+            assert_eq!(
+                runtime_host_user_item_indexes(&first.core_snapshot.messages, marker).len(),
+                1,
+                "`{marker}` must appear once as a tagged User item"
+            );
+            assert!(
+                !first.system_preamble.contains(marker),
+                "the fixed top must not carry `{marker}`"
+            );
+        }
+        // The environment producer is unchanged between both requests and must stay single.
+        // 环境生产者在两次请求之间保持不变，必须保持唯一。
+        assert_eq!(
+            runtime_host_user_item_indexes(
+                &first.core_snapshot.messages,
+                "Current execution mode: Build"
+            )
+            .len(),
+            1
+        );
+        // Exactly one real human input is visible; every other item is a typed host record.
+        // 恰好一条真实人类输入可见；其余条目都是强类型宿主记录。
+        assert_eq!(
+            first
+                .core_snapshot
+                .messages
+                .iter()
+                .filter(|message| !message
+                    .id
+                    .starts_with(vulcan_context::runtime_host::RUNTIME_HOST_MESSAGE_PREFIX))
+                .count(),
+            1
+        );
+
+        // The next request reuses that history and changes every dynamic producer body.
+        // 下一次请求复用该历史，并改变每个动态生产者正文。
+        let mut second_state =
+            crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state(
+                &first.core_snapshot,
+            )
+            .expect("produced history should convert back to canonical state");
+        vulcan_context::append_user_text_message(
+            &mut second_state,
+            "user-2",
+            "second real user input",
+            Vec::new(),
+        )
+        .expect("second real user input should be admitted");
+        let mut second_request = build_test_request();
+        second_request.conversation_state = second_state;
+        preparation.agent_prompt_snapshot =
+            crate::agent_runtime::execution_models::ExecutionAgentPromptSnapshot::fixed_parent_runtime(
+                "dynamic agent instructions V2",
+            );
+        preparation.session_plan_context = Some(String::from("dynamic plan context V2"));
+        preparation.system_prompt_hook_blocks = vec![dynamic_request_hook("dynamic hook body V2")];
+
+        let second = build_runtime_bootstrap_core(&preparation, &second_request, None)
+            .expect("second request should assemble through the production bootstrap");
+
+        // The fixed top and the locked baseline stay byte-identical across the adjacent pair.
+        // 相邻两次请求的固定顶部与锁定基线保持字节一致。
+        assert_eq!(second.system_preamble, first.system_preamble);
+        assert_eq!(second.locked_baseline, first.locked_baseline);
+
+        // Already emitted messages are never rewritten; every update follows them.
+        // 已发出的消息绝不被改写；每个更新都跟随其后。
+        let emitted_len = first.core_snapshot.messages.len();
+        assert_eq!(
+            serde_json::to_value(&second.core_snapshot.messages[..emitted_len]).unwrap(),
+            serde_json::to_value(&first.core_snapshot.messages).unwrap(),
+            "the already emitted request prefix must stay byte-identical"
+        );
+        let appended = &second.core_snapshot.messages[emitted_len..];
+        let updated_markers = [
+            "dynamic agent instructions V2",
+            "dynamic plan context V2",
+            "dynamic hook body V2",
+        ];
+        for updated_marker in updated_markers {
+            assert_eq!(
+                runtime_host_user_item_indexes(appended, updated_marker).len(),
+                1,
+                "the updated `{updated_marker}` must be appended exactly once"
+            );
+            assert!(
+                !second.system_preamble.contains(updated_marker),
+                "the fixed top must not carry `{updated_marker}`"
+            );
+        }
+        // Superseded bodies are retained; only an explicit withdrawal or compaction may invalidate them.
+        // 被替代的旧正文被保留；只有显式撤下或压缩才可使其失效。
+        for marker in superseded_markers {
+            assert_eq!(
+                runtime_host_user_item_indexes(&second.core_snapshot.messages, marker).len(),
+                1,
+                "the superseded `{marker}` body must be retained"
+            );
+        }
+        assert_eq!(
+            runtime_host_user_item_indexes(
+                &second.core_snapshot.messages,
+                "Current execution mode: Build"
+            )
+            .len(),
+            1,
+            "the unchanged environment producer must not be duplicated"
+        );
+        // Every appended item is either one updated dynamic producer or the next real user input.
+        // 每条追加条目要么是一条已更新的动态生产者，要么是下一条真实用户输入。
+        for message in appended {
+            let CoreConversationPayload::UserText { text, .. } = &message.payload else {
+                panic!("appended request material must be user-role text");
+            };
+            let is_dynamic_update = updated_markers.iter().any(|marker| text.contains(marker))
+                && text.contains("<vulcan_context_update ");
+            assert!(
+                is_dynamic_update || text.contains("second real user input"),
+                "unexpected appended request material: {text}"
+            );
+        }
+    }
 }

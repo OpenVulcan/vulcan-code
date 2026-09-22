@@ -94,8 +94,19 @@ pub(crate) struct RuntimePromptLayers {
     /// Legacy fallback system-preamble text.
     /// 旧版兼容系统前导语文本。
     pub(crate) fallback_text: String,
-    /// Structured provider prompt layers.
-    /// 结构化 Provider 提示词层。
+    /// Complete composer projection, including request-dynamic segments and every hook block.
+    /// 完整组合器投影，包含请求动态片段与全部 Hook 块。
+    ///
+    /// This projection is not a fixed-top input: its `system` carries request-dynamic text, so
+    /// handing it to a controller configuration would move dynamic content back into the top
+    /// System/Developer message. Its only production consumer is the session-owned remote
+    /// compaction candidate in `prompt_compaction/remote.rs`, and that candidate's request is
+    /// replaced wholesale by the V1 permit owner; the non-session permit path is refused there.
+    /// The fixed-top authority is `fallback_text` plus `locked_baseline`.
+    /// 此投影不是固定顶部输入：其 `system` 携带请求动态文本，交给控制器配置会把动态内容重新移回
+    /// 顶部 System/Developer 消息。它唯一的生产消费者是 `prompt_compaction/remote.rs` 中会话持有的
+    /// 远端压缩候选，该候选请求会被 V1 许可所有者整体替换；非会话许可路径在那里被明确拒绝。
+    /// 固定顶部权威是 `fallback_text` 与 `locked_baseline`。
     pub(crate) provider_layers: CoreProviderPromptLayers,
     /// Request-dynamic prompt layers that are not part of the locked context baseline.
     /// 不属于锁定上下文基线的请求动态提示词层。
@@ -2731,6 +2742,165 @@ mod tests {
                 .contains("User prefers precise answers.")
         );
         assert!(!layers.fallback_text.contains("<system_prompt_hooks>"));
+    }
+
+    /// Verifies every request-dynamic producer stays out of the fixed top and inside dynamic layers.
+    /// 验证所有请求动态生产者都不进入固定顶部，而是位于动态层。
+    ///
+    /// Covers the Plan, environment, temporary-guidance (Hook) and request-scoped agent producers in
+    /// one production composition, and pins that `provider_layers` is the only projection that
+    /// carries them. A fixed-top regression therefore fails here instead of reaching a wire request.
+    /// 在一次生产组合中覆盖 Plan、环境、临时指引（Hook）与请求级代理生产者，并固定
+    /// `provider_layers` 是唯一携带它们的投影。固定顶部回归会在此失败，而不会进入真实请求。
+    #[test]
+    fn request_dynamic_producers_stay_out_of_fixed_top_layers() {
+        // A workspace-free preparation isolates this test from project-owned prompt sources.
+        // 无工作区的执行准备把本测试与项目自有提示来源隔离。
+        let mut preparation =
+            build_test_preparation(String::new(), PersistedPromptConfiguration::default());
+        preparation.prompt_purpose = ExecutionPromptPurpose::UserTurn;
+        preparation.agent_prompt_snapshot =
+            crate::agent_runtime::execution_models::ExecutionAgentPromptSnapshot::fixed_parent_runtime(
+                "dynamic agent instructions body",
+            );
+        preparation.session_plan_context = Some(String::from("dynamic plan context body"));
+        preparation.system_prompt_hook_blocks = vec![SystemPromptHookBlock {
+            tag: String::from("vmm_profile"),
+            description: String::from("Dynamic profile details"),
+            content: String::from("dynamic hook body"),
+            source: Some(String::from("dynamic-producer-test")),
+            phase: vulcan_hooks::SystemPromptHookPhase::FirstSession,
+            baseline_provenance: None,
+        }];
+
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
+            .expect("runtime prompt layers should build");
+
+        // Every dynamic producer is confined to the non-top projection.
+        // 每个动态生产者都被限制在非顶部投影内。
+        for dynamic_body in [
+            "dynamic agent instructions body",
+            "dynamic plan context body",
+            "dynamic hook body",
+            "Current execution mode: Build",
+        ] {
+            assert!(
+                layers.provider_layers.system.contains(dynamic_body)
+                    || layers.provider_layers.developer.contains(dynamic_body)
+                    || layers
+                        .provider_layers
+                        .runtime_context
+                        .contains(dynamic_body),
+                "`{dynamic_body}` must remain reachable for the dynamic transport"
+            );
+            assert!(
+                !layers.fallback_text.contains(dynamic_body),
+                "the fixed top must not carry dynamic producer text `{dynamic_body}`"
+            );
+            assert!(
+                !layers
+                    .locked_baseline
+                    .locked_sources()
+                    .iter()
+                    .any(|source| source.content.contains(dynamic_body)),
+                "the locked baseline must not carry dynamic producer text `{dynamic_body}`"
+            );
+            // The same body must remain available to the dynamic transport that publishes it durably.
+            // 同一正文必须仍对可靠发布它的动态传输可用。
+            assert!(
+                layers.dynamic_prompt_layers.system.contains(dynamic_body)
+                    || layers
+                        .dynamic_prompt_layers
+                        .developer
+                        .contains(dynamic_body)
+                    || layers
+                        .dynamic_prompt_layers
+                        .runtime_context
+                        .contains(dynamic_body),
+                "`{dynamic_body}` must remain in the request-dynamic layers"
+            );
+        }
+        // The fixed top always ends with the fixed host guidance and never with a dynamic hook region.
+        // 固定顶部始终以固定宿主指引结尾，绝不以动态 Hook 区域结尾。
+        assert!(layers.fallback_text.contains(HOST_MESSAGE_GUIDANCE));
+        assert!(!layers.fallback_text.contains("<system_prompt_hooks>"));
+        // Every locked source that belongs to a top layer is rendered into that fixed top.
+        // 每个属于顶部层的锁定来源都会渲染进该固定顶部。
+        for source in layers.locked_baseline.locked_sources() {
+            let rendered_into_top = matches!(
+                source.target,
+                vulcan_session_core::v1::context::LockedPromptTarget::System
+                    | vulcan_session_core::v1::context::LockedPromptTarget::Developer
+            );
+            if rendered_into_top {
+                assert!(
+                    layers.fallback_text.contains(&source.content),
+                    "locked source `{}` must be byte-identical inside the fixed top",
+                    source.node_id
+                );
+            }
+        }
+    }
+
+    /// Verifies the Plan producer is request-dynamic and reaches the request through a tagged User event.
+    /// 验证 Plan 生产者属于请求动态内容，并通过带标签 User 事件到达请求。
+    ///
+    /// Uses the production composer and the production host-event synchronizer; a Text-only
+    /// projection would silently drop plan text for every non-V1 owner.
+    /// 使用生产组合器与生产宿主事件同步器；若只做文本投影，所有非 V1 所有者都会静默丢失计划正文。
+    #[test]
+    fn session_plan_context_reaches_request_as_tagged_user_event() {
+        let mut preparation =
+            build_test_preparation(String::new(), PersistedPromptConfiguration::default());
+        preparation.session_plan_context =
+            Some(String::from("PLAN_CONTEXT_MUST_BE_REQUEST_DYNAMIC"));
+
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
+            .expect("runtime prompt layers should build");
+
+        assert!(
+            !layers
+                .fallback_text
+                .contains("PLAN_CONTEXT_MUST_BE_REQUEST_DYNAMIC")
+        );
+        assert!(
+            layers
+                .dynamic_prompt_layers
+                .developer
+                .contains("PLAN_CONTEXT_MUST_BE_REQUEST_DYNAMIC")
+        );
+        // The matching host-event candidate carries the identical body without inventing a user.
+        // 匹配的宿主事件候选携带相同正文，且不虚构用户。
+        let plan_events = layers
+            .host_events
+            .iter()
+            .filter(|event| event.body.contains("PLAN_CONTEXT_MUST_BE_REQUEST_DYNAMIC"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            plan_events.len(),
+            1,
+            "exactly one host-event candidate must carry the plan context"
+        );
+        assert_eq!(plan_events[0].scope, "request");
+        assert!(!plan_events[0].expires_source);
+
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_events(&mut snapshot, &plan_events, None)
+            .expect("plan context should synchronize as one User event");
+        let plan_messages = snapshot
+            .messages
+            .iter()
+            .filter(|message| {
+                matches!(
+                    &message.payload,
+                    CoreConversationPayload::UserText { text, .. }
+                        if text.contains("PLAN_CONTEXT_MUST_BE_REQUEST_DYNAMIC")
+                            && text.contains("<vulcan_context_update ")
+                )
+            })
+            .count();
+        assert_eq!(plan_messages, 1);
     }
 
     /// Verifies locked-baseline projection trusts only producer-owned typed provenance.

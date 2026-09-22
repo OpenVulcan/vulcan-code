@@ -763,4 +763,145 @@ mod tests {
             assert!(!summary_input.contains("departing-memory"));
         }
     }
+
+    /// Verifies a real TTL expiry only appends one tagged User item and never rewrites the sent prefix.
+    /// 验证真实 TTL 失效只追加一条带标签 User 条目，绝不改写已发送前缀。
+    ///
+    /// Drives the production injection state, overlay builder, host-candidate projection and
+    /// append-only synchronizer, so the assertion covers a real producer instead of a hand-built event.
+    /// 驱动生产注入状态、覆盖层构建器、宿主候选投影与追加式同步器，因此断言覆盖真实生产者而非手工事件。
+    #[test]
+    fn ttl_expiry_appends_tagged_user_item_without_rewriting_emitted_prefix() {
+        use crate::agent_runtime::execution_models::ExecutionPromptPurpose;
+        use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
+        use crate::agent_runtime::provider_runtime_context::{
+            runtime_context_host_event_candidates, synchronize_runtime_host_request_context,
+        };
+        use vulcan_core::types::ConversationPayload;
+
+        let mut state = ContextInjectionState::default();
+        state.apply_inserts(
+            vec![
+                InjectionInsert::single(
+                    InjectionKind::Transient,
+                    "turn_memory",
+                    "memory",
+                    "ttl-bound memory",
+                    Some(1),
+                ),
+                InjectionInsert::single(
+                    InjectionKind::Transient,
+                    "session_memory",
+                    "memory",
+                    "retained memory",
+                    Some(5),
+                ),
+                persistent_insert("persistent_memory", "stable memory"),
+            ],
+            "1",
+        );
+
+        let mut snapshot = vulcan_core::types::ConversationSnapshot::default();
+        let initial = core_provider_context_injection_from_state_for_turn_draining_expiry_events(
+            &mut state,
+            &VmmSessionMemoryState::default(),
+            Some("turn-1"),
+            false,
+        )
+        .expect("initial injection overlay should render every producer");
+        assert!(initial.expired_events.is_empty());
+        let expiring_block = initial
+            .host_blocks
+            .iter()
+            .find(|block| block.tag.as_deref() == Some("turn_memory"))
+            .expect("the one-turn producer must be present before expiry")
+            .clone();
+        synchronize_runtime_host_request_context(
+            &mut snapshot,
+            &runtime_context_host_event_candidates(&initial),
+            None,
+            ExecutionPromptPurpose::UserTurn,
+        )
+        .unwrap();
+        let emitted_prefix = serde_json::to_value(&snapshot.messages).unwrap();
+        let emitted_count = snapshot.messages.len();
+        assert!(emitted_count >= 2);
+
+        // One logical turn boundary expires exactly the one-turn producer.
+        // 一个逻辑回合边界恰好使单回合生产者失效。
+        state.consume_turn("turn-1", "2");
+        let expiring = core_provider_context_injection_from_state_for_turn_draining_expiry_events(
+            &mut state,
+            &VmmSessionMemoryState::default(),
+            Some("turn-2"),
+            false,
+        )
+        .expect("the expiry marker should keep the overlay present");
+        assert_eq!(expiring.expired_events.len(), 1);
+        assert_eq!(
+            expiring.expired_events[0].source_id,
+            expiring_block.source_id
+        );
+        assert_eq!(expiring.expired_events[0].turn_id, "turn-1");
+        synchronize_runtime_host_request_context(
+            &mut snapshot,
+            &runtime_context_host_event_candidates(&expiring),
+            None,
+            ExecutionPromptPurpose::UserTurn,
+        )
+        .unwrap();
+
+        // The already emitted prefix is byte-identical; only one expiry item follows it.
+        // 已发出的前缀保持字节一致；其后只有一条失效条目。
+        assert_eq!(
+            serde_json::to_value(&snapshot.messages[..emitted_count]).unwrap(),
+            emitted_prefix
+        );
+        let appended = &snapshot.messages[emitted_count..];
+        assert_eq!(appended.len(), 1, "TTL expiry must append exactly one item");
+        assert!(
+            appended[0]
+                .id
+                .starts_with(vulcan_context::runtime_host::RUNTIME_HOST_MESSAGE_PREFIX)
+        );
+        assert!(matches!(
+            &appended[0].payload,
+            ConversationPayload::UserText { text, .. }
+                if text.contains("<vulcan_context_expired ")
+                    && text.contains("turn_memory")
+                    && text.contains("turn-1")
+        ));
+        // The expired body stays in the retained prefix: TTL never deletes per request.
+        // 失效正文保留在既有前缀中：TTL 绝不按请求删除正文。
+        assert!(
+            serde_json::to_string(&snapshot.messages[..emitted_count])
+                .unwrap()
+                .contains("ttl-bound memory")
+        );
+        // The durable ledger binds the expiry to the exact occurrence it invalidates.
+        // 可靠账本把失效绑定到它所失效的精确发生点。
+        let ledger = vulcan_context::runtime_host::read_runtime_host_ledger(
+            &core_snapshot_to_session_conversation_state(&snapshot).unwrap(),
+        )
+        .unwrap();
+        let update_row = ledger
+            .iter()
+            .find(|row| row.source_id == expiring_block.source_id && !row.expires_source)
+            .expect("the original update row must remain addressable");
+        assert!(
+            ledger
+                .iter()
+                .any(|row| { row.expires_source && row.occurrence_id == update_row.occurrence_id })
+        );
+
+        // Only compaction reclaims the invalidated body and rebuilds the active state.
+        // 只有压缩会回收已失效正文并重建有效状态。
+        let prepared = vulcan_context::runtime_host::prepare_runtime_host_compaction(
+            &core_snapshot_to_session_conversation_state(&snapshot).unwrap(),
+        )
+        .unwrap();
+        let compacted_input = serde_json::to_string(&prepared.messages).unwrap();
+        assert!(!compacted_input.contains("ttl-bound memory"));
+        assert!(compacted_input.contains("retained memory"));
+    }
 }
