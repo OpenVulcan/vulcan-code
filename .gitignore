@@ -40,7 +40,7 @@ target
 
 # Local task board state.
 # 本地任务看板状态。
-/TASK_NOW.md
+/TASK_*.md
 
 # Generated WebUI dependencies and build outputs.
 # WebUI 生成的依赖与构建产物。
@@ -58,7 +58,6 @@ target
 # Generated Tauri capability schemas for the service host.
 # 服务宿主生成的 Tauri 能力架构文件。
 /apps/vulcan-code-service/gen/
-TASK_LOG.md
 
 # Local Reasonix runtime state.
 # 本地 Reasonix 运行时状态。
