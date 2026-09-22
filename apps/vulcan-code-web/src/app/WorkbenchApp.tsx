@@ -102,6 +102,9 @@ export function WorkbenchApp(props: {
     if (notices.length === 0) return;
     const isChinese = startup.uiLocale?.toLowerCase().startsWith("zh") ?? true;
     const identities = notices.map(({ providerId, modelId }) => `${providerId} / ${modelId}`).join("、");
+    // toastId keeps distinct takeover batches visible until each batch is acknowledged.
+    // toastId 让不同批次的接管提示各自显示，直到分别完成确认。
+    const toastId = `startup-manual-model-reconciliation:${JSON.stringify(notices)}`;
     // acknowledge clears only notices that the user could see until this toast closed.
     // acknowledge 仅在用户可见提示关闭后清除对应的待确认记录。
     const acknowledge = () => {
@@ -114,7 +117,7 @@ export function WorkbenchApp(props: {
     toast.warning(
       isChinese ? "系统模型已接管同名手工模型" : "System models replaced matching manual models",
       {
-        id: "startup-manual-model-reconciliation",
+        id: toastId,
         description: isChinese
           ? `已移除 ${notices.length} 条手工定义并保留原有启用状态：${identities}`
           : `Removed ${notices.length} manual definitions while preserving enabled choices: ${identities}`,
