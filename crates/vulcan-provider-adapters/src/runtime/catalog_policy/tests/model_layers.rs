@@ -557,10 +557,10 @@ fn discovered_custom_model_applies_only_manual_advanced_declarations() {
     );
 }
 
-/// Verifies system-provider runtime settings change limits without replacing capability facts.
-/// 验证系统供应商运行时设置只修改限制，不替换能力事实。
+/// Verifies system-provider runtime settings cannot change model capability limits.
+/// 验证系统供应商运行时设置不能改变模型能力上限。
 #[test]
-fn system_provider_runtime_overrides_only_editable_limits() {
+fn system_provider_runtime_overrides_do_not_change_capabilities() {
     let provider_id = "system-provider";
     let model_id = "chat-model";
     let mut configuration = PersistedAiConfiguration::default();
@@ -597,8 +597,8 @@ fn system_provider_runtime_overrides_only_editable_limits() {
         .iter()
         .find(|model| model.id == model_id)
         .expect("model should remain visible");
-    assert_eq!(model.capabilities.context_limit, Some(16_000));
-    assert_eq!(model.capabilities.output_limit, Some(2_000));
+    assert_eq!(model.capabilities.context_limit, Some(200_000));
+    assert_eq!(model.capabilities.output_limit, None);
     assert_eq!(
         model.capabilities.reasoning_efforts,
         crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS

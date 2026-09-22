@@ -384,7 +384,7 @@ export function ModelListSettingsArea() {
                           <span className="settings-validation-error">
                             {t("settings.models.routeUnavailableReason")}: {record.unavailableReason ?? t("settings.models.routeUnresolved")}
                           </span>
-                          {blockedModel ? <Button
+                          {selectedGroup?.provider.kind === "custom" && blockedModel ? <Button
                             aria-label={`${t("settings.modelCapabilities.title")} ${record.modelId}`}
                             disabled={pendingMutationKey !== null}
                             onClick={() => setEditingCapabilityModel(blockedModel)}
@@ -610,7 +610,7 @@ export function ModelListSettingsArea() {
                       {!internalState && !inventory.extensionCapabilities.some(isModelExtensionCapability) ? <span>—</span> : null}
                       </div>
                     <div className="settings-model-catalog-actions">
-                      {representative ? <Button
+                      {selectedGroup?.provider.kind === "custom" && representative ? <Button
                         aria-label={`${t("settings.modelCapabilities.title")} ${displayName}`}
                         disabled={pendingMutationKey !== null}
                         onClick={() => setEditingCapabilityModel(representative)}
@@ -726,7 +726,7 @@ export function ModelListSettingsArea() {
           />
         </DialogContent>
       </Dialog>
-      <PublicAiModelCapabilityDialog
+      {selectedGroup?.provider.kind === "custom" ? <PublicAiModelCapabilityDialog
         model={editingCapabilityModel}
         onOpenChange={(open) => {
           if (!open) {
@@ -746,7 +746,7 @@ export function ModelListSettingsArea() {
           ? localizedProviderName(selectedGroup.provider.id, selectedGroup.provider.display_name, t)
           : null}
         providerId={selectedGroup?.provider.id ?? null}
-      />
+      /> : null}
     </WorkspaceDirectoryLayout>
   )
 }

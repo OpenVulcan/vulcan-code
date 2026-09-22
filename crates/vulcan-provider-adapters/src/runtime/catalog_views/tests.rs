@@ -15,10 +15,10 @@ use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
-/// Verifies rebuilding user overlays never mutates the signed source catalog.
-/// 验证重建用户覆盖不会修改受签名的来源目录。
+/// Verifies signed system capabilities win over persisted user overlays.
+/// 验证受签名系统能力高于持久化的用户覆盖。
 #[test]
-fn system_model_overlay_rebuild_preserves_immutable_source_capabilities() {
+fn signed_system_model_capabilities_win_over_user_overlay() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -42,6 +42,13 @@ fn system_model_overlay_rebuild_preserves_immutable_source_capabilities() {
     runtime
         .reapply_model_catalog_overlays(&configuration)
         .expect("signed baseline should resolve");
+    let signed_capabilities = runtime.catalog_snapshot().unwrap()["one"]
+        .models
+        .iter()
+        .find(|model| model.id == "openai/gpt-5.6-sol")
+        .expect("signed model should exist")
+        .capabilities
+        .clone();
     configuration.model_capability_overrides.insert(
         PersistedAiConfiguration::provider_model_key("openrouter", "openai/gpt-5.6-sol"),
         crate::ModelCapabilityOverrides {
@@ -62,18 +69,82 @@ fn system_model_overlay_rebuild_preserves_immutable_source_capabilities() {
         .read()
         .expect("source catalog lock should remain healthy")
         .get("one")
-        .and_then(|catalog| catalog.models.iter().find(|model| model.id == "openai/gpt-5.6-sol"))
+        .and_then(|catalog| {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.id == "openai/gpt-5.6-sol")
+        })
         .and_then(|model| model.capabilities.context_limit);
     let effective = runtime
         .catalog_snapshot()
         .expect("effective catalog should remain readable");
     let effective_model = effective
         .get("one")
-        .and_then(|catalog| catalog.models.iter().find(|model| model.id == "openai/gpt-5.6-sol"))
+        .and_then(|catalog| {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.id == "openai/gpt-5.6-sol")
+        })
         .expect("effective model should exist");
     assert_eq!(immutable_context, Some(8_192));
-    assert_eq!(effective_model.capabilities.context_limit, Some(4_096));
-    assert!(effective_model.capabilities.input_resources.is_empty());
+    assert_eq!(effective_model.capabilities, signed_capabilities);
+}
+
+/// Verifies an exact signed identity wins over a colliding manual definition.
+/// 验证精确签名身份高于同 ID 的手工定义。
+#[test]
+fn signed_model_identity_wins_over_colliding_manual_definition() {
+    let (runtime, mut configuration) = two_account_runtime();
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("signed baseline should resolve");
+    let signed = runtime.catalog_snapshot().unwrap()["one"]
+        .models
+        .iter()
+        .find(|model| model.id == "openai/gpt-5.6-sol")
+        .expect("signed model should exist")
+        .clone();
+    configuration
+        .custom_models
+        .entry(String::from("openrouter"))
+        .or_default()
+        .insert(
+            String::from("openai/gpt-5.6-sol"),
+            crate::CustomModelDefinition {
+                id: String::from("openai/gpt-5.6-sol"),
+                display_name: String::from("Manual Collision"),
+                enabled: true,
+                capabilities: ModelCapabilities {
+                    operations: vec![AiOperation::ConversationRespond],
+                    context_limit: Some(8_192),
+                    output_limit: Some(1_024),
+                    ..ModelCapabilities::default()
+                },
+                request_projection: crate::CustomModelRequestProjection::default(),
+                tool_schema_projection: crate::ToolSchemaProjectionMode::Lightweight,
+                system_binding: Some(crate::SystemManualModelBinding {
+                    service_entry_id: String::from("public-api"),
+                    protocol_profile_id: OPENAI_RESPONSES_PROFILE_ID.to_string(),
+                }),
+            },
+        );
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("a colliding manual definition cannot replace a signed model");
+    let effective = runtime.catalog_snapshot().unwrap()["one"]
+        .models
+        .iter()
+        .find(|model| model.id == "openai/gpt-5.6-sol")
+        .expect("signed model should remain visible")
+        .clone();
+    assert_eq!(effective.display_name, signed.display_name);
+    assert_eq!(effective.capabilities, signed.capabilities);
+    assert_eq!(
+        effective.resolved_protocol_binding,
+        signed.resolved_protocol_binding
+    );
 }
 
 /// Verifies disabling one account-model pair leaves a sibling account and source evidence unchanged.
@@ -156,15 +227,17 @@ fn discovered_model_requires_provider_level_manual_definition() {
     runtime
         .reapply_model_catalog_overlays(&configuration)
         .expect("an unsupported account toggle should not publish the model");
-    assert!(runtime
-        .catalog_snapshot()
-        .expect("effective catalogs should remain readable")
-        .get("one")
-        .expect("first account catalog should exist")
-        .models
-        .is_empty());
-      // Support visibility requires signed or manually declared membership.
-      // 支持目录的可见性需要受签名或手工声明的成员资格。
+    assert!(
+        runtime
+            .catalog_snapshot()
+            .expect("effective catalogs should remain readable")
+            .get("one")
+            .expect("first account catalog should exist")
+            .models
+            .is_empty()
+    );
+    // Support visibility requires signed or manually declared membership.
+    // 支持目录的可见性需要受签名或手工声明的成员资格。
     let settings = runtime
         .settings_catalog_snapshot(&configuration)
         .expect("settings catalog should resolve");
@@ -172,7 +245,12 @@ fn discovered_model_requires_provider_level_manual_definition() {
         .model_support_catalogs
         .get("one")
         .expect("first account support catalog should exist");
-    assert!(support.models.iter().all(|model| model.id != "vendor/future-model"));
+    assert!(
+        support
+            .models
+            .iter()
+            .all(|model| model.id != "vendor/future-model")
+    );
 }
 
 /// Verifies signed conversation identities are the only default OpenRouter account choices.
@@ -201,8 +279,18 @@ fn openrouter_account_excludes_unreviewed_discovery() {
         .model_support_catalogs
         .get("one")
         .expect("first support catalog should exist");
-    assert!(first_support.models.iter().any(|model| model.id == "openai/gpt-5.6-sol"));
-    assert!(first_support.models.iter().all(|model| model.id != "vendor/future-model"));
+    assert!(
+        first_support
+            .models
+            .iter()
+            .any(|model| model.id == "openai/gpt-5.6-sol")
+    );
+    assert!(
+        first_support
+            .models
+            .iter()
+            .all(|model| model.id != "vendor/future-model")
+    );
     let initial = settings
         .connection_model_initial_policies
         .get("one")
@@ -247,12 +335,14 @@ fn openrouter_account_excludes_unreviewed_discovery() {
             .collect::<Vec<_>>(),
         initial_ids
     );
-    assert!(enabled
-        .get("two")
-        .expect("second account should exist")
-        .models
-        .iter()
-        .all(|model| model.id != "vendor/future-model"));
+    assert!(
+        enabled
+            .get("two")
+            .expect("second account should exist")
+            .models
+            .iter()
+            .all(|model| model.id != "vendor/future-model")
+    );
 }
 
 /// Verifies discovered media outputs stay out of the signed conversation catalog.
@@ -305,8 +395,18 @@ fn dedicated_media_discovery_does_not_enter_conversation_catalog() {
         .settings_catalog_snapshot(&configuration)
         .expect("settings should resolve");
     for (id, _, _) in cases {
-        assert!(settings.model_support_catalogs["one"].models.iter().all(|model| model.id != id));
-        assert!(settings.catalogs["one"].models.iter().all(|model| model.id != id));
+        assert!(
+            settings.model_support_catalogs["one"]
+                .models
+                .iter()
+                .all(|model| model.id != id)
+        );
+        assert!(
+            settings.catalogs["one"]
+                .models
+                .iter()
+                .all(|model| model.id != id)
+        );
     }
 }
 
@@ -350,9 +450,24 @@ fn zero_limit_media_discovery_cannot_publish_unsupported_model() {
         .catalogs
         .get("one")
         .expect("account catalog should exist");
-    assert!(effective.models.iter().any(|model| model.id == "openai/gpt-5.6-sol"));
-    assert!(effective.models.iter().all(|model| model.id != "google/veo-3.1"));
-    assert!(settings.model_support_catalogs["one"].models.iter().all(|model| model.id != "google/veo-3.1"));
+    assert!(
+        effective
+            .models
+            .iter()
+            .any(|model| model.id == "openai/gpt-5.6-sol")
+    );
+    assert!(
+        effective
+            .models
+            .iter()
+            .all(|model| model.id != "google/veo-3.1")
+    );
+    assert!(
+        settings.model_support_catalogs["one"]
+            .models
+            .iter()
+            .all(|model| model.id != "google/veo-3.1")
+    );
 
     // Zero upstream limits remain absent in source evidence and cannot grant account membership.
     // 上游零上限在来源证据中保持未设置，也不能授予账号目录成员资格。
@@ -376,13 +491,18 @@ fn zero_limit_media_discovery_cannot_publish_unsupported_model() {
     runtime
         .reapply_model_catalog_overlays(&overridden)
         .expect("an unsupported override cannot publish a media model");
-    assert!(runtime.catalog_snapshot().unwrap()["one"].models.iter().all(|model| model.id != "google/veo-3.1"));
+    assert!(
+        runtime.catalog_snapshot().unwrap()["one"]
+            .models
+            .iter()
+            .all(|model| model.id != "google/veo-3.1")
+    );
 }
 
-/// Verifies candidate capability differences are checked after inherited limits resolve.
-/// 验证候选能力差异会在继承限制解析完成后接受校验。
+/// Verifies system model capability writes fail while obsolete overrides can be cleared.
+/// 验证系统模型能力写入被拒绝，而过期覆盖仍可清除。
 #[test]
-fn capability_override_candidate_validates_final_resolved_limits() {
+fn system_model_capability_override_candidate_is_rejected() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -396,13 +516,16 @@ fn capability_override_candidate_validates_final_resolved_limits() {
         .expect("connection should register");
     install_source_catalog(&runtime, catalog("one"));
 
-    for (overrides, expected_error) in [(
+    for overrides in [
         crate::ModelCapabilityOverrides {
-            output_limit: Some(0),
+            context_limit: Some(8_192),
             ..crate::ModelCapabilityOverrides::default()
         },
-        "output limit must be greater than zero",
-    )] {
+        crate::ModelCapabilityOverrides {
+            output_limit: Some(4_096),
+            ..crate::ModelCapabilityOverrides::default()
+        },
+    ] {
         let error = runtime
             .validate_model_capability_override_candidate(
                 &configuration,
@@ -410,47 +533,20 @@ fn capability_override_candidate_validates_final_resolved_limits() {
                 "openai/gpt-5.6-sol",
                 Some(&overrides),
             )
-            .expect_err("invalid final limits must be rejected");
+            .expect_err("system model capability writes must be rejected");
         assert!(
-            error.contains(expected_error),
+            error.contains("System model capabilities are owned"),
             "unexpected validation error: {error}"
         );
     }
-
     runtime
         .validate_model_capability_override_candidate(
             &configuration,
             "openrouter",
             "openai/gpt-5.6-sol",
-            Some(&crate::ModelCapabilityOverrides {
-                context_limit: Some(8_192),
-                output_limit: Some(4_096),
-                ..crate::ModelCapabilityOverrides::default()
-            }),
+            None,
         )
-        .expect("valid final limits should be accepted");
-    runtime
-        .validate_model_capability_override_candidate(
-            &configuration,
-            "openrouter",
-            "openai/gpt-5.6-sol",
-            Some(&crate::ModelCapabilityOverrides {
-                context_limit: Some(2_048),
-                ..crate::ModelCapabilityOverrides::default()
-            }),
-        )
-        .expect("an inherited output limit above the narrowed context should be clamped");
-    runtime
-        .validate_model_capability_override_candidate(
-            &configuration,
-            "openrouter",
-            "openai/gpt-5.6-sol",
-            Some(&crate::ModelCapabilityOverrides {
-                output_limit: Some(9_000),
-                ..crate::ModelCapabilityOverrides::default()
-            }),
-        )
-        .expect("an output limit above the context should be clamped");
+        .expect("clearing an existing obsolete override remains allowed");
 }
 
 /// Verifies provider-level model management ignores account visibility while preserving route validation.
@@ -479,7 +575,7 @@ fn provider_model_management_uses_support_catalog_when_account_is_disabled() {
             .provider_model_is_supported(&configuration, "openrouter", "openai/gpt-5.6-sol")
             .expect("provider support should resolve")
     );
-    runtime
+    let error = runtime
         .validate_model_capability_override_candidate(
             &configuration,
             "openrouter",
@@ -490,7 +586,8 @@ fn provider_model_management_uses_support_catalog_when_account_is_disabled() {
                 ..crate::ModelCapabilityOverrides::default()
             }),
         )
-        .expect("account visibility must not block provider capability settings");
+        .expect_err("system capability settings must remain immutable");
+    assert!(error.contains("System model capabilities are owned"));
     runtime
         .validate_model_execution_override_candidate(
             &configuration,
@@ -552,10 +649,10 @@ fn credential_free_manual_model_accepts_direct_capability_settings() {
         .expect("manual provider-only validation should not require a credential");
 }
 
-/// Verifies a provider-wide difference remains usable when one account has a smaller context window.
-/// 验证供应商级差异在账号上下文窗口较小时仍然可用。
+/// Verifies a system-model override remains forbidden across multiple account catalogs.
+/// 验证系统模型覆盖在多个账号目录中仍被禁止。
 #[test]
-fn capability_override_candidate_clamps_each_account_independently() {
+fn system_capability_override_is_rejected_across_accounts() {
     let (runtime, configuration) = two_account_runtime();
     install_source_catalog(&runtime, catalog("one"));
     install_source_catalog(
@@ -575,7 +672,7 @@ fn capability_override_candidate_clamps_each_account_independently() {
         ),
     );
 
-    runtime
+    let error = runtime
         .validate_model_capability_override_candidate(
             &configuration,
             "openrouter",
@@ -585,13 +682,14 @@ fn capability_override_candidate_clamps_each_account_independently() {
                 ..crate::ModelCapabilityOverrides::default()
             }),
         )
-        .expect("the smaller account context should clamp the effective output ceiling");
+        .expect_err("account-specific evidence cannot authorize a system override");
+    assert!(error.contains("System model capabilities are owned"));
 }
 
-/// Verifies the current output overlay is applied to a signed model.
-/// 验证当前输出上限覆盖会应用于受签名模型。
+/// Verifies persisted model limit overlays cannot change signed model capabilities.
+/// 验证持久化模型上限覆盖不能改变受签名模型能力。
 #[test]
-fn model_overlay_rebuild_applies_persisted_output_limit() {
+fn signed_model_rebuild_ignores_persisted_limit_overlay() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -633,10 +731,14 @@ fn model_overlay_rebuild_applies_persisted_output_limit() {
         .expect("effective catalog should remain readable");
     let model = effective_catalogs
         .get("one")
-        .and_then(|catalog| catalog.models.iter().find(|model| model.id == "openai/gpt-5.6-sol"))
+        .and_then(|catalog| {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.id == "openai/gpt-5.6-sol")
+        })
         .expect("effective model should remain visible");
-    assert_eq!(model.capabilities.context_limit, baseline.context_limit);
-    assert_eq!(model.capabilities.output_limit, Some(9_000));
+    assert_eq!(model.capabilities, baseline);
 }
 
 /// Verifies removing a manual-only definition removes the model from its exact connection.

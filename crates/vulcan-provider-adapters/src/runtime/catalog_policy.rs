@@ -3,7 +3,7 @@
 
 use super::catalog_sources::{
     build_manifest_identity_catalog, merge_manifest_identity_catalog,
-    project_manifest_protocol_variants_for_connection, resolve_custom_model_service_entry,
+    resolve_custom_model_service_entry,
 };
 use super::model_overrides::resolve_request_projection;
 use crate::{
@@ -526,12 +526,10 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
             if availability == Some(false) {
                 continue;
             }
-            // signedRule keeps an existing Manifest model binding authoritative even when the
-            // user adds its identity to a manual source. An unmatched user identity uses only
-            // the explicitly selected verified route.
-            // signedRule 保持已存在的 Manifest 模型绑定权威；未命中规则的用户身份仅使用
-            // 明确选定且已验证的路由。
-            let signed_rule = if let Some(manifest) = manifest.filter(|_| !custom_provider) {
+            // An exact signed identity owns its capabilities and route even if a manual entry
+            // with the same ID remains in the configuration awaiting reconciliation.
+            // 精确签名身份拥有其能力与路由，即使同 ID 手工条目尚待配置对账清理。
+            let signed_identity = if let Some(manifest) = manifest.filter(|_| !custom_provider) {
                 let connection = configuration
                     .connection_graph
                     .connections
@@ -543,22 +541,31 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
                         )
                     })?;
                 manifest
-                    .rule_for_model(
-                        service_entry_id,
-                        Some(connection.credential_profile_id.as_str()),
-                        definition.id.as_str(),
-                    )
-                    .is_some()
+                    .catalog_models
+                    .get(service_entry_id)
+                    .is_some_and(|models| {
+                        models.iter().any(|model| model.model_id == definition.id)
+                    })
+                    || manifest
+                        .rule_for_model(
+                            service_entry_id,
+                            Some(connection.credential_profile_id.as_str()),
+                            definition.id.as_str(),
+                        )
+                        .is_some_and(|rule| rule.matcher.precedence() == 0)
             } else {
                 false
             };
+            if signed_identity {
+                continue;
+            }
             // A successful provider catalog remains authoritative for identity, limits, modalities,
             // and operations. The manual declaration may still add explicit advanced behavior that
             // `/models` cannot describe, such as reasoning projections and model parameters.
             // 成功的供应商目录仍是身份、限制、多模态和操作的权威来源。手工声明仍可补充
             // `/models` 无法表达的显式高级行为，例如思考投影和模型参数。
             if let Some(discovered_model) = models.get_mut(definition.id.as_str()) {
-                if !custom_provider && !signed_rule {
+                if !custom_provider {
                     project_system_manual_variant(
                         provider_id,
                         service_entry_id,
@@ -630,9 +637,8 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
                     &mut capabilities,
                 );
             }
-            // model receives signed protocol variants for system policies before the allowed
-            // manual advanced layer is projected onto each variant.
-            // model 在允许的手工高级层投影到每个变体前，先接收系统策略的签名协议变体。
+            // A user-owned system identity receives only its explicitly selected protocol route.
+            // 用户自有的系统供应商模型身份只接收其明确选择的协议路由。
             let mut model = ConnectionModel {
                 id: definition.id.clone(),
                 display_name: definition.display_name.clone(),
@@ -642,38 +648,13 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
                 resolved_protocol_binding: None,
             };
             if !custom_provider {
-                let manifest = manifest.ok_or_else(|| {
-                    format!(
-                        "System provider `{provider_id}` admitted a manual model without an active Manifest."
-                    )
-                })?;
-                let connection = configuration
-                    .connection_graph
-                    .connections
-                    .get(catalog.connection_id.as_str())
-                    .ok_or_else(|| {
-                        format!(
-                            "Credential connection `{}` is not configured for manual model projection.",
-                            catalog.connection_id
-                        )
-                    })?;
-                if signed_rule {
-                    project_manifest_protocol_variants_for_connection(
-                        manifest,
-                        connection,
-                        catalog.generation,
-                        &mut model,
-                        true,
-                    )?;
-                } else {
-                    project_system_manual_variant(
-                        provider_id,
-                        service_entry_id,
-                        catalog.generation,
-                        definition,
-                        &mut model,
-                    );
-                }
+                project_system_manual_variant(
+                    provider_id,
+                    service_entry_id,
+                    catalog.generation,
+                    definition,
+                    &mut model,
+                );
                 apply_custom_model_advanced_declaration(
                     &definition.capabilities,
                     &mut model.capabilities,

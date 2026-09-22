@@ -2611,6 +2611,11 @@ impl PersistedAiConfiguration {
         evidence: &crate::ModelCapabilityEvidence,
         capabilities: &mut ModelCapabilities,
     ) {
+        // Signed system capability limits belong to the Manifest; this layer serves custom providers only.
+        // 受签名系统模型的能力上限归清单所有；此层只服务于自定义供应商。
+        if !provider_id.starts_with("custom:") {
+            return;
+        }
         let Some(overrides) = self.provider_capability_overrides(provider_id) else {
             return;
         };
@@ -2625,11 +2630,6 @@ impl PersistedAiConfiguration {
             && let Some(output_limit) = overrides.output_limit
         {
             capabilities.output_limit = Some(output_limit);
-        }
-        // System-provider capabilities are immutable Manifest facts; only direct limits remain user-editable.
-        // 系统供应商能力是不可变 Manifest 事实；用户只能编辑直接限制。
-        if !provider_id.starts_with("custom:") {
-            return;
         }
         if !evidence.input_modalities_declared
             && capabilities.input_resources.is_empty()
@@ -2670,10 +2670,15 @@ impl PersistedAiConfiguration {
         model_id: &str,
         capabilities: &mut ModelCapabilities,
     ) {
+        // System identities and user-defined system models carry their own authoritative capabilities.
+        // 系统身份与用户手工定义的系统模型各自持有权威能力声明。
+        if !provider_id.starts_with("custom:") {
+            return;
+        }
         let Some(overrides) = self.model_capability_overrides(provider_id, model_id) else {
             return;
         };
-        apply_capability_overrides(overrides, capabilities, provider_id.starts_with("custom:"));
+        apply_capability_overrides(overrides, capabilities, true);
     }
 
     /// Removes non-route settings owned by one model after reference validation succeeds.
@@ -4766,8 +4771,8 @@ mod tests {
         );
     }
 
-    /// Verifies system providers accept only limit/window overrides and ignore stale capability fields.
-    /// 验证系统供应商只接受限制/窗口覆盖，并忽略陈旧能力字段。
+    /// Verifies system providers ignore all persisted model capability overrides.
+    /// 验证系统供应商忽略全部持久化模型能力覆盖。
     #[test]
     fn system_provider_capability_contract_is_not_user_overridable() {
         let mut configuration = PersistedAiConfiguration::default();
@@ -4798,7 +4803,7 @@ mod tests {
 
         configuration.apply_model_capability_overrides("minimax", "MiniMax-M2.7", &mut effective);
 
-        assert_eq!(effective.context_limit, Some(128_000));
+        assert_eq!(effective.context_limit, Some(204_800));
         assert!(effective.input_resources.is_empty());
         assert_eq!(
             effective.structured_output,

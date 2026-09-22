@@ -1377,6 +1377,11 @@ impl PublicAiRuntime {
         model_id: &str,
         overrides: Option<&crate::ModelCapabilityOverrides>,
     ) -> Result<(), String> {
+        if overrides.is_some() && !provider_id.starts_with("custom:") {
+            return Err(String::from(
+                "System model capabilities are owned by the signed Manifest or a manual model definition.",
+            ));
+        }
         if let Some(overrides) = overrides {
             overrides.validate_for_provider(provider_id)?;
         }
@@ -1520,6 +1525,11 @@ impl PublicAiRuntime {
         provider_id: &str,
         overrides: Option<&crate::ModelCapabilityOverrides>,
     ) -> Result<(), String> {
+        if overrides.is_some() && !provider_id.starts_with("custom:") {
+            return Err(String::from(
+                "System provider capability limits are owned by signed model definitions.",
+            ));
+        }
         if let Some(overrides) = overrides {
             overrides.validate_for_provider(provider_id)?;
         }
