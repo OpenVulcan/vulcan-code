@@ -94,7 +94,7 @@ pub const READ_SESSION_TOOL_ID: &str = "read_session";
 pub const SEND_SESSION_MESSAGE_TOOL_ID: &str = "send_session_message";
 
 /// Stable public id for sending a fire-and-forget notification to an authorized parent or self session.
-/// ������Ȩ�Ự�������通知���ߵ��ȶ�������ʶ��
+/// 向获授权父会话或本会话发送即发即忘通知工具的稳定公开标识。
 pub const SEND_NOTIFICATION_TOOL_ID: &str = "send_notification";
 
 /// Stable public id for waiting on an existing session.
@@ -229,15 +229,15 @@ pub struct SendSessionMessageArgs {
 }
 
 /// Arguments for sending one fire-and-forget notification to an authorized session.
-/// ������Ȩ�Ự����һ�����ش����通知�Ĳ�����
+/// 向一个获授权会话发送单条即发即忘通知的参数。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct SendNotificationArgs {
     /// Exact target session id authorized by the host.
-    /// ��������Ȩ�ľ�ȷĿ��Ự��ʶ��
+    /// 由宿主授权的精确目标会话标识。
     pub target_session_id: String,
     /// Notification text delivered without a reply contract.
-    /// �����ش�Լ����͵�通知�ı���
+    /// 不附带回复契约投递的通知正文。
     pub message: String,
 }
 
@@ -295,7 +295,7 @@ pub enum AgentCollaborationCommand {
     #[serde(rename = "send_session_message")]
     SendSessionMessage(SendSessionMessageArgs),
     /// Send a fire-and-forget notification to one authorized session.
-    /// ������Ȩ�Ự����һ�����ش���通知��
+    /// 向一个获授权会话发送即发即忘通知。
     #[serde(rename = "send_notification")]
     SendNotification(SendNotificationArgs),
     /// Wait for one authorized session revision.
@@ -638,7 +638,7 @@ fn parse_send_session_message(
 }
 
 /// Parses send_notification arguments.
-/// ���� send_notification ������
+/// 解析 send_notification 参数。
 fn parse_send_notification(
     arguments: Value,
     tool_id: &'static str,
@@ -839,7 +839,7 @@ fn send_session_message_args_schema() -> Value {
 }
 
 /// Builds the send_notification JSON Schema.
-/// ���� send_notification JSON Schema��
+/// 构建 send_notification JSON Schema。
 fn send_notification_args_schema() -> Value {
     json!({
         "type": "object",
