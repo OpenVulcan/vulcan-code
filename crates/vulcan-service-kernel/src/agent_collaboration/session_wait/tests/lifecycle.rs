@@ -921,6 +921,193 @@ async fn answer_after_asker_completion_settles_without_reviving_the_asker_turn()
     );
 }
 
+/// Admits one real `wait_question` tool call on the asker's open business turn.
+/// 在提问方的开放业务回合上准入一条真实的 `wait_question` 工具调用。
+///
+/// # Parameters
+/// 参数
+/// `handle` is the asker's canonical session and `now_ms` its semantic boundary time.
+/// `handle` 是提问方的规范会话，`now_ms` 是其语义边界时间。
+///
+/// # Returns
+/// 返回值
+/// Returns the exact context whose identity the native wait command validates against.
+/// 返回原生命令在等待校验时比对的精确上下文。
+fn prepare_wait_question_tool_call(
+    handle: &Arc<SessionHandle>,
+    now_ms: i64,
+) -> VulcanToolInvocationContext {
+    let input = handle
+        .read(|document| {
+            let through_seq = document.events().last().unwrap().seq;
+            PrepareAndStartApiInput {
+                purpose: ApiPurposeKind::MainGeneration,
+                request: ApiRequestSnapshot::new("openai", "model"),
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                projection: vulcan_session_core::v1::event::ProviderProjectionProof {
+                    segment_generation: document.segment_generation(),
+                    document_revision: document.memory_revision(),
+                    retained_from_seq: vulcan_session_core::v1::ids::Seq::try_new(1).unwrap(),
+                    through_seq,
+                    fingerprint_sha256: provider_visible_fingerprint(
+                        document.events(),
+                        through_seq,
+                    )
+                    .unwrap(),
+                },
+                locked_baseline: LockedBaselineProjection::empty(),
+                continuation_action_id: None,
+                now_ms,
+            }
+        })
+        .unwrap();
+    let api_call_id = handle
+        .prepare_and_start_api_durable(input)
+        .unwrap()
+        .value
+        .api_call_id;
+    let request_stream_id = RequestStreamId::try_new("wait-question-stream").unwrap();
+    let tool_call_id = handle
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::ToolBoundary,
+            |document| {
+                document.prepare_tool(
+                    api_call_id,
+                    request_stream_id.clone(),
+                    WAIT_QUESTION_TOOL_ID,
+                    ToolPayload::empty(),
+                    None,
+                    now_ms,
+                )
+            },
+        )
+        .unwrap()
+        .value;
+    let tool_seq = handle
+        .read(|document| {
+            document
+                .events()
+                .iter()
+                .find_map(|event| match &event.event {
+                    vulcan_session_core::v1::event::EventBody::ToolCall(tool)
+                        if tool.tool_call_id == tool_call_id =>
+                    {
+                        Some(event.seq)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        })
+        .unwrap();
+    VulcanToolInvocationContext {
+        session_id: handle.session_id().to_string(),
+        request_stream_id,
+        api_call_id,
+        tool_call_id,
+        tool_seq,
+        controller_tool_call_id: String::from("wait-question-tool"),
+        provider_tool_call_id: None,
+    }
+}
+
+/// An answer that already exists must be observed at once instead of waiting out the timeout.
+/// 已经存在的答案必须立即被观察到，而不是等满超时。
+///
+/// # Notes
+/// 说明
+/// This is the "answer arrives first" combination: the responder settles the question before the asker
+/// ever waits. A wait implementation that only watched for *new* collaboration changes would block here
+/// and report a timeout while the answer was already durable.
+/// 这是"答案先到"组合：回答方在提问方开始等待之前就结算了问题。若等待实现只观察**新增**协作变化，
+/// 就会在这里阻塞并报告超时，而答案其实已经可靠存在。
+#[tokio::test]
+async fn answer_arriving_before_the_wait_is_observed_immediately() {
+    let (_storage, invocation, target_handle, question, _operation) =
+        unacknowledged_settlement_fixture(false).await;
+    // The responder answers through the real native port before the asker waits at all.
+    // 回答方在提问方开始等待之前就通过真实原生端口作答。
+    target_handle
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| document.prepare_question_execution_before_api(question.clone(), 10),
+        )
+        .unwrap();
+    let context = start_question_execution_tool_call(
+        &target_handle,
+        ApiPurposeKind::QuestionExecution,
+        11,
+        "answer-before-wait",
+    );
+    let reply = session_v1_native_agent_collaboration_runtime(
+        invocation.state.clone(),
+        ServiceEventEmitter::new(Vec::new()),
+    )
+    .invoke(
+        context,
+        AgentCollaborationCommand::ReplyQuestion(ReplyQuestionArgs {
+            question_id: question.question_id.as_str().to_owned(),
+            answer: "Answer produced before the asker waited.".into(),
+            unable_to_answer: false,
+        }),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("the pre-wait answer was rejected: {error}"));
+    assert_eq!(reply["question_state"].as_str(), Some("answered"));
+    // Now the asker waits with a generous timeout; a settled question must end the wait at once.
+    // 现在提问方以充裕超时等待；已结算问题必须立即结束等待。
+    let source = invocation.source_handle.clone();
+    let started = std::time::Instant::now();
+    let wait_context = prepare_wait_question_tool_call(&source, 12);
+    let observed = session_v1_native_agent_collaboration_runtime(
+        invocation.state.clone(),
+        ServiceEventEmitter::new(Vec::new()),
+    )
+    .invoke(
+        wait_context,
+        AgentCollaborationCommand::WaitQuestion(
+            vulcan_agent_runtime::tooling::collaboration::WaitQuestionArgs {
+                question_id: question.question_id.as_str().to_owned(),
+                after_revision: None,
+                timeout_ms: 30_000,
+            },
+        ),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("waiting on a settled question failed: {error}"));
+    // The wait must report the settled snapshot rather than burning the whole timeout budget.
+    // 等待必须报告已结算快照，而不是耗尽整个超时预算。
+    assert_eq!(
+        observed["status"], "ok",
+        "an already answered question must not be waited out: {observed}"
+    );
+    assert_eq!(observed["question_state"].as_str(), Some("answered"));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "a settled question must be observed without consuming the wait budget"
+    );
+    assert_eq!(
+        observed["answer"]["body"].as_str(),
+        Some("Answer produced before the asker waited."),
+        "the observed answer must be the exact durable body"
+    );
+    // Observing the answer must not fabricate a second settlement on the asker.
+    // 观察答案不得在提问方伪造第二次结算。
+    source
+        .read(|document| {
+            let answered = document
+                .collaboration_state()
+                .questions
+                .values()
+                .filter(|record| record.answer.is_some())
+                .count();
+            assert_eq!(answered, 1, "exactly one answer may exist");
+        })
+        .unwrap();
+}
+
 /// An edit admission must hold its own target gate, not only the settlement peers.
 /// 编辑准入必须持有其自身目标门，而不只是结算对端。
 /// While the target gate is held elsewhere, the admission must not complete.
