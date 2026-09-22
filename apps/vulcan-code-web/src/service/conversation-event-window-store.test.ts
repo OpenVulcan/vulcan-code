@@ -955,6 +955,89 @@ describe("conversation-event-window-store V1 diagnostics", () => {
     ).toThrow(/unsafe event revision/);
   });
 
+  /** Distinct collaboration kinds must never be read as revisions of one another.
+   * 不同的协作类型绝不能被读作彼此的一次修订。 */
+  it("refuses to read a different collaboration kind as a revision of another", () => {
+    const collaborationish = (
+      eventKind: "question_created" | "delivery_settled",
+      operationId: string,
+      seq: number,
+    ): ConversationEventSummary =>
+      summary(seq, {
+        kind: "collaboration",
+        version: 1,
+        operation_id: operationId,
+        event_kind: eventKind,
+        after_state: { kind: "generation_ownership_cleared" },
+      } as ConversationEventBody);
+
+    // Two operation identities never collide: each keeps its own kind at the same seq.
+    // 两个不同的操作标识绝不冲突：各自在同一 seq 上保持自己的类型。
+    const distinct = new ConversationEventWindowStore();
+    distinct.hydrate(batch([collaborationish("question_created", "operation-a", 1)]));
+    distinct.applyLive(
+      livePatch([collaborationish("delivery_settled", "operation-b", 2)], { revision: 2 }),
+    );
+    expect(
+      distinct.render().map((event) => (event.event as { event_kind?: string }).event_kind),
+    ).toEqual(["question_created", "delivery_settled"]);
+
+    // The identity key must include the operation id even when the kind is unchanged: two different
+    // operations of the same kind at one seq are two entities, never one entity's revision.
+    // 即使类型相同，身份键也必须包含操作标识：同一 seq 上同类型的两个不同操作是两个实体，
+    // 绝不是同一实体的两次修订。
+    const sameKind = new ConversationEventWindowStore();
+    sameKind.hydrate(batch([collaborationish("question_created", "operation-a", 1)]));
+    expect(() =>
+      sameKind.applyLive(
+        livePatch(
+          [
+            {
+              ...collaborationish("question_created", "operation-b", 1),
+              event_revision: 2,
+            },
+          ],
+          { revision: 2 },
+        ),
+      ),
+    ).toThrow(/identity conflict/);
+    expect(
+      sameKind.render().map((event) => (event.event as { operation_id?: string }).operation_id),
+    ).toEqual(["operation-a"]);
+
+    // The same operation identity may not silently change kind or after-state: an answer must not be
+    // accepted as a receipt of itself, and the store must refuse rather than merge the two readings.
+    // 同一操作标识不得静默改变类型或后状态：答案不得被当作自身的回执接纳，存储必须拒绝而不是把两种
+    // 读法合并。
+    const sameIdentity = new ConversationEventWindowStore();
+    sameIdentity.hydrate(batch([collaborationish("question_created", "operation-shared", 1)]));
+    expect(() =>
+      sameIdentity.applyLive(
+        livePatch(
+          [
+            {
+              ...collaborationish("delivery_settled", "operation-shared", 1),
+              event_revision: 2,
+            },
+          ],
+          { revision: 2 },
+        ),
+      ),
+    ).toThrow(/illegal collaboration evolution/);
+    // Refusal must be atomic: the original reading survives untouched.
+    // 拒绝必须是原子的：原有读法保持不变。
+    expect(
+      sameIdentity.render().map((event) => (event.event as { event_kind?: string }).event_kind),
+    ).toEqual(["question_created"]);
+    expect(
+      (
+        sameIdentity.render()[0].event as {
+          after_state: { kind: string };
+        }
+      ).after_state.kind,
+    ).toBe("generation_ownership_cleared");
+  });
+
   it("formats gap, ownership, and evolution diagnostics", () => {
     expect(formatWindowPatchError({ code: "gap", expected: 2, actual: 4 })).toContain("gap");
     expect(
