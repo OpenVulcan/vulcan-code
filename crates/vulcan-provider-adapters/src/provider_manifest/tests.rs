@@ -766,25 +766,151 @@ fn manifest_schema_closes_model_parameter_definitions() {
     }
 }
 
+/// One nested-contract probe case: the bundled document and the property trail that locates the
+/// object to probe.
+///
+/// A trail never contains array positions. Regenerating a bundled manifest can insert, remove or
+/// reorder entries, and a positional pointer would then probe a different object — or nothing at
+/// all — with no contract change. Every segment selects the first object in the current subtree
+/// that exposes the named property, so cases stay attached to document content.
+type NestedContractCase = (&'static str, &'static [&'static str]);
+
+/// Probe cases shared by the Rust-parser and JSON-Schema closure tests.
+const NESTED_CONTRACT_CASES: &[NestedContractCase] = &[
+    ("openai.json", &["services", "protocol_routes", "responses_features"]),
+    ("openai.json", &["model_rules", "capabilities", "prompt_cache"]),
+    ("alibaba.json", &["usage_profiles", "payload"]),
+    ("minimax.json", &["request_profiles", "payload", "steps"]),
+    ("minimax.json", &["response_profiles", "payload", "steps"]),
+    ("alibaba.json", &["services", "service_origin_override_policy"]),
+    ("alibaba.json", &["services", "native_inference_bindings"]),
+    ("alibaba.json", &["tool_targets", "output"]),
+    ("alibaba.json", &["tool_targets", "execution"]),
+    ("alibaba.json", &["tool_targets", "output", "resource_decoders"]),
+];
+
+/// One resolved location step; array positions are chosen by the resolver, never by a case.
+#[derive(Clone)]
+enum LocatedStep {
+    Key(String),
+    Index(usize),
+}
+
+/// Collects every descendant object exposing `key` in document order, with its path from `value`.
+fn collect_holders_exposing_key<'a>(
+    value: &'a serde_json::Value,
+    key: &str,
+    prefix: &[LocatedStep],
+    found: &mut Vec<(Vec<LocatedStep>, &'a serde_json::Value)>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.contains_key(key) {
+                found.push((prefix.to_vec(), value));
+            }
+            for (name, child) in map {
+                let mut next = prefix.to_vec();
+                next.push(LocatedStep::Key(name.clone()));
+                collect_holders_exposing_key(child, key, &next, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                let mut next = prefix.to_vec();
+                next.push(LocatedStep::Index(index));
+                collect_holders_exposing_key(item, key, &next, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Resolves one property trail, backtracking until the remaining trail also resolves.
+///
+/// Backtracking matters: an intermediate property can appear in several entries while only one of
+/// them carries the nested contract, so the first candidate is not necessarily the right one.
+/// A trail that ends at an array of objects resolves to that array's first object element.
+fn locate_trail(value: &serde_json::Value, trail: &[&str]) -> Option<Vec<LocatedStep>> {
+    let Some((key, rest)) = trail.split_first() else {
+        return match value {
+            serde_json::Value::Object(_) => Some(Vec::new()),
+            serde_json::Value::Array(items) => items
+                .iter()
+                .position(|item| item.is_object())
+                .map(|index| vec![LocatedStep::Index(index)]),
+            _ => None,
+        };
+    };
+    let mut holders = Vec::new();
+    collect_holders_exposing_key(value, key, &[], &mut holders);
+    for (mut path, holder) in holders {
+        let Some(child) = holder.get(key) else {
+            continue;
+        };
+        path.push(LocatedStep::Key(String::from(*key)));
+        if let Some(mut suffix) = locate_trail(child, rest) {
+            path.append(&mut suffix);
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Walks one previously located path from the document root.
+fn walk_located_path<'a>(
+    document: &'a mut serde_json::Value,
+    path: &[LocatedStep],
+) -> Option<&'a mut serde_json::Value> {
+    let mut current = document;
+    for step in path {
+        current = match step {
+            LocatedStep::Key(name) => current.get_mut(name.as_str())?,
+            LocatedStep::Index(index) => current.get_mut(*index)?,
+        };
+    }
+    Some(current)
+}
+
+/// Locates one nested contract object by property trail instead of by array position.
+fn nested_contract_target<'a>(
+    document: &'a mut serde_json::Value,
+    trail: &[&str],
+) -> Option<&'a mut serde_json::Value> {
+    let path = locate_trail(document, trail)?;
+    walk_located_path(document, &path)
+}
+
+/// Verifies trail resolution backtracks instead of committing to the first partial match.
+///
+/// The first service also exposes `protocol_routes`, but only the second one carries the nested
+/// contract; a resolver that stops at the first candidate would look in the wrong route list. This
+/// is the shape that made the previous positional case fail silently when bundled data changed.
+#[test]
+fn nested_contract_trail_resolution_backtracks() {
+    let mut document = serde_json::json!({
+        "services": [
+            { "protocol_routes": [{ "protocol_profile_id": "without-contract" }] },
+            { "protocol_routes": [{ "responses_features": {} }] },
+        ]
+    });
+    {
+        let target = nested_contract_target(
+            &mut document,
+            &["services", "protocol_routes", "responses_features"],
+        )
+        .expect("resolver must skip the route list that lacks the nested contract");
+        assert_eq!(*target, serde_json::json!({}));
+    }
+    assert_eq!(
+        nested_contract_target(&mut document, &["services", "absent_contract"]),
+        None
+    );
+}
+
 /// Verifies production manifest parsing rejects unknown fields in imported nested contracts.
 /// 验证生产 Manifest 解析拒绝导入嵌套契约中的未知字段。
 #[test]
 fn manifest_parser_closes_imported_nested_contracts() {
-    let cases = [
-        (
-            "openai.json",
-            "/services/1/protocol_routes/0/responses_features",
-        ),
-        ("openai.json", "/model_rules/0/capabilities/prompt_cache"),
-        ("alibaba.json", "/usage_profiles/0/payload"),
-        ("minimax.json", "/request_profiles/0/payload/steps/0"),
-        ("minimax.json", "/response_profiles/0/payload/steps/0"),
-        ("alibaba.json", "/services/4/service_origin_override_policy"),
-        ("alibaba.json", "/services/4/native_inference_bindings/0"),
-        ("alibaba.json", "/tool_targets/0/output"),
-        ("alibaba.json", "/tool_targets/0/execution"),
-        ("alibaba.json", "/tool_targets/1/output/resource_decoders/0"),
-    ];
     let manifests_directory = schema_resource("provider-manifest-v2.schema.json")
         .parent()
         .expect("schema path must have a parent")
@@ -792,16 +918,21 @@ fn manifest_parser_closes_imported_nested_contracts() {
         .expect("schema directory must have a parent")
         .join("manifests");
 
-    for (file_name, pointer) in cases {
+    for &(file_name, trail) in NESTED_CONTRACT_CASES {
         let manifest_path = manifests_directory.join(file_name);
         let manifest_text = std::fs::read_to_string(&manifest_path)
             .unwrap_or_else(|_| panic!("missing manifest resource at {}", manifest_path.display()));
         let mut manifest: serde_json::Value =
             serde_json::from_str(&manifest_text).expect("bundled manifest must be valid JSON");
-        manifest
-            .pointer_mut(pointer)
+        nested_contract_target(&mut manifest, trail)
             .and_then(serde_json::Value::as_object_mut)
-            .unwrap_or_else(|| panic!("test manifest must expose object at `{pointer}`"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "`{file_name}` no longer exposes a nested contract object at trail {trail:?}; \
+                     the bundled document changed, so this expectation may be stale and must be \
+                     re-verified against the current manifest"
+                )
+            })
             .insert(String::from("unexpected"), serde_json::Value::Bool(true));
         let invalid_text = serde_json::to_string(&manifest).expect("test document must serialize");
         assert!(
@@ -810,7 +941,7 @@ fn manifest_parser_closes_imported_nested_contracts() {
                 super::ManifestOwnership::System,
             )
             .is_err(),
-            "unknown nested field at `{file_name}{pointer}` must be rejected"
+            "unknown nested field in `{file_name}` at trail {trail:?} must be rejected"
         );
     }
 }
@@ -824,21 +955,6 @@ fn manifest_schema_closes_imported_nested_contracts() {
         .expect("provider manifest schema must remain valid Draft 2020-12");
     let validator =
         jsonschema::draft202012::new(&schema).expect("provider manifest schema must compile");
-    let cases = [
-        (
-            "openai.json",
-            "/services/1/protocol_routes/0/responses_features",
-        ),
-        ("openai.json", "/model_rules/0/capabilities/prompt_cache"),
-        ("alibaba.json", "/usage_profiles/0/payload"),
-        ("minimax.json", "/request_profiles/0/payload/steps/0"),
-        ("minimax.json", "/response_profiles/0/payload/steps/0"),
-        ("alibaba.json", "/services/4/service_origin_override_policy"),
-        ("alibaba.json", "/services/4/native_inference_bindings/0"),
-        ("alibaba.json", "/tool_targets/0/output"),
-        ("alibaba.json", "/tool_targets/0/execution"),
-        ("alibaba.json", "/tool_targets/1/output/resource_decoders/0"),
-    ];
     let manifests_directory = schema_resource("provider-manifest-v2.schema.json")
         .parent()
         .expect("schema path must have a parent")
@@ -846,7 +962,7 @@ fn manifest_schema_closes_imported_nested_contracts() {
         .expect("schema directory must have a parent")
         .join("manifests");
 
-    for (file_name, pointer) in cases {
+    for &(file_name, trail) in NESTED_CONTRACT_CASES {
         let manifest_path = manifests_directory.join(file_name);
         let manifest_text = std::fs::read_to_string(&manifest_path)
             .unwrap_or_else(|_| panic!("missing manifest resource at {}", manifest_path.display()));
@@ -856,14 +972,19 @@ fn manifest_schema_closes_imported_nested_contracts() {
             validator.is_valid(&manifest),
             "unchanged bundled manifest `{file_name}` must satisfy the committed schema"
         );
-        manifest
-            .pointer_mut(pointer)
+        nested_contract_target(&mut manifest, trail)
             .and_then(serde_json::Value::as_object_mut)
-            .unwrap_or_else(|| panic!("test manifest must expose object at `{pointer}`"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "`{file_name}` no longer exposes a nested contract object at trail {trail:?}; \
+                     the bundled document changed, so this expectation may be stale and must be \
+                     re-verified against the current manifest"
+                )
+            })
             .insert(String::from("unexpected"), serde_json::Value::Bool(true));
         assert!(
             !validator.is_valid(&manifest),
-            "unknown nested field at `{file_name}{pointer}` must be rejected by the schema"
+            "unknown nested field in `{file_name}` at trail {trail:?} must be rejected by the schema"
         );
     }
 }
