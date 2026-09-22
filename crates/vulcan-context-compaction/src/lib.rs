@@ -1,10 +1,12 @@
 //! Shared context-compaction helpers reused by the host runtime and workspace UI.
 //! 供宿主运行时与工作区界面复用的共享上下文压缩辅助能力。
 
+mod native_source;
 mod planning;
 mod preview;
 mod rewrite;
 
+pub use native_source::NativeCompactionSources;
 pub use planning::{
     CompactionContinuationPromptOptions, CompactionInputBudget, CompactionInputPruneMode,
     CompactionInputPruneReport, CompactionPlan, CompactionPlanInput, CompactionResult,

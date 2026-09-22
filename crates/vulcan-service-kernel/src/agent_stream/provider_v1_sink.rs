@@ -23,9 +23,10 @@ use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
     PreparedToolInvocationIdentity, persistent_tool_output_from_result,
 };
 use vulcan_ai_contract::{
-    AiMessage, ContentItem, MessageRole, ProviderReplayEnvelope, ProviderReplayProjection,
-    ProviderReplayRoute, ResourceKind, ResourceReference, ResourceSourceKind,
-    ToolCall as AiToolCall, ToolResult as AiToolResult, project_provider_replay,
+    AiMessage, ContentItem, HOST_MESSAGE_GUIDANCE, MessageRole, ProviderReplayEnvelope,
+    ProviderReplayProjection, ProviderReplayRoute, ResourceKind, ResourceReference,
+    ResourceSourceKind, ToolCall as AiToolCall, ToolResult as AiToolResult,
+    project_provider_replay,
 };
 use vulcan_change_set::{PersistentChangeSetError, persistent_change_set_from_host_result};
 use vulcan_context::protocol::validate_session_conversation_message_identities;
@@ -44,10 +45,9 @@ use vulcan_core::types::{
     ConversationSnapshot, ProviderContinuation,
 };
 use vulcan_session_core::v1::context::{
-    LockedBaselineProjection, LockedPromptTarget, LockedSource,
+    LockedBaselineProjection, LockedBaselineSegmentInput, LockedPromptTarget, LockedSource,
+    LockedSourceKind,
 };
-#[cfg(test)]
-use vulcan_session_core::v1::context::{LockedBaselineSegmentInput, LockedSourceKind};
 #[cfg(test)]
 use vulcan_session_core::v1::document::TurnSuccessor;
 use vulcan_session_core::v1::document::{
@@ -80,6 +80,11 @@ use crate::session_runtime_registry_v1::{
 };
 use crate::state::SharedServiceBridgeState;
 
+mod compaction_source;
+mod remote_checkpoint;
+pub(crate) use remote_checkpoint::{
+    compaction_state_from_projection, planning_message_id as remote_compaction_planning_message_id,
+};
 mod context_injection;
 #[cfg(test)]
 mod memory_acceptance;
@@ -94,6 +99,55 @@ pub(crate) use media::frozen_prompt_media_projection;
 /// 同一格式化函数服务于控制器历史、准确来源查询和物理记忆锚点。
 fn provider_projection_message_id(index: usize) -> String {
     format!("v1-provider-message-{}", index + 1)
+}
+
+/// Adds the fixed host guidance while the initial locked baseline is established.
+/// 在初始锁定基线建立时加入固定宿主指引。
+///
+/// Existing initialized baselines are returned byte-for-byte; the guidance is a one-time
+/// baseline fact and must never be rewritten into later request history.
+/// 已初始化基线按字节原样返回；该指引是一次性基线事实，不能重写进后续请求历史。
+fn initial_locked_baseline_with_host_guidance(
+    baseline: &LockedBaselineProjection,
+) -> Result<LockedBaselineProjection, SessionRuntimeError> {
+    if let Some(source) = baseline
+        .locked_sources()
+        .iter()
+        .find(|source| source.node_id == "host-message-guidance")
+    {
+        let is_exact = source.kind == LockedSourceKind::BaselineHooks
+            && source.target == LockedPromptTarget::System
+            && source.source_label.as_deref() == Some("host_message_guidance")
+            && source.source_id.as_deref() == Some("v1:host_message_guidance")
+            && source.content == HOST_MESSAGE_GUIDANCE;
+        if is_exact {
+            return Ok(baseline.clone());
+        }
+        return Err(provider_projection_runtime_error(
+            "The locked baseline contains an invalid host-message guidance source.",
+        ));
+    }
+    let mut segments = baseline
+        .locked_sources()
+        .iter()
+        .map(|source| LockedBaselineSegmentInput {
+            kind: source.kind,
+            node_id: source.node_id.clone(),
+            target: source.target,
+            source_label: source.source_label.clone(),
+            source_id: source.source_id.clone(),
+            content: source.content.clone(),
+        })
+        .collect::<Vec<_>>();
+    segments.push(LockedBaselineSegmentInput {
+        kind: LockedSourceKind::BaselineHooks,
+        node_id: String::from("host-message-guidance"),
+        target: LockedPromptTarget::System,
+        source_label: Some(String::from("host_message_guidance")),
+        source_id: Some(String::from("v1:host_message_guidance")),
+        content: String::from(HOST_MESSAGE_GUIDANCE),
+    });
+    LockedBaselineProjection::project(segments).map_err(provider_projection_runtime_error)
 }
 
 /// Projects one ordered resource list into canonical controller attachments without transport state.
@@ -192,6 +246,9 @@ where
         // payload omits system/developer layers because those remain request prompt layers, not controller messages.
         // payload 会跳过 system/developer 层，因为它们属于请求提示词层而非控制器消息。
         let payload = match item {
+            ProjectedItem::RemoteCompactionCheckpoint { checkpoint, .. } => {
+                Some(remote_checkpoint::controller_payload(checkpoint)?)
+            }
             ProjectedItem::SystemText {
                 role: ProjectedSystemRole::HiddenUserShell,
                 text,
@@ -457,6 +514,9 @@ pub(crate) fn provider_v1_stream_sink_for_session(
 /// Stream-local V1 projection state that retains one exact session handle for its whole lifetime.
 /// 在完整生命周期内保留同一精确会话句柄的流局部 V1 投影状态。
 pub(crate) struct ProviderV1StreamSink {
+    /// Frozen planning source and current local compaction attempt, absent for business execution.
+    /// 冻结的规划来源及当前本地压缩尝试；业务执行时不存在。
+    compaction_source: Option<compaction_source::CompactionSourceWindow>,
     /// Unique V1 owner retained by this exact stream task.
     /// 当前精确流任务保留的唯一 V1 所有者。
     handle: Arc<SessionHandle>,
@@ -478,6 +538,9 @@ pub(crate) struct ProviderV1StreamSink {
     /// Exact completed assistant semantic of the last physical API.
     /// 最后一次物理 API 的精确已完成 assistant 语义。
     completed_assistant_text: Option<ProviderV1CompletedAssistantText>,
+    /// Native checkpoint accepted by the final successful physical API, without assistant semantics.
+    /// 最终成功物理 API 接受的原生检查点，不含助手语义。
+    completed_remote_compaction: Option<ProviderV1CompletedRemoteCompaction>,
     /// Exact locked baseline used by the last completed physical API.
     /// 最后一次已完成物理 API 使用的精确锁定基线。
     completed_locked_baseline: Option<LockedBaselineProjection>,
@@ -498,6 +561,18 @@ pub(crate) struct ProviderV1CompletedAssistantText {
     pub(crate) text: String,
 }
 
+/// Native output verified against the admitted route and the same successful API terminal.
+/// 针对准入路由及同一次成功 API 终态验证的原生输出。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderV1CompletedRemoteCompaction {
+    /// Exact local API owning the native output.
+    /// 拥有原生输出的精确本地 API。
+    pub(crate) api_call_id: ApiCallId,
+    /// Native checkpoint validated against all five frozen route dimensions.
+    /// 已针对五项冻结路由维度验证的原生检查点。
+    pub(crate) checkpoint: vulcan_session_core::v1::context::RemoteResponsesCheckpoint,
+}
+
 /// Durable V1 facts transferred exactly once from the stream sink to terminal handling.
 /// 从流 sink 向终态处理精确转移一次的可靠 V1 事实。
 #[derive(Debug, Default)]
@@ -514,6 +589,9 @@ pub(crate) struct ProviderV1FinishedDurability {
     /// Exact completed assistant semantic of the final physical API, when present.
     /// 最终物理 API 的精确已完成 assistant 语义（如存在）。
     pub(crate) completed_assistant_text: Option<ProviderV1CompletedAssistantText>,
+    /// Exact remote result, mutually exclusive with completed assistant text.
+    /// 精确远端结果，与已完成助手正文互斥。
+    pub(crate) completed_remote_compaction: Option<ProviderV1CompletedRemoteCompaction>,
     /// Exact locked baseline used by the final physical API, when present.
     /// 最终物理 API 使用的精确锁定基线（如存在）。
     pub(crate) locked_baseline: Option<LockedBaselineProjection>,
@@ -540,6 +618,9 @@ struct ActiveProviderV1Projection {
     /// Immutable typed Provider request facts used for terminal identity validation.
     /// 用于终态身份校验的不可变强类型 Provider 请求事实。
     request_facts: ProviderV1RequestFacts,
+    /// Frozen remote-compaction route; absent for ordinary and local-summary requests.
+    /// 冻结远端压缩路由；普通请求和本地摘要请求不设置。
+    remote_compaction_route: Option<V1ReplayRouteIdentity>,
     /// Exact validated locked baseline used to build this physical request.
     /// 构建当前物理请求所使用的精确已校验锁定基线。
     locked_baseline: LockedBaselineProjection,
@@ -1115,23 +1196,57 @@ fn unreplayable_replay_runtime_error(technical_reason: impl fmt::Display) -> Ses
 /// 返回值
 /// Returns the rebuilt candidate and a SHA-256 proof over the exact serialized request.
 /// 返回重建候选以及对精确序列化请求计算的 SHA-256 证明。
+#[cfg(test)]
 fn rebuild_provider_transport_candidate(
+    snapshot: SessionProviderProjectionSnapshot,
+    facts: &ProviderV1RequestFacts,
+    candidate: ProviderRequestPreparationCandidate,
+    prepared_media: media::PreparedV1UserMedia,
+) -> Result<SessionPreparedPhysicalRequest<ProviderRequestPreparationCandidate>, SessionRuntimeError>
+{
+    rebuild_provider_transport_candidate_with_compaction(
+        snapshot,
+        facts,
+        candidate,
+        prepared_media,
+        None,
+    )
+}
+
+/// Rebuilds `candidate` from durable `snapshot` and optional frozen `compaction`; returns the exact proved request.
+/// 根据可靠`snapshot`及可选冻结`compaction`重建`candidate`；返回带精确证明的请求。
+fn rebuild_provider_transport_candidate_with_compaction(
     snapshot: SessionProviderProjectionSnapshot,
     facts: &ProviderV1RequestFacts,
     mut candidate: ProviderRequestPreparationCandidate,
     mut prepared_media: media::PreparedV1UserMedia,
+    compaction: Option<&compaction_source::CompactionSourceWindow>,
 ) -> Result<SessionPreparedPhysicalRequest<ProviderRequestPreparationCandidate>, SessionRuntimeError>
 {
+    // Freeze summary semantics while retaining the current durable frontier for the final permit.
+    // 冻结摘要语义，同时为最终许可保留当前可靠前沿。
+    let snapshot = match compaction {
+        Some(source) => source.bound_snapshot(snapshot, facts)?,
+        None => snapshot,
+    };
     validate_provider_transport_candidate(facts, &candidate)?;
     validate_prompt_media_preparation_frontier(&snapshot)?;
     // effectiveLockedBaseline reuses the persisted initialized generation exactly. Only a fresh
     // or refresh-pending generation may establish the candidate baseline assembled for this call.
     // effectiveLockedBaseline 精确复用已持久化的初始化 generation。只有全新或待刷新 generation
     // 才允许建立本次调用组装的候选基线。
-    let effective_locked_baseline = snapshot
-        .initialized_locked_baseline
-        .clone()
-        .unwrap_or_else(|| candidate.locked_baseline.clone());
+    let effective_locked_baseline = match snapshot.initialized_locked_baseline.clone() {
+        Some(initialized) => {
+            let expected = initial_locked_baseline_with_host_guidance(&initialized)?;
+            if expected != initialized {
+                return Err(provider_projection_runtime_error(
+                    "The initialized V1 locked baseline is missing the fixed host guidance.",
+                ));
+            }
+            initialized
+        }
+        None => initial_locked_baseline_with_host_guidance(&candidate.locked_baseline)?,
+    };
     candidate.locked_baseline = effective_locked_baseline.clone();
     // controller_state is the shared logical V1 projection and therefore cannot contain physical delivery choices.
     // controller_state 是共享逻辑 V1 投影，因此不能包含物理投递选择。
@@ -1139,7 +1254,7 @@ fn rebuild_provider_transport_candidate(
         .map_err(provider_projection_runtime_error)?;
     // controller_snapshot is the lossless Core representation used by request capture and later checkpoints.
     // controller_snapshot 是请求捕获与后续检查点使用的无损 Core 表示。
-    let controller_snapshot = build_core_conversation_snapshot(&controller_state)
+    let mut controller_snapshot = build_core_conversation_snapshot(&controller_state)
         .map_err(provider_projection_runtime_error)?;
     // continuation comes from the same logical projection as controller history.
     // continuation 来自与控制器历史相同的逻辑投影。
@@ -1154,16 +1269,6 @@ fn rebuild_provider_transport_candidate(
         &snapshot,
         candidate.controller_config.context_injection.as_ref(),
     )?;
-    candidate.dynamic_prompt_layers = context_injection::with_persistent_blocks(
-        &candidate.dynamic_prompt_layers,
-        candidate.controller_config.context_injection.as_ref(),
-    );
-    append_dynamic_prompt_messages(
-        &candidate.dynamic_prompt_layers,
-        &mut request_messages,
-        &mut system_prompt_parts,
-    );
-
     for source in candidate.locked_baseline.locked_sources() {
         let role = locked_prompt_message_role(source)?;
         if matches!(role, MessageRole::System | MessageRole::Developer) {
@@ -1177,6 +1282,12 @@ fn rebuild_provider_transport_candidate(
     let replay_route = V1ReplayRouteIdentity::from_candidate(&candidate);
     for (index, item) in snapshot.items.iter().enumerate() {
         match item {
+            ProjectedItem::RemoteCompactionCheckpoint { checkpoint, .. } => {
+                request_messages.push(remote_checkpoint::physical_message(
+                    checkpoint,
+                    replay_route.as_ref(),
+                )?);
+            }
             ProjectedItem::SystemText { role, text, .. } => {
                 let message_role = projected_system_message_role(*role);
                 if matches!(message_role, MessageRole::System | MessageRole::Developer) {
@@ -1304,6 +1415,39 @@ fn rebuild_provider_transport_candidate(
         }
     }
 
+    // Pruned summaries use the exact normalized attempt, never the complete business history.
+    // 剪枝摘要使用精确规范化尝试，绝不恢复为完整业务历史。
+    if let Some(source) = compaction
+        && let Some((history, messages)) = source.pruned_transport(&candidate)?
+    {
+        controller_snapshot = history;
+        request_messages.extend(messages);
+    }
+
+    // Summary instructions belong to this physical request and never replace business producer state.
+    // 摘要指令属于本次物理请求，绝不替换业务生产者状态。
+    // Native compaction sends only its selected original prefix; local summary instructions would change that contract.
+    // 原生压缩只发送选定原始前缀；本地摘要指令会改变此契约。
+    let compaction_controls = if compaction.is_some_and(|source| source.is_remote()) {
+        Vec::new()
+    } else {
+        context_injection::compaction_request_messages(facts, &candidate)?
+    };
+    for message in compaction_controls {
+        let vulcan_core::types::ConversationPayload::UserText { text, .. } = &message.payload
+        else {
+            return Err(provider_projection_runtime_error(
+                "Compaction controls must be User messages.",
+            ));
+        };
+        latest_user_prompt = text.clone();
+        request_messages.push(text_ai_message(MessageRole::User, text.clone()));
+        controller_snapshot.messages.push(message);
+    }
+
+    // Dynamic layers now live in durable SystemContext history and must not be rendered again by the transport candidate.
+    // 动态层现在位于可靠 SystemContext 历史中，不能再由传输候选重复渲染。
+    candidate.dynamic_prompt_layers = ProviderPromptLayers::default();
     candidate.exact_request.model_id = facts.request.model.clone();
     candidate.exact_request.messages = request_messages;
     candidate.exact_request.resources.clear();
@@ -1348,50 +1492,6 @@ fn rebuild_provider_transport_candidate(
         projection,
         request_budget_evidence,
     })
-}
-
-/// Appends the producer-declared request-dynamic prompt layers before durable conversation history.
-/// 在可靠会话历史之前追加生产者声明的请求动态提示词层。
-///
-/// # Parameters
-/// # 参数
-/// - `layers`: Dynamic-only prompt layers emitted by the unique prompt composer.
-/// - `layers`：由唯一提示词组合器生成的仅动态提示词层。
-/// - `messages`: Exact Provider-neutral request message buffer.
-/// - `messages`：精确的 Provider 中立请求消息缓冲区。
-/// - `system_prompt_parts`: Controller snapshot system/developer prompt summary buffer.
-/// - `system_prompt_parts`：控制器快照的系统/开发者提示摘要缓冲区。
-fn append_dynamic_prompt_messages(
-    layers: &ProviderPromptLayers,
-    messages: &mut Vec<AiMessage>,
-    system_prompt_parts: &mut Vec<String>,
-) {
-    if !layers.system.trim().is_empty() {
-        system_prompt_parts.push(layers.system.clone());
-        messages.push(text_ai_message(MessageRole::System, layers.system.clone()));
-    }
-    if !layers.developer.trim().is_empty() {
-        system_prompt_parts.push(layers.developer.clone());
-        messages.push(text_ai_message(
-            MessageRole::Developer,
-            layers.developer.clone(),
-        ));
-    }
-    if !layers.tool_guidance.trim().is_empty() {
-        let rendered = ProviderPromptLayers {
-            tool_guidance: layers.tool_guidance.clone(),
-            ..ProviderPromptLayers::default()
-        }
-        .render_fallback_system_prompt();
-        system_prompt_parts.push(rendered.clone());
-        messages.push(text_ai_message(MessageRole::System, rendered));
-    }
-    if !layers.runtime_context.trim().is_empty() {
-        messages.push(text_ai_message(
-            MessageRole::User,
-            layers.runtime_context.clone(),
-        ));
-    }
 }
 
 /// Validates that pre-gate route facts do not drift from the selected V1 request configuration.
@@ -1582,6 +1682,7 @@ impl ProviderV1StreamSink {
         project_resource_catalog_registry: Arc<ProjectResourceCatalogRegistry>,
     ) -> Self {
         Self {
+            compaction_source: None,
             handle,
             project_resource_catalog_registry,
             active: None,
@@ -1589,6 +1690,7 @@ impl ProviderV1StreamSink {
             api_terminal_failure_persisted: false,
             turn_completion: None,
             completed_assistant_text: None,
+            completed_remote_compaction: None,
             completed_locked_baseline: None,
         }
     }
@@ -1603,8 +1705,17 @@ impl ProviderV1StreamSink {
             ),
             turn_completion: self.turn_completion.take(),
             completed_assistant_text: self.completed_assistant_text.take(),
+            completed_remote_compaction: self.completed_remote_compaction.take(),
             locked_baseline: self.completed_locked_baseline.take(),
         }
+    }
+
+    /// Reports whether the current request has a durable terminal receipt without consuming it.
+    /// 报告当前请求是否已有可靠终态回执，不消费该回执。
+    /// No parameters; returns true only after the entire physical request, including its tools, settled.
+    /// 无参数；仅整个物理请求及其工具均结算后返回 true。
+    pub(crate) fn has_durable_api_terminal(&self) -> bool {
+        self.active.is_none() && self.api_terminal_completion.is_some()
     }
 
     /// Returns the exact final assistant semantic retained for parent subagent return projection.
@@ -1632,6 +1743,7 @@ impl ProviderV1StreamSink {
     /// 仅在完成精确 V1 投影与可靠 api_started 提交后返回分派许可。
     pub(crate) async fn prepare_request(
         &mut self,
+        state: &SharedServiceBridgeState,
         facts: ProviderV1RequestFacts,
         candidate: ProviderRequestPreparationCandidate,
     ) -> Result<PreparedPhysicalApi, ProviderV1SinkError> {
@@ -1639,12 +1751,45 @@ impl ProviderV1StreamSink {
             return Err(ProviderV1SinkError::RequestAlreadyActive);
         }
         validate_provider_transport_candidate(&facts, &candidate)?;
-        let locked_baseline = candidate.locked_baseline.clone();
+        // Freeze the actual native route before moving the candidate into durable reconstruction.
+        // 在候选移入可靠重建前冻结实际原生路由。
+        let remote_compaction_route = if self
+            .compaction_source
+            .as_ref()
+            .is_some_and(|source| source.is_remote())
+        {
+            Some(
+                V1ReplayRouteIdentity::from_candidate(&candidate).ok_or_else(|| {
+                    provider_projection_runtime_error(
+                        "Remote compaction admission requires its exact frozen execution route.",
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
+        // Compaction summarizes history and must not consume messages addressed to the task execution.
+        // 压缩只总结历史，不消费发给任务执行的消息。
+        if facts.purpose != vulcan_session_core::v1::event::ApiPurposeKind::Compaction {
+            crate::agent_collaboration::project_collaboration_before_api(
+                state,
+                &self.handle,
+                facts.prepared_at_ms,
+            )
+            .await
+            .map_err(provider_projection_runtime_error)?;
+        }
+        context_injection::synchronize_request_dynamic_context(&self.handle, &facts, &candidate)?;
+        let locked_baseline =
+            initial_locked_baseline_with_host_guidance(&candidate.locked_baseline)?;
         let purpose = facts.purpose;
         let request = facts.request.clone();
         let continuation_action_id = facts.continuation_action_id.clone();
         let prepared_at_ms = facts.prepared_at_ms;
         let facts_for_build = facts.clone();
+        // Bind each physical retry to the source chosen before its runtime launch.
+        // 将每次物理重试绑定到其运行时启动前选定的来源。
+        let compaction_source = self.compaction_source.clone();
         // Private upload receipts use the existing project owner; prompt identity remains in the session owner.
         // 私有上传回执使用既有项目所有者；提示词身份仍归会话所有者。
         let resource_registry = Arc::clone(&self.project_resource_catalog_registry);
@@ -1660,8 +1805,16 @@ impl ProviderV1StreamSink {
                 move |snapshot, preparation| async move {
                     // Plan and materialize all resources before the durable API permit, outside both session locks.
                     // 在可靠API许可之前、两把会话锁之外规划和物化全部资源。
+                    // Only source-owned native media participates; minimal transcripts carry textual references.
+                    // 仅来源持有的原生媒体参与准备；最小转录只携带文本引用。
+                    let media_snapshot = match compaction_source.as_ref() {
+                        Some(source) => {
+                            source.bound_snapshot(snapshot.clone(), &facts_for_build)?
+                        }
+                        None => snapshot.clone(),
+                    };
                     let prepared_media = media::prepare_v1_user_media_durable(
-                        &snapshot,
+                        &media_snapshot,
                         candidate.media_context.as_ref(),
                         resource_registry,
                         Arc::clone(&preparation),
@@ -1675,11 +1828,12 @@ impl ProviderV1StreamSink {
                         let Some(snapshot) = preparation.recapture()? else {
                             return Ok(None);
                         };
-                        rebuild_provider_transport_candidate(
+                        rebuild_provider_transport_candidate_with_compaction(
                             snapshot,
                             &facts_for_build,
                             candidate,
                             prepared_media,
+                            compaction_source.as_ref(),
                         )
                         .map(Some)
                     })
@@ -1701,10 +1855,12 @@ impl ProviderV1StreamSink {
         self.api_terminal_failure_persisted = false;
         self.turn_completion = None;
         self.completed_assistant_text = None;
+        self.completed_remote_compaction = None;
         self.completed_locked_baseline = None;
         self.active = Some(ActiveProviderV1Projection {
             api_call_id: core_start.api_call_id,
             request_facts: facts,
+            remote_compaction_route,
             locked_baseline,
             project_directory,
             reasoning_text: String::new(),
@@ -1954,6 +2110,31 @@ impl ProviderV1StreamSink {
         &mut self,
         terminal: ProviderV1ApiTerminalFacts,
     ) -> Result<ProviderV1TerminalOutcome, ProviderV1SinkError> {
+        self.accept_terminal_with_remote(terminal, None).await
+    }
+
+    /// Accepts native `checkpoint` with its exact successful `terminal`; returns only after API durability.
+    /// 将原生`checkpoint`与精确成功`terminal`一同接收；仅在 API 可靠落盘后返回。
+    /// The admitted route, purpose, and absence of assistant/reasoning/tool semantics are mandatory.
+    /// 强制校验准入路由、用途及没有助手、推理、工具语义。
+    pub(crate) async fn accept_remote_compaction_terminal(
+        &mut self,
+        terminal: ProviderV1ApiTerminalFacts,
+        checkpoint: vulcan_session_core::v1::context::RemoteResponsesCheckpoint,
+    ) -> Result<ProviderV1TerminalOutcome, ProviderV1SinkError> {
+        self.accept_terminal_with_remote(terminal, Some(checkpoint))
+            .await
+    }
+
+    /// Settles `terminal` using the admitted output kind and optional native `checkpoint`.
+    /// 按准入输出种类及可选原生`checkpoint`结算`terminal`。
+    /// Returns the durable outcome; rejects kind or route drift before mutating any semantic state.
+    /// 返回可靠结果；在修改任何语义状态前拒绝种类或路由漂移。
+    async fn accept_terminal_with_remote(
+        &mut self,
+        terminal: ProviderV1ApiTerminalFacts,
+        checkpoint: Option<vulcan_session_core::v1::context::RemoteResponsesCheckpoint>,
+    ) -> Result<ProviderV1TerminalOutcome, ProviderV1SinkError> {
         let active = self
             .active
             .as_ref()
@@ -1964,6 +2145,51 @@ impl ProviderV1StreamSink {
         if active.pending_terminal.is_some() {
             return Err(ProviderV1SinkError::TerminalAlreadyPending);
         }
+        // Native failures also cannot introduce a conversational tool batch or replay source.
+        // 原生失败也不能引入对话工具批次或重放来源。
+        if active.remote_compaction_route.is_some()
+            && (terminal.tool_call_count != 0 || terminal.provider_source.is_some())
+        {
+            return Err(provider_projection_runtime_error(
+                "Remote compaction terminal cannot contain conversational tools or a replay source.",
+            ).into());
+        }
+        // Validate mutually exclusive result modes before any semantic sealing or API completion.
+        // 在任何语义封口或 API 完成之前校验互斥结果模式。
+        let completed_remote = match (&active.remote_compaction_route, checkpoint) {
+            (Some(route), Some(checkpoint)) => {
+                if terminal.request_facts.purpose
+                    != vulcan_session_core::v1::event::ApiPurposeKind::Compaction
+                    || terminal.status != ApiCallStatus::Completed
+                    || terminal.error.is_some()
+                    || terminal.provider_source.is_some()
+                    || terminal.tool_call_count != 0
+                    || active.assistant_text_seq.is_some()
+                    || active.reasoning_seq.is_some()
+                    || !active.prepared_tools.is_empty()
+                {
+                    return Err(provider_projection_runtime_error("Remote compaction terminal must contain only a successful native checkpoint.").into());
+                }
+                remote_checkpoint::physical_message(&checkpoint, Some(route))?;
+                Some(ProviderV1CompletedRemoteCompaction {
+                    api_call_id: active.api_call_id,
+                    checkpoint,
+                })
+            }
+            (Some(_), None) if terminal.status == ApiCallStatus::Completed => {
+                return Err(provider_projection_runtime_error(
+                    "Successful remote compaction terminal is missing its native checkpoint.",
+                )
+                .into());
+            }
+            (None, Some(_)) => {
+                return Err(provider_projection_runtime_error(
+                    "Native compaction result does not belong to an admitted remote attempt.",
+                )
+                .into());
+            }
+            (_, None) => None,
+        };
         self.seal_semantics_for_terminal(terminal.status, terminal.completed_at_ms)?;
         if terminal.tool_call_count > 0 {
             self.active
@@ -1972,13 +2198,19 @@ impl ProviderV1StreamSink {
                 .pending_terminal = Some(terminal);
             return Ok(ProviderV1TerminalOutcome::AwaitingTools);
         }
+        // Auxiliary question execution has its own closure and must not finish the business turn.
+        // 辅助答疑通过独立入口结束，不能关闭业务回合。
         let closes_logical_turn = terminal.status == ApiCallStatus::Completed
-            && terminal.request_facts.purpose
-                != vulcan_session_core::v1::event::ApiPurposeKind::Compaction;
+            && !matches!(
+                terminal.request_facts.purpose,
+                vulcan_session_core::v1::event::ApiPurposeKind::Compaction
+                    | vulcan_session_core::v1::event::ApiPurposeKind::QuestionExecution
+            );
         let completed_at_ms = terminal.completed_at_ms;
         let api_terminal = self.complete_api(terminal).await?;
         let has_promoted_in_turn_inputs = !api_terminal.value.promoted_input_seqs.is_empty();
         self.api_terminal_completion = Some(api_terminal);
+        self.completed_remote_compaction = completed_remote;
         if closes_logical_turn && !has_promoted_in_turn_inputs {
             // Settlement atomically chooses closure or child-return continuation, without a read/write gap.
             // 结算原子选择关闭或子任务回流续跑，不留下读写间隙。
@@ -1997,7 +2229,9 @@ impl ProviderV1StreamSink {
                 }
                 // Terminal handling reads pending returns from the owner after releasing admission.
                 // 终态处理释放准入后从所有者读取待回流结果，不保留可能过期的快照。
-                SuccessfulTurnSettlement::SubagentReturn => {}
+                SuccessfulTurnSettlement::SubagentReturn
+                | SuccessfulTurnSettlement::Collaboration
+                | SuccessfulTurnSettlement::Deferred => {}
             }
         }
         Ok(ProviderV1TerminalOutcome::Completed)
@@ -2386,7 +2620,9 @@ impl ProviderV1StreamSink {
             active.reasoning_seq = Some(receipt.value);
             active.reasoning_sealed = true;
         }
-        if !active.assistant_text.is_empty() {
+        // Seal every allocated semantic event, including an exact empty physical response.
+        // 封口每个已分配语义事件，包括真实的空物理回复。
+        if active.assistant_text_seq.is_some() {
             let receipt = self.handle.update_assistant_text(
                 active.api_call_id,
                 active.assistant_text.clone(),
@@ -2491,6 +2727,7 @@ fn persistent_change_set_from_tool_result(
 
 #[cfg(test)]
 mod tests {
+    mod remote_checkpoint;
     use super::*;
     use serde_json::json;
     use vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryRequest;
@@ -2522,6 +2759,35 @@ mod tests {
         SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
         SessionPersistenceBackend,
     };
+
+    /// Adds host guidance exactly once to a fresh baseline projection.
+    /// 验证宿主指引只在全新基线投影中加入一次。
+    #[test]
+    fn fresh_baseline_contains_host_guidance_once() {
+        let baseline = LockedBaselineProjection::empty();
+        let first = initial_locked_baseline_with_host_guidance(&baseline)
+            .expect("fresh baseline projection succeeds");
+        let guidance = first
+            .locked_sources()
+            .iter()
+            .find(|source| source.node_id == "host-message-guidance")
+            .expect("host guidance source");
+        assert_eq!(guidance.target, LockedPromptTarget::System);
+        assert_eq!(guidance.content, HOST_MESSAGE_GUIDANCE);
+        assert_eq!(
+            first
+                .locked_sources()
+                .iter()
+                .filter(|source| source.node_id == "host-message-guidance")
+                .count(),
+            1
+        );
+        assert_eq!(
+            initial_locked_baseline_with_host_guidance(&first)
+                .expect("initialized baseline remains stable"),
+            first
+        );
+    }
 
     /// Deterministic successful backend for sink state-machine tests.
     /// 用于 sink 状态机测试的确定性成功后端。
@@ -2595,7 +2861,16 @@ mod tests {
     /// Commits one exact prepared API and mirrors its durable receipt into the stream-local sink.
     /// 提交一次精确的已准备 API，并把其可靠回执镜像到流局部 sink。
     fn prepare_sink_request(handle: &SessionHandle, sink: &mut ProviderV1StreamSink) {
-        let facts = request_facts();
+        prepare_sink_request_with_facts(handle, sink, request_facts());
+    }
+
+    /// Prepares an isolated physical request with the explicit execution purpose under test.
+    /// 使用被测执行用途准备隔离的物理请求；参数为持久 owner、sink 和精确请求事实，无返回值。
+    fn prepare_sink_request_with_facts(
+        handle: &SessionHandle,
+        sink: &mut ProviderV1StreamSink,
+        facts: ProviderV1RequestFacts,
+    ) {
         let projection = handle
             .read(|document| {
                 let through_seq = document.events().last().map(|event| event.seq).unwrap();
@@ -2631,6 +2906,7 @@ mod tests {
         sink.active = Some(ActiveProviderV1Projection {
             api_call_id: prepared.value.api_call_id,
             request_facts: facts,
+            remote_compaction_route: None,
             locked_baseline: LockedBaselineProjection::empty(),
             project_directory: std::env::temp_dir()
                 .join(format!("vulcan-provider-v1-test-{}", handle.session_id())),
@@ -2674,6 +2950,8 @@ mod tests {
         let snapshot = SessionProviderProjectionSnapshot {
             preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 3,
+            open_turn_id: None,
+            child_business_execution_id: None,
             current_compaction_id: None,
             document_revision: 19,
             retained_from_seq: Seq::try_new(1)?,
@@ -2749,6 +3027,8 @@ mod tests {
         let snapshot = SessionProviderProjectionSnapshot {
             preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 7,
+            open_turn_id: None,
+            child_business_execution_id: None,
             current_compaction_id: None,
             document_revision: 31,
             retained_from_seq: Seq::try_new(1)?,
@@ -2846,6 +3126,8 @@ mod tests {
         let mut snapshot = SessionProviderProjectionSnapshot {
             current_compaction_id: None,
             preparing_user_prompt_media_seqs: vec![seq],
+            open_turn_id: None,
+            child_business_execution_id: None,
             segment_generation: 1,
             document_revision: 1,
             retained_from_seq: Seq::try_new(1)?,
@@ -2899,6 +3181,8 @@ mod tests {
             segment_generation: 1,
             current_compaction_id: None,
             document_revision: 2,
+            open_turn_id: None,
+            child_business_execution_id: None,
             retained_from_seq: first_seq,
             through_seq: second_seq,
             items: vec![first.clone(), second.clone()],
@@ -2986,17 +3270,27 @@ mod tests {
                 content: String::from("candidate-baseline-content"),
             }])
             .expect("candidate baseline");
-        let initialized_locked_baseline =
-            LockedBaselineProjection::project(vec![LockedBaselineSegmentInput {
+        let initialized_locked_baseline = LockedBaselineProjection::project(vec![
+            LockedBaselineSegmentInput {
                 kind: LockedSourceKind::AgentsMd,
                 node_id: String::from("persisted-baseline"),
                 target: LockedPromptTarget::Developer,
                 source_label: None,
                 source_id: None,
                 content: String::from("persisted-baseline-content"),
-            }])
-            .expect("persisted initialized baseline");
+            },
+            LockedBaselineSegmentInput {
+                kind: LockedSourceKind::BaselineHooks,
+                node_id: String::from("host-message-guidance"),
+                target: LockedPromptTarget::System,
+                source_label: Some(String::from("host_message_guidance")),
+                source_id: Some(String::from("v1:host_message_guidance")),
+                content: String::from(HOST_MESSAGE_GUIDANCE),
+            },
+        ])
+        .expect("persisted initialized baseline");
         let candidate = ProviderRequestPreparationCandidate {
+            source_message_positions: Default::default(),
             media_context: None,
             exact_request: AiExecutionRequest {
                 operation: AiOperation::ConversationRespond,
@@ -3109,6 +3403,8 @@ mod tests {
         let snapshot = SessionProviderProjectionSnapshot {
             preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 4,
+            open_turn_id: None,
+            child_business_execution_id: None,
             current_compaction_id: None,
             document_revision: 7,
             retained_from_seq: Seq::try_new(1).expect("valid retained seq"),
@@ -3155,11 +3451,11 @@ mod tests {
         let serialized = serde_json::to_string(&rebuilt.transport.exact_request.messages)
             .expect("serialize rebuilt request messages");
         assert!(serialized.contains("durable-v1-message"));
-        assert!(serialized.contains("dynamic-system"));
-        assert!(serialized.contains("dynamic-developer"));
-        assert!(serialized.contains("dynamic-tool-guidance"));
-        assert!(serialized.contains("dynamic-runtime-context"));
-        assert_eq!(serialized.matches("admitted-profile-delta").count(), 1);
+        assert!(!serialized.contains("dynamic-system"));
+        assert!(!serialized.contains("dynamic-developer"));
+        assert!(!serialized.contains("dynamic-tool-guidance"));
+        assert!(!serialized.contains("dynamic-runtime-context"));
+        assert_eq!(serialized.matches("admitted-profile-delta").count(), 0);
         assert_eq!(serialized.matches("admitted-memory-body").count(), 1);
         // Physical prefix placement is checked directly, not inferred from a request-wide text match.
         // 直接检查物理前缀位置，而非从整个请求的文本匹配推断。
@@ -3186,12 +3482,7 @@ mod tests {
         );
         assert_eq!(
             rebuilt.transport.request_snapshot.prompt_layers,
-            ProviderPromptLayers {
-                system: String::from("dynamic-system"),
-                developer: String::from("dynamic-developer"),
-                tool_guidance: String::from("dynamic-tool-guidance"),
-                runtime_context: String::from("dynamic-runtime-context\n\nadmitted-profile-delta"),
-            }
+            ProviderPromptLayers::default()
         );
         // The request-only memory prefix never contaminates durable controller message text.
         // 请求专属记忆前缀绝不污染持久控制器消息正文。
@@ -3582,6 +3873,9 @@ mod tests {
             .expect("read api start");
         assert_eq!(memory_revision, durable_revision);
         assert!(matches!(bodies.last(), Some(EventBody::ApiStarted(_))));
+        // Capture the actual API start before later host-only lifecycle events are appended.
+        // 在追加后续宿主专属生命周期事件前捕获真实 API 起点。
+        let api_start_index = bodies.len() - 1;
 
         sink.append_reasoning_delta("reason", 4)
             .expect("reasoning delta");
@@ -3603,24 +3897,20 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .expect("read complete lifecycle");
-        assert!(matches!(
-            &bodies[bodies.len() - 6],
-            EventBody::ApiStarted(_)
-        ));
-        assert!(matches!(
-            &bodies[bodies.len() - 5],
-            EventBody::AssistantReasoning(_)
-        ));
-        assert!(matches!(
-            &bodies[bodies.len() - 4],
-            EventBody::AssistantText(_)
-        ));
-        assert!(matches!(&bodies[bodies.len() - 3], EventBody::ApiStats(_)));
-        assert!(matches!(
-            &bodies[bodies.len() - 2],
-            EventBody::TurnBoundary(_)
-        ));
-        assert!(matches!(bodies.last(), Some(EventBody::TurnStats(_))));
+        // Natural idle is part of the same durable closure, after the ordered API and Turn statistics.
+        // 自然空闲属于同一次可靠闭合，位于有序 API 及回合统计之后。
+        let lifecycle = &bodies[api_start_index..];
+        assert_eq!(lifecycle.len(), 7, "unexpected lifecycle: {lifecycle:?}");
+        assert!(matches!(&lifecycle[0], EventBody::ApiStarted(_)));
+        assert!(matches!(&lifecycle[1], EventBody::AssistantReasoning(_)));
+        assert!(matches!(&lifecycle[2], EventBody::AssistantText(_)));
+        assert!(matches!(&lifecycle[3], EventBody::ApiStats(_)));
+        assert!(matches!(&lifecycle[4], EventBody::TurnBoundary(_)));
+        assert!(matches!(&lifecycle[5], EventBody::TurnStats(_)));
+        assert!(matches!(&lifecycle[6], EventBody::Collaboration(event)
+            if matches!(&event.after_state,
+                vulcan_session_core::v1::collaboration::CollaborationAfterState::RunControl { transition }
+                if transition.state == vulcan_session_core::v1::collaboration::CollaborationRunControl::NaturallyIdle)));
         let durability = sink.take_finished_durability();
         assert!(
             durability.api_terminal.is_some(),
@@ -3635,6 +3925,445 @@ mod tests {
         assert!(consumed.api_terminal.is_none());
         assert!(!consumed.api_terminal_failure_persisted);
         assert!(consumed.turn_completion.is_none());
+    }
+
+    /// Verifies display-free summaries still persist API facts, answer barriers and preserve business ownership.
+    /// 验证无展示摘要仍持久化 API 事实、响应屏障并保留业务归属。
+    /// No parameters or return value; assertions exercise valid and rejected summary payloads through the shared receiver.
+    /// 无参数及返回值；断言通过共用接收器验证有效和被拒绝的摘要载荷。
+    #[tokio::test]
+    async fn compaction_without_root_display_keeps_durable_boundaries() {
+        use vulcan_agent_runtime::agent_runtime::events::{
+            ExecutionStreamEvent, test_provider_request_durability_barrier,
+        };
+        use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::{
+            ProviderRequestTelemetryEvent, ProviderRequestTelemetryEventKind,
+        };
+        use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
+
+        for (valid, output) in [
+            (
+                true,
+                "<summary>Retain the original task identity.</summary>",
+            ),
+            (false, "<analysis>No final summary was produced.</analysis>"),
+            (false, ""),
+            (false, "   "),
+        ] {
+            // This session deliberately has no root workspace presentation row.
+            // 此会话故意不拥有根工作区展示行。
+            let handle = published_open_turn();
+            // A different visible root proves persistence does not depend on display selection.
+            // 不同的可见根会话证明持久化不依赖展示选择。
+            let service_state = crate::tests::test_support::test_service_state_with_parent_session(
+                SessionId::new_v4(),
+            );
+            service_state
+                .session_runtime_registry
+                .register(Arc::clone(&handle))
+                .unwrap();
+            // The real service registry and telemetry guard are retained throughout this physical request.
+            // 在整个物理请求期间保留真实服务注册表与遥测守卫。
+            let state = Arc::new(std::sync::Mutex::new(service_state));
+            // No display subscribers are needed to complete the durable protocol.
+            // 完成可靠协议不需要展示订阅者。
+            let app = crate::ServiceEventEmitter::new(Vec::new());
+            // The sink has one exact registered session owner.
+            // 接收器具有一个精确注册会话所有者。
+            let mut sink = ProviderV1StreamSink::new(
+                Arc::clone(&handle),
+                Arc::new(ProjectResourceCatalogRegistry::default()),
+            );
+            // Freeze compaction purpose before opening the actual API.
+            // 打开实际 API 之前冻结压缩用途。
+            let mut facts = request_facts();
+            facts.purpose = ApiPurposeKind::Compaction;
+            prepare_sink_request_with_facts(&handle, &mut sink, facts.clone());
+            // Cancellation uses the production guard independently of optional root display.
+            // 取消使用生产守卫，独立于可选根展示。
+            let mut telemetry =
+                crate::ProviderTelemetryHookGuard::new_with_persistence(Arc::clone(&state), None);
+            // Local display identity stays absent while the summary text is retained for canonical normalization.
+            // 局部展示身份保持不存在，而摘要文本被保留供规范化使用。
+            let mut output_id = None;
+            // Invalid tagged output must be rejected without keeping the API active.
+            // 必须拒绝无效标签输出，并且不能让 API 保持活动。
+            let mut raw = String::new();
+            for event in [
+                ExecutionStreamEvent::RequestStarted {
+                    session_id: handle.session_id(),
+                },
+                ExecutionStreamEvent::OutputDelta {
+                    session_id: handle.session_id(),
+                    delta: output.into(),
+                },
+            ] {
+                assert!(
+                    crate::context_compaction::apply_context_compaction_stream_event(
+                        &app,
+                        &state,
+                        None,
+                        &mut output_id,
+                        &mut raw,
+                        &mut sink,
+                        &mut telemetry,
+                        event,
+                    )
+                    .await
+                    .unwrap()
+                    .is_none()
+                );
+            }
+            assert!(output_id.is_none());
+            // Observe the same one-shot barrier used by real Provider completion.
+            // 观察真实 Provider 完成使用的同一一次性屏障。
+            let (completion, waiter) = test_provider_request_durability_barrier();
+            // Terminal facts belong to this same compaction API, never the visible root.
+            // 终态事实属于同一次压缩 API，绝不属于可见根会话。
+            let mut terminal = terminal_facts(0);
+            terminal.request_facts = facts;
+            // This envelope carries the real typed lifecycle owner through the shared receiver.
+            // 此封套通过共用接收器携带真实类型化生命周期所有者。
+            let event = ExecutionStreamEvent::ProviderRequestDurabilityBoundary {
+                event: ProviderRequestTelemetryEvent {
+                    kind: ProviderRequestTelemetryEventKind::Completed,
+                    session_id: handle.session_id(),
+                    payload: json!({}),
+                    completed_usage: None,
+                    v1_lifecycle: Some(ProviderV1LifecycleFacts::ApiTerminal(terminal)),
+                },
+                completion,
+            };
+            // Check both the host return and the actual producer wake-up result.
+            // 同时检查宿主返回与实际生产者唤醒结果。
+            let result = crate::context_compaction::apply_context_compaction_stream_event(
+                &app,
+                &state,
+                None,
+                &mut output_id,
+                &mut raw,
+                &mut sink,
+                &mut telemetry,
+                event,
+            )
+            .await;
+            // A receiver must never wait for a dropped or silently acknowledged error.
+            // 接收方绝不能等待被丢弃或静默确认的错误。
+            let receipt = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+                .await
+                .unwrap();
+            if valid {
+                assert!(result.unwrap().is_none());
+                receipt.unwrap();
+            } else {
+                assert_eq!(
+                    receipt,
+                    Err(String::from(
+                        "Provider output did not contain a valid compaction summary."
+                    ))
+                );
+                assert_eq!(result.unwrap_err(), receipt.unwrap_err());
+            }
+            handle
+                .read(|document| {
+                    assert!(document.active_api().is_none());
+                    assert!(!document.active_turn().unwrap().closed);
+                    assert_eq!(document.memory_revision(), document.durable_revision());
+                    assert!(
+                        document
+                            .events()
+                            .iter()
+                            .any(|row| matches!(row.event, EventBody::ApiStats(_)))
+                    );
+                    assert!(
+                        !document
+                            .events()
+                            .iter()
+                            .any(|row| matches!(row.event, EventBody::TurnBoundary(_)))
+                    );
+                    assert!(document.events().iter().any(|row| {
+                        matches!(&row.event, EventBody::AssistantText(text)
+                            if text.status == AssistantSemanticStatus::Completed)
+                    }));
+                })
+                .unwrap();
+            // Rejected physical output remains auditable, but its error forbids a compaction-node commit.
+            // 被拒绝的物理输出保留可审计性，但对应错误禁止提交压缩节点。
+            let durability = sink.take_finished_durability();
+            assert!(durability.api_terminal.is_some());
+            assert!(durability.completed_assistant_text.is_some());
+            assert!(durability.turn_completion.is_none());
+            if let Some(assistant) = durability.completed_assistant_text {
+                assert_eq!(
+                    assistant.text,
+                    if valid {
+                        "Retain the original task identity."
+                    } else {
+                        output
+                    }
+                );
+            }
+            assert!(
+                !state
+                    .lock()
+                    .unwrap()
+                    .workspace_snapshot
+                    .as_ref()
+                    .unwrap()
+                    .session_run_phases
+                    .contains_key(&handle.session_id())
+            );
+        }
+    }
+
+    /// Owns the global projection-barrier switch for serial compaction integration verification.
+    /// 为串行压缩集成验证持有全局投影屏障开关。
+    struct CompactionBarrierTestGuard;
+
+    impl Drop for CompactionBarrierTestGuard {
+        /// Restores the default switch on normal completion or assertion unwind; no return value.
+        /// 正常完成或断言展开时恢复默认开关；无返回值。
+        fn drop(&mut self) {
+            let _ = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(false);
+        }
+    }
+
+    /// Settles all real policy rejections before refusing a tool-bearing summary through its final barrier.
+    /// 通过最后屏障拒绝带工具的摘要之前，结算全部真实策略拒绝结果。
+    /// No parameters or return value; asserts partial-batch ownership and durable final closure.
+    /// 无参数和返回值；断言部分批次归属与可靠最终闭合。
+    #[tokio::test]
+    async fn compaction_tool_rejections_settle_before_final_barrier_failure() {
+        use vulcan_agent_runtime::agent_runtime::events::{
+            ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind,
+            test_provider_request_durability_barrier,
+        };
+        use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::{
+            ProviderRequestTelemetryEvent, ProviderRequestTelemetryEventKind,
+        };
+        use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
+        use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
+            attach_test_runtime_event_projection_barrier,
+            set_runtime_event_projection_barriers_enabled, test_tool_rejection_invocation_result,
+        };
+
+        set_runtime_event_projection_barriers_enabled(true).unwrap();
+        // Serial test ownership restores the production switch even when an assertion fails.
+        // 串行测试归属保证断言失败时也恢复生产开关。
+        let _barrier_guard = CompactionBarrierTestGuard;
+        for output in ["", "I will call two tools."] {
+            // This exact hidden child ledger owns the physical request and all its tool boundaries.
+            // 此精确隐藏子账本持有物理请求及其全部工具边界。
+            let handle = published_open_turn();
+            // No root presentation is installed for the child request.
+            // 不为子请求安装根展示。
+            let service_state = crate::tests::test_support::test_service_state_with_parent_session(
+                SessionId::new_v4(),
+            );
+            service_state
+                .session_runtime_registry
+                .register(Arc::clone(&handle))
+                .unwrap();
+            // Keep the real service owner throughout all durable writes.
+            // 全部可靠写入期间保留真实服务所有者。
+            let state = Arc::new(std::sync::Mutex::new(service_state));
+            // No UI subscriber is required for the real persistence barriers.
+            // 真实持久化屏障不需要 UI 订阅者。
+            let app = crate::ServiceEventEmitter::new(Vec::new());
+            // The sink remains attached to one exact child handle.
+            // 接收器始终绑定一个精确子句柄。
+            let mut sink = ProviderV1StreamSink::new(
+                Arc::clone(&handle),
+                Arc::new(ProjectResourceCatalogRegistry::default()),
+            );
+            // Freeze the physical purpose before its start is admitted.
+            // 准入开始前冻结物理用途。
+            let mut facts = request_facts();
+            facts.purpose = ApiPurposeKind::Compaction;
+            prepare_sink_request_with_facts(&handle, &mut sink, facts.clone());
+            // The actual telemetry guard observes completion without inventing cancellation usage.
+            // 实际遥测守卫观察完成，不虚构取消用量。
+            let mut telemetry =
+                crate::ProviderTelemetryHookGuard::new_with_persistence(Arc::clone(&state), None);
+            // Retain the exact optional physical output, even though it is not a valid summary.
+            // 保留精确可选物理输出，即使其不是有效摘要。
+            let mut raw = output.to_owned();
+            // Hidden execution must not allocate a root display identity.
+            // 隐藏执行不得分配根展示身份。
+            let mut output_id = None;
+            // Two tools prove the first rejection cannot prematurely close the physical group.
+            // 两个工具证明首个拒绝不能提前关闭物理组。
+            let mut terminal = terminal_facts(2);
+            terminal.request_facts = facts;
+            // Use the producer's real one-shot completion barrier.
+            // 使用生产者真实的一次性完成屏障。
+            let (completion, waiter) = test_provider_request_durability_barrier();
+            crate::context_compaction::apply_context_compaction_stream_event(
+                &app,
+                &state,
+                None,
+                &mut output_id,
+                &mut raw,
+                &mut sink,
+                &mut telemetry,
+                ExecutionStreamEvent::ProviderRequestDurabilityBoundary {
+                    event: ProviderRequestTelemetryEvent {
+                        kind: ProviderRequestTelemetryEventKind::Completed,
+                        session_id: handle.session_id(),
+                        payload: json!({}),
+                        completed_usage: None,
+                        v1_lifecycle: Some(ProviderV1LifecycleFacts::ApiTerminal(terminal)),
+                    },
+                    completion,
+                },
+            )
+            .await
+            .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(!sink.has_durable_api_terminal());
+            // These are real recovery requests whose local IDs are allocated by the production batch writer.
+            // 这些是真实恢复请求，其本地 ID 由生产批次写入器分配。
+            let requests = vec![
+                recovery_request(
+                    "rejected-one",
+                    "shell_command",
+                    json!({"command": "never execute"}),
+                ),
+                recovery_request("rejected-two", "file_edit", json!({"path": "never write"})),
+            ];
+            // Replay the same ordering emitted by the real rejected-tool executor.
+            // 重放真实被拒绝工具执行器发出的相同顺序。
+            let mut boundaries = vec![(
+                RuntimeEventKind::ToolBatchPrepared,
+                ToolExecutionRecoveryBoundary::BatchPrepared(requests.clone()),
+            )];
+            for request in &requests {
+                boundaries.push((
+                    RuntimeEventKind::ToolStarted,
+                    ToolExecutionRecoveryBoundary::Started {
+                        request: request.request.clone(),
+                        binding_fingerprint: request.binding_fingerprint.clone(),
+                    },
+                ));
+            }
+            for request in &requests {
+                boundaries.push((
+                    RuntimeEventKind::ToolFinished,
+                    ToolExecutionRecoveryBoundary::Finished(test_tool_rejection_invocation_result(
+                        &request.request,
+                        "Tool calls are not allowed during this internal execution.",
+                    )),
+                ));
+            }
+            for (index, (kind, boundary)) in boundaries.into_iter().enumerate() {
+                // Every transition carries the production barrier, including the last rejection.
+                // 每次转换都携带生产屏障，包括最后拒绝。
+                let (event, waiter) = attach_test_runtime_event_projection_barrier(
+                    RuntimeEvent::new(kind, "summary policy rejection", "durable tool boundary")
+                        .with_tool_execution_boundary(boundary),
+                )
+                .unwrap();
+                // Only the final tool has permission to end this failed summary attempt.
+                // 只有最后工具有权结束本次失败摘要尝试。
+                let result = crate::context_compaction::apply_context_compaction_stream_event(
+                    &app,
+                    &state,
+                    None,
+                    &mut output_id,
+                    &mut raw,
+                    &mut sink,
+                    &mut telemetry,
+                    ExecutionStreamEvent::RuntimeEvent {
+                        session_id: handle.session_id(),
+                        event,
+                    },
+                )
+                .await;
+                // Observe the actual producer receipt instead of only the host return value.
+                // 观察实际生产者回执，而非仅宿主返回值。
+                let receipt = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+                    .await
+                    .unwrap();
+                if index == 4 {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .contains("after settling its tool batch")
+                    );
+                    assert!(
+                        receipt
+                            .unwrap_err()
+                            .contains("after settling its tool batch")
+                    );
+                    assert!(sink.has_durable_api_terminal());
+                } else {
+                    assert!(result.unwrap().is_none());
+                    receipt.unwrap();
+                    assert!(!sink.has_durable_api_terminal());
+                }
+            }
+            handle.read(|document| {
+                assert!(document.active_api().is_none());
+                assert!(!document.active_turn().unwrap().closed);
+                assert_eq!(document.memory_revision(), document.durable_revision());
+                assert_eq!(document.events().iter().filter(|row| matches!(&row.event, EventBody::ApiStats(_))).count(), 1);
+                assert_eq!(document.events().iter().filter(|row| matches!(&row.event,
+                    EventBody::ToolCall(tool) if tool.status == ToolCallStatus::Completed && tool.output.is_some()
+                )).count(), 2);
+                assert!(!document.events().iter().any(|row| matches!(&row.event, EventBody::TurnBoundary(_))));
+            }).unwrap();
+            assert!(sink.take_finished_durability().turn_completion.is_none());
+            assert!(output_id.is_none());
+        }
+    }
+
+    /// Verifies question-purpose API completion keeps business closure with the dedicated owner.
+    /// 验证答疑用途 API 完成将业务闭合保留给专用 owner；无参数和返回值，失败通过断言报告。
+    #[tokio::test]
+    async fn question_api_terminal_does_not_complete_business_turn() {
+        // The open ordinary turn represents an in-turn question execution at this sink boundary.
+        // 此 sink 边界中的普通开放回合表示原回合内的答疑执行。
+        let handle = published_open_turn();
+        // The sink retains only physical-request facts and must not manufacture logical completion.
+        // sink 仅保留物理请求事实，不得生成逻辑完成。
+        let mut sink = ProviderV1StreamSink::new(
+            Arc::clone(&handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        // The purpose is frozen before the real durable API preparation.
+        // 用途在真实可靠 API 准备之前冻结。
+        let mut facts = request_facts();
+        facts.purpose = ApiPurposeKind::QuestionExecution;
+        prepare_sink_request_with_facts(&handle, &mut sink, facts.clone());
+        sink.append_assistant_delta("No additional answer.", 6)
+            .expect("persist actual assistant output");
+        // A final physical response without a reply tool is not a business completion receipt.
+        // 没有回复工具的物理最终响应不构成业务完成回执。
+        let mut terminal = terminal_facts(0);
+        terminal.request_facts = facts;
+        assert_eq!(
+            sink.accept_terminal(terminal).await.expect("API terminal"),
+            ProviderV1TerminalOutcome::Completed
+        );
+        handle
+            .read(|document| {
+                assert!(!document.active_turn().expect("original turn").closed);
+                assert!(matches!(
+                    document.events().last().map(|event| &event.event),
+                    Some(EventBody::ApiStats(_))
+                ));
+                assert_eq!(document.memory_revision(), document.durable_revision());
+            })
+            .expect("read durable API-only result");
+        // Physical usage is available once, while logical completion remains absent.
+        // 物理用量可提取一次，而逻辑完成始终不存在。
+        let durability = sink.take_finished_durability();
+        assert!(durability.api_terminal.is_some());
+        assert!(durability.turn_completion.is_none());
+        assert!(sink.take_finished_durability().api_terminal.is_none());
     }
 
     /// Verifies failed API completion transfers an explicit durable-failure marker exactly once.
@@ -3770,6 +4499,320 @@ mod tests {
             .expect("read parent document")
             .expect("validate pending child return");
         assert_eq!(pending_dispatch.as_ref(), Some(&appended_return));
+    }
+
+    /// Keeps the real parent sink open until owned child content and success publish together.
+    /// 使真实父接收器保持开放，直至所属子正文与成功一起发布。
+    /// Parameters: none. Returns: none; verifies durable publication, completion gating and retry.
+    /// 参数：无。返回值：无；验证可靠发布、完成门及重试。
+    #[tokio::test]
+    async fn owned_child_return_keeps_parent_open_until_publication() {
+        use crate::session_runtime_registry_v1::{SessionFlushReason, SessionMutationAdmission};
+        use vulcan_session_core::v1::collaboration::{
+            ActivateChildTaskInput, CollaborationExecutionId, CollaborationOperationId,
+            CollaborationParticipant, ReserveChildTaskInput,
+        };
+        // Real service dispatch requires the parent to exist in the authoritative SQLite index.
+        // 真实服务分发要求父会话存在于权威 SQLite 索引。
+        let parent_id = SessionId::new_v4();
+        // Keep all indexed parent files alive through dispatch verification.
+        // 在分发验证期间保持所有父索引文件存活。
+        let dispatch_root = crate::tests::test_support::TestHostRuntimeRoot::new(parent_id);
+        // Indexed creation must precede loading the canonical parent document.
+        // 索引创建必须先于规范父文档加载。
+        let dispatch_controller = dispatch_root.attached_host_runtime_handle().await;
+        // The locator carries the actual shared project identity used by both participants.
+        // 定位器携带双方参与者使用的实际共享项目身份。
+        let parent_locator = dispatch_root.v1_storage_locator();
+        // Preserve the declared project across the parent and the isolated child fixture.
+        // 在父会话与隔离子夹具间保留声明项目。
+        let project_id = parent_locator.project_id().to_owned();
+        // Canonical loading and every parent mutation use the actual production file writer.
+        // 规范加载及每项父修改均使用实际生产文件写入器。
+        let parent_handle = SessionHandle::new(
+            parent_id,
+            parent_locator.clone(),
+            vulcan_workspace_store::workspace_store::load_session_v1_full(&parent_locator)
+                .unwrap()
+                .document,
+        );
+        parent_handle
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("owned-parent").unwrap(),
+                    "root",
+                    vec![],
+                ),
+                2,
+            )
+            .unwrap();
+        // Produce the opaque return using the real child sink's durable terminal facts.
+        // 使用真实子接收器的可靠终态事实产生不透明回流。
+        let child_id = SessionId::new_v4();
+        // The child shares the parent's actual project while retaining the existing isolated writer seam.
+        // 子会话共享父实际项目，同时保留既有隔离写入接口。
+        let child_handle = SessionHandle::with_backend(
+            child_id,
+            SessionDocument::new(child_id.to_string(), &project_id, "child", 1),
+            Arc::new(TestPersistenceBackend),
+        );
+        child_handle
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("owned-publication-execution").unwrap(),
+                    "root",
+                    vec![],
+                ),
+                2,
+            )
+            .unwrap();
+        let mut child_sink = ProviderV1StreamSink::new(
+            Arc::clone(&child_handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&child_handle, &mut child_sink);
+        child_sink
+            .append_assistant_delta("owned child result", 5)
+            .unwrap();
+        child_sink.accept_terminal(terminal_facts(0)).await.unwrap();
+        let child_durability = child_sink.take_finished_durability();
+        let task_id = SubagentTaskId::try_new(child_handle.session_id().to_string()).unwrap();
+        let input = child_handle
+            .read(|document| {
+                document.build_subagent_return_input(SubagentReturnBuildRequest {
+                    final_turn_id: child_durability
+                        .api_terminal
+                        .as_ref()
+                        .unwrap()
+                        .value
+                        .turn_id,
+                    child_task_id: task_id.clone(),
+                    source_assistant_text_seq: child_durability
+                        .completed_assistant_text
+                        .as_ref()
+                        .unwrap()
+                        .seq,
+                })
+            })
+            .unwrap()
+            .unwrap();
+        // Reserve and activate the exact owned child before the parent model completes.
+        // 在父模型完成之前预留并激活精确所属子任务。
+        let parent_turn = parent_handle
+            .read(|document| document.active_turn().unwrap().turn_id)
+            .unwrap();
+        let execution = CollaborationExecutionId::try_new("owned-publication-execution").unwrap();
+        parent_handle
+            .mutate_durable(
+                SessionMutationAdmission::ControlPlane,
+                SessionFlushReason::MetadataChanged,
+                |document| {
+                    document.reserve_child_task(ReserveChildTaskInput {
+                        operation_id: CollaborationOperationId::try_new(
+                            "owned-publication-reserve",
+                        )
+                        .unwrap(),
+                        source_tool_name: String::from("spawn_agent"),
+                        execution_id: execution.clone(),
+                        task_id: task_id.clone(),
+                        parent_turn_id: parent_turn,
+                        child: CollaborationParticipant::new(
+                            child_handle.session_id().to_string(),
+                            parent_handle.session_id().to_string(),
+                            project_id.as_str(),
+                            1,
+                            None,
+                            Some(task_id.clone()),
+                        )?,
+                        reserved_at_ms: 3,
+                    })
+                },
+            )
+            .unwrap();
+        parent_handle
+            .mutate_durable(
+                SessionMutationAdmission::ControlPlane,
+                SessionFlushReason::MetadataChanged,
+                |document| {
+                    document.activate_child_task(ActivateChildTaskInput {
+                        operation_id: CollaborationOperationId::try_new(
+                            "owned-publication-activate",
+                        )
+                        .unwrap(),
+                        execution_id: execution.clone(),
+                        task_id,
+                        active_at_ms: 4,
+                    })
+                },
+            )
+            .unwrap();
+        let mut parent_sink = ProviderV1StreamSink::new(
+            Arc::clone(&parent_handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        prepare_sink_request(&parent_handle, &mut parent_sink);
+        parent_sink
+            .append_assistant_delta("parent physical output", 5)
+            .unwrap();
+        parent_sink
+            .accept_terminal(terminal_facts(0))
+            .await
+            .unwrap();
+        assert!(
+            parent_sink
+                .take_finished_durability()
+                .turn_completion
+                .is_none()
+        );
+        parent_handle
+            .read(|document| {
+                assert!(!document.active_turn().unwrap().closed);
+                assert_eq!(
+                    document
+                        .completion_obligations(parent_turn)
+                        .open_child_task_ids
+                        .len(),
+                    1
+                );
+                assert!(
+                    document
+                        .pending_subagent_return_dispatch()
+                        .unwrap()
+                        .is_none()
+                );
+            })
+            .unwrap();
+        // One owner revision publishes both facts without quarantining the canonical handle.
+        // 一个所有者修订发布两个事实，不隔离规范句柄。
+        let before = parent_handle
+            .read(|document| document.memory_revision())
+            .unwrap();
+        let published = parent_handle
+            .append_execution_subagent_return(execution.clone(), input.clone(), 30)
+            .unwrap();
+        assert!(published.changed);
+        assert_eq!(published.revision, before + 1);
+        assert_eq!(published.value.parent_turn_id, parent_turn);
+        parent_handle
+            .read(|document| {
+                assert_eq!(document.durable_revision(), published.revision);
+                assert!(
+                    document
+                        .completion_obligations(parent_turn)
+                        .open_child_task_ids
+                        .is_empty()
+                );
+                assert_eq!(
+                    document.pending_subagent_return_dispatch().unwrap(),
+                    Some(published.value.clone())
+                );
+                assert!(!document.active_turn().unwrap().closed);
+            })
+            .unwrap();
+        let retry = parent_handle
+            .append_execution_subagent_return(execution, input, 31)
+            .unwrap();
+        assert!(!retry.changed);
+        assert_eq!(retry.revision, published.revision);
+        // Register the existing canonical owner so no test-created replacement history participates.
+        // 登记既有规范所有者，避免测试新造替代历史参与判断。
+        let mut dispatch_state = crate::tests::test_support::test_service_state_with_parent_session(
+            parent_handle.session_id(),
+        );
+        dispatch_state.controller_runtime = Some(dispatch_controller.clone());
+        dispatch_state
+            .session_runtime_registry
+            .register(parent_handle.clone())
+            .unwrap();
+        // Shared state follows the production service ownership boundary.
+        // 共享状态遵守生产服务所有权边界。
+        let dispatch_state = Arc::new(std::sync::Mutex::new(dispatch_state));
+        // Runtime remains offline; the active API branch must return before model preparation.
+        // 运行时保持离线；活动 API 分支必须在模型准备之前返回。
+        let dispatch_runtime = crate::tests::test_support::test_agent_runtime_bridge();
+        // Real durable auxiliary requests cannot discharge the parent's child-result continuation.
+        // 真实持久辅助请求不能解除父会话的子结果续跑义务。
+        for purpose in [
+            ApiPurposeKind::Compaction,
+            ApiPurposeKind::QuestionExecution,
+        ] {
+            // Use the same canonical parent and accepted result across both auxiliary requests.
+            // 两次辅助请求共用同一规范父会话及已接纳结果。
+            let mut auxiliary_sink = ProviderV1StreamSink::new(
+                Arc::clone(&parent_handle),
+                Arc::new(ProjectResourceCatalogRegistry::default()),
+            );
+            // Purpose is supplied to the actual prepared API, rather than editing stored events.
+            // 用途传给实际准备的 API，而非修改已存储事件。
+            let mut auxiliary_facts = request_facts();
+            auxiliary_facts.purpose = purpose;
+            auxiliary_facts.prepared_at_ms = 32;
+            prepare_sink_request_with_facts(&parent_handle, &mut auxiliary_sink, auxiliary_facts);
+            assert!(
+                !Box::pin(
+                    crate::webui_turn_chaining::start_exact_v1_subagent_return_turn(
+                        &vulcan_service_api::ServiceEventEmitter::new(vec![]),
+                        &dispatch_state,
+                        &dispatch_controller,
+                        &dispatch_runtime,
+                        parent_handle.session_id(),
+                        published.value.clone(),
+                    )
+                )
+                .await
+                .unwrap(),
+                "an auxiliary API is not successful business dispatch"
+            );
+            parent_handle
+                .mutate_durable(
+                    SessionMutationAdmission::ExistingTurn,
+                    SessionFlushReason::DisplayBoundary,
+                    |document| document.interrupt_active_api(33),
+                )
+                .unwrap();
+            // Exercise the production completion gate under its own canonical writer lock.
+            // 在规范写锁内执行生产完成门。
+            let settlement = parent_handle.complete_successful_turn(34).await.unwrap();
+            assert!(matches!(
+                settlement.value,
+                SuccessfulTurnSettlement::SubagentReturn
+            ));
+            assert!(!settlement.changed);
+            parent_handle
+                .read(|document| {
+                    assert!(!document.active_turn().unwrap().closed);
+                    assert_eq!(
+                        document.pending_subagent_return_dispatch().unwrap(),
+                        Some(published.value.clone())
+                    );
+                })
+                .unwrap();
+        }
+        // A later ordinary business API positively proves dispatch of the same original result.
+        // 后续普通业务 API 正向证明同一原结果已分发。
+        let mut business_sink = ProviderV1StreamSink::new(
+            parent_handle.clone(),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        // Use real preparation again, so this is not a fabricated event predicate test.
+        // 再次使用真实准备，避免仅测试伪造事件谓词。
+        let mut business_facts = request_facts();
+        business_facts.prepared_at_ms = 35;
+        prepare_sink_request_with_facts(&parent_handle, &mut business_sink, business_facts);
+        assert!(
+            Box::pin(
+                crate::webui_turn_chaining::start_exact_v1_subagent_return_turn(
+                    &vulcan_service_api::ServiceEventEmitter::new(vec![]),
+                    &dispatch_state,
+                    &dispatch_controller,
+                    &dispatch_runtime,
+                    parent_handle.session_id(),
+                    published.value,
+                )
+            )
+            .await
+            .unwrap()
+        );
     }
 
     /// Exercises late completion through the production listener with or without a durable child receipt.
@@ -3909,18 +4952,20 @@ mod tests {
             },
         )
         .await;
-        assert!(
-            !state
+        assert_eq!(
+            state
                 .lock()
                 .unwrap()
                 .detached_subagent_task_listeners
-                .contains_key(&child.task_id)
-        );
-        assert_eq!(
-            capture.states.lock().unwrap().last().map(String::as_str),
-            Some("completed")
+                .contains_key(&child.task_id),
+            !durable_child,
+            "unpublished results must retain exact recovery ownership"
         );
         if durable_child {
+            assert_eq!(
+                capture.states.lock().unwrap().last().map(String::as_str),
+                Some("completed")
+            );
             handled.expect("late completion must be persisted without a user prompt");
             let receipt = parent_handle
                 .read(|doc| doc.pending_subagent_return_dispatch())
@@ -3958,12 +5003,12 @@ mod tests {
         assert_late_child_completion_lifecycle(true).await;
     }
 
-    /// Verifies return persistence errors cannot suppress terminal navigation or leak the listener.
-    /// 验证回流持久化错误不能阻断终态导航或泄漏监听器。
-    /// Parameters: none. Returns: none; asserts explicit failure and successful lifecycle cleanup.
-    /// 参数：无。返回值：无；断言显式失败以及生命周期成功清理。
+    /// Verifies failed publication retains exact recovery ownership without claiming a durable result.
+    /// 验证发布失败保留精确恢复归属，不宣称已有可靠结果。
+    /// Parameters: none. Returns: none; asserts explicit failure and the retained listener.
+    /// 参数：无。返回值：无；断言明确失败及保留监听器。
     #[tokio::test]
-    async fn late_child_completion_error_still_pushes_state() {
+    async fn late_child_completion_error_retains_publication_owner() {
         assert_late_child_completion_lifecycle(false).await;
     }
 
@@ -5129,6 +6174,8 @@ mod tests {
             segment_generation: 1,
             current_compaction_id: None,
             document_revision: 1,
+            open_turn_id: None,
+            child_business_execution_id: None,
             retained_from_seq: Seq::try_new(1).expect("valid retained seq"),
             through_seq: Seq::try_new(1).expect("valid through seq"),
             items: vec![ProjectedItem::AssistantText {
@@ -5154,6 +6201,7 @@ mod tests {
             initialized_locked_baseline: None,
         };
         let candidate = ProviderRequestPreparationCandidate {
+            source_message_positions: Default::default(),
             media_context: None,
             exact_request: AiExecutionRequest {
                 operation: AiOperation::ConversationRespond,
@@ -5214,6 +6262,114 @@ mod tests {
             locked_baseline: LockedBaselineProjection::empty(),
             dynamic_prompt_layers: ProviderPromptLayers::default(),
         };
+
+        // Exercise summary controls on the same production reconstruction, with an actual durable business inventory.
+        // 在相同生产重建路径验证摘要控制，并使用真实持久业务清单。
+        let (_directory, handle) = published_stored_open_turn();
+        let mut business_candidate = candidate.clone();
+        business_candidate.dynamic_prompt_layers.runtime_context =
+            String::from("original-business-memory");
+        context_injection::synchronize_request_dynamic_context(
+            &handle,
+            &facts,
+            &business_candidate,
+        )?;
+        let before = handle.read(|document| {
+            (
+                document.memory_revision(),
+                serde_json::to_value(&document.metadata).unwrap(),
+                serde_json::to_value(document.events()).unwrap(),
+            )
+        })?;
+        let mut summary_facts = facts.clone();
+        summary_facts.purpose = ApiPurposeKind::Compaction;
+        let mut summary_candidate = candidate.clone();
+        summary_candidate.dynamic_prompt_layers = ProviderPromptLayers {
+            system: String::from("local-summary-system"),
+            developer: String::from("local-summary-developer"),
+            tool_guidance: String::from("local-summary-tools"),
+            runtime_context: String::from("local-summary-context"),
+        };
+        summary_candidate.request_snapshot.prompt =
+            String::from("Summarize <history> & preserve pending questions.");
+        context_injection::synchronize_request_dynamic_context(
+            &handle,
+            &summary_facts,
+            &summary_candidate,
+        )?;
+        assert_eq!(
+            before,
+            handle.read(|document| (
+                document.memory_revision(),
+                serde_json::to_value(&document.metadata).unwrap(),
+                serde_json::to_value(document.events()).unwrap(),
+            ))?
+        );
+        let summary = rebuild_provider_transport_candidate(
+            snapshot.clone(),
+            &summary_facts,
+            summary_candidate.clone(),
+            media::PreparedV1UserMedia {
+                prompts: BTreeMap::new(),
+                bindings: Vec::new(),
+            },
+        )?;
+        let serialized = serde_json::to_string(&summary.transport.exact_request.messages).unwrap();
+        for body in [
+            "local-summary-system",
+            "local-summary-developer",
+            "local-summary-tools",
+            "local-summary-context",
+        ] {
+            assert_eq!(serialized.matches(body).count(), 1);
+            assert!(
+                !summary
+                    .transport
+                    .request_snapshot
+                    .system_prompt
+                    .contains(body)
+            );
+        }
+        let last = summary.transport.exact_request.messages.last().unwrap();
+        assert_eq!(last.role, MessageRole::User);
+        assert!(matches!(&last.content[0], ContentItem::Text { text }
+            if text.contains("scope=\"compaction_request\"")
+            && text.contains("source=\"context_compaction:instruction\"")
+            && text.contains("Summarize &lt;history&gt; &amp; preserve pending questions.")));
+        assert_eq!(summary.transport.request_snapshot.history.len(), 6);
+        assert_eq!(
+            summary.transport.request_snapshot.history,
+            summary.transport.controller_snapshot.messages
+        );
+        assert_eq!(
+            summary
+                .request_budget_evidence
+                .request_text_measurement
+                .history_message_count,
+            6
+        );
+        assert!(summary.transport.dynamic_prompt_layers.is_empty());
+        compaction_source::verify_compaction_transport_selection(
+            snapshot.clone(),
+            &summary_facts,
+            summary_candidate.clone(),
+        )?;
+        // An exact business retry observes no revision or producer-state change from the isolated summary.
+        // 精确业务重试不会观察到隔离摘要引起的修订或生产者状态变化。
+        context_injection::synchronize_request_dynamic_context(
+            &handle,
+            &facts,
+            &business_candidate,
+        )?;
+        assert_eq!(
+            before.0,
+            handle.read(|document| document.memory_revision())?
+        );
+        summary_candidate.request_snapshot.prompt.clear();
+        assert!(
+            context_injection::compaction_request_messages(&summary_facts, &summary_candidate)
+                .is_err()
+        );
 
         let rebuilt = rebuild_provider_transport_candidate(
             snapshot,

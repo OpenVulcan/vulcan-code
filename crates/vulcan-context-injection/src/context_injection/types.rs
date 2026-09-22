@@ -246,6 +246,12 @@ pub struct InjectionStateItem {
     /// Stable hash built from normalized provider-visible content.
     /// 根据规范化 Provider 可见内容构建的稳定哈希。
     pub content_hash: String,
+    /// Stable producer source identity independent from the rendered body.
+    /// 与渲染正文无关的稳定生产者来源身份。
+    pub source_id: String,
+    /// Stable occurrence identity allocated when this instruction is first created.
+    /// 在该指令首次创建时分配的稳定发生点身份。
+    pub occurrence_id: String,
     /// Initial TTL attached to transient items.
     /// 附着到临时内容项的初始 TTL。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -325,6 +331,33 @@ pub struct InjectionStateGroup {
     pub items: BTreeMap<String, InjectionStateItem>,
 }
 
+/// Describes one transient injection that expired at a concrete logical turn.
+/// 描述一条在明确逻辑回合失效的临时注入。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InjectionExpiryEvent {
+    /// Stable identity for the append-only expiration marker.
+    /// 用于追加式失效标记的稳定身份。
+    pub event_id: String,
+    /// Stable producer source identity of the expired instruction.
+    /// 已失效指令的稳定生产者来源身份。
+    pub source_id: String,
+    /// Stable occurrence identity allocated when the instruction was created.
+    /// 指令创建时分配的稳定发生点身份。
+    pub occurrence_id: String,
+    /// Normalized injection tag that owned the expired item.
+    /// 拥有已失效内容项的规范化注入标签。
+    pub tag: String,
+    /// Stable content hash retained for correlation with the earlier body.
+    /// 保留稳定内容哈希，用于关联此前已经发送的正文。
+    pub content_hash: String,
+    /// Logical turn that consumed the final TTL unit.
+    /// 消耗最后一个 TTL 单位的逻辑回合。
+    pub turn_id: String,
+    /// Provider-visible marker body appended after the retained earlier body.
+    /// 追加在此前保留正文之后、供 Provider 看到的失效标记正文。
+    pub body: String,
+}
+
 /// Session or scope level context-injection state.
 /// 会话或作用域级上下文注入状态。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,6 +366,14 @@ pub struct ContextInjectionState {
     /// 按渲染标签名称索引的活动分组。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub groups: BTreeMap<String, InjectionStateGroup>,
+    /// Monotonic occurrence counters keyed by producer source identity.
+    /// 按生产者来源身份保存的单调发生点计数器。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_sequences: BTreeMap<String, u64>,
+    /// Append-only expiration markers waiting for the next provider request.
+    /// 等待下一次 Provider 请求追加发送的失效标记队列。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_expiry_events: Vec<InjectionExpiryEvent>,
 }
 
 /// Result counters produced when expired transient injections are removed.

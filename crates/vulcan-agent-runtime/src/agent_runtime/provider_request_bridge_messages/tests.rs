@@ -132,7 +132,7 @@ fn provider_visible_history_applies_system_update_as_user_wrapper() {
         panic!("system update should become user-scoped wrapper text");
     };
     assert!(attachments.is_empty());
-    assert!(text.contains("user scoped"));
+    assert!(text.contains("vulcan_context_update"));
     assert!(text.contains("system-update-1"));
     assert!(text.contains("compacted project rules"));
 }
@@ -285,7 +285,8 @@ fn provider_visible_history_downgrades_model_unsupported_attachments() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         Some(&capabilities),
-    );
+    )
+    .expect("valid provider history projection");
 
     let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
         panic!("expected projected user text");
@@ -341,7 +342,8 @@ fn provider_visible_history_filters_legacy_explore_assistant_projection() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
-    );
+    )
+    .expect("valid provider history projection");
 
     assert_eq!(projected.len(), 2);
     assert!(projected.iter().all(|message| message.id != "explore-1"));
@@ -391,7 +393,8 @@ fn provider_visible_history_preserves_matched_tool_result() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
-    );
+    )
+    .expect("valid provider history projection");
 
     assert!(matches!(
         &projected[1].payload,
@@ -452,7 +455,8 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
-    );
+    )
+    .expect("valid provider history projection");
 
     let CoreConversationPayload::Assistant { tool_calls, .. } = &projected[0].payload else {
         panic!("first projected message should retain the assistant tool batch");
@@ -539,7 +543,8 @@ fn provider_visible_history_downgrades_orphan_tool_result() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
-    );
+    )
+    .expect("valid provider history projection");
 
     let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
         panic!("expected orphan tool result to become plain user text");
@@ -594,7 +599,8 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
-    );
+    )
+    .expect("valid provider history projection");
 
     assert_eq!(projected.len(), 1);
     let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
@@ -639,7 +645,8 @@ fn provider_visible_history_downgrades_unanswered_tool_batch() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
-    );
+    )
+    .expect("valid provider history projection");
 
     assert_eq!(projected.len(), 1);
     let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
@@ -687,7 +694,8 @@ fn canonical_fixture_plain_text_history_projects_stably() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
-    );
+    )
+    .expect("valid provider history projection");
 
     assert_eq!(projected.len(), 3);
     assert_eq!(projected[0].id, "user-1");
@@ -743,7 +751,8 @@ fn canonical_fixture_tool_call_and_result_projects_as_protocol_pair() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
-    );
+    )
+    .expect("valid provider history projection");
 
     assert_eq!(projected.len(), 2);
     let CoreConversationPayload::Assistant { tool_calls, .. } = &projected[0].payload else {
@@ -803,7 +812,8 @@ fn canonical_fixture_provider_switch_downgrades_stale_tool_state() {
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         None,
-    );
+    )
+    .expect("valid provider history projection");
 
     assert_eq!(projected.len(), 2);
     let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
@@ -854,7 +864,7 @@ fn canonical_fixture_dynamic_injection_projects_as_system_update_wrapper() {
     };
     assert!(attachments.is_empty());
     assert!(text.contains("dynamic-injection-1"));
-    assert!(text.contains("user scoped"));
+    assert!(text.contains("vulcan_context_update"));
 }
 
 /// Verifies multimodal canonical fixtures preserve image and video attachments only when provider and model support them.
@@ -880,7 +890,8 @@ fn canonical_fixture_image_and_video_understanding_respects_model_capabilities()
         &messages,
         Some(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
         Some(&capabilities),
-    );
+    )
+    .expect("valid Responses provider history projection");
     let CoreConversationPayload::UserText {
         text: responses_text,
         attachments: responses_attachments,
@@ -900,7 +911,8 @@ fn canonical_fixture_image_and_video_understanding_respects_model_capabilities()
         &messages,
         Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
         Some(&capabilities),
-    );
+    )
+    .expect("valid OpenAI provider history projection");
     let CoreConversationPayload::UserText {
         text,
         attachments: openai_attachments,

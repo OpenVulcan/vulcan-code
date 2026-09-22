@@ -11,6 +11,15 @@ use vulcan_session_core::v1::ids::SubagentTaskId;
 use crate::session_runtime_registry_v1::SessionHandle;
 use crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1;
 
+#[cfg(test)]
+mod admission_tests;
+
+pub(crate) mod non_success;
+pub(crate) mod retry;
+pub(crate) mod startup_abort;
+pub(crate) mod startup_rejection;
+mod terminal;
+
 /// Starts one detached child-task listener using the shared task runtime stream.
 /// 使用共享任务运行时流启动单个分离子任务监听器。
 pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
@@ -24,13 +33,12 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
     if event.kind != RuntimeEventKind::DelegateStarted {
         return Ok(());
     }
-    let Some(metadata) = event.metadata.as_ref() else {
-        return Ok(());
-    };
-    let Some(panel_state) = parse_subagent_task_panel_metadata(parent_session_id, metadata, None)
-    else {
-        return Ok(());
-    };
+    let metadata = event
+        .metadata
+        .as_ref()
+        .ok_or_else(|| String::from("DelegateStarted is missing authoritative task metadata."))?;
+    let panel_state = parse_subagent_task_panel_metadata(parent_session_id, metadata, None)
+        .ok_or_else(|| String::from("DelegateStarted has invalid authoritative task metadata."))?;
     let task_id = panel_state.task_id;
     let execution_id = subagent_feedback_execution_id_from_tool_metadata(metadata)?;
     if !agent_runtime
@@ -41,7 +49,9 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
             "detached_listener_delegate_started_stale_execution",
             format!("parent={parent_session_id} task={task_id} execution_id={execution_id}"),
         );
-        return Ok(());
+        return Err(format!(
+            "DelegateStarted execution is no longer current: task={task_id} execution={execution_id}."
+        ));
     }
     // executionFacts are retained by TaskRuntime before DelegateStarted and are the only child
     // lifecycle input accepted here.
@@ -68,126 +78,170 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
     // childHandle 在事件订阅开始前持有确定性的 root/TASK 子目录树。
     let child_handle = create_or_load_embedded_task_session_v1(&session_registry, execution_facts)
         .map_err(|error| error.to_string())?;
-    crate::session_plan_runtime::emit_lifetime_usage_changed(&app, &state, &child_handle);
-    agent_runtime
+    start_admitted_detached_subagent_listener(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        parent_session_id,
+        child_handle,
+        execution_id,
+    )
+}
+
+/// Attaches the existing event sink and reliable finalizer to an already admitted child document.
+/// 为已经准入的子文档附加既有事件接收器及可靠终态处理器。
+/// Callers must retain canonical lifecycle admission; this entry never creates another root input.
+/// 调用者必须保留规范生命周期准入；此入口绝不创建另一条根输入。
+/// Returns after subscription is installed, or after exact failed-start cleanup.
+/// 安装订阅后返回，或在精确失败启动清理后返回错误。
+pub(crate) fn start_admitted_detached_subagent_listener(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    controller_runtime: HostRuntimeHandle,
+    agent_runtime: AgentRuntimeBridge,
+    parent_session_id: SessionId,
+    child_handle: Arc<SessionHandle>,
+    execution_id: String,
+) -> Result<(), String> {
+    // Runtime facts and the existing document must refer to the same concrete execution.
+    // 运行时事实与已有文档必须指向同一个具体执行。
+    let task_id = child_handle.session_id();
+    let facts = agent_runtime
         .task_runtime
-        .expect_durable_task_return(task_id, &execution_id)?;
-    webui_trace(
-        "detached_listener_delegate_started",
-        format!(
-            "parent={parent_session_id} task={task_id} execution_id={execution_id} public_task_id={} label={}",
-            panel_state.public_task_id, panel_state.subagent_label
-        ),
-    );
-    let should_start = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let should_start =
-            guard.detached_subagent_task_listeners.get(&task_id) != Some(&execution_id);
-        if should_start {
-            guard
-                .detached_subagent_task_listeners
-                .insert(task_id, execution_id.clone());
+        .active_task_v1_execution_facts(task_id, &execution_id)?;
+    if facts.parent_session_id != parent_session_id || facts.task_id != task_id {
+        return Err(String::from(
+            "Detached listener does not match its runtime execution owner.",
+        ));
+    }
+    // Freeze exact cleanup ownership before any fallible listener admission.
+    // 在任何可能失败的监听器准入之前冻结精确清理归属。
+    let startup_owner = startup_rejection::capture_owner(&child_handle, &execution_id)?;
+    // Retain canonical cleanup owners when successful admission moves originals into the listener.
+    // 成功准入将原对象移入监听器时，保留规范清理所有者。
+    let rejected_child = Arc::clone(&child_handle);
+    // The rejected generation must not be replaced by a later listener's identifier.
+    // 被拒代次不得替换为后续监听器的标识。
+    let rejected_execution = execution_id.clone();
+    // Only this runtime owns the unpublished return gate.
+    // 只有该运行时拥有未发布回流门。
+    let rejected_runtime = agent_runtime.task_runtime.clone();
+    // Registration cleanup must compare the same service instance and exact execution.
+    // 注册清理必须比较同一服务实例和精确执行。
+    let rejected_state = state.clone();
+    // Admission must finish before the caller acknowledges the Provider start barrier.
+    // 准入必须在调用方确认 Provider 启动屏障之前完成。
+    let admission = (|| -> Result<(), String> {
+        crate::session_plan_runtime::emit_lifetime_usage_changed(&app, &state, &child_handle);
+        agent_runtime
+            .task_runtime
+            .expect_durable_task_return(task_id, &execution_id)?;
+
+        let should_start = {
+            let mut guard = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            let should_start =
+                guard.detached_subagent_task_listeners.get(&task_id) != Some(&execution_id);
+            if should_start {
+                guard
+                    .detached_subagent_task_listeners
+                    .insert(task_id, execution_id.clone());
+            }
+            should_start
+        };
+        if !should_start {
+            webui_trace(
+                "detached_listener_already_running",
+                format!("parent={parent_session_id} task={task_id} execution_id={execution_id}"),
+            );
+            return Ok(());
         }
-        should_start
-    };
-    if !should_start {
+        // Subscribe before spawning; every rejection uses the common exact-ownership cleanup below.
+        // 先订阅再派生；所有拒绝统一使用下方精确归属清理。
+        let detached_stream = agent_runtime
+            .task_runtime
+            .subscribe_active_detached_task_events(task_id, &execution_id)?;
         webui_trace(
-            "detached_listener_already_running",
+            "detached_listener_spawn",
             format!("parent={parent_session_id} task={task_id} execution_id={execution_id}"),
         );
-        return Ok(());
-    }
-    // detached_stream is created before the background task so subscription failure can roll back the just-committed service registration synchronously.
-    // detached_stream 在后台任务创建前完成订阅，使订阅失败可以同步回滚刚提交的服务侧注册。
-    let detached_stream = match agent_runtime
-        .task_runtime
-        .subscribe_detached_task_events(task_id, &execution_id)
-    {
-        Ok(stream) => stream,
-        Err(subscription_error) => {
-            // rollback_result clears only this exact execution and therefore cannot delete a replacement listener.
-            // rollback_result 仅清理当前精确执行，因此不会误删替代监听器。
-            let rollback_result = state
-                .lock()
-                .map_err(|error| format!("failed to lock service state: {error}"))
-                .map(|mut guard| {
-                    clear_webui_detached_listener_execution_if_current(
-                        &mut guard,
-                        task_id,
-                        &execution_id,
-                    )
-                });
-            return match rollback_result {
-                // cleared reports whether the failed subscription still owned and removed its service registration.
-                // cleared 表示失败订阅是否仍拥有并移除了自身的服务侧注册。
-                Ok(cleared) => {
-                    webui_trace(
-                        "detached_listener_subscription_rollback",
-                        format!(
-                            "parent={parent_session_id} task={task_id} execution_id={execution_id} cleared={cleared}"
-                        ),
-                    );
-                    Err(subscription_error)
-                }
-                Err(rollback_error) => Err(format!(
-                    "{subscription_error} The detached listener registration rollback also failed: {rollback_error}"
-                )),
-            };
-        }
-    };
-    webui_trace(
-        "detached_listener_spawn",
-        format!("parent={parent_session_id} task={task_id} execution_id={execution_id}"),
-    );
-    let project_resource_catalog_registry = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))
-        .map(|guard| Arc::clone(&guard.project_resource_catalog_registry))?;
-    spawn_service_task(async move {
-        // providerV1Sink retains the exact child handle for the complete detached execution.
-        // providerV1Sink 在完整分离执行期间保留精确子句柄。
-        let mut provider_v1_sink =
-            ProviderV1StreamSink::new(Arc::clone(&child_handle), project_resource_catalog_registry);
-        // providerTelemetryGuard survives for the complete detached child-event subscription.
-        // providerTelemetryGuard 在完整分离子事件订阅期间保持存活。
-        let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new_with_persistence(
-            state.clone(),
-            Some(controller_runtime.clone()),
-        );
-        let mut stream = Box::pin(detached_stream);
-        while let Some(event) = stream.next().await {
-            webui_trace(
-                "detached_listener_event",
-                format!(
-                    "task={task_id} execution_id={execution_id} kind={} {}",
-                    detached_task_event_label(&event),
-                    detached_task_event_trace_detail(&event)
-                ),
+        let project_resource_catalog_registry = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))
+            .map(|guard| Arc::clone(&guard.project_resource_catalog_registry))?;
+        spawn_service_task(async move {
+            // providerV1Sink retains the exact child handle for the complete detached execution.
+            // providerV1Sink 在完整分离执行期间保留精确子句柄。
+            let mut provider_v1_sink = ProviderV1StreamSink::new(
+                Arc::clone(&child_handle),
+                project_resource_catalog_registry,
             );
-            if let Err(error) = handle_webui_detached_subagent_task_event(
+            // providerTelemetryGuard survives for the complete detached child-event subscription.
+            // providerTelemetryGuard 在完整分离子事件订阅期间保持存活。
+            let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new_with_persistence(
+                state.clone(),
+                Some(controller_runtime.clone()),
+            );
+            retry::drive(
                 &app,
                 &state,
                 &controller_runtime,
                 &agent_runtime,
+                parent_session_id,
                 task_id,
                 &execution_id,
-                child_handle.as_ref(),
+                &child_handle,
+                startup_owner,
+                detached_stream,
                 &mut provider_telemetry_guard,
                 &mut provider_v1_sink,
-                event,
             )
-            .await
-            {
-                eprintln!("[webui-service] detached subagent event failed: {error}");
+            .await;
+            if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
+                provider_telemetry_guard.forward(event);
+                crate::session_plan_runtime::emit_lifetime_usage_changed(
+                    &app,
+                    &state,
+                    &child_handle,
+                );
+            }
+        });
+        Ok(())
+    })();
+    if let Err(error) = admission {
+        // Attempt every independent cleanup and preserve each failure beside the original cause.
+        // 尝试每个独立清理，并在原原因旁保留各项失败。
+        let mut cleanup_errors = Vec::new();
+        if let Err(cleanup) =
+            startup_rejection::close_rejected_child(&rejected_child, startup_owner, &error)
+        {
+            cleanup_errors.push(format!("Child document cleanup failed: {cleanup}"));
+        }
+        if let Err(cleanup) =
+            rejected_runtime.cancel_rejected_task_return(task_id, &rejected_execution)
+        {
+            cleanup_errors.push(format!("Child return gate cleanup failed: {cleanup}"));
+        }
+        match rejected_state.lock() {
+            Ok(mut guard) => {
+                clear_webui_detached_listener_execution_if_current(
+                    &mut guard,
+                    task_id,
+                    &rejected_execution,
+                );
+            }
+            Err(cleanup) => {
+                cleanup_errors.push(format!("Child listener cleanup failed: {cleanup}"))
             }
         }
-        if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
-            provider_telemetry_guard.forward(event);
-            crate::session_plan_runtime::emit_lifetime_usage_changed(&app, &state, &child_handle);
-        }
-    });
+        return if cleanup_errors.is_empty() {
+            Err(error)
+        } else {
+            Err(format!("{error} {}", cleanup_errors.join(" ")))
+        };
+    }
     Ok(())
 }
 
@@ -197,8 +251,9 @@ fn append_exact_v1_subagent_return(
     state: &SharedServiceBridgeState,
     parent_session_id: SessionId,
     task_id: SessionId,
+    execution_id: &str,
     child_handle: &SessionHandle,
-    provider_v1_sink: &ProviderV1StreamSink,
+    completed_assistant: Option<&ProviderV1CompletedAssistantText>,
 ) -> Result<SubagentReturnReceipt, String> {
     if child_handle.session_id() != task_id {
         return Err(format!(
@@ -206,14 +261,9 @@ fn append_exact_v1_subagent_return(
             child_handle.session_id()
         ));
     }
-    let completed_assistant = provider_v1_sink
-        .completed_assistant_text()
-        .cloned()
-        .ok_or_else(|| {
-            String::from(
-                "Detached child completion has no exact durable V1 final assistant receipt.",
-            )
-        })?;
+    let completed_assistant = completed_assistant.cloned().ok_or_else(|| {
+        String::from("Detached child completion has no exact durable V1 final assistant receipt.")
+    })?;
     let parent_handle = {
         let registry = state
             .lock()
@@ -224,9 +274,18 @@ fn append_exact_v1_subagent_return(
             .get(parent_session_id)
             .map_err(|error| error.to_string())?
     };
+    // Source sequence coverage is meaningful only inside the exact child generation.
+    // 来源序号覆盖只在精确子代次内部有意义。
+    let child_generation = child_handle
+        .read(|document| document.segment_generation())
+        .map_err(|error| error.to_string())?;
     let after_seq = parent_handle
         .read_full_durable(|document| {
-            document.subagent_return_frontier_before(&task_id.to_string(), completed_assistant.seq)
+            document.subagent_return_frontier_before(
+                &task_id.to_string(),
+                child_generation,
+                completed_assistant.seq,
+            )
         })
         .map_err(|error| error.to_string())?;
     let input = child_handle
@@ -268,7 +327,12 @@ fn append_exact_v1_subagent_return(
         })
         .map_err(|error| format!("读取子会话 V1 回流事实失败：{error}"))??;
     let committed = parent_handle
-        .append_subagent_return(input, current_v1_unix_millis()?)
+        .append_execution_subagent_return(
+            vulcan_session_core::v1::collaboration::CollaborationExecutionId::try_new(execution_id)
+                .map_err(|error| error.to_string())?,
+            input,
+            current_v1_unix_millis()?,
+        )
         .map_err(|error| format!("子代理 V1 回流提交失败：{error}"))?;
     webui_trace(
         "detached_subagent_v1_return_committed",
@@ -303,13 +367,54 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
         .get(&task_id)
         .is_some_and(|current_execution_id| current_execution_id == execution_id);
     match event {
+        DetachedTaskRuntimeEvent::StartupAborted { .. } => Err(String::from(
+            "Startup abort must be handled by its captured admission owner.",
+        )),
         DetachedTaskRuntimeEvent::ChildExecution(event) => {
             if !listener_is_current {
                 webui_trace(
                     "detached_child_event_stale_execution",
                     format!("task={task_id} execution_id={execution_id}"),
                 );
+                // A superseded parent cannot admit descendants; reject their waiter immediately.
+                // 已被替代的父执行不能准入后代；立即拒绝其等待器。
+                if let ExecutionStreamEvent::RuntimeEvent { event, .. } = &event
+                    && event.kind == RuntimeEventKind::DelegateStarted
+                {
+                    let error = "Nested DelegateStarted belongs to a superseded parent execution.";
+                    vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(event, error)?;
+                    return Err(String::from(error));
+                }
                 return Ok(());
+            }
+            // Nested starts travel through the owning child's stream, not the root stream.
+            // 嵌套启动经由所属子任务的事件流传递，不经过根事件流。
+            // Establish the descendant sink before acknowledging its execution barrier.
+            // 在确认执行屏障前建立后代任务的持久接收器。
+            if let ExecutionStreamEvent::RuntimeEvent { session_id, event } = &event
+                && event.kind == RuntimeEventKind::DelegateStarted
+            {
+                // The listener identity is authoritative for the spawning parent.
+                // 监听器身份是启动父任务的权威来源。
+                let admission = if *session_id != task_id {
+                    Err(String::from(
+                        "Nested DelegateStarted does not belong to the owning task session.",
+                    ))
+                } else {
+                    maybe_start_webui_detached_subagent_task_listener(
+                        app.clone(),
+                        state.clone(),
+                        controller_runtime.clone(),
+                        agent_runtime.clone(),
+                        task_id,
+                        event,
+                    )
+                };
+                if let Err(error) = admission {
+                    vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(event, &error)
+                        .map_err(|rejection_error| format!("{error} Rejecting the nested start barrier also failed: {rejection_error}"))?;
+                    return Err(error);
+                }
             }
             handle_webui_detached_child_execution_event(
                 app,
@@ -327,183 +432,19 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
             parent_session_id,
             event,
         } => {
-            let is_finished = event.kind == RuntimeEventKind::DelegateFinished;
-            webui_trace(
-                "detached_parent_event_received",
-                format!(
-                    "listener_task={task_id} execution_id={execution_id} parent={parent_session_id} kind={:?} is_finished={is_finished} listener_is_current={listener_is_current}",
-                    event.kind
-                ),
-            );
-            let parent_state_check_started_at = current_unix_millis_value();
-            let (parent_is_regular_session, parent_is_stopped) = {
-                let guard = state
-                    .lock()
-                    .map_err(|error| format!("failed to lock service state: {error}"))?;
-                match guard.workspace_snapshot.as_ref() {
-                    Some(workspace_snapshot) => (
-                        workspace_snapshot_contains_regular_session(
-                            workspace_snapshot,
-                            parent_session_id,
-                        ),
-                        workspace_snapshot
-                            .session_run_phases
-                            .get(&parent_session_id)
-                            == Some(&SessionRunPhase::Stopped),
-                    ),
-                    None => (false, false),
-                }
-            };
-            webui_trace_if_slow(
-                "detached_parent_event_state_check_slow",
-                parent_state_check_started_at,
-                format!(
-                    "listener_task={task_id} parent={parent_session_id} kind={:?}",
-                    event.kind
-                ),
-            );
-            // Keep return persistence errors until lifecycle cleanup and its push have completed.
-            // 回流持久化错误保留到生命周期清理及其推送完成之后再返回。
-            let v1_return_result = if listener_is_current && is_finished {
-                Some(append_exact_v1_subagent_return(
-                    state,
-                    parent_session_id,
-                    task_id,
-                    child_handle,
-                    provider_v1_sink,
-                ))
-            } else {
-                None
-            };
-            if let Some(Ok(_)) = &v1_return_result {
-                let metadata = event
-                    .metadata
-                    .as_ref()
-                    .ok_or("The child return metadata is missing.")?;
-                let mailbox: vulcan_session_boundary::SubagentMailboxEvent =
-                    serde_json::from_value(metadata["payload"]["subagent_mailbox_event"].clone())
-                        .map_err(|error| error.to_string())?;
-                agent_runtime
-                    .task_runtime
-                    .publish_durable_task_return(execution_id, mailbox)?;
-            }
-            if let Some(Err(error)) = &v1_return_result {
-                // A persistence failure must wake the parent with its cause instead of waiting forever.
-                // 持久化失败必须携带原因唤醒父会话，避免无限等待。
-                let metadata = event
-                    .metadata
-                    .as_ref()
-                    .ok_or("The child return metadata is missing.")?;
-                let mut mailbox: vulcan_session_boundary::SubagentMailboxEvent =
-                    serde_json::from_value(metadata["payload"]["subagent_mailbox_event"].clone())
-                        .map_err(|error| error.to_string())?;
-                if mailbox.kind == vulcan_session_boundary::SubagentMailboxEventKind::Completed {
-                    mailbox.kind = vulcan_session_boundary::SubagentMailboxEventKind::Failed;
-                    mailbox.payload["status"] = serde_json::json!("failed");
-                    mailbox.payload["error_text"] = serde_json::json!(format!(
-                        "Child return content could not be committed: {error}"
-                    ));
-                    agent_runtime
-                        .task_runtime
-                        .publish_durable_task_return(execution_id, mailbox)?;
-                }
-            }
-            let consumed = if listener_is_current {
-                match ingest_webui_subagent_runtime_event_for_listener_execution(
-                    app,
-                    state,
-                    agent_runtime,
-                    parent_session_id,
-                    &event,
-                    Some(execution_id),
-                ) {
-                    Ok(consumed) => consumed,
-                    Err(error) => {
-                        eprintln!("[webui-service] ingest subagent parent event failed: {error}");
-                        false
-                    }
-                }
-            } else {
-                true
-            };
-            webui_trace(
-                "detached_parent_event_ingested",
-                format!(
-                    "listener_task={task_id} parent={parent_session_id} kind={:?} consumed={consumed}",
-                    event.kind
-                ),
-            );
-            if !consumed && !is_finished {
-                append_runtime_event_projection_and_release_barrier(
-                    app,
-                    state,
-                    parent_session_id,
-                    &event,
-                )?;
-            } else {
-                release_runtime_event_projection_barrier_after_attempt(&event)?;
-            }
-            if is_finished {
-                let cleaned_current_listener = {
-                    let mut guard = state
-                        .lock()
-                        .map_err(|error| format!("failed to lock service state: {error}"))?;
-                    let cleaned = clear_webui_detached_listener_execution_if_current(
-                        &mut guard,
-                        task_id,
-                        execution_id,
-                    );
-                    if !cleaned && v1_return_result.as_ref().is_some_and(Result::is_ok) {
-                        clear_webui_subagent_completion_gate_ignored(
-                            &mut guard,
-                            task_id,
-                            execution_id,
-                        );
-                    }
-                    cleaned
-                };
-                if cleaned_current_listener {
-                    emit_webui_subagent_navigation_changed_delta_for_parent(
-                        app,
-                        state,
-                        parent_session_id,
-                    )?;
-                }
-                // Unsuccessful persistence must not leave a terminal child looking active.
-                // 持久化失败不得让终态子任务继续显示为活动状态。
-                let v1_return_receipt = v1_return_result.transpose()?;
-                if let Some(receipt) = v1_return_receipt
-                    && parent_is_regular_session
-                    && !parent_is_stopped
-                {
-                    let started = start_exact_v1_subagent_return_turn(
-                        app,
-                        state,
-                        controller_runtime,
-                        agent_runtime,
-                        parent_session_id,
-                        receipt,
-                    )
-                    .await?;
-                    webui_trace(
-                        "detached_parent_event_v1_return_dispatch",
-                        format!("parent={parent_session_id} task={task_id} started={started}"),
-                    );
-                    if !started {
-                        webui_trace(
-                            "detached_parent_event_v1_return_deferred_to_parent_terminal",
-                            format!("parent={parent_session_id} task={task_id}"),
-                        );
-                    }
-                }
-            }
-            if is_finished && parent_is_regular_session && parent_is_stopped {
-                webui_trace(
-                    "detached_parent_event_v1_return_preserved_while_stopped",
-                    format!("parent={parent_session_id} task={task_id}"),
-                );
-            }
-            Ok(())
+            terminal::handle_parent_event(
+                app,
+                state,
+                controller_runtime,
+                agent_runtime,
+                task_id,
+                execution_id,
+                child_handle,
+                parent_session_id,
+                event,
+                provider_v1_sink.completed_assistant_text(),
+            )
+            .await
         }
     }
 }
@@ -556,6 +497,11 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
         ExecutionStreamEvent::Prepared(_) => Ok(()),
         ExecutionStreamEvent::ProviderRequestCheckpoint { .. } => Ok(()),
         ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
+            if event.kind == ProviderRequestTelemetryEventKind::FirstToken {
+                // Preserve replay-safety evidence without treating best-effort Started as admission.
+                // 保留重放安全证据，不把尽力投递的 Started 视为准入。
+                provider_telemetry_guard.observe_durable_boundary(&event);
+            }
             provider_telemetry_guard.forward(event);
             Ok(())
         }
@@ -641,7 +587,7 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
                                 }
                             }
                             provider_v1_sink
-                                .prepare_request(facts.clone(), candidate)
+                                .prepare_request(state, facts.clone(), candidate)
                                 .await
                                 .map_err(|error| error.to_string())
                         }
@@ -652,6 +598,9 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
                     "Detached Provider preparation is missing typed request facts.",
                 )),
             };
+            // The committed API remains owned even if the waiting producer has already been dropped.
+            // 即使等待中的生产者已经被丢弃，已提交 API 仍有明确归属。
+            provider_telemetry_guard.observe_preparation_result(&event, &result);
             let response = result.as_ref().map(|_| ()).map_err(Clone::clone);
             let _ = completion.complete(result);
             response

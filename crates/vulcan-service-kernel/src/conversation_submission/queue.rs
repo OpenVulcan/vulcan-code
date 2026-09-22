@@ -556,7 +556,9 @@ pub(crate) fn queue_existing_submission(
             ));
         }
     };
-    if let Err(error) = dispatch_queued_pending_prompt_hook(agent_runtime, queued_hook_event) {
+    if let Err(error) =
+        dispatch_queued_pending_prompt_hook(&v1_handle, agent_runtime, queued_hook_event)
+    {
         webui_trace(
             "queued_submission_hook_failed_after_commit",
             format!("session={session_id} error={error}"),

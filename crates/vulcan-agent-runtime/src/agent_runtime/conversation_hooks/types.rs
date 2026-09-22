@@ -48,6 +48,24 @@ pub struct ConversationTimelineItem {
     pub source_id: Option<String>,
 }
 
+/// One host-validated human input in an exact V1 in-turn continuation batch.
+/// 精确 V1 回合内续跑批次中一条经宿主验证的人类输入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalInTurnHookInput {
+    /// Canonical browser action used for identity across queue admission and later promotion.
+    /// 用于队列准入和后续提升之间身份关联的规范浏览器动作。
+    pub client_action_id: vulcan_session_core::v1::ClientActionId,
+    /// Original session-local input allocation; retries cannot substitute another input.
+    /// 原会话本地输入分配；重试不能替换为另一输入。
+    pub input_id: vulcan_session_core::v1::PendingInputId,
+    /// Provider-visible event position validated against the exact terminal receipt.
+    /// 按精确终态回执验证的 Provider 可见事件位置。
+    pub input_seq: vulcan_session_core::v1::Seq,
+    /// Canonical raw user text; manual-injection syntax is sanitized only for a new Hook item.
+    /// 规范原始用户正文；仅为新 Hook 条目清理手动注入语法。
+    pub text: String,
+}
+
 /// Host-visible VMM writeback effect returned by hook handlers.
 /// hook 处理器返回给宿主可见的 VMM 写回效果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,6 +290,25 @@ pub(super) struct ActiveConversationTurn {
     /// Prompt entry ids that were already recorded when queued during this turn.
     /// 在该回合排队时已经记录过的提示词条目标识集合。
     pub(super) recorded_prompt_entry_ids: std::collections::BTreeSet<String>,
+    /// Durable admission identities projected into this Hook, independent of preparation notifications.
+    /// 投影到本 Hook 的可靠准入身份，独立于准备通知。
+    pub(super) observed_input_identities: BTreeMap<
+        String,
+        (
+            vulcan_session_core::v1::PendingInputId,
+            vulcan_session_core::v1::business_hook::BusinessHookInputKind,
+            u64,
+        ),
+    >,
+    /// Exact promoted-input coordinates already projected during this business Hook lifetime.
+    /// 本业务 Hook 生命周期中已投影的精确提升输入坐标。
+    pub(super) canonical_input_receipts: BTreeMap<
+        String,
+        (
+            vulcan_session_core::v1::PendingInputId,
+            vulcan_session_core::v1::Seq,
+        ),
+    >,
 }
 
 impl ActiveConversationTurn {
@@ -288,6 +325,8 @@ impl ActiveConversationTurn {
             vmm_runtime_ready,
             timeline: Vec::new(),
             recorded_prompt_entry_ids: std::collections::BTreeSet::new(),
+            observed_input_identities: BTreeMap::new(),
+            canonical_input_receipts: BTreeMap::new(),
         }
     }
 }

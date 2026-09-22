@@ -118,6 +118,63 @@ fn consume_turn_only_decrements_once_per_turn() {
     assert!(state.groups.is_empty());
 }
 
+/// Verifies TTL expiration is emitted once while the earlier body has already been retained.
+/// 验证 TTL 失效只发出一次，同时此前正文仍由历史保留。
+#[test]
+fn ttl_expiry_emits_one_append_only_event() {
+    let mut state = ContextInjectionState::default();
+    state.apply_insert(transient_insert("desc", "memory", 1), "1");
+
+    let expired = state.consume_turn_with_expiry_events("turn-1", "2");
+
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].tag, "vmm_inject");
+    assert_eq!(expired[0].turn_id, "turn-1");
+    assert!(
+        expired[0]
+            .body
+            .contains("Context injection expired after TTL")
+    );
+    assert!(state.groups.is_empty());
+    assert_eq!(state.take_pending_expiry_events(), expired);
+    assert!(state.take_pending_expiry_events().is_empty());
+}
+
+/// Verifies re-creating the same transient body after expiry receives a new occurrence identity.
+/// 验证相同临时正文在失效后重新创建会获得新的发生点身份。
+#[test]
+fn transient_reappearance_allocates_a_new_occurrence_id() {
+    let mut state = ContextInjectionState::default();
+    state.apply_insert(transient_insert("desc", "memory", 1), "1");
+    let first_occurrence = state
+        .groups
+        .get("vmm_inject")
+        .and_then(|group| group.items.values().next())
+        .map(|item| item.occurrence_id.clone())
+        .expect("initial occurrence");
+
+    let expired = state.consume_turn_with_expiry_events("turn-1", "2");
+    assert_eq!(expired[0].occurrence_id, first_occurrence);
+    state.apply_insert(transient_insert("desc", "memory", 1), "3");
+    let second_occurrence = state
+        .groups
+        .get("vmm_inject")
+        .and_then(|group| group.items.values().next())
+        .map(|item| item.occurrence_id.clone())
+        .expect("reappeared occurrence");
+
+    assert_ne!(second_occurrence, first_occurrence);
+    assert_eq!(
+        expired[0].content_hash,
+        state
+            .groups
+            .get("vmm_inject")
+            .and_then(|group| group.items.values().next())
+            .map(|item| item.content_hash.clone())
+            .expect("reappeared body hash")
+    );
+}
+
 /// Verifies expired transient injections are removed before compaction drafts are rendered.
 /// 验证已失效临时注入会在压缩候选状态渲染前被移除。
 #[test]
@@ -239,6 +296,82 @@ fn panel_cards_show_only_effective_runtime_fields() {
 
 /// Renders test structured items for model context.
 /// 为测试结构化内容项渲染模型上下文。
+fn render_test_metadata(item: &InjectionStateItem) -> String {
+    serde_json::to_string(item.metadata.as_ref().expect("fixture metadata")).unwrap()
+}
+
+/// Verifies changed rendering or routing inputs allocate a new occurrence while exact refreshes keep it.
+/// 验证渲染或路由输入变化分配新发生点，精确刷新则保留发生点。
+#[test]
+fn injection_projection_changes_allocate_new_occurrences() {
+    let registry = test_registry().with_renderer(
+        "metadata",
+        InjectionItemRenderer {
+            render_model: render_test_metadata,
+            render_panel: test_render_panel,
+            render_detail: test_render_detail,
+        },
+    );
+    let options = InjectionRenderOptions {
+        registry: &registry,
+        current_turn_marker: None,
+    };
+    for case in 0..4 {
+        let mut insert = persistent_insert("memory", "unchanged raw body");
+        insert.items[0].dedupe_key = Some(String::from("slot"));
+        insert.items[0].renderer_id = Some(String::from("metadata"));
+        insert.items[0].metadata = Some(serde_json::json!({"version": 1}));
+        insert.source_display = Some(String::from("source-a"));
+        let mut state = ContextInjectionState::default();
+        state.apply_insert(insert.clone(), "1");
+        let original = state.resolve_view_with_options(&options).host_blocks[0].clone();
+        match case {
+            0 => insert.items[0].metadata = Some(serde_json::json!({"version": 2})),
+            1 => insert.items[0].renderer_id = Some(String::from("test.memory")),
+            2 => insert.source_display = Some(String::from("source-b")),
+            3 => insert.scope = InjectionScope::Project,
+            _ => unreachable!(),
+        }
+        state.apply_insert(insert.clone(), "2");
+        let changed = state.resolve_view_with_options(&options).host_blocks[0].clone();
+        assert_eq!(changed.source_id, original.source_id);
+        assert_eq!(changed.content_hash, original.content_hash);
+        assert_ne!(changed.occurrence_id, original.occurrence_id, "case {case}");
+        if case < 2 {
+            assert_ne!(changed.body, original.body);
+        }
+        state.apply_insert(insert, "3");
+        let repeated = state.resolve_view_with_options(&options).host_blocks[0].clone();
+        assert_eq!(repeated.occurrence_id, changed.occurrence_id);
+    }
+}
+
+/// Verifies changing a group scope also versions untouched sibling items whose rendered route changes.
+/// 验证改变组作用域也会更新未被直接改写但渲染路由已改变的兄弟条目版本。
+#[test]
+fn injection_group_scope_change_versions_every_sibling() {
+    let mut insert = persistent_insert("memory", "first");
+    insert.items.push(InjectionInsertItem::new("second"));
+    let mut state = ContextInjectionState::default();
+    state.apply_insert(insert.clone(), "1");
+    let previous = state.resolve_view().host_blocks;
+    insert.items.truncate(1);
+    insert.scope = InjectionScope::Project;
+    state.apply_insert(insert, "2");
+    let next = state.resolve_view().host_blocks;
+    assert_eq!(next.len(), 2);
+    for old in previous {
+        let current = next
+            .iter()
+            .find(|item| item.source_id == old.source_id)
+            .unwrap();
+        assert_eq!(current.scope, "project");
+        assert_ne!(current.occurrence_id, old.occurrence_id);
+    }
+}
+
+/// Renders test structured items for model context.
+/// 为测试结构化内容项渲染模型上下文。
 fn test_render_model(item: &InjectionStateItem) -> String {
     format!("model:{}", item.content)
 }
@@ -316,6 +449,9 @@ fn structured_dedupe_key_resets_ttl_without_duplicate_items() {
     insert.items[0].dedupe_key = Some(String::from("memory:1"));
     let mut state = ContextInjectionState::default();
     state.apply_insert_for_turn(insert, "1", Some("turn-a"));
+    // Capture the producer's original identity before changing the content of the same slot.
+    // 在修改同一槽位正文前捕获生产者的原始身份。
+    let original = state.resolve_view().host_blocks[0].clone();
     state.consume_turn("turn-a", "2");
     let mut refreshed = transient_insert("new", "updated text", 5);
     refreshed.items[0].dedupe_key = Some(String::from("memory:1"));
@@ -328,6 +464,23 @@ fn structured_dedupe_key_resets_ttl_without_duplicate_items() {
     assert_eq!(item.content, "updated text");
     assert_eq!(item.remaining_turns, Some(5));
     assert_eq!(item.created_turn_marker.as_deref(), Some("turn-b"));
+    assert_eq!(item.source_id, original.source_id);
+    assert_ne!(item.occurrence_id, original.occurrence_id);
+    assert_ne!(item.content_hash, original.content_hash);
+    // Expiry must reference the replacement occurrence and its new body hash.
+    // 失效必须引用替换后的发生点和新正文哈希。
+    let updated = state.resolve_view().host_blocks[0].clone();
+    for turn in 0..4 {
+        assert!(
+            state
+                .consume_turn_with_expiry_events(&format!("next-{turn}"), "4")
+                .is_empty()
+        );
+    }
+    let expired = state.consume_turn_with_expiry_events("last", "5");
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].occurrence_id, updated.occurrence_id);
+    assert_eq!(expired[0].content_hash, updated.content_hash);
 }
 
 #[test]

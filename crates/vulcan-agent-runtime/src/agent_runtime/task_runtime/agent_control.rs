@@ -1,4 +1,8 @@
 use super::*;
+
+#[cfg(test)]
+#[path = "tests/durable_return.rs"]
+mod durable_return_tests;
 use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
@@ -86,6 +90,37 @@ impl std::fmt::Display for InterAgentMessageRestoreError {
 }
 
 impl TaskRuntime {
+    /// Removes an unpublished return gate after this exact startup was rejected before Provider launch.
+    /// 此精确启动在 Provider 启动前被拒绝后，移除尚未发布的回流门。
+    /// `task_id` and `execution_id` identify the rejected admission; a replacement is left intact.
+    /// `task_id` 与 `execution_id` 标识被拒准入；替代执行保持原状。
+    /// Returns whether the gate was removed, or an explicit registry/publication conflict.
+    /// 返回是否移除了门控，或明确的注册表及发布冲突。
+    pub fn cancel_rejected_task_return(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<bool, String> {
+        // Compare and remove under one lock so late rejection cannot clear a newer execution.
+        // 在同一锁内比较并删除，防止迟到拒绝清除较新执行。
+        let mut returns = self
+            .durable_return_mailboxes
+            .write()
+            .map_err(|_| "The durable return registry is locked.")?;
+        match returns.get(&task_id) {
+            Some((expected, None)) if expected == execution_id => {
+                returns.remove(&task_id);
+                drop(returns);
+                self.notify_subagent_mailbox_activity();
+                Ok(true)
+            }
+            Some((expected, Some(_))) if expected == execution_id => Err(String::from(
+                "A published child return cannot be cancelled as a rejected startup.",
+            )),
+            _ => Ok(false),
+        }
+    }
+
     /// Defers successful feedback until the V1 owner publishes its exact return statistics.
     /// 将成功反馈延迟到 V1 所有者发布精确回流统计之后。
     /// `task_id` and `execution_id` identify the admitted generation; returns registration errors.
@@ -106,8 +141,50 @@ impl TaskRuntime {
             .is_none_or(|(expected, _)| expected != execution_id)
         {
             returns.insert(task_id, (execution_id.to_string(), None));
+            drop(returns);
+            self.notify_subagent_mailbox_activity();
         }
         Ok(())
+    }
+
+    /// Waits for the host-published result of the exact registered child execution without consuming parent feedback.
+    /// 等待宿主发布精确已登记子执行的结果，不消费父级反馈。
+    /// `task_id` and `execution_id` identify the original run; missing or replaced gates return an explicit error.
+    /// `task_id` 与 `execution_id` 标识原运行；缺失或被替换的门控返回明确错误。
+    /// The caller must still validate current durable ownership before dispatching any auxiliary work.
+    /// 调用者在派发任何辅助工作前仍须校验当前可靠归属。
+    pub async fn wait_for_durable_task_return(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<SubagentMailboxEvent, String> {
+        // Subscribe before inspecting the cache so publication between inspection and waiting cannot be lost.
+        // 在检查缓存之前订阅，避免丢失检查与等待之间的发布。
+        let mut activity = self.subscribe_subagent_mailbox_activity();
+        loop {
+            activity.borrow_and_update();
+            {
+                // Drop the synchronous read lock before awaiting; this cache is the sole publication authority.
+                // 在等待之前释放同步读锁；此缓存是唯一发布权威。
+                let returns = self
+                    .durable_return_mailboxes
+                    .read()
+                    .map_err(|_| String::from("The durable return registry is locked."))?;
+                let (expected, receipt) = returns.get(&task_id).ok_or_else(|| {
+                    String::from("The durable return was not registered or was cancelled.")
+                })?;
+                if expected != execution_id {
+                    return Err(String::from("The durable return execution was replaced."));
+                }
+                if let Some(receipt) = receipt {
+                    return Ok(receipt.clone());
+                }
+            }
+            activity
+                .changed()
+                .await
+                .map_err(|_| String::from("The durable return publication channel closed."))?;
+        }
     }
 
     /// Publishes exact V1 feedback once per execution, then retains it for repeated waits.
@@ -178,10 +255,8 @@ impl TaskRuntime {
             // Preserve delivery identity until its durable acceptance succeeds.
             // 在可靠接纳成功之前保留投递身份。
             let message = &messages[index];
-            accept(
-                &message.delivery_id,
-                &format_inter_agent_messages_for_model(std::slice::from_ref(message)),
-            )?;
+            let model_text = format_inter_agent_messages_for_model(std::slice::from_ref(message))?;
+            accept(&message.delivery_id, &model_text)?;
             messages.remove(index);
             consumed += 1;
         }
@@ -442,7 +517,20 @@ impl TaskRuntime {
     ) -> Result<String, String> {
         let created_at_ms = current_unix_millis_u64();
         let delivery_id = format!("subagent-message-{target_task_id}-{}", Uuid::new_v4());
+        // Queue deliveries receive a distinct task identity so repeated follow-ups cannot reuse the public agent path.
+        // 排队投递使用独立任务身份，确保重复后续消息不会复用公开代理路径。
+        let task_id = if steering {
+            target_task_id.to_string()
+        } else {
+            format!("queued-task-{delivery_id}")
+        };
         let message = QueuedInterAgentMessage {
+            kind: if steering {
+                vulcan_ai_contract::HostMessageKind::TaskSteer
+            } else {
+                vulcan_ai_contract::HostMessageKind::TaskStart
+            },
+            task_id,
             steering,
             delivery_id: delivery_id.clone(),
             author_session_id,
@@ -790,7 +878,7 @@ impl TaskRuntime {
         if messages.is_empty() {
             return Ok(false);
         }
-        let prompt = format_inter_agent_messages_for_model(&messages);
+        let prompt = format_inter_agent_messages_for_model(&messages)?;
         let parsed_args = match parse_task_tool_arguments(json!({
             "task_id": target.agent_id,
             "prompt": prompt,
@@ -1024,14 +1112,16 @@ pub(super) fn is_root_agent_target(target: &str) -> bool {
 ///
 /// # Returns
 /// 返回值
-/// A single prompt containing every typed agent message in delivery order.
-/// 按投递顺序包含所有类型化智能体消息的单条提示词。
-fn format_inter_agent_messages_for_model(messages: &[QueuedInterAgentMessage]) -> String {
+/// A single prompt containing every typed agent message in delivery order, or the exact envelope error.
+/// 返回按投递顺序包含所有类型化智能体消息的单条提示词，或精确的信封渲染错误。
+fn format_inter_agent_messages_for_model(
+    messages: &[QueuedInterAgentMessage],
+) -> Result<String, String> {
     messages
         .iter()
         .map(inter_agent_message_model_text)
-        .collect::<Vec<_>>()
-        .join("\n\n")
+        .collect::<Result<Vec<_>, _>>()
+        .map(|messages| messages.join("\n\n"))
 }
 
 /// Atomically appends provider-visible and display projections for delivered messages to a stored snapshot.
@@ -1077,7 +1167,7 @@ pub(super) fn append_inter_agent_messages_to_snapshot(
             record_kind: CoreTranscriptRecordKind::Visible,
             visible: false,
             title: String::from("智能体消息"),
-            body: inter_agent_message_model_text(message),
+            body: inter_agent_message_model_text(message)?,
             metadata: Some(inter_agent_agent_message_metadata(message)),
             created_at: message.created_at_ms.to_string(),
         };
@@ -1165,10 +1255,12 @@ where
 /// 一个规范的 Provider 可见会话载荷。
 fn inter_agent_message_payload(message: &QueuedInterAgentMessage) -> CoreConversationPayload {
     CoreConversationPayload::AgentMessage {
+        kind: message.kind,
         message_type: String::from("MESSAGE"),
+        task_id: message.task_id.clone(),
         task_name: message.target_agent_id.clone(),
         sender: inter_agent_message_sender(message),
-        recipient: message.target_agent_id.clone(),
+        recipient: inter_agent_message_recipient(message),
         payload: message.content.clone(),
         trigger_turn: true,
         metadata: Some(inter_agent_agent_message_metadata(message)),
@@ -1185,19 +1277,21 @@ fn inter_agent_message_payload(message: &QueuedInterAgentMessage) -> CoreConvers
 ///
 /// # Returns
 /// 返回值
-/// The model text produced by the shared `AgentMessage` envelope.
-/// 共享 `AgentMessage` 信封产生的模型文本。
-fn inter_agent_message_model_text(message: &QueuedInterAgentMessage) -> String {
+/// The model text produced by the shared `AgentMessage` envelope, or its validation error.
+/// 返回共享 `AgentMessage` 信封产生的模型文本，或其校验错误。
+fn inter_agent_message_model_text(message: &QueuedInterAgentMessage) -> Result<String, String> {
     CoreConversationPayload::render_agent_message_text(
-        "MESSAGE",
-        &message.target_agent_id,
+        &inter_agent_message_id(message),
+        message.kind,
         &inter_agent_message_sender(message),
+        &inter_agent_message_recipient(message),
+        &message.task_id,
         &message.content,
     )
 }
 
-/// Returns the logical sender for one parent-to-child message.
-/// 返回单条父到子消息的逻辑发送方。
+/// Returns the exact source session identity for one parent-to-child message.
+/// 返回单条父到子消息的精确源会话身份。
 ///
 /// # Parameters
 /// 参数
@@ -1206,10 +1300,16 @@ fn inter_agent_message_model_text(message: &QueuedInterAgentMessage) -> String {
 ///
 /// # Returns
 /// 返回值
-/// A stable parent-scoped sender label.
-/// 稳定的父级作用域发送方标签。
+/// The UUID-shaped parent session identity used by the host envelope.
+/// 宿主消息信封使用的 UUID 形父级会话身份。
 fn inter_agent_message_sender(message: &QueuedInterAgentMessage) -> String {
-    format!("parent:{}", message.author_session_id)
+    message.author_session_id.to_string()
+}
+
+/// Returns the exact target session identity for one parent-to-child message.
+/// 返回单条父到子消息的精确目标会话身份。
+fn inter_agent_message_recipient(message: &QueuedInterAgentMessage) -> String {
+    message.target_task_id.to_string()
 }
 
 /// Returns the stable canonical message id for one delivered message.

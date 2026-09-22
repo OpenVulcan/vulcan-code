@@ -15,16 +15,28 @@ use super::request_encoding::{
 };
 use super::request_headers::execution_headers;
 use super::response_body::read_bounded_response_text;
-use super::response_metadata::parse_retry_after_headers;
+use super::response_metadata::{
+    allowlisted_rate_limit_headers, parse_retry_after_headers, provider_request_id_from_headers,
+};
 use super::transport_diagnostics::{
     emit_provider_transport_failure_trace, emit_provider_transport_http_status_trace,
     emit_provider_transport_trace, emit_responses_compact_response_shape_trace,
+    provider_transport_unix_millis,
+};
+use super::wire_capture::{
+    ProviderWireRequestCaptureTarget, ProviderWireRequestTraceDispatch,
+    provider_wire_request_capture, publish_wire_request_capture,
 };
 use super::{ProviderExecutionClient, ProviderExecutionRoute};
 use crate::CredentialExecutionSecret;
+use async_stream::try_stream;
+use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::pin::Pin;
 use std::time::{Duration, Instant, SystemTime};
+use tokio::sync::oneshot;
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionRequest, DispatchOutcome, RetryAfterHint,
     canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
@@ -53,6 +65,39 @@ pub struct ResponsesCompactResult {
     pub response_id: Option<String>,
 }
 
+/// Separates physical HTTP observations from the opaque unary compaction result.
+/// 将物理 HTTP 观测与不透明的一元压缩结果分开。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResponsesCompactEvent {
+    /// Response headers were observed before consuming either a success or failure body.
+    /// 在消费成功或失败正文前已观察到响应头。
+    TransportObserved {
+        /// Host timestamp immediately before sending this one HTTP request.
+        /// 发送本次唯一 HTTP 请求前的宿主时间戳。
+        dispatched_at_ms: i64,
+        /// Host timestamp when response headers became available.
+        /// 响应头可用时的宿主时间戳。
+        headers_at_ms: i64,
+        /// Actual response status, including unauthorized and other failures.
+        /// 实际响应状态，包括未授权及其他失败。
+        http_status: u16,
+        /// Upstream request identity selected by the frozen route allowlist.
+        /// 由冻结路由允许列表选出的上游请求身份。
+        provider_request_id: Option<String>,
+        /// Allowlisted quota headers shared with ordinary HTTP execution.
+        /// 与普通 HTTP 执行共用的允许列表配额响应头。
+        rate_limit_headers: BTreeMap<String, String>,
+    },
+    /// Complete validated native output; this is not assistant text or a continuation token.
+    /// 完整且已验证的原生输出；它不是助手正文或延续令牌。
+    Completed(ResponsesCompactResult),
+}
+
+/// One lazy HTTP attempt with ordered observations and a single terminal result or failure.
+/// 一次惰性 HTTP 尝试，包含有序观测及唯一终态结果或失败。
+pub type ResponsesCompactStream =
+    Pin<Box<dyn Stream<Item = Result<ResponsesCompactEvent, ProviderExecutionFailure>> + Send>>;
+
 impl ProviderExecutionClient {
     /// Executes the standalone Codex Responses compaction endpoint without streaming.
     /// 执行独立 Codex Responses 远端压缩端点，且不使用流式传输。
@@ -74,6 +119,43 @@ impl ProviderExecutionClient {
         request: AiExecutionRequest,
         secret: CredentialExecutionSecret,
     ) -> Result<ResponsesCompactResult, ProviderExecutionFailure> {
+        // stream preserves the same one-attempt transport contract for non-session callers.
+        // stream 为非会话调用方保留同一单次尝试传输契约。
+        let mut stream = self.stream_responses_compact(route, request, secret, None);
+        while let Some(event) = stream.next().await {
+            if let ResponsesCompactEvent::Completed(result) = event? {
+                return Ok(result);
+            }
+        }
+        Err(compact_protocol_failure(
+            "Remote Responses compaction ended without a terminal result.",
+        ))
+    }
+
+    /// Exposes exactly one compact HTTP attempt without OAuth refresh or retry.
+    /// 暴露恰好一次 compact HTTP 尝试，不进行 OAuth 刷新或重试。
+    ///
+    /// `route`, `request`, and `secret` freeze the admitted request; `wire_request_capture`
+    /// optionally records its final encoded body using the ordinary best-effort trace contract.
+    /// `route`、`request` 与 `secret` 冻结已准入请求；`wire_request_capture` 可选地通过
+    /// 普通尽力追踪契约记录其最终编码正文。
+    ///
+    /// Returns a lazy stream. Session callers must obtain durable admission before polling it,
+    /// persist each observation, and obtain a fresh admission before any subsequent attempt.
+    /// 返回惰性流。会话调用方必须在轮询前取得可靠准入，持久化每次观测，并在后续尝试前重新准入。
+    pub fn stream_responses_compact(
+        &self,
+        route: ProviderExecutionRoute,
+        request: AiExecutionRequest,
+        secret: CredentialExecutionSecret,
+        wire_request_capture: Option<oneshot::Sender<ProviderWireRequestTraceDispatch>>,
+    ) -> ResponsesCompactStream {
+        // client is immutable transport ownership retained until this attempt ends or is dropped.
+        // client 是保留至本次尝试结束或析构的不可变传输所有权。
+        let client = self.clone();
+        // redactionSecret remains outside the stream so every yielded failure is sanitized.
+        // redactionSecret 保留在流外，确保每个产出的失败都经过脱敏。
+        let redaction_secret = secret.clone();
         // traceStartedAt measures the complete unary compact attempt, including pre-dispatch validation.
         // traceStartedAt 衡量完整的一元压缩尝试，包括分派前校验。
         let trace_started_at = Instant::now();
@@ -83,19 +165,19 @@ impl ProviderExecutionClient {
             .cache_scope_id
             .clone()
             .unwrap_or_else(|| String::from("responses-compact"));
-        emit_provider_transport_trace(
-            trace_id.as_str(),
-            "responses_compact",
-            "execution_started",
-            &trace_started_at,
-        );
-        // result keeps every early failure inside the same secret-safe diagnostic boundary.
-        // result 将所有提前失败保留在同一个不含密钥的诊断边界内。
-        let result = async {
+        // diagnosticTraceId remains available after the inner stream consumes its own identity.
+        // diagnosticTraceId 在内部流取得自身身份后仍可供诊断使用。
+        let diagnostic_trace_id = trace_id.clone();
+        // stream owns one physical request and suspends after headers for host durability.
+        // stream 持有一次物理请求，并在响应头后暂停以等待宿主持久化。
+        let stream = try_stream! {
+            emit_provider_transport_trace(
+                trace_id.as_str(), "responses_compact", "execution_started", &trace_started_at,
+            );
             if route.protocol_route.protocol_profile_id != OPENAI_CODEX_RESPONSES_PROFILE_ID {
-                return Err(pre_dispatch_failure(
+                Err(pre_dispatch_failure(
                     "Standalone remote compaction requires the Codex Responses protocol.",
-                ));
+                ))?;
             }
             // request freezes the same route-owned tool input contract used by ordinary HTTP and WebSocket dispatch.
             // request 冻结与普通 HTTP 和 WebSocket 分派相同的路由自有工具输入契约。
@@ -108,7 +190,7 @@ impl ProviderExecutionClient {
             );
             // profile is the exact registered Codex Responses implementation used for both encoding and transport limits.
             // profile 是同时用于编码与传输限制的精确已注册 Codex Responses 实现。
-            let transport = self
+            let transport = client
                 .protocols
                 .transport_profile(route.protocol_route.protocol_profile_id.as_str())
                 .map_err(llm_core_protocol_failure)?;
@@ -156,10 +238,10 @@ impl ProviderExecutionClient {
                 &trace_started_at,
             );
             if encoded.path != "/responses" {
-                return Err(pre_dispatch_failure(format!(
+                Err(pre_dispatch_failure(format!(
                     "Codex Responses compaction requires the `/responses` endpoint, got `{}`.",
                     encoded.path
-                )));
+                )))?;
             }
             emit_provider_transport_trace(
                 trace_id.as_str(),
@@ -188,6 +270,16 @@ impl ProviderExecutionClient {
                 "headers_ready",
                 &trace_started_at,
             );
+            // Trace acknowledgement is observational; it does not grant session dispatch permission.
+            // 追踪确认仅用于观测，不授予会话分派权限。
+            if let Some(capture) = wire_request_capture {
+                publish_wire_request_capture(
+                    ProviderWireRequestCaptureTarget::Trace(capture),
+                    provider_wire_request_capture(
+                        "responses_compact", "POST", url.as_str(), &encoded, &headers,
+                    ),
+                ).await?;
+            }
             // transport freezes the same profile's response limits for the unary HTTP call.
             // transport 为一元 HTTP 调用冻结同一协议实现的响应限制。
             // compactRequestStartedAt and compactRequestTimeout bound both headers and the complete body.
@@ -210,9 +302,12 @@ impl ProviderExecutionClient {
                 "request_dispatched",
                 &trace_started_at,
             );
+            // dispatchedAtMs records this exact attempt rather than a surrounding retry operation.
+            // dispatchedAtMs 记录本次精确尝试，而不是外围重试操作。
+            let dispatched_at_ms = provider_transport_unix_millis()?;
             let response = tokio::time::timeout(
                 Duration::from_millis(transport.response_headers_timeout_ms),
-                self.http
+                client.http
                     .post(url.as_str())
                     .headers(headers)
                     .json(&encoded.body)
@@ -238,6 +333,18 @@ impl ProviderExecutionClient {
                 &trace_started_at,
             );
             let status = response.status();
+            // Headers are emitted even for 401 so retrying cannot erase a rejected physical request.
+            // 即使是 401 也产出响应头，避免重试抹去被拒绝的物理请求。
+            yield ResponsesCompactEvent::TransportObserved {
+                dispatched_at_ms,
+                headers_at_ms: provider_transport_unix_millis()?,
+                http_status: status.as_u16(),
+                provider_request_id: provider_request_id_from_headers(
+                    response.headers(),
+                    route.protocol_route.provider_request_id_headers.as_slice(),
+                )?,
+                rate_limit_headers: allowlisted_rate_limit_headers(response.headers()),
+            };
             emit_provider_transport_http_status_trace(
                 trace_id.as_str(),
                 "responses_compact",
@@ -261,8 +368,8 @@ impl ProviderExecutionClient {
                     body.as_str(),
                 )
                 .map_err(protocol_failure)?;
-                return Err(http_failure(status.as_u16(), retry_after, body.as_str()));
-            }
+                Err(http_failure(status.as_u16(), retry_after, body.as_str()))?;
+            } else {
             let content_type = response
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)
@@ -273,9 +380,9 @@ impl ProviderExecutionClient {
                 .next()
                 .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
             {
-                return Err(compact_protocol_failure(format!(
+                Err(compact_protocol_failure(format!(
                     "Provider compaction response from `{url}` must use application/json, got `{content_type}`."
-                )));
+                )))?;
             }
             let body = read_responses_compact_body_with_timeout(
                 response,
@@ -304,28 +411,33 @@ impl ProviderExecutionClient {
                 &value,
                 &trace_started_at,
             );
-            decode_responses_compact_result(&value, url.as_str())
-        }
-        .await;
-        // result crosses the same exact-secret redaction boundary as streaming execution errors.
-        // result 与流式执行错误经过同一条精确秘密脱敏边界。
-        let result =
-            result.map_err(|failure| sanitize_provider_execution_failure(failure, &secret));
-        match &result {
-            Ok(_) => emit_provider_transport_trace(
-                trace_id.as_str(),
-                "responses_compact",
-                "execution_finished",
-                &trace_started_at,
-            ),
-            Err(failure) => emit_provider_transport_failure_trace(
-                trace_id.as_str(),
-                "responses_compact",
-                failure,
-                &trace_started_at,
-            ),
-        }
-        result
+            yield ResponsesCompactEvent::Completed(
+                decode_responses_compact_result(&value, url.as_str())?,
+            );
+            }
+        };
+        Box::pin(stream.map(move |result| {
+            // result crosses the exact-secret boundary before any caller sees a failure.
+            // result 在调用方看到任何失败前跨越精确秘密脱敏边界。
+            let result = result
+                .map_err(|failure| sanitize_provider_execution_failure(failure, &redaction_secret));
+            match &result {
+                Ok(ResponsesCompactEvent::Completed(_)) => emit_provider_transport_trace(
+                    diagnostic_trace_id.as_str(),
+                    "responses_compact",
+                    "execution_finished",
+                    &trace_started_at,
+                ),
+                Err(failure) => emit_provider_transport_failure_trace(
+                    diagnostic_trace_id.as_str(),
+                    "responses_compact",
+                    failure,
+                    &trace_started_at,
+                ),
+                Ok(ResponsesCompactEvent::TransportObserved { .. }) => {}
+            }
+            result
+        }))
     }
 }
 

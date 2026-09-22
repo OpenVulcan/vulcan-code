@@ -3,9 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use vulcan_agent_runtime::{
-    provider_config::{ProviderConfigurationFile, ReasoningEffortLevel},
-};
+use vulcan_agent_runtime::provider_config::{ProviderConfigurationFile, ReasoningEffortLevel};
 use vulcan_core::types::ConversationAttachment;
 use vulcan_service_api::{
     PendingPromptSummary, PendingPromptsChangedDelta, ServiceEvent, ServiceEventEmitter,
@@ -58,23 +56,57 @@ pub(super) struct QueuedPendingPromptHookEvent {
 ///
 /// # Parameters
 /// 参数
-/// `agent_runtime` owns the Hook runtime and `event` contains committed queue facts.
-/// `agent_runtime` 持有 Hook 运行时，`event` 包含已提交队列事实。
+/// `handle` owns the published queue observations; `agent_runtime` owns the live Hook and `event` identifies notification.
+/// `handle` 持有已发布队列观察；`agent_runtime` 持有活动 Hook，`event` 标识通知。
 ///
 /// # Returns
 /// 返回值
 /// Success after timeline mutation and notification dispatch, or an explicit Hook lock error.
 /// 时间线修改与通知分发后返回成功，或返回显式 Hook 锁错误。
 pub(super) fn dispatch_queued_pending_prompt_hook(
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
     agent_runtime: &AgentRuntimeBridge,
     event: QueuedPendingPromptHookEvent,
 ) -> Result<(), String> {
-    // hook_runtime may create or extend a logical turn only after the queue is authoritative.
-    // hook_runtime 仅在队列成为权威状态后创建或扩展逻辑回合。
+    // Late or idle queue notifications cannot fabricate ownership for a replacement task.
+    // 迟到或空闲队列通知不能为替代任务伪造归属。
+    if event.session_id != handle.session_id() {
+        return Err(String::from(
+            "Queued Hook notification has a foreign canonical owner.",
+        ));
+    }
+    let captured = crate::session_business_hook::live_business_hook_state(handle)?;
     let mut hook_runtime = agent_runtime
         .conversation_hook_runtime
         .lock()
         .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+    let Some(captured) = captured else {
+        return Ok(());
+    };
+    if !hook_runtime.has_active_turn(event.session_id) {
+        return Ok(());
+    }
+    let Some(observed) = captured
+        .observed_inputs
+        .iter()
+        // A former queue item may now be guidance in another turn; its old queue callback is no longer applicable.
+        // 原队列项可能已成为另一回合的引导；旧队列回调不再适用。
+        .find(|entry| {
+            entry.client_action_id.as_str() == event.prompt_entry_id
+                && entry.kind
+                    == vulcan_session_core::v1::business_hook::BusinessHookInputKind::Queued
+        })
+    else {
+        return Ok(());
+    };
+    if observed.content != event.prompt {
+        return Err(String::from(
+            "Queued Hook notification conflicts with its canonical input.",
+        ));
+    }
+    // Apply the entire ordered journal before dispatching this one notification; callbacks may arrive out of order.
+    // 派发本条通知前应用整个有序日志；回调可能乱序到达。
+    hook_runtime.restore_business_hook_state(&captured)?;
     hook_runtime.record_queued_user_prompt(
         event.session_id,
         &event.prompt_entry_id,

@@ -16,6 +16,9 @@ use crate::tooling::{
     build_prefixed_public_tool_name, NativeToolCatalog, NativeToolDescriptor,
     NativeToolExecutionRequest,
 };
+use crate::tooling::collaboration::{
+    NativeAgentCollaborationRuntime, build_agent_collaboration_tool_candidates,
+};
 use crate::workspace_path::native_workspace_path_text_from_path;
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
@@ -85,6 +88,7 @@ pub fn build_vulcan_tools_manager(
     session_vmm: vulcan_vmm::VmmConfigLayer,
     vmm_runtime_ready: bool,
     native_browser_runtime: Option<Arc<dyn crate::tooling::native::NativeBrowserRuntime>>,
+    native_agent_collaboration_runtime: Option<Arc<dyn NativeAgentCollaborationRuntime>>,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
@@ -97,9 +101,18 @@ pub fn build_vulcan_tools_manager(
         && vmm_effective.ai_tools_enabled
         && vmm_effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
 
-    for subagent_candidate in build_subagent_tool_candidates(task_runtime) {
+    for subagent_candidate in build_subagent_tool_candidates(
+        task_runtime,
+        native_agent_collaboration_runtime.clone(),
+    ) {
         occupied_public_tool_ids.insert(subagent_candidate.descriptor.id.clone());
         candidates.push(subagent_candidate);
+    }
+    if let Some(runtime) = native_agent_collaboration_runtime {
+        for candidate in build_agent_collaboration_tool_candidates(runtime) {
+            occupied_public_tool_ids.insert(candidate.descriptor.id.clone());
+            candidates.push(candidate);
+        }
     }
     let ask_candidate = build_question_tool_candidate(question_runtime, "ask");
     occupied_public_tool_ids.insert(ask_candidate.descriptor.id.clone());

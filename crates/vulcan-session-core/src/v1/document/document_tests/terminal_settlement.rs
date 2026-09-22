@@ -11,6 +11,7 @@ fn settlement_record(settlement_id: &str, turn_id: TurnId) -> TerminalSettlement
         settlement_id: settlement_id.to_string(),
         session_id: String::from("sess-1"),
         turn_id,
+        scope: crate::v1::config::TerminalSettlementScope::BusinessTurn,
         owner_generation: String::from("stream-task:owner-a"),
         state: TerminalSettlementState::Pending,
         reason_code: String::from("stream_finished_without_v1_api_terminal"),
@@ -99,6 +100,14 @@ fn terminal_settlement_mark_and_resolve_are_idempotent() {
         Err(DomainError::TerminalSettlementMissing { .. })
     ));
 
+    assert!(
+        document
+            .resolve_terminal_settlement("settle-a", T0 + 5)
+            .is_err()
+    );
+    document
+        .close_turn(TurnOutcome::Stopped, 1, T0 + 5)
+        .unwrap();
     let resolved = document
         .resolve_terminal_settlement("settle-a", T0 + 5)
         .expect("resolution should commit");

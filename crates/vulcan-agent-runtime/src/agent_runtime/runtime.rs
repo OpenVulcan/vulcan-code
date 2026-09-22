@@ -388,6 +388,16 @@ impl RuntimeFoundation {
         self.public_ai_runtime = Some(runtime);
     }
 
+    /// Installs `runtime` through the normal foundation boundary for host integration tests; returns nothing.
+    /// 为宿主集成测试通过普通基础边界安装 `runtime`；无返回值。
+    #[cfg(feature = "test-support")]
+    pub fn install_public_ai_runtime_for_testing(
+        &mut self,
+        runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
+    ) {
+        self.install_public_ai_runtime(runtime);
+    }
+
     /// Returns the installed public AI runtime.
     /// 返回已安装的公共 AI 运行时。
     ///

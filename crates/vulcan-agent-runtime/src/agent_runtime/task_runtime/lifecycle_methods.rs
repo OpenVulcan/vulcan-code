@@ -338,6 +338,33 @@ impl TaskRuntime {
         execution_id: &str,
     ) -> Result<impl futures_util::Stream<Item = DetachedTaskRuntimeEvent> + Send + 'static, String>
     {
+        self.subscribe_detached_task_events_inner(task_id, execution_id, false)
+    }
+
+    /// Subscribes a startup owner only while its exact stream remains open under the stream lock.
+    /// 仅在事件流锁内确认精确流仍开放时为启动所有者订阅。
+    /// Returns a registered live stream, or an explicit error if cancellation already removed its owner.
+    /// 返回已注册活动流；如果取消已移除所有者则返回明确错误。
+    pub fn subscribe_active_detached_task_events(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<impl futures_util::Stream<Item = DetachedTaskRuntimeEvent> + Send + 'static, String>
+    {
+        self.subscribe_detached_task_events_inner(task_id, execution_id, true)
+    }
+
+    /// Serializes optional startup admission with buffered replay and subscriber registration.
+    /// 将可选启动准入与缓冲回放和订阅者注册串行化。
+    /// `require_open` rejects late startup owners; historical subscribers retain terminal replay behavior.
+    /// `require_open` 拒绝迟到启动所有者；历史订阅者保留终态回放行为。
+    fn subscribe_detached_task_events_inner(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+        require_open: bool,
+    ) -> Result<impl futures_util::Stream<Item = DetachedTaskRuntimeEvent> + Send + 'static, String>
+    {
         // stream_key identifies the only execution this subscriber may consume.
         // stream_key 标识本订阅者唯一允许消费的执行。
         let stream_key = DetachedTaskExecutionKey::new(task_id, execution_id);
@@ -354,6 +381,11 @@ impl TaskRuntime {
                     "The detached task stream registry is locked and cannot subscribe task `{task_id}` execution `{execution_id}`."
                 )
             })?;
+            if require_open && streams.get(&stream_key).is_none_or(|stream| stream.closed) {
+                return Err(format!(
+                    "Task `{task_id}` execution `{execution_id}` no longer has an open startup stream."
+                ));
+            }
             // closed records whether this exact execution has already reached terminal state.
             // closed 记录当前精确执行是否已经到达终态。
             let closed = if let Some(state) = streams.get_mut(&stream_key) {
@@ -556,13 +588,37 @@ impl TaskRuntime {
         request: &TaskExecutionRequest,
     ) -> Result<ActiveTaskRunGuard, String> {
         let task_id = request.task_id;
-        let execution_id = request.execution_id.as_str();
         let transaction_lock = self.task_execution_state_lock(task_id)?;
         let _transaction = transaction_lock.lock().map_err(|_| {
             String::from(
                 "The task execution transaction is locked and cannot claim the prepared run.",
             )
         })?;
+        self.claim_active_task_run_with_transaction_lock_held(request)
+    }
+
+    /// Claims the exact request while its caller retains the task transaction lock.
+    /// 调用方保持任务事务锁时认领精确请求。
+    /// `request` supplies execution facts; returns the exclusive lease without admitting another run.
+    /// `request` 提供执行事实；返回排他租约，不准入另一运行。
+    /// Recovery uses this entry to install its missing record in the same transaction.
+    /// 恢复使用此入口在同一事务中安装缺失记录。
+    pub(super) fn claim_active_task_run_with_transaction_lock_held(
+        self: &Arc<Self>,
+        request: &TaskExecutionRequest,
+    ) -> Result<ActiveTaskRunGuard, String> {
+        // Both ownership coordinates are taken from the same immutable request.
+        // 两个归属坐标均来自同一不可变请求。
+        let task_id = request.task_id;
+        let execution_id = request.execution_id.as_str();
+        self.ensure_no_auxiliary_execution_with_transaction_lock_held(task_id)?;
+        // Duplicate delivery must not replace or abort the original physical owner, even for the same execution.
+        // 重复投递不能替换或中止原物理所有者，即使执行标识相同。
+        if self.task_has_active_or_starting_run(task_id)? {
+            return Err(format!(
+                "Task `{task_id}` already owns an active or starting execution."
+            ));
+        }
         self.claim_task_execution_record_owner(task_id, execution_id)?;
         let guard = self.reserve_active_task_run(task_id, execution_id)?;
         let mut active_task_runs = self.active_task_runs.write().map_err(|_| {
@@ -582,6 +638,52 @@ impl TaskRuntime {
         ));
         drop(active_task_runs);
         Ok(guard)
+    }
+
+    /// Installs one trusted durable collaboration binding for a concrete execution attempt.
+    /// 为一次具体执行尝试安装一条可信可靠协作绑定。
+    ///
+    /// Replaying the same reservation is idempotent; a different reservation cannot replace an
+    /// execution that may already be waiting for terminal settlement.
+    /// 重放同一预留是幂等的；不同预留不能替换可能正在等待终态结算的执行。
+    pub(crate) fn register_child_task_lifecycle_binding(
+        &self,
+        binding: ChildTaskLifecycleBinding,
+    ) -> Result<(), String> {
+        let execution_id = binding.reservation.execution.execution_id.clone();
+        let mut bindings = self.collaboration_lifecycle_bindings.write().map_err(|_| {
+            String::from(
+                "The collaboration lifecycle binding registry is locked and cannot register the child execution.",
+            )
+        })?;
+        if let Some(existing) = bindings.get(&execution_id) {
+            if existing.reservation == binding.reservation
+                && Arc::ptr_eq(&existing.port, &binding.port)
+            {
+                return Ok(());
+            }
+            return Err(format!(
+                "Execution `{execution_id}` already owns a different collaboration lifecycle binding."
+            ));
+        }
+        bindings.insert(execution_id, binding);
+        Ok(())
+    }
+
+    /// Takes the exact lifecycle binding once the corresponding execution starts.
+    /// 在对应执行启动时取出该执行的精确生命周期绑定。
+    pub(crate) fn take_child_task_lifecycle_binding(
+        &self,
+        execution_id: &str,
+    ) -> Result<Option<ChildTaskLifecycleBinding>, String> {
+        self.collaboration_lifecycle_bindings
+            .write()
+            .map_err(|_| {
+                String::from(
+                    "The collaboration lifecycle binding registry is locked and cannot claim the child execution.",
+                )
+            })
+            .map(|mut bindings| bindings.remove(execution_id))
     }
 
     /// Reserves one exact child execution before DelegateStarted is published.
@@ -850,6 +952,27 @@ impl TaskRuntime {
         })
     }
 
+    /// Forwards a host event from compaction through the original child's exact detached listener.
+    /// 通过原子任务的精确分离监听器转发来自压缩的宿主事件。
+    /// `task_id` and `execution_id` bind the active owner; `event` retains its original barrier. Returns delivery failure explicitly.
+    /// `task_id` 与 `execution_id` 绑定活动所有者；`event` 保留原屏障。投递失败明确返回。
+    pub fn publish_child_compaction_host_event(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+        event: RuntimeEvent,
+    ) -> Result<(), String> {
+        self.active_task_v1_execution_facts(task_id, execution_id)?;
+        self.publish_detached_task_event(
+            task_id,
+            execution_id,
+            DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::RuntimeEvent {
+                session_id: task_id,
+                event,
+            }),
+        )
+    }
+
     /// Removes one active child-task run only when the caller owns the current reservation generation.
     /// 仅当调用方拥有当前预留世代时移除一条活动子任务运行。
     ///
@@ -972,6 +1095,44 @@ impl TaskRuntime {
         });
         if !delivered {
             state.buffered_events.push(event);
+        }
+        Ok(())
+    }
+
+    /// Emits startup failure only to existing listeners, then removes the exact stream atomically.
+    /// 仅向已有监听器发送启动失败，随后原子移除精确事件流。
+    /// The caller has released its active lease; absent listeners never leave an orphan buffer.
+    /// 调用方已经释放活动租约；不存在监听器时绝不留下孤立缓冲。
+    /// Returns success after ordered delivery/EOF, or an explicit registry-lock error.
+    /// 有序投递与流结束后返回成功，否则返回明确注册表锁错误。
+    pub(super) fn abort_detached_task_startup(
+        &self,
+        request: &TaskExecutionRequest,
+        reason: &str,
+    ) -> Result<(), String> {
+        // Freeze the same typed host failure used by normal runtime terminal publication.
+        // 冻结正常运行时终态发布所用同类强类型宿主失败。
+        let event = DetachedTaskRuntimeEvent::StartupAborted {
+            parent_session_id: request.current_session_id,
+            event: parent_events::build_task_failure_parent_runtime_event(request, reason),
+        };
+        // Removal and delivery share one lock, so no late subscriber can inherit an orphan abort.
+        // 移除与投递共用一把锁，防止迟到订阅者接收孤立中止事件。
+        let mut streams = self.detached_task_event_streams.write().map_err(|_| format!(
+            "The detached task stream registry is locked and cannot abort task `{}` execution `{}`.",
+            request.task_id, request.execution_id,
+        ))?;
+        // Taking the exact row drops all senders only after the abort has entered each live queue.
+        // 取走精确记录后，仅在中止进入每个活动队列之后释放全部发送端。
+        if let Some(stream) = streams.remove(&DetachedTaskExecutionKey::new(
+            request.task_id,
+            &request.execution_id,
+        )) {
+            for sender in stream.subscribers {
+                // A dropped receiver has no remaining host owner; never buffer for a future execution.
+                // 已销毁接收端不再拥有宿主责任；绝不为未来执行缓冲。
+                let _ = sender.send(event.clone());
+            }
         }
         Ok(())
     }

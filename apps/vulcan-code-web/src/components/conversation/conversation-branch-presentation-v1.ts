@@ -140,6 +140,9 @@ function conversationMessagesForV1Event(
   const base = conversationMessageBase(sessionId, summary, rootInput);
   switch (summary.event.kind) {
     case "user_input":
+      // The typed collaboration event owns the visible card; its provider mirror is not a prompt.
+      // 强类型协作事件拥有可见卡片，其供应商镜像不是人类提示词。
+      if (summary.event.input_source === "agent_message") return [];
       return [userInputMessage(base, summary.event, resources)];
     case "assistant_reasoning":
       return [{
@@ -224,16 +227,13 @@ function conversationMessagesForV1Event(
     case "api_stats":
       return [];
     case "subagent_return":
+    case "collaboration":
       return [{
         ...base,
-        role: "assistant",
-        title: "Subagent return",
-        body: summary.event.content,
-        metadata: {
-          ...presentationMetadata(summary, rootInput),
-          child_session_id: summary.event.child_session_id,
-          subagent_task_id: summary.event.child_task_id,
-        },
+        role: "system",
+        recordKind: "agent-interaction",
+        body: summary.event.kind === "subagent_return" ? summary.event.content : "",
+        agentInteraction: { ...summary, event: summary.event },
       }];
     case "queued_input_resolution":
     case "system_context":

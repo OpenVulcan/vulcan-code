@@ -5,6 +5,9 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PendingSessionPromptSource {
+    /// Host continuation of the same business turn after durable agent guidance or a result.
+    /// 可靠代理方向或结果到达后，由宿主继续同一业务回合。
+    AgentContinuation,
     /// User-authored follow-up that should wait for the current run to finish naturally.
     /// 应等待当前运行自然结束后再发送的用户跟进消息。
     UserFollowup,
@@ -23,6 +26,12 @@ pub enum PendingSessionPromptSource {
     /// Host-created attempt that restores a claimed execution checkpoint.
     /// 宿主创建的已领取执行 checkpoint 恢复尝试。
     ExecutionRetry,
+    /// Host-authorized auxiliary Q&A that neither appends a human prompt nor starts a business turn.
+    /// 宿主授权的辅助答疑，不追加人类提示词，也不启动业务回合。
+    QuestionExecution,
+    /// A durable agent-authored task with its own business turn and no human prompt record.
+    /// 拥有独立业务回合的可靠代理任务，不产生人类提示词记录。
+    AgentTask,
 }
 
 impl PendingSessionPromptSource {
@@ -55,10 +64,10 @@ impl PendingSessionPromptSource {
         matches!(self, Self::UserFollowup)
     }
 
-    /// Returns whether this source should close the logical user-authored turn.
-    /// 返回该来源是否应该闭合用户编写的逻辑回合。
+    /// Returns whether this source should close its logical business Hook turn.
+    /// 返回该来源是否应该闭合其逻辑业务 Hook 回合。
     pub fn runs_completed_turn_hooks(self) -> bool {
-        self.starts_user_parent_turn()
+        self.starts_user_parent_turn() || self == Self::AgentTask
     }
 
     /// Returns whether this source is process input folded into the active user turn.

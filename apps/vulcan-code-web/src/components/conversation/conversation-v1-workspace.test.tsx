@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  conversationV1CollaborationSessionIds,
+  createConversationV1CollaborationNavigation,
   ConversationV1Workspace,
   type ConversationV1OptimisticUserInput,
 } from "./conversation-v1-workspace";
@@ -109,6 +111,42 @@ function renderWorkspace(
 }
 
 describe("ConversationV1Workspace", () => {
+  it("keeps embedded child collaboration sessions navigable from the exact backend snapshot", () => {
+    // navigation mirrors the production parent-to-child route projection.
+    // navigation 镜像生产环境的父子路由投影。
+    const navigation = {
+      parentConversationId: "parent-session",
+      activeConversationId: "child-session",
+      activeTaskId: "child-session",
+      tasks: [{
+        taskId: "child-session",
+        publicTaskId: "child-public-id",
+        label: "子代理",
+        runState: "running",
+        isRunning: true,
+        isActive: true,
+      }],
+    };
+    const conversations = [{ id: "parent-session" }];
+
+    const available = conversationV1CollaborationSessionIds(conversations, navigation);
+    expect(available).toEqual(new Set(["parent-session", "child-session"]));
+
+    const selectConversation = vi.fn();
+    const openSubagentPanel = vi.fn(async () => true);
+    const route = createConversationV1CollaborationNavigation({
+      conversations,
+      navigation,
+      onSelectConversation: selectConversation,
+      onOpenSubagentPanel: openSubagentPanel,
+    });
+    route.onOpenSession("parent-session");
+    route.onOpenSession("child-session");
+
+    expect(selectConversation).toHaveBeenCalledWith("parent-session");
+    expect(openSubagentPanel).toHaveBeenCalledWith("parent-session", "child-session");
+  });
+
   it("renders only canonical V1 events for the exact selected owner", () => {
     // events represent the only production transcript authority.
     // events 表示唯一的生产转录权威。

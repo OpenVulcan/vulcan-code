@@ -10,7 +10,7 @@ use vulcan_agent_runtime::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
     ExecutionStreamEvent,
     agent_runtime::{
-        context_injection_runtime::core_provider_context_injection_from_state_for_turn,
+        context_injection_runtime::core_provider_context_injection_from_state_for_turn_draining_expiry_events,
         prompt_compaction::{
             PromptCompactionExecution, PromptCompactionJobRequest, PromptCompactionLaunchContext,
             PromptCompactionModelTarget, PromptCompactionProgressEvent,
@@ -18,7 +18,7 @@ use vulcan_agent_runtime::{
             stream_prompt_compaction_job,
         },
     },
-    conversation_protocol::{SessionConversationState, conversation_state_from_session_messages},
+    conversation_protocol::SessionConversationState,
     provider_config::ReasoningEffortLevel,
 };
 use vulcan_context::{ContextBudgetSnapshot, ContextCompactionPolicy, append_record_body_delta};

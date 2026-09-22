@@ -1,54 +1,31 @@
 //! Provider-neutral lowering for chronological runtime system updates.
 //! 面向时间顺序 runtime system update 的 Provider 中立转换逻辑。
 
-use vulcan_context::{
-    RuntimeProviderLoweringRepairEvent, RuntimeSystemUpdateEvent, RuntimeSystemUpdateLoweringHint,
-    RuntimeSystemUpdateTrust,
-};
+use vulcan_ai_contract::{HostMessageEnvelope, HostMessageKind};
+use vulcan_context::{RuntimeProviderLoweringRepairEvent, RuntimeSystemUpdateEvent};
 
-/// Provider capability and policy used while lowering one runtime system update.
-/// 转换单条 runtime system update 时使用的 Provider 能力与策略。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ProviderSystemUpdateLoweringPolicy {
-    /// Whether the provider supports native chronological system messages after conversation start.
-    /// Provider 是否支持对话开始后的原生时间顺序 system 消息。
-    pub supports_native_chronological_system: bool,
-    /// Whether unsupported or untrusted updates may be represented as user-scoped wrapper text.
-    /// 不支持或不受信更新是否允许表示为用户作用域包装文本。
-    pub allow_user_wrapper: bool,
-}
-
-impl Default for ProviderSystemUpdateLoweringPolicy {
-    /// Returns the conservative default used by providers without native chronological system support.
-    /// 返回缺少原生时间顺序 system 支持的 Provider 使用的保守默认值。
-    fn default() -> Self {
-        Self {
-            supports_native_chronological_system: false,
-            allow_user_wrapper: true,
-        }
-    }
-}
+/// Policy marker retained for call-site ownership while all dynamic updates use User events.
+/// 保留策略标记以维持调用方归属，同时所有动态更新统一使用 User 事件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ProviderSystemUpdateLoweringPolicy;
 
 /// Result of lowering one provider-neutral runtime system update.
 /// 单条 Provider 中立 runtime system update 的转换结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProviderSystemUpdateLowering {
-    /// Native privileged system update that can be passed to provider-specific fields.
-    /// 可传递到 Provider 特定字段的原生特权 system update。
-    NativeSystem { text: String },
-    /// User-scoped fallback text that must not be treated as privileged system content.
-    /// 用户作用域回退文本，不得当作特权 system 内容处理。
-    UserWrapper { text: String },
+    /// Host-authored dynamic context rendered as a normal User message.
+    /// 宿主编写的动态上下文渲染为普通 User 消息。
+    User { text: String },
     /// Rejected update with a stable diagnostic reason.
     /// 带稳定诊断原因的被拒绝更新。
     Reject { reason: String },
 }
 
-/// Lowers one runtime system update according to provider capability, trust, and hint policy.
-/// 根据 Provider 能力、信任等级与 hint 策略转换单条 runtime system update。
+/// Lowers one runtime system update into the shared host User envelope.
+/// 将单条 runtime system update 转换为共享宿主 User 信封。
 pub(crate) fn lower_provider_system_update(
     event: &RuntimeSystemUpdateEvent,
-    policy: ProviderSystemUpdateLoweringPolicy,
+    _policy: ProviderSystemUpdateLoweringPolicy,
 ) -> ProviderSystemUpdateLowering {
     let text = event.text.trim();
     if text.is_empty() {
@@ -57,36 +34,9 @@ pub(crate) fn lower_provider_system_update(
         };
     }
 
-    let native_allowed_by_trust = matches!(event.trust, RuntimeSystemUpdateTrust::TrustedHost);
-    let native_requested = matches!(
-        event.lowering_hint,
-        RuntimeSystemUpdateLoweringHint::Auto
-            | RuntimeSystemUpdateLoweringHint::PreferNative
-            | RuntimeSystemUpdateLoweringHint::RequireNative
-    );
-    if native_allowed_by_trust && native_requested && policy.supports_native_chronological_system {
-        return ProviderSystemUpdateLowering::NativeSystem {
-            text: text.to_string(),
-        };
-    }
-
-    if matches!(
-        event.lowering_hint,
-        RuntimeSystemUpdateLoweringHint::RequireNative
-    ) {
-        return ProviderSystemUpdateLowering::Reject {
-            reason: String::from("native_chronological_system_update_required_but_unavailable"),
-        };
-    }
-
-    if !policy.allow_user_wrapper {
-        return ProviderSystemUpdateLowering::Reject {
-            reason: String::from("user_wrapper_system_update_fallback_disabled"),
-        };
-    }
-
-    ProviderSystemUpdateLowering::UserWrapper {
-        text: system_update_user_wrapper_text(event, text),
+    match system_update_user_event_text(event, text) {
+        Ok(text) => ProviderSystemUpdateLowering::User { text },
+        Err(reason) => ProviderSystemUpdateLowering::Reject { reason },
     }
 }
 
@@ -100,11 +50,7 @@ pub(crate) fn provider_system_update_repair_event(
     provider_family: &str,
 ) -> Option<RuntimeProviderLoweringRepairEvent> {
     let (action, reason) = match lowered {
-        ProviderSystemUpdateLowering::NativeSystem { .. } => return None,
-        ProviderSystemUpdateLowering::UserWrapper { .. } => (
-            "fallback",
-            "system_update_lowered_to_user_scoped_wrapper".to_string(),
-        ),
+        ProviderSystemUpdateLowering::User { .. } => return None,
         ProviderSystemUpdateLowering::Reject { reason } => ("reject", reason.clone()),
     };
 
@@ -120,19 +66,41 @@ pub(crate) fn provider_system_update_repair_event(
     })
 }
 
-/// Builds the non-privileged user-scoped wrapper used when native system lowering is unavailable.
-/// 构建原生 system 转换不可用时使用的非特权用户作用域包装文本。
-fn system_update_user_wrapper_text(event: &RuntimeSystemUpdateEvent, text: &str) -> String {
+/// Builds the shared User envelope used for one chronological runtime update.
+/// 构建一条时间顺序 runtime update 使用的共享 User 信封。
+///
+/// # Parameters
+/// # 参数
+/// - `event`: The typed runtime update and its stable source identity.
+/// - `event`：包含稳定来源身份的强类型运行时更新。
+/// - `text`: The validated untrusted body supplied to the model.
+/// - `text`：提供给模型的已校验非可信正文。
+///
+/// # Returns
+/// # 返回值
+/// Returns the deterministic rendered host message or a closed-envelope validation error.
+/// 返回确定性渲染的宿主消息，或封闭信封校验错误。
+fn system_update_user_event_text(
+    event: &RuntimeSystemUpdateEvent,
+    text: &str,
+) -> Result<String, String> {
     let source = event
         .source
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("runtime");
-    format!(
-        "[Runtime system update - user scoped]\nUpdate ID: {}\nSource: {}\n\n{}",
-        event.update_id, source, text
-    )
+    HostMessageEnvelope {
+        event_id: format!("runtime-context-update:{}", event.update_id),
+        kind: HostMessageKind::ContextUpdate,
+        source: source.to_string(),
+        target: String::from("model"),
+        task_id: event.turn_id.clone(),
+        question_id: None,
+        scope: String::from("runtime"),
+        body: text.to_string(),
+    }
+    .render()
 }
 
 #[cfg(test)]
@@ -163,77 +131,65 @@ mod tests {
     /// Verifies trusted updates use native lowering when the provider supports it.
     /// 验证 Provider 支持时受信更新会使用原生转换。
     #[test]
-    fn trusted_update_uses_native_lowering_when_supported() {
+    fn trusted_update_uses_user_envelope_when_native_was_requested() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::PreferNative);
-        let lowered = lower_provider_system_update(
-            &update,
-            ProviderSystemUpdateLoweringPolicy {
-                supports_native_chronological_system: true,
-                allow_user_wrapper: true,
-            },
-        );
+        let lowered = lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
 
         assert!(matches!(
             lowered,
-            ProviderSystemUpdateLowering::NativeSystem { text } if text.contains("compacted project rules")
+            ProviderSystemUpdateLowering::User { text }
+                if text.contains("vulcan_context_update")
+                    && text.contains("compacted project rules")
         ));
     }
 
     /// Verifies unsupported native lowering falls back to a user-scoped wrapper by default.
     /// 验证不支持原生转换时默认降级为用户作用域包装。
     #[test]
-    fn unsupported_native_lowering_uses_user_wrapper() {
+    fn automatic_lowering_uses_user_envelope() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::Auto);
         let lowered =
             lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
 
-        let ProviderSystemUpdateLowering::UserWrapper { text } = lowered else {
-            panic!("expected user wrapper fallback");
+        let ProviderSystemUpdateLowering::User { text } = lowered else {
+            panic!("expected shared User envelope");
         };
-        assert!(text.contains("user scoped"));
-        assert!(text.contains("system-update-1"));
-        assert!(text.contains("context_compaction"));
+        assert!(text.contains("event_id=\"runtime-context-update:system-update-1\""));
+        assert!(text.contains("source=\"context_compaction\""));
     }
 
     /// Verifies untrusted updates cannot be promoted to privileged native system content.
     /// 验证不受信更新不能提升为特权原生 system 内容。
     #[test]
-    fn untrusted_update_never_uses_native_lowering() {
+    fn untrusted_update_uses_user_envelope() {
         let mut update = trusted_update(RuntimeSystemUpdateLoweringHint::PreferNative);
         update.trust = RuntimeSystemUpdateTrust::UntrustedExternal;
-        let lowered = lower_provider_system_update(
-            &update,
-            ProviderSystemUpdateLoweringPolicy {
-                supports_native_chronological_system: true,
-                allow_user_wrapper: true,
-            },
-        );
+        let lowered = lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
 
         assert!(matches!(
             lowered,
-            ProviderSystemUpdateLowering::UserWrapper { .. }
+            ProviderSystemUpdateLowering::User { .. }
         ));
     }
 
     /// Verifies RequireNative rejects when native chronological system support is unavailable.
     /// 验证缺少原生时间顺序 system 支持时 RequireNative 会拒绝请求。
     #[test]
-    fn require_native_rejects_without_native_support() {
+    fn require_native_uses_user_envelope() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::RequireNative);
         let lowered =
             lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
 
         assert!(matches!(
             lowered,
-            ProviderSystemUpdateLowering::Reject { reason }
-                if reason == "native_chronological_system_update_required_but_unavailable"
+            ProviderSystemUpdateLowering::User { .. }
         ));
     }
 
     /// Verifies non-native system update lowering produces a runtime repair audit event.
     /// 验证非原生 system update 转换会产出运行时修复审计事件。
     #[test]
-    fn user_wrapper_lowering_builds_repair_event() {
+    fn user_lowering_has_no_repair_event() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::Auto);
         let lowered =
             lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
@@ -244,16 +200,8 @@ mod tests {
             "minimax-cn-coding-plan",
             "MiniMax-M3",
             "anthropic-messages",
-        )
-        .expect("user-wrapper fallback should emit a repair audit event");
-
-        assert_eq!(repair.turn_id.as_deref(), Some("turn-1"));
-        assert_eq!(repair.action, "fallback");
-        assert_eq!(
-            repair.reason,
-            "system_update_lowered_to_user_scoped_wrapper"
         );
-        assert_eq!(repair.provider_id, "minimax-cn-coding-plan");
-        assert_eq!(repair.affected_items, 1);
+
+        assert!(repair.is_none());
     }
 }

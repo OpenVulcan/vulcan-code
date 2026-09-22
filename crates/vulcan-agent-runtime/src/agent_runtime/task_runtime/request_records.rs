@@ -30,6 +30,9 @@ pub(super) fn prepare_task_execution_request(
             )
         })?);
     }
+    // Reject before changing the retained business result or preparation identity.
+    // 在改动保留的业务结果或准备身份之前拒绝冲突。
+    task_runtime.ensure_no_auxiliary_execution_with_transaction_lock_held(task_id)?;
     let normalized_description = normalize_optional_task_label(args.description.as_deref());
     let normalized_subagent = normalize_optional_task_label(args.subagent.as_deref())
         .or_else(|| normalize_optional_task_label(args.subagent_profile_id.as_deref()));

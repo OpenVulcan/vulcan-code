@@ -19,6 +19,7 @@ import {
   resourceId,
   type ConversationEventBody,
   type ConversationEventSummary,
+  type CollaborationTaskResult,
 } from "@/service/conversation-event-window-store";
 
 /** Builds one complete V1 event envelope for renderer tests.
@@ -46,6 +47,337 @@ function seqOffset(markup: string, seq: number): number {
 }
 
 describe("ConversationV1DisplayRenderer", () => {
+  it("renders an owned child failure as a result with its original diagnostic and source", () => {
+    // The record represents the parent-owned result event, not a human-authored message.
+    // 此记录表示父侧结果事件，而非人类编写的消息。
+    const event: ConversationEventBody = {
+      kind: "collaboration", version: 1, operation_id: "child-result:3",
+      event_kind: "child_task_non_success_recorded",
+      after_state: { kind: "child_task", task: {
+        reservation_operation_id: "reserve", source_tool_name: "spawn_agent", execution_id: "failed-execution",
+        task_id: "worker", parent_segment_generation: 1, parent_turn_id: 7,
+        child: { session_id: "executor", root_session_id: "parent", project_id: "project", segment_generation: 1, task_id: "worker" },
+        state: "terminal", reserved_at_ms: 3, terminal_at_ms: 10, terminal_outcome: "failed",
+        non_success_projection: null,
+        non_success_result: { operation_id: "child-result:3", event_seq: 12, parent_revision: 5, proof: {
+          child_session_id: "executor", child_segment_generation: 1, execution_id: "failed-execution",
+          child_turn_id: 1, child_start_seq: 1, child_terminal_seq: 4, child_turn_outcome: "stopped", outcome: "failed",
+          failure_notes: [{ event_seq: 2, reason_code: "startup_failed", redacted_detail: "原始启动错误" }],
+        } },
+      } },
+    };
+    // Render through the actual event timeline and its collaboration navigation context.
+    // 通过实际事件时间线及其协作导航上下文渲染。
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+      <ConversationV1DisplayRenderer availableCollaborationSessionIds={new Set(["executor"])}
+        onOpenCollaborationSession={() => undefined} events={[summary(12, event, "host_only")]} />
+    </I18nProvider>);
+    expect(markup).toContain('data-collaboration-card-kind="task-result"');
+    expect(markup).toContain('class="conversation-v1-collaboration-body">startup_failed: 原始启动错误');
+    expect(markup).toContain("打开来源会话");
+    expect(markup).not.toContain("user-bubble");
+    expect(markup).not.toContain("assistant-final-output");
+    expect(markup).not.toContain("conversation-v1-collaboration-cancel-button");
+    // Projection is a delivery control; only the immutable report carries the visible diagnostic.
+    // 投影属于交付控制；只有不可变报告携带可见诊断。
+    if (event.after_state.kind !== "child_task") throw new Error("Expected a child task fixture");
+    const projected: ConversationEventBody = {
+      ...event, operation_id: "child-result-project:12", event_kind: "child_task_non_success_projected",
+      after_state: { kind: "child_task", task: { ...event.after_state.task, non_success_projection: {
+        execution_id: "failed-execution", result_seq: 12, parent_turn_id: 7,
+        inputs: [{ input_id: 1, input_seq: 13 }], operation_id: "child-result-project:12",
+        event_seq: 14, parent_revision: 6, projected_at_ms: 114,
+      } } },
+    };
+    // Render both durable facts together to detect duplicate result presentation.
+    // 一起渲染两个持久事实，以检测重复结果展示。
+    const deliveredMarkup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+      <ConversationV1DisplayRenderer events={[
+        summary(12, event, "host_only"),
+        summary(13, { kind: "user_input", client_action_id: clientActionId("child-result:12:0"),
+          input_id: 1, input_source: "agent_message", text: "model-only result envelope" }),
+        summary(14, projected, "host_only"),
+      ]} />
+    </I18nProvider>);
+    expect(deliveredMarkup.match(/data-collaboration-card-kind="task-result"/g)).toHaveLength(1);
+    expect(deliveredMarkup.match(/class="conversation-v1-collaboration-body">startup_failed: 原始启动错误/g)).toHaveLength(1);
+    expect(deliveredMarkup).not.toContain("model-only result envelope");
+  });
+
+  it("renders final task facts separately from user prompts and delivery acknowledgements", () => {
+    // The target executor returns the result to its original requester; stopped work has no answer.
+    // 目标执行者向原请求者回传结果；停止任务没有回答正文。
+    const result: CollaborationTaskResult = {
+      acceptance: {
+        message: {
+          operation_id: "send", delivery_id: "delivery", kind: "task_start", body: "Original task",
+          source: { session_id: "requester", root_session_id: "requester", project_id: "project", segment_generation: 1, turn_id: 1 },
+          target: { session_id: "executor", root_session_id: "executor", project_id: "project", segment_generation: 1 },
+        }, operation_id: "accept", target_revision: 2, event_seq: 2, accepted_at_ms: 2,
+      },
+      effect: { delivery_id: "delivery", operation_id: "claim", target_revision: 3, event_seq: 3, occurred_at_ms: 3,
+        outcome: { kind: "claimed", execution_id: "execution", turn_id: 2, input_id: 2, input_seq: 4 } },
+      terminal: { turn_id: 2, turn_start_seq: 3, turn_stats_seq: 9, outcome: "completed", completed_at_ms: 9,
+        final_assistant: { api_call_id: 2, api_stats_seq: 7, source_text: { event_seq: 6, text: "完整最终结果" } } },
+      operation_id: "task-result:3", target_revision: 6, event_seq: 10, recorded_at_ms: 9,
+    };
+    for (const outcome of ["completed", "stopped", "abandoned"] as const) {
+      // Each variant is independently rendered so a stale success cannot leak into stopped output.
+      // 每个分支独立渲染，避免旧成功正文混入停止输出。
+      const snapshot: CollaborationTaskResult = { ...result, terminal: { ...result.terminal, outcome,
+        final_assistant: outcome === "completed" ? result.terminal.final_assistant : null } };
+      const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+        <ConversationV1DisplayRenderer
+          availableCollaborationSessionIds={new Set(["executor"])}
+          onOpenCollaborationSession={() => undefined}
+          events={[summary(10, {
+          kind: "collaboration", version: 1, operation_id: result.operation_id,
+          event_kind: "task_result_recorded", after_state: { kind: "task_result", result: snapshot },
+        }, "host_only")]} />
+      </I18nProvider>);
+      expect(markup).toContain('data-collaboration-card-kind="task-result"');
+      expect(markup).toContain("代理任务结果");
+      expect(markup).toContain(outcome === "completed" ? "已完成" : outcome === "stopped" ? "已停止" : "已放弃");
+      expect(markup.includes("完整最终结果")).toBe(outcome === "completed");
+      expect(markup).not.toContain("user-bubble");
+      expect(markup).not.toContain("assistant-final-output");
+      expect(markup).not.toContain("conversation-v1-collaboration-cancel-button");
+      // Only the executor route is available: this verifies the reversed result direction.
+      // 只有执行者路由可用：据此验证结果回传方向确实反转。
+      expect(markup).toMatch(/aria-label="打开来源会话"[^>]*class="conversation-v1-collaboration-session-button"[^>]*type="button">/);
+      expect(markup).not.toMatch(/aria-label="打开来源会话"[^>]*disabled/);
+      expect(markup).toMatch(/aria-label="打开目标会话"[^>]*disabled/);
+      // The requester receives a result card; an internal acknowledgement never becomes another answer.
+      // 请求者收到结果卡片；内部确认绝不成为另一份回答。
+      const acceptance = { result: snapshot, operation_id: "receive-result", event_seq: 20, receiver_revision: 8, accepted_at_ms: 10 };
+      const received = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+        <ConversationV1DisplayRenderer
+          availableCollaborationSessionIds={new Set(["executor"])}
+          onOpenCollaborationSession={() => undefined}
+          events={[summary(20, { kind: "collaboration", version: 1, operation_id: acceptance.operation_id,
+            event_kind: "task_result_accepted", after_state: { kind: "received_task_result", acceptance },
+          }, "host_only")]} />
+      </I18nProvider>);
+      expect(received).toContain('data-collaboration-card-kind="task-result"');
+      expect(received).toContain("代理任务结果");
+      expect(received.includes("完整最终结果")).toBe(outcome === "completed");
+      expect(received).not.toMatch(/aria-label="打开来源会话"[^>]*disabled/);
+      expect(received).toMatch(/aria-label="打开目标会话"[^>]*disabled/);
+      expect(received).not.toContain("user-bubble");
+      const confirmed = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+        <ConversationV1DisplayRenderer events={[summary(30, {
+          kind: "collaboration", version: 1, operation_id: "confirm-result", event_kind: "task_result_acknowledged",
+          after_state: { kind: "task_result_acknowledgement", acknowledgement: { acceptance,
+            operation_id: "confirm-result", event_seq: 30, target_revision: 9, acknowledged_at_ms: 11 } },
+        }, "host_only")]} />
+      </I18nProvider>);
+      expect(confirmed).toContain("任务结果已送达");
+      expect(confirmed).not.toContain('data-collaboration-card-kind="task-result"');
+      expect(confirmed).not.toContain('class="conversation-v1-collaboration-body"');
+      expect(confirmed).not.toContain("conversation-v1-collaboration-cancel-button");
+      expect(confirmed).not.toContain("assistant-final-output");
+      // Projection is an insertion receipt, with neither a second answer body nor reply controls.
+      // 投影是插入回执，不包含第二份回答正文或回复操作。
+      const projected = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+        <ConversationV1DisplayRenderer events={[summary(32, {
+          kind: "collaboration", version: 1, operation_id: "project-result", event_kind: "task_result_projected",
+          after_state: { kind: "task_result_projection", projection: { delivery_id: "delivery", acceptance_seq: 20,
+            turn_id: 1, inputs: [{ input_seq: 31, input_id: 4 }], operation_id: "project-result", event_seq: 32,
+            receiver_revision: 10, projected_at_ms: 12 } },
+        }, "host_only")]} />
+      </I18nProvider>);
+      expect(projected).toContain("任务结果已加入上下文");
+      expect(projected).not.toContain('class="conversation-v1-collaboration-body"');
+      expect(projected).not.toContain("conversation-v1-collaboration-cancel-button");
+      expect(projected).not.toContain("user-bubble");
+    }
+  });
+  it("renders task intent, acceptance and effects as distinct delivery cards", () => {
+    // These are the exact Core after-state variants, not parsed provider User envelopes.
+    // 这些是精确 Core 后状态分支，不是解析供应商 User 信封所得。
+    const message = {
+      operation_id: "send-task", delivery_id: "task-delivery", kind: "task_steer" as const,
+      source: { session_id: "source", root_session_id: "source", project_id: "project", segment_generation: 1, turn_id: 1 },
+      target: { session_id: "target", root_session_id: "target", project_id: "project", segment_generation: 1, turn_id: 2 },
+      body: "先检查身份绑定",
+    };
+    const acceptance = { message, operation_id: "accept-task", target_revision: 3, event_seq: 3, accepted_at_ms: 3 };
+    const effect = {
+      delivery_id: message.delivery_id, operation_id: "apply-task", target_revision: 4, event_seq: 5, occurred_at_ms: 4,
+      outcome: { kind: "steered" as const, turn_id: 2, input_id: 2, input_seq: 4 },
+    };
+    const events: ConversationEventBody[] = [
+      { kind: "collaboration", version: 1, operation_id: "send-task", event_kind: "task_message_sent",
+        after_state: { kind: "outbound_task_message", record: { message, created_at_ms: 2, acceptance: null } } },
+      { kind: "collaboration", version: 1, operation_id: "accept-task", event_kind: "task_message_accepted",
+        after_state: { kind: "inbound_task_message", acceptance } },
+      { kind: "collaboration", version: 1, operation_id: "ack-task", event_kind: "task_message_acknowledged",
+        after_state: { kind: "outbound_task_message", record: { message, created_at_ms: 2, acceptance } } },
+      { kind: "collaboration", version: 1, operation_id: "apply-task", event_kind: "task_message_effect",
+        after_state: { kind: "task_message_effect", effect } },
+      { kind: "collaboration", version: 1, operation_id: "failed-task", event_kind: "task_message_effect",
+        after_state: { kind: "task_message_effect", effect: { ...effect,
+          outcome: { kind: "failed", reason: "authorization_revoked" } } } },
+      { kind: "collaboration", version: 1, operation_id: "claimed-task", event_kind: "task_message_effect",
+        after_state: { kind: "task_message_effect", effect: { ...effect,
+          outcome: { kind: "claimed", execution_id: "next-task-execution", turn_id: 3, input_id: 4, input_seq: 6 } } } },
+    ];
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+      <ConversationV1DisplayRenderer events={events.map((event, index) => summary(index + 1, event, "host_only"))} />
+    </I18nProvider>);
+    expect(markup.match(/data-collaboration-card-kind="task-message"/g)).toHaveLength(6);
+    expect(markup).toContain("代理任务消息");
+    expect(markup).toContain("任务已认领");
+    expect(markup).toContain("先检查身份绑定");
+    expect(markup).not.toContain('data-collaboration-card-kind="task-result"');
+    expect(markup).not.toContain("user-bubble");
+    expect(markup).not.toContain("子任务结果");
+  });
+  it("renders child terminal output through the shared task-result card", () => {
+    // markup proves the event-native path no longer drops child results or labels them as a parent final.
+    // markup 证明事件原生链路不再丢弃子任务结果，也不将其标记为父助手最终回复。
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+      <ConversationV1DisplayRenderer events={[summary(2, { kind: "subagent_return", child_session_id: "child-session", child_segment_generation: 1, child_root_action_id: "child-execution", child_task_id: "child-task", content: "子任务完成内容", source_assistant_text_seq: 3, source_from_seq: 1, source_to_seq: 5, child_turn_stats_seq: 5 })]} />
+    </I18nProvider>);
+    expect(markup).toContain('data-collaboration-card-kind="task-result"');
+    expect(markup).toContain("子任务完成内容");
+    expect(markup).not.toContain("assistant-final-output");
+    expect(markup).not.toContain("user-bubble");
+  });
+  it("renders HostOnly collaboration questions as localized cards with exact session navigation", () => {
+    const onOpenSession = vi.fn();
+    const onCancelQuestion = vi.fn();
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <ConversationV1DisplayRenderer
+          availableCollaborationSessionIds={new Set(["session-source", "session-target"])}
+          events={[
+            summary(1, {
+              kind: "collaboration",
+              version: 1,
+              operation_id: "operation-question-1",
+              event_kind: "question_created",
+              after_state: {
+                kind: "question",
+                question: {
+                  operation_id: "operation-question-1",
+                  question_id: "question-1",
+                  delivery_id: "delivery-1",
+                  source: {
+                    session_id: "session-source",
+                    root_session_id: "session-source",
+                    project_id: "project-1",
+                    segment_generation: 1,
+                    turn_id: 7,
+                  },
+                  target: {
+                    session_id: "session-target",
+                    root_session_id: "session-target",
+                    project_id: "project-1",
+                    segment_generation: 1,
+                    task_id: "task-target",
+                  },
+                  body: "Which file owns this behavior?",
+                  execution_purpose: "in_turn_question",
+                  state: "pending",
+                  created_at_ms: 100,
+                },
+                delivery: {
+                  delivery_id: "delivery-1",
+                  question_id: "question-1",
+                  operation_id: "operation-question-1",
+                  source: {
+                    session_id: "session-source",
+                    root_session_id: "session-source",
+                    project_id: "project-1",
+                    segment_generation: 1,
+                    turn_id: 7,
+                  },
+                  target: {
+                    session_id: "session-target",
+                    root_session_id: "session-target",
+                    project_id: "project-1",
+                    segment_generation: 1,
+                    task_id: "task-target",
+                  },
+                  state: "recorded",
+                  updated_at_ms: 101,
+                },
+              },
+            }, "host_only"),
+          ]}
+          onCancelCollaborationQuestion={onCancelQuestion}
+          onOpenCollaborationSession={onOpenSession}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain('data-event-kind="collaboration"');
+    expect(markup).toContain("代理提问");
+    expect(markup).toContain("等待处理");
+    expect(markup).toContain("Which file owns this behavior?");
+    expect(markup).toContain("打开来源会话");
+    expect(markup).toContain("打开目标会话");
+    expect(markup).toContain("撤销问题");
+    expect(markup).toContain("operation-question-1");
+    expect(markup).toContain("session-source");
+    expect(markup).toContain("session-target");
+    expect(markup).not.toContain("ask-question-dialog");
+  });
+
+  it("renders phase notifications in a distinct collaboration card without question controls", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="en-US">
+        <ConversationV1DisplayRenderer
+          availableCollaborationSessionIds={new Set(["session-source", "session-target"])}
+          events={[
+            summary(2, {
+              kind: "collaboration",
+              version: 1,
+              operation_id: "operation-notification-1",
+              event_kind: "notification_sent",
+              after_state: {
+                kind: "outbound_notification",
+                notification: {
+                  notification_id: "notification-1",
+                  delivery_id: "delivery-notification-1",
+                  operation_id: "operation-notification-1",
+                  source: {
+                    session_id: "session-source",
+                    root_session_id: "session-source",
+                    project_id: "project-1",
+                    segment_generation: 1,
+                    turn_id: 7,
+                  },
+                  target: {
+                    session_id: "session-target",
+                    root_session_id: "session-target",
+                    project_id: "project-1",
+                    segment_generation: 1,
+                    task_id: "task-target",
+                  },
+                  body: "The child agent reached the validation phase.",
+                  state: "recorded",
+                  created_at_ms: 110,
+                  updated_at_ms: 111,
+                },
+              },
+            }, "host_only"),
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain('data-collaboration-card-kind="notification"');
+    expect(markup).toContain("conversation-v1-collaboration-notification-card");
+    expect(markup).toContain("Agent phase notification");
+    expect(markup).toContain("Recorded");
+    expect(markup).toContain("The child agent reached the validation phase.");
+    expect(markup).toContain("Open source session");
+    expect(markup).toContain("Open target session");
+    expect(markup).not.toContain("Cancel collaboration question");
+  });
+
   // Goal control facts must render as marked cards, not raw protocol identifiers or assistant paragraphs.
   // 目标控制事实必须渲染为标记卡片，不能成为原始协议编号或 assistant 段落。
   it("renders resumed and blocked goals as localized notice cards", () => {
@@ -387,7 +719,9 @@ describe("ConversationV1DisplayRenderer", () => {
       }, "ui_only"),
       summary(11, {
         kind: "turn_boundary",
+        reason: "completed",
         outcome: "completed",
+        purpose: "business",
       }, "provider"),
       summary(12, {
         kind: "turn_stats",

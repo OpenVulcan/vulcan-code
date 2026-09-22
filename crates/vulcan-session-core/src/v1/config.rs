@@ -10,10 +10,11 @@
 //! 转录、恢复副本或统计账本。
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::ContextCompactionWindowNodeId;
 
-use crate::v1::ids::{ClientActionId, PendingInputId, ResourceId, Seq, TurnId};
+use crate::v1::collaboration::{CollaborationExecutionId, CollaborationMetadata};
+use crate::v1::ids::{ApiCallId, ClientActionId, PendingInputId, ResourceId, Seq, TurnId};
 
 /// File contract of the V1 session metadata document.
 /// V1 会话元数据文档的文件契约。
@@ -729,6 +730,26 @@ pub enum TerminalSettlementState {
     RepairRequired,
 }
 
+/// Exact execution scope allowed to settle after a stream failure.
+/// 流失败后允许结算的精确执行范围。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TerminalSettlementScope {
+    /// Settle the original business turn through its existing failure reducer.
+    /// 通过既有失败归约器结算原业务回合。
+    BusinessTurn,
+    /// Settle only the named auxiliary execution, retaining any parent business turn.
+    /// 仅结算指定辅助执行，保留其父业务回合。
+    QuestionExecution {
+        /// Durable execution identity captured before stream ownership is released.
+        /// 释放流所有权前捕获的可靠执行身份。
+        execution_id: CollaborationExecutionId,
+        /// Exact unfinished physical API, or none when no API remains active.
+        /// 精确未完成物理 API；无活动 API 时为空。
+        api_call_id: Option<ApiCallId>,
+    },
+}
+
 /// Durable, recoverable settlement intent for one exact terminal boundary.
 /// 一个精确终态边界的可靠可恢复结算意图。
 ///
@@ -750,6 +771,9 @@ pub struct TerminalSettlementRecord {
     /// Exact logical turn whose terminal fact is being settled.
     /// 正在结算终态事实的精确逻辑回合。
     pub turn_id: TurnId,
+    /// Required business or auxiliary scope; never inferred from mutable UI state.
+    /// 必需的业务或辅助范围，绝不根据可变 UI 状态推断。
+    pub scope: TerminalSettlementScope,
     /// Exact in-process terminal-persistence owner generation identity.
     /// 精确的进程内终态持久化所有者代际身份。
     pub owner_generation: String,
@@ -886,6 +910,27 @@ pub struct MetadataDocument {
     /// Allocator frontier cache.
     /// 分配器 frontier 缓存。
     pub id_frontier: IdFrontier,
+    /// Required typed collaboration recovery state and event coverage marker.
+    /// 协作领域必需的强类型恢复状态与事件覆盖标记。
+    pub collaboration: CollaborationMetadata,
+    /// Latest typed state for each request dynamic-context producer.
+    /// 每个请求动态上下文生产者的最新强类型状态。
+    pub dynamic_context: BTreeMap<String, super::dynamic_context::DynamicContextState>,
+    /// Resolved child execution profile, absent for ordinary sessions and unprepared children.
+    /// 已解析子执行配置；普通会话及尚未准备的子代理没有此记录。
+    pub child_execution_profile: Option<super::child_execution::ChildExecutionProfile>,
+    /// Latest auxiliary maintenance ownership; business completion remains independent.
+    /// 最近辅助维护归属；业务完成保持独立。
+    pub context_maintenance: Option<super::context_maintenance::ContextMaintenanceExecution>,
+    /// Initial child creation sources published atomically with their parent reservations.
+    /// 与父预留原子发布的初始子创建来源。
+    pub child_creation_intents: BTreeMap<
+        super::collaboration::CollaborationExecutionId,
+        super::child_execution::ChildCreationIntent,
+    >,
+    /// Required main-session Hook admission binding; empty until its first preparation.
+    /// 必需主会话 Hook 准入绑定；首次准备之前为空。
+    pub business_hook: super::business_hook::BusinessHookMetadata,
 }
 
 impl MetadataDocument {
@@ -919,6 +964,12 @@ impl MetadataDocument {
                 next_local_id: 1,
                 next_seq: 1,
             },
+            collaboration: CollaborationMetadata::new(),
+            dynamic_context: BTreeMap::new(),
+            child_execution_profile: None,
+            context_maintenance: None,
+            child_creation_intents: BTreeMap::new(),
+            business_hook: super::business_hook::BusinessHookMetadata::default(),
         }
     }
 }

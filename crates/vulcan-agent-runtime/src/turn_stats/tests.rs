@@ -446,7 +446,9 @@ fn current_turn_stats_use_triggering_agent_message_when_no_user_record_exists() 
             SessionConversationMessage {
                 id: String::from("session-1-agent-message-2000"),
                 payload: SessionConversationPayload::AgentMessage {
+                    kind: vulcan_ai_contract::HostMessageKind::TaskResult,
                     message_type: String::from("completed"),
+                    task_id: String::from("task-agent-a"),
                     task_name: String::from("agent-a"),
                     sender: String::from("agent-a"),
                     recipient: String::from("parent"),

@@ -10,8 +10,6 @@ use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
 };
 use vulcan_session_core::v1::document::PlanModeTransitionInput;
-use vulcan_session_core::v1::document::SessionDocument;
-use vulcan_session_core::v1::event::{EventBody, SystemContextOperation};
 
 /// Publishes the root usage projection after a terminal or tool increment.
 /// 在终态或工具增量后发布根用量投影。
@@ -31,20 +29,6 @@ pub(crate) fn emit_lifetime_usage_changed(
         eprintln!("[session-usage] publish: {error}");
     }
 }
-
-/// 会话当前处于计划模式时返回计划模式开发者提示段。
-pub(crate) fn session_plan_context_for_prompt_from_state(
-    _app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    _controller_runtime: &HostRuntimeHandle,
-    session_id: SessionId,
-) -> Result<Option<String>, String> {
-    let handle = registered_session_v1_handle_from_state(state, session_id)?;
-    handle
-        .read(plan_context_for_next_provider_request)
-        .map_err(|error| format!("读取 V1 Plan 提示词状态失败：{error}"))?
-}
-
 /// Persists one Plan-mode choice through the failure-atomic V1 domain transition.
 /// 通过失败原子的 V1 领域转换持久化一次 Plan 模式选择。
 ///
@@ -87,140 +71,6 @@ pub(crate) async fn persist_session_plan_mode_v1(
         .map_err(|error| format!("持久化 V1 Plan 模式失败：{error}"))?;
     Ok(receipt.changed)
 }
-
-/// Projects the transient Plan prompt adapter from the append-only V1 event sequence.
-/// 从只追加的 V1 事件序列投影临时 Plan 提示词适配器。
-///
-/// # Parameters
-/// 参数
-/// `document` is the authoritative resident V1 session document.
-/// `document` 是权威的驻留 V1 会话文档。
-///
-/// # Returns
-/// 返回值
-/// Returns the current Plan context, a pending one-shot exit context, or no adapter context.
-/// 返回当前 Plan 上下文、待发送的一次性退出上下文，或不返回适配上下文。
-fn plan_context_for_next_provider_request(
-    document: &SessionDocument,
-) -> Result<Option<String>, String> {
-    let plan_enabled = document.metadata.mode.plan.enabled;
-    let latest_plan_context = document.events().iter().rev().find_map(|event| {
-        let EventBody::SystemContext(context) = &event.event else {
-            return None;
-        };
-        (context.context_key == "plan_mode").then_some((event.seq(), context))
-    });
-    let Some((context_seq, context)) = latest_plan_context else {
-        return if plan_enabled {
-            Err(String::from(
-                "V1 Plan metadata is enabled without its Provider-visible context event.",
-            ))
-        } else {
-            Ok(None)
-        };
-    };
-    match (plan_enabled, context.operation) {
-        (true, SystemContextOperation::Upsert) => Ok(Some(context.content.clone())),
-        (false, SystemContextOperation::Remove) => {
-            let already_crossed_api_boundary = document.events().iter().any(|event| {
-                event.seq() > context_seq && matches!(&event.event, EventBody::ApiStarted(_))
-            });
-            Ok((!already_crossed_api_boundary).then(|| context.content.clone()))
-        }
-        _ => Err(String::from(
-            "V1 Plan metadata and its latest Provider-visible context operation disagree.",
-        )),
-    }
-}
-
-#[cfg(test)]
-mod v1_plan_context_tests {
-    use super::*;
-    use vulcan_session_core::v1::context::LockedBaselineProjection;
-    use vulcan_session_core::v1::document::{
-        ClientInputSubmission, PlanModeTransitionInput, PrepareAndStartApiInput,
-    };
-    use vulcan_session_core::v1::event::{
-        ApiPurposeKind, ApiRequestSnapshot, ProviderProjectionProof,
-    };
-    use vulcan_session_core::v1::ids::ClientActionId;
-    use vulcan_session_core::v1::projection::provider_visible_fingerprint;
-
-    /// Plan exit context remains pending until the next physical API boundary crosses its seq.
-    /// Plan 退出上下文会保留到下一次物理 API 边界越过其 seq 为止。
-    #[test]
-    fn plan_context_adapter_is_derived_from_v1_sequence_without_legacy_persistence() {
-        let mut document = SessionDocument::new("session-1", "project-1", "title", 1);
-        document
-            .submit_root_input(
-                ClientInputSubmission::new(
-                    ClientActionId::try_new("plan-context-root")
-                        .expect("plan-context root action id should be valid"),
-                    "root",
-                    Vec::new(),
-                ),
-                2,
-            )
-            .expect("root turn")
-            .into_value();
-        document
-            .set_plan_mode(
-                PlanModeTransitionInput::try_new(true, "plan-enter").expect("enable plan"),
-                3,
-            )
-            .expect("enable plan mode");
-        assert_eq!(
-            plan_context_for_next_provider_request(&document).expect("active plan context"),
-            Some(String::from("plan-enter"))
-        );
-
-        document
-            .set_plan_mode(
-                PlanModeTransitionInput::try_new(false, "plan-exit").expect("disable plan"),
-                4,
-            )
-            .expect("disable plan mode");
-        assert_eq!(
-            plan_context_for_next_provider_request(&document).expect("pending exit context"),
-            Some(String::from("plan-exit"))
-        );
-
-        let retained_from_seq = document.events().first().expect("root input event").seq;
-        let through_seq = document.events().last().expect("plan exit event").seq;
-        let prepared = document
-            .prepare_and_start_api(PrepareAndStartApiInput {
-                purpose: ApiPurposeKind::MainGeneration,
-                request: ApiRequestSnapshot::new("provider", "model"),
-                request_budget_evidence:
-                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
-                projection: ProviderProjectionProof {
-                    segment_generation: document.segment_generation(),
-                    document_revision: document.memory_revision(),
-                    retained_from_seq,
-                    through_seq,
-                    fingerprint_sha256: provider_visible_fingerprint(
-                        document.events(),
-                        through_seq,
-                    )
-                    .expect("provider-visible fingerprint"),
-                },
-                locked_baseline: LockedBaselineProjection::empty(),
-                continuation_action_id: None,
-                now_ms: 5,
-            })
-            .expect("cross next physical API boundary")
-            .into_value();
-        assert_eq!(
-            document.active_api().expect("active API").api_call_id,
-            prepared.api_call_id
-        );
-        assert_eq!(
-            plan_context_for_next_provider_request(&document).expect("consumed exit context"),
-            None
-        );
-    }
-}
-
 /// Renders the Plan-mode developer guidance attached to each active Plan request.
 /// 渲染附加到每次活跃计划模式请求的开发者引导。
 ///

@@ -25,6 +25,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_delete_archived_conversations",
     "service_mark_conversation_read",
     "service_select_conversation",
+    "service_list_collaboration_grants",
+    "service_add_collaboration_grant",
+    "service_remove_collaboration_grant",
+    "service_cancel_collaboration_question",
     "service_open_external_url",
 ];
 
@@ -139,6 +143,44 @@ pub(super) async fn dispatch(
         ),
         "service_select_conversation" => rpc_json_result(
             service_select_conversation(state, rpc_required_param(params, "conversationId")?).await,
+        ),
+        "service_list_collaboration_grants" => rpc_json_result(
+            service_list_collaboration_grants(
+                state,
+                rpc_required_param(params, "sourceSessionId")?,
+            )
+            .await,
+        ),
+        "service_add_collaboration_grant" => rpc_json_result(
+            service_add_collaboration_grant(
+                state,
+                rpc_required_param(params, "sourceSessionId")?,
+                rpc_required_param(params, "targetSessionId")?,
+                rpc_required_param(params, "operationId")?,
+                rpc_required_param(params, "actions")?,
+            )
+            .await,
+        ),
+        "service_remove_collaboration_grant" => rpc_json_result(
+            service_remove_collaboration_grant(
+                state,
+                rpc_required_param(params, "sourceSessionId")?,
+                rpc_required_param(params, "grantId")?,
+                rpc_required_param(params, "operationId")?,
+            )
+            .await,
+        ),
+        "service_cancel_collaboration_question" => rpc_json_result(
+            service_cancel_collaboration_question(
+                state,
+                rpc_required_param(params, "questionId")?,
+                rpc_required_param(params, "sourceRootSessionId")?,
+                rpc_required_param(params, "operationId")?,
+                rpc_optional_param(params, "reason")?.unwrap_or_else(|| {
+                    String::from("user_cancelled")
+                }),
+            )
+            .await,
         ),
         "service_open_external_url" => rpc_json_result(service_open_external_url(
             state,

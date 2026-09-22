@@ -567,6 +567,163 @@ fn prepare_execution_exposes_knowledge_tools_for_effective_access() {
     assert!(definition_ids.contains(&KNOWLEDGE_READ_TOOL_ID));
 }
 
+/// Auxiliary execution excludes business mutators from both visibility and invocation.
+/// 辅助执行同时从可见目录和调用定义中排除业务修改工具。
+#[test]
+fn question_execution_removes_business_tools_from_both_surfaces() {
+    // Include task, mode and collaboration controls alongside tools that remain usable.
+    // 将任务、模式和协作控制与仍可使用的工具一起构造。
+    let definitions = [
+        vulcan_subagent_core::SPAWN_AGENT_TOOL,
+        vulcan_subagent_core::SEND_MESSAGE_TOOL,
+        vulcan_subagent_core::INTERRUPT_AGENT_TOOL,
+        vulcan_subagent_core::CLOSE_AGENT_TOOL,
+        crate::tooling::collaboration::SEND_SESSION_MESSAGE_TOOL_ID,
+        CREATE_GOAL_TOOL_ID,
+        UPDATE_GOAL_TOOL_ID,
+        crate::tooling::native::SUBMIT_PLAN_TOOL_ID,
+        TODOLIST_TOOL_ID,
+        crate::tooling::collaboration::REPLY_QUESTION_TOOL_ID,
+        GET_GOAL_TOOL_ID,
+    ]
+    .into_iter()
+    .map(|id| test_resolved_tool(id, VulcanToolSourceKind::Native))
+    .collect::<Vec<_>>();
+    // Both surfaces start with the exact same permitted tool set.
+    // 两个入口初始持有完全相同的已准入工具集合。
+    let mut resolved = ResolvedToolSet {
+        descriptors: definitions
+            .iter()
+            .map(|tool| tool.descriptor.clone())
+            .collect(),
+        definitions,
+    };
+    super::remove_question_execution_business_tools(&mut resolved);
+    assert_eq!(resolved.descriptors.len(), 2);
+    assert_eq!(resolved.definitions.len(), 2);
+    for id in [
+        crate::tooling::collaboration::REPLY_QUESTION_TOOL_ID,
+        GET_GOAL_TOOL_ID,
+    ] {
+        assert!(resolved.descriptors.iter().any(|tool| tool.id == id));
+        assert!(
+            resolved
+                .definitions
+                .iter()
+                .any(|tool| tool.descriptor.id == id)
+        );
+    }
+}
+
+/// Original tool origins constrain both advertised tools and callable definitions after catalog changes.
+/// 工具目录变化后，原工具来源同时限制展示工具和可调用定义。
+#[test]
+fn captured_child_tool_admission_tracks_origin_and_denies_replacements() {
+    use vulcan_session_core::v1::child_execution::{ChildToolOrigin, ChildToolSourceKind};
+    // The original tool has been renamed; its previous name now belongs to another server.
+    // 原工具已经改名；旧名称现在属于另一服务。
+    let mut original = test_resolved_tool("read_2", VulcanToolSourceKind::Mcp);
+    original.descriptor = VulcanToolDescriptor::new(
+        "read_2",
+        "read_2",
+        "Read",
+        None,
+        VulcanToolOrigin::new(VulcanToolSourceKind::Mcp, "original-server", "read"),
+    );
+    let mut replacement = test_resolved_tool("read", VulcanToolSourceKind::Mcp);
+    replacement.descriptor = VulcanToolDescriptor::new(
+        "read",
+        "read",
+        "Read",
+        None,
+        VulcanToolOrigin::new(VulcanToolSourceKind::Mcp, "replacement-server", "read"),
+    );
+    let definitions = vec![
+        original,
+        replacement,
+        test_resolved_tool("new-tool", VulcanToolSourceKind::Native),
+    ];
+    let mut resolved = ResolvedToolSet {
+        descriptors: definitions
+            .iter()
+            .map(|definition| definition.descriptor.clone())
+            .collect(),
+        definitions,
+    };
+    let admitted = BTreeMap::from([(
+        String::from("read"),
+        ChildToolOrigin {
+            source_kind: ChildToolSourceKind::Mcp,
+            namespace: String::from("original-server"),
+            original_name: String::from("read"),
+        },
+    )]);
+    super::captured_child_tool_admission::filter_tools(&mut resolved, Some(&admitted));
+    assert_eq!(
+        resolved
+            .descriptors
+            .iter()
+            .map(|tool| tool.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["read_2"]
+    );
+    assert_eq!(
+        resolved
+            .definitions
+            .iter()
+            .map(|tool| tool.descriptor.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["read_2"]
+    );
+    super::captured_child_tool_admission::filter_tools(&mut resolved, Some(&BTreeMap::new()));
+    assert!(resolved.descriptors.is_empty());
+    assert!(resolved.definitions.is_empty());
+}
+
+/// The production preparation entry rejects child Q&A without an explicit original admission.
+/// 生产准备入口拒绝未提供明确原准入记录的子答疑。
+#[test]
+fn captured_child_tool_admission_is_required_by_child_preparation() {
+    // Identity and purpose come from host request fields, never message text.
+    // 身份与用途来自宿主请求字段，不来自消息正文。
+    let config = test_provider_config();
+    let foundation = test_runtime_foundation(&config);
+    let mut request = test_execution_preparation_request();
+    request.prompt_purpose = ExecutionPromptPurpose::QuestionExecution;
+    request.prompt.clear();
+    request.execution_scope = vulcan_session_core::ExecutionScope::TaskSession {
+        root_session_id: vulcan_session_core::SessionNodeId::from(Uuid::new_v4()),
+        task_session_id: vulcan_session_core::SessionNodeId::from(request.session_id),
+    };
+    let error = match prepare_execution_with_tool_snapshot(&foundation, None, &config, &request) {
+        Ok(_) => panic!("missing child admission unexpectedly accepted"),
+        Err(error) => error,
+    };
+    assert!(error.contains("original tool admission"));
+    request.captured_child_tool_admission = Some(BTreeMap::new());
+    let prepared =
+        prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+    assert!(prepared.preparation.tool_descriptors.is_empty());
+    assert!(prepared.tool_snapshot.resolved_tool_definitions.is_empty());
+}
+
+/// Auxiliary admission refuses a business prompt and an explicit user-input launch mode.
+/// 辅助准入拒绝业务提示词和显式用户输入启动方式。
+#[test]
+fn question_admission_rejects_business_input() {
+    // The existing nonempty prompt must fail even for a main-session auxiliary request.
+    // 即使是主会话辅助请求，现有非空提示词也必须失败。
+    let mut request = test_execution_preparation_request();
+    request.prompt_purpose = ExecutionPromptPurpose::QuestionExecution;
+    assert!(super::captured_child_tool_admission::validate_request(&request).is_err());
+    request.prompt.clear();
+    request.turn_start_mode =
+        Some(crate::agent_runtime::execution_models::ExecutionTurnStartMode::UserPrompt);
+    assert!(super::captured_child_tool_admission::validate_request(&request).is_err());
+    request.turn_start_mode = None;
+    assert!(super::captured_child_tool_admission::validate_request(&request).is_ok());
+}
+
 /// Verifies context-compaction preparation clears every provider-visible tool snapshot.
 /// 验证上下文压缩准备阶段会清空所有 Provider 可见工具快照。
 #[test]
@@ -580,12 +737,25 @@ fn prepare_execution_hides_tools_for_context_compaction_purpose() {
         node_id: SessionNodeId::from(request.session_id),
     };
     request.execution_mode = String::from("Compaction");
+    // A parent may reject one tool; that selective policy cannot weaken internal execution isolation.
+    // 父级可以只拒绝一个工具；该选择性策略不能削弱内部执行隔离。
+    request.tool_request_rejection_reason = Some(String::from("Parent forbids shell only."));
+    request.tool_request_rejection_tool_ids = vec![String::from("shell_command")];
+    request.tool_request_rejection_all_tools = false;
 
     let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
         .expect("context compaction preparation should still resolve");
 
     assert!(prepared.preparation.tool_descriptors.is_empty());
     assert!(prepared.tool_snapshot.resolved_tool_definitions.is_empty());
+    assert!(prepared.preparation.tool_request_rejection_all_tools);
+    assert_eq!(
+        prepared
+            .preparation
+            .tool_request_rejection_reason
+            .as_deref(),
+        Some("Tool calls are not allowed during this internal execution.")
+    );
 }
 
 /// Verifies cache-preserving compaction preparation keeps provider-visible tool snapshots.
@@ -601,6 +771,11 @@ fn prepare_execution_keeps_tools_for_cache_preserving_context_compaction_purpose
         node_id: SessionNodeId::from(request.session_id),
     };
     request.execution_mode = String::from("Compaction");
+    // Keeping a visible catalog does not inherit permission to execute its unlisted tools.
+    // 保留可见目录不代表继承执行未被列入拒绝清单的工具权限。
+    request.tool_request_rejection_reason = Some(String::from("Parent forbids shell only."));
+    request.tool_request_rejection_tool_ids = vec![String::from("shell_command")];
+    request.tool_request_rejection_all_tools = false;
 
     let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
         .expect("cache-preserving context compaction preparation should still resolve");
@@ -612,6 +787,14 @@ fn prepare_execution_keeps_tools_for_cache_preserving_context_compaction_purpose
     assert!(
         !prepared.tool_snapshot.resolved_tool_definitions.is_empty(),
         "cache-preserving compaction must keep provider-visible tool definitions"
+    );
+    assert!(prepared.preparation.tool_request_rejection_all_tools);
+    assert_eq!(
+        prepared
+            .preparation
+            .tool_request_rejection_reason
+            .as_deref(),
+        Some("Tool calls are not allowed during this internal execution.")
     );
 }
 
@@ -667,7 +850,9 @@ fn test_provider_config() -> ProviderConfigurationFile {
 
 /// Builds a runtime foundation with one explicit public-AI route and in-memory model catalog.
 /// 构建带有一条显式公共 AI 路由与内存模型目录的运行时基础。
-fn test_runtime_foundation(config: &ProviderConfigurationFile) -> RuntimeFoundation {
+pub(in crate::agent_runtime) fn test_runtime_foundation(
+    config: &ProviderConfigurationFile,
+) -> RuntimeFoundation {
     let mut foundation = RuntimeFoundation::build_from_optional_mcp_access(
         config,
         &AgentProfileCatalog::default(),
@@ -817,6 +1002,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         temperature: None,
         reasoning_effort: ReasoningEffortLevel::Off,
         tool_exposure_override: Default::default(),
+        captured_child_tool_admission: None,
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,
         tool_request_rejection_tool_ids: Vec::new(),
@@ -835,6 +1021,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         controller_runtime: None,
         native_goal_runtime: None,
         native_browser_runtime: None,
+        native_agent_collaboration_runtime: None,
         supplemental_mcp_tools: Vec::new(),
         media_resource_runtime: None,
         knowledge_access: None,

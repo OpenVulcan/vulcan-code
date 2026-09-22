@@ -1,0 +1,263 @@
+//! Indexed startup repair without hydrating unrelated conversation histories.
+//! 基于索引的启动修复，不水合无关会话历史。
+
+use super::*;
+mod main_execution;
+pub(super) mod native_execution;
+mod native_results;
+pub(super) mod tree;
+pub(super) mod worker;
+use std::collections::BTreeSet;
+use vulcan_session_core::v1::collaboration::{
+    CollaborationState, CollaborationTaskMessageEffectKind, CollaborationTaskMessageKind,
+};
+use vulcan_workspace_store::workspace_store::locate_session_v1_storage;
+
+/// Selects durable delivery and queued-task work; questions do not become business completion duties.
+/// 筛选可靠投递和排队任务待办；问题不会变成业务完成义务。
+/// `collaboration` is metadata only; returns whether canonical loading is necessary for repair.
+/// `collaboration` 仅是元数据；返回是否需要为修复加载规范文档。
+fn needs_delivery_recovery(collaboration: &CollaborationState) -> bool {
+    // A claim can survive a crash before dispatch; the full document later proves API eligibility.
+    // 认领可能在分发前崩溃后存续；完整文档随后证明 API 准入资格。
+    if collaboration
+        .task_message_effects
+        .iter()
+        .any(|(delivery, effect)| {
+            matches!(
+                effect.outcome,
+                CollaborationTaskMessageEffectKind::Claimed { .. }
+            ) && !collaboration.task_results.contains_key(delivery)
+        })
+    {
+        return true;
+    }
+    collaboration
+        .outbound_task_messages
+        .values()
+        .any(|record| record.acceptance.is_none())
+        || collaboration.task_results.keys().any(|delivery| {
+            !collaboration
+                .task_result_acknowledgements
+                .contains_key(delivery)
+        })
+        || collaboration
+            .inbound_task_messages
+            .iter()
+            .any(|(delivery, acceptance)| {
+                acceptance.message.kind == CollaborationTaskMessageKind::TaskStart
+                    && !collaboration.task_message_effects.contains_key(delivery)
+            })
+        || collaboration.outbound_deliveries.values().any(|delivery| {
+            matches!(
+                delivery.state,
+                CollaborationDeliveryState::Recorded
+                    | CollaborationDeliveryState::Accepted
+                    | CollaborationDeliveryState::Projected
+            ) || (delivery.settlement_ack.is_none()
+                && collaboration
+                    .questions
+                    .get(&delivery.question_id)
+                    .is_some_and(|question| question.state != CollaborationQuestionState::Pending))
+        })
+}
+
+/// Repairs `session_ids` independently using exact indexed locators and published state.
+/// 使用精确索引定位器和已发布状态，独立修复 `session_ids`。
+/// `app` emits launches and `state` supplies service ownership; returns collected per-session failures.
+/// `app` 发出启动，`state` 提供服务所有权；返回汇总的逐会话失败。
+pub(super) async fn recover_indexed_collaboration(
+    app: &crate::ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_ids: BTreeSet<Uuid>,
+) -> Result<(), String> {
+    let registry = state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .session_runtime_registry
+        .clone();
+    recover_indexed_collaboration_owned(app, state, session_ids, &registry).await
+}
+
+/// Repairs one indexed pass only for the captured canonical registry.
+/// 仅为捕获的规范注册表修复一轮索引扫描。
+/// `registry` is worker ownership, and every selected node rechecks replacement and shutdown before repair.
+/// `registry` 是任务所有权；每个选中节点在修复前重新检查替换及关闭状态。
+async fn recover_indexed_collaboration_owned(
+    app: &crate::ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_ids: BTreeSet<Uuid>,
+    registry: &Arc<SessionRuntimeRegistry>,
+) -> Result<(), String> {
+    // Startup publication precedes this call; retain only immutable service owners across awaits.
+    // 启动发布先于此调用；跨等待只保留不可变服务所有者。
+    let controller = {
+        let guard = state.lock().map_err(|error| error.to_string())?;
+        if !Arc::ptr_eq(&guard.session_runtime_registry, registry) {
+            return Err(String::from(
+                "Collaboration recovery registry was replaced.",
+            ));
+        }
+        guard
+            .controller_runtime
+            .clone()
+            .ok_or_else(|| String::from("collaboration recovery requires controller runtime"))?
+    };
+    // Do not abort remaining independent sessions when one journal or locator is unavailable.
+    // 一个日志或定位器不可用时，不终止其余独立会话。
+    let mut failures = Vec::new();
+    for session_id in session_ids {
+        worker::require_active_owner(state, registry)?;
+        let attempt = async {
+            let locator = locate_session_v1_storage(&controller, &session_id.to_string())
+                .await
+                .map_err(|error| error.to_string())?;
+            // Native descendants have no SQLite rows; discover them through exact durable reservations.
+            // 原生后代没有 SQLite 行；通过精确可靠预留发现它们。
+            let discovery = tree::discover(state, &registry, locator).await?;
+            failures.extend(discovery.failures);
+            let nodes = discovery.nodes;
+            for (index, node) in nodes.iter().enumerate() {
+                worker::require_active_owner(state, registry)?;
+                // Native unfinished reservations require source inspection even without message outbox work.
+                // 即使没有消息出站待办，原生未结算预留也要求检查来源。
+                let native_pending = node.parent.as_ref().is_some_and(|(_, records)| records.iter()
+                    .any(|record| record.state != vulcan_session_core::v1::collaboration::CollaborationChildTaskState::Terminal));
+                if !needs_delivery_recovery(&node.snapshot.collaboration) && !native_pending {
+                    continue;
+                }
+                // One damaged participant must not prevent independent discovered peers from repair.
+                // 一个损坏参与者不能阻止其他已发现独立参与者修复。
+                let session_id = Uuid::parse_str(node.locator.session_id())
+                    .map_err(|error| error.to_string())?;
+                let repair = async {
+                    // Full canonical loading revalidates event coverage and the current generation.
+                    // 完整规范加载重新校验事件覆盖及当前代际。
+                    let handle = tree::load_selected(state, &registry, &nodes, index).await?;
+                    worker::require_active_owner(state, registry)?;
+                    if let Some((parent_index, records)) = &node.parent {
+                        // Loading the selected ancestry already established this exact canonical parent.
+                        // 加载选中祖先链已经建立此精确规范父节点。
+                        let parent_id = Uuid::parse_str(nodes[*parent_index].locator.session_id())
+                            .map_err(|error| error.to_string())?;
+                        let parent = registry.get(parent_id).map_err(|error| error.to_string())?;
+                        if let Err(error) = native_results::recover_terminal_returns(
+                            &registry, parent.clone(), handle.clone(), records.clone(),
+                        ).await {
+                            failures.push(format!("session {session_id} native results: {error}"));
+                        }
+                        // Keep the native preparation state off the discovery caller's stack.
+                        // 将原生准备状态移出发现调用链的栈空间。
+                        if let Err(error) = Box::pin(native_execution::recover(
+                            app, state, registry, parent, handle.clone(), records.clone(),
+                        )).await {
+                            failures.push(format!("session {session_id} native execution: {error}"));
+                        }
+                    }
+                    let invocation = recovery_invocation(
+                        state.clone(),
+                        controller.clone(),
+                        registry.clone(),
+                        session_id,
+                        handle.clone(),
+                    )?;
+                    if let Err(error) =
+                        reconcile_canonical_collaboration_outbox(app, &invocation).await
+                    {
+                        failures.push(format!("session {session_id} outbox: {error}"));
+                    }
+                    if let Err(error) = reconcile_task_results_for_session(state, session_id).await
+                    {
+                        failures.push(format!("session {session_id} results: {error}"));
+                    }
+                    // Previously acknowledged starts may have crashed before the advisory wakeup.
+                    // 已确认的启动可能在提示性唤醒之前崩溃。
+                    if node.parent.is_none()
+                        && let Err(error) = task_launch::wake_session_tasks_if_idle(
+                            app,
+                            state,
+                            &controller,
+                            session_id,
+                        )
+                        .await
+                    {
+                        failures.push(format!("session {session_id} queued tasks: {error}"));
+                    }
+                    let questions = handle
+                        .read(|document| {
+                            document
+                                .collaboration_state()
+                                .questions
+                                .values()
+                                .filter(|question| {
+                                    question.state == CollaborationQuestionState::Pending
+                                })
+                                .map(|question| question.question_id.clone())
+                                .collect::<Vec<_>>()
+                        })
+                        .map_err(|error| error.to_string())?;
+                    for question_id in questions {
+                        if let Err(error) =
+                            launch::wake_accepted_question(app, &invocation, &question_id).await
+                        {
+                            failures.push(format!(
+                                "session {session_id} question {}: {error}",
+                                question_id.as_str()
+                            ));
+                        }
+                    }
+                    Ok::<(), String>(())
+                }
+                .await;
+                if let Err(error) = repair {
+                    failures.push(format!("session {session_id}: {error}"));
+                }
+            }
+            // Child recovery may have published results after the root's first pass.
+            // 子恢复可能在根首次扫描之后发布结果。
+            // Re-read the original indexed root after all descendants; closed unrelated histories remain cold.
+            // 在全部后代之后重读原索引根；无关已闭合历史保持冷态。
+            if nodes.first().is_some_and(|root| root.snapshot.open_turn_start_seq.is_some()) {
+                let handle = tree::load_selected(state, registry, &nodes, 0).await?;
+                if let Err(error) = Box::pin(main_execution::recover(
+                    app, state, &controller, registry, handle,
+                )).await {
+                    failures.push(format!("session {session_id} main business: {error}"));
+                }
+            }
+            Ok::<(), String>(())
+        }
+        .await;
+        if let Err(error) = attempt {
+            failures.push(format!("session {session_id}: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Collaboration startup recovery has {} unresolved item(s): {}",
+            failures.len(),
+            failures.join("; ")
+        ))
+    }
+}
+
+/// Schedules serialized startup repair with retained failure retries for active and archived sessions.
+/// 为活动及归档会话调度串行启动修复，并保留失败重试。
+/// `state` owns the published workspace and `app` reports diagnostics; never blocks readiness.
+/// `state` 拥有已发布工作区，`app` 报告诊断；不阻塞就绪发布。
+pub(crate) fn start_collaboration_recovery(
+    state: SharedServiceBridgeState,
+    app: crate::ServiceEventEmitter,
+) {
+    if let Err(error) = worker::schedule(&state, app) {
+        tracing::warn!(%error, "Collaboration recovery worker could not start");
+        if let Err(diagnostic) = crate::push_webui_service_diagnostic(
+            &state,
+            format!("代理协作恢复任务启动失败：{error}"),
+        ) {
+            tracing::warn!(%diagnostic, "Collaboration recovery diagnostic publication failed");
+        }
+    }
+}

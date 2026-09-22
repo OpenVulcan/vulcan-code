@@ -721,6 +721,40 @@ impl SessionDocument {
         tool_call_id: ToolCallId,
         completion: ToolCompletion,
     ) -> Result<IdempotentMutation<ToolCompletionReceipt>, DomainError> {
+        if self
+            .require_tool_for_api(api_call_id, tool_call_id)?
+            .1
+            .tool_name
+            != "wait_question"
+        {
+            return self.finish_tool_terminal(api_call_id, tool_call_id, completion);
+        }
+        // Publish the answer receipt with its actual tool output, never before that output exists.
+        // 答案回执与实际工具输出一起发布，不能在输出存在之前提前交付。
+        // Completion time is shared by both facts in this staged mutation.
+        // 完成时间由本次暂存修改中的两个事实共用。
+        let finished_at_ms = completion.finished_at_ms;
+        // Staged state provides rollback even after the terminal tool event has been updated.
+        // staged 状态在工具终态事件更新之后仍能提供回滚。
+        let mut staged = self.begin_atomic_mutation()?;
+        // Receipt retains the same ToolCall identity used by ordinary completion.
+        // receipt 保留普通完成流程使用的同一 ToolCall 身份。
+        let receipt = staged.finish_tool_terminal(api_call_id, tool_call_id, completion)?;
+        staged.deliver_completed_question_wait(tool_call_id, finished_at_ms)?;
+        self.commit_atomic_mutation(staged);
+        Ok(receipt)
+    }
+
+    /// Applies a validated terminal tool transition and returns its stable same-event receipt.
+    /// 应用已校验的工具终态转换，并返回稳定的同事件回执。
+    /// The collaboration wrapper stages this mutation together with answer delivery when required.
+    /// 协作包装层在需要时将本次修改与答案交付一起暂存。
+    fn finish_tool_terminal(
+        &mut self,
+        api_call_id: ApiCallId,
+        tool_call_id: ToolCallId,
+        completion: ToolCompletion,
+    ) -> Result<IdempotentMutation<ToolCompletionReceipt>, DomainError> {
         validate_tool_completion_changeset(completion.changeset.as_ref())?;
         if !matches!(
             completion.status,

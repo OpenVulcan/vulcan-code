@@ -496,8 +496,56 @@ export interface AskQuestionPresentationItem {
   answered: boolean;
 }
 
-// SubagentOrchestrationPresentation describes one inline subagent orchestration display.
-// SubagentOrchestrationPresentation 描述一条内联子代理调度展示。
+// CollaborationToolArguments keeps the exact native collaboration argument contract behind the detail view.
+// CollaborationToolArguments 将原生协作工具的精确参数契约保留在详情视图之后。
+export type CollaborationToolArguments =
+  | {
+      target_session_id: string;
+      question: string;
+    }
+  | {
+      question: string;
+    }
+  | {
+      question_id: string;
+      answer: string;
+      unable_to_answer: boolean;
+    }
+  | {
+      question_id: string;
+      after_revision: number | null;
+      timeout_ms: number;
+    }
+  | {
+      question_id: string;
+      reason: string;
+    }
+  | {
+      limit: number;
+      cursor: string | null;
+    }
+  | {
+      session_id: string;
+      after_seq: number | null;
+      limit: number;
+    }
+  | {
+      session_id: string;
+      message: string;
+      delivery_mode: "queue" | "interrupt";
+    }
+  | {
+      target_session_id: string;
+      message: string;
+    }
+  | {
+      session_id: string;
+      after_revision: number | null;
+      timeout_ms: number;
+    };
+
+// SubagentOrchestrationPresentation describes one inline subagent or agent-collaboration display.
+// SubagentOrchestrationPresentation 描述一条内联子代理或代理协作展示。
 export interface SubagentOrchestrationPresentation {
   // Discriminator for subagent orchestration cards.
   // 子代理调度卡片的判别字段。
@@ -513,7 +561,24 @@ export interface SubagentOrchestrationPresentation {
   detailRef?: ConversationDetailRef;
   // Normalized orchestration operation.
   // 规范化调度操作类型。
-  operation: "create" | "message" | "wait" | "agent_orchestration_info" | "list_agents" | "close" | "interrupt" | "feedback";
+  operation:
+    | "create"
+    | "message"
+    | "wait"
+    | "agent_orchestration_info"
+    | "list_agents"
+    | "close"
+    | "interrupt"
+    | "feedback"
+    | "collaboration_question"
+    | "collaboration_answer"
+    | "collaboration_steer"
+    | "collaboration_question_wait"
+    | "collaboration_notification"
+    | "collaboration_session_list"
+    | "collaboration_session_read"
+    | "collaboration_session_wait"
+    | "collaboration_cancel";
   // Compact title shown in the row.
   // 紧凑行中展示的标题。
   title: string;
@@ -541,6 +606,9 @@ export interface SubagentOrchestrationPresentation {
   // Optional runtime debug summary for subagent source diagnostics.
   // 可选的子代理来源诊断运行时调试摘要。
   debugSummary?: string | null;
+  // Exact native collaboration arguments retained for the technical detail panel.
+  // 保留给技术详情面板的原生协作精确参数。
+  collaborationArguments?: CollaborationToolArguments | null;
   // Whether a wait_agent call ended by timeout.
   // wait_agent 调用是否因超时结束。
   timedOut?: boolean | null;

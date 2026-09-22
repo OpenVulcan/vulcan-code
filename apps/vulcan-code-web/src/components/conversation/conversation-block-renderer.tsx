@@ -1,3 +1,4 @@
+import { ConversationAgentInteractionView } from "./conversation-collaboration-card";
 import {
   BrainCircuit,
   FileText,
@@ -187,6 +188,9 @@ export function ConversationBlocksView(props: {
   const [block] = props.blocks;
   if (!block) {
     return null;
+  }
+  if (block.agentInteraction) {
+    return <ConversationAgentInteractionView interaction={block.agentInteraction} />;
   }
   if (block.kind === "markdown") {
     if (props.itemStreaming && props.conversationId && block.sourceMessageId) {

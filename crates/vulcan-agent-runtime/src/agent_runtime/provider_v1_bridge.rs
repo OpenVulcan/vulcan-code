@@ -816,18 +816,20 @@ impl ProviderV1RequestTemplate {
     ) -> Self {
         // basePurpose is selected only from typed purpose and subagent ownership.
         // basePurpose 仅根据强类型用途与子代理归属选择。
-        let base_purpose = if preparation.subagent_prompt_context.is_some() {
-            Some(ApiPurposeKind::Subagent)
-        } else {
-            match preparation.prompt_purpose {
-                ExecutionPromptPurpose::ContextCompaction
-                | ExecutionPromptPurpose::ContextCompactionCachePreserving => {
-                    Some(ApiPurposeKind::Compaction)
-                }
-                ExecutionPromptPurpose::ExecutionRetry => Some(ApiPurposeKind::RetryGeneration),
-                ExecutionPromptPurpose::UserTurn => Some(ApiPurposeKind::MainGeneration),
-                ExecutionPromptPurpose::GitCommitSummary => None,
+        let base_purpose = match preparation.prompt_purpose {
+            // Child identity supplies ownership, but cannot override an auxiliary request's execution purpose.
+            // 子代理身份提供归属，但不能覆盖辅助请求的执行用途。
+            ExecutionPromptPurpose::QuestionExecution => Some(ApiPurposeKind::QuestionExecution),
+            ExecutionPromptPurpose::ContextCompaction
+            | ExecutionPromptPurpose::ContextCompactionCachePreserving => {
+                Some(ApiPurposeKind::Compaction)
             }
+            _ if preparation.subagent_prompt_context.is_some() => Some(ApiPurposeKind::Subagent),
+            ExecutionPromptPurpose::ExecutionRetry => Some(ApiPurposeKind::RetryGeneration),
+            ExecutionPromptPurpose::UserTurn | ExecutionPromptPurpose::AgentTask => {
+                Some(ApiPurposeKind::MainGeneration)
+            }
+            ExecutionPromptPurpose::GitCommitSummary => None,
         };
         Self {
             base_purpose,
@@ -865,12 +867,20 @@ impl ProviderV1RequestTemplate {
     ) -> Option<ProviderV1RequestFacts> {
         // continuationActionId binds only the first physical request owned by one manual Continue.
         // continuationActionId 仅绑定一次手动 Continue 所有的首个物理请求。
-        let continuation_action_id = bind_continuation
+        // Auxiliary retries retain their purpose and never consume a business Continue action.
+        // 辅助重试保留自身用途，绝不消费业务继续动作。
+        let is_auxiliary = matches!(
+            self.base_purpose,
+            Some(ApiPurposeKind::QuestionExecution | ApiPurposeKind::Compaction)
+        );
+        let continuation_action_id = (bind_continuation && !is_auxiliary)
             .then(|| self.continuation_action_id.clone())
             .flatten();
-        // purpose changes to RetryGeneration only for a real transport retry, never by string heuristics.
-        // purpose 仅在真实传输重试时切换为 RetryGeneration，绝不使用字符串启发式判断。
-        let purpose = if continuation_action_id.is_some() {
+        // Only business generation changes purpose on retry; isolated execution owners remain stable.
+        // 只有业务生成在重试时改变用途；隔离执行所有者保持稳定。
+        let purpose = if is_auxiliary {
+            self.base_purpose?
+        } else if continuation_action_id.is_some() {
             ApiPurposeKind::Continue
         } else if retry_count > 0 {
             ApiPurposeKind::RetryGeneration
@@ -895,6 +905,30 @@ impl ProviderV1RequestTemplate {
 }
 
 impl ProviderV1ApiTerminalFacts {
+    /// Builds a native success from already validated compaction `request_facts`, `usage`, `timing`, and completion time.
+    /// 根据已验证的压缩`request_facts`、`usage`、`timing`及完成时间构建原生成功。
+    /// Returns a tool-free terminal without a conversational replay source; the telemetry owner validates purpose before consumption.
+    /// 返回无工具且不带对话重放来源的终态；遥测所有者在消费前验证用途。
+    pub(crate) fn native_compaction_succeeded(
+        request_facts: ProviderV1RequestFacts,
+        usage: &CoreProviderUsageSnapshot,
+        timing: ApiTimings,
+        completed_at_ms: i64,
+    ) -> Self {
+        Self {
+            request_facts,
+            usage: usage_snapshot(usage),
+            status: ApiCallStatus::Completed,
+            end_reason: Some(ApiEndReason::CompletedSuccessfully),
+            error: None,
+            continuation_eligibility: ContinuationEligibility::Forbidden,
+            timing,
+            provider_source: None,
+            tool_call_count: 0,
+            completed_at_ms,
+        }
+    }
+
     /// Builds one successful terminal fact from typed request, usage, and timing data.
     /// 从强类型请求、用量与时间数据构建一个成功终态事实。
     ///
@@ -1489,6 +1523,37 @@ mod tests {
             .expect("tool-followup request should produce facts");
         assert_eq!(after_tool.purpose, ApiPurposeKind::MainGeneration);
         assert!(after_tool.continuation_action_id.is_none());
+
+        // Auxiliary requests retain purpose through the same continuation and retry machinery.
+        // 辅助请求经过同一续跑和重试链时保留自身用途。
+        for auxiliary_purpose in [
+            ApiPurposeKind::QuestionExecution,
+            ApiPurposeKind::Compaction,
+        ] {
+            // Each auxiliary kind exercises both retries and accidental continuation binding.
+            // 每类辅助用途都覆盖重试及意外继续绑定。
+            let auxiliary = ProviderV1RequestTemplate {
+                base_purpose: Some(auxiliary_purpose),
+                ..template.clone()
+            };
+            for retry_count in [0, 1, 2] {
+                for bind_continuation in [false, true] {
+                    // Each physical attempt must remain excluded from business turn closure.
+                    // 每次物理尝试都必须保持在业务回合闭合逻辑之外。
+                    let facts = auxiliary
+                        .request_facts(
+                            String::from("qa-call"),
+                            &snapshot,
+                            retry_count,
+                            bind_continuation,
+                            30,
+                        )
+                        .expect("auxiliary execution produces request facts");
+                    assert_eq!(facts.purpose, auxiliary_purpose);
+                    assert!(facts.continuation_action_id.is_none());
+                }
+            }
+        }
     }
 
     /// Structured payment failures map to balance facts without reading telemetry JSON.

@@ -2,6 +2,7 @@
 //! 客户端输入准入、队列处置、草稿归属及幂等回归测试。
 
 use super::*;
+use crate::v1::dynamic_context::DynamicContextInput;
 
 /// Steering is replayable, idempotent and stays in the same turn without admitting an active API.
 /// 插队可回放、幂等且保持同一回合，并拒绝在活动 API 内准入。
@@ -31,7 +32,7 @@ fn steering_waits_for_physical_request_boundary() -> Result<(), DomainError> {
     assert!(!doc.active_turn().unwrap().closed);
     assert!(
         matches!(&doc.events.iter().find(|event| event.seq == seq).unwrap().event,
-        EventBody::UserInput(input) if input.text == "guidance" && input.input_source == UserInputSource::PendingInTurn)
+        EventBody::UserInput(input) if input.text == "guidance" && input.input_source == UserInputSource::AgentMessage)
     );
     advance_fixture_durable(&mut doc)?;
     SessionDocument::from_parts(
@@ -121,6 +122,15 @@ fn root_input_activates_bound_request_at_admission() -> Result<(), DomainError> 
 #[test]
 fn enqueue_preempts_undispatched_goal_and_replays_exact_receipt() -> Result<(), DomainError> {
     let mut doc = new_document();
+    doc.synchronize_dynamic_context(
+        vec![DynamicContextInput::new(
+            "queued-ttl",
+            Some(String::from("expires with queued preemption")),
+            SystemContextScope::Session,
+            Some(1),
+        )],
+        T0,
+    )?;
     let goal = doc.create_goal("finish", None, "Keep working.", T0 + 1)?;
     let goal_turn = goal
         .continuation_turn_id
@@ -157,6 +167,26 @@ fn enqueue_preempts_undispatched_goal_and_replays_exact_receipt() -> Result<(), 
             })
             .count(),
         1
+    );
+    assert_eq!(
+        doc.events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.event,
+                    EventBody::SystemContext(context)
+                        if context.context_key == "queued-ttl"
+                            && context.operation == SystemContextOperation::Remove
+                            && context.content.contains("expired after logical turn")
+                )
+            })
+            .count(),
+        1,
+        "queued preemption must persist one TTL expiration marker"
+    );
+    assert!(
+        doc.metadata.dynamic_context.is_empty(),
+        "the expired metadata generation must be removed atomically"
     );
     assert!(matches!(
         doc.events()

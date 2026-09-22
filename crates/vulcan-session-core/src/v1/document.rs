@@ -47,7 +47,12 @@ use crate::v1::stats::TurnStatBuckets;
 use vulcan_change_set::PersistentChangeSet;
 
 mod api;
+mod business_hook;
+mod child_creation;
+mod child_execution;
+mod collaboration;
 mod compaction;
+mod dynamic_context;
 mod generation;
 mod hydration;
 mod input;
@@ -67,6 +72,8 @@ pub use api::{
     ContinuationDispatchResolution, ContinuationTerminalProjection, PrepareAndStartApiInput,
     PreparedApiStart,
 };
+pub use child_execution::ChildContextMaintenanceSource;
+pub use collaboration::ChildTaskNonSuccessInput;
 pub use compaction::CompactionCommitInput;
 pub use input::{
     ClientInputSubmission, DraftMutationReceipt, EnqueueInputDisposition, EnqueueInputReceipt,
@@ -104,12 +111,21 @@ pub enum TurnOrigin {
     /// A root user prompt opened the turn.
     /// 根用户提示词开启回合。
     UserRoot,
+    /// A durably accepted agent task opened its own business turn.
+    /// 已可靠接纳的代理任务开启自己的业务回合。
+    AgentTask,
     /// Goal auto-continue opened the turn.
     /// Goal 自动续跑开启回合。
     GoalContinuation,
     /// A durable child result opened a follow-up turn after the parent had finished.
     /// 父回合结束后，可靠子任务结果开启后续处理回合。
     SubagentReturn,
+    /// A dedicated auxiliary turn answered a temporary collaboration question.
+    /// 专用辅助回合回答临时协作问题。
+    QuestionExecution,
+    /// An independent auxiliary execution maintains a completed child's context.
+    /// 独立辅助执行维护已完成子任务的上下文。
+    ContextMaintenance,
 }
 
 /// Expected semantic kind of one resident event owned by the active API.
@@ -260,6 +276,9 @@ pub struct SessionDocument {
     /// Revision advanced by every mutation.
     /// 每次 mutation 递增的修订号。
     memory_revision: u64,
+    /// Private revision reserved by an unpublished composite mutation; never serialized or issued to a writer.
+    /// 未发布复合修改预留的私有修订，绝不序列化或交给写入器。
+    staged_commit_revision: Option<u64>,
     /// Revision confirmed durable by the writer.
     /// 由写入器确认持久化的修订号。
     durable_revision: u64,
@@ -328,6 +347,7 @@ impl SessionDocument {
             active_api: None,
             id_allocator: IdAllocator::new(),
             memory_revision: 0,
+            staged_commit_revision: None,
             durable_revision: 0,
             dirty_since: BTreeMap::new(),
             changed_event_seqs_by_revision: BTreeMap::new(),
@@ -482,6 +502,7 @@ impl SessionDocument {
             active_api: None,
             id_allocator: IdAllocator::new(),
             memory_revision: persisted_revision,
+            staged_commit_revision: None,
             durable_revision: persisted_revision,
             dirty_since: BTreeMap::new(),
             changed_event_seqs_by_revision: BTreeMap::new(),
@@ -492,6 +513,14 @@ impl SessionDocument {
             resident_start_seq,
         };
         document.rebuild_derived_state()?;
+        document.validate_collaboration_state()?;
+        document.validate_child_execution_profile()?;
+        document.validate_child_creation_intents()?;
+        document.validate_business_hook_binding()?;
+        if let Some(record) = document.terminal_settlement_record() {
+            document.terminal_settlement_has_terminal_fact(record)?;
+        }
+        dynamic_context::validate_dynamic_context_map(&document.metadata.dynamic_context)?;
         document.validate_runtime_initialization_state()?;
         document.validate_compaction_state()?;
         document.validate_loaded_metadata()?;
@@ -839,6 +868,80 @@ impl SessionDocument {
         Ok(seq)
     }
 
+    /// Returns the revision to be published by the current mutation, including nested draft operations.
+    /// 返回当前修改将发布的修订，包含嵌套草稿操作。
+    /// No state changes; overflow is rejected before any event or metadata mutation.
+    /// 不修改状态；在修改事件或元数据之前拒绝溢出。
+    fn next_mutation_revision(&self) -> Result<u64, DomainError> {
+        match self.staged_commit_revision {
+            Some(revision) => Ok(revision),
+            None => self
+                .memory_revision
+                .checked_add(1)
+                .ok_or_else(|| DomainError::invalid_id("document_revision", self.memory_revision)),
+        }
+    }
+
+    /// Executes related domain transitions as one failure-atomic, single-revision publication.
+    /// 将相关领域转换作为一次失败原子、单修订的发布执行。
+    /// `transition` may call document mutations but must not issue flushes or acknowledge persistence.
+    /// `transition` 可调用文档修改，但不得发出 flush 或确认持久化。
+    /// Returns the domain result after installing the draft; any error leaves the live owner unchanged.
+    /// 安装草稿后返回领域结果；任何错误都保持当前所有者不变。
+    pub fn apply_atomic_transition<T>(
+        &mut self,
+        transition: impl FnOnce(&mut Self) -> Result<T, DomainError>,
+    ) -> Result<T, DomainError> {
+        // Draft revisions and embedded receipts use the same reserved publication identity.
+        // 草稿修订及其内嵌回执使用同一个预留发布身份。
+        let mut staged = self.begin_atomic_mutation()?;
+        // The result cannot escape until every domain transition succeeds.
+        // 只有全部领域转换成功后，结果才可离开草稿。
+        let result = transition(&mut staged)?;
+        if staged.memory_revision != self.memory_revision
+            && Some(staged.memory_revision) != staged.staged_commit_revision
+        {
+            return Err(DomainError::ImmutableFieldMutation {
+                entity: "atomic_transition",
+                field: "document_revision",
+            });
+        }
+        if staged.durable_revision != self.durable_revision
+            || staged.issued_revisions != self.issued_revisions
+        {
+            return Err(DomainError::ImmutableFieldMutation {
+                entity: "atomic_transition",
+                field: "persistence_boundary",
+            });
+        }
+        self.commit_atomic_mutation(staged);
+        Ok(result)
+    }
+
+    /// Creates an isolated composite draft whose suboperations share one future publication revision.
+    /// 创建隔离复合草稿，其子操作共享一个待发布修订。
+    /// Returns the clone or an overflow error; dropping it rolls back every staged suboperation.
+    /// 返回副本或溢出错误；丢弃副本即可回滚全部暂存子操作。
+    fn begin_atomic_mutation(&self) -> Result<Self, DomainError> {
+        // Nested drafts inherit the original publication identity, including receipt-embedded revisions.
+        // 嵌套草稿继承原始发布身份，包括回执内部的修订字段。
+        let revision = self.next_mutation_revision()?;
+        // Only the clone carries the reservation; the live document remains untouched on failure.
+        // 只有副本携带预留；失败时当前文档保持不变。
+        let mut staged = self.clone();
+        staged.staged_commit_revision = Some(revision);
+        Ok(staged)
+    }
+
+    /// Installs a successful draft and restores the enclosing mutation's revision reservation.
+    /// 安装成功草稿，并恢复外层修改的修订预留。
+    /// `staged` must originate from `begin_atomic_mutation` on this exclusively borrowed owner.
+    /// `staged` 必须来自此独占借用所有者的 `begin_atomic_mutation`。
+    fn commit_atomic_mutation(&mut self, mut staged: Self) {
+        staged.staged_commit_revision = self.staged_commit_revision;
+        *self = staged;
+    }
+
     /// Bumps one real memory revision, touches session metadata monotonically,
     /// and records the exact event seq values changed by that revision.
     /// 递增一次真实内存修订、单调更新会话 metadata，并记录该修订真实变化的事件 seq。
@@ -849,7 +952,10 @@ impl SessionDocument {
             self.metadata.id_frontier = id_frontier;
         }
         self.metadata.updated_at_ms = self.metadata.updated_at_ms.max(now_ms);
-        self.memory_revision += 1;
+        self.memory_revision = match self.staged_commit_revision {
+            Some(revision) => revision,
+            None => self.memory_revision + 1,
+        };
         let revision = self.memory_revision;
         self.metadata.document_revision = revision;
         let changed: Vec<Seq> = changed_event_seqs
@@ -858,8 +964,15 @@ impl SessionDocument {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        self.changed_event_seqs_by_revision
-            .insert(revision, changed);
+        // Every staged suboperation contributes its exact changed events to the one public receipt.
+        // 每个暂存子操作将精确变化事件汇入同一份公开回执。
+        let receipt = self
+            .changed_event_seqs_by_revision
+            .entry(revision)
+            .or_default();
+        receipt.extend(changed);
+        receipt.sort_unstable();
+        receipt.dedup();
         for file in files
             .iter()
             .copied()

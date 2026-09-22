@@ -219,6 +219,15 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
     // launchContext represents controls already materialized for the owning ordinary turn.
     // launchContext 表示已经为所属普通回合物化的控制项。
     let launch_context = PromptCompactionLaunchContext {
+        temperature: Some(0.25),
+        captured_child_tool_admission: Some(BTreeMap::from([(
+            String::from("read"),
+            vulcan_session_core::v1::child_execution::ChildToolOrigin {
+                source_kind: vulcan_session_core::v1::child_execution::ChildToolSourceKind::Mcp,
+                namespace: String::from("server"),
+                original_name: String::from("read-file"),
+            },
+        )])),
         execution_mode: String::from("plan"),
         provider_tool_selections_override: Some(BTreeMap::from([(
             String::from("web_search"),
@@ -269,6 +278,20 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
     );
 
     assert_eq!(request.execution_mode, "plan");
+    assert_eq!(request.temperature, Some(0.25));
+    assert_eq!(
+        PromptCompactionLaunchContext::from_execution_request(&request).temperature,
+        Some(0.25)
+    );
+    assert_eq!(
+        request.captured_child_tool_admission,
+        launch_context.captured_child_tool_admission
+    );
+    assert_eq!(
+        PromptCompactionLaunchContext::from_execution_request(&request)
+            .captured_child_tool_admission,
+        launch_context.captured_child_tool_admission
+    );
     assert_eq!(
         request
             .provider_tool_selections_override
@@ -432,7 +455,8 @@ fn full_fidelity_attempt_uses_full_context_state() {
         &full_context_state,
         Some(test_budget()),
         CompactionInputPruneMode::None,
-    );
+    )
+    .expect("valid full-fidelity compaction source");
     let attempt_state = compaction_attempt_conversation_state(
         &full_context_state,
         &prepared.source_messages,
@@ -486,7 +510,8 @@ fn full_fidelity_boundary_rewrite_keeps_planned_tail() {
     let mut state =
         conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()])
             .expect("valid replayed conversation identities");
-    let source_messages = vulcan_context::conversation_state_to_compaction_source_messages(&state);
+    let source_messages = vulcan_context::conversation_state_to_compaction_source_messages(&state)
+        .expect("valid compaction source messages");
     let plan = vulcan_context_compaction::plan_context_compaction(
         vulcan_context_compaction::CompactionPlanInput {
             session_label: "full-fidelity-boundary",
@@ -543,7 +568,8 @@ fn observed_usage_drives_initial_downgrade_decision() {
             .expect("valid replayed conversation identities");
 
     assert_eq!(
-        initial_compaction_prune_mode(&full_context_state, Some(test_budget()), Some(101), Some(1),),
+        initial_compaction_prune_mode(&full_context_state, Some(test_budget()), Some(101), Some(1),)
+            .expect("observed usage does not render conversation state"),
         CompactionInputPruneMode::RequiredForWindowDowngrade
     );
 }
@@ -557,7 +583,8 @@ fn budget_estimate_drives_initial_downgrade_without_observed_usage() {
             .expect("valid replayed conversation identities");
 
     assert_eq!(
-        initial_compaction_prune_mode(&full_context_state, Some(test_budget()), None, Some(101),),
+        initial_compaction_prune_mode(&full_context_state, Some(test_budget()), None, Some(101),)
+            .expect("estimated usage does not render conversation state"),
         CompactionInputPruneMode::RequiredForWindowDowngrade
     );
 }

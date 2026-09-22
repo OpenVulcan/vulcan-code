@@ -6,9 +6,9 @@ use super::{ActiveTurnState, SessionDocument, TurnOrigin, validate_system_contex
 use crate::v1::config::{GoalConfig, GoalState, MAX_GOAL_OBJECTIVE_CHARS, MetadataDocument};
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
-    ConversationEvent, DisplayNoteEvent, DisplayNoticeKind, EventBody, EventVisibility,
-    NoticeSeverity, SystemContextEvent, SystemContextOperation, SystemContextScope, SystemRoleHint,
-    ToolCallStatus, TurnOutcome,
+    ApiPurposeKind, ConversationEvent, DisplayNoteEvent, DisplayNoticeKind, EventBody,
+    EventVisibility, NoticeSeverity, SystemContextEvent, SystemContextOperation,
+    SystemContextScope, SystemRoleHint, ToolCallStatus,
 };
 use crate::v1::ids::{IdAllocator, Seq, TurnId};
 
@@ -535,16 +535,31 @@ impl SessionDocument {
         let undispatched_continuation = self.active_turn.as_ref().filter(|turn| {
             !turn.closed
                 && turn.origin == TurnOrigin::GoalContinuation
+                // Even undispatched business cannot close while an auxiliary physical request owns it.
+                // 即使业务尚未分发，辅助物理请求占用期间也不能关闭回合。
+                && self.active_api.is_none()
                 && !self.events.iter().any(|event| {
                     event.turn_id == Some(turn.turn_id)
-                        && matches!(event.event, EventBody::ApiStarted(_))
+                        && matches!(&event.event, EventBody::ApiStarted(started)
+                            if !matches!(started.purpose,
+                                ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution))
                 })
         });
         let closure_buckets = undispatched_continuation
             .map(|turn| self.aggregate_turn_buckets(turn.turn_id, turn.start_seq))
             .transpose()?;
+        let expiring_contexts = undispatched_continuation
+            .map(|turn| super::turns::expiring_ttl_contexts(self, turn.turn_id))
+            .transpose()?
+            .unwrap_or_default();
+        let ttl_expiration_count = u64::try_from(expiring_contexts.len()).map_err(|_| {
+            DomainError::ImmutableFieldMutation {
+                entity: "ttl_expiration",
+                field: "event_count",
+            }
+        })?;
         let appended_event_count = if undispatched_continuation.is_some() {
-            4
+            4 + ttl_expiration_count
         } else {
             2
         };
@@ -582,13 +597,17 @@ impl SessionDocument {
 
         let mut staged_active_turn = self.active_turn.clone();
         let mut staged_metadata = self.metadata.clone();
+        super::turns::clear_expired_dynamic_context_metadata(
+            &mut staged_metadata,
+            &expiring_contexts,
+        );
         if let (Some(turn), Some(buckets)) = (undispatched_continuation, closure_buckets) {
             self.stage_turn_closure(
                 &mut staged_allocator,
                 &mut staged_events,
                 turn.turn_id,
                 turn.start_seq,
-                TurnOutcome::Stopped,
+                crate::v1::event::TurnClosureReason::Stopped,
                 0,
                 now_ms,
                 buckets,

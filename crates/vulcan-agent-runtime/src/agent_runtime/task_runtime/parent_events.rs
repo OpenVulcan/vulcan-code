@@ -166,7 +166,7 @@ pub(super) fn publish_task_failure_to_parent_after_resume_decision(
 /// 返回值
 /// Returns one DelegateFinished event that preserves failure accounting.
 /// 返回一条保留失败记账的 DelegateFinished 事件。
-fn build_task_failure_parent_runtime_event(
+pub(super) fn build_task_failure_parent_runtime_event(
     request: &TaskExecutionRequest,
     error: &str,
 ) -> RuntimeEvent {

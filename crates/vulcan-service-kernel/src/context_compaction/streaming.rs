@@ -86,6 +86,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                 "Context compaction requires a registered V1 session owner before Provider dispatch.",
             )
         })?;
+    provider_v1_sink.bind_compaction_source(&request.full_context_state)?;
     // providerTelemetryGuard closes an active compaction request if the stream future is dropped.
     // providerTelemetryGuard 在压缩流 Future 被丢弃时关闭活动请求。
     let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new_with_persistence(
@@ -97,6 +98,43 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     let mut stream = Box::pin(stream_prompt_compaction_job(request));
     while let Some(event) = stream.next().await {
         match event {
+            PromptCompactionStreamEvent::RemoteCompleted {
+                event,
+                checkpoint,
+                completion,
+            } => {
+                if let Err(error) = apply_remote_compaction_completion(
+                    app,
+                    state,
+                    &raw_assistant_output,
+                    &mut provider_v1_sink,
+                    &mut provider_telemetry_guard,
+                    event,
+                    checkpoint,
+                    completion,
+                )
+                .await
+                {
+                    projection_error = Some(error);
+                    break;
+                }
+            }
+            PromptCompactionStreamEvent::PreparedRemoteSource { source } => {
+                if let Err(error) = provider_v1_sink.select_remote_compaction_source(&source) {
+                    projection_error = Some(error);
+                    break;
+                }
+                raw_assistant_output.clear();
+            }
+            PromptCompactionStreamEvent::PreparedSource { source, mode } => {
+                if let Err(error) = provider_v1_sink.select_compaction_source(&source, mode) {
+                    projection_error = Some(error);
+                    break;
+                }
+                // A retry's durable summary must contain only that attempt's output.
+                // 重试的可靠摘要只能包含本次尝试的输出。
+                raw_assistant_output.clear();
+            }
             PromptCompactionStreamEvent::Progress(progress) => {
                 if let Err(error) = append_webui_context_compaction_progress(
                     app,
@@ -113,13 +151,15 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                 }
             }
             PromptCompactionStreamEvent::Stream(event) => {
-                if let Err(error) = apply_webui_context_compaction_stream_event(
+                if let Err(error) = apply_context_compaction_stream_event(
                     app,
                     state,
-                    session_id,
-                    section_id,
-                    budget_note,
-                    trigger,
+                    Some(CompactionStreamPresentation {
+                        session_id,
+                        section_id,
+                        budget_note,
+                        trigger,
+                    }),
                     &mut output_message_id,
                     &mut raw_assistant_output,
                     &mut provider_v1_sink,
@@ -164,29 +204,55 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     // durability contains the exact V1 API and normalized assistant semantic receipts.
     // durability 包含精确的 V1 API 与规范化 assistant 语义回执。
     let durability = provider_v1_sink.take_finished_durability();
-    let completed_assistant_text = durability.completed_assistant_text.as_ref().ok_or_else(
-        || {
-            String::from(
-                "Context compaction completed without a durable normalized V1 assistant semantic.",
-            )
-        },
-    )?;
-    if durability.api_terminal.is_none() {
-        return Err(String::from(
-            "Context compaction completed without a durable V1 API terminal receipt.",
-        ));
-    }
-    // Verify the canonical payload, not the Agent's display-only continuation wrapper.
-    // 校验规范正文，而非 Agent 仅用于显示的续接包装。
-    super::completion::verified_compaction_summary_body(
-        &execution.compaction_result.summary_record.body,
-        &completed_assistant_text.text,
+    super::completion::verified_compaction_commit_input(
+        &execution,
+        &durability,
+        retained_from_seq,
     )?;
     Ok(WebuiContextCompactionExecution {
         execution,
         retained_from_seq,
         durability,
     })
+}
+
+/// Persists native `checkpoint` and `event` through the owning sink, then acknowledges `completion`.
+/// 通过归属接收器持久化原生`checkpoint`及`event`，然后确认`completion`。
+/// `raw_assistant_output` must be empty; app/state forward usage while the telemetry guard owns cancellation.
+/// `raw_assistant_output`必须为空；app/state 转发用量，遥测守卫持有取消责任。
+/// Returns explicit kind, ownership, or durability errors to both caller and waiting producer.
+/// 向调用方和等待中的生产者同时返回明确的种类、归属或持久化错误。
+pub(crate) async fn apply_remote_compaction_completion(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    raw_assistant_output: &str,
+    sink: &mut ProviderV1StreamSink,
+    telemetry: &mut ProviderTelemetryHookGuard,
+    event: vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent,
+    checkpoint: vulcan_session_core::v1::context::RemoteResponsesCheckpoint,
+    completion: vulcan_agent_runtime::agent_runtime::events::ProviderRequestDurabilityCompletion,
+) -> Result<(), String> {
+    // A completed observation releases telemetry cancellation only after its kind has been checked.
+    // 只有核对种类后，完成观测才能释放遥测取消责任。
+    let result = async {
+        if event.kind != ProviderRequestTelemetryEventKind::Completed || !raw_assistant_output.is_empty() {
+            return Err(String::from("Remote compaction terminal cannot contain assistant text or nonterminal telemetry."));
+        }
+        let Some(ProviderV1LifecycleFacts::ApiTerminal(facts)) = event.v1_lifecycle.clone() else {
+            return Err(String::from("Remote compaction terminal is missing typed physical API facts."));
+        };
+        telemetry.observe_durable_boundary(&event);
+        sink.record_telemetry_terminal(&event, app, state).map_err(|error| error.to_string())?;
+        match sink.accept_remote_compaction_terminal(facts, checkpoint).await.map_err(|error| error.to_string())? {
+            ProviderV1TerminalOutcome::Completed => Ok(()),
+            ProviderV1TerminalOutcome::AwaitingTools => Err(String::from("Remote compaction cannot wait for assistant tools.")),
+        }
+    }.await;
+    if result.is_ok() {
+        telemetry.forward(event);
+    }
+    let _ = completion.complete(result.clone());
+    result
 }
 
 /// Spawns the selected-session context-compaction stream and mirrors it into WebUI state.
@@ -418,27 +484,60 @@ pub(crate) fn spawn_webui_context_compaction_task(
     Ok(())
 }
 
-/// Applies one prompt-compaction stream event to the retained WebUI transcript.
-/// 将一条提示词压缩流事件应用到保留的 WebUI 转录状态。
-pub(crate) async fn apply_webui_context_compaction_stream_event(
+/// Optional root-session display identity; persistence is always owned by the supplied V1 sink.
+/// 可选根会话展示身份；持久化始终由传入的 V1 接收器持有。
+pub(crate) struct CompactionStreamPresentation<'a> {
+    /// Exact root session whose transient display should change.
+    /// 瞬态展示需要变化的精确根会话。
+    pub(crate) session_id: SessionId,
+    /// Existing display section, never used as API or task authority.
+    /// 既有展示分段，绝不作为 API 或任务权威。
+    pub(crate) section_id: &'a str,
+    /// User-facing reason for the current input budget.
+    /// 面向用户的当前输入预算原因。
+    pub(crate) budget_note: &'a str,
+    /// User-facing trigger label retained by the original root caller.
+    /// 原根调用方保留的面向用户触发标签。
+    pub(crate) trigger: &'a str,
+}
+
+/// Applies `event` through the exact `provider_v1_sink`, using `presentation` only for optional root UI.
+/// 通过精确`provider_v1_sink`处理`event`，`presentation`仅用于可选根界面。
+/// `app` and `state` own publication, buffers retain this attempt, and the telemetry guard owns cancellation.
+/// `app`及`state`持有发布，缓冲保存本次尝试，遥测守卫持有取消处理。
+/// Returns None for handled events; without root UI, non-tool host events are returned to the owning child listener.
+/// 已处理事件返回 None；没有根界面时，非工具宿主事件交回所属子监听器。
+/// Deferred host events retain their barrier; presentation absence never authorizes a child lifecycle transition.
+/// 延迟宿主事件保留屏障；缺少展示绝不授权子生命周期转换。
+pub(crate) async fn apply_context_compaction_stream_event(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    section_id: &str,
-    budget_note: &str,
-    trigger: &str,
+    presentation: Option<CompactionStreamPresentation<'_>>,
     output_message_id: &mut Option<String>,
     raw_assistant_output: &mut String,
     provider_v1_sink: &mut ProviderV1StreamSink,
     provider_telemetry_guard: &mut ProviderTelemetryHookGuard,
     event: ExecutionStreamEvent,
-) -> Result<(), String> {
-    match event {
+) -> Result<Option<ExecutionStreamEvent>, String> {
+    if presentation.is_none()
+        && matches!(&event, ExecutionStreamEvent::RuntimeEvent { event, .. }
+            if event.tool_execution_boundary.is_none())
+    {
+        return Ok(Some(event));
+    }
+    // Only the exact sink handles physical preparation and semantic persistence.
+    // 仅由精确接收器处理物理准备与语义持久化。
+    let result = match event {
         ExecutionStreamEvent::Prepared(_)
         | ExecutionStreamEvent::ProviderRequestCheckpoint { .. }
         | ExecutionStreamEvent::ProviderLoweringRepair { .. }
         | ExecutionStreamEvent::RequestReady { .. } => Ok(()),
         ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
+            if event.kind == ProviderRequestTelemetryEventKind::FirstToken {
+                // First-token evidence updates only the already admitted request with the same identity.
+                // 首 Token 证据仅更新身份相同且已准入的请求。
+                provider_telemetry_guard.observe_durable_boundary(&event);
+            }
             provider_telemetry_guard.forward(event);
             Ok(())
         }
@@ -452,69 +551,111 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
             if event_kind == ProviderRequestTelemetryEventKind::Completed {
                 provider_telemetry_guard.observe_durable_boundary(&event);
             }
-            let v1_result: Result<(), String> = match (event_kind, lifecycle) {
-                (
-                    ProviderRequestTelemetryEventKind::Started,
-                    Some(ProviderV1LifecycleFacts::RequestPrepared(_)),
-                ) => Err(ProviderV1SinkError::UnexpectedRequestStartDurabilityBoundary.to_string()),
-                (
-                    ProviderRequestTelemetryEventKind::Dispatched,
-                    Some(ProviderV1LifecycleFacts::TransportObserved(facts)),
-                ) => provider_v1_sink
-                    .mark_transport_observed(facts)
-                    .await
-                    .map_err(|error| error.to_string()),
-                (
-                    ProviderRequestTelemetryEventKind::Completed,
-                    Some(ProviderV1LifecycleFacts::ApiTerminal(facts)),
-                ) => {
-                    // Even an unusable summary consumed one physical API request.
-                    // 即使摘要不可用，也已经消耗了一次物理 API 请求。
-                    provider_v1_sink
-                        .record_telemetry_terminal(&event, app, state)
-                        .map_err(|error| error.to_string())?;
-                    if facts.status == vulcan_session_core::v1::event::ApiCallStatus::Completed {
-                        // normalizedSummary is the sole Provider-visible compaction summary persisted in V1.
-                        // normalizedSummary 是 V1 中唯一持久化且 Provider 可见的压缩摘要。
-                        let normalized_summary = extract_compaction_model_summary(
-                            raw_assistant_output,
-                        )
-                        .ok_or_else(|| {
-                            String::from(
-                                "Provider output did not contain a valid compaction summary.",
-                            )
-                        })?;
-                        provider_v1_sink
-                            .append_assistant_delta(&normalized_summary, facts.completed_at_ms)
-                            .map_err(|error| error.to_string())?;
-                    }
-                    match provider_v1_sink
-                        .accept_terminal(facts)
+            let v1_result: Result<(), String> = async {
+                match (event_kind, lifecycle) {
+                    (
+                        ProviderRequestTelemetryEventKind::Started,
+                        Some(ProviderV1LifecycleFacts::RequestPrepared(_)),
+                    ) => Err(
+                        ProviderV1SinkError::UnexpectedRequestStartDurabilityBoundary.to_string(),
+                    ),
+                    (
+                        ProviderRequestTelemetryEventKind::Dispatched,
+                        Some(ProviderV1LifecycleFacts::TransportObserved(facts)),
+                    ) => provider_v1_sink
+                        .mark_transport_observed(facts)
                         .await
-                        .map_err(|error| error.to_string())?
-                    {
-                        ProviderV1TerminalOutcome::Completed => Ok(()),
-                        ProviderV1TerminalOutcome::AwaitingTools => Err(String::from(
-                            "Context compaction cannot complete with pending tools.",
-                        )),
+                        .map_err(|error| error.to_string()),
+                    (
+                        ProviderRequestTelemetryEventKind::Completed,
+                        Some(ProviderV1LifecycleFacts::ApiTerminal(facts)),
+                    ) => {
+                        // Even an unusable summary consumed one physical API request.
+                        // 即使摘要不可用，也已经消耗了一次物理 API 请求。
+                        provider_v1_sink
+                            .record_telemetry_terminal(&event, app, state)
+                            .map_err(|error| error.to_string())?;
+                        if facts.tool_call_count > 0 {
+                            // Internal summary tools are policy-rejected, but their real batch must settle durably.
+                            // 内部摘要工具由策略拒绝，但其真实批次仍须可靠结算。
+                            // Preserve actual output; the final tool boundary rejects this attempt after API closure.
+                            // 保留实际输出；最后工具边界将在 API 闭合后拒绝本次尝试。
+                            if !raw_assistant_output.is_empty() {
+                                provider_v1_sink
+                                    .append_assistant_delta(raw_assistant_output, facts.completed_at_ms)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            return match provider_v1_sink
+                                .accept_terminal(facts)
+                                .await
+                                .map_err(|error| error.to_string())?
+                            {
+                                ProviderV1TerminalOutcome::AwaitingTools => Ok(()),
+                                ProviderV1TerminalOutcome::Completed => Err(String::from(
+                                    "Context compaction tool batch completed before its durable tool boundaries.",
+                                )),
+                            };
+                        }
+                        if facts.status == vulcan_session_core::v1::event::ApiCallStatus::Completed
+                        {
+                            // normalizedSummary is the sole Provider-visible compaction summary persisted in V1.
+                            // normalizedSummary 是 V1 中唯一持久化且 Provider 可见的压缩摘要。
+                            let Some(normalized_summary) =
+                                extract_compaction_model_summary(raw_assistant_output)
+                            else {
+                                // Retain rejected physical output so its Provider source has an honest semantic owner.
+                                // 保留被拒绝的物理输出，让 Provider 来源拥有真实语义归属。
+                                // The error below prevents this output from becoming a committed compaction summary.
+                                // 下方错误阻止此输出成为已提交压缩摘要。
+                                provider_v1_sink
+                                    .append_assistant_delta(
+                                        raw_assistant_output,
+                                        facts.completed_at_ms,
+                                    )
+                                    .map_err(|error| error.to_string())?;
+                                // Unusable content does not erase the completed physical API or leave its permit open.
+                                // 不可用内容不能抹去已完成物理 API，也不能让其许可保持开放。
+                                provider_v1_sink
+                                    .accept_terminal(facts)
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                                return Err(String::from(
+                                    "Provider output did not contain a valid compaction summary.",
+                                ));
+                            };
+                            provider_v1_sink
+                                .append_assistant_delta(&normalized_summary, facts.completed_at_ms)
+                                .map_err(|error| error.to_string())?;
+                        }
+                        match provider_v1_sink
+                            .accept_terminal(facts)
+                            .await
+                            .map_err(|error| error.to_string())?
+                        {
+                            ProviderV1TerminalOutcome::Completed => Ok(()),
+                            ProviderV1TerminalOutcome::AwaitingTools => Err(String::from(
+                                "Context compaction cannot complete with pending tools.",
+                            )),
+                        }
                     }
+                    (
+                        ProviderRequestTelemetryEventKind::Started
+                        | ProviderRequestTelemetryEventKind::Dispatched
+                        | ProviderRequestTelemetryEventKind::Completed,
+                        Some(ProviderV1LifecycleFacts::ExcludedNonSession),
+                    ) => Err(String::from(
+                        "Session context compaction cannot use a non-session Provider lifecycle.",
+                    )),
+                    (ProviderRequestTelemetryEventKind::Started, _) => {
+                        Err(ProviderV1SinkError::MissingTypedRequestFacts.to_string())
+                    }
+                    (ProviderRequestTelemetryEventKind::Completed, _) => {
+                        Err(ProviderV1SinkError::MissingTypedTerminalFacts.to_string())
+                    }
+                    _ => Ok(()),
                 }
-                (
-                    ProviderRequestTelemetryEventKind::Started
-                    | ProviderRequestTelemetryEventKind::Dispatched
-                    | ProviderRequestTelemetryEventKind::Completed,
-                    Some(ProviderV1LifecycleFacts::ExcludedNonSession),
-                ) => Err(String::from(
-                    "Session context compaction cannot use a non-session Provider lifecycle.",
-                )),
-                (ProviderRequestTelemetryEventKind::Started, _) => {
-                    Err(ProviderV1SinkError::MissingTypedRequestFacts.to_string())
-                }
-                (ProviderRequestTelemetryEventKind::Completed, _) => {
-                    Err(ProviderV1SinkError::MissingTypedTerminalFacts.to_string())
-                }
-                _ => Ok(()),
-            };
+            }
+            .await;
             if let Err(error) = v1_result {
                 let error = error.to_string();
                 let _ = completion.complete(Err(error.clone()));
@@ -533,9 +674,9 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
         } => {
             // permitResult is the exact V1 request rebuilt and durably started by the session owner.
             // permitResult 是由会话所有者精确重建并可靠启动的 V1 请求。
-            let permit_result = match event.v1_lifecycle {
+            let permit_result = match event.v1_lifecycle.clone() {
                 Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) => provider_v1_sink
-                    .prepare_request(facts, candidate)
+                    .prepare_request(state, facts, candidate)
                     .await
                     .map_err(|error| error.to_string()),
                 Some(ProviderV1LifecycleFacts::ExcludedNonSession) => Err(String::from(
@@ -543,13 +684,25 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
                 )),
                 _ => Err(ProviderV1SinkError::MissingTypedRequestFacts.to_string()),
             };
+            // Arm before releasing the producer, including cancellation before its Started echo.
+            // 在放行生产者之前激活跟踪，覆盖其 Started 回送之前发生的取消。
+            provider_telemetry_guard.observe_preparation_result(&event, &permit_result);
             let response = permit_result.as_ref().map(|_| ()).map_err(Clone::clone);
             let _ = completion.complete(permit_result);
             response
         }
         ExecutionStreamEvent::WireRequestReady { .. } => Ok(()),
         ExecutionStreamEvent::RequestStarted { .. } => {
-            apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
+            if let Some(presentation) = presentation {
+                apply_session_phase(
+                    app,
+                    state,
+                    presentation.session_id,
+                    SessionRunPhase::Requesting,
+                )
+            } else {
+                Ok(())
+            }
         }
         ExecutionStreamEvent::ThinkingDelta { delta, .. } => {
             // nowMs binds the reasoning mutation to the observed stream boundary.
@@ -561,7 +714,11 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
                 .map_err(|error| error.to_string())
         }
         ExecutionStreamEvent::TransientReasoningStatusChanged { status, .. } => {
-            emit_transient_reasoning_status(app, state, session_id, status)
+            if let Some(presentation) = presentation {
+                emit_transient_reasoning_status(app, state, presentation.session_id, status)
+            } else {
+                Ok(())
+            }
         }
         ExecutionStreamEvent::ThinkingCompleted { .. } => {
             // nowMs binds the reasoning terminal state to the observed stream boundary.
@@ -574,16 +731,20 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
         }
         ExecutionStreamEvent::OutputDelta { delta, .. } => {
             raw_assistant_output.push_str(&delta);
-            append_webui_context_compaction_output_delta(
-                app,
-                state,
-                session_id,
-                section_id,
-                budget_note,
-                trigger,
-                output_message_id,
-                &delta,
-            )
+            if let Some(presentation) = presentation {
+                append_webui_context_compaction_output_delta(
+                    app,
+                    state,
+                    presentation.session_id,
+                    presentation.section_id,
+                    presentation.budget_note,
+                    presentation.trigger,
+                    output_message_id,
+                    &delta,
+                )
+            } else {
+                Ok(())
+            }
         }
         ExecutionStreamEvent::RuntimeEvent { event, .. } => {
             if event.tool_execution_boundary.is_some() {
@@ -609,6 +770,15 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
                         return Err(error);
                     }
                 };
+                if provider_v1_sink.has_durable_api_terminal() {
+                    // Wait for every policy-rejected result before aborting, so peer tools never remain in flight.
+                    // 等待每个策略拒绝结果落盘后才中止，避免同批工具遗留在途状态。
+                    let error = String::from(
+                        "Context compaction rejected a tool-bearing response after settling its tool batch.",
+                    );
+                    reject_runtime_event_projection_barrier_from_event_with_reason(&event, &error)?;
+                    return Err(error);
+                }
                 let acknowledgement = match outcome {
                     ProviderV1ToolBoundaryOutcome::Applied => {
                         acknowledge_runtime_event_projection_barrier_from_event(&event)
@@ -618,9 +788,16 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
                     }
                 };
                 acknowledgement?;
-                return Ok(());
+                return Ok(None);
             }
-            append_runtime_event_projection_and_release_barrier(app, state, session_id, &event)?;
+            if let Some(presentation) = presentation {
+                append_runtime_event_projection_and_release_barrier(
+                    app,
+                    state,
+                    presentation.session_id,
+                    &event,
+                )?;
+            }
             Ok(())
         }
         ExecutionStreamEvent::ConversationCheckpoint { .. } => Ok(()),
@@ -628,7 +805,8 @@ pub(crate) async fn apply_webui_context_compaction_stream_event(
         ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired { .. } => Ok(()),
         ExecutionStreamEvent::ProviderRouteSwitchRequired { .. } => Ok(()),
         ExecutionStreamEvent::Finished(_) => Ok(()),
-    }
+    };
+    result.map(|()| None)
 }
 
 /// Returns the retained selected-session title used by compaction diagnostics.

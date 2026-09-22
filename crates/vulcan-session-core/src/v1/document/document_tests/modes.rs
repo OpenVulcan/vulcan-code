@@ -242,6 +242,42 @@ fn goal_restart_between_requests_pauses_and_remains_reloadable() -> Result<(), D
     Ok(())
 }
 
+/// Restart pauses automatic Goal work without discarding its already-admitted user successor.
+/// 重启暂停自动 Goal 工作，但不丢弃已经准入的用户后继。
+/// Covers durable replay, exact original input ownership and repeated interruption projection.
+/// 覆盖可靠重放、精确原输入归属及重复中断投影。
+#[test]
+fn goal_restart_preserves_admitted_user_successor() -> Result<(), DomainError> {
+    // The real enqueue transaction closes only the old automatic continuation.
+    // 真实排队事务只关闭旧自动续跑。
+    let mut document = new_document();
+    document.create_goal("Goal", None, "Continue", T0)?;
+    document.enqueue_input(
+        ClientInputSubmission::new(
+            ClientActionId::try_new("restart-user")?,
+            "Original user work",
+            vec![],
+        ),
+        T0 + 1,
+    )?;
+    // Preserve source ownership across the startup projection and a complete reload.
+    // 在启动投影及完整重载前后保留来源归属。
+    let original = document.active_turn().unwrap().clone();
+    assert_eq!(document.project_persisted_interruptions()?, 2);
+    assert_eq!(document.metadata.mode.goal.state, GoalState::Paused);
+    assert_eq!(document.active_turn(), Some(&original));
+    assert_eq!(document.project_persisted_interruptions()?, 0);
+    let restored = SessionDocument::from_parts(
+        document.metadata.clone(),
+        initialized_runtime_lock(),
+        vec![],
+        vec![],
+        document.events().to_vec(),
+    )?;
+    assert_eq!(restored.active_turn(), Some(&original));
+    Ok(())
+}
+
 /// Legacy paused goals whose origin was rewritten must not gain working time from unrelated metadata updates.
 /// 旧版暂停期间改写过起点的目标，不得因无关元数据更新增加工作时长。
 #[test]
@@ -402,6 +438,13 @@ fn set_plan_mode_is_atomic_idempotent_and_goal_exclusive() -> Result<(), DomainE
             ..
         }) if context_key == "plan_mode" && content == "enter plan"
     ));
+    let entered_projection = crate::v1::projection::project_document(&document, None, &[])?;
+    assert!(matches!(
+        entered_projection.first(),
+        Some(crate::v1::projection::ProjectedItem::UserInput { text, .. })
+            if text.contains("<vulcan_context_update")
+                && text.ends_with(">enter plan</vulcan_context_update>")
+    ));
     assert_eq!(document.memory_revision(), baseline_revision + 1);
     assert_eq!(
         document.dirty_files().collect::<BTreeSet<_>>(),
@@ -427,6 +470,15 @@ fn set_plan_mode_is_atomic_idempotent_and_goal_exclusive() -> Result<(), DomainE
             ..
         }) if context_key == "plan_mode" && content == "leave plan"
     ));
+    let exited_projection = crate::v1::projection::project_document(&document, None, &[])?;
+    assert!(exited_projection.iter().any(|item| {
+        matches!(
+            item,
+            crate::v1::projection::ProjectedItem::UserInput { text, .. }
+                if text.contains("<vulcan_context_expired")
+                    && text.ends_with(">leave plan</vulcan_context_expired>")
+        )
+    }));
     document.create_goal("goal", None, "goal context", T0 + 3)?;
     let before_conflict = document.clone();
     assert!(matches!(

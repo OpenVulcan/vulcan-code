@@ -26,11 +26,11 @@ use crate::{
     agent_runtime::{
         context_injection_runtime::{
             collect_builtin_manual_injection_ops_and_sanitized_prompt,
-            core_provider_context_injection_from_state_for_turn,
+            core_provider_context_injection_from_state_for_turn_draining_expiry_events,
         },
         conversation_hooks::{
             ConversationHookRuntime, ConversationPrecheckOutcome, ConversationPrecheckRequest,
-            ConversationProfileOutcome, ConversationProfileRequest,
+            ConversationProfileOutcome, ConversationProfileRequest, ConversationUserEventRequest,
             vmm_profile_sync_effect_from_report, vmm_recall_batch_effect_from_report,
             vmm_session_status_effect_from_report,
         },
@@ -148,6 +148,9 @@ pub struct SharedPromptPrecheckPlan {
 /// 需要在画像准备及可选 precheck 完成后继续的提示词回合。
 #[derive(Clone)]
 pub struct SharedPromptTurnStart {
+    /// Deferred observation that cannot run before the host publishes this business Hook.
+    /// 在宿主发布此业务 Hook 之前不能运行的延迟观察。
+    pub deferred_user_event: Option<ConversationUserEventRequest>,
     /// Session that owns this prompt turn.
     /// 拥有该提示词回合的会话。
     pub session_id: SessionId,
@@ -433,6 +436,44 @@ pub fn begin_shared_prompt_turn(
     conversation_hook_runtime: &mut ConversationHookRuntime,
     input: SharedPromptTurnBeginInput<'_>,
 ) -> Result<SharedPromptTurnStart, String> {
+    begin_shared_prompt_turn_with_input_projection(
+        workspace_snapshot,
+        conversation_hook_runtime,
+        input,
+        None,
+    )
+}
+
+/// Begins an exact human in-turn batch or explicit Continue with per-input Hook identity.
+/// 使用逐输入 Hook 身份开始精确人类回合内批次或显式 Continue。
+/// `inputs` carries host-validated canonical provenance; other arguments keep the ordinary shared-turn contract.
+/// `inputs` 携带宿主验证的规范来源；其他参数保持普通共享回合契约。
+/// Returns preparation for the original business turn, without appending a combined timeline input.
+/// 返回原业务回合的准备结果，不追加合并时间线输入。
+pub fn begin_shared_prompt_turn_with_canonical_inputs(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    conversation_hook_runtime: &mut ConversationHookRuntime,
+    input: SharedPromptTurnBeginInput<'_>,
+    inputs: &[crate::agent_runtime::conversation_hooks::CanonicalInTurnHookInput],
+) -> Result<SharedPromptTurnStart, String> {
+    begin_shared_prompt_turn_with_input_projection(
+        workspace_snapshot,
+        conversation_hook_runtime,
+        input,
+        Some(inputs),
+    )
+}
+
+/// Routes one workspace preparation through an explicitly selected canonical input projection.
+/// 通过明确选择的规范输入投影路由一次工作区准备。
+/// `canonical_inputs` is present for an exact in-turn batch or Continue, including an empty pure Continue; returns shared preparation.
+/// `canonical_inputs` 在精确回合内批次或 Continue 中存在，包含空的纯继续；返回共享准备结果。
+fn begin_shared_prompt_turn_with_input_projection(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    conversation_hook_runtime: &mut ConversationHookRuntime,
+    input: SharedPromptTurnBeginInput<'_>,
+    canonical_inputs: Option<&[crate::agent_runtime::conversation_hooks::CanonicalInTurnHookInput]>,
+) -> Result<SharedPromptTurnStart, String> {
     let owning_project_id = workspace_snapshot
         .sessions
         .iter()
@@ -448,7 +489,7 @@ pub fn begin_shared_prompt_turn(
                 updated_at: now.clone(),
                 ..SessionRuntimeStateEntry::default()
             });
-        begin_shared_prompt_turn_with_runtime_state(
+        begin_shared_prompt_turn_with_runtime_input_projection(
             runtime_state,
             conversation_hook_runtime,
             SharedPromptTurnRuntimeBeginInput {
@@ -472,6 +513,7 @@ pub fn begin_shared_prompt_turn(
                 reasoning_effort: input.reasoning_effort,
                 owning_project_id,
             },
+            canonical_inputs,
         )?
     };
     let initial_phase = if input.source.runs_user_prompt_precheck() {
@@ -506,6 +548,24 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
     conversation_hook_runtime: &mut ConversationHookRuntime,
     input: SharedPromptTurnRuntimeBeginInput<'_>,
 ) -> Result<SharedPromptTurnStart, String> {
+    begin_shared_prompt_turn_with_runtime_input_projection(
+        runtime_state,
+        conversation_hook_runtime,
+        input,
+        None,
+    )
+}
+
+/// Applies one optional canonical batch to a detached runtime draft and publishes only on success.
+/// 将可选规范批次应用到分离运行态草稿，并仅在成功时发布。
+/// The ordinary input owns Provider content; `canonical_inputs` owns per-input Hook history.
+/// 普通输入持有 Provider 正文；`canonical_inputs` 持有逐输入 Hook 历史。
+fn begin_shared_prompt_turn_with_runtime_input_projection(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    conversation_hook_runtime: &mut ConversationHookRuntime,
+    input: SharedPromptTurnRuntimeBeginInput<'_>,
+    canonical_inputs: Option<&[crate::agent_runtime::conversation_hooks::CanonicalInTurnHookInput]>,
+) -> Result<SharedPromptTurnStart, String> {
     // draft_runtime_state isolates hydration, paired message/record append, and runtime flags until prompt start succeeds.
     // draft_runtime_state 会隔离水合、成对消息/记录追加与运行态标记，直到提示词启动成功。
     let mut draft_runtime_state = runtime_state.clone();
@@ -515,6 +575,7 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
         &mut draft_runtime_state,
         conversation_hook_runtime,
         input,
+        canonical_inputs,
     )?;
     *runtime_state = draft_runtime_state;
     Ok(start)
@@ -531,10 +592,28 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
     runtime_state: &mut SessionRuntimeStateEntry,
     conversation_hook_runtime: &mut ConversationHookRuntime,
     input: SharedPromptTurnRuntimeBeginInput<'_>,
+    canonical_inputs: Option<&[crate::agent_runtime::conversation_hooks::CanonicalInTurnHookInput]>,
 ) -> Result<SharedPromptTurnStart, String> {
     let now = current_unix_millis_text();
-    let (injection_ops, sanitized_prompt) =
-        collect_builtin_manual_injection_ops_and_sanitized_prompt(input.prompt);
+    // A continuation must reuse a restored business Hook; never invent one from an internal prompt.
+    // 续跑必须复用已恢复的业务 Hook，绝不从内部提示伪造新的 Hook。
+    if input.source == PendingSessionPromptSource::AgentContinuation
+        && !conversation_hook_runtime.has_active_turn(input.session_id)
+    {
+        return Err(String::from(
+            "Agent continuation requires the original business Hook to be restored.",
+        ));
+    }
+    // Agent task bodies are canonical data, not a human command surface for manual injection.
+    // 代理任务正文是规范数据，不是用于手动注入的人类命令入口。
+    let (injection_ops, sanitized_prompt) = if matches!(
+        input.source,
+        PendingSessionPromptSource::AgentTask | PendingSessionPromptSource::AgentContinuation
+    ) {
+        (Vec::new(), input.prompt.to_string())
+    } else {
+        collect_builtin_manual_injection_ops_and_sanitized_prompt(input.prompt)
+    };
     let start_attachments = input.attachments.clone();
     // providerAttachments is isolated from canonical persistence and may carry transient delivery decisions.
     // providerAttachments 与规范持久化隔离，可以携带临时传输决策。
@@ -633,17 +712,32 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
             .as_deref(),
     );
     let hook_conversation_state = runtime_state.conversation_state.clone();
-    let hook_requests = conversation_hook_runtime.prepare_user_prompt_hook_requests(
-        input.session_id,
-        &input.prompt_entry_id,
-        input.owning_project_id.clone(),
-        input.workspace_path.to_string(),
-        input.source,
-        system_prompt_hook_phase,
-        &sanitized_prompt,
-        &hook_conversation_state,
-        input.vmm_runtime_ready,
-    );
+    let hook_requests = if let Some(inputs) = canonical_inputs {
+        conversation_hook_runtime.prepare_canonical_in_turn_hook_requests(
+            input.session_id,
+            &input.prompt_entry_id,
+            input.owning_project_id.clone(),
+            input.workspace_path.to_string(),
+            input.source,
+            system_prompt_hook_phase,
+            &sanitized_prompt,
+            &hook_conversation_state,
+            input.vmm_runtime_ready,
+            inputs,
+        )?
+    } else {
+        conversation_hook_runtime.prepare_user_prompt_hook_requests(
+            input.session_id,
+            &input.prompt_entry_id,
+            input.owning_project_id.clone(),
+            input.workspace_path.to_string(),
+            input.source,
+            system_prompt_hook_phase,
+            &sanitized_prompt,
+            &hook_conversation_state,
+            input.vmm_runtime_ready,
+        )
+    };
     // preparation_turn_id correlates sibling requests without making either line the owner.
     // preparation_turn_id 关联同级请求，而不让任一线路成为另一线路的所有者。
     let preparation_turn_id = hook_requests.turn_id;
@@ -663,6 +757,7 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         &now,
     );
     Ok(SharedPromptTurnStart {
+        deferred_user_event: hook_requests.deferred_user_event,
         session_id: input.session_id,
         preparation_turn_id,
         continuation_action_id: input.continuation_action_id,
@@ -738,6 +833,16 @@ fn prompt_turn_boundary_events(
     visible_user_prompt_record_id: Option<&str>,
     now: &str,
 ) -> Vec<SessionBoundaryEvent> {
+    // V1 collaboration events already own execution identity; no synthetic human turn is emitted.
+    // V1 协作事件已持有执行身份，不再生成虚构的人类回合。
+    if matches!(
+        input.source,
+        PendingSessionPromptSource::QuestionExecution
+            | PendingSessionPromptSource::AgentTask
+            | PendingSessionPromptSource::AgentContinuation
+    ) {
+        return Vec::new();
+    }
     let thread_id = SessionNodeId::from(input.session_id);
     let timestamp_ms = unix_millis_text_to_u64(now);
     let append_canonical_user_message =
@@ -1116,18 +1221,20 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         input.start.source == PendingSessionPromptSource::ExecutionRetry;
     // promptPurpose uses retry semantics only after an exact Provider checkpoint exists; resumed preparation preserves the original user-turn semantics without appending another message.
     // promptPurpose 仅在精确 Provider checkpoint 已存在后使用重试语义；恢复准备会保留原用户回合语义但不追加另一条消息。
-    let prompt_purpose = if is_restored_provider_checkpoint {
-        ExecutionPromptPurpose::ExecutionRetry
-    } else {
-        ExecutionPromptPurpose::UserTurn
+    let prompt_purpose = match input.start.source {
+        PendingSessionPromptSource::AgentTask => ExecutionPromptPurpose::AgentTask,
+        PendingSessionPromptSource::QuestionExecution => ExecutionPromptPurpose::QuestionExecution,
+        PendingSessionPromptSource::ExecutionRetry => ExecutionPromptPurpose::ExecutionRetry,
+        _ => ExecutionPromptPurpose::UserTurn,
     };
     let runtime_policy = vulcan_session_core::ExecutionRuntimePolicy::main_session();
-    let context_injection = core_provider_context_injection_from_state_for_turn(
-        &runtime_state.context_injection_state,
-        vmm_session_memory,
-        Some(&expected_turn_id),
-        input.start.vmm_runtime_ready,
-    );
+    let context_injection =
+        core_provider_context_injection_from_state_for_turn_draining_expiry_events(
+            &mut runtime_state.context_injection_state,
+            vmm_session_memory,
+            Some(&expected_turn_id),
+            input.start.vmm_runtime_ready,
+        );
     validate_session_provider_tool_target_completeness(runtime_state)?;
     // providerConversationState is a request-owned copy; canonical history keeps original attachments unchanged.
     // providerConversationState 是请求持有的副本；规范历史保持原始附件不变。
@@ -1160,9 +1267,10 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             session_id: vulcan_session_core::SessionNodeId::from(session_id),
         },
         runtime_policy,
-        // Every shared preparation creates or restores this exact Hook turn, including process-only retries and Goal continuations.
-        // 每次共享准备都会创建或恢复这个精确 Hook 回合，包括仅过程恢复与目标续轮。
-        conversation_hook_turn_id: Some(expected_turn_id),
+        // Auxiliary preparation must not attach its correlation identity to a business Hook turn.
+        // 辅助准备不能将其关联身份绑定到业务 Hook 回合。
+        conversation_hook_turn_id: (prompt_purpose != ExecutionPromptPurpose::QuestionExecution)
+            .then_some(expected_turn_id),
         continuation_action_id: input.start.continuation_action_id,
         provider_request_continuation: None,
         execution_agent_id: None,
@@ -1218,6 +1326,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             .or(input.provider_reasoning_effort)
             .unwrap_or(ReasoningEffortLevel::Off),
         tool_exposure_override: Default::default(),
+        captured_child_tool_admission: None,
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,
         tool_request_rejection_tool_ids: Vec::new(),
@@ -1236,6 +1345,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         controller_runtime: None,
         native_goal_runtime: None,
         native_browser_runtime: None,
+        native_agent_collaboration_runtime: None,
         supplemental_mcp_tools: Vec::new(),
         media_resource_runtime: None,
         knowledge_access: None,

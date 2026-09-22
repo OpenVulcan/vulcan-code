@@ -3,20 +3,56 @@
 
 use crate::render::{
     InjectionPanelCard, InjectionPanelItem, InjectionRenderOptions, InjectionRendererRegistry,
-    ResolvedInjectionView, item_turn_label, render_group_block, vmm_metadata_score_value,
+    ResolvedInjectionHostBlock, ResolvedInjectionView, item_turn_label, render_group_block,
+    render_host_item_block, vmm_metadata_score_value,
 };
 use crate::types::{
-    ContextInjectionState, InjectionCompactionPolicy, InjectionInsert, InjectionKind,
-    InjectionPruneReport, InjectionStateGroup, InjectionStateItem,
+    ContextInjectionState, InjectionCompactionPolicy, InjectionExpiryEvent, InjectionInsert,
+    InjectionKind, InjectionPruneReport, InjectionScope, InjectionStateGroup, InjectionStateItem,
 };
 use crate::util::{normalize_content, normalize_renderer_id, normalize_tag, stable_content_hash};
 use serde_json::Value;
 
+/// Builds one deterministic append-only marker for an expired injection item.
+/// 为已失效注入内容构建一个确定性的追加式标记。
+fn expiry_event_for_item(
+    tag: &str,
+    item: &InjectionStateItem,
+    turn_id: &str,
+) -> InjectionExpiryEvent {
+    let event_id = format!("context-expired:{}:{}", item.occurrence_id, turn_id);
+    let body = format!(
+        "Context injection expired after TTL: tag={tag}; content_hash={}; turn_id={turn_id}",
+        item.content_hash
+    );
+    InjectionExpiryEvent {
+        event_id,
+        source_id: item.source_id.clone(),
+        occurrence_id: item.occurrence_id.clone(),
+        tag: tag.to_string(),
+        content_hash: item.content_hash.clone(),
+        turn_id: turn_id.to_string(),
+        body,
+    }
+}
+
 impl ContextInjectionState {
+    /// Allocates the next stable occurrence identity for one producer source.
+    /// 为一个生产者来源分配下一个稳定发生点身份。
+    fn allocate_occurrence_id(&mut self, source_id: &str) -> String {
+        let sequence = self
+            .source_sequences
+            .entry(source_id.to_string())
+            .and_modify(|value| *value = value.saturating_add(1))
+            .or_insert(1);
+        format!("{source_id}:occurrence:{sequence}")
+    }
+
     /// Returns whether the state contains no active injection items.
     /// 返回该状态是否不包含任何活动注入内容项。
     pub fn is_empty(&self) -> bool {
         self.groups.values().all(|group| group.items.is_empty())
+            && self.pending_expiry_events.is_empty()
     }
 
     /// Applies hook-collected insertion operations to the state.
@@ -57,23 +93,6 @@ impl ContextInjectionState {
         if tag.is_empty() {
             return;
         }
-        let group = self
-            .groups
-            .entry(tag.clone())
-            .or_insert_with(|| InjectionStateGroup {
-                tag: tag.clone(),
-                kind: insert.kind,
-                scope: insert.scope,
-                priority: insert.priority,
-                compaction_policy: insert.compaction_policy,
-                ..InjectionStateGroup::default()
-            });
-        group.description = insert.description;
-        group.kind = insert.kind;
-        group.scope = insert.scope;
-        group.priority = insert.priority;
-        group.compaction_policy = insert.compaction_policy;
-
         for item in insert.items {
             let normalized_content = normalize_content(&item.content);
             if normalized_content.is_empty() {
@@ -97,12 +116,72 @@ impl ContextInjectionState {
                 let normalized = normalize_content(&value);
                 (!normalized.is_empty()).then_some(normalized)
             });
-            let content_hash =
+            let dedupe_hash =
                 stable_content_hash(dedupe_key.as_deref().unwrap_or(normalized_content.as_str()));
-            let compaction_policy = item.compaction_policy.unwrap_or(insert.compaction_policy);
+            let content_hash = stable_content_hash(normalized_content.as_str());
+            let source_id = format!("context_injection:{tag}:{dedupe_hash}");
             let source_display = item
                 .source_display
                 .or_else(|| insert.source_display.clone());
+            // A group route change also changes sibling envelopes, even when this write updates only one item.
+            // 即使本次只更新一个条目，组路由变化也会改变其兄弟条目的信封。
+            let (route_changed, sibling_sources) = match self.groups.get(&tag) {
+                Some(group) if group.kind != insert.kind || group.scope != insert.scope => (
+                    true,
+                    group
+                        .items
+                        .iter()
+                        .filter(|(key, _)| *key != &dedupe_hash)
+                        .map(|(key, sibling)| (key.clone(), sibling.source_id.clone()))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => (false, Vec::new()),
+            };
+            for (key, sibling_source) in sibling_sources {
+                let sibling_occurrence = self.allocate_occurrence_id(&sibling_source);
+                // Allocation only mutates source counters, so every captured sibling still exists under this exclusive borrow.
+                // 分配只改变来源计数器，因此在此独占借用中所有已捕获的兄弟条目仍然存在。
+                self.groups
+                    .get_mut(&tag)
+                    .expect("captured injection group")
+                    .items
+                    .get_mut(&key)
+                    .expect("captured injection sibling")
+                    .occurrence_id = sibling_occurrence;
+            }
+            let existing = self
+                .groups
+                .get(&tag)
+                .and_then(|group| group.items.get(&dedupe_hash));
+            let occurrence_id = match existing {
+                Some(existing)
+                    if !route_changed
+                        && existing.content_hash == content_hash
+                        && existing.renderer_id == renderer_id
+                        && existing.metadata == metadata
+                        && existing.source_display == source_display =>
+                {
+                    existing.occurrence_id.clone()
+                }
+                _ => self.allocate_occurrence_id(&source_id),
+            };
+            let group = self
+                .groups
+                .entry(tag.clone())
+                .or_insert_with(|| InjectionStateGroup {
+                    tag: tag.clone(),
+                    kind: insert.kind,
+                    scope: insert.scope,
+                    priority: insert.priority,
+                    compaction_policy: insert.compaction_policy,
+                    ..InjectionStateGroup::default()
+                });
+            group.description = insert.description.clone();
+            group.kind = insert.kind;
+            group.scope = insert.scope;
+            group.priority = insert.priority;
+            group.compaction_policy = insert.compaction_policy;
+            let compaction_policy = item.compaction_policy.unwrap_or(insert.compaction_policy);
             let created_turn_marker = if insert.kind == InjectionKind::Transient {
                 turn_marker
                     .map(str::trim)
@@ -113,9 +192,13 @@ impl ContextInjectionState {
             };
             group
                 .items
-                .entry(content_hash.clone())
+                .entry(dedupe_hash)
                 .and_modify(|existing| {
                     existing.content = normalized_content.clone();
+                    // Publish the newly allocated occurrence together with its exact body version.
+                    // 将新分配的发生点与其精确正文版本一并保存。
+                    existing.content_hash = content_hash.clone();
+                    existing.occurrence_id = occurrence_id.clone();
                     existing.ttl_turns = ttl_turns;
                     existing.remaining_turns = ttl_turns;
                     existing.compaction_policy = compaction_policy;
@@ -129,6 +212,8 @@ impl ContextInjectionState {
                 .or_insert_with(|| InjectionStateItem {
                     content: normalized_content,
                     content_hash,
+                    source_id,
+                    occurrence_id,
                     ttl_turns,
                     remaining_turns: ttl_turns,
                     last_consumed_turn_id: None,
@@ -147,7 +232,18 @@ impl ContextInjectionState {
     /// Consumes transient TTL for a logical turn once and deletes expired items.
     /// 为一个逻辑回合消耗一次临时 TTL，并删除已经失效的内容项。
     pub fn consume_turn(&mut self, turn_id: &str, now: &str) {
-        for group in self.groups.values_mut() {
+        let _ = self.consume_turn_with_expiry_events(turn_id, now);
+    }
+
+    /// Consumes one logical turn and returns the expiration markers created by that turn.
+    /// 消耗一个逻辑回合，并返回该回合产生的失效标记。
+    pub fn consume_turn_with_expiry_events(
+        &mut self,
+        turn_id: &str,
+        now: &str,
+    ) -> Vec<InjectionExpiryEvent> {
+        let mut expired_events = Vec::new();
+        for (tag, group) in self.groups.iter_mut() {
             if group.kind != InjectionKind::Transient {
                 continue;
             }
@@ -158,12 +254,23 @@ impl ContextInjectionState {
                 item.last_consumed_turn_id = Some(turn_id.to_string());
                 item.remaining_turns = item.remaining_turns.map(|turns| turns.saturating_sub(1));
                 item.updated_at = now.to_string();
+                if item.remaining_turns == Some(0) {
+                    expired_events.push(expiry_event_for_item(tag, item, turn_id));
+                }
             }
             group
                 .items
                 .retain(|_, item| item.remaining_turns.is_none_or(|turns| turns > 0));
         }
         self.remove_empty_groups();
+        self.enqueue_expiry_events(expired_events.clone());
+        expired_events
+    }
+
+    /// Takes pending expiration markers exactly once for provider request projection.
+    /// 为 Provider 请求投影一次性取出待发送的失效标记。
+    pub fn take_pending_expiry_events(&mut self) -> Vec<InjectionExpiryEvent> {
+        std::mem::take(&mut self.pending_expiry_events)
     }
 
     /// Removes transient items whose remaining TTL is already exhausted and reports the pruning counters.
@@ -176,20 +283,44 @@ impl ContextInjectionState {
     pub fn prune_expired_transient_items(&mut self) -> InjectionPruneReport {
         let before_group_count = self.groups.len();
         let mut removed_item_count = 0usize;
-        for group in self.groups.values_mut() {
+        let mut expired_events = Vec::new();
+        for (tag, group) in self.groups.iter_mut() {
             if group.kind != InjectionKind::Transient {
                 continue;
             }
             let before_item_count = group.items.len();
+            for item in group.items.values() {
+                if item.remaining_turns == Some(0) {
+                    if let Some(turn_id) = item.last_consumed_turn_id.as_deref() {
+                        expired_events.push(expiry_event_for_item(tag, item, turn_id));
+                    }
+                }
+            }
             group
                 .items
                 .retain(|_, item| item.remaining_turns.is_none_or(|turns| turns > 0));
             removed_item_count += before_item_count.saturating_sub(group.items.len());
         }
         self.remove_empty_groups();
+        self.enqueue_expiry_events(expired_events);
         InjectionPruneReport {
             removed_item_count,
             removed_group_count: before_group_count.saturating_sub(self.groups.len()),
+        }
+    }
+
+    /// Appends expiration markers without replaying an existing event identity.
+    /// 追加失效标记并按稳定事件身份阻止已有事件重放。
+    fn enqueue_expiry_events(&mut self, events: Vec<InjectionExpiryEvent>) {
+        for event in events {
+            if self
+                .pending_expiry_events
+                .iter()
+                .any(|pending| pending.event_id == event.event_id)
+            {
+                continue;
+            }
+            self.pending_expiry_events.push(event);
         }
     }
 
@@ -319,10 +450,39 @@ impl ContextInjectionState {
     ) -> ResolvedInjectionView {
         let mut persistent_blocks = Vec::new();
         let mut transient_blocks = Vec::new();
+        let mut host_blocks = Vec::new();
         for group in self.sorted_groups() {
             let Some(block) = render_group_block(group, options) else {
                 continue;
             };
+            for item in group.items.values() {
+                let Some(item_body) = render_host_item_block(item, options) else {
+                    continue;
+                };
+                host_blocks.push(ResolvedInjectionHostBlock {
+                    source_id: item.source_id.clone(),
+                    occurrence_id: item.occurrence_id.clone(),
+                    source: item
+                        .source_display
+                        .clone()
+                        .unwrap_or_else(|| format!("context-injection:{}", group.tag)),
+                    tag: group.tag.clone(),
+                    content_hash: item.content_hash.clone(),
+                    turn_id: item
+                        .created_turn_marker
+                        .clone()
+                        .or_else(|| item.last_consumed_turn_id.clone()),
+                    transient: group.kind == InjectionKind::Transient,
+                    scope: match group.scope {
+                        InjectionScope::Global => "global",
+                        InjectionScope::Project => "project",
+                        InjectionScope::Session => "session",
+                        InjectionScope::Turn => "turn",
+                    }
+                    .to_string(),
+                    body: item_body,
+                });
+            }
             match group.kind {
                 InjectionKind::Persistent => persistent_blocks.push(block),
                 InjectionKind::Transient => transient_blocks.push(block),
@@ -337,6 +497,7 @@ impl ContextInjectionState {
         ResolvedInjectionView {
             persistent_blocks,
             transient_prefix,
+            host_blocks,
             has_transient: !transient_blocks.is_empty(),
             fingerprint,
         }

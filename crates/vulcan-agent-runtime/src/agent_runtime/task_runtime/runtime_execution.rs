@@ -1,8 +1,15 @@
 use super::*;
+use crate::agent_runtime::prompt_compaction::ChildTaskCompactionPhase;
 
 /// Owns cleanup for one detached execution stream until the background finalizer takes over.
 /// 在后台终态处理器接管前，持有一条分离执行流的清理责任。
 pub(super) struct DetachedTaskStreamStartupGuard {
+    /// Shared immutable request identity; sharing avoids another conversation snapshot clone.
+    /// 共享不可变请求身份，避免再次克隆对话快照。
+    request: Arc<TaskExecutionRequest>,
+    /// Explicit observed startup failure; absent means ownership ended without a returned error.
+    /// 已观测明确启动失败；不存在表示所有权结束时没有返回错误。
+    failure_reason: Option<String>,
     /// Shared task runtime that owns the detached stream registry.
     /// 持有分离流注册表的共享任务运行时。
     runtime: Arc<TaskRuntime>,
@@ -15,6 +22,9 @@ pub(super) struct DetachedTaskStreamStartupGuard {
     /// Whether this guard still owns responsibility for closing the opened stream.
     /// 本守卫是否仍持有关闭已打开事件流的责任。
     owns_cleanup: bool,
+    /// Active run ownership must be released before a rejected startup closes its stream.
+    /// 被拒启动关闭其事件流之前，必须先释放活动运行所有权。
+    active_run: Option<ActiveTaskRunGuard>,
 }
 
 impl DetachedTaskStreamStartupGuard {
@@ -25,10 +35,10 @@ impl DetachedTaskStreamStartupGuard {
     /// 参数
     /// `runtime` owns the detached stream registry and later background finalizer.
     /// `runtime` 持有分离流注册表以及后续后台终态处理器。
-    /// `task_id` identifies the stable child task.
-    /// `task_id` 标识稳定子任务。
-    /// `execution_id` identifies the concrete execution attempt.
-    /// `execution_id` 标识具体执行尝试。
+    /// `request` retains exact task, execution and parent identity without duplicating history.
+    /// `request` 保留精确任务、执行与父身份，不重复复制历史。
+    /// `active_run` transfers the exact active lease into ordered startup cleanup.
+    /// `active_run` 将精确活动租约移交给有序启动清理。
     ///
     /// # Returns
     /// 返回值
@@ -36,16 +46,101 @@ impl DetachedTaskStreamStartupGuard {
     /// 精确流打开后返回清理所有者，否则返回注册表打开错误。
     pub(super) fn open(
         runtime: Arc<TaskRuntime>,
-        task_id: SessionId,
-        execution_id: &str,
+        request: Arc<TaskExecutionRequest>,
+        active_run: ActiveTaskRunGuard,
     ) -> Result<Self, String> {
+        // All cleanup coordinates come from the same immutable admitted request.
+        // 所有清理坐标均来自同一不可变已准入请求。
+        let task_id = request.task_id;
+        // Keep the stream identity distinct from the reusable physical task.
+        // 将事件流身份与可复用物理任务区分。
+        let execution_id = &request.execution_id;
+        if active_run.task_id != task_id || !Arc::ptr_eq(&active_run.runtime, &runtime) {
+            return Err(String::from(
+                "Detached startup does not own the supplied active task run.",
+            ));
+        }
         runtime.open_detached_task_event_stream_for_run(task_id, execution_id)?;
         Ok(Self {
             runtime,
             task_id,
             execution_id: execution_id.to_string(),
+            request,
+            failure_reason: None,
             owns_cleanup: true,
+            active_run: Some(active_run),
         })
+    }
+
+    /// Preserves the original fallible startup result so Drop can report the actual cause.
+    /// 保留原始可失败启动结果，使析构能报告实际原因。
+    /// Returns the input result unchanged; cancellation without a result uses an explicit ownership-end cause.
+    /// 原样返回输入结果；未返回结果的取消使用明确所有权结束原因。
+    pub(super) fn observe<T>(&mut self, result: Result<T, String>) -> Result<T, String> {
+        if let Err(reason) = &result {
+            self.failure_reason = Some(reason.clone());
+        }
+        result
+    }
+
+    /// Releases the exact lease, records process state and sends the explicit host abort in order.
+    /// 依次释放精确租约、记录进程状态并发送明确宿主中止。
+    /// `reason` is the original cause; returns combined cleanup errors without hiding independent failures.
+    /// `reason` 是原始原因；返回组合清理错误，不隐藏独立失败。
+    fn abort_startup(&mut self, reason: &str) -> Result<(), String> {
+        self.release_active_run()?;
+        // Failure projection cannot substitute for durable host cleanup, so attempt both independently.
+        // 失败投影不能替代可靠宿主清理，因此独立尝试两者。
+        let projection = self
+            .runtime
+            .mark_existing_startup_failure(&self.request, reason);
+        // This event is emitted after lease release even when the process-local projection failed.
+        // 即使进程内投影失败，此事件仍在租约释放之后发出。
+        let aborted = self
+            .runtime
+            .abort_detached_task_startup(&self.request, reason);
+        if aborted.is_ok() {
+            self.owns_cleanup = false;
+        }
+        match (projection, aborted) {
+            (Ok(_), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+            (Err(projection), Err(abort)) => Err(format!(
+                "{projection} Startup abort publication also failed: {abort}"
+            )),
+        }
+    }
+
+    /// Attaches the Provider abort handle while startup still owns the active run.
+    /// 启动阶段仍拥有活动运行时附加 Provider 中止句柄。
+    /// `handle` belongs to the just-spawned Provider; returns an ownership or registry error.
+    /// `handle` 属于刚派生的 Provider；返回归属或注册表错误。
+    pub(super) fn attach_abort_handle(&self, handle: AbortHandle) -> Result<(), String> {
+        self.active_run
+            .as_ref()
+            .ok_or_else(|| String::from("Detached startup already transferred its active run."))?
+            .attach_abort_handle(handle)
+    }
+
+    /// Transfers the active run once into the background finalizer immediately before spawn.
+    /// 在派生前将活动运行一次性移交给后台终态处理器。
+    /// Returns the exact owned guard or rejects an attempted duplicate transfer.
+    /// 返回精确所属守卫，或拒绝重复移交。
+    pub(super) fn take_active_run(&mut self) -> Result<ActiveTaskRunGuard, String> {
+        self.active_run
+            .take()
+            .ok_or_else(|| String::from("Detached startup already transferred its active run."))
+    }
+
+    /// Releases the active lease before stream closure, preserving failed lease removal for retry.
+    /// 在事件流关闭之前释放活动租约，保留失败的租约删除以便重试。
+    /// Returns success if ownership was transferred or released, otherwise the registry failure.
+    /// 归属已移交或已释放时返回成功，否则返回注册表失败。
+    fn release_active_run(&mut self) -> Result<(), String> {
+        if let Some(active_run) = self.active_run.as_mut() {
+            active_run.release_in_place()?;
+        }
+        Ok(())
     }
 
     /// Closes the startup-owned stream and preserves both the primary and cleanup failures.
@@ -61,14 +156,9 @@ impl DetachedTaskStreamStartupGuard {
     /// The primary error when cleanup succeeds, otherwise a diagnostic containing both failures.
     /// 清理成功时返回主错误，否则返回同时包含两项失败的诊断。
     pub(super) fn close_after_error(mut self, primary_error: String) -> String {
-        match self
-            .runtime
-            .close_detached_task_event_stream(self.task_id, self.execution_id.as_str())
-        {
-            Ok(()) => {
-                self.owns_cleanup = false;
-                primary_error
-            }
+        self.failure_reason = Some(primary_error.clone());
+        match self.abort_startup(&primary_error) {
+            Ok(()) => primary_error,
             Err(close_error) => format!(
                 "{primary_error} Detached stream cleanup for task `{}` execution `{}` also failed: {close_error}",
                 self.task_id, self.execution_id
@@ -81,10 +171,16 @@ impl DetachedTaskStreamStartupGuard {
     ///
     /// # Returns
     /// 返回值
-    /// Returns no value; consuming this guard prevents its Drop fallback from closing the live stream.
-    /// 不返回值；消费本守卫会阻止其 Drop 兜底关闭仍在运行的事件流。
-    pub(super) fn handoff_to_background_finalizer(mut self) {
+    /// Returns success after lease transfer, or an ownership error and cleans up the rejected handoff.
+    /// 租约移交后返回成功，否则返回归属错误并清理被拒绝的交接。
+    pub(super) fn handoff_to_background_finalizer(mut self) -> Result<(), String> {
+        if self.active_run.is_some() {
+            return Err(String::from(
+                "Detached startup must transfer its active run before stream handoff.",
+            ));
+        }
         self.owns_cleanup = false;
+        Ok(())
     }
 }
 
@@ -97,13 +193,17 @@ impl Drop for DetachedTaskStreamStartupGuard {
     /// Returns no value; cleanup failure is emitted because Drop has no caller error channel.
     /// 不返回值；由于 Drop 没有调用方错误通道，清理失败会输出诊断。
     fn drop(&mut self) {
-        if self.owns_cleanup
-            && let Err(error) = self
-                .runtime
-                .close_detached_task_event_stream(self.task_id, self.execution_id.as_str())
-        {
+        if !self.owns_cleanup {
+            return;
+        }
+        // Missing error means the startup future ended before handoff, including cancellation or unwinding.
+        // 缺失错误表示启动 Future 在交接前结束，包括取消或栈展开。
+        let reason = self.failure_reason.clone().unwrap_or_else(|| {
+            String::from("Child startup ended before background ownership was established.")
+        });
+        if let Err(error) = self.abort_startup(&reason) {
             eprintln!(
-                "[task-runtime] detached stream startup guard cleanup failed for task `{}` execution `{}`: {error}",
+                "[task-runtime] detached stream startup guard cleanup failed for task {} execution {}: {error}",
                 self.task_id, self.execution_id
             );
         }
@@ -114,10 +214,50 @@ impl Drop for DetachedTaskStreamStartupGuard {
 /// 通过共享运行时准备与 Provider 分发桥执行一条子代理任务。
 pub(crate) async fn run_task_with_shared_runtime_context(
     task_runtime: Arc<TaskRuntime>,
+    mut context: TaskExecutionRuntimeContext,
+    base_controller_config: CoreControllerConfig,
+    parent_live_sender: ProviderLiveDeltaSender,
+    request: TaskExecutionRequest,
+) -> Result<TaskExecutionOutcome, String> {
+    // A new delegation never inherits its parent's recovery identity.
+    // 新委派绝不继承父级的恢复身份。
+    context.recovered_child_profile = None;
+    // Claim trusted coordinates before publishing the start; reserve after the host creates the child document.
+    // 发布启动前认领可信坐标；在宿主创建子文档后预留。
+    let lifecycle_binding =
+        task_runtime.take_child_task_lifecycle_binding(request.execution_id.as_str())?;
+    if let Some(binding) = &lifecycle_binding {
+        if binding.reservation.execution.task_session_id != request.task_id
+            || binding.reservation.execution.execution_id != request.execution_id
+        {
+            return Err(format!(
+                "Child lifecycle binding does not match task `{}` execution `{}`.",
+                request.task_id, request.execution_id
+            ));
+        }
+    }
+    // The startup guard owns explicit abort publication; the host settles any durable reservation.
+    // 启动守卫拥有明确中止发布责任；宿主结算已有持久预留。
+    run_task_with_shared_runtime_context_inner(
+        task_runtime,
+        context,
+        base_controller_config,
+        parent_live_sender,
+        request,
+        lifecycle_binding,
+    )
+    .await
+}
+
+/// Runs one child execution after its durable reservation has been acknowledged.
+/// 在可靠预留确认后运行一条子执行。
+async fn run_task_with_shared_runtime_context_inner(
+    task_runtime: Arc<TaskRuntime>,
     context: TaskExecutionRuntimeContext,
     base_controller_config: CoreControllerConfig,
     parent_live_sender: ProviderLiveDeltaSender,
     request: TaskExecutionRequest,
+    lifecycle_binding: Option<ChildTaskLifecycleBinding>,
 ) -> Result<TaskExecutionOutcome, String> {
     let mut request = request;
     let task_id = request.task_id;
@@ -171,22 +311,56 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         &resolved_config,
     );
     request.controller_config = Some(running_controller_config.clone());
+    // Startup and the finalizer share the finalized request without another history clone.
+    // 启动与终态处理器共享最终请求，不再克隆一份历史。
+    let request = Arc::new(request);
     let started_payload =
         build_task_host_payload(&request, "running", None, "", current_unix_millis_text());
     // detachedStreamStartupGuard owns stream cleanup until the background finalizer is installed.
     // detachedStreamStartupGuard 在后台终态处理器安装前持有事件流清理责任。
-    let detached_stream_startup_guard = DetachedTaskStreamStartupGuard::open(
+    let mut detached_stream_startup_guard = DetachedTaskStreamStartupGuard::open(
         Arc::clone(&task_runtime),
-        task_id,
-        &request.execution_id,
+        Arc::clone(&request),
+        active_task_run_guard,
     )?;
-    let (delegate_started_event, projection_barrier) =
+    // Initial creation and resumption resolve once, records parent ownership first and installs the host sink before UI projection.
+    // 初始创建与续跑只解析一次，先记录父归属，并在界面投影之前安装宿主接收器。
+    let initial_preparation = if let Some(binding) = &lifecycle_binding {
+        detached_stream_startup_guard.observe(
+            context
+                .request_template
+                .native_agent_collaboration_runtime
+                .as_ref()
+                .ok_or_else(|| {
+                    String::from("Durable child admission requires a profile capture host.")
+                }),
+        )?;
+        let prepared = detached_stream_startup_guard.observe(
+            runtime_launch::prepare_task_runtime_execution(&context, &request, &resolved_config),
+        )?;
+        let creation = detached_stream_startup_guard
+            .observe(prepared.creation.as_ref().ok_or_else(|| {
+                String::from("Child admission requires captured creation settings.")
+            }))?
+            .clone();
+        detached_stream_startup_guard.observe(
+            binding
+                .port
+                .create_child_task(binding.reservation.clone(), creation)
+                .await,
+        )?;
+        Some(prepared)
+    } else {
+        None
+    };
+    let (delegate_started_event, projection_barrier) = detached_stream_startup_guard.observe(
         attach_runtime_event_projection_barrier(build_task_delegate_runtime_event(
             RuntimeEventKind::DelegateStarted,
             &request,
             "Running and waiting for the subagent to return a result.",
             started_payload,
-        ))?;
+        )),
+    )?;
     if parent_live_sender
         .send(Ok(ProviderStreamDelta::RuntimeEvent(
             delegate_started_event,
@@ -215,9 +389,11 @@ pub(crate) async fn run_task_with_shared_runtime_context(
     // Wait until the parent workbench projection sees the subagent-start event before the child run advances.
     // 等待父级工作台投影看到子代理启动事件后，再推进子任务执行。
     let has_projection_barrier = projection_barrier.is_some();
-    wait_runtime_event_projection_barrier(projection_barrier)
-        .await
-        .map_err(|error| error.to_string())?;
+    detached_stream_startup_guard.observe(
+        wait_runtime_event_projection_barrier(projection_barrier)
+            .await
+            .map_err(|error| error.to_string()),
+    )?;
     if !has_projection_barrier {
         tokio::task::yield_now().await;
     }
@@ -230,8 +406,80 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         ),
     );
 
+    // Capture the recoverable profile before activation, then hand off this exact prepared launch.
+    // 激活前捕获可恢复配置，再交接这份精确准备的启动结果。
+    let initial_launch = if let Some(binding) = &lifecycle_binding {
+        // All durable executions have already published through their single prepared admission.
+        // 所有可靠执行均已通过唯一准备准入完成发布。
+        let prepared = detached_stream_startup_guard
+            .observe(initial_preparation.ok_or_else(|| {
+                String::from("Durable child launch lost its admitted preparation.")
+            }))?;
+        let launch = detached_stream_startup_guard.observe(
+            Box::pin(runtime_launch::launch_prepared_task_runtime_execution(
+                &context, prepared,
+            ))
+            .await,
+        )?;
+        let active_at_ms =
+            detached_stream_startup_guard.observe(current_unix_millis_u64().try_into().map_err(
+                |_| String::from("Child lifecycle activation timestamp exceeds the durable range."),
+            ))?;
+        let activation_request =
+            detached_stream_startup_guard.observe(binding.activation_request(active_at_ms))?;
+        detached_stream_startup_guard.observe(
+            binding
+                .port
+                .activate_child_task(activation_request)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Child task `{}` durable activation failed before provider launch: {error}",
+                        request.public_task_id
+                    )
+                }),
+        )?;
+        Some(launch)
+    } else {
+        None
+    };
+
+    spawn_admitted_task_execution(
+        task_runtime,
+        context,
+        request,
+        resolved_config,
+        running_controller_config,
+        detached_stream_startup_guard,
+        trace_started_at,
+        initial_launch,
+    )
+}
+
+/// Starts the shared provider loop and finalizer after the host has admitted its exact listener.
+/// 宿主已准入精确监听器后，启动共享 Provider 循环与终态处理器。
+/// The guard owns startup cleanup; an optional prepared launch belongs to a recovered execution.
+/// 守卫持有启动清理；可选已准备载荷属于恢复执行。
+/// Returns the running acknowledgement after abort and finalizer ownership is installed.
+/// 安装中止及终态所有权后返回运行接纳回执。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_admitted_task_execution(
+    task_runtime: Arc<TaskRuntime>,
+    context: TaskExecutionRuntimeContext,
+    request: Arc<TaskExecutionRequest>,
+    resolved_config: TaskSessionResolvedConfig,
+    running_controller_config: CoreControllerConfig,
+    mut detached_stream_startup_guard: DetachedTaskStreamStartupGuard,
+    trace_started_at: u64,
+    initial_launch: Option<
+        crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch,
+    >,
+) -> Result<TaskExecutionOutcome, String> {
+    // Both admission routes retain the same concrete child identity for every terminal path.
+    // 两种准入路径在每条终态路径中保留同一个具体子身份。
+    let task_id = request.task_id;
     let background_task_runtime = Arc::clone(&task_runtime);
-    let background_request = request.clone();
+    let background_request = request.as_ref().clone();
     let background_resolved_config = resolved_config.clone();
     let child_completion_controller_config = running_controller_config.clone();
     let stopped_controller_config = running_controller_config.clone();
@@ -257,15 +505,51 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             current_unix_millis_u64().saturating_sub(trace_started_at)
         ),
     );
-    let child_run_task = tokio::spawn(async move {
+    // Gate all preparation and Provider writes until the abort handle and finalizer both own the run.
+    // 在中止句柄和终态处理器共同接管运行前，阻止所有准备与 Provider 写入。
+    // Heap-own the execution state so synchronous recovery admission does not carry the provider future.
+    // 在堆上持有执行状态，避免同步恢复准入携带 Provider Future。
+    let (child_run_start, child_run_task) = spawn_child_run_after_handoff(Box::pin(async move {
         let mut background_request = background_request;
-        let mut launch = prepare_task_runtime_stream_launch_with_preflight_compaction(
-            Arc::clone(&background_task_runtime),
-            &context,
-            &mut background_request,
-            &background_resolved_config,
-        )
-        .await?;
+        let mut launch = match initial_launch {
+            Some(launch) => {
+                if background_resolved_config
+                    .effective_config
+                    .context_compaction
+                    .auto_compaction_enabled
+                    && task_launch_should_compact(&launch)
+                    && let Some(snapshot) = Box::pin(run_task_session_context_compaction(
+                        Arc::clone(&background_task_runtime),
+                        context.clone(),
+                        background_request.clone(),
+                        background_resolved_config.clone(),
+                        ChildTaskCompactionPhase::ActiveBusiness,
+                    ))
+                    .await?
+                {
+                    background_request.snapshot = snapshot;
+                    Box::pin(prepare_task_runtime_stream_launch(
+                        &context,
+                        &background_request,
+                        &background_resolved_config,
+                    ))
+                    .await?
+                } else {
+                    launch
+                }
+            }
+            None => {
+                Box::pin(
+                    prepare_task_runtime_stream_launch_with_preflight_compaction(
+                        Arc::clone(&background_task_runtime),
+                        &context,
+                        &mut background_request,
+                        &background_resolved_config,
+                    ),
+                )
+                .await?
+            }
+        };
         let initial_tool_result_count =
             task_snapshot_tool_result_count(&background_request.snapshot);
         let initial_message_ids = background_request
@@ -354,12 +638,13 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             completed_usage = snapshot_usage.or_else(|| checkpoint_usage.clone());
             completed_last_usage = snapshot_last_usage.or(checkpoint_usage);
             background_request.snapshot = checkpoint_snapshot;
-            let compacted_snapshot = run_task_session_context_compaction(
+            let compacted_snapshot = Box::pin(run_task_session_context_compaction(
                 Arc::clone(&background_task_runtime),
                 context.clone(),
                 background_request.clone(),
                 background_resolved_config.clone(),
-            )
+                ChildTaskCompactionPhase::ActiveBusiness,
+            ))
             .await?
             .ok_or_else(|| {
                 format!(
@@ -369,11 +654,11 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             })?;
             background_request.snapshot = compacted_snapshot;
             mid_turn_compaction_attempted = true;
-            launch = prepare_task_runtime_stream_launch(
+            launch = Box::pin(prepare_task_runtime_stream_launch(
                 &context,
                 &background_request,
                 &background_resolved_config,
-            )
+            ))
             .await?;
         };
         let budget_should_compact = report
@@ -405,12 +690,12 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             outcome,
             should_compact_context,
         })
-    });
+    }));
     let child_run_abort_handle = child_run_task.abort_handle();
     let child_run_abort_guard = AbortChildRunOnDrop {
         handle: child_run_abort_handle.clone(),
     };
-    if let Err(error) = active_task_run_guard.attach_abort_handle(child_run_abort_handle) {
+    if let Err(error) = detached_stream_startup_guard.attach_abort_handle(child_run_abort_handle) {
         return Err(detached_stream_startup_guard.close_after_error(error));
     }
     task_runtime_trace(
@@ -421,6 +706,9 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             current_unix_millis_u64().saturating_sub(trace_started_at)
         ),
     );
+    // Move the lease into the finalizer without an await gap before installing that finalizer.
+    // 将租约移入终态处理器，安装该处理器之前不留 await 间隙。
+    let active_task_run_guard = detached_stream_startup_guard.take_active_run()?;
     tokio::spawn(async move {
         let mut active_task_run_guard = Some(active_task_run_guard);
         let _child_run_abort_guard = child_run_abort_guard;
@@ -438,12 +726,17 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         &outcome,
                     )
                     .map(|committed| outcome_committed = committed);
+                // The durable parent return publisher settles success together with the exact content.
+                // 父侧可靠回流发布器将成功终态与精确正文一起结算。
+                // Keep the durable child obligation active while the result is still in transit.
+                // 结果仍在传输时保留持久子任务完成约束。
+                let store_and_lifecycle_result = store_result.map_err(|error| {
+                    format!(
+                        "The subagent task completed, but its terminal state could not be recorded: {error}"
+                    )
+                });
                 match combine_task_run_finalization_results(
-                    store_result.map_err(|error| {
-                        format!(
-                            "The subagent task completed, but its terminal state could not be recorded: {error}"
-                        )
-                    }),
+                    store_and_lifecycle_result,
                     release_owned_active_task_run(&mut active_task_run_guard, task_id).map_err(
                         |error| {
                             format!(
@@ -467,12 +760,15 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                             outcome_committed,
                             resumed_queued_messages,
                         );
-                        if completion.should_compact_context {
+                        if completion.should_compact_context
+                            && outcome_committed
+                            && !resumed_queued_messages
+                        {
                             spawn_task_session_context_compaction(
                                 Arc::clone(&task_runtime),
                                 compaction_runtime_context,
-                                request.clone(),
-                                outcome.resolved_config.clone(),
+                                request.as_ref().clone(),
+                                outcome,
                             );
                         }
                         resumed_queued_messages
@@ -504,12 +800,15 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         &outcome,
                     )
                     .map(|committed| outcome_committed = committed);
+                // The host publishes stop evidence and releases the owned obligation atomically.
+                // 宿主原子发布停止证据并解除所属任务义务。
+                let store_and_lifecycle_result = store_result.map_err(|error| {
+                    format!(
+                        "The stopped subagent task could not record its terminal state: {error}"
+                    )
+                });
                 match combine_task_run_finalization_results(
-                    store_result.map_err(|error| {
-                        format!(
-                            "The stopped subagent task could not record its terminal state: {error}"
-                        )
-                    }),
+                    store_and_lifecycle_result,
                     release_owned_active_task_run(&mut active_task_run_guard, task_id).map_err(
                         |error| {
                             format!(
@@ -553,12 +852,15 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         &error,
                     )
                     .map(|committed| failure_committed = committed);
-                match combine_task_run_finalization_results(
-                    mark_result.map_err(|record_error| {
+                // Failure remains an owned obligation until the host durably records its report.
+                // 在宿主可靠记录报告之前，失败执行仍保留所属任务义务。
+                let mark_and_lifecycle_result = mark_result.map_err(|record_error| {
                         format!(
                             "The subagent task failed with `{error}`, and recording that failure also failed: {record_error}"
                         )
-                    }),
+                    });
+                match combine_task_run_finalization_results(
+                    mark_and_lifecycle_result,
                     release_owned_active_task_run(&mut active_task_run_guard, task_id).map_err(
                         |release_error| {
                             format!(
@@ -610,12 +912,15 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         &outcome,
                     )
                     .map(|committed| outcome_committed = committed);
+                // Cancellation uses the same durable stopped-result publisher as an explicit stop.
+                // 取消与明确停止使用相同的可靠停止结果发布器。
+                let store_and_lifecycle_result = store_result.map_err(|error| {
+                    format!(
+                        "The cancelled subagent task could not record its stopped state: {error}"
+                    )
+                });
                 match combine_task_run_finalization_results(
-                    store_result.map_err(|error| {
-                        format!(
-                            "The cancelled subagent task could not record its stopped state: {error}"
-                        )
-                    }),
+                    store_and_lifecycle_result,
                     release_owned_active_task_run(&mut active_task_run_guard, task_id).map_err(
                         |error| {
                             format!(
@@ -664,12 +969,15 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         &error,
                     )
                     .map(|committed| failure_committed = committed);
-                match combine_task_run_finalization_results(
-                    mark_result.map_err(|record_error| {
+                // A panicked child also needs its durable report before parent terminal settlement.
+                // 崩溃子任务同样需要可靠报告先于父侧终态结算。
+                let mark_and_lifecycle_result = mark_result.map_err(|record_error| {
                         format!(
                             "The subagent task failed with `{error}`, and recording that failure also failed: {record_error}"
                         )
-                    }),
+                    });
+                match combine_task_run_finalization_results(
+                    mark_and_lifecycle_result,
                     release_owned_active_task_run(&mut active_task_run_guard, task_id).map_err(
                         |release_error| {
                             format!(
@@ -736,7 +1044,10 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             ),
         );
     });
-    detached_stream_startup_guard.handoff_to_background_finalizer();
+    detached_stream_startup_guard.handoff_to_background_finalizer()?;
+    // A receiver already cancelled by stop is settled by its installed finalizer; never reopen startup.
+    // 接收端若已被停止操作取消，将由已安装终态处理器结算，绝不重新打开启动阶段。
+    let _ = child_run_start.send(());
     task_runtime_trace(
         "shared_task_spawn_return",
         format!(
@@ -746,6 +1057,36 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         ),
     );
     Ok(running_outcome)
+}
+
+/// Spawns a child future behind explicit handoff permission.
+/// 在明确交接许可之后派生子任务 Future。
+/// `run` may prepare or write child state only after the returned sender grants permission.
+/// 只有返回的发送端授予许可后，`run` 才能准备或写入子状态。
+/// Returns the one-use permission sender and the finalizer-owned join handle; withdrawal skips `run`.
+/// 返回一次性许可发送端及终态处理器所属的连接句柄；撤回许可会跳过 `run`。
+pub(super) fn spawn_child_run_after_handoff<F, T>(
+    run: F,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<T, String>>,
+)
+where
+    F: std::future::Future<Output = Result<T, String>> + Send + 'static,
+    T: Send + 'static,
+{
+    // Dropping permission is an explicit failed handoff, never implicit authorization to launch.
+    // 丢弃许可明确表示交接失败，绝不隐式授权启动。
+    let (permission, admitted) = tokio::sync::oneshot::channel();
+    // The finalizer receives this handle before the caller may release permission.
+    // 调用方释放许可之前，终态处理器先取得此句柄。
+    let task = tokio::spawn(async move {
+        admitted
+            .await
+            .map_err(|_| String::from("Child startup handoff permission was withdrawn."))?;
+        run.await
+    });
+    (permission, task)
 }
 
 /// Counts replayable tool results in one child-task conversation snapshot.
@@ -1076,13 +1417,18 @@ fn stopped_task_snapshot_from_runtime_or_request(
 
 /// Spawns one non-blocking TaskSession context compaction job after a child task has completed.
 /// 在子任务完成后派生一个非阻塞 TaskSession 上下文压缩任务。
+/// `task_runtime` owns publication, `context` owns execution dependencies, `request` binds identity,
+/// and `outcome` supplies the committed terminal history and configuration; returns after scheduling.
+/// `task_runtime`持有发布，`context`持有执行依赖，`request`绑定身份，
+/// `outcome`提供已提交终态历史和配置；调度后返回。
 pub(super) fn spawn_task_session_context_compaction(
     task_runtime: Arc<TaskRuntime>,
     context: TaskExecutionRuntimeContext,
-    request: TaskExecutionRequest,
-    resolved_config: TaskSessionResolvedConfig,
+    mut request: TaskExecutionRequest,
+    outcome: TaskExecutionOutcome,
 ) {
-    if !resolved_config
+    if !outcome
+        .resolved_config
         .effective_config
         .context_compaction
         .auto_compaction_enabled
@@ -1090,12 +1436,32 @@ pub(super) fn spawn_task_session_context_compaction(
         return;
     }
 
+    // Maintenance must summarize the committed terminal history, including all calls and the final assistant.
+    // 维护必须总结已提交终态历史，包括全部调用及最终助手回复。
+    request.snapshot = outcome.snapshot;
+    // Preserve the exact final controller configuration rather than the initial resume configuration.
+    // 保留精确最终控制器配置，而不是初始续跑配置。
+    request.controller_config = Some(outcome.controller_config);
+    // The terminal outcome owns the effective policy used for this maintenance attempt.
+    // 终态结果持有本次维护尝试使用的有效策略。
+    let resolved_config = outcome.resolved_config;
+
+    // Native maintenance publishes its canonical document; its later result must not overwrite a concurrently resumed resident mirror.
+    // 原生维护发布规范文档；其迟到结果不能覆盖同时续跑的常驻镜像。
+    let uses_native_host = context
+        .request_template
+        .native_agent_collaboration_runtime
+        .is_some();
+
     tokio::spawn(async move {
+        // Native hosts own publication waiting together with cancellation and durable cleanup.
+        // 原生宿主将发布等待、取消及可靠清理一起持有。
         let compacted_snapshot = match run_task_session_context_compaction(
             Arc::clone(&task_runtime),
             context,
             request.clone(),
             resolved_config,
+            ChildTaskCompactionPhase::CompletedBusinessMaintenance,
         )
         .await
         {
@@ -1108,6 +1474,11 @@ pub(super) fn spawn_task_session_context_compaction(
         let Some(compacted_snapshot) = compacted_snapshot else {
             return;
         };
+        // The host's auxiliary exclusion has already been released; only standalone maintenance owns this resident update.
+        // 宿主辅助互斥已经释放；仅独立运行时维护持有此常驻更新。
+        if uses_native_host {
+            return;
+        }
         let mut sessions = match task_runtime.sessions.write() {
             Ok(sessions) => sessions,
             Err(_) => {
@@ -1143,6 +1514,8 @@ pub(super) fn spawn_task_session_context_compaction(
 /// `request` 标识其请求上下文可能被压缩的已完成子代理执行。
 /// `resolved_config` supplies the effective context-compaction policy for that execution.
 /// `resolved_config` 提供该次执行的有效上下文压缩策略。
+/// `phase` is chosen by the lifecycle caller and distinguishes an active lease from completed maintenance.
+/// `phase` 由生命周期调用方选择，区分活动租约与完成后维护。
 ///
 /// # Returns
 /// 返回值
@@ -1153,43 +1526,45 @@ pub(crate) async fn run_task_session_context_compaction(
     context: TaskExecutionRuntimeContext,
     request: TaskExecutionRequest,
     resolved_config: TaskSessionResolvedConfig,
+    phase: ChildTaskCompactionPhase,
 ) -> Result<Option<CoreConversationSnapshot>, String> {
-    let mut conversation_state = core_snapshot_to_session_conversation_state(&request.snapshot)?;
-    let messages = conversation_state_to_compaction_source_messages(&conversation_state);
+    if let Some(host) = context
+        .request_template
+        .native_agent_collaboration_runtime
+        .as_ref()
+    {
+        // A native child must never plan against the resident snapshot that the host will replace on dispatch.
+        // 原生子代理绝不能依据派发时会被宿主替换的驻留快照规划。
+        let (provider_configuration, preparation, model_target) =
+            task_compaction_launch_inputs(&context, &request, &resolved_config)?;
+        return host
+            .compact_child_task(
+                crate::agent_runtime::prompt_compaction::ChildTaskCompactionRequest {
+                    phase,
+                    invocation: request,
+                    preparation,
+                    provider_configuration,
+                    model_target,
+                    foundation: Arc::clone(&context.foundation),
+                    luaskills_runtime: context.luaskills_runtime.clone(),
+                },
+            )
+            .await;
+    }
+    // Select active host instructions once for both summary input and frozen-tail planning.
+    // 为摘要输入和冻结尾段规划一次性选择有效宿主指令。
+    let mut conversation_state = vulcan_context::runtime_host::prepare_runtime_host_compaction(
+        &core_snapshot_to_session_conversation_state(&request.snapshot)?,
+    )?;
+    let messages = conversation_state_to_compaction_source_messages(&conversation_state)?;
     if messages.is_empty() {
         return Ok(None);
     }
 
     // The preparation request carries the exact provider overrides already resolved for this task.
     // 准备请求携带已为本次任务执行解析的精确供应商覆盖。
-    let (provider_configuration, compaction_preparation_request) =
-        build_task_runtime_preparation_request(&context, &request, &resolved_config)?;
-    let compaction_session_id = compaction_preparation_request.session_id.to_string();
-    let public_ai_runtime = context.foundation.public_ai_runtime().ok_or_else(|| {
-        String::from("TaskSession context compaction requires the public AI runtime.")
-    })?;
-    let behavior_seed = task_context_compaction_policy_from_snapshot(
-        &resolved_config.effective_config.context_compaction,
-    );
-    let model_target = resolve_prompt_compaction_model_target(
-        public_ai_runtime.as_ref(),
-        compaction_session_id.as_str(),
-        compaction_preparation_request
-            .provider_route_lease_identity
-            .as_ref(),
-        compaction_preparation_request
-            .provider_id_override
-            .as_deref(),
-        compaction_preparation_request
-            .connection_id_override
-            .as_deref(),
-        compaction_preparation_request.model_id_override.as_deref(),
-        compaction_preparation_request.context_compaction_window_node_id,
-        Some(behavior_seed),
-    )?
-    .ok_or_else(|| {
-        String::from("TaskSession context compaction requires an exact model target.")
-    })?;
+    let (provider_configuration, compaction_preparation_request, model_target) =
+        task_compaction_launch_inputs(&context, &request, &resolved_config)?;
     let Some(plan) = plan_context_compaction(CompactionPlanInput {
         session_label: &request.public_task_id,
         messages: &messages,
@@ -1204,6 +1579,7 @@ pub(crate) async fn run_task_session_context_compaction(
     let launch_context =
         PromptCompactionLaunchContext::from_execution_request(&compaction_preparation_request);
     let stream = stream_prompt_compaction_foundation_job(PromptCompactionFoundationJobRequest {
+        ownership: crate::agent_runtime::prompt_compaction::PromptCompactionOwnership::RuntimeOnly,
         session_id: request.task_id,
         session_title: request.display_title.clone(),
         workspace_path: context.request_template.workspace_path.clone(),
@@ -1250,6 +1626,65 @@ pub(crate) async fn run_task_session_context_compaction(
         return Ok(Some(build_core_conversation_snapshot(&conversation_state)?));
     }
     Ok(None)
+}
+
+/// Resolves the original child's exact provider preparation and summary target for either durable or standalone execution.
+/// 为可靠或独立执行解析原子任务的精确供应商准备及摘要目标。
+/// The context, invocation and resolved configuration retain the original scope; returns exact launch inputs or an error.
+/// 上下文、调用与已解析配置保留原范围；返回精确启动输入或错误。
+fn task_compaction_launch_inputs(
+    context: &TaskExecutionRuntimeContext,
+    request: &TaskExecutionRequest,
+    resolved_config: &TaskSessionResolvedConfig,
+) -> Result<
+    (
+        ProviderConfigurationFile,
+        ExecutionPreparationRequest,
+        crate::agent_runtime::prompt_compaction::PromptCompactionModelTarget,
+    ),
+    String,
+> {
+    // Reuse the same preparation path as the actual child request, including its exact route overrides.
+    // 复用实际子请求的相同准备路径，包括精确路由覆盖。
+    let (provider_configuration, preparation) = if context
+        .request_template
+        .native_agent_collaboration_runtime
+        .is_some()
+    {
+        super::runtime_launch::build_task_runtime_compaction_controls(
+            context,
+            request,
+            resolved_config,
+        )?
+    } else {
+        build_task_runtime_preparation_request(context, request, resolved_config)?
+    };
+    // The declared runtime is the only provider resolver; no alternate protocol is selected.
+    // 声明的运行时是唯一供应商解析器；不选择替代协议。
+    let public_ai_runtime = context.foundation.public_ai_runtime().ok_or_else(|| {
+        String::from("TaskSession context compaction requires the public AI runtime.")
+    })?;
+    // Behavior policy is resolved together with this exact task's model window.
+    // 行为策略与此精确任务的模型窗口一同解析。
+    let behavior_seed = task_context_compaction_policy_from_snapshot(
+        &resolved_config.effective_config.context_compaction,
+    );
+    // Freeze the route before the host reads any compaction source.
+    // 在宿主读取任何压缩来源之前冻结路由。
+    let target = resolve_prompt_compaction_model_target(
+        public_ai_runtime.as_ref(),
+        &preparation.session_id.to_string(),
+        preparation.provider_route_lease_identity.as_ref(),
+        preparation.provider_id_override.as_deref(),
+        preparation.connection_id_override.as_deref(),
+        preparation.model_id_override.as_deref(),
+        preparation.context_compaction_window_node_id,
+        Some(behavior_seed),
+    )?
+    .ok_or_else(|| {
+        String::from("TaskSession context compaction requires an exact model target.")
+    })?;
+    Ok((provider_configuration, preparation, target))
 }
 
 /// Builds the shared compaction planning policy from a resolved TaskSession policy snapshot.

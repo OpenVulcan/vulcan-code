@@ -3,6 +3,9 @@
 
 use super::*;
 
+mod owned_returns;
+mod result_consumption;
+
 /// A final return includes stopped predecessor usage and additive timing exactly once.
 /// 最终回流恰好一次包含此前停止回合的用量与可累加计时。
 #[test]
@@ -75,7 +78,12 @@ fn subagent_return_includes_unreturned_stopped_turn_and_timing() -> Result<(), D
     let projected = crate::v1::projection::project_provider_items(parent.events(), None, &[])?;
     assert!(projected.iter().any(|item| matches!(item,
         crate::v1::projection::ProjectedItem::SubagentReturnText { text }
-            if text == "result"
+            if text.contains("<vulcan_agent_message")
+                && text.contains("kind=\"task_result\"")
+                && text.contains("source=\"sess-1\"")
+                && text.contains("target=\"parent\"")
+                && text.contains("task_id=\"worker\"")
+                && text.contains(">result</vulcan_agent_message>")
     )));
     Ok(())
 }

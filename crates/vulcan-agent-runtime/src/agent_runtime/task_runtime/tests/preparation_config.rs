@@ -57,6 +57,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         temperature: None,
         reasoning_effort: ReasoningEffortLevel::High,
         tool_exposure_override: ToolExposureSnapshot::default(),
+        captured_child_tool_admission: None,
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,
         tool_request_rejection_tool_ids: Vec::new(),
@@ -75,6 +76,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         controller_runtime: None,
         native_goal_runtime: None,
         native_browser_runtime: None,
+        native_agent_collaboration_runtime: None,
         supplemental_mcp_tools: Vec::new(),
         media_resource_runtime: None,
         knowledge_access: None,
@@ -91,6 +93,682 @@ fn expected_child_forbidden_tool_ids() -> Vec<String> {
         .iter()
         .map(|tool_id| (*tool_id).to_string())
         .collect()
+}
+
+/// Captured child settings preserve actual inheritance and normalized routing through serialization.
+/// 捕获的子设置在序列化后保留真实继承结果和规范化路由。
+#[test]
+fn child_profile_capture_freezes_actual_request_settings() {
+    // Policy inputs deliberately differ from the constructed request's inherited settings.
+    // 策略输入故意与构造完成请求的继承设置不同。
+    let mut resolved = SessionEffectiveConfig::default();
+    resolved.provider_model.model_id = Some(String::from("qualified-provider/model"));
+    resolved.prompt_skills.enabled = vec![String::from("stale-skill")];
+    resolved.context_compaction.context_budget = Some(32_000);
+    let mut request = test_parent_execution_request(Uuid::new_v4());
+    request.provider_id_override = Some(String::from("qualified-provider"));
+    request.model_id_override = Some(String::from("model"));
+    request.execution_mode = String::from("review");
+    request.reasoning_effort = ReasoningEffortLevel::XHigh;
+    request.session_prompt_skill_overrides.insert(
+        String::from("inherited"),
+        PersistedPromptSkillState::Enabled,
+    );
+    request.session_prompt_skill_overrides.insert(
+        String::from("disabled"),
+        PersistedPromptSkillState::Disabled,
+    );
+    request.prompt_skill_policy_override = CapabilityPolicySnapshot {
+        mode: CapabilityPolicyMode::AllowOnly,
+        selectors: vec![String::from("inherited")],
+    };
+    // The stored representation must restore exactly the settings supplied to request preparation.
+    // 存储表示必须精确恢复传给请求准备的设置。
+    let captured = capture_child_effective_config(&resolved, &request).unwrap();
+    let reloaded: SessionEffectiveConfig =
+        serde_json::from_str(&serde_json::to_string(&captured).unwrap()).unwrap();
+    assert_eq!(captured, reloaded);
+    assert_eq!(
+        captured.provider_model.provider_id.as_deref(),
+        Some("qualified-provider")
+    );
+    assert_eq!(captured.provider_model.model_id.as_deref(), Some("model"));
+    assert_eq!(
+        captured.provider_model.reasoning_effort.as_deref(),
+        Some("x-high")
+    );
+    assert_eq!(
+        captured.provider_model.execution_mode.as_deref(),
+        Some("review")
+    );
+    assert_eq!(
+        captured.prompt_skills.policy,
+        request.prompt_skill_policy_override
+    );
+    assert_eq!(
+        captured.prompt_skills.enabled,
+        vec![String::from("inherited")]
+    );
+    assert_eq!(
+        captured.prompt_skills.disabled,
+        vec![String::from("disabled")]
+    );
+    assert_eq!(captured.context_compaction.context_budget, Some(32_000));
+    request.model_id_override = None;
+    assert!(capture_child_effective_config(&resolved, &request).is_err());
+}
+
+/// Source identity survives name collisions, and capture follows the executor's rejection semantics.
+/// 来源身份不受名称冲突影响，捕获遵循执行器的拒绝语义。
+#[test]
+fn child_profile_capture_preserves_tool_origins_and_rejections() {
+    // Distinct sources can acquire the same public name in different runtime generations.
+    // 不同来源可能在不同运行时代际取得同一个公开名称。
+    let first = VulcanToolDescriptor::new(
+        "read",
+        "read",
+        "Read",
+        None,
+        VulcanToolOrigin::new(VulcanToolSourceKind::Mcp, "server-a", "read-file"),
+    );
+    let replacement = VulcanToolDescriptor::new(
+        "read",
+        "read",
+        "Read",
+        None,
+        VulcanToolOrigin::new(VulcanToolSourceKind::Mcp, "server-b", "read-file"),
+    );
+    let admitted = capture_child_admitted_tools(std::slice::from_ref(&first), None, false, &[]);
+    let replaced = capture_child_admitted_tools(&[replacement], None, false, &[]);
+    assert_ne!(admitted, replaced);
+    assert_eq!(admitted["read"].namespace, "server-a");
+    assert_eq!(admitted["read"].original_name, "read-file");
+    assert!(
+        capture_child_admitted_tools(
+            std::slice::from_ref(&first),
+            Some("Denied"),
+            false,
+            &[String::from("read")]
+        )
+        .is_empty()
+    );
+    assert!(
+        capture_child_admitted_tools(std::slice::from_ref(&first), Some("Denied"), true, &[])
+            .is_empty()
+    );
+    // A rejection list without a reason does not reject calls in the real executor.
+    // 真实执行器不会因没有拒绝原因的列表而拒绝调用。
+    assert_eq!(
+        capture_child_admitted_tools(&[first], None, true, &[String::from("read")]),
+        admitted
+    );
+}
+
+/// Builds a captured child profile with explicit settings for auxiliary request restoration.
+/// 构造带显式设置的已捕获子配置，用于辅助请求恢复。
+/// `task_id` is the exact child owner; the returned profile has a distinct root and one admitted tool.
+/// `task_id` 是精确子所有者；返回配置具有独立根及一个已准入工具。
+fn question_request_profile(
+    task_id: SessionId,
+) -> vulcan_session_core::v1::child_execution::ChildExecutionProfile {
+    use vulcan_session_core::v1::child_execution::{
+        ChildExecutionProfile, ChildExecutionPromptContext, ChildToolOrigin, ChildToolSourceKind,
+    };
+    use vulcan_session_core::v1::{SubagentTaskId, TurnId};
+    // Profile settings deliberately differ from the request template's defaults.
+    // 配置设置故意与请求模板默认值不同。
+    let root = Uuid::new_v4();
+    let mut effective = SessionEffectiveConfig::default();
+    effective.provider_model = ProviderModelSnapshot {
+        provider_id: Some(String::from("child-provider")),
+        model_id: Some(String::from("child-model")),
+        reasoning_effort: Some(String::from("low")),
+        execution_mode: Some(String::from("plan")),
+    };
+    effective.prompt_skills.enabled = vec![String::from("child-skill")];
+    effective.context_compaction.context_budget = Some(32_000);
+    ChildExecutionProfile {
+        version: 1,
+        root_session_id: root.to_string(),
+        parent_session_id: root.to_string(),
+        task_id: SubagentTaskId::try_new(task_id.to_string()).unwrap(),
+        segment_generation: 7,
+        business_turn_id: TurnId::try_new(1).unwrap(),
+        business_execution_id: String::from("business"),
+        invocation_config: TaskInvocationConfig::main("Review"),
+        resolved_config: TaskSessionResolvedConfig {
+            requested_config: Default::default(),
+            effective_config: effective.clone(),
+            functional_system_prompt_layers: vec![],
+            runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::task_session(),
+        },
+        runtime_identity: vulcan_session_core::v1::child_execution::ChildExecutionRuntimeIdentity {
+            public_task_id: String::from("code-reviewer"),
+            display_title: String::from("Review code"),
+            description: None,
+            subagent: Some(String::from("reviewer")),
+            depth: 1,
+        },
+        effective_config: effective,
+        runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::task_session(),
+        execution_agent_id: Some(String::from("child-agent")),
+        connection_id: String::from("captured-child-connection"),
+        temperature: Some(0.25),
+        request_overrides: Default::default(),
+        admitted_tools: BTreeMap::from([(
+            String::from("reply_question"),
+            ChildToolOrigin {
+                source_kind: ChildToolSourceKind::Native,
+                namespace: String::from("collaboration"),
+                original_name: String::from("reply_question"),
+            },
+        )]),
+        fixed_agent_prompt: Some(String::from("Fixed child prompt")),
+        prompt_context: ChildExecutionPromptContext {
+            identity: String::from("reviewer"),
+            delegated_task: String::from("Review"),
+            delegation: None,
+            functional_system_prompt: None,
+        },
+    }
+}
+
+/// Restoring a child request preserves history while replacing parent settings and route ownership.
+/// 恢复子请求保留历史，同时替换父设置与路由归属。
+#[test]
+fn question_request_restores_child_settings_without_business_input() {
+    // The host has supplied a child-owned request without creating another business prompt.
+    // 宿主提供子自有请求，不创建另一条业务提示词。
+    let mut request = test_parent_execution_request(Uuid::new_v4());
+    request.prompt.clear();
+    request.prompt_purpose = ExecutionPromptPurpose::QuestionExecution;
+    request.connection_id_override = Some(String::from("parent-connection"));
+    request.session_prompt_skill_overrides.insert(
+        String::from("parent-skill"),
+        PersistedPromptSkillState::Enabled,
+    );
+    request
+        .conversation_state
+        .continuation
+        .last_provider_message_id = Some(String::from("child-response"));
+    let history = serde_json::to_value(&request.conversation_state).unwrap();
+    let profile = question_request_profile(request.session_id);
+    restore_child_question_request(&mut request, &profile, 7).unwrap();
+    assert_eq!(
+        request.provider_id_override.as_deref(),
+        Some("child-provider")
+    );
+    assert_eq!(request.model_id_override.as_deref(), Some("child-model"));
+    assert_eq!(request.execution_agent_id.as_deref(), Some("child-agent"));
+    assert_eq!(request.reasoning_effort, ReasoningEffortLevel::Low);
+    assert_eq!(request.execution_mode, "plan");
+    assert_eq!(request.temperature, Some(0.25));
+    assert_eq!(
+        request.connection_id_override.as_deref(),
+        Some("captured-child-connection")
+    );
+    assert!(request.provider_route_lease_identity.is_none());
+    assert_eq!(request.runtime_policy, profile.runtime_policy);
+    assert_eq!(
+        request.captured_child_tool_admission,
+        Some(profile.admitted_tools)
+    );
+    assert_eq!(request.context_budget_override, Some(32_000));
+    assert_eq!(request.session_prompt_skill_overrides.len(), 1);
+    assert_eq!(
+        request.session_prompt_skill_overrides["child-skill"],
+        PersistedPromptSkillState::Enabled
+    );
+    assert_eq!(
+        request.agent_prompt_snapshot.as_ref().unwrap().text,
+        "Fixed child prompt"
+    );
+    assert!(matches!(
+        request.execution_scope,
+        ExecutionScope::TaskSession { .. }
+    ));
+    assert!(request.conversation_hook_turn_id.is_none());
+    assert_eq!(
+        serde_json::to_value(&request.conversation_state).unwrap(),
+        history
+    );
+    assert!(request.prompt.is_empty());
+}
+
+/// Restored child business keeps history and exact settings without inheriting a main-session Hook.
+/// 恢复子业务保留历史及精确设置，不继承主会话 Hook。
+/// Returns nothing; source publication and rejection checks use actual Core transitions.
+/// 不返回值；来源发布及拒绝检查使用实际 Core 转换。
+#[test]
+fn child_business_request_restores_original_config_without_new_input() {
+    use crate::agent_runtime::execution_models::ExecutionTurnStartMode;
+    use vulcan_session_core::v1::collaboration::{
+        CollaborationExecutionId, CollaborationOperationId, CollaborationRunControl,
+        SetRunControlInput,
+    };
+    use vulcan_session_core::v1::document::{ClientInputSubmission, SessionDocument};
+    use vulcan_session_core::v1::ids::ClientActionId;
+    // The template starts with a main-session Hook that child restoration must explicitly reject.
+    // 模板起初携带主会话 Hook，子恢复必须明确拒绝。
+    let mut request = test_parent_execution_request(Uuid::new_v4());
+    request.prompt.clear();
+    request.prompt_purpose = ExecutionPromptPurpose::AgentTask;
+    request.conversation_hook_turn_id = Some(String::from("original-business-hook"));
+    request.session_goal_context = None;
+    request.session_plan_context = None;
+    // Actual canonical root allocation supplies the profile's business turn.
+    // 实际规范根分配提供配置的业务回合。
+    let mut document = SessionDocument::new(request.session_id.to_string(), "project", "Child", 1);
+    let execution = CollaborationExecutionId::try_new("restored-business").unwrap();
+    let turn = document
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new(execution.as_str()).unwrap(),
+                "Original delegated work",
+                vec![],
+            ),
+            2,
+        )
+        .unwrap()
+        .into_value();
+    // The fixture's resolved settings intentionally differ from the request template.
+    // 夹具已解析设置刻意不同于请求模板。
+    let mut profile = question_request_profile(request.session_id);
+    profile.segment_generation = document.segment_generation();
+    profile.business_turn_id = turn;
+    profile.business_execution_id = execution.as_str().to_owned();
+    document
+        .capture_child_execution_profile(profile.clone(), 3)
+        .unwrap();
+    document
+        .set_collaboration_run_control(SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("start-business").unwrap(),
+            state: CollaborationRunControl::Running,
+            changed_at_ms: 4,
+        })
+        .unwrap();
+    // Dirty source and wrong purpose must fail before mutating the request.
+    // 脏来源和错误用途必须在修改请求之前失败。
+    let original_provider = request.provider_id_override.clone();
+    assert!(restore_child_business_request(&mut request, &document, &execution).is_err());
+    assert_eq!(request.provider_id_override, original_provider);
+    let revision = document
+        .prepare_flush_candidates()
+        .unwrap()
+        .unwrap()
+        .revision;
+    document.advance_durable(revision).unwrap();
+    assert!(restore_child_business_request(&mut request, &document, &execution).is_err());
+    assert_eq!(request.provider_id_override, original_provider);
+    request.conversation_hook_turn_id = None;
+    request.prompt_purpose = ExecutionPromptPurpose::QuestionExecution;
+    assert!(restore_child_business_request(&mut request, &document, &execution).is_err());
+    assert_eq!(request.provider_id_override, original_provider);
+    request.prompt_purpose = ExecutionPromptPurpose::AgentTask;
+    // Freeze both histories to prove configuration restoration does not append or rewrite input.
+    // 冻结双方历史，证明配置恢复没有追加或改写输入。
+    let source_before = serde_json::to_value((&document.metadata, document.events())).unwrap();
+    let history_before = serde_json::to_value(&request.conversation_state).unwrap();
+    restore_child_business_request(&mut request, &document, &execution).unwrap();
+    assert_eq!(
+        serde_json::to_value((&document.metadata, document.events())).unwrap(),
+        source_before
+    );
+    assert_eq!(
+        serde_json::to_value(&request.conversation_state).unwrap(),
+        history_before
+    );
+    assert_eq!(
+        request.provider_id_override.as_deref(),
+        Some("child-provider")
+    );
+    assert_eq!(request.model_id_override.as_deref(), Some("child-model"));
+    assert_eq!(
+        request.connection_id_override.as_deref(),
+        Some("captured-child-connection")
+    );
+    assert_eq!(
+        request.captured_child_tool_admission,
+        Some(profile.admitted_tools)
+    );
+    assert!(request.conversation_hook_turn_id.is_none());
+    assert_eq!(
+        request.turn_start_mode,
+        Some(ExecutionTurnStartMode::RestoredCheckpoint)
+    );
+    assert!(request.prompt_purpose.runs_completed_turn_hooks());
+    assert!(request.prompt.is_empty());
+}
+
+/// Repreparation preserves current authorization instead of restoring a wider captured ceiling.
+/// 再准备保留当前授权，不恢复更宽的已捕获上限。
+/// Exercises the recovery branch with an exact invocation and rejects a replacement execution.
+/// 使用精确调用验证恢复分支，并拒绝替代执行身份。
+#[test]
+fn recovered_child_repreparation_preserves_narrowed_knowledge() {
+    // The durable ceiling includes a library removed by the current host authorization.
+    // 可靠上限包含已被当前宿主授权移除的知识库。
+    let task_id = Uuid::new_v4();
+    let mut profile = question_request_profile(task_id);
+    profile.request_overrides.knowledge_access = Some(
+        vulcan_session_core::v1::child_execution::ChildKnowledgeAccess {
+            project_id: "project".into(),
+            library_ids: BTreeSet::from(["allowed".into(), "revoked".into()]),
+            retrieval_mode: None,
+        },
+    );
+    let mut request = test_parent_execution_request(task_id);
+    request.prompt.clear();
+    request.conversation_hook_turn_id = None;
+    request.prompt_purpose = ExecutionPromptPurpose::AgentTask;
+    request.connection_id_override = Some(profile.connection_id.clone());
+    request.captured_child_tool_admission = Some(profile.admitted_tools.clone());
+    request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
+        project_id: "project".into(),
+        library_ids: vec!["allowed".into()],
+        retrieval_mode: None,
+        knowledge_search_handler: None,
+    });
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let mut context =
+        TaskExecutionRuntimeContext::new(provider_config, Arc::new(foundation), None, request);
+    context.recovered_child_profile = Some(profile.clone());
+    let mut invocation = TaskExecutionRequest {
+        current_session_id: Uuid::parse_str(&profile.parent_session_id).unwrap(),
+        root_session_id: Uuid::parse_str(&profile.root_session_id).unwrap(),
+        task_id,
+        execution_id: profile.business_execution_id.clone(),
+        public_task_id: profile.runtime_identity.public_task_id.clone(),
+        prompt: profile.invocation_config.prompt.clone(),
+        description: profile.runtime_identity.description.clone(),
+        subagent: profile.runtime_identity.subagent.clone(),
+        invocation_config: profile.invocation_config.clone(),
+        display_title: profile.runtime_identity.display_title.clone(),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: true,
+    };
+    let (_, restored) =
+        build_task_runtime_preparation_request(&context, &invocation, &profile.resolved_config)
+            .unwrap();
+    assert_eq!(
+        restored.connection_id_override.as_ref(),
+        Some(&profile.connection_id)
+    );
+    assert_eq!(
+        restored.captured_child_tool_admission.as_ref(),
+        Some(&profile.admitted_tools)
+    );
+    assert_eq!(
+        restored.knowledge_access.unwrap().library_ids,
+        vec!["allowed"]
+    );
+    assert!(restored.prompt.is_empty());
+    assert_eq!(
+        restored.turn_start_mode,
+        Some(crate::agent_runtime::execution_models::ExecutionTurnStartMode::RestoredCheckpoint)
+    );
+    invocation.execution_id = "replacement-execution".into();
+    assert!(
+        build_task_runtime_preparation_request(&context, &invocation, &profile.resolved_config)
+            .is_err()
+    );
+}
+
+/// Bad generations and invalid captured settings cannot partially retarget the request.
+/// 错误代际和无效捕获设置不能部分改变请求目标。
+#[test]
+fn question_request_rejects_invalid_profile_before_mutation() {
+    let mut request = test_parent_execution_request(Uuid::new_v4());
+    request.prompt.clear();
+    request.prompt_purpose = ExecutionPromptPurpose::QuestionExecution;
+    let before = request.clone();
+    let mut profile = question_request_profile(request.session_id);
+    assert!(restore_child_question_request(&mut request, &profile, 8).is_err());
+    profile.effective_config.provider_model.reasoning_effort = Some(String::from("unknown"));
+    assert!(restore_child_question_request(&mut request, &profile, 7).is_err());
+    assert_eq!(request.execution_scope, before.execution_scope);
+    assert_eq!(request.provider_id_override, before.provider_id_override);
+    assert_eq!(request.reasoning_effort, before.reasoning_effort);
+    assert_eq!(
+        request.captured_child_tool_admission,
+        before.captured_child_tool_admission
+    );
+    assert_eq!(
+        request.session_prompt_skill_overrides,
+        before.session_prompt_skill_overrides
+    );
+}
+
+/// JSON reload and child restoration preserve exact routes, reasoning, and session memory policy.
+/// JSON 重载与子恢复保留精确路由、推理及会话记忆策略。
+#[test]
+fn child_request_overrides_roundtrip_through_question_restoration() {
+    use vulcan_workbench_model::{
+        SessionMediaUnderstandingModelSelection, SessionMediaUnderstandingReasoningEffort,
+        SessionMediaUnderstandingSelection, SessionProviderToolTargetSelection,
+    };
+    // Child request contains settings that differ from the later preparation template.
+    // 子请求包含与后续准备模板不同的设置。
+    let mut original = test_parent_execution_request(Uuid::new_v4());
+    // Exact non-secret tool route must survive without consulting new global defaults.
+    // 精确非敏感工具路由必须独立于新全局默认值存续。
+    let target = SessionProviderToolTargetSelection {
+        connection_id: String::from("child-connection"),
+        target_id: String::from("child-target"),
+    };
+    original.provider_tool_selections_override =
+        Some(BTreeMap::from([("web_search".into(), target.clone())]));
+    original.provider_tool_media_understanding_selections_override = Some(BTreeMap::from([
+        (
+            "image_understanding".into(),
+            SessionMediaUnderstandingSelection::ModelReplacement {
+                selection: SessionMediaUnderstandingModelSelection {
+                    provider_id: "media-provider".into(),
+                    model_id: "media-model".into(),
+                    connection_id: "media-connection".into(),
+                },
+                reasoning_effort: Some(SessionMediaUnderstandingReasoningEffort::XHigh),
+            },
+        ),
+        (
+            "audio_understanding".into(),
+            SessionMediaUnderstandingSelection::ProviderTool {
+                selection: target.clone(),
+            },
+        ),
+    ]));
+    original.provider_tool_enabled_capabilities_override =
+        Some(BTreeSet::from(["web_search".into()]));
+    original.provider_extension_target_sets_override = Some(BTreeMap::from([(
+        "web_search".into(),
+        BTreeSet::from([target]),
+    )]));
+    original.session_vmm.precheck_enabled = Some(false);
+    original.session_vmm.memory_writeback_enabled = Some(true);
+    original.output_style_snapshot = Some(vulcan_prompt_composer::PromptOutputStyleSnapshot::new(
+        "child-style",
+        "Child style",
+        "Exact child instructions",
+        "child-resource",
+    ));
+    original.project_id = Some("child-project".into());
+    original.knowledge_access = Some(ExecutionKnowledgeAccessContext {
+        project_id: "child-project".into(),
+        library_ids: vec!["child-library".into()],
+        retrieval_mode: Some("display_hybrid".into()),
+        knowledge_search_handler: None,
+    });
+    // Profile capture uses the same helper called by real child business preparation.
+    // 配置捕获使用真实子业务准备调用的相同助手。
+    let mut profile = question_request_profile(original.session_id);
+    profile.request_overrides = capture_child_request_overrides(&original).unwrap();
+    // Serialize the complete durable profile, not only an in-memory adapter value.
+    // 序列化完整可靠配置，而非仅内存适配值。
+    let profile = serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+    // A new template deliberately carries another capability and session policy.
+    // 新模板刻意携带另一能力和会话策略。
+    let mut restored = test_parent_execution_request(original.session_id);
+    restored.prompt.clear();
+    restored.prompt_purpose = ExecutionPromptPurpose::QuestionExecution;
+    restored.provider_tool_enabled_capabilities_override = Some(BTreeSet::from(["foreign".into()]));
+    restored.session_vmm.precheck_enabled = Some(true);
+    restored.project_vmm.enabled = Some(false);
+    restored.knowledge_access = Some(ExecutionKnowledgeAccessContext {
+        project_id: "foreign-project".into(),
+        library_ids: vec!["foreign-library".into()],
+        retrieval_mode: None,
+        knowledge_search_handler: None,
+    });
+    restore_child_question_request(&mut restored, &profile, 7).unwrap();
+    assert_eq!(
+        restored.provider_tool_selections_override,
+        original.provider_tool_selections_override
+    );
+    assert_eq!(
+        restored.provider_tool_media_understanding_selections_override,
+        original.provider_tool_media_understanding_selections_override
+    );
+    assert_eq!(
+        restored.provider_tool_enabled_capabilities_override,
+        original.provider_tool_enabled_capabilities_override
+    );
+    assert_eq!(
+        restored.provider_extension_target_sets_override,
+        original.provider_extension_target_sets_override
+    );
+    assert_eq!(restored.session_vmm, original.session_vmm);
+    assert_eq!(restored.project_vmm.enabled, Some(false));
+    assert_eq!(
+        restored.output_style_snapshot,
+        original.output_style_snapshot
+    );
+    assert!(restored.knowledge_access.is_none());
+    assert_eq!(
+        profile
+            .request_overrides
+            .knowledge_access
+            .as_ref()
+            .unwrap()
+            .library_ids,
+        BTreeSet::from(["child-library".into()])
+    );
+}
+
+/// Rejects unknown knowledge modes and project mismatches before creating a durable ceiling.
+/// 在生成可靠权限上限前拒绝未知知识检索模式及项目不匹配。
+#[test]
+fn child_request_overrides_knowledge_capture_is_exact() {
+    // Request identity and authorized context must agree before any provider work.
+    // 在任何供应商工作前，请求身份必须与授权上下文一致。
+    let mut request = test_parent_execution_request(Uuid::new_v4());
+    request.project_id = Some("project".into());
+    request.knowledge_access = Some(ExecutionKnowledgeAccessContext {
+        project_id: "foreign".into(),
+        library_ids: vec!["library".into()],
+        retrieval_mode: None,
+        knowledge_search_handler: None,
+    });
+    assert!(capture_child_request_overrides(&request).is_err());
+    request.knowledge_access.as_mut().unwrap().project_id = "project".into();
+    // Every declared retrieval policy must survive serialization without substitution.
+    // 每个已声明检索策略必须通过序列化保留，不能被替换。
+    for mode in [
+        None,
+        Some("raw_bm25"),
+        Some("display_bm25"),
+        Some("display_hybrid"),
+    ] {
+        request.knowledge_access.as_mut().unwrap().retrieval_mode = mode.map(str::to_owned);
+        // Captured JSON uses the exact protocol spelling for retrieval policies.
+        // 捕获的 JSON 使用检索策略的精确协议拼写。
+        let captured = capture_child_request_overrides(&request).unwrap();
+        assert_eq!(
+            serde_json::to_value(captured).unwrap()["knowledge_access"]["retrieval_mode"],
+            serde_json::to_value(mode).unwrap()
+        );
+    }
+    request.knowledge_access.as_mut().unwrap().retrieval_mode = Some("unknown".into());
+    assert!(capture_child_request_overrides(&request).is_err());
+    // Absence removes stale style and callback state from a later request template.
+    // 缺省设置移除后续请求模板中的过期风格及回调状态。
+    request.output_style_snapshot = Some(vulcan_prompt_composer::PromptOutputStyleSnapshot::new(
+        "template",
+        "Template",
+        "Template instructions",
+        "template-resource",
+    ));
+    restore_child_request_overrides(&mut request, &Default::default());
+    assert!(request.output_style_snapshot.is_none());
+    assert!(request.knowledge_access.is_none());
+}
+
+/// Each optional request map preserves explicit emptiness independently of the other selections.
+/// 每个可选请求映射独立于其他选择保留显式空值。
+#[test]
+fn child_request_overrides_preserve_all_empty_and_inherited_combinations() {
+    for mask in 0_u8..16 {
+        // All sixteen optional boundaries are intentional request contracts.
+        // 十六种可选边界均是明确请求契约。
+        let mut request = test_parent_execution_request(Uuid::new_v4());
+        request.provider_tool_selections_override = (mask & 1 != 0).then(BTreeMap::new);
+        request.provider_tool_media_understanding_selections_override =
+            (mask & 2 != 0).then(BTreeMap::new);
+        request.provider_tool_enabled_capabilities_override = (mask & 4 != 0).then(BTreeSet::new);
+        request.provider_extension_target_sets_override = (mask & 8 != 0).then(BTreeMap::new);
+        // Capture before replacing all template fields with their opposite optional state.
+        // 在将全部模板字段替换为相反可选状态之前捕获。
+        let captured = capture_child_request_overrides(&request).unwrap();
+        request.provider_tool_selections_override = (mask & 1 == 0).then(BTreeMap::new);
+        request.provider_tool_media_understanding_selections_override =
+            (mask & 2 == 0).then(BTreeMap::new);
+        request.provider_tool_enabled_capabilities_override = (mask & 4 == 0).then(BTreeSet::new);
+        request.provider_extension_target_sets_override = (mask & 8 == 0).then(BTreeMap::new);
+        restore_child_request_overrides(&mut request, &captured);
+        assert_eq!(capture_child_request_overrides(&request).unwrap(), captured);
+    }
+}
+
+/// Unsupported memory transport and malformed route identities fail explicitly without retargeting.
+/// 不支持的记忆传输及格式错误的路由身份明确失败，不改变请求目标。
+#[test]
+fn child_request_overrides_reject_secret_layers_and_invalid_profile() {
+    use vulcan_session_core::v1::config::ProviderToolTargetConfig;
+    // Session policy cannot smuggle transport credentials into durable child metadata.
+    // 会话策略不能将传输凭据带入可靠子元数据。
+    let mut request = test_parent_execution_request(Uuid::new_v4());
+    request.session_vmm.grpc_api_key = Some(String::from("fixture-secret-value"));
+    // Diagnostic must not contain the rejected secret.
+    // 诊断不得包含被拒绝的秘密。
+    let error = capture_child_request_overrides(&request).unwrap_err();
+    assert!(!error.contains("fixture-secret-value"));
+    request.session_vmm = Default::default();
+    request.prompt.clear();
+    request.prompt_purpose = ExecutionPromptPurpose::QuestionExecution;
+    // Invalid child identity is rejected before request model or tool fields change.
+    // 无效子身份在请求模型或工具字段变化前被拒绝。
+    let mut profile = question_request_profile(request.session_id);
+    profile.request_overrides.provider_tool_selections = Some(BTreeMap::from([(
+        "web_search".into(),
+        ProviderToolTargetConfig {
+            connection_id: " ".into(),
+            target_id: "target".into(),
+        },
+    )]));
+    // Preserve the original model assertion independently of the malformed route.
+    // 独立于格式错误路由保存原模型断言。
+    let original_model = request.model_id_override.clone();
+    assert!(restore_child_question_request(&mut request, &profile, 7).is_err());
+    assert_eq!(request.model_id_override, original_model);
+    assert!(request.captured_child_tool_admission.is_none());
 }
 
 /// Verifies child agents cannot use parent-owned interaction or memory tools.
@@ -443,6 +1121,9 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
         None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
+    // A restored parent has its own captured ceiling; initial delegation must capture the new child's tools.
+    // 恢复父代理具有自己的捕获权限上限；首次委派必须捕获新子代理的工具。
+    parent_request.captured_child_tool_admission = Some(BTreeMap::new());
     parent_request.connection_id_override = Some(String::from("parent-connection"));
     parent_request.provider_route_lease_identity =
         Some(vulcan_workbench_model::SessionProviderRouteLeaseIdentity {
@@ -501,6 +1182,7 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
     );
     assert_eq!(child_request.connection_id_override, None);
     assert_eq!(child_request.provider_route_lease_identity, None);
+    assert!(child_request.captured_child_tool_admission.is_none());
 }
 
 /// Verifies ordinary child-agent execution hides parent-session tools by default.

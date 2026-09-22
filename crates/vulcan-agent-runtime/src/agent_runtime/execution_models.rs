@@ -14,6 +14,7 @@ use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{fmt, path::PathBuf, sync::Arc};
+use vulcan_ai_contract::HostMessageKind;
 use vulcan_context::{
     ContextAssembly, ContextBaseline, ContextRequestMode, RuntimeSystemUpdateEvent,
 };
@@ -106,9 +107,15 @@ pub struct ExecutionProviderVisibleAgentMessage {
     /// Stable delivery identifier shared by mailbox, runtime, and display records.
     /// 由 mailbox、runtime 与显示记录共享的稳定投递标识。
     pub delivery_id: String,
+    /// Explicit task envelope kind assigned by the producing lifecycle.
+    /// 生产生命周期明确分配的任务信封类型。
+    pub kind: HostMessageKind,
     /// Stable model-visible inter-agent message type.
     /// 模型可见的稳定智能体间消息类型。
     pub message_type: String,
+    /// Stable task identity independent from the display task name or agent path.
+    /// 独立于展示任务名或代理路径的稳定任务身份。
+    pub task_id: String,
     /// Logical task or agent path associated with the message.
     /// 该消息关联的逻辑任务或智能体路径。
     pub task_name: String,
@@ -142,7 +149,9 @@ impl ExecutionProviderVisibleAgentMessage {
     /// 携带相同模型载荷的 Provider 可见核心追加请求。
     pub fn to_core_append_request(&self) -> vulcan_core::controller::AgentMessageAppendRequest {
         vulcan_core::controller::AgentMessageAppendRequest {
+            kind: self.kind,
             message_type: self.message_type.clone(),
+            task_id: self.task_id.clone(),
             task_name: self.task_name.clone(),
             sender: self.sender.clone(),
             recipient: self.recipient.clone(),
@@ -477,6 +486,14 @@ pub struct ExecutionPreparationRequest {
     /// Request-scoped tool exposure override applied by the shared preparation bridge.
     /// 由共享准备桥应用的请求级工具可见性覆盖。
     pub tool_exposure_override: ToolExposureSnapshot,
+    /// Original callable tool origins limiting restored child business, Q&A and their compaction requests.
+    /// 限制恢复子业务、答疑及其压缩请求的原可调用工具来源。
+    pub captured_child_tool_admission: Option<
+        std::collections::BTreeMap<
+            String,
+            vulcan_session_core::v1::child_execution::ChildToolOrigin,
+        >,
+    >,
     /// Optional reason used to reject visible tool calls before host execution.
     /// 在宿主执行前拒绝可见工具调用时使用的可选原因。
     pub tool_request_rejection_reason: Option<String>,
@@ -532,6 +549,10 @@ pub struct ExecutionPreparationRequest {
     /// Optional host-injected browser scheduler for direct AI tools in the trusted conversation.
     /// 可信会话内 AI 直接工具使用的可选宿主注入浏览器调度接口。
     pub native_browser_runtime: Option<Arc<dyn crate::tooling::native::NativeBrowserRuntime>>,
+    /// Optional host-injected agent-collaboration runtime for question and session tools.
+    /// 问答与会话工具使用的可选宿主注入代理协作运行时。
+    pub native_agent_collaboration_runtime:
+        Option<Arc<dyn crate::tooling::collaboration::NativeAgentCollaborationRuntime>>,
     /// Owner-scoped MCP bindings discovered before a provider turn and subjected to normal tool policy.
     /// Provider 回合前发现并接受常规工具策略过滤的所有者范围 MCP 绑定。
     pub supplemental_mcp_tools: Vec<crate::mcp::McpRuntimeToolBinding>,
@@ -593,9 +614,15 @@ pub enum ExecutionPromptPurpose {
     /// Normal user-authored conversation turn.
     /// 普通用户发起的会话回合。
     UserTurn,
+    /// Agent-authored business work already persisted in canonical history.
+    /// 已持久化到规范历史中的代理发起业务任务。
+    AgentTask,
     /// Recovery of retained provider-visible state, optionally followed by one reconciled user-authored message.
     /// 恢复保留的 Provider 可见状态，并可在完成对账后追加一条用户编写消息。
     ExecutionRetry,
+    /// Auxiliary collaboration Q&A that cannot complete or resume the original business task.
+    /// 不能完成或恢复原业务任务的辅助协作答疑。
+    QuestionExecution,
     /// Cache-preserving internal context-compaction summary request.
     /// 保持缓存的内部上下文压缩摘要请求。
     ContextCompactionCachePreserving,
@@ -638,14 +665,18 @@ impl ExecutionPromptPurpose {
     pub const fn supports_user_turn_tooling(self) -> bool {
         matches!(
             self,
-            Self::UserTurn | Self::ExecutionRetry | Self::ContextCompactionCachePreserving
+            Self::UserTurn
+                | Self::AgentTask
+                | Self::ExecutionRetry
+                | Self::QuestionExecution
+                | Self::ContextCompactionCachePreserving
         )
     }
 
     /// Returns whether this purpose should run completed-turn hooks.
     /// 返回该用途是否应该运行完成回合 hook。
     pub const fn runs_completed_turn_hooks(self) -> bool {
-        matches!(self, Self::UserTurn)
+        matches!(self, Self::UserTurn | Self::AgentTask)
     }
 
     /// Returns a compact diagnostics label for this prompt purpose.
@@ -653,7 +684,9 @@ impl ExecutionPromptPurpose {
     pub const fn diagnostics_label(self) -> &'static str {
         match self {
             Self::UserTurn => "user-turn",
+            Self::AgentTask => "agent-task",
             Self::ExecutionRetry => "execution-retry",
+            Self::QuestionExecution => "question-execution",
             Self::ContextCompactionCachePreserving => "context-compaction-cache-preserving",
             Self::ContextCompaction => "context-compaction",
             Self::GitCommitSummary => "git-commit-summary",

@@ -16,6 +16,9 @@ pub(crate) struct SessionPhysicalPreparation {
     /// Exact source generation; a replaced generation can never receive a late completion.
     /// 精确来源代际；替换代际绝不能收到迟到完成。
     segment_generation: u64,
+    /// Frozen instruction selection purpose shared by initial capture and post-resource recapture.
+    /// 初次捕获与资源处理后重捕获共用的固定指令筛选用途。
+    projection_purpose: SessionProjectionPurpose,
     /// Prompt occurrences authorized by Core when this preparation captured its input.
     /// 本准备捕获输入时，由Core授权的提示词出现。
     prompt_seqs: Vec<Seq>,
@@ -39,17 +42,21 @@ struct PreparationFrontier {
 }
 
 impl SessionPhysicalPreparation {
-    /// Creates authority for `snapshot` using the same `handle` and already-acquired `lease`; performs no I/O.
-    /// 使用同一`handle`及已取得`lease`为`snapshot`建立权限；不执行IO。
+    /// Creates authority for `snapshot` using the same `handle`, acquired `lease`, and frozen `projection_purpose`.
+    /// 使用同一`handle`、已取得的`lease`及固定`projection_purpose`为`snapshot`建立权限。
+    /// Returns request-local authority without I/O; all recaptures retain this instruction-selection purpose.
+    /// 返回不执行IO的请求局部权限；所有重捕获保持此指令筛选用途。
     pub(super) fn new(
         handle: Arc<SessionHandle>,
         lease: Arc<OwnedMutexGuard<()>>,
         snapshot: SessionProviderProjectionSnapshot,
+        projection_purpose: SessionProjectionPurpose,
     ) -> Self {
         Self {
             handle,
             _lease: lease,
             segment_generation: snapshot.segment_generation,
+            projection_purpose,
             prompt_seqs: snapshot.preparing_user_prompt_media_seqs.clone(),
             frontier: Mutex::new(PreparationFrontier {
                 expected_revision: snapshot.document_revision,
@@ -182,7 +189,7 @@ impl SessionPhysicalPreparation {
         }
         frontier.snapshot = self
             .handle
-            .capture_provider_projection_snapshot_with_publisher_locked()?;
+            .capture_provider_projection_snapshot_with_publisher_locked(self.projection_purpose)?;
         Ok(Some(frontier.snapshot.clone()))
     }
 

@@ -40,19 +40,24 @@ pub fn select_node_for_seq(nodes: &[CompactionNode], target_seq: Seq) -> Option<
         .rfind(|node| node.occurred_at_seq <= target_seq)
 }
 
-/// Returns whether one node list is ordered by occurrence and ids.
-/// 返回一个节点列表是否按发生顺序与 id 排序。
+/// Returns whether `nodes` have increasing occurrences/ids and a nondecreasing retained frontier.
+/// 返回`nodes`的发生点及 ID 是否递增、保留前沿是否不倒退。
 pub fn assert_node_order(nodes: &[CompactionNode]) -> bool {
     let mut previous_occurred = 0u64;
     let mut previous_id = 0u64;
+    // A published generation cannot restore already discarded history through a later compaction.
+    // 已发布代次不能通过后续压缩重新带回已经丢弃的历史。
+    let mut previous_retained = 0u64;
     for node in nodes {
         if node.occurred_at_seq.value() <= previous_occurred
             || node.compaction_id.value() <= previous_id
+            || node.retained_from_seq.value() < previous_retained
         {
             return false;
         }
         previous_occurred = node.occurred_at_seq.value();
         previous_id = node.compaction_id.value();
+        previous_retained = node.retained_from_seq.value();
     }
     true
 }
@@ -69,7 +74,9 @@ mod tests {
             api_stats_seq: Seq::try_new(occurred + 1).unwrap(),
             occurred_at_seq: Seq::try_new(occurred).unwrap(),
             retained_from_seq: Seq::try_new(retained).unwrap(),
-            summary: String::new(),
+            content: crate::v1::context::CompactionContent::Summary {
+                text: String::new(),
+            },
             created_at_ms: 1,
         }
     }

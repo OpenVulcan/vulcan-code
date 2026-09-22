@@ -14,7 +14,6 @@ use vulcan_session_core::v1::document::{
     ClientInputSubmission, ForkGenerationInput, IdempotentMutation, SessionDocument,
 };
 use vulcan_session_core::v1::errors::DomainError;
-use vulcan_session_core::v1::event::{EventBody, TurnOutcome};
 use vulcan_session_core::v1::ids::{ClientActionId, ResourceId, Seq};
 use vulcan_workbench_model::SessionId;
 use vulcan_workspace_store::data_plane::HostRuntimeHandle;
@@ -32,6 +31,8 @@ use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
     SessionRuntimeError, SessionRuntimeRegistry,
 };
+
+mod deletion;
 
 /// Complete caller-resolved facts required to create one root V1 session.
 /// 创建一个根 V1 会话所需的完整调用方已解析事实。
@@ -123,6 +124,19 @@ pub(crate) enum SessionV1LifecycleError {
     /// Root input mutated memory without yielding one complete flush candidate.
     /// 根输入修改了内存，却没有产生一份完整 flush 候选。
     MissingInitialFlushCandidate(SessionId),
+    /// Physical deletion is blocked while the canonical session has unsettled collaboration.
+    /// 当规范会话仍有未结协作义务时，阻止物理删除。
+    UnsettledCollaboration(SessionId),
+    /// Physical membership or canonical ownership changed before a deletion could be sealed.
+    /// 删除封存前，物理成员集合或规范归属发生变化。
+    InvalidDeletionTree {
+        /// Exact indexed root selected for deletion.
+        /// 选中删除的精确索引根。
+        session_id: SessionId,
+        /// Explicit rejected identity, structure or cleanup failure.
+        /// 明确被拒绝的身份、结构或清理失败。
+        detail: String,
+    },
     /// A fresh construction unexpectedly observed an already committed root action.
     /// 全新构建意外观察到已经提交的根动作。
     UnexpectedIdempotentRootAction {
@@ -213,6 +227,14 @@ impl fmt::Display for SessionV1LifecycleError {
                 formatter,
                 "V1 session {session_id} root input produced no initial flush candidate"
             ),
+            Self::UnsettledCollaboration(session_id) => write!(
+                formatter,
+                "V1 session {session_id} cannot be physically deleted while collaboration is unsettled"
+            ),
+            Self::InvalidDeletionTree { session_id, detail } => write!(
+                formatter,
+                "V1 session {session_id} deletion tree rejected: {detail}"
+            ),
             Self::UnexpectedIdempotentRootAction {
                 session_id,
                 client_action_id,
@@ -273,6 +295,8 @@ impl std::error::Error for SessionV1LifecycleError {
             Self::InvalidDateBucket { .. }
             | Self::InvalidTaskAdmissionTimestamp { .. }
             | Self::MissingInitialFlushCandidate(_)
+            | Self::UnsettledCollaboration(_)
+            | Self::InvalidDeletionTree { .. }
             | Self::RestoreStorageMissing { .. }
             | Self::InvalidIndexedSessionId { .. }
             | Self::ProjectLifecycleIncomplete { .. }
@@ -842,67 +866,14 @@ fn submit_resumed_embedded_task_root_input(
     submission: ClientInputSubmission,
     now_ms: i64,
 ) -> Result<(), SessionV1LifecycleError> {
-    let (submission_already_exists, open_turn_id, has_active_api) = handle.read(|document| {
-        let submission_already_exists = document.events().iter().any(|event| {
-            matches!(
-                &event.event,
-                EventBody::UserInput(input)
-                    if input.client_action_id == submission.client_action_id
-            )
-        });
-        let open_turn_id = document
-            .active_turn()
-            .filter(|turn| !turn.closed)
-            .map(|turn| turn.turn_id);
-        (
-            submission_already_exists,
-            open_turn_id,
-            document.active_api().is_some(),
-        )
-    })?;
-    if submission_already_exists {
-        handle.submit_root_input(submission, now_ms)?;
-        return Ok(());
-    }
-    if let Some(expected_turn_id) = open_turn_id {
-        if has_active_api {
-            handle.mutate_durable_if_changed(
-                SessionMutationAdmission::ExistingTurn,
-                SessionFlushReason::ApiCompleted,
-                |document| {
-                    if document.interrupt_active_api_for_process(now_ms)?.is_some() {
-                        return Ok(SessionMutationChange::Changed(()));
-                    }
-                    Ok(SessionMutationChange::Unchanged(()))
-                },
-            )?;
-        }
-        handle.mutate_durable(
-            SessionMutationAdmission::ExistingTurn,
-            SessionFlushReason::TurnCompleted,
-            |document| {
-                let turn = document.active_turn().ok_or(DomainError::NoActiveTurn)?;
-                if turn.closed || turn.turn_id != expected_turn_id {
-                    return Err(DomainError::TurnIdentityMismatch {
-                        expected: expected_turn_id.value(),
-                        actual: turn.turn_id.value(),
-                    });
-                }
-                let started_at_ms = document
-                    .events()
-                    .iter()
-                    .find(|event| event.seq == turn.start_seq)
-                    .ok_or(DomainError::ReferenceViolation {
-                        kind: "turn_start_event",
-                        value: turn.start_seq.value(),
-                    })?
-                    .created_at_ms;
-                let duration_ms = now_ms.saturating_sub(started_at_ms).max(0);
-                document.close_turn(TurnOutcome::Stopped, duration_ms, now_ms)
-            },
-        )?;
-    }
-    handle.submit_root_input(submission, now_ms)?;
+    handle.mutate_durable_if_changed(
+        SessionMutationAdmission::RootTurn,
+        SessionFlushReason::InputAccepted,
+        move |document| match document.submit_resumed_child_root_input(submission, now_ms)? {
+            IdempotentMutation::Committed(_) => Ok(SessionMutationChange::Changed(())),
+            IdempotentMutation::Idempotent(_) => Ok(SessionMutationChange::Unchanged(())),
+        },
+    )?;
     Ok(())
 }
 
@@ -990,6 +961,21 @@ pub(crate) fn create_or_load_embedded_task_session_v1(
                 )));
             }
         }
+        // Publish Running with the first root input because embedded creation bypasses handle submission.
+        // 嵌入创建绕过句柄提交，因此必须将 Running 与首个根输入一起发布。
+        document.set_collaboration_run_control(
+            vulcan_session_core::v1::collaboration::SetRunControlInput {
+                operation_id:
+                    vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(
+                        format!(
+                            "root-input-running:{child_session_id}:{}",
+                            initial_action_id.as_str(),
+                        ),
+                    )?,
+                state: vulcan_session_core::v1::collaboration::CollaborationRunControl::Running,
+                changed_at_ms: now_ms,
+            },
+        )?;
         let candidate = document
             .prepare_flush_candidates()?
             .ok_or(SessionRuntimeError::MutationProducedNoRevision)?;
@@ -1352,8 +1338,8 @@ pub(crate) async fn restore_session_lifecycle_v1(
     .await
 }
 
-/// Deletes one exact V1 root directory before removing its SQLite locator row.
-/// 先删除一个精确 V1 根目录，再移除其 SQLite 定位记录。
+/// Checks and seals the full embedded tree before deleting the V1 root and its SQLite locator row.
+/// 检查并封存完整嵌入树后，删除 V1 根及其 SQLite 定位记录。
 ///
 /// # Parameters / 参数
 ///
@@ -1370,12 +1356,7 @@ pub(crate) async fn delete_session_lifecycle_v1(
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
 ) -> Result<(), SessionV1LifecycleError> {
-    let _lifecycle = registry.acquire_lifecycle_transition(session_id).await?;
-    if let Some(handle) = registry.unregister_lifecycle_session(session_id)? {
-        handle.flush_all()?;
-    }
-    delete_session_v1(controller, &session_id.to_string()).await?;
-    Ok(())
+    deletion::delete_tree(controller, registry, session_id).await
 }
 
 /// Projects one durable metadata snapshot and preserves projection lag as a structured error.
@@ -1445,6 +1426,7 @@ mod tests {
 
     use super::*;
 
+    mod collaboration_deletion;
     mod draft_handoff;
 
     /// Isolated storage fixture used by lifecycle integration tests.
@@ -2363,7 +2345,17 @@ mod tests {
             })
             .expect("read created embedded task session");
         assert_eq!(created_memory, created_durable);
-        assert_eq!(created_events.len(), 1);
+        assert_eq!(created_events.len(), 2);
+        assert!(matches!(
+            created_events[1].event,
+            EventBody::Collaboration(_)
+        ));
+        assert_eq!(
+            child_handle
+                .read(|document| document.collaboration_run_control())
+                .unwrap(),
+            vulcan_session_core::v1::collaboration::CollaborationRunControl::Running
+        );
         assert!(matches!(
             &created_events[0].event,
             EventBody::UserInput(input)
@@ -2481,6 +2473,43 @@ mod tests {
             )
             .expect("persist initial child API activity");
 
+        // Invalid successor input must roll back interruption, closure, revisions and durable history together.
+        // 非法后继输入必须一并回滚中断、闭合、修订及可靠历史。
+        let before = first
+            .read_full_durable(|document| {
+                (
+                    document.durable_revision(),
+                    document.events().to_vec(),
+                    serde_json::to_value(&document.metadata).unwrap(),
+                )
+            })
+            .unwrap();
+        assert!(
+            submit_resumed_embedded_task_root_input(
+                &first,
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("rejected-empty-successor").unwrap(),
+                    "",
+                    vec![],
+                ),
+                1_787_788_800_100,
+            )
+            .is_err()
+        );
+        first
+            .read_full_durable(|document| {
+                assert_eq!(document.durable_revision(), before.0);
+                assert_eq!(document.events(), before.1.as_slice());
+                assert_eq!(serde_json::to_value(&document.metadata).unwrap(), before.2);
+                assert_eq!(
+                    document.active_api().unwrap().api_call_id,
+                    first_api_call_id
+                );
+                assert_eq!(document.active_turn().unwrap().turn_id, first_turn_id);
+                assert!(!document.active_turn().unwrap().closed);
+            })
+            .unwrap();
+
         let resumed = create_or_load_embedded_task_session_v1(
             &registry,
             TaskV1ExecutionFacts {
@@ -2527,6 +2556,7 @@ mod tests {
                         )
                 }));
                 assert_eq!(document.memory_revision(), document.durable_revision());
+                assert_eq!(document.durable_revision(), before.0 + 1);
             })
             .expect("verify resumed embedded task lifecycle");
         // projection is captured from the durable owner used by physical request reconstruction, not the legacy controller.

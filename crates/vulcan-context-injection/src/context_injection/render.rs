@@ -16,12 +16,61 @@ pub struct ResolvedInjectionView {
     /// Transient blocks that should prefix the target user prompt.
     /// 应前置到目标用户提示词的临时块。
     pub transient_prefix: String,
+    /// Producer-owned blocks with stable source identities for non-V1 projection.
+    /// 带有稳定来源身份、供非 V1 投影使用的生产者自有块。
+    pub host_blocks: Vec<ResolvedInjectionHostBlock>,
     /// Whether transient content is present in the current view.
     /// 当前视图是否存在临时内容。
     pub has_transient: bool,
     /// Stable fingerprint for diagnostics and continuation safety checks.
     /// 用于诊断与 continuation 安全检查的稳定指纹。
     pub fingerprint: String,
+}
+
+/// One resolved injection block with source identity preserved beside rendered text.
+/// 在保留渲染正文的同时保存来源身份的一条已解析注入块。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedInjectionHostBlock {
+    /// Stable source identity assigned from the persisted group owner.
+    /// 从持久化分组所有者分配的稳定来源身份。
+    pub source_id: String,
+    /// Stable occurrence identity allocated when the instruction was created.
+    /// 指令创建时分配的稳定发生点身份。
+    pub occurrence_id: String,
+    /// Host source label carried by the block.
+    /// 该块携带的宿主来源标签。
+    pub source: String,
+    /// Normalized injection tag that owns the block.
+    /// 持有该块的规范化注入标签。
+    pub tag: String,
+    /// Stable hash of the normalized raw instruction body.
+    /// 规范化原始指令正文的稳定哈希。
+    pub content_hash: String,
+    /// Logical turn marker associated with a transient instruction.
+    /// 与临时指令关联的逻辑回合标记。
+    pub turn_id: Option<String>,
+    /// Whether this block is transient and has turn-scoped lifetime.
+    /// 该块是否为具有回合级生命周期的临时内容。
+    pub transient: bool,
+    /// Provider-facing scope of the block.
+    /// 该块面向 Provider 的作用域。
+    pub scope: String,
+    /// Rendered provider-visible body.
+    /// 面向 Provider 的渲染正文。
+    pub body: String,
+}
+
+/// Renders one injection instruction as an independently identifiable host block.
+/// 将一条注入指令渲染为可独立识别的宿主块。
+pub(crate) fn render_host_item_block(
+    item: &InjectionStateItem,
+    options: &InjectionRenderOptions<'_>,
+) -> Option<String> {
+    let content = options.registry.model_content(item);
+    if content.trim().is_empty() {
+        return None;
+    }
+    Some(content)
 }
 
 /// Reads a VMM relevance score from numeric or string metadata.

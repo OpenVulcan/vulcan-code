@@ -64,7 +64,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
         core_snapshot,
     )
     .map_err(|error| format!("Invalid core conversation snapshot: {error}"))?;
-    let preview_prompt = provider_request_snapshot_prompt(prompt, provider_visible_agent_messages);
+    let preview_prompt = provider_request_snapshot_prompt(prompt, provider_visible_agent_messages)?;
     let adapter = CoreRequestPreviewProviderAdapter::new(
         preparation.model_blueprint.provider_id.clone(),
         preparation.model_blueprint.protocol_profile_id.clone(),
@@ -86,23 +86,25 @@ pub(crate) async fn build_core_provider_request_snapshot(
 fn provider_request_snapshot_prompt(
     prompt: &str,
     provider_visible_agent_messages: &[ExecutionProviderVisibleAgentMessage],
-) -> String {
+) -> Result<String, String> {
     let agent_message_prompt = provider_visible_agent_messages
         .iter()
         .map(|message| {
             CoreConversationPayload::render_agent_message_text(
-                &message.message_type,
-                &message.task_name,
+                &message.delivery_id,
+                message.kind,
                 &message.sender,
+                &message.recipient,
+                &message.task_id,
                 &message.payload,
             )
         })
-        .collect::<Vec<_>>()
+        .collect::<Result<Vec<_>, _>>()?
         .join("\n\n");
     if !agent_message_prompt.trim().is_empty() {
-        return agent_message_prompt;
+        return Ok(agent_message_prompt);
     }
-    prompt.trim().to_string()
+    Ok(prompt.trim().to_string())
 }
 
 #[cfg(test)]
@@ -114,7 +116,9 @@ mod tests {
     fn seeded_agent_message(payload: &str) -> ExecutionProviderVisibleAgentMessage {
         ExecutionProviderVisibleAgentMessage {
             delivery_id: String::from("delivery-1"),
+            kind: vulcan_ai_contract::HostMessageKind::TaskResult,
             message_type: String::from("FINAL_ANSWER"),
+            task_id: String::from("task-1"),
             task_name: String::from("child_agent"),
             sender: String::from("child_agent"),
             recipient: String::from("parent:session-1"),
@@ -132,9 +136,10 @@ mod tests {
         let prompt = provider_request_snapshot_prompt(
             "Mailbox-triggered agent message turn.",
             &[seeded_agent_message("子代理完成。")],
-        );
+        )
+        .expect("valid seeded agent message");
 
-        assert!(prompt.contains("<agent_message>"));
+        assert!(prompt.contains("<vulcan_agent_message"));
         assert!(prompt.contains("子代理完成。"));
         assert!(!prompt.contains("Mailbox-triggered"));
     }
@@ -143,7 +148,8 @@ mod tests {
     /// 在不存在已播种子智能体消息时保留普通用户提示词。
     #[test]
     fn request_snapshot_prompt_keeps_user_prompt_without_seeded_messages() {
-        let prompt = provider_request_snapshot_prompt("  请继续  ", &[]);
+        let prompt = provider_request_snapshot_prompt("  请继续  ", &[])
+            .expect("plain prompt does not render an agent message");
 
         assert_eq!(prompt, "请继续");
     }

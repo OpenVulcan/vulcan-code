@@ -13,6 +13,8 @@ impl TaskRuntime {
             backends: RwLock::new(HashMap::new()),
             execution_contexts: RwLock::new(HashMap::new()),
             active_task_runs: RwLock::new(HashMap::new()),
+            auxiliary_execution_reservations: RwLock::new(HashMap::new()),
+            collaboration_lifecycle_bindings: RwLock::new(HashMap::new()),
             task_execution_state_locks: Mutex::new(HashMap::new()),
             detached_task_event_streams: RwLock::new(HashMap::new()),
             subagent_mailbox: InMemorySubagentMailbox::default(),
@@ -238,6 +240,32 @@ impl TaskRuntime {
         let registry_summary = (!record.last_result_text.trim().is_empty())
             .then_some(record.last_result_text.as_str());
         self.upsert_subagent_registry_entry(&record, status, registry_summary)
+    }
+
+    /// Binds `execution_id` to an existing test-seeded `task_id` without changing its status or result.
+    /// 将 `execution_id` 绑定到已有测试播种 `task_id`，不改变其状态或结果。
+    /// Returns an explicit missing-record error; only cross-crate test-support builds expose this entry.
+    /// 记录缺失时返回明确错误；仅跨 crate 测试支持构建暴露此入口。
+    #[cfg(feature = "test-support")]
+    pub fn bind_test_subagent_execution(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<(), String> {
+        if execution_id.is_empty() {
+            return Err(String::from("Test child execution identity is empty."));
+        }
+        // Test fixture binding never creates a missing resident record or changes business completion.
+        // 测试夹具绑定绝不创建缺失常驻记录，也不改变业务完成状态。
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| String::from("Test child registry is locked."))?;
+        let record = sessions
+            .get_mut(&task_id)
+            .ok_or_else(|| String::from("Test child record is missing."))?;
+        record.execution_id = Some(execution_id.to_owned());
+        Ok(())
     }
 
     /// Replaces the merged subagent catalog used by future spawn_agent calls.

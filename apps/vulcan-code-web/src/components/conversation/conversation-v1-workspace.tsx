@@ -1,3 +1,5 @@
+import { createConversationV1CollaborationNavigation, type ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
+export { createConversationV1CollaborationNavigation, conversationV1CollaborationSessionIds } from "./conversation-collaboration-navigation";
 import * as React from "react";
 import { runConversationControlAction } from "./conversation-control-feedback";
 
@@ -15,6 +17,7 @@ import { useI18n } from "@/i18n";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { SelectedConversationEventWindowCommands } from "@/service/selected-conversation-event-window-registry";
 import type { ExternalResourceRef } from "@/service/conversation-event-window-store";
+import type { ConversationSummary } from "@/types";
 
 /** Process-local user input shown only until its canonical V1 event appears.
  * 仅在对应 canonical V1 事件出现前展示的进程内用户输入。 */
@@ -93,6 +96,18 @@ export interface ConversationV1WorkspaceProps {
   /** Opens one currently available external resource.
    * 打开一个当前可用的外部资源。 */
   onOpenExternalRef?: (reference: ExternalResourceRef) => void;
+  /** Opens one exact collaboration participant session through the host route.
+   * 通过宿主路由打开一个精确协作参与者会话。*/
+  onOpenCollaborationSession?: (sessionId: string) => void;
+  /** Exact collaboration session ids with a live host route.
+   * 具有实时宿主路由的精确协作会话身份。*/
+  availableCollaborationSessionIds?: ReadonlySet<string>;
+  /** Host-owned navigation inputs for direct and embedded collaboration sessions.
+   * 宿主持有的直接会话与嵌入式协作会话导航输入。*/
+  collaborationNavigation?: ConversationV1CollaborationNavigation | null;
+  /** Cancels one exact pending collaboration question through the frozen host wrapper.
+   * 通过已冻结的宿主包装器取消一个精确待处理协作问题。*/
+  onCancelCollaborationQuestion?: (questionId: string, sourceRootSessionId: string) => void;
   /** Receives distinct edit-root and completed-Turn fork actions.
    * 接收彼此独立的编辑根操作与完整回合分叉操作。
    */
@@ -122,6 +137,20 @@ export function ConversationV1Workspace(props: ConversationV1WorkspaceProps) {
   // events becomes empty until the exact selected owner is ready; no stale fallback is allowed.
   // 在精确选中归属准备完成前 events 保持为空；不允许使用过期回退。
   const events = ownerReady ? props.snapshot.events : [];
+  // collaborationNavigation derives only from the explicit host snapshot and route callbacks.
+  // collaborationNavigation 只从明确的宿主快照与路由回调派生。
+  const collaborationNavigation = React.useMemo(
+    () => props.collaborationNavigation
+      ? createConversationV1CollaborationNavigation(props.collaborationNavigation)
+      : null,
+    [props.collaborationNavigation],
+  );
+  // Direct renderer props remain available for hosts that already built the route adapter.
+  // 已构建路由适配器的宿主仍可直接提供渲染器回调。
+  const onOpenCollaborationSession = props.onOpenCollaborationSession
+    ?? collaborationNavigation?.onOpenSession;
+  const availableCollaborationSessionIds = props.availableCollaborationSessionIds
+    ?? collaborationNavigation?.availableSessionIds;
 
   React.useEffect(() => {
     historyRequest.current = null;
@@ -197,7 +226,10 @@ export function ConversationV1Workspace(props: ConversationV1WorkspaceProps) {
               availableExternalRefKeys={props.availableExternalRefKeys}
               defaultExpandedTools={false}
               events={events}
+              availableCollaborationSessionIds={availableCollaborationSessionIds}
+              onCancelCollaborationQuestion={props.onCancelCollaborationQuestion}
               onCopyText={props.onCopyText}
+              onOpenCollaborationSession={onOpenCollaborationSession}
               onOpenExternalRef={props.onOpenExternalRef}
               onRootInputGenerationAction={props.onRootInputGenerationAction}
               reasoningDisplayMode={props.reasoningDisplayMode}

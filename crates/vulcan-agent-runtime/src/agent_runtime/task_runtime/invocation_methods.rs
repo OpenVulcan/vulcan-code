@@ -65,18 +65,19 @@ impl TaskRuntime {
     pub async fn invoke_spawn_agent(
         self: &Arc<Self>,
         current_session_id: SessionId,
+        lifecycle: Option<collaboration_lifecycle::ChildTaskInvocation>,
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
         // backend is the exact handler registered for the current controller session.
         // backend 是为当前控制器会话注册的精确处理器。
         let backend = self
-            .backend_for_session(current_session_id)?
-            .ok_or_else(|| {
-                format!(
-                    "The current session `{}` does not have a task backend installed, so the subagent cannot run.",
-                    current_session_id
-                )
-            })?;
+                .backend_for_session(current_session_id)?
+                .ok_or_else(|| {
+                    format!(
+                        "The current session `{}` does not have a task backend installed, so the subagent cannot run.",
+                        current_session_id
+                    )
+                })?;
 
         let parsed_args = parse_task_tool_arguments(args)?;
         let resolved_identifier =
@@ -87,7 +88,67 @@ impl TaskRuntime {
             resolved_identifier,
             parsed_args,
         )?;
-        let outcome = match backend(invocation.clone()).await {
+        // Register the original trusted tool identity before the backend may publish its start event.
+        // 在后端可能发布启动事件之前登记原始可信工具身份。
+        let registration = if let Some(lifecycle) = lifecycle {
+            if lifecycle.invocation.session_id != current_session_id.to_string() {
+                return Err(String::from(
+                    "spawn_agent lifecycle source does not match the parent session",
+                ));
+            }
+            let operation_id =
+                vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(
+                    crate::tooling::collaboration::stable_collaboration_operation_id(
+                        &lifecycle.invocation,
+                        SPAWN_AGENT_TOOL,
+                    ),
+                )
+                .map_err(|error| error.to_string())?;
+            self.register_child_task_lifecycle_binding(ChildTaskLifecycleBinding {
+                port: lifecycle.port,
+                reservation: collaboration_lifecycle::ChildTaskReservationRequest {
+                    invocation: lifecycle.invocation,
+                    operation_id,
+                    execution: collaboration_lifecycle::ChildTaskExecutionIdentity {
+                        task_session_id: invocation.task_id,
+                        execution_id: invocation.execution_id.clone(),
+                        task_id: vulcan_session_core::v1::ids::SubagentTaskId::try_new(
+                            invocation.task_id.to_string(),
+                        )
+                        .map_err(|error| error.to_string())?,
+                    },
+                    reserved_at_ms: current_unix_millis_u64().try_into().map_err(|_| {
+                        String::from("child reservation timestamp exceeds the durable range")
+                    })?,
+                },
+            })?;
+            Some(collaboration_lifecycle::ChildBindingRegistrationGuard {
+                runtime: self.clone(),
+                execution_id: invocation.execution_id.clone(),
+            })
+        } else {
+            None
+        };
+        let backend_result = backend(invocation.clone()).await;
+        let backend_result = if registration.is_some()
+            && self
+                .take_child_task_lifecycle_binding(&invocation.execution_id)?
+                .is_some()
+        {
+            // Preserve backend failures, including the marker used to discard pre-start placeholders.
+            // 保留后端失败，包括用于丢弃启动前占位的标记。
+            // Only a claimed-success mismatch needs a new ownership error.
+            // 只有未认领却声称成功时才需要新的归属错误。
+            match backend_result {
+                Err(error) => Err(error),
+                Ok(_) => Err(String::from(
+                    "The task backend exited without claiming its child lifecycle binding.",
+                )),
+            }
+        } else {
+            backend_result
+        };
+        let outcome = match backend_result {
             Ok(outcome) => outcome,
             Err(error) => {
                 if let Some(visible_error) =
@@ -343,7 +404,7 @@ impl TaskRuntime {
             // task_id addresses the same authoritative ownership and inbox used by cached-terminal checks.
             // task_id 定位与缓存终态检查相同的权威运行所有权及 inbox。
             let task_id = SessionId::from(entry.session_id);
-            if entry.status == SubagentStatus::Completed {
+            if entry.status.is_terminal() {
                 let returns = self
                     .durable_return_mailboxes
                     .read()
@@ -446,9 +507,9 @@ impl TaskRuntime {
             {
                 continue;
             }
-            // V1 completion remains pending until its canonical inclusive statistics are available.
-            // V1 完成在规范包容性统计可用之前保持待处理。
-            if entry.status == SubagentStatus::Completed {
+            // Every V1 terminal remains pending until its canonical parent result is durable.
+            // 所有 V1 终态在规范父结果可靠落盘之前均保持待处理。
+            if entry.status.is_terminal() {
                 let returns = self
                     .durable_return_mailboxes
                     .read()
@@ -896,6 +957,16 @@ impl TaskRuntime {
         }
         // Stop ownership, runtime archival, and inbox clearing share the sorted task locks.
         // 停止所有权、运行时归档与 inbox 清理共享有序任务锁。
+        // Auxiliary writers are owned by the host and must settle before any subtree member is archived.
+        // 辅助写入器归宿主持有，必须在任何子树成员归档之前结算。
+        for task_id in &prepared_archive.task_ids {
+            self.ensure_no_auxiliary_execution_with_transaction_lock_held(*task_id)
+                .map_err(|error| {
+                    format!(
+                        "Cannot close the agent tree before auxiliary execution settles: {error}"
+                    )
+                })?;
+        }
         let stopped_task_ids =
             self.reserve_and_abort_selected_task_runs(&prepared_archive.task_ids)?;
         self.mark_stopped_tasks_with_transaction_locks_held(&stopped_task_ids, "user_interrupt")?;

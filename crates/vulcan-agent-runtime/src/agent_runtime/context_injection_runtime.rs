@@ -3,11 +3,13 @@
 
 use sha2::{Digest, Sha256};
 use vulcan_context_injection::{
-    ContextInjectionState, InjectionHelper, InjectionInsert, InjectionKind, InjectionPanelCard,
-    InjectionRenderOptions, InjectionRendererRegistry,
+    ContextInjectionState, InjectionExpiryEvent, InjectionHelper, InjectionInsert, InjectionKind,
+    InjectionPanelCard, InjectionRenderOptions, InjectionRendererRegistry,
 };
 use vulcan_core::types::{
     ProviderContextAnchor as CoreProviderContextAnchor,
+    ProviderContextExpiredEvent as CoreProviderContextExpiredEvent,
+    ProviderContextHostBlock as CoreProviderContextHostBlock,
     ProviderContextInjection as CoreProviderContextInjection,
     ProviderContextMutationKind as CoreProviderContextMutationKind,
 };
@@ -23,6 +25,42 @@ pub fn core_provider_context_injection_from_state_for_turn(
     vmm_state: &VmmSessionMemoryState,
     current_turn_marker: Option<&str>,
     vmm_runtime_ready: bool,
+) -> Option<CoreProviderContextInjection> {
+    core_provider_context_injection_from_state_for_turn_with_pending_expiry_events(
+        state,
+        vmm_state,
+        current_turn_marker,
+        vmm_runtime_ready,
+        &[],
+    )
+}
+
+/// Drains typed TTL expiration markers and projects them into one non-V1 runtime overlay.
+/// 取出强类型 TTL 失效标记，并将其投影到一次非 V1 运行时覆盖层。
+pub fn core_provider_context_injection_from_state_for_turn_draining_expiry_events(
+    state: &mut ContextInjectionState,
+    vmm_state: &VmmSessionMemoryState,
+    current_turn_marker: Option<&str>,
+    vmm_runtime_ready: bool,
+) -> Option<CoreProviderContextInjection> {
+    let expired_events = state.take_pending_expiry_events();
+    core_provider_context_injection_from_state_for_turn_with_pending_expiry_events(
+        state,
+        vmm_state,
+        current_turn_marker,
+        vmm_runtime_ready,
+        &expired_events,
+    )
+}
+
+/// Projects shared state with a caller-owned set of append-only expiration markers.
+/// 使用调用方持有的追加式失效标记集合投影共享状态。
+fn core_provider_context_injection_from_state_for_turn_with_pending_expiry_events(
+    state: &ContextInjectionState,
+    vmm_state: &VmmSessionMemoryState,
+    current_turn_marker: Option<&str>,
+    vmm_runtime_ready: bool,
+    expired_events: &[InjectionExpiryEvent],
 ) -> Option<CoreProviderContextInjection> {
     let registry = context_injection_renderer_registry();
     let options = InjectionRenderOptions {
@@ -48,13 +86,31 @@ pub fn core_provider_context_injection_from_state_for_turn(
     // The fingerprint includes exact baseline bytes without exposing those bytes in diagnostic identities.
     // 指纹覆盖准确基线字节，但不在诊断身份中暴露正文。
     if let Some(prefix) = &pending_baseline {
+        // Pending baselines can shrink within one epoch as leases expire or are revoked.
+        // 待绑定基线会因租约到期或撤销而在同一纪元内缩减。
+        // Version exact rendered bytes; unrelated state revisions must not duplicate the same visible event.
+        // 对准确渲染字节进行版本化；无关状态修订不能重复生成相同可见事件。
+        let baseline_hash = hex::encode(Sha256::digest(prefix.as_bytes()));
         view.fingerprint = format!(
             "{}|vmm-pending:{}:{}",
-            view.fingerprint,
-            vmm_state.cache_epoch.epoch_id,
-            hex::encode(Sha256::digest(prefix.as_bytes()))
+            view.fingerprint, vmm_state.cache_epoch.epoch_id, baseline_hash
         );
         view.persistent_blocks.push(prefix.clone());
+        view.host_blocks
+            .push(vulcan_context_injection::ResolvedInjectionHostBlock {
+                source_id: format!("vmm:pending-baseline:{}", vmm_state.cache_epoch.epoch_id),
+                occurrence_id: format!(
+                    "vmm:pending-baseline:{}:{baseline_hash}",
+                    vmm_state.cache_epoch.epoch_id
+                ),
+                source: String::from("vmm"),
+                tag: String::from("vmm_pending_baseline"),
+                content_hash: baseline_hash,
+                turn_id: None,
+                transient: false,
+                scope: String::from("session"),
+                body: prefix.clone(),
+            });
     }
     let anchored_prefixes = if anchor_rendering_active {
         vmm_state
@@ -70,6 +126,40 @@ pub fn core_provider_context_injection_from_state_for_turn(
     } else {
         Vec::new()
     };
+    let mut host_blocks = view
+        .host_blocks
+        .iter()
+        .map(|block| CoreProviderContextHostBlock {
+            source_id: block.source_id.clone(),
+            occurrence_id: block.occurrence_id.clone(),
+            source: block.source.clone(),
+            tag: Some(block.tag.clone()),
+            content_hash: Some(block.content_hash.clone()),
+            turn_id: block.turn_id.clone(),
+            transient: block.transient,
+            target: String::from("model"),
+            task_id: None,
+            scope: block.scope.clone(),
+            body: block.body.clone(),
+        })
+        .collect::<Vec<_>>();
+    host_blocks.extend(
+        anchored_prefixes
+            .iter()
+            .map(|anchor| CoreProviderContextHostBlock {
+                source_id: format!("vmm:anchor:{}", anchor.anchor_id),
+                occurrence_id: format!("vmm:anchor:{}", anchor.anchor_id),
+                source: String::from("vmm"),
+                tag: None,
+                content_hash: Some(hex::encode(Sha256::digest(anchor.prefix.as_bytes()))),
+                turn_id: None,
+                transient: false,
+                target: anchor.target_message_id.clone(),
+                task_id: None,
+                scope: String::from("message"),
+                body: anchor.prefix.clone(),
+            }),
+    );
     let mutation_kind = if pending_baseline.is_some() || !view.transient_prefix.trim().is_empty() {
         CoreProviderContextMutationKind::HistoricalRewrite
     } else if anchored_prefixes.is_empty() {
@@ -86,6 +176,31 @@ pub fn core_provider_context_injection_from_state_for_turn(
         },
         &anchored_prefixes,
     );
+    let expired_events = expired_events
+        .iter()
+        .map(|event| CoreProviderContextExpiredEvent {
+            event_id: event.event_id.clone(),
+            source_id: event.source_id.clone(),
+            occurrence_id: event.occurrence_id.clone(),
+            tag: event.tag.clone(),
+            content_hash: event.content_hash.clone(),
+            source: String::from("context_injection"),
+            target: String::from("model"),
+            scope: String::from("turn"),
+            turn_id: event.turn_id.clone(),
+            body: event.body.clone(),
+        })
+        .collect::<Vec<_>>();
+    let fingerprint = if expired_events.is_empty() {
+        fingerprint
+    } else {
+        let event_ids = expired_events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{fingerprint}|expired:{event_ids}")
+    };
     // Only persistent generic layers need fingerprint comparison across provider cursors.
     // 只有持久化通用层需要跨 Provider 游标比较改写指纹。
     let rewrite_fingerprint =
@@ -115,6 +230,8 @@ pub fn core_provider_context_injection_from_state_for_turn(
         reclaimable_anchor_bytes: cache_pressure.reclaimable_anchor_bytes,
         reclaimable_anchor_estimated_tokens: cache_pressure.reclaimable_anchor_estimated_tokens,
         fingerprint,
+        expired_events,
+        host_blocks,
     };
     (!injection.is_empty()).then_some(injection)
 }
@@ -292,6 +409,36 @@ mod tests {
         );
 
         assert!(overlay.is_none());
+    }
+
+    /// Verifies a non-V1 projection drains one typed TTL marker into the Core overlay.
+    /// 验证非 V1 投影会将一条强类型 TTL 标记取出并放入 Core 覆盖层。
+    #[test]
+    fn provider_overlay_drains_ttl_expiry_event() {
+        let mut state = ContextInjectionState::default();
+        state.apply_insert(
+            InjectionInsert::single(
+                InjectionKind::Transient,
+                "turn_memory",
+                "memory",
+                "dynamic memory",
+                Some(1),
+            ),
+            "1",
+        );
+        state.consume_turn("turn-1", "2");
+
+        let overlay = core_provider_context_injection_from_state_for_turn_draining_expiry_events(
+            &mut state,
+            &VmmSessionMemoryState::default(),
+            Some("turn-2"),
+            false,
+        )
+        .expect("expiry marker should keep the overlay present");
+
+        assert_eq!(overlay.expired_events.len(), 1);
+        assert_eq!(overlay.expired_events[0].turn_id, "turn-1");
+        assert!(state.pending_expiry_events.is_empty());
     }
 
     /// Verifies a disabled stable-anchor epoch never leaks retained VMM bodies into provider overlays.
@@ -483,5 +630,137 @@ mod tests {
                 .contains("live-compacted-memory")
         );
         assert!(memory.pending_active_baseline_prefix().is_none());
+    }
+
+    /// Verifies pending baseline revisions survive lease expiry or revocation through real host projection.
+    /// 验证待绑定基线经真实宿主投影后，能正确承载租约到期或撤销产生的新版本。
+    #[test]
+    fn pending_baseline_lease_changes_append_without_rewriting_history() {
+        use crate::agent_runtime::execution_models::ExecutionPromptPurpose;
+        use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
+        use crate::agent_runtime::provider_runtime_context::{
+            runtime_context_host_event_candidates, synchronize_runtime_host_request_context,
+        };
+
+        // Exercise both producer mutations without constructing artificial host event identities.
+        // 同时覆盖两种生产者变更，不手工伪造宿主事件身份。
+        for revoke in [false, true] {
+            // The two leases have distinct lifetimes inside the same pending compaction epoch.
+            // 两条租约在同一个待绑定压缩纪元内具有不同存活期限。
+            let mut memory = VmmSessionMemoryState::default();
+            memory
+                .synchronize_stable_anchor_rendering(true, "1")
+                .unwrap();
+            for (memory_id, text, ttl_turns) in
+                [(7, "departing-memory", 1), (8, "retained-memory", 4)]
+            {
+                memory
+                    .apply_recall_batch(
+                        "session-a",
+                        "old-user",
+                        &VmmRecallBatch {
+                            ttl_turns,
+                            injection_tag: String::from("memory"),
+                            injection_description: String::from("memory"),
+                            items: vec![ContextItem {
+                                memory_id,
+                                text: text.to_owned(),
+                                ..Default::default()
+                            }],
+                        },
+                        "1",
+                    )
+                    .unwrap();
+            }
+            memory.begin_cache_epoch("9", None, "2").unwrap();
+            // One helper always runs the production overlay builder, including its feature policy.
+            // 此辅助闭包始终运行生产覆盖层构建器，包含真实功能策略。
+            let overlay_for = |state: &VmmSessionMemoryState| {
+                core_provider_context_injection_from_state_for_turn(
+                    &ContextInjectionState::default(),
+                    state,
+                    None,
+                    true,
+                )
+                .expect("pending baseline")
+            };
+            let first = overlay_for(&memory);
+            let mut snapshot = vulcan_core::types::ConversationSnapshot::default();
+            synchronize_runtime_host_request_context(
+                &mut snapshot,
+                &runtime_context_host_event_candidates(&first),
+                None,
+                ExecutionPromptPurpose::UserTurn,
+            )
+            .unwrap();
+            let original_prefix = serde_json::to_value(&snapshot.messages).unwrap();
+            memory.register_active_turn("turn-a", "3").unwrap();
+            // Unrelated durable revision changes do not create another visible baseline occurrence.
+            // 无关的持久化修订变化不会生成另一次可见基线发生点。
+            let unchanged = overlay_for(&memory);
+            assert_eq!(
+                first.host_blocks[0].occurrence_id,
+                unchanged.host_blocks[0].occurrence_id
+            );
+            synchronize_runtime_host_request_context(
+                &mut snapshot,
+                &runtime_context_host_event_candidates(&unchanged),
+                None,
+                ExecutionPromptPurpose::UserTurn,
+            )
+            .unwrap();
+            assert_eq!(snapshot.messages.len(), 1);
+            if revoke {
+                let key = memory
+                    .active_leases
+                    .iter()
+                    .find(|(_, lease)| lease.item.memory_id == 7)
+                    .map(|(key, _)| key.clone())
+                    .unwrap();
+                memory.revoke_lease(&key, "4").unwrap();
+            } else {
+                memory.consume_turn("turn-a", "4").unwrap();
+            }
+            memory.validate("session-a").unwrap();
+            let changed = overlay_for(&memory);
+            assert_eq!(
+                first.host_blocks[0].source_id,
+                changed.host_blocks[0].source_id
+            );
+            assert_ne!(first.host_blocks[0].body, changed.host_blocks[0].body);
+            synchronize_runtime_host_request_context(
+                &mut snapshot,
+                &runtime_context_host_event_candidates(&changed),
+                None,
+                ExecutionPromptPurpose::UserTurn,
+            )
+            .expect("changed live baseline must be a new event");
+            assert_eq!(snapshot.messages.len(), 2);
+            assert_eq!(
+                serde_json::to_value(&snapshot.messages[..1]).unwrap(),
+                original_prefix
+            );
+            assert_ne!(
+                first.host_blocks[0].occurrence_id,
+                changed.host_blocks[0].occurrence_id
+            );
+            synchronize_runtime_host_request_context(
+                &mut snapshot,
+                &runtime_context_host_event_candidates(&changed),
+                None,
+                ExecutionPromptPurpose::UserTurn,
+            )
+            .unwrap();
+            assert_eq!(snapshot.messages.len(), 2);
+            // A new compaction consumes only the replacement baseline; the original prefix stayed immutable.
+            // 新压缩只消费替代后的基线；此前的原始前缀始终保持不变。
+            let prepared = vulcan_context::runtime_host::prepare_runtime_host_compaction(
+                &core_snapshot_to_session_conversation_state(&snapshot).unwrap(),
+            )
+            .unwrap();
+            let summary_input = serde_json::to_string(&prepared.messages).unwrap();
+            assert!(summary_input.contains("retained-memory"));
+            assert!(!summary_input.contains("departing-memory"));
+        }
     }
 }

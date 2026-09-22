@@ -3,6 +3,7 @@
 
 use super::persistence::DirtyFile;
 use super::selection::active_request_from_pending;
+use super::turns::{clear_expired_dynamic_context_metadata, expiring_ttl_contexts};
 use super::{
     ActiveTurnState, IdempotentMutation, SessionDocument, TurnOrigin, client_action_conflict,
     validate_timestamp,
@@ -13,7 +14,7 @@ use crate::v1::config::{
 };
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
-    ConversationEvent, EventBody, EventVisibility, ExecutionControlKind,
+    ApiPurposeKind, ConversationEvent, EventBody, EventVisibility, ExecutionControlKind,
     QueuedInputResolutionEvent, QueuedInputResolutionKind, SystemContextOperation, TurnOutcome,
     UserInputEvent, UserInputSource,
 };
@@ -897,6 +898,8 @@ impl SessionDocument {
         let text = validate_user_input(text, &resource_ids)?;
         // A user can supersede a retained late return that has not started inference, including after Stop.
         // 用户可取代尚未启动推理的迟到回流，包括停止后保留的回流。
+        // Auxiliary requests do not consume the return, while any active physical request still excludes replacement.
+        // 辅助请求不消费回流，但任何活动物理请求仍排除替代。
         let undispatched_return = self
             .active_turn
             .as_ref()
@@ -906,7 +909,9 @@ impl SessionDocument {
                     && self.active_api.is_none()
                     && !self.events.iter().any(|event| {
                         event.turn_id == Some(turn.turn_id)
-                            && matches!(&event.event, EventBody::ApiStarted(_))
+                            && matches!(&event.event, EventBody::ApiStarted(started)
+                                if !matches!(started.purpose,
+                                    ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution))
                     })
             })
             .cloned();
@@ -925,15 +930,30 @@ impl SessionDocument {
                 .as_ref()
                 .map(active_request_from_pending)
         });
+        let expiring_contexts = undispatched_return
+            .as_ref()
+            .map(|turn| expiring_ttl_contexts(self, turn.turn_id))
+            .transpose()?
+            .unwrap_or_default();
+        let ttl_expiration_count = u64::try_from(expiring_contexts.len()).map_err(|_| {
+            DomainError::ImmutableFieldMutation {
+                entity: "ttl_expiration",
+                field: "event_count",
+            }
+        })?;
         self.ensure_transition_capacity(
             (if undispatched_return.is_some() { 3 } else { 1 })
-                + u64::from(request_config.is_some()),
+                + u64::from(request_config.is_some())
+                + ttl_expiration_count,
             2,
         )?;
         let mut staged_allocator = self.id_allocator;
         let input_id = PendingInputId::try_new(staged_allocator.next_local_id()?)?;
         let turn_id = TurnId::try_new(staged_allocator.next_local_id()?)?;
-        let mut staged_events = Vec::with_capacity(1);
+        let event_count = (if undispatched_return.is_some() { 3 } else { 1 })
+            + u64::from(request_config.is_some())
+            + ttl_expiration_count;
+        let mut staged_events = Vec::with_capacity(event_count as usize);
         let mut staged_metadata = self.metadata.clone();
         consume_matching_draft(&mut staged_metadata, &text, &resource_ids);
         if let Some(return_turn) = undispatched_return {
@@ -946,11 +966,12 @@ impl SessionDocument {
                 &mut staged_events,
                 return_turn.turn_id,
                 return_turn.start_seq,
-                TurnOutcome::Stopped,
+                crate::v1::event::TurnClosureReason::Stopped,
                 0,
                 now_ms,
                 buckets,
             )?;
+            clear_expired_dynamic_context_metadata(&mut staged_metadata, &expiring_contexts);
         }
         if let Some(request_config) = request_config {
             self.stage_bound_request_activation(
@@ -1031,13 +1052,17 @@ impl SessionDocument {
         let text = validate_user_input(text, &resource_ids)?;
         validate_timestamp("updated_at_ms", now_ms)?;
 
+        // User priority ends only when business starts; completed auxiliary work cannot consume that priority.
+        // 用户优先权仅在业务启动后结束；已结束辅助工作不能消费该优先权。
         let undispatched_goal_turn = self.active_turn.as_ref().filter(|turn| {
             !turn.closed
                 && turn.origin == TurnOrigin::GoalContinuation
                 && self.active_api.is_none()
                 && !self.events.iter().any(|event| {
                     event.turn_id == Some(turn.turn_id)
-                        && matches!(event.event, EventBody::ApiStarted(_))
+                        && matches!(&event.event, EventBody::ApiStarted(started)
+                            if !matches!(started.purpose,
+                                ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution))
                 })
         });
         if let Some(goal_turn) = undispatched_goal_turn.cloned() {
@@ -1047,11 +1072,20 @@ impl SessionDocument {
                 });
             }
             let buckets = self.aggregate_turn_buckets(goal_turn.turn_id, goal_turn.start_seq)?;
-            self.ensure_transition_capacity(3 + u64::from(bound_request_config.is_some()), 2)?;
+            let expiring_contexts = expiring_ttl_contexts(self, goal_turn.turn_id)?;
+            let ttl_expiration_count = u64::try_from(expiring_contexts.len()).map_err(|_| {
+                DomainError::ImmutableFieldMutation {
+                    entity: "ttl_expiration",
+                    field: "event_count",
+                }
+            })?;
+            let request_config_event_count = u64::from(bound_request_config.is_some());
+            let event_count = 3 + request_config_event_count + ttl_expiration_count;
+            self.ensure_transition_capacity(event_count, 2)?;
             let mut staged_allocator = self.id_allocator;
             let input_id = PendingInputId::try_new(staged_allocator.next_local_id()?)?;
             let scheduled_turn_id = TurnId::try_new(staged_allocator.next_local_id()?)?;
-            let mut staged_events = Vec::with_capacity(3);
+            let mut staged_events = Vec::with_capacity(event_count as usize);
             let mut staged_metadata = self.metadata.clone();
             consume_matching_draft(&mut staged_metadata, &text, &resource_ids);
             let stopped_turn_stats_seq = self.stage_turn_closure(
@@ -1059,11 +1093,12 @@ impl SessionDocument {
                 &mut staged_events,
                 goal_turn.turn_id,
                 goal_turn.start_seq,
-                TurnOutcome::Stopped,
+                crate::v1::event::TurnClosureReason::Stopped,
                 0,
                 now_ms,
                 buckets,
             )?;
+            clear_expired_dynamic_context_metadata(&mut staged_metadata, &expiring_contexts);
             if let Some(request_config) = bound_request_config {
                 self.stage_bound_request_activation(
                     &mut staged_metadata,
@@ -1125,6 +1160,30 @@ impl SessionDocument {
         let input_id = PendingInputId::try_new(staged_allocator.next_local_id()?)?;
         let mut staged_metadata = self.metadata.clone();
         consume_matching_draft(&mut staged_metadata, &text, &resource_ids);
+        // Persist the observed queue input together with admission, before any process-local Hook notification.
+        // 将已观察队列输入与准入一起持久化，先于任何进程内 Hook 通知。
+        // Canonical turn ownership exists before Hook preparation, closing that initial crash window too.
+        // Hook 准备前已存在规范回合归属，同时关闭该初始崩溃窗口。
+        if let Some(turn) = self
+            .active_turn
+            .as_ref()
+            .filter(|turn| !turn.closed && turn.origin != TurnOrigin::QuestionExecution)
+        {
+            staged_metadata
+                .business_hook
+                .observed_inputs
+                .retain(|entry| entry.turn_id == turn.turn_id);
+            staged_metadata.business_hook.observed_inputs.push(
+                crate::v1::business_hook::BusinessHookObservedInput {
+                    turn_id: turn.turn_id,
+                    client_action_id: client_action_id.clone(),
+                    input_id,
+                    observed_revision: self.next_mutation_revision()?,
+                    kind: crate::v1::business_hook::BusinessHookInputKind::Queued,
+                    content: text.clone(),
+                },
+            );
+        }
         staged_metadata.input_state.queued_inputs.push(QueuedInput {
             parameters,
             bound_request_config,
@@ -1544,7 +1603,17 @@ impl SessionDocument {
                 },
             ));
         }
-        let turn_id = self.require_open_turn()?.turn_id;
+        // An auxiliary turn cannot own a human task; leave its exact queue entry untouched.
+        // 辅助回合不能拥有人类任务；保持精确队列项不变。
+        let turn = self.require_open_turn()?;
+        if turn.origin == TurnOrigin::QuestionExecution {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "question_execution.business_inputs",
+            });
+        }
+        // Only the admitted business turn receives this explicit queue promotion.
+        // 只有已准入业务回合接收此次明确队列晋升。
+        let turn_id = turn.turn_id;
         let index = self.require_queued_input_index(&identity)?;
         let queued = self.metadata.input_state.queued_inputs[index].clone();
         self.ensure_transition_capacity(1, 0)?;
@@ -1571,6 +1640,35 @@ impl SessionDocument {
             .input_state
             .pending_staging_release_actions
             .insert(identity.client_action_id.clone());
+        // A queue admitted during an earlier task is first observed by this task when explicitly promoted.
+        // 更早任务期间准入的队列项，仅在明确提升时首次被本任务观察。
+        staged_metadata
+            .business_hook
+            .observed_inputs
+            .retain(|entry| entry.turn_id == turn_id);
+        if let Some(observed) = staged_metadata
+            .business_hook
+            .observed_inputs
+            .iter()
+            .find(|entry| entry.client_action_id == queued.client_action_id)
+        {
+            if observed.input_id != queued.input_id || observed.content != queued.text {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "business_hook.promoted_identity",
+                });
+            }
+        } else {
+            staged_metadata.business_hook.observed_inputs.push(
+                crate::v1::business_hook::BusinessHookObservedInput {
+                    turn_id,
+                    client_action_id: queued.client_action_id.clone(),
+                    input_id: queued.input_id,
+                    observed_revision: self.next_mutation_revision()?,
+                    kind: crate::v1::business_hook::BusinessHookInputKind::Interrupt,
+                    content: queued.text.clone(),
+                },
+            );
+        }
         staged_metadata
             .input_state
             .pending_in_turn_inputs
@@ -1780,7 +1878,7 @@ impl SessionDocument {
             if let EventBody::UserInput(input) = &event.event
                 && input.client_action_id == client_action_id
             {
-                if input.text == text && input.input_source == UserInputSource::PendingInTurn {
+                if input.text == text && input.input_source == UserInputSource::AgentMessage {
                     return Ok(IdempotentMutation::Idempotent(event.seq));
                 }
                 return Err(client_action_conflict(&client_action_id));
@@ -1809,7 +1907,7 @@ impl SessionDocument {
                 parameters: None,
                 client_action_id,
                 input_id,
-                input_source: UserInputSource::PendingInTurn,
+                input_source: UserInputSource::AgentMessage,
                 text,
                 resource_ids: vec![],
             }),
@@ -1848,12 +1946,38 @@ impl SessionDocument {
         }
         self.require_client_action_unused(&client_action_id)?;
         let text = validate_user_input(text, &resource_ids)?;
-        let turn_id = self.require_open_turn()?.turn_id;
+        // Direct callers must obey the same auxiliary boundary as queue promotion.
+        // 直接调用者必须遵守与队列晋升相同的辅助边界。
+        let turn = self.require_open_turn()?;
+        if turn.origin == TurnOrigin::QuestionExecution {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "question_execution.business_inputs",
+            });
+        }
+        // Retain the exact original business turn for the pending supplement.
+        // 为待处理补充输入保留精确原业务回合。
+        let turn_id = turn.turn_id;
         self.ensure_transition_capacity(0, 1)?;
         let mut staged_allocator = self.id_allocator;
         let input_id = PendingInputId::try_new(staged_allocator.next_local_id()?)?;
         let mut staged_metadata = self.metadata.clone();
         consume_matching_draft(&mut staged_metadata, &text, &resource_ids);
+        // Persist direct guidance with admission, before API terminal promotion or asynchronous preparation.
+        // 将直接引导与准入一起持久化，先于 API 终态提升或异步准备。
+        staged_metadata
+            .business_hook
+            .observed_inputs
+            .retain(|entry| entry.turn_id == turn_id);
+        staged_metadata.business_hook.observed_inputs.push(
+            crate::v1::business_hook::BusinessHookObservedInput {
+                turn_id,
+                client_action_id: client_action_id.clone(),
+                input_id,
+                observed_revision: self.next_mutation_revision()?,
+                kind: crate::v1::business_hook::BusinessHookInputKind::Interrupt,
+                content: text.clone(),
+            },
+        );
         staged_metadata
             .input_state
             .pending_in_turn_inputs
@@ -2014,11 +2138,25 @@ impl SessionDocument {
         let Some(stats_index) = input_index.checked_sub(1) else {
             return Ok(EnqueueInputDisposition::Queued);
         };
-        let Some(boundary_index) = input_index.checked_sub(2) else {
-            return Ok(EnqueueInputDisposition::Queued);
-        };
         let input_event = &self.events[input_index];
         let stats_event = &self.events[stats_index];
+        // Turn closure now places its ordered TTL removals between the boundary and statistics.
+        // 回合闭合会在边界与统计之间写入有序 TTL 移除事件。
+        let mut boundary_index = stats_index;
+        loop {
+            let Some(previous_index) = boundary_index.checked_sub(1) else {
+                return Ok(EnqueueInputDisposition::Queued);
+            };
+            boundary_index = previous_index;
+            let candidate = &self.events[boundary_index];
+            if candidate.turn_id == stats_event.turn_id
+                && matches!(&candidate.event, EventBody::SystemContext(context)
+                    if context.operation == SystemContextOperation::Remove)
+            {
+                continue;
+            }
+            break;
+        }
         let boundary_event = &self.events[boundary_index];
         let (
             EventBody::UserInput(_),

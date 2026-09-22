@@ -1,6 +1,7 @@
 import type { ConversationDetailRef, ToolDetailPayload } from "@/components/conversation/conversation-detail";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
 import type {
+  CollaborationToolArguments,
   SubagentOrchestrationAgent,
   SubagentOrchestrationPresentation,
   SubagentUsageSummary,
@@ -42,7 +43,10 @@ export function resolveSubagentOrchestrationPresentation(
     return null;
   }
   const args = firstArgumentsObject(blocks);
-  const payload = subagentOperationPayload(operation, blocks);
+  const collaborationArguments = collaborationToolArguments(toolName, args);
+  const payload = isCollaborationOperation(operation)
+    ? collaborationOutputPayload(blocks)
+    : subagentOperationPayload(operation, blocks);
   const title = subagentPresentationTitle(operation, args, payload, toolName);
   const operationHasAgents = operation === "agent_orchestration_info" || operation === "list_agents" || operation === "wait";
   const operationClosesAgents = operation === "close";
@@ -52,15 +56,23 @@ export function resolveSubagentOrchestrationPresentation(
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : true,
     debugSummary: subagentDebugSummary(payload?.debug),
     detailRef,
-    effectivePrompt: stringValue(payload?.prompt),
+    effectivePrompt: isCollaborationOperation(operation) ? null : stringValue(payload?.prompt),
     id: subagentPresentationId(blocks, operation, title),
     kind: "subagent_orchestration",
-    note: stringValue(payload?.note) ?? (operation === "wait" || operation === "agent_orchestration_info" || operation === "list_agents" ? stringValue(payload?.message) : null),
+    note: isCollaborationOperation(operation)
+      ? null
+      : stringValue(payload?.note) ?? (operation === "wait" || operation === "agent_orchestration_info" || operation === "list_agents" ? stringValue(payload?.message) : null),
     operation,
     prompt: subagentPrompt(operation, args, payload),
-    queued: booleanValue(payload?.queued),
-    deliveryMode: stringValue(payload?.delivery_mode ?? payload?.deliveryMode),
-    result: subagentResult(operation, payload),
+    queued: isCollaborationOperation(operation)
+      ? collaborationDeliveryMode(collaborationArguments) === "queue"
+        ? true
+        : null
+      : booleanValue(payload?.queued),
+    deliveryMode: isCollaborationOperation(operation)
+      ? collaborationDeliveryMode(collaborationArguments)
+      : stringValue(payload?.delivery_mode ?? payload?.deliveryMode),
+    result: subagentResult(operation, payload, blocks),
     state: displayState,
     closedAgents: operationClosesAgents ? closedAgents(payload) : [],
     closedCount: operationClosesAgents ? closedAgentCount(payload) : 0,
@@ -72,6 +84,7 @@ export function resolveSubagentOrchestrationPresentation(
     noActiveAgents: operation === "wait" ? subagentWaitHasNoActiveAgents(payload) : false,
     interrupted: operation === "wait" ? booleanValue(payload?.interrupted) : null,
     terminalEventReceived: operation === "wait" ? subagentWaitTerminalEventReceived(payload) : false,
+    collaborationArguments,
     title,
   };
 }
@@ -116,19 +129,33 @@ function mergeSubagentPayload(
     ...presentation,
     agents,
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : presentation.agentsKnown,
-    debugSummary: subagentDebugSummary(payload.debug) ?? presentation.debugSummary,
-    effectivePrompt: stringValue(payload.prompt) ?? presentation.effectivePrompt,
-    note: stringValue(payload.note) ?? presentation.note,
-    prompt: presentation.prompt ?? stringValue(payload.prompt),
-    queued: booleanValue(payload.queued) ?? presentation.queued,
-    deliveryMode: stringValue(payload.delivery_mode ?? payload.deliveryMode) ?? presentation.deliveryMode,
+    debugSummary: isCollaborationOperation(presentation.operation)
+      ? presentation.debugSummary
+      : subagentDebugSummary(payload.debug) ?? presentation.debugSummary,
+    effectivePrompt: isCollaborationOperation(presentation.operation)
+      ? presentation.effectivePrompt
+      : stringValue(payload.prompt) ?? presentation.effectivePrompt,
+    note: isCollaborationOperation(presentation.operation)
+      ? presentation.note
+      : stringValue(payload.note) ?? presentation.note,
+    prompt: isCollaborationOperation(presentation.operation)
+      ? presentation.prompt
+      : presentation.prompt ?? stringValue(payload.prompt),
+    queued: isCollaborationOperation(presentation.operation)
+      ? presentation.queued
+      : booleanValue(payload.queued) ?? presentation.queued,
+    deliveryMode: isCollaborationOperation(presentation.operation)
+      ? presentation.deliveryMode
+      : stringValue(payload.delivery_mode ?? payload.deliveryMode) ?? presentation.deliveryMode,
     result: subagentResult(presentation.operation, payload) ?? presentation.result,
     closedAgents: operationClosesAgents ? closedAgents(payload) : presentation.closedAgents,
     closedCount: operationClosesAgents ? closedAgentCount(payload) : presentation.closedCount,
     clearedMessageCount: operationClosesAgents ? clearedMessageCount(payload) : presentation.clearedMessageCount,
     stoppedCount: operationStopsAgents ? stoppedTaskCount(payload) : presentation.stoppedCount,
     stoppedTaskIds: operationStopsAgents ? stoppedTaskIds(payload) : presentation.stoppedTaskIds,
-    target: presentation.target ?? stringValue(payload.target),
+    target: isCollaborationOperation(presentation.operation)
+      ? presentation.target
+      : presentation.target ?? stringValue(payload.target),
     timedOut: presentation.operation === "wait"
       ? booleanValue(payload.timed_out ?? payload.timedOut) ?? presentation.timedOut
       : presentation.timedOut,
@@ -198,6 +225,9 @@ function subagentPayloadMatchesOperation(
   // 候选载荷对象。
   payload: Record<string, unknown>,
 ): boolean {
+  if (isCollaborationOperation(operation)) {
+    return true;
+  }
   if (operation === "wait") {
     return "message" in payload || "timed_out" in payload || "timedOut" in payload || "interrupted" in payload;
   }
@@ -256,6 +286,15 @@ function subagentOperation(
   payloadHint: Record<string, unknown> | null,
 ): SubagentOrchestrationPresentation["operation"] | null {
   const normalized = toolName ? normalizeToolName(toolName) : null;
+  if (normalized === "ask_question" || normalized === "ask_parent") return "collaboration_question";
+  if (normalized === "reply_question") return "collaboration_answer";
+  if (normalized === "send_session_message") return "collaboration_steer";
+  if (normalized === "send_notification") return "collaboration_notification";
+  if (normalized === "wait_question") return "collaboration_question_wait";
+  if (normalized === "list_sessions") return "collaboration_session_list";
+  if (normalized === "read_session") return "collaboration_session_read";
+  if (normalized === "wait_session") return "collaboration_session_wait";
+  if (normalized === "cancel_question") return "collaboration_cancel";
   if (normalized === "spawn_agent") return "create";
   if (normalized === "send_message" || hostKind === "subagent_message") return "message";
   if (normalized === "wait_agent" || hostKind === "subagent_wait") return "wait";
@@ -353,6 +392,15 @@ function subagentPresentationTitle(
   // 原始工具名。
   toolName: string | null,
 ): string {
+  if (operation === "collaboration_question") return "Agent collaboration question";
+  if (operation === "collaboration_answer") return "Question answer receipt";
+  if (operation === "collaboration_steer") return "Agent task direction";
+  if (operation === "collaboration_question_wait") return "Wait for question settlement";
+  if (operation === "collaboration_notification") return "Agent phase notification";
+  if (operation === "collaboration_session_list") return "Authorized session list";
+  if (operation === "collaboration_session_read") return "Authorized session read";
+  if (operation === "collaboration_session_wait") return "Wait for session revision";
+  if (operation === "collaboration_cancel") return "Cancel collaboration question";
   if (operation === "wait") {
     return toolName ?? "wait_agent";
   }
@@ -389,6 +437,21 @@ function subagentPrompt(
   // 宿主或正文载荷。
   payload: Record<string, unknown> | null,
 ): string | null {
+  if (operation === "collaboration_question") {
+    return textValue(args?.question);
+  }
+  if (operation === "collaboration_answer") {
+    return textValue(args?.answer);
+  }
+  if (operation === "collaboration_steer") {
+    return textValue(args?.message);
+  }
+  if (operation === "collaboration_notification") {
+    return textValue(args?.message);
+  }
+  if (operation === "collaboration_cancel") {
+    return textValue(args?.reason);
+  }
   if (operation === "create") {
     return textValue(args?.message) ?? textValue(args?.prompt) ?? textValue(payload?.prompt);
   }
@@ -440,7 +503,11 @@ function subagentResult(
   // Host or body payload.
   // 宿主或正文载荷。
   payload: Record<string, unknown> | null,
+  blocks: ToolExecutionConversationBlock[] = [],
 ): string | null {
+  if (isCollaborationOperation(operation)) {
+    return payload ? JSON.stringify(payload) : fallbackResultFromBlocks(blocks);
+  }
   if (operation === "create") {
     return null;
   }
@@ -542,6 +609,158 @@ function subagentWaitHasNoActiveAgents(
   }
   return stringValue(payload?.activity_status ?? payload?.activityStatus)?.toLowerCase()
     === "no_active_agents";
+}
+
+// isCollaborationOperation identifies the exact native collaboration card family.
+// isCollaborationOperation 识别原生协作卡片的精确操作族。
+function isCollaborationOperation(
+  operation: SubagentOrchestrationPresentation["operation"],
+): boolean {
+  return operation === "collaboration_question"
+    || operation === "collaboration_answer"
+    || operation === "collaboration_steer"
+    || operation === "collaboration_notification"
+    || operation === "collaboration_question_wait"
+    || operation === "collaboration_session_list"
+    || operation === "collaboration_session_read"
+    || operation === "collaboration_session_wait"
+    || operation === "collaboration_cancel";
+}
+
+// collaborationOutputPayload reads only a generic result body for a collaboration tool.
+// collaborationOutputPayload 只读取协作工具的通用结果正文。
+function collaborationOutputPayload(
+  blocks: ToolExecutionConversationBlock[],
+): Record<string, unknown> | null {
+  const hostPayload = fixedHostPayload(blocks);
+  if (hostPayload) {
+    return hostPayload;
+  }
+  return firstBodyJsonObject(blocks);
+}
+
+// collaborationToolArguments validates the exact native argument shape without probing result fields.
+// collaborationToolArguments 校验原生精确参数形状，不探测结果字段。
+function collaborationToolArguments(
+  toolName: string | null,
+  args: Record<string, unknown> | null,
+): CollaborationToolArguments | null {
+  const normalized = toolName ? normalizeToolName(toolName) : null;
+  if (!normalized || !args) {
+    return null;
+  }
+  switch (normalized) {
+    case "ask_question": {
+      const targetSessionId = exactString(args.target_session_id);
+      const question = exactString(args.question);
+      return targetSessionId && question
+        ? { target_session_id: targetSessionId, question }
+        : null;
+    }
+    case "ask_parent": {
+      const question = exactString(args.question);
+      return question ? { question } : null;
+    }
+    case "reply_question": {
+      const questionId = exactString(args.question_id);
+      const answer = exactString(args.answer);
+      return questionId && answer
+        ? { question_id: questionId, answer, unable_to_answer: args.unable_to_answer === true }
+        : null;
+    }
+    case "wait_question": {
+      const questionId = exactString(args.question_id);
+      const timeoutMs = exactNumber(args.timeout_ms);
+      if (!questionId || timeoutMs === null) return null;
+      return {
+        question_id: questionId,
+        after_revision: exactOptionalNumber(args.after_revision),
+        timeout_ms: timeoutMs,
+      };
+    }
+    case "cancel_question": {
+      const questionId = exactString(args.question_id);
+      const reason = exactString(args.reason);
+      return questionId && reason
+        ? { question_id: questionId, reason }
+        : null;
+    }
+    case "list_sessions": {
+      const limit = exactNumber(args.limit);
+      return limit === null
+        ? null
+        : { limit, cursor: exactOptionalString(args.cursor) };
+    }
+    case "read_session": {
+      const sessionId = exactString(args.session_id);
+      const limit = exactNumber(args.limit);
+      return sessionId && limit !== null
+        ? { session_id: sessionId, after_seq: exactOptionalNumber(args.after_seq), limit }
+        : null;
+    }
+    case "send_session_message": {
+      const sessionId = exactString(args.session_id);
+      const message = exactString(args.message);
+      const deliveryMode = args.delivery_mode === "queue" || args.delivery_mode === "interrupt"
+        ? args.delivery_mode
+        : null;
+      return sessionId && message && deliveryMode
+         ? { session_id: sessionId, message, delivery_mode: deliveryMode }
+         : null;
+    }
+    case "send_notification": {
+      const targetSessionId = exactString(args.target_session_id);
+      const message = exactString(args.message);
+      return targetSessionId && message
+        ? { target_session_id: targetSessionId, message }
+        : null;
+    }
+    case "wait_session": {
+      const sessionId = exactString(args.session_id);
+      const timeoutMs = exactNumber(args.timeout_ms);
+      if (!sessionId || timeoutMs === null) return null;
+      return {
+        session_id: sessionId,
+        after_revision: exactOptionalNumber(args.after_revision),
+        timeout_ms: timeoutMs,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+// collaborationDeliveryMode reads delivery mode only from the exact send-session-message arguments.
+// collaborationDeliveryMode 只从精确的 send-session-message 参数读取投递模式。
+function collaborationDeliveryMode(
+  args: CollaborationToolArguments | null,
+): "queue" | "interrupt" | null {
+  if (!args || !("delivery_mode" in args)) return null;
+  return args.delivery_mode;
+}
+
+// exactString accepts only the native string field and never searches alternate paths.
+// exactString 只接受原生字符串字段，绝不搜索替代路径。
+function exactString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+// exactNumber accepts only a finite native JSON number.
+// exactNumber 只接受有限的原生 JSON 数值。
+function exactNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+// exactOptionalNumber preserves absence without inventing a default.
+// exactOptionalNumber 保留字段缺失，不发明默认值。
+function exactOptionalNumber(value: unknown): number | null {
+  return value === undefined || value === null ? null : exactNumber(value);
+}
+
+// exactOptionalString preserves an omitted cursor as null.
+// exactOptionalString 将缺失的游标保留为 null。
+function exactOptionalString(value: unknown): string | null {
+  return value === undefined || value === null ? null : exactString(value);
 }
 
 // subagentAgentHasTerminalState recognizes terminal wait_agent rows from compact agent state.

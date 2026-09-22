@@ -440,6 +440,35 @@ fn explicit_turn_start_index(
                             == vulcan_session_core::v1::event::SystemContextOperation::Upsert
                         && open_start == Some(event.seq))
             }
+            // Collaboration starts are typed host facts; tagged User text is never a start authority.
+            // 协作起点是强类型宿主事实；带标签的 User 正文绝不是起点权威。
+            EventBody::Collaboration(collaboration) => {
+                use vulcan_session_core::v1::collaboration::{
+                    CollaborationAfterState, CollaborationEventKind,
+                    CollaborationTaskMessageEffectKind,
+                };
+                match &collaboration.after_state {
+                    CollaborationAfterState::TaskMessageEffect { effect }
+                        if collaboration.event_kind
+                            == CollaborationEventKind::TaskMessageEffect =>
+                    {
+                        effect.event_seq == event.seq
+                            && matches!(
+                                &effect.outcome,
+                                CollaborationTaskMessageEffectKind::Claimed {
+                                    turn_id: claimed_turn, ..
+                                } if *claimed_turn == turn_id
+                            )
+                    }
+                    CollaborationAfterState::QuestionExecution { execution }
+                        if collaboration.event_kind
+                            == CollaborationEventKind::QuestionExecutionStarted =>
+                    {
+                        execution.execution_turn_id == Some(turn_id)
+                    }
+                    _ => false,
+                }
+            }
             _ => false,
         }
     })
@@ -550,7 +579,7 @@ fn validate_small_documents(layout: &SessionV1Layout) -> Result<SmallDocuments, 
         return Err(SessionV1Error::corrupt(
             ErrorCode::CompactionCorrupt,
             compactions_path.clone(),
-            "compaction nodes are out of order (occurrence or id)",
+            "compaction nodes are out of order (occurrence, id or retained boundary)",
         )
         .with_context(&layout.session_id, compactions_path.clone()));
     }

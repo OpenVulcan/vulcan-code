@@ -9,6 +9,7 @@
 //! seq 等于该语义事实实际发生的顺序，且更新绝不分配新的 seq。
 
 mod api;
+mod business_api_boundaries;
 mod compaction;
 mod hydration;
 mod input;
@@ -16,6 +17,7 @@ mod invariants;
 mod modes;
 mod persistence;
 mod provider_source;
+mod remote_compaction;
 mod selection;
 mod subagent;
 mod terminal_settlement;

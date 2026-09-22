@@ -2,6 +2,70 @@
 //! session kernel tests。
 
 use super::*;
+
+/// A QA preparation requires the exact durable identity in addition to turn text and generation.
+/// 答疑准备除回合文本和代际外，还要求精确可靠身份。
+#[test]
+fn question_preparation_requires_exact_kernel_execution_identity() {
+    // session_id and state use the same isolated service fixture as other kernel ownership tests.
+    // session_id 与 state 使用和其他内核归属测试相同的隔离服务夹具。
+    let session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(session_id);
+    // execution_id binds the only admitted question on this physical kernel generation.
+    // execution_id 绑定当前物理内核代际唯一准入的问题。
+    let execution_id =
+        vulcan_session_core::v1::collaboration::CollaborationExecutionId::try_new("qa-1").unwrap();
+    start_webui_session_kernel_turn(
+        &mut state,
+        session_id,
+        "qa-preparation",
+        ActiveTurnKind::QuestionExecution {
+            execution_id: execution_id.clone(),
+        },
+    )
+    .unwrap();
+    let state = Arc::new(Mutex::new(state));
+    let generation = capture_webui_question_preparation_generation(
+        &state,
+        session_id,
+        "qa-preparation",
+        &execution_id,
+    )
+    .unwrap();
+    assert!(generation.is_some());
+    assert_eq!(
+        capture_webui_question_preparation_generation(
+            &state,
+            session_id,
+            "qa-preparation",
+            &vulcan_session_core::v1::collaboration::CollaborationExecutionId::try_new("qa-2")
+                .unwrap()
+        )
+        .unwrap(),
+        None
+    );
+    {
+        let mut guard = state.lock().unwrap();
+        stop_webui_session_kernel_generation(&mut guard, session_id);
+        start_webui_session_kernel_turn(
+            &mut guard,
+            session_id,
+            "qa-preparation",
+            ActiveTurnKind::UserPrompt,
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        capture_webui_question_preparation_generation(
+            &state,
+            session_id,
+            "qa-preparation",
+            &execution_id
+        )
+        .unwrap(),
+        None
+    );
+}
 use crate::pending_prompts::dispatch_queued_pending_prompt_hook;
 use crate::session_goal_lifecycle::session_goal_dispatch_authority_from_v1_handle;
 use crate::session_runtime_registry_v1::{SessionHandle, SessionPersistenceBackend};
@@ -249,6 +313,19 @@ fn restarted_open_goal_continuation_admits_exactly_one_dispatch_owner() {
         .continuation_turn_id
         .expect("Play opens a continuation");
     assert_ne!(expected_turn_id, interrupted_turn_id);
+    // The Play service atomically adds this execution consent beside the resumed mode.
+    // 播放服务在恢复模式旁原子附加此执行许可。
+    document
+        .set_collaboration_run_control(vulcan_session_core::v1::collaboration::SetRunControlInput {
+            operation_id:
+                vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(
+                    "restarted-goal-play",
+                )
+                .unwrap(),
+            state: vulcan_session_core::v1::collaboration::CollaborationRunControl::Running,
+            changed_at_ms: 50_000,
+        })
+        .unwrap();
     let handle =
         SessionHandle::with_backend(session_id, document, Arc::new(RestartGoalReadOnlyBackend));
     let service_state = test_service_state_with_parent_session(session_id);
@@ -419,10 +496,31 @@ async fn webui_pending_prompt_enqueue_does_not_interrupt_active_wait_agent() {
     wait_task.abort();
 }
 
-/// Verifies a queued workspace draft cannot create a Hook turn before explicit post-commit dispatch.
-/// 验证排队工作区草稿无法在显式提交后分发前创建 Hook 回合。
+/// Creates a real empty canonical session for queue-notification boundary tests.
+/// 为队列通知边界测试创建真实空规范会话。
+/// `session_id` selects storage ownership; the returned directory keeps the file backend alive.
+/// `session_id` 选择存储归属；返回目录保持文件后端存活。
+fn queued_hook_storage(session_id: SessionId) -> (tempfile::TempDir, Arc<SessionHandle>) {
+    // File publication, rather than a workspace mirror, is the queue authority.
+    // 文件发布是队列权威，工作区镜像不是。
+    let storage = tempfile::tempdir().unwrap();
+    let locator = vulcan_workspace_store::workspace_store::create_session_v1_storage_fixture(
+        storage.path(),
+        &session_id.to_string(),
+        1,
+    )
+    .unwrap();
+    let loaded = vulcan_workspace_store::workspace_store::load_session_v1_tail(&locator).unwrap();
+    (
+        storage,
+        SessionHandle::new(session_id, locator, loaded.document),
+    )
+}
+
+/// An idle queue notification cannot create a business Hook before actual task admission.
+/// 空闲队列通知不能在实际任务准入前创建业务 Hook。
 #[test]
-fn queued_prompt_hook_waits_for_authoritative_workspace_commit() {
+fn queued_prompt_hook_does_not_create_idle_business_owner() {
     // session_id identifies the regular session receiving the queued follow-up.
     // session_id 标识接收排队后续提示的普通会话。
     let session_id = SessionId::new_v4();
@@ -466,10 +564,24 @@ fn queued_prompt_hook_waits_for_authoritative_workspace_commit() {
             .expect("hook runtime lock")
             .has_active_turn(session_id)
     );
-    dispatch_queued_pending_prompt_hook(&agent_runtime, hook_event)
+    // Commit the exact queue action while there is still no admitted business turn.
+    // 在仍无准入业务回合时提交精确队列动作。
+    let (_storage, handle) = queued_hook_storage(session_id);
+    handle
+        .enqueue_input(
+            vulcan_session_core::v1::ClientInputSubmission::new(
+                vulcan_session_core::v1::ClientActionId::try_new("queued-hook-after-commit-action")
+                    .unwrap(),
+                "queued after commit",
+                vec![],
+            ),
+            2,
+        )
+        .unwrap();
+    dispatch_queued_pending_prompt_hook(&handle, &agent_runtime, hook_event)
         .expect("committed queue event should dispatch");
     assert!(
-        agent_runtime
+        !agent_runtime
             .conversation_hook_runtime
             .lock()
             .expect("hook runtime lock")
@@ -533,7 +645,8 @@ fn queued_prompt_hook_lock_failure_preserves_queue_entry() {
 
     // error is the explicit post-commit Hook diagnostic.
     // error 是显式的提交后 Hook 诊断。
-    let error = dispatch_queued_pending_prompt_hook(&agent_runtime, hook_event)
+    let (_storage, handle) = queued_hook_storage(session_id);
+    let error = dispatch_queued_pending_prompt_hook(&handle, &agent_runtime, hook_event)
         .expect_err("poisoned Hook runtime should reject dispatch");
     assert!(error.contains("failed to lock conversation hook runtime"));
     assert_eq!(
@@ -2810,12 +2923,8 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
     let second_owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
     {
         let mut guard = state.lock().expect("second terminal owner should register");
-        register_session_terminal_persistence_owner(
-            &mut guard,
-            session_id,
-            second_owner.clone(),
-        )
-        .expect("second terminal owner should register exactly");
+        register_session_terminal_persistence_owner(&mut guard, session_id, second_owner.clone())
+            .expect("second terminal owner should register exactly");
     }
     let second_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
         state.clone(),

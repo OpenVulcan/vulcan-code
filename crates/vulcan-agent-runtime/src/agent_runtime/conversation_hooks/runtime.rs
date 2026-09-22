@@ -4,6 +4,9 @@ use super::*;
 /// 单个提示词回合中可独立派发的画像与 precheck 请求。
 #[derive(Clone)]
 pub struct ConversationPromptHookRequests {
+    /// Inert user observation; the host releases it only after durable Hook publication.
+    /// 尚不执行的用户观察；宿主仅在可靠发布 Hook 后释放。
+    pub deferred_user_event: Option<ConversationUserEventRequest>,
     /// Profile preparation request whose payload owns system-profile placement metadata.
     /// 持有系统画像放置元数据的画像准备请求。
     pub profile: ConversationProfileRequest,
@@ -28,6 +31,216 @@ pub struct ConversationHookRuntime {
 }
 
 impl ConversationHookRuntime {
+    /// Drops only process-local preparation after the host proves that no Hook was ever published for this business.
+    /// 宿主证明本业务从未发布 Hook 后，仅丢弃进程内准备。
+    /// `source` must be freshly validated under submission exclusion; no observation or completion event is sent.
+    /// `source` 必须在提交互斥内刚完成重验；不发送观察或完成事件。
+    pub fn discard_unpublished_business_preparation(
+        &mut self,
+        source: &vulcan_session_core::v1::business_hook::InitialBusinessPreparation,
+    ) -> Result<(), String> {
+        // The domain source fixes the physical session; a display ID cannot choose another owner.
+        // 领域来源固定物理会话；显示 ID 不能选择其他所有者。
+        let session_id = source
+            .session_id
+            .parse::<SessionId>()
+            .map_err(|error| format!("Invalid initial business session identity: {error}"))?;
+        self.active_turns.remove(&session_id);
+        Ok(())
+    }
+
+    /// Restores canonical input observations with their original Hook identity, without dispatching notifications.
+    /// 将规范输入观察与原 Hook 身份一起恢复，不派发通知。
+    /// `state` must come from validated durable recovery; conflicts leave all live state unchanged.
+    /// `state` 必须来自已验证可靠恢复；冲突保持全部活动状态不变。
+    /// Returns whether ownership or a missing canonical timeline item was installed; other timeline kinds are preserved.
+    /// 返回是否安装归属或缺失规范时间线条目；其他时间线种类保持不变。
+    pub fn restore_business_hook_state(
+        &mut self,
+        state: &vulcan_session_core::v1::business_hook::BusinessHookMetadata,
+    ) -> Result<bool, String> {
+        // Stage every validation and timeline change before publishing the process-local owner.
+        // 发布进程内所有者之前暂存全部校验和时间线变更。
+        let binding = state
+            .binding
+            .as_ref()
+            .ok_or_else(|| String::from("Business Hook recovery state has no original binding."))?;
+        state
+            .validate(binding.segment_generation)
+            .map_err(|error| error.to_string())?;
+        let session_id =
+            SessionId::parse_str(&binding.session_id).map_err(|error| error.to_string())?;
+        let mut staged = self
+            .active_turns
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_else(|| {
+                ActiveConversationTurn::new(
+                    binding.hook_turn_id.clone(),
+                    binding.user_content.clone(),
+                    binding.vmm_runtime_ready,
+                )
+            });
+        if staged.turn_id != binding.hook_turn_id || staged.user_content != binding.user_content {
+            return Err(String::from(
+                "Business Hook recovery state conflicts with the retained owner.",
+            ));
+        }
+        // Canonical order cannot be inferred from asynchronous callback arrival order.
+        // 规范顺序不能从异步回调到达顺序推断。
+        let mut last_position = None;
+        let mut changed = !self.active_turns.contains_key(&session_id);
+        for entry in &state.observed_inputs {
+            if entry.turn_id != binding.turn_id {
+                return Err(String::from(
+                    "Observed Hook input belongs to a different business turn.",
+                ));
+            }
+            // The admission kind owns raw-queue versus sanitized-interrupt projection, never role or text heuristics.
+            // 准入种类决定原始队列或清理插队投影，绝不通过角色或正文猜测。
+            let (kind, content) = match entry.kind {
+                vulcan_session_core::v1::business_hook::BusinessHookInputKind::Queued => {
+                    ("user_followup", entry.content.clone())
+                }
+                vulcan_session_core::v1::business_hook::BusinessHookInputKind::Interrupt => {
+                    let (_, sanitized) = crate::agent_runtime::context_injection_runtime::collect_builtin_manual_injection_ops_and_sanitized_prompt(&entry.content);
+                    ("user_interrupt", sanitized)
+                }
+            };
+            let identity = (entry.input_id, entry.kind, entry.observed_revision);
+            if staged
+                .observed_input_identities
+                .get(entry.client_action_id.as_str())
+                .is_some_and(|prior| prior != &identity)
+                || staged
+                    .canonical_input_receipts
+                    .get(entry.client_action_id.as_str())
+                    .is_some_and(|prior| prior.0 != entry.input_id)
+            {
+                return Err(String::from(
+                    "Observed Hook input changed its admitted identity.",
+                ));
+            }
+            let expected = ConversationTimelineItem::new(
+                "user",
+                kind,
+                content.trim().to_owned(),
+                Some(entry.client_action_id.as_str().to_owned()),
+            );
+            let matches = staged
+                .timeline
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| {
+                    item.source_id.as_deref() == Some(entry.client_action_id.as_str())
+                })
+                .collect::<Vec<_>>();
+            let position = if matches.is_empty() {
+                // Append a missing observation only after all earlier canonical observations have been checked.
+                // 仅在全部更早规范观察通过检查后追加缺失观察。
+                staged.timeline.push(expected);
+                changed = true;
+                staged.timeline.len() - 1
+            } else if matches.len() == 1 && matches[0].1 == &expected {
+                matches[0].0
+            } else {
+                return Err(String::from(
+                    "Observed Hook input conflicts with its retained timeline content.",
+                ));
+            };
+            if last_position.is_some_and(|previous| position <= previous) {
+                return Err(String::from(
+                    "Observed Hook timeline order conflicts with canonical admission order.",
+                ));
+            }
+            last_position = Some(position);
+            changed |= staged
+                .observed_input_identities
+                .insert(entry.client_action_id.as_str().to_owned(), identity)
+                .is_none();
+            if entry.kind == vulcan_session_core::v1::business_hook::BusinessHookInputKind::Queued {
+                changed |= staged
+                    .recorded_prompt_entry_ids
+                    .insert(entry.client_action_id.as_str().to_owned());
+            }
+        }
+        if changed {
+            self.active_turns.insert(session_id, staged);
+        }
+        Ok(changed)
+    }
+
+    /// Captures the actual in-memory Hook seed against host-proven V1 coordinates.
+    /// 对照宿主已证明的 V1 坐标捕获实际内存 Hook 种子。
+    /// The host supplies canonical session/generation/turn/start; missing ownership returns an error.
+    /// 宿主提供规范会话、代次、回合及起点；缺失归属时返回错误。
+    pub fn capture_business_hook_binding(
+        &self,
+        session_id: SessionId,
+        segment_generation: u64,
+        turn_id: vulcan_session_core::v1::TurnId,
+        start_seq: vulcan_session_core::v1::Seq,
+    ) -> Result<vulcan_session_core::v1::business_hook::BusinessHookBinding, String> {
+        // The retained owner supplies original content; callers cannot replace it with a continuation prompt.
+        // 保留所有者提供原正文；调用方不能将其替换为续跑提示词。
+        let turn = self.active_turns.get(&session_id).ok_or_else(|| {
+            String::from("Business Hook capture requires its original active owner.")
+        })?;
+        Ok(
+            vulcan_session_core::v1::business_hook::BusinessHookBinding {
+                session_id: session_id.to_string(),
+                segment_generation,
+                turn_id,
+                start_seq,
+                hook_turn_id: turn.turn_id.clone(),
+                user_content: turn.user_content.clone(),
+                vmm_runtime_ready: turn.vmm_runtime_ready,
+            },
+        )
+    }
+
+    /// Restores only a host-validated durable Hook seed, without replaying profile or user-event hooks.
+    /// 仅恢复宿主已校验的可靠 Hook 种子，不重放画像或用户事件 Hook。
+    /// `binding` comes from full canonical recovery; returns true only when a missing owner is installed.
+    /// `binding` 来自完整规范恢复；仅在安装缺失所有者时返回 true。
+    /// Existing matching ownership preserves its live timeline; conflicts never replace it.
+    /// 已有匹配归属保留活动时间线；冲突绝不替换它。
+    pub fn restore_business_hook_binding(
+        &mut self,
+        binding: &vulcan_session_core::v1::business_hook::BusinessHookBinding,
+    ) -> Result<bool, String> {
+        // Parse and validate before allocating process-local ownership.
+        // 分配进程内归属之前解析并校验。
+        let session_id =
+            SessionId::parse_str(&binding.session_id).map_err(|error| error.to_string())?;
+        vulcan_session_core::v1::business_hook::BusinessHookMetadata {
+            version: 1,
+            binding: Some(binding.clone()),
+            observed_inputs: Vec::new(),
+        }
+        .validate(binding.segment_generation)
+        .map_err(|error| error.to_string())?;
+        if let Some(existing) = self.active_turns.get(&session_id) {
+            if existing.turn_id != binding.hook_turn_id
+                || existing.user_content != binding.user_content
+            {
+                return Err(String::from(
+                    "Business Hook restoration conflicts with the retained owner.",
+                ));
+            }
+            return Ok(false);
+        }
+        self.active_turns.insert(
+            session_id,
+            ActiveConversationTurn::new(
+                binding.hook_turn_id.clone(),
+                binding.user_content.clone(),
+                binding.vmm_runtime_ready,
+            ),
+        );
+        Ok(true)
+    }
+
     /// Restores prepared Hook requests for an already-recorded logical user turn.
     /// 为已经记录的逻辑用户回合恢复已准备 Hook 请求。
     ///
@@ -83,6 +296,7 @@ impl ConversationHookRuntime {
             }
         }
         Ok(ConversationPromptHookRequests {
+            deferred_user_event: None,
             profile: ConversationProfileRequest::new(
                 self.dispatcher.clone(),
                 session_id,
@@ -192,20 +406,67 @@ impl ConversationHookRuntime {
         conversation_state: &SessionConversationState,
         vmm_runtime_ready: bool,
     ) -> ConversationPromptHookRequests {
+        self.prepare_prompt_hook_requests_with_timeline_policy(
+            session_id,
+            prompt_entry_id,
+            project_id,
+            workspace_path,
+            source,
+            system_prompt_hook_phase,
+            prompt,
+            conversation_state,
+            vmm_runtime_ready,
+            false,
+        )
+    }
+
+    /// Assembles the existing preparation payloads with an explicit timeline ownership policy.
+    /// 使用明确时间线归属策略组装既有准备载荷。
+    /// `timeline_prepared` means a validated canonical batch already owns user events and timeline mutation.
+    /// `timeline_prepared` 表示已验证规范批次已经持有用户事件及时间线修改。
+    /// All other parameters retain the public prompt preparation contract; returns sibling Hook requests.
+    /// 其余参数沿用公开提示准备契约；返回同级 Hook 请求。
+    pub(super) fn prepare_prompt_hook_requests_with_timeline_policy(
+        &mut self,
+        session_id: SessionId,
+        prompt_entry_id: &str,
+        project_id: Option<String>,
+        workspace_path: String,
+        source: PendingSessionPromptSource,
+        system_prompt_hook_phase: SystemPromptHookPhase,
+        prompt: &str,
+        conversation_state: &SessionConversationState,
+        vmm_runtime_ready: bool,
+        timeline_prepared: bool,
+    ) -> ConversationPromptHookRequests {
         let event_kind = pending_prompt_source_event_kind(source);
-        let was_recorded_while_queued = self
-            .active_turns
-            .get(&session_id)
-            .is_some_and(|turn| turn.recorded_prompt_entry_ids.contains(prompt_entry_id));
-        let is_new_turn = !self.active_turns.contains_key(&session_id);
-        let turn_id = if is_new_turn {
+        // Auxiliary preparation has its own durable execution identity and never owns a business Hook turn.
+        // 辅助准备使用独立的持久执行身份，绝不持有业务 Hook 回合。
+        let is_question_execution = source == PendingSessionPromptSource::QuestionExecution;
+        // Host, Goal and child-return continuation prompts are dispatch instructions, never user observations.
+        // 宿主、Goal 和子回流续跑提示属于分发指令，绝不是用户观察。
+        let is_host_continuation = matches!(
+            source,
+            PendingSessionPromptSource::AgentContinuation
+                | PendingSessionPromptSource::GoalContinuation
+                | PendingSessionPromptSource::SubagentReturnContinuation
+        );
+        let was_recorded_while_queued = !is_question_execution
+            && self
+                .active_turns
+                .get(&session_id)
+                .is_some_and(|turn| turn.recorded_prompt_entry_ids.contains(prompt_entry_id));
+        let is_new_turn = !is_question_execution && !self.active_turns.contains_key(&session_id);
+        let turn_id = if is_question_execution {
+            format!("session-{session_id}-question-execution-{prompt_entry_id}")
+        } else if is_new_turn {
             let turn_id = new_conversation_turn_id(session_id);
             self.active_turns.insert(
                 session_id,
                 ActiveConversationTurn::new(turn_id.clone(), prompt.to_string(), vmm_runtime_ready),
             );
             turn_id
-        } else if was_recorded_while_queued {
+        } else if was_recorded_while_queued || is_host_continuation || timeline_prepared {
             self.active_turns
                 .get(&session_id)
                 .map(|turn| turn.turn_id.clone())
@@ -235,20 +496,27 @@ impl ConversationHookRuntime {
             "event_kind": event_kind,
             "is_new_turn": is_new_turn,
             "was_recorded_while_queued": was_recorded_while_queued,
+            "canonical_batch_timeline_prepared": timeline_prepared,
             "user_content": prompt,
             "visible_history_count": visible_history_count(conversation_state),
             "message_count": conversation_state.messages.len(),
             "record_count": conversation_state.records.len(),
             "vmm_runtime_ready": vmm_runtime_ready,
         });
-        if !was_recorded_while_queued {
-            self.dispatch_json(
-                HOOK_CONVERSATION_USER_EVENT,
-                session_id,
-                precheck_payload.clone(),
-                HookScope::Session,
-            );
-        }
+        // Preparing identity must not notify external observers before the host makes that identity durable.
+        // 宿主使身份可靠落盘之前，准备身份不能通知外部观察器。
+        let deferred_user_event = (!is_question_execution
+            && !is_host_continuation
+            && !was_recorded_while_queued
+            && !timeline_prepared)
+            .then(|| {
+                ConversationUserEventRequest::new(
+                    self.dispatcher.clone(),
+                    session_id,
+                    precheck_payload.clone(),
+                    turn_id.clone(),
+                )
+            });
         // profile_payload owns only session profile context and cannot inspect the user prompt.
         // profile_payload 仅持有会话画像上下文，无法读取用户提示词。
         let profile_payload = json!({
@@ -262,6 +530,7 @@ impl ConversationHookRuntime {
             "vmm_runtime_ready": vmm_runtime_ready,
         });
         ConversationPromptHookRequests {
+            deferred_user_event,
             profile: ConversationProfileRequest::new(
                 self.dispatcher.clone(),
                 session_id,
@@ -642,29 +911,17 @@ impl ConversationHookRuntime {
 
     /// Dispatches one JSON hook payload without blocking the UI thread.
     /// 在不阻塞 UI 线程的情况下调度一条 JSON hook payload。
-    fn dispatch_json(
+    pub(super) fn dispatch_json(
         &self,
         point: &'static str,
         session_id: SessionId,
         payload: Value,
         scope: HookScope,
     ) {
-        let dispatcher = self.dispatcher.clone();
-        let context = HookContext {
-            run_id: format!("{point}:{session_id}"),
-            point: point.to_string(),
-            scope,
-            actor: HookActor::new("vulcan-code-runtime"),
-            workspace_id: None,
-            project_id: None,
-            session_id: Some(session_id.to_string()),
-            conversation_id: Some(session_id.to_string()),
-            user_id: None,
-            capabilities: Default::default(),
-            metadata: BTreeMap::new(),
-        };
-        let request = HookDispatchRequest::new(context, HookPayload { value: payload });
-        spawn_hook_dispatch(dispatcher, request);
+        // Share immutable host context construction with deferred first-prompt observations.
+        // 与延迟首次提示观察共用不可变宿主上下文构建。
+        let request = super::user_event::prepared_hook_dispatch(point, session_id, payload, scope);
+        spawn_hook_dispatch(self.dispatcher.clone(), request);
     }
 }
 

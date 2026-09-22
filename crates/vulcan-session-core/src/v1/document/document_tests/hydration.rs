@@ -73,6 +73,7 @@ fn rebuild_derives_state_after_serde_round_trip() {
         active_api: None,
         id_allocator: IdAllocator::new(),
         memory_revision: 0,
+        staged_commit_revision: None,
         durable_revision: 0,
         dirty_since: BTreeMap::new(),
         changed_event_seqs_by_revision: BTreeMap::new(),
@@ -112,6 +113,7 @@ fn rebuild_rejects_sequence_gap() {
         active_api: None,
         id_allocator: IdAllocator::new(),
         memory_revision: 0,
+        staged_commit_revision: None,
         durable_revision: 0,
         dirty_since: BTreeMap::new(),
         changed_event_seqs_by_revision: BTreeMap::new(),
@@ -151,6 +153,7 @@ fn rebuild_keeps_open_api_group_active() {
         active_api: None,
         id_allocator: IdAllocator::new(),
         memory_revision: 0,
+        staged_commit_revision: None,
         durable_revision: 0,
         dirty_since: BTreeMap::new(),
         changed_event_seqs_by_revision: BTreeMap::new(),
@@ -388,6 +391,7 @@ fn open_api_purpose_survives_rebuild() {
         active_api: None,
         id_allocator: IdAllocator::new(),
         memory_revision: 0,
+        staged_commit_revision: None,
         durable_revision: 0,
         dirty_since: BTreeMap::new(),
         changed_event_seqs_by_revision: BTreeMap::new(),
@@ -464,7 +468,9 @@ fn rebuild_rejects_bad_turn_closure_sequences() {
         resource_ids: Vec::new(),
     });
     let boundary = EventBody::TurnBoundary(TurnBoundaryEvent {
+        reason: crate::v1::event::TurnClosureReason::Completed,
         outcome: TurnOutcome::Completed,
+        purpose: crate::v1::event::TurnBoundaryPurpose::Business,
     });
     let stats = EventBody::TurnStats(TurnStatsEvent {
         start_seq: Seq::try_new(1).unwrap(),

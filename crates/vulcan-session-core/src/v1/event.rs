@@ -13,6 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use vulcan_ai_contract::ProviderReplayEnvelope;
 
 use crate::v1::budget::ProviderRequestBudgetEvidence;
+use crate::v1::collaboration::CollaborationEvent;
 use crate::v1::config::ActiveRequestConfig;
 use crate::v1::errors::DomainError;
 use crate::v1::ids::{
@@ -103,6 +104,11 @@ impl ConversationEvent {
             EventBody::DisplayNote(note) => note.api_call_id.map_or(0, ApiCallId::value),
             EventBody::RequestConfigChanged(_) => 0,
             EventBody::ExecutionControl(control) => control.api_call_id.map_or(0, ApiCallId::value),
+            EventBody::Collaboration(_) => 0,
+            EventBody::ContextMaintenance(execution) => execution
+                .turn_id
+                .value()
+                .max(execution.business_turn_id.value()),
             EventBody::SystemContext(_)
             | EventBody::TurnBoundary(_)
             | EventBody::TurnStats(_)
@@ -191,6 +197,12 @@ pub enum EventBody {
     /// Provider-invisible execution control fact.
     /// Provider 不可见的执行控制事实。
     ExecutionControl(ExecutionControlEvent),
+    /// Host-only typed collaboration mutation and recovery fact.
+    /// 仅宿主可见的强类型协作变更与恢复事实。
+    Collaboration(CollaborationEvent),
+    /// Host-only start or terminal after-state of an independent maintenance execution.
+    /// 独立维护执行的仅宿主起始或终态后状态。
+    ContextMaintenance(super::context_maintenance::ContextMaintenanceExecution),
 }
 
 impl EventBody {
@@ -213,6 +225,8 @@ impl EventBody {
             Self::DisplayNote(_) => "display_note",
             Self::RequestConfigChanged(_) => "request_config_changed",
             Self::ExecutionControl(_) => "execution_control",
+            Self::Collaboration(_) => "collaboration",
+            Self::ContextMaintenance(_) => "context_maintenance",
         }
     }
 }
@@ -399,6 +413,9 @@ pub enum UserInputSource {
     /// Queued prompt scheduled after the previous turn closes.
     /// 前一回合关闭后调度入流的排队提示词。
     QueuedScheduled,
+    /// Host-authenticated agent communication projected through the protocol User role.
+    /// 宿主认证的代理通信，通过协议 User 角色投影。
+    AgentMessage,
 }
 
 /// One user input event (root, supplementary, or scheduled queued).
@@ -853,6 +870,9 @@ pub enum ApiPurposeKind {
     /// Physical call inside or for a subagent.
     /// 子代理内部或为子代理发起的物理调用。
     Subagent,
+    /// Physical call dedicated to answering one collaboration question.
+    /// 专门用于回答一条协作问题的物理调用。
+    QuestionExecution,
 }
 
 /// Final state of one physical Provider API call.
@@ -1073,14 +1093,83 @@ pub enum TurnOutcome {
     Stopped,
 }
 
+/// Durable distinction between a business turn and an auxiliary question attempt.
+/// 业务回合与辅助答疑尝试之间的持久化区分。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnBoundaryPurpose {
+    /// Business completion consumes one logical-turn context lifetime.
+    /// 业务完成消耗一次逻辑回合上下文寿命。
+    Business,
+    /// Auxiliary completion records usage without consuming business context lifetime.
+    /// 辅助完成记录消耗，但不消费业务上下文寿命。
+    QuestionExecution,
+    /// Maintenance records its own closure without consuming a business context lifetime.
+    /// 维护记录自身闭合，不消耗业务上下文寿命。
+    ContextMaintenance,
+}
+
+/// Explicit host classification retained independently of the aggregate turn outcome.
+/// 独立于聚合回合结果保留的明确宿主分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnClosureReason {
+    /// The business or auxiliary execution completed normally.
+    /// 业务或辅助执行正常完成。
+    Completed,
+    /// The user abandoned the original logical turn.
+    /// 用户放弃原逻辑回合。
+    Abandoned,
+    /// The host explicitly stopped the execution without classifying it as failure.
+    /// 宿主明确停止执行，未将其分类为失败。
+    Stopped,
+    /// The host failure transition atomically closed the execution with its diagnostic.
+    /// 宿主失败转换连同诊断原子闭合执行。
+    Failed,
+}
+
+impl TurnClosureReason {
+    /// Maps explicit `self` classification to the existing turn-statistic outcome.
+    /// 将明确的 `self` 分类映射到既有回合统计结果。
+    /// Returns Stopped for a failure without losing the separately persisted failure classification.
+    /// 失败返回 Stopped，同时不丢失单独持久化的失败分类。
+    pub fn outcome(self) -> TurnOutcome {
+        match self {
+            Self::Completed => TurnOutcome::Completed,
+            Self::Abandoned => TurnOutcome::Abandoned,
+            Self::Stopped | Self::Failed => TurnOutcome::Stopped,
+        }
+    }
+}
+
+impl From<TurnOutcome> for TurnClosureReason {
+    /// Maps an explicit ordinary `outcome`; failure callers must select Failed themselves.
+    /// 映射明确普通 `outcome`；失败调用方必须自行选择 Failed。
+    /// Returns the corresponding normal closure classification without inspecting message text.
+    /// 返回对应普通闭合分类，不检查消息文本。
+    fn from(outcome: TurnOutcome) -> Self {
+        match outcome {
+            TurnOutcome::Completed => Self::Completed,
+            TurnOutcome::Abandoned => Self::Abandoned,
+            TurnOutcome::Stopped => Self::Stopped,
+        }
+    }
+}
+
 /// Turn closure fact written before the unique turn statistic.
 /// 在唯一回合统计之前写入的回合闭合事实。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TurnBoundaryEvent {
+    /// Required host reason published atomically with closure, never inferred from diagnostics.
+    /// 与闭合原子发布的必需宿主原因，绝不从诊断推断。
+    pub reason: TurnClosureReason,
     /// Terminal closure outcome.
     /// 终态闭合结果。
     pub outcome: TurnOutcome,
+    /// Immutable closure purpose, retained even when the opening event is compacted.
+    /// 不可变闭合用途，即使起始事件被压缩也继续保留。
+    pub purpose: TurnBoundaryPurpose,
 }
 
 /// The single terminal statistic event of one truly closed turn.
@@ -1111,10 +1200,19 @@ pub struct TurnStatsEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubagentReturnEvent {
+    /// Exact child generation that owns all source sequence numbers.
+    /// 拥有全部来源序号的精确子代次。
+    pub child_segment_generation: u64,
+    /// Original root action identifying the returned child execution.
+    /// 标识回流子执行的原根动作。
+    pub child_root_action_id: ClientActionId,
     /// True for new content-only returns; absent legacy values require a statistics pair.
     /// 新正文回流为真；旧数据缺失该值时要求统计事件对。
     #[serde(default, skip_serializing_if = "subagent_content_only_is_false")]
     pub content_only: bool,
+    /// Parent session identity that owns this returned result.
+    /// 拥有本次回流结果的父会话身份。
+    pub parent_session_id: String,
     /// Subagent session id that produced the content.
     /// 产出该内容的子代理会话 id。
     pub child_session_id: String,

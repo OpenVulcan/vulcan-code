@@ -245,6 +245,635 @@ export interface ExternalResourceRef {
   id: string;
 }
 
+/** Serialized kind of one typed collaboration mutation.
+ * 一条强类型协作变更的序列化类型。 */
+export type CollaborationEventKind =
+  | "task_result_recorded"
+  | "task_result_accepted"
+  | "task_result_acknowledged"
+  | "task_result_projected"
+  | "task_message_sent"
+  | "task_message_accepted"
+  | "task_message_acknowledged"
+  | "task_message_effect"
+  | "question_created"
+  | "delivery_recorded"
+  | "delivery_accepted"
+  | "delivery_projected"
+  | "delivery_failed"
+  | "delivery_settled"
+  | "delivery_settlement_acknowledged"
+  | "notification_sent"
+  | "notification_progress"
+  | "notification_accepted"
+  | "notification_projected"
+  | "notification_failed"
+  | "question_answered"
+  | "question_cancelled"
+  | "answer_delivered"
+  | "child_task_reserved"
+  | "child_task_activated"
+  | "child_task_terminal"
+  | "child_task_non_success_recorded"
+  | "child_task_non_success_projected"
+  | "question_execution_started"
+  | "question_execution_completed"
+  | "question_successor_scheduled"
+  | "grant_added"
+  | "grant_removed"
+  | "run_control_changed"
+  | "generation_ownership_cleared";
+
+/** Current settlement state of one source-owned question.
+ * 一条来源问题当前的结算状态。 */
+export type CollaborationQuestionState = "pending" | "answered" | "cancelled";
+
+/** Current progress of one collaboration delivery.
+ * 一条协作投递当前的进度。 */
+export type CollaborationDeliveryState = "recorded" | "accepted" | "projected" | "failed";
+
+/** Independent lifecycle of one typed one-way notification.
+ * 一条强类型单向通知的独立生命周期。 */
+export type CollaborationNotificationState = "recorded" | "accepted" | "projected" | "failed";
+
+/** Stable failure reason for one failed collaboration delivery.
+ * 一条协作投递失败时使用的稳定原因。 */
+export type CollaborationDeliveryFailureReason =
+  | "target_stopped"
+  | "target_missing"
+  | "source_unavailable"
+  | "authorization_revoked"
+  | "generation_mismatch"
+  | "invalid_binding"
+  | "unknown";
+
+/** Independent route used to deliver a settled answer.
+ * 已结算答案使用的独立交付路径。 */
+export type CollaborationAnswerDeliveryKind = "wait_tool" | "user_event";
+
+/** Current state of the independent answer delivery record.
+ * 独立答案交付记录的当前状态。 */
+export type CollaborationAnswerDeliveryState = "undelivered" | "delivered";
+
+/** Lifecycle state of one child task reservation.
+ * 一条子任务预留的生命周期状态。 */
+export type CollaborationChildTaskState = "reserved" | "active" | "terminal";
+
+/** Explicit terminal outcome of one child task.
+ * 一条子任务的明确终态结果。 */
+export type CollaborationChildTaskTerminalOutcome = "completed" | "failed" | "stopped" | "cancelled";
+
+/** Explicit host run-control state captured by collaboration events.
+ * 协作事件记录的明确宿主运行控制状态。 */
+export type CollaborationRunControl = "running" | "naturally_idle" | "stopped" | "main_only" | "main_and_subagents";
+
+/** Purpose of one collaboration-related execution.
+ * 一次协作相关执行的用途。 */
+export type CollaborationExecutionPurpose = "normal_task" | "in_turn_question" | "naturally_idle_question";
+
+/** Lifecycle state of one dedicated question execution.
+ * 一次专用问题执行的生命周期状态。 */
+export type CollaborationQuestionExecutionState = "running" | "completed";
+
+/** Outcome of one completed dedicated question execution.
+ * 一次完成的专用问题执行结果。 */
+export type CollaborationQuestionExecutionOutcome = "settled" | "failed" | "unanswered";
+
+/** Terminal settlement selected by the source authority and acknowledged by the target.
+ * 来源权威选定且目标确认的终态结算。 */
+export type CollaborationTargetSettlementState = "answered" | "cancelled";
+
+/** Authority that created one collaboration grant.
+ * 创建一条协作授权的权威主体。 */
+export type CollaborationGrantAuthority = "local_user";
+
+/** Action admitted by one collaboration grant.
+ * 一条协作授权允许的动作。 */
+export type CollaborationGrantAction = "read" | "ask" | "steer" | "start" | "reply" | "notify";
+
+/** Stable host-owned locator of one collaboration participant.
+ * 一名协作参与者的宿主稳定定位信息。 */
+export interface CollaborationParticipant {
+  session_id: string;
+  root_session_id: string;
+  project_id: string;
+  segment_generation: number;
+  turn_id?: number;
+  task_id?: string;
+}
+
+/** Independent delivery revision of one settled answer.
+ * 一条已结算答案的独立交付修订记录。 */
+export interface CollaborationAnswerDeliveryRecord {
+  state: CollaborationAnswerDeliveryState;
+  delivery_revision: number;
+  kind?: CollaborationAnswerDeliveryKind;
+  projected_seq?: number;
+  /** Stable UserInput identity when the answer uses a User event.
+   * 答案使用 User 事件交付时的稳定 UserInput 身份。*/
+  projected_input_id?: number;
+  /** Stable tool-call identity when the answer uses a tool result.
+   * 答案使用工具结果交付时的稳定工具调用身份。*/
+  tool_call_id?: number;
+  /** Physical ToolCall event sequence carrying the completed result.
+   * 携带已完成结果的物理 ToolCall 事件序号。*/
+  tool_result_seq?: number;
+  last_operation_id: string;
+  updated_at_ms: number;
+}
+
+/** Answer stored by the source question authority.
+ * 来源问题权威持有的答案记录。 */
+export interface CollaborationAnswerRecord {
+  operation_id: string;
+  responder: CollaborationParticipant;
+  body: string;
+  settled_at_ms: number;
+  delivery: CollaborationAnswerDeliveryRecord;
+}
+
+/** Cancellation stored by the source question authority.
+ * 来源问题权威持有的撤销记录。 */
+export interface CollaborationCancellationRecord {
+  operation_id: string;
+  requester: CollaborationParticipant;
+  reason: string;
+  cancelled_at_ms: number;
+}
+
+/** Source-owned question record and its immutable identities.
+ * 来源拥有的问题记录及其不可变身份。 */
+export interface CollaborationQuestionRecord {
+  operation_id: string;
+  question_id: string;
+  delivery_id: string;
+  source: CollaborationParticipant;
+  target: CollaborationParticipant;
+  body: string;
+  execution_purpose: CollaborationExecutionPurpose;
+  state: CollaborationQuestionState;
+  answer?: CollaborationAnswerRecord;
+  cancellation?: CollaborationCancellationRecord;
+  created_at_ms: number;
+}
+
+/** Source-side durable acknowledgement of a target terminal settlement.
+ * 来源侧持久化记录的目标终态结算确认。 */
+export interface CollaborationTargetSettlementAck {
+  state: CollaborationTargetSettlementState;
+  source_event_seq: number;
+  target_event_seq: number;
+  target_revision: number;
+  acknowledged_at_ms: number;
+}
+
+/** Source-owned outbound delivery progress.
+ * 来源拥有的出站投递进度。 */
+export interface CollaborationDeliveryRecord {
+  delivery_id: string;
+  question_id: string;
+  operation_id: string;
+  source: CollaborationParticipant;
+  target: CollaborationParticipant;
+  state: CollaborationDeliveryState;
+  failure?: CollaborationDeliveryFailureReason;
+  target_revision?: number;
+  target_event_seq?: number;
+  settlement_ack?: CollaborationTargetSettlementAck;
+  updated_at_ms: number;
+}
+
+/** Target-side terminal settlement acknowledgement.
+ * 目标侧终态结算确认。 */
+export interface CollaborationInboundSettlementRecord {
+  state: CollaborationTargetSettlementState;
+  source_event_seq: number;
+  source_operation_id: string;
+  target_operation_id: string;
+  acknowledged_at_ms: number;
+}
+
+/** Target-owned accepted, projected, or failed delivery record.
+ * 目标拥有的接纳、投影或失败投递记录。 */
+export interface CollaborationInboundDeliveryRecord {
+  delivery_id: string;
+  question_id: string;
+  operation_id: string;
+  source: CollaborationParticipant;
+  target: CollaborationParticipant;
+  bound_turn_id?: number;
+  execution_purpose: CollaborationExecutionPurpose;
+  state: CollaborationDeliveryState;
+  failure?: CollaborationDeliveryFailureReason;
+  target_revision: number;
+  projected_seq?: number;
+  /** Stable UserInput identity proved by the projection event.
+   * 投影事件证明的稳定 UserInput 身份。*/
+  projected_input_id?: number;
+  /** Logical turn carried by the projected UserInput event.
+   * 投影 UserInput 事件携带的逻辑回合。*/
+  projected_turn_id?: number;
+  settlement?: CollaborationInboundSettlementRecord;
+  updated_at_ms: number;
+}
+
+/** Source-owned outbox record for one one-way notification.
+ * 一条单向通知的来源出站箱记录。 */
+export interface CollaborationNotificationRecord {
+  notification_id: string;
+  delivery_id: string;
+  operation_id: string;
+  source: CollaborationParticipant;
+  target: CollaborationParticipant;
+  body: string;
+  state: CollaborationNotificationState;
+  failure?: CollaborationDeliveryFailureReason;
+  target_revision?: number;
+  target_event_seq?: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+/** Target-owned acceptance and projection record for one notification.
+ * 一条通知的目标接纳与投影记录。 */
+export interface CollaborationInboundNotificationRecord {
+  notification_id: string;
+  delivery_id: string;
+  source_operation_id: string;
+  operation_id: string;
+  source: CollaborationParticipant;
+  target: CollaborationParticipant;
+  body: string;
+  state: CollaborationNotificationState;
+  failure?: CollaborationDeliveryFailureReason;
+  target_revision: number;
+  projected_seq?: number;
+  projected_input_id?: number;
+  projected_turn_id?: number;
+  accepted_at_ms: number;
+  updated_at_ms: number;
+}
+
+/** Parent-bound child task reservation and terminal state.
+ * 按父回合绑定的子任务预留及终态。 */
+export interface CollaborationChildTaskRecord {
+  /** Authenticated original reservation operation.
+   * 已认证的原始预留操作。 */
+  reservation_operation_id: string;
+  /** Original canonical ToolCall name.
+   * 原始规范 ToolCall 名称。 */
+  source_tool_name: string;
+  /** Exact execution identity, independent of the reusable child session.
+   * 精确执行身份，独立于可复用子会话。 */
+  execution_id: string;
+  task_id: string;
+  /** Parent generation captured by the reservation.
+   * 预留时捕获的父文档代际。 */
+  parent_segment_generation: number;
+  parent_turn_id: number;
+  child: CollaborationParticipant;
+  state: CollaborationChildTaskState;
+  reserved_at_ms: number;
+  active_at_ms?: number;
+  terminal_at_ms?: number;
+  terminal_outcome?: CollaborationChildTaskTerminalOutcome;
+  /** Exact persisted non-success report owned by this reservation.
+   * 此预留拥有的精确持久非成功报告。 */
+  non_success_result: CollaborationChildTaskNonSuccessResult | null;
+  /** Complete model input proof, independent of the original report receipt.
+   * 完整模型输入凭据，独立于原报告回执。 */
+  non_success_projection: CollaborationChildTaskResultProjection | null;
+}
+
+/** Durable complete User input batch for one owned child result.
+ * 一份所属子结果的可靠完整 User 输入批次。 */
+export interface CollaborationChildTaskResultProjection {
+  /** Original child execution identity.
+   * 原子执行身份。 */
+  execution_id: string;
+  /** Parent report event sequence.
+   * 父报告事件序号。 */
+  result_seq: number;
+  /** Original parent business turn.
+   * 原父业务回合。 */
+  parent_turn_id: number;
+  /** Complete ordered input identities.
+   * 完整有序输入身份。 */
+  inputs: Array<{ input_seq: number; input_id: number }>;
+  /** Immutable projection operation.
+   * 不可变投影操作。 */
+  operation_id: string;
+  /** Projection receipt event sequence.
+   * 投影回执事件序号。 */
+  event_seq: number;
+  /** Atomic revision publishing all inputs.
+   * 发布全部输入的原子修订。 */
+  parent_revision: number;
+  /** First projection timestamp.
+   * 首次投影时间戳。 */
+  projected_at_ms: number;
+}
+
+/** Durable failed or stopped child result, independent of assistant final text.
+ * 可靠失败或停止子结果，独立于助手最终文本。 */
+export interface CollaborationChildTaskNonSuccessResult {
+  /** Atomic parent revision publishing the original report.
+   * 发布原报告的原子父修订。 */
+  parent_revision: number;
+  /** Parent operation freezing the original source proof.
+   * 冻结原来源凭据的父操作。 */
+  operation_id: string;
+  /** Parent publication event sequence.
+   * 父发布事件序号。 */
+  event_seq: number;
+  /** Exact child root, terminal and host diagnostic coordinates.
+   * 精确子根输入、终态及宿主诊断坐标。 */
+  proof: {
+    /** Source physical session.
+     * 来源物理会话。 */
+    child_session_id: string;
+    /** Source document generation.
+     * 来源文档代次。 */
+    child_segment_generation: number;
+    /** Root-input execution identity.
+     * 根输入执行身份。 */
+    execution_id: string;
+    /** Original source business turn.
+     * 原来源业务回合。 */
+    child_turn_id: number;
+    /** Exact root input sequence.
+     * 精确根输入序号。 */
+    child_start_seq: number;
+    /** Exact terminal statistic sequence.
+     * 精确终态统计序号。 */
+    child_terminal_seq: number;
+    /** Persisted logical closure, distinct from failure classification.
+     * 已持久逻辑闭合，区别于失败分类。 */
+    child_turn_outcome: "stopped" | "abandoned";
+    /** Authenticated host outcome.
+     * 已认证宿主结果。 */
+    outcome: "failed" | "stopped" | "cancelled";
+    /** Original permanent diagnostics in event order.
+     * 按事件顺序排列的原永久诊断。 */
+    failure_notes: Array<{
+      /** Child diagnostic event sequence.
+       * 子诊断事件序号。 */
+      event_seq: number;
+      /** Stable host reason code.
+       * 稳定宿主原因码。 */
+      reason_code: string;
+      /** Producer-redacted detail when present.
+       * 存在时的生产端脱敏详情。 */
+      redacted_detail: string | null;
+    }>;
+  };
+}
+
+/** Dedicated question execution state.
+ * 专用问题执行状态。 */
+export interface CollaborationQuestionExecutionRecord {
+  execution_id: string;
+  operation_id: string;
+  question_id: string;
+  participant: CollaborationParticipant;
+  purpose: CollaborationExecutionPurpose;
+  parent_turn_id?: number;
+  execution_turn_id?: number;
+  state: CollaborationQuestionExecutionState;
+  started_at_ms: number;
+  completed_at_ms?: number;
+  outcome?: CollaborationQuestionExecutionOutcome;
+  /** Exact queued business task selected after this auxiliary execution.
+   * 此辅助执行之后选定的精确排队业务任务。 */
+  queued_successor?: CollaborationQueuedUserSuccessor;
+}
+
+/** Durable queued successor identity, independent of the completed question attempt.
+ * 可靠队列后继身份，独立于已完成问题尝试。 */
+export interface CollaborationQueuedUserSuccessor {
+  /** New business turn.
+   * 新业务回合。 */
+  turn_id: number;
+  /** Preserved accepted input.
+   * 保留的已接纳输入。 */
+  input_id: number;
+  /** Original user action.
+   * 原用户动作。 */
+  client_action_id: string;
+  /** Exact scheduled input event.
+   * 精确已调度输入事件。 */
+  input_seq: number;
+}
+
+/** User-owned authorization grant record.
+ * 用户拥有的协作授权记录。 */
+export interface CollaborationGrantRecord {
+  grant_id: string;
+  authority: CollaborationGrantAuthority;
+  source_session_id: string;
+  target_session_id: string;
+  actions: CollaborationGrantAction[];
+  created_revision: number;
+  created_at_ms: number;
+  revoked_at_ms?: number;
+  revoked_revision?: number;
+}
+
+/** One explicit run-control transition retained for audit and recovery.
+ * 一条为审计和恢复保留的明确运行控制转换。 */
+export interface CollaborationRunControlRecord {
+  operation_id: string;
+  state: CollaborationRunControl;
+  changed_at_ms: number;
+}
+
+/** Frozen source intent for a new task or guidance to one exact existing turn.
+ * 新任务或精确已有回合方向的冻结来源意图。 */
+export interface CollaborationTaskMessage {
+  // Stable source operation and delivery identities.
+  // 稳定来源操作及投递身份。
+  operation_id: string;
+  delivery_id: string;
+  // Host-verified participants; only steering binds an existing target turn.
+  // 宿主验证的参与者；只有方向消息绑定目标已有回合。
+  source: CollaborationParticipant;
+  target: CollaborationParticipant;
+  // Explicit business intent and literal body.
+  // 明确业务意图及原样正文。
+  kind: "task_start" | "task_steer";
+  body: string;
+}
+
+/** Immutable acceptance receipt; it does not imply execution or task completion.
+ * 不可变接纳回执；不表示执行或任务完成。 */
+export interface CollaborationTaskMessageAcceptance {
+  // Exact accepted intent and target operation.
+  // 精确接纳意图及目标操作。
+  message: CollaborationTaskMessage;
+  operation_id: string;
+  // Target publication coordinates and original acceptance time.
+  // 目标发布坐标与原始接纳时间。
+  target_revision: number;
+  event_seq: number;
+  accepted_at_ms: number;
+}
+
+/** Source outbox snapshot with its explicit nullable target acknowledgement.
+ * 来源出站快照，携带明确可空的目标准入确认。 */
+export interface CollaborationTaskMessageRecord {
+  // Frozen original intent and its source creation time.
+  // 冻结原始意图及来源创建时间。
+  message: CollaborationTaskMessage;
+  created_at_ms: number;
+  // Null before source acknowledgement; target acceptance is never task completion.
+  // 来源确认前为空；目标接纳绝不等于任务完成。
+  acceptance: CollaborationTaskMessageAcceptance | null;
+}
+
+/** Exact target delivery effect, distinct from the business task result.
+ * 精确目标投递效果，与业务任务结果区分。 */
+export interface CollaborationTaskMessageEffect {
+  // Delivery and effect operation identities.
+  // 投递及效果操作身份。
+  delivery_id: string;
+  operation_id: string;
+  // Explicit application coordinates or a classified delivery failure.
+  // 明确应用坐标或分类投递失败。
+  outcome:
+    | { kind: "claimed"; execution_id: string; turn_id: number; input_id: number; input_seq: number }
+    | { kind: "steered"; turn_id: number; input_id: number; input_seq: number }
+    | { kind: "failed"; reason: CollaborationDeliveryFailureReason };
+  // Target effect publication coordinates and timestamp.
+  // 目标效果发布坐标及时间戳。
+  target_revision: number;
+  event_seq: number;
+  occurred_at_ms: number;
+}
+
+/** Immutable completed assistant snapshot with its original target event coordinates.
+ * 不可变的已完成助手快照及其原目标事件坐标。 */
+export interface CollaborationTaskFinalAssistant {
+  // Exact business API and its terminal statistic.
+  // 精确业务 API 及其终态统计。
+  api_call_id: number;
+  api_stats_seq: number;
+  // Unique complete original text snapshot; delivery chunking does not alter this source.
+  // 唯一的完整原始正文快照；投递分块不改变此来源。
+  source_text: { event_seq: number; text: string };
+}
+
+/** Frozen business closure, independent of the target's current active turn.
+ * 冻结的业务闭合事实，独立于目标当前活动回合。 */
+export interface CollaborationTaskTerminal {
+  // Exact completed business turn and its statistic range.
+  // 精确闭合业务回合及其统计范围。
+  turn_id: number;
+  turn_start_seq: number;
+  turn_stats_seq: number;
+  // Successful completion alone carries an actual final assistant response.
+  // 仅成功完成携带实际最终助手回复。
+  outcome: "completed" | "stopped" | "abandoned";
+  final_assistant: CollaborationTaskFinalAssistant | null;
+  // Actual target closure timestamp.
+  // 实际目标闭合时间戳。
+  completed_at_ms: number;
+}
+
+/** Target-owned result binding the accepted intent to its exact business terminal facts.
+ * 目标所有的结果，将已接纳意图绑定至其精确业务终态事实。 */
+export interface CollaborationTaskResult {
+  // Original participants, applied effect and immutable business outcome.
+  // 原始参与者、已应用效果及不可变业务结果。
+  acceptance: CollaborationTaskMessageAcceptance;
+  effect: CollaborationTaskMessageEffect;
+  terminal: CollaborationTaskTerminal;
+  // Target recording operation, publication coordinates and recording timestamp.
+  // 目标记录操作、发布坐标及记录时间戳。
+  operation_id: string;
+  target_revision: number;
+  event_seq: number;
+  recorded_at_ms: number;
+}
+
+/** Original requester receipt for the complete immutable result, separate from model consumption.
+ * 原请求者对完整不可变结果的回执，与模型消费区分。 */
+export interface CollaborationTaskResultAcceptance {
+  // Complete original result and immutable receiver operation.
+  // 完整原始结果及不可变接收操作。
+  result: CollaborationTaskResult;
+  operation_id: string;
+  // Receiver-local publication coordinates and original acceptance time.
+  // 接收方本地发布坐标及原接纳时间。
+  event_seq: number;
+  receiver_revision: number;
+  accepted_at_ms: number;
+}
+
+/** Exact complete input batch committed to the original requesting turn.
+ * 提交到原请求回合的精确完整输入批次。 */
+export interface CollaborationTaskResultProjection {
+  // Original delivery, receiver acceptance and business turn identities.
+  // 原投递、接收方接纳及业务回合身份。
+  delivery_id: string;
+  acceptance_seq: number;
+  turn_id: number;
+  // Ordered input proof for every result chunk.
+  // 每份结果分块的有序输入凭据。
+  inputs: Array<{ input_seq: number; input_id: number }>;
+  // Immutable local operation and publication coordinates.
+  // 不可变本地操作及发布坐标。
+  operation_id: string;
+  event_seq: number;
+  receiver_revision: number;
+  projected_at_ms: number;
+}
+
+/** Internal executor acknowledgement of the original requester's persistence, not a model reply.
+ * 执行者对原请求者持久化的内部确认，不是模型回复。 */
+export interface CollaborationTaskResultAcknowledgement {
+  // Original immutable requester receipt and executor confirmation identity.
+  // 原不可变请求者回执及执行者确认身份。
+  acceptance: CollaborationTaskResultAcceptance;
+  operation_id: string;
+  // Executor-local publication coordinates and original acknowledgement time.
+  // 执行者本地发布坐标及原确认时间。
+  event_seq: number;
+  target_revision: number;
+  acknowledged_at_ms: number;
+}
+
+/** Exact entity after-state changed by one collaboration event.
+ * 一条协作事件变更实体的精确后状态。 */
+export type CollaborationAfterState =
+  | { kind: "outbound_task_message"; record: CollaborationTaskMessageRecord }
+  | { kind: "inbound_task_message"; acceptance: CollaborationTaskMessageAcceptance }
+  | { kind: "task_message_effect"; effect: CollaborationTaskMessageEffect }
+  | { kind: "task_result"; result: CollaborationTaskResult }
+  | { kind: "received_task_result"; acceptance: CollaborationTaskResultAcceptance }
+  | { kind: "task_result_acknowledgement"; acknowledgement: CollaborationTaskResultAcknowledgement }
+  | { kind: "task_result_projection"; projection: CollaborationTaskResultProjection }
+  | { kind: "question"; question: CollaborationQuestionRecord; delivery: CollaborationDeliveryRecord }
+  | { kind: "outbound_delivery"; delivery: CollaborationDeliveryRecord }
+  | { kind: "inbound_delivery"; delivery: CollaborationInboundDeliveryRecord }
+  | { kind: "outbound_notification"; notification: CollaborationNotificationRecord }
+  | { kind: "inbound_notification"; notification: CollaborationInboundNotificationRecord }
+  | { kind: "answer_delivery"; question_id: string; delivery: CollaborationAnswerDeliveryRecord }
+  | { kind: "child_task"; task: CollaborationChildTaskRecord }
+  | { kind: "question_execution"; execution: CollaborationQuestionExecutionRecord }
+  | { kind: "grant"; grant: CollaborationGrantRecord }
+  | { kind: "run_control"; transition: CollaborationRunControlRecord }
+  | { kind: "generation_ownership_cleared" };
+
+/** Complete serialized collaboration event body inside the V1 event envelope.
+ * V1 事件 envelope 内完整序列化协作事件体。 */
+export interface CollaborationEvent {
+  kind: "collaboration";
+  version: number;
+  operation_id: string;
+  event_kind: CollaborationEventKind;
+  after_state: CollaborationAfterState;
+}
+
 /** Persisted semantic kind of one project-owned resource generated by a tool.
  * 工具生成并归项目所有的一项持久化资源的语义类型。 */
 export type GeneratedResourceKind = "audio" | "image" | "video" | "pdf" | "file";
@@ -291,7 +920,7 @@ export type ConversationEventBody =
       kind: "user_input";
       client_action_id: ClientActionId;
       input_id: number;
-      input_source: "root" | "pending_in_turn" | "queued_scheduled";
+      input_source: "root" | "pending_in_turn" | "queued_scheduled" | "agent_message";
       text: string;
       resource_ids?: ResourceId[];
     }
@@ -368,7 +997,16 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
       continuation_eligibility: "allowed" | "forbidden";
       timing: ApiTimings;
     }
-  | { kind: "turn_boundary"; outcome: "completed" | "abandoned" | "stopped" }
+  | {
+      kind: "turn_boundary";
+      /** Explicit host closure classification, independent of the aggregate stopped outcome.
+       * 明确宿主闭合分类，独立于聚合停止结果。 */
+      reason: "completed" | "abandoned" | "stopped" | "failed";
+      outcome: "completed" | "abandoned" | "stopped";
+      /** Durable purpose distinguishes business completion from auxiliary question execution.
+       * 持久化用途区分业务完成与辅助答疑执行。 */
+      purpose: "business" | "question_execution";
+    }
   | {
       kind: "turn_stats";
       start_seq: number;
@@ -379,6 +1017,12 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
     }
   | {
       kind: "subagent_return";
+      /** Exact generation owning the source sequence range.
+       * 拥有来源序号范围的精确代次。 */
+      child_segment_generation: number;
+      /** Original root action of the returned execution.
+       * 回流执行的原根动作。 */
+      child_root_action_id: string;
       child_session_id: string;
       child_task_id: string;
       content: string;
@@ -433,11 +1077,16 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
         | "recovered";
       api_call_id?: number;
       client_action_id?: ClientActionId;
-    };
+    }
+  | CollaborationEvent;
 
 /** Stable event kind derived from the discriminated event body.
  * 从判别事件体派生的稳定事件种类。 */
 export type ConversationEventKind = ConversationEventBody["kind"];
+
+/** Immutable identity used to compare revisions of one persisted event.
+ * 用于比较同一持久化事件修订的不可变身份。 */
+export type EventIdentity = string;
 
 /** Complete event shared by hydration, pagination, and live updates.
  * hydration、分页与实时更新共享的完整事件。 */
@@ -1394,7 +2043,7 @@ function canonicalJson(value: unknown): string {
 
 /** Derives the immutable same-seq identity from the authoritative event body.
  * 从权威事件体推导不可变的同 seq 身份。 */
-function eventIdentity(summary: ConversationEventSummary): string {
+function eventIdentity(summary: ConversationEventSummary): EventIdentity {
   const event = summary.event;
   switch (event.kind) {
     case "system_context":
@@ -1414,7 +2063,9 @@ function eventIdentity(summary: ConversationEventSummary): string {
     case "turn_stats":
       return `${event.kind}:${summary.turn_id ?? "none"}`;
     case "subagent_return":
-      return `${event.kind}:${event.child_session_id}:${event.child_task_id}:${event.source_assistant_text_seq}:${event.child_turn_stats_seq}`;
+      // Root action and task strings may contain separators; preserve tuple boundaries exactly.
+      // 根动作及任务字符串可包含分隔符；精确保留元组边界。
+      return JSON.stringify([event.kind, event.child_session_id, event.child_segment_generation, event.child_root_action_id, event.child_task_id, event.source_assistant_text_seq, event.child_turn_stats_seq]);
     case "subagent_return_stats":
       return `${event.kind}:${event.child_session_id}:${event.child_task_id}:${event.child_turn_stats_seq}`;
     case "display_note":
@@ -1423,6 +2074,8 @@ function eventIdentity(summary: ConversationEventSummary): string {
       return event.kind;
     case "execution_control":
       return `${event.kind}:${event.control_kind}:${event.api_call_id ?? "none"}:${event.client_action_id ?? "none"}`;
+    case "collaboration":
+      return `${event.kind}:${event.operation_id}`;
   }
 }
 

@@ -4,12 +4,43 @@
 use super::persistence::DirtyFile;
 use super::{IdempotentMutation, SessionDocument, ensure_api_request_field, group_event_api_id};
 use crate::v1::compaction_frontier::{assert_node_order, trim_unpublished_candidates};
-use crate::v1::context::{CompactionNode, LockedBaselineProjection, RuntimeInitializationState};
+use crate::v1::context::{
+    CompactionContent, CompactionNode, LockedBaselineProjection, RemoteResponsesCheckpoint,
+    RuntimeInitializationState,
+};
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
     ApiCallStatus, ApiPurposeKind, AssistantSemanticStatus, EventBody, ProviderProjectionProof,
 };
 use crate::v1::ids::{ApiCallId, CompactionId, JS_SAFE_INTEGER_MAX, Seq};
+
+/// Checks `checkpoint` against the API's frozen `request`; returns a field-specific error on drift.
+/// 针对 API 冻结的`request`检查`checkpoint`；漂移时返回字段级错误。
+/// The host separately verifies the endpoint against its immutable prepared transport route.
+/// 宿主另行针对不可变的已准备传输路由核对端点。
+fn validate_remote_checkpoint_route(
+    checkpoint: &RemoteResponsesCheckpoint,
+    request: &crate::v1::event::ApiRequestSnapshot,
+) -> Result<(), DomainError> {
+    checkpoint.validate()?;
+    ensure_api_request_field(
+        "compaction.provider",
+        &request.provider,
+        &checkpoint.provider_id,
+    )?;
+    ensure_api_request_field("compaction.model", &request.model, &checkpoint.model_id)?;
+    ensure_api_request_field(
+        "compaction.connection",
+        &request.connection_id,
+        &Some(checkpoint.connection_id.clone()),
+    )?;
+    ensure_api_request_field(
+        "compaction.profile",
+        &request.profile,
+        &Some(checkpoint.protocol_profile_id.clone()),
+    )?;
+    Ok(())
+}
 
 /// Strongly typed atomic input for publishing one context-compaction generation.
 /// 发布一个上下文压缩代际的强类型原子输入。
@@ -18,15 +49,15 @@ pub struct CompactionCommitInput {
     /// Physical compaction API identity.
     /// 物理压缩 API 身份。
     pub api_call_id: ApiCallId,
-    /// Provider semantic seq that contains the exact compaction summary.
-    /// 包含精确压缩总结的 Provider 语义 seq。
+    /// Summary semantic seq, or the terminal API seq for a remote checkpoint.
+    /// 摘要语义 seq，或远端检查点的 API 终态 seq。
     pub occurred_at_seq: Seq,
     /// Inclusive first event retained by the new Provider window.
     /// 新 Provider 窗口包含的首个保留事件。
     pub retained_from_seq: Seq,
-    /// Exact persisted compaction summary.
-    /// 精确持久化的压缩总结。
-    pub summary: String,
+    /// Exact local summary or canonical opaque remote output.
+    /// 精确本地摘要或规范不透明远端输出。
+    pub content: CompactionContent,
     /// Exact eight-kind locked baseline segments refreshed for the new generation.
     /// 为新代际刷新的精确八种锁定基线片段。
     pub locked_baseline: LockedBaselineProjection,
@@ -46,7 +77,29 @@ impl CompactionCommitInput {
             api_call_id,
             occurred_at_seq,
             retained_from_seq,
-            summary: summary.into(),
+            content: CompactionContent::Summary {
+                text: summary.into(),
+            },
+            locked_baseline,
+        }
+    }
+
+    /// Builds a remote commit from `api_call_id`, its durable `api_stats_seq`, the retained boundary,
+    /// exact provider `checkpoint`, and the admitted `locked_baseline`; validation occurs on commit.
+    /// 根据`api_call_id`、其可靠`api_stats_seq`、保留边界、精确供应商`checkpoint`及准入
+    /// `locked_baseline`构建远端提交；提交时执行校验。
+    pub fn remote_responses(
+        api_call_id: ApiCallId,
+        api_stats_seq: Seq,
+        retained_from_seq: Seq,
+        checkpoint: RemoteResponsesCheckpoint,
+        locked_baseline: LockedBaselineProjection,
+    ) -> Self {
+        Self {
+            api_call_id,
+            occurred_at_seq: api_stats_seq,
+            retained_from_seq,
+            content: CompactionContent::RemoteResponses { checkpoint },
             locked_baseline,
         }
     }
@@ -148,7 +201,7 @@ impl SessionDocument {
             api_call_id,
             occurred_at_seq,
             retained_from_seq,
-            summary,
+            content,
             locked_baseline,
         } = input;
         let locked_sources = locked_baseline.into_locked_sources();
@@ -194,42 +247,63 @@ impl SessionDocument {
                             | EventBody::ToolCall(_)
                     )
             })
-            .max_by_key(|event| event.seq.value())
-            .ok_or_else(|| DomainError::reference("compaction_summary", api_call_id.value()))?;
-        if last_provider_event.seq != occurred_at_seq {
-            return Err(DomainError::SequenceViolation {
-                expected: last_provider_event.seq.value(),
-                actual: occurred_at_seq.value(),
-            });
+            .max_by_key(|event| event.seq.value());
+        match &content {
+            CompactionContent::Summary { text: summary } => {
+                let last_provider_event = last_provider_event.ok_or_else(|| {
+                    DomainError::reference("compaction_summary", api_call_id.value())
+                })?;
+                if last_provider_event.seq != occurred_at_seq {
+                    return Err(DomainError::SequenceViolation {
+                        expected: last_provider_event.seq.value(),
+                        actual: occurred_at_seq.value(),
+                    });
+                }
+                let persisted_summary = match &last_provider_event.event {
+                    EventBody::AssistantText(text)
+                        if text.status == AssistantSemanticStatus::Completed =>
+                    {
+                        &text.text
+                    }
+                    EventBody::AssistantReasoning(reasoning)
+                        if reasoning.status == AssistantSemanticStatus::Completed =>
+                    {
+                        &reasoning.text
+                    }
+                    _ => {
+                        return Err(DomainError::ImmutableFieldMutation {
+                            entity: "compaction",
+                            field: "summary_source",
+                        });
+                    }
+                };
+                if persisted_summary != summary {
+                    return Err(DomainError::ImmutableFieldMutation {
+                        entity: "compaction",
+                        field: "summary",
+                    });
+                }
+                if occurred_at_seq >= api_stats_seq {
+                    return Err(DomainError::SequenceViolation {
+                        expected: occurred_at_seq.value(),
+                        actual: api_stats_seq.value(),
+                    });
+                }
+            }
+            CompactionContent::RemoteResponses { checkpoint } => {
+                validate_remote_checkpoint_route(checkpoint, &started.request)?;
+                if occurred_at_seq != api_stats_seq || last_provider_event.is_some() {
+                    return Err(DomainError::ImmutableFieldMutation {
+                        entity: "compaction",
+                        field: "remote_source",
+                    });
+                }
+            }
         }
-        let persisted_summary = match &last_provider_event.event {
-            EventBody::AssistantText(text) if text.status == AssistantSemanticStatus::Completed => {
-                &text.text
-            }
-            EventBody::AssistantReasoning(reasoning)
-                if reasoning.status == AssistantSemanticStatus::Completed =>
-            {
-                &reasoning.text
-            }
-            _ => {
-                return Err(DomainError::ImmutableFieldMutation {
-                    entity: "compaction",
-                    field: "summary_source",
-                });
-            }
-        };
-        if persisted_summary != &summary {
-            return Err(DomainError::ImmutableFieldMutation {
-                entity: "compaction",
-                field: "summary",
-            });
-        }
-        if retained_from_seq.value() > occurred_at_seq.value()
-            || occurred_at_seq.value() >= api_stats_seq.value()
-        {
+        if retained_from_seq > occurred_at_seq {
             return Err(DomainError::SequenceViolation {
                 expected: occurred_at_seq.value(),
-                actual: retained_from_seq.value().max(api_stats_seq.value()),
+                actual: retained_from_seq.value(),
             });
         }
         if let Some(existing) = self
@@ -240,7 +314,7 @@ impl SessionDocument {
             if existing.api_stats_seq != api_stats_seq
                 || existing.occurred_at_seq != occurred_at_seq
                 || existing.retained_from_seq != retained_from_seq
-                || existing.summary != summary
+                || existing.content != content
             {
                 return Err(DomainError::ImmutableFieldMutation {
                     entity: "compaction",
@@ -280,9 +354,17 @@ impl SessionDocument {
             api_stats_seq,
             occurred_at_seq,
             retained_from_seq,
-            summary,
+            content,
             created_at_ms: now_ms,
         });
+        // A delayed result cannot publish an older generation after a newer node has become durable.
+        // 迟到结果不能在较新节点已可靠发布后再发布更旧代次。
+        if !assert_node_order(&staged_compactions) {
+            return Err(DomainError::ImmutableFieldMutation {
+                entity: "compactions",
+                field: "node_order",
+            });
+        }
         let mut staged_runtime_lock = self.runtime_lock.clone();
         staged_runtime_lock.current_compaction_id = Some(compaction_id);
         staged_runtime_lock.locked_sources = locked_sources;
@@ -391,9 +473,16 @@ impl SessionDocument {
             ));
         }
         for node in &self.compactions {
-            if node.retained_from_seq > node.occurred_at_seq
-                || node.occurred_at_seq >= node.api_stats_seq
-            {
+            // Both payload kinds remain validated even when their API events are in sealed storage.
+            // 即使 API 事件已经进入封存存储，两种载荷仍需验证。
+            let invalid_occurrence = match &node.content {
+                CompactionContent::Summary { .. } => node.occurred_at_seq >= node.api_stats_seq,
+                CompactionContent::RemoteResponses { checkpoint } => {
+                    checkpoint.validate()?;
+                    node.occurred_at_seq != node.api_stats_seq
+                }
+            };
+            if node.retained_from_seq > node.occurred_at_seq || invalid_occurrence {
                 return Err(DomainError::ImmutableFieldMutation {
                     entity: "compaction",
                     field: "seq_boundaries",
@@ -440,6 +529,26 @@ impl SessionDocument {
                     field: "api_status",
                 });
             }
+            let CompactionContent::Summary { text: summary } = &node.content else {
+                if let CompactionContent::RemoteResponses { checkpoint } = &node.content {
+                    validate_remote_checkpoint_route(checkpoint, &started.request)?;
+                }
+                if self.events.iter().any(|event| {
+                    group_event_api_id(event) == Some(node.api_call_id.value())
+                        && matches!(
+                            &event.event,
+                            EventBody::AssistantReasoning(_)
+                                | EventBody::AssistantText(_)
+                                | EventBody::ToolCall(_)
+                        )
+                }) {
+                    return Err(DomainError::ImmutableFieldMutation {
+                        entity: "compaction",
+                        field: "remote_source",
+                    });
+                }
+                continue;
+            };
             let summary_matches = self.events.iter().any(|event| {
                 if event.seq != node.occurred_at_seq {
                     return false;
@@ -448,12 +557,12 @@ impl SessionDocument {
                     EventBody::AssistantText(text) => {
                         text.api_call_id == node.api_call_id
                             && text.status == AssistantSemanticStatus::Completed
-                            && text.text == node.summary
+                            && &text.text == summary
                     }
                     EventBody::AssistantReasoning(reasoning) => {
                         reasoning.api_call_id == node.api_call_id
                             && reasoning.status == AssistantSemanticStatus::Completed
-                            && reasoning.text == node.summary
+                            && &reasoning.text == summary
                     }
                     _ => false,
                 }

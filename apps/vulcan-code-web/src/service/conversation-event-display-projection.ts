@@ -22,6 +22,10 @@ export type ToolCallEvent = Extract<ConversationEventBody, { kind: "tool_call" }
  * 作为永久 UI 事实渲染的精确安全边界请求配置变更。 */
 export type RequestConfigChangedEvent = Extract<ConversationEventBody, { kind: "request_config_changed" }>;
 
+/** Typed collaboration event retained as an independent HostOnly timeline fact.
+ * 作为独立 HostOnly 时间线事实保留的强类型协作事件。 */
+export type CollaborationEvent = Extract<ConversationEventBody, { kind: "collaboration" }>;
+
 /** User-visible category of one exact request-configuration transition.
  * 一次精确请求配置转换的用户可见分类。 */
 export type RequestConfigChangeKind = "route" | "thinking" | "none";
@@ -70,8 +74,25 @@ export type TurnStatsEvent = Extract<ConversationEventBody, { kind: "turn_stats"
  * 除 assistant 思考、正文和工具调用之外的全部持久化事件。 */
 export type AuxiliaryConversationEvent = Exclude<
   ConversationEventBody,
-  AssistantReasoningEvent | AssistantTextEvent | ToolCallEvent | RequestConfigChangedEvent
+  AssistantReasoningEvent | AssistantTextEvent | ToolCallEvent | RequestConfigChangedEvent | CollaborationEvent
 >;
+
+// pendingCollaborationQuestionIds derives action availability from the latest visible authoritative snapshots.
+// pendingCollaborationQuestionIds 从可见窗口中最新的权威快照派生操作可用性。
+// Parameters: events follow canonical sequence order; returns pending source-owned question IDs only.
+// 参数：events 遵循规范序号顺序；仅返回仍待处理的来源问题身份。
+export function pendingCollaborationQuestionIds(events: readonly ConversationEventSummary[]): ReadonlySet<string> {
+  // pending is view state only; the service revalidates the question at the durable mutation boundary.
+  // pending 仅是视图状态，服务仍在可靠变更边界重新校验问题。
+  const pending = new Set<string>();
+  for (const summary of events) {
+    if (summary.event.kind !== "collaboration" || summary.event.after_state.kind !== "question") continue;
+    const question = summary.event.after_state.question;
+    if (question.state === "pending") pending.add(question.question_id);
+    else pending.delete(question.question_id);
+  }
+  return pending;
+}
 
 /** Stable API grouping coordinates derived only from typed event fields.
  * 仅从强类型事件字段派生的稳定 API 分组坐标。 */
@@ -121,6 +142,13 @@ export interface RequestConfigChangedDisplayItem extends ConversationDisplayItem
   request_config_changed: RequestConfigChangedEvent;
 }
 
+/** Display item for one collaboration event, including HostOnly control facts.
+ * 一条协作事件的显示项，包含 HostOnly 控制事实。 */
+export interface CollaborationDisplayItem extends ConversationDisplayItemBase {
+  kind: "collaboration";
+  collaboration: CollaborationEvent;
+}
+
 /** Display item for one non-content event retained in canonical seq order.
  * 一条按 canonical seq 顺序保留的非正文事件显示项。 */
 export interface AuxiliaryEventDisplayItem extends ConversationDisplayItemBase {
@@ -135,6 +163,7 @@ export type ConversationEventDisplayItem =
   | AssistantMarkdownDisplayItem
   | ToolCallDisplayItem
   | RequestConfigChangedDisplayItem
+  | CollaborationDisplayItem
   | AuxiliaryEventDisplayItem;
 
 /** Content item retained inside one collapsible process group in exact seq order.
@@ -212,15 +241,35 @@ export interface ConversationDisplayNoteTranscriptNode extends ConversationTrans
   item: AuxiliaryEventDisplayItem & { event: DisplayNoteEvent };
 }
 
+/** One collaboration event shown as its own independent timeline card.
+ * 作为独立时间线卡显示的一条协作事件。 */
+export interface ConversationCollaborationTranscriptNode extends ConversationTranscriptNodeBase {
+  kind: "collaboration";
+  item: CollaborationDisplayItem;
+}
+
 /** Visual transcript node derived only from typed V1 events.
  * 仅从强类型 V1 事件派生的视觉转录节点。 */
+// ConversationSubagentReturnTranscriptNode preserves a child result without impersonating the parent assistant.
+// ConversationSubagentReturnTranscriptNode 保留子任务结果，不冒充父助手回复。
+export interface ConversationSubagentReturnTranscriptNode extends ConversationTranscriptNodeBase {
+  // Dedicated UI kind for a business task result, separate from question answers.
+  // 业务任务结果的专用界面类型，与问题回答分离。
+  kind: "subagent_return";
+  // Exact persisted child-result event and display envelope.
+  // 精确持久化的子任务结果事件与展示封装。
+  item: AuxiliaryEventDisplayItem & { event: Extract<ConversationEventBody, { kind: "subagent_return" }> };
+}
+
 export type ConversationTranscriptDisplayNode =
+  | ConversationSubagentReturnTranscriptNode
   | ConversationUserInputTranscriptNode
   | ConversationProcessTranscriptNode
   | ConversationAssistantTranscriptNode
   | ConversationTurnStatsTranscriptNode
   | ConversationRequestConfigTranscriptNode
-  | ConversationDisplayNoteTranscriptNode;
+  | ConversationDisplayNoteTranscriptNode
+  | ConversationCollaborationTranscriptNode;
 
 /** Builds the visual transcript without exposing structural persistence events as UI rows.
  * 构建视觉转录，同时不把结构性持久化事件暴露为 UI 行。
@@ -286,6 +335,23 @@ export function projectConversationTranscriptDisplay(
   };
 
   for (const item of items) {
+    if (item.kind === "collaboration") {
+      // Collaboration events are HostOnly control facts that remain user-visible in this timeline.
+      // 协作事件是仍需在此时间线向用户展示的 HostOnly 控制事实。
+      flushProcess();
+      nodes.push({
+        kind: "collaboration",
+        seq: item.seq,
+        turn_id: item.turn_id,
+        item,
+      });
+      continue;
+    }
+    if (item.kind === "event" && item.event.kind === "subagent_return") {
+      flushProcess();
+      nodes.push({ kind: "subagent_return", seq: item.seq, turn_id: item.turn_id, item: { ...item, event: item.event } });
+      continue;
+    }
     if (item.visibility === "host_only") continue;
     if (item.kind === "assistant_reasoning" || item.kind === "tool_call") {
       appendProcess(item);
@@ -331,6 +397,9 @@ export function projectConversationTranscriptDisplay(
       continue;
     }
     if (item.event.kind === "user_input") {
+      // Typed collaboration facts own the visible card; the protocol mirror is not a human prompt.
+      // 类型化协作事实拥有可见卡片；协议镜像不是用户提示词。
+      if (item.event.input_source === "agent_message") continue;
       flushProcess();
       nodes.push({
         kind: "user_input",
@@ -456,6 +525,8 @@ function projectConversationEvent(summary: ConversationEventSummary): Conversati
         kind: "request_config_changed",
         request_config_changed: summary.event,
       };
+    case "collaboration":
+      return { ...base, kind: "collaboration", collaboration: summary.event };
     default:
       return { ...base, kind: "event", event: summary.event };
   }

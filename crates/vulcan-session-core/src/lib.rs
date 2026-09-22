@@ -22,6 +22,9 @@ pub mod selector;
 /// Shared child-agent registry models.
 /// 共享子代理注册表模型。
 pub mod subagent_registry;
+/// Shared invocation and resolved configuration for durable child recovery.
+/// 用于可靠子恢复的共享调用与已解析配置。
+pub mod task_config;
 /// Shared active-turn input queue and mailbox models.
 /// 共享活动回合输入队列与 mailbox 模型。
 pub mod turn_input_queue;
@@ -53,6 +56,7 @@ pub use selector::{normalize_tool_selector, normalized_tool_selector_set, tool_s
 pub use subagent_registry::{
     SubagentKind, SubagentRegistry, SubagentRegistryEntry, SubagentRegistryError, SubagentStatus,
 };
+pub use task_config::{TaskInvocationConfig, TaskSessionResolvedConfig};
 pub use turn_input_queue::{MailboxDeliveryPhase, TurnInput, TurnInputKind, TurnInputQueue};
 
 #[cfg(test)]

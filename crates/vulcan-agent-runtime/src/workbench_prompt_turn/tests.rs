@@ -20,6 +20,369 @@ use crate::{
 
 use super::*;
 
+/// Shared preparation preserves per-input identities through the actual completed-turn Hook payload.
+/// 共享准备通过实际完成回合 Hook 载荷保留逐输入身份。
+#[tokio::test]
+async fn canonical_in_turn_shared_preparation_does_not_duplicate_the_combined_prompt() {
+    use crate::agent_runtime::conversation_hooks::CanonicalInTurnHookInput;
+    use vulcan_session_core::v1::{PendingInputId, Seq};
+    // The existing runtime-scoped entry creates the one business owner used by both batch attempts.
+    // 既有运行态入口创建两次批次尝试共用的唯一业务所有者。
+    let session_id = SessionId::from_u128(923);
+    let mut state = SessionRuntimeStateEntry::default();
+    let mut hooks = ConversationHookRuntime::new();
+    let make_input =
+        |source, prompt: &'static str, entry: &str| SharedPromptTurnRuntimeBeginInput {
+            session_id,
+            session_title: "过程续跑",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: entry.to_owned(),
+            continuation_action_id: None,
+            prompt,
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            provider_attachments: None,
+            existing_canonical_user_message_id: None,
+            append_canonical_user_message: false,
+            append_visible_user_prompt_record: false,
+            source,
+            vmm_runtime_ready: false,
+            vmm_precheck_ready: false,
+            execution_mode: "build".into(),
+            reasoning_effort: None,
+            owning_project_id: Some("project-a".into()),
+        };
+    let root = begin_shared_prompt_turn_with_runtime_state(
+        &mut state,
+        &mut hooks,
+        make_input(
+            PendingSessionPromptSource::UserFollowup,
+            "Original work",
+            "root",
+        ),
+    )
+    .unwrap();
+    hooks.record_queued_user_prompt(
+        session_id,
+        "queue-a",
+        None,
+        "D:/workspace".into(),
+        PendingSessionPromptSource::UserFollowup,
+        "Queued work",
+    );
+    // These coordinates are the same shape supplied by the service's exact pending-input authority.
+    // 这些坐标与服务精确待输入权威提供的结构一致。
+    let inputs = vec![
+        CanonicalInTurnHookInput {
+            client_action_id: ClientActionId::try_new("queue-a").unwrap(),
+            input_id: PendingInputId::try_new(3).unwrap(),
+            input_seq: Seq::try_new(10).unwrap(),
+            text: "Queued work".into(),
+        },
+        CanonicalInTurnHookInput {
+            client_action_id: ClientActionId::try_new("direct-b").unwrap(),
+            input_id: PendingInputId::try_new(4).unwrap(),
+            input_seq: Seq::try_new(11).unwrap(),
+            text: "Direct work".into(),
+        },
+    ];
+    for batch_id in ["webui-v1-pending-in-turn-1-9", "retry-batch"] {
+        let started = begin_shared_prompt_turn_with_runtime_input_projection(
+            &mut state,
+            &mut hooks,
+            make_input(
+                PendingSessionPromptSource::UserInterrupt,
+                "Queued work\n\nDirect work",
+                batch_id,
+            ),
+            Some(&inputs),
+        )
+        .unwrap();
+        assert_eq!(started.preparation_turn_id, root.preparation_turn_id);
+        assert_eq!(started.prompt, "Queued work\n\nDirect work");
+        assert!(state.conversation_state.messages.is_empty());
+        assert!(state.conversation_state.records.is_empty());
+    }
+    // Pure explicit Continue preserves the original owner without inventing a user timeline row.
+    // 纯显式 Continue 保留原所有者，不虚构用户时间线条目。
+    let resumed = begin_shared_prompt_turn_with_runtime_input_projection(
+        &mut state,
+        &mut hooks,
+        make_input(
+            PendingSessionPromptSource::ExecutionRetry,
+            "",
+            "pure-continue",
+        ),
+        Some(&[]),
+    )
+    .unwrap();
+    assert_eq!(resumed.preparation_turn_id, root.preparation_turn_id);
+    // The actual dispatch report proves the VMM-facing consumer receives individual history only once.
+    // 实际派发报告证明面向 VMM 的消费方仅收到一次逐条历史。
+    let (_, completed) = hooks.prepare_turn_completion_dispatch(
+        session_id,
+        None,
+        "done",
+        1,
+        &state.conversation_state,
+    );
+    let report = completed.run().await.report.unwrap();
+    assert_eq!(report.payload.value["user_content"], "Original work");
+    let timeline = report.payload.value["timeline"].as_array().unwrap();
+    assert_eq!(timeline.len(), 2);
+    assert_eq!(timeline[0]["source_id"], "queue-a");
+    assert_eq!(timeline[1]["source_id"], "direct-b");
+    assert_eq!(timeline[1]["content"], "Direct work");
+}
+
+/// Agent continuation retains the original Hook and creates no human history or manual injection.
+/// 代理续跑保留原 Hook，不创建人类历史或手动注入。
+#[test]
+fn agent_continuation_preparation_reuses_business_hook_without_human_side_effects() {
+    let session_id = SessionId::from_u128(922);
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let mut hooks = ConversationHookRuntime::new();
+    let make_input = |source| SharedPromptTurnRuntimeBeginInput {
+        session_id,
+        session_title: "业务续跑",
+        workspace_path: "D:/workspace",
+        prompt_entry_id: "agent-continuation".into(),
+        continuation_action_id: None,
+        prompt: "@inject 3 unexpected",
+        hidden_model_guidance: None,
+        provider_visible_agent_messages: Vec::new(),
+        attachments: Vec::new(),
+        provider_attachments: None,
+        existing_canonical_user_message_id: None,
+        append_canonical_user_message: false,
+        append_visible_user_prompt_record: false,
+        source,
+        vmm_runtime_ready: false,
+        vmm_precheck_ready: false,
+        execution_mode: "Build".into(),
+        reasoning_effort: None,
+        owning_project_id: Some("project-a".into()),
+    };
+    assert!(
+        begin_shared_prompt_turn_with_runtime_state(
+            &mut runtime_state,
+            &mut hooks,
+            make_input(PendingSessionPromptSource::AgentContinuation)
+        )
+        .is_err()
+    );
+    assert!(runtime_state.active_precheck_turn_id.is_none());
+    assert!(runtime_state.conversation_state.messages.is_empty());
+    assert!(runtime_state.conversation_state.records.is_empty());
+    assert!(!hooks.has_active_turn(session_id));
+    let root = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hooks,
+        SharedPromptTurnRuntimeBeginInput {
+            prompt: "Original business",
+            ..make_input(PendingSessionPromptSource::UserFollowup)
+        },
+    )
+    .unwrap();
+    let start = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hooks,
+        make_input(PendingSessionPromptSource::AgentContinuation),
+    )
+    .unwrap();
+    assert_eq!(start.preparation_turn_id, root.preparation_turn_id);
+    assert_eq!(start.prompt, "@inject 3 unexpected");
+    assert!(start.boundary_events.is_empty());
+    assert!(runtime_state.conversation_state.messages.is_empty());
+    assert!(runtime_state.conversation_state.records.is_empty());
+    let mut memory = test_vmm_session_memory(session_id);
+    let continued = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+        &mut runtime_state,
+        &mut memory,
+        SharedPromptTurnContinueInput {
+            vmm_context_epoch: None,
+            vmm_profile_read_source: None,
+            precheck_outcome: start.precheck_request.clone().skip(),
+            profile_outcome: start.profile_request.clone().skip(),
+            start,
+            project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+            runtime_reasoning_effort: None,
+            provider_reasoning_effort: None,
+            patch_visible_user_prompt_record: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        continued.request.conversation_hook_turn_id.as_deref(),
+        Some(root.preparation_turn_id.as_str())
+    );
+    assert_eq!(
+        continued.request.prompt_purpose,
+        ExecutionPromptPurpose::UserTurn
+    );
+    assert!(continued.request.boundary_events.is_empty());
+    assert!(continued.request.conversation_state.messages.is_empty());
+}
+
+/// Exercises auxiliary preparation without creating human history, business boundaries or Hook ownership.
+/// 验证辅助准备不会创建人类历史、业务边界或 Hook 归属。
+#[test]
+fn question_execution_preparation_has_no_business_turn_side_effects() {
+    // The auxiliary execution belongs to an existing idle session.
+    // 辅助执行属于既有空闲会话。
+    let session_id = SessionId::from_u128(919);
+    // Local state remains separate from the authoritative V1 collaboration events.
+    // 本地状态与权威 V1 协作事件保持分离。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    // No business Hook should be created by this shared preparation entry point.
+    // 此共享准备入口不应创建业务 Hook。
+    let mut hook_runtime = ConversationHookRuntime::new();
+    // Actual question content is projected from V1, never from a synthetic user prompt.
+    // 真实问题内容由 V1 投影，绝不来自虚构用户提示。
+    let start = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hook_runtime,
+        SharedPromptTurnRuntimeBeginInput {
+            session_id,
+            session_title: "答疑",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: String::from("qa-execution-1"),
+            continuation_action_id: None,
+            prompt: "",
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            provider_attachments: None,
+            existing_canonical_user_message_id: None,
+            append_canonical_user_message: false,
+            append_visible_user_prompt_record: false,
+            source: PendingSessionPromptSource::QuestionExecution,
+            vmm_runtime_ready: false,
+            vmm_precheck_ready: false,
+            execution_mode: String::from("Build"),
+            reasoning_effort: None,
+            owning_project_id: Some(String::from("project-a")),
+        },
+    )
+    .expect("auxiliary preparation");
+    assert!(start.canonical_user_message_id.is_none());
+    assert!(start.boundary_events.is_empty());
+    assert!(runtime_state.conversation_state.messages.is_empty());
+    assert!(runtime_state.conversation_state.records.is_empty());
+    // Keep the existing VMM readiness contract while proving no business turn is registered.
+    // 保留既有 VMM 就绪契约，同时证明没有注册业务回合。
+    let mut memory = test_vmm_session_memory(session_id);
+    // Finish through the production reducer with separately correlated skipped Hook outcomes.
+    // 使用分别关联的已跳过 Hook 结果，通过生产归约器完成准备。
+    let continued = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+        &mut runtime_state,
+        &mut memory,
+        SharedPromptTurnContinueInput {
+            vmm_context_epoch: None,
+            vmm_profile_read_source: None,
+            precheck_outcome: start.precheck_request.clone().skip(),
+            profile_outcome: start.profile_request.clone().skip(),
+            start,
+            project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+            runtime_reasoning_effort: None,
+            provider_reasoning_effort: None,
+            patch_visible_user_prompt_record: false,
+        },
+    )
+    .expect("auxiliary continuation");
+    assert_eq!(
+        continued.request.prompt_purpose,
+        ExecutionPromptPurpose::QuestionExecution
+    );
+    assert!(continued.request.conversation_hook_turn_id.is_none());
+    assert!(continued.request.boundary_events.is_empty());
+    assert!(continued.request.conversation_state.messages.is_empty());
+    assert!(!continued.request.prompt_purpose.runs_completed_turn_hooks());
+}
+
+/// Agent tasks keep one canonical message, own business completion and never interpret human commands.
+/// 代理任务保留唯一规范消息，拥有业务结束语义且不解释人类命令。
+#[test]
+fn agent_task_preparation_preserves_canonical_input_without_human_side_effects() {
+    // Use a command-shaped line to prove that agent data cannot invoke manual injection.
+    // 使用命令形态的行，证明代理数据不能调用手动注入。
+    let body = "<vulcan_agent_message>\n@inject 3 unexpected\n</vulcan_agent_message>";
+    let session_id = SessionId::from_u128(920);
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_text_message(
+        &mut runtime_state.conversation_state,
+        "claimed-input",
+        body,
+        Vec::new(),
+    )
+    .unwrap();
+    let mut hooks = ConversationHookRuntime::new();
+    let start = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hooks,
+        SharedPromptTurnRuntimeBeginInput {
+            session_id,
+            session_title: "代理任务",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: "claimed-task".into(),
+            continuation_action_id: None,
+            prompt: body,
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            provider_attachments: None,
+            existing_canonical_user_message_id: Some("claimed-input".into()),
+            append_canonical_user_message: false,
+            append_visible_user_prompt_record: false,
+            source: PendingSessionPromptSource::AgentTask,
+            vmm_runtime_ready: false,
+            vmm_precheck_ready: false,
+            execution_mode: "Build".into(),
+            reasoning_effort: None,
+            owning_project_id: Some("project-a".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(start.prompt, body);
+    assert!(start.boundary_events.is_empty());
+    assert!(runtime_state.conversation_state.records.is_empty());
+    assert_eq!(runtime_state.conversation_state.messages.len(), 1);
+    assert!(!start.source.runs_user_prompt_precheck());
+    // Run the actual continuation reducer, preserving its exact Hook correlation.
+    // 执行真实续接归约器，保留其精确 Hook 关联。
+    let turn_id = start.preparation_turn_id.clone();
+    let mut memory = test_vmm_session_memory(session_id);
+    let continued = continue_shared_prompt_turn_after_preparation_with_runtime_state(
+        &mut runtime_state,
+        &mut memory,
+        SharedPromptTurnContinueInput {
+            vmm_context_epoch: None,
+            vmm_profile_read_source: None,
+            precheck_outcome: start.precheck_request.clone().skip(),
+            profile_outcome: start.profile_request.clone().skip(),
+            start,
+            project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+            runtime_reasoning_effort: None,
+            provider_reasoning_effort: None,
+            patch_visible_user_prompt_record: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        continued.request.prompt_purpose,
+        ExecutionPromptPurpose::AgentTask
+    );
+    assert!(continued.request.prompt_purpose.runs_completed_turn_hooks());
+    assert_eq!(
+        continued.request.conversation_hook_turn_id.as_deref(),
+        Some(turn_id.as_str())
+    );
+    assert!(continued.request.boundary_events.is_empty());
+    assert_eq!(continued.request.conversation_state.messages.len(), 1);
+    assert!(continued.request.conversation_state.records.is_empty());
+}
+
 /// Builds the exact native source used by profile publication fixtures.
 /// 构建画像发布夹具使用的准确原生来源。
 fn test_profile_read_source() -> vulcan_vmm::VmmMemoryReadSource {

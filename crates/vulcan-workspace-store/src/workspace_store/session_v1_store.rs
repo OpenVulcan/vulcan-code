@@ -48,6 +48,8 @@ use super::session_v1::writer::{
     create_session, flush_candidate, verify_existing_session_creation,
 };
 
+mod lifecycle_tree;
+
 /// Fixed parent-owned directory containing every embedded task-session V1 tree.
 /// 保存全部内嵌任务会话 V1 目录树的固定父级目录。
 const EMBEDDED_TASK_PARTITION: &str = "TASK";
@@ -55,6 +57,23 @@ const EMBEDDED_TASK_PARTITION: &str = "TASK";
 /// Fixed deterministic bucket used to derive `TASK/task-{session_id}` without scanning.
 /// 用于无扫描派生 `TASK/task-{session_id}` 的固定确定性目录桶。
 const EMBEDDED_TASK_BUCKET: &str = "task";
+
+/// Metadata-only recovery selection from one atomic metadata publication.
+/// 从一次原子元数据发布取得的恢复筛选快照。
+/// This snapshot locates work; callers must validate the canonical document before mutation.
+/// 此快照用于定位待办；修改前调用方必须校验规范文档。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionV1CollaborationRecoverySnapshot {
+    /// Physical generation read together with the collaboration records.
+    /// 与协作记录一起读取的物理代次。
+    pub segment_generation: u64,
+    /// Open business selection hint read from the same metadata publication.
+    /// 从同一次元数据发布读取的开放业务筛选线索。
+    pub open_turn_start_seq: Option<Seq>,
+    /// Typed collaboration records belonging to that same metadata publication.
+    /// 属于同一次元数据发布的强类型协作记录。
+    pub collaboration: vulcan_session_core::v1::collaboration::CollaborationState,
+}
 
 /// Fixed V1 session partition below the application data root.
 /// 应用数据根目录下固定的 V1 会话分区。
@@ -148,6 +167,64 @@ impl SessionV1StorageLocator {
             .into());
         }
         Ok(metadata)
+    }
+
+    /// Reads validated collaboration state for recovery selection without loading interaction history.
+    /// 读取已校验协作状态用于恢复筛选，不加载交互历史。
+    /// The exact locator owns the file; callers must serialize this read with lifecycle replacement.
+    /// 精确定位器拥有该文件；调用方必须将此读取与生命周期替换串行化。
+    /// Returns only typed metadata; actual repair must load and revalidate the canonical document.
+    /// 仅返回强类型元数据；实际修复必须加载并重新校验规范文档。
+    pub fn read_collaboration_recovery_state(
+        &self,
+    ) -> Result<vulcan_session_core::v1::collaboration::CollaborationState, SessionV1StoreError>
+    {
+        Ok(self.read_collaboration_recovery_snapshot()?.collaboration)
+    }
+
+    /// Reads generation and collaboration together without opening interaction or runtime files.
+    /// 一起读取代次与协作记录，不打开交互或运行时文件。
+    /// The locator supplies ownership; returns a selection hint or an explicit metadata error.
+    /// 定位器提供归属；返回筛选线索或明确元数据错误。
+    pub fn read_collaboration_recovery_snapshot(
+        &self,
+    ) -> Result<SessionV1CollaborationRecoverySnapshot, SessionV1StoreError> {
+        // An unpublished directory is missing; an existing directory with absent metadata is corrupt.
+        // 尚未发布的目录属于缺失；已有目录缺少元数据则属于损坏。
+        // Preserve IO failures so permission errors cannot authorize a recovery publication.
+        // 保留 IO 失败，避免权限错误授权恢复发布。
+        let directory = self.session_directory();
+        if !directory
+            .try_exists()
+            .map_err(|error| SessionV1StorageError::io(&directory, error.to_string()))?
+        {
+            return Err(SessionV1StorageError::session_missing(&self.session_id, directory).into());
+        }
+        // Metadata is a work-selection hint, never authorization to execute or settle a message.
+        // 元数据是待办筛选线索，绝不是执行或结算消息的授权。
+        let metadata = self.read_indexed_metadata()?;
+        if !(1..=vulcan_session_core::v1::ids::JS_SAFE_INTEGER_MAX)
+            .contains(&metadata.segment_generation)
+        {
+            return Err(SessionV1StorageError::corrupt(
+                SessionV1StorageErrorCode::MetadataCorrupt,
+                self.layout.metadata_path(),
+                "collaboration recovery generation is invalid",
+            )
+            .into());
+        }
+        metadata.collaboration.validate().map_err(|error| {
+            SessionV1StorageError::corrupt(
+                SessionV1StorageErrorCode::MetadataCorrupt,
+                self.layout.metadata_path(),
+                format!("collaboration recovery metadata: {error}"),
+            )
+        })?;
+        Ok(SessionV1CollaborationRecoverySnapshot {
+            segment_generation: metadata.segment_generation,
+            open_turn_start_seq: metadata.open_turn_start_seq,
+            collaboration: metadata.collaboration.state,
+        })
     }
 
     /// Reads the capability configuration's metadata and validates its own selection subtree.
@@ -1575,6 +1652,93 @@ fn remove_exact_session_directory(
 
 #[cfg(test)]
 mod tests {
+    /// Recovery distinguishes unpublished storage from an incomplete or corrupt existing directory.
+    /// 恢复区分尚未发布的存储与不完整或损坏的已有目录。
+    /// Returns nothing; all paths belong to one temporary fixture and no existing data is removed.
+    /// 不返回值；全部路径属于一个临时夹具，不移除任何已有数据。
+    #[test]
+    fn collaboration_recovery_metadata_distinguishes_missing_publication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = super::create_session_v1_storage_fixture(
+            temporary.path(),
+            "missing-publication-root",
+            1,
+        )
+        .unwrap();
+        let child =
+            super::locate_embedded_task_session_v1(&root, "missing-publication-child").unwrap();
+        assert!(matches!(child.read_collaboration_recovery_snapshot(),
+            Err(super::SessionV1StoreError::Storage(error)) if error.code == super::SessionV1StorageErrorCode::SessionMissing));
+        std::fs::create_dir_all(child.session_directory()).unwrap();
+        assert!(matches!(child.read_collaboration_recovery_snapshot(),
+            Err(super::SessionV1StoreError::Storage(error)) if error.code == super::SessionV1StorageErrorCode::MetadataCorrupt));
+        std::fs::write(child.layout.metadata_path(), b"invalid metadata").unwrap();
+        assert!(matches!(child.read_collaboration_recovery_snapshot(),
+            Err(super::SessionV1StoreError::Storage(error)) if error.code == super::SessionV1StorageErrorCode::MetadataCorrupt));
+        assert_eq!(
+            std::fs::read(child.layout.metadata_path()).unwrap(),
+            b"invalid metadata"
+        );
+    }
+
+    /// Recovery selection validates metadata without opening or repairing a broken interaction tail.
+    /// 恢复筛选校验元数据，不打开或修复损坏的交互尾部。
+    #[test]
+    fn collaboration_recovery_metadata_does_not_load_interactions() {
+        // The isolated fixture contains the real metadata contract and locator ownership.
+        // 隔离夹具包含真实元数据契约及定位器所有权。
+        let temporary = tempfile::tempdir().unwrap();
+        let locator =
+            super::create_session_v1_storage_fixture(temporary.path(), "collaboration-metadata", 1)
+                .unwrap();
+        let mut metadata = locator.read_indexed_metadata().unwrap();
+        let tail = locator.layout.segment_entry_path(
+            metadata.segment_generation,
+            &metadata.split_list[0].file_name,
+        );
+        std::fs::write(&tail, b"invalid interaction JSON\n").unwrap();
+        let original = std::fs::read(locator.layout.metadata_path()).unwrap();
+        assert!(super::load_session_v1_tail(&locator).is_err());
+        assert_eq!(
+            locator.read_collaboration_recovery_state().unwrap(),
+            metadata.collaboration.state
+        );
+        assert_eq!(
+            locator.read_collaboration_recovery_snapshot().unwrap(),
+            super::SessionV1CollaborationRecoverySnapshot {
+                segment_generation: metadata.segment_generation,
+                open_turn_start_seq: metadata.open_turn_start_seq,
+                collaboration: metadata.collaboration.state.clone(),
+            }
+        );
+        assert_eq!(
+            std::fs::read(locator.layout.metadata_path()).unwrap(),
+            original
+        );
+        assert_eq!(std::fs::read(&tail).unwrap(), b"invalid interaction JSON\n");
+        // Typed collaboration corruption cannot be mistaken for an empty outbox.
+        // 强类型协作损坏不能被误判为空出站箱。
+        metadata.collaboration.version = 99;
+        super::super::session_v1::documents::write_json_document(
+            &locator.layout.metadata_path(),
+            &metadata,
+            "metadata",
+        )
+        .unwrap();
+        assert!(locator.read_collaboration_recovery_state().is_err());
+        // A valid collaboration container cannot hide an unusable physical generation.
+        // 合法协作容器不能掩盖不可用物理代次。
+        metadata.collaboration.version = 1;
+        metadata.segment_generation = 0;
+        super::super::session_v1::documents::write_json_document(
+            &locator.layout.metadata_path(),
+            &metadata,
+            "metadata",
+        )
+        .unwrap();
+        assert!(locator.read_collaboration_recovery_snapshot().is_err());
+    }
+
     /// Model restoration reads metadata even when interactions are corrupt, without changing either file.
     /// 即使交互内容损坏，模型恢复仍仅读取 metadata，且不修改任何文件。
     #[test]

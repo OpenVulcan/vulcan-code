@@ -495,15 +495,19 @@ fn append_agent_message_keeps_transcript_record_hidden() {
         VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
             .expect("valid core conversation snapshot");
 
-    controller.append_agent_message(AgentMessageAppendRequest {
+    controller
+        .append_agent_message(AgentMessageAppendRequest {
+        kind: vulcan_ai_contract::HostMessageKind::TaskResult,
         message_type: String::from("FINAL_ANSWER"),
+        task_id: String::from("task-code-review"),
         task_name: String::from("code-review"),
         sender: String::from("code-review"),
         recipient: String::from("parent"),
         payload: String::from("review complete"),
         trigger_turn: true,
         metadata: Some(json!({ "source": "test" })),
-    });
+        })
+        .expect("valid agent message");
 
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.messages.len(), 1);
@@ -518,7 +522,7 @@ fn append_agent_message_keeps_transcript_record_hidden() {
         } if task_name == "code-review" && payload == "review complete" && *trigger_turn
     ));
     assert!(!snapshot.records[0].visible);
-    assert!(snapshot.records[0].body.contains("<agent_message>"));
+    assert!(snapshot.records[0].body.contains("<vulcan_agent_message"));
     assert!(snapshot.records[0].body.contains("review complete"));
 }
 
@@ -530,24 +534,34 @@ fn preseeded_agent_message_prompt_reuses_existing_tail() {
         VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
             .expect("valid core conversation snapshot");
 
-    controller.append_agent_message(AgentMessageAppendRequest {
+    controller
+        .append_agent_message(AgentMessageAppendRequest {
+        kind: vulcan_ai_contract::HostMessageKind::TaskSteer,
         message_type: String::from("MESSAGE"),
+        task_id: String::from("task-worker-a"),
         task_name: String::from("worker-a"),
         sender: String::from("parent:root"),
         recipient: String::from("worker-a"),
         payload: String::from("continue with this context"),
         trigger_turn: true,
         metadata: None,
-    });
+        })
+        .expect("valid agent message");
 
+    let message_id = controller.snapshot().messages[0].id.clone();
     let prompt = ConversationPayload::render_agent_message_text(
-        "MESSAGE",
-        "worker-a",
+        &message_id,
+        vulcan_ai_contract::HostMessageKind::TaskSteer,
         "parent:root",
+        "worker-a",
+        "task-worker-a",
         "continue with this context",
-    );
+    )
+    .expect("valid agent message");
 
-    assert!(!controller.should_append_user_turn(&prompt));
+    assert!(!controller
+        .should_append_user_turn(&prompt)
+        .expect("valid agent message history"));
 }
 
 /// Verifies display-only records do not enter provider-visible history.

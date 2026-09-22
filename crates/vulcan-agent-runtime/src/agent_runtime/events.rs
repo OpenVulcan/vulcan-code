@@ -64,6 +64,9 @@ impl std::fmt::Debug for ProviderRequestMediaContext {
 /// V1会话所有者重建请求前产生的不可变传输候选。
 #[derive(Debug, Clone)]
 pub struct ProviderRequestPreparationCandidate {
+    /// Exact controller-message identities mapped by the transport builder to physical positions.
+    /// 由传输构建器映射到物理位置的准确控制器消息身份。
+    pub source_message_positions: std::collections::BTreeMap<String, usize>,
     /// Frozen media execution for real session requests; state-only and excluded fixtures may omit it.
     /// 真实会话请求的冻结媒体执行；仅状态和排除夹具可以省略。
     pub media_context: Option<ProviderRequestMediaContext>,
@@ -359,6 +362,21 @@ pub(crate) fn provider_request_durability_barrier() -> (
         },
         receiver,
     )
+}
+
+/// Exposes the real durability barrier to cross-crate host tests; returns its completion and error-preserving waiter.
+/// 向跨 crate 宿主测试公开真实可靠屏障；返回完成端与保留错误的等待器。
+#[cfg(feature = "test-support")]
+pub fn test_provider_request_durability_barrier() -> (
+    ProviderRequestDurabilityCompletion,
+    impl std::future::Future<Output = Result<(), String>>,
+) {
+    // Keep test observations on the same one-shot channel used by real Provider dispatch.
+    // 让测试观察使用真实 Provider 分派的同一一次性通道。
+    let (completion, receiver) = provider_request_durability_barrier();
+    (completion, async move {
+        receiver.await.map_err(|error| error.to_string())?
+    })
 }
 
 /// High-level runtime event kinds emitted by the compose foundation.

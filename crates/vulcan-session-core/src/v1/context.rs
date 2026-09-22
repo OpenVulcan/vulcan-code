@@ -14,6 +14,9 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use crate::v1::errors::DomainError;
 use crate::v1::ids::{ApiCallId, CompactionId, Seq};
 
+mod compaction_content;
+pub use compaction_content::{CompactionContent, RemoteResponsesCheckpoint};
+
 /// File contract of the V1 runtime lock document.
 /// V1 运行时锁定文档的文件契约。
 pub const RUNTIME_CONTRACT: &str = "vulcan.session-runtime.v1";
@@ -331,9 +334,9 @@ pub struct CompactionNode {
     /// enter the new active window.
     /// 包含保留边界：该 seq 及之后的 Provider 可见事件进入新活动窗口。
     pub retained_from_seq: Seq,
-    /// Compaction summary text.
-    /// 压缩总结文本。
-    pub summary: String,
+    /// Exclusive summary or opaque checkpoint defining this context generation.
+    /// 定义此上下文代次的互斥摘要或不透明检查点。
+    pub content: CompactionContent,
     /// Creation time in Unix milliseconds.
     /// 创建时间(Unix 毫秒)。
     pub created_at_ms: i64,
@@ -574,7 +577,9 @@ mod tests {
                 api_stats_seq: Seq::try_new(4).unwrap(),
                 occurred_at_seq: Seq::try_new(3).unwrap(),
                 retained_from_seq: Seq::try_new(1).unwrap(),
-                summary: "summary".to_string(),
+                content: CompactionContent::Summary {
+                    text: "summary".to_string(),
+                },
                 created_at_ms: 5,
             }],
         );

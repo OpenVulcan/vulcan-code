@@ -85,6 +85,7 @@ pub(super) async fn handle_finished_stream_event(
     active_stream_task_id: Uuid,
     stream_task_started_at: i128,
     execution_goal_id: Option<&str>,
+    terminal_scope: TerminalSettlementScope,
     v1_finished_durability: ProviderV1FinishedDurability,
     report: ExecutionRunReport,
 ) -> FinishedStreamEventOutcome {
@@ -207,6 +208,42 @@ pub(super) async fn handle_finished_stream_event(
             return FinishedStreamEventOutcome::OwnershipUnavailable;
         }
     };
+    // Auxiliary final text ends only its execution; it cannot enter business accounting or task completion.
+    // 辅助最终文本只结束自身执行，不能进入业务记账或任务完成。
+    if let TerminalSettlementScope::QuestionExecution { execution_id, .. } = &terminal_scope {
+        // Keep the predecessor identity after its scope is consumed by terminal settlement.
+        // 终态结算消费范围后仍保留前驱身份。
+        let execution_id = execution_id.clone();
+        // A selected user successor can dispatch only after the exact terminal gate has reopened.
+        // 只有精确终态闸门重新开放后，选定用户后继才能分发。
+        let settled = handle_question_finished_report(
+            app,
+            task_state,
+            report,
+            terminal_scope,
+            v1_api_terminal_receipt,
+            logical_turn_completed,
+            terminal_persistence_owner,
+        )
+        .await;
+        if settled {
+            if let Err(error) = super::question_finished::start_question_queued_successor(
+                app,
+                task_state,
+                controller_runtime,
+                agent_runtime,
+                finished_session_id,
+                &execution_id,
+            )
+            .await
+            {
+                eprintln!(
+                    "[webui-service] question successor dispatch failed: session={finished_session_id} error={error}"
+                );
+            }
+        }
+        return FinishedStreamEventOutcome::Handled;
+    }
     // retainedGoalId closes the interval between an AI-created Goal tool result and the next Provider boundary.
     // retainedGoalId 闭合 AI 创建目标工具结果与下一次 Provider 边界之间的时间窗口。
     let retained_goal_id = removed_active_stream_task
@@ -366,6 +403,18 @@ pub(super) async fn handle_finished_stream_event(
     // 可靠 V1 回合回执独自选择并授权后继；旧持久化不得否决该事实。
     // Re-read only after releasing terminal admission: a child can finish after the sink snapshot.
     // 释放终态准入后重新读取：子任务可能在 sink 快照之后完成。
+    // Return exact task results after terminal ownership is released; failures retain durable retry state.
+    // 释放终态归属后回传精确任务结果；失败保留可靠重试状态。
+    if terminal_authority_settled {
+        if let Err(error) = crate::agent_collaboration::reconcile_task_results_for_session(
+            task_state,
+            finished_session_id,
+        )
+        .await
+        {
+            tracing::warn!(session_id = %finished_session_id, %error, "Task result return remains pending after terminal settlement");
+        }
+    }
     let pending_subagent_return = if terminal_authority_settled {
         match registered_session_v1_handle_from_state(task_state, finished_session_id).and_then(
             |handle| {
@@ -431,6 +480,22 @@ pub(super) async fn handle_finished_stream_event(
                 eprintln!(
                     "[webui-service] dispatch exact V1 in-turn continuation failed: session={finished_session_id} error={error}"
                 );
+                false
+            }
+        }
+    } else if terminal_authority_settled {
+        match crate::webui_turn_chaining::start_exact_v1_collaboration_continuation(
+            app,
+            task_state,
+            controller_runtime,
+            agent_runtime,
+            finished_session_id,
+        )
+        .await
+        {
+            Ok(started) => started,
+            Err(error) => {
+                tracing::warn!(session_id = %finished_session_id, %error, "Exact collaboration continuation remains pending");
                 false
             }
         }

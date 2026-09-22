@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "runtime_flow/startup_profile.rs"]
+mod startup_profile;
+
 /// Builds one shared runtime context for task-start lifecycle tests.
 /// 为子任务启动生命周期测试构建共享运行时上下文。
 ///
@@ -68,6 +71,7 @@ fn build_task_start_test_runtime_context(
             temperature: None,
             reasoning_effort: ReasoningEffortLevel::High,
             tool_exposure_override: ToolExposureSnapshot::default(),
+            captured_child_tool_admission: None,
             tool_request_rejection_reason: None,
             tool_request_rejection_all_tools: false,
             tool_request_rejection_tool_ids: Vec::new(),
@@ -86,6 +90,7 @@ fn build_task_start_test_runtime_context(
             controller_runtime: None,
             native_goal_runtime: None,
             native_browser_runtime: None,
+            native_agent_collaboration_runtime: None,
             supplemental_mcp_tools: Vec::new(),
             media_resource_runtime: None,
             knowledge_access: None,
@@ -133,6 +138,117 @@ fn build_task_start_test_invocation(
         snapshot: CoreConversationSnapshot::default(),
         controller_config: None,
         is_resumed: false,
+    }
+}
+
+/// Failed and stopped feedback must wait for the same durable gate as successful content.
+/// 失败和停止反馈必须等待与成功正文相同的可靠发布门。
+/// Returns no value; verifies live mailbox, default waits and cached-terminal reads.
+/// 不返回值；验证实时邮箱、默认等待及缓存终态读取。
+#[tokio::test]
+async fn non_success_mailbox_waits_for_durable_parent_result() {
+    for stopped in [false, true] {
+        // Each status has an isolated physical execution and actual task registry.
+        // 每种状态具有隔离物理执行及实际任务注册表。
+        let runtime = Arc::new(TaskRuntime::new());
+        // Allocate one parent identity for both default and explicit wait paths.
+        // 为默认与明确等待路径分配一个父身份。
+        let parent = Uuid::new_v4();
+        // Keep task identity independent from its execution ID.
+        // 任务身份与执行 ID 保持独立。
+        let task = Uuid::new_v4();
+        // Use the real invocation fixture consumed by the production record builders.
+        // 使用生产记录构造器消费的真实调用夹具。
+        let request = build_task_start_test_invocation(parent, task, "non-success-gate");
+        runtime
+            .expect_durable_task_return(task, &request.execution_id)
+            .unwrap();
+        if stopped {
+            // Normal stop has no invented error or final assistant source.
+            // 正常停止不制造错误或最终助手来源。
+            let config = build_test_controller_config("Base prompt");
+            // Resolve the same model settings used by other offline task fixtures.
+            // 解析其他离线任务夹具所用相同模型设置。
+            let resolved = test_resolved_config(&config, &request.invocation_config);
+            // Store a genuine stopped outcome through the production mailbox path.
+            // 通过生产邮箱路径保存真实停止结果。
+            let outcome = build_stopped_task_execution_outcome(
+                task,
+                config,
+                resolved,
+                CoreConversationSnapshot::default(),
+            );
+            runtime
+                .store_task_outcome(parent, &request, &outcome)
+                .unwrap();
+        } else {
+            runtime
+                .mark_task_failure(parent, &request, "original child failure")
+                .unwrap();
+        }
+        assert!(
+            !runtime
+                .has_subagent_events_for_parent(parent.into())
+                .unwrap()
+        );
+        assert!(
+            runtime
+                .wait_agent_cached_terminal_events(
+                    parent,
+                    &BTreeSet::from([task.into()]),
+                    &BTreeSet::new()
+                )
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(25),
+                runtime.invoke_wait_agent(parent, json!({"timeout_ms": 10_000}))
+            )
+            .await
+            .is_err()
+        );
+        // This exact host event is published only after the parent document commit.
+        // 此精确宿主事件仅在父文档提交之后发布。
+        let mailbox = build_subagent_mailbox_event(
+            &request,
+            if stopped {
+                TaskSessionStatus::Stopped
+            } else {
+                TaskSessionStatus::Failed
+            },
+            7,
+            None,
+            if stopped {
+                None
+            } else {
+                Some("original child failure")
+            },
+            None,
+        );
+        runtime
+            .publish_durable_task_return(&request.execution_id, mailbox.clone())
+            .unwrap();
+        runtime
+            .publish_durable_task_return(&request.execution_id, mailbox.clone())
+            .unwrap();
+        assert_eq!(
+            runtime
+                .take_subagent_events_for_parent(parent.into())
+                .unwrap(),
+            vec![mailbox.clone()]
+        );
+        assert_eq!(
+            runtime
+                .wait_agent_cached_terminal_events(
+                    parent,
+                    &BTreeSet::from([task.into()]),
+                    &BTreeSet::new()
+                )
+                .unwrap(),
+            vec![mailbox]
+        );
     }
 }
 
@@ -610,6 +726,20 @@ fn superseded_task_preparation_cannot_claim_or_fail_newer_execution() {
     assert_eq!(v1_facts.execution_id, second_invocation.execution_id);
     assert_eq!(v1_facts.prompt, "second concurrent prompt");
     assert_eq!(v1_facts.display_title, second_invocation.display_title);
+    // Replayed admission of the same execution cannot replace the already retained physical owner.
+    // 同执行的重放准入不能替换已经保留的物理所有者。
+    assert!(
+        task_runtime
+            .claim_and_reserve_active_task_run(&second_invocation)
+            .is_err()
+    );
+    assert_eq!(
+        task_runtime
+            .active_task_v1_execution_facts(task_id, &second_invocation.execution_id)
+            .unwrap()
+            .admitted_at_ms,
+        v1_facts.admitted_at_ms,
+    );
     assert!(v1_facts.is_resumed);
 
     task_runtime
@@ -980,9 +1110,18 @@ fn detached_stream_startup_guard_drop_closes_open_stream() {
     {
         // startupGuard owns cleanup until this lexical startup scope ends.
         // startupGuard 在当前词法启动作用域结束前持有清理责任。
-        let _startup_guard =
-            DetachedTaskStreamStartupGuard::open(Arc::clone(&task_runtime), task_id, execution_id)
-                .expect("startup guard should open the exact detached stream");
+        let _startup_guard = DetachedTaskStreamStartupGuard::open(
+            Arc::clone(&task_runtime),
+            Arc::new(build_task_start_test_invocation(
+                Uuid::new_v4(),
+                task_id,
+                execution_id,
+            )),
+            task_runtime
+                .reserve_active_task_run(task_id, execution_id)
+                .unwrap(),
+        )
+        .expect("startup guard should open the exact detached stream");
         assert!(
             task_runtime
                 .detached_task_event_streams
@@ -1001,6 +1140,197 @@ fn detached_stream_startup_guard_drop_closes_open_stream() {
             .contains_key(&stream_key),
         "dropping the startup owner must remove the empty opened stream"
     );
+    assert!(!task_runtime.is_task_running(task_id).unwrap());
+}
+
+/// An observed failure or cancelled startup emits one explicit abort after lease release, before EOF.
+/// 已观测失败或被取消启动在租约释放之后、流结束之前发出一次明确中止。
+/// Returns no value; verifies real subscriber order and absence of premature mailbox feedback.
+/// 不返回值；验证真实订阅顺序及不存在提前邮箱反馈。
+#[tokio::test]
+async fn detached_stream_startup_guard_emits_exact_abort_before_eof() {
+    for explicit in [false, true] {
+        // Isolate the two terminal paths and their process-local registries.
+        // 隔离两条终止路径及其进程内注册表。
+        let runtime = Arc::new(TaskRuntime::new());
+        // The immutable request is shared with the cleanup guard, without another history copy.
+        // 不可变请求与清理守卫共享，不额外复制历史。
+        let request = Arc::new(build_task_start_test_invocation(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "startup-abort-notice",
+        ));
+        runtime
+            .expect_durable_task_return(request.task_id, &request.execution_id)
+            .unwrap();
+        // Startup owns both the exact lease and detached stream before subscription.
+        // 订阅前，启动同时拥有精确租约与分离流。
+        let guard = DetachedTaskStreamStartupGuard::open(
+            runtime.clone(),
+            request.clone(),
+            runtime
+                .reserve_active_task_run(request.task_id, &request.execution_id)
+                .unwrap(),
+        )
+        .unwrap();
+        // This is the production buffered stream, not a synthetic event list.
+        // 此处使用生产缓冲事件流，而非合成事件列表。
+        let mut events = Box::pin(
+            runtime
+                .subscribe_detached_task_events(request.task_id, &request.execution_id)
+                .unwrap(),
+        );
+        if explicit {
+            assert_eq!(
+                guard.close_after_error(String::from("original admission failure")),
+                "original admission failure"
+            );
+        } else {
+            drop(guard);
+        }
+        assert!(!runtime.is_task_running(request.task_id).unwrap());
+        // The explicit signal is mandatory; ordinary EOF cannot carry its identity or original cause.
+        // 明确信号不可缺少；普通流结束无法携带身份或原始原因。
+        let Some(DetachedTaskRuntimeEvent::StartupAborted {
+            parent_session_id,
+            event,
+        }) = events.next().await
+        else {
+            panic!("missing startup abort");
+        };
+        assert_eq!(parent_session_id, request.current_session_id);
+        assert_eq!(
+            event.metadata.as_ref().unwrap()["payload"]["execution_id"],
+            request.execution_id
+        );
+        assert_eq!(
+            event.metadata.as_ref().unwrap()["payload"]["execution_status"],
+            "failed"
+        );
+        if explicit {
+            assert_eq!(
+                event.metadata.as_ref().unwrap()["payload"]["result"],
+                "original admission failure"
+            );
+        }
+        assert!(events.next().await.is_none());
+        assert!(
+            !runtime
+                .has_subagent_events_for_parent(request.current_session_id.into())
+                .unwrap()
+        );
+        assert!(
+            !runtime
+                .detached_task_event_streams
+                .read()
+                .unwrap()
+                .contains_key(&DetachedTaskExecutionKey::new(
+                    request.task_id,
+                    &request.execution_id
+                ))
+        );
+    }
+}
+
+/// Cancelling a pending startup future releases its lease and sends the original owner an explicit abort.
+/// 取消待定启动 Future 会释放租约，并向原所有者发送明确中止。
+/// Returns no value; cancellation is synchronized after ownership enters the actual spawned future.
+/// 不返回值；取消同步发生在所有权进入实际派生 Future 之后。
+#[tokio::test]
+async fn detached_stream_startup_guard_handles_cancelled_future() {
+    // Use the production stream registry and request identity across task cancellation.
+    // 在任务取消期间使用生产流注册表与请求身份。
+    let runtime = Arc::new(TaskRuntime::new());
+    // A concrete request freezes the stream owner before the future is spawned.
+    // 具体请求在 Future 派生前冻结流所有者。
+    let request = Arc::new(build_task_start_test_invocation(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "cancelled-startup",
+    ));
+    // The guard is moved into a suspended future, matching asynchronous startup ownership.
+    // 守卫移入挂起 Future，与异步启动归属一致。
+    let guard = DetachedTaskStreamStartupGuard::open(
+        runtime.clone(),
+        request.clone(),
+        runtime
+            .reserve_active_task_run(request.task_id, &request.execution_id)
+            .unwrap(),
+    )
+    .unwrap();
+    // Subscribe before cancellation so the host receives the explicit control event.
+    // 在取消前订阅，确保宿主收到明确控制事件。
+    let mut events = Box::pin(
+        runtime
+            .subscribe_detached_task_events(request.task_id, &request.execution_id)
+            .unwrap(),
+    );
+    // Synchronization proves the future really started; no timing-based sleeps are needed.
+    // 同步证明 Future 已实际启动，无需按时间休眠。
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    // This pending task owns the same guard that production startup holds across awaits.
+    // 此待定任务持有与生产启动跨等待期间相同的守卫。
+    let startup = tokio::spawn(async move {
+        // Keep cleanup ownership alive until task cancellation drops the suspended future.
+        // 保留清理归属，直到任务取消丢弃挂起 Future。
+        let _guard = guard;
+        entered.send(()).unwrap();
+        std::future::pending::<()>().await;
+    });
+    ready.await.unwrap();
+    startup.abort();
+    assert!(startup.await.unwrap_err().is_cancelled());
+    assert!(!runtime.is_task_running(request.task_id).unwrap());
+    assert!(
+        matches!(events.next().await, Some(DetachedTaskRuntimeEvent::StartupAborted { parent_session_id, .. }) if parent_session_id == request.current_session_id)
+    );
+    assert!(events.next().await.is_none());
+}
+
+/// Provider work cannot start before handoff, and withdrawn permission never polls its future.
+/// Provider 工作不能先于交接开始，撤回许可不会轮询其 Future。
+/// Returns no value; exercises the production launch helper with grant, withdrawal and stop.
+/// 不返回值；通过生产启动辅助函数验证授权、撤回与停止。
+#[tokio::test]
+async fn child_run_handoff_gates_all_provider_work() {
+    for action in ["grant", "withdraw", "stop"] {
+        // Observing a side effect represents the first possible preparation or Provider write.
+        // 观测副作用代表首次可能发生的准备或 Provider 写入。
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // The future holds a separate reference so the test can inspect whether it was polled.
+        // Future 持有独立引用，使测试能检查其是否被轮询。
+        let observed = started.clone();
+        // Production helper must hold the child regardless of scheduler progress before handoff.
+        // 无论交接前调度如何推进，生产辅助函数都必须阻止子任务。
+        let (permission, child) = spawn_child_run_after_handoff(async move {
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        tokio::task::yield_now().await;
+        assert!(!started.load(std::sync::atomic::Ordering::SeqCst));
+        match action {
+            "grant" => {
+                permission.send(()).unwrap();
+                child.await.unwrap().unwrap();
+                assert!(started.load(std::sync::atomic::Ordering::SeqCst));
+            }
+            "withdraw" => {
+                drop(permission);
+                assert_eq!(
+                    child.await.unwrap().unwrap_err(),
+                    "Child startup handoff permission was withdrawn."
+                );
+                assert!(!started.load(std::sync::atomic::Ordering::SeqCst));
+            }
+            "stop" => {
+                child.abort();
+                assert!(child.await.unwrap_err().is_cancelled());
+                assert!(permission.send(()).is_err());
+                assert!(!started.load(std::sync::atomic::Ordering::SeqCst));
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// Verifies explicit startup failure cleanup preserves both the primary and stream-close errors.
@@ -1018,9 +1348,18 @@ fn detached_stream_startup_guard_preserves_cleanup_failure() {
     let execution_id = "startup-cleanup-failure";
     // startupGuard owns the opened stream before cleanup becomes unavailable.
     // startupGuard 在清理能力不可用前持有已打开的事件流。
-    let startup_guard =
-        DetachedTaskStreamStartupGuard::open(Arc::clone(&task_runtime), task_id, execution_id)
-            .expect("startup guard should open before poisoning");
+    let startup_guard = DetachedTaskStreamStartupGuard::open(
+        Arc::clone(&task_runtime),
+        Arc::new(build_task_start_test_invocation(
+            Uuid::new_v4(),
+            task_id,
+            execution_id,
+        )),
+        task_runtime
+            .reserve_active_task_run(task_id, execution_id)
+            .unwrap(),
+    )
+    .expect("startup guard should open before poisoning");
     // poisonResult proves the authoritative stream registry cannot perform cleanup.
     // poisonResult 证明权威事件流注册表无法执行清理。
     let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1040,6 +1379,7 @@ fn detached_stream_startup_guard_preserves_cleanup_failure() {
     assert!(error.contains("detached task stream registry is locked"));
     assert!(error.contains(&task_id.to_string()));
     assert!(error.contains(execution_id));
+    assert!(!task_runtime.is_task_running(task_id).unwrap());
 }
 
 /// Verifies successful handoff leaves the detached stream open for the background finalizer.
@@ -1060,11 +1400,24 @@ fn detached_stream_startup_guard_handoff_preserves_live_stream() {
     let stream_key = DetachedTaskExecutionKey::new(task_id, execution_id);
     // startupGuard owns cleanup only until the background finalizer is declared ready.
     // startupGuard 仅在后台终态处理器就绪前持有清理责任。
-    let startup_guard =
-        DetachedTaskStreamStartupGuard::open(Arc::clone(&task_runtime), task_id, execution_id)
-            .expect("startup guard should open the exact detached stream");
+    let mut startup_guard = DetachedTaskStreamStartupGuard::open(
+        Arc::clone(&task_runtime),
+        Arc::new(build_task_start_test_invocation(
+            Uuid::new_v4(),
+            task_id,
+            execution_id,
+        )),
+        task_runtime
+            .reserve_active_task_run(task_id, execution_id)
+            .unwrap(),
+    )
+    .expect("startup guard should open the exact detached stream");
 
-    startup_guard.handoff_to_background_finalizer();
+    // Keep the transferred lease alive for the real finalizer's full lifetime.
+    // 在真实终态处理器整个生命周期中保留移交的租约。
+    let finalizer_run = startup_guard.take_active_run().unwrap();
+    startup_guard.handoff_to_background_finalizer().unwrap();
+    assert!(task_runtime.is_task_running(task_id).unwrap());
 
     assert!(
         task_runtime
@@ -1077,6 +1430,109 @@ fn detached_stream_startup_guard_handoff_preserves_live_stream() {
     task_runtime
         .close_detached_task_event_stream(task_id, execution_id)
         .expect("background finalizer should close the handed-off stream");
+    finalizer_run.release().unwrap();
+}
+
+/// Verifies lease release precedes stream closure even while the stream registry is unavailable.
+/// 验证即使事件流注册表暂不可用，租约释放也先于流关闭。
+/// Returns no value; a blocked stream lock makes reversed cleanup order observable.
+/// 不返回值；通过占用事件流锁观察清理顺序是否颠倒。
+#[test]
+fn detached_stream_startup_guard_releases_lease_before_stream_lock() {
+    // The shared runtime exposes independent lease and stream locks.
+    // 共享运行时提供独立的租约锁和事件流锁。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // The task and execution identify the one startup being cancelled.
+    // 任务与执行标识唯一被取消的启动。
+    let task_id = Uuid::new_v4();
+    // The execution remains fixed across both cleanup observations.
+    // 两次清理观察使用固定执行标识。
+    let execution_id = "startup-ordered-drop";
+    // The guard owns both resources before cancellation.
+    // 取消前守卫持有两项资源。
+    let startup_guard = DetachedTaskStreamStartupGuard::open(
+        Arc::clone(&task_runtime),
+        Arc::new(build_task_start_test_invocation(
+            Uuid::new_v4(),
+            task_id,
+            execution_id,
+        )),
+        task_runtime
+            .reserve_active_task_run(task_id, execution_id)
+            .unwrap(),
+    )
+    .unwrap();
+    // Holding this lock forces stream cleanup to wait without blocking lease release.
+    // 持有此锁使事件流清理等待，但不阻塞租约释放。
+    let stream_lock = task_runtime.detached_task_event_streams.write().unwrap();
+    // Drop executes on another thread so the observed order is not lexical destruction order.
+    // 在另一线程执行销毁，确保观察到的顺序并非词法变量销毁顺序。
+    let cleanup_thread = std::thread::spawn(move || drop(startup_guard));
+    // A bounded wait detects release without risking a permanent test deadlock.
+    // 有界等待检测租约释放，避免测试永久死锁。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while task_runtime.is_task_running(task_id).unwrap() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // Capture the ordering fact before unblocking the stream cleanup.
+    // 在解除事件流清理阻塞前记录顺序事实。
+    let released_before_stream_unlock = !task_runtime.is_task_running(task_id).unwrap();
+    drop(stream_lock);
+    cleanup_thread.join().unwrap();
+    assert!(
+        released_before_stream_unlock,
+        "active lease must be released before acquiring the stream cleanup lock"
+    );
+    assert!(
+        !task_runtime
+            .detached_task_event_streams
+            .read()
+            .unwrap()
+            .contains_key(&DetachedTaskExecutionKey::new(task_id, execution_id))
+    );
+}
+
+/// Verifies a handoff cannot leave the active lease owned by a consumed startup guard.
+/// 验证交接不能让已消费的启动守卫继续拥有活动租约。
+/// Returns no value; rejection must release both the lease and its exact stream.
+/// 不返回值；拒绝时必须释放租约及其精确事件流。
+#[test]
+fn detached_stream_startup_guard_rejects_handoff_without_lease_transfer() {
+    // The shared runtime owns both resources checked after rejection.
+    // 共享运行时持有拒绝后检查的两项资源。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // The task is dedicated to this rejected transfer.
+    // 此任务专用于被拒绝的移交。
+    let task_id = Uuid::new_v4();
+    // The concrete execution must not survive an incomplete handoff.
+    // 具体执行不能在不完整交接后存活。
+    let execution_id = "startup-invalid-handoff";
+    // Startup deliberately retains its lease when handoff is requested.
+    // 请求交接时启动守卫刻意保留其租约。
+    let startup_guard = DetachedTaskStreamStartupGuard::open(
+        Arc::clone(&task_runtime),
+        Arc::new(build_task_start_test_invocation(
+            Uuid::new_v4(),
+            task_id,
+            execution_id,
+        )),
+        task_runtime
+            .reserve_active_task_run(task_id, execution_id)
+            .unwrap(),
+    )
+    .unwrap();
+    // The explicit ownership error remains visible to the caller.
+    // 显式归属错误对调用方保持可见。
+    let error = startup_guard.handoff_to_background_finalizer().unwrap_err();
+    assert!(error.contains("must transfer its active run"));
+    assert!(!task_runtime.is_task_running(task_id).unwrap());
+    assert!(
+        !task_runtime
+            .detached_task_event_streams
+            .read()
+            .unwrap()
+            .contains_key(&DetachedTaskExecutionKey::new(task_id, execution_id))
+    );
 }
 
 /// Verifies detached event publication reports registry lock poisoning instead of silently dropping the event.
@@ -1602,6 +2058,7 @@ async fn invoke_spawn_agent_prestart_cancel_does_not_reserve_public_id() {
     let first_error = task_runtime
         .invoke_spawn_agent(
             parent_session_id,
+            None,
             json!({
                 "prompt": "review once",
                 "task_id": "retryable-agent"
@@ -1635,6 +2092,7 @@ async fn invoke_spawn_agent_prestart_cancel_does_not_reserve_public_id() {
     let retry_result = task_runtime
         .invoke_spawn_agent(
             parent_session_id,
+            None,
             json!({
                 "prompt": "review again",
                 "task_id": "retryable-agent"
@@ -1717,6 +2175,7 @@ async fn invoke_spawn_agent_rejects_duplicate_public_id() {
     let error = task_runtime
         .invoke_spawn_agent(
             parent_session_id,
+            None,
             json!({
                 "prompt": "generate another image",
                 "task_id": "image-generator-2"
@@ -1815,6 +2274,7 @@ async fn invoke_spawn_agent_reuses_public_id_after_close_agent() {
     let result = task_runtime
         .invoke_spawn_agent(
             parent_session_id,
+            None,
             json!({
                 "prompt": "run fresh reusable work",
                 "task_id": "reusable-agent"
@@ -1905,6 +2365,8 @@ fn archived_task_session_rejects_stale_stop_and_execution_claim() {
         .restore_inter_agent_messages_front_after_failure(
             task_id,
             vec![QueuedInterAgentMessage {
+                kind: vulcan_ai_contract::HostMessageKind::TaskStart,
+                task_id: String::from("stale-archived-delivery"),
                 steering: false,
                 delivery_id: String::from("stale-archived-delivery"),
                 author_session_id: root_session_id,
@@ -2060,7 +2522,11 @@ async fn inter_agent_message_queue_resumes_idle_agent() {
         .expect("captured prompt lock")
         .clone()
         .expect("backend should capture prompt");
-    assert!(prompt.starts_with("<agent_message>"));
+    assert!(prompt.starts_with("<vulcan_agent_message "));
+    assert!(prompt.contains(&format!("source=\"{parent_session_id}\"")));
+    assert!(prompt.contains(&format!("target=\"{task_id}\"")));
+    assert!(prompt.contains("kind=\"task_start\""));
+    assert!(prompt.contains("task_id=\"queued-task-subagent-message-"));
     assert!(prompt.contains("queue this context"));
     assert!(!prompt.contains("[Inter-agent messages]"));
     assert!(!prompt.contains("send_message"));
@@ -2073,17 +2539,21 @@ async fn inter_agent_message_queue_resumes_idle_agent() {
         matches!(
             &message.payload,
             CoreConversationPayload::AgentMessage {
+                kind,
                 message_type,
+                task_id: message_task_id,
                 task_name,
                 sender,
                 recipient,
                 payload,
                 trigger_turn,
                 ..
-            } if message_type == "MESSAGE"
+            } if *kind == vulcan_ai_contract::HostMessageKind::TaskStart
+                && !message_task_id.is_empty()
+                && message_type == "MESSAGE"
                 && task_name == "worker-a"
-                && sender == &format!("parent:{parent_session_id}")
-                && recipient == "worker-a"
+                && sender == &parent_session_id.to_string()
+                && recipient == &task_id.to_string()
                 && payload == "queue this context"
                 && *trigger_turn
         )
@@ -2462,7 +2932,10 @@ async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
         .expect("captured prompt lock")
         .clone()
         .expect("backend should capture prompt");
-    assert!(prompt.starts_with("<agent_message>"));
+    assert!(prompt.starts_with("<vulcan_agent_message "));
+    assert!(prompt.contains(&format!("source=\"{parent_session_id}\"")));
+    assert!(prompt.contains(&format!("target=\"{task_id}\"")));
+    assert!(prompt.contains("kind=\"task_start\""));
     assert!(prompt.contains("continue after current work"));
     assert!(prompt.contains("also acknowledge the second queued message"));
     assert!(
@@ -2481,17 +2954,21 @@ async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
         matches!(
             &message.payload,
             CoreConversationPayload::AgentMessage {
+                kind,
                 message_type,
+                task_id: message_task_id,
                 task_name,
                 sender,
                 recipient,
                 payload,
                 trigger_turn,
                 ..
-            } if message_type == "MESSAGE"
+            } if *kind == vulcan_ai_contract::HostMessageKind::TaskStart
+                && !message_task_id.is_empty()
+                && message_type == "MESSAGE"
                 && task_name == "worker-a"
-                && sender == &format!("parent:{parent_session_id}")
-                && recipient == "worker-a"
+                && sender == &parent_session_id.to_string()
+                && recipient == &task_id.to_string()
                 && payload == "continue after current work"
                 && *trigger_turn
         )
@@ -2589,6 +3066,8 @@ fn offline_inter_agent_snapshot_projection_is_atomic_on_identity_conflict() {
     // message identifies all deterministic provider, hidden-record, and display projections for one delivery.
     // message 标识单次投递的全部确定性 Provider、隐藏记录与显示投影。
     let message = QueuedInterAgentMessage {
+        kind: vulcan_ai_contract::HostMessageKind::TaskStart,
+        task_id: String::from("offline-delivery"),
         steering: false,
         delivery_id: String::from("offline-delivery"),
         author_session_id: Uuid::new_v4(),
@@ -2632,6 +3111,8 @@ fn offline_inter_agent_snapshot_projection_is_atomic_on_identity_conflict() {
 #[test]
 fn offline_inter_agent_snapshot_projection_reuses_identical_delivery_owner() {
     let message = QueuedInterAgentMessage {
+        kind: vulcan_ai_contract::HostMessageKind::TaskStart,
+        task_id: String::from("offline-idempotent-delivery"),
         steering: false,
         delivery_id: String::from("offline-idempotent-delivery"),
         author_session_id: Uuid::new_v4(),

@@ -627,6 +627,8 @@ fn snapshot(
     }
     Ok(SessionProviderProjectionSnapshot {
         current_compaction_id: None,
+        open_turn_id: None,
+        child_business_execution_id: None,
         preparing_user_prompt_media_seqs: preparing,
         segment_generation: 1,
         document_revision: 1,

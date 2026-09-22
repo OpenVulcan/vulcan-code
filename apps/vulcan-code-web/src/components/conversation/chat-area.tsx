@@ -597,6 +597,12 @@ export function ChatArea(props: ChatAreaProps) {
       ) : null}
       {selectedConversation ? (
         <ConversationBranchWorkspaceV1
+          collaborationNavigation={{
+            conversations: props.workbench.conversations,
+            navigation: subagentNavigation,
+            onSelectConversation: props.onSelectConversation,
+            onOpenSubagentPanel: handleOpenSubagentPanelFromTimeline,
+          }}
           providers={props.workbench.providers}
           commandSessions={props.workbench.commandSessions ?? []}
           commands={eventWindowCommands}

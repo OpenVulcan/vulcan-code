@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn subagent_tool_surface_exposes_session_agent_style_tools_without_visible_task() {
     let task_runtime = Arc::new(TaskRuntime::new());
-    let candidates = build_subagent_tool_candidates(task_runtime);
+    let candidates = build_subagent_tool_candidates(task_runtime, None);
     let visible_ids = candidates
         .iter()
         .filter(|candidate| candidate.ai_visible)

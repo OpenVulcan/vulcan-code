@@ -330,7 +330,9 @@ fn goal_owner_recovery_preserves_events_and_rejects_unrelated_corruption() {
     // A duplicated boundary is not an ownership defect and must still be rejected.
     // 重复边界并非归属缺陷，仍必须拒绝。
     events.last_mut().unwrap().event = EventBody::TurnBoundary(TurnBoundaryEvent {
+        reason: vulcan_session_core::v1::event::TurnClosureReason::Completed,
         outcome: TurnOutcome::Completed,
+        purpose: vulcan_session_core::v1::event::TurnBoundaryPurpose::Business,
     });
     std::fs::write(&tail, serialize_segment(&events).unwrap()).unwrap();
     let mut old_metadata = metadata;
@@ -2965,7 +2967,9 @@ fn node(id: u64, occurred: u64, retained: u64) -> CompactionNode {
         api_stats_seq: Seq::try_new(occurred).unwrap(),
         occurred_at_seq: Seq::try_new(occurred).unwrap(),
         retained_from_seq: Seq::try_new(retained).unwrap(),
-        summary: String::new(),
+        content: vulcan_session_core::v1::context::CompactionContent::Summary {
+            text: String::new(),
+        },
         created_at_ms: 1,
     }
 }
@@ -3599,12 +3603,19 @@ fn fork_reselects_pointer_and_preserves_kept_nodes() {
     let loaded = load_session(&fork_layout).unwrap();
     assert_eq!(loaded.document.compactions.len(), 1);
     let kept = &loaded.document.compactions[0];
+    // This fork fixture owns a local summary; opaque checkpoints have a separate replay path.
+    // 此分支夹具持有本地摘要；不透明检查点使用独立重放路径。
+    let vulcan_session_core::v1::context::CompactionContent::Summary { text: summary } =
+        &kept.content
+    else {
+        panic!("expected local summary");
+    };
     let retained_summary_seq = output
         .events
         .iter()
         .find_map(|event| match &event.event {
-            EventBody::AssistantText(text) if text.text == kept.summary => Some(event.seq),
-            EventBody::AssistantReasoning(reasoning) if reasoning.text == kept.summary => {
+            EventBody::AssistantText(text) if &text.text == summary => Some(event.seq),
+            EventBody::AssistantReasoning(reasoning) if &reasoning.text == summary => {
                 Some(event.seq)
             }
             _ => None,

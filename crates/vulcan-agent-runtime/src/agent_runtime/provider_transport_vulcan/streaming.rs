@@ -103,7 +103,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
             public,
             controller_config,
             controller_snapshot,
-            source_message_positions: _,
+            source_message_positions,
             budget,
             context_budget,
             request_budget_guard,
@@ -112,6 +112,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         self.live_sender
             .send(Ok(ProviderStreamDelta::RequestPrepared {
                 candidate: ProviderRequestPreparationCandidate {
+                    source_message_positions,
                     media_context: Some(
                         crate::agent_runtime::events::ProviderRequestMediaContext {
                             execution: std::sync::Arc::clone(&self.media_execution),

@@ -657,6 +657,8 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         .insert(
             task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                kind: vulcan_ai_contract::HostMessageKind::TaskStart,
+                task_id: String::from("same-name-root-message"),
                 steering: false,
                 delivery_id: String::from("same-name-root-message"),
                 author_session_id: root_session_id,
@@ -1169,6 +1171,8 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         inboxes.insert(
             parent_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                kind: vulcan_ai_contract::HostMessageKind::TaskStart,
+                task_id: String::from("test-delivery-parent"),
                 steering: false,
                 delivery_id: String::from("test-delivery-parent"),
                 author_session_id: root_session_id,
@@ -1182,6 +1186,8 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         inboxes.insert(
             child_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                kind: vulcan_ai_contract::HostMessageKind::TaskStart,
+                task_id: String::from("test-delivery-child"),
                 steering: false,
                 delivery_id: String::from("test-delivery-child"),
                 author_session_id: parent_task_id,
@@ -1378,6 +1384,8 @@ async fn close_agent_rejects_non_cascade_orphans_and_closes_active_subtree() {
         inboxes.insert(
             parent_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                kind: vulcan_ai_contract::HostMessageKind::TaskStart,
+                task_id: String::from("non-cascade-parent-message"),
                 steering: false,
                 delivery_id: String::from("non-cascade-parent-message"),
                 author_session_id: root_session_id,
@@ -1391,6 +1399,8 @@ async fn close_agent_rejects_non_cascade_orphans_and_closes_active_subtree() {
         inboxes.insert(
             child_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                kind: vulcan_ai_contract::HostMessageKind::TaskStart,
+                task_id: String::from("non-cascade-child-message"),
                 steering: false,
                 delivery_id: String::from("non-cascade-child-message"),
                 author_session_id: parent_task_id,
@@ -1903,6 +1913,8 @@ async fn wait_agent_returns_consumed_child_feedback() {
     // queued_message represents an admitted successor that has not started its new physical execution yet.
     // queued_message 表示已经接纳、但尚未启动新物理执行的后继投递。
     let queued_message = QueuedInterAgentMessage {
+        kind: vulcan_ai_contract::HostMessageKind::TaskStart,
+        task_id: String::from("queued-after-terminal"),
         steering: false,
         delivery_id: String::from("queued-after-terminal"),
         author_session_id: root_session_id,

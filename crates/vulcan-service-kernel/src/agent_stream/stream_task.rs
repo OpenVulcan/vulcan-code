@@ -9,6 +9,9 @@ mod finished;
 mod launch_failure;
 mod prepared;
 mod provider_route_switch;
+mod question_finished;
+mod question_knowledge;
+mod question_launch;
 mod request_phase;
 mod request_trace;
 mod restart_state;
@@ -27,6 +30,12 @@ pub(crate) use prepared::PreparedStreamFailureCommit;
 pub(crate) use prepared::commit_prepared_stream_failure;
 use prepared::{PreparedStreamEventAction, handle_prepared_stream_event};
 use provider_route_switch::refreshed_execution_request_after_pending_provider_route_switch;
+pub(crate) use question_finished::handle_question_finished_report;
+pub(crate) use question_knowledge::resolve_child_question_knowledge;
+pub(crate) use question_launch::{
+    fail_question_execution_preparation, fail_undispatched_question_execution,
+    spawn_question_execution_stream_task,
+};
 use request_phase::{RequestPhaseStreamEvent, handle_request_phase_stream_event};
 use request_trace::StreamRequestTraceState;
 use restart_state::{StreamRestartState, commit_configuration_reprepare_limit};
@@ -35,7 +44,7 @@ pub(crate) use stream_exit::StreamTaskExitOutcome;
 pub(crate) use stream_exit::{StreamTaskExitReason, handle_stream_task_exit};
 use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
 use vulcan_session_core::v1::{
-    DomainError, TerminalSettlementRecord, TerminalSettlementState, TurnId,
+    DomainError, TerminalSettlementRecord, TerminalSettlementScope, TerminalSettlementState, TurnId,
 };
 
 /// Maximum persistence attempts for one terminal execution-failure boundary.
@@ -216,6 +225,29 @@ pub(crate) async fn persist_v1_execution_failure_boundary_for_turn(
     redacted_detail: Option<String>,
     expected_turn_id: Option<TurnId>,
 ) -> Result<(), String> {
+    persist_v1_execution_failure_boundary_for_scope(
+        task_state,
+        session_id,
+        reason_code,
+        redacted_detail,
+        expected_turn_id,
+        TerminalSettlementScope::BusinessTurn,
+    )
+    .await
+}
+
+/// Persists failure for the exact recorded business or question scope, retaining the same storage retry policy.
+/// 为精确记录的业务或答疑范围持久化失败，保留相同的存储重试策略。
+/// Inputs bind session, turn, scope and sanitized diagnostic; success means the complete terminal mutation is durable.
+/// 输入绑定会话、回合、范围及脱敏诊断；成功表示完整终态修改已可靠落盘。
+pub(crate) async fn persist_v1_execution_failure_boundary_for_scope(
+    task_state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    reason_code: &str,
+    redacted_detail: Option<String>,
+    expected_turn_id: Option<TurnId>,
+    scope: TerminalSettlementScope,
+) -> Result<(), String> {
     let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
         task_state, session_id,
     )?;
@@ -237,6 +269,9 @@ pub(crate) async fn persist_v1_execution_failure_boundary_for_turn(
         // attempt_reason_code is the exact reason identity consumed by this single attempt closure.
         // attempt_reason_code 是本次尝试闭包消费的精确原因身份。
         let attempt_reason_code = owned_reason_code.clone();
+        // Each retry retains the originally captured execution and API identity.
+        // 每次重试保留最初捕获的执行及 API 身份。
+        let attempt_scope = scope.clone();
         // persistence_result keeps the structured storage category available for safe retry policy.
         // persistence_result 保留结构化存储类别，以便执行安全的重试策略。
         let persistence_result = handle
@@ -245,7 +280,13 @@ pub(crate) async fn persist_v1_execution_failure_boundary_for_turn(
                 crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
                 crate::session_runtime_registry_v1::SessionFlushReason::DisplayBoundary,
                 move |document| {
-                    if let Some(expected_turn_id) = expected_turn_id {
+                    // Business failure still owns the active turn; auxiliary recovery proves its stored execution separately.
+                    // 业务失败仍拥有活动回合；辅助恢复则独立证明其已保存执行。
+                    // A durable auxiliary completion may already have selected a different queued user turn.
+                    // 可靠辅助完成可能已经选定不同的排队用户回合。
+                    if matches!(&attempt_scope, TerminalSettlementScope::BusinessTurn)
+                        && let Some(expected_turn_id) = expected_turn_id
+                    {
                         match document.active_turn().map(|turn| turn.turn_id) {
                             Some(actual_turn_id) if actual_turn_id == expected_turn_id => {}
                             Some(actual_turn_id) => {
@@ -258,17 +299,40 @@ pub(crate) async fn persist_v1_execution_failure_boundary_for_turn(
                             None => return Err(DomainError::NoActiveTurn),
                         }
                     }
-                    Ok(
-                        if document.fail_execution_boundary_and_close_turn(
-                            &attempt_reason_code,
-                            attempt_detail.as_deref(),
-                            now_ms,
-                        )? {
-                            crate::session_runtime_registry_v1::SessionMutationChange::Changed(())
-                        } else {
-                            crate::session_runtime_registry_v1::SessionMutationChange::Unchanged(())
-                        },
-                    )
+                    // The persisted scope chooses the reducer; auxiliary failure never closes its parent.
+                    // 持久化范围选择归约器；辅助失败绝不关闭其父回合。
+                    let changed = match attempt_scope {
+                        TerminalSettlementScope::BusinessTurn => document
+                            .fail_execution_boundary_and_close_turn(
+                                &attempt_reason_code,
+                                attempt_detail.as_deref(),
+                                now_ms,
+                            )?,
+                        TerminalSettlementScope::QuestionExecution { .. } => {
+                            let record = document.terminal_settlement_record().cloned().ok_or(
+                                DomainError::CollaborationStateViolation {
+                                    field: "terminal_settlement.question_intent",
+                                },
+                            )?;
+                            if record.scope != attempt_scope
+                                || Some(record.turn_id) != expected_turn_id
+                            {
+                                return Err(DomainError::CollaborationStateViolation {
+                                    field: "terminal_settlement.question_scope",
+                                });
+                            }
+                            document.fail_question_execution_for_terminal_settlement(
+                                &record,
+                                attempt_detail.as_deref(),
+                                now_ms,
+                            )?
+                        }
+                    };
+                    Ok(if changed {
+                        crate::session_runtime_registry_v1::SessionMutationChange::Changed(())
+                    } else {
+                        crate::session_runtime_registry_v1::SessionMutationChange::Unchanged(())
+                    })
                 },
             )
             .await;
@@ -322,10 +386,42 @@ pub(crate) async fn settle_stream_terminal_authority(
     redacted_detail: Option<String>,
     terminal_persistence_owner: SessionTerminalPersistenceOwnerGuard,
 ) -> bool {
+    settle_stream_terminal_authority_with_scope(
+        task_state,
+        session_id,
+        v1_terminal_authority_persisted,
+        fallback_reason_code,
+        redacted_detail,
+        terminal_persistence_owner,
+        TerminalSettlementScope::BusinessTurn,
+    )
+    .await
+}
+
+/// Settles the explicit execution scope and preserves it through durable and pre-intent recovery.
+/// 结算明确执行范围，并在可靠恢复及意图前恢复中保留该范围。
+/// The exact owner blocks replacements; a sufficient terminal receipt permits release without another mutation.
+/// 精确所有者阻止替代执行；充分终态回执允许不再修改而释放。
+/// Returns true only after durable scoped settlement and exact-owner release.
+/// 仅在范围内结算可靠完成并释放精确所有者后返回 true。
+pub(crate) async fn settle_stream_terminal_authority_with_scope(
+    task_state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    v1_terminal_authority_persisted: bool,
+    fallback_reason_code: &'static str,
+    redacted_detail: Option<String>,
+    terminal_persistence_owner: SessionTerminalPersistenceOwnerGuard,
+    scope: TerminalSettlementScope,
+) -> bool {
     // A sufficient durable Provider terminal leaves no dangerous phase, so the exact owner may reopen admission directly.
     // 充分的可靠 Provider 终态不留下危险阶段，因此精确 owner 可以直接重新开放准入。
     if v1_terminal_authority_persisted {
-        return release_settled_terminal_persistence_owner(terminal_persistence_owner, session_id);
+        return release_settled_terminal_persistence_owner(
+            task_state,
+            terminal_persistence_owner,
+            session_id,
+            &scope,
+        );
     }
     let owner_generation = terminal_persistence_owner.owner_generation();
     // The exact fallback survives failures before the V1 intent can be constructed.
@@ -337,6 +433,7 @@ pub(crate) async fn settle_stream_terminal_authority(
             owner_generation: owner_generation.clone(),
             reason_code: fallback_reason_code,
             redacted_detail: redacted_detail.clone(),
+            scope: scope.clone(),
         },
     ) {
         eprintln!(
@@ -368,15 +465,32 @@ pub(crate) async fn settle_stream_terminal_authority(
     };
     // settlement_turn_id is the exact logical turn whose terminal fact the dangerous phase must close.
     // settlement_turn_id 是危险阶段必须闭合终态事实的精确逻辑回合。
-    let settlement_turn_id = match handle
-        .read(|document| document.active_turn().map(|turn| turn.turn_id))
-    {
-        Ok(Some(turn_id)) => turn_id,
-        Ok(None) => {
+    let settlement_turn_id = match handle.read(|document| match &scope {
+        TerminalSettlementScope::BusinessTurn => {
+            Ok::<_, DomainError>(document.active_turn().map(|turn| turn.turn_id))
+        }
+        TerminalSettlementScope::QuestionExecution { execution_id, .. } => {
+            let execution = document
+                .collaboration_state()
+                .question_executions
+                .get(execution_id)
+                .ok_or_else(|| DomainError::CollaborationNotFound {
+                    kind: "question_execution",
+                    identity: execution_id.as_str().to_owned(),
+                })?;
+            Ok(execution.execution_turn_id.or(execution.parent_turn_id))
+        }
+    }) {
+        Ok(Ok(Some(turn_id))) => turn_id,
+        Ok(Ok(None)) => {
             // No open turn remains, so the fallback write cannot create a second terminal fact.
             // 已无开放回合，回退写入不可能产生第二条终态事实。
-            let released =
-                release_settled_terminal_persistence_owner(terminal_persistence_owner, session_id);
+            let released = release_settled_terminal_persistence_owner(
+                task_state,
+                terminal_persistence_owner,
+                session_id,
+                &scope,
+            );
             if released {
                 crate::terminal_settlement_service::clear_terminal_pre_intent_repair(
                     task_state,
@@ -385,6 +499,13 @@ pub(crate) async fn settle_stream_terminal_authority(
                 );
             }
             return released;
+        }
+        Ok(Err(error)) => {
+            eprintln!(
+                "[webui-service] terminal execution binding unavailable: session={session_id} error={error}"
+            );
+            drop(terminal_persistence_owner);
+            return false;
         }
         Err(error) => {
             eprintln!(
@@ -399,6 +520,7 @@ pub(crate) async fn settle_stream_terminal_authority(
         settlement_id: settlement_id.clone(),
         session_id: session_id.to_string(),
         turn_id: settlement_turn_id,
+        scope: scope.clone(),
         owner_generation,
         state: TerminalSettlementState::Pending,
         reason_code: fallback_reason_code.to_string(),
@@ -426,12 +548,13 @@ pub(crate) async fn settle_stream_terminal_authority(
         session_id,
         &intent.owner_generation,
     );
-    match persist_v1_execution_failure_boundary_for_turn(
+    match persist_v1_execution_failure_boundary_for_scope(
         task_state,
         session_id,
         fallback_reason_code,
         redacted_detail,
         Some(settlement_turn_id),
+        scope.clone(),
     )
     .await
     {
@@ -474,15 +597,30 @@ pub(crate) async fn settle_stream_terminal_authority(
         drop(terminal_persistence_owner);
         return false;
     }
-    release_settled_terminal_persistence_owner(terminal_persistence_owner, session_id)
+    release_settled_terminal_persistence_owner(
+        task_state,
+        terminal_persistence_owner,
+        session_id,
+        &scope,
+    )
 }
 
 /// Releases one exact owner after its durable terminal fact and settlement intent are settled.
 /// 在可靠终态事实与结算意图均已落场后释放一个精确 owner。
 fn release_settled_terminal_persistence_owner(
+    state: &SharedServiceBridgeState,
     terminal_persistence_owner: SessionTerminalPersistenceOwnerGuard,
     session_id: SessionId,
+    scope: &TerminalSettlementScope,
 ) -> bool {
+    // Keep child admission closed when the durable auxiliary terminal cannot be proven.
+    // 无法证明可靠辅助终态时保持子准入关闭。
+    if let Err(error) = crate::agent_collaboration::child_execution_ownership::release_child_question_execution_owner(
+        state, session_id, scope,
+    ) {
+        eprintln!("[webui-service] child question admission release failed: session={session_id} error={error}");
+        return false;
+    }
     match terminal_persistence_owner.release() {
         Ok(()) => true,
         Err(error) => {
@@ -507,6 +645,8 @@ fn release_settled_terminal_persistence_owner(
 /// 存在安全处理后的原始失败时由 `redacted_detail` 携带。
 /// `terminal_persistence_owner` binds cleanup to the exact marker installed before active ownership was released.
 /// `terminal_persistence_owner` 将清理绑定到释放活动所有权前安装的精确标记。
+/// `terminal_scope` is captured by the original stream and selects its business or auxiliary failure reducer.
+/// `terminal_scope` 由原始流捕获，选择其业务或辅助失败归约器。
 /// # Returns
 /// 返回值
 /// This asynchronous cleanup reports failures through service diagnostics and always leaves the in-process token fail-closed when its exact owner remains current.
@@ -517,6 +657,7 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
     terminal_persistence_owner: SessionTerminalPersistenceOwner,
     reason_code: &'static str,
     redacted_detail: Option<String>,
+    terminal_scope: TerminalSettlementScope,
 ) {
     // terminal_persistence_guard keeps Continue, prompts, Stop, and kernel turns closed through every early return.
     // terminal_persistence_guard 在所有提前返回路径中持续阻塞 Continue、提示词、Stop 与 kernel 回合。
@@ -533,13 +674,14 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
             return;
         }
     };
-    settle_stream_terminal_authority(
+    settle_stream_terminal_authority_with_scope(
         &task_state,
         session_id,
         false,
         reason_code,
         redacted_detail,
         terminal_persistence_guard,
+        terminal_scope,
     )
     .await;
 }
@@ -608,6 +750,7 @@ fn spawn_agent_stream_task_with_restart_state(
         &request.execution_scope,
         request.runtime_policy.hooks_enabled,
         request.conversation_hook_turn_id.as_deref(),
+        request.prompt_purpose,
     );
     let runtime_event_hook_policy = match runtime_event_hook_policy {
         Ok(policy) => policy,
@@ -637,6 +780,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                 ),
                                 "runtime_event_hook_correlation_rejected",
                                 Some(error.clone()),
+                                restart_state.terminal_scope(),
                             ));
                         } else {
                             eprintln!(
@@ -665,6 +809,9 @@ fn spawn_agent_stream_task_with_restart_state(
     let task_state = state.clone();
     let registration_failure_app = app.clone();
     let registration_failure_state = state.clone();
+    // Registration may drop the entire future; retain its original scope outside that future.
+    // 登记可能丢弃整个 Future；在该 Future 外保留原始范围。
+    let registration_failure_scope = restart_state.terminal_scope();
     // registrationExpectedKernelTurnId remains outside the moved task so registration validates the same immutable owner.
     // registrationExpectedKernelTurnId 保留在被移动任务之外，使登记校验同一不可变所有者。
     let registration_expected_kernel_turn_id = expected_kernel_turn_id.clone();
@@ -817,7 +964,7 @@ fn spawn_agent_stream_task_with_restart_state(
                         preparation,
                         session_id,
                         stream_task_started_at,
-                        restart_state,
+                        restart_state.clone(),
                         active_stream_task_id,
                         expected_kernel_generation,
                         &expected_kernel_turn_id,
@@ -844,7 +991,7 @@ fn spawn_agent_stream_task_with_restart_state(
                     let lifecycle = event.v1_lifecycle.clone();
                     // Once any prior V1 durability checkpoint fails, reject later preparation locally.
                     // 任一既有 V1 可靠性检查点失败后，在本地拒绝后续准备，绝不再次进入唯一 owner。
-                    let permit_result = if let Some(error) =
+                    let mut permit_result = if let Some(error) =
                         prepared_retry_checkpoint_error.as_ref()
                     {
                         Err(error.clone())
@@ -854,7 +1001,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                 Some(sink),
                                 Some(ProviderV1LifecycleFacts::RequestPrepared(facts)),
                             ) => sink
-                                .prepare_request(facts, candidate)
+                                .prepare_request(&task_state, facts, candidate)
                                 .await
                                 .map_err(|error| error.to_string()),
                             (Some(_), Some(ProviderV1LifecycleFacts::ExcludedNonSession))
@@ -876,7 +1023,19 @@ fn spawn_agent_stream_task_with_restart_state(
                     };
                     // A real permit is the only progress boundary that replenishes configuration-restart allowance.
                     // 真实许可是唯一补充配置重启额度的进展边界。
+                    // Cancellation ownership starts at commit, before later owner validation or producer wakeup.
+                    // 取消归属从提交时开始，早于后续所有者校验或生产者唤醒。
+                    provider_telemetry_guard.observe_preparation_result(&event, &permit_result);
                     restart_state.observe_preparation(&permit_result);
+                    // Retain the committed API identity even if its owner check prevents network dispatch.
+                    // 即使所有者核对阻止网络分派，仍保留已提交 API 身份。
+                    if let Err(error) = restart_state.validate_prepared_owner(
+                        &task_state,
+                        session_id,
+                        &permit_result,
+                    ) {
+                        permit_result = Err(error);
+                    }
                     if let Err(error) = permit_result.as_ref() {
                         prepared_retry_checkpoint_error = Some(error.clone());
                         eprintln!(
@@ -1281,6 +1440,7 @@ fn spawn_agent_stream_task_with_restart_state(
                             &task_state,
                             session_id,
                             active_stream_task_id,
+                            restart_state.terminal_scope(),
                         )
                         .await;
                         return;
@@ -1343,6 +1503,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                     ),
                                     "context_compaction_policy_refresh_failed",
                                     Some(error),
+                                    restart_state.terminal_scope(),
                                 )
                                 .await;
                             }
@@ -1362,6 +1523,7 @@ fn spawn_agent_stream_task_with_restart_state(
                             &task_state,
                             session_id,
                             active_stream_task_id,
+                            restart_state.terminal_scope(),
                         )
                         .await;
                         return;
@@ -1427,6 +1589,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                     ),
                                     "pending_provider_route_activation_failed",
                                     Some(error),
+                                    restart_state.terminal_scope(),
                                 )
                                 .await;
                             }
@@ -1459,6 +1622,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                 Some(format!(
                                     "Repeated context compaction was rejected: {reason}"
                                 )),
+                                restart_state.terminal_scope(),
                             )
                             .await;
                         }
@@ -1481,6 +1645,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                 Some(String::from(
                                     "Context compaction requires an active execution preparation.",
                                 )),
+                                restart_state.terminal_scope(),
                             )
                             .await;
                         }
@@ -1554,6 +1719,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                     ),
                                     "context_compaction_request_missing",
                                     Some(error),
+                                    restart_state.terminal_scope(),
                                 )
                                 .await;
                             }
@@ -1579,6 +1745,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                     ),
                                     "context_compaction_failed",
                                     Some(error),
+                                    restart_state.terminal_scope(),
                                 )
                                 .await;
                             }
@@ -1601,6 +1768,7 @@ fn spawn_agent_stream_task_with_restart_state(
                         active_stream_task_id,
                         stream_task_started_at,
                         execution_provider_goal_id.as_deref(),
+                        restart_state.terminal_scope(),
                         v1_finished_durability,
                         report,
                     )
@@ -1663,13 +1831,14 @@ fn spawn_agent_stream_task_with_restart_state(
                 StreamTaskExitReason::StaleKernelGeneration => "stale_kernel_generation",
                 StreamTaskExitReason::FinishedEventHandled => "finished_event_already_handled",
             };
-            settle_stream_terminal_authority(
+            settle_stream_terminal_authority_with_scope(
                 &task_state,
                 session_id,
                 false,
                 reason_code,
                 None,
                 terminal_persistence_guard,
+                restart_state.terminal_scope(),
             )
             .await;
         }
@@ -1712,6 +1881,7 @@ fn spawn_agent_stream_task_with_restart_state(
                             SessionTerminalPersistenceOwner::KernelGeneration(kernel_generation),
                             "stream_task_registration_failed",
                             Some(error.to_string()),
+                            registration_failure_scope,
                         ));
                     } else {
                         eprintln!(

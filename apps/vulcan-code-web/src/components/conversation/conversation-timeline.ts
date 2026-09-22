@@ -61,7 +61,18 @@ export function projectConversationTimelineItems(
         && (!isTurnStatsRenderItem(item) || isSubagentTurnStatsRenderItem(item))),
       isAssistantMarkdownRenderItem,
     );
+    // Trailing host interactions must not steal the parent final answer or move before it.
+    // 末尾宿主交互不能抢占父助手最终回复，也不能移动到它之前。
+    const trailingInteractions: ConversationRenderItem[] = [];
+    if (!running && !stopped) {
+      while (processItems.at(-1)?.blocks.some((block) => block.kind === "agent-interaction")) {
+        trailingInteractions.unshift(processItems.pop()!);
+      }
+    }
     const finalItem = !running && !stopped ? popTrailingFinalAssistantItem(processItems) : null;
+    if (!finalItem) {
+      processItems.push(...trailingInteractions.splice(0));
+    }
     const turnUserItem = currentTurn.userItem;
     const shouldDefaultCollapse = Boolean(turnUserItem) && Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(turnUserItem?.id ?? "");
     const startedAtMs = conversationMessageUnixMillis(currentTurn.anchorItem.sourceMessage ?? currentTurn.anchorItem.userMessage);
@@ -89,6 +100,9 @@ export function projectConversationTimelineItems(
     }
     if (finalItem) {
       timeline.push({ kind: "item", item: finalItem, finalAssistantOutput: true });
+    }
+    for (const item of trailingInteractions) {
+      timeline.push({ kind: "item", item });
     }
     if (currentTurn.statsItem) {
       timeline.push({ kind: "item", item: currentTurn.statsItem });
@@ -200,6 +214,7 @@ function timelineCanStartImplicitProcessTurn(
     || isTurnStatsRenderItem(item)
     || isContextCompactionRenderItem(item)
     || isSubagentFeedbackDisplayRenderItem(item)
+    || item.blocks.some((block) => block.kind === "agent-interaction")
   ) {
     return false;
   }

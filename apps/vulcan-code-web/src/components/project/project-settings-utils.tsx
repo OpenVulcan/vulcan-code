@@ -1,4 +1,4 @@
-import { BookMarked, Bot, BrainCircuit, Database, FolderCog, Network } from "lucide-react";
+import { BookMarked, Bot, BrainCircuit, Database, FolderCog, Network, ShieldCheck } from "lucide-react";
 import type { TranslationKey } from "@/i18n";
 import type { ProjectSummary, WorkbenchSnapshot } from "@/types";
 import type {
@@ -51,6 +51,12 @@ export function projectSettingsSections(
       icon: <Database size={16} />,
       label: t("projectSettings.attachmentCache"),
       detail: t("projectSettings.attachmentCleanup"),
+    },
+    {
+      id: "collaboration-grants",
+      icon: <ShieldCheck size={16} />,
+      label: t("conversation.collaboration.timeline.grant"),
+      detail: t("conversation.collaboration.status.granted"),
     },
   ];
   sections.splice(2, 0, {

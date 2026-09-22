@@ -220,6 +220,7 @@ pub(super) async fn handle_prepared_stream_event(
                 SessionTerminalPersistenceOwner::StreamTask(active_stream_task_id),
                 "execution_preparation_failed",
                 Some(error),
+                restart_state.terminal_scope(),
             )
             .await;
         }
@@ -308,6 +309,7 @@ pub(super) async fn handle_prepared_stream_event(
                     SessionTerminalPersistenceOwner::StreamTask(active_stream_task_id),
                     "automatic_context_compaction_failed",
                     Some(error),
+                    restart_state.terminal_scope(),
                 )
                 .await;
             }

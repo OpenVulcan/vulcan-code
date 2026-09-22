@@ -890,6 +890,9 @@ pub(crate) fn runtime_event_trace_detail(event: &RuntimeEvent) -> String {
 /// 为 WebUI 跟踪日志构建紧凑的分离任务元数据。
 pub(crate) fn detached_task_event_trace_detail(event: &DetachedTaskRuntimeEvent) -> String {
     match event {
+        DetachedTaskRuntimeEvent::StartupAborted {
+            parent_session_id, ..
+        } => format!("parent={parent_session_id} startup_aborted=true"),
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::RuntimeEvent {
             event,
             ..
@@ -977,6 +980,7 @@ pub(crate) fn detached_task_event_trace_detail(event: &DetachedTaskRuntimeEvent)
 /// 返回单条分离任务事件的紧凑标签，避免输出大型载荷。
 pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'static str {
     match event {
+        DetachedTaskRuntimeEvent::StartupAborted { .. } => "child.startup_aborted",
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::Prepared(_)) => {
             "child.prepared"
         }
@@ -1357,7 +1361,11 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 .map(|selection| &selection.model.capabilities),
         ),
         thinking_display_mode: workbench_thinking_display_mode(provider_configuration),
-        tool_collapse_default_enabled: Some(provider_configuration.tool_collapse_default_enabled.unwrap_or(true)),
+        tool_collapse_default_enabled: Some(
+            provider_configuration
+                .tool_collapse_default_enabled
+                .unwrap_or(true),
+        ),
         git_commit: git_commit_settings(provider_configuration),
         provider_retry: provider_retry_settings(provider_configuration),
         provider_request_trace_enabled: provider_configuration.provider_request_trace_enabled,

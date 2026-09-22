@@ -738,7 +738,15 @@ impl SessionDocument {
                 field: "active_request_uninitialized",
             });
         }
-        let turn_id = self.require_open_turn()?.turn_id;
+        let turn = self.require_open_turn()?;
+        if turn.origin == super::TurnOrigin::ContextMaintenance
+            && purpose != ApiPurposeKind::Compaction
+        {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "context_maintenance.api_purpose",
+            });
+        }
+        let turn_id = turn.turn_id;
         if let Some(action_id) = continuation_action_id.as_ref() {
             self.validate_continuation_action_for_api(action_id, turn_id)?;
         }

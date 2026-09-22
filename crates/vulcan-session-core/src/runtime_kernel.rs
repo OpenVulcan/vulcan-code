@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Runtime kind for an active session turn.
 /// 活动会话回合的运行类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActiveTurnKind {
     /// User prompted provider turn.
@@ -14,6 +14,13 @@ pub enum ActiveTurnKind {
     /// Mailbox-triggered provider turn.
     /// mailbox 触发的 Provider 回合。
     MailboxTriggered,
+    /// Dedicated temporary question execution that must not complete the business task.
+    /// 临时问题专用执行，不得结束业务任务。
+    QuestionExecution {
+        /// Durable execution identity owned by this exact kernel generation.
+        /// 当前精确内核代际拥有的可靠执行身份。
+        execution_id: crate::v1::collaboration::CollaborationExecutionId,
+    },
     /// Hidden provider turn triggered by an active goal while the session is idle.
     /// 会话空闲时由活跃目标触发的隐藏 Provider 回合。
     GoalContinuation,
@@ -299,7 +306,7 @@ impl SessionRuntimeKernel {
             generation: self.generation,
             stopped: self.stopped,
             active_turn_id: self.active_turn.as_ref().map(|turn| turn.turn_id.clone()),
-            active_turn_kind: self.active_turn.as_ref().map(|turn| turn.kind),
+            active_turn_kind: self.active_turn.as_ref().map(|turn| turn.kind.clone()),
             active_turn_generation: self.active_turn.as_ref().map(|turn| turn.generation),
             mailbox_delivery_phase: self.input_queue.delivery_phase(),
             current_turn_input_count: self.input_queue.current_turn_len(),
@@ -545,6 +552,39 @@ mod tests {
         assert_eq!(
             kernel.active_turn().map(|turn| turn.turn_id.as_str()),
             Some("turn-1")
+        );
+    }
+
+    /// Question identity survives projection and serialization, then leaves with the stopped generation.
+    /// 问题身份跨投影与序列化保留，随后随被停止代际一起移出。
+    #[test]
+    fn question_execution_identity_is_owned_by_one_kernel_generation() {
+        // execution_id represents one reliable auxiliary operation rather than a display label.
+        // execution_id 表示一个可靠辅助操作，而非显示标签。
+        let execution_id =
+            crate::v1::collaboration::CollaborationExecutionId::try_new("question-run").unwrap();
+        // kernel is isolated and uses a real runtime turn transition.
+        // kernel 独立且使用真实运行时回合转换。
+        let mut kernel = SessionRuntimeKernel::new(SessionNodeId::new_v4());
+        let kind = ActiveTurnKind::QuestionExecution {
+            execution_id: execution_id.clone(),
+        };
+        kernel
+            .start_turn("qa-preparation", kind.clone(), 10)
+            .unwrap();
+        assert_eq!(kernel.snapshot().active_turn_kind, Some(kind.clone()));
+        // restored preserves the exact current-contract identity with no legacy decoder.
+        // restored 保留当前契约的精确身份，不使用历史解码器。
+        let mut restored: SessionRuntimeKernel =
+            serde_json::from_str(&serde_json::to_string(&kernel).unwrap()).unwrap();
+        assert_eq!(restored.stop_current_generation(20).unwrap().kind, kind);
+        assert!(restored.snapshot().active_turn_kind.is_none());
+        restored
+            .start_turn("business", ActiveTurnKind::UserPrompt, 30)
+            .unwrap();
+        assert_eq!(
+            restored.snapshot().active_turn_kind,
+            Some(ActiveTurnKind::UserPrompt)
         );
     }
 

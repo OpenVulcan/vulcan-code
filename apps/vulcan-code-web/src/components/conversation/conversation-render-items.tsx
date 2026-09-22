@@ -807,7 +807,7 @@ export function ConversationRenderItemView(props: {
         {props.item.leadingThinking ? <ThinkingPreview compact>
           {props.item.leadingThinking.map((block) => <MarkdownMessage key={block.id} content={block.body} eager onOpenMedia={props.onOpenMedia} />)}
         </ThinkingPreview> : null}
-        {props.item.role === "system" ? <span className="message-role-label">SYSTEM</span> : null}
+        {props.item.role === "system" && !props.item.sourceMessage?.agentInteraction ? <span className="message-role-label">SYSTEM</span> : null}
         <div className="conversation-block-content">
         <ConversationBlocksView
           autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}

@@ -400,12 +400,10 @@ fn render_core_conversation_message_preview(
             "### {}. agent_message · `{}`\n{}",
             index + 1,
             message.id,
-            render_text_code_fence(
-                &message
-                    .payload
-                    .agent_message_model_text()
-                    .unwrap_or_default()
-            )
+            match message.payload.agent_message_model_text(&message.id) {
+                Ok(text) => render_text_code_fence(&text),
+                Err(error) => format!("Agent message rendering failed: {error}"),
+            }
         ),
     }
 }

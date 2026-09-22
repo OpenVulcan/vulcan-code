@@ -66,15 +66,9 @@ const DEFAULT_AGENT_COLOR: &str = "gray";
 /// 插件贡献智能体使用的稳定宿主分类标识。
 pub const PLUGIN_SUBAGENT_CATEGORY_ID: &str = "plugins";
 
-/// Subagent mode keys accepted by catalog files and spawn_agent.
-/// 目录文件与 spawn_agent 接受的子代理模式键。
-pub const SUBAGENT_MODE_DEFAULT: &str = "default";
-/// Mirror subagent mode key accepted by catalog files and spawn_agent.
-/// 目录文件与 spawn_agent 接受的镜像子代理模式键。
-pub const SUBAGENT_MODE_MIRROR: &str = "mirror";
-/// Expert subagent mode key accepted by catalog files and spawn_agent.
-/// 目录文件与 spawn_agent 接受的专家子代理模式键。
-pub const SUBAGENT_MODE_EXPERT: &str = "expert";
+pub use vulcan_session_core::task_config::{
+    SUBAGENT_MODE_DEFAULT, SUBAGENT_MODE_EXPERT, SUBAGENT_MODE_MIRROR,
+};
 
 /// Loaded catalog scope for one subagent definition.
 /// 单个子代理定义的已加载目录作用域。

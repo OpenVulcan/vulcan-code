@@ -1,9 +1,14 @@
 //! Pure domain builders for edited and forked history generations.
 //! 编辑与分叉历史 generation 的纯领域构建器。
 
+use crate::v1::collaboration::CollaborationMetadata;
 use crate::v1::compaction_frontier::select_node_for_seq;
 use crate::v1::config::{ForkOrigin, GoalConfig, InputState, MetadataDocument, PlanModeConfig};
 use crate::v1::context::{CompactionNode, RuntimeInitializationState, RuntimeLock};
+use crate::v1::dynamic_context::{
+    DYNAMIC_CONTEXT_DEVELOPER_KEY, DYNAMIC_CONTEXT_PERSISTENT_KEY, DYNAMIC_CONTEXT_RUNTIME_KEY,
+    DYNAMIC_CONTEXT_SYSTEM_KEY, DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY, DYNAMIC_CONTEXT_TRANSIENT_KEY,
+};
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
     ConversationEvent, EventBody, EventVisibility, SystemContextEvent, SystemContextOperation,
@@ -146,6 +151,13 @@ impl SessionDocument {
         input: EditGenerationInput,
     ) -> Result<GenerationBuildOutput, DomainError> {
         self.ensure_generation_source_ready()?;
+        // Replacing source history cannot abandon an accepted question or child obligation.
+        // 替换来源历史不能遗弃已接纳问题或子任务义务。
+        if self.has_unsettled_collaboration_for_edit_or_delete() {
+            return Err(DomainError::InvalidGenerationInput {
+                field: "unsettled_collaboration",
+            });
+        }
         validate_timestamp("generation.now_ms", input.now_ms)?;
         validate_user_input(
             input.replacement.text.clone(),
@@ -369,6 +381,19 @@ impl SessionDocument {
         metadata.mode.plan = PlanModeConfig::default();
         metadata.config.pending_request = None;
         metadata.input_state = InputState::default();
+        // Dynamic request producers are refreshed from the new execution after explicit history invalidation.
+        // 动态请求生产者在历史明确失效后由新执行重新生成。
+        metadata.dynamic_context.clear();
+        // A new event-tree generation cannot inherit the old child's executable profile ownership.
+        // 新事件树代际不能继承旧子代理的可执行配置所有权。
+        metadata.child_execution_profile = None;
+        metadata.context_maintenance = None;
+        // A rewritten parent cannot retain executable creation ownership from its old event tree.
+        // 改写后的父会话不能保留旧事件树的可执行创建归属。
+        metadata.child_creation_intents.clear();
+        // A rewritten event tree cannot retain another generation's Hook correlation.
+        // 改写后的事件树不能保留另一代次的 Hook 关联。
+        metadata.business_hook = crate::v1::business_hook::BusinessHookMetadata::default();
         metadata.segment_generation = next_segment_generation;
         metadata.active_context_generation = next_context_generation;
         metadata.open_turn_start_seq = open_turn_start_seq;
@@ -385,6 +410,12 @@ impl SessionDocument {
         target_seq: Seq,
         now_ms: i64,
     ) -> Result<GenerationBuildOutput, DomainError> {
+        // Copied events remain readable, but only events after this boundary can own new collaboration work.
+        // 复制事件保持可读，但只有此边界之后的事件可以拥有新的协作执行权威。
+        metadata.collaboration = CollaborationMetadata {
+            history_boundary_seq: Some(target_seq),
+            ..CollaborationMetadata::new()
+        };
         let kept_compactions: Vec<CompactionNode> = self
             .compactions
             .iter()
@@ -403,7 +434,7 @@ impl SessionDocument {
             locked_sources: Vec::new(),
         };
 
-        let active_mode_keys = active_mode_context_keys(&retained, target_seq)?;
+        let active_mode_keys = active_generation_context_keys(&retained, target_seq)?;
         let mut document = SessionDocument::from_parts(
             metadata.clone(),
             runtime_lock.clone(),
@@ -430,7 +461,7 @@ impl SessionDocument {
                         operation: SystemContextOperation::Remove,
                         scope: SystemContextScope::Session,
                         ttl_turns: None,
-                        provider_role_hint: Some(SystemRoleHint::Developer),
+                        provider_role_hint: Some(SystemRoleHint::HiddenUserShell),
                         content: generation_reset_content(context_key).to_string(),
                     }),
                     now_ms,
@@ -493,18 +524,26 @@ impl SessionDocument {
     }
 }
 
-/// Returns active Goal/Plan semantic keys that must receive explicit removal facts.
-/// 返回必须追加显式移除事实的活动 Goal/Plan 语义键。
-fn active_mode_context_keys(
+/// Returns active mode and request-context keys that must receive explicit removal facts.
+/// 返回必须追加显式移除事实的活动模式及请求上下文语义键。
+fn active_generation_context_keys(
     events: &[ConversationEvent],
     through_seq: Seq,
 ) -> Result<Vec<&'static str>, DomainError> {
+    // Active versions come from the retained prefix, never from a newer metadata snapshot.
+    // 活动版本来自保留历史前缀，不能从时间更晚的 metadata 快照推断。
     let active = derive_active_system_state(events, through_seq)?;
     let mut result = Vec::new();
     for context_key in [
         GOAL_STATE_CONTEXT_KEY,
         GOAL_CONTINUATION_CONTEXT_KEY,
         PLAN_MODE_CONTEXT_KEY,
+        DYNAMIC_CONTEXT_SYSTEM_KEY,
+        DYNAMIC_CONTEXT_DEVELOPER_KEY,
+        DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY,
+        DYNAMIC_CONTEXT_RUNTIME_KEY,
+        DYNAMIC_CONTEXT_PERSISTENT_KEY,
+        DYNAMIC_CONTEXT_TRANSIENT_KEY,
     ] {
         if active.iter().any(|state| state.context_key == context_key) {
             result.push(context_key);
@@ -526,7 +565,15 @@ fn generation_reset_content(context_key: &str) -> &'static str {
         PLAN_MODE_CONTEXT_KEY => {
             "Plan mode was reset because the conversation history was replaced."
         }
-        _ => unreachable!("only frozen mode context keys are passed to the reset builder"),
+        DYNAMIC_CONTEXT_SYSTEM_KEY
+        | DYNAMIC_CONTEXT_DEVELOPER_KEY
+        | DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY
+        | DYNAMIC_CONTEXT_RUNTIME_KEY
+        | DYNAMIC_CONTEXT_PERSISTENT_KEY
+        | DYNAMIC_CONTEXT_TRANSIENT_KEY => {
+            "This context version expired because the conversation history was replaced. New execution context will be supplied separately."
+        }
+        _ => unreachable!("only frozen generation context keys are passed to the reset builder"),
     }
 }
 
@@ -553,14 +600,23 @@ fn checked_generation_counter(field: &'static str, value: u64) -> Result<u64, Do
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
+    use crate::v1::collaboration::{
+        AddCollaborationGrantInput, CollaborationDeliveryId, CollaborationExecutionPurpose,
+        CollaborationGrantAction, CollaborationGrantAuthority, CollaborationOperationId,
+        CollaborationParticipant, CollaborationQuestionId, CreateQuestionInput,
+        ReserveChildTaskInput,
+    };
     use crate::v1::config::{ActiveRequestConfig, PendingRequestConfig};
     use crate::v1::document::{ApiCompletion, ClientInputSubmission};
+    use crate::v1::dynamic_context::DynamicContextInput;
     use crate::v1::event::{
         ApiCallStatus, ApiEndReason, ApiPurposeKind, ApiRequestSnapshot, ApiTimings,
         AssistantSemanticStatus, ContinuationEligibility,
     };
-    use crate::v1::ids::ClientActionId;
+    use crate::v1::ids::{ClientActionId, SubagentTaskId};
     use crate::v1::stats::UsageSnapshot;
 
     /// Fixed semantic time used by generation tests.
@@ -579,8 +635,51 @@ mod tests {
             .expect("fixture revision becomes durable");
     }
 
-    /// Builds one durable source containing two root turns and an active Plan context before the second root.
-    /// 构建一个包含两个根回合且第二根输入前已有活动 Plan 上下文的可靠源文档。
+    /// Builds the six active request dynamic producers used by generation fixtures.
+    /// 构建 generation 夹具使用的六个活动请求动态生产者。
+    fn active_dynamic_context_inputs() -> Vec<DynamicContextInput> {
+        vec![
+            DynamicContextInput::new(
+                DYNAMIC_CONTEXT_SYSTEM_KEY,
+                Some("system-prefix".to_string()),
+                SystemContextScope::Session,
+                None,
+            ),
+            DynamicContextInput::new(
+                DYNAMIC_CONTEXT_DEVELOPER_KEY,
+                Some("developer-prefix".to_string()),
+                SystemContextScope::Session,
+                None,
+            ),
+            DynamicContextInput::new(
+                DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY,
+                Some("tool-prefix".to_string()),
+                SystemContextScope::Session,
+                None,
+            ),
+            DynamicContextInput::new(
+                DYNAMIC_CONTEXT_RUNTIME_KEY,
+                Some("runtime-prefix".to_string()),
+                SystemContextScope::Session,
+                None,
+            ),
+            DynamicContextInput::new(
+                DYNAMIC_CONTEXT_PERSISTENT_KEY,
+                Some("persistent-prefix".to_string()),
+                SystemContextScope::Session,
+                None,
+            ),
+            DynamicContextInput::new(
+                DYNAMIC_CONTEXT_TRANSIENT_KEY,
+                Some("transient-prefix".to_string()),
+                SystemContextScope::Session,
+                None,
+            ),
+        ]
+    }
+
+    /// Builds one durable source with two root turns, an active Plan context, and six dynamic keys before the second root.
+    /// 构建一个包含两个根回合、活动 Plan 上下文及六个动态键的可靠源文档。
     fn durable_edit_source() -> SessionDocument {
         let mut document = SessionDocument::new("source-session", "project", "source", T0);
         document
@@ -608,6 +707,9 @@ mod tests {
                 T0 + 3,
             )
             .unwrap();
+        document
+            .synchronize_dynamic_context(active_dynamic_context_inputs(), T0 + 4)
+            .unwrap();
         document.metadata.mode.plan.enabled = true;
         document
             .submit_root_input(
@@ -616,11 +718,122 @@ mod tests {
                     "second",
                     Vec::new(),
                 ),
-                T0 + 4,
+                T0 + 5,
             )
             .unwrap();
         document
-            .close_turn(crate::v1::event::TurnOutcome::Completed, 1, T0 + 5)
+            .close_turn(crate::v1::event::TurnOutcome::Completed, 1, T0 + 6)
+            .unwrap();
+        make_durable(&mut document);
+        document
+    }
+
+    /// Builds a durable source with real pending question, child, and grant state.
+    /// 构建一个带有真实待处理问题、子任务和授权状态的可靠源文档。
+    fn durable_fork_source_with_pending_collaboration() -> SessionDocument {
+        let mut document = SessionDocument::new("source-session", "project", "source", T0);
+        document
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("root-1").unwrap(),
+                    "first",
+                    Vec::new(),
+                ),
+                T0 + 1,
+            )
+            .unwrap();
+        let parent_turn_id = document
+            .active_turn()
+            .expect("first root must open a parent turn")
+            .turn_id;
+        let child_task_id = SubagentTaskId::try_new("child-task").unwrap();
+        let child = CollaborationParticipant::new(
+            "child-session",
+            "source-session",
+            "project",
+            1,
+            None,
+            Some(child_task_id.clone()),
+        )
+        .unwrap();
+        document
+            .reserve_child_task(ReserveChildTaskInput {
+                source_tool_name: String::from("spawn_agent"),
+                execution_id: crate::v1::collaboration::CollaborationExecutionId::try_new(
+                    "child-execution",
+                )
+                .unwrap(),
+                operation_id: CollaborationOperationId::try_new("child-operation").unwrap(),
+                task_id: child_task_id,
+                parent_turn_id,
+                child,
+                reserved_at_ms: T0 + 2,
+            })
+            .unwrap();
+
+        let source = CollaborationParticipant::new(
+            "source-session",
+            "source-session",
+            "project",
+            1,
+            Some(parent_turn_id),
+            None,
+        )
+        .unwrap();
+        let target = CollaborationParticipant::new(
+            "target-session",
+            "target-session",
+            "project",
+            1,
+            None,
+            None,
+        )
+        .unwrap();
+        document
+            .create_question(CreateQuestionInput {
+                operation_id: CollaborationOperationId::try_new("question-operation").unwrap(),
+                question_id: CollaborationQuestionId::try_new("question-id").unwrap(),
+                delivery_id: CollaborationDeliveryId::try_new("question-delivery").unwrap(),
+                source,
+                target,
+                body: "pending question".to_string(),
+                execution_purpose: CollaborationExecutionPurpose::InTurnQuestion,
+                created_at_ms: T0 + 3,
+            })
+            .unwrap();
+
+        let mut actions = BTreeSet::new();
+        actions.insert(CollaborationGrantAction::Ask);
+        document
+            .add_collaboration_grant(AddCollaborationGrantInput {
+                operation_id: CollaborationOperationId::try_new("grant-operation").unwrap(),
+                grant_id: crate::v1::collaboration::CollaborationGrantId::try_new("grant-id")
+                    .unwrap(),
+                authority: CollaborationGrantAuthority::LocalUser,
+                source_session_id: "source-session".to_string(),
+                target_session_id: "target-session".to_string(),
+                actions,
+                created_at_ms: T0 + 4,
+            })
+            .unwrap();
+        document
+            .close_turn(crate::v1::event::TurnOutcome::Stopped, 1, T0 + 5)
+            .unwrap();
+        document
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("root-2").unwrap(),
+                    "second",
+                    Vec::new(),
+                ),
+                T0 + 6,
+            )
+            .unwrap();
+        document
+            .synchronize_dynamic_context(active_dynamic_context_inputs(), T0 + 7)
+            .unwrap();
+        document
+            .close_turn(crate::v1::event::TurnOutcome::Completed, 1, T0 + 8)
             .unwrap();
         make_durable(&mut document);
         document
@@ -652,6 +865,17 @@ mod tests {
             temperature: None,
             set_at_ms: T0 + 6,
         });
+        let mut post_boundary_inputs = active_dynamic_context_inputs();
+        post_boundary_inputs.push(DynamicContextInput::new(
+            "dynamic.post_boundary",
+            Some("post-boundary".to_string()),
+            SystemContextScope::Session,
+            None,
+        ));
+        source
+            .synchronize_dynamic_context(post_boundary_inputs, T0 + 7)
+            .unwrap();
+        make_durable(&mut source);
         let before = source.clone();
         let target_seq = source
             .events()
@@ -716,6 +940,39 @@ mod tests {
                 ..
             }) if context_key == PLAN_MODE_CONTEXT_KEY
         )));
+        assert!(output.metadata.dynamic_context.is_empty());
+        assert!(!output.events.iter().any(|event| matches!(
+            &event.event,
+            EventBody::SystemContext(SystemContextEvent { context_key, .. })
+                if context_key == "dynamic.post_boundary"
+        )));
+        let removed_dynamic_keys = output
+            .events
+            .iter()
+            .filter_map(|event| match &event.event {
+                EventBody::SystemContext(SystemContextEvent {
+                    context_key,
+                    operation: SystemContextOperation::Remove,
+                    ..
+                }) if context_key.starts_with("dynamic.")
+                    || context_key.starts_with("injection.") =>
+                {
+                    Some(context_key.as_str())
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            removed_dynamic_keys,
+            BTreeSet::from([
+                DYNAMIC_CONTEXT_SYSTEM_KEY,
+                DYNAMIC_CONTEXT_DEVELOPER_KEY,
+                DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY,
+                DYNAMIC_CONTEXT_RUNTIME_KEY,
+                DYNAMIC_CONTEXT_PERSISTENT_KEY,
+                DYNAMIC_CONTEXT_TRANSIENT_KEY,
+            ])
+        );
         assert_eq!(
             output.metadata.id_frontier.next_seq,
             output.events.len() as u64 + 1
@@ -925,7 +1182,7 @@ mod tests {
             })
             .expect("edited generation must build");
         let retained_root = &output.events[target_seq.value() as usize - 1];
-        assert_eq!(retained_root.created_at_ms, T0 + 4);
+        assert_eq!(retained_root.created_at_ms, T0 + 5);
         assert_eq!(retained_root.updated_at_ms, replacement_at_ms);
 
         let mut edited = SessionDocument::from_parts(
@@ -988,12 +1245,61 @@ mod tests {
         assert_eq!(duration_ms, 5);
     }
 
+    /// Edit generation rejects unsettled collaboration without mutating the source document.
+    /// 编辑 generation 拒绝未结算协作，并且不修改源文档。
+    #[test]
+    fn edit_generation_rejects_unsettled_collaboration_without_mutation() {
+        let source = durable_fork_source_with_pending_collaboration();
+        assert_eq!(source.collaboration_state().questions.len(), 1);
+        assert_eq!(source.collaboration_state().child_tasks.len(), 1);
+        assert_eq!(source.collaboration_state().grants.len(), 1);
+        assert_eq!(source.collaboration_state().operations.len(), 3);
+        let target_seq = source
+            .events()
+            .iter()
+            .find_map(|event| match &event.event {
+                EventBody::UserInput(input) if input.text == "second" => Some(event.seq),
+                _ => None,
+            })
+            .expect("second root input must exist");
+        let before = source.clone();
+
+        let result = source.build_edited_generation(EditGenerationInput {
+            target_seq,
+            replacement: RootInputReplacement::new("replacement", Vec::new()),
+            now_ms: T0 + 20,
+        });
+
+        assert!(matches!(
+            result,
+            Err(DomainError::InvalidGenerationInput {
+                field: "unsettled_collaboration",
+            })
+        ));
+        assert_eq!(source, before);
+    }
+
     /// Fork generation preserves copied fact identities while assigning exact child metadata.
     /// 分叉 generation 保留复制事实身份，同时写入精确子会话 metadata。
     #[test]
     fn fork_generation_preserves_prefix_identity_and_resets_transient_state() {
-        let source = durable_edit_source();
+        let mut source = durable_fork_source_with_pending_collaboration();
+        assert_eq!(source.collaboration_state().questions.len(), 1);
+        assert_eq!(source.collaboration_state().child_tasks.len(), 1);
+        assert_eq!(source.collaboration_state().grants.len(), 1);
+        assert_eq!(source.collaboration_state().operations.len(), 3);
         let source_turn_end_seq = source.events().last().unwrap().seq;
+        let mut post_boundary_inputs = active_dynamic_context_inputs();
+        post_boundary_inputs.push(DynamicContextInput::new(
+            "dynamic.post_boundary",
+            Some("post-boundary".to_string()),
+            SystemContextScope::Session,
+            None,
+        ));
+        source
+            .synchronize_dynamic_context(post_boundary_inputs, T0 + 9)
+            .unwrap();
+        make_durable(&mut source);
         let output = source
             .build_fork_generation(ForkGenerationInput {
                 child_session_id: "child-session".to_string(),
@@ -1027,6 +1333,50 @@ mod tests {
             source.events()[..source_turn_end_seq.value() as usize]
         );
         assert_eq!(output.history_target_seq, source_turn_end_seq);
+        assert_eq!(
+            output.metadata.collaboration.history_boundary_seq,
+            Some(source_turn_end_seq)
+        );
+        assert!(
+            output
+                .events
+                .iter()
+                .any(|event| { matches!(&event.event, EventBody::Collaboration(_)) })
+        );
+        assert!(output.metadata.dynamic_context.is_empty());
+        assert!(!output.events.iter().any(|event| matches!(
+            &event.event,
+            EventBody::SystemContext(SystemContextEvent { context_key, .. })
+                if context_key == "dynamic.post_boundary"
+        )));
+        assert!(output.metadata.collaboration.state.questions.is_empty());
+        assert!(
+            output
+                .metadata
+                .collaboration
+                .state
+                .outbound_deliveries
+                .is_empty()
+        );
+        assert!(
+            output
+                .metadata
+                .collaboration
+                .state
+                .inbound_deliveries
+                .is_empty()
+        );
+        assert!(output.metadata.collaboration.state.child_tasks.is_empty());
+        assert!(
+            output
+                .metadata
+                .collaboration
+                .state
+                .question_executions
+                .is_empty()
+        );
+        assert!(output.metadata.collaboration.state.grants.is_empty());
+        assert!(output.metadata.collaboration.state.operations.is_empty());
         assert_eq!(output.metadata.open_turn_start_seq, None);
         let restored = SessionDocument::from_parts(
             output.metadata.clone(),
@@ -1037,6 +1387,16 @@ mod tests {
         )
         .unwrap();
         assert!(restored.active_turn().is_none());
+        assert!(
+            restored
+                .events()
+                .iter()
+                .any(|event| matches!(&event.event, EventBody::Collaboration(_)))
+        );
+        assert!(restored.collaboration_state().questions.is_empty());
+        assert!(restored.collaboration_state().child_tasks.is_empty());
+        assert!(restored.collaboration_state().grants.is_empty());
+        assert!(restored.collaboration_state().operations.is_empty());
         assert!(!output.metadata.mode.goal.enabled);
         assert!(!output.metadata.mode.plan.enabled);
         assert_eq!(output.metadata.input_state, InputState::default());

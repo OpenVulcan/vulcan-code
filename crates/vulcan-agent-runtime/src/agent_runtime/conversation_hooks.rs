@@ -82,11 +82,14 @@ const PROFILE_DISPATCH_TIMEOUT_MS: u64 = 120_000;
 /// 完成回合 hook 调度的宿主侧安全兜底上限。
 const COMPLETION_DISPATCH_TIMEOUT_MS: u64 = 120_000;
 
+mod canonical_inputs;
 mod completion;
 mod helpers;
 mod precheck;
 mod profile;
 mod runtime;
+mod user_event;
+pub use user_event::ConversationUserEventRequest;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -97,10 +100,10 @@ pub use precheck::{ConversationPrecheckOutcome, ConversationPrecheckRequest};
 pub use profile::{ConversationProfileOutcome, ConversationProfileRequest};
 pub use runtime::{ConversationHookRuntime, ConversationPromptHookRequests};
 pub use types::{
-    ConversationTimelineItem, ConversationTurnCompletionStatus, VmmProfileSyncHookEffect,
-    VmmRecallBatchHookEffect, VmmSessionStatusHookEffect, VmmWritebackHookEffect,
-    vmm_profile_sync_effect_from_report, vmm_recall_batch_effect_from_report,
-    vmm_session_status_effect_from_report,
+    CanonicalInTurnHookInput, ConversationTimelineItem, ConversationTurnCompletionStatus,
+    VmmProfileSyncHookEffect, VmmRecallBatchHookEffect, VmmSessionStatusHookEffect,
+    VmmWritebackHookEffect, vmm_profile_sync_effect_from_report,
+    vmm_recall_batch_effect_from_report, vmm_session_status_effect_from_report,
 };
 
 use helpers::*;

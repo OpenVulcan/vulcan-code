@@ -2,6 +2,9 @@
 //! 适配器入口边界的回归测试。
 
 use super::*;
+use crate::agent_runtime::provider_runtime_context::{
+    runtime_context_host_event_candidates, synchronize_runtime_host_events,
+};
 use serde_json::Value;
 
 /// Verifies a catalog maximum does not become the default request output budget.
@@ -62,4 +65,38 @@ fn public_execution_failure_message_is_json() {
     assert_eq!(value["upstream_message"], "upstream detail | key=value");
     assert_eq!(value["request_id"], "req-123");
     assert_eq!(value["message"], error.message);
+}
+
+/// Verifies typed TTL expiration is encoded as a User host message for non-V1 transport.
+/// 验证强类型 TTL 失效事件在非 V1 传输中编码为 User 宿主消息。
+#[test]
+fn non_v1_expired_context_is_a_user_event() {
+    let injection = vulcan_core::types::ProviderContextInjection {
+        expired_events: vec![vulcan_core::types::ProviderContextExpiredEvent {
+            event_id: String::from("context-expired:event-1"),
+            source_id: String::from("context_injection:profile:hash-1"),
+            occurrence_id: String::from("context_injection:profile:hash-1:occurrence:1"),
+            tag: String::from("profile"),
+            content_hash: String::from("hash-1"),
+            source: String::from("context_injection"),
+            target: String::from("model"),
+            scope: String::from("turn"),
+            turn_id: String::from("turn-1"),
+            body: String::from("Context injection expired after TTL."),
+        }],
+        ..Default::default()
+    };
+    let mut snapshot = vulcan_core::types::ConversationSnapshot::default();
+    let candidates = runtime_context_host_event_candidates(&injection);
+    synchronize_runtime_host_events(&mut snapshot, &candidates, None)
+        .expect("typed expiry should synchronize");
+
+    assert_eq!(snapshot.messages.len(), 1);
+    let vulcan_core::types::ConversationPayload::UserText { text, .. } =
+        &snapshot.messages[0].payload
+    else {
+        panic!("expiry event should be a User message");
+    };
+    assert!(text.contains("<vulcan_context_expired"));
+    assert!(text.contains("event_id=\"context-expired:event-1\""));
 }

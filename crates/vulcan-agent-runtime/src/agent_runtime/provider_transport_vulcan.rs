@@ -61,7 +61,7 @@ pub(crate) const OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY: &str = "oauth_credentia
 /// 返回值
 /// The configured or default request budget capped by the catalog maximum when present.
 /// 返回配置值或默认请求预算；存在目录最大值时以其封顶。
-fn resolved_public_output_token_limit(
+pub(crate) fn resolved_public_output_token_limit(
     configured_limit: Option<u64>,
     catalog_limit: Option<u64>,
 ) -> u64 {

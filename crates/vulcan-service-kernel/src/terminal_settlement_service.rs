@@ -373,13 +373,14 @@ pub(crate) async fn retry_pre_intent_terminal_settlement(
     };
     let owner_guard =
         SessionTerminalPersistenceOwnerGuard::adopt_registered(state.clone(), session_id, owner)?;
-    if crate::settle_stream_terminal_authority(
+    if crate::settle_stream_terminal_authority_with_scope(
         state,
         session_id,
         false,
         repair.reason_code,
         repair.redacted_detail,
         owner_guard,
+        repair.scope,
     )
     .await
     {
@@ -431,15 +432,17 @@ pub(crate) async fn settle_pending_terminal_settlement(
     // terminal_fact_in_memory 允许在存储写入失败后重刷同一条内存脏终态事实。
     let (terminal_fact_durable, terminal_fact_in_memory, active_turn_id) = handle
         .read(|document| {
-            let terminal_fact_in_memory = document.turn_has_terminal_fact(record.turn_id);
-            (
+            let terminal_fact_in_memory =
+                document.terminal_settlement_has_terminal_fact(&record)?;
+            Ok::<_, vulcan_session_core::v1::DomainError>((
                 terminal_fact_in_memory
                     && document.memory_revision() == document.durable_revision(),
                 terminal_fact_in_memory,
                 document.active_turn().map(|turn| turn.turn_id),
-            )
+            ))
         })
-        .map_err(|error| format!("failed to read durable terminal fact: {error}"))?;
+        .map_err(|error| format!("failed to read durable terminal fact: {error}"))?
+        .map_err(|error| format!("invalid durable terminal scope: {error}"))?;
     if !terminal_fact_durable {
         // The boundary writer closes the document's currently active turn. It is only safe when
         // that exact turn is the one named by the durable settlement intent.
@@ -456,12 +459,13 @@ pub(crate) async fn settle_pending_terminal_settlement(
         }
         // The same turn id and reason code make the retry settle exactly once without a second fact.
         // 同一回合 ID 与原因码使重试恰好结算一次，不产生第二条事实。
-        crate::agent_stream::persist_v1_execution_failure_boundary_for_turn(
+        crate::agent_stream::persist_v1_execution_failure_boundary_for_scope(
             state,
             session_id,
             record.reason_code.as_str(),
             None,
             Some(record.turn_id),
+            record.scope.clone(),
         )
         .await?;
     }
@@ -472,6 +476,13 @@ pub(crate) async fn settle_pending_terminal_settlement(
         },
     )
     .await?;
+    // Propagate auxiliary release failures instead of reporting recovery while exclusion remains held.
+    // 向上返回辅助释放失败，避免仍持有互斥时报告恢复完成。
+    crate::agent_collaboration::child_execution_ownership::release_child_question_execution_owner(
+        state,
+        session_id,
+        &record.scope,
+    )?;
     release_recorded_settlement_owner(state, session_id, &record);
     Ok(if terminal_fact_durable {
         TerminalSettlementRetryOutcome::AlreadySettled

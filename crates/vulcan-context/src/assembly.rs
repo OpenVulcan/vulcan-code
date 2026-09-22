@@ -490,8 +490,8 @@ fn render_message_layer_content(message: &ConversationMessage) -> String {
         }
         ConversationPayload::AgentMessage { .. } => message
             .payload
-            .agent_message_model_text()
-            .unwrap_or_default(),
+            .agent_message_model_text(&message.id)
+            .unwrap_or_else(|error| format!("Agent message rendering failed: {error}")),
     }
 }
 

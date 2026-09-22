@@ -257,8 +257,8 @@ pub(super) fn core_message_to_public(
             content: vec![ContentItem::Text {
                 text: message
                     .payload
-                    .agent_message_model_text()
-                    .ok_or_else(|| provider_failure("vulcan", "Agent message rendering failed."))?,
+                    .agent_message_model_text(&message.id)
+                    .map_err(|error| provider_failure("vulcan", error.as_str()))?,
             }],
             provider_context_items: Vec::new(),
         }),
@@ -400,8 +400,8 @@ pub(super) fn core_message_text(
         }
         CoreConversationPayload::AgentMessage { .. } => message
             .payload
-            .agent_message_model_text()
-            .ok_or_else(|| provider_failure("vulcan", "Agent message rendering failed.")),
+            .agent_message_model_text(&message.id)
+            .map_err(|error| provider_failure("vulcan", error.as_str())),
     }
 }
 

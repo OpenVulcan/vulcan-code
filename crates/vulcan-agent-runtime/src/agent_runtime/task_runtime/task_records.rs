@@ -66,23 +66,8 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         outcome: &TaskExecutionOutcome,
     ) {
-        if outcome.execution_status == TaskExecutionStatus::Completed {
-            match self.durable_return_mailboxes.read() {
-                Ok(returns)
-                    if returns
-                        .get(&invocation.task_id)
-                        .is_some_and(|(execution, _)| execution == &invocation.execution_id) =>
-                {
-                    return;
-                }
-                Err(_) => {
-                    eprintln!(
-                        "[task-runtime] durable return registry locked; refusing premature completion feedback"
-                    );
-                    return;
-                }
-                _ => {}
-            }
+        if self.task_return_requires_durable_publication(invocation) {
+            return;
         }
         self.publish_subagent_mailbox_event(
             invocation,
@@ -480,7 +465,7 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         error: &str,
     ) -> Result<(), String> {
-        self.mark_task_failure_projection(current_session_id, invocation, error, true)
+        self.mark_task_failure_projection(current_session_id, invocation, error, true, false)
             .map(|_| ())
     }
 
@@ -506,7 +491,27 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         error: &str,
     ) -> Result<bool, String> {
-        self.mark_task_failure_projection(current_session_id, invocation, error, false)
+        self.mark_task_failure_projection(current_session_id, invocation, error, false, false)
+    }
+
+    /// Marks an existing admitted startup record without inventing a rejected task or publishing its mailbox.
+    /// 标记已有已准入启动记录，不虚构被拒任务，也不发布其邮箱。
+    /// `invocation` supplies exact ownership and `error` preserves the startup cause.
+    /// `invocation` 提供精确归属，`error` 保留启动原因。
+    /// Returns whether the existing exact execution was updated; absence and supersession are unchanged.
+    /// 返回已有精确执行是否更新；缺失或被替代时保持不变。
+    pub(super) fn mark_existing_startup_failure(
+        &self,
+        invocation: &TaskExecutionRequest,
+        error: &str,
+    ) -> Result<bool, String> {
+        self.mark_task_failure_projection(
+            invocation.current_session_id,
+            invocation,
+            error,
+            false,
+            true,
+        )
     }
 
     /// Publishes a previously committed child failure to the process-local parent mailbox.
@@ -523,6 +528,9 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         error: &str,
     ) {
+        if self.task_return_requires_durable_publication(invocation) {
+            return;
+        }
         self.publish_subagent_mailbox_event(
             invocation,
             TaskSessionStatus::Failed,
@@ -530,6 +538,24 @@ impl TaskRuntime {
             Some(error),
             None,
         );
+    }
+
+    /// Keeps every registered terminal kind behind the exact host publication gate.
+    /// 将所有已登记终态类型保留在精确宿主发布门之后。
+    /// `invocation` identifies the physical run; returns true for a retained gate or unavailable registry.
+    /// `invocation` 标识物理执行；门仍保留或注册表不可用时返回 true。
+    fn task_return_requires_durable_publication(&self, invocation: &TaskExecutionRequest) -> bool {
+        match self.durable_return_mailboxes.read() {
+            // A newer gate also forbids this stale run from publishing into the parent mailbox.
+            // 更新的门同样禁止旧执行发布到父邮箱。
+            Ok(returns) => returns.contains_key(&invocation.task_id),
+            Err(_) => {
+                eprintln!(
+                    "[task-runtime] durable return registry locked; refusing premature terminal feedback"
+                );
+                true
+            }
+        }
     }
 
     /// Commits one failed task projection with explicit parent-mailbox publication policy.
@@ -545,6 +571,8 @@ impl TaskRuntime {
     /// - `error`：投影到任务记录中的稳定失败文本。
     /// - `publish_parent_mailbox`: Whether this commit may immediately wake the parent waiter.
     /// - `publish_parent_mailbox`：本次提交是否可以立即唤醒父级等待者。
+    /// - `require_existing_record`: Reject synthetic creation during pre-admission startup cleanup.
+    /// - `require_existing_record`：准入前启动清理期间禁止合成创建记录。
     ///
     /// # Returns
     /// 返回值
@@ -556,6 +584,7 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         error: &str,
         publish_parent_mailbox: bool,
+        require_existing_record: bool,
     ) -> Result<bool, String> {
         let transaction_lock = self.task_execution_state_lock(invocation.task_id)?;
         let _transaction = transaction_lock.lock().map_err(|_| {
@@ -563,6 +592,17 @@ impl TaskRuntime {
                 "The task execution transaction is locked and cannot store the failure outcome.",
             )
         })?;
+        // Test admission under the same task transaction as the commit, preventing remove/recreate races.
+        // 在与提交相同的任务事务内检查准入，避免删除后重建竞态。
+        if require_existing_record
+            && !self
+                .sessions
+                .read()
+                .map_err(|_| String::from("The task session registry is locked."))?
+                .contains_key(&invocation.task_id)
+        {
+            return Ok(false);
+        }
         if !self.task_execution_can_commit_status(invocation, TaskSessionStatus::Failed)? {
             task_runtime_trace(
                 "task_failure_stale_execution_skipped",

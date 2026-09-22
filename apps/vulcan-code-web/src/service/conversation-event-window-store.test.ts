@@ -522,6 +522,31 @@ describe("conversation-event-window-store V1 same-seq evolution", () => {
     expect(store.render()[0].event).toEqual(subagentStats());
   });
 
+  it("rejects child result generation and execution changes without delimiter collisions", () => {
+    // Source strings deliberately contain separators that would collide in a joined identity.
+    // 来源字符串故意包含会在拼接身份中冲突的分隔符。
+    const original: Extract<ConversationEventBody, { kind: "subagent_return" }> = {
+      kind: "subagent_return", child_session_id: "child", child_segment_generation: 1,
+      child_root_action_id: "run:part", child_task_id: "task", content: "result",
+      source_assistant_text_seq: 3, source_from_seq: 1, source_to_seq: 4, child_turn_stats_seq: 4,
+    };
+    // Each mutation keeps parent event seq and payload text identical while changing source ownership.
+    // 每个修改都保留父事件序号及正文相同，同时改变来源归属。
+    const replacements = [
+      { ...original, child_segment_generation: 2 },
+      { ...original, child_root_action_id: "new-run" },
+      { ...original, child_root_action_id: "run", child_task_id: "part:task" },
+    ];
+    for (const replacement of replacements) {
+      // Rejection must leave the original event window untouched.
+      // 拒绝必须保持原事件窗口不变。
+      const store = new ConversationEventWindowStore();
+      store.hydrate(batch([summary(1, original, 10)]));
+      expect(() => store.applyLive(livePatch([summary(1, replacement, 20, 2)]))).toThrow(/identity conflict/);
+      expect(store.render()[0].event).toEqual(original);
+    }
+  });
+
   it("ignores stale revisions before they can overwrite a newer terminal state", () => {
     const store = new ConversationEventWindowStore();
     store.hydrate(batch([summary(1, toolCall(5, "completed"), 30, 3)]));

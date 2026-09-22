@@ -23,6 +23,21 @@ const SUBAGENT_HOST_KIND_VALUES = [
 // SUBAGENT_HOST_KINDS 为子智能体宿主类型提供常量时间查询。
 const SUBAGENT_HOST_KINDS = new Set<string>(SUBAGENT_HOST_KIND_VALUES);
 
+// COLLABORATION_TOOL_NAMES lists the exact native agent-collaboration tool ids.
+// COLLABORATION_TOOL_NAMES 列出原生代理协作工具的精确标识。
+const COLLABORATION_TOOL_NAMES = new Set([
+  "ask_question",
+  "ask_parent",
+  "reply_question",
+  "wait_question",
+  "cancel_question",
+  "send_notification",
+  "list_sessions",
+  "read_session",
+  "send_session_message",
+  "wait_session",
+]);
+
 // SUBAGENT_TOOL_HOST_KINDS lists host kinds that should render as tool evidence.
 // SUBAGENT_TOOL_HOST_KINDS 列出应渲染为工具证据的宿主类型。
 const TOOL_EVIDENCE_HOST_KINDS = new Set([
@@ -40,6 +55,13 @@ const TOOL_EVIDENCE_HOST_KINDS = new Set([
 export function isSubagentHostKind(hostKind?: string | null): boolean {
   const normalized = hostKind?.trim().toLowerCase();
   return Boolean(normalized && SUBAGENT_HOST_KINDS.has(normalized));
+}
+
+// isCollaborationToolName returns whether one exact tool id belongs to agent collaboration.
+// isCollaborationToolName 判断精确工具标识是否属于代理协作工具。
+export function isCollaborationToolName(toolName?: string | null): boolean {
+  const normalized = toolName?.trim().toLowerCase();
+  return Boolean(normalized && COLLABORATION_TOOL_NAMES.has(normalized));
 }
 
 // isSubagentFeedbackMetadata returns whether metadata belongs to a child-agent feedback projection.

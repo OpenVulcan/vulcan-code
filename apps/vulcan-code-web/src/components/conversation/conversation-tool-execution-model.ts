@@ -4,6 +4,7 @@ import type { TranslationKey } from "@/i18n-messages";
 import type { ToolRequestProgressSnapshot } from "@/types";
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
 import {
+  isCollaborationToolName,
   isSubagentFeedbackMetadata,
   isSubagentHostKind,
   isSubagentToolName,
@@ -321,6 +322,9 @@ function formatToolRequestBytes(bytes: number): string {
 function buildSubagentToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string | null {
   const toolName = toolExecutionName(blocks);
   const hostKind = firstMetadataString(blocks, ["host_result.kind", "hostResult.kind", "kind"]);
+  if (isCollaborationToolName(toolName)) {
+    return buildCollaborationToolExecutionDetailBody(blocks);
+  }
   if (!isSubagentToolName(toolName) && !isSubagentHostKind(hostKind)) {
     return null;
   }
@@ -347,6 +351,24 @@ function buildSubagentToolExecutionDetailBody(blocks: ToolExecutionConversationB
     return buildSubagentInterruptDetailBody(blocks, t);
   }
   return buildSubagentSpawnDetailBody(blocks, t);
+}
+
+// buildCollaborationToolExecutionDetailBody renders exact collaboration arguments and opaque output text.
+// buildCollaborationToolExecutionDetailBody 渲染精确协作参数与不透明工具输出正文。
+function buildCollaborationToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[]): string {
+  const toolName = toolExecutionName(blocks) ?? "collaboration";
+  const argumentsValue = blocks
+    .map((block) => metadataValue(block.rawMetadata, ["arguments"]))
+    .find((value) => value !== null && value !== undefined);
+  const sections = [`## ${toolName}`];
+  if (argumentsValue !== undefined) {
+    sections.push(`### Arguments\n\n\`\`\`json\n${JSON.stringify(argumentsValue, null, 2)}\n\`\`\``);
+  }
+  const body = blocks.map((block) => block.body.trim()).find(Boolean);
+  if (body) {
+    sections.push(`### Tool output\n\n${body}`);
+  }
+  return sections.join("\n\n");
 }
 
 // buildSubagentMessageDetailBody renders send_message as a compact inline record.
@@ -768,7 +790,7 @@ export function toolExecutionSubagentLabel(blocks: ToolExecutionConversationBloc
   if (name) {
     return name;
   }
-  return blocks.some((block) => isSubagentToolName(block.toolName) || Boolean(block.subagentTaskId))
+  return blocks.some((block) => isSubagentToolName(block.toolName) || isCollaborationToolName(block.toolName) || Boolean(block.subagentTaskId))
     ? (t ? t("conversation.subagent.schedule") : "Subagent schedule")
     : null;
 }

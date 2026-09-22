@@ -4,21 +4,24 @@
 //! `project_provider_items` is the single projection function that turns the
 //! seq-ordered main event stream into the Provider-visible message sequence:
 //! `ui_only`/`host_only` payloads are filtered after their structural boundary
-//! effects are applied, provider-visible events keep their original seq order,
+//! effects are applied, dynamic SystemContext facts become ordered User
+//! function envelopes, provider-visible events keep their source seq identity,
 //! and each complete API group expands into one assistant message (reasoning +
 //! text + tool calls) followed by its tool results, all derived from the same
 //! events. The replay fingerprint hashes only the immutable Provider-visible
 //! projection and never the late host fields.
 //! `project_provider_items` 是把 seq 有序主事件流转换为 Provider 可见消息
 //! 序列的唯一投影函数：先应用 `ui_only`/`host_only` 事件的结构边界作用再过滤
-//! 其载荷、保留 Provider 可见事件的原始 seq 顺序、把每个完整 API 组展开为一条
-//! assistant 消息(推理 + 正文 + 工具调用)以及紧随其后的工具结果，全部来自同一
-//! 组事件。重放指纹只哈希不可变 Provider 可见投影，绝不包含宿主后写字段。
+//! 其载荷、把动态 SystemContext 事实转换为有序 User 功能信封、保留 Provider
+//! 可见事件的源 seq 身份、把每个完整 API 组展开为一条 assistant 消息(推理 +
+//! 正文 + 工具调用)以及紧随其后的工具结果，全部来自同一组事件。重放指纹只
+//! 哈希不可变 Provider 可见投影，绝不包含宿主后写字段。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use vulcan_ai_contract::{HostMessageEnvelope, HostMessageKind};
 
 use crate::v1::errors::DomainError;
 use crate::v1::event::*;
@@ -45,8 +48,18 @@ pub enum ProjectedSystemRole {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProjectedItem {
-    /// Dynamic system semantics still active at projection time.
-    /// 投影时刻仍然生效的动态系统语义。
+    /// Published opaque context checkpoint, independent of assistant semantic events.
+    /// 已发布的不透明上下文检查点，独立于助手语义事件。
+    RemoteCompactionCheckpoint {
+        /// Durable node identity, never inferred from an event's display text.
+        /// 可靠节点身份，绝不从事件展示文本推断。
+        compaction_id: crate::v1::ids::CompactionId,
+        /// Exact route-bound provider output owned by this context generation.
+        /// 本上下文代次持有的精确且绑定路由的供应商输出。
+        checkpoint: Box<crate::v1::context::RemoteResponsesCheckpoint>,
+    },
+    /// Reserved system-layer item for non-dynamic projections.
+    /// 为非动态投影保留的系统层项目。
     SystemText {
         /// Role hint for the protocol adapter.
         /// 供协议适配器使用的角色提示。
@@ -178,6 +191,139 @@ pub struct ActiveSystemState {
     pub last_consumed_turn_id: Option<TurnId>,
 }
 
+/// Stable host identities used by every V1 dynamic-context envelope.
+/// 所有 V1 动态上下文信封使用的稳定宿主身份。
+const HOST_MESSAGE_SOURCE: &str = "host";
+/// Stable model target used by every V1 dynamic-context envelope.
+/// 所有 V1 动态上下文信封使用的稳定模型目标。
+const HOST_MESSAGE_TARGET: &str = "model";
+
+/// Returns the deterministic wire scope for one V1 context scope.
+/// 返回一个 V1 上下文作用域的确定性线缆名称。
+fn context_scope_name(scope: SystemContextScope) -> &'static str {
+    match scope {
+        SystemContextScope::Global => "global",
+        SystemContextScope::Project => "project",
+        SystemContextScope::Session => "session",
+        SystemContextScope::Turn => "turn",
+    }
+}
+
+/// Builds the stable event identity for one dynamic context mutation.
+/// 为一条动态上下文变更构造稳定事件身份。
+fn context_event_id(seq: Seq, context_key: &str, kind: HostMessageKind) -> String {
+    let kind_name = match kind {
+        HostMessageKind::ContextUpdate => "update",
+        HostMessageKind::ContextExpired => "expired",
+        _ => unreachable!("context projection only accepts context message kinds"),
+    };
+    format!("v1-context-{kind_name}-{}-{context_key}", seq.value())
+}
+
+/// Renders one dynamic context mutation through the shared host-message contract.
+/// 通过共享宿主消息契约渲染一条动态上下文变更。
+fn render_context_message(
+    seq: Seq,
+    context_key: &str,
+    scope: SystemContextScope,
+    kind: HostMessageKind,
+    body: &str,
+) -> Result<String, DomainError> {
+    HostMessageEnvelope {
+        event_id: context_event_id(seq, context_key, kind),
+        kind,
+        source: HOST_MESSAGE_SOURCE.to_string(),
+        target: HOST_MESSAGE_TARGET.to_string(),
+        task_id: None,
+        question_id: None,
+        scope: context_scope_name(scope).to_string(),
+        body: body.to_string(),
+    }
+    .render()
+    .map_err(|_| DomainError::ImmutableFieldMutation {
+        entity: "host_message_envelope",
+        field: "render",
+    })
+}
+
+/// Renders one completed subagent return as a task-result envelope.
+/// 将一条已完成的子代理回流渲染为 task-result 信封。
+fn render_subagent_result_message(
+    event_seq: Seq,
+    child_session_id: &str,
+    parent_session_id: &str,
+    task_id: &str,
+    body: &str,
+) -> Result<String, DomainError> {
+    HostMessageEnvelope {
+        event_id: event_seq.value().to_string(),
+        kind: HostMessageKind::TaskResult,
+        source: child_session_id.to_string(),
+        target: parent_session_id.to_string(),
+        task_id: Some(task_id.to_string()),
+        question_id: None,
+        scope: String::from("task"),
+        body: body.to_string(),
+    }
+    .render()
+    .map_err(|_| DomainError::ImmutableFieldMutation {
+        entity: "host_message_envelope",
+        field: "render",
+    })
+}
+
+/// Projects one durable SystemContext event into a User functional envelope.
+/// 将一条可靠 SystemContext 事件投影为 User 功能信封。
+fn project_context_event(
+    event: &ConversationEvent,
+    context: &SystemContextEvent,
+) -> Result<SourcedProjectedItem, DomainError> {
+    validate_system_context_event(context)?;
+    let kind = match context.operation {
+        SystemContextOperation::Upsert => HostMessageKind::ContextUpdate,
+        SystemContextOperation::Remove => HostMessageKind::ContextExpired,
+    };
+    let text = render_context_message(
+        event.seq,
+        &context.context_key,
+        context.scope,
+        kind,
+        &context.content,
+    )?;
+    Ok(SourcedProjectedItem {
+        user_prompt_parameters: None,
+        source_from_seq: event.seq,
+        source_to_seq: event.seq,
+        item: ProjectedItem::UserInput {
+            text,
+            resource_ids: Vec::new(),
+        },
+    })
+}
+
+/// Projects one still-active compaction backfill into a deterministic User update.
+/// 将一条仍然有效的压缩回填投影为确定性的 User 更新。
+fn project_backfill_context(
+    state: &ActiveSystemState,
+) -> Result<SourcedProjectedItem, DomainError> {
+    let text = render_context_message(
+        state.source_seq,
+        &state.context_key,
+        state.scope,
+        HostMessageKind::ContextUpdate,
+        &state.content,
+    )?;
+    Ok(SourcedProjectedItem {
+        user_prompt_parameters: None,
+        source_from_seq: state.source_seq,
+        source_to_seq: state.source_seq,
+        item: ProjectedItem::UserInput {
+            text,
+            resource_ids: Vec::new(),
+        },
+    })
+}
+
 /// Rebuilds the exact active system state at one inclusive seq boundary.
 /// 在一个包含式 seq 边界重建精确的活动系统状态。
 ///
@@ -190,9 +336,9 @@ pub struct ActiveSystemState {
 /// # Returns
 /// 返回值
 /// Returns active states ordered by their latest Upsert seq. TTL is consumed
-/// exactly once by each persisted logical `TurnBoundary`.
+/// exactly once by each persisted business `TurnBoundary`; auxiliary attempts do not consume TTL.
 /// 返回按最新 Upsert seq 排序的活动状态；TTL 仅由每个持久化逻辑
-/// `TurnBoundary` 精确消费一次。
+/// 业务 `TurnBoundary` 精确消费一次；辅助尝试不消费 TTL。
 pub fn derive_active_system_state(
     events: &[ConversationEvent],
     through_seq: Seq,
@@ -277,11 +423,16 @@ fn advance_active_system_state<'a>(
                     }
                 }
             }
-            EventBody::TurnBoundary(_) => {
+            EventBody::TurnBoundary(boundary) => {
                 let turn_id = event.turn_id.ok_or(DomainError::ReferenceViolation {
                     kind: "turn_boundary.turn_id",
                     value: event.seq().value(),
                 })?;
+                // The closure itself carries purpose, so replay needs no mutable execution lookup.
+                // 闭合本身携带用途，因此回放无需查询可变执行状态。
+                if boundary.purpose != crate::v1::event::TurnBoundaryPurpose::Business {
+                    continue;
+                }
                 for state in states.values_mut() {
                     let Some(remaining_turns) = state.remaining_turns else {
                         continue;
@@ -374,7 +525,68 @@ pub fn project_provider_items_with_sources(
         retained_from_seq,
         backfill_system,
         PartialAssistantPolicy::Omit,
+        None,
     )
+}
+
+/// Projects a context generation using the immutable compaction frontier, or the uncompressed initial history.
+/// 使用不可变压缩前沿投影上下文代次，或投影尚未压缩的初始历史。
+///
+/// `events` is the complete ordered source range; `retained_from_seq` selects its retained tail.
+/// `events` 为完整有序来源范围；`retained_from_seq` 选择保留尾段。
+/// `context_frozen_at` is the committed compaction frontier, or the current frontier only for summary planning.
+/// `context_frozen_at` 为已提交的压缩前沿；仅摘要规划允许使用当前前沿。
+/// Returns sourced messages with expired or superseded pre-frontier instructions removed and later history unchanged.
+/// 返回带来源消息，移除前沿之前失效或被替代的指令，保持前沿之后的历史不变。
+pub fn project_context_generation_items_with_sources(
+    events: &[ConversationEvent],
+    retained_from_seq: Seq,
+    context_frozen_at: Option<Seq>,
+) -> Result<Vec<SourcedProjectedItem>, DomainError> {
+    let Some(through_seq) = context_frozen_at else {
+        if retained_from_seq.value() != 1 {
+            return Err(DomainError::reference(
+                "context_generation.missing_frontier",
+                retained_from_seq.value(),
+            ));
+        }
+        return project_provider_items_with_sources(events, Some(retained_from_seq), &[]);
+    };
+    if through_seq < retained_from_seq || !events.iter().any(|event| event.seq() == through_seq) {
+        return Err(DomainError::reference(
+            "context_generation.frontier",
+            through_seq.value(),
+        ));
+    }
+    // Freeze state once at this generation's committed boundary, never at the next ordinary request.
+    // 仅在本代次已提交的边界冻结状态，绝不在下一普通请求时重新冻结。
+    let active = derive_active_system_state(events, through_seq)?;
+    let frozen = FrozenContextProjection {
+        through_seq,
+        active_source_seqs: active.iter().map(|state| state.source_seq).collect(),
+    };
+    let backfill = active
+        .into_iter()
+        .filter(|state| state.source_seq < retained_from_seq)
+        .collect::<Vec<_>>();
+    project_items_with_policy(
+        events,
+        Some(retained_from_seq),
+        &backfill,
+        PartialAssistantPolicy::Omit,
+        Some(&frozen),
+    )
+}
+
+/// Immutable instruction selection for a single compaction generation.
+/// 单次压缩代次的不可变指令选择。
+struct FrozenContextProjection {
+    /// Exact committed frontier beyond which events remain append-only.
+    /// 精确已提交前沿，其后事件保持仅追加。
+    through_seq: Seq,
+    /// Original update identities still active at that frontier.
+    /// 该前沿处仍然有效的原始更新身份。
+    active_source_seqs: BTreeSet<Seq>,
 }
 
 /// Controls only partial assistant inclusion; fingerprint callers select their frozen contract explicitly.
@@ -398,6 +610,7 @@ fn project_items_with_policy(
     retained_from_seq: Option<Seq>,
     backfill_system: &[ActiveSystemState],
     partial_policy: PartialAssistantPolicy,
+    frozen_context: Option<&FrozenContextProjection>,
 ) -> Result<Vec<SourcedProjectedItem>, DomainError> {
     let boundary = retained_from_seq.map(Seq::value).unwrap_or(0);
     let mut active_system = BTreeMap::new();
@@ -412,38 +625,22 @@ fn project_items_with_policy(
             });
         }
     }
-    advance_active_system_state(
-        &mut active_system,
-        events
-            .iter()
-            .filter(|event| event.seq().value() >= boundary),
-    )?;
-
-    let mut prefix_states: Vec<ActiveSystemState> = backfill_system
-        .iter()
-        .filter(|state| state.remaining_turns.is_none())
+    // The caller freezes backfill at compaction; later expiration must not remove an already emitted prefix.
+    // 调用方在压缩时冻结回填；后续失效不得移除已经发出的前缀。
+    let mut backfill_states: Vec<ActiveSystemState> = active_system
+        .values()
+        .filter(|state| state.source_seq.value() < boundary)
         .cloned()
-        .chain(
-            active_system
-                .into_values()
-                .filter(|state| state.remaining_turns.is_some()),
-        )
         .collect();
-    prefix_states.sort_by_key(|state| state.source_seq.value());
-    let mut items: Vec<SourcedProjectedItem> = prefix_states
+    backfill_states.sort_by_key(|state| state.source_seq.value());
+    let mut items: Vec<SourcedProjectedItem> = backfill_states
         .iter()
-        .map(|state| SourcedProjectedItem {
-            user_prompt_parameters: None,
-            source_from_seq: state.source_seq,
-            source_to_seq: state.source_seq,
-            item: ProjectedItem::SystemText {
-                role: state.role,
-                context_key: state.context_key.clone(),
-                text: state.content.clone(),
-            },
-        })
-        .collect();
+        .map(project_backfill_context)
+        .collect::<Result<_, _>>()?;
     let mut pending: Vec<(ApiCallId, PendingGroup)> = Vec::new();
+    // Events observed while an API group is open wait for its terminal boundary.
+    // 在 API 组开放期间观察到的事件必须等待该组终态边界。
+    let mut deferred_items: Vec<SourcedProjectedItem> = Vec::new();
 
     // New immutable return pairs carry timing; legacy pairs keep their existing wire projection.
     // 新的不可变回流事件对携带计时；旧事件对保持既有线协议投影。
@@ -484,6 +681,9 @@ fn project_items_with_policy(
                 stats.status,
                 partial_policy,
             )?;
+            if pending.is_empty() {
+                items.append(&mut deferred_items);
+            }
             continue;
         }
         if !event.is_provider_visible() {
@@ -491,35 +691,19 @@ fn project_items_with_policy(
         }
         match &event.event {
             EventBody::SystemContext(context) => {
-                flush_pending(&mut items, &mut pending)?;
                 validate_system_context_event(context)?;
-                if context.operation == SystemContextOperation::Upsert
-                    && context.ttl_turns.is_some()
-                {
-                    // TTL-bound semantics are rendered only through the active
-                    // prefix calculated for this physical request. Keeping the
-                    // durable Upsert in seq still makes every historical request
-                    // reproducible without leaking an expired value forward.
-                    // TTL 约束语义仅通过本次物理请求计算出的活动前缀渲染。持久
-                    // Upsert 仍保留原始 seq，因此既可重建历史请求，也不会把过期值
-                    // 泄漏到后续请求。
+                if frozen_context.is_some_and(|frozen| {
+                    event.seq() <= frozen.through_seq
+                        && !frozen.active_source_seqs.contains(&event.seq())
+                }) {
                     continue;
                 }
-                // Both entry and explicit exit semantics are durable Provider facts. Remove is
-                // not an instruction to erase historical messages; it is the ordered semantic
-                // that tells the model this context is no longer active.
-                // 进入与显式退出语义都是持久 Provider 事实。Remove 不是删除历史消息的
-                // 指令，而是按序告知模型该上下文已不再生效的语义。
-                items.push(SourcedProjectedItem {
-                    source_from_seq: event.seq,
-                    source_to_seq: event.seq,
-                    item: ProjectedItem::SystemText {
-                        role: role_hint(context.provider_role_hint),
-                        context_key: context.context_key.clone(),
-                        text: context.content.clone(),
-                    },
-                    user_prompt_parameters: None,
-                });
+                let projected = project_context_event(event, context)?;
+                if pending.is_empty() {
+                    items.push(projected);
+                } else {
+                    deferred_items.push(projected);
+                }
             }
             EventBody::UserInput(input) => {
                 // Projection may consume a directly loaded event range; validate host parameters before forwarding them.
@@ -527,8 +711,7 @@ fn project_items_with_policy(
                 if let Some(parameters) = &input.parameters {
                     parameters.validate(&input.resource_ids)?;
                 }
-                flush_pending(&mut items, &mut pending)?;
-                items.push(SourcedProjectedItem {
+                let projected = SourcedProjectedItem {
                     user_prompt_parameters: input.parameters.clone(),
                     source_from_seq: event.seq,
                     source_to_seq: event.seq,
@@ -536,7 +719,13 @@ fn project_items_with_policy(
                         text: input.text.clone(),
                         resource_ids: input.resource_ids.clone(),
                     },
-                });
+                };
+                let had_open_api_group = !pending.is_empty();
+                flush_pending(&mut items, &mut pending)?;
+                if !had_open_api_group {
+                    items.append(&mut deferred_items);
+                }
+                items.push(projected);
             }
             EventBody::AssistantReasoning(reasoning) => {
                 let group = pending_group(&mut pending, reasoning.api_call_id, event.seq);
@@ -596,7 +785,6 @@ fn project_items_with_policy(
                 }
             }
             EventBody::SubagentReturn(return_event) => {
-                flush_pending(&mut items, &mut pending)?;
                 // Join only the atomic statistics pair with this exact child and source frontier.
                 // 仅关联当前精确子代理与源前沿对应的原子统计事件对。
                 let (text, source_to_seq) = match return_statistics.get(&(
@@ -625,12 +813,25 @@ fn project_items_with_policy(
                     }
                     None => (return_event.content.clone(), event.seq),
                 };
-                items.push(SourcedProjectedItem {
+                let text = render_subagent_result_message(
+                    event.seq,
+                    &return_event.child_session_id,
+                    &return_event.parent_session_id,
+                    return_event.child_task_id.as_str(),
+                    &text,
+                )?;
+                let projected = SourcedProjectedItem {
                     source_from_seq: event.seq,
                     source_to_seq,
                     item: ProjectedItem::SubagentReturnText { text },
                     user_prompt_parameters: None,
-                });
+                };
+                let had_open_api_group = !pending.is_empty();
+                flush_pending(&mut items, &mut pending)?;
+                if !had_open_api_group {
+                    items.append(&mut deferred_items);
+                }
+                items.push(projected);
             }
             EventBody::ApiStats(_) => {}
             EventBody::ApiStarted(_)
@@ -640,14 +841,20 @@ fn project_items_with_policy(
             | EventBody::SubagentReturnStats(_)
             | EventBody::DisplayNote(_)
             | EventBody::RequestConfigChanged(_)
-            | EventBody::ExecutionControl(_) => {
+            | EventBody::ExecutionControl(_)
+            | EventBody::Collaboration(_)
+            | EventBody::ContextMaintenance(_) => {
                 // Provider-invisible facts are filtered; the sequence stays
                 // strictly in original seq order.
                 // Provider 不可见事实被过滤；序列严格保持原始 seq 顺序。
             }
         }
     }
+    let had_open_api_group = !pending.is_empty();
     flush_pending(&mut items, &mut pending)?;
+    if !had_open_api_group {
+        items.append(&mut deferred_items);
+    }
     Ok(items)
 }
 
@@ -863,7 +1070,7 @@ fn fingerprint_with_policy(
         }
     }
     let mut items: Vec<ProjectedItem> =
-        project_items_with_policy(&stripped, None, &[], partial_policy)?
+        project_items_with_policy(&stripped, None, &[], partial_policy, None)?
             .into_iter()
             .map(|sourced| sourced.item)
             .collect();
@@ -992,6 +1199,7 @@ mod tests_projection {
                 ProjectedItem::ToolResult { .. } => "tool_result",
                 ProjectedItem::SystemText { .. } => "system",
                 ProjectedItem::SubagentReturnText { .. } => "subagent",
+                ProjectedItem::RemoteCompactionCheckpoint { .. } => "remote_compaction",
             })
             .collect()
     }
@@ -1172,10 +1380,8 @@ mod tests_projection {
         assert_eq!(provider_source.fingerprint_sha256.len(), 64);
     }
 
-    /// UiOnly ApiStats flushes its API group before a later Provider-visible
-    /// system context; the exact serialized projection is the ordering golden.
-    /// UiOnly ApiStats 在后续 Provider 可见系统上下文前 flush 其 API 组；精确
-    /// 序列化投影就是顺序 golden。
+    /// UiOnly ApiStats flushes its API group before a later User context envelope.
+    /// UiOnly ApiStats 在后续 User 上下文信封前 flush 其 API 组。
     #[test]
     fn api_stats_boundary_precedes_following_system_context_golden()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1193,9 +1399,37 @@ mod tests_projection {
 
         let items = project_document(&document, None, &[])?;
         let actual = serde_json::to_string(&items)?;
+        let actual: serde_json::Value = serde_json::from_str(&actual)?;
         assert_eq!(
-            actual,
-            r#"[{"kind":"user_input","text":"hello","resource_ids":[]},{"kind":"assistant_text","text":"hi","reasoning":"think","tool_calls":[{"tool_call_id":4,"provider_tool_call_id":"pt-1","tool_name":"shell","input":{"cmd":"ls"}}]},{"kind":"tool_result","tool_call_id":4,"provider_tool_call_id":"pt-1","tool_name":"shell","status":"completed","output":{"ok":true}},{"kind":"system_text","role":"developer","context_key":"goal_continuation","text":"next"}]"#
+            actual[0]["kind"],
+            serde_json::Value::String(String::from("user_input"))
+        );
+        assert_eq!(
+            actual[1]["kind"],
+            serde_json::Value::String(String::from("assistant_text"))
+        );
+        assert_eq!(
+            actual[2]["kind"],
+            serde_json::Value::String(String::from("tool_result"))
+        );
+        assert_eq!(
+            actual[3]["kind"],
+            serde_json::Value::String(String::from("user_input"))
+        );
+        let context_text = actual[3]["text"]
+            .as_str()
+            .expect("dynamic context must project as user text");
+        let context_event = document
+            .events()
+            .iter()
+            .find(|event| matches!(event.event, EventBody::SystemContext(_)))
+            .expect("context event must persist");
+        assert_eq!(
+            context_text,
+            format!(
+                "<vulcan_context_update version=\"1\" event_id=\"v1-context-update-{}-goal_continuation\" kind=\"context_update\" source=\"host\" target=\"model\" scope=\"session\">next</vulcan_context_update>",
+                context_event.seq.value()
+            )
         );
         Ok(())
     }
@@ -1509,7 +1743,13 @@ mod tests_projection {
         .unwrap();
         let goal_entries = items
             .iter()
-            .filter(|item| matches!(item, ProjectedItem::SystemText { context_key, .. } if context_key == "goal_state"))
+            .filter(|item| {
+                matches!(
+                    item,
+                    ProjectedItem::UserInput { text, .. }
+                        if text.contains("v1-context-update-") && text.ends_with(">continue</vulcan_context_update>")
+                )
+            })
             .count();
         assert_eq!(
             goal_entries, 1,
@@ -1547,7 +1787,13 @@ mod tests_projection {
         assert_eq!(
             before_close
                 .iter()
-                .filter(|item| matches!(item, ProjectedItem::SystemText { text, .. } if text == "remember this"))
+                .filter(|item| {
+                    matches!(
+                        item,
+                        ProjectedItem::UserInput { text, .. }
+                            if text.ends_with(">remember this</vulcan_context_update>")
+                    )
+                })
                 .count(),
             1,
             "multiple physical APIs in one Turn never consume TTL twice"
@@ -1571,9 +1817,22 @@ mod tests_projection {
         let retained_from_seq = Seq::try_new(ttl_seq.value() + 1).expect("next seq");
         let retained_items = project_document(&document, Some(retained_from_seq), &backfill)
             .expect("retained projection");
-        assert!(retained_items.iter().any(
-            |item| matches!(item, ProjectedItem::SystemText { text, .. } if text == "remember this")
-        ));
+        // Freeze a real compaction generation while the instruction still has one logical turn left.
+        // 在指令还剩一个逻辑回合时冻结真实压缩代次。
+        let frozen_at = document.events().last().unwrap().seq();
+        let frozen_items = project_context_generation_items_with_sources(
+            document.events(),
+            retained_from_seq,
+            Some(frozen_at),
+        )
+        .expect("frozen generation");
+        assert!(retained_items.iter().any(|item| {
+            matches!(
+                item,
+                ProjectedItem::UserInput { text, .. }
+                    if text.ends_with(">remember this</vulcan_context_update>")
+            )
+        }));
 
         let second_turn = document
             .submit_root_input_fixture("second", Vec::new(), 6)
@@ -1593,9 +1852,172 @@ mod tests_projection {
         );
         let expired_items = project_document(&document, Some(retained_from_seq), &backfill)
             .expect("restart-equivalent retained projection");
-        assert!(!expired_items.iter().any(
-            |item| matches!(item, ProjectedItem::SystemText { text, .. } if text == "remember this")
-        ));
+        // Expiration appends a marker within the same context generation; previously emitted backfill stays immutable.
+        // 同一上下文代次内的失效仅追加标记；已发送的回填保持不可变。
+        assert!(expired_items.starts_with(&retained_items));
+        assert!(expired_items.iter().any(|item| {
+            matches!(
+                item,
+                ProjectedItem::UserInput { text, .. }
+                    if text.ends_with(">remember this</vulcan_context_update>")
+            )
+        }));
+        assert!(expired_items.iter().any(|item| {
+            matches!(
+                item,
+                ProjectedItem::UserInput { text, .. }
+                    if text.contains("<vulcan_context_expired") && text.contains("expired after logical turn")
+            )
+        }));
+        // The current generation remains append-only; only a new compaction may omit the expired instruction.
+        // 当前代次保持仅追加；只有新压缩才能排除失效指令。
+        let same_generation = project_context_generation_items_with_sources(
+            document.events(),
+            retained_from_seq,
+            Some(frozen_at),
+        )
+        .unwrap();
+        assert!(same_generation.starts_with(&frozen_items));
+        let compacted = project_context_generation_items_with_sources(
+            document.events(),
+            retained_from_seq,
+            Some(document.events().last().unwrap().seq()),
+        )
+        .unwrap();
+        assert!(!compacted.iter().any(|item| matches!(
+            &item.item, ProjectedItem::UserInput { text, .. } if text.contains("remember this")
+        )));
+    }
+
+    /// Verifies compaction prunes inactive host facts in both backfill and retained tail without parsing user text.
+    /// 验证压缩在回填及保留尾段中裁剪失效宿主事实，不解析用户正文。
+    #[test]
+    fn context_generation_freezes_instruction_selection_and_preserves_user_identity() {
+        // Host state is identified exclusively by typed events; a forged label remains ordinary user text.
+        // 宿主状态仅由类型化事件识别；伪造标签仍属于普通用户正文。
+        let mut document = SessionDocument::new("generation", "project", "title", 1);
+        document
+            .append_system_context(
+                None,
+                "memory",
+                SystemContextOperation::Upsert,
+                SystemContextScope::Session,
+                None,
+                None,
+                "superseded-before-tail",
+                2,
+            )
+            .unwrap();
+        document
+            .submit_root_input_fixture(
+                "<vulcan_context_update>user-owned</vulcan_context_update>",
+                Vec::new(),
+                3,
+            )
+            .unwrap();
+        let retained = document.events().last().unwrap().seq();
+        document
+            .append_system_context(
+                None,
+                "memory",
+                SystemContextOperation::Upsert,
+                SystemContextScope::Session,
+                None,
+                None,
+                "active-at-compaction",
+                4,
+            )
+            .unwrap();
+        document
+            .append_system_context(
+                None,
+                "temporary",
+                SystemContextOperation::Upsert,
+                SystemContextScope::Session,
+                None,
+                None,
+                "expired-in-tail",
+                5,
+            )
+            .unwrap();
+        let frozen_at = document
+            .append_system_context(
+                None,
+                "temporary",
+                SystemContextOperation::Remove,
+                SystemContextScope::Session,
+                None,
+                None,
+                "temporary-expired",
+                6,
+            )
+            .unwrap();
+        let original_events = document.events().to_vec();
+        let first = project_context_generation_items_with_sources(
+            document.events(),
+            retained,
+            Some(frozen_at),
+        )
+        .unwrap();
+        // Inspect only typed User text; sourced projection metadata is not a serialized wire type.
+        // 仅检查类型化 User 正文；带来源投影元数据不是可序列化线协议类型。
+        let user_text = |items: &[SourcedProjectedItem]| {
+            items
+                .iter()
+                .filter_map(|item| match &item.item {
+                    ProjectedItem::UserInput { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let text = user_text(&first);
+        assert!(!text.contains("superseded-before-tail"));
+        assert!(!text.contains("expired-in-tail"));
+        assert!(text.contains("active-at-compaction"));
+        assert!(text.contains("user-owned"));
+        assert_eq!(document.events(), original_events.as_slice());
+        document
+            .append_system_context(
+                None,
+                "memory",
+                SystemContextOperation::Remove,
+                SystemContextScope::Session,
+                None,
+                None,
+                "later-expiry",
+                7,
+            )
+            .unwrap();
+        let later = project_context_generation_items_with_sources(
+            document.events(),
+            retained,
+            Some(frozen_at),
+        )
+        .unwrap();
+        assert!(later.starts_with(&first));
+        assert!(user_text(&later).contains("later-expiry"));
+        let next = project_context_generation_items_with_sources(
+            document.events(),
+            retained,
+            Some(document.events().last().unwrap().seq()),
+        )
+        .unwrap();
+        let next_text = user_text(&next);
+        assert!(!next_text.contains("active-at-compaction"));
+        assert!(next_text.contains("user-owned"));
+        assert!(
+            project_context_generation_items_with_sources(document.events(), retained, None)
+                .is_err()
+        );
+        assert!(
+            project_context_generation_items_with_sources(
+                document.events(),
+                retained,
+                Some(Seq::try_new(999).unwrap())
+            )
+            .is_err()
+        );
     }
 
     /// Upsert resets TTL and an explicit Remove terminates the refreshed generation immediately.
@@ -1643,10 +2065,18 @@ mod tests_projection {
                 5,
             )
             .expect("refreshed TTL must persist");
-        assert!(project_document(&document, None, &[])
-            .expect("active refreshed projection")
-            .iter()
-            .any(|item| matches!(item, ProjectedItem::SystemText { text, .. } if text == "refreshed value")));
+        assert!(
+            project_document(&document, None, &[])
+                .expect("active refreshed projection")
+                .iter()
+                .any(|item| {
+                    matches!(
+                        item,
+                        ProjectedItem::UserInput { text, .. }
+                            if text.ends_with(">refreshed value</vulcan_context_update>")
+                    )
+                })
+        );
         document
             .append_system_context(
                 None,
@@ -1660,11 +2090,20 @@ mod tests_projection {
             )
             .expect("explicit removal must persist");
         let removed = project_document(&document, None, &[]).expect("removed projection");
-        assert!(!removed.iter().any(
-            |item| matches!(item, ProjectedItem::SystemText { text, .. } if text == "refreshed value")
-        ));
-        assert!(removed.iter().any(
-            |item| matches!(item, ProjectedItem::SystemText { text, .. } if text == "The temporary memory is no longer active.")
-        ));
+        assert!(removed.iter().any(|item| {
+            matches!(
+                item,
+                ProjectedItem::UserInput { text, .. }
+                    if text.ends_with(">refreshed value</vulcan_context_update>")
+            )
+        }));
+        assert!(removed.iter().any(|item| {
+            matches!(
+                item,
+                ProjectedItem::UserInput { text, .. }
+                    if text.contains("<vulcan_context_expired")
+                        && text.ends_with(">The temporary memory is no longer active.</vulcan_context_expired>")
+            )
+        }));
     }
 }

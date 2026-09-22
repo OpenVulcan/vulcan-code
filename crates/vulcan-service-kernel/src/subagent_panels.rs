@@ -286,6 +286,13 @@ pub(super) async fn service_stop_subagent_task(
         (resolved_parent_session_id, task_states_to_mark)
     };
     let stopped_task_ids = agent_runtime.task_runtime.stop_task_tree(task_session_id)?;
+    crate::conversation_run_services::stop_owned_child_auxiliary_tree(
+        &app,
+        &state,
+        &agent_runtime.task_runtime,
+        task_session_id,
+    )
+    .await?;
     webui_trace(
         "stop_subagent_result",
         format!(
@@ -382,6 +389,16 @@ pub(super) async fn service_close_subagent_task(
             "parent={parent_session_id} resolved_parent={resolved_parent_session_id} task={task_session_id} public_task_id={public_task_id}"
         ),
     );
+    // Finish all auxiliary writers before runtime archival can unload their canonical documents.
+    // 在运行时归档能卸载规范文档之前，先完成全部辅助写入器。
+    agent_runtime.task_runtime.stop_task_tree(task_session_id)?;
+    crate::conversation_run_services::stop_owned_child_auxiliary_tree(
+        &app,
+        &state,
+        &agent_runtime.task_runtime,
+        task_session_id,
+    )
+    .await?;
     let close_result = agent_runtime
         .task_runtime
         .invoke_close_agent(

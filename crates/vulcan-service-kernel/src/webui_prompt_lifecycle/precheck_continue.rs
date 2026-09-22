@@ -22,7 +22,7 @@ use crate::{
 /// 只为实际启用原生记忆的提示词获取发布归属。
 /// Takes the same admitted runtime and start as continuation; external and disabled paths remain untouched.
 /// 接收与继续执行相同的准入运行时及起点；外置及禁用路径保持不变。
-async fn prepare_native_recall_publication(
+pub(crate) async fn prepare_native_recall_publication(
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
     start: &SharedPromptTurnStart,
@@ -302,6 +302,52 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     precheck_outcome: ConversationPrecheckOutcome,
     native_publication: Option<&crate::native_vmm::NativeVmmRecallPublication>,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
+    continue_webui_prompt_turn_after_preparation_for_purpose(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        start,
+        expected_kernel_generation,
+        profile_outcome,
+        precheck_outcome,
+        native_publication,
+        PromptContinuationPurpose::Business,
+    )
+}
+
+/// Distinguishes ordinary request preparation from a host-authorized auxiliary question execution.
+/// 区分普通请求准备与宿主已授权的辅助答疑执行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptContinuationPurpose {
+    /// Prepare the current business task, including its Goal context publication.
+    /// 准备当前业务任务，包含其目标上下文发布。
+    Business,
+    /// Prepare auxiliary Q&A without publishing or resuming the business Goal.
+    /// 准备辅助答疑，不发布或恢复业务目标。
+    QuestionExecution,
+}
+
+/// Builds a request using the exact owner and explicitly selected preparation purpose.
+/// 使用精确 owner 和明确的准备用途构建请求。
+///
+/// The emitter, shared state, controller, agent runtime, start record, generation and preparation
+/// outcomes have the same ownership as ordinary continuation; purpose controls Goal side effects.
+/// 参数为发送器、共享状态、控制器、代理运行时、启动记录、代次和准备结果；用途控制目标副作用。
+/// Returns the prepared request, no request for a stale owner, or an explicit preparation error.
+/// 返回已准备请求、owner 已失效时的空值，或明确的准备错误。
+pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &HostRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    start: SharedPromptTurnStart,
+    expected_kernel_generation: u64,
+    profile_outcome: ConversationProfileOutcome,
+    precheck_outcome: ConversationPrecheckOutcome,
+    native_publication: Option<&crate::native_vmm::NativeVmmRecallPublication>,
+    purpose: PromptContinuationPurpose,
+) -> Result<Option<ExecutionPreparationRequest>, String> {
     let session_id = start.session_id;
     let continue_started_at = current_unix_millis_value();
     webui_after_precheck_trace(
@@ -430,9 +476,8 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         .session_runtime_state
         .get(&session_id)
         .and_then(|runtime_state| runtime_state.active_reasoning_effort);
-    // canonicalUserMessageId identifies the exact provider-history row that must receive post-precheck Goal text.
-    // canonicalUserMessageId 标识必须接收预检后目标文本的精确 Provider 历史行。
-    let canonical_user_message_id = start.canonical_user_message_id.clone();
+    // Keep the preparation identity for idempotent publication; Goal context is projected from V1 events.
+    // 保留准备身份用于幂等发布；目标上下文从 V1 事件投影。
     let prompt_turn_id = start.preparation_turn_id.clone();
     let shared_continue_started_at = current_unix_millis_value();
     // vmm_command_id makes the full Provider-boundary transition durably idempotent.
@@ -696,10 +741,20 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         Some(crate::session_media_resources_v1::session_v1_media_resource_runtime(state)?);
     // Native Goal tools receive the exact request session's V1 domain port; no SQLite store is exposed.
     // 原生 Goal 工具取得精确请求会话的 V1 领域端口；不再暴露 SQLite 存储。
-    request.native_goal_runtime = Some(crate::session_goals::session_v1_native_goal_runtime(
-        state.clone(),
-        app.clone(),
-    ));
+    request.native_goal_runtime = match purpose {
+        PromptContinuationPurpose::Business => Some(
+            crate::session_goals::session_v1_native_goal_runtime(state.clone(), app.clone()),
+        ),
+        PromptContinuationPurpose::QuestionExecution => None,
+    };
+    // Collaboration tools receive a host-owned port and derive the sender from each actual tool call.
+    // 协作工具取得宿主端口，并从每次真实工具调用确定发送方身份。
+    request.native_agent_collaboration_runtime = Some(
+        crate::agent_collaboration::session_v1_native_agent_collaboration_runtime(
+            state.clone(),
+            app.clone(),
+        ),
+    );
     // Browser tools are registered only while their exact plugin is enabled; each call still
     // checks the live generation and derives ownership from the trusted execution session.
     // 浏览器工具仅在精确插件启用时注册；每次调用仍核对实时代次并从可信执行会话确定归属。
@@ -733,43 +788,18 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         ));
     }
     let goal_context_started_at = current_unix_millis_value();
-    let (session_goal_context, goal_turn_usage_context) =
-        session_goal_prompt_parts_from_state(state, session_id)?;
-    request.session_goal_context = session_goal_context;
-    if request.provider_visible_agent_messages.is_empty() {
-        request.prompt = prepend_goal_context_to_current_prompt(
-            request.prompt,
-            &request.conversation_state,
-            request.session_goal_context.as_ref(),
-        );
-        request.prompt =
-            append_goal_turn_usage_context(request.prompt, goal_turn_usage_context.as_deref());
-        if let Some(canonical_user_message_id) = canonical_user_message_id.as_deref() {
-            // runtimeState remains the persistence owner while request history receives an identical immutable snapshot.
-            // runtimeState 继续作为持久化所有者，请求历史取得完全相同的不可变快照。
-            let runtime_state = workspace_snapshot
-                .session_runtime_state
-                .get_mut(&session_id)
-                .ok_or_else(|| {
-                    format!("会话 `{session_id}` 缺少运行态，无法绑定目标提示词到规范消息。")
-                })?;
-            replace_canonical_current_user_prompt(
-                &mut runtime_state.conversation_state,
-                canonical_user_message_id,
-                &request.prompt,
-            )?;
-            // updatedAt makes the provider-history mutation visible to runtime-state persistence.
-            // updatedAt 使 Provider 历史变更对运行态持久化可见。
-            runtime_state.updated_at = current_unix_millis_text();
-            request.conversation_state = runtime_state.conversation_state.clone();
+    match purpose {
+        PromptContinuationPurpose::Business => {
+            // Goal state owns durable context events; usage publication belongs only to business preparation.
+            // 目标状态持有可靠上下文事件；用量发布只属于业务准备。
+            let (session_goal_context, goal_turn_usage_context) =
+                session_goal_prompt_parts_from_state(state, session_id)?;
+            request.session_goal_context = session_goal_context;
+            persist_goal_turn_usage_context(handle.as_ref(), goal_turn_usage_context.as_deref())?;
         }
-    } else {
-        attach_goal_context_to_provider_visible_agent_messages(
-            &mut request.provider_visible_agent_messages,
-            &request.conversation_state,
-            request.session_goal_context.as_ref(),
-            goal_turn_usage_context.as_deref(),
-        );
+        PromptContinuationPurpose::QuestionExecution => {
+            request.session_goal_context = None;
+        }
     }
     webui_after_precheck_trace(
         "after_precheck_09_goal_context_ready",
@@ -779,8 +809,9 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
         ),
     );
     let plan_context_started_at = current_unix_millis_value();
-    request.session_plan_context =
-        session_plan_context_for_prompt_from_state(app, state, controller_runtime, session_id)?;
+    // V1 Plan entry and exit are projected from their original event positions exactly once.
+    // V1 Plan 进入与退出只从原始事件位置投影一次。
+    request.session_plan_context = None;
     webui_after_precheck_trace(
         "after_precheck_10_plan_context_ready",
         format!(
@@ -1058,7 +1089,8 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 // tool catalog; an empty browser uses a non-connectable template until AI opens one.
                 // 在 Provider 看到本回合工具目录前发现所有者范围 Playwright Schema；没有浏览器时先用
                 // 不可连接的模板，直至 AI 打开浏览器。
-                match crate::browser::prepare_browser_mcp_bindings(state.clone(), session_id).await {
+                match crate::browser::prepare_browser_mcp_bindings(state.clone(), session_id).await
+                {
                     Ok(bindings) => request.supplemental_mcp_tools = bindings,
                     Err(error) => {
                         eprintln!("[webui-service] prepare browser MCP failed: {error}");
@@ -1072,7 +1104,9 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                         )
                         .await
                         {
-                            eprintln!("[webui-service] cleanup failed browser MCP preparation failed: {cleanup_error}");
+                            eprintln!(
+                                "[webui-service] cleanup failed browser MCP preparation failed: {cleanup_error}"
+                            );
                         }
                         return;
                     }
@@ -1550,6 +1584,15 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
         )
     })?;
     terminal_persistence_guard.release()?;
+    // Asynchronous preparation failure has no provider terminal callback to return its task result.
+    // 异步准备失败没有供应商终态回调来回传任务结果。
+    // Delivery runs after releasing terminal ownership and keeps failed receipts available for retry.
+    // 投递在释放终态归属后执行，失败回执仍可重试。
+    if let Err(delivery_error) =
+        crate::agent_collaboration::reconcile_task_results_for_session(state, session_id).await
+    {
+        tracing::warn!(session_id = %session_id, %delivery_error, "Preparation failure task result return remains pending");
+    }
     if diagnostics.is_empty() {
         Ok(())
     } else {

@@ -51,7 +51,9 @@ pub use resource_download::{
 };
 pub(crate) use response_body::read_bounded_response_text;
 pub(crate) use response_metadata::parse_retry_after_headers;
-pub use responses_compact::ResponsesCompactResult;
+pub use responses_compact::{
+    ResponsesCompactEvent, ResponsesCompactResult, ResponsesCompactStream,
+};
 use responses_websocket::{ResponsesWebsocketSessionCacheEntry, responses_websocket_cache_key};
 pub use route::ProviderExecutionRoute;
 pub(crate) use route::upstream_protocol_for_profile_id;

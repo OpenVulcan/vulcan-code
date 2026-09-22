@@ -133,6 +133,7 @@ fn test_task_args(prompt: &str, task_id: Option<&str>) -> TaskToolInvocationArgs
     }
 }
 
+mod lifecycle_binding;
 mod preparation_config;
 mod registry_mailbox;
 mod runtime_flow;

@@ -2,6 +2,7 @@
 //! runtime workspace helpers 辅助逻辑。
 
 use super::*;
+use vulcan_session_core::v1::collaboration::CollaborationChildTaskState;
 
 /// Returns the selected project path for a VMM request scope.
 /// 返回 VMM 请求作用域选中的项目路径。
@@ -444,40 +445,39 @@ pub(crate) fn webui_turn_completion_gate_from_state(
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
 ) -> Result<WebuiTurnCompletionGate, String> {
-    let pending_subagent_count = {
-        let mut guard = state
+    // The durable document is the completion gate; live task cards cannot settle a parent turn.
+    // 可靠文档才是完成门，实时任务卡片不能结算父回合。
+    let session_runtime_registry = {
+        let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let running_tasks =
-            running_webui_subagent_task_states_for_tree_from_live_cache(&mut guard, session_id);
-        let running_execution_keys = running_tasks
-            .iter()
-            .filter_map(|(_, state)| {
-                guard
-                    .detached_subagent_task_listeners
-                    .get(&state.task_id)
-                    .map(|execution_id| {
-                        SubagentExecutionKey::new(state.task_id, execution_id.as_str())
-                    })
-            })
-            .collect::<BTreeSet<_>>();
-        guard
-            .subagent_completion_gate_ignored_tasks
-            .retain(|execution_key| running_execution_keys.contains(execution_key));
-        running_tasks
-            .iter()
-            .filter(|(_, state)| {
-                guard
-                    .detached_subagent_task_listeners
-                    .get(&state.task_id)
-                    .is_none_or(|execution_id| {
-                        !guard.subagent_completion_gate_ignored_tasks.contains(
-                            &SubagentExecutionKey::new(state.task_id, execution_id.as_str()),
+        std::sync::Arc::clone(&guard.session_runtime_registry)
+    };
+    let session_handle = session_runtime_registry
+        .get(session_id)
+        .map_err(|error| format!("failed to resolve durable session completion gate: {error}"))?;
+    let durable_has_pending_collaboration = session_handle
+        .read(|document| {
+            document
+                .active_turn()
+                .map(|turn| {
+                    !document
+                        .completion_obligations(turn.turn_id)
+                        .open_child_task_ids
+                        .is_empty()
+                })
+                .unwrap_or_else(|| {
+                    document.collaboration_state().child_tasks.values().any(|task| {
+                        matches!(
+                            task.state,
+                            CollaborationChildTaskState::Reserved
+                                | CollaborationChildTaskState::Active
                         )
                     })
-            })
-            .count()
-    };
+                })
+        })
+        .map_err(|error| format!("failed to read durable collaboration completion gate: {error}"))?;
+    let pending_subagent_count = usize::from(durable_has_pending_collaboration);
     let has_active_hook_turn = agent_runtime
         .conversation_hook_runtime
         .lock()

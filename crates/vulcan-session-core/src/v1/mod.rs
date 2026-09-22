@@ -13,10 +13,15 @@
 //! 生产调用点在此之前继续使用旧模块。
 
 pub mod budget;
+pub mod business_hook;
+pub mod child_execution;
+pub mod collaboration;
 pub mod compaction_frontier;
 pub mod config;
 pub mod context;
+pub mod context_maintenance;
 pub mod document;
+pub mod dynamic_context;
 pub mod errors;
 pub mod event;
 pub mod goal;
@@ -34,9 +39,10 @@ pub use budget::{
     ProviderRequestBudgetEvidence, ProviderRequestContextBreakdown, ProviderRequestTextMeasurement,
     ProviderUsageBudgetAnchor, latest_provider_usage_budget_anchor,
 };
+pub use collaboration::*;
 pub use config::{
     DraftState, MetadataDocument, ModeConfig, QueuedInputIdentity, SessionConfig,
-    TerminalSettlementRecord, TerminalSettlementState,
+    TerminalSettlementRecord, TerminalSettlementScope, TerminalSettlementState,
 };
 pub use context::{
     CompactionNode, CompactionsDocument, LockedBaselineProjection, LockedBaselineSegmentInput,
@@ -55,6 +61,11 @@ pub use document::{
     SubagentReturnReceipt, ToolCompletion, ToolCompletionReceipt, ToolPreparation,
     TurnCompletionTransition, TurnOrigin, TurnSuccessor,
 };
+pub use dynamic_context::{
+    DYNAMIC_CONTEXT_DEVELOPER_KEY, DYNAMIC_CONTEXT_PERSISTENT_KEY, DYNAMIC_CONTEXT_RUNTIME_KEY,
+    DYNAMIC_CONTEXT_SYSTEM_KEY, DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY, DYNAMIC_CONTEXT_TRANSIENT_KEY,
+    DynamicContextInput, DynamicContextOccurrence, DynamicContextOperation, DynamicContextState,
+};
 pub use errors::DomainError;
 pub use event::{
     ApiCallStatus, ApiEndReason, ApiErrorCategory, ApiPurposeKind, ApiStatsEvent, ApiTimings,
@@ -65,7 +76,8 @@ pub use event::{
     QueuedInputResolutionEvent, QueuedInputResolutionKind, RedactedApiError, SubagentReturnEvent,
     SubagentReturnStatsEvent, SubagentReturnStatus, SystemContextEvent, SystemContextOperation,
     SystemContextScope, SystemRoleHint, ToolCallEvent, ToolCallStatus, ToolPayload,
-    TurnBoundaryEvent, TurnOutcome, TurnStatsEvent, UserInputEvent, UserInputSource,
+    TurnBoundaryEvent, TurnBoundaryPurpose, TurnClosureReason, TurnOutcome, TurnStatsEvent,
+    UserInputEvent, UserInputSource,
 };
 pub use ids::{
     ApiCallId, CLIENT_ACTION_ID_MAX_BYTES, ClientActionId, CompactionId, IdAllocator,

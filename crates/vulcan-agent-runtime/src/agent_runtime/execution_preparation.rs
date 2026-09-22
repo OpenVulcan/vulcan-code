@@ -34,6 +34,7 @@ use vulcan_prompt_skills::{
 use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot};
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
+pub(crate) mod captured_child_tool_admission;
 #[path = "execution_preparation/codebase_tool_routing_prompt.rs"]
 mod codebase_tool_routing_prompt;
 #[path = "execution_preparation/tool_exposure.rs"]
@@ -75,6 +76,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     config: &ProviderConfigurationFile,
     request: &ExecutionPreparationRequest,
 ) -> Result<PreparedExecution, String> {
+    captured_child_tool_admission::validate_request(request)?;
     // preparationStartedAt measures the complete synchronous execution-preparation boundary.
     // preparationStartedAt 测量完整同步执行准备边界。
     let preparation_started_at = after_precheck_unix_millis();
@@ -349,6 +351,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         session_vmm.clone(),
         request.vmm_runtime_ready,
         request.native_browser_runtime.clone(),
+        request.native_agent_collaboration_runtime.clone(),
     );
     after_precheck_trace(
         "after_precheck_25a9_tools_manager_ready",
@@ -369,6 +372,13 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     }
     filter_resolved_tool_set_by_tool_exposure(&mut resolved_tools, &tool_exposure);
     remove_request_hidden_tools(&mut resolved_tools, &request.tool_request_hidden_tool_ids);
+    if request.prompt_purpose == ExecutionPromptPurpose::QuestionExecution {
+        remove_question_execution_business_tools(&mut resolved_tools);
+    }
+    captured_child_tool_admission::filter_tools(
+        &mut resolved_tools,
+        request.captured_child_tool_admission.as_ref(),
+    );
     let prompt_skill_tool_available = request.prompt_purpose.supports_user_turn_tooling()
         && render_prompt_skills_instructions(&prompt_skills).is_some();
     if !prompt_skill_tool_available {
@@ -458,16 +468,17 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         additional_developer_segments,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors,
-        tool_request_rejection_reason: request.tool_request_rejection_reason.clone().or_else(
-            || {
-                request.prompt_purpose.rejects_tool_requests().then(|| {
-                    String::from("Tool calls are not allowed during this internal execution.")
-                })
-            },
-        ),
+        // Internal execution policy is mandatory even when the source request rejected only selected tools.
+        // 即使来源请求只拒绝部分工具，内部执行策略也必须强制生效。
+        tool_request_rejection_reason: if request.prompt_purpose.rejects_tool_requests() {
+            Some(String::from(
+                "Tool calls are not allowed during this internal execution.",
+            ))
+        } else {
+            request.tool_request_rejection_reason.clone()
+        },
         tool_request_rejection_all_tools: request.tool_request_rejection_all_tools
-            || (request.prompt_purpose.rejects_tool_requests()
-                && request.tool_request_rejection_reason.is_none()),
+            || request.prompt_purpose.rejects_tool_requests(),
         tool_request_rejection_tool_ids: request.tool_request_rejection_tool_ids.clone(),
         delegate_agents: active_agent.delegates.clone(),
         enabled_mcp_servers: mcp_overview.active_summary_rows().to_vec(),
@@ -662,6 +673,31 @@ fn remove_request_hidden_tools(
     }
 }
 
+/// Removes business lifecycle mutations from both the model catalog and executable definitions.
+/// 从模型目录和可执行定义中同时移除业务生命周期修改工具。
+/// Existing profile and mode restrictions remain authoritative for every retained tool.
+/// 每个保留工具仍遵守既有角色与模式限制。
+fn remove_question_execution_business_tools(
+    resolved_tools: &mut vulcan_tools_manager::ResolvedToolSet,
+) {
+    // Exact registered IDs prevent auxiliary Q&A from creating obligations or restarting business modes.
+    // 精确注册 ID 防止辅助答疑创建业务义务或重新启动业务模式。
+    let forbidden = [
+        vulcan_subagent_core::SPAWN_AGENT_TOOL,
+        vulcan_subagent_core::SEND_MESSAGE_TOOL,
+        vulcan_subagent_core::INTERRUPT_AGENT_TOOL,
+        vulcan_subagent_core::CLOSE_AGENT_TOOL,
+        crate::tooling::collaboration::SEND_SESSION_MESSAGE_TOOL_ID,
+        crate::tooling::native::CREATE_GOAL_TOOL_ID,
+        crate::tooling::native::UPDATE_GOAL_TOOL_ID,
+        crate::tooling::native::SUBMIT_PLAN_TOOL_ID,
+        crate::tooling::native::TODOLIST_TOOL_ID,
+    ];
+    for tool_id in forbidden {
+        remove_resolved_tool(resolved_tools, tool_id);
+    }
+}
+
 /// Builds the human-readable prompt preview for user and seeded-agent turns.
 /// 为用户回合与已播种智能体回合构建人类可读提示预览。
 ///
@@ -684,16 +720,19 @@ fn execution_prompt_preview(request: &ExecutionPreparationRequest) -> String {
         .first()
         .map(|message| {
             CoreConversationPayload::render_agent_message_text(
-                &message.message_type,
-                &message.task_name,
+                &message.delivery_id,
+                message.kind,
                 &message.sender,
+                &message.recipient,
+                &message.task_id,
                 &message.payload,
             )
+            .map(|preview| truncate_preview(&preview, 180))
+            .unwrap_or_else(|error| format!("Agent message rendering failed: {error}"))
         })
-        .map(|preview| truncate_preview(&preview, 180))
         .unwrap_or_default()
 }
 
 #[cfg(test)]
 #[path = "execution_preparation/tests.rs"]
-mod tests;
+pub(in crate::agent_runtime) mod tests;

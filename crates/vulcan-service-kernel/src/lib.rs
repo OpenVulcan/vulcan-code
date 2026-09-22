@@ -104,20 +104,20 @@ use vulcan_service_api::{
     ProjectTerminalDisplayChangedEvent, ProjectTerminalRunningCountChangedEvent,
     ProjectTerminalShellOption, ProjectTerminalSummary, ProviderModelSummary, ProviderSummary,
     ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot,
-    ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent, SessionAddonsChangedDelta,
-    SessionAddonsChangedResponse, SessionContextCompactionWindowUpdateRequest, SessionGoalSummary,
-    SessionOutputStyleSummary, SessionOutputStyleUpdateRequest, SessionPlanArtifactSummary,
-    SessionPlanModeSummary, SessionTodolistItemSummary, SessionTodolistSummary,
-    SessionVmmPolicyByConversation, SessionVmmPolicySummary, SettingSectionSummary,
-    StartupSnapshot, StartupStepStatus, SubagentCatalogIssueSummary, SubagentCatalogSummary,
-    SubagentCatalogUpdate, SubagentCategorySummary, SubagentDefinitionLocaleSummary,
-    SubagentDefinitionSaveRequest, SubagentDefinitionSummary, SubagentNavigationChangedDelta,
-    SubagentNavigationSnapshot, SubagentPanelRouteResponse, TerminalDisplayChunk, ToolCallSummary,
+    ServiceActiveWorkSummary, ServiceEvent, ServiceEventEmitter, ServiceLifecycle,
+    ServiceStatusFailure, ServiceStatusSnapshot, SessionAddonChangedEvent,
+    SessionAddonsChangedDelta, SessionAddonsChangedResponse,
+    SessionContextCompactionWindowUpdateRequest, SessionGoalSummary, SessionOutputStyleSummary,
+    SessionOutputStyleUpdateRequest, SessionPlanArtifactSummary, SessionPlanModeSummary,
+    SessionTodolistItemSummary, SessionTodolistSummary, SessionVmmPolicyByConversation,
+    SessionVmmPolicySummary, SettingSectionSummary, StartupSnapshot, StartupStepStatus,
+    SubagentCatalogIssueSummary, SubagentCatalogSummary, SubagentCatalogUpdate,
+    SubagentCategorySummary, SubagentDefinitionLocaleSummary, SubagentDefinitionSaveRequest,
+    SubagentDefinitionSummary, SubagentNavigationChangedDelta, SubagentNavigationSnapshot,
+    SubagentPanelRouteResponse, TerminalDisplayChunk, ToolCallSummary,
     TransientReasoningStatusChangedDelta, TransientReasoningStatusKind,
     TransientReasoningStatusSnapshot, TransientReasoningSummaryItemSnapshot,
-    UpdateConversationRunPhaseDelta, VmmMemorySnapshot, ServiceActiveWorkSummary,
-    ServiceLifecycle, ServiceStatusFailure, ServiceStatusSnapshot,
-    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
+    UpdateConversationRunPhaseDelta, VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
     WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
     WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot, WorkspaceGitChangedEvent,
     webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
@@ -151,6 +151,8 @@ use vulcan_workbench_model::{
 };
 use vulcan_workspace_store::{data_plane::HostRuntimeHandle, workspace_store::WorkspaceSnapshot};
 
+mod agent_collaboration;
+mod agent_collaboration_execution;
 mod agent_skills_watcher;
 mod agent_stream;
 mod ai_credential_secret_store;
@@ -183,8 +185,8 @@ mod native_vmm;
 mod output_style;
 mod pending_prompt_services;
 mod pending_prompts;
-mod plugin_mcp_secret_store;
 mod plugin_environment_install_tasks;
+mod plugin_mcp_secret_store;
 mod plugin_services;
 mod plugin_storage;
 mod plugin_ui_events;
@@ -203,6 +205,7 @@ mod service_bootstrap;
 mod service_bridge_io;
 mod service_diagnostics_paths;
 mod service_state_access;
+mod session_business_hook;
 mod session_goal_lifecycle;
 mod session_goals;
 mod session_hydration;
@@ -219,8 +222,9 @@ mod skill_catalog_projection;
 mod skills_services;
 mod state;
 mod subagent_event_ingest;
-mod terminal_settlement_service;mod subagent_panels;
+mod subagent_panels;
 mod subagent_workspace_mutation;
+mod terminal_settlement_service;
 pub(crate) mod vce;
 mod vmm;
 mod vmm_hooks;
@@ -237,7 +241,7 @@ mod workspace_files;
 mod workspace_persistence_versions;
 mod workspace_session_queries;
 mod workspace_watcher;
-use plugin_environment_install_tasks::*;
+use agent_collaboration::service_cancel_collaboration_question;
 use agent_stream::*;
 use attachments::{
     composer_attachment_capabilities, composer_attachment_draft_scope,
@@ -299,6 +303,7 @@ use pending_prompts::{
     emit_pending_prompts_changed_delta, enqueue_webui_pending_prompt_from_submission,
     session_has_blocking_system_prompt_work,
 };
+use plugin_environment_install_tasks::*;
 use plugin_services::{
     service_invoke_plugin_action, service_load_plugin_ui_module, service_read_plugin_text_asset,
 };
@@ -319,22 +324,20 @@ use runtime_summary_projection::*;
 use runtime_workspace_helpers::*;
 use service_bootstrap::startup_snapshot_with_phase;
 pub use service_bootstrap::{emit_initial_service_events, spawn_service_bootstrap};
+use service_bridge_io::*;
 pub use service_bridge_io::{
-    WebuiServiceHttpBridgeHandle, remove_owned_webui_service_discovery,
-    service_startup_snapshot, service_status_snapshot_from_state, service_workbench_snapshot,
+    WebuiServiceHttpBridgeHandle, remove_owned_webui_service_discovery, service_startup_snapshot,
+    service_status_snapshot_from_state, service_workbench_snapshot,
     spawn_webui_service_http_bridge,
 };
-use service_bridge_io::*;
 use service_diagnostics_paths::*;
 use service_state_access::*;
 use session_goal_lifecycle::{
     account_session_goal_from_report, account_session_goal_provider_usage,
-    append_goal_turn_usage_context, attach_goal_context_to_provider_visible_agent_messages,
     cache_session_goal_summary, ensure_regular_session_exists, normalize_session_goal_objective,
-    prepend_goal_context_to_current_prompt, replace_canonical_current_user_prompt,
-    session_goal_id_for_provider_request, session_goal_prompt_parts_from_state,
-    session_goal_request_session_id, sync_selected_session_v1_projection_from_store,
-    validate_session_goal_budget,
+    persist_goal_turn_usage_context, session_goal_id_for_provider_request,
+    session_goal_prompt_parts_from_state, session_goal_request_session_id,
+    sync_selected_session_v1_projection_from_store, validate_session_goal_budget,
 };
 #[cfg(test)]
 use session_goal_lifecycle::{
@@ -360,10 +363,10 @@ use skills_services::*;
 pub use state::ServiceShellHost;
 pub use state::SharedServiceBridgeState;
 use state::*;
-use terminal_settlement_service::*;
 use subagent_event_ingest::*;
 use subagent_panels::*;
 use subagent_workspace_mutation::*;
+use terminal_settlement_service::*;
 use vce::*;
 use vmm::{
     service_load_project_vmm_config, service_run_vmm_memory_action, service_save_vmm_memory_config,
@@ -459,7 +462,12 @@ pub fn create_service_bridge_state(
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
+        question_preparation_tasks: BTreeMap::new(),
         session_terminal_persistence_owners: BTreeMap::new(),
+        child_question_execution_owners: BTreeMap::new(),
+        child_maintenance_owners: BTreeMap::new(),
+        child_maintenance_tasks: BTreeMap::new(),
+        child_maintenance_stops: BTreeMap::new(),
         terminal_pre_intent_repairs: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_runtime_registry: Arc::new(Default::default()),
@@ -554,24 +562,44 @@ pub fn service_prepare_for_app_shutdown(
     // The periodic synchronizer and subsequent task/MCP teardown have no complete in-process
     // rollback. A later persistence or VCE error must leave admission closed and report failure.
     // 周期同步器及后续任务/MCP 拆卸没有完整的进程内回滚；之后持久化或 VCE 失败必须保持准入关闭并报告故障。
-    state.lock().map_err(|error| error.to_string())?
-        .service_lifecycle_state.block_shutdown_recovery();
+    state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .service_lifecycle_state
+        .block_shutdown_recovery();
     let runtime_shutdown = ordered_runtime_shutdown(
-        || match task_runtime.as_ref() {
-            Some(task_runtime) => {
-                // stopped_task_ids are captured before canonical writer drain prevents new runtime events.
-                // stopped_task_ids 在规范写入器排空阻止新运行事件之前捕获。
-                let stopped_task_ids = task_runtime.stop_active_tasks_for_app_shutdown()?;
-                for handle in &session_v1_handles {
-                    handle.flush_all().map_err(|error| error.to_string())?;
+        || {
+            // Maintenance owns independent work even after business tasks finish; drain it before flushing writers.
+            // 业务任务结束后维护仍持有独立工作；刷写写入器之前先排空维护。
+            if let Some(service_runtime) = service_runtime.as_ref() {
+                service_runtime
+                    .block_on(agent_collaboration::child_maintenance::stop_all(state))?;
+            } else {
+                let service = state.lock().map_err(|error| error.to_string())?;
+                if !service.child_maintenance_tasks.is_empty()
+                    || !service.child_maintenance_owners.is_empty()
+                {
+                    return Err(String::from(
+                        "Child maintenance shutdown requires the retained service runtime.",
+                    ));
                 }
-                Ok(stopped_task_ids)
             }
-            None => {
-                for handle in &session_v1_handles {
-                    handle.flush_all().map_err(|error| error.to_string())?;
+            match task_runtime.as_ref() {
+                Some(task_runtime) => {
+                    // stopped_task_ids are captured before canonical writer drain prevents new runtime events.
+                    // stopped_task_ids 在规范写入器排空阻止新运行事件之前捕获。
+                    let stopped_task_ids = task_runtime.stop_active_tasks_for_app_shutdown()?;
+                    for handle in &session_v1_handles {
+                        handle.flush_all().map_err(|error| error.to_string())?;
+                    }
+                    Ok(stopped_task_ids)
                 }
-                Ok(Vec::new())
+                None => {
+                    for handle in &session_v1_handles {
+                        handle.flush_all().map_err(|error| error.to_string())?;
+                    }
+                    Ok(Vec::new())
+                }
             }
         },
         || {
@@ -642,11 +670,13 @@ pub fn service_resume_after_failed_app_shutdown(
             "Shutdown stopped process-owned runtimes; admission cannot safely recover in this process. Restart the service.",
         );
         if let Ok(mut guard) = state.lock() {
-            guard.service_lifecycle_state.retain_recovery_failure(ServiceStatusFailure {
-                stage: String::from("shutdown-recovery"),
-                code: String::from("shutdown_recovery_failed"),
-                message: error.clone(),
-            });
+            guard
+                .service_lifecycle_state
+                .retain_recovery_failure(ServiceStatusFailure {
+                    stage: String::from("shutdown-recovery"),
+                    code: String::from("shutdown_recovery_failed"),
+                    message: error.clone(),
+                });
         }
         return Err(error);
     }
@@ -684,8 +714,11 @@ pub fn service_resume_after_failed_app_shutdown(
         session_runtime_registry
             .resume_after_failed_shutdown()
             .map_err(|error| error.to_string())?;
-        state.lock().map_err(|error| error.to_string())?
-            .service_lifecycle_state.end_shutdown_drain();
+        state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .service_lifecycle_state
+            .end_shutdown_drain();
         Ok(())
     })();
     if let Err(error) = recovery_result {
@@ -695,7 +728,9 @@ pub fn service_resume_after_failed_app_shutdown(
             message: error.clone(),
         };
         if let Ok(mut guard) = state.lock() {
-            guard.service_lifecycle_state.retain_recovery_failure(failure);
+            guard
+                .service_lifecycle_state
+                .retain_recovery_failure(failure);
         }
         return Err(error);
     }

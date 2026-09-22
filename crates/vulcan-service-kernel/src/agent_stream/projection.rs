@@ -1254,6 +1254,15 @@ fn apply_observed_usage_to_context_budget_with_local_state(
     // Codex 会把最近一次模型输出之后写入的消息增量加到最近一次 Provider 总量上。
     let local_context_tokens = conversation_state
         .map(local_context_tokens_after_latest_assistant)
+        .map(|result| {
+            result.unwrap_or_else(|error| {
+                format!("Context projection failed: {error}")
+                    .chars()
+                    .count()
+                    .saturating_add(3)
+                    / 4
+            })
+        })
         .unwrap_or_default();
     let active_context_tokens = provider_context_tokens.saturating_add(local_context_tokens);
     let auto_compact_context_tokens = match context_budget.auto_compact_scope {
@@ -1289,9 +1298,9 @@ fn apply_observed_usage_to_context_budget_with_local_state(
 /// 估算最近一次助手响应之后写入的规范消息 Token 数。
 fn local_context_tokens_after_latest_assistant(
     conversation_state: &vulcan_context::SessionConversationState,
-) -> usize {
+) -> Result<usize, String> {
     let source_messages =
-        vulcan_context::conversation_state_to_compaction_source_messages(conversation_state);
+        vulcan_context::conversation_state_to_compaction_source_messages(conversation_state)?;
     let start = source_messages
         .iter()
         .rposition(|message| {
@@ -1299,7 +1308,9 @@ fn local_context_tokens_after_latest_assistant(
         })
         .map(|index| index.saturating_add(1))
         .unwrap_or_default();
-    vulcan_context_compaction::estimate_compaction_source_tokens(&source_messages[start..])
+    Ok(vulcan_context_compaction::estimate_compaction_source_tokens(
+        &source_messages[start..],
+    ))
 }
 
 #[cfg(test)]
@@ -1648,6 +1659,8 @@ mod tests {
             ..vulcan_context::SessionConversationState::default()
         };
 
-        assert!(local_context_tokens_after_latest_assistant(&state) > 0);
+        assert!(local_context_tokens_after_latest_assistant(&state)
+            .expect("valid compaction source messages")
+            > 0);
     }
 }

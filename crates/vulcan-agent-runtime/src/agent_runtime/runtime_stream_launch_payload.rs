@@ -122,7 +122,7 @@ pub(crate) fn build_runtime_stream_launch_payload(
 ) -> Result<RuntimeStreamLaunch, String> {
     let turn_start_mode = runtime_stream_turn_start_mode_for_request(request);
     let effective_prompt =
-        controller_effective_prompt_for_launch(request, &bootstrap.core_snapshot);
+        controller_effective_prompt_for_launch(request, &bootstrap.core_snapshot)?;
     // providerTelemetryContext captures model and owner facts before preparation moves into the launch payload.
     // providerTelemetryContext 在执行准备移入启动载荷前捕获模型与归属事实。
     let provider_telemetry_context = ProviderRequestTelemetryContext::from_preparation(
@@ -167,9 +167,18 @@ pub(crate) fn build_runtime_stream_launch_payload(
 
 /// Resolves how the provider loop should start the next controller turn.
 /// 解析 Provider 循环应如何启动下一次控制器回合。
-fn runtime_stream_turn_start_mode_for_request(
+pub(crate) fn runtime_stream_turn_start_mode_for_request(
     request: &ExecutionPreparationRequest,
 ) -> RuntimeStreamTurnStartMode {
+    // Collaboration input was durably projected before launch and must not append a human prompt.
+    // 协作输入在启动前已可靠投影，不能再追加人类提示词。
+    if matches!(
+        request.prompt_purpose,
+        crate::agent_runtime::execution_models::ExecutionPromptPurpose::QuestionExecution
+            | crate::agent_runtime::execution_models::ExecutionPromptPurpose::AgentTask
+    ) {
+        return RuntimeStreamTurnStartMode::RestoredCheckpoint;
+    }
     if let Some(mode) = request.turn_start_mode {
         return match mode {
             ExecutionTurnStartMode::UserPrompt => RuntimeStreamTurnStartMode::UserPrompt,
@@ -208,24 +217,27 @@ fn runtime_stream_turn_start_mode_for_request(
 fn controller_effective_prompt_for_launch(
     request: &ExecutionPreparationRequest,
     core_snapshot: &CoreConversationSnapshot,
-) -> String {
+) -> Result<String, String> {
     if !request.provider_visible_agent_messages.is_empty() {
-        return request
+        let prompt = request
             .provider_visible_agent_messages
             .iter()
             .map(|message| {
                 CoreConversationPayload::render_agent_message_text(
-                    &message.message_type,
-                    &message.task_name,
+                    &message.delivery_id,
+                    message.kind,
                     &message.sender,
+                    &message.recipient,
+                    &message.task_id,
                     &message.payload,
                 )
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>, _>>()?
             .join("\n\n");
+        return Ok(prompt);
     }
     let raw_prompt = request.prompt.trim().to_string();
-    core_snapshot
+    Ok(core_snapshot
         .messages
         .last()
         .and_then(|message| match &message.payload {
@@ -233,7 +245,7 @@ fn controller_effective_prompt_for_launch(
             _ => None,
         })
         .filter(|text| projected_user_prompt_matches_request(text, &raw_prompt))
-        .unwrap_or(raw_prompt)
+        .unwrap_or(raw_prompt))
 }
 
 /// Returns whether one projected user prompt can safely stand in for the raw request prompt.
@@ -402,6 +414,7 @@ mod tests {
             temperature: Some(0.2),
             reasoning_effort: crate::provider_config::ReasoningEffortLevel::Off,
             tool_exposure_override: Default::default(),
+            captured_child_tool_admission: None,
             tool_request_rejection_reason: None,
             tool_request_rejection_all_tools: false,
             tool_request_rejection_tool_ids: Vec::new(),
@@ -420,6 +433,7 @@ mod tests {
             controller_runtime: None,
             native_goal_runtime: None,
             native_browser_runtime: None,
+            native_agent_collaboration_runtime: None,
             supplemental_mcp_tools: Vec::new(),
             media_resource_runtime: None,
             knowledge_access: None,
@@ -427,6 +441,104 @@ mod tests {
             session_plan_context: None,
             embedded_turn_usage_segments: Vec::new(),
         }
+    }
+
+    /// Verifies actual bootstrap exposes dynamic instructions once in User history and keeps both top projections stable.
+    /// 验证真实 bootstrap 将动态指令仅投影一次到 User 历史，且两份顶部投影均保持稳定。
+    #[test]
+    fn bootstrap_keeps_request_agent_instructions_out_of_top_layers() {
+        // Use the production composer and bootstrap, rather than a manually correct protocol fixture.
+        // 使用生产组合器与 bootstrap，而不是手工构造正确的协议夹具。
+        let mut preparation = build_test_preparation();
+        preparation.workspace_path = String::new();
+        preparation.agent_prompt_snapshot =
+            crate::agent_runtime::execution_models::ExecutionAgentPromptSnapshot::fixed_parent_runtime(
+                "dynamic-bootstrap-instructions",
+            );
+        let request = build_test_request();
+        let bootstrap = build_runtime_bootstrap_core(&preparation, &request, None)
+            .expect("production bootstrap should build");
+        let controller = bootstrap.core_controller.config();
+        assert_eq!(controller.system_prompt, bootstrap.system_preamble);
+        assert_eq!(controller.prompt_layers, bootstrap.prompt_layers);
+        assert_eq!(
+            controller.prompt_layers.render_fallback_system_prompt(),
+            bootstrap.system_preamble
+        );
+        assert!(
+            !bootstrap
+                .system_preamble
+                .contains("dynamic-bootstrap-instructions")
+        );
+        assert!(
+            bootstrap
+                .dynamic_prompt_layers
+                .system
+                .contains("dynamic-bootstrap-instructions")
+        );
+        assert_eq!(
+            bootstrap
+                .core_snapshot
+                .messages
+                .iter()
+                .filter(|message| matches!(
+                    &message.payload,
+                    CoreConversationPayload::UserText { text, .. }
+                        if text.contains("dynamic-bootstrap-instructions")
+                            && text.contains("<vulcan_context_update ")
+                ))
+                .count(),
+            1
+        );
+        // Restored history may end in a user message that has already been sent; additions must follow it.
+        // 恢复历史末尾可能是已经发送的用户消息；新增内容必须位于其后。
+        let mut restored_request = build_test_request();
+        restored_request.conversation_state = crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state(&bootstrap.core_snapshot).unwrap();
+        vulcan_context::append_user_text_message(
+            &mut restored_request.conversation_state,
+            "already-sent-user",
+            "previous user",
+            Vec::new(),
+        )
+        .unwrap();
+        restored_request.turn_start_mode = Some(ExecutionTurnStartMode::RestoredCheckpoint);
+        let restored_prefix = restored_request.conversation_state.messages.clone();
+        preparation.agent_prompt_snapshot = None;
+        let withdrawn =
+            build_runtime_bootstrap_core(&preparation, &restored_request, None).unwrap();
+        let withdrawn_state = crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state(&withdrawn.core_snapshot).unwrap();
+        assert_eq!(
+            serde_json::to_value(&withdrawn_state.messages[..restored_prefix.len()]).unwrap(),
+            serde_json::to_value(&restored_prefix).unwrap()
+        );
+        let ledger =
+            vulcan_context::runtime_host::read_runtime_host_ledger(&withdrawn_state).unwrap();
+        let original = ledger
+            .iter()
+            .find(|row| {
+                !row.expires_source && row.envelope.body.contains("dynamic-bootstrap-instructions")
+            })
+            .unwrap();
+        assert!(
+            ledger
+                .iter()
+                .any(|row| row.expires_source && row.occurrence_id == original.occurrence_id)
+        );
+        // Auxiliary Q&A sees only its local preparation and cannot withdraw the original business inventory.
+        // 辅助答疑只持有局部准备，不能撤下原业务清单。
+        preparation.prompt_purpose =
+            crate::agent_runtime::execution_models::ExecutionPromptPurpose::QuestionExecution;
+        restored_request.prompt_purpose = preparation.prompt_purpose;
+        let auxiliary =
+            build_runtime_bootstrap_core(&preparation, &restored_request, None).unwrap();
+        let auxiliary_state = crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state(&auxiliary.core_snapshot).unwrap();
+        let auxiliary_ledger =
+            vulcan_context::runtime_host::read_runtime_host_ledger(&auxiliary_state).unwrap();
+        assert!(
+            !auxiliary_ledger
+                .iter()
+                .any(|row| row.expires_source && row.occurrence_id == original.occurrence_id)
+        );
     }
 
     /// Builds one minimal canonical snapshot used to verify controller seeding during launch assembly.
@@ -485,6 +597,263 @@ mod tests {
         }
     }
 
+    /// Recovery preserves original identity across listener rejection and immediate post-handoff cancellation.
+    /// 恢复在监听拒绝及交接后立即取消时保留原身份。
+    /// Uses the real launch assembler and durable domain transitions without invoking a provider.
+    /// 使用真实启动组装器及可靠领域转换，不调用供应商。
+    #[tokio::test]
+    async fn recovered_child_launch_preserves_identity_across_listener_and_stop() {
+        use crate::agent_profile::AgentProfileCatalog;
+        use crate::agent_runtime::runtime::RuntimeFoundation;
+        use crate::agent_runtime::task_runtime::restore_child_business_request;
+        use vulcan_session_core::v1::child_execution::{
+            ChildExecutionProfile, ChildExecutionPromptContext, ChildExecutionRuntimeIdentity,
+        };
+        use vulcan_session_core::v1::collaboration::{
+            CollaborationExecutionId, CollaborationOperationId, CollaborationRunControl,
+            SetRunControlInput,
+        };
+        use vulcan_session_core::v1::document::{ClientInputSubmission, SessionDocument};
+        use vulcan_session_core::v1::{ClientActionId, SubagentTaskId};
+        use vulcan_session_core::{
+            ExecutionRuntimePolicy, ProviderModelSnapshot, SessionEffectiveConfig,
+            TaskInvocationConfig, TaskSessionResolvedConfig,
+        };
+        // Each case owns a fresh runtime; the successful handoff is stopped before this thread yields.
+        // 每种情况持有全新运行时；成功交接在本线程让出执行之前被停止。
+        for (reject_listener, stop_during_admission) in
+            [(true, false), (false, false), (true, true)]
+        {
+            // The original business identity is deliberately unrelated to mutable display labels.
+            // 原业务身份故意与可变展示标签无关。
+            let root_id = Uuid::new_v4();
+            let mut document =
+                SessionDocument::new(Uuid::nil().to_string(), "project", "Edited title", 1);
+            let turn = document
+                .submit_root_input(
+                    ClientInputSubmission::new(
+                        ClientActionId::try_new("original-execution").unwrap(),
+                        "请分析主入口文件",
+                        vec![],
+                    ),
+                    2,
+                )
+                .unwrap()
+                .into_value();
+            let mut effective = SessionEffectiveConfig::default();
+            effective.provider_model = ProviderModelSnapshot {
+                provider_id: Some("openai".into()),
+                model_id: Some("gpt-test".into()),
+                reasoning_effort: Some("off".into()),
+                execution_mode: Some("build".into()),
+            };
+            let profile = ChildExecutionProfile {
+                version: 1,
+                root_session_id: root_id.to_string(),
+                parent_session_id: root_id.to_string(),
+                task_id: SubagentTaskId::try_new(Uuid::nil().to_string()).unwrap(),
+                segment_generation: 1,
+                business_turn_id: turn,
+                business_execution_id: "original-execution".into(),
+                runtime_identity: ChildExecutionRuntimeIdentity {
+                    public_task_id: "original-reviewer".into(),
+                    display_title: "Original review".into(),
+                    description: Some("Review source".into()),
+                    subagent: None,
+                    depth: 1,
+                },
+                invocation_config: TaskInvocationConfig::main("请分析主入口文件"),
+                resolved_config: TaskSessionResolvedConfig {
+                    requested_config: Default::default(),
+                    effective_config: effective.clone(),
+                    functional_system_prompt_layers: vec![],
+                    runtime_policy: ExecutionRuntimePolicy::task_session(),
+                },
+                effective_config: effective,
+                runtime_policy: ExecutionRuntimePolicy::task_session(),
+                execution_agent_id: Some("default-agent".into()),
+                connection_id: "test-connection".into(),
+                temperature: Some(0.2),
+                admitted_tools: Default::default(),
+                request_overrides: Default::default(),
+                fixed_agent_prompt: Some("Original fixed prompt".into()),
+                prompt_context: ChildExecutionPromptContext {
+                    identity: "original-reviewer".into(),
+                    delegated_task: "请分析主入口文件".into(),
+                    delegation: None,
+                    functional_system_prompt: None,
+                },
+            };
+            document
+                .capture_child_execution_profile(profile.clone(), 3)
+                .unwrap();
+            document
+                .set_collaboration_run_control(SetRunControlInput {
+                    operation_id: CollaborationOperationId::try_new("running").unwrap(),
+                    state: CollaborationRunControl::Running,
+                    changed_at_ms: 4,
+                })
+                .unwrap();
+            let revision = document
+                .prepare_flush_candidates()
+                .unwrap()
+                .unwrap()
+                .revision;
+            document.advance_durable(revision).unwrap();
+            let execution_id = CollaborationExecutionId::try_new("original-execution").unwrap();
+            let before = document.clone();
+            let mut request = build_test_request();
+            request.prompt.clear();
+            request.conversation_hook_turn_id = None;
+            request.prompt_purpose = crate::agent_runtime::ExecutionPromptPurpose::AgentTask;
+            restore_child_business_request(&mut request, &document, &execution_id).unwrap();
+            let config = crate::provider_config::ProviderConfigurationFile::default();
+            let foundation = Arc::new(RuntimeFoundation::build_from_optional_mcp_access(
+                &config,
+                &AgentProfileCatalog::default(),
+                None,
+                None,
+            ));
+            let runtime = foundation.task_runtime();
+            let context =
+                TaskExecutionRuntimeContext::new(config, foundation, None, request.clone());
+            // Retain the exact preparation for a retry against the same runtime and durable document.
+            // 为同一运行时及可靠文档上的重试保留精确准备。
+            let retry_context = context.clone();
+            let mut bootstrap = build_test_bootstrap();
+            bootstrap.task_runtime = runtime.clone();
+            bootstrap.preparation.prompt_purpose =
+                crate::agent_runtime::ExecutionPromptPurpose::AgentTask;
+            let launch =
+                build_runtime_stream_launch_payload(&request, bootstrap, Some(context)).unwrap();
+            let admitted = std::cell::Cell::new(false);
+            let result = runtime.start_recovered_child_business(
+                launch,
+                &document,
+                &execution_id,
+                |invocation| {
+                    admitted.set(true);
+                    assert_eq!(invocation.public_task_id, "original-reviewer");
+                    assert_eq!(invocation.execution_id, "original-execution");
+                    assert_eq!(invocation.display_title, "Original review");
+                    assert_eq!(invocation.invocation_config, profile.invocation_config);
+                    assert_eq!(invocation.snapshot.messages.len(), 1);
+                    assert!(runtime.is_task_running(invocation.task_id).unwrap());
+                    if stop_during_admission {
+                        assert!(runtime.stop_task(invocation.task_id).unwrap());
+                    }
+                    if reject_listener {
+                        Err(String::from("test listener rejected before provider"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            assert!(admitted.get());
+            if reject_listener {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .contains("test listener rejected before provider")
+                );
+                assert!(!runtime.is_task_running(Uuid::nil()).unwrap());
+                if !stop_during_admission {
+                    // Unwinding must release the same admission before an ordinary retry can succeed.
+                    // 栈展开必须释放同一准入，之后普通重试才能成功。
+                    let mut panic_bootstrap = build_test_bootstrap();
+                    panic_bootstrap.task_runtime = runtime.clone();
+                    panic_bootstrap.preparation.prompt_purpose =
+                        crate::agent_runtime::ExecutionPromptPurpose::AgentTask;
+                    let panic_launch = build_runtime_stream_launch_payload(
+                        &request,
+                        panic_bootstrap,
+                        Some(retry_context.clone()),
+                    )
+                    .unwrap();
+                    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        runtime.start_recovered_child_business(
+                            panic_launch,
+                            &document,
+                            &execution_id,
+                            |_| panic!("listener unwound before handoff"),
+                        )
+                    }));
+                    assert!(unwound.is_err());
+                    assert!(!runtime.is_task_running(Uuid::nil()).unwrap());
+                    assert!(
+                        runtime
+                            .subagent_registry_snapshot()
+                            .unwrap()
+                            .get_for_parent(root_id.into(), "original-reviewer")
+                            .is_none()
+                    );
+                }
+                // Reuse both original identities: generating another task would not prove rollback.
+                // 复用两个原身份：生成另一个任务不能证明回滚。
+                let mut retry_bootstrap = build_test_bootstrap();
+                retry_bootstrap.task_runtime = runtime.clone();
+                retry_bootstrap.preparation.prompt_purpose =
+                    crate::agent_runtime::ExecutionPromptPurpose::AgentTask;
+                let retry_launch = build_runtime_stream_launch_payload(
+                    &request,
+                    retry_bootstrap,
+                    Some(retry_context),
+                )
+                .unwrap();
+                let retry = runtime.start_recovered_child_business(
+                    retry_launch,
+                    &document,
+                    &execution_id,
+                    |_| {
+                        assert!(
+                            !stop_during_admission,
+                            "stopped admission must not reach a listener"
+                        );
+                        Ok(())
+                    },
+                );
+                if stop_during_admission {
+                    assert!(
+                        retry
+                            .unwrap_err()
+                            .contains("already has a resident task record")
+                    );
+                    assert_eq!(
+                        runtime
+                            .subagent_registry_snapshot()
+                            .unwrap()
+                            .get_for_parent(root_id.into(), "original-reviewer")
+                            .unwrap()
+                            .status,
+                        vulcan_session_core::SubagentStatus::Stopped,
+                    );
+                } else {
+                    retry.unwrap();
+                }
+            } else {
+                result.unwrap();
+            }
+            if !stop_during_admission {
+                assert!(runtime.is_task_running(Uuid::nil()).unwrap());
+                // The current-thread runtime cannot poll provider work before this immediate abort.
+                // 当前线程运行时在此立即中止前无法轮询 Provider 工作。
+                assert!(runtime.stop_task(Uuid::nil()).unwrap());
+                tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                    while runtime.is_task_running(Uuid::nil()).unwrap() {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
+            assert!(!runtime.is_task_running(Uuid::nil()).unwrap());
+            assert_eq!(
+                serde_json::to_value((&document.metadata, document.events())).unwrap(),
+                serde_json::to_value((&before.metadata, before.events())).unwrap()
+            );
+        }
+    }
+
     /// Only an explicit restored action selects continuation, leaving new input and normal retry modes unchanged.
     /// 只有明确的恢复动作选择继续模式，新输入和普通重试模式保持不变。
     /// No inputs; verifies the host action identity is not inferred from prompt text or assistant history.
@@ -523,6 +892,45 @@ mod tests {
         );
     }
 
+    /// Auxiliary questions start from their already-projected canonical history without a user prompt.
+    /// 辅助问题从已投影的规范历史启动，不追加用户提示词。
+    #[test]
+    fn question_launch_mode_restores_canonical_history() {
+        let mut request = build_test_request();
+        request.prompt.clear();
+        request.prompt_purpose =
+            crate::agent_runtime::execution_models::ExecutionPromptPurpose::QuestionExecution;
+        assert!(request.provider_visible_agent_messages.is_empty());
+        assert!(request.turn_start_mode.is_none());
+        let launch =
+            build_runtime_stream_launch_payload(&request, build_test_bootstrap(), None).unwrap();
+        assert_eq!(
+            launch.turn_start_mode,
+            RuntimeStreamTurnStartMode::RestoredCheckpoint
+        );
+        assert!(launch.effective_prompt.is_empty());
+    }
+
+    /// Claimed agent work restores canonical history even when a caller supplies user-start mode.
+    /// 即使调用方传入用户启动模式，已认领代理任务也只恢复规范历史。
+    #[test]
+    fn agent_task_launch_mode_never_appends_human_prompt() {
+        // The durable tagged input is already in history; this adapter must not append it twice.
+        // 可靠带标签输入已经在历史中；此适配层不能重复追加它。
+        let mut request = build_test_request();
+        request.prompt_purpose =
+            crate::agent_runtime::execution_models::ExecutionPromptPurpose::AgentTask;
+        request.turn_start_mode = Some(ExecutionTurnStartMode::UserPrompt);
+        let launch =
+            build_runtime_stream_launch_payload(&request, build_test_bootstrap(), None).unwrap();
+        assert_eq!(
+            launch.turn_start_mode,
+            RuntimeStreamTurnStartMode::RestoredCheckpoint
+        );
+        assert!(request.prompt_purpose.runs_completed_turn_hooks());
+        assert!(request.prompt_purpose.supports_user_turn_tooling());
+    }
+
     /// Trims the effective prompt and preserves the bootstrapped controller snapshot inside the launch delta state.
     /// 裁剪生效提示词，并在启动增量状态中保留已 bootstrap 的控制器快照。
     #[test]
@@ -556,7 +964,9 @@ mod tests {
         request.prompt.clear();
         request.provider_visible_agent_messages = vec![ExecutionProviderVisibleAgentMessage {
             delivery_id: String::from("delivery-1"),
+            kind: vulcan_ai_contract::HostMessageKind::TaskResult,
             message_type: String::from("FINAL_ANSWER"),
+            task_id: String::from("task-1"),
             task_name: String::from("quick_agent"),
             sender: String::from("quick_agent"),
             recipient: String::from("parent:00000000-0000-0000-0000-000000000000"),
@@ -568,10 +978,32 @@ mod tests {
         let preparation = build_test_preparation();
         let runtime_core = build_runtime_bootstrap_core(&preparation, &request, None)
             .expect("runtime bootstrap core should seed agent messages");
-        assert!(matches!(
-            runtime_core.core_snapshot.messages.last().map(|message| &message.payload),
-            Some(CoreConversationPayload::AgentMessage { payload, .. }) if payload == "abc"
-        ));
+        // Dynamic host context may follow the agent message; its typed identity must remain unique and unchanged.
+        // 动态宿主上下文可位于代理消息之后；代理的强类型身份必须唯一且保持不变。
+        let agent_messages = runtime_core
+            .core_snapshot
+            .messages
+            .iter()
+            .filter(|message| {
+                matches!(
+                    &message.payload,
+                    CoreConversationPayload::AgentMessage { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(agent_messages.len(), 1);
+        assert!(
+            matches!(&agent_messages[0].payload, CoreConversationPayload::AgentMessage { payload, .. } if payload == "abc")
+        );
+        assert!(runtime_core.core_snapshot.messages.iter().all(|message| {
+            matches!(
+                &message.payload,
+                CoreConversationPayload::AgentMessage { .. }
+            ) || message
+                .id
+                .starts_with(vulcan_context::runtime_host::RUNTIME_HOST_MESSAGE_PREFIX)
+        }));
+        let seeded_messages = serde_json::to_value(&runtime_core.core_snapshot.messages).unwrap();
         let crate::agent_runtime::runtime_stream_bootstrap_core::RuntimeBootstrapCore {
             system_preamble,
             dynamic_prompt_layers,
@@ -606,10 +1038,10 @@ mod tests {
             launch.turn_start_mode,
             RuntimeStreamTurnStartMode::RestoredCheckpoint
         );
-        assert!(launch.effective_prompt.contains("<agent_message>"));
+        assert!(launch.effective_prompt.contains("<vulcan_agent_message"));
         assert_eq!(
-            launch.stream_state.controller().snapshot().messages.len(),
-            1
+            serde_json::to_value(&launch.stream_state.controller().snapshot().messages).unwrap(),
+            seeded_messages
         );
     }
 
@@ -827,6 +1259,23 @@ mod tests {
         assert_ne!(projected_text, prompt);
         assert!(projected_attachments.is_empty());
         let expected_effective_prompt = projected_text.clone();
+        // Only one actual human input may remain; host User envelopes are separate typed records.
+        // 只能保留一个真实人类输入；宿主 User 信封属于不同的强类型记录。
+        assert_eq!(
+            core_snapshot
+                .messages
+                .iter()
+                .filter(|message| matches!(
+                    &message.payload,
+                    CoreConversationPayload::UserText { .. }
+                ) && !message
+                    .id
+                    .starts_with(vulcan_context::runtime_host::RUNTIME_HOST_MESSAGE_PREFIX))
+                .count(),
+            1
+        );
+        assert_eq!(latest_projected_message.id, latest_request_message.id);
+        let seeded_messages = serde_json::to_value(&core_snapshot.messages).unwrap();
         let bootstrap = RuntimeStreamBootstrap {
             preparation,
             active_agent: None,
@@ -851,8 +1300,8 @@ mod tests {
 
         assert_eq!(launch.effective_prompt, expected_effective_prompt);
         assert_eq!(
-            launch.stream_state.controller().snapshot().messages.len(),
-            1
+            serde_json::to_value(&launch.stream_state.controller().snapshot().messages).unwrap(),
+            seeded_messages
         );
     }
 }

@@ -2,6 +2,7 @@
 //! 运行时流事件编排。
 
 use super::*;
+use vulcan_agent_runtime::ExecutionPromptPurpose;
 use vulcan_session_core::ExecutionScope;
 
 /// Request-authoritative Hook routing policy for root runtime stream events.
@@ -31,6 +32,8 @@ pub(super) enum RuntimeEventHookPolicy {
 /// `hooks_enabled` 是请求级运行时能力决策。
 /// `conversation_hook_turn_id` is the precheck-validated Hook turn captured by the request.
 /// `conversation_hook_turn_id` 是请求捕获且经过预检验证的 Hook 回合。
+/// `purpose` separates auxiliary Q&A from the business turn even when session Hooks are enabled.
+/// `purpose` 在会话启用 Hook 时仍将辅助答疑与业务回合分离。
 ///
 /// # Returns
 /// 返回值
@@ -40,7 +43,11 @@ pub(super) fn runtime_event_hook_policy_for_execution_scope(
     execution_scope: &ExecutionScope,
     hooks_enabled: bool,
     conversation_hook_turn_id: Option<&str>,
+    purpose: ExecutionPromptPurpose,
 ) -> Result<RuntimeEventHookPolicy, String> {
+    if purpose == ExecutionPromptPurpose::QuestionExecution {
+        return Ok(RuntimeEventHookPolicy::Disabled);
+    }
     if hooks_enabled && matches!(execution_scope, ExecutionScope::MainSession { .. }) {
         // turn_id is the immutable precheck correlation required by every root-stream tool Hook.
         // turn_id 是每个根流工具 Hook 必须使用的不可变预检关联。
@@ -188,6 +195,12 @@ pub(super) async fn handle_runtime_stream_event(
         &event,
     ) {
         eprintln!("[webui-service] start detached subagent listener failed: {error}");
+        // Provider launch must observe the listener/persistence failure instead of a display acknowledgement.
+        // Provider 启动必须观察监听器或持久化失败，不能收到显示确认。
+        if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(&event, &error) {
+            eprintln!("[webui-service] reject subagent start barrier failed: {rejection_error}");
+        }
+        return;
     }
 
     // A consumed delegate event owns its child projection and must not be duplicated in the parent transcript.
@@ -269,6 +282,73 @@ fn runtime_event_phase_transition(
 mod tests {
     use super::*;
     use vulcan_session_core::SessionNodeId;
+
+    /// Owns the global production barrier switch for a serial integration test.
+    /// 为串行集成测试持有全局生产屏障开关。
+    struct DelegateBarrierGuard;
+
+    impl Drop for DelegateBarrierGuard {
+        /// Restores the test default on completion or assertion unwinding.
+        /// 完成或断言展开时恢复测试默认值。
+        fn drop(&mut self) {
+            let _ = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(false);
+        }
+    }
+
+    /// A real root stream rejects malformed child admission through the actual execution waiter.
+    /// 真实根流通过实际执行等待器拒绝畸形子任务准入。
+    #[tokio::test]
+    async fn delegate_start_failure_rejects_production_barrier() {
+        use crate::tests::test_support::{
+            TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
+        };
+        use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
+            attach_test_runtime_event_projection_barrier,
+            set_runtime_event_projection_barriers_enabled,
+        };
+        // The host fixture owns all storage; this test never calls a model or starts a child.
+        // 宿主夹具拥有全部存储；此测试不调用模型或启动子代理。
+        let session_id = Uuid::new_v4();
+        let root = TestHostRuntimeRoot::new(session_id);
+        let controller = root.attached_host_runtime_handle().await;
+        let state = Arc::new(std::sync::Mutex::new(
+            test_service_state_with_parent_session(session_id),
+        ));
+        let agent_runtime = test_agent_runtime_bridge();
+        set_runtime_event_projection_barriers_enabled(true).unwrap();
+        let _barrier_guard = DelegateBarrierGuard;
+        let (event, waiter) = attach_test_runtime_event_projection_barrier(RuntimeEvent::new(
+            RuntimeEventKind::DelegateStarted,
+            "invalid child admission",
+            "Missing task binding",
+        ))
+        .unwrap();
+        let mut trace = StreamRequestTraceState::new(0);
+        handle_runtime_stream_event(
+            &ServiceEventEmitter::new(vec![]),
+            &state,
+            &controller,
+            &agent_runtime,
+            &mut trace,
+            &RuntimeEventHookPolicy::Disabled,
+            session_id,
+            Uuid::new_v4(),
+            event,
+        )
+        .await;
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("host must reject immediately")
+            .expect_err("child must not be released");
+        assert!(error.contains("invalid authoritative task metadata"));
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .detached_subagent_task_listeners
+                .is_empty()
+        );
+    }
 
     /// Verifies that tool boundaries map to their exact workbench phases.
     /// 验证工具边界会映射到精确的工作台阶段。
@@ -357,31 +437,76 @@ mod tests {
         };
 
         assert_eq!(
-            runtime_event_hook_policy_for_execution_scope(&main_scope, true, Some("turn-17"))
-                .expect("Hook-enabled main session should accept exact turn correlation"),
+            runtime_event_hook_policy_for_execution_scope(
+                &main_scope,
+                true,
+                Some("turn-17"),
+                ExecutionPromptPurpose::UserTurn
+            )
+            .expect("Hook-enabled main session should accept exact turn correlation"),
             RuntimeEventHookPolicy::ConversationTurn {
                 turn_id: String::from("turn-17")
             }
         );
         assert_eq!(
-            runtime_event_hook_policy_for_execution_scope(&main_scope, false, None)
-                .expect("Hook-disabled main session should not require correlation"),
+            runtime_event_hook_policy_for_execution_scope(
+                &main_scope,
+                false,
+                None,
+                ExecutionPromptPurpose::UserTurn
+            )
+            .expect("Hook-disabled main session should not require correlation"),
             RuntimeEventHookPolicy::Disabled
         );
         assert_eq!(
-            runtime_event_hook_policy_for_execution_scope(&task_scope, true, None)
-                .expect("task-session stream Hooks use their detached execution path"),
+            runtime_event_hook_policy_for_execution_scope(
+                &task_scope,
+                true,
+                None,
+                ExecutionPromptPurpose::UserTurn
+            )
+            .expect("task-session stream Hooks use their detached execution path"),
             RuntimeEventHookPolicy::Disabled
         );
         assert_eq!(
-            runtime_event_hook_policy_for_execution_scope(&compaction_scope, true, None)
-                .expect("compaction stream Hooks use their committed notification path"),
+            runtime_event_hook_policy_for_execution_scope(
+                &compaction_scope,
+                true,
+                None,
+                ExecutionPromptPurpose::ContextCompaction
+            )
+            .expect("compaction stream Hooks use their committed notification path"),
             RuntimeEventHookPolicy::Disabled
         );
         // error proves an enabled main-session Hook cannot fall back to mutable active-turn lookup.
         // error 证明启用的主会话 Hook 无法回退到可变 active-turn 查询。
-        let error = runtime_event_hook_policy_for_execution_scope(&main_scope, true, None)
-            .expect_err("Hook-enabled main session must reject missing turn correlation");
+        assert_eq!(
+            runtime_event_hook_policy_for_execution_scope(
+                &main_scope,
+                true,
+                None,
+                ExecutionPromptPurpose::QuestionExecution
+            )
+            .expect("auxiliary execution does not need a business Hook"),
+            RuntimeEventHookPolicy::Disabled
+        );
+        assert_eq!(
+            runtime_event_hook_policy_for_execution_scope(
+                &main_scope,
+                true,
+                Some("retained-business"),
+                ExecutionPromptPurpose::QuestionExecution
+            )
+            .expect("auxiliary execution cannot attach to a retained business Hook"),
+            RuntimeEventHookPolicy::Disabled
+        );
+        let error = runtime_event_hook_policy_for_execution_scope(
+            &main_scope,
+            true,
+            None,
+            ExecutionPromptPurpose::UserTurn,
+        )
+        .expect_err("Hook-enabled main session must reject missing turn correlation");
         assert!(error.contains("missing its conversation Hook turn id"));
     }
 }

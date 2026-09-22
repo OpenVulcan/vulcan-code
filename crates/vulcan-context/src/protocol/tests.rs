@@ -275,7 +275,8 @@ fn compaction_source_projects_runtime_messages() {
         continuation: SessionProviderContinuationState::default(),
     };
 
-    let messages = conversation_state_to_compaction_source_messages(&state);
+    let messages = conversation_state_to_compaction_source_messages(&state)
+        .expect("valid compaction source messages");
 
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].id, "user-runtime-1");
@@ -311,7 +312,8 @@ fn compaction_source_keeps_raw_tool_result_and_structured_identity() {
         continuation: SessionProviderContinuationState::default(),
     };
 
-    let messages = conversation_state_to_compaction_source_messages(&state);
+    let messages = conversation_state_to_compaction_source_messages(&state)
+        .expect("valid compaction source messages");
 
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].body, "stderr line one\r\nerror conclusion");
@@ -341,7 +343,9 @@ fn compaction_source_projects_agent_messages_as_user_messages() {
         messages: vec![SessionConversationMessage {
             id: String::from("agent-message-1"),
             payload: SessionConversationPayload::AgentMessage {
+                kind: vulcan_ai_contract::HostMessageKind::TaskResult,
                 message_type: String::from("FINAL_ANSWER"),
+                task_id: String::from("task-code-review"),
                 task_name: String::from("code-review"),
                 sender: String::from("code-review"),
                 recipient: String::from("parent"),
@@ -354,12 +358,13 @@ fn compaction_source_projects_agent_messages_as_user_messages() {
         continuation: SessionProviderContinuationState::default(),
     };
 
-    let messages = conversation_state_to_compaction_source_messages(&state);
+    let messages = conversation_state_to_compaction_source_messages(&state)
+        .expect("valid agent message envelope");
 
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].id, "agent-message-1");
     assert_eq!(messages[0].kind, SessionMessageKind::User);
-    assert!(messages[0].body.contains("<agent_message>"));
+    assert!(messages[0].body.contains("<vulcan_agent_message"));
     assert!(messages[0].body.contains("review complete"));
 }
 
@@ -389,7 +394,8 @@ fn compaction_source_ignores_display_records() {
         created_at: String::new(),
     });
 
-    let messages = conversation_state_to_compaction_source_messages(&state);
+    let messages = conversation_state_to_compaction_source_messages(&state)
+        .expect("valid compaction source messages");
 
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].id, "runtime-user");
@@ -412,7 +418,8 @@ fn compaction_source_rejects_record_only_state() {
         created_at: String::new(),
     });
 
-    let messages = conversation_state_to_compaction_source_messages(&state);
+    let messages = conversation_state_to_compaction_source_messages(&state)
+        .expect("valid compaction source messages");
 
     assert!(messages.is_empty());
 }

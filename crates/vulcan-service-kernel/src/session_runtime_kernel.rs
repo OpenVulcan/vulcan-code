@@ -314,10 +314,7 @@ fn start_webui_session_kernel_turn_with_admission(
     kind: ActiveTurnKind,
     allowed_reservation_id: Option<Uuid>,
 ) -> Result<(), String> {
-    if let Some(owner) = state
-        .session_terminal_persistence_owners
-        .get(&session_id)
-    {
+    if let Some(owner) = state.session_terminal_persistence_owners.get(&session_id) {
         return Err(format!(
             "Session `{session_id}` is committing its terminal state ({}); a new runtime kernel turn cannot start",
             owner.diagnostic_label()
@@ -708,6 +705,48 @@ pub(crate) fn capture_webui_prompt_preparation_generation(
         return Err(String::from("workspace snapshot is not ready"));
     }
     Ok(generation)
+}
+
+/// Checks both preparation ownership and the durable question ID carried by the kernel.
+/// 同时检查准备归属与内核携带的可靠问题执行 ID。
+/// `state`, session and turn identify the preparation; `execution_id` is the required auxiliary owner.
+/// `state`、会话及回合标识准备；`execution_id` 是必需的辅助所有者。
+/// Returns its generation only while all identities match, or a state-lock error.
+/// 仅在全部身份匹配时返回代际，否则返回空值或状态锁错误。
+pub(crate) fn capture_webui_question_preparation_generation(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    turn_id: &str,
+    execution_id: &vulcan_session_core::v1::collaboration::CollaborationExecutionId,
+) -> Result<Option<u64>, String> {
+    // guard keeps logical and durable execution binding in the same read boundary.
+    // guard 将逻辑与可靠执行绑定保持在同一个读取边界。
+    let guard = state
+        .lock()
+        .map_err(|error| format!("Failed to lock question kernel: {error}"))?;
+    // generation excludes stopped, replaced and terminalizing preparation owners.
+    // generation 排除停止、替代及正在终态化的准备所有者。
+    let Some(generation) = current_webui_prompt_preparation_generation(&guard, session_id, turn_id)
+    else {
+        return Ok(None);
+    };
+    if guard.workspace_snapshot.is_none() {
+        return Err(String::from("Question preparation workspace is not ready."));
+    }
+    // The preceding generation proof established this exact kernel and active turn.
+    // 前面的代际证明已经确认该精确内核及活动回合。
+    let turn = guard
+        .session_runtime_kernels
+        .get(&session_id)
+        .and_then(|kernel| kernel.active_turn())
+        .ok_or_else(|| {
+            String::from("Question preparation kernel disappeared under its state lock.")
+        })?;
+    Ok(
+        matches!(&turn.kind, ActiveTurnKind::QuestionExecution { execution_id: current }
+        if current == execution_id)
+        .then_some(generation),
+    )
 }
 
 /// Returns the session ids whose runtime kernels currently own active turns.

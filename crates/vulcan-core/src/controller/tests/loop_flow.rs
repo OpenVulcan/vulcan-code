@@ -321,15 +321,19 @@ fn run_seeded_turn_streaming_uses_preseeded_agent_message() {
         let mut controller =
             VulcanCoreController::new(build_test_config(2), ConversationSnapshot::default())
                 .expect("valid core conversation snapshot");
-        controller.append_agent_message(AgentMessageAppendRequest {
+        controller
+            .append_agent_message(AgentMessageAppendRequest {
+            kind: vulcan_ai_contract::HostMessageKind::TaskResult,
             message_type: String::from("FINAL_ANSWER"),
+            task_id: String::from("task-quick-agent"),
             task_name: String::from("quick_agent"),
             sender: String::from("quick_agent"),
             recipient: String::from("parent"),
             payload: String::from("abc"),
             trigger_turn: true,
             metadata: None,
-        });
+            })
+            .expect("valid agent message");
 
         let result = controller
             .run_seeded_turn_streaming_with_checkpoints_and_interventions(

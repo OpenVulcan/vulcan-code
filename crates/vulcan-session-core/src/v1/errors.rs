@@ -527,6 +527,50 @@ pub enum DomainError {
         /// 既有未完成结算身份。
         settlement_id: String,
     },
+    /// A collaboration record or operation was not found in authoritative state.
+    /// 权威协作状态中不存在目标记录或操作。
+    CollaborationNotFound {
+        /// Stable collaboration entity kind.
+        /// 稳定协作实体类型。
+        kind: &'static str,
+        /// Exact requested identity.
+        /// 精确请求身份。
+        identity: String,
+    },
+    /// A collaboration operation reused an identity with different semantics.
+    /// 协作操作以不同语义复用了同一身份。
+    CollaborationConflict {
+        /// Exact conflicting operation identity.
+        /// 发生冲突的精确操作身份。
+        operation_id: String,
+    },
+    /// A collaboration caller is not the participant authorized for the action.
+    /// 协作调用者不是该动作获授权的参与者。
+    CollaborationUnauthorized {
+        /// Stable action name.
+        /// 稳定动作名称。
+        action: &'static str,
+        /// Exact question or delivery identity.
+        /// 精确问题或投递身份。
+        identity: String,
+    },
+    /// A question has already been settled by an earlier operation.
+    /// 问题已经由更早操作完成结算。
+    CollaborationAlreadySettled {
+        /// Question identity.
+        /// 问题身份。
+        question_id: String,
+        /// Winning state name.
+        /// 胜出状态名称。
+        state: &'static str,
+    },
+    /// A collaboration state transition violates its explicit lifecycle.
+    /// 协作状态转换违反明确生命周期。
+    CollaborationStateViolation {
+        /// Stable field or transition name.
+        /// 稳定字段或转换名称。
+        field: &'static str,
+    },
 }
 
 impl DomainError {
@@ -838,6 +882,25 @@ impl fmt::Display for DomainError {
             Self::TerminalSettlementConflict { settlement_id } => write!(
                 formatter,
                 "terminal settlement `{settlement_id}` is still unfinished"
+            ),
+            Self::CollaborationNotFound { kind, identity } => {
+                write!(formatter, "collaboration {kind} `{identity}` was not found")
+            }
+            Self::CollaborationConflict { operation_id } => write!(
+                formatter,
+                "collaboration operation `{operation_id}` was already persisted with different semantics"
+            ),
+            Self::CollaborationUnauthorized { action, identity } => write!(
+                formatter,
+                "collaboration action `{action}` is not authorized for `{identity}`"
+            ),
+            Self::CollaborationAlreadySettled { question_id, state } => write!(
+                formatter,
+                "collaboration question `{question_id}` is already settled as {state}"
+            ),
+            Self::CollaborationStateViolation { field } => write!(
+                formatter,
+                "collaboration state transition is invalid at {field}"
             ),
         }
     }

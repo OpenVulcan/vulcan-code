@@ -2,6 +2,7 @@
 //! compose 运行时基础架构使用的原生工具注册面。
 
 pub mod bridge;
+pub mod collaboration;
 pub mod native;
 
 pub use command_session_runtime::CommandSessionRuntime;

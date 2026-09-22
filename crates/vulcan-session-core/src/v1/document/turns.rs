@@ -11,16 +11,18 @@ use super::{
     ActiveTurnState, IdempotentMutation, SessionDocument, TurnOrigin, client_action_conflict,
     validate_system_context_content, validate_timestamp,
 };
-use crate::v1::config::GoalState;
+use crate::v1::config::{GoalState, MetadataDocument};
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
-    ApiCallStatus, ApiStatsEvent, AssistantSemanticStatus, ContinuationEligibility,
+    ApiCallStatus, ApiPurposeKind, ApiStatsEvent, AssistantSemanticStatus, ContinuationEligibility,
     ConversationEvent, EventBody, EventVisibility, ExecutionControlEvent, ExecutionControlKind,
     SystemContextEvent, SystemContextOperation, SystemContextScope, SystemRoleHint,
-    TurnBoundaryEvent, TurnOutcome, TurnStatsEvent, UserInputEvent, UserInputSource,
+    TurnBoundaryEvent, TurnBoundaryPurpose, TurnOutcome, TurnStatsEvent, UserInputEvent,
+    UserInputSource,
 };
 use crate::v1::goal::{GoalStopReason, decide_goal_continuation};
 use crate::v1::ids::{ClientActionId, IdAllocator, PendingInputId, ResourceId, Seq, TurnId};
+use crate::v1::projection::{ActiveSystemState, ProjectedSystemRole, derive_active_system_state};
 use crate::v1::stats::{StatBucket, TurnStatBuckets};
 
 /// One explicit request to resume the current unfinished logical Turn.
@@ -155,6 +157,79 @@ fn continuation_guidance_key(client_action_id: &ClientActionId) -> String {
     format!("continuation_guidance/{}", client_action_id.as_str())
 }
 
+/// Finds TTL generations that expire when one logical turn closes.
+/// 找出一个逻辑回合闭合时到期的 TTL 代际。
+pub(super) fn expiring_ttl_contexts(
+    document: &SessionDocument,
+    turn_id: TurnId,
+) -> Result<Vec<ActiveSystemState>, DomainError> {
+    // Only the exact open business owner can consume a context lifetime.
+    // 只有精确匹配的开放业务所有者才能消耗上下文寿命。
+    let turn = document.require_open_turn()?;
+    if turn.turn_id != turn_id {
+        return Err(DomainError::TurnIdentityMismatch {
+            expected: turn_id.value(),
+            actual: turn.turn_id.value(),
+        });
+    }
+    if matches!(
+        turn.origin,
+        TurnOrigin::QuestionExecution | TurnOrigin::ContextMaintenance
+    ) {
+        return Ok(Vec::new());
+    }
+    let through_seq = document.events().last().map(ConversationEvent::seq).ok_or(
+        DomainError::ReferenceViolation {
+            kind: "ttl_expiration.event_frontier",
+            value: turn_id.value(),
+        },
+    )?;
+    Ok(derive_active_system_state(document.events(), through_seq)?
+        .into_iter()
+        .filter(|state| {
+            state.remaining_turns == Some(1) && state.last_consumed_turn_id != Some(turn_id)
+        })
+        .collect())
+}
+
+/// Removes only metadata generations whose source event is the expiring version.
+/// 仅移除 source 事件正好是到期版本的 metadata 代际。
+pub(super) fn clear_expired_dynamic_context_metadata(
+    metadata: &mut MetadataDocument,
+    expiring_contexts: &[ActiveSystemState],
+) {
+    for state in expiring_contexts {
+        let should_remove = metadata
+            .dynamic_context
+            .get(&state.context_key)
+            .is_some_and(|current| current.source_seq == state.source_seq);
+        if should_remove {
+            metadata.dynamic_context.remove(&state.context_key);
+        }
+    }
+}
+
+/// Converts a projected system role back to the durable role hint for an expiration marker.
+/// 将投影系统角色转换回失效标记所需的可靠角色提示。
+fn expiration_role_hint(role: ProjectedSystemRole) -> Option<SystemRoleHint> {
+    Some(match role {
+        ProjectedSystemRole::Developer => SystemRoleHint::Developer,
+        ProjectedSystemRole::System => SystemRoleHint::System,
+        ProjectedSystemRole::HiddenUserShell => SystemRoleHint::HiddenUserShell,
+    })
+}
+
+/// Builds the stable body that identifies the expired context generation.
+/// 构造标识已失效上下文代际的稳定正文。
+fn ttl_expiration_content(state: &ActiveSystemState, turn_id: TurnId) -> String {
+    format!(
+        "The dynamic context `{}` from event seq {} expired after logical turn {}.",
+        state.context_key,
+        state.source_seq.value(),
+        turn_id.value(),
+    )
+}
+
 // Keep all mutations on the single authoritative document instance.
 // 所有修改仍作用于唯一权威文档实例。
 impl SessionDocument {
@@ -245,6 +320,22 @@ impl SessionDocument {
             has_input && consume_matching_draft(&mut staged_metadata, &text, &resource_ids);
         let (input_id, input_seq) = if has_input {
             let input_id = PendingInputId::try_new(staged_allocator.next_local_id()?)?;
+            // Continue's optional human supplement is admitted directly into the stream, so record it in this same transaction.
+            // Continue 的可选人类补充直接准入事件流，因此在同一事务中记录观察。
+            staged_metadata
+                .business_hook
+                .observed_inputs
+                .retain(|entry| entry.turn_id == turn_id);
+            staged_metadata.business_hook.observed_inputs.push(
+                crate::v1::business_hook::BusinessHookObservedInput {
+                    turn_id,
+                    client_action_id: client_action_id.clone(),
+                    input_id,
+                    observed_revision: self.next_mutation_revision()?,
+                    kind: crate::v1::business_hook::BusinessHookInputKind::Interrupt,
+                    content: text.clone(),
+                },
+            );
             let input_seq = self.stage_event(
                 &mut staged_allocator,
                 &mut staged_events,
@@ -458,15 +549,18 @@ impl SessionDocument {
         }))
     }
 
-    /// Validates that the latest physical API terminal permits an explicit Continue.
-    /// 校验最近一次物理 API 终态允许显式继续。
+    /// Validates that the latest business API terminal permits an explicit Continue.
+    /// 校验最近一次业务 API 终态允许显式继续。
     fn validate_continuation_eligibility(&self, turn_id: TurnId) -> Result<(), DomainError> {
         let latest_started = self
             .events
             .iter()
             .rev()
             .find(|event| {
-                event.turn_id == Some(turn_id) && matches!(event.event, EventBody::ApiStarted(_))
+                event.turn_id == Some(turn_id)
+                    && matches!(&event.event, EventBody::ApiStarted(started)
+                        if !matches!(started.purpose,
+                            ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution))
             })
             .ok_or(DomainError::ContinuationNotEligible {
                 reason: "missing_api_started",
@@ -500,16 +594,18 @@ impl SessionDocument {
         if self.events.iter().any(|event| {
             event.turn_id == Some(turn_id)
                 && event.seq.value() > terminal_event.seq.value()
-                && matches!(
-                    event.event,
-                    EventBody::ApiStarted(_)
-                        | EventBody::TurnBoundary(_)
-                        | EventBody::TurnStats(_)
-                        | EventBody::ExecutionControl(ExecutionControlEvent {
-                            control_kind: ExecutionControlKind::TurnResumed,
-                            ..
-                        })
-                )
+                && (matches!(&event.event, EventBody::ApiStarted(started)
+                        if !matches!(started.purpose,
+                            ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution))
+                    || matches!(
+                        event.event,
+                        EventBody::TurnBoundary(_)
+                            | EventBody::TurnStats(_)
+                            | EventBody::ExecutionControl(ExecutionControlEvent {
+                                control_kind: ExecutionControlKind::TurnResumed,
+                                ..
+                            })
+                    ))
         }) {
             return Err(DomainError::ContinuationNotEligible {
                 reason: "terminal_boundary_superseded",
@@ -533,6 +629,37 @@ impl SessionDocument {
         duration_ms: i64,
         now_ms: i64,
     ) -> Result<Seq, DomainError> {
+        if self.require_open_turn()?.origin == TurnOrigin::ContextMaintenance {
+            let execution_id = self
+                .metadata
+                .context_maintenance
+                .as_ref()
+                .ok_or(DomainError::CollaborationStateViolation {
+                    field: "context_maintenance.owner",
+                })?
+                .execution_id
+                .clone();
+            return self
+                .finish_child_context_maintenance(&execution_id, outcome.into(), now_ms)
+                .map(IdempotentMutation::into_value);
+        }
+        let turn_id = self.require_open_turn()?.turn_id;
+        let mut staged = self.begin_atomic_mutation()?;
+        staged.finish_in_turn_question_executions(turn_id, now_ms)?;
+        let receipt = staged.close_turn_after_question_attempts(outcome, duration_ms, now_ms)?;
+        staged.record_task_results_for_turn(turn_id, now_ms)?;
+        self.commit_atomic_mutation(staged);
+        Ok(receipt)
+    }
+
+    /// Commits the actual turn boundary after its question attempts have ended in the staged document.
+    /// 暂存文档中的答疑尝试结束后，提交实际回合边界。
+    fn close_turn_after_question_attempts(
+        &mut self,
+        outcome: TurnOutcome,
+        duration_ms: i64,
+        now_ms: i64,
+    ) -> Result<Seq, DomainError> {
         let turn = self.require_open_turn()?;
         if let Some(api) = self.active_api.as_ref() {
             return Err(DomainError::TurnCompletionWhileApiActive {
@@ -542,16 +669,23 @@ impl SessionDocument {
         }
         let turn_id = turn.turn_id;
         let start_seq = turn.start_seq;
-        self.ensure_transition_capacity(2, 0)?;
+        let expiring_contexts = expiring_ttl_contexts(self, turn_id)?;
+        let ttl_expiration_count = u64::try_from(expiring_contexts.len()).map_err(|_| {
+            DomainError::ImmutableFieldMutation {
+                entity: "ttl_expiration",
+                field: "event_count",
+            }
+        })?;
+        self.ensure_transition_capacity(2 + ttl_expiration_count, 0)?;
         let buckets = self.aggregate_turn_buckets(turn_id, start_seq)?;
         let mut staged_allocator = self.id_allocator;
-        let mut staged_events = Vec::with_capacity(2);
+        let mut staged_events = Vec::with_capacity((2 + ttl_expiration_count) as usize);
         let final_seq = self.stage_turn_closure(
             &mut staged_allocator,
             &mut staged_events,
             turn_id,
             start_seq,
-            outcome,
+            outcome.into(),
             duration_ms,
             now_ms,
             buckets,
@@ -559,6 +693,7 @@ impl SessionDocument {
         let mut staged_active_turn = turn.clone();
         staged_active_turn.closed = true;
         let mut staged_metadata = self.metadata.clone();
+        clear_expired_dynamic_context_metadata(&mut staged_metadata, &expiring_contexts);
         staged_metadata.open_turn_start_seq = None;
         let changed_event_seqs: Vec<Seq> =
             staged_events.iter().map(ConversationEvent::seq).collect();
@@ -574,8 +709,8 @@ impl SessionDocument {
         Ok(final_seq)
     }
 
-    /// Stages one complete boundary/statistics pair without publishing owner state.
-    /// 暂存一组完整的边界/统计事件，不发布 owner 状态。
+    /// Stages one complete boundary, TTL expirations, and statistics without publishing owner state.
+    /// 暂存一组完整的边界、TTL 失效标记与统计事件，不发布 owner 状态。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn stage_turn_closure(
         &self,
@@ -583,24 +718,62 @@ impl SessionDocument {
         staged_events: &mut Vec<ConversationEvent>,
         turn_id: TurnId,
         start_seq: Seq,
-        outcome: TurnOutcome,
+        reason: crate::v1::event::TurnClosureReason,
         duration_ms: i64,
         now_ms: i64,
         buckets: TurnStatBuckets,
     ) -> Result<Seq, DomainError> {
+        // Preserve explicit failure classification while retaining the existing aggregate outcome contract.
+        // 保留明确失败分类，同时保持既有聚合结果契约。
+        let outcome = reason.outcome();
+        let mut expiring_contexts = expiring_ttl_contexts(self, turn_id)?;
+        // A staged explicit Remove already expires the key in this atomic transition.
+        // 同一原子转换中已暂存的显式 Remove 已经使该 key 失效。
+        for event in staged_events.iter() {
+            if let EventBody::SystemContext(context) = &event.event
+                && context.operation == SystemContextOperation::Remove
+            {
+                expiring_contexts.retain(|state| state.context_key != context.context_key);
+            }
+        }
         self.stage_event(
             staged_allocator,
             staged_events,
             Some(turn_id),
             EventVisibility::UiOnly,
-            EventBody::TurnBoundary(TurnBoundaryEvent { outcome }),
+            EventBody::TurnBoundary(TurnBoundaryEvent {
+                reason,
+                outcome,
+                purpose: match self.require_open_turn()?.origin {
+                    TurnOrigin::QuestionExecution => TurnBoundaryPurpose::QuestionExecution,
+                    TurnOrigin::ContextMaintenance => TurnBoundaryPurpose::ContextMaintenance,
+                    _ => TurnBoundaryPurpose::Business,
+                },
+            }),
             now_ms,
         )?;
-        // The boundary event just took the last seq; the turn_stats event will
-        // take exactly the next one, so the covered end seq includes the
-        // statistics event itself (plan 12.21.2 "覆盖的起止 seq").
-        // 边界事件刚刚取得最后一个 seq；turn_stats 事件将精确取得下一个，因此
-        // 覆盖结束 seq 包含统计事件自身(计划 12.21.2"覆盖的起止 seq")。
+        // Persist one ordered expiration marker for each TTL generation ending here.
+        // 为在此处结束的每个 TTL 代际追加一条有序失效标记。
+        for state in expiring_contexts {
+            self.stage_event(
+                staged_allocator,
+                staged_events,
+                Some(turn_id),
+                EventVisibility::Provider,
+                EventBody::SystemContext(SystemContextEvent {
+                    context_key: state.context_key.clone(),
+                    operation: SystemContextOperation::Remove,
+                    scope: state.scope,
+                    ttl_turns: None,
+                    provider_role_hint: expiration_role_hint(state.role),
+                    content: ttl_expiration_content(&state, turn_id),
+                }),
+                now_ms,
+            )?;
+        }
+        // The statistics event takes the next seq after boundary and expiration markers, so its
+        // own seq remains the inclusive covered end boundary.
+        // 统计事件在边界和失效标记之后取得下一个 seq，因此自身 seq 仍是包含式覆盖结束边界。
         let end_seq = Seq::try_new(staged_allocator.frontier().1)?;
         self.stage_event(
             staged_allocator,
@@ -648,7 +821,29 @@ impl SessionDocument {
         now_ms: i64,
         usage: Option<&crate::v1::lifetime_usage::GoalUsageSnapshot>,
     ) -> Result<TurnCompletionTransition, DomainError> {
+        let mut staged = self.begin_atomic_mutation()?;
+        staged.finish_in_turn_question_executions(expected_turn_id, now_ms)?;
+        let receipt =
+            staged.complete_turn_after_question_attempts(expected_turn_id, now_ms, usage)?;
+        staged.record_task_results_for_turn(expected_turn_id, now_ms)?;
+        self.commit_atomic_mutation(staged);
+        Ok(receipt)
+    }
+
+    /// Selects the business successor after closing in-turn question attempts atomically.
+    /// 原子闭合回合内答疑尝试后选择业务后继。
+    fn complete_turn_after_question_attempts(
+        &mut self,
+        expected_turn_id: TurnId,
+        now_ms: i64,
+        usage: Option<&crate::v1::lifetime_usage::GoalUsageSnapshot>,
+    ) -> Result<TurnCompletionTransition, DomainError> {
         let turn = self.require_open_turn()?.clone();
+        if turn.origin == TurnOrigin::ContextMaintenance {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "context_maintenance.business_completion_forbidden",
+            });
+        }
         if turn.turn_id != expected_turn_id {
             return Err(DomainError::TurnIdentityMismatch {
                 expected: expected_turn_id.value(),
@@ -704,6 +899,13 @@ impl SessionDocument {
         let goal_objective = (queued_successor.is_none() && decision.should_continue)
             .then(|| self.metadata.mode.goal.objective.clone());
         let has_successor = queued_successor.is_some() || goal_objective.is_some();
+        let expiring_contexts = expiring_ttl_contexts(self, expected_turn_id)?;
+        let ttl_expiration_count = u64::try_from(expiring_contexts.len()).map_err(|_| {
+            DomainError::ImmutableFieldMutation {
+                entity: "ttl_expiration",
+                field: "event_count",
+            }
+        })?;
         let queued_request_config_count = u64::from(
             queued_successor
                 .as_ref()
@@ -711,7 +913,8 @@ impl SessionDocument {
         );
         let appended_event_count = (if has_successor { 3 } else { 2 })
             + u64::from(next_goal_state.is_some())
-            + queued_request_config_count;
+            + queued_request_config_count
+            + ttl_expiration_count;
         self.ensure_transition_capacity(appended_event_count, u64::from(has_successor))?;
         let buckets = self.aggregate_turn_buckets(expected_turn_id, turn.start_seq)?;
         // Stage the boundary, the unique turn statistics, and the optional successor before
@@ -726,12 +929,13 @@ impl SessionDocument {
             &mut staged_events,
             expected_turn_id,
             turn.start_seq,
-            TurnOutcome::Completed,
+            crate::v1::event::TurnClosureReason::Completed,
             duration_ms,
             now_ms,
             buckets,
         )?;
         let mut staged_metadata = self.metadata.clone();
+        clear_expired_dynamic_context_metadata(&mut staged_metadata, &expiring_contexts);
         let mut completed_turn = turn;
         completed_turn.closed = true;
         let mut staged_active_turn = Some(completed_turn);
@@ -845,14 +1049,30 @@ impl SessionDocument {
         })
     }
 
-    /// Requires the latest physical API of one turn to carry final assistant text.
-    /// 要求一个回合的最新物理 API 携带最终 assistant 正文。
+    /// Requires the latest business API of one turn to carry final assistant text.
+    /// 要求一个回合的最新业务 API 携带最终 assistant 正文。
     fn require_final_assistant(&self, turn_id: TurnId) -> Result<(), DomainError> {
+        // A response cannot settle business guidance that has not entered a business request.
+        // 回复不能结算尚未进入业务请求的业务方向。
+        if self
+            .pending_collaboration_continuation()
+            .is_some_and(|pending| pending.turn_id == turn_id)
+        {
+            return Err(DomainError::TurnMissingFinalAssistant {
+                turn_id: turn_id.value(),
+            });
+        }
         let latest_stats = self
             .events
             .iter()
             .filter_map(|event| match &event.event {
-                EventBody::ApiStats(stats) if event.turn_id == Some(turn_id) => {
+                EventBody::ApiStats(stats)
+                    if event.turn_id == Some(turn_id)
+                        && !matches!(
+                            stats.purpose,
+                            ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution
+                        ) =>
+                {
                     Some((event.seq, stats))
                 }
                 _ => None,

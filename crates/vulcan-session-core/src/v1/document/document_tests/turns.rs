@@ -2,6 +2,8 @@
 //! 逻辑回合连续性、统计及后继选择回归测试。
 
 use super::*;
+use crate::v1::dynamic_context::DynamicContextInput;
+use crate::v1::projection::{ActiveSystemState, ProjectedSystemRole};
 
 /// Abort then continue keeps the same turn id and never creates a fake user
 /// prompt.
@@ -294,6 +296,154 @@ fn turn_stats_end_seq_includes_itself() {
         stats_seq.value(),
         "turn stats must cover its own seq"
     );
+}
+
+/// A one-turn TTL appends exactly one durable expiration marker before turn statistics.
+/// 单回合 TTL 在回合统计前恰好追加一条可靠失效标记。
+#[test]
+fn ttl_expiration_marker_is_durable_and_once_per_turn() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    doc.append_system_context(
+        None,
+        "ttl-memory",
+        SystemContextOperation::Upsert,
+        SystemContextScope::Session,
+        Some(1),
+        Some(SystemRoleHint::Developer),
+        "remember for this turn",
+        T0,
+    )?;
+    let turn_id = doc.submit_root_input_fixture("work", Vec::new(), T0 + 1)?;
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 2,
+    )?;
+    doc.append_assistant_text(api, "done", AssistantSemanticStatus::Completed, T0 + 3)?;
+    complete_ok(&mut doc, api, None, T0 + 4)?;
+
+    doc.close_turn(TurnOutcome::Completed, 1, T0 + 5)?;
+
+    let expiration_events: Vec<_> = doc
+        .events()
+        .iter()
+        .filter(|event| {
+            matches!(
+                &event.event,
+                EventBody::SystemContext(context)
+                    if context.context_key == "ttl-memory"
+                        && context.operation == SystemContextOperation::Remove
+            )
+        })
+        .collect();
+    assert_eq!(expiration_events.len(), 1);
+    let expiration = expiration_events[0];
+    assert_eq!(expiration.turn_id, Some(turn_id));
+    let stats = doc
+        .events()
+        .iter()
+        .find(|event| matches!(event.event, EventBody::TurnStats(_)))
+        .expect("turn statistics must persist");
+    assert!(expiration.seq.value() < stats.seq.value());
+    assert!(matches!(
+        &expiration.event,
+        EventBody::SystemContext(context)
+            if context.content.contains("expired after logical turn")
+                && context.ttl_turns.is_none()
+    ));
+    Ok(())
+}
+
+/// TTL cleanup preserves a newer metadata generation and permits the same value to re-enter.
+/// TTL 清理保留同 key 的新 metadata 代际，并允许同一正文再次注入。
+#[test]
+fn ttl_cleanup_matches_metadata_source_generation() -> Result<(), DomainError> {
+    let mut document = new_document();
+    document.synchronize_dynamic_context(
+        vec![DynamicContextInput::new(
+            "ttl-memory",
+            Some(String::from("old")),
+            SystemContextScope::Session,
+            None,
+        )],
+        T0,
+    )?;
+    let old_state = document
+        .metadata
+        .dynamic_context
+        .get("ttl-memory")
+        .expect("old metadata state")
+        .clone();
+    document.synchronize_dynamic_context(
+        vec![DynamicContextInput::new(
+            "ttl-memory",
+            Some(String::from("new")),
+            SystemContextScope::Session,
+            None,
+        )],
+        T0 + 1,
+    )?;
+    let new_source_seq = document
+        .metadata
+        .dynamic_context
+        .get("ttl-memory")
+        .expect("new metadata state")
+        .source_seq;
+    crate::v1::document::turns::clear_expired_dynamic_context_metadata(
+        &mut document.metadata,
+        &[ActiveSystemState {
+            source_seq: old_state.source_seq,
+            context_key: String::from("ttl-memory"),
+            role: ProjectedSystemRole::HiddenUserShell,
+            content: old_state.raw_content,
+            scope: old_state.scope,
+            remaining_turns: Some(1),
+            last_consumed_turn_id: None,
+        }],
+    );
+    assert_eq!(
+        document
+            .metadata
+            .dynamic_context
+            .get("ttl-memory")
+            .expect("new generation must survive")
+            .source_seq,
+        new_source_seq
+    );
+
+    let mut expiring = new_document();
+    expiring.synchronize_dynamic_context(
+        vec![DynamicContextInput::new(
+            "ttl-memory",
+            Some(String::from("same body")),
+            SystemContextScope::Session,
+            Some(1),
+        )],
+        T0,
+    )?;
+    expiring.submit_root_input_fixture("work", Vec::new(), T0 + 1)?;
+    let api = expiring.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 2,
+    )?;
+    expiring.append_assistant_text(api, "done", AssistantSemanticStatus::Completed, T0 + 3)?;
+    complete_ok(&mut expiring, api, None, T0 + 4)?;
+    expiring.close_turn(TurnOutcome::Completed, 1, T0 + 5)?;
+    assert!(expiring.metadata.dynamic_context.is_empty());
+    let before_reinjection = expiring.events().len();
+    let result = expiring.synchronize_dynamic_context(
+        vec![DynamicContextInput::new(
+            "ttl-memory",
+            Some(String::from("same body")),
+            SystemContextScope::Session,
+            Some(1),
+        )],
+        T0 + 6,
+    )?;
+    assert!(result.changed());
+    assert_eq!(expiring.events().len(), before_reinjection + 1);
+    Ok(())
 }
 
 /// Turn completion selects queued users before Goal continuation and preserves FIFO on restart.

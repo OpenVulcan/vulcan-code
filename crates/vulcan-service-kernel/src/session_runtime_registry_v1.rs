@@ -13,6 +13,10 @@ use uuid::Uuid;
 #[cfg(test)]
 use vulcan_service_api::ConversationEventPatchDurabilityV1;
 use vulcan_service_api::{ConversationEventLiveDeltaV1, ServiceEvent, ServiceEventEmitter};
+use vulcan_session_core::v1::collaboration::{
+    CollaborationOperationId, CollaborationRunControl, CollaborationRunControlReceipt,
+    SetRunControlInput,
+};
 use vulcan_session_core::v1::config::QueuedInputIdentity;
 use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_session_core::v1::document::{
@@ -23,7 +27,8 @@ use vulcan_session_core::v1::document::{
     MemoryRevisionReceipt, PrepareAndStartApiInput, PreparedApiStart, PreparedToolBatchReceipt,
     QueuedInputDraftReceipt, QueuedInputOrderReceipt, QueuedInputPendingTurnReceipt,
     QueuedInputRemovalReceipt, SessionDocument, SubagentReturnInput, SubagentReturnReceipt,
-    ToolCompletion, ToolCompletionReceipt, ToolPreparation, TurnCompletionTransition,
+    ToolCompletion, ToolCompletionReceipt, ToolPreparation, TurnCompletionTransition, TurnOrigin,
+    TurnSuccessor,
 };
 use vulcan_session_core::v1::errors::DomainError;
 use vulcan_session_core::v1::event::{
@@ -34,8 +39,7 @@ use vulcan_session_core::v1::ids::{
     ApiCallId, ClientActionId, CompactionId, ResourceId, Seq, ToolCallId, TurnId,
 };
 use vulcan_session_core::v1::projection::{
-    ProjectedItem, SourcedProjectedItem, derive_active_system_state,
-    project_provider_items_with_sources,
+    ProjectedItem, SourcedProjectedItem, project_context_generation_items_with_sources,
 };
 use vulcan_session_core::v1::service_dto::ConversationEventWindowBatch;
 use vulcan_session_core::v1::{
@@ -102,6 +106,9 @@ pub(crate) enum SessionMutationAdmission {
     /// Starts a new root Turn and is rejected after shutdown begins.
     /// 启动新根回合，并在关闭开始后被拒绝。
     RootTurn,
+    /// Persists collaboration control-plane facts without opening a new Turn.
+    /// 持久化协作控制面事实，但不创建新的回合。
+    ControlPlane,
     /// Advances or settles work already admitted into an existing Turn.
     /// 推进或结算已经进入现有回合的工作。
     ExistingTurn,
@@ -174,18 +181,42 @@ pub(crate) struct SessionConditionalMutationReceipt<T> {
 /// 关闭成功回合与消费新到达子任务结果之间的原子选择。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SuccessfulTurnSettlement {
+    /// Durable steering or a task result requires continuation of the original business turn.
+    /// 可靠方向或任务结果要求继续原业务回合。
+    Collaboration,
     /// The logical turn closed and selected its normal successor.
     /// 逻辑回合已关闭并选择正常后继。
     Completed(TurnCompletionTransition),
+    /// The assistant output is retained while durable collaboration obligations remain open.
+    /// 在可靠协作完成义务仍未结清时保留 assistant 输出，不发布逻辑完成。
+    Deferred,
     /// A durable return keeps the logical turn open for one more physical request.
     /// 可靠回流保持逻辑回合开放，以便继续一次物理请求。
     SubagentReturn,
+}
+
+/// Determines which immutable frontier owns instruction filtering for a durable projection.
+/// 决定可靠投影的指令筛选由哪一个不可变前沿持有。
+#[derive(Clone, Copy)]
+enum SessionProjectionPurpose {
+    /// Ordinary requests preserve the current committed context generation.
+    /// 普通请求保留当前已提交上下文代次。
+    ProviderRequest,
+    /// Summary planning and physical requests exclude instructions inactive at the captured durable frontier.
+    /// 摘要规划和物理请求排除在已捕获可靠前沿处已经失效的指令。
+    CompactionContext,
 }
 
 /// Immutable V1 ledger projection captured by the unique session owner before API start.
 /// 在 API 启动前由唯一会话 owner 捕获的不可变 V1 账本投影。
 #[derive(Debug, Clone)]
 pub(crate) struct SessionProviderProjectionSnapshot {
+    /// Exact open logical turn captured with the durable source; closed turns have no execution owner.
+    /// 与可靠来源一同捕获的精确开放逻辑回合；已关闭回合没有执行归属。
+    pub(crate) open_turn_id: Option<TurnId>,
+    /// Frozen child business execution identity; regular sessions have no child profile.
+    /// 冻结的子业务执行身份；普通会话没有子执行档案。
+    pub(crate) child_business_execution_id: Option<String>,
     /// Exact durable compaction identity captured with this projection's retained boundary.
     /// 与本投影保留边界一同捕获的准确持久压缩身份。
     pub(crate) current_compaction_id: Option<CompactionId>,
@@ -501,6 +532,12 @@ pub(crate) enum SessionRuntimeError {
     /// A new root Turn was attempted after shutdown admission closed.
     /// 关闭准入后仍尝试启动新的根回合。
     ShuttingDown,
+    /// The session is sealed for lifecycle deletion and rejects every new mutation.
+    /// 会话已进入生命周期删除封存状态并拒绝所有新修改。
+    SessionSealed(SessionId),
+    /// Deletion sealing found durable collaboration work that still needs settlement.
+    /// 删除封存检查发现仍有需要收敛的持久协作工作。
+    UnsettledCollaboration(SessionId),
     /// The registry already owns this exact session.
     /// 注册表已经拥有该精确会话。
     DuplicateSession(SessionId),
@@ -699,6 +736,14 @@ impl fmt::Display for SessionRuntimeError {
                 "V1 session {session_id} is quarantined and rejects further writes: {reason}"
             ),
             Self::ShuttingDown => formatter.write_str("V1 session is shutting down"),
+            Self::SessionSealed(session_id) => write!(
+                formatter,
+                "V1 session {session_id} is sealed for lifecycle deletion"
+            ),
+            Self::UnsettledCollaboration(session_id) => write!(
+                formatter,
+                "V1 session {session_id} still has unsettled collaboration work"
+            ),
             Self::DuplicateSession(session_id) => {
                 write!(formatter, "V1 session {session_id} is already registered")
             }
@@ -872,6 +917,21 @@ impl SessionPersistenceBackend for FileSessionPersistenceBackend {
     }
 }
 
+/// Tracks the final deletion fence independently from ordinary shutdown draining.
+/// 独立记录最终删除封存状态，避免与普通关闭排空混淆。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionDeletionState {
+    /// The handle accepts mutations according to its ordinary admission class.
+    /// 句柄按普通准入类别接受修改。
+    Open,
+    /// Deletion has reserved the handle and all new mutations must stop.
+    /// 删除已预留该句柄，所有新修改必须停止。
+    Sealing,
+    /// Deletion has completed the final write-side fence.
+    /// 删除已完成最终写入侧封存。
+    Sealed,
+}
+
 /// Unique mutable owner and serialized physical writer for one V1 session.
 /// 单个 V1 会话的唯一可变所有者与串行物理写入器。
 #[derive(Clone)]
@@ -929,6 +989,9 @@ pub(crate) struct SessionHandle {
     /// Whether root-Turn admission has closed for shutdown.
     /// 根回合准入是否因关闭流程而关闭。
     shutting_down: Mutex<bool>,
+    /// Whether this handle is sealed or sealing for final lifecycle deletion.
+    /// 当前句柄是否正在进行或已经完成最终生命周期删除封存。
+    sealed_for_deletion: Mutex<SessionDeletionState>,
     /// First domain contract violation that permanently quarantines this owner.
     /// 永久隔离当前所有者的首个领域契约违反。
     quarantine: Mutex<Option<SessionQuarantineReason>>,
@@ -967,8 +1030,31 @@ impl SessionHandle {
                 persistence_failures: BTreeMap::new(),
             }),
             shutting_down: Mutex::new(false),
+            sealed_for_deletion: Mutex::new(SessionDeletionState::Open),
             quarantine: Mutex::new(None),
         })
+    }
+
+    /// Builds a file-backed owner with an injected writer for storage-failure verification.
+    /// 使用注入写入器构建文件所有者，以验证存储失败。
+    /// `locator` and `document` retain real loading authority; `backend` controls only physical writes.
+    /// `locator` 与 `document` 保留实际加载权威；`backend` 仅控制物理写入。
+    /// Returns an unpublished-to-registry owner with the same production loading behavior.
+    /// 返回尚未注册且保持相同生产加载行为的所有者。
+    #[cfg(test)]
+    pub(crate) fn with_storage_backend(
+        session_id: SessionId,
+        locator: SessionV1StorageLocator,
+        document: SessionDocument,
+        backend: Arc<dyn SessionPersistenceBackend>,
+    ) -> Arc<Self> {
+        // No other owner can observe this handle before its first registration.
+        // 首次注册前，其他所有者无法观察此句柄。
+        let mut handle = Self::new(session_id, locator, document);
+        Arc::get_mut(&mut handle)
+            .expect("new handle has one owner")
+            .backend = backend;
+        handle
     }
 
     /// Builds one handle with an explicit backend for deterministic tests.
@@ -1000,6 +1086,7 @@ impl SessionHandle {
                 persistence_failures: BTreeMap::new(),
             }),
             shutting_down: Mutex::new(false),
+            sealed_for_deletion: Mutex::new(SessionDeletionState::Open),
             quarantine: Mutex::new(None),
         })
     }
@@ -1055,6 +1142,7 @@ impl SessionHandle {
             .mutation_publisher
             .lock()
             .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        self.ensure_admitted(SessionMutationAdmission::RootTurn)?;
         let prior_revision = self
             .document
             .lock()
@@ -1163,6 +1251,7 @@ impl SessionHandle {
             .mutation_publisher
             .lock()
             .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        self.ensure_admitted(SessionMutationAdmission::RootTurn)?;
         let prior_revision = self
             .document
             .lock()
@@ -1240,13 +1329,100 @@ impl SessionHandle {
         submission: ClientInputSubmission,
         now_ms: i64,
     ) -> Result<SessionConditionalMutationReceipt<TurnId>, SessionRuntimeError> {
-        self.mutate_durable_if_changed(
+        let running_operation_id = CollaborationOperationId::try_new(format!(
+            "root-input-running:{}:{}",
+            self.session_id,
+            submission.client_action_id.as_str()
+        ))
+        .map_err(SessionRuntimeError::from)?;
+        let receipt = self.mutate_durable_if_changed(
             SessionMutationAdmission::RootTurn,
             SessionFlushReason::InputAccepted,
             move |document| {
+                document.apply_atomic_transition(move |document| {
+                    let turn_mutation = document.submit_root_input(submission, now_ms)?;
+                    match turn_mutation {
+                        IdempotentMutation::Idempotent(turn_id) => {
+                            Ok(SessionMutationChange::Unchanged((turn_id, None)))
+                        }
+                        IdempotentMutation::Committed(turn_id) => {
+                            let control_mutation =
+                                document.set_collaboration_run_control(SetRunControlInput {
+                                    operation_id: running_operation_id,
+                                    state: CollaborationRunControl::Running,
+                                    changed_at_ms: now_ms,
+                                })?;
+                            let control_receipt = match control_mutation {
+                                IdempotentMutation::Committed(receipt)
+                                | IdempotentMutation::Idempotent(receipt) => receipt,
+                            };
+                            Ok(SessionMutationChange::Changed((
+                                turn_id,
+                                Some(control_receipt),
+                            )))
+                        }
+                    }
+                })
+            },
+        )?;
+        // A fresh root input and its Running control are committed as one durable admission; an idempotent replay preserves a prior stop state.
+        // 新根输入与 Running 控制在同一次可靠准入中提交；幂等重放保留之前的停止状态。
+        Ok(SessionConditionalMutationReceipt {
+            value: receipt.value.0,
+            changed: receipt.changed,
+            revision: receipt.revision,
+            changed_event_seqs: receipt.changed_event_seqs,
+            flush_reason: receipt.flush_reason,
+        })
+    }
+
+    /// Persists one typed collaboration run-control transition under the session owner.
+    /// 在会话 owner 下持久化一条类型化协作运行控制转换。
+    pub(crate) fn set_collaboration_run_control_durable(
+        &self,
+        input: SetRunControlInput,
+    ) -> Result<
+        SessionConditionalMutationReceipt<CollaborationRunControlReceipt>,
+        SessionRuntimeError,
+    > {
+        self.mutate_durable_if_changed(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
                 document
-                    .submit_root_input(submission, now_ms)
+                    .set_collaboration_run_control(input)
                     .map(session_change_from_idempotent)
+            },
+        )
+    }
+
+    /// Applies a run-control transition only while its expected durable state is still current.
+    /// 仅当预期的可靠状态仍然当前时应用运行控制转换。
+    pub(crate) fn set_collaboration_run_control_if_current_durable(
+        &self,
+        expected_state: CollaborationRunControl,
+        input: SetRunControlInput,
+    ) -> Result<
+        SessionConditionalMutationReceipt<Option<CollaborationRunControlReceipt>>,
+        SessionRuntimeError,
+    > {
+        self.mutate_durable_if_changed(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                if document.collaboration_run_control() != expected_state {
+                    return Ok(SessionMutationChange::Unchanged(None));
+                }
+                document
+                    .set_collaboration_run_control(input)
+                    .map(|mutation| match mutation {
+                        IdempotentMutation::Committed(receipt) => {
+                            SessionMutationChange::Changed(Some(receipt))
+                        }
+                        IdempotentMutation::Idempotent(receipt) => {
+                            SessionMutationChange::Unchanged(Some(receipt))
+                        }
+                    })
             },
         )
     }
@@ -1270,13 +1446,40 @@ impl SessionHandle {
         submission: ClientInputSubmission,
         now_ms: i64,
     ) -> Result<SessionConditionalMutationReceipt<EnqueueInputReceipt>, SessionRuntimeError> {
+        // Only a newly scheduled user successor may activate control; queued work and retries do not.
+        // 只有新调度的用户后继可以激活控制；普通排队及重试不能激活。
+        let running_operation_id = CollaborationOperationId::try_new(format!(
+            "queued-input-running:{}:{}",
+            self.session_id,
+            submission.client_action_id.as_str()
+        ))
+        .map_err(SessionRuntimeError::from)?;
         self.mutate_durable_if_changed(
             SessionMutationAdmission::RootTurn,
             SessionFlushReason::InputAccepted,
             move |document| {
-                document
-                    .enqueue_input(submission, now_ms)
-                    .map(session_change_from_idempotent)
+                document.apply_atomic_transition(move |document| {
+                    match document.enqueue_input(submission, now_ms)? {
+                        IdempotentMutation::Idempotent(receipt) => {
+                            Ok(SessionMutationChange::Unchanged(receipt))
+                        }
+                        IdempotentMutation::Committed(receipt) => {
+                            if matches!(
+                                receipt.disposition,
+                                vulcan_session_core::v1::document::EnqueueInputDisposition::SupersededGoalAndScheduled { .. }
+                            ) {
+                                // Publish the new business turn and its run permission in the same revision.
+                                // 在同一修订发布新业务回合及其运行许可。
+                                document.set_collaboration_run_control(SetRunControlInput {
+                                    operation_id: running_operation_id,
+                                    state: CollaborationRunControl::Running,
+                                    changed_at_ms: now_ms,
+                                })?;
+                            }
+                            Ok(SessionMutationChange::Changed(receipt))
+                        }
+                    }
+                })
             },
         )
     }
@@ -1509,6 +1712,13 @@ impl SessionHandle {
         self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
         // Phase one captures a durable frontier while the existing writer and publisher preserve ordering.
         // 第一阶段捕获可靠前沿，既有写入器与发布器保持顺序。
+        // The physical API purpose also owns every later recapture, not only the initial summary plan.
+        // 物理 API 用途同时决定每次后续重捕获，不能只在最初摘要规划中生效。
+        let projection_purpose = if purpose == ApiPurposeKind::Compaction {
+            SessionProjectionPurpose::CompactionContext
+        } else {
+            SessionProjectionPurpose::ProviderRequest
+        };
         let snapshot = {
             let _writer = self
                 .writer
@@ -1518,6 +1728,7 @@ impl SessionHandle {
                 .mutation_publisher
                 .lock()
                 .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+            self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
             let prior_revision = self
                 .document
                 .lock()
@@ -1557,7 +1768,7 @@ impl SessionHandle {
             // writes remain pending until an explicit user-input or Continue boundary activates them.
             // Provider 准备仅消费已经活动的请求配置。选择器写入保持待生效，直到明确的用户输入或
             // Continue 边界激活它们。
-            self.capture_provider_projection_snapshot_with_publisher_locked()?
+            self.capture_provider_projection_snapshot_with_publisher_locked(projection_purpose)?
         };
         // Completed-result workers retain this same lease if the asynchronous builder is dropped.
         // 异步构建者被丢弃时，已完成结果工作线程保留同一租约。
@@ -1565,6 +1776,7 @@ impl SessionHandle {
             Arc::clone(self),
             lease,
             snapshot.clone(),
+            projection_purpose,
         ));
         // Phase two may read media, upload or encode asynchronously after both synchronous guards are gone.
         // 第二阶段仅在两个同步守卫释放后，才可异步读取媒体、上传或编码。
@@ -1596,6 +1808,7 @@ impl SessionHandle {
             .mutation_publisher
             .lock()
             .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
         if preparation.invalidated()? {
             return Ok(None);
         }
@@ -1698,6 +1911,17 @@ impl SessionHandle {
     pub(crate) fn capture_context_compaction_planning_snapshot(
         &self,
     ) -> Result<SessionProviderProjectionSnapshot, SessionRuntimeError> {
+        self.capture_durable_projection(SessionProjectionPurpose::CompactionContext)
+    }
+
+    /// Captures a flushed snapshot for the specified projection purpose under the existing writer and publisher locks.
+    /// 在既有写入与发布锁内，为指定投影用途捕获已落盘快照。
+    /// Returns the exact source projection, or an admission, persistence, or projection error.
+    /// 返回精确来源投影，或准入、持久化、投影错误。
+    fn capture_durable_projection(
+        &self,
+        purpose: SessionProjectionPurpose,
+    ) -> Result<SessionProviderProjectionSnapshot, SessionRuntimeError> {
         self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
         let _writer = self
             .writer
@@ -1707,13 +1931,14 @@ impl SessionHandle {
             .mutation_publisher
             .lock()
             .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
         let revision = self
             .document
             .lock()
             .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
             .memory_revision();
         self.flush_through_with_writer_and_publisher_locked(revision)?;
-        self.capture_provider_projection_snapshot_with_publisher_locked()
+        self.capture_provider_projection_snapshot_with_publisher_locked(purpose)
     }
 
     /// Captures the complete durable Provider history used by a Continue-owned controller run.
@@ -1726,13 +1951,14 @@ impl SessionHandle {
     pub(crate) fn capture_controller_projection_snapshot(
         &self,
     ) -> Result<SessionProviderProjectionSnapshot, SessionRuntimeError> {
-        self.capture_context_compaction_planning_snapshot()
+        self.capture_durable_projection(SessionProjectionPurpose::ProviderRequest)
     }
 
     /// Captures the exact durable V1 Provider projection while publication is serialized.
     /// 在发布已串行化时捕获精确可靠的 V1 Provider 投影。
     fn capture_provider_projection_snapshot_with_publisher_locked(
         &self,
+        purpose: SessionProjectionPurpose,
     ) -> Result<SessionProviderProjectionSnapshot, SessionRuntimeError> {
         let locator = self
             .locator
@@ -1742,10 +1968,14 @@ impl SessionHandle {
             segment_generation,
             document_revision,
             retained_from_seq,
+            context_frozen_at,
+            remote_checkpoint,
             through_seq,
             preparing_user_prompt_media_seqs,
             initialized_locked_baseline,
             current_compaction_id,
+            open_turn_id,
+            child_business_execution_id,
         ) = {
             let document = self
                 .document
@@ -1767,27 +1997,57 @@ impl SessionHandle {
                         "an API cannot start before the first durable event",
                     ))
                 })?;
-            let retained_from_seq = match document.runtime_lock.current_compaction_id {
-                Some(compaction_id) => document
-                    .compactions
-                    .iter()
-                    .find(|node| node.compaction_id == compaction_id)
-                    .map(|node| node.retained_from_seq)
-                    .ok_or_else(|| {
-                        SessionRuntimeError::ProviderProjectionInvariant(String::from(
-                            "runtime compaction pointer has no matching durable node",
-                        ))
-                    })?,
-                None => Seq::try_new(1)?,
-            };
+            // Both identities come from the same committed node; later requests never advance this frontier.
+            // 两种身份来自同一已提交节点；后续请求绝不推进此前沿。
+            let (retained_from_seq, context_frozen_at, remote_checkpoint) =
+                match document.runtime_lock.current_compaction_id {
+                    Some(compaction_id) => document
+                        .compactions
+                        .iter()
+                        .find(|node| node.compaction_id == compaction_id)
+                        .map(|node| {
+                            // The published node owns its opaque projection; no assistant event is synthesized.
+                            // 已发布节点持有不透明投影；不合成助手事件。
+                            let checkpoint = match &node.content {
+                                vulcan_session_core::v1::context::CompactionContent::Summary { .. } => None,
+                                vulcan_session_core::v1::context::CompactionContent::RemoteResponses { checkpoint } => Some(SourcedProjectedItem {
+                                    user_prompt_parameters: None,
+                                    source_from_seq: node.api_stats_seq,
+                                    source_to_seq: node.api_stats_seq,
+                                    item: ProjectedItem::RemoteCompactionCheckpoint {
+                                        compaction_id: node.compaction_id,
+                                        checkpoint: Box::new(checkpoint.clone()),
+                                    },
+                                }),
+                            };
+                            (node.retained_from_seq, Some(node.api_stats_seq), checkpoint)
+                        })
+                        .ok_or_else(|| {
+                            SessionRuntimeError::ProviderProjectionInvariant(String::from(
+                                "runtime compaction pointer has no matching durable node",
+                            ))
+                        })?,
+                    None => (Seq::try_new(1)?, None, None),
+                };
             (
                 document.segment_generation(),
                 document.memory_revision(),
                 retained_from_seq,
+                context_frozen_at,
+                remote_checkpoint,
                 Seq::try_new(through_value)?,
                 document.preparing_user_prompt_media_seqs(),
                 LockedBaselineProjection::from_initialized_runtime_lock(&document.runtime_lock)?,
                 document.runtime_lock.current_compaction_id,
+                document
+                    .active_turn()
+                    .filter(|turn| !turn.closed)
+                    .map(|turn| turn.turn_id),
+                document
+                    .metadata
+                    .child_execution_profile
+                    .as_ref()
+                    .map(|profile| profile.business_execution_id.clone()),
             )
         };
         let range = locator.load_event_range(Seq::try_new(1)?, through_seq)?;
@@ -1799,21 +2059,29 @@ impl SessionHandle {
                 String::from("exact event range frontier changed during Provider projection"),
             ));
         }
-        let backfill_system = if retained_from_seq.value() > 1 {
-            derive_active_system_state(&range.events, Seq::try_new(retained_from_seq.value() - 1)?)?
-        } else {
-            Vec::new()
+        // Planning may prune at the current frontier; ordinary continuation must reuse the committed frontier.
+        // 规划可以在当前前沿裁剪；普通继续必须复用已提交前沿。
+        let instruction_frontier = match purpose {
+            SessionProjectionPurpose::ProviderRequest => context_frozen_at,
+            SessionProjectionPurpose::CompactionContext => Some(through_seq),
         };
-        let sourced_items = project_provider_items_with_sources(
+        let mut sourced_items = project_context_generation_items_with_sources(
             &range.events,
-            Some(retained_from_seq),
-            &backfill_system,
+            retained_from_seq,
+            instruction_frontier,
         )?;
+        // The checkpoint replaces the discarded prefix and therefore precedes all retained history.
+        // 检查点替代已丢弃前缀，因此位于全部保留历史之前。
+        if let Some(checkpoint) = remote_checkpoint {
+            sourced_items.insert(0, checkpoint);
+        }
         let items = sourced_items
             .iter()
             .map(|projected| projected.item.clone())
             .collect();
         Ok(SessionProviderProjectionSnapshot {
+            open_turn_id,
+            child_business_execution_id,
             current_compaction_id,
             preparing_user_prompt_media_seqs,
             segment_generation,
@@ -2112,6 +2380,7 @@ impl SessionHandle {
             .mutation_publisher
             .lock()
             .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
         let required_revision = self
             .document
             .lock()
@@ -2202,7 +2471,9 @@ impl SessionHandle {
         // Read accounting inside the document transaction; accounting never locks documents.
         // 在文档事务中读取统计；统计模块永不获取文档锁。
         let usage_handle = self.clone();
-        self.clone()
+        let session_id = self.session_id;
+        let completion_receipt = self
+            .clone()
             .mutate_durable_if_changed_async(
                 SessionMutationAdmission::ExistingTurn,
                 SessionFlushReason::TurnCompleted,
@@ -2218,20 +2489,69 @@ impl SessionHandle {
                         .active_turn()
                         .map(|turn| turn.turn_id)
                         .ok_or(DomainError::NoActiveTurn)?;
-                    document
-                        .complete_turn_with_lifetime_usage(
+                    let active_turn_origin = document
+                        .active_turn()
+                        .map(|turn| turn.origin)
+                        .ok_or(DomainError::NoActiveTurn)?;
+                    // Question executions and explicit stop states never create a second business completion.
+                    // 问题执行与明确停止状态绝不创建第二次业务完成。
+                    if active_turn_origin == TurnOrigin::QuestionExecution
+                        || !matches!(
+                            document.collaboration_run_control(),
+                            CollaborationRunControl::Running
+                        )
+                    {
+                        return Ok(SessionMutationChange::Unchanged(
+                            SuccessfulTurnSettlement::Deferred,
+                        ));
+                    }
+                    // Resume accepted business guidance through its own durable dispatch authority.
+                    // 通过独立可靠分发权威继续已接纳业务方向。
+                    if document.pending_collaboration_continuation().is_some() {
+                        return Ok(SessionMutationChange::Unchanged(
+                            SuccessfulTurnSettlement::Collaboration,
+                        ));
+                    }
+                    // Keep the logical Turn open while Core still owns a reserved or active child task.
+                    // 当 Core 仍持有预留或活动子任务时保持逻辑回合开启。
+                    if !document
+                        .completion_obligations(expected_turn_id)
+                        .open_child_task_ids
+                        .is_empty()
+                    {
+                        return Ok(SessionMutationChange::Unchanged(
+                            SuccessfulTurnSettlement::Deferred,
+                        ));
+                    }
+                    document.apply_atomic_transition(move |document| {
+                        let transition = document.complete_turn_with_lifetime_usage(
                             expected_turn_id,
                             now_ms,
                             usage_handle.goal_usage_snapshot().ok().as_ref(),
-                        )
-                        .map(|transition| {
-                            SessionMutationChange::Changed(SuccessfulTurnSettlement::Completed(
-                                transition,
-                            ))
-                        })
+                        )?;
+                        if matches!(&transition.successor, TurnSuccessor::None) {
+                            // Natural idle is recorded in the same document mutation as Turn closure.
+                            // 自然空闲与 Turn 闭合在同一次文档修改中记录。
+                            let natural_idle_operation_id =
+                                CollaborationOperationId::try_new(format!(
+                                    "natural-idle:{}:{}",
+                                    session_id,
+                                    transition.completed_turn_final_seq.value()
+                                ))?;
+                            document.set_collaboration_run_control(SetRunControlInput {
+                                operation_id: natural_idle_operation_id,
+                                state: CollaborationRunControl::NaturallyIdle,
+                                changed_at_ms: now_ms,
+                            })?;
+                        }
+                        Ok(SessionMutationChange::Changed(
+                            SuccessfulTurnSettlement::Completed(transition),
+                        ))
+                    })
                 },
             )
-            .await
+            .await?;
+        Ok(completion_receipt)
     }
 
     /// Durably appends one exact child return without numeric usage to the parent.
@@ -2260,6 +2580,38 @@ impl SessionHandle {
                 document
                     .append_subagent_return(input, now_ms)
                     .map(session_change_from_idempotent)
+            },
+        )
+    }
+
+    /// Commits child content and its owned execution terminal fact under one publication lock.
+    /// 在同一发布锁下提交子正文及其所属执行终态事实。
+    /// `execution_id` is supplied by the detached listener; `input` is validated child content.
+    /// `execution_id` 由分离监听器提供；`input` 是已校验子正文。
+    /// Returns only after the combined revision is durable, or an explicit domain/storage error.
+    /// 仅在组合修订落盘后返回，否则返回明确的领域或存储错误。
+    pub(crate) fn append_execution_subagent_return(
+        &self,
+        execution_id: vulcan_session_core::v1::collaboration::CollaborationExecutionId,
+        input: SubagentReturnInput,
+        now_ms: i64,
+    ) -> Result<SessionConditionalMutationReceipt<SubagentReturnReceipt>, SessionRuntimeError> {
+        self.mutate_durable_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::SubagentReturned,
+            move |document| {
+                // Native owned executions must publish both facts; unowned task calls keep content-only returns.
+                // 原生所属执行必须发布两个事实；无所属预留的任务调用保持仅正文回流。
+                if document
+                    .collaboration_state()
+                    .child_tasks
+                    .contains_key(&execution_id)
+                {
+                    document.complete_child_task_with_return(execution_id, input, now_ms)
+                } else {
+                    document.append_subagent_return(input, now_ms)
+                }
+                .map(session_change_from_idempotent)
             },
         )
     }
@@ -2558,6 +2910,7 @@ impl SessionHandle {
             .mutation_publisher
             .lock()
             .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        self.ensure_admitted(admission)?;
         self.mutate_in_memory_with_publisher_locked(flush_reason, mutation)
     }
 
@@ -2591,6 +2944,7 @@ impl SessionHandle {
             .mutation_publisher
             .lock()
             .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        self.ensure_admitted(admission)?;
         self.mutate_in_memory_if_changed_with_publisher_locked(flush_reason, mutation)
     }
 
@@ -2608,6 +2962,7 @@ impl SessionHandle {
                 .mutation_publisher
                 .lock()
                 .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+            self.ensure_admitted(admission)?;
             self.mutate_in_memory_with_publisher_locked(flush_reason, mutation)?
         };
         self.flush_through(receipt.revision)?;
@@ -2749,6 +3104,7 @@ impl SessionHandle {
                 .mutation_publisher
                 .lock()
                 .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+            self.ensure_admitted(admission)?;
             self.mutate_in_memory_if_changed_with_publisher_locked(flush_reason, mutation)?
         };
         self.flush_through(receipt.revision)?;
@@ -3439,6 +3795,79 @@ impl SessionHandle {
         self.flush_through(target)
     }
 
+    /// Reserves and completes the final write-side fence before physical lifecycle deletion.
+    /// 在物理生命周期删除前预留并完成最终写入侧封存。
+    ///
+    /// The reservation closes new admissions before waiting for the writer and publisher locks.
+    /// Existing mutations that already crossed the publisher boundary are allowed to finish, and
+    /// the authoritative document is checked again while both serialization locks are held.
+    /// 预留会在等待写入器和发布器锁前关闭新准入；已经越过发布器边界的修改允许完成，
+    /// 并在同时持有两个串行锁时再次检查权威文档。
+    pub(crate) fn seal_for_deletion(&self) -> Result<(), SessionRuntimeError> {
+        {
+            let mut state = self
+                .sealed_for_deletion
+                .lock()
+                .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+            if *state != SessionDeletionState::Open {
+                return Err(SessionRuntimeError::SessionSealed(self.session_id));
+            }
+            *state = SessionDeletionState::Sealing;
+        }
+
+        let result = (|| {
+            self.ensure_not_quarantined()?;
+            let _writer = self
+                .writer
+                .lock()
+                .map_err(|_| SessionRuntimeError::WriterLockPoisoned)?;
+            let _publisher = self
+                .mutation_publisher
+                .lock()
+                .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+            self.ensure_not_quarantined()?;
+            let unsettled = self
+                .document
+                .lock()
+                .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
+                .has_unsettled_collaboration_for_edit_or_delete();
+            if unsettled {
+                return Err(SessionRuntimeError::UnsettledCollaboration(self.session_id));
+            }
+            let mut state = self
+                .sealed_for_deletion
+                .lock()
+                .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+            if *state != SessionDeletionState::Sealing {
+                return Err(SessionRuntimeError::SessionSealed(self.session_id));
+            }
+            *state = SessionDeletionState::Sealed;
+            Ok(())
+        })();
+
+        if result.is_err()
+            && let Ok(mut state) = self.sealed_for_deletion.lock()
+            && *state == SessionDeletionState::Sealing
+        {
+            *state = SessionDeletionState::Open;
+        }
+        result
+    }
+
+    /// Reopens a deletion-reserved handle after physical deletion failed.
+    /// 物理删除失败后重新打开已预留删除的句柄。
+    pub(crate) fn reopen_after_failed_deletion(&self) -> Result<(), SessionRuntimeError> {
+        let mut state = self
+            .sealed_for_deletion
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+        if *state != SessionDeletionState::Sealed {
+            return Err(SessionRuntimeError::SessionSealed(self.session_id));
+        }
+        *state = SessionDeletionState::Open;
+        Ok(())
+    }
+
     /// Closes new-root admission while admitted work settles terminal facts.
     /// 关闭新根回合准入，同时允许已接纳工作结算终态事实。
     pub(crate) fn begin_shutdown(&self) -> Result<(), SessionRuntimeError> {
@@ -3468,6 +3897,14 @@ impl SessionHandle {
         admission: SessionMutationAdmission,
     ) -> Result<(), SessionRuntimeError> {
         self.ensure_not_quarantined()?;
+        let deletion_state = self
+            .sealed_for_deletion
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+        if *deletion_state != SessionDeletionState::Open {
+            return Err(SessionRuntimeError::SessionSealed(self.session_id));
+        }
+        drop(deletion_state);
         let shutting_down = self
             .shutting_down
             .lock()
@@ -3544,10 +3981,34 @@ pub(crate) struct SessionRuntimeRegistry {
     state: Mutex<SessionRuntimeRegistryState>,
 }
 
+/// Exclusive process-local recovery ownership, released on completion, cancellation or unwind.
+/// 独占进程内恢复所有权，在完成、取消或栈展开时释放。
+pub(crate) struct SessionCollaborationRecoveryGuard {
+    /// Exact registry instance, independent of a later service registry replacement.
+    /// 精确注册表实例，独立于后续服务注册表替换。
+    registry: Arc<SessionRuntimeRegistry>,
+}
+
+impl Drop for SessionCollaborationRecoveryGuard {
+    /// Releases only this registry's singleton worker slot without touching canonical documents.
+    /// 只释放本注册表的单实例任务槽，不触碰规范文档。
+    fn drop(&mut self) {
+        match self.registry.state.lock() {
+            Ok(mut state) => state.collaboration_recovery_running = false,
+            Err(error) => {
+                tracing::error!(%error, "Collaboration recovery ownership could not be released")
+            }
+        }
+    }
+}
+
 /// Mutable registry state serialized by the registry-owned mutex.
 /// 由注册表自有互斥锁串行化的可变注册表状态。
 #[derive(Default)]
 struct SessionRuntimeRegistryState {
+    /// One retained collaboration recovery worker per canonical registry instance.
+    /// 每个规范注册表实例保留唯一协作恢复任务。
+    collaboration_recovery_running: bool,
     /// Registered handles keyed by stable application session id.
     /// 按稳定应用会话 id 索引的已注册句柄。
     handles: BTreeMap<SessionId, Arc<SessionHandle>>,
@@ -3557,6 +4018,9 @@ struct SessionRuntimeRegistryState {
     /// Per-session lifecycle serializers retained independently of loaded handles.
     /// 独立于已加载句柄保留的单会话生命周期串行器。
     lifecycle_gates: BTreeMap<SessionId, Arc<AsyncMutex<()>>>,
+    /// Sessions reserved for final deletion; no new canonical owner may load them.
+    /// 已预留最终删除的会话；不得再加载新的规范 owner。
+    deleting: BTreeSet<SessionId>,
     /// Whether registry-wide root admission is closed.
     /// 注册表级根回合准入是否关闭。
     shutting_down: bool,
@@ -3616,6 +4080,9 @@ impl SessionCreationReservation<'_> {
             .state
             .lock()
             .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
+        if state.deleting.contains(&self.session_id) {
+            return Err(SessionRuntimeError::SessionSealed(self.session_id));
+        }
         let owns_slot = state
             .loading
             .get(&self.session_id)
@@ -3683,6 +4150,25 @@ impl Default for SessionRuntimeRegistry {
 }
 
 impl SessionRuntimeRegistry {
+    /// Reserves the only recovery worker for this registry until its returned guard is dropped.
+    /// 在返回的守卫释放前，为本注册表预留唯一恢复任务。
+    /// No work is started here; concurrent callers receive no guard and cannot replace its owner.
+    /// 此处不启动工作；并发调用方不会取得守卫，也不能替换其所有者。
+    pub(crate) fn try_reserve_collaboration_recovery(
+        self: &Arc<Self>,
+    ) -> Result<Option<SessionCollaborationRecoveryGuard>, SessionRuntimeError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
+        if state.collaboration_recovery_running {
+            return Ok(None);
+        }
+        state.collaboration_recovery_running = true;
+        Ok(Some(SessionCollaborationRecoveryGuard {
+            registry: Arc::clone(self),
+        }))
+    }
     /// Returns the stable epoch shared by hydration, live pushes, and reconnect.
     /// 返回 hydration、实时推送与重连共享的稳定代次。
     pub(crate) fn service_epoch(&self) -> &str {
@@ -3720,6 +4206,76 @@ impl SessionRuntimeRegistry {
         Ok(SessionLifecycleTransitionGuard {
             _guard: gate.lock_owned().await,
         })
+    }
+
+    /// Reserves one canonical handle for final deletion before unregistering it.
+    /// 在注销规范句柄前为最终删除预留一个规范 owner。
+    ///
+    /// The registry tombstone blocks cold loads while the handle seal waits for already admitted
+    /// writes. The caller must hold the session lifecycle transition guard.
+    /// 注册表墓碑会在句柄封存等待已准入写入时阻止冷加载；调用方必须持有会话生命周期转换守卫。
+    pub(crate) fn begin_lifecycle_deletion(
+        &self,
+        session_id: SessionId,
+        expected_handle: &Arc<SessionHandle>,
+    ) -> Result<(), SessionRuntimeError> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
+            let Some(handle) = state.handles.get(&session_id) else {
+                return Err(SessionRuntimeError::SessionNotRegistered(session_id));
+            };
+            if !Arc::ptr_eq(handle, expected_handle) {
+                return Err(SessionRuntimeError::SessionNotRegistered(session_id));
+            }
+            if !state.deleting.insert(session_id) {
+                return Err(SessionRuntimeError::SessionSealed(session_id));
+            }
+        }
+
+        match expected_handle.seal_for_deletion() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.deleting.remove(&session_id);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Restores one deletion-reserved handle after physical deletion failed.
+    /// 物理删除失败后恢复一个已预留删除的句柄。
+    pub(crate) fn abort_lifecycle_deletion(
+        &self,
+        session_id: SessionId,
+        handle: Arc<SessionHandle>,
+    ) -> Result<(), SessionRuntimeError> {
+        let should_resume_root = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
+            state.deleting.remove(&session_id);
+            if let Some(existing) = state.handles.get(&session_id) {
+                // An unregister failure may happen before removal, so restoring the same canonical
+                // owner is already complete and must not be reported as a duplicate failure.
+                // 注销失败可能发生在移除前；若仍是同一规范 owner，恢复动作已完成，不应误报重复会话。
+                if !Arc::ptr_eq(existing, &handle) {
+                    return Err(SessionRuntimeError::DuplicateSession(session_id));
+                }
+            } else {
+                state.handles.insert(session_id, Arc::clone(&handle));
+            }
+            !state.shutting_down
+        };
+        handle.reopen_after_failed_deletion()?;
+        if should_resume_root {
+            handle.resume_after_failed_shutdown()?;
+        }
+        Ok(())
     }
 
     /// Removes one registered root owner after an archive or delete projection commits.
@@ -3796,6 +4352,9 @@ impl SessionRuntimeRegistry {
         if state.shutting_down {
             return Err(SessionRuntimeError::ShuttingDown);
         }
+        if state.deleting.contains(&session_id) {
+            return Err(SessionRuntimeError::SessionSealed(session_id));
+        }
         if state.handles.contains_key(&session_id) {
             return Err(SessionRuntimeError::DuplicateSession(session_id));
         }
@@ -3822,10 +4381,13 @@ impl SessionRuntimeRegistry {
             .state
             .lock()
             .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
+        let session_id = handle.session_id();
+        if state.deleting.contains(&session_id) {
+            return Err(SessionRuntimeError::SessionSealed(session_id));
+        }
         if state.shutting_down {
             return Err(SessionRuntimeError::ShuttingDown);
         }
-        let session_id = handle.session_id();
         if state.loading.contains_key(&session_id) {
             return Err(SessionRuntimeError::SessionRegistrationInProgress(
                 session_id,
@@ -3847,9 +4409,14 @@ impl SessionRuntimeRegistry {
         &self,
         session_id: SessionId,
     ) -> Result<Arc<SessionHandle>, SessionRuntimeError> {
-        self.state
+        let state = self
+            .state
             .lock()
-            .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?
+            .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
+        if state.deleting.contains(&session_id) {
+            return Err(SessionRuntimeError::SessionSealed(session_id));
+        }
+        state
             .handles
             .get(&session_id)
             .cloned()
@@ -3870,6 +4437,9 @@ impl SessionRuntimeRegistry {
                     .state
                     .lock()
                     .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
+                if state.deleting.contains(&session_id) {
+                    return Err(SessionRuntimeError::SessionSealed(session_id));
+                }
                 if let Some(handle) = state.handles.get(&session_id) {
                     return Ok(Arc::clone(handle));
                 }
@@ -3924,6 +4494,9 @@ impl SessionRuntimeRegistry {
                 .lock()
                 .map_err(|_| SessionRuntimeError::RegistryLockPoisoned)?;
             state.loading.remove(&session_id);
+            if state.deleting.contains(&session_id) {
+                return Err(SessionRuntimeError::SessionSealed(session_id));
+            }
             if let Ok(handle) = &loaded {
                 if let Some(emitter) = state.live_event_emitter.clone() {
                     handle.install_live_event_publisher(emitter, &self.service_epoch)?;
@@ -3964,6 +4537,9 @@ impl SessionRuntimeRegistry {
                 .state
                 .lock()
                 .map_err(|_| SessionRuntimeError::RegistryLockPoisoned.to_string())?;
+            if state.deleting.contains(&session_id) {
+                return Err(SessionRuntimeError::SessionSealed(session_id).to_string());
+            }
             if state.shutting_down {
                 return Err(SessionRuntimeError::ShuttingDown.to_string());
             }
@@ -4074,6 +4650,9 @@ impl SessionRuntimeRegistry {
 
 #[cfg(test)]
 mod tests {
+    mod collaboration_publication;
+    mod context_generation;
+    mod input_dispatch_authority;
     mod request_preparation;
     use super::*;
     use std::path::PathBuf;

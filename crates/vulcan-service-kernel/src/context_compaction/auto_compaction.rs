@@ -502,7 +502,11 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
                 "V1 compaction retained message `{retained_message_id}` has no durable source seq"
             )
         })?;
-    let full_context_state = conversation_state_from_session_messages(&full_session_messages)
+    let full_context_state =
+        crate::agent_stream::provider_v1_sink::compaction_state_from_projection(
+            &snapshot,
+            &full_session_messages,
+        )
         .map_err(|error| format!("failed to build V1 compaction conversation state: {error}"))?;
     // Capture the existing catalog owner without retaining the service mutex during resource preparation.
     // 捕获既有目录所有者，不在资源准备期间持有服务互斥锁。
@@ -533,11 +537,26 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
 
 /// Converts one sourced V1 Provider item into the planner's transcript-only shape.
 /// 把一条带来源的 V1 Provider 投影项转换为规划器的仅转录形态。
-fn compaction_message_from_v1_projection(
+pub(crate) fn compaction_message_from_v1_projection(
     projected: &SourcedProjectedItem,
 ) -> Option<Result<(SessionMessageEntry, Seq), String>> {
     let created_at = String::new();
     match &projected.item {
+        ProjectedItem::RemoteCompactionCheckpoint { compaction_id, checkpoint } => Some(
+            checkpoint.validate().map_err(|error| error.to_string()).map(|()| (
+                SessionMessageEntry {
+                    id: crate::agent_stream::provider_v1_sink::remote_compaction_planning_message_id(*compaction_id),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::CompactionSummary,
+                    visible: false,
+                    title: String::from("REMOTE CHECKPOINT"),
+                    body: String::new(),
+                    metadata: None,
+                    created_at,
+                },
+                projected.source_from_seq,
+            )),
+        ),
         ProjectedItem::SystemText { .. } => None,
         ProjectedItem::UserInput { text, resource_ids } => {
             let mut body = text.clone();
@@ -768,15 +787,15 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
     vmm_session_memory: &vulcan_vmm::VmmSessionMemoryState,
 ) -> Result<ExecutionPreparationRequest, String> {
     let current_vmm_service_ready = webui_vmm_runtime_readiness(state)?.service_ready;
-    let guard = state
+    let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     let runtime_state = guard
         .workspace_snapshot
-        .as_ref()
+        .as_mut()
         .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?
         .session_runtime_state
-        .get(&request.session_id)
+        .get_mut(&request.session_id)
         .ok_or_else(|| String::from("自动上下文压缩完成后未找到会话运行时状态。"))?;
     let mut refreshed = request.clone();
     // vmmRuntimeReady cannot become true during compaction and is revoked immediately after stop.
@@ -805,12 +824,19 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
         .boundary_events
         .first()
         .and_then(|event| event.turn_id.clone());
-    refreshed.context_injection = core_provider_context_injection_from_state_for_turn(
-        &context_injection_state,
-        vmm_session_memory,
-        turn_marker.as_deref(),
-        vmm_runtime_ready,
-    );
+    let had_pending_expiry_events = !context_injection_state.pending_expiry_events.is_empty();
+    refreshed.context_injection =
+        core_provider_context_injection_from_state_for_turn_draining_expiry_events(
+            &mut context_injection_state,
+            vmm_session_memory,
+            turn_marker.as_deref(),
+            vmm_runtime_ready,
+        );
+    if had_pending_expiry_events {
+        runtime_state
+            .context_injection_state
+            .take_pending_expiry_events();
+    }
     Ok(refreshed)
 }
 
@@ -994,6 +1020,9 @@ pub(crate) fn build_webui_context_compaction_job_request(
             && let Some(runtime_state) = runtime_state
         {
             apply_session_provider_tool_cache_snapshot_to_compaction(runtime_state, &mut context)?;
+            // Temperature comes from the active V1 request projection, not a pending picker selection.
+            // 温度来自活动 V1 请求投影，而非待生效选择器选项。
+            context.temperature = runtime_state.active_temperature;
             context.execution_mode = runtime_state
                 .active_work_mode
                 .clone()

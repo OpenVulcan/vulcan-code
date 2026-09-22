@@ -31,7 +31,10 @@ pub(crate) fn append_provider_visible_agent_messages_to_core_snapshot(
         return Ok(());
     }
 
-    let mut seen_delivery_ids = snapshot
+    // Stage every validation and render in a candidate so one late failure cannot partially mutate the caller snapshot.
+    // 将全部校验和渲染暂存到候选快照中，避免后续失败时部分修改调用方快照。
+    let mut candidate = snapshot.clone();
+    let mut seen_delivery_ids = candidate
         .messages
         .iter()
         .filter_map(|message| message.id.strip_prefix("agent-message:"))
@@ -46,9 +49,10 @@ pub(crate) fn append_provider_visible_agent_messages_to_core_snapshot(
                 message.delivery_id
             ));
         }
-        append_provider_visible_agent_message_to_core_snapshot(snapshot, message);
+        append_provider_visible_agent_message_to_core_snapshot(&mut candidate, message)?;
     }
 
+    *snapshot = candidate;
     Ok(())
 }
 
@@ -60,6 +64,7 @@ fn validate_provider_visible_agent_message(
     for (field_name, field_value) in [
         ("delivery_id", message.delivery_id.as_str()),
         ("message_type", message.message_type.as_str()),
+        ("task_id", message.task_id.as_str()),
         ("task_name", message.task_name.as_str()),
         ("sender", message.sender.as_str()),
         ("recipient", message.recipient.as_str()),
@@ -80,21 +85,25 @@ fn validate_provider_visible_agent_message(
 fn append_provider_visible_agent_message_to_core_snapshot(
     snapshot: &mut CoreConversationSnapshot,
     message: &ExecutionProviderVisibleAgentMessage,
-) {
+) -> Result<(), String> {
     let message_id = format!("agent-message:{}", message.delivery_id);
     let record_id = format!("agent-record:{}", message.delivery_id);
     let created_at = message.timestamp_ms.to_string();
     let model_text = CoreConversationPayload::render_agent_message_text(
-        &message.message_type,
-        &message.task_name,
+        &message_id,
+        message.kind,
         &message.sender,
+        &message.recipient,
+        &message.task_id,
         &message.payload,
-    );
+    )?;
 
     snapshot.messages.push(CoreConversationMessage {
         id: message_id,
         payload: CoreConversationPayload::AgentMessage {
+            kind: message.kind,
             message_type: message.message_type.clone(),
+            task_id: message.task_id.clone(),
             task_name: message.task_name.clone(),
             sender: message.sender.clone(),
             recipient: message.recipient.clone(),
@@ -113,4 +122,5 @@ fn append_provider_visible_agent_message_to_core_snapshot(
         metadata: message.metadata.clone(),
         created_at,
     });
+    Ok(())
 }

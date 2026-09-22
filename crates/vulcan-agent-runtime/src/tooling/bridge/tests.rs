@@ -5,19 +5,118 @@ use super::{
     build_luaskills_dispatch_candidate, build_luaskills_help_candidate, build_vulcan_tools_manager,
     inject_host_managed_pwd_if_needed, luaskills_entry_to_call_view,
 };
+use crate::agent_runtime::task_runtime::collaboration_lifecycle::{
+    ChildTaskActivationRequest, ChildTaskLifecycleReceipt, ChildTaskReservationRequest,
+    ChildTaskTerminalRequest,
+};
 use crate::luaskills_runtime::PWD_PARAMETER_NAME;
 use crate::tooling::build_native_tool_catalog;
+use crate::tooling::collaboration::{
+    ASK_PARENT_TOOL_ID, ASK_QUESTION_TOOL_ID, AgentCollaborationCommand, CANCEL_QUESTION_TOOL_ID,
+    LIST_SESSIONS_TOOL_ID, NativeAgentCollaborationRuntime, READ_SESSION_TOOL_ID,
+    REPLY_QUESTION_TOOL_ID, SEND_NOTIFICATION_TOOL_ID, SEND_SESSION_MESSAGE_TOOL_ID,
+    WAIT_QUESTION_TOOL_ID, WAIT_SESSION_TOOL_ID,
+};
 use luaskills::RuntimeEntryDescriptor;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
-use vulcan_luaskills_prompt::{LuaSkillPromptEntry, LUASKILL_HELP_TOOL_NAME};
+use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{
     ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
-    VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind, VulcanToolsManager,
+    VulcanToolInvocationContext, VulcanToolInvocationResult, VulcanToolOrigin,
+    VulcanToolSourceKind, VulcanToolsManager,
 };
 use vulcan_vmm::VmmConfigLayer;
+
+/// Provides a host collaboration port whose candidates can be projected by bridge tests.
+/// 提供可由桥接测试投影工具候选的宿主协作端口。
+#[derive(Debug)]
+struct FakeCollaborationRuntime;
+
+#[async_trait::async_trait]
+impl NativeAgentCollaborationRuntime for FakeCollaborationRuntime {
+    /// Rejects unexpected compaction in this bridge fixture; no snapshot is returned.
+    /// 在此桥接夹具中拒绝非预期压缩；不返回快照。
+    async fn compact_child_task(
+        &self,
+        _: crate::agent_runtime::prompt_compaction::ChildTaskCompactionRequest,
+    ) -> Result<Option<vulcan_core::types::ConversationSnapshot>, String> {
+        Err(String::from("Unexpected child compaction in test host."))
+    }
+    /// Rejects unexpected initial creation in this narrowly scoped test host.
+    /// 在此限定范围的测试宿主中拒绝非预期初始创建。
+    async fn create_child_task(
+        &self,
+        _: crate::agent_runtime::task_runtime::collaboration_lifecycle::ChildTaskReservationRequest,
+        _: crate::agent_runtime::task_runtime::collaboration_lifecycle::ChildExecutionProfileCaptureRequest,
+    ) -> Result<
+        crate::agent_runtime::task_runtime::collaboration_lifecycle::ChildTaskLifecycleReceipt,
+        String,
+    > {
+        Err(String::from("Unexpected initial child creation."))
+    }
+    /// Accepts host-only profile capture independently of model tool invocation tests.
+    /// 独立于模型工具调用测试接纳仅宿主配置捕获。
+    async fn capture_child_execution_profile(
+        &self,
+        _request: crate::agent_runtime::task_runtime::collaboration_lifecycle::ChildExecutionProfileCaptureRequest,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Returns an empty result for candidate registration tests.
+    /// 为候选注册测试返回空结果。
+    async fn invoke(
+        &self,
+        _context: VulcanToolInvocationContext,
+        _command: AgentCollaborationCommand,
+    ) -> Result<Value, String> {
+        Ok(Value::Null)
+    }
+
+    /// Returns an empty result for the legacy wait wrapper.
+    /// 为旧版等待包装器返回空结果。
+    async fn wait_for_incoming_question(
+        &self,
+        _context: VulcanToolInvocationContext,
+    ) -> Result<Value, String> {
+        Ok(Value::Null)
+    }
+
+    /// Rejects child-task reservation because the bridge fake has no durable owner.
+    /// 桥接假端口没有持久化所有者，因此拒绝子任务预留。
+    async fn reserve_child_task(
+        &self,
+        _request: ChildTaskReservationRequest,
+    ) -> Result<ChildTaskLifecycleReceipt, String> {
+        Err(String::from(
+            "bridge fake does not implement child-task reservation",
+        ))
+    }
+
+    /// Rejects child-task activation because the bridge fake has no durable owner.
+    /// 桥接假端口没有持久化所有者，因此拒绝子任务激活。
+    async fn activate_child_task(
+        &self,
+        _request: ChildTaskActivationRequest,
+    ) -> Result<ChildTaskLifecycleReceipt, String> {
+        Err(String::from(
+            "bridge fake does not implement child-task activation",
+        ))
+    }
+
+    /// Rejects child-task terminalization because the bridge fake has no durable owner.
+    /// 桥接假端口没有持久化所有者，因此拒绝子任务终态提交。
+    async fn terminal_child_task(
+        &self,
+        _request: ChildTaskTerminalRequest,
+    ) -> Result<ChildTaskLifecycleReceipt, String> {
+        Err(String::from(
+            "bridge fake does not implement child-task terminalization",
+        ))
+    }
+}
 
 /// Verifies host-managed PWD injection uses the native workspace-path format expected by LuaSkills host conventions.
 /// 验证宿主管理 PWD 注入会使用 LuaSkills 宿主公约要求的原生工作区路径格式。
@@ -191,6 +290,7 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
         VmmConfigLayer::default(),
         false,
         None,
+        None,
     );
 
     let resolved: ResolvedToolSet = manager.resolve_for_execution_mode("Build");
@@ -278,6 +378,7 @@ fn native_vce_public_id_is_reserved_from_provider_collisions() {
         VmmConfigLayer::default(),
         false,
         None,
+        None,
     );
 
     let resolved = manager.resolve_for_execution_mode("Build");
@@ -339,13 +440,16 @@ fn native_vce_tool_is_hidden_without_ready_handler() {
         VmmConfigLayer::default(),
         false,
         None,
+        None,
     );
 
-    assert!(manager
-        .resolve_for_execution_mode("Build")
-        .descriptors
-        .iter()
-        .all(|descriptor| descriptor.id != vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID));
+    assert!(
+        manager
+            .resolve_for_execution_mode("Build")
+            .descriptors
+            .iter()
+            .all(|descriptor| descriptor.id != vulcan_context_engine::CODEBASE_RETRIEVAL_TOOL_ID)
+    );
 }
 
 /// Verifies VMM memory tools require ready configuration, enabled AI tools, and one live runtime.
@@ -412,6 +516,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         VmmConfigLayer::default(),
         VmmConfigLayer::default(),
         true,
+        None,
         None,
     );
     let enabled_ids = enabled_manager
@@ -492,6 +597,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         },
         true,
         None,
+        None,
     );
     let disabled_ids = disabled_manager
         .resolve_for_execution_mode("Build")
@@ -527,6 +633,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         VmmConfigLayer::default(),
         false,
         None,
+        None,
     );
     let stopped_ids = stopped_manager
         .resolve_for_execution_mode("Build")
@@ -535,4 +642,118 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
         .map(|descriptor| descriptor.id)
         .collect::<Vec<_>>();
     assert!(!stopped_ids.iter().any(|id| id.starts_with("vmm_")));
+}
+
+/// Verifies the host bridge registers every collaboration candidate, including one-way notifications.
+/// 验证宿主桥接完整注册所有协作候选工具，包括单向通知工具。
+#[test]
+fn native_collaboration_candidates_are_registered_by_bridge() {
+    let runtime_config = crate::agent_runtime::config::AgentRuntimeConfig {
+        active_model: None,
+        active_agent_id: String::from("agent-a"),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        tool_policies: Default::default(),
+        configured_mcp_server_ids: Vec::new(),
+        enabled_mcp_server_ids: Vec::new(),
+    };
+    let native_catalog = build_native_tool_catalog(
+        &runtime_config,
+        None,
+        Arc::new(crate::tooling::CommandSessionRuntime::new()),
+        VmmConfigLayer::default(),
+        None,
+        None,
+    );
+    let manager = build_vulcan_tools_manager(
+        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+        native_catalog,
+        None,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        Vec::new(),
+        VmmConfigLayer::default(),
+        VmmConfigLayer::default(),
+        false,
+        None,
+        Some(Arc::new(FakeCollaborationRuntime)),
+    );
+
+    let build_ids = manager
+        .resolve_for_execution_mode("Build")
+        .descriptors
+        .into_iter()
+        .map(|descriptor| descriptor.id)
+        .collect::<Vec<_>>();
+    for tool_id in [
+        ASK_QUESTION_TOOL_ID,
+        ASK_PARENT_TOOL_ID,
+        REPLY_QUESTION_TOOL_ID,
+        WAIT_QUESTION_TOOL_ID,
+        CANCEL_QUESTION_TOOL_ID,
+        LIST_SESSIONS_TOOL_ID,
+        READ_SESSION_TOOL_ID,
+        SEND_SESSION_MESSAGE_TOOL_ID,
+        SEND_NOTIFICATION_TOOL_ID,
+        WAIT_SESSION_TOOL_ID,
+    ] {
+        assert!(
+            build_ids.iter().any(|candidate| candidate == tool_id),
+            "bridge must register collaboration tool {tool_id}"
+        );
+    }
+
+    let notification_definition = manager
+        .resolve_for_execution_mode("Build")
+        .definitions
+        .into_iter()
+        .find(|definition| definition.descriptor.id == SEND_NOTIFICATION_TOOL_ID)
+        .expect("send_notification definition must be projected by bridge");
+    assert_eq!(notification_definition.parameters_schema["type"], "object");
+    assert_eq!(
+        notification_definition.parameters_schema["additionalProperties"],
+        false
+    );
+    assert_eq!(
+        notification_definition.parameters_schema["required"],
+        json!(["target_session_id", "message"])
+    );
+
+    let plan_ids = manager
+        .resolve_for_execution_mode("Plan")
+        .descriptors
+        .into_iter()
+        .map(|descriptor| descriptor.id)
+        .collect::<Vec<_>>();
+    assert!(
+        plan_ids
+            .iter()
+            .any(|candidate| candidate == SEND_NOTIFICATION_TOOL_ID)
+    );
+    assert!(
+        plan_ids
+            .iter()
+            .any(|candidate| candidate == ASK_QUESTION_TOOL_ID)
+    );
+    assert!(
+        !plan_ids
+            .iter()
+            .any(|candidate| candidate == SEND_SESSION_MESSAGE_TOOL_ID),
+        "task message delivery remains hidden in Plan mode"
+    );
 }

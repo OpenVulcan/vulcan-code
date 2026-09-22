@@ -19,6 +19,191 @@ use vulcan_session_core::v1::{
 };
 use vulcan_workspace_store::workspace_store::load_session_v1_full;
 
+/// Failed auxiliary writes recover through the existing owner gate without closing the parent turn.
+/// 辅助写入失败通过既有所有者门禁恢复，不关闭父回合。
+#[tokio::test]
+async fn question_terminal_settlement_retries_exact_scope_without_business_completion() {
+    use vulcan_session_core::v1::TerminalSettlementScope;
+    use vulcan_session_core::v1::collaboration::*;
+    for in_parent in [false, true] {
+        // Each target has its own canonical UUID and scripted persistence owner.
+        // 每个目标拥有独立规范 UUID 及脚本化持久化所有者。
+        let session_id = SessionId::new_v4();
+        // Assemble the accepted durable execution before installing failure injection.
+        // 在安装失败注入前装配已接纳可靠执行。
+        let mut document = SessionDocument::new(
+            session_id.to_string(),
+            "project-a",
+            "Auxiliary recovery",
+            1_700_000_000_000,
+        );
+        // Only the retained-parent case admits a business root input.
+        // 只有保留父回合场景才准入业务根输入。
+        let parent_turn_id = in_parent.then(|| {
+            document
+                .submit_root_input(
+                    ClientInputSubmission::new(
+                        ClientActionId::try_new("qa-parent-root").unwrap(),
+                        "Original task.",
+                        vec![],
+                    ),
+                    1_700_000_000_001,
+                )
+                .unwrap()
+                .into_value()
+        });
+        if in_parent {
+            document
+                .set_collaboration_run_control(SetRunControlInput {
+                    operation_id: CollaborationOperationId::try_new("qa-main-only").unwrap(),
+                    state: CollaborationRunControl::MainOnly,
+                    changed_at_ms: 1_700_000_000_002,
+                })
+                .unwrap();
+        }
+        // Question scope comes from target acceptance and preserves the original parent identity.
+        // 问题范围来自目标接纳，并保留原父身份。
+        let purpose = if in_parent {
+            CollaborationExecutionPurpose::InTurnQuestion
+        } else {
+            CollaborationExecutionPurpose::NaturallyIdleQuestion
+        };
+        // A delivered source fact is independent of the target's physical execution lifecycle.
+        // 已投递来源事实独立于目标物理执行生命周期。
+        let source = CollaborationParticipant::new(
+            "source-session",
+            "source-session",
+            "project-a",
+            1,
+            Some(TurnId::try_new(1).unwrap()),
+            None,
+        )
+        .unwrap();
+        // The target is bound to its real session and optional retained turn.
+        // 目标绑定真实会话及可选保留回合。
+        let target = CollaborationParticipant::new(
+            session_id.to_string(),
+            session_id.to_string(),
+            "project-a",
+            1,
+            parent_turn_id,
+            None,
+        )
+        .unwrap();
+        // Exact question identity is shared by acceptance and execution start.
+        // 精确问题身份由接纳与执行启动共享。
+        let question_id = CollaborationQuestionId::try_new("qa-settlement-question").unwrap();
+        document
+            .accept_delivery(AcceptDeliveryInput {
+                operation_id: CollaborationOperationId::try_new("qa-accept").unwrap(),
+                delivery_id: CollaborationDeliveryId::try_new("qa-delivery").unwrap(),
+                question_id: question_id.clone(),
+                source,
+                target: target.clone(),
+                bound_turn_id: parent_turn_id,
+                execution_purpose: purpose,
+                accepted_at_ms: 1_700_000_000_003,
+            })
+            .unwrap();
+        // The execution identity remains authoritative after the original in-memory owner is removed.
+        // 原内存所有者被移除后，执行身份仍是权威。
+        let execution_id = CollaborationExecutionId::try_new("qa-settlement-execution").unwrap();
+        document
+            .begin_question_execution(BeginQuestionExecutionInput {
+                operation_id: CollaborationOperationId::try_new("qa-begin").unwrap(),
+                execution_id: execution_id.clone(),
+                question_id,
+                participant: target,
+                purpose,
+                parent_turn_id,
+                started_at_ms: 1_700_000_000_004,
+            })
+            .unwrap();
+        // Scope is persisted before both fallback attempts and the repair-mark write fail.
+        // 两次回退尝试及修复标记写入失败前先持久化范围。
+        let scope = TerminalSettlementScope::QuestionExecution {
+            execution_id: execution_id.clone(),
+            api_call_id: None,
+        };
+        // Preserve business controls to prove recovery cannot resume MainOnly or change Goal state.
+        // 保留业务控制，证明恢复不能解除 MainOnly 或改变 Goal 状态。
+        let expected_control = document.collaboration_run_control();
+        // Registry state owns the same canonical handle used by production terminal repair.
+        // 注册表状态持有与生产终态修复相同的规范句柄。
+        let mut service_state = test_service_state_with_parent_session(session_id);
+        // Fail only the dangerous boundary and repair writes; the later controlled retry can succeed.
+        // 只让危险边界及修复写入失败，后续受控重试可以成功。
+        let handle = register_test_session_v1_document_with_scripted_flush_failures(
+            &mut service_state,
+            session_id,
+            document,
+            [2, 3, 4].into_iter().collect(),
+        );
+        // Exact terminal ownership must survive the failed storage attempts.
+        // 精确终态所有权必须跨越存储失败尝试保留。
+        let owner = SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4());
+        register_session_terminal_persistence_owner(&mut service_state, session_id, owner.clone())
+            .unwrap();
+        // The shared owner table is deliberately cleared later to exercise reconstruction.
+        // 后续刻意清空共享所有者表以验证重建。
+        let state = Arc::new(Mutex::new(service_state));
+        // Guard is consumed by the real terminal orchestration, not bypassed by direct Core calls.
+        // 守卫由真实终态编排消费，不通过直接 Core 调用绕过。
+        let guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
+            state.clone(),
+            session_id,
+            owner.clone(),
+        )
+        .unwrap();
+        assert!(
+            !crate::settle_stream_terminal_authority_with_scope(
+                &state,
+                session_id,
+                false,
+                "qa_stream_failed",
+                Some("Controlled failure.".into()),
+                guard,
+                scope.clone()
+            )
+            .await
+        );
+        handle
+            .read(|document| {
+                assert_eq!(document.terminal_settlement_record().unwrap().scope, scope);
+                assert!(document.memory_revision() > document.durable_revision());
+                assert_eq!(document.active_turn().unwrap().closed, !in_parent);
+            })
+            .unwrap();
+        state
+            .lock()
+            .unwrap()
+            .session_terminal_persistence_owners
+            .clear();
+        rebuild_pending_terminal_settlement_owner(&state, session_id, &handle);
+        assert_eq!(
+            settle_pending_terminal_settlement(&state, &handle, session_id)
+                .await
+                .unwrap(),
+            TerminalSettlementRetryOutcome::SettledByRetry
+        );
+        assert!(
+            !state
+                .lock()
+                .unwrap()
+                .session_terminal_persistence_owners
+                .contains_key(&session_id)
+        );
+        handle.read(|document| {
+            assert!(document.terminal_settlement_record().is_none());
+            assert_eq!(document.memory_revision(), document.durable_revision());
+            assert_eq!(document.collaboration_run_control(), expected_control);
+            assert_eq!(document.active_turn().unwrap().closed, !in_parent);
+            assert_eq!(document.collaboration_state().question_executions[&execution_id].outcome, Some(CollaborationQuestionExecutionOutcome::Failed));
+            assert_eq!(document.events().iter().filter(|event| matches!(&event.event, EventBody::Collaboration(value) if value.event_kind == CollaborationEventKind::QuestionExecutionCompleted)).count(), 1);
+        }).unwrap();
+    }
+}
+
 /// Builds one service state whose exact session owns one open V1 turn with a scripted store.
 /// 构建一个服务状态，其精确会话持有一条开放 V1 回合，并挂接脚本化存储。
 ///
@@ -314,6 +499,7 @@ async fn settlement_retry_rejects_different_active_turn() {
         ),
         session_id: session_id.to_string(),
         turn_id: TurnId::try_new(active_turn_id.value() + 1).expect("different valid turn id"),
+        scope: vulcan_session_core::v1::TerminalSettlementScope::BusinessTurn,
         owner_generation: owner.owner_generation(),
         state: TerminalSettlementState::Pending,
         reason_code: String::from("stream_finished_without_v1_api_terminal"),
@@ -524,6 +710,7 @@ async fn durable_settlement_survives_physical_restart_and_retries_once() {
         ),
         session_id: session_id.to_string(),
         turn_id,
+        scope: vulcan_session_core::v1::TerminalSettlementScope::BusinessTurn,
         owner_generation: owner.owner_generation(),
         state: TerminalSettlementState::Pending,
         reason_code: String::from("stream_finished_without_v1_api_terminal"),

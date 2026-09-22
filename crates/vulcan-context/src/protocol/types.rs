@@ -4,6 +4,7 @@
 use crate::transcript::{SessionMessageKind, SessionMessageRecordKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use vulcan_ai_contract::HostMessageKind;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
 
 /// Session-scoped canonical conversation state persisted independently from the visible transcript.
@@ -156,9 +157,15 @@ pub enum SessionConversationPayload {
     /// Inter-agent message delivered through the session mailbox.
     /// 通过会话 mailbox 投递的代理间消息。
     AgentMessage {
+        /// Explicit task envelope kind assigned by the producing lifecycle.
+        /// 生产生命周期明确分配的任务信封类型。
+        kind: HostMessageKind,
         /// Stable message type shown to the receiving model.
         /// 展示给接收模型的稳定消息类型。
         message_type: String,
+        /// Stable task identity independent from the display task name or agent path.
+        /// 独立于展示任务名或代理路径的稳定任务身份。
+        task_id: String,
         /// Logical task name or agent path associated with the message.
         /// 与该消息关联的逻辑任务名或代理路径。
         task_name: String,

@@ -53,6 +53,7 @@ use vulcan_session_core::{CapabilityPolicySnapshot, ExecutionRuntimePolicy, Tool
 use vulcan_workbench_model::SessionProviderToolTargetSelection;
 
 mod pruning;
+mod remote;
 
 #[cfg(test)]
 mod tests;
@@ -108,6 +109,9 @@ impl PromptCompactionModelTarget {
 /// 在压缩期间复现普通回合提示词与工具可见性所需的不可变会话控制。
 #[derive(Debug, Clone)]
 pub struct PromptCompactionLaunchContext {
+    /// Exact sampling temperature captured from the owning request; compaction cannot silently change active request configuration.
+    /// 从所属请求捕获的精确采样温度；压缩不能静默改变活动请求配置。
+    pub temperature: Option<f32>,
     /// Exact frozen user-prompt media authority for the selected history; never inferred from files or model caches.
     /// 所选历史的精确冻结用户提示词媒体权威；绝不从文件或模型缓存推断。
     pub media_projection:
@@ -148,6 +152,10 @@ pub struct PromptCompactionLaunchContext {
     /// Exact request-scoped tool exposure policy.
     /// 精确的请求级工具可见性策略。
     pub tool_exposure_override: ToolExposureSnapshot,
+    /// Original restored-child tool admission retained across internal compaction.
+    /// 内部压缩期间保留的原恢复子代理工具准入范围。
+    pub captured_child_tool_admission:
+        Option<BTreeMap<String, vulcan_session_core::v1::child_execution::ChildToolOrigin>>,
     /// Optional host rejection reason retained for mirror-task tool shape parity.
     /// 为镜像子任务工具形态一致性保留的可选宿主拒绝原因。
     pub tool_request_rejection_reason: Option<String>,
@@ -184,6 +192,7 @@ impl Default for PromptCompactionLaunchContext {
     /// 返回构建模式执行且不含会话专属覆盖的上下文。
     fn default() -> Self {
         Self {
+            temperature: None,
             media_projection: None,
             execution_mode: String::from("build"),
             runtime_policy: ExecutionRuntimePolicy::main_session(),
@@ -196,6 +205,7 @@ impl Default for PromptCompactionLaunchContext {
             session_storage_directory: None,
             output_style_snapshot: None,
             tool_exposure_override: Default::default(),
+            captured_child_tool_admission: None,
             tool_request_rejection_reason: None,
             tool_request_rejection_all_tools: false,
             tool_request_rejection_tool_ids: Vec::new(),
@@ -223,6 +233,7 @@ impl PromptCompactionLaunchContext {
     /// 返回一份不可变压缩启动上下文，并有意排除动态会话覆盖层。
     pub fn from_execution_request(request: &ExecutionPreparationRequest) -> Self {
         Self {
+            temperature: request.temperature,
             // Compaction planning supplies its own exact source snapshot after the ordinary controls are copied.
             // 普通控制复制后，由压缩规划提供自身精确来源快照。
             media_projection: None,
@@ -243,6 +254,7 @@ impl PromptCompactionLaunchContext {
             session_storage_directory: request.session_storage_directory.clone(),
             output_style_snapshot: request.output_style_snapshot.clone(),
             tool_exposure_override: request.tool_exposure_override.clone(),
+            captured_child_tool_admission: request.captured_child_tool_admission.clone(),
             tool_request_rejection_reason: request.tool_request_rejection_reason.clone(),
             tool_request_rejection_all_tools: request.tool_request_rejection_all_tools,
             tool_request_rejection_tool_ids: request.tool_request_rejection_tool_ids.clone(),
@@ -409,10 +421,25 @@ pub struct PromptCompactionJobRequest {
     pub command_session_runtime: Arc<CommandSessionRuntime>,
 }
 
-/// Immutable request payload required to execute one prompt-based compaction job from an already resolved runtime foundation.
-/// 从已解析运行时基础架构执行单次提示词式压缩任务所需的不可变请求载荷。
+/// Declared acknowledgement authority for compaction launched from an existing runtime foundation.
+/// 从已有运行时基础架构启动压缩时声明的确认权威。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptCompactionOwnership {
+    /// The consumer owns durable V1 preparation and terminal acknowledgements.
+    /// 消费方持有可靠 V1 准备及终态确认。
+    SessionV1,
+    /// The standalone runtime has no V1 document or durability consumer.
+    /// 独立运行时没有 V1 文档或可靠性消费方。
+    RuntimeOnly,
+}
+
+/// Immutable compaction inputs with an explicit acknowledgement owner.
+/// 带明确确认所有者的不可变压缩输入。
 #[derive(Clone)]
 pub struct PromptCompactionFoundationJobRequest {
+    /// The caller declares who consumes mandatory preparation and terminal barriers.
+    /// 调用方声明谁消费强制准备及终态屏障。
+    pub ownership: PromptCompactionOwnership,
     /// Target session identifier.
     /// 目标会话标识。
     pub session_id: crate::model::SessionId,
@@ -460,6 +487,45 @@ pub struct PromptCompactionFoundationJobRequest {
     pub foundation: Arc<RuntimeFoundation>,
     /// Optional LuaSkills runtime handle reused by the preparation pipeline.
     /// 被准备链路复用的可选 LuaSkills 运行时句柄。
+    pub luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+}
+
+/// Host admission purpose chosen at the original compaction call site.
+/// 在原压缩调用点选择的宿主准入用途。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildTaskCompactionPhase {
+    /// The original business execution still owns its active lease and open turn.
+    /// 原业务执行仍持有活动租约和开放回合。
+    ActiveBusiness,
+    /// The result has been stored and the original active lease has already been released.
+    /// 结果已经保存，原活动租约已经释放。
+    CompletedBusinessMaintenance,
+}
+
+/// Trusted child invocation and resolved runtime inputs handed to its durable host for compaction.
+/// 向可靠宿主交接用于压缩的可信子调用与已解析运行时输入。
+#[derive(Clone)]
+pub struct ChildTaskCompactionRequest {
+    /// Explicit admission class; the host must never infer it by falling back after a failed lease lookup.
+    /// 显式准入类别；宿主绝不能在租约查找失败后以兜底方式推断。
+    pub phase: ChildTaskCompactionPhase,
+    /// Original task and execution identity; its resident snapshot is not durable source authority.
+    /// 原任务及执行身份；其驻留快照不具有可靠来源权威。
+    pub invocation: crate::agent_runtime::task_runtime::TaskExecutionRequest,
+    /// Actual child preparation retaining model overrides, prompt controls and workspace ownership.
+    /// 实际子准备，保留模型覆盖、提示控制与工作区归属。
+    pub preparation: ExecutionPreparationRequest,
+    /// Exact provider configuration resolved for the child execution.
+    /// 为子执行解析的精确供应商配置。
+    pub provider_configuration: ProviderConfigurationFile,
+    /// Exact declared summary target; the host must not choose another route.
+    /// 精确声明的摘要目标；宿主不得选择其他路由。
+    pub model_target: PromptCompactionModelTarget,
+    /// Already initialized runtime foundation shared with the child.
+    /// 与子代理共享的已初始化运行时基础。
+    pub foundation: Arc<RuntimeFoundation>,
+    /// Existing optional skill runtime retained by the child execution.
+    /// 子执行保留的既有可选技能运行时。
     pub luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
 }
 
@@ -533,12 +599,42 @@ pub struct PromptCompactionProgressEvent {
 /// 单次提示词压缩请求运行期间发出的增量事件。
 #[derive(Debug, Clone)]
 pub enum PromptCompactionStreamEvent {
+    /// Exact immutable planner prefix selected for a native remote attempt; this event alone grants no dispatch permit.
+    /// 为原生远端尝试选择的精确不可变规划前缀；此事件本身不授予发送许可。
+    PreparedRemoteSource {
+        /// Original ordered source rows, without local summary pruning or diagnostic instructions.
+        /// 原始有序来源行，不含本地摘要剪枝或诊断指令。
+        source: Vec<vulcan_context::SessionMessageEntry>,
+    },
+    /// Exact source selected before each local attempt, including retries; never a model-authored event.
+    /// 每次本地尝试及重试前选定的精确来源；绝不是模型编写的事件。
+    PreparedSource {
+        /// Source records after this attempt's pruning, preserving original record identities.
+        /// 本次剪枝后的来源记录，保留原始记录身份。
+        source: vulcan_context_compaction::PreparedCompactionSource,
+        /// Requested mode, which also chooses full-state versus transcript reconstruction.
+        /// 请求模式，同时决定采用完整状态还是转录重建。
+        mode: CompactionInputPruneMode,
+    },
     /// Progress update that is safe to show even if the current attempt later retries.
     /// 即使当前尝试随后重试也可以安全展示的进度更新。
     Progress(PromptCompactionProgressEvent),
     /// A normal execution stream event that should be mirrored into transcript UI or task logs.
     /// 应镜像到转录界面或任务日志中的普通执行流事件。
     Stream(ExecutionStreamEvent),
+    /// Native success paired with its own physical terminal durability barrier, never assistant text.
+    /// 与自身物理终态可靠屏障配对的原生成功结果，绝不是助手正文。
+    RemoteCompleted {
+        /// Completed telemetry with typed physical API facts.
+        /// 带强类型物理 API 事实的完成遥测。
+        event: crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent,
+        /// Exact validated provider output and route identity.
+        /// 精确且已验证的供应商输出及路由身份。
+        checkpoint: vulcan_session_core::v1::context::RemoteResponsesCheckpoint,
+        /// Single-use host acknowledgement after physical completion is durable.
+        /// 物理完成可靠落盘后使用的一次性宿主确认。
+        completion: crate::agent_runtime::events::ProviderRequestDurabilityCompletion,
+    },
     /// Terminal compaction result after the internal summary request settles.
     /// 内部总结请求收敛后的终态压缩结果。
     Finished(Result<PromptCompactionExecution, String>),
@@ -627,13 +723,13 @@ fn remote_responses_usage_to_core(
 /// protocol messages; `model_target` and `reasoning_effort` freeze the owning turn controls.
 /// `runtime` 持有当前供应商路由与凭据边界；`session_id` 限定稳定缓存键；`plan` 选择源窗口；
 /// `full_context_state` 保留其无损协议消息；`model_target` 与 `reasoning_effort` 冻结所属回合控制。
+/// `durable_events` supplies the explicit V1 consumer; absence selects the independent runtime path.
+/// `durable_events`提供明确的 V1 消费方；缺省时选择独立运行时路径。
 ///
 /// # Returns
 /// 返回值
-/// A route-bound remote result when the switch is enabled and the endpoint succeeds, `None` when
-/// the route is disabled or a non-semantic remote failure permits local fallback, or an error when
-/// the provider has already exposed semantic output or a side effect.
-/// 当开关启用且端点成功时返回绑定路由的远端结果；当路由关闭或非语义远端失败允许本地回退时返回 `None`；当供应商已经产生语义输出或副作用时返回错误。
+/// A route-bound result or an explicit session-path error. Only the independent runtime retains local fallback.
+/// 返回绑定路由的结果或明确的会话路径错误；仅独立运行时仍保留本地回退。
 async fn try_remote_responses_compaction(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     foundation: &RuntimeFoundation,
@@ -648,8 +744,14 @@ async fn try_remote_responses_compaction(
     full_context_state: &SessionConversationState,
     model_target: &PromptCompactionModelTarget,
     reasoning_effort: ReasoningEffortLevel,
+    durable_events: Option<&tokio::sync::mpsc::UnboundedSender<PromptCompactionStreamEvent>>,
 ) -> Result<Option<PromptCompactionExecution>, String> {
     if plan.source_messages.is_empty() {
+        if durable_events.is_some() {
+            return Err(String::from(
+                "A session remote compaction requires a nonempty planned source.",
+            ));
+        }
         return Ok(None);
     }
     // preparedExecution freezes one route for lossless history projection and the eventual dispatch.
@@ -665,6 +767,9 @@ async fn try_remote_responses_compaction(
         {
             Ok(execution) => execution,
             Err(failure) => {
+                if durable_events.is_some() {
+                    return Err(failure.to_string());
+                }
                 remote_compaction_failure_allows_local_fallback(&failure)?;
                 return Ok(None);
             }
@@ -698,7 +803,12 @@ async fn try_remote_responses_compaction(
         Ok(preparation) => preparation,
         // Local tool preparation has not dispatched provider work, so the configured local path remains safe.
         // 本地工具准备尚未分派 Provider 工作，因此配置的本地路径仍可安全使用。
-        Err(_) => return Ok(None),
+        Err(error) => {
+            if durable_events.is_some() {
+                return Err(error);
+            }
+            return Ok(None);
+        }
     };
     validate_remote_compaction_tooling_route(
         &tooling_preparation.preparation.model_blueprint,
@@ -706,12 +816,50 @@ async fn try_remote_responses_compaction(
     )?;
     // providerTools retains the canonical host definitions before route-specific schema normalization.
     // providerTools 在路由专属 Schema 正规化前保留规范宿主定义。
-    let provider_tools = tooling_preparation
+    let provider_tools: Vec<_> = tooling_preparation
         .tool_snapshot
         .resolved_tool_definitions
         .iter()
         .map(resolved_tool_definition_to_provider_tool_definition)
         .collect();
+    if let Some(events) = durable_events {
+        // The session path builds an unprepared candidate; its unique owner materializes media and releases the wire request.
+        // 会话路径构建未准备候选；由唯一所有者物化媒体并放行线路请求。
+        let active_agent = foundation
+            .agent_definition(&tooling_preparation.preparation.agent_id)
+            .ok_or_else(|| String::from("The prepared remote compaction agent is unavailable."))?;
+        let runtime_prompt = build_runtime_prompt_layers_for_agent(
+            &tooling_preparation.preparation,
+            Some(active_agent),
+        )?;
+        let candidate = remote::build_candidate(
+            &prepared_execution,
+            &tooling_preparation.preparation,
+            runtime_prompt,
+            provider_tools,
+            full_context_state,
+            plan,
+            active_agent
+                .temperature
+                .or(tooling_preparation.preparation.temperature),
+            reasoning_effort,
+        )
+        .await?;
+        let mut telemetry_preparation = tooling_preparation.preparation.clone();
+        // Tool and baseline composition use ordinary visibility; physical accounting remains a compaction API.
+        // 工具与基线组合使用普通可见性；物理记账仍为压缩 API。
+        telemetry_preparation.prompt_purpose =
+            ExecutionPromptPurpose::ContextCompactionCachePreserving;
+        return remote::execute_durable(
+            prepared_execution,
+            telemetry_preparation,
+            candidate,
+            plan,
+            events,
+        )
+        .await
+        .map(Some);
+    }
     // tools uses the identical compatibility projector as ordinary Responses execution.
     // tools 使用与普通 Responses 执行完全相同的兼容投影器。
     let tools = project_public_tool_definitions(&prepared_execution.route, provider_tools);
@@ -998,7 +1146,13 @@ pub fn stream_prompt_compaction_job(
             remote_foundation.as_ref(),
         ) {
             yield prompt_compaction_progress("remote_compaction_check");
-            match try_remote_responses_compaction(
+            yield PromptCompactionStreamEvent::PreparedRemoteSource {
+                source: request.plan.source_messages.clone(),
+            };
+            // Relay permits while the producer awaits them; polling only its final result would deadlock.
+            // 在生产者等待许可期间转发屏障；仅轮询其最终结果会造成死锁。
+            let (remote_sender, mut remote_receiver) = tokio::sync::mpsc::unbounded_channel();
+            let remote_execution = try_remote_responses_compaction(
                 request.public_ai_runtime.as_ref(),
                 foundation,
                 &request.provider_configuration,
@@ -1012,7 +1166,17 @@ pub fn stream_prompt_compaction_job(
                 &request.full_context_state,
                 model_target,
                 request.reasoning_effort,
-            ).await {
+                Some(&remote_sender),
+            );
+            tokio::pin!(remote_execution);
+            let remote_result = loop {
+                tokio::select! {
+                    biased;
+                    Some(event) = remote_receiver.recv() => yield event,
+                    result = &mut remote_execution => break result,
+                }
+            };
+            match remote_result {
                 Ok(Some(execution)) => {
                     yield prompt_compaction_progress("remote_compaction_complete");
                     yield PromptCompactionStreamEvent::Finished(Ok(execution));
@@ -1027,12 +1191,18 @@ pub fn stream_prompt_compaction_job(
                 }
             }
         }
-        let mut prune_mode = initial_compaction_prune_mode(
+        let mut prune_mode = match initial_compaction_prune_mode(
             &request.full_context_state,
             request.input_budget,
             request.observed_input_tokens,
             request.estimated_input_tokens,
-        );
+        ) {
+            Ok(mode) => mode,
+            Err(error) => {
+                yield PromptCompactionStreamEvent::Finished(Err(error));
+                return;
+            }
+        };
         let mut full_fidelity_attempts = 0usize;
         let mut pruned_attempts = 0usize;
         let mut provider_request_count = 0usize;
@@ -1043,12 +1213,18 @@ pub fn stream_prompt_compaction_job(
                 pruned_attempts = pruned_attempts.saturating_add(1);
             }
             yield prompt_compaction_progress("prepare_input");
-            let prepared_source = prepared_compaction_source_for_attempt(
+            let prepared_source = match prepared_compaction_source_for_attempt(
                 &request.plan,
                 &request.full_context_state,
                 request.input_budget,
                 prune_mode,
-            );
+            ) {
+                Ok(source) => source,
+                Err(error) => {
+                    yield PromptCompactionStreamEvent::Finished(Err(error));
+                    return;
+                }
+            };
             yield prompt_compaction_progress("build_request");
             let source_conversation_state = match compaction_attempt_conversation_state(
                 &request.full_context_state,
@@ -1060,6 +1236,10 @@ pub fn stream_prompt_compaction_job(
                     yield PromptCompactionStreamEvent::Finished(Err(error));
                     return;
                 }
+            };
+            yield PromptCompactionStreamEvent::PreparedSource {
+                source: prepared_source.clone(),
+                mode: prune_mode,
             };
             let prompt_mode =
                 compaction_prompt_mode_for_prune_mode(prepared_source.prune_report.mode);
@@ -1216,7 +1396,14 @@ pub fn stream_prompt_compaction_foundation_job(
                 .filter(|target| target.remote_compaction_enabled),
         ) {
             yield prompt_compaction_progress("remote_compaction_check");
-            match try_remote_responses_compaction(
+            yield PromptCompactionStreamEvent::PreparedRemoteSource {
+                source: request.plan.source_messages.clone(),
+            };
+            // The explicit caller mode prevents an unowned standalone consumer from awaiting V1 acknowledgements.
+            // 显式调用方模式避免没有所有者的独立消费方等待 V1 确认。
+            let (remote_sender, mut remote_receiver) = tokio::sync::mpsc::unbounded_channel();
+            let durable_events = (request.ownership == PromptCompactionOwnership::SessionV1).then_some(&remote_sender);
+            let remote_execution = try_remote_responses_compaction(
                 runtime.as_ref(),
                 &request.foundation,
                 &request.provider_configuration,
@@ -1230,7 +1417,17 @@ pub fn stream_prompt_compaction_foundation_job(
                 &request.full_context_state,
                 model_target,
                 request.reasoning_effort,
-            ).await {
+                durable_events,
+            );
+            tokio::pin!(remote_execution);
+            let remote_result = loop {
+                tokio::select! {
+                    biased;
+                    Some(event) = remote_receiver.recv() => yield event,
+                    result = &mut remote_execution => break result,
+                }
+            };
+            match remote_result {
                 Ok(Some(execution)) => {
                     yield prompt_compaction_progress("remote_compaction_complete");
                     yield PromptCompactionStreamEvent::Finished(Ok(execution));
@@ -1245,12 +1442,18 @@ pub fn stream_prompt_compaction_foundation_job(
                 }
             }
         }
-        let mut prune_mode = initial_compaction_prune_mode(
+        let mut prune_mode = match initial_compaction_prune_mode(
             &request.full_context_state,
             request.input_budget,
             request.observed_input_tokens,
             request.estimated_input_tokens,
-        );
+        ) {
+            Ok(mode) => mode,
+            Err(error) => {
+                yield PromptCompactionStreamEvent::Finished(Err(error));
+                return;
+            }
+        };
         let mut full_fidelity_attempts = 0usize;
         let mut pruned_attempts = 0usize;
         let mut provider_request_count = 0usize;
@@ -1261,12 +1464,18 @@ pub fn stream_prompt_compaction_foundation_job(
                 pruned_attempts = pruned_attempts.saturating_add(1);
             }
             yield prompt_compaction_progress("prepare_input");
-            let prepared_source = prepared_compaction_source_for_attempt(
+            let prepared_source = match prepared_compaction_source_for_attempt(
                 &request.plan,
                 &request.full_context_state,
                 request.input_budget,
                 prune_mode,
-            );
+            ) {
+                Ok(source) => source,
+                Err(error) => {
+                    yield PromptCompactionStreamEvent::Finished(Err(error));
+                    return;
+                }
+            };
             yield prompt_compaction_progress("build_request");
             let source_conversation_state = match compaction_attempt_conversation_state(
                 &request.full_context_state,
@@ -1278,6 +1487,10 @@ pub fn stream_prompt_compaction_foundation_job(
                     yield PromptCompactionStreamEvent::Finished(Err(error));
                     return;
                 }
+            };
+            yield PromptCompactionStreamEvent::PreparedSource {
+                source: prepared_source.clone(),
+                mode: prune_mode,
             };
             let prompt_mode =
                 compaction_prompt_mode_for_prune_mode(prepared_source.prune_report.mode);
@@ -1528,9 +1741,10 @@ fn build_prompt_compaction_launch_request(
         context_budget_override: None,
         context_window_prefill_input_tokens: None,
         execution_mode: launch_context.execution_mode.clone(),
-        temperature: None,
+        temperature: launch_context.temperature,
         reasoning_effort,
         tool_exposure_override: launch_context.tool_exposure_override.clone(),
+        captured_child_tool_admission: launch_context.captured_child_tool_admission.clone(),
         tool_request_rejection_reason: launch_context.tool_request_rejection_reason.clone(),
         tool_request_rejection_all_tools: launch_context.tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids: launch_context.tool_request_rejection_tool_ids.clone(),
@@ -1549,6 +1763,7 @@ fn build_prompt_compaction_launch_request(
         controller_runtime: None,
         native_goal_runtime: None,
         native_browser_runtime: None,
+        native_agent_collaboration_runtime: None,
         supplemental_mcp_tools: Vec::new(),
         media_resource_runtime: None,
         knowledge_access: None,

@@ -4,23 +4,251 @@
 use super::*;
 use vulcan_core::types::ProviderContextInjection;
 use vulcan_core::types::{ConversationMessage, ConversationPayload, ConversationSnapshot};
+use vulcan_session_core::v1::dynamic_context::{
+    DYNAMIC_CONTEXT_DEVELOPER_KEY, DYNAMIC_CONTEXT_PERSISTENT_KEY, DYNAMIC_CONTEXT_RUNTIME_KEY,
+    DYNAMIC_CONTEXT_SYSTEM_KEY, DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY, DynamicContextInput,
+    DynamicContextOccurrence,
+};
+use vulcan_session_core::v1::event::SystemContextScope;
 
-/// Appends declared persistent user blocks to request-local layers, never the locked baseline.
-/// 将已声明的持久用户块追加到请求局部层，绝不修改锁定基线。
-/// Takes the composer layers and optional admitted overlay; returns layers for physical rendering.
-/// 接收组合器层及可选准入覆盖层，返回用于物理渲染的层。
-pub(super) fn with_persistent_blocks(
+/// Publishes business producer changes; compaction has no authority to withdraw or replace them.
+/// 发布业务生产者变化；压缩没有撤下或替换这些生产者的权限。
+/// Uses the exact handle and request facts; returns only after the durable mutation succeeds.
+/// 使用精确句柄及请求事实；仅在可靠修改成功后返回。
+pub(super) fn synchronize_request_dynamic_context(
+    handle: &SessionHandle,
+    facts: &ProviderV1RequestFacts,
+    candidate: &ProviderRequestPreparationCandidate,
+) -> Result<(), SessionRuntimeError> {
+    if facts.purpose == vulcan_session_core::v1::event::ApiPurposeKind::Compaction {
+        return Ok(());
+    }
+    // The ordinary path keeps the complete producer inventory and its original durable admission.
+    // 普通路径保留完整生产者清单及原有可靠准入。
+    let inputs = dynamic_context_inputs(
+        &candidate.dynamic_prompt_layers,
+        candidate.controller_config.context_injection.as_ref(),
+    )?;
+    handle.mutate_durable_if_changed(
+        SessionMutationAdmission::ExistingTurn,
+        SessionFlushReason::MetadataChanged,
+        move |document| {
+            document
+                .synchronize_dynamic_context(inputs, facts.prepared_at_ms)
+                .map(|result| match result {
+                    vulcan_session_core::v1::document::IdempotentMutation::Committed(seqs) => {
+                        SessionMutationChange::Changed(seqs)
+                    }
+                    vulcan_session_core::v1::document::IdempotentMutation::Idempotent(seqs) => {
+                        SessionMutationChange::Unchanged(seqs)
+                    }
+                })
+        },
+    )?;
+    Ok(())
+}
+
+/// Builds request-local User controls for a summary without adding events to the business document.
+/// 为摘要构建请求局部 User 控制消息，不向业务文档添加事件。
+/// Exact typed layers and the prepared final prompt are rendered once; returns an error for invalid envelopes.
+/// 精确类型化提示层和已准备最终提示只渲染一次；信封无效时返回错误。
+pub(super) fn compaction_request_messages(
+    facts: &ProviderV1RequestFacts,
+    candidate: &ProviderRequestPreparationCandidate,
+) -> Result<Vec<ConversationMessage>, SessionRuntimeError> {
+    if facts.purpose != vulcan_session_core::v1::event::ApiPurposeKind::Compaction {
+        return Ok(Vec::new());
+    }
+    if candidate.request_snapshot.prompt.trim().is_empty() {
+        return Err(provider_projection_runtime_error(
+            "Compaction request has no final summary instruction.",
+        ));
+    }
+    // Fixed source names come from the typed composer fields, never from parsing user content.
+    // 固定来源名称来自类型化组合器字段，绝不通过解析用户内容推测。
+    let layers = &candidate.dynamic_prompt_layers;
+    // Ordered controls are appended after authoritative history and included in request budgeting.
+    // 有序控制消息追加在权威历史之后，并计入请求预算。
+    let mut messages = Vec::new();
+    for (source, body) in [
+        ("system", layers.system.as_str()),
+        ("developer", layers.developer.as_str()),
+        ("tool_guidance", layers.tool_guidance.as_str()),
+        ("runtime_context", layers.runtime_context.as_str()),
+        ("instruction", candidate.request_snapshot.prompt.as_str()),
+    ] {
+        if body.trim().is_empty() {
+            continue;
+        }
+        // Bind each local control to this exact physical request and fixed composer field.
+        // 将每条局部控制绑定到本次精确物理请求及固定组合器字段。
+        let event_id = format!("compaction-request:{}:{source}", facts.provider_call_id);
+        // This typed envelope is request-local; no body text can create durable collaboration authority.
+        // 此类型化信封仅属于请求；正文不能创建持久协作权限。
+        let envelope = vulcan_ai_contract::HostMessageEnvelope {
+            event_id: event_id.clone(),
+            kind: vulcan_ai_contract::HostMessageKind::ContextUpdate,
+            source: format!("context_compaction:{source}"),
+            target: String::from("model"),
+            task_id: None,
+            question_id: None,
+            scope: String::from("compaction_request"),
+            body: body.to_owned(),
+        };
+        messages.push(ConversationMessage {
+            id: event_id,
+            payload: ConversationPayload::UserText {
+                text: envelope
+                    .render()
+                    .map_err(provider_projection_runtime_error)?,
+                attachments: Vec::new(),
+            },
+        });
+    }
+    Ok(messages)
+}
+
+/// Builds the stable prompt inputs, independent transient blocks, and typed expiry facts.
+/// 构建稳定提示层输入、独立临时块及类型化过期事实。
+///
+/// Empty layers are represented as `None`, so the domain method can append one explicit
+/// invalidation fact when a producer disappears. The request bridge owns no envelope rendering;
+/// projection later wraps the raw event body exactly once.
+/// 空层使用 `None` 表示，使领域方法能在生产者消失时追加一条明确失效事实。请求桥接不负责信封渲染，
+/// 后续投影只对原始事件正文套壳一次。
+/// Persistent values use Session scope; each typed transient block uses one Turn-scoped producer.
+/// 持久值使用 Session 作用域；每个类型化临时块使用一个 Turn 作用域生产者。
+pub(super) fn dynamic_context_inputs(
     layers: &ProviderPromptLayers,
     injection: Option<&ProviderContextInjection>,
-) -> ProviderPromptLayers {
-    // Reuse the Core placement contract with only request-dynamic layers as its input authority.
-    // 复用 Core 放置契约，但输入权威仅限请求动态层。
-    let config = vulcan_core::types::ControllerConfig {
-        prompt_layers: layers.clone(),
-        context_injection: injection.cloned(),
-        ..Default::default()
-    };
-    config.provider_prompt_layers_with_persistent_injection()
+) -> Result<Vec<DynamicContextInput>, SessionRuntimeError> {
+    let persistent = injection.map(|value| {
+        value
+            .persistent_blocks
+            .iter()
+            .filter_map(|block| normalized_raw_content(block))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    });
+    let mut inputs = [
+        (
+            DYNAMIC_CONTEXT_SYSTEM_KEY,
+            normalized_raw_content(&layers.system),
+            SystemContextScope::Session,
+            None,
+        ),
+        (
+            DYNAMIC_CONTEXT_DEVELOPER_KEY,
+            normalized_raw_content(&layers.developer),
+            SystemContextScope::Session,
+            None,
+        ),
+        (
+            DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY,
+            normalized_raw_content(&layers.tool_guidance),
+            SystemContextScope::Session,
+            None,
+        ),
+        (
+            DYNAMIC_CONTEXT_RUNTIME_KEY,
+            normalized_raw_content(&layers.runtime_context),
+            SystemContextScope::Session,
+            None,
+        ),
+        (
+            DYNAMIC_CONTEXT_PERSISTENT_KEY,
+            persistent.filter(|value| !value.is_empty()),
+            SystemContextScope::Session,
+            None,
+        ),
+    ]
+    .into_iter()
+    .map(|(producer_key, raw_content, scope, ttl_turns)| {
+        DynamicContextInput::new(producer_key, raw_content, scope, ttl_turns)
+    })
+    .collect::<Vec<_>>();
+    if let Some(injection) = injection {
+        for block in injection.host_blocks.iter().filter(|block| block.transient) {
+            if block.scope != "turn" {
+                return Err(provider_projection_runtime_error(format!(
+                    "transient context block `{}` has scope `{}` instead of `turn`",
+                    block.source_id, block.scope
+                )));
+            }
+            let tag = block.tag.clone().ok_or_else(|| {
+                provider_projection_runtime_error(format!(
+                    "transient context block `{}` has no typed tag",
+                    block.source_id
+                ))
+            })?;
+            let content_hash = block.content_hash.clone().ok_or_else(|| {
+                provider_projection_runtime_error(format!(
+                    "transient context block `{}` has no typed content hash",
+                    block.source_id
+                ))
+            })?;
+            let turn_id = block.turn_id.clone().ok_or_else(|| {
+                provider_projection_runtime_error(format!(
+                    "transient context block `{}` has no typed turn identity",
+                    block.source_id
+                ))
+            })?;
+            let raw_content = normalized_raw_content(&block.body).ok_or_else(|| {
+                provider_projection_runtime_error(format!(
+                    "transient context block `{}` has no raw body",
+                    block.source_id
+                ))
+            })?;
+            let occurrence = DynamicContextOccurrence::new(
+                block.source_id.clone(),
+                block.occurrence_id.clone(),
+                tag,
+                content_hash,
+                turn_id,
+            );
+            inputs.push(
+                DynamicContextInput::new(
+                    block.source_id.clone(),
+                    Some(raw_content),
+                    SystemContextScope::Turn,
+                    Some(1),
+                )
+                .with_occurrence(occurrence),
+            );
+        }
+        for event in &injection.expired_events {
+            if event.scope != "turn" {
+                return Err(provider_projection_runtime_error(format!(
+                    "expired context event `{}` has scope `{}` instead of `turn`",
+                    event.event_id, event.scope
+                )));
+            }
+            let occurrence = DynamicContextOccurrence::new(
+                event.source_id.clone(),
+                event.occurrence_id.clone(),
+                event.tag.clone(),
+                event.content_hash.clone(),
+                event.turn_id.clone(),
+            );
+            inputs.push(
+                DynamicContextInput::new(
+                    event.source_id.clone(),
+                    Some(event.body.clone()),
+                    SystemContextScope::Turn,
+                    None,
+                )
+                .as_remove(occurrence),
+            );
+        }
+    }
+    Ok(inputs)
+}
+
+/// Trims one producer body while rejecting whitespace-only values.
+/// 规范化一个生产者正文并拒绝全空白值。
+fn normalized_raw_content(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 /// Resolves immutable prefixes against exact current V1 user positions before physical rendering.
@@ -140,6 +368,8 @@ mod tests {
     fn projection() -> SessionProviderProjectionSnapshot {
         SessionProviderProjectionSnapshot {
             current_compaction_id: None,
+            open_turn_id: None,
+            child_business_execution_id: None,
             preparing_user_prompt_media_seqs: Vec::new(),
             segment_generation: 1,
             document_revision: 1,
@@ -210,30 +440,97 @@ mod tests {
         );
     }
 
-    /// Checks that an empty dynamic composer does not import any controller system baseline.
-    /// 检查空动态组合器不会引入任何控制器系统基线。
-    /// Uses a persistent memory block and returns after exact placement and input immutability assertions.
-    /// 使用持久记忆块，在准确放置及输入不变断言通过后返回。
+    /// Checks all stable producers map to raw session-scoped inputs and preserve declared text.
+    /// 检查所有稳定生产者映射为原始会话范围输入，并保留声明正文。
     #[test]
-    fn persistent_blocks_use_only_declared_dynamic_layers() {
-        // The input contains no frozen baseline and remains unchanged after request-local composition.
-        // 输入不包含冻结基线，请求局部组合后保持不变。
-        let layers = ProviderPromptLayers::default();
-        // The existing Core contract places persistent context in hidden user content.
-        // 既有 Core 契约将持久上下文放在隐藏用户内容中。
+    fn dynamic_inputs_cover_layers_and_injection_once() {
+        let layers = ProviderPromptLayers {
+            system: String::from(" system "),
+            developer: String::from("developer"),
+            tool_guidance: String::from("tools"),
+            runtime_context: String::from("runtime"),
+        };
         let injection = ProviderContextInjection {
-            persistent_blocks: vec![String::from("profile")],
+            persistent_blocks: vec![String::from("profile"), String::from(" rules ")],
+            transient_prefix: String::from(" transient "),
+            host_blocks: vec![vulcan_core::types::ProviderContextHostBlock {
+                source_id: String::from("context_injection:profile:hash-1"),
+                occurrence_id: String::from("context_injection:profile:hash-1:occurrence:1"),
+                source: String::from("context_injection"),
+                tag: Some(String::from("profile")),
+                content_hash: Some(String::from("hash-1")),
+                turn_id: Some(String::from("turn-1")),
+                transient: true,
+                target: String::from("model"),
+                task_id: None,
+                scope: String::from("turn"),
+                body: String::from("transient"),
+            }],
             ..Default::default()
         };
+
+        let inputs = dynamic_context_inputs(&layers, Some(&injection)).expect("typed inputs");
+
+        assert_eq!(inputs.len(), 6);
+        assert_eq!(inputs[0].producer_key, DYNAMIC_CONTEXT_SYSTEM_KEY);
+        assert_eq!(inputs[0].raw_content.as_deref(), Some("system"));
+        assert_eq!(inputs[1].producer_key, DYNAMIC_CONTEXT_DEVELOPER_KEY);
+        assert_eq!(inputs[2].producer_key, DYNAMIC_CONTEXT_TOOL_GUIDANCE_KEY);
+        assert_eq!(inputs[3].producer_key, DYNAMIC_CONTEXT_RUNTIME_KEY);
+        assert_eq!(inputs[4].producer_key, DYNAMIC_CONTEXT_PERSISTENT_KEY);
+        assert_eq!(inputs[4].raw_content.as_deref(), Some("profile\n\nrules"));
+        assert_eq!(inputs[5].producer_key, "context_injection:profile:hash-1");
+        assert_eq!(inputs[5].raw_content.as_deref(), Some("transient"));
+        assert!(inputs[..5].iter().all(|input| {
+            input.scope == SystemContextScope::Session && input.ttl_turns.is_none()
+        }));
+        assert_eq!(inputs[5].scope, SystemContextScope::Turn);
+        assert_eq!(inputs[5].ttl_turns, Some(1));
+    }
+
+    /// Preserves one typed expiration marker as a raw durable input with a stable producer key.
+    /// 将一条强类型失效标记作为带稳定生产者键的原始可靠输入保留下来。
+    #[test]
+    fn dynamic_inputs_preserve_expiration_body_and_identity() {
+        let injection = ProviderContextInjection {
+            expired_events: vec![vulcan_core::types::ProviderContextExpiredEvent {
+                event_id: String::from("context-expired:profile:hash-1:turn-1"),
+                source_id: String::from("context_injection:profile:hash-1"),
+                occurrence_id: String::from("context_injection:profile:hash-1:occurrence:1"),
+                tag: String::from("profile"),
+                content_hash: String::from("hash-1"),
+                source: String::from("context_injection"),
+                target: String::from("model"),
+                scope: String::from("turn"),
+                turn_id: String::from("turn-1"),
+                body: String::from(
+                    "Context injection expired after TTL: tag=profile; content_hash=hash-1; turn_id=turn-1",
+                ),
+            }],
+            ..Default::default()
+        };
+
+        let inputs = dynamic_context_inputs(&ProviderPromptLayers::default(), Some(&injection))
+            .expect("typed inputs");
+        let expiration = inputs.last().expect("expiration input");
+        assert_eq!(expiration.producer_key, "context_injection:profile:hash-1");
         assert_eq!(
-            with_persistent_blocks(&layers, Some(&injection)),
-            ProviderPromptLayers {
-                runtime_context: String::from("profile"),
-                ..Default::default()
-            }
+            expiration.raw_content.as_deref(),
+            Some(injection.expired_events[0].body.as_str())
         );
-        assert_eq!(layers, ProviderPromptLayers::default());
-        assert_eq!(with_persistent_blocks(&layers, None), layers);
+        assert_eq!(expiration.scope, SystemContextScope::Turn);
+        assert_eq!(expiration.ttl_turns, None);
+        assert_eq!(
+            expiration.operation,
+            vulcan_session_core::v1::dynamic_context::DynamicContextOperation::Remove
+        );
+        assert_eq!(
+            expiration
+                .occurrence
+                .as_ref()
+                .map(|value| value.occurrence_id.as_str()),
+            Some("context_injection:profile:hash-1:occurrence:1")
+        );
     }
 
     /// Rejects stale memory even when compaction reuses the same canonical position identifier.

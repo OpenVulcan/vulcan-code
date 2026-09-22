@@ -604,7 +604,7 @@ fn push_labeled_non_empty_part(parts: &mut Vec<String>, label: &str, text: &str)
 /// 仅返回从 `state.messages` 派生的条目；显示记录会被有意忽略。
 pub fn conversation_state_to_compaction_source_messages(
     state: &SessionConversationState,
-) -> Vec<SessionMessageEntry> {
+) -> Result<Vec<SessionMessageEntry>, String> {
     state
         .messages
         .iter()
@@ -616,8 +616,8 @@ pub fn conversation_state_to_compaction_source_messages(
 /// 将一条 Provider 可见协议消息转换为仅供压缩使用的转录条目。
 fn conversation_message_to_compaction_source_message(
     message: &SessionConversationMessage,
-) -> SessionMessageEntry {
-    match &message.payload {
+) -> Result<SessionMessageEntry, String> {
+    let entry = match &message.payload {
         SessionConversationPayload::UserText { text, attachments } => {
             compaction_user_text_message(message.id.clone(), text, attachments)
         }
@@ -645,21 +645,25 @@ fn conversation_message_to_compaction_source_message(
             text,
         ),
         SessionConversationPayload::AgentMessage {
-            message_type,
-            task_name,
+            kind,
+            task_id,
             sender,
+            recipient,
             payload,
             ..
         } => {
             let text = ConversationPayload::render_agent_message_text(
-                message_type,
-                task_name,
+                &message.id,
+                *kind,
                 sender,
+                recipient,
+                task_id,
                 payload,
-            );
+            )?;
             compaction_user_text_message(message.id.clone(), &text, &[])
         }
-    }
+    };
+    Ok(entry)
 }
 
 /// Builds one compaction-only user transcript entry from canonical user text.

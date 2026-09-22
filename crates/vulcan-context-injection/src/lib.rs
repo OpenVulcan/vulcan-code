@@ -12,12 +12,12 @@ mod util;
 
 pub use render::{
     InjectionItemRenderer, InjectionPanelCard, InjectionPanelItem, InjectionRenderOptions,
-    InjectionRendererRegistry, ResolvedInjectionView,
+    InjectionRendererRegistry, ResolvedInjectionHostBlock, ResolvedInjectionView,
 };
 pub use types::{
     ContextInjectionState, InjectionCompactionPolicy, InjectionHelper, InjectionInsert,
-    InjectionInsertItem, InjectionKind, InjectionPruneReport, InjectionScope, InjectionStateGroup,
-    InjectionStateItem,
+    InjectionExpiryEvent, InjectionInsertItem, InjectionKind, InjectionPruneReport, InjectionScope,
+    InjectionStateGroup, InjectionStateItem,
 };
 
 #[cfg(test)]

@@ -21,6 +21,49 @@ import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v
 import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
+import type { ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
+import { cancelCollaborationQuestion } from "@/service/collaboration-question-service";
+
+vi.mock("@/service/collaboration-question-service", () => ({ cancelCollaborationQuestion: vi.fn() }));
+
+// collaborationEvents builds a notification and a child result after the parent's real final answer.
+// collaborationEvents 构建父会话真实最终回复之后的通知与子任务结果。
+// Returns canonical ordered facts including the hidden User protocol mirror.
+// 返回规范有序事实，其中包含隐藏的 User 协议镜像。
+function collaborationEvents(): ConversationEventSummary[] {
+  // source and target preserve the host-declared identities used for navigation assertions.
+  // source 与 target 保留用于导航断言的宿主声明身份。
+  const source = { session_id: "session-source", root_session_id: "root-source", project_id: "project-1", segment_generation: 1 };
+  const target = { session_id: "session-target", root_session_id: "session-target", project_id: "project-1", segment_generation: 1 };
+  return [
+    completeTurnEvents()[0],
+    eventSummary(2, { kind: "assistant_text", api_call_id: 1, status: "completed", text: "父助手的结束回复" }),
+    eventSummary(3, {
+      kind: "collaboration", version: 1, operation_id: "notify-op", event_kind: "notification_sent",
+      after_state: { kind: "outbound_notification", notification: {
+        notification_id: "notice-1", delivery_id: "notice-delivery", operation_id: "notify-op", source, target,
+        body: "子代理已经完成代码定位", state: "recorded", created_at_ms: 1003, updated_at_ms: 1003,
+      } },
+    }, "host_only"),
+    eventSummary(4, { kind: "user_input", client_action_id: clientActionId("mirror-action"), input_id: 2, input_source: "agent_message", text: "<vulcan_agent_message>协议镜像不得显示</vulcan_agent_message>" }),
+    eventSummary(5, { kind: "subagent_return", child_session_id: "session-source", child_segment_generation: 1, child_root_action_id: "child-execution", child_task_id: "child-task", content: "子任务的结束结果", source_assistant_text_seq: 12, source_from_seq: 1, source_to_seq: 14, child_turn_stats_seq: 14 }),
+    ...completeTurnEvents().slice(-1),
+  ];
+}
+
+// questionEvent builds one source-owned pending question without a human Ask interaction.
+// questionEvent 构建由来源持有的待处理问题，不包含人类 Ask 交互。
+function questionEvent(): ConversationEventSummary {
+  // participant preserves a child session whose durable source belongs to a different root.
+  // participant 保留持久化来源属于另一根会话的子会话。
+  const source = { session_id: "session-source", root_session_id: "root-source", project_id: "project-1", segment_generation: 1 };
+  const target = { session_id: "session-target", root_session_id: "session-target", project_id: "project-1", segment_generation: 1 };
+  return eventSummary(9, { kind: "collaboration", version: 1, operation_id: "question-op", event_kind: "question_created", after_state: {
+    kind: "question",
+    question: { question_id: "question-1", delivery_id: "delivery-1", operation_id: "question-op", source, target, body: "请确认归属", execution_purpose: "in_turn_question", state: "pending", created_at_ms: 1009 },
+    delivery: { question_id: "question-1", delivery_id: "delivery-1", operation_id: "question-op", source, target, state: "recorded", updated_at_ms: 1009 },
+  } }, "host_only");
+}
 
 // eventSummary builds one typed V1 envelope for restored-workspace tests.
 // eventSummary 为恢复后 workspace 测试构建一条强类型 V1 envelope。
@@ -127,7 +170,7 @@ function completeTurnEvents(): readonly ConversationEventSummary[] {
       continuation_eligibility: "forbidden",
       timing: { completed_at_ms: 1_200 },
     }, "ui_only"),
-    eventSummary(7, { kind: "turn_boundary", outcome: "completed" }),
+    eventSummary(7, { kind: "turn_boundary", reason: "completed", outcome: "completed", purpose: "business" }),
     eventSummary(8, {
       kind: "turn_stats",
       start_seq: 1,
@@ -171,6 +214,9 @@ function workspaceTree(
   // Running state exercises the production live reasoning expansion path.
   // 运行状态用于验证生产实时思考展开路径。
   sessionRunning = false,
+  // Optional host routes exercise real card buttons through the production surface.
+  // 可选宿主路由通过生产界面验证真实卡片按钮。
+  collaborationNavigation?: ConversationV1CollaborationNavigation,
 ): React.ReactElement {
   const conversation: ConversationSummary = {
     id: "session-branch-v1",
@@ -193,6 +239,7 @@ function workspaceTree(
       <TooltipProvider>
         <ConversationLiveStreamProvider store={new ConversationLiveStreamStore()}>
           <ConversationBranchWorkspaceV1
+            collaborationNavigation={collaborationNavigation}
             commandSessions={[]}
             commands={commands}
             conversation={conversation}
@@ -235,6 +282,82 @@ function renderWorkspace(...args: Parameters<typeof workspaceTree>): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  it("disables historical question actions once a later authoritative snapshot settles the question", () => {
+    // created is the old pending snapshot retained as immutable history.
+    // created 是作为不可变历史保留的旧待处理快照。
+    const created = questionEvent();
+    if (created.event.kind !== "collaboration" || created.event.after_state.kind !== "question") throw new Error("Invalid question fixture");
+    // settled supplies the later authoritative state without rewriting the old event.
+    // settled 提供后续权威状态，不重写旧事件。
+    const settled = eventSummary(10, { ...created.event, operation_id: "cancel-op", event_kind: "question_cancelled", after_state: {
+      ...created.event.after_state,
+      question: { ...created.event.after_state.question, state: "cancelled", cancellation: { operation_id: "cancel-op", requester: created.event.after_state.question.source, reason: "user_cancelled", cancelled_at_ms: 1010 } },
+    } }, "host_only");
+    const markup = renderWorkspace([created, settled]);
+    expect(markup).toContain('class="conversation-v1-collaboration-cancel-button" disabled=""');
+    expect(markup).toContain("user_cancelled");
+  });
+  it("keeps notification and child-result cards distinct from human input and parent completion", () => {
+    // presentation and timeline exercise the same adapter and grouping path used by ChatArea.
+    // presentation 与 timeline 验证 ChatArea 使用的相同适配器及分组链路。
+    const presentation = projectConversationBranchPresentationV1("session-branch-v1", collaborationEvents(), emptyResourceCatalog(), (key) => key);
+    const timeline = projectConversationTimelineItems(presentation.renderItems, undefined, false);
+    expect(presentation.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(presentation.messages.filter((message) => message.agentInteraction)).toHaveLength(2);
+    expect(timeline.filter((entry) => entry.kind === "item" && entry.finalAssistantOutput).map((entry) => entry.kind === "item" && entry.item.sourceMessage?.body)).toEqual(["父助手的结束回复"]);
+    // markup proves the actual workspace mounts the shared cards without exposing protocol mirrors.
+    // markup 证明真实 workspace 挂载共享卡片，不暴露协议镜像。
+    const markup = renderWorkspace(collaborationEvents());
+    expect(markup).toContain('data-collaboration-card-kind="notification"');
+    expect(markup).toContain('data-collaboration-card-kind="task-result"');
+    expect(markup).toContain("子代理已经完成代码定位");
+    expect(markup).toContain("子任务的结束结果");
+    expect(markup).not.toContain("协议镜像不得显示");
+    expect(markup).not.toContain("conversation-v1-collaboration-cancel-button");
+    expect(markup.indexOf("父助手的结束回复")).toBeLessThan(markup.indexOf('data-seq="3"'));
+    expect(markup.indexOf('data-seq="3"')).toBeLessThan(markup.indexOf('data-seq="5"'));
+    expect(markup).not.toContain('message-role-label">SYSTEM');
+    // Late notifications alone never invent an executing business process after completed history.
+    // 完成历史之后的迟到通知不能凭空创建执行中的业务过程。
+    const late = projectConversationBranchPresentationV1("session-branch-v1", [questionEvent()], emptyResourceCatalog(), (key) => key);
+    expect(projectConversationTimelineItems(late.renderItems, undefined, true).map((entry) => entry.kind)).toEqual(["item"]);
+  });
+
+  it("routes known participants and cancels one exact source-owned question only once", async () => {
+    // container mounts production buttons so callbacks cannot pass on static markup alone.
+    // container 挂载生产按钮，避免只用静态标记证明回调有效。
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const onSelectConversation = vi.fn();
+    const onOpenSubagentPanel = vi.fn(async () => true);
+    // resolveCancellation controls one outstanding request to test synchronous duplicate clicks.
+    // resolveCancellation 控制一个未完成请求，验证同步重复点击。
+    let resolveCancellation!: (value: Awaited<ReturnType<typeof cancelCollaborationQuestion>>) => void;
+    vi.mocked(cancelCollaborationQuestion).mockImplementationOnce(() => new Promise((resolve) => { resolveCancellation = resolve; }));
+    try {
+      await React.act(async () => { root.render(workspaceTree([questionEvent()], "inline_output", [], false, {
+        conversations: [{ id: "session-source" }], navigation: null, onSelectConversation, onOpenSubagentPanel,
+      })); });
+      const sourceButton = container.querySelector<HTMLButtonElement>('[aria-label="打开来源会话"]')!;
+      const targetButton = container.querySelector<HTMLButtonElement>('[aria-label="打开目标会话"]')!;
+      expect(sourceButton.disabled).toBe(false);
+      expect(targetButton.disabled).toBe(true);
+      await React.act(async () => { sourceButton.click(); targetButton.click(); });
+      expect(onSelectConversation).toHaveBeenCalledExactlyOnceWith("session-source");
+      expect(onOpenSubagentPanel).not.toHaveBeenCalled();
+      const cancelButton = container.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-cancel-button")!;
+      await React.act(async () => { cancelButton.click(); cancelButton.click(); });
+      expect(cancelCollaborationQuestion).toHaveBeenCalledExactlyOnceWith("question-1", "root-source");
+      expect(cancelButton.disabled).toBe(true);
+      await React.act(async () => { resolveCancellation({ status: "accepted", question_id: "question-1", question_state: "cancelled", operation_id: "cancel-operation", revision: 2 }); });
+      expect(cancelButton.disabled).toBe(true);
+    } finally {
+      await React.act(async () => root.unmount());
+      container.remove();
+      vi.mocked(cancelCollaborationQuestion).mockReset();
+    }
+  });
   // The same live sequence must hand reasoning to exactly one tool under either popup preference.
   // 同一实时序列在两种弹窗偏好下都必须仅将思考交给一个工具。
   it.each(["popup_only", "inline_output"] as const)("retains full reasoning through live-to-tool handoff in %s", async (mode) => {

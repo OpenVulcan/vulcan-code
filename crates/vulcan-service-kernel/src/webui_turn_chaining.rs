@@ -5,7 +5,6 @@ use vulcan_service_api::ServiceEventEmitter;
 use vulcan_session_core::v1::document::{
     ApiGroupCompletionReceipt, SubagentReturnReceipt, TurnCompletionTransition, TurnSuccessor,
 };
-use vulcan_session_core::v1::event::EventBody;
 use vulcan_workbench_model::{PendingSessionPromptEntry, PendingSessionPromptSource, SessionId};
 use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 use vulcan_workspace_store::workspace_store::{
@@ -32,6 +31,42 @@ use super::{
     current_unix_millis_text, current_unix_millis_value, webui_session_has_active_run,
     webui_session_kernel_has_active_turn, webui_trace, webui_trace_if_slow,
 };
+
+/// Starts one same-turn continuation selected from durable collaboration state after terminal admission opens.
+/// 终态准入开放后，从可靠协作状态选定并启动一次同回合续跑。
+/// Service arguments retain their original owners; `session_id` is the finished physical execution owner.
+/// 服务参数保留原所有者；`session_id` 是刚结束物理执行的所有者。
+/// Returns false when no exact business continuation remains, without creating a replacement turn.
+/// 不再有精确业务续跑时返回 false，不创建替代回合。
+pub(crate) async fn start_exact_v1_collaboration_continuation(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &HostRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    let handle = session_v1_handle_from_state(state, session_id).await?;
+    let authority = handle
+        .read(|document| {
+            if document.active_api().is_some() {
+                return None;
+            }
+            document.pending_collaboration_continuation()
+        })
+        .map_err(|error| error.to_string())?;
+    let Some(authority) = authority else {
+        return Ok(false);
+    };
+    crate::webui_prompt_lifecycle::maybe_prepare_webui_collaboration_continuation(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        session_id,
+        authority,
+    )
+    .await
+}
 
 /// Starts the next WebUI chained turn after one stream finishes.
 /// 在单个执行流结束后启动下一条 WebUI 链式回合。
@@ -64,7 +99,15 @@ pub(super) async fn maybe_start_webui_turn_chain_after_finished(
     let receipt_revision = receipt.revision;
     let started =
         match receipt.value.successor {
-            TurnSuccessor::None => Ok(false),
+            TurnSuccessor::None => {
+                crate::agent_collaboration::wake_session_tasks_if_idle(
+                    app,
+                    state,
+                    controller_runtime,
+                    finished_session_id,
+                )
+                .await
+            }
             TurnSuccessor::GoalContinuation {
                 turn_id,
                 context_seq,
@@ -149,8 +192,8 @@ pub(super) async fn maybe_start_webui_turn_chain_after_finished(
 ///
 /// # Returns
 /// 返回值
-/// Returns true when this call starts the Turn or the same Turn already owns an active V1 API.
-/// 当前调用启动回合，或同一回合已经持有活动 V1 API 时返回 true。
+/// Returns true when this call starts business or a later business API already covers the queued input.
+/// 当前调用启动业务，或更晚的业务 API 已覆盖排队输入时返回 true。
 pub(crate) async fn start_exact_v1_queued_turn(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -175,16 +218,26 @@ pub(crate) async fn start_exact_v1_queued_turn(
     )? {
         emit_pending_prompts_changed_delta(app, state, session_id)?;
     }
-    let active_turn = handle
-        .read(|document| document.active_api().map(|api| api.turn_id))
+    // A queued successor can be acknowledged only by business after its exact input.
+    // 只有精确输入之后的业务请求才能确认排队后继已经分发。
+    let (active_turn, already_dispatched) = handle
+        .read(|document| {
+            (
+                document.active_api().map(|api| api.turn_id),
+                document.business_input_dispatch_started(authority.turn_id, authority.input_seq),
+            )
+        })
         .map_err(|error| format!("读取 V1 排队分发活动 API 失败：{error}"))?;
     if let Some(active_turn_id) = active_turn {
         if active_turn_id == authority.turn_id {
-            return Ok(true);
+            return Ok(already_dispatched);
         }
         return Err(String::from(
             "Another V1 Turn already owns the active physical API.",
         ));
+    }
+    if already_dispatched {
+        return Ok(true);
     }
     let attachments = conversation_attachments_from_resource_ids(
         &project_directory,
@@ -220,10 +273,12 @@ pub(crate) async fn start_exact_v1_queued_turn(
     {
         return Ok(true);
     }
-    let active_turn = handle
-        .read(|document| document.active_api().map(|api| api.turn_id))
+    let dispatched_after_attempt = handle
+        .read(|document| {
+            document.business_input_dispatch_started(authority.turn_id, authority.input_seq)
+        })
         .map_err(|error| format!("复核 V1 排队分发活动 API 失败：{error}"))?;
-    Ok(active_turn == Some(authority.turn_id))
+    Ok(dispatched_after_attempt)
 }
 
 /// Starts the next physical API for Provider-visible inputs already committed inside the same logical Turn.
@@ -255,17 +310,16 @@ pub(crate) async fn start_exact_v1_pending_in_turn(
     let (active_api_turn, already_dispatched) = handle
         .read(|document| {
             let active_api_turn = document.active_api().map(|api| api.turn_id);
-            let already_dispatched = document.events().iter().any(|event| {
-                event.turn_id == Some(receipt.turn_id)
-                    && event.seq > last_input_seq
-                    && matches!(event.event, EventBody::ApiStarted(_))
-            });
+            let already_dispatched =
+                document.business_input_dispatch_started(receipt.turn_id, last_input_seq);
             (active_api_turn, already_dispatched)
         })
         .map_err(|error| format!("读取 V1 回合内续跑分发状态失败：{error}"))?;
     if let Some(active_turn_id) = active_api_turn {
         if active_turn_id == receipt.turn_id {
-            return Ok(true);
+            // Auxiliary occupancy cannot acknowledge the promoted business input.
+            // 辅助占用不能确认已提升的业务输入。
+            return Ok(already_dispatched);
         }
         return Err(String::from(
             "Another V1 Turn already owns the active physical API.",
@@ -326,18 +380,10 @@ pub(crate) async fn start_exact_v1_pending_in_turn(
     {
         return Ok(true);
     }
-    let (active_api_turn, dispatched_after_attempt) = handle
-        .read(|document| {
-            let active_api_turn = document.active_api().map(|api| api.turn_id);
-            let dispatched_after_attempt = document.events().iter().any(|event| {
-                event.turn_id == Some(receipt.turn_id)
-                    && event.seq > last_input_seq
-                    && matches!(event.event, EventBody::ApiStarted(_))
-            });
-            (active_api_turn, dispatched_after_attempt)
-        })
+    let dispatched_after_attempt = handle
+        .read(|document| document.business_input_dispatch_started(receipt.turn_id, last_input_seq))
         .map_err(|error| format!("复核 V1 回合内续跑分发状态失败：{error}"))?;
-    Ok(active_api_turn == Some(receipt.turn_id) || dispatched_after_attempt)
+    Ok(dispatched_after_attempt)
 }
 
 /// Starts one exact open root-input Turn without consulting legacy messages or prompt queues.
@@ -374,11 +420,8 @@ pub(crate) async fn start_exact_v1_user_root_turn(
                     "The root input no longer owns the authoritative open V1 Turn.",
                 ));
             }
-            let already_dispatched = document.events().iter().any(|event| {
-                event.turn_id == Some(turn.turn_id)
-                    && event.seq.value() > input_seq.value()
-                    && matches!(event.event, EventBody::ApiStarted(_))
-            });
+            let already_dispatched =
+                document.business_input_dispatch_started(turn.turn_id, input_seq);
             Ok((
                 turn.turn_id,
                 document.active_api().map(|api| api.turn_id),
@@ -388,7 +431,9 @@ pub(crate) async fn start_exact_v1_user_root_turn(
         .map_err(|error| format!("读取 V1 根输入分发状态失败：{error}"))??;
     if let Some(active_turn_id) = active_api_turn {
         if active_turn_id == turn_id {
-            return Ok(true);
+            // An active auxiliary API occupies the slot without acknowledging the original task.
+            // 活动辅助 API 占用执行位置，但不确认原任务已经分发。
+            return Ok(already_dispatched);
         }
         return Err(String::from(
             "Another V1 Turn already owns the active physical API.",
@@ -437,13 +482,7 @@ pub(crate) async fn start_exact_v1_user_root_turn(
         return Ok(true);
     }
     let dispatched_after_attempt = handle
-        .read(|document| {
-            document.events().iter().any(|event| {
-                event.turn_id == Some(turn_id)
-                    && event.seq.value() > input_seq.value()
-                    && matches!(event.event, EventBody::ApiStarted(_))
-            })
-        })
+        .read(|document| document.business_input_dispatch_started(turn_id, input_seq))
         .map_err(|error| format!("复核 V1 根输入分发状态失败：{error}"))?;
     Ok(dispatched_after_attempt)
 }
@@ -462,11 +501,7 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
     let (active_api_turn, already_dispatched) = handle
         .read(|document| {
             let active_api_turn = document.active_api().map(|api| api.turn_id);
-            let already_dispatched = document.events().iter().any(|event| {
-                event.turn_id == Some(receipt.parent_turn_id)
-                    && event.seq.value() > receipt.return_seq.value()
-                    && matches!(event.event, EventBody::ApiStarted(_))
-            });
+            let already_dispatched = document.subagent_return_dispatch_started(&receipt);
             (active_api_turn, already_dispatched)
         })
         .map_err(|error| format!("读取 V1 子代理回流分发状态失败：{error}"))?;
@@ -507,13 +542,7 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
         return Ok(true);
     }
     let dispatched_after_attempt = handle
-        .read(|document| {
-            document.events().iter().any(|event| {
-                event.turn_id == Some(receipt.parent_turn_id)
-                    && event.seq.value() > receipt.return_seq.value()
-                    && matches!(event.event, EventBody::ApiStarted(_))
-            })
-        })
+        .read(|document| document.subagent_return_dispatch_started(&receipt))
         .map_err(|error| format!("复核 V1 子代理回流分发状态失败：{error}"))?;
     Ok(dispatched_after_attempt)
 }

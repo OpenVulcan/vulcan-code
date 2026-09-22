@@ -49,6 +49,16 @@ export function parseConversationBlocks(
   // 用于本地化元数据摘要的可选翻译函数。
   t?: (key: TranslationKey) => string,
 ): ConversationBlock[] {
+  if (message.agentInteraction) {
+    return [{
+      id: `${message.id}:agent-interaction`,
+      kind: "agent-interaction",
+      title: "",
+      body: message.body,
+      summary: "",
+      agentInteraction: message.agentInteraction,
+    }];
+  }
   if (message.role === "user") {
     return [conversationMarkdownBlock(message.id, 0, message.body)];
   }

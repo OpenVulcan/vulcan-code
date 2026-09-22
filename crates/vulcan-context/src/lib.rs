@@ -5,6 +5,7 @@ pub mod assembly;
 pub mod budget;
 pub mod protocol;
 pub mod request_mode;
+pub mod runtime_host;
 pub mod system_update;
 pub mod transcript;
 

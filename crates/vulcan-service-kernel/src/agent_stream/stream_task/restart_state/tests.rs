@@ -178,3 +178,116 @@ fn excluded_non_session_permit_cannot_clear_v1_configuration_debt() {
     }));
     assert!(!state.try_configuration_restart());
 }
+
+/// Supplies one admitted auxiliary record for checking immutable stream binding, without claiming a launch.
+/// 提供一条已准入辅助记录，用于检查不可变流绑定，不宣称实际启动。
+fn question_execution_fixture(in_parent: bool) -> CollaborationQuestionExecutionRecord {
+    use vulcan_session_core::v1::collaboration::{
+        CollaborationExecutionPurpose, CollaborationOperationId, CollaborationParticipant,
+        CollaborationQuestionId,
+    };
+    // One exact logical turn belongs either to the auxiliary task or its retained parent.
+    // 一个精确逻辑回合要么属于辅助任务，要么属于其保留父回合。
+    let turn_id = TurnId::try_new(1).unwrap();
+    CollaborationQuestionExecutionRecord {
+        execution_id: CollaborationExecutionId::try_new("qa-stream").unwrap(),
+        operation_id: CollaborationOperationId::try_new("qa-begin").unwrap(),
+        question_id: CollaborationQuestionId::try_new("qa-question").unwrap(),
+        participant: CollaborationParticipant::new(
+            "target",
+            "target",
+            "project",
+            1,
+            in_parent.then_some(turn_id),
+            None,
+        )
+        .unwrap(),
+        purpose: if in_parent {
+            CollaborationExecutionPurpose::InTurnQuestion
+        } else {
+            CollaborationExecutionPurpose::NaturallyIdleQuestion
+        },
+        parent_turn_id: in_parent.then_some(turn_id),
+        execution_turn_id: (!in_parent).then_some(turn_id),
+        state: CollaborationQuestionExecutionState::Running,
+        started_at_ms: 1,
+        completed_at_ms: None,
+        outcome: None,
+        queued_successor: None,
+    }
+}
+
+/// Retries and compaction retain exact QA identity and only a real permit can replace its physical API.
+/// 重试和压缩保留精确答疑身份，只有真实许可才能替换其物理 API。
+#[test]
+fn question_scope_survives_restarts_and_rejected_preparation() {
+    for in_parent in [false, true] {
+        // The first pre-request failure must carry no invented physical API.
+        // 首次请求前失败不能携带虚构物理 API。
+        let record = question_execution_fixture(in_parent);
+        // The same owned state moves through real restart branches.
+        // 相同自有状态经过真实重启分支。
+        let mut state = StreamRestartState::for_question_execution(&record).unwrap();
+        assert_eq!(
+            state.terminal_scope(),
+            TerminalSettlementScope::QuestionExecution {
+                execution_id: record.execution_id.clone(),
+                api_call_id: None,
+            }
+        );
+        state.observe_preparation(&Ok(successful_permit_fixture()));
+        // A captured scope also survives the task future's destruction on registration failure.
+        // 捕获范围也能在登记失败销毁任务 Future 后继续保留。
+        let captured = state.terminal_scope();
+        assert!(
+            matches!(&captured, TerminalSettlementScope::QuestionExecution { api_call_id: Some(id), .. } if id.value() == 1)
+        );
+        for _ in 0..3 {
+            assert!(state.try_configuration_restart());
+            state = state
+                .clone()
+                .with_auto_compaction_attempted(true)
+                .with_auto_compaction_attempted(false);
+            state.observe_preparation(&Ok(PreparedPhysicalApi::RequestConfigurationChanged));
+            state.observe_preparation(&Err("preparation failed".into()));
+            assert_eq!(state.terminal_scope(), captured);
+        }
+        assert!(!state.try_configuration_restart());
+        assert_eq!(
+            state.question_execution.as_ref().unwrap().turn_id,
+            TurnId::try_new(1).unwrap()
+        );
+        // A subsequent successful physical request changes only the API identity.
+        // 后续成功物理请求只改变 API 身份。
+        let mut next = successful_permit_fixture();
+        if let PreparedPhysicalApi::SessionV1 { core_start, .. } = &mut next {
+            core_start.api_call_id = ApiCallId::try_new(2).unwrap();
+        }
+        state.observe_preparation(&Ok(next));
+        assert_eq!(
+            state.terminal_scope(),
+            TerminalSettlementScope::QuestionExecution {
+                execution_id: record.execution_id,
+                api_call_id: Some(ApiCallId::try_new(2).unwrap()),
+            }
+        );
+        assert_eq!(state.configuration_restarts, 0);
+    }
+}
+
+/// Completed and ambiguous bindings never acquire a fresh question stream owner.
+/// 已完成及歧义绑定绝不获得新的答疑流所有者。
+#[test]
+fn question_scope_rejects_completed_or_ambiguous_execution() {
+    // Completion cannot be undone by constructing another stream from an old receipt.
+    // 不能通过旧回执构造另一个流来撤销完成状态。
+    let mut record = question_execution_fixture(false);
+    record.state = CollaborationQuestionExecutionState::Completed;
+    assert!(StreamRestartState::for_question_execution(&record).is_err());
+    record.state = CollaborationQuestionExecutionState::Running;
+    record.parent_turn_id = record.execution_turn_id;
+    assert!(StreamRestartState::for_question_execution(&record).is_err());
+    record.parent_turn_id = None;
+    record.execution_turn_id = None;
+    assert!(StreamRestartState::for_question_execution(&record).is_err());
+}

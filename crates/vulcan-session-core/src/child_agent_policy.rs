@@ -18,6 +18,11 @@ pub const CHILD_AGENT_FORBIDDEN_TOOL_IDS: &[&str] = &[
     "close_agent",
     "list_agents",
     "ask",
+    "ask_question",
+    "list_sessions",
+    "read_session",
+    "send_session_message",
+    "wait_session",
     "submit_plan",
     "todolist",
     "vmm_memory_search",
@@ -128,12 +133,39 @@ mod tests {
             "ask",
             "submit_plan",
             "todolist",
+            "ask_question",
+            "list_sessions",
+            "read_session",
+            "send_session_message",
+            "wait_session",
         ] {
             assert!(
                 forbidden_tools.contains(&tool_id),
                 "child-agent hard-disabled tools must include {tool_id}"
             );
             assert!(child_agent_tool_is_forbidden(&tool_id.to_ascii_uppercase()));
+        }
+    }
+
+    /// Verifies child agents retain parent question and authorized notification capabilities.
+    /// 验证子代理保留父级问答及由服务校验的通知能力。
+    #[test]
+    fn child_agent_collaboration_policy_allows_parent_question_tools() {
+        assert!(
+            child_agent_tool_is_forbidden("ask"),
+            "human-facing ask must remain parent-owned"
+        );
+        for tool_id in [
+            "ask_parent",
+            "reply_question",
+            "wait_question",
+            "cancel_question",
+            "send_notification",
+        ] {
+            assert!(
+                !child_agent_tool_is_forbidden(tool_id),
+                "child agents should retain {tool_id}"
+            );
         }
     }
 

@@ -4,6 +4,38 @@ use vulcan_context::protocol::{
     validate_session_conversation_record_identities,
 };
 
+/// Builds the memory projection of one ended auxiliary execution without a business completion.
+/// 构建一次已结束辅助执行的内存投影，不产生业务完成。
+/// `runtime_state` remains unchanged; `session_id` must match `report`, and `now` dates correlation cleanup.
+/// `runtime_state` 保持不变；`session_id` 必须匹配 `report`，`now` 标记关联清理时间。
+/// Returns a validated checkpoint projection, preserving business records and all non-conversation state.
+/// 返回已验证检查点投影，保留业务记录及全部非对话状态。
+/// Auxiliary usage and outcomes are owned by V1 events, never synthesized as another user-turn report.
+/// 辅助用量及结果由 V1 事件拥有，绝不合成为另一份用户回合报告。
+pub fn build_question_execution_report_state(
+    runtime_state: &SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    report: &ExecutionRunReport,
+) -> Result<SessionRuntimeStateEntry, String> {
+    if report.session_id != session_id {
+        return Err("The auxiliary report belongs to a different session.".into());
+    }
+    // Publish only after checkpoint identity validation and correlation cleanup succeed on this draft.
+    // 仅在本草稿上的检查点身份验证及关联清理成功后发布。
+    let mut draft = runtime_state.clone();
+    if let Some(checkpoint) = report.conversation_state.clone() {
+        apply_checkpoint_conversation_state(&mut draft, checkpoint, now)?;
+    }
+    clear_open_tool_correlations(&mut draft);
+    validate_session_conversation_message_identities(&draft.conversation_state.messages)
+        .map_err(|error| format!("Invalid auxiliary conversation message identity: {error}"))?;
+    validate_session_conversation_record_identities(&draft.conversation_state.records)
+        .map_err(|error| format!("Invalid auxiliary conversation record identity: {error}"))?;
+    draft.updated_at = now.to_string();
+    Ok(draft)
+}
+
 /// Applies the terminal execution report to one background conversation state.
 /// 将终态执行报告应用到单个后台会话状态。
 ///

@@ -365,7 +365,8 @@ fn compaction_source_accepts_runtime_log_messages_without_records() {
         .get(&session_id)
         .expect("runtime state should exist");
     let messages =
-        conversation_state_to_compaction_source_messages(&runtime_state.conversation_state);
+        conversation_state_to_compaction_source_messages(&runtime_state.conversation_state)
+            .expect("valid compaction source messages");
 
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].id, "runtime-user-1");

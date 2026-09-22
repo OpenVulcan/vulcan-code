@@ -1,13 +1,20 @@
 use super::*;
 use crate::types::ProviderContinuation;
+use vulcan_ai_contract::HostMessageKind;
 
 /// Request object used to append one provider-visible inter-agent message.
 /// 用于追加单条 Provider 可见代理间消息的请求对象。
 #[derive(Debug, Clone)]
 pub struct AgentMessageAppendRequest {
+    /// Explicit task envelope kind assigned by the producing lifecycle.
+    /// 生产生命周期明确分配的任务信封类型。
+    pub kind: HostMessageKind,
     /// Stable model-visible inter-agent message type.
     /// 模型可见的稳定代理间消息类型。
     pub message_type: String,
+    /// Stable task identity independent from the display task name or agent path.
+    /// 独立于展示任务名或代理路径的稳定任务身份。
+    pub task_id: String,
     /// Logical task or agent path associated with the message.
     /// 该消息关联的逻辑任务或代理路径。
     pub task_name: String,
@@ -252,12 +259,17 @@ impl VulcanCoreController {
     /// 返回值
     /// The generated provider-visible message id.
     /// 返回生成的 Provider 可见消息标识。
-    pub fn append_agent_message(&mut self, request: AgentMessageAppendRequest) -> String {
+    pub fn append_agent_message(
+        &mut self,
+        request: AgentMessageAppendRequest,
+    ) -> Result<String, CoreError> {
         let message_id = self.next_local_id("agent-message");
         let record_id = self.next_local_id("agent-record");
         let timestamp = current_unix_millis_text();
         let AgentMessageAppendRequest {
+            kind,
             message_type,
+            task_id,
             task_name,
             sender,
             recipient,
@@ -266,15 +278,20 @@ impl VulcanCoreController {
             metadata,
         } = request;
         let model_text = ConversationPayload::render_agent_message_text(
-            &message_type,
-            &task_name,
+            &message_id,
+            kind,
             &sender,
+            &recipient,
+            &task_id,
             &payload,
-        );
+        )
+        .map_err(|message| CoreError::InvalidState { message })?;
         self.snapshot.messages.push(ConversationMessage {
             id: message_id.clone(),
             payload: ConversationPayload::AgentMessage {
+                kind,
                 message_type,
+                task_id,
                 task_name,
                 sender,
                 recipient,
@@ -293,7 +310,7 @@ impl VulcanCoreController {
             metadata,
             created_at: timestamp,
         });
-        message_id
+        Ok(message_id)
     }
 
     /// Appends one display-only transcript record without changing provider-visible history.
@@ -340,7 +357,7 @@ impl VulcanCoreController {
 
     /// Returns whether the controller still needs to append one new user turn instead of reusing the host-preseeded latest user prompt.
     /// 返回控制器当前是否仍需追加一条新的用户回合，而不是复用宿主已预播种的最新用户提示词。
-    pub(super) fn should_append_user_turn(&self, prompt: &str) -> bool {
+    pub(super) fn should_append_user_turn(&self, prompt: &str) -> Result<bool, CoreError> {
         let prompt = prompt.trim();
         let latest_user_matches = matches!(
             self.snapshot.messages.last(),
@@ -350,9 +367,11 @@ impl VulcanCoreController {
             }) if text.trim() == prompt
         );
         if latest_user_matches {
-            return false;
+            return Ok(false);
         }
-        trailing_agent_messages_prompt(&self.snapshot.messages).as_deref() != Some(prompt)
+        Ok(trailing_agent_messages_prompt(&self.snapshot.messages)?
+            .as_deref()
+            != Some(prompt))
     }
 
     /// Appends one provider assistant turn into the canonical message window and the durable record stream.
@@ -511,17 +530,28 @@ impl VulcanCoreController {
 /// 返回值
 /// The joined model text when the tail contains at least one agent message.
 /// 当尾部至少包含一条智能体消息时返回拼接后的模型文本。
-fn trailing_agent_messages_prompt(messages: &[ConversationMessage]) -> Option<String> {
+fn trailing_agent_messages_prompt(
+    messages: &[ConversationMessage],
+) -> Result<Option<String>, CoreError> {
     let mut rendered_messages = Vec::new();
     for message in messages.iter().rev() {
-        let Some(model_text) = message.payload.agent_message_model_text() else {
+        let model_text = match &message.payload {
+            ConversationPayload::AgentMessage { .. } => Some(
+                message
+                    .payload
+                    .agent_message_model_text(&message.id)
+                    .map_err(|message| CoreError::InvalidState { message })?,
+            ),
+            _ => None,
+        };
+        let Some(model_text) = model_text else {
             break;
         };
         rendered_messages.push(model_text);
     }
     if rendered_messages.is_empty() {
-        return None;
+        return Ok(None);
     }
     rendered_messages.reverse();
-    Some(rendered_messages.join("\n\n"))
+    Ok(Some(rendered_messages.join("\n\n")))
 }

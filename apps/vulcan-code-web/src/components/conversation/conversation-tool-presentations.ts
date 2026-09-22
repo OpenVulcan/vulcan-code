@@ -48,6 +48,7 @@ import type {
 export type {
   AskQuestionPresentation,
   AskQuestionPresentationItem,
+  CollaborationToolArguments,
   CommandExecutionPresentation,
   FileAccessItemPresentation,
   FileAccessLineRangePresentation,

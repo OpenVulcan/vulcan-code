@@ -324,7 +324,7 @@ impl VulcanCoreController {
             return Err(error);
         }
 
-        if self.should_append_user_turn(trimmed_prompt) {
+        if self.should_append_user_turn(trimmed_prompt)? {
             self.append_user_turn(trimmed_prompt, Vec::new());
         }
         let mut provider_turns_executed = 0usize;
@@ -512,7 +512,7 @@ impl VulcanCoreController {
             return Err(error);
         }
 
-        if self.should_append_user_turn(trimmed_prompt) {
+        if self.should_append_user_turn(trimmed_prompt)? {
             self.append_user_turn(trimmed_prompt, Vec::new());
         }
         self.run_provider_tool_streaming_loop(

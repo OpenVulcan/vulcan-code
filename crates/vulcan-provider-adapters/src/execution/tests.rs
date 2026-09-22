@@ -3,5 +3,6 @@
 
 mod manifest_equivalence;
 mod multimodal_projection;
+mod host_message_projection;
 mod protocol_fidelity;
 mod provider_contracts;

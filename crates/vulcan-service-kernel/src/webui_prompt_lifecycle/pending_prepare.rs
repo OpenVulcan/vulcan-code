@@ -165,11 +165,8 @@ pub(crate) fn pending_in_turn_dispatch_authority_from_v1_handle(
                 });
                 previous_seq = *input_seq;
             }
-            let already_dispatched = document.events().iter().any(|event| {
-                event.turn_id == Some(receipt.turn_id)
-                    && event.seq > previous_seq
-                    && matches!(event.event, EventBody::ApiStarted(_))
-            });
+            let already_dispatched =
+                document.business_input_dispatch_started(receipt.turn_id, previous_seq);
             if already_dispatched {
                 return Err(String::from(
                     "The promoted in-turn input boundary already owns a later physical API.",
@@ -213,6 +210,9 @@ pub(crate) struct SessionUserRootDispatchAuthority {
 /// 等待父级推理的一条可靠子代理回流的精确 V1 权威。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionSubagentReturnDispatchAuthority {
+    /// Exact parent history generation captured with the return source.
+    /// 与回流来源一起捕获的精确父历史代次。
+    pub(crate) generation: u64,
     /// Parent open Turn that owns the returned child result.
     /// 持有已回流子结果的父级开放回合。
     pub(crate) parent_turn_id: TurnId,
@@ -236,6 +236,21 @@ pub(crate) struct SessionSubagentReturnDispatchAuthority {
     pub(crate) content: String,
 }
 
+impl SessionSubagentReturnDispatchAuthority {
+    /// Reconstructs the exact source receipt for canonical revalidation without interpreting content.
+    /// 为规范重验重建精确来源回执，不解释正文。
+    pub(super) fn receipt(&self) -> SubagentReturnReceipt {
+        SubagentReturnReceipt {
+            parent_turn_id: self.parent_turn_id,
+            return_seq: self.return_seq,
+            child_session_id: self.child_session_id.clone(),
+            child_task_id: self.child_task_id.clone(),
+            source_assistant_text_seq: self.source_assistant_text_seq,
+            child_turn_stats_seq: self.child_turn_stats_seq,
+        }
+    }
+}
+
 /// Reads and validates one subagent return directly from its parent V1 receipt.
 /// 直接依据父会话 V1 回执读取并校验一条子代理回流。
 pub(crate) fn subagent_return_dispatch_authority_from_v1_handle(
@@ -243,48 +258,58 @@ pub(crate) fn subagent_return_dispatch_authority_from_v1_handle(
     receipt: &SubagentReturnReceipt,
 ) -> Result<SessionSubagentReturnDispatchAuthority, String> {
     handle
-        .read(|document| {
-            // Validate the persisted content identity before resuming the parent.
-            // 恢复父会话之前校验已持久化的内容身份。
-            let turn = document
-                .active_turn()
-                .ok_or("The subagent return has no open parent Turn.")?;
-            if turn.closed || turn.turn_id != receipt.parent_turn_id {
-                return Err(String::from(
-                    "The subagent return no longer belongs to the open parent Turn.",
-                ));
-            }
-            let record = document
-                .events()
-                .iter()
-                .find(|event| event.seq == receipt.return_seq)
-                .ok_or("The subagent return seq is missing.")?;
-            let EventBody::SubagentReturn(returned) = &record.event else {
-                return Err(String::from(
-                    "The receipt does not point to a subagent return.",
-                ));
-            };
-            if record.turn_id != Some(receipt.parent_turn_id)
-                || returned.child_session_id != receipt.child_session_id
-                || returned.child_task_id != receipt.child_task_id
-                || returned.child_turn_stats_seq != receipt.child_turn_stats_seq
-                || returned.source_assistant_text_seq != receipt.source_assistant_text_seq
-            {
-                return Err(String::from(
-                    "The subagent return differs from its durable receipt.",
-                ));
-            }
-            Ok(SessionSubagentReturnDispatchAuthority {
-                parent_turn_id: receipt.parent_turn_id,
-                return_seq: receipt.return_seq,
-                child_session_id: receipt.child_session_id.clone(),
-                child_task_id: receipt.child_task_id.clone(),
-                source_assistant_text_seq: receipt.source_assistant_text_seq,
-                child_turn_stats_seq: receipt.child_turn_stats_seq,
-                content: returned.content.clone(),
-            })
-        })
+        .read(|document| subagent_return_dispatch_authority_from_document(document, receipt))
         .map_err(|error| format!("读取 V1 子代理回流失败：{error}"))?
+}
+
+/// Validates a return receipt against one complete snapshot supplied by its storage owner.
+/// 对照存储所有者提供的一份完整快照校验回流回执。
+/// Returns the immutable source fields or rejects a different turn, event, or child identity.
+/// 返回不可变来源字段，或拒绝不同回合、事件或子身份。
+pub(super) fn subagent_return_dispatch_authority_from_document(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+    receipt: &SubagentReturnReceipt,
+) -> Result<SessionSubagentReturnDispatchAuthority, String> {
+    // Validate the persisted content identity before resuming the parent.
+    // 恢复父会话之前校验已持久化的内容身份。
+    let turn = document
+        .active_turn()
+        .ok_or("The subagent return has no open parent Turn.")?;
+    if turn.closed || turn.turn_id != receipt.parent_turn_id {
+        return Err(String::from(
+            "The subagent return no longer belongs to the open parent Turn.",
+        ));
+    }
+    let record = document
+        .events()
+        .iter()
+        .find(|event| event.seq == receipt.return_seq)
+        .ok_or("The subagent return seq is missing.")?;
+    let EventBody::SubagentReturn(returned) = &record.event else {
+        return Err(String::from(
+            "The receipt does not point to a subagent return.",
+        ));
+    };
+    if record.turn_id != Some(receipt.parent_turn_id)
+        || returned.child_session_id != receipt.child_session_id
+        || returned.child_task_id != receipt.child_task_id
+        || returned.child_turn_stats_seq != receipt.child_turn_stats_seq
+        || returned.source_assistant_text_seq != receipt.source_assistant_text_seq
+    {
+        return Err(String::from(
+            "The subagent return differs from its durable receipt.",
+        ));
+    }
+    Ok(SessionSubagentReturnDispatchAuthority {
+        generation: document.segment_generation(),
+        parent_turn_id: receipt.parent_turn_id,
+        return_seq: receipt.return_seq,
+        child_session_id: receipt.child_session_id.clone(),
+        child_task_id: receipt.child_task_id.clone(),
+        source_assistant_text_seq: receipt.source_assistant_text_seq,
+        child_turn_stats_seq: receipt.child_turn_stats_seq,
+        content: returned.content.clone(),
+    })
 }
 
 /// Reads and validates one queued successor directly from the authoritative V1 event.
@@ -308,6 +333,28 @@ pub(crate) fn queued_dispatch_authority_from_v1_handle(
             {
                 return Err(String::from(
                     "The queued successor no longer owns the authoritative open V1 Turn.",
+                ));
+            }
+            // Revalidate automatic post-QA dispatch after acquiring its reservation, not just before it.
+            // 取得分发预留后再次校验自动答疑后分发，而不只是预留之前校验。
+            // The reserved caller prevents Stop from crossing this proof and kernel admission.
+            // 持有预留的调用者阻止 Stop 跨越此证明与内核准入。
+            let auxiliary_successor = document
+                .collaboration_state()
+                .question_executions
+                .values()
+                .any(|execution| {
+                    execution
+                        .queued_successor
+                        .as_ref()
+                        .is_some_and(|successor| successor.turn_id == turn_id)
+                });
+            if auxiliary_successor
+                && document.collaboration_run_control()
+                    != vulcan_session_core::v1::collaboration::CollaborationRunControl::Running
+            {
+                return Err(String::from(
+                    "The queued question successor is stopped and cannot dispatch automatically.",
                 ));
             }
             let event = document
@@ -354,8 +401,8 @@ pub(crate) fn queued_dispatch_authority_from_v1_handle(
 /// `handle` 持有精确常驻代次；`input_seq` 是编辑或分叉发布的根边界。
 ///
 /// # Returns / 返回值
-/// Returns the exact immutable dispatch payload only when no physical API has started in the Turn.
-/// 仅在该回合尚未启动物理 API 时返回精确不可变分发载荷。
+/// Returns the exact immutable payload when no business API has started and no physical API is active.
+/// 在尚未启动业务 API 且没有活动物理 API 时返回精确不可变载荷。
 pub(crate) fn user_root_dispatch_authority_from_v1_handle(
     handle: &SessionHandle,
     input_seq: Seq,
@@ -371,10 +418,7 @@ pub(crate) fn user_root_dispatch_authority_from_v1_handle(
                 ));
             }
             if document.active_api().is_some()
-                || document.events().iter().any(|event| {
-                    event.turn_id == Some(turn.turn_id)
-                        && matches!(event.event, EventBody::ApiStarted(_))
-                })
+                || document.business_input_dispatch_started(turn.turn_id, input_seq)
             {
                 return Err(String::from(
                     "The authoritative root Turn already owns a physical API.",
@@ -463,7 +507,56 @@ pub(crate) fn queued_dispatch_authority_for_client_action(
 
 /// Exact durable authority consumed by one process-local Provider admission.
 /// 一次进程内 Provider 准入所消费的精确可靠权威。
-enum ExactPendingPromptDispatch {
+pub(super) enum ExactPendingPromptDispatch {
+    /// First preparation of a proven original human root or queued successor.
+    /// 对已证明原人类根或排队后继进行首次准备。
+    InitialHumanBusiness {
+        /// Full durable source and frontier, revalidated inside submission exclusion.
+        /// 完整可靠来源及前沿，在提交互斥内重验。
+        authority: vulcan_session_core::v1::business_hook::InitialHumanBusiness,
+        /// Target-only hydration without changing the selected UI session.
+        /// 不改变界面所选会话的目标水合。
+        workspace: WorkspaceSnapshot,
+        /// Normal user preparation adapter over the existing canonical input.
+        /// 基于已有规范输入的正常用户准备适配对象。
+        entry: PendingSessionPromptEntry,
+    },
+    /// Original main business recovered without a new message acceptance or human input.
+    /// 恢复原主业务，不创建新消息接纳或人类输入。
+    BusinessRecovery {
+        /// Original Hook and exact published revision.
+        /// 原 Hook 及精确已发布修订。
+        authority: super::business_recovery_prepare::MainBusinessRecoveryAuthority,
+        /// Target-owned workspace projection, independent of the selected UI session.
+        /// 目标所属工作区投影，独立于界面当前选择会话。
+        workspace: WorkspaceSnapshot,
+        /// Internal preparation adapter that never enters canonical human history.
+        /// 不进入规范人类历史的内部准备适配对象。
+        entry: PendingSessionPromptEntry,
+    },
+    /// Accepted business guidance resumes its own original turn.
+    /// 已接纳业务方向恢复其原回合。
+    Collaboration {
+        /// Exact immutable local acceptance anchor.
+        /// 精确不可变本地接纳锚点。
+        authority: vulcan_session_core::v1::collaboration::CollaborationContinuation,
+        /// Non-persistent host dispatch adapter.
+        /// 非持久化宿主分发适配对象。
+        entry: PendingSessionPromptEntry,
+    },
+    /// Agent task input already claimed into its independent business turn.
+    /// 已认领到独立业务回合的代理任务输入。
+    AgentTask {
+        /// Exact claim, execution and input identity.
+        /// 精确认领、执行及输入身份。
+        authority: SessionAgentTaskDispatchAuthority,
+        /// Hydrated target candidate; only its session slice may be published.
+        /// 已水合目标候选；只允许发布其中的目标会话切片。
+        workspace: WorkspaceSnapshot,
+        /// Non-persistent adapter of the canonical agent input.
+        /// 规范代理输入的非持久适配对象。
+        entry: PendingSessionPromptEntry,
+    },
     /// One open Goal-continuation Turn selected by the V1 domain transaction.
     /// 由 V1 领域事务选定的开放 Goal 续跑回合。
     Goal {
@@ -522,6 +615,10 @@ impl ExactPendingPromptDispatch {
     fn entry(&self) -> &PendingSessionPromptEntry {
         match self {
             Self::Goal { entry, .. }
+            | Self::InitialHumanBusiness { entry, .. }
+            | Self::BusinessRecovery { entry, .. }
+            | Self::Collaboration { entry, .. }
+            | Self::AgentTask { entry, .. }
             | Self::Queued { entry, .. }
             | Self::Root { entry, .. }
             | Self::SubagentReturn { entry, .. }
@@ -533,7 +630,11 @@ impl ExactPendingPromptDispatch {
     /// 不查询任何进程镜像，返回精确提示词来源。
     fn source(&self) -> PendingSessionPromptSource {
         match self {
+            Self::InitialHumanBusiness { .. } => PendingSessionPromptSource::UserFollowup,
             Self::Goal { .. } => PendingSessionPromptSource::GoalContinuation,
+            Self::Collaboration { .. } => PendingSessionPromptSource::AgentContinuation,
+            Self::BusinessRecovery { .. } => PendingSessionPromptSource::AgentContinuation,
+            Self::AgentTask { authority, .. } => authority.prompt_source(),
             Self::Queued { .. } | Self::Root { .. } | Self::PendingInTurn { .. } => {
                 PendingSessionPromptSource::UserFollowup
             }
@@ -541,15 +642,70 @@ impl ExactPendingPromptDispatch {
         }
     }
 
-    /// Returns the authoritative V1 user-input sequence that owns a new logical user turn.
-    /// 返回持有新逻辑用户回合的权威 V1 用户输入序号。
+    /// Returns the canonical V1 input sequence owning a newly admitted human or agent business turn.
+    /// 返回持有新准入人类或代理业务回合的规范 V1 输入序号。
     fn canonical_user_input_seq(&self) -> Option<Seq> {
         match self {
+            Self::InitialHumanBusiness { authority, .. } => Some(authority.preparation.start_seq),
             Self::Queued { authority, .. } => Some(authority.input_seq),
+            Self::AgentTask { authority, .. } => Some(authority.input_seq),
             Self::Root { authority, .. } => Some(authority.input_seq),
-            Self::Goal { .. } | Self::SubagentReturn { .. } | Self::PendingInTurn { .. } => None,
+            Self::Goal { .. }
+            | Self::BusinessRecovery { .. }
+            | Self::Collaboration { .. }
+            | Self::SubagentReturn { .. }
+            | Self::PendingInTurn { .. } => None,
         }
     }
+}
+
+/// Starts the claimed agent task using its canonical input and the target's active settings.
+/// 使用规范输入及目标当前设置，启动已认领代理任务。
+/// Returns false while another service execution owns admission; errors preserve the durable claim.
+/// 其他服务执行持有准入时返回 false；错误保留可靠认领事实。
+pub(crate) async fn maybe_prepare_webui_agent_task(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &HostRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    authority: SessionAgentTaskDispatchAuthority,
+) -> Result<bool, String> {
+    // The entry is an execution adapter; the tagged message is already owned by V1 history.
+    // 此项是执行适配对象；带标签消息已由 V1 历史持有。
+    let handle = registered_session_v1_handle_from_state(state, session_id)?;
+    let workspace = crate::session_hydration::load_workspace_for_submission(
+        state,
+        controller_runtime.clone(),
+        Some(session_id),
+    )
+    .await?;
+    let entry = PendingSessionPromptEntry {
+        id: authority.execution_id.as_str().to_owned(),
+        prompt: authority.text.clone(),
+        hidden_model_guidance: None,
+        preview: authority.text.clone(),
+        attachments: Vec::new(),
+        model_reference: None,
+        runtime_options: exact_v1_dispatch_runtime_options(handle.as_ref())?,
+        source: authority.prompt_source(),
+        task_id: None,
+        panel_entry_id: None,
+        created_at: current_unix_millis_text(),
+    };
+    prepare_webui_pending_prompt(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        session_id,
+        ExactPendingPromptDispatch::AgentTask {
+            authority,
+            workspace,
+            entry,
+        },
+    )
+    .await
 }
 
 /// Starts one Goal continuation directly from its exact durable V1 authority.
@@ -747,7 +903,7 @@ fn exact_goal_continuation_prompt_entry(
 /// 返回值
 /// Whether the selected prompt started a formal Provider turn.
 /// 返回选定提示词是否已启动正式 Provider 回合。
-async fn prepare_webui_pending_prompt(
+pub(super) async fn prepare_webui_pending_prompt(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &HostRuntimeHandle,
@@ -765,19 +921,22 @@ async fn prepare_webui_pending_prompt(
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace_snapshot = guard
-            .workspace_snapshot
-            .clone()
-            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        let workspace_snapshot = match &exact_dispatch {
+            ExactPendingPromptDispatch::AgentTask { workspace, .. }
+            | ExactPendingPromptDispatch::InitialHumanBusiness { workspace, .. }
+            | ExactPendingPromptDispatch::BusinessRecovery { workspace, .. } => workspace.clone(),
+            _ => guard
+                .workspace_snapshot
+                .clone()
+                .ok_or_else(|| String::from("workspace snapshot is not ready"))?,
+        };
+        let pending_plan = session_has_pending_plan_artifact(&workspace_snapshot, session_id);
         (
             workspace_snapshot,
             guard.active_stream_tasks.contains_key(&session_id),
             webui_session_kernel_has_active_turn(&guard, session_id),
             webui_session_has_active_run(&guard, session_id),
-            guard
-                .workspace_snapshot
-                .as_ref()
-                .is_some_and(|snapshot| session_has_pending_plan_artifact(snapshot, session_id)),
+            pending_plan,
         )
     };
     webui_trace(
@@ -815,6 +974,10 @@ async fn prepare_webui_pending_prompt(
     };
     let pending_prompt_dispatch_authorization =
         pending_prompt_dispatch_guard.existing_submission_authorization(session_id)?;
+    if let ExactPendingPromptDispatch::InitialHumanBusiness { authority, .. } = &exact_dispatch {
+        let handle = registered_session_v1_handle_from_state(state, session_id)?;
+        super::initial_business_prepare::validate_initial_human_business(&handle, authority)?;
+    }
     if let Some(expected_goal_authority) = goal_authority {
         let handle = registered_session_v1_handle_from_state(state, session_id)?;
         let current_goal_authority =
@@ -919,6 +1082,45 @@ async fn prepare_webui_pending_prompt(
         .collect();
     // vmmReadiness is the service-owned prerequisite captured before this process-local admission.
     // vmmReadiness 是在本次进程内准入前捕获的服务级权威前提事实。
+    let hook_owner_handle = registered_session_v1_handle_from_state(state, session_id)?;
+    if let ExactPendingPromptDispatch::BusinessRecovery { authority, .. } = &exact_dispatch {
+        super::business_recovery_prepare::restore_main_business_recovery_hook(
+            &hook_owner_handle,
+            &entry_agent_runtime,
+            authority,
+        )?;
+    }
+    if let ExactPendingPromptDispatch::AgentTask { authority, .. } = &exact_dispatch {
+        super::agent_task_prepare::prepare_agent_task_hook_owner(
+            &hook_owner_handle,
+            &entry_agent_runtime,
+            authority,
+        )?;
+    }
+    // Internal sources restore their original owner before live timeline synchronization.
+    // 内部来源在活动时间线同步之前恢复原所有者。
+    match &exact_dispatch {
+        ExactPendingPromptDispatch::Goal { authority, .. } => {
+            super::internal_continuation_prepare::prepare_internal_continuation_hook_owner(
+                &hook_owner_handle,
+                &entry_agent_runtime,
+                super::internal_continuation_prepare::InternalContinuationHookSource::Goal(
+                    authority,
+                ),
+            )?;
+        }
+        ExactPendingPromptDispatch::SubagentReturn { authority, .. } => {
+            super::internal_continuation_prepare::prepare_internal_continuation_hook_owner(
+                &hook_owner_handle, &entry_agent_runtime,
+                super::internal_continuation_prepare::InternalContinuationHookSource::SubagentReturn(authority),
+            )?;
+        }
+        _ => {}
+    }
+    crate::session_business_hook::synchronize_live_business_hook_inputs(
+        hook_owner_handle.as_ref(),
+        &entry_agent_runtime,
+    )?;
     let vmm_readiness = webui_vmm_runtime_readiness(state)?;
     let mut prompt_turn_begin_input = SharedPromptTurnBeginInput {
         session_id,
@@ -950,11 +1152,8 @@ async fn prepare_webui_pending_prompt(
             ));
         }
         let authorization = pending_prompt_dispatch_authorization;
-        // Service state always precedes the shared Hook runtime in the cross-runtime lock order.
-        // 跨运行时锁顺序中，服务状态始终先于共享 Hook 运行时。
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        // The submission reservation spans Hook preparation, durable capture and kernel registration.
+        // 提交预留覆盖 Hook 准备、可靠捕获以及 kernel 注册。
         let mut hook_runtime = entry_agent_runtime
             .conversation_hook_runtime
             .lock()
@@ -964,6 +1163,17 @@ async fn prepare_webui_pending_prompt(
             &mut hook_runtime,
             prompt_turn_begin_input,
         )?;
+        drop(hook_runtime);
+        crate::session_business_hook::publish_prepared_business_hook(
+            handle.as_ref(),
+            &entry_agent_runtime,
+            &precheck_start,
+        )?;
+        // Disk publication completed without holding either shared service or Hook state.
+        // 磁盘发布已完成，其间未持有共享服务状态或 Hook 状态。
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
         let active_turn_kind = if entry.source == PendingSessionPromptSource::GoalContinuation {
             ActiveTurnKind::GoalContinuation
         } else {
@@ -978,6 +1188,31 @@ async fn prepare_webui_pending_prompt(
         )?;
         precheck_start
     } else {
+        if let ExactPendingPromptDispatch::BusinessRecovery { authority, .. } = &exact_dispatch {
+            super::business_recovery_prepare::validate_main_business_recovery(
+                &hook_owner_handle,
+                authority,
+            )?;
+        }
+        if let ExactPendingPromptDispatch::AgentTask { authority, .. } = &exact_dispatch {
+            let handle = registered_session_v1_handle_from_state(state, session_id)?;
+            let current = agent_task_dispatch_authority_from_v1_handle(
+                handle.as_ref(),
+                &authority.delivery_id,
+            )?;
+            if &current != authority {
+                return Err(String::from(
+                    "Agent task authority changed before Hook setup.",
+                ));
+            }
+        }
+        if let ExactPendingPromptDispatch::Collaboration { authority, .. } = &exact_dispatch {
+            let handle = registered_session_v1_handle_from_state(state, session_id)?;
+            super::collaboration_prepare::validate_collaboration_dispatch(
+                handle.as_ref(),
+                authority,
+            )?;
+        }
         if let ExactPendingPromptDispatch::Queued {
             authority: expected_queued_authority,
             ..
@@ -994,6 +1229,22 @@ async fn prepare_webui_pending_prompt(
             if &current_queued_authority != expected_queued_authority {
                 return Err(format!(
                     "Queued dispatch authority changed for session `{session_id}` before Hook setup"
+                ));
+            }
+            // A retained receipt identifies the input, but cannot authorize another business dispatch.
+            // 保留的回执标识输入，但不能授权再次执行业务分发。
+            let occupied = handle
+                .read(|document| {
+                    document.active_api().is_some()
+                        || document.business_input_dispatch_started(
+                            expected_queued_authority.turn_id,
+                            expected_queued_authority.input_seq,
+                        )
+                })
+                .map_err(|error| error.to_string())?;
+            if occupied {
+                return Err(String::from(
+                    "Queued input is physically occupied or already dispatched.",
                 ));
             }
         }
@@ -1086,23 +1337,65 @@ async fn prepare_webui_pending_prompt(
             prompt_turn_begin_input.existing_canonical_user_message_id =
                 Some(canonical_user_message_id);
         }
-        // Service state always precedes the shared Hook runtime in the cross-runtime lock order.
-        // 跨运行时锁顺序中，服务状态始终先于共享 Hook 运行时。
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let ExactPendingPromptDispatch::InitialHumanBusiness { authority, .. } = &exact_dispatch
+        {
+            // Only proven unpublished preparation may discard process-local remnants before first capture.
+            // 只有已证明尚未发布的准备，才能在首次捕获前丢弃进程内残留。
+            super::initial_business_prepare::validate_initial_human_business(
+                &hook_owner_handle,
+                authority,
+            )?;
+            entry_agent_runtime
+                .conversation_hook_runtime
+                .lock()
+                .map_err(|error| format!("Failed to lock initial business Hook runtime: {error}"))?
+                .discard_unpublished_business_preparation(&authority.preparation)?;
+        }
+        // The retained submission reservation serializes this admission without holding outer locks over I/O.
+        // 保留的提交预留串行化本次准入，无须跨 I/O 持有外层锁。
         let mut hook_runtime = entry_agent_runtime
             .conversation_hook_runtime
             .lock()
             .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
-        let precheck_start = begin_shared_prompt_turn(
-            &mut workspace_snapshot,
-            &mut hook_runtime,
-            prompt_turn_begin_input,
+        // Exact process inputs retain their individual canonical identities even when Provider preparation uses a batch prompt.
+        // 即使 Provider 准备使用批次提示，精确过程输入仍保留各自规范身份。
+        let precheck_start = if let ExactPendingPromptDispatch::PendingInTurn {
+            authority, ..
+        } = &exact_dispatch
+        {
+            let inputs = authority.inputs.iter().map(|input|
+                vulcan_agent_runtime::agent_runtime::conversation_hooks::CanonicalInTurnHookInput {
+                    client_action_id: input.client_action_id.clone(), input_id: input.input_id,
+                    input_seq: input.input_seq, text: input.text.clone(),
+                }).collect::<Vec<_>>();
+            vulcan_agent_runtime::workbench_prompt_turn::begin_shared_prompt_turn_with_canonical_inputs(
+                &mut workspace_snapshot, &mut hook_runtime, prompt_turn_begin_input, &inputs,
+            )?
+        } else {
+            begin_shared_prompt_turn(
+                &mut workspace_snapshot,
+                &mut hook_runtime,
+                prompt_turn_begin_input,
+            )?
+        };
+        drop(hook_runtime);
+        let handle = registered_session_v1_handle_from_state(state, session_id)?;
+        crate::session_business_hook::publish_prepared_business_hook(
+            handle.as_ref(),
+            &entry_agent_runtime,
+            &precheck_start,
         )?;
+        // Register only after the exact prepared Hook has durable ownership.
+        // 仅在精确准备的 Hook 已具有可靠归属后注册。
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
         if matches!(
             &exact_dispatch,
             ExactPendingPromptDispatch::SubagentReturn { .. }
+                | ExactPendingPromptDispatch::BusinessRecovery { .. }
+                | ExactPendingPromptDispatch::Collaboration { .. }
+                | ExactPendingPromptDispatch::AgentTask { .. }
         ) {
             start_reserved_webui_session_kernel_turn(
                 &mut guard,
@@ -1121,6 +1414,23 @@ async fn prepare_webui_pending_prompt(
         }
         precheck_start
     };
+    if matches!(
+        &exact_dispatch,
+        ExactPendingPromptDispatch::AgentTask { .. }
+            | ExactPendingPromptDispatch::InitialHumanBusiness { .. }
+            | ExactPendingPromptDispatch::BusinessRecovery { .. }
+    ) {
+        return finish_target_prompt_preparation(
+            app,
+            state,
+            controller_runtime,
+            &entry_agent_runtime,
+            workspace_snapshot,
+            precheck_start,
+            entry.source,
+        )
+        .await;
+    }
     if precheck_start.vmm_runtime_ready {
         refresh_exact_vmm_hook_session_projection(
             &entry_agent_runtime.vmm_hook_runtime,
@@ -1180,11 +1490,13 @@ mod tests {
     #[test]
     fn exact_goal_adapter_identity_includes_the_v1_turn() {
         let first = SessionGoalDispatchAuthority {
+            generation: 1,
             goal_id: String::from("goal-v1-8"),
             turn_id: TurnId::try_new(11).expect("first Turn id should be valid"),
             context_seq: Seq::try_new(10).expect("first context seq should be valid"),
         };
         let second = SessionGoalDispatchAuthority {
+            generation: 1,
             goal_id: first.goal_id.clone(),
             turn_id: TurnId::try_new(12).expect("second Turn id should be valid"),
             context_seq: Seq::try_new(11).expect("second context seq should be valid"),

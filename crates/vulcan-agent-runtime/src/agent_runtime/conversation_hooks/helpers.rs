@@ -290,6 +290,9 @@ pub(super) fn pending_prompt_source_event_kind(source: PendingSessionPromptSourc
         PendingSessionPromptSource::GoalContinuation => "goal_continuation",
         PendingSessionPromptSource::SubagentReturnContinuation => "subagent_return_continuation",
         PendingSessionPromptSource::ExecutionRetry => "execution_retry",
+        PendingSessionPromptSource::QuestionExecution => "question_execution",
+        PendingSessionPromptSource::AgentTask => "agent_task",
+        PendingSessionPromptSource::AgentContinuation => "agent_continuation",
     }
 }
 

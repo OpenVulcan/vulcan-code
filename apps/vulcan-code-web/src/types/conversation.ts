@@ -18,6 +18,15 @@ import type {
 import type { CommandSessionSummary, ContextInjectionSnapshot, ContextUsageSnapshot } from "./runtime-context";
 import type { ProjectSummary } from "./projects-files";
 import type { ContextCompactionWindowNodeId } from "./public-ai";
+import type { ConversationEventBody, ConversationEventSummary } from "@/service/conversation-event-window-store";
+
+// ConversationAgentInteraction retains exact collaboration or child-result facts for display only.
+// ConversationAgentInteraction 仅为展示保留精确协作或子任务结果事实。
+export type ConversationAgentInteraction = Omit<ConversationEventSummary, "event"> & {
+  // Only host-owned interaction variants can select an agent card; text cannot select this type.
+  // 只有宿主持有的交互分支可选择代理卡片，正文不能选择此类型。
+  event: Extract<ConversationEventBody, { kind: "collaboration" | "subagent_return" }>;
+};
 
 // ConversationRunOutcome identifies the strict terminal result of a settled run.
 // ConversationRunOutcome 标识已结束运行的严格终态结果。
@@ -84,6 +93,9 @@ export interface ConversationSummary {
 // It is projected only from V1 events and is never a persistence or RPC authority.
 // 它仅由 V1 事件投影生成，绝不作为持久化或 RPC 权威。
 export interface ConversationMessage {
+  // Exact V1 interaction rendered separately from human prompts and assistant task completion.
+  // 精确 V1 交互，与人类提示词及助手任务完成分开展示。
+  agentInteraction?: ConversationAgentInteraction;
   // Stable presentation identity derived from the V1 event sequence.
   // 从 V1 事件序号派生的稳定展示身份。
   id: string;

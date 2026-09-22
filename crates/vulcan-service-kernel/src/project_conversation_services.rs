@@ -3,8 +3,14 @@
 
 use super::*;
 
+mod collaboration_grants;
 mod conversation_services;
 mod project_services;
+
+pub(super) use collaboration_grants::{
+    service_add_collaboration_grant, service_list_collaboration_grants,
+    service_remove_collaboration_grant,
+};
 
 pub(super) use conversation_services::{
     service_archive_conversation, service_delete_archived_conversations,
@@ -320,7 +326,7 @@ fn begin_lifecycle_transition(
 ) -> Result<SessionTurnAdmissionGuard, String> {
     // reserved_session_ids deduplicates project membership before validation and reservation.
     // reserved_session_ids 在校验与预留前去重项目成员关系。
-    let reserved_session_ids = session_ids.into_iter().collect::<BTreeSet<_>>();
+    let mut reserved_session_ids = session_ids.into_iter().collect::<BTreeSet<_>>();
     // reserved_project_scopes deduplicates exact project targets before validation and reservation.
     // reserved_project_scopes 在校验与预留前去重精确项目目标。
     let reserved_project_scopes = project_ids
@@ -333,9 +339,45 @@ fn begin_lifecycle_transition(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // Completed parents can still own active descendants; use canonical runtime edges rather than the visible list.
+    // 已完成父任务仍可能拥有活动后代；使用规范运行时父边，而非可见列表。
+    if let Some(runtime) = &guard.agent_runtime {
+        // This snapshot includes completed business records with independent auxiliary work.
+        // 此快照包含拥有独立辅助工作的已完成业务记录。
+        let registry = runtime.task_runtime.subagent_registry_snapshot()?;
+        // Every target can be either an indexed root or an embedded subtree root.
+        // 每个目标既可以是索引根，也可以是嵌入子树根。
+        let mut pending = reserved_session_ids.iter().copied().collect::<Vec<_>>();
+        while let Some(parent) = pending.pop() {
+            for child in registry.list_for_parent(parent.into()) {
+                if reserved_session_ids.insert(child.session_id.as_uuid()) {
+                    pending.push(child.session_id.as_uuid());
+                }
+            }
+        }
+    }
+    if let Some(child) = crate::agent_collaboration::child_maintenance::lifecycle_conflict(
+        &guard,
+        &reserved_session_ids,
+        &reserved_project_scopes,
+    ) {
+        return Err(format!(
+            "子会话 `{child}` 正在维护上下文或等待可靠清理，请先停止后再{action_label}。"
+        ));
+    }
     for session_id in &reserved_session_ids {
+        // Embedded business runs are owned by TaskRuntime rather than a main-session kernel slot.
+        // 嵌入业务运行由 TaskRuntime 持有，而非主会话内核槽位。
+        let child_is_running = match &guard.agent_runtime {
+            Some(runtime) => runtime.task_runtime.is_task_running(*session_id)?,
+            None => false,
+        };
         if webui_session_kernel_has_active_turn(&guard, *session_id)
             || webui_session_has_active_run(&guard, *session_id)
+            || guard
+                .child_question_execution_owners
+                .contains_key(session_id)
+            || child_is_running
         {
             return Err(format!(
                 "会话 `{session_id}` 正在运行，请先停止后再{action_label}。"

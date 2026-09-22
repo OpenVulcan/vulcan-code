@@ -10,7 +10,10 @@
 //! 必须由调用方的意图前恢复路径处理。
 
 use super::*;
-use crate::v1::config::{TerminalSettlementRecord, TerminalSettlementState};
+use crate::v1::collaboration::CollaborationQuestionExecutionState;
+use crate::v1::config::{
+    TerminalSettlementRecord, TerminalSettlementScope, TerminalSettlementState,
+};
 
 impl SessionDocument {
     /// Returns the durable terminal settlement intent, if one is still open.
@@ -38,8 +41,14 @@ impl SessionDocument {
                 session_id: self.metadata.session_id.clone(),
             });
         }
+        self.terminal_settlement_has_terminal_fact(&record)?;
         if let Some(existing) = self.metadata.input_state.terminal_settlement.as_ref() {
-            if existing.settlement_id == record.settlement_id {
+            if existing.settlement_id == record.settlement_id
+                && existing.turn_id == record.turn_id
+                && existing.scope == record.scope
+                && existing.owner_generation == record.owner_generation
+                && existing.reason_code == record.reason_code
+            {
                 return Ok(IdempotentMutation::Idempotent(existing.state));
             }
             return Err(DomainError::TerminalSettlementConflict {
@@ -97,6 +106,11 @@ impl SessionDocument {
                 settlement_id: settlement_id.to_owned(),
             });
         }
+        if !self.terminal_settlement_has_terminal_fact(existing)? {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "terminal_settlement.missing_terminal_fact",
+            });
+        }
         self.metadata.input_state.terminal_settlement = None;
         self.touch_metadata_only_revision(now_ms);
         Ok(IdempotentMutation::Committed(()))
@@ -113,6 +127,49 @@ impl SessionDocument {
         self.events.iter().any(|event| {
             event.turn_id == Some(turn_id) && matches!(event.event, EventBody::TurnStats(_))
         })
+    }
+
+    /// Checks the exact scope's completion proof without conflating an auxiliary attempt with its parent.
+    /// 检查精确范围的完成凭据，不混淆辅助尝试及其父回合。
+    /// `record` identifies the session, turn and execution; returns whether its terminal fact exists.
+    /// `record` 标识会话、回合及执行；返回其终态事实是否存在。
+    pub fn terminal_settlement_has_terminal_fact(
+        &self,
+        record: &TerminalSettlementRecord,
+    ) -> Result<bool, DomainError> {
+        if record.session_id != self.metadata.session_id {
+            return Err(DomainError::TerminalSettlementSessionMismatch {
+                session_id: self.metadata.session_id.clone(),
+            });
+        }
+        match &record.scope {
+            TerminalSettlementScope::BusinessTurn => {
+                Ok(self.turn_has_terminal_fact(record.turn_id))
+            }
+            TerminalSettlementScope::QuestionExecution { execution_id, .. } => {
+                // Execution identity, not the latest physical activity, owns auxiliary settlement.
+                // 执行身份而非最新物理活动拥有辅助结算。
+                let execution = self
+                    .collaboration_state()
+                    .question_executions
+                    .get(execution_id)
+                    .ok_or_else(|| DomainError::CollaborationNotFound {
+                        kind: "question_execution",
+                        identity: execution_id.as_str().to_string(),
+                    })?;
+                if execution.execution_turn_id.or(execution.parent_turn_id) != Some(record.turn_id)
+                {
+                    return Err(DomainError::CollaborationStateViolation {
+                        field: "terminal_settlement.question_turn",
+                    });
+                }
+                Ok(
+                    execution.state == CollaborationQuestionExecutionState::Completed
+                        && (execution.execution_turn_id.is_none()
+                            || self.turn_has_terminal_fact(record.turn_id)),
+                )
+            }
+        }
     }
 
     /// Publishes one metadata-only revision for the settlement intent transition.

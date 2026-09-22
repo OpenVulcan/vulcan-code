@@ -31,6 +31,7 @@ use crate::model::SessionTurnUsageSegmentKind;
 use crate::model::{SessionId, SessionTurnUsageSegment};
 use crate::provider_config::{PersistedPromptSkillState, ProviderConfigurationFile};
 use async_stream::stream;
+use collaboration_lifecycle::ChildTaskLifecycleBinding;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -47,6 +48,7 @@ use tokio::sync::{
 };
 use tokio::task::AbortHandle;
 use uuid::Uuid;
+use vulcan_ai_contract::HostMessageKind;
 use vulcan_context::{ContextCompactionPolicy, conversation_state_to_compaction_source_messages};
 use vulcan_context_compaction::{CompactionPlanInput, plan_context_compaction};
 #[cfg(test)]
@@ -93,11 +95,16 @@ const RUNNING_TASK_RESULT_SUMMARY: &str = "This is a running-status acknowledgem
 
 mod agent_control;
 mod arguments;
+mod business_recovery;
+mod child_request_overrides;
+pub mod collaboration_lifecycle;
 mod controller_config;
 mod invocation_methods;
 mod invocation_results;
 mod lifecycle_methods;
 mod parent_events;
+mod question_request;
+mod question_reservation;
 mod request_records;
 mod runtime_execution;
 mod runtime_launch;
@@ -108,6 +115,7 @@ mod tool_surface;
 
 use agent_control::*;
 use arguments::*;
+use child_request_overrides::*;
 use controller_config::*;
 use invocation_results::*;
 use parent_events::*;
@@ -118,6 +126,8 @@ use status_events::*;
 use tool_surface::*;
 
 pub(crate) use parent_events::build_task_execution_handler;
+pub use question_request::{restore_child_business_request, restore_child_question_request};
+pub use question_reservation::{ChildAuxiliaryExecutionGuard, ChildAuxiliaryExecutionPurpose};
 pub(crate) use tool_surface::build_subagent_tool_candidates;
 
 /// Boxed asynchronous task execution future.
@@ -465,6 +475,16 @@ struct ResolvedTaskSessionIdentifier {
 /// 当父级工具调用等待终态结果时，由某条子任务镜像输出的分离运行时事件。
 #[derive(Debug, Clone)]
 pub enum DetachedTaskRuntimeEvent {
+    /// Explicit startup termination emitted after the exact active lease has been released.
+    /// 在精确活动租约释放后发出的明确启动终止事件。
+    StartupAborted {
+        /// Original direct parent captured by the startup request.
+        /// 启动请求捕获的原直接父会话。
+        parent_session_id: SessionId,
+        /// Host-produced failure feedback preserving the original request identity and cause.
+        /// 保留原请求身份与原因的宿主失败反馈。
+        event: RuntimeEvent,
+    },
     /// Child-session execution event that should be projected into the dedicated subagent transcript surface.
     /// 应投影到独立子代理转录界面中的子会话执行事件。
     ChildExecution(ExecutionStreamEvent),
@@ -575,6 +595,12 @@ pub struct TaskPendingMessage {
 /// 等待子代理安全边界消费的一条代理间消息。
 #[derive(Debug, Clone)]
 struct QueuedInterAgentMessage {
+    /// Typed host message kind selected by the delivery mode at admission.
+    /// 在接纳阶段根据投递模式选择的类型化宿主消息种类。
+    kind: HostMessageKind,
+    /// Stable task identity owned by this concrete delivery execution.
+    /// 由本次具体投递执行持有的稳定任务身份。
+    task_id: String,
     /// Whether the message is eligible at the next physical request boundary.
     /// 消息是否应在下一次物理请求边界被消费。
     steering: bool,
@@ -696,6 +722,19 @@ impl Drop for ActiveTaskRunGuard {
 }
 
 impl ActiveTaskRunGuard {
+    /// Releases this exact run in place while retaining ownership if a registry failure needs retry.
+    /// 原地释放此精确运行，在注册表失败需要重试时保留所有权。
+    /// Returns success for an already released lease or after exact-generation removal.
+    /// 已释放租约或精确代次删除之后返回成功。
+    pub(crate) fn release_in_place(&mut self) -> Result<(), String> {
+        if !self.released {
+            self.runtime
+                .remove_active_task_run(self.task_id, self.run_id)?;
+            self.released = true;
+        }
+        Ok(())
+    }
+
     /// Explicitly releases the exact active-run reservation owned by this guard.
     /// 显式释放本守卫拥有的精确活动运行预留。
     ///
@@ -704,10 +743,7 @@ impl ActiveTaskRunGuard {
     /// Success when the owned reservation is absent or removed, otherwise a registry-lock error.
     /// 所属预留已不存在或已移除时返回成功，否则返回注册表锁错误。
     pub(crate) fn release(mut self) -> Result<(), String> {
-        self.runtime
-            .remove_active_task_run(self.task_id, self.run_id)?;
-        self.released = true;
-        Ok(())
+        self.release_in_place()
     }
 
     /// Attaches the provider abort handle to this exact reserved run.
@@ -732,6 +768,10 @@ impl ActiveTaskRunGuard {
 /// 为控制器会话捕获的共享执行上下文，使子任务运行能够复用普通运行时准备桥。
 #[derive(Clone)]
 pub(crate) struct TaskExecutionRuntimeContext {
+    /// Captured business settings used only while recovering this exact execution.
+    /// 仅恢复精确执行期间使用的已捕获业务设置。
+    pub(crate) recovered_child_profile:
+        Option<vulcan_session_core::v1::child_execution::ChildExecutionProfile>,
     /// Provider configuration snapshot used by the parent execution.
     /// 父级执行使用的供应商配置快照。
     pub(crate) config: ProviderConfigurationFile,
@@ -764,6 +804,7 @@ impl TaskExecutionRuntimeContext {
         let agent_prompt_snapshot =
             fixed_agent_prompt_snapshot_for_request(&foundation, &request_template);
         Self {
+            recovered_child_profile: None,
             config,
             foundation,
             luaskills_runtime,
@@ -1048,6 +1089,12 @@ pub struct TaskRuntime {
     /// Active child-task abort handles keyed by stable task identifier.
     /// 按稳定任务标识索引存储的活动子任务中止句柄。
     active_task_runs: RwLock<HashMap<SessionId, ActiveTaskRunEntry>>,
+    /// Auxiliary execution owners excluded from business-task completion accounting.
+    /// 不参与业务任务完成计数的辅助执行所有者。
+    auxiliary_execution_reservations: RwLock<HashMap<SessionId, Uuid>>,
+    /// Per-execution durable collaboration bindings supplied by the trusted tool invocation.
+    /// 按具体执行保存由可信工具调用提供的可靠协作绑定。
+    collaboration_lifecycle_bindings: RwLock<HashMap<String, ChildTaskLifecycleBinding>>,
     /// Per-task transaction locks serializing preparation ownership and execution state commits.
     /// 按任务串行化准备所有权与执行状态提交的事务锁。
     task_execution_state_locks: Mutex<HashMap<SessionId, Weak<Mutex<()>>>>,

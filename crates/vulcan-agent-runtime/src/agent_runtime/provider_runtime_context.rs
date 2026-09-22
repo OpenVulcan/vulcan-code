@@ -14,12 +14,20 @@ use crate::agent_runtime::provider_prompt_loader::{
 use crate::provider_config::{
     PersistedPromptConfiguration, load_project_configuration_file, project_configuration_file_path,
 };
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
-use vulcan_core::types::ProviderPromptLayers as CoreProviderPromptLayers;
+use vulcan_ai_contract::{HOST_MESSAGE_GUIDANCE, HostMessageEnvelope, HostMessageKind};
+use vulcan_context::runtime_host::RuntimeHostEventMetadata;
+use vulcan_core::types::{
+    ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
+    ConversationRecord as CoreConversationRecord, ConversationSnapshot as CoreConversationSnapshot,
+    ProviderPromptLayers as CoreProviderPromptLayers,
+    TranscriptRecordKind as CoreTranscriptRecordKind, TranscriptRole as CoreTranscriptRole,
+};
 use vulcan_hooks::{SystemPromptHookBaselineKind, SystemPromptHookBlock};
 use vulcan_prompt_composer::{
     AdditionalPromptSegment, AgentPromptSnapshot, DEFAULT_PROJECT_RULES_FILE_NAME,
@@ -95,6 +103,48 @@ pub(crate) struct RuntimePromptLayers {
     /// Canonical context-generation baseline projected from producer-owned typed provenance.
     /// 根据生产者持有的强类型来源投影出的规范上下文代际基线。
     pub(crate) locked_baseline: LockedBaselineProjection,
+    /// Ordered non-V1 host events produced from this prompt assembly.
+    /// 从本次提示词装配生产的有序非 V1 宿主事件。
+    pub(crate) host_events: Vec<RuntimeHostEventCandidate>,
+}
+
+/// One typed host event candidate waiting for canonical User-history synchronization.
+/// 等待同步到规范 User 历史的一条强类型宿主事件候选。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeHostEventCandidate {
+    /// Stable producer-owned source identity, independent from body content.
+    /// 与正文内容无关、由生产者持有的稳定来源身份。
+    pub(crate) source_id: String,
+    /// Host source label rendered into the envelope.
+    /// 渲染到信封中的宿主来源标签。
+    pub(crate) source: String,
+    /// Provider-facing target identity.
+    /// 面向 Provider 的目标身份。
+    pub(crate) target: String,
+    /// Optional logical task association.
+    /// 可选的逻辑任务关联。
+    pub(crate) task_id: Option<String>,
+    /// Scope in which the event takes effect.
+    /// 事件生效的作用域。
+    pub(crate) scope: String,
+    /// Untrusted host-provided body.
+    /// 宿主提供的不可信事件正文。
+    pub(crate) body: String,
+    /// Stable occurrence identity supplied by a stateful producer when already allocated.
+    /// 已由有状态生产者分配时携带的稳定发生点身份。
+    pub(crate) occurrence_id: Option<String>,
+    /// Producer-owned raw-body hash used for version comparison.
+    /// 用于版本比较的生产者原始正文哈希。
+    pub(crate) content_hash: Option<String>,
+    /// Existing event identity for an expiration marker, if this is one.
+    /// 若为失效标记，则携带已有的事件身份。
+    pub(crate) event_id: Option<String>,
+    /// Semantic host-message kind.
+    /// 宿主消息的语义种类。
+    pub(crate) kind: HostMessageKind,
+    /// Whether this event invalidates an earlier occurrence of the same source.
+    /// 此事件是否使同一来源的较早发生点失效。
+    pub(crate) expires_source: bool,
 }
 
 impl RuntimePromptLayers {
@@ -132,20 +182,456 @@ impl RuntimePromptLayers {
         // dynamic_prompt_layers 按生产者持有的来源信息过滤，使许可可以合并请求级指令且不重复锁定基线。
         let dynamic_prompt_layers =
             render_request_dynamic_prompt_layers(output, &preparation.system_prompt_hook_blocks);
-        // fallback_text supports text-only transports without inventing replacement prompt content.
-        // fallback_text 支持纯文本传输，同时不虚构替代提示内容。
-        let fallback_text = if provider_layers.is_empty() {
+        // fallback_text contains only the producer-declared stable baseline; dynamic material is emitted as User events by the non-V1 transport.
+        // fallback_text 只包含生产者声明的稳定基线；动态内容由非 V1 传输层作为 User 事件发送。
+        let stable_provider_layers =
+            render_locked_runtime_prompt_layers(output, &preparation.system_prompt_hook_blocks);
+        let fallback_text = if stable_provider_layers.is_empty() {
             build_legacy_runtime_system_preamble(preparation)?
         } else {
-            provider_layers.render_fallback_system_prompt()
+            stable_provider_layers.render_fallback_system_prompt()
         };
+        let host_events =
+            build_runtime_prompt_host_events(output, &preparation.system_prompt_hook_blocks);
         Ok(Self {
             fallback_text,
             provider_layers,
             dynamic_prompt_layers,
             locked_baseline,
+            host_events,
         })
     }
+}
+
+/// Builds typed host-event candidates without collapsing them into a request-local prefix.
+/// 构建强类型宿主事件候选，不将其折叠为请求局部前缀。
+fn build_runtime_prompt_host_events(
+    output: &PromptAssemblyOutput,
+    hook_blocks: &[SystemPromptHookBlock],
+) -> Vec<RuntimeHostEventCandidate> {
+    let mut candidates = Vec::new();
+    for segments in [
+        output.system_segments.as_slice(),
+        output.developer_segments.as_slice(),
+        output.user_segments.as_slice(),
+        output.tool_metadata_segments.as_slice(),
+    ] {
+        for segment in segments {
+            let body = segment.body.trim();
+            if body.is_empty() {
+                continue;
+            }
+            if segment.baseline_provenance.is_some() && segment.target != PromptTarget::User {
+                continue;
+            }
+            let source_id = if let Some(provenance) = segment.baseline_provenance.as_ref() {
+                format!(
+                    "prompt-baseline:{}:{}",
+                    provenance.source_id, segment.node_id
+                )
+            } else {
+                format!("prompt-dynamic:{}", segment.node_id)
+            };
+            let source = if segment.source_label.trim().is_empty() {
+                String::from("prompt")
+            } else {
+                segment.source_label.clone()
+            };
+            candidates.push(RuntimeHostEventCandidate {
+                source_id,
+                source,
+                target: String::from("model"),
+                task_id: None,
+                scope: if segment.baseline_provenance.is_some() {
+                    String::from("session")
+                } else {
+                    String::from("request")
+                },
+                body: body.to_string(),
+                occurrence_id: None,
+                content_hash: None,
+                event_id: None,
+                kind: HostMessageKind::ContextUpdate,
+                expires_source: false,
+            });
+        }
+    }
+    for block in hook_blocks {
+        if block.baseline_provenance.is_some() {
+            continue;
+        }
+        let Some(body) = render_system_prompt_hook_block(block) else {
+            continue;
+        };
+        let source = block
+            .source
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("hook");
+        candidates.push(RuntimeHostEventCandidate {
+            source_id: format!("hook:{}:{}:{}", block.phase.as_str(), source, block.tag),
+            source: source.to_string(),
+            target: String::from("model"),
+            task_id: None,
+            scope: String::from("request"),
+            body,
+            occurrence_id: None,
+            content_hash: None,
+            event_id: None,
+            kind: HostMessageKind::ContextUpdate,
+            expires_source: false,
+        });
+    }
+    candidates
+}
+
+/// Synchronizes typed runtime host candidates into canonical User history once.
+/// 将强类型运行时宿主候选只同步一次到规范 User 历史。
+///
+/// Existing canonical messages and metadata are never rewritten. New candidates are inserted
+/// before the admitted user only while that user is still the current unsent boundary; callers
+/// pass `None` after the boundary has been sent so later events append at the end.
+/// 既有规范消息与元数据永不改写。只有在准入用户仍是未发送边界时才插入其前方；边界发送后调用方传入 `None`，后续事件追加到末尾。
+pub(crate) fn synchronize_runtime_host_events(
+    snapshot: &mut CoreConversationSnapshot,
+    candidates: &[RuntimeHostEventCandidate],
+    current_user_message_id: Option<&str>,
+) -> Result<(), String> {
+    // Only this producer's records carry its schema; malformed owned records must not be forgotten.
+    // 仅本生产者的记录承载此 Schema；格式错误的所属记录不得被忽略。
+    let mut metadata_rows = vulcan_context::runtime_host::read_runtime_host_ledger(
+        &crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state(snapshot)?,
+    )?;
+    // Stage the entire batch so a later identity conflict cannot publish a partial projection.
+    // 暂存整个批次，避免后续身份冲突发布部分投影。
+    let mut staged_messages: Vec<CoreConversationMessage> = Vec::new();
+    let mut staged_records = Vec::new();
+    // The caller supplies the admitted unsent user boundary; absent boundaries append at the tail.
+    // 调用方提供已准入且未发送的用户边界；未提供边界时追加到尾部。
+    let insertion_index = match current_user_message_id {
+        Some(message_id) => snapshot
+            .messages
+            .iter()
+            .position(|message| message.id == message_id)
+            .ok_or_else(|| format!("Runtime host insertion boundary `{message_id}` is missing."))?,
+        None => snapshot.messages.len(),
+    };
+
+    for candidate in candidates {
+        // Preserve the existing normalized envelope body while retaining the producer's original content hash.
+        // 保留既有信封正文规范化规则，同时保留生产者原始内容哈希。
+        let body = candidate.body.trim();
+        if body.is_empty() {
+            continue;
+        }
+        let body_hash = candidate
+            .content_hash
+            .clone()
+            .unwrap_or_else(|| hex::encode(Sha256::digest(body.as_bytes())));
+        // Render with an explicit event identity; expiry events reference an occurrence without reusing its event.
+        // 使用明确事件身份渲染；失效事件引用发生点，但不复用其事件身份。
+        let envelope_for_event = |event_id: &str| HostMessageEnvelope {
+            event_id: event_id.to_string(),
+            kind: candidate.kind,
+            source: candidate.source.clone(),
+            target: candidate.target.clone(),
+            task_id: candidate.task_id.clone(),
+            question_id: None,
+            scope: candidate.scope.clone(),
+            body: body.to_string(),
+        };
+        let render_event = |event_id: &str| envelope_for_event(event_id).render();
+        // Exact rendered bytes also protect routing and scope, which a body hash alone cannot authenticate.
+        // 精确渲染字节同时保护路由和作用域，单独正文哈希无法确认这些字段。
+        let matches_message = |metadata: &RuntimeHostEventMetadata, rendered: &str| {
+            if !metadata
+                .envelope
+                .render()
+                .is_ok_and(|expected| expected == rendered)
+            {
+                return false;
+            }
+            let message_id = metadata.message_id();
+            let mut matches = snapshot
+                .messages
+                .iter()
+                .chain(staged_messages.iter())
+                .filter(|message| message.id == message_id);
+            let first = matches.next();
+            if metadata.compacted_out {
+                // Only a committed compaction fact permits an absent event; exact replay never restores it.
+                // 仅已提交的压缩事实允许事件缺失；精确重放不会恢复该事件。
+                return first.is_none();
+            }
+            matches.next().is_none()
+                && first.is_some_and(|message| {
+                    matches!(
+                        &message.payload,
+                        CoreConversationPayload::UserText { text, attachments }
+                            if text == rendered && attachments.is_empty()
+                    )
+                })
+        };
+        // Only snapshot-style producers without occurrence identities may coalesce identical current values.
+        // 只有不提供发生点身份的快照型生产者可以合并相同当前值。
+        let latest_source = metadata_rows
+            .iter()
+            .filter(|metadata| metadata.source_id == candidate.source_id)
+            .max_by_key(|metadata| metadata.occurrence);
+        if candidate.occurrence_id.is_none()
+            && candidate.event_id.is_none()
+            && !candidate.expires_source
+        {
+            if let Some(latest) = metadata_rows
+                .iter()
+                .filter(|metadata| {
+                    metadata.source_id == candidate.source_id && !metadata.expires_source
+                })
+                .max_by_key(|metadata| metadata.occurrence)
+            {
+                if latest.body_hash == body_hash
+                    && !metadata_rows.iter().any(|event| {
+                        event.expires_source && event.occurrence_id == latest.occurrence_id
+                    })
+                    && matches_message(latest, &render_event(&latest.event_id)?)
+                {
+                    continue;
+                }
+            }
+        }
+        // Source sequence orders physical events, while occurrence identity binds update and expiry together.
+        // 来源序号排序物理事件，发生点身份则关联更新及其失效事件。
+        let occurrence = latest_source
+            .map_or(0, |metadata| metadata.occurrence)
+            .checked_add(1)
+            .ok_or_else(|| String::from("Runtime host occurrence sequence exhausted."))?;
+        let occurrence_id = candidate.occurrence_id.clone().unwrap_or_else(|| {
+            format!(
+                "runtime-host:{}:{occurrence}",
+                source_identity_hash(&candidate.source_id)
+            )
+        });
+        let event_id = candidate
+            .event_id
+            .clone()
+            .unwrap_or_else(|| occurrence_id.clone());
+        let rendered = render_event(&event_id)?;
+        // Replay is keyed by the event, not by the occurrence shared with its expiration marker.
+        // 重放按事件去重，不按与失效标记共享的发生点去重。
+        if let Some(existing) = metadata_rows
+            .iter()
+            .find(|metadata| metadata.event_id == event_id)
+        {
+            if existing.source_id != candidate.source_id
+                || existing.occurrence_id != occurrence_id
+                || existing.body_hash != body_hash
+                || existing.expires_source != candidate.expires_source
+                || !matches_message(existing, &rendered)
+            {
+                return Err(format!(
+                    "Runtime host event `{event_id}` was reused with different metadata or content."
+                ));
+            }
+            continue;
+        }
+        // One occurrence has one update; distinct withdrawal and late TTL events may invalidate it independently.
+        // 一个发生点只有一个更新；独立撤下和迟到 TTL 事件可以分别使其失效。
+        if metadata_rows.iter().any(|metadata| {
+            metadata.occurrence_id == occurrence_id
+                && (metadata.source_id != candidate.source_id
+                    || (!metadata.expires_source && !candidate.expires_source))
+        }) {
+            return Err(format!(
+                "Runtime host occurrence `{occurrence_id}` was reused with a different event identity."
+            ));
+        }
+        let message_id = format!("runtime-host:{event_id}");
+        if snapshot
+            .messages
+            .iter()
+            .chain(staged_messages.iter())
+            .any(|message| message.id == message_id)
+        {
+            return Err(format!(
+                "Runtime host message `{message_id}` has no matching metadata."
+            ));
+        }
+        // Store the raw event identity consistently; the transport message prefix belongs only to message IDs.
+        // 一致保存原始事件身份；传输消息前缀仅属于消息 ID。
+        let envelope = envelope_for_event(&event_id);
+        let metadata = RuntimeHostEventMetadata {
+            version: 1,
+            source_id: candidate.source_id.clone(),
+            occurrence,
+            occurrence_id,
+            body_hash,
+            event_id,
+            expires_source: candidate.expires_source,
+            envelope,
+            compacted_out: false,
+        };
+        // Validate required ledger fields before publishing any part of the candidate batch.
+        // 发布候选批次的任何部分前校验必需账本字段。
+        let metadata_value = serde_json::to_value(&metadata)
+            .map_err(|error| format!("Runtime host metadata serialization failed: {error}"))?;
+        RuntimeHostEventMetadata::decode(&metadata.record_id(), Some(&metadata_value))?;
+        staged_records.push(CoreConversationRecord {
+            id: metadata.record_id(),
+            role: CoreTranscriptRole::User,
+            record_kind: CoreTranscriptRecordKind::ProjectionOnly,
+            visible: false,
+            title: String::from("Runtime host context"),
+            body: body.to_string(),
+            metadata: Some(metadata_value),
+            created_at: String::from("0"),
+        });
+        staged_messages.push(CoreConversationMessage {
+            id: message_id,
+            payload: CoreConversationPayload::UserText {
+                text: rendered,
+                attachments: Vec::new(),
+            },
+        });
+        metadata_rows.push(metadata);
+    }
+    // Publish only after every candidate has passed identity and envelope validation.
+    // 仅在全部候选通过身份与信封校验后发布。
+    snapshot
+        .messages
+        .splice(insertion_index..insertion_index, staged_messages);
+    snapshot.records.extend(staged_records);
+    Ok(())
+}
+
+/// Synchronizes one complete business request or one explicitly partial auxiliary request atomically.
+/// 原子同步一个完整业务请求或一个明确局部的辅助请求。
+/// `snapshot` is canonical history, `candidates` come from the completed prompt/injection assembly,
+/// `purpose` determines source-list authority, and `current_user_message_id` is an unsent boundary only.
+/// `snapshot` 是规范历史，`candidates` 来自完成的提示/注入装配，`purpose` 决定清单权威，
+/// `current_user_message_id` 仅表示尚未发送的边界。
+/// Returns success after one commit or an explicit conflict without partially publishing updates or withdrawals.
+/// 一次提交后返回成功；冲突时不发布部分更新或撤下消息。
+pub(crate) fn synchronize_runtime_host_request_context(
+    snapshot: &mut CoreConversationSnapshot,
+    candidates: &[RuntimeHostEventCandidate],
+    current_user_message_id: Option<&str>,
+    purpose: ExecutionPromptPurpose,
+) -> Result<(), String> {
+    match purpose {
+        ExecutionPromptPurpose::QuestionExecution
+        | ExecutionPromptPurpose::ContextCompaction
+        | ExecutionPromptPurpose::ContextCompactionCachePreserving
+        | ExecutionPromptPurpose::GitCommitSummary => {
+            return synchronize_runtime_host_events(snapshot, candidates, current_user_message_id);
+        }
+        ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::AgentTask
+        | ExecutionPromptPurpose::ExecutionRetry => {}
+    }
+    // Complete current sources must not contain two competing updates for the same producer slot.
+    // 完整当前清单不能为同一生产者槽位提供两个相互竞争的更新。
+    let mut current_sources = std::collections::BTreeMap::new();
+    for candidate in candidates
+        .iter()
+        .filter(|candidate| !candidate.expires_source)
+    {
+        if current_sources
+            .insert(candidate.source_id.as_str(), candidate)
+            .is_some()
+        {
+            return Err(format!(
+                "Complete runtime host context has duplicate source `{}`.",
+                candidate.source_id
+            ));
+        }
+    }
+    let mut staged = snapshot.clone();
+    synchronize_runtime_host_events(&mut staged, candidates, current_user_message_id)?;
+    let ledger = vulcan_context::runtime_host::read_runtime_host_ledger(
+        &crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state(&staged)?,
+    )?;
+    let active_ids = vulcan_context::runtime_host::active_runtime_host_message_ids(&ledger);
+    let active_sources = ledger
+        .iter()
+        .filter(|row| active_ids.contains(&row.message_id()))
+        .map(|row| (row.source_id.as_str(), row))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for (source, candidate) in &current_sources {
+        let active = active_sources.get(source).ok_or_else(|| format!("Current runtime host source `{source}` refers to an already invalidated occurrence."))?;
+        if candidate
+            .occurrence_id
+            .as_ref()
+            .is_some_and(|occurrence| occurrence != &active.occurrence_id)
+        {
+            return Err(format!(
+                "Current runtime host source `{source}` does not match its active occurrence."
+            ));
+        }
+    }
+    // Withdraw only previously active sources absent from this complete inventory, preserving their original route.
+    // 仅撤下完整清单中缺失的既有有效来源，并保留其原始路由。
+    let withdrawn = active_sources.iter().filter(|(_, row)| !current_sources.contains_key(row.source_id.as_str()))
+        .map(|(_, row)| RuntimeHostEventCandidate {
+            source_id: row.source_id.clone(), source: row.envelope.source.clone(),
+            target: row.envelope.target.clone(), task_id: row.envelope.task_id.clone(), scope: row.envelope.scope.clone(),
+            body: format!("This context source has been withdrawn. Stop applying event `{}` (occurrence `{}`).", row.event_id, row.occurrence_id),
+            occurrence_id: Some(row.occurrence_id.clone()), content_hash: Some(row.body_hash.clone()),
+            event_id: Some(format!("context-withdrawn:{}", row.event_id)), kind: HostMessageKind::ContextExpired,
+            expires_source: true,
+        }).collect::<Vec<_>>();
+    synchronize_runtime_host_events(&mut staged, &withdrawn, current_user_message_id)?;
+    *snapshot = staged;
+    Ok(())
+}
+
+/// Hashes only the typed producer identity used to namespace generated event IDs.
+/// 仅对用于生成事件 ID 命名空间的强类型生产者身份做哈希。
+fn source_identity_hash(source_id: &str) -> String {
+    hex::encode(Sha256::digest(source_id.as_bytes()))
+}
+
+/// Converts producer-owned context blocks and expiration facts into typed runtime candidates.
+/// 将生产者持有的上下文块与失效事实转换为强类型运行时候选。
+pub(crate) fn runtime_context_host_event_candidates(
+    injection: &vulcan_core::types::ProviderContextInjection,
+) -> Vec<RuntimeHostEventCandidate> {
+    let mut candidates = injection
+        .host_blocks
+        .iter()
+        .map(|block| RuntimeHostEventCandidate {
+            source_id: block.source_id.clone(),
+            source: block.source.clone(),
+            target: block.target.clone(),
+            task_id: block.task_id.clone(),
+            scope: block.scope.clone(),
+            body: block.body.clone(),
+            occurrence_id: Some(block.occurrence_id.clone()),
+            content_hash: block.content_hash.clone(),
+            event_id: None,
+            kind: HostMessageKind::ContextUpdate,
+            expires_source: false,
+        })
+        .collect::<Vec<_>>();
+    candidates.extend(
+        injection
+            .expired_events
+            .iter()
+            .map(|event| RuntimeHostEventCandidate {
+                source_id: event.source_id.clone(),
+                source: event.source.clone(),
+                target: event.target.clone(),
+                task_id: None,
+                scope: event.scope.clone(),
+                body: event.body.clone(),
+                occurrence_id: Some(event.occurrence_id.clone()),
+                content_hash: Some(event.content_hash.clone()),
+                event_id: Some(event.event_id.clone()),
+                kind: HostMessageKind::ContextExpired,
+                expires_source: true,
+            }),
+    );
+    candidates
 }
 
 /// Builds the prompt-composer input used by the runtime bridge.
@@ -248,7 +734,9 @@ fn prompt_assembly_mode_for_preparation(preparation: &ExecutionPreparation) -> P
     }
     match preparation.prompt_purpose {
         ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::AgentTask
         | ExecutionPromptPurpose::ExecutionRetry
+        | ExecutionPromptPurpose::QuestionExecution
         | ExecutionPromptPurpose::ContextCompactionCachePreserving => PromptAssemblyMode::Primary,
         ExecutionPromptPurpose::ContextCompaction => PromptAssemblyMode::ContextCompactionMinimal,
         ExecutionPromptPurpose::GitCommitSummary => PromptAssemblyMode::ContextCompactionMinimal,
@@ -262,7 +750,9 @@ fn build_prompt_purpose_developer_segments(
 ) -> Vec<AdditionalPromptSegment> {
     match purpose {
         ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::AgentTask
         | ExecutionPromptPurpose::ExecutionRetry
+        | ExecutionPromptPurpose::QuestionExecution
         | ExecutionPromptPurpose::ContextCompactionCachePreserving => Vec::new(),
         ExecutionPromptPurpose::ContextCompaction => vec![AdditionalPromptSegment::dynamic(
             "Context Compaction Contract",
@@ -322,6 +812,66 @@ fn render_runtime_prompt_layers(output: &PromptAssemblyOutput) -> CoreProviderPr
         tool_guidance: output.render_tool_metadata_text(),
         runtime_context: output.render_user_text(),
     }
+}
+
+/// Renders only producer-declared baseline segments for the stable provider prefix.
+/// 仅渲染生产者声明的基线片段，作为稳定 Provider 前缀。
+///
+/// # Parameters
+/// # 参数
+/// - `output`: The ordered composer output whose baseline provenance is authoritative.
+/// - `output`：基线来源信息具有权威性的有序组合器输出。
+/// - `hook_blocks`: Hook blocks emitted for the same prompt assembly.
+/// - `hook_blocks`：同一次提示词装配生成的 Hook 块。
+///
+/// # Returns
+/// # 返回值
+/// Returns stable layers without request-dynamic context or hook text.
+/// 返回不含请求动态上下文或 Hook 文本的稳定层。
+fn render_locked_runtime_prompt_layers(
+    output: &PromptAssemblyOutput,
+    hook_blocks: &[SystemPromptHookBlock],
+) -> CoreProviderPromptLayers {
+    let mut layers = CoreProviderPromptLayers {
+        system: render_locked_prompt_segments(&output.system_segments),
+        developer: render_locked_prompt_segments(&output.developer_segments),
+        tool_guidance: render_locked_prompt_segments(&output.tool_metadata_segments),
+        // User-targeted host baseline text is emitted as a User event by non-V1 transport.
+        // 面向 User 的宿主基线文本由非 V1 传输层作为 User 事件发送。
+        runtime_context: String::new(),
+    };
+    let baseline_hook_region = render_system_prompt_hook_region(
+        &hook_blocks
+            .iter()
+            .filter(|block| block.baseline_provenance.is_some())
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
+    append_prompt_text(&mut layers.system, &baseline_hook_region);
+    append_prompt_text(&mut layers.system, HOST_MESSAGE_GUIDANCE);
+    layers
+}
+
+/// Joins only prompt segments with typed baseline provenance.
+/// 仅拼接带有强类型基线来源的提示词片段。
+///
+/// # Parameters
+/// # 参数
+/// - `segments`: Ordered prompt segments for one target layer.
+/// - `segments`：一个目标层的有序提示词片段。
+///
+/// # Returns
+/// # 返回值
+/// Returns the non-empty baseline segment bodies in source order.
+/// 按来源顺序返回非空基线片段正文。
+fn render_locked_prompt_segments(segments: &[PromptSegment]) -> String {
+    segments
+        .iter()
+        .filter(|segment| segment.baseline_provenance.is_some())
+        .map(|segment| segment.body.as_str())
+        .filter(|body| !body.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Renders only request-dynamic prompt segments from one composer output.
@@ -866,25 +1416,14 @@ fn load_workspace_project_prompt_configuration(
 /// Returns rendered legacy transport text, or the exact provider prompt resource failure.
 /// 返回渲染后的旧传输文本，或精确的 Provider 提示词资源失败。
 fn build_legacy_runtime_system_preamble(
-    preparation: &ExecutionPreparation,
+    _preparation: &ExecutionPreparation,
 ) -> Result<String, String> {
     // provider_prompt comes from the same unique resource contract as structured composition.
     // provider_prompt 来自与结构化组合相同的唯一资源契约。
     let provider_prompt = load_provider_base_system_prompt()?;
-    // sections preserves legacy transport ordering without supplying compatibility content.
-    // sections 保留旧传输顺序，但不提供兼容性内容。
-    let mut sections = vec![
-        provider_prompt,
-        format!("Current workspace: {}", preparation.workspace_path),
-        format!("Current execution mode: {}", preparation.execution_mode),
-    ];
-    // hook_region is the validated runtime-owned system extension appended after base context.
-    // hook_region 是追加在基础上下文之后的已验证运行时自有系统扩展。
-    let hook_region = render_system_prompt_hook_region(&preparation.system_prompt_hook_blocks);
-    if !hook_region.is_empty() {
-        sections.push(hook_region);
-    }
-    Ok(sections.join("\n"))
+    // The legacy fallback is kept stable; workspace, mode, and dynamic hooks are User events.
+    // 旧版回退文本保持稳定；工作区、模式和动态 Hook 均作为 User 事件发送。
+    Ok([provider_prompt, HOST_MESSAGE_GUIDANCE.to_string()].join("\n\n"))
 }
 
 /// Keeps the main provider tool loop unlimited regardless of legacy agent or prompt-purpose settings.
@@ -914,6 +1453,741 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use vulcan_context::{ContextAssembly, ContextBaseline};
+
+    /// Builds one typed runtime host candidate for append-only synchronization tests.
+    /// 为追加式同步测试构建一条强类型运行时候选。
+    fn host_candidate(
+        source_id: &str,
+        body: &str,
+        occurrence_id: Option<&str>,
+        event_id: Option<&str>,
+        expires_source: bool,
+    ) -> RuntimeHostEventCandidate {
+        RuntimeHostEventCandidate {
+            source_id: source_id.to_string(),
+            source: String::from("test-host"),
+            target: String::from("model"),
+            task_id: None,
+            scope: String::from("request"),
+            body: body.to_string(),
+            occurrence_id: occurrence_id.map(str::to_string),
+            content_hash: None,
+            event_id: event_id.map(str::to_string),
+            kind: if expires_source {
+                HostMessageKind::ContextExpired
+            } else {
+                HostMessageKind::ContextUpdate
+            },
+            expires_source,
+        }
+    }
+
+    /// Verifies stable source deduplication, append-only ordering, and reappearance identity.
+    /// 验证稳定来源去重、追加式顺序以及重新出现时的新身份。
+    #[test]
+    fn runtime_host_events_preserve_prefix_and_new_occurrence_after_expiry() {
+        let mut snapshot = CoreConversationSnapshot {
+            messages: vec![CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("request"),
+                    attachments: Vec::new(),
+                },
+            }],
+            ..Default::default()
+        };
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[host_candidate("env", "one", Some("occ-1"), None, false)],
+            Some("user-1"),
+        )
+        .expect("first host event should synchronize");
+        let first_message_id = snapshot.messages[0].id.clone();
+        assert_eq!(first_message_id, "runtime-host:occ-1");
+
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[host_candidate("env", "one", Some("occ-1"), None, false)],
+            Some("user-1"),
+        )
+        .expect("same host body should deduplicate");
+        assert_eq!(snapshot.messages.len(), 2);
+
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[host_candidate(
+                "env",
+                "expired",
+                Some("occ-1"),
+                Some("expiry-1"),
+                true,
+            )],
+            Some("user-1"),
+        )
+        .expect("expiry marker should append before the unsent user");
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[host_candidate("env", "one", Some("occ-2"), None, false)],
+            Some("user-1"),
+        )
+        .expect("reappeared body should receive a new occurrence");
+        assert_eq!(snapshot.messages.len(), 4);
+        assert_eq!(snapshot.messages[0].id, first_message_id);
+        assert_ne!(snapshot.messages[0].id, snapshot.messages[2].id);
+
+        snapshot.messages.push(CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::from("answer"),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: None,
+                tool_calls: Vec::new(),
+            },
+        });
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[host_candidate("env", "later", Some("occ-3"), None, false)],
+            None,
+        )
+        .expect("later host event should append after the sent turn");
+        assert_eq!(
+            snapshot.messages.last().map(|message| message.id.as_str()),
+            Some("runtime-host:occ-3")
+        );
+        assert_eq!(snapshot.messages[0].id, first_message_id);
+    }
+
+    /// Verifies equal bodies retain distinct producer occurrences and replays never revive expired instructions.
+    /// 验证相同正文保留不同生产者发生点，且重放不会重新激活失效指令。
+    #[test]
+    fn runtime_host_events_distinguish_occurrences_and_replay_expiry() {
+        // The expiry references the original occurrence and content hash, but owns a separate event and body.
+        // 失效标记引用原发生点与内容哈希，但具有独立事件及正文。
+        let mut first = host_candidate("ttl", "remember", Some("occ-1"), None, false);
+        first.content_hash = Some(String::from("original-hash"));
+        let mut expiry = host_candidate("ttl", "expired", Some("occ-1"), Some("expiry-1"), true);
+        expiry.content_hash = first.content_hash.clone();
+        let second = host_candidate("ttl", "remember", Some("occ-2"), None, false);
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[first.clone(), second.clone(), expiry.clone()],
+            None,
+        )
+        .expect("distinct updates and expiration should coexist");
+        let before = serde_json::to_value(&snapshot).expect("snapshot serializes");
+        synchronize_runtime_host_events(&mut snapshot, &[expiry, first, second], None)
+            .expect("out-of-order retries should reuse exact events");
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), before);
+        assert_eq!(snapshot.messages.len(), 3);
+        assert_eq!(snapshot.messages[2].id, "runtime-host:expiry-1");
+    }
+
+    /// Verifies source snapshots coalesce current values while later changes append without rewriting history.
+    /// 验证来源快照合并相同当前值，后续变化仅追加而不改写历史。
+    #[test]
+    fn runtime_host_events_coalesce_only_unidentified_current_values() {
+        // The producer lacks occurrence IDs, so synchronization allocates each changed value once.
+        // 生产者不提供发生点 ID，因此同步为每次变化分配一次身份。
+        let first = host_candidate("environment", "one", None, None, false);
+        let second = host_candidate("environment", "two", None, None, false);
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[first.clone(), first.clone(), second.clone(), second],
+            None,
+        )
+        .expect("snapshot values should synchronize");
+        let original = snapshot.messages.clone();
+        synchronize_runtime_host_events(&mut snapshot, &[first], None)
+            .expect("returning value should append a new occurrence");
+        assert_eq!(snapshot.messages.len(), 3);
+        assert_eq!(&snapshot.messages[..2], original.as_slice());
+        assert_ne!(snapshot.messages[0].id, snapshot.messages[2].id);
+    }
+
+    /// Verifies failed replay validation publishes no partial batch, even when the producer hash is unchanged.
+    /// 验证重放校验失败不发布部分批次，即使生产者哈希保持不变。
+    #[test]
+    fn runtime_host_events_reject_conflicts_atomically() {
+        // Exact identity owns both rendered body and routing, independently from the supplied content hash.
+        // 精确身份同时拥有渲染正文与路由，不依赖传入内容哈希。
+        let mut original = host_candidate("ttl", "one", Some("occ-1"), None, false);
+        original.content_hash = Some(String::from("hash"));
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_events(&mut snapshot, &[original.clone()], None).unwrap();
+        let before = serde_json::to_value(&snapshot).unwrap();
+        let mut body_conflict = original.clone();
+        body_conflict.body = String::from("changed with same hash");
+        let mut routing_conflict = original.clone();
+        routing_conflict.target = String::from("another-agent");
+        let mut event_conflict = original.clone();
+        event_conflict.event_id = Some(String::from("second-update-id"));
+        for conflict in [body_conflict, routing_conflict, event_conflict] {
+            let staged = host_candidate("other", "valid", Some("other-occ"), None, false);
+            assert!(
+                synchronize_runtime_host_events(&mut snapshot, &[staged, conflict], None).is_err()
+            );
+            assert_eq!(serde_json::to_value(&snapshot).unwrap(), before);
+        }
+    }
+
+    /// Verifies unknown or missing owned metadata and a missing insertion boundary fail explicitly.
+    /// 验证未知或缺失的所属元数据及缺失插入边界明确失败。
+    #[test]
+    fn runtime_host_events_reject_unknown_projection_metadata() {
+        // Unrelated projection records are outside this producer's schema ownership.
+        // 无关投影记录不属于本生产者的 Schema 归属。
+        let candidate = host_candidate("ttl", "one", Some("occ-1"), None, false);
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_events(&mut snapshot, &[candidate.clone()], None).unwrap();
+        let mut unrelated = snapshot.records[0].clone();
+        unrelated.id = String::from("another-producer");
+        unrelated.metadata = Some(serde_json::json!({"version": 99}));
+        snapshot.records.push(unrelated);
+        synchronize_runtime_host_events(&mut snapshot, &[candidate.clone()], None).unwrap();
+        assert!(synchronize_runtime_host_events(&mut snapshot, &[], Some("missing-user")).is_err());
+        snapshot.records[0].metadata.as_mut().unwrap()["version"] = serde_json::json!(99);
+        let before = serde_json::to_value(&snapshot).unwrap();
+        assert!(
+            synchronize_runtime_host_events(&mut snapshot, &[candidate.clone()], None).is_err()
+        );
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), before);
+        snapshot.records[0].metadata = None;
+        assert!(synchronize_runtime_host_events(&mut snapshot, &[candidate], None).is_err());
+    }
+
+    /// Verifies host identity metadata survives the real record compactor and both snapshot bridges.
+    /// 验证宿主身份元数据经过真实记录压缩器和双向快照桥后仍完整保留。
+    #[test]
+    fn runtime_host_events_survive_record_compaction_and_replay() {
+        use crate::agent_runtime::provider_request_bridge_conversation::{
+            build_core_conversation_snapshot, core_snapshot_to_session_conversation_state,
+        };
+
+        // The ledger includes an expired occurrence and a newer active occurrence of the same source.
+        // 账本同时包含同一来源的过期发生点和更新的有效发生点。
+        let first = host_candidate("ttl", "remember", Some("occ-1"), None, false);
+        let expiry = host_candidate("ttl", "expired", Some("occ-1"), Some("expiry-1"), true);
+        let second = host_candidate("ttl", "new memory", Some("occ-2"), None, false);
+        let candidates = vec![first, expiry, second];
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_events(&mut snapshot, &candidates, None).expect("initial events");
+        // The existing bridge classifies ProjectionOnly records as Explore; establish that canonical baseline first.
+        // 既有桥把 ProjectionOnly 记录归类为 Explore；先建立该规范基线。
+        snapshot = build_core_conversation_snapshot(
+            &core_snapshot_to_session_conversation_state(&snapshot)
+                .expect("initial session bridge"),
+        )
+        .expect("initial core bridge");
+        let before = serde_json::to_value(&snapshot).expect("snapshot serializes");
+
+        for _ in 0..2 {
+            // Child compaction converts snapshots, compacts records, and restores the core state.
+            // 子代理压缩先转换快照，再压缩记录，最后还原核心状态。
+            let mut state =
+                core_snapshot_to_session_conversation_state(&snapshot).expect("to session");
+            vulcan_context_compaction::compact_conversation_records_after_summary(
+                &mut state,
+                "summary-anchor",
+                vulcan_context::ContextCompactionPolicy::default(),
+                |value| Some(value.clone()),
+            );
+            snapshot = build_core_conversation_snapshot(&state).expect("to core");
+            synchronize_runtime_host_events(&mut snapshot, &candidates, None)
+                .expect("compacted host events must remain replayable");
+            assert_eq!(serde_json::to_value(&snapshot).unwrap(), before);
+        }
+
+        // Preserving the ledger must not weaken route-conflict validation after compaction.
+        // 保留账本不能削弱压缩后的路由冲突校验。
+        let mut conflict = candidates[2].clone();
+        conflict.target = String::from("different-agent");
+        assert!(synchronize_runtime_host_events(&mut snapshot, &[conflict], None).is_err());
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), before);
+    }
+
+    /// Verifies real compaction excludes expired instructions, backfills active ones, and replays archived identities exactly.
+    /// 验证真实压缩排除失效指令、回填有效指令，并精确重放归档身份。
+    #[test]
+    fn runtime_host_compaction_filters_backfills_and_replays_without_resurrection() {
+        use crate::agent_runtime::provider_request_bridge_conversation::{
+            build_core_conversation_snapshot, core_snapshot_to_session_conversation_state,
+        };
+        use vulcan_context::runtime_host::prepare_runtime_host_compaction;
+        use vulcan_context::{SessionConversationMessage, SessionConversationPayload};
+        use vulcan_context_compaction::{
+            CompactionPlanInput, CompactionResult, plan_context_compaction,
+        };
+
+        // Updates precede the summarized rounds; old expiry arrives after a newer occurrence at the retained tail.
+        // 更新位于摘要轮次之前；旧失效事件晚于新发生点到达保留尾段。
+        let old = host_candidate("ttl", "old directive", Some("old"), None, false);
+        let current = host_candidate("ttl", "current directive", Some("current"), None, false);
+        let permanent = host_candidate(
+            "persistent",
+            "exact active instruction",
+            Some("persistent"),
+            None,
+            false,
+        );
+        let short = host_candidate("short", "expired directive", Some("short"), None, false);
+        let late_old_expiry =
+            host_candidate("ttl", "old expired", Some("old"), Some("expire-old"), true);
+        let short_expiry = host_candidate(
+            "short",
+            "short expired",
+            Some("short"),
+            Some("expire-short"),
+            true,
+        );
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[
+                old.clone(),
+                current.clone(),
+                permanent.clone(),
+                short.clone(),
+            ],
+            None,
+        )
+        .unwrap();
+        let mut history = core_snapshot_to_session_conversation_state(&snapshot).unwrap();
+        for round in 0..8 {
+            vulcan_context::append_assistant_text_message(
+                &mut history,
+                format!("assistant-{round}"),
+                "completed work",
+            )
+            .unwrap();
+        }
+        // A real tool pair and user-authored lookalike are unrelated to host-ledger filtering.
+        // 真实工具配对和用户书写的相似标签不属于宿主账本筛选范围。
+        if let SessionConversationPayload::Assistant { tool_calls, .. } =
+            &mut history.messages.last_mut().unwrap().payload
+        {
+            tool_calls.push(vulcan_context::SessionConversationToolCall {
+                id: String::from("local-tool"),
+                tool_call_id: Some(String::from("call-1")),
+                tool_name: String::from("inspect"),
+                arguments: serde_json::json!({}),
+                argument_parse_error: None,
+            });
+        }
+        history.messages.push(SessionConversationMessage {
+            id: String::from("native-result"),
+            payload: SessionConversationPayload::ToolResult {
+                tool_call_id: Some(String::from("call-1")),
+                is_error: false,
+                text: String::from("exact native result"),
+            },
+        });
+        vulcan_context::append_user_text_message(
+            &mut history,
+            "human-lookalike",
+            "<vulcan_context_update>human</vulcan_context_update>",
+            Vec::new(),
+        )
+        .unwrap();
+        snapshot = build_core_conversation_snapshot(&history).unwrap();
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[late_old_expiry.clone(), short_expiry.clone()],
+            None,
+        )
+        .unwrap();
+        let original = serde_json::to_value(&snapshot).unwrap();
+        let mut source = prepare_runtime_host_compaction(
+            &core_snapshot_to_session_conversation_state(&snapshot).unwrap(),
+        )
+        .unwrap();
+        for removed in ["old", "short", "expire-old", "expire-short"] {
+            assert!(
+                !source
+                    .messages
+                    .iter()
+                    .any(|message| message.id == format!("runtime-host:{removed}"))
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&snapshot).unwrap(),
+            original,
+            "planning must not edit ordinary history"
+        );
+        let messages =
+            vulcan_context::conversation_state_to_compaction_source_messages(&source).unwrap();
+        let plan = plan_context_compaction(CompactionPlanInput {
+            session_label: "host-compaction",
+            messages: &messages,
+            all_messages: &messages,
+            context_start_message_id: None,
+            source_until_message_id: None,
+            policy: vulcan_context::ContextCompactionPolicy {
+                tail_turns: 2,
+                preserve_recent_tokens: 5_000,
+                ..Default::default()
+            },
+        })
+        .expect("real tail plan");
+        assert!(
+            !plan
+                .tail_selection
+                .retained_message_ids
+                .iter()
+                .any(|id| id.starts_with("runtime-host:")),
+            "active hosts start in the summarized prefix"
+        );
+        let result = CompactionResult::from_model_summary(&plan, "work summary");
+        vulcan_context_compaction::compact_conversation_with_compaction_result(
+            &mut source,
+            "summary",
+            &result,
+        )
+        .unwrap();
+        vulcan_context_compaction::compact_conversation_records_after_summary(
+            &mut source,
+            "summary",
+            result.policy,
+            |value| Some(value.clone()),
+        );
+        for retained in [
+            "runtime-host:current",
+            "runtime-host:persistent",
+            "native-result",
+            "human-lookalike",
+        ] {
+            let expected = snapshot
+                .messages
+                .iter()
+                .find(|message| message.id == retained)
+                .unwrap();
+            let actual = build_core_conversation_snapshot(&source)
+                .unwrap()
+                .messages
+                .into_iter()
+                .find(|message| message.id == retained)
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
+        }
+        snapshot = build_core_conversation_snapshot(&source).unwrap();
+        let after = serde_json::to_value(&snapshot).unwrap();
+        synchronize_runtime_host_events(
+            &mut snapshot,
+            &[
+                short_expiry,
+                permanent,
+                late_old_expiry,
+                old.clone(),
+                short,
+                current.clone(),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&snapshot).unwrap(),
+            after,
+            "archived replay must not resurrect expired bodies"
+        );
+        // Archived events still bind the original recipient and exact envelope bytes.
+        // 归档事件仍绑定原收件人和精确信封字节。
+        let mut conflict = old;
+        conflict.target = String::from("wrong-recipient");
+        assert!(synchronize_runtime_host_events(&mut snapshot, &[conflict], None).is_err());
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), after);
+        let prefix = snapshot.messages.clone();
+        let expiry = host_candidate(
+            "ttl",
+            "current expired",
+            Some("current"),
+            Some("expire-current"),
+            true,
+        );
+        synchronize_runtime_host_events(&mut snapshot, &[expiry], None).unwrap();
+        assert_eq!(
+            serde_json::to_value(&snapshot.messages[..prefix.len()]).unwrap(),
+            serde_json::to_value(&prefix).unwrap()
+        );
+        let next = prepare_runtime_host_compaction(
+            &core_snapshot_to_session_conversation_state(&snapshot).unwrap(),
+        )
+        .unwrap();
+        assert!(!next.messages.iter().any(
+            |message| message.id == "runtime-host:current" || message.id == "runtime-host:old"
+        ));
+        snapshot = build_core_conversation_snapshot(&next).unwrap();
+        let fresh = host_candidate("ttl", &current.body, Some("fresh"), None, false);
+        synchronize_runtime_host_events(&mut snapshot, &[fresh], None).unwrap();
+        assert_eq!(snapshot.messages.last().unwrap().id, "runtime-host:fresh");
+    }
+
+    /// Verifies a real injection-slot replacement reaches host history with a new identity and expires exactly once.
+    /// 验证真实注入槽位更新以新身份进入宿主历史，并精确失效一次。
+    #[test]
+    fn runtime_host_real_injection_replacement_survives_compaction() {
+        use crate::agent_runtime::context_injection_runtime::{
+            core_provider_context_injection_from_state_for_turn,
+            core_provider_context_injection_from_state_for_turn_draining_expiry_events,
+        };
+        use crate::agent_runtime::provider_request_bridge_conversation::{
+            build_core_conversation_snapshot, core_snapshot_to_session_conversation_state,
+        };
+        use vulcan_context_injection::{ContextInjectionState, InjectionInsert, InjectionKind};
+
+        // Both writes address one producer slot; only a changed body allocates the replacement occurrence.
+        // 两次写入指向同一生产者槽位；正文变化才分配替换发生点。
+        let mut injection = ContextInjectionState::default();
+        let memory = vulcan_vmm::VmmSessionMemoryState::default();
+        let mut snapshot = CoreConversationSnapshot::default();
+        for (body, source) in [
+            ("original memory", "source-a"),
+            ("replacement memory", "source-a"),
+            ("replacement memory", "source-b"),
+        ] {
+            let prefix = serde_json::to_value(&snapshot.messages).unwrap();
+            let prefix_len = snapshot.messages.len();
+            let mut insert = InjectionInsert::single(
+                InjectionKind::Transient,
+                "memory",
+                "description",
+                body,
+                Some(1),
+            );
+            insert.items[0].dedupe_key = Some(String::from("slot-1"));
+            insert.source_display = Some(source.to_string());
+            injection.apply_insert_for_turn(insert, "1", Some("business-1"));
+            let overlay = core_provider_context_injection_from_state_for_turn(
+                &injection,
+                &memory,
+                Some("business-1"),
+                false,
+            )
+            .unwrap();
+            synchronize_runtime_host_events(
+                &mut snapshot,
+                &runtime_context_host_event_candidates(&overlay),
+                None,
+            )
+            .unwrap();
+            assert_eq!(snapshot.messages.len(), prefix_len + 1);
+            assert_eq!(
+                serde_json::to_value(&snapshot.messages[..prefix_len]).unwrap(),
+                prefix
+            );
+        }
+        injection.consume_turn("business-1", "2");
+        let overlay = core_provider_context_injection_from_state_for_turn_draining_expiry_events(
+            &mut injection,
+            &memory,
+            Some("business-2"),
+            false,
+        )
+        .unwrap();
+        let expiration = runtime_context_host_event_candidates(&overlay);
+        synchronize_runtime_host_events(&mut snapshot, &expiration, None).unwrap();
+        let compacted = vulcan_context::runtime_host::prepare_runtime_host_compaction(
+            &core_snapshot_to_session_conversation_state(&snapshot).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            compacted.messages.is_empty(),
+            "neither the replaced nor expired version remains active"
+        );
+        snapshot = build_core_conversation_snapshot(&compacted).unwrap();
+        let before = serde_json::to_value(&snapshot).unwrap();
+        synchronize_runtime_host_events(&mut snapshot, &expiration, None).unwrap();
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), before);
+        assert!(
+            core_provider_context_injection_from_state_for_turn_draining_expiry_events(
+                &mut injection,
+                &memory,
+                Some("business-2"),
+                false
+            )
+            .is_none()
+        );
+    }
+
+    /// Verifies an actual persistent injection deletion becomes a routed withdrawal without deleting the sent prefix.
+    /// 验证真实长期注入删除转为按原路由发送的撤下消息，不删除已经发送的前缀。
+    #[test]
+    fn runtime_host_real_injection_removal_appends_once_and_compacts() {
+        use crate::agent_runtime::context_injection_runtime::core_provider_context_injection_from_state_for_turn;
+        use crate::agent_runtime::provider_request_bridge_conversation::{
+            build_core_conversation_snapshot, core_snapshot_to_session_conversation_state,
+        };
+        use vulcan_context_injection::{ContextInjectionState, InjectionInsert, InjectionKind};
+        let mut injection = ContextInjectionState::default();
+        injection.apply_insert(
+            InjectionInsert::single(
+                InjectionKind::Persistent,
+                "memory",
+                "description",
+                "persistent instruction",
+                None,
+            ),
+            "1",
+        );
+        let overlay = core_provider_context_injection_from_state_for_turn(
+            &injection,
+            &Default::default(),
+            None,
+            false,
+        )
+        .unwrap();
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_request_context(
+            &mut snapshot,
+            &runtime_context_host_event_candidates(&overlay),
+            None,
+            ExecutionPromptPurpose::UserTurn,
+        )
+        .unwrap();
+        let prefix = serde_json::to_value(&snapshot.messages).unwrap();
+        assert!(injection.remove_group(Some(InjectionKind::Persistent), "memory"));
+        assert!(
+            core_provider_context_injection_from_state_for_turn(
+                &injection,
+                &Default::default(),
+                None,
+                false
+            )
+            .is_none()
+        );
+        synchronize_runtime_host_request_context(
+            &mut snapshot,
+            &[],
+            None,
+            ExecutionPromptPurpose::UserTurn,
+        )
+        .unwrap();
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(
+            serde_json::to_value(&snapshot.messages[..1]).unwrap(),
+            prefix
+        );
+        let next = vulcan_context::runtime_host::prepare_runtime_host_compaction(
+            &core_snapshot_to_session_conversation_state(&snapshot).unwrap(),
+        )
+        .unwrap();
+        assert!(next.messages.is_empty());
+        snapshot = build_core_conversation_snapshot(&next).unwrap();
+        let compacted = serde_json::to_value(&snapshot).unwrap();
+        synchronize_runtime_host_request_context(
+            &mut snapshot,
+            &[],
+            None,
+            ExecutionPromptPurpose::UserTurn,
+        )
+        .unwrap();
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), compacted);
+    }
+
+    /// Verifies complete inventories withdraw absent sources once while partial auxiliary requests preserve them.
+    /// 验证完整清单只撤下缺失来源一次，而局部辅助请求保留这些来源。
+    #[test]
+    fn runtime_host_inventory_withdrawal_is_routed_atomic_and_replay_safe() {
+        use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
+        use vulcan_context::runtime_host::read_runtime_host_ledger;
+        let mut original = host_candidate("memory-slot", "instruction", Some("occ"), None, false);
+        original.target = String::from("specific-model-target");
+        original.task_id = Some(String::from("business-owner"));
+        original.scope = String::from("session");
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_request_context(
+            &mut snapshot,
+            &[original.clone()],
+            None,
+            ExecutionPromptPurpose::UserTurn,
+        )
+        .unwrap();
+        let initial = serde_json::to_value(&snapshot).unwrap();
+        for purpose in [
+            ExecutionPromptPurpose::QuestionExecution,
+            ExecutionPromptPurpose::ContextCompaction,
+            ExecutionPromptPurpose::ContextCompactionCachePreserving,
+            ExecutionPromptPurpose::GitCommitSummary,
+        ] {
+            synchronize_runtime_host_request_context(&mut snapshot, &[], None, purpose).unwrap();
+            assert_eq!(serde_json::to_value(&snapshot).unwrap(), initial);
+        }
+        synchronize_runtime_host_request_context(
+            &mut snapshot,
+            &[],
+            None,
+            ExecutionPromptPurpose::ExecutionRetry,
+        )
+        .unwrap();
+        assert_eq!(snapshot.messages.len(), 2);
+        let ledger = read_runtime_host_ledger(
+            &core_snapshot_to_session_conversation_state(&snapshot).unwrap(),
+        )
+        .unwrap();
+        let withdrawn = &ledger[1];
+        assert!(withdrawn.expires_source);
+        assert_eq!(withdrawn.occurrence_id, "occ");
+        assert_eq!(withdrawn.envelope.target, original.target);
+        assert_eq!(withdrawn.envelope.source, original.source);
+        assert_eq!(withdrawn.envelope.task_id, original.task_id);
+        assert_eq!(withdrawn.envelope.scope, original.scope);
+        let after = serde_json::to_value(&snapshot).unwrap();
+        synchronize_runtime_host_request_context(
+            &mut snapshot,
+            &[],
+            None,
+            ExecutionPromptPurpose::AgentTask,
+        )
+        .unwrap();
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), after);
+        // A stale complete snapshot cannot reactivate an already withdrawn occurrence.
+        // 过时完整快照不能重新激活已撤下的发生点。
+        assert!(
+            synchronize_runtime_host_request_context(
+                &mut snapshot,
+                &[original],
+                None,
+                ExecutionPromptPurpose::UserTurn
+            )
+            .is_err()
+        );
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), after);
+        let late_ttl = host_candidate(
+            "memory-slot",
+            "TTL also expired",
+            Some("occ"),
+            Some("late-ttl"),
+            true,
+        );
+        synchronize_runtime_host_events(&mut snapshot, &[late_ttl.clone()], None).unwrap();
+        let late = serde_json::to_value(&snapshot).unwrap();
+        synchronize_runtime_host_events(&mut snapshot, &[late_ttl], None).unwrap();
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), late);
+        let fresh = host_candidate("memory-slot", "instruction", Some("new-occ"), None, false);
+        synchronize_runtime_host_request_context(
+            &mut snapshot,
+            &[fresh.clone()],
+            None,
+            ExecutionPromptPurpose::UserTurn,
+        )
+        .unwrap();
+        let before_conflict = serde_json::to_value(&snapshot).unwrap();
+        assert!(
+            synchronize_runtime_host_request_context(
+                &mut snapshot,
+                &[fresh.clone(), fresh],
+                None,
+                ExecutionPromptPurpose::UserTurn
+            )
+            .is_err()
+        );
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), before_conflict);
+    }
 
     /// Verifies the project-rules loader reads a non-empty workspace AGENTS.md file.
     /// 验证项目规则加载器会读取非空的工作区 AGENTS.md 文件。
@@ -1254,6 +2528,8 @@ mod tests {
     /// 验证请求级代理提示词快照会进入共享运行时提示词组合器。
     #[test]
     fn runtime_prompt_layers_use_request_scoped_agent_prompt_snapshot() {
+        // A request-specific agent override is dynamic; changing it must preserve the stable top bytes.
+        // 请求专属代理覆盖属于动态内容；改变它必须保留稳定顶部字节。
         let mut preparation = build_test_preparation(
             String::from("D:/missing"),
             PersistedPromptConfiguration::default(),
@@ -1261,15 +2537,37 @@ mod tests {
         preparation.agent_prompt_snapshot = ExecutionAgentPromptSnapshot::fixed_parent_runtime(
             "Task-specific reviewer instructions.",
         );
-
-        let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
+        let first = build_runtime_prompt_layers_for_agent(&preparation, None)
             .expect("runtime prompt layers should build");
-
         assert!(
-            layers
+            !first
                 .fallback_text
                 .contains("Task-specific reviewer instructions.")
         );
+        assert!(
+            first
+                .dynamic_prompt_layers
+                .system
+                .contains("Task-specific reviewer instructions.")
+        );
+        let mut snapshot = CoreConversationSnapshot::default();
+        synchronize_runtime_host_events(&mut snapshot, &first.host_events, None)
+            .expect("first dynamic request should synchronize");
+        let prefix = snapshot.messages.clone();
+
+        preparation.agent_prompt_snapshot =
+            ExecutionAgentPromptSnapshot::fixed_parent_runtime("Updated reviewer instructions.");
+        let second = build_runtime_prompt_layers_for_agent(&preparation, None)
+            .expect("updated runtime prompt layers should build");
+        assert_eq!(first.fallback_text, second.fallback_text);
+        synchronize_runtime_host_events(&mut snapshot, &second.host_events, None)
+            .expect("changed override should append");
+        assert_eq!(&snapshot.messages[..prefix.len()], prefix.as_slice());
+        assert_eq!(snapshot.messages.len(), prefix.len() + 1);
+        assert!(matches!(&snapshot.messages.last().unwrap().payload,
+                CoreConversationPayload::UserText { text, .. }
+                    if text.contains("Updated reviewer instructions.")
+                        && text.contains("<vulcan_context_update ")));
     }
 
     /// Verifies active session goals never enter the global provider prompt layers.
@@ -1432,7 +2730,7 @@ mod tests {
                 .system
                 .contains("User prefers precise answers.")
         );
-        assert!(layers.fallback_text.contains("<system_prompt_hooks>"));
+        assert!(!layers.fallback_text.contains("<system_prompt_hooks>"));
     }
 
     /// Verifies locked-baseline projection trusts only producer-owned typed provenance.

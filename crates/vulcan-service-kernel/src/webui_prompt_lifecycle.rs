@@ -22,26 +22,38 @@ use super::pending_prompts::{
 };
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, active_reasoning_selection_effort,
-    append_goal_turn_usage_context, attach_goal_context_to_provider_visible_agent_messages,
     cached_project_vmm_layer, capture_webui_prompt_preparation_generation,
     capture_webui_prompt_preparation_workspace,
     commit_workspace_snapshot_and_emit_session_phase_delta,
     commit_workspace_snapshot_and_emit_session_phase_delta_if_prompt_owner_current,
     current_unix_millis_text, current_unix_millis_value, ensure_webui_session_runtime_entry,
-    load_project_configuration, prepend_goal_context_to_current_prompt,
-    push_webui_service_diagnostic, refresh_exact_vmm_hook_session_projection,
-    replace_canonical_current_user_prompt, selected_session_id_from_state,
+    load_project_configuration, persist_goal_turn_usage_context, push_webui_service_diagnostic,
+    refresh_exact_vmm_hook_session_projection, selected_session_id_from_state,
     session_goal_prompt_parts_from_state, session_has_pending_plan_artifact,
-    session_plan_context_for_prompt_from_state, spawn_agent_stream_task, spawn_service_task,
-    stop_webui_session_kernel_generation, webui_after_precheck_trace, webui_session_has_active_run,
-    webui_session_kernel_has_active_turn, webui_trace, workspace_path_for_session,
+    spawn_agent_stream_task, spawn_service_task, stop_webui_session_kernel_generation,
+    webui_after_precheck_trace, webui_session_has_active_run, webui_session_kernel_has_active_turn,
+    webui_trace, workspace_path_for_session,
 };
 
+mod agent_task_prepare;
+mod business_recovery_prepare;
+pub(crate) use business_recovery_prepare::{
+    MainBusinessStartupAuthority, main_business_startup_authority,
+    maybe_prepare_webui_business_recovery,
+};
+mod initial_business_prepare;
+mod internal_continuation_prepare;
+pub(crate) use initial_business_prepare::maybe_prepare_initial_human_business;
+mod collaboration_prepare;
+pub(crate) use collaboration_prepare::maybe_prepare_webui_collaboration_continuation;
 /// Inserts one visible pending prompt and starts dispatch immediately when the session can run.
 mod pending_dispatch;
 mod pending_prepare;
 mod precheck_continue;
+mod question_prepare;
 
+pub(crate) use agent_task_prepare::*;
 pub(super) use pending_dispatch::*;
 pub(super) use pending_prepare::*;
 pub(super) use precheck_continue::*;
+pub(crate) use question_prepare::spawn_webui_question_prepare_task;

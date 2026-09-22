@@ -4,7 +4,7 @@ use super::*;
 /// 将规范 core 消息转换为真正会发送给上游 Provider 的可见历史。
 pub(crate) fn core_messages_to_provider_visible_history(
     messages: &[CoreConversationMessage],
-) -> Vec<CoreConversationMessage> {
+) -> Result<Vec<CoreConversationMessage>, String> {
     core_messages_to_provider_visible_history_for_model(messages, None, None)
 }
 
@@ -14,7 +14,7 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model(
     messages: &[CoreConversationMessage],
     protocol_profile_id: Option<&str>,
     capabilities: Option<&ModelCapabilities>,
-) -> Vec<CoreConversationMessage> {
+) -> Result<Vec<CoreConversationMessage>, String> {
     core_messages_to_provider_visible_history_for_model_with_system_updates(
         messages,
         protocol_profile_id,
@@ -22,7 +22,6 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model(
         &[],
         ProviderSystemUpdateLoweringPolicy::default(),
     )
-    .expect("empty system update overlays should not fail")
 }
 
 /// Converts canonical core messages plus chronological system updates into provider-visible history.
@@ -69,7 +68,7 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model_with_system_up
         protocol_profile_id,
         capabilities,
         bridge_tool_ids,
-    );
+    )?;
     apply_provider_visible_system_updates(&mut projected, system_updates, system_update_policy)?;
 
     validate_provider_visible_tool_topology(&projected)?;
@@ -84,7 +83,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
     protocol_profile_id: Option<&str>,
     capabilities: Option<&ModelCapabilities>,
     bridge_tool_ids: &[String],
-) -> Vec<CoreConversationMessage> {
+) -> Result<Vec<CoreConversationMessage>, String> {
     let mut projected = Vec::with_capacity(messages.len());
     let mut index = 0usize;
 
@@ -200,10 +199,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                 projected.push(CoreConversationMessage {
                     id: message.id.clone(),
                     payload: CoreConversationPayload::UserText {
-                        text: message
-                            .payload
-                            .agent_message_model_text()
-                            .unwrap_or_default(),
+                        text: message.payload.agent_message_model_text(&message.id)?,
                         attachments: Vec::new(),
                     },
                 });
@@ -212,7 +208,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
         }
     }
 
-    projected
+    Ok(projected)
 }
 
 /// Applies lowered runtime system updates to the provider-visible history in chronological anchor order.
@@ -224,13 +220,7 @@ fn apply_provider_visible_system_updates(
 ) -> Result<(), String> {
     for update in system_updates {
         let text = match lower_provider_system_update(update, policy) {
-            ProviderSystemUpdateLowering::UserWrapper { text } => text,
-            ProviderSystemUpdateLowering::NativeSystem { .. } => {
-                return Err(format!(
-                    "runtime system update `{}` requires native chronological system support that the canonical provider-visible bridge cannot represent",
-                    update.update_id
-                ));
-            }
+            ProviderSystemUpdateLowering::User { text } => text,
             ProviderSystemUpdateLowering::Reject { reason } => {
                 return Err(format!(
                     "runtime system update `{}` rejected during provider lowering: {reason}",

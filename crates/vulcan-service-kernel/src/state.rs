@@ -214,6 +214,9 @@ pub(crate) struct TerminalPreIntentRepair {
     /// Original safe failure detail retained only for this process-local retry.
     /// 仅为当前进程内重试保留的原始安全失败详情。
     pub(crate) redacted_detail: Option<String>,
+    /// Exact execution scope retained even before the durable intent can be written.
+    /// 在可靠意图写入前也保留的精确执行范围。
+    pub(crate) scope: vulcan_session_core::v1::TerminalSettlementScope,
 }
 
 impl SessionTerminalPersistenceOwner {
@@ -460,10 +463,34 @@ pub struct ServiceBridgeState {
     /// Active WebUI stream task handles keyed by session id.
     /// 按会话标识索引的 WebUI 活动流任务句柄。
     pub(crate) active_stream_tasks: BTreeMap<SessionId, ActiveStreamTask>,
+    /// Cancellable auxiliary preparation, separate from its eventual Provider stream.
+    /// 可取消辅助准备，与其后续 Provider 流分别登记。
+    pub(crate) question_preparation_tasks: BTreeMap<SessionId, crate::agent_collaboration_execution::preparation_tasks::QuestionPreparationTask>,
     /// Exact stream owners currently committing their accepted terminal state to durable storage.
     /// 当前正在把已接纳终态提交到可靠存储的精确流所有者。
     pub(crate) session_terminal_persistence_owners:
         BTreeMap<SessionId, SessionTerminalPersistenceOwner>,
+    /// Child auxiliary admission retained independently of abortable stream futures.
+    /// 独立于可中止流 Future 保留的子辅助准入。
+    pub(crate) child_question_execution_owners: BTreeMap<
+        SessionId,
+        crate::agent_collaboration::child_execution_ownership::ChildQuestionExecutionOwner,
+    >,
+    /// Maintenance exclusion retained until its own durable terminal is confirmed.
+    /// 在确认维护自身可靠终态前保留的维护互斥。
+    pub(crate) child_maintenance_owners: BTreeMap<
+        SessionId,
+        crate::agent_collaboration::child_maintenance::ChildMaintenanceOwner,
+    >,
+    /// Service-owned work from publication waiting through durable maintenance settlement.
+    /// 从等待发布到可靠维护结算的服务自有工作。
+    pub(crate) child_maintenance_tasks: BTreeMap<
+        SessionId,
+        crate::agent_collaboration::child_maintenance::ChildMaintenanceTask,
+    >,
+    /// Exact stopped business identities reject late maintenance without blocking a new business execution.
+    /// 精确已停止业务身份拒绝迟到维护，不阻止新的业务执行。
+    pub(crate) child_maintenance_stops: BTreeMap<SessionId, String>,
     /// Exact pre-intent terminal retries for owners retained after an early failure.
     /// 早期失败后保留的所有者对应的精确意图前终态重试。
     pub(crate) terminal_pre_intent_repairs: BTreeMap<SessionId, TerminalPreIntentRepair>,
@@ -583,7 +610,8 @@ impl SessionTerminalPersistenceOwnerGuard {
     /// # 返回值
     /// Success only when the same marker was removed; mismatches remain fail-closed.
     /// 仅在同一标记被移除时返回成功；不匹配情况保持失败关闭。
-    pub(crate) fn release(mut self) -> Result<(), String> {        // guard recovers poisoned state only for exact owner-qualified admission cleanup.
+    pub(crate) fn release(mut self) -> Result<(), String> {
+        // guard recovers poisoned state only for exact owner-qualified admission cleanup.
         // guard 仅为带精确所有者限定的准入清理恢复中毒状态。
         let mut guard =
             lock_service_state_for_admission_cleanup(&self.state, "terminal-persistence owner");
@@ -821,7 +849,8 @@ impl ActiveStreamTask {
     /// 返回值
     /// Returns no value after forwarding cancellation to Tokio.
     /// 将取消请求转发给 Tokio 后无返回值。
-    #[cfg(test)]
+    /// Callers must subsequently join with `abort_and_wait`; requesting cancellation alone is not teardown evidence.
+    /// 调用方随后必须通过 `abort_and_wait` 等待；仅请求取消不是清理完成证据。
     pub(crate) fn abort(&self) {
         self.handle.abort();
     }

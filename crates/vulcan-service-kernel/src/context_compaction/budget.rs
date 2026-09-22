@@ -106,16 +106,26 @@ pub(crate) fn context_compaction_budget_snapshot_from_state(
 pub(crate) fn context_compaction_input_budget_from_snapshot(
     budget: Option<&ContextBudgetSnapshot>,
 ) -> Option<CompactionInputBudget> {
+    context_compaction_input_budget_from_limit(
+        budget.and_then(|budget| budget.context_limit.or(budget.effective_input_limit)),
+    )
+}
+
+/// Derives summary input headroom from the exact declared model limit without manufacturing a UI budget snapshot.
+/// 从精确声明的模型上限推导摘要输入余量，不构造虚假的界面预算快照。
+/// `context_limit` is absent for an undeclared window; returns the same optional budget used by root compaction.
+/// 未声明窗口时 `context_limit` 不存在；返回与根压缩相同的可选预算。
+pub(crate) fn context_compaction_input_budget_from_limit(
+    context_limit: Option<usize>,
+) -> Option<CompactionInputBudget> {
     let safety_reserve_tokens = CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS
         .max(MIN_CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS);
-    budget
-        .and_then(|budget| budget.context_limit.or(budget.effective_input_limit))
-        .map(|context_limit| CompactionInputBudget {
-            target_input_budget_tokens: context_limit
-                .saturating_sub(safety_reserve_tokens)
-                .max(1usize),
-            safety_reserve_tokens,
-        })
+    context_limit.map(|context_limit| CompactionInputBudget {
+        target_input_budget_tokens: context_limit
+            .saturating_sub(safety_reserve_tokens)
+            .max(1usize),
+        safety_reserve_tokens,
+    })
 }
 
 /// Returns the latest provider-observed input tokens for compaction downgrade decisions.

@@ -592,6 +592,7 @@ pub(crate) fn attach_runtime_event_projection_barrier(
         RuntimeEventKind::ToolBatchPrepared
             | RuntimeEventKind::ToolStarted
             | RuntimeEventKind::ToolFinished
+            | RuntimeEventKind::DelegateStarted
     );
     let barrier_id = Uuid::new_v4().to_string();
     let (sender, receiver) = oneshot::channel();
@@ -646,6 +647,37 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
     wait_runtime_event_projection_receipt(barrier)
         .await
         .map(|_| ())
+}
+
+/// Attaches the production barrier and exposes its wait result to cross-crate host verification.
+/// 附加生产屏障，并向跨 crate 宿主验证公开等待结果。
+/// `event` is the actual host input; callers enable and serially own the production barrier switch.
+/// `event` 是实际宿主输入；调用方启用并串行持有生产屏障开关。
+/// Returns the decorated event and its production waiter, or an explicit disabled/registry error.
+/// 返回装饰后的事件及生产等待器，或明确的禁用、注册表错误。
+#[cfg(feature = "test-support")]
+pub fn attach_test_runtime_event_projection_barrier(
+    event: RuntimeEvent,
+) -> Result<
+    (
+        RuntimeEvent,
+        impl std::future::Future<Output = Result<(), String>>,
+    ),
+    String,
+> {
+    // Use the real registration and waiting paths, including the event's execution-safety policy.
+    // 使用真实注册和等待路径，包含事件自身的执行安全策略。
+    let (event, barrier) = attach_runtime_event_projection_barrier(event)?;
+    if barrier.is_none() {
+        return Err(String::from(
+            "Projection barriers must be enabled for host verification.",
+        ));
+    }
+    Ok((event, async move {
+        wait_runtime_event_projection_barrier(barrier)
+            .await
+            .map_err(|error| error.to_string())
+    }))
 }
 
 /// Waits for the exact durable local identities assigned to one prepared tool batch.
@@ -1158,6 +1190,18 @@ pub(crate) fn build_tool_rejection_invocation_result(
         })),
         is_error: false,
     }
+}
+
+/// Produces the actual policy rejection for cross-crate host boundary verification.
+/// 为跨 crate 宿主边界验证生成真实策略拒绝结果。
+/// `request` identifies the rejected invocation and `message` explains the policy; returns the production result.
+/// `request` 标识被拒绝调用，`message` 说明策略；返回生产结果。
+#[cfg(feature = "test-support")]
+pub fn test_tool_rejection_invocation_result(
+    request: &CoreToolInvocationRequest,
+    message: &str,
+) -> CoreToolInvocationResult {
+    build_tool_rejection_invocation_result(request, message)
 }
 
 #[async_trait::async_trait]

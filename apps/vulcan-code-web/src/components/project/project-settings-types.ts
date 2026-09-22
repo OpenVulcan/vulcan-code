@@ -16,7 +16,7 @@ export type { ProjectSettingsRevision } from "@/types";
 
 // ProjectSettingsSectionId names the left-side categories in the project settings dialog.
 // ProjectSettingsSectionId 命名项目设置弹窗左侧分类。
-export type ProjectSettingsSectionId = "overview" | "vmm" | "code-context" | "knowledge-bases" | "agent-skills" | "attachments";
+export type ProjectSettingsSectionId = "overview" | "vmm" | "code-context" | "knowledge-bases" | "agent-skills" | "attachments" | "collaboration-grants";
 
 // ProjectSettingsSectionSummary describes one navigable settings category.
 // ProjectSettingsSectionSummary 描述单个可导航的设置分类。

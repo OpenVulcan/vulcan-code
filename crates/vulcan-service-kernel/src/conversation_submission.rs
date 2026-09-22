@@ -51,10 +51,11 @@ use super::{
     composer_attachment_workspace_path_from_snapshot, current_unix_millis_text,
     current_unix_millis_value, defer_attachment_delivery_to_v1, emit_pending_prompts_changed_delta,
     emit_service_event_with_trace, enqueue_webui_pending_prompt_from_submission,
-    hydrate_retained_submission_session_if_needed, load_workspace_for_submission,
-    mark_webui_prompt_preparation_failed, mark_webui_prompt_snapshot_preparing,
-    materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
-    parse_session_id, persist_initial_submission_goal, preserve_active_session_run_state,
+    ensure_session_terminal_settlement_settled, hydrate_retained_submission_session_if_needed,
+    load_workspace_for_submission, mark_webui_prompt_preparation_failed,
+    mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
+    owning_project_id_for_session, parse_prompt_session_target, parse_session_id,
+    persist_initial_submission_goal, preserve_active_session_run_state,
     provider_tool_capability_key, queued_dispatch_authority_for_client_action,
     refresh_exact_vmm_hook_session_projection, resolve_composer_attachment_summary_for_workspace,
     retain_slow_submission_diagnostic, retained_submission_snapshot_has_session_context,
@@ -62,7 +63,6 @@ use super::{
     session_has_blocking_system_prompt_work, session_process_public_ai_selection,
     spawn_service_task, start_exact_v1_queued_turn, start_reserved_webui_session_kernel_user_turn,
     start_webui_precheck_or_continue, start_webui_session_kernel_user_turn,
-    ensure_session_terminal_settlement_settled,
     webui_session_kernel_has_active_turn, webui_shared_prompt_precheck_plan, webui_submit_trace,
     webui_trace_if_slow, webui_vmm_runtime_readiness,
 };
@@ -2131,6 +2131,8 @@ async fn load_existing_submission_v1_authority(
 /// an existing session has been located through SQLite and loaded into its unique registry slot.
 /// 仅在新建的 FreshUninitialized 根完整落盘并注册后，或已有会话通过 SQLite 定位并加载到
 /// 唯一注册槽后返回。
+/// Explicit Continue returns its durable receipt; other submission modes return no continuation receipt.
+/// 显式继续返回其可靠回执；其他提交模式不返回继续回执。
 async fn materialize_submission_session_v1(
     state: &SharedServiceBridgeState,
     controller_runtime: &HostRuntimeHandle,
@@ -2145,7 +2147,7 @@ async fn materialize_submission_session_v1(
     existing_authority: Option<&ExistingSubmissionV1Authority>,
     bound_request_config: Option<&ActiveRequestConfig>,
     now_ms: i64,
-) -> Result<(), String> {
+) -> Result<Option<vulcan_session_core::v1::document::ContinueTurnReceipt>, String> {
     // clientActionId preserves the browser-owned durable idempotency identity
     // without deriving a replacement from the session or current time.
     // clientActionId 原样保留浏览器持有的可靠幂等身份，不从会话或当前时间派生替代值。
@@ -2258,15 +2260,16 @@ async fn materialize_submission_session_v1(
                             .with_hidden_model_guidance(hidden_model_guidance.map(str::to_string));
                     continuation.submission.parameters = parameters;
                     continuation.submission.bound_request_config = bound_request_config.cloned();
-                    authority
+                    let receipt = authority
                         .handle
                         .continue_turn(continuation, now_ms)
                         .map_err(|error| error.to_string())?;
+                    return Ok(Some(receipt.value));
                 }
             }
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Submits one ordinary user prompt or one revision-bound recovery through the shared conversation pipeline.
@@ -2786,7 +2789,7 @@ async fn service_start_conversation_execution(
     // precedes Goal, Plan, output-style, and pending-model mutations.
     // V1 物化是旧选择器确定会话/项目/附件归属后的首个可靠会话边界；它有意先于
     // Goal、Plan、输出风格与待切换模型修改。
-    materialize_submission_session_v1(
+    let continuation_receipt = materialize_submission_session_v1(
         &state,
         &controller_runtime,
         &materialized_session,
@@ -2984,17 +2987,25 @@ async fn service_start_conversation_execution(
         );
         // vmmReadiness is captured before Hook turn admission and remains immutable for this request.
         // vmmReadiness 在 Hook 回合准入前捕获，并在本次请求期间保持不可变。
+        crate::session_business_hook::synchronize_live_business_hook_inputs(
+            handle.as_ref(), &agent_runtime,
+        )?;
         let vmm_readiness = webui_vmm_runtime_readiness(&state)?;
         let turn_begin_started_at = current_unix_millis_value();
         let precheck_start = {
+            // Preserve the actual Continue admission receipt through Hook preparation instead of deriving an input identity.
+            // 将实际 Continue 准入回执保留到 Hook 准备，不派生输入身份。
+            let continuation_authority = if submission_mode.is_continuation() {
+                let receipt = continuation_receipt.as_ref().ok_or_else(|| String::from("Continue admission has no canonical receipt."))?;
+                Some(crate::session_business_hook::continuation_hook_authority(
+                    handle.as_ref(), &accepted_action_id, receipt,
+                )?)
+            } else { None };
             let mut hook_runtime = agent_runtime
                 .conversation_hook_runtime
                 .lock()
                 .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
-            begin_shared_prompt_turn(
-                &mut workspace_snapshot,
-                &mut hook_runtime,
-                SharedPromptTurnBeginInput {
+            let begin_input = SharedPromptTurnBeginInput {
                     session_id,
                     session_title,
                     workspace_path,
@@ -3016,9 +3027,23 @@ async fn service_start_conversation_execution(
                     vmm_precheck_ready: vmm_readiness.precheck_ready,
                     execution_mode: runtime_options.execution_mode,
                     reasoning_effort: runtime_options.reasoning_effort,
-                },
-            )?
+                };
+            if let Some(authority) = continuation_authority {
+                hook_runtime.restore_business_hook_state(&authority.state)?;
+                vulcan_agent_runtime::workbench_prompt_turn::begin_shared_prompt_turn_with_canonical_inputs(
+                    &mut workspace_snapshot, &mut hook_runtime, begin_input, &authority.inputs,
+                )?
+            } else {
+                begin_shared_prompt_turn(&mut workspace_snapshot, &mut hook_runtime, begin_input)?
+            }
         };
+        // Publish original Hook ownership before kernel dispatch can launch the first Provider request.
+        // 在 kernel 分发能够启动首个 Provider 请求之前发布原 Hook 归属。
+        crate::session_business_hook::publish_prepared_business_hook(
+            handle.as_ref(),
+            &agent_runtime,
+            &precheck_start,
+        )?;
         Ok::<_, String>((kernel_reservation_id, precheck_start, turn_begin_started_at))
     }.await;
     let (kernel_reservation_id, mut precheck_start, turn_begin_started_at) =

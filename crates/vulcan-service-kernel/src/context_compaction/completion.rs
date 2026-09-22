@@ -3,11 +3,137 @@
 
 use super::*;
 
+/// Verifies `execution` against exact physical `durability` and builds the commit for `retained_from_seq`.
+/// 根据精确物理`durability`验证`execution`，并为`retained_from_seq`构建提交。
+/// Returns a mutually exclusive local-summary or native-checkpoint input; display text never proves native output.
+/// 返回互斥的本地摘要或原生检查点输入；展示文字不能证明原生输出。
+pub(crate) fn verified_compaction_commit_input(
+    execution: &PromptCompactionExecution,
+    durability: &crate::agent_stream::ProviderV1FinishedDurability,
+    retained_from_seq: Seq,
+) -> Result<vulcan_session_core::v1::document::CompactionCommitInput, String> {
+    use vulcan_agent_runtime::agent_runtime::prompt_compaction::PromptCompactionExecutionProfile;
+    use vulcan_session_core::v1::{
+        context::RemoteResponsesCheckpoint, document::CompactionCommitInput,
+    };
+    if execution.fallback_used
+        || execution.provider_request_count == 0
+        || durability.api_terminal_failure_persisted
+    {
+        return Err(String::from(
+            "Compaction commit requires a successful physical execution.",
+        ));
+    }
+    // The exact terminal and admitted baseline belong to the final physical attempt, not an earlier retry.
+    // 精确终态与准入基线属于最终物理尝试，而不是先前重试。
+    let terminal = durability
+        .api_terminal
+        .as_ref()
+        .ok_or_else(|| String::from("Compaction has no durable API terminal receipt."))?;
+    // baseline is the exact admitted static context, never rebuilt from current settings at commit.
+    // baseline 是精确准入的静态上下文，提交时绝不从当前设置重建。
+    let baseline = durability
+        .locked_baseline
+        .as_ref()
+        .ok_or_else(|| String::from("Compaction has no admitted locked baseline."))?;
+    // result is an independent runtime report that must match the sink receipt below.
+    // result 是独立运行时报告，必须与下方接收器回执相等。
+    let result = &execution.compaction_result;
+    match execution.execution_profile {
+        PromptCompactionExecutionProfile::RemoteResponses => {
+            if durability.completed_assistant_text.is_some() {
+                return Err(String::from(
+                    "Native compaction cannot commit assistant summary semantics.",
+                ));
+            }
+            // The sink supplies native bytes only after checking the real admitted route and successful terminal.
+            // 接收器仅在核对实际准入路由及成功终态后提供原生字节。
+            let remote = durability
+                .completed_remote_compaction
+                .as_ref()
+                .ok_or_else(|| {
+                    String::from("Remote compaction has no verified native terminal receipt.")
+                })?;
+            // route belongs to the reported native bytes and cannot be inferred from model display labels.
+            // route 属于报告的原生字节，不能从模型显示名称推导。
+            let route = result.provider_context_route.as_ref().ok_or_else(|| {
+                String::from("Remote compaction result is missing its native route identity.")
+            })?;
+            // checkpoint converts the declared result without aliases, fallback fields, or diagnostic text.
+            // checkpoint 转换已声明结果，不使用别名、候选字段或诊断文字。
+            let checkpoint = RemoteResponsesCheckpoint {
+                provider_id: route.provider_id.clone(),
+                connection_id: route.connection_id.clone(),
+                route_fingerprint: route.route_fingerprint.clone(),
+                protocol_profile_id: route.protocol_profile_id.clone(),
+                model_id: route.model_id.clone(),
+                output_items: result.provider_context_items.clone(),
+                response_id: result.provider_context_response_id.clone(),
+            };
+            if remote.api_call_id != terminal.value.api_call_id
+                || remote.checkpoint != checkpoint
+                || execution.provider_id.as_deref() != Some(checkpoint.provider_id.as_str())
+                || execution.model_id.as_deref() != Some(checkpoint.model_id.as_str())
+            {
+                return Err(String::from(
+                    "Remote compaction result differs from its exact admitted physical receipt.",
+                ));
+            }
+            Ok(CompactionCommitInput::remote_responses(
+                remote.api_call_id,
+                terminal.value.stats_seq,
+                retained_from_seq,
+                checkpoint,
+                baseline.clone(),
+            ))
+        }
+        PromptCompactionExecutionProfile::CachePreservingFullFidelity
+        | PromptCompactionExecutionProfile::PrunedMinimal => {
+            if durability.completed_remote_compaction.is_some()
+                || !result.provider_context_items.is_empty()
+                || result.provider_context_route.is_some()
+                || result.provider_context_usage.is_some()
+                || result.provider_context_response_id.is_some()
+            {
+                return Err(String::from(
+                    "Local compaction cannot commit native remote output.",
+                ));
+            }
+            // Local summary identity includes the physical API as well as ordering before its stats event.
+            // 本地摘要身份同时包含物理 API 及先于其统计事件的顺序。
+            let assistant = durability
+                .completed_assistant_text
+                .as_ref()
+                .ok_or_else(|| {
+                    String::from("Local compaction has no durable assistant receipt.")
+                })?;
+            if assistant.api_call_id != terminal.value.api_call_id
+                || assistant.seq.value() >= terminal.value.stats_seq.value()
+            {
+                return Err(String::from(
+                    "Compaction assistant and API terminal receipts do not match.",
+                ));
+            }
+            // summary retains exact persisted model text after removing only the known display wrapper.
+            // summary 仅移除已知展示包装后保留精确持久模型正文。
+            let summary =
+                verified_compaction_summary_body(&result.summary_record.body, &assistant.text)?;
+            Ok(CompactionCommitInput::new(
+                assistant.api_call_id,
+                assistant.seq,
+                retained_from_seq,
+                summary,
+                baseline.clone(),
+            ))
+        }
+    }
+}
+
 /// Verifies the model summary inside a display record against the exact durable assistant text.
 /// 校验显示记录中的模型摘要是否与精确持久化助手正文一致。
 /// Accepts the Agent summary record and V1 receipt text; returns canonical text or an explicit mismatch.
 /// 接受 Agent 摘要记录与 V1 回执正文，返回规范正文或明确的不一致错误。
-pub(super) fn verified_compaction_summary_body(
+pub(crate) fn verified_compaction_summary_body(
     summary_record_body: &str,
     durable_assistant_text: &str,
 ) -> Result<String, String> {
@@ -354,43 +480,24 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     }
 
     let provider_request_count = execution.provider_request_count;
-    let completed_assistant = durability.completed_assistant_text.ok_or_else(|| {
-        String::from(
-            "Context compaction finished without an exact durable assistant semantic receipt.",
-        )
-    })?;
-    let api_terminal = durability.api_terminal.ok_or_else(|| {
-        String::from("Context compaction finished without an exact durable API terminal receipt.")
-    })?;
-    let locked_baseline = durability.locked_baseline.ok_or_else(|| {
-        String::from("Context compaction finished without its exact locked baseline projection.")
-    })?;
-    // Commit only the canonical summary already persisted by the same physical API.
-    // 仅提交同一次物理 API 已持久化的规范摘要。
-    let summary_body = verified_compaction_summary_body(
-        &execution.compaction_result.summary_record.body,
-        &completed_assistant.text,
-    )?;
-    if completed_assistant.seq.value() >= api_terminal.value.stats_seq.value() {
-        return Err(String::from(
-            "Context compaction assistant semantic must precede its durable API terminal.",
-        ));
-    }
+    // Root and child commits share the exact local/native physical receipt validation.
+    // 主子提交共用精确本地/原生物理回执校验。
+    let commit_input =
+        verified_compaction_commit_input(&execution, &durability, retained_from_seq)?;
+    // Native diagnostics are display-only; their text never enters the durable checkpoint node.
+    // 原生诊断仅供展示，其文字绝不进入可靠检查点节点。
+    let summary_body = match &commit_input.content {
+        vulcan_session_core::v1::context::CompactionContent::Summary { text } => text.clone(),
+        vulcan_session_core::v1::context::CompactionContent::RemoteResponses { .. } => {
+            execution.compaction_result.summary_record.body.clone()
+        }
+    };
     let now_ms = i64::try_from(current_unix_millis_value()).map_err(|_| {
         String::from("Current Unix millisecond timestamp exceeds the V1 i64 contract.")
     })?;
     let handle =
         crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
-    let compaction_receipt = match handle.record_compaction(
-        vulcan_session_core::v1::document::CompactionCommitInput::new(
-            completed_assistant.api_call_id,
-            completed_assistant.seq,
-            retained_from_seq,
-            summary_body.clone(),
-            locked_baseline,
-        ),
-        now_ms,
-    ) {
+    let compaction_receipt = match handle.record_compaction(commit_input, now_ms) {
         Ok(receipt) => receipt,
         Err(error) => {
             let rejection_error =

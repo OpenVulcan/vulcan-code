@@ -1,4 +1,8 @@
 import * as React from "react";
+import { ConversationAgentInteractionActionsContext } from "./conversation-collaboration-card";
+import { createConversationV1CollaborationNavigation, type ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
+import { cancelCollaborationQuestion } from "@/service/collaboration-question-service";
+import { pendingCollaborationQuestionIds } from "@/service/conversation-event-display-projection";
 import { ThinkingPopupContext } from "./thinking-preview";
 
 import type { GeneratedMediaAttachment, GeneratedMediaKind } from "@/components/media/generated-media";
@@ -74,6 +78,9 @@ export interface ConversationBranchOptimisticUserInputV1 {
 // ConversationBranchWorkspaceV1Props binds the restored branch presentation to one authoritative V1 owner.
 // ConversationBranchWorkspaceV1Props 把恢复后的分支展示绑定到一个权威 V1 所有者。
 export interface ConversationBranchWorkspaceV1Props {
+  // Exact direct and embedded routes supplied by the mounted host, never inferred from event text.
+  // 已挂载宿主提供的精确直接及嵌入路由，绝不从事件正文推测。
+  collaborationNavigation?: ConversationV1CollaborationNavigation;
   // Live provider/model catalog; absence represents an isolated host without configuration.
   // 实时供应商和模型目录；缺失表示不带配置的隔离宿主。
   providers?: readonly ProviderSummary[];
@@ -170,6 +177,23 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   // events preserves the exact controller order and never falls back to legacy messages.
   // events 保留控制器精确顺序，并且绝不回退到旧消息。
   const events = ownerReady ? props.snapshot.events : [];
+  // collaborationRoutes only enables participants present in the current host navigation snapshot.
+  // collaborationRoutes 仅启用当前宿主导航快照中存在的参与会话。
+  const collaborationRoutes = React.useMemo(
+    () => props.collaborationNavigation ? createConversationV1CollaborationNavigation(props.collaborationNavigation) : null,
+    [props.collaborationNavigation],
+  );
+  // collaborationActions keeps cancellation source-bound and refreshes through the exact window owner.
+  // collaborationActions 让撤销绑定问题来源，并通过精确窗口所有者刷新。
+  const collaborationActions = React.useMemo(() => ({
+    cancellableQuestionIds: pendingCollaborationQuestionIds(events),
+    onOpenSession: collaborationRoutes?.onOpenSession,
+    availableSessionIds: collaborationRoutes?.availableSessionIds,
+    onCancelQuestion: async (questionId: string, sourceRootSessionId: string): Promise<void> => {
+      await cancelCollaborationQuestion(questionId, sourceRootSessionId);
+      await props.commands.rehydrate();
+    },
+  }), [collaborationRoutes, props.commands, events]);
   // resourceIds preserves first occurrence order across typed user and generated-resource references.
   // resourceIds 保留强类型用户资源与生成资源引用的首次出现顺序。
   const resourceIds = React.useMemo(() => collectConversationResourceIdsV1(events), [events]);
@@ -267,6 +291,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
 
   return (
     <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "popup_only"}>
+    <ConversationAgentInteractionActionsContext.Provider value={collaborationActions}>
     <ConversationWorkspace
       autoExpandStreamingThinking={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "inline_output"}
       commandSessions={props.commandSessions}
@@ -303,6 +328,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       transientReasoningStatus={props.transientReasoningStatus}
       workspacePath={props.workspacePath}
     />
+    </ConversationAgentInteractionActionsContext.Provider>
     </ThinkingPopupContext.Provider>
   );
 }

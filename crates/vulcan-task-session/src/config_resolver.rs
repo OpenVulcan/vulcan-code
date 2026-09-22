@@ -1,4 +1,3 @@
-use crate::SUBAGENT_MODE_EXPERT;
 use crate::profile::SubagentProfile;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -8,77 +7,7 @@ use vulcan_session_core::{
     SessionEffectiveConfig, SessionRequestedConfig, ToolExposureSnapshot,
 };
 
-/// Task invocation configuration supplied by the spawn-agent subagent call.
-/// spawn_agent 子代理调用提供的任务调用配置。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskInvocationConfig {
-    /// Prompt that the task session should execute.
-    /// 子代理会话需要执行的提示词。
-    pub prompt: String,
-    /// Optional profile identifier requested by the invocation.
-    /// 调用请求的可选配置标识符。
-    pub subagent_profile_id: Option<String>,
-    /// Optional subagent execution mode key requested by the invocation.
-    /// 调用请求的可选子代理执行模式键。
-    pub subagent_mode: Option<String>,
-    /// Optional inheritance override for this invocation.
-    /// 本次调用的可选继承覆盖。
-    pub inherit_parent_config: Option<bool>,
-    /// Optional replacement system prompt.
-    /// 可选的替换系统提示词。
-    pub system_prompt: Option<String>,
-    /// Optional appended system prompt.
-    /// 可选的追加系统提示词。
-    pub system_prompt_append: Option<String>,
-    /// Provider and model override request.
-    /// 供应商与模型覆盖请求。
-    pub provider_model: ProviderModelSnapshot,
-    /// Tool exposure override request.
-    /// 工具可见性覆盖请求。
-    pub tool_exposure: ToolExposureSnapshot,
-    /// Prompt skill override request.
-    /// 提示词技能覆盖请求。
-    pub prompt_skills: PromptSkillSnapshot,
-    /// Context compaction override request.
-    /// 上下文压缩覆盖请求。
-    pub context_compaction: ContextCompactionPolicyRequest,
-    /// Runtime policy override request.
-    /// 运行时策略覆盖请求。
-    pub runtime_policy: ExecutionRuntimePolicyRequest,
-    /// Additional invocation-owned payload.
-    /// 调用拥有的额外载荷。
-    pub extra: Value,
-}
-
-impl TaskInvocationConfig {
-    /// Creates a default task invocation that inherits the parent configuration.
-    /// 创建默认继承父配置的任务调用。
-    pub fn main(prompt: impl Into<String>) -> Self {
-        Self {
-            prompt: prompt.into(),
-            subagent_profile_id: None,
-            subagent_mode: None,
-            inherit_parent_config: None,
-            system_prompt: None,
-            system_prompt_append: None,
-            provider_model: ProviderModelSnapshot::default(),
-            tool_exposure: ToolExposureSnapshot::default(),
-            prompt_skills: PromptSkillSnapshot::default(),
-            context_compaction: ContextCompactionPolicyRequest::default(),
-            runtime_policy: ExecutionRuntimePolicyRequest::default(),
-            extra: Value::Null,
-        }
-    }
-
-    /// Creates a task invocation that targets a named subagent profile.
-    /// 创建指向命名子代理配置的任务调用。
-    pub fn with_profile(profile_id: impl Into<String>, prompt: impl Into<String>) -> Self {
-        let mut invocation = Self::main(prompt);
-        invocation.subagent_profile_id = Some(profile_id.into());
-        invocation.subagent_mode = Some(SUBAGENT_MODE_EXPERT.to_string());
-        invocation
-    }
-}
+pub use vulcan_session_core::{TaskInvocationConfig, TaskSessionResolvedConfig};
 
 /// Input used to resolve one task-session effective configuration.
 /// 用于解析一个子代理会话有效配置的输入。
@@ -96,24 +25,6 @@ pub struct TaskSessionConfigResolutionInput {
     /// Invocation-level override configuration.
     /// 调用级覆盖配置。
     pub invocation: TaskInvocationConfig,
-}
-
-/// Fully resolved task-session configuration plus its isolated runtime policy.
-/// 完整解析的子代理会话配置及其隔离运行时策略。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskSessionResolvedConfig {
-    /// Requested configuration persisted for audit.
-    /// 为审计持久化的请求配置。
-    pub requested_config: SessionRequestedConfig,
-    /// Effective configuration used by execution.
-    /// 执行使用的有效配置。
-    pub effective_config: SessionEffectiveConfig,
-    /// Functional system prompt layers owned by this task session after resolution.
-    /// 解析后由当前子代理会话自身拥有的功能性系统提示词层。
-    pub functional_system_prompt_layers: Vec<String>,
-    /// Runtime policy enforced for task sessions.
-    /// 对子代理会话强制执行的运行时策略。
-    pub runtime_policy: ExecutionRuntimePolicy,
 }
 
 /// Resolves task-session configuration from defaults, parent state, profile, and invocation.

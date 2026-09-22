@@ -131,6 +131,39 @@ impl Drop for BrowserAiIdleSlotPrune<'_> {
     }
 }
 
+/// Holds ordered browser preparation admission before its cancellation-independent task is spawned.
+/// 在生成独立于取消的任务之前，按顺序持有浏览器准备准入。
+struct BrowserAiPreparationReservation {
+    /// Owned slot lock; optional only so Drop can unlock it before pruning the slot.
+    /// 自有槽位锁；可选性仅用于 Drop 在清理槽位之前解锁。
+    connection: Option<tokio::sync::OwnedMutexGuard<Option<BrowserAiConnection>>>,
+    /// Manager owning the slot registry.
+    /// 拥有槽位注册表的管理器。
+    manager: BrowserManager,
+    /// Exact conversation identity supplied by the host.
+    /// 宿主提供的精确会话身份。
+    owner: String,
+    /// Slot reserved before Stop can observe a completed preparation cancellation.
+    /// 在 Stop 可以观察到准备取消完成之前预留的槽位。
+    slot: Arc<tokio::sync::Mutex<Option<BrowserAiConnection>>>,
+    /// Plugin admission acquired before the slot to preserve drain lock ordering.
+    /// 先于槽位取得的插件准入，用于保持排空锁顺序。
+    _admission: tokio::sync::OwnedRwLockReadGuard<()>,
+}
+
+impl Drop for BrowserAiPreparationReservation {
+    /// Unlocks before idle-slot pruning on success, error, cancellation, or panic.
+    /// 在成功、错误、取消或 panic 时，先解锁再清理空闲槽位。
+    fn drop(&mut self) {
+        drop(self.connection.take());
+        let _prune = BrowserAiIdleSlotPrune {
+            manager: &self.manager,
+            owner: &self.owner,
+            slot: &self.slot,
+        };
+    }
+}
+
 /// Enabled plugin resources captured atomically before one browser transition.
 /// 一次浏览器转换前原子捕获的已启用插件资源。
 struct BrowserAiEnvironment {
@@ -397,6 +430,39 @@ impl BrowserManager {
 }
 
 impl CoreNativeBrowserRuntime {
+    /// Reserves the plugin gate then the exact owner slot before any detached preparation is created.
+    /// 在创建任何分离准备前，先预留插件门，再预留精确所有者槽位。
+    /// `manager` owns both locks and `owner_session_id` selects the slot; returns an owned reservation.
+    /// `manager` 拥有两把锁，`owner_session_id` 选择槽位；返回自有预留。
+    async fn reserve_preparation_slot(
+        manager: BrowserManager,
+        owner_session_id: SessionId,
+    ) -> Result<BrowserAiPreparationReservation, String> {
+        // Waiting here is cancellable and has not started any independent browser operation.
+        // 此处等待可以取消，且尚未启动任何独立浏览器操作。
+        let admission = manager.ai_transition_gate.clone().read_owned().await;
+        if manager.ai_drain_closed.load(Ordering::SeqCst) {
+            return Err(String::from("browser plugin owner admission is draining"));
+        }
+        let owner = owner_session_id.to_string();
+        let slot = Self::connection_slot(&manager, &owner)?;
+        // A cancelled slot waiter must not leave an otherwise unreferenced empty slot.
+        // 被取消的槽位等待者不得遗留没有其他引用的空槽位。
+        let _prune = BrowserAiIdleSlotPrune {
+            manager: &manager,
+            owner: &owner,
+            slot: &slot,
+        };
+        let connection = slot.clone().lock_owned().await;
+        Ok(BrowserAiPreparationReservation {
+            connection: Some(connection),
+            manager: manager.clone(),
+            owner: owner.clone(),
+            slot: slot.clone(),
+            _admission: admission,
+        })
+    }
+
     /// Runs an AI transition only while the plugin admission barrier remains open.
     /// 仅在插件准入屏障开放期间执行 AI 转换。
     async fn await_admitted_owner_transition<T, F>(
@@ -1035,9 +1101,14 @@ impl CoreNativeBrowserRuntime {
         owner_session_id: SessionId,
     ) -> Result<Vec<McpRuntimeToolBinding>, String> {
         let environment = self.environment()?;
+        // Acquire ordered admission before creating cancellation-independent work, closing the late-slot race.
+        // 创建独立于取消的工作前取得有序准入，封闭迟到槽位竞争。
+        let reservation =
+            Self::reserve_preparation_slot(environment.manager.clone(), owner_session_id).await?;
         let state = self.state.clone();
-        Self::await_admitted_owner_transition(environment.manager.clone(), async move {
-            Self::prepare_bindings_transition(state, environment, owner_session_id).await
+        Self::await_owner_transition(async move {
+            Self::prepare_bindings_transition(state, environment, owner_session_id, reservation)
+                .await
         })
         .await
     }
@@ -1048,15 +1119,15 @@ impl CoreNativeBrowserRuntime {
         state: SharedServiceBridgeState,
         environment: BrowserAiEnvironment,
         owner_session_id: SessionId,
+        mut reservation: BrowserAiPreparationReservation,
     ) -> Result<Vec<McpRuntimeToolBinding>, String> {
         let owner = owner_session_id.to_string();
-        let slot = Self::connection_slot(&environment.manager, &owner)?;
-        let _idle_slot_prune = BrowserAiIdleSlotPrune {
-            manager: &environment.manager,
-            owner: &owner,
-            slot: &slot,
-        };
-        let mut connection = slot.lock().await;
+        // The detached task already owns this lock; Stop must wait for its conversion before retirement.
+        // 分离任务已经拥有此锁；Stop 必须等此转换完成后才能退休。
+        let connection = reservation
+            .connection
+            .as_deref_mut()
+            .expect("browser preparation reservation remains locked until Drop");
         let selected = environment.manager.selected_ai_browser(&owner)?;
         let selected_browser_id = selected.map(|projection| projection.session_id);
         let reused = connection.as_ref().is_some_and(|current| {
@@ -1085,7 +1156,7 @@ impl CoreNativeBrowserRuntime {
                     &environment.manager,
                     owner_session_id,
                     previous,
-                    &mut connection,
+                    connection,
                 )
                 .await?;
             }
@@ -1093,7 +1164,7 @@ impl CoreNativeBrowserRuntime {
                 &environment,
                 owner_session_id,
                 selected_browser_id,
-                &mut connection,
+                connection,
             )
             .await?;
             *connection = Some(next);
@@ -1105,7 +1176,7 @@ impl CoreNativeBrowserRuntime {
                     &environment.manager,
                     owner_session_id,
                     current,
-                    &mut connection,
+                    connection,
                 )
                 .await?;
             }
@@ -1476,6 +1547,139 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
     use tokio::sync::oneshot;
+
+    /// A cancelled binding waiter cannot let retirement finish before its reserved conversion publishes.
+    /// 绑定等待者取消后，退休不能早于已预留转换的发布完成。
+    #[tokio::test]
+    async fn preparation_reservation_orders_cancelled_conversion_before_retirement() {
+        // Real Core ownership and an empty MCP registry avoid launching any external browser process.
+        // 真实 Core 所有权和空 MCP 注册表避免启动外部浏览器进程。
+        let manager = BrowserManager::new();
+        let owner = SessionId::new_v4();
+        let browser = manager
+            .create_owned_session(&owner.to_string(), BrowserProfileMode::Ephemeral)
+            .unwrap();
+        let mcp_runtime = vulcan_agent_runtime::mcp::bootstrap_mcp_runtime_access(Vec::new())
+            .await
+            .unwrap();
+        let mut reservation =
+            CoreNativeBrowserRuntime::reserve_preparation_slot(manager.clone(), owner)
+                .await
+                .unwrap();
+        assert!(
+            manager.ai_connections.lock().unwrap()[&owner.to_string()]
+                .try_lock()
+                .is_err()
+        );
+        // Hold the detached operation before its late lease acquisition and connection publication.
+        // 在迟到租约获取及连接发布之前阻挡分离操作。
+        let (entered, entered_receiver) = oneshot::channel();
+        let (release, release_receiver) = oneshot::channel();
+        let transition_manager = manager.clone();
+        let browser_id = browser.session_id.clone();
+        let waiter = tokio::spawn(CoreNativeBrowserRuntime::await_owner_transition(
+            async move {
+                entered.send(()).unwrap();
+                release_receiver.await.unwrap();
+                let (_, lease_secret) = transition_manager.acquire_lease(
+                    &browser_id,
+                    "ai:preparation-stop-test",
+                    None,
+                )?;
+                // A partially established connection already owns a lease even before gateway attachment.
+                // 部分建立的连接在网关附加前已经持有租约。
+                *reservation.connection.as_deref_mut().unwrap() = Some(BrowserAiConnection {
+                    plugin_generation: 1,
+                    mcp_runtime,
+                    browser_id: Some(browser_id),
+                    lease_secret: Some(lease_secret),
+                    connection_id: Some(String::from("preparation-stop-test")),
+                    heartbeat: None,
+                    ready: false,
+                });
+                Ok::<(), String>(())
+            },
+        ));
+        tokio::time::timeout(Duration::from_secs(10), entered_receiver)
+            .await
+            .unwrap()
+            .unwrap();
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        let retirement_manager = manager.clone();
+        let mut retirement = tokio::spawn(async move {
+            retirement_manager
+                .retire_ai_connection_after_turn(owner)
+                .await
+        });
+        // Retirement must remain blocked while the independently running operation owns its slot.
+        // 独立运行的操作拥有槽位时，退休必须保持阻塞。
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut retirement)
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), retirement)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let projection = manager.session_projection(&browser.session_id).unwrap();
+        assert_eq!(projection.lease_state, BrowserLeaseState::Free);
+        assert_eq!(
+            projection.automation_state,
+            BrowserAutomationState::Detached
+        );
+        assert!(manager.ai_connections.lock().unwrap().is_empty());
+    }
+
+    /// Preparation reservations preserve plugin drain ordering and reclaim their empty slots on Drop.
+    /// 准备预留保持插件排空锁顺序，并在析构时回收空槽位。
+    #[tokio::test]
+    async fn preparation_reservation_preserves_plugin_drain_and_idle_cleanup() {
+        let manager = BrowserManager::new();
+        let owner = SessionId::new_v4();
+        let reservation =
+            CoreNativeBrowserRuntime::reserve_preparation_slot(manager.clone(), owner)
+                .await
+                .unwrap();
+        assert!(manager.ai_transition_gate.try_write().is_err());
+        manager.begin_ai_drain();
+        let drain_manager = manager.clone();
+        let mut drain = tokio::spawn(async move { drain_manager.shutdown_ai_connections().await });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut drain)
+                .await
+                .is_err()
+        );
+        drop(reservation);
+        tokio::time::timeout(Duration::from_secs(10), drain)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            CoreNativeBrowserRuntime::reserve_preparation_slot(
+                manager.clone(),
+                SessionId::new_v4()
+            )
+            .await
+            .is_err()
+        );
+        assert!(manager.ai_connections.lock().unwrap().is_empty());
+        manager.finish_ai_drain();
+        // Re-enabling admission must allow the next owner without retaining the previous idle slot.
+        // 重新启用准入必须允许下一所有者，且不保留前一个空槽位。
+        let next = CoreNativeBrowserRuntime::reserve_preparation_slot(
+            manager.clone(),
+            SessionId::new_v4(),
+        )
+        .await
+        .unwrap();
+        drop(next);
+        assert!(manager.ai_connections.lock().unwrap().is_empty());
+    }
 
     /// Verifies completed owners release idle slots without detaching a concurrent holder.
     /// 验证已结束会话释放空闲槽位，同时不会使并发持有者脱离注册表。

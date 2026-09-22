@@ -313,12 +313,14 @@ fn golden_turn_boundary() {
         7,
         1,
         EventBody::TurnBoundary(TurnBoundaryEvent {
+            reason: TurnClosureReason::Completed,
             outcome: TurnOutcome::Completed,
+            purpose: TurnBoundaryPurpose::Business,
         }),
     );
     assert_golden(
         &event,
-        r#"{"seq":7,"turn_id":1,"created_at_ms":1700000000000,"updated_at_ms":1700000000000,"event_revision":1,"visibility":"ui_only","event":{"kind":"turn_boundary","outcome":"completed"}}"#,
+        r#"{"seq":7,"turn_id":1,"created_at_ms":1700000000000,"updated_at_ms":1700000000000,"event_revision":1,"visibility":"ui_only","event":{"kind":"turn_boundary","reason":"completed","outcome":"completed","purpose":"business"}}"#,
     );
 }
 
@@ -357,7 +359,10 @@ fn golden_subagent_return() {
         9,
         1,
         EventBody::SubagentReturn(SubagentReturnEvent {
+            child_segment_generation: 1,
+            child_root_action_id: ClientActionId::try_new("child-execution-9").unwrap(),
             content_only: false,
+            parent_session_id: "parent-1".to_string(),
             child_session_id: "child-1".to_string(),
             child_task_id: SubagentTaskId::try_new("task-9").unwrap(),
             content: "summary: done".to_string(),
@@ -369,7 +374,7 @@ fn golden_subagent_return() {
     );
     assert_golden(
         &event,
-        r#"{"seq":9,"turn_id":1,"created_at_ms":1700000000000,"updated_at_ms":1700000000000,"event_revision":1,"visibility":"provider","event":{"kind":"subagent_return","child_session_id":"child-1","child_task_id":"task-9","content":"summary: done","source_assistant_text_seq":11,"source_from_seq":1,"source_to_seq":12,"child_turn_stats_seq":12}}"#,
+        r#"{"seq":9,"turn_id":1,"created_at_ms":1700000000000,"updated_at_ms":1700000000000,"event_revision":1,"visibility":"provider","event":{"kind":"subagent_return","child_segment_generation":1,"child_root_action_id":"child-execution-9","parent_session_id":"parent-1","child_session_id":"child-1","child_task_id":"task-9","content":"summary: done","source_assistant_text_seq":11,"source_from_seq":1,"source_to_seq":12,"child_turn_stats_seq":12}}"#,
     );
 }
 
@@ -413,7 +418,10 @@ fn subagent_return_reload_rejects_missing_identity_source_and_non_final_status()
         9,
         1,
         EventBody::SubagentReturn(SubagentReturnEvent {
+            child_segment_generation: 1,
+            child_root_action_id: ClientActionId::try_new("child-execution-9").unwrap(),
             content_only: false,
+            parent_session_id: "parent-1".to_string(),
             child_session_id: "child-1".to_string(),
             child_task_id: SubagentTaskId::try_new("task-9").unwrap(),
             content: "summary: done".to_string(),
@@ -424,7 +432,12 @@ fn subagent_return_reload_rejects_missing_identity_source_and_non_final_status()
         }),
     );
     let baseline = serde_json::to_value(event).expect("subagent return JSON");
-    for field in ["child_task_id", "source_assistant_text_seq"] {
+    for field in [
+        "child_task_id",
+        "source_assistant_text_seq",
+        "child_segment_generation",
+        "child_root_action_id",
+    ] {
         let mut missing = baseline.clone();
         missing["event"]
             .as_object_mut()
@@ -683,7 +696,9 @@ fn golden_compactions_document() {
             api_stats_seq: Seq::try_new(101).unwrap(),
             occurred_at_seq: Seq::try_new(100).unwrap(),
             retained_from_seq: Seq::try_new(60).unwrap(),
-            summary: "compacted".to_string(),
+            content: crate::v1::context::CompactionContent::Summary {
+                text: "compacted".to_string(),
+            },
             created_at_ms: T,
         }],
         ..CompactionsDocument::new("sess-1")
@@ -691,7 +706,7 @@ fn golden_compactions_document() {
     let json = serde_json::to_string(&document).unwrap();
     assert_eq!(
         json,
-        r#"{"contract":"vulcan.session-compactions.v1","schema_version":1,"session_id":"sess-1","nodes":[{"compaction_id":1,"api_call_id":4,"api_stats_seq":101,"occurred_at_seq":100,"retained_from_seq":60,"summary":"compacted","created_at_ms":1700000000000}]}"#
+        r#"{"contract":"vulcan.session-compactions.v1","schema_version":1,"session_id":"sess-1","nodes":[{"compaction_id":1,"api_call_id":4,"api_stats_seq":101,"occurred_at_seq":100,"retained_from_seq":60,"content":{"kind":"summary","text":"compacted"},"created_at_ms":1700000000000}]}"#
     );
 }
 

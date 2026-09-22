@@ -155,7 +155,10 @@ fn compact_conversation_with_legacy_inputs(
     source_until_message_id: Option<&str>,
     policy: ContextCompactionPolicy,
 ) -> Result<(), String> {
-    let source_messages = conversation_state_to_compaction_source_messages(state);
+    // Plan from the same isolated host selection that the summary and rewrite will consume.
+    // 从摘要与改写共用的同一隔离宿主选择规划。
+    let mut candidate = vulcan_context::runtime_host::prepare_runtime_host_compaction(state)?;
+    let source_messages = conversation_state_to_compaction_source_messages(&candidate)?;
     let plan = plan_context_compaction(CompactionPlanInput {
         session_label: "legacy-rewrite",
         messages: &source_messages,
@@ -185,7 +188,9 @@ fn compact_conversation_with_legacy_inputs(
         provider_context_usage: None,
         provider_context_response_id: None,
     };
-    compact_conversation_with_compaction_result(state, summary_message_id, &result)
+    compact_conversation_with_compaction_result(&mut candidate, summary_message_id, &result)?;
+    *state = candidate;
+    Ok(())
 }
 
 /// Atomically rewrites one canonical conversation from a frozen compaction result.
@@ -285,11 +290,15 @@ pub fn compact_conversation_with_compaction_result(
     validate_session_conversation_message_identities(&compacted_messages)
         .map_err(|error| format!("Invalid compacted conversation message identity: {error}"))?;
 
-    state.messages = compacted_messages;
+    // Preserve still-active exact host instructions and mark removed events only in an atomic candidate.
+    // 在原子候选中保留仍有效的精确宿主指令，并标记已移出的事件。
+    let mut candidate =
+        vulcan_context::runtime_host::rebuild_runtime_host_compaction(state, compacted_messages)?;
     // continuation is reset only after every frozen-boundary and identity validation succeeds.
     // continuation 仅在全部冻结边界与身份校验成功后重置。
-    state.continuation = Default::default();
-    state.continuation.updated_at = Some(result.created_at.clone());
+    candidate.continuation = Default::default();
+    candidate.continuation.updated_at = Some(result.created_at.clone());
+    *state = candidate;
     Ok(())
 }
 
@@ -581,6 +590,16 @@ pub fn compact_conversation_records_after_summary_with_retained_ids(
     let mut matched_local_tool_ids = std::collections::BTreeSet::new();
     let mut matched_tool_call_ids = std::collections::BTreeSet::new();
     for record in &state.records {
+        // Runtime host records own replay identities even when their messages leave the active window.
+        // 即使消息离开活动窗口，运行时宿主记录仍持有重放身份。
+        // Their producer reserves this ID namespace and rejects missing metadata; display pruning must not erase it.
+        // 生产者独占此 ID 命名空间并拒绝缺失元数据；展示记录剪枝不得清除该账本。
+        if record
+            .id
+            .starts_with(vulcan_context::runtime_host::RUNTIME_HOST_RECORD_PREFIX)
+        {
+            full_record_ids.insert(record.id.clone());
+        }
         if model_switch_display_record_should_survive_compaction(record) {
             // Model-switch audit records remain complete so the renderer can localize their frozen labels after compaction.
             // 模型切换审计记录保持完整，使渲染器在压缩后仍能本地化其冻结标签。
@@ -1145,7 +1164,8 @@ mod tests {
         };
         // sourceMessages is the canonical model projection consumed by the only tail selector.
         // sourceMessages 是唯一尾部选择器消费的规范模型投影。
-        let source_messages = conversation_state_to_compaction_source_messages(&state);
+        let source_messages = conversation_state_to_compaction_source_messages(&state)
+            .expect("valid compaction source messages");
         // policy retains two segments under a budget that fits one historical preview and the full newest segment.
         // policy 在可容纳一份历史预览和完整最新段的预算下保留两个执行段。
         let policy = ContextCompactionPolicy {
@@ -1805,6 +1825,53 @@ mod tests {
                 .find(|record| record.id == "detail-retained")
                 .map(|record| record.body.as_str()),
             Some(original_detail_body.as_str())
+        );
+    }
+
+    /// Verifies host replay ledgers survive even after their messages leave the active context.
+    /// 验证宿主重放账本在对应消息离开活动上下文后仍完整保留。
+    #[test]
+    fn record_compaction_preserves_host_ledger_without_retained_message() {
+        // The reserved identity, not a user-authored body or metadata lookalike, owns this ledger.
+        // 账本归属由保留身份确定，而不是用户正文或相似元数据。
+        let ledger = SessionConversationRecord {
+            id: String::from("runtime-host-record:runtime-host:occurrence-1"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::ExploreOutput,
+            visible: false,
+            title: String::from("Runtime host context"),
+            body: "x".repeat(PROTOCOL_RECORD_COMPACTED_BODY_CHARS.saturating_add(1)),
+            metadata: Some(json!({"event_id": "occurrence-1", "version": 1})),
+            created_at: String::from("0"),
+        };
+        // Ordinary user records deliberately have identical content but remain subject to display pruning.
+        // 普通用户记录故意具有相同内容，仍按展示记录规则裁剪。
+        let mut user_record = ledger.clone();
+        user_record.id = String::from("human-record");
+        let mut state = SessionConversationState {
+            records: vec![ledger.clone(), user_record],
+            ..Default::default()
+        };
+        let report = compact_conversation_records_after_summary(
+            &mut state,
+            "summary",
+            ContextCompactionPolicy::default(),
+            test_compact_change_set_host_result,
+        );
+        assert_eq!(report.full_record_count, 1);
+        assert_eq!(report.compacted_historical_record_count, 1);
+        assert_eq!(
+            serde_json::to_value(&state.records[0]).unwrap(),
+            serde_json::to_value(ledger).unwrap()
+        );
+        assert!(state.records[1].metadata.is_none());
+        assert_eq!(
+            state.records[1].body.chars().count(),
+            PROTOCOL_RECORD_COMPACTED_BODY_CHARS
+        );
+        assert!(
+            state.messages.is_empty(),
+            "ledger retention must never reinsert a provider message"
         );
     }
 

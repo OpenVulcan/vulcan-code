@@ -1767,6 +1767,9 @@ fn run_service_bootstrap(
     pending_luaskills_callbacks.commit();
     mark_webui_service_discovery_ready(state);
     emit_service_snapshots(event_emitter, &startup, &emitted_workbench);
+    // Recover durable collaboration after publication, loading only indexed sessions with delivery work.
+    // 发布后恢复可靠协作，仅加载存在投递待办的索引会话。
+    crate::agent_collaboration::start_collaboration_recovery(state.clone(), event_emitter.clone());
     crate::vmm::start_vmm_health_monitor(state.clone(), event_emitter.clone());
     trace_bootstrap_stage("total", bootstrap_started_at, "result=ready");
     Ok(())

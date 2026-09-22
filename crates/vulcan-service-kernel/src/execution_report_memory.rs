@@ -29,6 +29,59 @@ use super::{
 use crate::vmm_session_controller::open_registered_session_vmm_controller;
 use crate::webui_vmm_runtime_readiness;
 
+/// Applies only the auxiliary checkpoint to existing session memory; V1 owns outcome and usage.
+/// 仅将辅助检查点应用到既有会话内存；结果与用量由 V1 拥有。
+/// `state` supplies the prepared adapter and `report` its exact session; errors leave the adapter unchanged.
+/// `state` 提供已准备适配器，`report` 指定其精确会话；错误保持适配器不变。
+/// Returns after atomic memory publication without phase changes, business hooks or completion notifications.
+/// 原子发布内存后返回，不修改阶段、不执行业务 Hook、不发送完成通知。
+pub(crate) fn apply_question_execution_report_to_memory(
+    state: &SharedServiceBridgeState,
+    report: &ExecutionRunReport,
+) -> Result<(), String> {
+    // The physical report session is the sole adapter key; no parent-session substitution is allowed.
+    // 物理报告会话是唯一适配器键，不允许替换为父会话。
+    let session_id = report.session_id;
+    // Retain the service lock only for the local validated publication, never for durable I/O.
+    // 仅在本地已验证发布期间持有服务锁，不跨可靠 I/O 持有。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // The adapter must have been installed by preparation before a provider stream can finish.
+    // 供应商流结束前，准备阶段必须已安装适配器。
+    let workspace = guard
+        .workspace_snapshot
+        .as_mut()
+        .ok_or("The workspace adapter is unavailable.")?;
+    // Read the latest state so concurrent non-execution UI changes are retained by the draft.
+    // 读取最新状态，使草稿保留并发的非执行 UI 变化。
+    let source = workspace
+        .session_runtime_state
+        .get(&session_id)
+        .ok_or("The question execution has no prepared session adapter.")?;
+    // Only the shared QA reducer may construct this projection; the ordinary terminal builder is excluded.
+    // 只有共享答疑归约器可构建该投影，排除普通终态构建器。
+    let projected =
+        vulcan_agent_runtime::session_event_runtime::build_question_execution_report_state(
+            source,
+            session_id,
+            &current_unix_millis_text(),
+            report,
+        )?;
+    // Keep the child detail cache as a mirror of the same adapter, not another task result.
+    // 子详情缓存保持为相同适配器的镜像，而非另一份任务结果。
+    let conversation_state = projected.conversation_state.clone();
+    workspace
+        .session_runtime_state
+        .insert(session_id, projected);
+    sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
+    if let Some(entry) = guard.subagent_surface_detail_cache.get_mut(&session_id) {
+        entry.task_state.conversation_state = Some(conversation_state);
+        entry.last_access_ms = current_unix_millis_value();
+    }
+    Ok(())
+}
+
 /// Applies one streamed conversation checkpoint to retained workspace memory.
 /// 将单个流式对话检查点应用到保留工作区内存。
 ///
@@ -203,6 +256,15 @@ where
             .conversation_hook_runtime
             .lock()
             .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+        // Missing process-local ownership requires canonical restoration before consuming any completion effect.
+        // 缺失进程内所有权时，必须先规范恢复，之后才能消费任何完成效果。
+        // A final User message may be agent guidance or dynamic context and cannot identify the original business root.
+        // 最后一条 User 消息可能是代理引导或动态上下文，不能标识原业务根输入。
+        if !hook_runtime.has_active_turn(request.session_id) {
+            return Err(String::from(
+                "Business completion requires restoration of its original conversation Hook owner.",
+            ));
+        }
         if let Some(expected_turn_id) = request.expected_vmm_turn_id {
             // actual_turn_id is copied before the mutating completion call so mismatch cannot remove Hook ownership.
             // actual_turn_id 在可变完成调用前复制，使身份不匹配无法移除 Hook 所有权。
@@ -525,6 +587,9 @@ pub(super) fn apply_execution_report_to_memory(
             // completion_status freezes the inspected gate decision for hook commit and context consumption.
             // completion_status 固化已检查的闸门决策，供 Hook 提交与上下文消费共同使用。
             let completion_status = completion_gate.completion_status();
+            // Logical completion requires both a successful physical report and a clear durable collaboration gate.
+            // 逻辑完成同时要求物理报告成功且可靠协作完成门已经清空。
+            let logical_turn_completed = apply_result.is_success && completion_status.is_final();
             // consumes_vmm_ttl identifies the single final boundary before either state machine commits ownership.
             // consumes_vmm_ttl 在任一状态机提交所有权前标识唯一终态边界。
             let consumes_vmm_ttl = vmm_runtime_ready
@@ -613,10 +678,12 @@ pub(super) fn apply_execution_report_to_memory(
             if let Some(session) =
                 active_session_summary_for_session_mut(&mut workspace.sessions, session_id)
             {
-                session.status = if apply_result.is_success {
+                session.status = if !apply_result.is_success {
+                    SessionState::Blocked
+                } else if logical_turn_completed {
                     SessionState::Completed
                 } else {
-                    SessionState::Blocked
+                    SessionState::Running
                 };
                 session.last_updated_label = String::from("刚刚");
             }
@@ -628,10 +695,12 @@ pub(super) fn apply_execution_report_to_memory(
                 .insert(session_id, runtime_state);
             workspace.session_run_phases.insert(
                 session_id,
-                if apply_result.is_success {
+                if !apply_result.is_success {
+                    SessionRunPhase::Failed
+                } else if logical_turn_completed {
                     SessionRunPhase::Ready
                 } else {
-                    SessionRunPhase::Failed
+                    SessionRunPhase::Preparing
                 },
             );
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
@@ -648,15 +717,19 @@ pub(super) fn apply_execution_report_to_memory(
                     );
                 }
             }
-            let terminal_run_phase = if apply_result.is_success {
+            let terminal_run_phase = if !apply_result.is_success {
+                SessionRunPhase::Failed
+            } else if logical_turn_completed {
                 SessionRunPhase::Ready
             } else {
-                SessionRunPhase::Failed
+                SessionRunPhase::Preparing
             };
-            let terminal_status_label = if apply_result.is_success {
+            let terminal_status_label = if !apply_result.is_success {
+                SessionState::Blocked.label().to_string()
+            } else if logical_turn_completed {
                 SessionState::Completed.label().to_string()
             } else {
-                SessionState::Blocked.label().to_string()
+                SessionState::Running.label().to_string()
             };
             (
                 project_id,
@@ -1053,6 +1126,92 @@ pub(super) fn spawn_conversation_completion_hook_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Missing Hook ownership rejects completion before TTL persistence or synthesized turn allocation.
+    /// 缺失 Hook 归属时，在 TTL 持久化或合成回合分配之前拒绝完成。
+    /// Returns nothing; an actual registered root then proves normal completion still uses its original identity.
+    /// 不返回值；随后实际登记根输入，证明正常完成仍使用原身份。
+    #[tokio::test]
+    async fn terminal_hook_requires_original_owner_before_effect_commit() {
+        // The real runtime starts without a process-local Hook owner, matching a cold load.
+        // 真实运行时起初没有进程内 Hook 所有者，与冷加载一致。
+        let runtime = crate::tests::test_support::test_agent_runtime_bridge();
+        // This physical session retains one stable identity throughout both checks.
+        // 此物理会话在两次检查中保留同一稳定身份。
+        let session_id = uuid::Uuid::new_v4();
+        // No conversation text can substitute for the missing original ownership.
+        // 任何会话文本都不能替代缺失的原归属。
+        let conversation = SessionConversationState::default();
+        // This counter represents the durable side effect executed only after ownership validation.
+        // 此计数表示仅在归属校验后执行的可靠副作用。
+        let committed = std::cell::Cell::new(0);
+        // The exact request factory keeps all terminal facts identical across both attempts.
+        // 精确请求工厂使两次尝试的全部终态事实保持相同。
+        let request = || TerminalConversationHookRequest {
+            session_id,
+            project_id: None,
+            assistant_content: "Done",
+            provider_request_count: 1,
+            conversation_state: &conversation,
+            completion_status: ConversationTurnCompletionStatus::Completed,
+            pending_subagent_count: 0,
+            vmm_runtime_ready: false,
+            action: TerminalConversationHookAction::Complete,
+            expected_vmm_turn_id: None,
+        };
+        assert!(
+            commit_terminal_conversation_hook(&runtime, request(), || {
+                committed.set(committed.get() + 1);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(committed.get(), 0);
+        assert!(
+            !runtime
+                .conversation_hook_runtime
+                .lock()
+                .unwrap()
+                .has_active_turn(session_id)
+        );
+        // Actual root admission creates the one owner permitted to commit this terminal.
+        // 实际根准入创建唯一获准提交此终态的所有者。
+        let admitted = runtime
+            .conversation_hook_runtime
+            .lock()
+            .unwrap()
+            .prepare_user_prompt_hook_requests(
+                session_id,
+                "original-input",
+                None,
+                "D:/hook-owner-test".to_owned(),
+                vulcan_workbench_model::PendingSessionPromptSource::UserFollowup,
+                vulcan_hooks::SystemPromptHookPhase::FirstSession,
+                "Original task",
+                &conversation,
+                false,
+            );
+        // Preserve the captured root identity; completion must not allocate a replacement.
+        // 保留捕获根身份；完成不能分配替代身份。
+        let result = commit_terminal_conversation_hook(&runtime, request(), || {
+            committed.set(committed.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            matches!(result, TerminalConversationHookCommit::Completion { turn_id, .. }
+            if turn_id == admitted.turn_id)
+        );
+        assert_eq!(committed.get(), 1);
+        assert!(
+            !runtime
+                .conversation_hook_runtime
+                .lock()
+                .unwrap()
+                .has_active_turn(session_id)
+        );
+    }
+
     /// Verifies terminal hook ownership selects one exclusive action for every outcome.
     /// 验证终态 Hook 所有权为每种结果选择唯一互斥操作。
     #[test]

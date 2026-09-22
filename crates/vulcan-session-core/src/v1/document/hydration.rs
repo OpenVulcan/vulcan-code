@@ -21,6 +21,9 @@ use super::{
     TOOL_RANK, TurnOrigin, ensure_api_request_field, group_event_api_id, group_rank,
     provider_source_of, validate_timestamp,
 };
+use crate::v1::collaboration::{
+    CollaborationAfterState, CollaborationEventKind, CollaborationTaskMessageEffectKind,
+};
 use crate::v1::config::{ForkOrigin, GoalState};
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
@@ -160,6 +163,7 @@ impl SessionDocument {
         validate_subagent_return_history(&self.events)?;
         validate_queued_input_resolution_history(&self.metadata, &self.events)?;
         validate_client_action_history(&self.metadata, &self.events)?;
+        self.validate_context_maintenance_history()?;
         validate_api_dispatch_history(&self.events)?;
 
         // Validate API-group ordering and provider_source placement.
@@ -368,7 +372,14 @@ impl SessionDocument {
             };
             let turn_value = turn_id.value();
             match &event.event {
-                EventBody::TurnBoundary(_) => {
+                EventBody::TurnBoundary(boundary) => {
+                    // The host reason and aggregate outcome must describe the same immutable closure.
+                    // 宿主原因与聚合结果必须描述同一次不可变闭合。
+                    if boundary.reason.outcome() != boundary.outcome {
+                        return Err(DomainError::TurnClosureMismatch {
+                            turn_id: turn_value,
+                        });
+                    }
                     if turn_boundaries
                         .insert(turn_value, event.seq.value())
                         .is_some()
@@ -466,6 +477,12 @@ impl SessionDocument {
                             .or_insert((event.seq.value(), TurnOrigin::UserRoot));
                     }
                 }
+                EventBody::ContextMaintenance(record) if record.terminal.is_none() => {
+                    turn_state.insert(
+                        record.turn_id.value(),
+                        (record.started_seq.value(), TurnOrigin::ContextMaintenance),
+                    );
+                }
                 EventBody::SubagentReturn(_) if let Some(turn_id) = event.turn_id => {
                     turn_state
                         .entry(turn_id.value())
@@ -482,7 +499,103 @@ impl SessionDocument {
                         .entry(turn_id.value())
                         .or_insert((event.seq.value(), TurnOrigin::GoalContinuation));
                 }
+                EventBody::Collaboration(collaboration)
+                    if let CollaborationAfterState::TaskMessageEffect { effect } =
+                        &collaboration.after_state
+                        && let CollaborationTaskMessageEffectKind::Claimed { turn_id, .. } =
+                            &effect.outcome
+                        && event.turn_id == Some(*turn_id) =>
+                {
+                    turn_state
+                        .entry(turn_id.value())
+                        .or_insert((event.seq.value(), TurnOrigin::AgentTask));
+                }
+                EventBody::Collaboration(collaboration)
+                    if collaboration.event_kind
+                        == CollaborationEventKind::QuestionExecutionStarted
+                        && let CollaborationAfterState::QuestionExecution { execution } =
+                            &collaboration.after_state
+                        && let Some(turn_id) = execution.execution_turn_id
+                        && event.turn_id == Some(turn_id) =>
+                {
+                    turn_state
+                        .entry(turn_id.value())
+                        .or_insert((event.seq.value(), TurnOrigin::QuestionExecution));
+                }
                 _ => {}
+            }
+        }
+        // The metadata open-turn pointer preserves the auxiliary turn start when compaction has
+        // removed its HostOnly start event from the resident tail.
+        // metadata 的开放回合指针在压缩移除 HostOnly 起始事件后仍保留辅助回合起点。
+        if let Some(start_seq) = self.metadata.open_turn_start_seq {
+            if let Some(record) = &self.metadata.context_maintenance
+                && record.terminal.is_none()
+            {
+                if record.started_seq != start_seq {
+                    return Err(DomainError::CollaborationStateViolation {
+                        field: "context_maintenance.open_anchor",
+                    });
+                }
+                turn_state.insert(
+                    record.turn_id.value(),
+                    (start_seq.value(), TurnOrigin::ContextMaintenance),
+                );
+            }
+            // Recover agent-task origin even when compaction removed its HostOnly claim anchor.
+            // 即使压缩移除了 HostOnly 认领锚点，也恢复代理任务来源。
+            for effect in self
+                .metadata
+                .collaboration
+                .state
+                .task_message_effects
+                .values()
+            {
+                if effect.event_seq == start_seq
+                    && let CollaborationTaskMessageEffectKind::Claimed { turn_id, .. } =
+                        &effect.outcome
+                {
+                    turn_state.insert(turn_id.value(), (start_seq.value(), TurnOrigin::AgentTask));
+                }
+            }
+            for execution in self
+                .metadata
+                .collaboration
+                .state
+                .question_executions
+                .values()
+                .filter(|execution| {
+                    execution.state
+                        == crate::v1::collaboration::CollaborationQuestionExecutionState::Running
+                })
+            {
+                if let Some(turn_id) = execution.execution_turn_id {
+                    turn_state
+                        .entry(turn_id.value())
+                        .or_insert((start_seq.value(), TurnOrigin::QuestionExecution));
+                }
+            }
+        }
+        // Validate closure purpose against every resident opening fact before rebuilding ownership.
+        // 重建所有权前，按每个常驻起始事实校验闭合用途。
+        for event in &self.events {
+            if let EventBody::TurnBoundary(boundary) = &event.event
+                && let Some(turn_id) = event.turn_id
+                && let Some((_, origin)) = turn_state.get(&turn_id.value())
+                && boundary.purpose
+                    != match origin {
+                        TurnOrigin::QuestionExecution => {
+                            crate::v1::event::TurnBoundaryPurpose::QuestionExecution
+                        }
+                        TurnOrigin::ContextMaintenance => {
+                            crate::v1::event::TurnBoundaryPurpose::ContextMaintenance
+                        }
+                        _ => crate::v1::event::TurnBoundaryPurpose::Business,
+                    }
+            {
+                return Err(DomainError::TurnClosureMismatch {
+                    turn_id: turn_id.value(),
+                });
             }
         }
         for (turn_id, (start_seq, origin)) in turn_state {
@@ -715,7 +828,21 @@ impl SessionDocument {
             .max()
             .unwrap_or(self.metadata.updated_at_ms)
             .max(self.metadata.updated_at_ms);
-        let mut projected = if self.active_api.is_some() {
+        // Maintenance cannot retain a business Continue path after its process owner disappears.
+        // 维护的进程所有者消失后，不能保留业务继续路径。
+        // Count its atomic diagnostic/API/turn settlement as one recovered auxiliary execution.
+        // 将其原子诊断、API 和回合结算计为一个已恢复辅助执行。
+        let mut projected = if self
+            .active_turn
+            .as_ref()
+            .is_some_and(|turn| !turn.closed && turn.origin == TurnOrigin::ContextMaintenance)
+        {
+            u32::from(self.fail_execution_boundary_and_close_turn(
+                "context_maintenance_process_interrupted",
+                Some("The process exited before context maintenance completed."),
+                now_ms,
+            )?)
+        } else if self.active_api.is_some() {
             self.interrupt_active_api_state(now_ms, ApiEndReason::ProcessInterrupted, false)?
                 .0
         } else {
@@ -742,7 +869,13 @@ impl SessionDocument {
             projected += 2;
         }
         if pause_restarted_goal {
-            if let Some(turn) = self.active_turn.as_ref().filter(|turn| !turn.closed) {
+            // Pausing automatic Goal work cannot close a distinct user, agent-task or reply owner.
+            // 暂停自动 Goal 工作不能关闭独立的用户、代理任务或回流所有者。
+            if let Some(turn) = self
+                .active_turn
+                .as_ref()
+                .filter(|turn| !turn.closed && turn.origin == TurnOrigin::GoalContinuation)
+            {
                 let started_at_ms = self
                     .events
                     .iter()

@@ -122,6 +122,122 @@ function compactionMarker(): ConversationEventBody {
   };
 }
 
+/** Builds one exact serde-shaped collaboration question event from the Rust wire contract.
+ * 按 Rust wire 契约构建一条精确 serde 形状的协作问题事件。 */
+function collaborationQuestionCreatedFixture(state: "pending" | "answered" = "pending"): ConversationEventBody {
+  return {
+    kind: "collaboration",
+    version: 1,
+    operation_id: "operation-question-1",
+    event_kind: state === "pending" ? "question_created" : "question_answered",
+    after_state: {
+      kind: "question",
+      question: {
+        operation_id: "operation-question-1",
+        question_id: "question-1",
+        delivery_id: "delivery-1",
+        source: {
+          session_id: "session-source",
+          root_session_id: "session-source",
+          project_id: "project-1",
+          segment_generation: 1,
+          turn_id: 7,
+        },
+        target: {
+          session_id: "session-target",
+          root_session_id: "session-target",
+          project_id: "project-1",
+          segment_generation: 1,
+          task_id: "task-target",
+        },
+        body: "Which file owns this behavior?",
+        execution_purpose: "in_turn_question",
+        state,
+        ...(state === "answered" ? {
+          answer: {
+            operation_id: "operation-answer-1",
+            responder: {
+              session_id: "session-target",
+              root_session_id: "session-target",
+              project_id: "project-1",
+              segment_generation: 1,
+              task_id: "task-target",
+            },
+            body: "The projection service owns it.",
+            settled_at_ms: 120,
+            delivery: {
+              state: "delivered",
+              delivery_revision: 1,
+              kind: "wait_tool",
+              last_operation_id: "operation-answer-delivery-1",
+              updated_at_ms: 121,
+            },
+          },
+        } : {}),
+        created_at_ms: 100,
+      },
+      delivery: {
+        delivery_id: "delivery-1",
+        question_id: "question-1",
+        operation_id: "operation-question-1",
+        source: {
+          session_id: "session-source",
+          root_session_id: "session-source",
+          project_id: "project-1",
+          segment_generation: 1,
+          turn_id: 7,
+        },
+        target: {
+          session_id: "session-target",
+          root_session_id: "session-target",
+          project_id: "project-1",
+          segment_generation: 1,
+          task_id: "task-target",
+        },
+        state: "recorded",
+        updated_at_ms: 101,
+      },
+    },
+  };
+}
+
+/** Builds one exact serde-shaped source notification event from the Rust wire contract.
+ * 按 Rust wire 契约构建一条精确 serde 形状的来源通知事件。 */
+function collaborationNotificationSentFixture(): ConversationEventBody {
+  return {
+    kind: "collaboration",
+    version: 1,
+    operation_id: "operation-notification-1",
+    event_kind: "notification_sent",
+    after_state: {
+      kind: "outbound_notification",
+      notification: {
+        notification_id: "notification-1",
+        delivery_id: "delivery-notification-1",
+        operation_id: "operation-notification-1",
+        source: {
+          session_id: "session-source",
+          root_session_id: "session-source",
+          project_id: "project-1",
+          segment_generation: 1,
+          turn_id: 7,
+        },
+        target: {
+          session_id: "session-target",
+          root_session_id: "session-target",
+          project_id: "project-1",
+          segment_generation: 1,
+          task_id: "task-target",
+        },
+        body: "The child agent reached the validation phase.",
+        state: "recorded",
+        created_at_ms: 110,
+        updated_at_ms: 111,
+      },
+    },
+  };
+}
+
 /** Returns one concrete tool display item after asserting its union branch.
  * 在断言联合类型分支后返回一个具体工具显示项。 */
 function asTool(item: ReturnType<typeof projectConversationEventDisplay>[number]): ToolCallDisplayItem {
@@ -130,6 +246,67 @@ function asTool(item: ReturnType<typeof projectConversationEventDisplay>[number]
 }
 
 describe("conversation V1 event display projection", () => {
+  it("keeps the serde collaboration envelope strict and visible on the HostOnly timeline", () => {
+    const event = collaborationQuestionCreatedFixture();
+    const projected = projectConversationEventDisplay([summary(1, event, 101, 1, "host_only")]);
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toMatchObject({
+      kind: "collaboration",
+      collaboration: {
+        kind: "collaboration",
+        event_kind: "question_created",
+        after_state: { kind: "question" },
+      },
+    });
+    const nodes = projectConversationTranscriptDisplay(projected);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({ kind: "collaboration", seq: 1 });
+    if (nodes[0].kind !== "collaboration") throw new Error("expected collaboration node");
+    expect(nodes[0].item.collaboration.after_state.kind).toBe("question");
+    if (nodes[0].item.collaboration.after_state.kind !== "question") throw new Error("expected question state");
+    expect(nodes[0].item.collaboration.after_state.question.target.session_id).toBe("session-target");
+  });
+
+  it("keeps the serde notification envelope as an independent HostOnly timeline node", () => {
+    const event = collaborationNotificationSentFixture();
+    const projected = projectConversationEventDisplay([summary(2, event, 102, 1, "host_only")]);
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toMatchObject({
+      kind: "collaboration",
+      collaboration: {
+        kind: "collaboration",
+        event_kind: "notification_sent",
+        after_state: {
+          kind: "outbound_notification",
+          notification: {
+            notification_id: "notification-1",
+            body: "The child agent reached the validation phase.",
+          },
+        },
+      },
+    });
+    const nodes = projectConversationTranscriptDisplay(projected);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({ kind: "collaboration", seq: 2 });
+  });
+
+  it("uses operation_id as the same-seq identity for collaboration revisions", () => {
+    const store = new ConversationEventWindowStore();
+    store.hydrate(batch([summary(1, collaborationQuestionCreatedFixture(), 101, 1, "host_only")]));
+    const revisedEvent = collaborationQuestionCreatedFixture();
+    store.applyLive(livePatch([summary(1, revisedEvent, 102, 2, "host_only")], 2));
+    const rendered = store.render();
+    expect(rendered).toHaveLength(1);
+    expect(rendered[0].event).toMatchObject({
+      kind: "collaboration",
+      operation_id: "operation-question-1",
+    });
+    expect(rendered[0].event_revision).toBe(2);
+    const conflictingEvent = { ...revisedEvent, operation_id: "operation-question-2" };
+    expect(() => store.applyLive(livePatch([summary(1, conflictingEvent, 103, 3, "host_only")], 3)))
+      .toThrow(/identity conflict/);
+  });
+
   // Only consecutive same-turn reasoning belongs to the final response; earlier tools and Turns remain intact.
   // 仅连续的同回合思考归属最终回复；之前的工具与其他回合保持完整。
   it("attaches trailing reasoning without crossing a tool or Turn boundary", () => {
@@ -150,6 +327,26 @@ describe("conversation V1 event display projection", () => {
     const separate = projectConversationTranscriptDisplay(projectConversationEventDisplay([summary(1, reasoning("previous turn")), { ...summary(2, assistant("answer")), turn_id: 8 }]));
     expect(separate.map(node => node.kind)).toEqual(["process_group", "assistant_final"]);
     expect(separate[1].kind === "assistant_final" && separate[1].leading_reasoning).toEqual([]);
+  });
+
+  it("uses typed origin to hide the provider envelope while retaining the agent card and real user text", () => {
+    // Identical text cannot confer host identity or hide a genuine human input.
+    // 相同正文不能取得宿主身份，也不能隐藏真实的人类输入。
+    const text = '<vulcan_agent_message kind="question">Who is asking?</vulcan_agent_message>';
+    const nodes = projectConversationTranscriptDisplay(projectConversationEventDisplay([
+      summary(1, {
+        kind: "user_input", client_action_id: clientActionId("human-quote"),
+        input_id: 1, input_source: "root", text,
+      }),
+      summary(2, collaborationQuestionCreatedFixture(), 10, 1, "host_only"),
+      summary(3, {
+        kind: "user_input", client_action_id: clientActionId("agent-message:delivery-1"),
+        input_id: 3, input_source: "agent_message", text,
+      }),
+    ]));
+    expect(nodes.map((node) => node.kind)).toEqual(["user_input", "collaboration"]);
+    expect(nodes[0].seq).toBe(1);
+    expect(nodes[1].seq).toBe(2);
   });
 
   it("derives user, process, and final-answer hierarchy while hiding structural ledger facts", () => {
@@ -208,7 +405,7 @@ describe("conversation V1 event display projection", () => {
         continuation_eligibility: "forbidden",
         timing: {},
       }, 10, 1, "ui_only"),
-      summary(10, { kind: "turn_boundary", outcome: "completed" }),
+      summary(10, { kind: "turn_boundary", reason: "completed", outcome: "completed", purpose: "business" }),
       summary(11, {
         kind: "turn_stats",
         start_seq: 1,

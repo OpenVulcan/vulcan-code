@@ -10,6 +10,67 @@ use crate::session_request_config_v1::{VmmSessionPolicyField, set_vmm_session_po
 use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
 };
+use vulcan_session_core::v1::collaboration::{
+    CollaborationOperationId, CollaborationRunControl, SetRunControlInput,
+};
+
+mod child_question_stop;
+mod question_stop;
+pub(crate) use child_question_stop::stop_owned_child_question_execution;
+
+/// Stops maintenance and question-only work across the actual child tree without reopening completed business.
+/// 在实际子任务树中停止维护及仅答疑工作，不重开已完成业务。
+/// `app`, `state`, and `runtime` supply service ownership; `session_id` selects the root and all descendants.
+/// `app`、`state` 和 `runtime` 提供服务归属；`session_id` 选择根及全部后代。
+/// Business tasks must already be stopped by the caller; errors retain the exact auxiliary repair owner.
+/// 调用者必须已停止业务任务；错误保留精确辅助修复所有者。
+pub(crate) async fn stop_owned_child_auxiliary_tree(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    runtime: &vulcan_agent_runtime::agent_runtime::task_runtime::TaskRuntime,
+    session_id: SessionId,
+) -> Result<(), String> {
+    // A maintenance storage failure cannot leave other selected question workers running.
+    // 维护存储失败不能使其他已选答疑工作任务继续运行。
+    let maintenance_failure =
+        crate::agent_collaboration::child_maintenance::stop_tree(state, runtime, session_id)
+            .await
+            .err();
+    // Completed business remains in this registry while its question-only execution is running.
+    // 仅答疑执行运行期间，已完成业务仍保留在此注册表中。
+    let registry = runtime.subagent_registry_snapshot()?;
+    // A root can be an ordinary conversation or a nested child.
+    // 根可以是普通会话或嵌套子任务。
+    let mut pending = vec![session_id];
+    // Visit each stable session only once, independent of panel display state.
+    // 独立于面板展示状态，仅访问每个稳定会话一次。
+    let mut visited = BTreeSet::new();
+    // Drain unrelated selected children even if one requires retained terminal repair.
+    // 即使某个子任务需要保留终态修复，也排空其他已选子任务。
+    let mut failures = maintenance_failure.into_iter().collect::<Vec<_>>();
+    while let Some(current) = pending.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+        pending.extend(
+            registry
+                .list_for_parent(current.into())
+                .into_iter()
+                .map(|entry| entry.session_id.as_uuid()),
+        );
+        if let Err(error) = stop_owned_child_question_execution(app, state, current).await {
+            failures.push(format!("{current}: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Child auxiliary stop requires repair: {}",
+            failures.join("; ")
+        ))
+    }
+}
 
 /// Provider-visible semantic recorded when user Stop pauses autonomous Goal execution.
 /// 用户停止操作暂停目标自动执行时记录的 Provider 可见语义。
@@ -337,6 +398,38 @@ async fn service_stop_conversation_run_owned(
     // stopAdmissionGuard closes replacement-turn admission before the active stream registry is dismantled.
     // stopAdmissionGuard 在拆除活动流注册表前关闭替代回合准入。
     let stop_admission_guard = begin_session_run_stop_exclusion(&state, target_session_id)?;
+    {
+        let guard = state.lock().map_err(|error| error.to_string())?;
+        crate::agent_collaboration_execution::preparation_tasks::validate_question_preparation_task(&guard, target_session_id)?;
+    }
+    // Persist the typed collaboration stop before teardown so late recovery cannot rely on live UI or backend state.
+    // 在拆除执行链前持久化类型化协作停止状态，防止迟到恢复依赖实时 UI 或后端状态。
+    let goal_handle = session_v1_handle_from_state(&state, target_session_id).await?;
+    let stop_control = if mode == StopConversationRunMode::MainAndSubagents {
+        CollaborationRunControl::MainAndSubagents
+    } else {
+        CollaborationRunControl::MainOnly
+    };
+    let stop_control_at_ms = current_v1_goal_unix_millis()?;
+    let stop_control_operation_id = CollaborationOperationId::try_new(format!(
+        "conversation-stop:{target_session_id}:{stop_control_at_ms}:{}",
+        Uuid::new_v4()
+    ))
+    .map_err(|error| format!("failed to create collaboration stop operation identity: {error}"))?;
+    let stop_control_receipt = goal_handle
+        .set_collaboration_run_control_durable(SetRunControlInput {
+            operation_id: stop_control_operation_id,
+            state: stop_control,
+            changed_at_ms: stop_control_at_ms,
+        })
+        .map_err(|error| format!("failed to persist collaboration stop control: {error}"))?;
+    webui_trace(
+        "stop_conversation_collaboration_control",
+        format!(
+            "session={target_session_id} state={stop_control:?} changed={} revision={}",
+            stop_control_receipt.changed, stop_control_receipt.revision
+        ),
+    );
     // stoppedHookTurnId freezes the exact logical Hook owner before any stop teardown can race a replacement turn.
     // stoppedHookTurnId 在停止清理可能与替代回合竞争前冻结精确逻辑 Hook 所有者。
     let stopped_hook_turn_id = agent_runtime
@@ -351,23 +444,40 @@ async fn service_stop_conversation_run_owned(
     let terminal_persistence_owner = SessionTerminalPersistenceOwner::RunStop(Uuid::new_v4());
     // stopOwnershipTransition closes the former stream and kernel generation without an unowned terminal gap.
     // stopOwnershipTransition 关闭旧流与 kernel 代际，且不会留下无所有者终态空窗。
-    let (active_task, had_active_kernel_turn) = {
+    let (active_task, preparation_task, had_active_kernel_turn, stopped_question_execution_id) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         // activeTask is detached before the kernel stops, while the same state lock excludes replacement registration.
         // activeTask 在 kernel 停止前分离，同一状态锁同时排除替代登记。
-        let active_task = guard.active_stream_tasks.remove(&target_session_id);
-        // hadActiveKernelTurn records the exact in-lock generation transition for Stop diagnostics.
-        // hadActiveKernelTurn 记录 Stop 诊断所需的精确锁内代际转换。
-        let had_active_kernel_turn =
-            stop_webui_session_kernel_generation(&mut guard, target_session_id);
+        crate::agent_collaboration_execution::preparation_tasks::validate_question_preparation_task(&guard, target_session_id)?;
         register_session_terminal_persistence_owner(
             &mut guard,
             target_session_id,
             terminal_persistence_owner.clone(),
         )?;
-        (active_task, had_active_kernel_turn)
+        let active_task = guard.active_stream_tasks.remove(&target_session_id);
+        let preparation_task = guard.question_preparation_tasks.remove(&target_session_id);
+        // Capture the exact auxiliary identity before stopping the kernel removes its active turn.
+        // 停止内核移除活动回合之前，捕获精确辅助身份。
+        let stopped_question_execution_id = guard
+            .session_runtime_kernels
+            .get(&target_session_id)
+            .and_then(|kernel| kernel.active_turn())
+            .and_then(|turn| match &turn.kind {
+                ActiveTurnKind::QuestionExecution { execution_id } => Some(execution_id.clone()),
+                _ => None,
+            });
+        // hadActiveKernelTurn records the exact in-lock generation transition for Stop diagnostics.
+        // hadActiveKernelTurn 记录 Stop 诊断所需的精确锁内代际转换。
+        let had_active_kernel_turn =
+            stop_webui_session_kernel_generation(&mut guard, target_session_id);
+        (
+            active_task,
+            preparation_task,
+            had_active_kernel_turn,
+            stopped_question_execution_id,
+        )
     };
     // terminalPersistenceGuard deliberately retains an unreleased marker on every early error or panic.
     // terminalPersistenceGuard 会在任何提前错误或 panic 时有意保留未释放标记。
@@ -377,10 +487,41 @@ async fn service_stop_conversation_run_owned(
         terminal_persistence_owner,
     )?;
     let had_active_stream_task = active_task.is_some();
+    // Cancel both physical owners before waiting, so neither can finish new preparation work during teardown.
+    // 等待之前取消两个物理所有者，防止拆除期间继续完成新准备工作。
+    if let Some(task) = &preparation_task {
+        task.task.abort();
+    }
+    if let Some(task) = &active_task {
+        task.abort();
+    }
+    if let Some(task) = preparation_task {
+        if let Err(error) = task.task.abort_and_wait().await {
+            eprintln!("[webui-service] stopped question preparation teardown warning: {error}");
+        }
+    }
     let active_task_join_error = if let Some(active_task) = active_task {
         active_task.abort_and_wait().await.err()
     } else {
         None
+    };
+    // Settle result workers before freezing the stop API identity; no replacement preparation is admitted.
+    // 冻结停止 API 身份前结算结果工作器；此时不准入任何替代准备。
+    let preparation_settlement = goal_handle.acquire_request_preparation_settlement().await;
+    // Write QA intent before external cleanup can fail or its API can be interrupted.
+    // 在外部清理可能失败或 API 可能被中断之前写入答疑意图。
+    let prepared_question_scope = match stopped_question_execution_id.as_ref() {
+        Some(execution_id) => Some(
+            question_stop::persist_question_stop_intent(
+                &state,
+                &goal_handle,
+                target_session_id,
+                execution_id,
+                terminal_persistence_guard.owner_generation(),
+            )
+            .await?,
+        ),
+        None => None,
     };
     // Stop owns the terminal boundary after aborting the stream, so no Finished event can
     // retire its Playwright process. Revoke the exact conversation grant while replacement
@@ -397,23 +538,32 @@ async fn service_stop_conversation_run_owned(
         .map_err(|error| format!("停止浏览器自动化授权失败：{error}"))?;
     // The aborted stream cannot publish its normal Finished event, so Stop owns the V1 API interruption.
     // 被中止的流无法发布正常 Finished 事件，因此 Stop 负责 V1 API 中断事实。
-    let goal_handle = session_v1_handle_from_state(&state, target_session_id).await?;
-    // The stream is aborted, but completed upload-result workers may still own its original preparation lease.
-    // 流已中止，但已完成上传结果工作线程可能仍持有其原准备租约。
-    // Settle those exact results before Stop can close or seal the prompt; this guard also excludes replacement preparation.
-    // 在Stop可能闭合或封存提示词之前结算这些精确结果；本守卫同时排除替代准备。
-    let _preparation_settlement = goal_handle.acquire_request_preparation_settlement().await;
     let stop_interruption_at_ms = current_v1_goal_unix_millis()?;
     let interruption_receipt = goal_handle
         .mutate_durable_if_changed(
             SessionMutationAdmission::ExistingTurn,
             SessionFlushReason::ApiCompleted,
             move |document| {
+                // Scope is proven before interrupting an API; a different business API must remain untouched.
+                // 中断 API 之前先证明范围；不同业务 API 必须保持不变。
+                let question_scope = stopped_question_execution_id
+                    .as_ref()
+                    .map(|execution_id| question_stop::question_stop_scope(document, execution_id))
+                    .transpose()?;
+                if question_scope != prepared_question_scope {
+                    return Err(
+                        vulcan_session_core::v1::DomainError::CollaborationStateViolation {
+                            field: "question_stop.prepared_scope_changed",
+                        },
+                    );
+                }
                 Ok(
                     match document.interrupt_active_api(stop_interruption_at_ms) {
-                        Ok(stats_seq) => SessionMutationChange::Changed(Some(stats_seq)),
+                        Ok(stats_seq) => {
+                            SessionMutationChange::Changed((Some(stats_seq), question_scope))
+                        }
                         Err(vulcan_session_core::v1::DomainError::NoActiveApi) => {
-                            SessionMutationChange::Unchanged(None)
+                            SessionMutationChange::Unchanged((None, question_scope))
                         }
                         Err(error) => return Err(error),
                     },
@@ -421,11 +571,16 @@ async fn service_stop_conversation_run_owned(
             },
         )
         .map_err(|error| format!("停止后持久化 V1 API 中断失败：{error}"))?;
+    // Scoped terminal persistence reacquires this gate; retaining it would deadlock the same stop.
+    // 带范围终态持久化会重新获取该关卡；继续持有会使同一次停止死锁。
+    // Run-stop admission and terminal ownership still exclude all replacement requests.
+    // RunStop 准入与终态所有者仍排除全部替代请求。
+    drop(preparation_settlement);
     webui_trace(
         "stop_conversation_v1_boundary",
         format!(
             "session={target_session_id} interrupted_api_stats_seq={:?}",
-            interruption_receipt.value.map(|seq| seq.value())
+            interruption_receipt.value.0.map(|seq| seq.value())
         ),
     );
     // The immediate stopped phase removes the stale running affordance before slower settlement can fail.
@@ -459,6 +614,15 @@ async fn service_stop_conversation_run_owned(
         let _ = agent_runtime
             .task_runtime
             .stop_task_tree(task_state.task_id);
+    }
+    if stop_running_subagents {
+        stop_owned_child_auxiliary_tree(
+            &app,
+            &state,
+            &agent_runtime.task_runtime,
+            target_session_id,
+        )
+        .await?;
     }
     if !running_subagent_task_states.is_empty() {
         let running_subagent_task_ids = running_subagent_task_states
@@ -529,7 +693,27 @@ async fn service_stop_conversation_run_owned(
     }
     // Both the user interruption and optional Goal pause are durable before admission reopens.
     // 用户中断与可选 Goal 暂停都已可靠落盘后，才重新开放准入。
-    terminal_persistence_guard.release()?;
+    if let Some(question_scope) = interruption_receipt.value.1 {
+        // Stop settles only the captured auxiliary execution through the recoverable scope-aware intent.
+        // Stop 通过可恢复的带范围意图，仅结算捕获的辅助执行。
+        if !crate::agent_stream::settle_stream_terminal_authority_with_scope(
+            &state,
+            target_session_id,
+            false,
+            question_stop::QUESTION_STOP_REASON,
+            Some(question_stop::QUESTION_STOP_DETAIL.to_owned()),
+            terminal_persistence_guard,
+            question_scope,
+        )
+        .await
+        {
+            return Err(String::from(
+                "答疑停止结算尚未完成，已保留恢复记录与终态所有者。",
+            ));
+        }
+    } else {
+        terminal_persistence_guard.release()?;
+    }
     // The Stop admission reservation is equally live state and must not contaminate the successful Continue summary.
     // Stop 准入预留同样属于实时状态，不得污染成功响应中的 Continue 摘要。
     drop(stop_admission_guard);

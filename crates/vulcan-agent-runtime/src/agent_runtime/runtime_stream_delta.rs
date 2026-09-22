@@ -1430,6 +1430,7 @@ mod tests {
             crate::agent_runtime::events::provider_request_preparation_barrier();
         ProviderStreamDelta::RequestPrepared {
             candidate: crate::agent_runtime::events::ProviderRequestPreparationCandidate {
+                source_message_positions: Default::default(),
                 media_context: None,
                 exact_request: serde_json::from_value(json!({
                     "operation": "conversation_respond",

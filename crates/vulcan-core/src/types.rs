@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use vulcan_ai_contract::{HostMessageEnvelope, HostMessageKind};
 
 /// Describes one controller-level failure that should never be hidden behind the provider runtime.
 /// 描述一种不应被 Provider 运行时黑盒掩盖的控制器级失败。
@@ -285,6 +286,86 @@ fn is_zero_usize(value: &usize) -> bool {
     *value == 0
 }
 
+/// Describes one append-only expiration marker emitted after transient context TTL exhaustion.
+/// 描述临时上下文 TTL 耗尽后发出的一个追加式失效标记。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderContextExpiredEvent {
+    /// Stable identity used to correlate this marker across provider projections.
+    /// 用于在不同 Provider 投影之间关联该标记的稳定身份。
+    pub event_id: String,
+    /// Stable producer source identity of the expired instruction.
+    /// 已失效指令的稳定生产者来源身份。
+    pub source_id: String,
+    /// Stable occurrence identity allocated when the instruction was created.
+    /// 指令创建时分配的稳定发生点身份。
+    pub occurrence_id: String,
+    /// Normalized injection tag that owned the expired instruction.
+    /// 持有已失效指令的规范化注入标签。
+    pub tag: String,
+    /// Stable hash of the normalized raw instruction body.
+    /// 规范化原始指令正文的稳定哈希。
+    pub content_hash: String,
+    /// Host source that owns the expired context.
+    /// 拥有已失效上下文的宿主来源。
+    pub source: String,
+    /// Provider-facing target identifier for the marker.
+    /// 失效标记面向 Provider 的目标标识。
+    pub target: String,
+    /// Lifetime scope of the expired context.
+    /// 已失效上下文的生命周期作用域。
+    pub scope: String,
+    /// Logical turn at which the final TTL unit was consumed.
+    /// 消耗最后一个 TTL 单位的逻辑回合。
+    pub turn_id: String,
+    /// Provider-visible marker body; the earlier context body remains in history.
+    /// Provider 可见的标记正文；此前上下文正文仍保留在历史中。
+    pub body: String,
+}
+
+/// Carries one producer-owned runtime context block before non-V1 history projection.
+/// 携带一条由生产者持有、供非 V1 历史投影使用的运行时上下文块。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderContextHostBlock {
+    /// Stable producer identity used for occurrence tracking.
+    /// 用于发生点跟踪的稳定生产者身份。
+    pub source_id: String,
+    /// Stable occurrence identity allocated by the owning producer.
+    /// 由生产者所有者分配的稳定发生点身份。
+    pub occurrence_id: String,
+    /// Host source label attached to the rendered envelope.
+    /// 附加到渲染信封上的宿主来源标签。
+    pub source: String,
+    /// Normalized injection tag when this block belongs to context injection.
+    /// 当该块属于上下文注入时对应的规范化注入标签。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// Stable hash of the normalized raw instruction body when available.
+    /// 可用时规范化原始指令正文的稳定哈希。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// Logical turn marker associated with transient context injection.
+    /// 与临时上下文注入关联的逻辑回合标记。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    /// Whether this block has transient turn-scoped lifetime.
+    /// 该块是否具有回合级生命周期的临时作用域。
+    #[serde(default)]
+    pub transient: bool,
+    /// Provider-facing target identity.
+    /// 面向 Provider 的目标身份。
+    pub target: String,
+    /// Optional logical task association.
+    /// 可选的逻辑任务关联。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// Scope in which this block is effective.
+    /// 此块生效的作用域。
+    pub scope: String,
+    /// Untrusted provider-visible body produced by the source owner.
+    /// 由来源所有者生成、面向 Provider 的不可信正文。
+    pub body: String,
+}
+
 /// Represents provider-facing context-injection text resolved before one controller run starts.
 /// 表示单次控制器运行开始前解析完成的 Provider 可见上下文注入文本。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -337,6 +418,14 @@ pub struct ProviderContextInjection {
     /// 用于诊断与 continuation 安全检查的稳定指纹。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fingerprint: String,
+    /// Append-only transient expiration markers awaiting provider projection.
+    /// 等待 Provider 投影的追加式临时上下文失效标记。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expired_events: Vec<ProviderContextExpiredEvent>,
+    /// Producer-owned blocks used only by the non-V1 canonical User-event producer.
+    /// 仅供非 V1 规范 User 事件生产者使用的生产者自有块。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_blocks: Vec<ProviderContextHostBlock>,
 }
 
 impl ProviderContextInjection {
@@ -346,6 +435,8 @@ impl ProviderContextInjection {
         self.persistent_blocks.is_empty()
             && self.transient_prefix.trim().is_empty()
             && self.anchored_prefixes.is_empty()
+            && self.expired_events.is_empty()
+            && self.host_blocks.is_empty()
     }
 
     /// Returns whether transient provider-facing content is present.
@@ -384,6 +475,9 @@ impl ProviderContextInjection {
         continuation: &ProviderContinuation,
         uncovered_message_ids: &[&str],
     ) -> bool {
+        if !self.expired_events.is_empty() {
+            return false;
+        }
         if self.requires_historical_rewrite() {
             return false;
         }
@@ -758,9 +852,15 @@ pub enum ConversationPayload {
     /// Inter-agent message delivered through the session mailbox.
     /// 通过会话 mailbox 投递的代理间消息。
     AgentMessage {
+        /// Explicit host message kind; it is never inferred from display text.
+        /// 显式宿主消息种类；绝不从展示文本推断。
+        kind: HostMessageKind,
         /// Stable message type shown to the receiving model.
         /// 展示给接收模型的稳定消息类型。
         message_type: String,
+        /// Stable business task identity independent from the display task name.
+        /// 独立于展示任务名称的稳定业务任务身份。
+        task_id: String,
         /// Logical task name or agent path associated with the message.
         /// 与该消息关联的逻辑任务名或代理路径。
         task_name: String,
@@ -784,51 +884,70 @@ pub enum ConversationPayload {
 }
 
 impl ConversationPayload {
-    /// Renders an inter-agent message into a provider-compatible user-message XML envelope.
-    /// 将代理间消息渲染为兼容 Provider 的用户消息 XML 信封。
+    /// Renders an inter-agent message through the shared host-message contract.
+    /// 通过共享宿主消息契约渲染一条代理间消息。
+    ///
+    /// The caller supplies the already-owned outer identity. This keeps replay IDs tied to
+    /// `ConversationMessage.id` or a durable delivery ID and prevents the renderer from
+    /// inventing UUIDs, timestamps, or body hashes.
+    /// 调用方提供已经归属的外层身份，使重放 ID 绑定到 `ConversationMessage.id` 或可靠投递 ID，
+    /// 并阻止渲染器生成 UUID、时间戳或正文哈希。
     pub fn render_agent_message_text(
-        message_type: &str,
-        task_name: &str,
+        event_id: &str,
+        kind: HostMessageKind,
         sender: &str,
+        target: &str,
+        task_id: &str,
         payload: &str,
-    ) -> String {
-        format!(
-            "<agent_message>\n  <message_type>{}</message_type>\n  <task_name>{}</task_name>\n  <sender>{}</sender>\n  <payload>{}</payload>\n</agent_message>",
-            xml_escape_text(message_type.trim()),
-            xml_escape_text(task_name.trim()),
-            xml_escape_text(sender.trim()),
-            xml_escape_text(payload)
-        )
+    ) -> Result<String, String> {
+        if !matches!(
+            kind,
+            HostMessageKind::TaskStart
+                | HostMessageKind::TaskSteer
+                | HostMessageKind::TaskResult
+                | HostMessageKind::AgentNotification
+        ) {
+            return Err(format!(
+                "agent message renderer does not accept host message kind {kind:?}"
+            ));
+        }
+        HostMessageEnvelope {
+            event_id: event_id.to_string(),
+            kind,
+            source: sender.to_string(),
+            target: target.to_string(),
+            task_id: Some(task_id.to_string()),
+            question_id: None,
+            scope: String::from("task"),
+            body: payload.to_string(),
+        }
+        .render()
     }
 
     /// Returns the full provider-compatible text for one agent message payload.
     /// 返回单条代理消息载荷的完整 Provider 兼容文本。
-    pub fn agent_message_model_text(&self) -> Option<String> {
+    pub fn agent_message_model_text(&self, event_id: &str) -> Result<String, String> {
         match self {
             Self::AgentMessage {
-                message_type,
-                task_name,
+                kind,
+                task_id,
                 sender,
+                recipient,
                 payload,
                 ..
-            } => Some(Self::render_agent_message_text(
-                message_type,
-                task_name,
+            } => Self::render_agent_message_text(
+                event_id,
+                *kind,
                 sender,
+                recipient,
+                task_id,
                 payload,
+            ),
+            _ => Err(String::from(
+                "agent_message_model_text requires an AgentMessage payload",
             )),
-            _ => None,
         }
     }
-}
-
-/// Escapes text inserted into model-visible XML compatibility envelopes.
-/// 转义插入模型可见 XML 兼容信封的文本。
-fn xml_escape_text(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 /// Represents the role that a transcript record should surface in the projection layer.

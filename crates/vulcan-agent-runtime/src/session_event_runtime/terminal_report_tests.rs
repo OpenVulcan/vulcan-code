@@ -254,3 +254,119 @@ fn terminal_report_apply_is_atomic_on_assistant_identity_collision() {
     assert!(error.contains("duplicates id"));
     assert_eq!(format!("{runtime_state:#?}"), original_state);
 }
+
+/// Auxiliary finish preserves prior business results and accepts only real checkpoint conversation content.
+/// 辅助结束保留既有业务结果，只接纳真实检查点对话内容。
+#[test]
+fn question_report_preserves_business_records_and_does_not_synthesize_completion() {
+    // A real business completion already exists before the optional question is handled.
+    // 可选问题处理前已存在真实业务完成。
+    let session_id = test_session_id();
+    // The source contains real final output, summary and user-turn statistics from normal completion.
+    // 来源包含正常完成产生的真实最终输出、摘要及用户回合统计。
+    let mut source = SessionRuntimeStateEntry::default();
+    apply_terminal_execution_report_to_state(
+        &mut source,
+        session_id,
+        "5000",
+        &usage_report(session_id, "Original result", 10, 2, 0, 12, None),
+    )
+    .unwrap();
+    source
+        .tool_request_record_ids
+        .insert("qa-request".into(), "qa-request-record".into());
+    source
+        .tool_call_record_ids
+        .insert("qa-call".into(), "qa-call-record".into());
+    // Both success and failure must leave the original business completion intact.
+    // 成功和失败均必须保持原业务完成不变。
+    let before = format!("{source:#?}");
+    for failed in [false, true] {
+        // A report-only assistant string is not authoritative conversation history or a question answer.
+        // 仅报告中的助手字符串不是权威对话历史或问题答案。
+        let mut report = usage_report(session_id, "Do not synthesize this", 20, 3, 0, 23, None);
+        report.error = failed.then(|| "Auxiliary failure".into());
+        // The auxiliary reducer only clears ephemeral tool correlation and updates the adapter timestamp.
+        // 辅助归约器仅清除临时工具关联并更新适配器时间。
+        let actual =
+            build_question_execution_report_state(&source, session_id, "5001", &report).unwrap();
+        // The full-state comparison also protects retained memory policy and pending business preparation.
+        // 完整状态比较同时保护保留的记忆策略及待处理业务准备。
+        let mut expected = source.clone();
+        expected.tool_request_record_ids.clear();
+        expected.tool_call_record_ids.clear();
+        expected.updated_at = "5001".into();
+        assert_eq!(format!("{actual:#?}"), format!("{expected:#?}"));
+        assert_eq!(format!("{source:#?}"), before);
+
+        // A real checkpoint may append genuine assistant content without producing another business summary.
+        // 真实检查点可以追加真实助手内容，但不产生另一份业务摘要。
+        let mut checkpoint = source.conversation_state.clone();
+        checkpoint.messages.push(SessionConversationMessage {
+            id: "qa-checkpoint-assistant".into(),
+            payload: SessionConversationPayload::Assistant {
+                text: "Question execution ended".into(),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: None,
+                tool_calls: vec![],
+            },
+        });
+        report.conversation_state = Some(checkpoint.clone());
+        // Expected records remain exactly those of the business task; V1 owns auxiliary status and usage.
+        // 预期记录与业务任务完全一致；辅助状态和用量由 V1 拥有。
+        let projected =
+            build_question_execution_report_state(&source, session_id, "5002", &report).unwrap();
+        assert_eq!(
+            serde_json::to_value(&projected.conversation_state.messages).unwrap(),
+            serde_json::to_value(&checkpoint.messages).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&projected.conversation_state.records).unwrap(),
+            serde_json::to_value(&source.conversation_state.records).unwrap()
+        );
+    }
+}
+
+/// Invalid auxiliary checkpoints and wrong-session reports fail without mutating retained business state.
+/// 无效辅助检查点及错误会话报告失败时不修改保留业务状态。
+#[test]
+fn question_report_rejects_identity_collision_and_session_mismatch_atomically() {
+    // Use existing valid business content to expose accidental mutation on the error path.
+    // 使用既有有效业务内容暴露错误路径的意外修改。
+    let session_id = test_session_id();
+    // Every error must leave this complete source unchanged.
+    // 每个错误都必须保持此完整来源不变。
+    let mut source = SessionRuntimeStateEntry::default();
+    apply_terminal_execution_report_to_state(
+        &mut source,
+        session_id,
+        "6000",
+        &usage_report(session_id, "Original result", 10, 2, 0, 12, None),
+    )
+    .unwrap();
+    // Clone one message identity deliberately to form an invalid provider checkpoint.
+    // 故意克隆一个消息身份，形成无效供应商检查点。
+    let mut checkpoint = source.conversation_state.clone();
+    checkpoint.messages.push(checkpoint.messages[0].clone());
+    // The report otherwise names the correct target session.
+    // 报告其他字段仍指定正确目标会话。
+    let mut report = usage_report(session_id, "Auxiliary output", 10, 2, 0, 12, None);
+    report.conversation_state = Some(checkpoint);
+    // Comparison includes memory policy, tool correlation and existing history.
+    // 比较涵盖记忆策略、工具关联及既有历史。
+    let before = format!("{source:#?}");
+    assert!(
+        build_question_execution_report_state(&source, session_id, "6001", &report)
+            .unwrap_err()
+            .contains("duplicates id")
+    );
+    report.session_id = SessionId::new_v4();
+    assert!(
+        build_question_execution_report_state(&source, session_id, "6001", &report)
+            .unwrap_err()
+            .contains("different session")
+    );
+    assert_eq!(format!("{source:#?}"), before);
+}

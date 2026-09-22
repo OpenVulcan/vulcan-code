@@ -61,6 +61,7 @@ fn manager(
         VmmConfigLayer::default(),
         ready,
         None,
+        None,
     )
 }
 

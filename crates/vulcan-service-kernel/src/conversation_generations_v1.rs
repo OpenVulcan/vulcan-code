@@ -209,11 +209,7 @@ async fn start_exact_generation_root(
             let turn_id = target_event
                 .turn_id
                 .ok_or_else(|| String::from("The generation root has no Turn identity."))?;
-            let already_dispatched = document.events().iter().any(|event| {
-                event.turn_id == Some(turn_id)
-                    && event.seq.value() > target_seq.value()
-                    && matches!(event.event, EventBody::ApiStarted(_))
-            });
+            let already_dispatched = document.business_input_dispatch_started(turn_id, target_seq);
             if !already_dispatched {
                 let active_turn = document.active_turn().ok_or_else(|| {
                     String::from("The undispatched generation root has no open Turn.")

@@ -11,6 +11,7 @@ use crate::agent_runtime::provider_request_preview::build_provider_request_previ
 use crate::agent_runtime::provider_request_snapshot_builder::build_core_provider_request_snapshot;
 use crate::agent_runtime::provider_runtime_context::{
     build_runtime_prompt_layers_for_agent, resolve_runtime_max_turns,
+    runtime_context_host_event_candidates, synchronize_runtime_host_request_context,
 };
 use crate::agent_runtime::provider_system_update_lowering::{
     ProviderSystemUpdateLoweringPolicy, lower_provider_system_update,
@@ -159,10 +160,45 @@ pub(crate) fn build_runtime_bootstrap_core(
         &mut core_snapshot,
         &request.provider_visible_agent_messages,
     )?;
+    let mut host_events = runtime_prompt.host_events.clone();
+    if let Some(injection) = request.context_injection.as_ref() {
+        host_events.extend(runtime_context_host_event_candidates(injection));
+    }
+    // Only the same resolved UserPrompt launch mode owns a new unsent user insertion boundary.
+    // 仅相同解析结果的 UserPrompt 启动模式拥有新的未发送用户插入边界。
+    let has_new_user_boundary = matches!(
+        crate::agent_runtime::runtime_stream_launch_payload::runtime_stream_turn_start_mode_for_request(request),
+        crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamTurnStartMode::UserPrompt
+    );
+    let current_user_message_id = request
+        .conversation_state
+        .messages
+        .last()
+        .filter(|message| {
+            has_new_user_boundary
+                && !message
+                    .id
+                    .starts_with(vulcan_context::runtime_host::RUNTIME_HOST_MESSAGE_PREFIX)
+                && matches!(
+                    &message.payload,
+                    vulcan_context::SessionConversationPayload::UserText { .. }
+                )
+        })
+        .map(|message| message.id.as_str());
+    synchronize_runtime_host_request_context(
+        &mut core_snapshot,
+        &host_events,
+        current_user_message_id,
+        preparation.prompt_purpose,
+    )?;
+    // Match the actual transport entry: only the stable preamble belongs to the top-level controller layers.
+    // 与实际传输入口保持一致：只有稳定前导语属于控制器顶部提示层。
+    let stable_prompt_layers =
+        CoreProviderPromptLayers::from_system_prompt(system_preamble.clone());
     let controller_config = build_core_controller_config_with_layers(
         preparation,
         &system_preamble,
-        runtime_prompt.provider_layers.clone(),
+        stable_prompt_layers.clone(),
         resolve_runtime_max_turns(active_agent, preparation.prompt_purpose),
         None,
     );
@@ -171,7 +207,7 @@ pub(crate) fn build_runtime_bootstrap_core(
 
     Ok(RuntimeBootstrapCore {
         system_preamble,
-        prompt_layers: runtime_prompt.provider_layers,
+        prompt_layers: stable_prompt_layers,
         dynamic_prompt_layers: runtime_prompt.dynamic_prompt_layers,
         locked_baseline: runtime_prompt.locked_baseline,
         core_snapshot,

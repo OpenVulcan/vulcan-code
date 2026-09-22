@@ -2,15 +2,7 @@
 //! 会话目标生命周期 prompt context 辅助逻辑。
 
 use super::*;
-use vulcan_agent_runtime::{
-    agent_runtime::{
-        execution_models::ExecutionProviderVisibleAgentMessage,
-        session_goal_prompt::{
-            render_active_session_goal_context, session_goal_context_version_marker,
-        },
-    },
-    conversation_protocol::{SessionConversationPayload, SessionConversationState},
-};
+use vulcan_agent_runtime::agent_runtime::session_goal_prompt::render_active_session_goal_context;
 
 /// Captures the stable goal context and optional turn usage from the same state snapshot.
 /// 从同一状态快照捕获稳定目标上下文与可选的本轮用量快照。
@@ -36,6 +28,75 @@ pub(crate) fn session_goal_prompt_parts_from_state(
         goal.as_ref().and_then(session_goal_execution_context),
         goal.as_ref().and_then(render_goal_turn_usage_context),
     ))
+}
+
+/// Persists a turn's Goal usage as an ordered host fact without changing user or agent input.
+/// 将回合的 Goal 用量保存为有序宿主事实，不改写用户或代理输入。
+///
+/// `handle` is the canonical V1 owner and `usage_context` is the host-computed usage snapshot.
+/// `handle` 是规范 V1 所有者，`usage_context` 是宿主计算的用量快照。
+/// Returns after a durable append, or without a write when the same turn already has this snapshot.
+/// 可靠追加后返回；当前回合已有同一快照时不重复写入。
+pub(crate) fn persist_goal_turn_usage_context(
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+    usage_context: Option<&str>,
+) -> Result<(), String> {
+    use crate::session_runtime_registry_v1::{
+        SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
+    };
+    use vulcan_session_core::v1::{
+        errors::DomainError,
+        event::{EventBody, SystemContextOperation, SystemContextScope, SystemRoleHint},
+    };
+
+    // Empty usage is intentionally absent; it must not manufacture a host event.
+    // 空用量有意省略，不能因此制造宿主事件。
+    let Some(content) = usage_context.filter(|value| !value.trim().is_empty()) else {
+        return Ok(());
+    };
+    let now_ms = current_v1_goal_unix_millis()?;
+    handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                let turn_id = document
+                    .active_turn()
+                    .filter(|turn| !turn.closed)
+                    .map(|turn| turn.turn_id)
+                    .ok_or(DomainError::NoActiveTurn)?;
+                let previous = document.events().iter().rev().find_map(|event| {
+                    match &event.event {
+                        EventBody::SystemContext(context)
+                            if event.turn_id == Some(turn_id)
+                                && context.context_key == "goal_usage_snapshot" =>
+                        {
+                            Some(context)
+                        }
+                        _ => None,
+                    }
+                });
+                if previous.is_some_and(|context| {
+                    context.operation == SystemContextOperation::Upsert
+                        && context.content == content
+                }) {
+                    return Ok(SessionMutationChange::Unchanged(()));
+                }
+                document.append_system_context(
+                    Some(turn_id),
+                    "goal_usage_snapshot",
+                    SystemContextOperation::Upsert,
+                    SystemContextScope::Turn,
+                    Some(1),
+                    Some(SystemRoleHint::HiddenUserShell),
+                    content,
+                    now_ms,
+                )?;
+                Ok(SessionMutationChange::Changed(()))
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| format!("Failed to persist ordered Goal usage context: {error}"))
 }
 
 /// Binds one active goal identifier to the prompt text rendered from the same summary.
@@ -107,197 +168,6 @@ pub(crate) fn render_goal_turn_usage_context(goal: &SessionGoalSummary) -> Optio
     }
     lines.push(String::from("</goal_usage_snapshot>"));
     Some(lines.join("\n"))
-}
-
-/// Appends one usage snapshot to the current request prompt without rewriting prior turns.
-/// 将用量快照追加到当前请求提示词，不改写此前任何回合。
-///
-/// # Parameters
-/// 参数
-/// `prompt` is the current provider-visible user prompt.
-/// `prompt` 是当前 Provider 可见的用户提示词。
-/// `usage_context` is the optional cumulative usage snapshot for this turn.
-/// `usage_context` 是本回合可选的累计用量快照。
-///
-/// # Returns
-/// 返回值
-/// The original prompt when usage is absent, otherwise the usage-appended prompt.
-/// 用量为空时返回原提示词，否则返回已追加用量的提示词。
-pub(crate) fn append_goal_turn_usage_context(
-    prompt: String,
-    usage_context: Option<&str>,
-) -> String {
-    let Some(usage_context) = usage_context
-        .map(str::trim)
-        .filter(|context| !context.is_empty())
-    else {
-        return prompt;
-    };
-    format!("{prompt}\n\n{usage_context}")
-}
-
-/// Prepends stable goal guidance to the current prompt only when that goal version was not already delivered.
-/// 仅当对应目标版本尚未投递时，将稳定目标引导前置到当前提示词。
-///
-/// # Parameters
-/// 参数
-/// `prompt` is the concrete provider-visible prompt being sent now.
-/// `prompt` 是当前将要发送的具体 Provider 可见提示词。
-/// `conversation_state` is the canonical history before the current prompt.
-/// `conversation_state` 是当前提示词之前的规范历史。
-/// `goal_context` binds the active goal version to its stable guidance.
-/// `goal_context` 将活动目标版本绑定到稳定引导。
-///
-/// # Returns
-/// 返回值
-/// The original prompt when absent or already delivered, otherwise the goal-prefixed prompt.
-/// 目标不存在或已投递时返回原提示词，否则返回已前置目标引导的提示词。
-pub(crate) fn prepend_goal_context_to_current_prompt(
-    prompt: String,
-    conversation_state: &SessionConversationState,
-    goal_context: Option<&ExecutionSessionGoalContext>,
-) -> String {
-    let Some(goal_context_text) = undelivered_goal_context_text(conversation_state, goal_context)
-    else {
-        return prompt;
-    };
-    if prompt.trim().is_empty() {
-        return goal_context_text.to_string();
-    }
-    format!("{goal_context_text}\n\n{prompt}")
-}
-
-/// Attaches Goal guidance and cumulative usage to the concrete mailbox messages starting this turn.
-/// 将目标引导与累计用量绑定到启动本回合的具体 mailbox 消息。
-///
-/// # Parameters
-/// 参数
-/// `messages` contains the provider-visible inter-agent inputs for the current turn.
-/// `messages` 包含当前回合的 Provider 可见代理间输入。
-/// `conversation_state` is the canonical history before these mailbox messages.
-/// `conversation_state` 是这些 mailbox 消息之前的规范历史。
-/// `goal_context` binds the active Goal version to stable guidance.
-/// `goal_context` 将活动目标版本绑定到稳定引导。
-/// `usage_context` is the optional cumulative usage snapshot for this turn.
-/// `usage_context` 是本回合可选的累计用量快照。
-///
-/// # Returns
-/// 返回值
-/// This function returns no value and mutates only the first and last concrete mailbox payloads.
-/// 此函数没有返回值，且仅修改首尾具体 mailbox 载荷。
-pub(crate) fn attach_goal_context_to_provider_visible_agent_messages(
-    messages: &mut [ExecutionProviderVisibleAgentMessage],
-    conversation_state: &SessionConversationState,
-    goal_context: Option<&ExecutionSessionGoalContext>,
-    usage_context: Option<&str>,
-) {
-    if messages.is_empty() {
-        return;
-    }
-    if let Some(goal_context_text) = undelivered_goal_context_text(conversation_state, goal_context)
-    {
-        // firstPayload binds stable guidance immediately before the first concrete mailbox input.
-        // firstPayload 将稳定引导直接绑定在第一条具体 mailbox 输入之前。
-        let first_payload = &mut messages[0].payload;
-        if first_payload.trim().is_empty() {
-            *first_payload = goal_context_text.to_string();
-        } else {
-            *first_payload = format!("{goal_context_text}\n\n{first_payload}");
-        }
-    }
-    if let Some(usage_context) = usage_context
-        .map(str::trim)
-        .filter(|context| !context.is_empty())
-    {
-        // lastPayload keeps the changing usage snapshot at the append-only end of this mailbox input batch.
-        // lastPayload 将变化的用量快照保留在本批 mailbox 输入的追加式末尾。
-        let last_payload = &mut messages
-            .last_mut()
-            .expect("non-empty mailbox input has a last payload")
-            .payload;
-        if last_payload.trim().is_empty() {
-            *last_payload = usage_context.to_string();
-        } else {
-            last_payload.push_str("\n\n");
-            last_payload.push_str(usage_context);
-        }
-    }
-}
-
-/// Replaces one exact canonical current-user message with its final provider-visible text.
-/// 使用最终 Provider 可见文本替换一条精确的当前规范用户消息。
-///
-/// # Parameters
-/// 参数
-/// `conversation_state` owns the canonical provider history being prepared.
-/// `conversation_state` 持有正在准备的规范 Provider 历史。
-/// `message_id` identifies the current user message created by the shared prompt reducer.
-/// `message_id` 标识共享提示词归约器创建的当前用户消息。
-/// `prompt` is the complete text that the provider must observe for this exact message.
-/// `prompt` 是 Provider 必须在该精确消息中观察到的完整文本。
-///
-/// # Returns
-/// 返回值
-/// Success after replacing the exact user text, or an explicit identity/payload mismatch error.
-/// 成功替换精确用户文本后返回成功；身份或载荷不匹配时返回显式错误。
-pub(crate) fn replace_canonical_current_user_prompt(
-    conversation_state: &mut SessionConversationState,
-    message_id: &str,
-    prompt: &str,
-) -> Result<(), String> {
-    let message = conversation_state
-        .messages
-        .iter_mut()
-        .find(|message| message.id == message_id)
-        .ok_or_else(|| {
-            format!(
-                "Canonical current user message `{message_id}` is missing during Goal delivery."
-            )
-        })?;
-    let SessionConversationPayload::UserText { text, .. } = &mut message.payload else {
-        return Err(format!(
-            "Canonical current message `{message_id}` is not a user-text payload."
-        ));
-    };
-    *text = prompt.to_string();
-    Ok(())
-}
-
-/// Returns stable Goal guidance only when its exact version marker is absent from canonical history.
-/// 仅当规范历史中不存在精确目标版本标记时返回稳定目标引导。
-///
-/// # Parameters
-/// 参数
-/// `conversation_state` is the canonical history before the current concrete input.
-/// `conversation_state` 是当前具体输入之前的规范历史。
-/// `goal_context` is the optional active Goal context bound to this execution.
-/// `goal_context` 是绑定到本次执行的可选活动目标上下文。
-///
-/// # Returns
-/// 返回值
-/// Trimmed stable guidance for an undelivered Goal version, otherwise no value.
-/// 未投递目标版本返回裁剪后的稳定引导，否则不返回值。
-fn undelivered_goal_context_text<'a>(
-    conversation_state: &SessionConversationState,
-    goal_context: Option<&'a ExecutionSessionGoalContext>,
-) -> Option<&'a str> {
-    let goal_context = goal_context?;
-    let marker = session_goal_context_version_marker(&goal_context.goal_id);
-    let already_delivered =
-        conversation_state
-            .messages
-            .iter()
-            .any(|message| match &message.payload {
-                SessionConversationPayload::UserText { text, .. }
-                | SessionConversationPayload::ToolResult { text, .. } => text.contains(&marker),
-                SessionConversationPayload::AgentMessage { payload, .. } => {
-                    payload.contains(&marker)
-                }
-                SessionConversationPayload::Assistant { .. } => false,
-            });
-    (!already_delivered)
-        .then_some(goal_context.prompt_context.trim())
-        .filter(|context| !context.is_empty())
 }
 
 /// Renders the budget-limited wrap-up template copied from Codex semantics.

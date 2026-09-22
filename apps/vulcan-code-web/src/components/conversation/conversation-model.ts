@@ -1,9 +1,10 @@
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import type { ConversationMessage } from "@/types";
+import type { ConversationAgentInteraction } from "@/types/conversation";
 
 // ConversationBlockKind describes one WebUI-renderable conversation block family.
 // ConversationBlockKind 描述 WebUI 可渲染的单个会话块族。
-export type ConversationBlockKind = "markdown" | "tool-call" | "tool-result" | "command" | "diff" | "thinking" | "notice" | "turn-stats" | "plan-artifact";
+export type ConversationBlockKind = "markdown" | "tool-call" | "tool-result" | "command" | "diff" | "thinking" | "notice" | "turn-stats" | "plan-artifact" | "agent-interaction";
 
 // ConversationPlanArtifact describes one submitted Plan artifact embedded in a turn.
 // ConversationPlanArtifact 描述嵌入单个回合中的已提交计划产物。
@@ -29,6 +30,9 @@ export type ConversationRenderItemKind = "user" | "assistant" | "system";
 // ConversationBlock describes one parsed message block shown inside the transcript.
 // ConversationBlock 描述转录区中展示的单个解析后消息块。
 export interface ConversationBlock {
+  // Typed interaction facts retained by the V1 presentation adapter, never parsed from model text.
+  // 由 V1 展示适配器保留的强类型交互事实，绝不从模型正文解析。
+  agentInteraction?: ConversationAgentInteraction;
   // Stable block identifier within the owning message.
   // 所属消息内的稳定块标识。
   id: string;

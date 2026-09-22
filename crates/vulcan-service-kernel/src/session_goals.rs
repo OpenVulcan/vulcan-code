@@ -21,6 +21,11 @@ use crate::session_runtime_registry_v1::{
     SessionMutationChange, SessionRuntimeError,
 };
 
+mod activation;
+use activation::{
+    activate_user_goal_transition, resume_session_goal_v1, update_session_goal_status_v1,
+};
+
 /// Provider-visible semantic recorded when a user pauses autonomous Goal work.
 /// 用户暂停目标自动执行时记录的 Provider 可见语义。
 const GOAL_PAUSED_PROVIDER_CONTEXT: &str =
@@ -382,19 +387,24 @@ fn save_session_goal_v1(
         SessionMutationAdmission::MetadataOnly,
         SessionFlushReason::MetadataChanged,
         move |document| {
-            // save_goal owns create, update, and completed-generation replacement as one failure-atomic domain transaction.
-            // save_goal 以单个失败原子领域事务统一拥有创建、更新及已完成代际替换。
-            let previous_origin = document.metadata.mode.goal.origin_seq;
-            let transition =
-                document.save_goal(objective.clone(), token_budget, objective, now_ms)?;
-            if document.metadata.mode.goal.origin_seq != previous_origin {
-                document.metadata.mode.goal.usage_baseline = handle.goal_usage_snapshot().ok();
-            }
-            Ok(match transition {
-                Some(transition) => {
-                    SessionMutationChange::Changed(transition.continuation_turn_id.is_some())
+            document.apply_atomic_transition(move |document| {
+                // Creation may grant a new user-owned turn; editing an existing Goal never grants execution consent.
+                // 创建可以授予新的用户所属回合；编辑已有 Goal 绝不授予执行许可。
+                let previous_origin = document.metadata.mode.goal.origin_seq;
+                let transition =
+                    document.save_goal(objective.clone(), token_budget, objective, now_ms)?;
+                if document.metadata.mode.goal.origin_seq != previous_origin {
+                    document.metadata.mode.goal.usage_baseline = handle.goal_usage_snapshot().ok();
                 }
-                None => SessionMutationChange::Unchanged(false),
+                Ok(match transition {
+                    Some(transition) => {
+                        if transition.continuation_turn_id.is_some() {
+                            activate_user_goal_transition(document, &transition, now_ms)?;
+                        }
+                        SessionMutationChange::Changed(transition.continuation_turn_id.is_some())
+                    }
+                    None => SessionMutationChange::Unchanged(false),
+                })
             })
         },
     )
@@ -471,18 +481,7 @@ pub(super) async fn service_resume_session_goal(
     let handle = session_v1_handle_from_state(&state, session_id).await?;
     let token_budget = request.token_budget.map(|value| value as u64);
     let now_ms = current_v1_goal_unix_millis()?;
-    handle
-        .mutate_durable_if_changed(
-            SessionMutationAdmission::MetadataOnly,
-            SessionFlushReason::MetadataChanged,
-            move |document| {
-                let transition =
-                    document.resume_goal(objective.clone(), token_budget, objective, now_ms)?;
-                Ok(SessionMutationChange::Changed(
-                    transition.continuation_turn_id.is_some(),
-                ))
-            },
-        )
+    resume_session_goal_v1(handle.as_ref(), objective, token_budget, now_ms)
         .map_err(|error| format!("继续 V1 Goal 失败：{error}"))?;
     let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
     cache_session_goal_summary(&state, session_id, summary.clone())?;
@@ -574,30 +573,7 @@ pub(super) async fn service_update_session_goal_status(
         begin_session_turn_start_exclusion(&state, [session_id], "更新目标状态")?;
     let handle = session_v1_handle_from_state(&state, session_id).await?;
     let now_ms = current_v1_goal_unix_millis()?;
-    handle
-        .mutate_durable_if_changed(
-            SessionMutationAdmission::MetadataOnly,
-            SessionFlushReason::MetadataChanged,
-            move |document| {
-                if document.metadata.mode.goal.enabled
-                    && document.metadata.mode.goal.state == target_status
-                {
-                    return Ok(SessionMutationChange::Unchanged(()));
-                }
-                match target_status {
-                    GoalState::Active => {
-                        let objective = document.metadata.mode.goal.objective.clone();
-                        let budget_tokens = document.metadata.mode.goal.budget_tokens;
-                        document.resume_goal(objective.clone(), budget_tokens, objective, now_ms)?
-                    }
-                    GoalState::Paused => {
-                        document.pause_goal(GOAL_PAUSED_PROVIDER_CONTEXT, now_ms)?
-                    }
-                    _ => unreachable!("the WebUI status enum admits only active or paused"),
-                };
-                Ok(SessionMutationChange::Changed(()))
-            },
-        )
+    update_session_goal_status_v1(handle.as_ref(), request.status, now_ms)
         .map_err(|error| format!("更新 V1 Goal 状态失败：{error}"))?;
     let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
     cache_session_goal_summary(&state, session_id, summary.clone())?;

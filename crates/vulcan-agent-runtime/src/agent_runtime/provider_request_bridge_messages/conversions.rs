@@ -40,7 +40,9 @@ pub(crate) fn session_message_to_core_message(
             text: text.clone(),
         },
         SessionConversationPayload::AgentMessage {
+            kind,
             message_type,
+            task_id,
             task_name,
             sender,
             recipient,
@@ -48,7 +50,9 @@ pub(crate) fn session_message_to_core_message(
             trigger_turn,
             metadata,
         } => CoreConversationPayload::AgentMessage {
+            kind: *kind,
             message_type: message_type.clone(),
+            task_id: task_id.clone(),
             task_name: task_name.clone(),
             sender: sender.clone(),
             recipient: recipient.clone(),
@@ -104,7 +108,9 @@ pub(crate) fn core_message_to_session_message(
             text: text.clone(),
         },
         CoreConversationPayload::AgentMessage {
+            kind,
             message_type,
+            task_id,
             task_name,
             sender,
             recipient,
@@ -112,7 +118,9 @@ pub(crate) fn core_message_to_session_message(
             trigger_turn,
             metadata,
         } => SessionConversationPayload::AgentMessage {
+            kind: *kind,
             message_type: message_type.clone(),
+            task_id: task_id.clone(),
             task_name: task_name.clone(),
             sender: sender.clone(),
             recipient: recipient.clone(),

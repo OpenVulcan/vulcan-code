@@ -1,4 +1,5 @@
 use super::*;
+use crate::tooling::collaboration::NativeAgentCollaborationRuntime;
 
 /// Default wait_agent timeout in milliseconds for the Vulcan core subagent tool.
 /// Vulcan 核心子代理工具的 `wait_agent` 默认等待毫秒数。
@@ -14,12 +15,15 @@ pub(super) const WAIT_AGENT_MAX_TIMEOUT_MS: u64 = 3_600_000;
 
 /// Builds the core child-agent tool surface backed by the shared subagent runtime.
 /// 构建由共享 TaskSession 运行时承载的 会话代理风格子代理工具面。
-pub fn build_subagent_tool_candidates(task_runtime: Arc<TaskRuntime>) -> Vec<VulcanToolCandidate> {
+pub fn build_subagent_tool_candidates(
+    task_runtime: Arc<TaskRuntime>,
+    collaboration_runtime: Option<Arc<dyn NativeAgentCollaborationRuntime>>,
+) -> Vec<VulcanToolCandidate> {
     vec![
-        build_spawn_agent_tool_candidate(Arc::clone(&task_runtime)),
+        build_spawn_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime.clone()),
         build_agent_orchestration_info_tool_candidate(Arc::clone(&task_runtime)),
         build_send_message_tool_candidate(Arc::clone(&task_runtime)),
-        build_wait_agent_tool_candidate(Arc::clone(&task_runtime)),
+        build_wait_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime),
         build_interrupt_agent_tool_candidate(Arc::clone(&task_runtime)),
         build_close_agent_tool_candidate(Arc::clone(&task_runtime)),
         build_list_agents_tool_candidate(task_runtime),
@@ -30,6 +34,7 @@ pub fn build_subagent_tool_candidates(task_runtime: Arc<TaskRuntime>) -> Vec<Vul
 /// 构建模型可见的非阻塞子代理启动工具。
 pub(super) fn build_spawn_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
+    collaboration_runtime: Option<Arc<dyn NativeAgentCollaborationRuntime>>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor::new(
@@ -45,6 +50,7 @@ pub(super) fn build_spawn_agent_tool_candidate(
         request_streaming: None,
         invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
+            let collaboration_runtime = collaboration_runtime.clone();
             Box::pin(async move {
                 let trace_started_at = current_unix_millis_u64();
                 let session_id = parse_subagent_tool_session_id(
@@ -60,7 +66,16 @@ pub(super) fn build_spawn_agent_tool_candidate(
                     ),
                 );
                 let task_args = task_tool_args_from_spawn_agent_args(args)?;
-                let result = task_runtime.invoke_spawn_agent(session_id, task_args).await;
+                let port = collaboration_runtime.ok_or_else(|| {
+                    String::from("spawn_agent requires the host collaboration runtime.")
+                })?;
+                let lifecycle = collaboration_lifecycle::ChildTaskInvocation {
+                    port,
+                    invocation: context,
+                };
+                let result = task_runtime
+                    .invoke_spawn_agent(session_id, Some(lifecycle), task_args)
+                    .await;
                 task_runtime_trace(
                     "subagent_spawn_agent_return",
                     format!(
@@ -154,6 +169,7 @@ pub(super) fn build_send_message_tool_candidate(
 /// 构建模型可见的子代理等待工具。
 pub(super) fn build_wait_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
+    collaboration_runtime: Option<Arc<dyn NativeAgentCollaborationRuntime>>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor::new(
@@ -171,12 +187,25 @@ pub(super) fn build_wait_agent_tool_candidate(
         request_streaming: None,
         invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
+            let collaboration_runtime = collaboration_runtime.clone();
             Box::pin(async move {
                 let session_id = parse_subagent_tool_session_id(
                     Some(context.session_id.as_str()),
                     WAIT_AGENT_TOOL,
                 )?;
-                task_runtime.invoke_wait_agent(session_id, args).await
+                let wait_for_child = task_runtime.invoke_wait_agent(session_id, args);
+                let Some(collaboration_runtime) = collaboration_runtime else {
+                    return wait_for_child.await;
+                };
+                let incoming_question_context = context.clone();
+                tokio::select! {
+                    result = wait_for_child => result,
+                    incoming_question = collaboration_runtime
+                        .wait_for_incoming_question(incoming_question_context) =>
+                    {
+                        incoming_question.map(VulcanToolInvocationResult::from_model_output)
+                    }
+                }
             })
         }),
     }

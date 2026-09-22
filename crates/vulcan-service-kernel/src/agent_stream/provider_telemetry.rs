@@ -22,6 +22,27 @@ pub(crate) struct ProviderTelemetryHookGuard {
 }
 
 impl ProviderTelemetryHookGuard {
+    /// Arms cancellation before releasing a successfully committed session preparation permit.
+    /// 在放行成功提交的会话准备许可之前激活取消跟踪。
+    /// `event` identifies the pending request; `result` is returned by the unique preparation owner.
+    /// `event`标识待准备请求；`result`由唯一准备所有者返回。
+    /// Rejections, configuration restarts, and excluded requests leave this session tracker unchanged.
+    /// 拒绝、配置重启及排除请求保持此会话跟踪器不变。
+    pub(crate) fn observe_preparation_result(
+        &mut self,
+        event: &ProviderRequestTelemetryEvent,
+        result: &Result<vulcan_agent_runtime::agent_runtime::events::PreparedPhysicalApi, String>,
+    ) {
+        if matches!(
+            result,
+            Ok(vulcan_agent_runtime::agent_runtime::events::PreparedPhysicalApi::SessionV1 { .. })
+        ) {
+            // A dropped permit receiver cannot undo api_started; the consumer still owns cancellation.
+            // 许可接收端被丢弃不能撤销 api_started；消费方仍承担取消责任。
+            self.cancellation.observe(event);
+        }
+    }
+
     /// Creates a guard that can persist and project cancellation accounting during Drop.
     /// 创建一个可在 Drop 期间持久化并投影取消记账的守卫。
     ///
@@ -219,6 +240,165 @@ mod tests {
     //! Provider 生命周期可靠所有权回归测试。
 
     use super::*;
+
+    /// Builds a typed permit fixture for cancellation handoff tests, without claiming real storage admission.
+    /// 构建取消交接测试用强类型许可夹具，不声称经过真实存储准入。
+    /// Returns a session permit when `session_owned` is true, otherwise an explicitly excluded permit.
+    /// `session_owned`为真时返回会话许可，否则返回明确排除的许可。
+    fn preparation_permit(
+        session_owned: bool,
+    ) -> vulcan_agent_runtime::agent_runtime::events::PreparedPhysicalApi {
+        use vulcan_agent_runtime::agent_runtime::events::PreparedPhysicalApi;
+        // All transport fields are inert: these tests exercise only the consumer's cancellation handoff.
+        // 全部传输字段均不执行：这些测试只检查消费方的取消责任交接。
+        let exact_request = vulcan_ai_contract::AiExecutionRequest {
+            operation: vulcan_ai_contract::AiOperation::ConversationRespond,
+            model_id: "test-model".into(),
+            cache_scope_id: None,
+            continuation: None,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            native_tools: Vec::new(),
+            tool_choice: Default::default(),
+            parallel_tool_calls: Default::default(),
+            structured_output: Default::default(),
+            stop_sequences: Vec::new(),
+            prompt_cache: Default::default(),
+            reasoning_effort: None,
+            reasoning_output: Default::default(),
+            model_parameters: Default::default(),
+            resources: Vec::new(),
+            output_token_limit: None,
+        };
+        // Snapshot values do not authorize the permit; the explicit enum variant selects ownership.
+        // 快照值不授予许可；显式枚举分支选择归属。
+        let request_snapshot = vulcan_core::types::ProviderRequestSnapshot {
+            provider_id: "test-provider".into(),
+            model_id: "test-model".into(),
+            system_prompt: String::new(),
+            prompt_layers: Default::default(),
+            prompt: String::new(),
+            prompt_in_history: true,
+            history: Vec::new(),
+            temperature: None,
+            max_turns: 1,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: Default::default(),
+        };
+        if !session_owned {
+            return PreparedPhysicalApi::ExcludedNonSession {
+                exact_request,
+                controller_config: Default::default(),
+                controller_snapshot: Default::default(),
+                request_snapshot,
+                context_budget: None,
+            };
+        }
+        PreparedPhysicalApi::SessionV1 {
+            exact_request,
+            controller_config: Default::default(),
+            controller_snapshot: Default::default(),
+            request_snapshot,
+            context_budget: None,
+            core_start: vulcan_session_core::v1::document::PreparedApiStart {
+                api_call_id: vulcan_session_core::v1::ApiCallId::try_new(1).unwrap(),
+                started_seq: vulcan_session_core::v1::Seq::try_new(1).unwrap(),
+                projection: vulcan_session_core::v1::ProviderProjectionProof {
+                    segment_generation: 1,
+                    document_revision: 1,
+                    retained_from_seq: vulcan_session_core::v1::Seq::try_new(1).unwrap(),
+                    through_seq: vulcan_session_core::v1::Seq::try_new(1).unwrap(),
+                    fingerprint_sha256: "test-proof".into(),
+                },
+                continuation_action_id: None,
+            },
+            provider_api_trace_store: None,
+        }
+    }
+
+    /// A committed permit owns cancellation even when its receiver disappears before a Started echo.
+    /// 已提交许可即使在 Started 回送前失去接收端，也必须持有取消责任。
+    #[tokio::test(flavor = "current_thread")]
+    async fn committed_preparation_arms_cancellation_before_dropped_receiver() {
+        use vulcan_agent_runtime::agent_runtime::events::PreparedPhysicalApi;
+        use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEventKind;
+        // This service fixture exercises the real guard with the same oneshot primitive as the private barrier.
+        // 此服务夹具检查真实守卫，使用与私有屏障相同的一次性通道原语。
+        let session_id = uuid::Uuid::new_v4();
+        let state = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::tests::test_support::test_service_state_with_parent_session(session_id),
+        ));
+        let mut guard = ProviderTelemetryHookGuard::new_with_persistence(state, None);
+        let started = ProviderRequestTelemetryEvent::detached(
+            ProviderRequestTelemetryEventKind::Started,
+            session_id,
+            serde_json::json!({"request_id":"admitted-request", "started_at_ms":1000}),
+            None,
+        );
+        // No failed or non-session outcome may create a synthetic session cancellation.
+        // 任何失败或非会话结果都不能创建合成的会话取消。
+        for result in [
+            Err("storage admission failed".into()),
+            Ok(PreparedPhysicalApi::RequestConfigurationChanged),
+            Ok(preparation_permit(false)),
+        ] {
+            guard.observe_preparation_result(&started, &result);
+            assert!(guard.take_cancelled_event().is_none());
+        }
+        let (completion, receiver) = tokio::sync::oneshot::channel();
+        drop(receiver);
+        let result = Ok(preparation_permit(true));
+        guard.observe_preparation_result(&started, &result);
+        assert!(completion.send(result).is_err());
+        let cancelled = guard
+            .take_cancelled_event()
+            .expect("committed request remains owned");
+        assert_eq!(cancelled.payload["request_id"], "admitted-request");
+        assert_eq!(cancelled.payload["status"], "cancelled");
+        assert!(guard.take_cancelled_event().is_none());
+    }
+
+    /// First-token evidence remains identity-bound, and a completed attempt cannot cancel twice.
+    /// 首 Token 证据保持身份绑定，已完成尝试不能重复取消。
+    #[tokio::test(flavor = "current_thread")]
+    async fn admitted_cancellation_preserves_first_token_and_terminal_identity() {
+        use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEventKind;
+        // The guard receives the same ordered event shapes used by detached and compaction consumers.
+        // 守卫接收与子代理及压缩消费方相同的有序事件形态。
+        let session_id = uuid::Uuid::new_v4();
+        let state = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::tests::test_support::test_service_state_with_parent_session(session_id),
+        ));
+        let mut guard = ProviderTelemetryHookGuard::new_with_persistence(state, None);
+        let started = ProviderRequestTelemetryEvent::detached(
+            ProviderRequestTelemetryEventKind::Started,
+            session_id,
+            serde_json::json!({"request_id":"admitted-request", "started_at_ms":1000}),
+            None,
+        );
+        let mut first_token = ProviderRequestTelemetryEvent::detached(
+            ProviderRequestTelemetryEventKind::FirstToken,
+            session_id,
+            serde_json::json!({"request_id":"foreign-request", "first_token_at_ms":1200, "time_to_first_token_ms":200}),
+            None,
+        );
+        guard.observe_preparation_result(&started, &Ok(preparation_permit(true)));
+        guard.observe_durable_boundary(&first_token);
+        let cancelled = guard.take_cancelled_event().unwrap();
+        assert_eq!(cancelled.payload["semantic_output_observed"], false);
+        guard.observe_preparation_result(&started, &Ok(preparation_permit(true)));
+        first_token.payload["request_id"] = serde_json::json!("admitted-request");
+        guard.observe_durable_boundary(&first_token);
+        let cancelled = guard.take_cancelled_event().unwrap();
+        assert_eq!(cancelled.payload["semantic_output_observed"], true);
+        assert_eq!(cancelled.payload["first_token_at_ms"], 1200);
+        assert_eq!(cancelled.payload["replay_safe"], false);
+        guard.observe_preparation_result(&started, &Ok(preparation_permit(true)));
+        guard.observe_durable_boundary(&cancelled);
+        assert!(guard.take_cancelled_event().is_none());
+    }
 
     /// Verifies best-effort Hook forwarding cannot arm cancellation before Started is durable.
     /// 验证 Started 可靠持久化前，尽力 Hook 转发不能激活取消跟踪。

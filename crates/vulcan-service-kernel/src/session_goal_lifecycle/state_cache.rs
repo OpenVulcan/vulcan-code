@@ -382,6 +382,9 @@ pub(crate) fn session_goal_summary_from_v1_handle(
 /// 从一次权威 V1 文档读取中捕获的可靠 Goal 分发身份。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionGoalDispatchAuthority {
+    /// Exact history generation; local turn and sequence identifiers may repeat after replacement.
+    /// 精确历史代次；替换后局部回合与序号标识可能重复。
+    pub(crate) generation: u64,
     /// Stable projected Goal stage identity.
     /// 稳定投影的 Goal 阶段身份。
     pub(crate) goal_id: String,
@@ -410,25 +413,42 @@ pub(crate) fn session_goal_dispatch_authority_from_v1_handle(
     session_id: SessionId,
 ) -> Result<Option<SessionGoalDispatchAuthority>, String> {
     handle
-        .read(|document| {
-            let summary = session_goal_summary_from_document(
-                document,
-                session_id,
-                handle.goal_usage_snapshot().ok().as_ref(),
-            )?;
-            if summary.status != SessionGoalStatus::Active {
-                return None;
-            }
-            let turn = document.active_turn()?;
-            (!turn.closed
-                && turn.origin == vulcan_session_core::v1::document::TurnOrigin::GoalContinuation)
-                .then_some(SessionGoalDispatchAuthority {
-                    goal_id: summary.goal_id,
-                    turn_id: turn.turn_id,
-                    context_seq: turn.start_seq,
-                })
-        })
+        .read(|document| session_goal_dispatch_authority_from_document(document, session_id))
         .map_err(|error| format!("读取 V1 Goal 分发身份失败：{error}"))
+}
+
+/// Derives Goal dispatch identity from one caller-owned canonical snapshot.
+/// 从调用方持有的一份规范快照推导 Goal 分发身份。
+/// Returns no authority while stopped, archived, or occupied; accounting does not grant execution.
+/// 停止、归档或被占用时不返回权威；统计不授予执行权限。
+pub(crate) fn session_goal_dispatch_authority_from_document(
+    document: &SessionDocument,
+    session_id: SessionId,
+) -> Option<SessionGoalDispatchAuthority> {
+    // Goal identity and lifecycle are canonical; this projection never needs mutable usage counters.
+    // Goal 身份与生命周期由规范记录决定；此投影不需要可变使用量计数。
+    let summary = session_goal_summary_from_document(document, session_id, None)?;
+    if summary.status != SessionGoalStatus::Active
+        || document.metadata.archived_at_ms.is_some()
+        || document.collaboration_run_control()
+            != vulcan_session_core::v1::collaboration::CollaborationRunControl::Running
+        || document.active_api().is_some()
+        || document.collaboration_state().question_executions.values().any(|execution| {
+            execution.state == vulcan_session_core::v1::collaboration::CollaborationQuestionExecutionState::Running
+        })
+    {
+        return None;
+    }
+    // Require the actual Goal continuation owner, not merely active Goal metadata on a user turn.
+    // 要求实际 Goal 续跑所有者，而非仅附着于用户回合的活动 Goal 元数据。
+    let turn = document.active_turn()?;
+    (!turn.closed && turn.origin == vulcan_session_core::v1::document::TurnOrigin::GoalContinuation)
+        .then_some(SessionGoalDispatchAuthority {
+            generation: document.segment_generation(),
+            goal_id: summary.goal_id,
+            turn_id: turn.turn_id,
+            context_seq: turn.start_seq,
+        })
 }
 
 /// Maps one catalog MIME value to the stable conversation attachment category.
@@ -770,6 +790,21 @@ mod tests {
         };
         document.metadata.mode.goal.origin_turn_id = Some(turn_id);
         document.metadata.mode.goal.origin_seq = document.active_turn().map(|turn| turn.start_seq);
+        // This projection fixture models an admitted user activation, including its execution consent.
+        // 此投影夹具模拟已准入用户激活，包含其执行许可。
+        document
+            .set_collaboration_run_control(
+                vulcan_session_core::v1::collaboration::SetRunControlInput {
+                    operation_id:
+                        vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(
+                            "state-cache-goal-running",
+                        )
+                        .unwrap(),
+                    state: vulcan_session_core::v1::collaboration::CollaborationRunControl::Running,
+                    changed_at_ms: 3,
+                },
+            )
+            .unwrap();
         (
             SessionHandle::with_backend(session_id, document, Arc::new(ReadOnlyPersistenceBackend)),
             turn_id,

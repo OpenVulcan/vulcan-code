@@ -1960,6 +1960,9 @@ function SubagentOrchestrationDetail(props: {
   t: (key: TranslationKey) => string;
 }) {
   const { presentation, t } = props;
+  if (presentation.operation.startsWith("collaboration_")) {
+    return <CollaborationToolDetail presentation={presentation} t={t} />;
+  }
   if (presentation.operation === "wait") {
     return (
       <div className="subagent-orchestration-detail">
@@ -2106,6 +2109,45 @@ function SubagentOrchestrationDetail(props: {
   );
 }
 
+// CollaborationToolDetail keeps question, answer, direction and waiting cards distinct.
+// CollaborationToolDetail 保持问题、回答、方向与等待卡片彼此区分。
+function CollaborationToolDetail(props: {
+  // Exact collaboration presentation model.
+  // 精确的协作展示模型。
+  presentation: SubagentOrchestrationPresentation;
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string;
+}) {
+  const { presentation, t } = props;
+  const argumentText = presentation.collaborationArguments
+    ? JSON.stringify(presentation.collaborationArguments, null, 2)
+    : null;
+  const promptLabel = presentation.operation === "collaboration_answer"
+    ? t("conversation.collaboration.detail.answer")
+    : presentation.operation === "collaboration_notification"
+      ? t("conversation.collaboration.detail.notification")
+      : presentation.operation === "collaboration_steer"
+      ? t("conversation.subagent.detail.message")
+      : t("conversation.collaboration.detail.question");
+  return (
+    <div className="subagent-orchestration-detail collaboration-tool-detail">
+      {presentation.prompt ? <SubagentInlineTextLine label={promptLabel} text={presentation.prompt} /> : null}
+      {presentation.deliveryMode ? (
+        <div className="subagent-orchestration-meta">
+          <span>{t("conversation.subagent.detail.deliveryMode")}</span>
+          <strong>{presentation.deliveryMode === "queue" ? t("conversation.subagent.queue.followup") : t("conversation.subagent.queue.steering")}</strong>
+        </div>
+      ) : null}
+      {argumentText ? <SubagentTextBlock label={t("conversation.collaboration.detail.arguments")} text={argumentText} /> : null}
+      {presentation.result ? <SubagentTextBlock label={t("conversation.collaboration.detail.output")} text={presentation.result} /> : null}
+      {!presentation.prompt && !argumentText && !presentation.result ? (
+        <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.empty")}</div>
+      ) : null}
+    </div>
+  );
+}
+
 // SubagentOrchestrationAgentRow renders one listed child-agent status row.
 // SubagentOrchestrationAgentRow 渲染单条已列出的子代理状态行。
 function SubagentOrchestrationAgentRow(props: {
@@ -2180,6 +2222,15 @@ function subagentOperationLabel(
   // 翻译辅助函数。
   t: (key: TranslationKey) => string,
 ): string {
+  if (presentation.operation === "collaboration_question") return t("conversation.collaboration.question");
+  if (presentation.operation === "collaboration_answer") return t("conversation.collaboration.answer");
+  if (presentation.operation === "collaboration_steer") return t("conversation.collaboration.steer");
+  if (presentation.operation === "collaboration_question_wait") return t("conversation.collaboration.questionWait");
+  if (presentation.operation === "collaboration_notification") return t("conversation.collaboration.notification");
+  if (presentation.operation === "collaboration_session_list") return t("conversation.collaboration.sessionList");
+  if (presentation.operation === "collaboration_session_read") return t("conversation.collaboration.sessionRead");
+  if (presentation.operation === "collaboration_session_wait") return t("conversation.collaboration.sessionWait");
+  if (presentation.operation === "collaboration_cancel") return t("conversation.collaboration.cancel");
   if (presentation.operation === "wait") return t("conversation.subagent.detail.wait");
   if (presentation.operation === "message") return t("conversation.subagent.detail.message");
   if (presentation.operation === "agent_orchestration_info") return t("conversation.subagent.detail.templateCollection");
@@ -2200,6 +2251,14 @@ function subagentSummaryText(
   // 翻译辅助函数。
   t: (key: TranslationKey) => string,
 ): string {
+  if (presentation.operation === "collaboration_steer") {
+    return presentation.deliveryMode === "queue"
+      ? t("conversation.subagent.queue.followup")
+      : t("conversation.subagent.queue.steering");
+  }
+  if (presentation.operation.startsWith("collaboration_")) {
+    return subagentOperationLabel(presentation, t);
+  }
   if (presentation.operation === "wait") {
     return subagentWaitStatusText(presentation, t);
   }

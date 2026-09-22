@@ -6,6 +6,182 @@ use super::*;
 use serde_json::json;
 use vulcan_ai_contract::{APPLY_PATCH_TOOL_NAME, ToolDefinition};
 
+/// Runs the real single-attempt compact transport against a gated loopback response.
+/// 对带正文闸门的环回响应运行真实单次压缩传输。
+///
+/// `status` selects success or unauthorized response; returns after checking wire identity,
+/// header-before-body delivery, secret redaction, and the absence of a hidden retry.
+/// `status` 选择成功或未授权响应；验证线路身份、先头后体、秘密脱敏及无隐藏重试后返回。
+async fn verify_compact_attempt_boundary(status: u16) {
+    use super::super::super::test_support::read_test_http_request;
+    use std::sync::Arc;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+    use vulcan_ai_protocols::ProtocolRegistry;
+
+    // listener is the only reachable transport endpoint in this test.
+    // listener 是本测试唯一可达的传输端点。
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    // address scopes the immutable route to the isolated socket.
+    // address 将不可变路由限定到隔离 Socket。
+    let address = listener.local_addr().unwrap();
+    // releaseBody ensures header observation cannot depend on receiving the unary result.
+    // releaseBody 确保响应头观测不依赖接收一元结果。
+    let (release_body, body_ready) = oneshot::channel::<()>();
+    // server independently captures bytes and withholds the body until the host acknowledges headers.
+    // server 独立捕获字节，并在宿主确认响应头前扣留正文。
+    let server = tokio::spawn(async move {
+        // socket owns the sole physical request accepted by this server.
+        // socket 持有该服务器接受的唯一物理请求。
+        let (mut socket, _) = listener.accept().await.unwrap();
+        // received records what was actually sent after the trace acknowledgement.
+        // received 记录追踪确认后真正发送的内容。
+        let received = read_test_http_request(&mut socket).await;
+        // body deliberately echoes a fake secret on failure to exercise production redaction.
+        // body 在失败时故意回显假秘密，以验证生产脱敏。
+        let body = if status == 200 {
+            json!({"id":"compact-result", "output":[{"type":"compaction", "encrypted_content":"opaque"}], "usage":{"input_tokens":3}}).to_string()
+        } else {
+            json!({"error":{"message":"rejected compact-fake-token"}}).to_string()
+        };
+        socket.write_all(format!(
+            "HTTP/1.1 {status} Test\r\ncontent-type: application/json\r\ncontent-length: {}\r\nx-request-id: compact-attempt\r\nconnection: close\r\n\r\n", body.len(),
+        ).as_bytes()).await.unwrap();
+        body_ready.await.unwrap();
+        socket.write_all(body.as_bytes()).await.unwrap();
+        (received, listener)
+    });
+    // client uses production encoding, credential projection, HTTP and bounded unary decoding.
+    // client 使用生产编码、凭据投影、HTTP 及有界一元解码。
+    let client = ProviderExecutionClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        Arc::new(ProtocolRegistry::first_batch().unwrap()),
+    );
+    // route retains real native Codex declarations while replacing only its endpoint.
+    // route 保留真实原生 Codex 声明，仅替换端点。
+    let mut route = bundled_manifest_route(
+        "openai",
+        "codex-subscription",
+        OPENAI_CODEX_RESPONSES_PROFILE_ID,
+    );
+    route.protocol_route.base_url_override = Some(format!("http://{address}"));
+    // secret is synthetic OAuth material; no credential store or refresh endpoint is accessed.
+    // secret 是合成 OAuth 材料，不访问凭据仓库或刷新端点。
+    let secret =
+        crate::CredentialSecretEnvelope::new(crate::CredentialSecretMaterial::OpenAiCodexOAuth {
+            tokens: crate::OAuthTokenSet {
+                access_token: String::from("compact-fake-token"),
+                refresh_token: String::from("compact-fake-refresh"),
+                issued_at_unix_ms: 1,
+                expires_at_unix_ms: 2,
+                scopes: Default::default(),
+                account_subject: None,
+                email: None,
+            },
+            id_token: None,
+            account_id: Some(String::from("compact-fake-account")),
+        })
+        .unwrap()
+        .execution_secret()
+        .unwrap();
+    // captureReceiver acknowledges final wire tracing independently of header observation.
+    // captureReceiver 独立于响应头观测确认最终线路追踪。
+    let (capture_sender, capture_receiver) = oneshot::channel::<ProviderWireRequestTraceDispatch>();
+    // captureTask retains the exact body for comparison with bytes observed by the server.
+    // captureTask 保留精确正文以便与服务器观察到的字节比较。
+    let capture_task = tokio::spawn(async move {
+        // dispatch carries the actual compact endpoint and filtered final request.
+        // dispatch 携带实际 compact 端点及过滤后的最终请求。
+        let dispatch = capture_receiver.await.unwrap();
+        dispatch.persistence_result.send(Ok(())).unwrap();
+        dispatch.request
+    });
+    // stream exposes one attempt and has no access to OAuth renewal.
+    // stream 暴露一次尝试且无法访问 OAuth 续期。
+    let mut stream =
+        client.stream_responses_compact(route, minimal_request(), secret, Some(capture_sender));
+    // observed must arrive while the response body is still unavailable.
+    // observed 必须在响应正文仍不可用时到达。
+    let observed = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match observed {
+        ResponsesCompactEvent::TransportObserved {
+            dispatched_at_ms,
+            headers_at_ms,
+            http_status,
+            provider_request_id,
+            ..
+        } => {
+            assert!(headers_at_ms >= dispatched_at_ms);
+            assert_eq!(http_status, status);
+            assert_eq!(provider_request_id.as_deref(), Some("compact-attempt"));
+        }
+        ResponsesCompactEvent::Completed(_) => panic!("headers must precede the native result"),
+    }
+    release_body.send(()).unwrap();
+    // terminal is either the real native result or the original physical failure.
+    // terminal 是真实原生结果或原始物理失败。
+    let terminal = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    if status == 200 {
+        // result contains opaque output and usage without a synthetic assistant message.
+        // result 包含不透明输出和用量，不生成虚构助手消息。
+        let ResponsesCompactEvent::Completed(result) = terminal.unwrap() else {
+            panic!("one terminal native result expected")
+        };
+        assert_eq!(
+            result.output_items,
+            vec![json!({"type":"compaction", "encrypted_content":"opaque"})]
+        );
+        assert_eq!(result.usage, Some(json!({"input_tokens":3})));
+        assert_eq!(result.response_id.as_deref(), Some("compact-result"));
+    } else {
+        // failure keeps dispatch and status facts while removing the fake secret.
+        // failure 保留分派及状态事实，同时移除假秘密。
+        let failure = terminal.unwrap_err();
+        assert_eq!(failure.error.http_status, Some(status));
+        assert_eq!(failure.error.dispatch_outcome, DispatchOutcome::Dispatched);
+        assert!(!failure.error.message.contains("compact-fake-token"));
+    }
+    assert!(stream.next().await.is_none());
+    // captured and received independently prove final filtering and endpoint selection.
+    // captured 与 received 独立证明最终过滤和端点选择。
+    let captured = capture_task.await.unwrap();
+    let (received, listener) = server.await.unwrap();
+    assert!(received.starts_with("POST /responses/compact HTTP/1.1\r\n"));
+    assert_eq!(
+        captured.body,
+        serde_json::from_str::<Value>(received.split_once("\r\n\r\n").unwrap().1).unwrap()
+    );
+    assert!(captured.body.get("stream").is_none());
+    assert!(captured.body.get("previous_response_id").is_none());
+    assert_eq!(captured.transport, "responses_compact");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+/// Verifies real successful compact HTTP exposes headers before native result decoding.
+/// 验证真实成功 compact HTTP 在原生结果解码前暴露响应头。
+#[tokio::test]
+async fn compact_attempt_stream_preserves_wire_and_native_result_boundaries() {
+    verify_compact_attempt_boundary(200).await;
+}
+
+/// Verifies a physical 401 remains observable and never triggers a hidden second request.
+/// 验证物理 401 保持可观测且不会触发隐藏的第二次请求。
+#[tokio::test]
+async fn compact_attempt_stream_reports_unauthorized_without_retry() {
+    verify_compact_attempt_boundary(401).await;
+}
+
 /// Verifies compact encoding consumes the same route-owned Apply Patch contract as live streaming.
 /// 验证 compact 编码与实时流请求消费同一份路由自有 Apply Patch 契约。
 #[test]
