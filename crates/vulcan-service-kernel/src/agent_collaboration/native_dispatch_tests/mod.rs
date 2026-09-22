@@ -5,6 +5,7 @@ use super::*;
 use crate::agent_collaboration::test_support::fixture;
 
 mod cases;
+mod grants;
 mod wake;
 
 /// One admitted source API plus the exact ToolCall that a native port dispatch is bound to.
