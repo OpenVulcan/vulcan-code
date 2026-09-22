@@ -636,7 +636,7 @@
         "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfan.image-gen-skill.2026-09-22"
+        "evidence_revision": "apikeyfan.gpt-image-2.5-flare.user-confirmed.2026-09-22"
       }
     },
     {
@@ -861,7 +861,7 @@
         "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
         "constraints": ["Exactly one image is generated.", "Reference-image generation is not exposed because the APIKEY.FAN request shape has not been verified."],
         "limitations": ["Requested size is not a pixel guarantee; verified outputs normalize to about 1.57 million pixels.", "2048x1152 and 3840x2160 both produced 1672x941; high quality did not produce native 4K."],
-        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#四codex-分组隐式图片能力"]
+        "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#generation-contract"]
       },
       "output": {
         "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/png"],
@@ -905,7 +905,7 @@
         "format_policy": {"input_formats": ["text"], "output_formats": ["image/jpeg"]},
         "constraints": ["Exactly one image and resolution 1k are sent."],
         "limitations": ["UI text accuracy varied in the single verified sample.", "The route does not expose the unavailable grok-imagine-edit model."],
-        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#6411-apikeyfun-真实调用结果"]
+        "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#grok-media"]
       },
       "output": {
         "kind": "resources", "source_path": "/data", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/jpeg"],
@@ -938,7 +938,7 @@
         "format_policy": {"input_formats": ["text"], "output_formats": ["image/jpeg"]},
         "constraints": ["Exactly one image and resolution 1k are sent."],
         "limitations": ["One sample is not a permanent quality guarantee.", "Verified raw cost ticks were 2.5 times the standard image model."],
-        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#6411-apikeyfun-真实调用结果"]
+        "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#grok-media"]
       },
       "output": {
         "kind": "resources", "source_path": "/data", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/jpeg"],
@@ -987,7 +987,7 @@
         "format_policy": {"input_formats": ["text", "image/jpeg", "image/png", "image/webp", "reference_voice_id"], "output_formats": ["video/mp4", "video:h264", "audio:aac"]},
         "constraints": ["Single-image mode must omit aspect_ratio.", "Multi-reference mode accepts at most seven images and three voice IDs and requires prompt plus aspect_ratio.", "Video editing and extension endpoints are not exposed."],
         "limitations": ["The ordinary 15-second ceiling must not be interpreted as a verified 15-second multi-reference guarantee.", "480p is supported by configuration evidence; the completed live samples used 720p and two seconds."],
-        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#6431-apikeyfun-权威参数与真实调用结果"]
+        "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#grok-media"]
       },
       "output": {
         "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "video", "mime_types": ["video/mp4"],
@@ -1022,7 +1022,7 @@
         "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
         "constraints": ["Exactly one image is requested.", "Reference-image and masked-edit inputs are not exposed."],
         "limitations": ["Requested size is not a pixel guarantee; output dimensions remain provider-managed."],
-        "evidence_refs": ["apikeyfan.image-gen-skill.2026-09-22"]
+        "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#generation-contract"]
       },
       "output": {
         "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/png"],
@@ -1068,7 +1068,7 @@
         "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
         "constraints": ["Exactly one image is requested.", "Reference-image and masked-edit inputs are not exposed."],
         "limitations": ["Requested size is not a pixel guarantee; output dimensions remain provider-managed."],
-        "evidence_refs": ["apikeyfan.gpt-image-2.5-flare.user-confirmed.2026-09-22"]
+        "evidence_refs": ["docs/contracts/providers/apikeyfan-verified-media-facts.md#generation-contract"]
       },
       "output": {
         "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/png"],
