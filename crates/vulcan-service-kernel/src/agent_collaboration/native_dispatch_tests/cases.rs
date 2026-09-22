@@ -5,8 +5,68 @@ use super::*;
 use vulcan_agent_runtime::tooling::collaboration::{
     ASK_QUESTION_TOOL_ID, AskQuestionArgs, CANCEL_QUESTION_TOOL_ID, CancelQuestionArgs,
     LIST_SESSIONS_TOOL_ID, ListSessionsArgs, READ_SESSION_TOOL_ID, ReadSessionArgs,
-    SEND_NOTIFICATION_TOOL_ID, SendNotificationArgs, WAIT_QUESTION_TOOL_ID, WaitQuestionArgs,
+    SEND_NOTIFICATION_TOOL_ID, SendNotificationArgs, WAIT_QUESTION_TOOL_ID, WAIT_SESSION_TOOL_ID,
+    WaitQuestionArgs, WaitSessionArgs,
 };
+
+/// A watched session's own revision can be below the watcher's cursor, so waiting must not wake early.
+/// 被观察会话自身的修订可能低于监视者游标，因此等待不得被提前唤醒。
+///
+/// # Notes
+/// 说明
+/// `wait_session` compares the watched session's document revision against the caller's cursor. When
+/// the watcher's own document has advanced past the watched session's, that comparison is satisfied by
+/// a cursor the watcher can legitimately have observed, and an unchanged watched session would report
+/// `changed` at once. The operation identity of this dispatch is the only cursor the caller could have
+/// obtained, because a resumed wait reuses the value the previous wait returned.
+/// `wait_session` 把被观察会话的文档修订与调用方游标比较。当监视者自身文档已越过被观察会话时，
+/// 该比较会被一个监视者合法观察过的游标满足，于是一个毫无变化的被观察会话也会立即报告 changed。
+/// 本次分派的操作身份正是调用方唯一可能持有的游标，因为恢复的等待复用的是上一次等待返回的值。
+#[tokio::test]
+async fn native_dispatch_wait_session_does_not_wake_on_the_watchers_own_revision() {
+    let dispatch = native_dispatch_fixture(false, WAIT_SESSION_TOOL_ID).await;
+    let (source_revision, target_revision) = (
+        dispatch
+            .source()
+            .read(|document| document.durable_revision())
+            .unwrap(),
+        dispatch
+            .target
+            .read(|document| document.durable_revision())
+            .unwrap(),
+    );
+    let waited = dispatch
+        .invoke(AgentCollaborationCommand::WaitSession(WaitSessionArgs {
+            session_id: dispatch.target.session_id().to_string(),
+            after_revision: None,
+            timeout_ms: 50,
+        }))
+        .await
+        .unwrap();
+    // A cursorless wait captures the watched session's current revision and ends on its own deadline.
+    // 无游标等待捕获被观察会话的当前修订，并在其自身截止时间结束。
+    assert_eq!(waited["status"], "timeout");
+    assert_eq!(waited["wait_status"], "timeout");
+    assert_eq!(waited["after_revision"].as_u64(), Some(target_revision));
+    assert_eq!(waited["document_revision"].as_u64(), Some(target_revision));
+    // Resuming from that exact cursor must keep waiting: the watched session has not changed.
+    // 从该精确游标恢复必须继续等待：被观察会话没有变化。
+    let dispatch = dispatch.retool(WAIT_SESSION_TOOL_ID).await;
+    let resumed = dispatch
+        .invoke(AgentCollaborationCommand::WaitSession(WaitSessionArgs {
+            session_id: dispatch.target.session_id().to_string(),
+            after_revision: Some(target_revision),
+            timeout_ms: 50,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        resumed["status"], "timeout",
+        "an unchanged watched session must not wake a resumed wait (watcher revision {source_revision})"
+    );
+    assert_eq!(resumed["wait_status"], "timeout");
+    assert_eq!(resumed["document_revision"].as_u64(), Some(target_revision));
+}
 
 /// Asking one authorized session must reach the durable question record through the real port.
 /// 向一个获授权会话提问必须通过真实端口到达可靠问题记录。
