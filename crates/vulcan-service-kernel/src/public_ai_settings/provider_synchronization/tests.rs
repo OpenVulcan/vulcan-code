@@ -3,6 +3,44 @@
 
 use super::*;
 
+/// Verifies online activation records a takeover notice in the same candidate configuration.
+/// 验证在线激活会在同一候选配置中记录接管提示。
+#[test]
+fn online_reconciliation_persists_manual_model_takeover_notice() {
+    let catalog = vulcan_provider_adapters::provider_manifest::load_bundled_resolved_catalog();
+    let manifest = catalog
+        .manifest("openrouter")
+        .expect("bundled OpenRouter manifest should exist");
+    let model_id = "openai/gpt-5.6-sol";
+    let mut configuration = PersistedAiConfiguration::default();
+    configuration.custom_models.insert(
+        String::from("openrouter"),
+        std::collections::BTreeMap::from([(
+            String::from(model_id),
+            vulcan_provider_adapters::CustomModelDefinition {
+                id: String::from(model_id),
+                display_name: String::from("Manual model before signed takeover"),
+                enabled: true,
+                capabilities: vulcan_ai_contract::ModelCapabilities::default(),
+                request_projection: Default::default(),
+                tool_schema_projection: Default::default(),
+                system_binding: None,
+            },
+        )]),
+    );
+
+    let notices = reconcile_signed_models_and_record_notices(&mut configuration, manifest);
+
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].provider_id, "openrouter");
+    assert_eq!(notices[0].model_id, model_id);
+    assert!(configuration.custom_model("openrouter", model_id).is_none());
+    assert_eq!(
+        configuration.pending_system_model_takeover_notices["openrouter"],
+        std::collections::BTreeSet::from([String::from(model_id)])
+    );
+}
+
 /// Verifies exact compensation becomes a provider-local rejection instead of a batch error.
 /// 验证精确补偿会成为逐供应商拒绝，而不是批次错误。
 #[test]

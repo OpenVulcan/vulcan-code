@@ -214,6 +214,38 @@ fn required_provider_activation_snapshots(
         .collect()
 }
 
+/// Reconciles one signed model generation and durably records every manual-model takeover.
+/// 对账一个签名模型代际，并持久记录每一项手工模型接管。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is the transactional candidate and `manifest` is its exact signed authority.
+/// `configuration` 是事务候选配置；`manifest` 是对应的精确签名权威。
+///
+/// # Returns
+/// 返回值
+/// Notices for the current UI publication; the same identities remain in configuration until acknowledged.
+/// 返回供当前界面发布的提示；相同身份会保留在配置中，直到界面确认。
+fn reconcile_signed_models_and_record_notices(
+    configuration: &mut PersistedAiConfiguration,
+    manifest: &vulcan_provider_adapters::provider_manifest::ResolvedProviderManifest,
+) -> Vec<vulcan_service_api::StartupModelReconciliationNotice> {
+    let provider_id = manifest.descriptor.id.as_str();
+    let notices = configuration
+        .reconcile_signed_manual_model_collisions(manifest)
+        .into_iter()
+        .map(|model_id| {
+            configuration.record_pending_system_model_takeover_notice(provider_id, &model_id);
+            vulcan_service_api::StartupModelReconciliationNotice {
+                provider_id: provider_id.to_string(),
+                model_id,
+            }
+        })
+        .collect::<Vec<_>>();
+    configuration.reconcile_signed_model_inventory(manifest);
+    notices
+}
+
 /// Restores staged Manifest ownership before any runtime generation was published.
 /// 在任何运行时代际发布前恢复已暂存 Manifest 的所有权。
 ///
@@ -324,16 +356,10 @@ async fn publish_synced_provider_projections_or_restore(
                 ),
             ));
         };
-        for model_id in candidate_configuration.reconcile_signed_manual_model_collisions(&manifest)
-        {
-            model_reconciliation_notices.push(
-                vulcan_service_api::StartupModelReconciliationNotice {
-                    provider_id: snapshot.provider_id.clone(),
-                    model_id,
-                },
-            );
-        }
-        candidate_configuration.reconcile_signed_model_inventory(&manifest);
+        model_reconciliation_notices.extend(reconcile_signed_models_and_record_notices(
+            &mut candidate_configuration,
+            &manifest,
+        ));
     }
     // catalogTransaction remains owned until success or every compensation/republish step ends.
     // catalogTransaction 持续持有到成功或全部补偿/重新发布步骤结束。
@@ -868,17 +894,8 @@ pub(crate) async fn service_rollback_provider_manifest(
         return Err(String::from("Staged rollback manifest is missing."));
     };
     let mut candidate_configuration = configuration.clone();
-    let model_reconciliation_notices = candidate_configuration
-        .reconcile_signed_manual_model_collisions(&manifest)
-        .into_iter()
-        .map(
-            |model_id| vulcan_service_api::StartupModelReconciliationNotice {
-                provider_id: provider_id.clone(),
-                model_id,
-            },
-        )
-        .collect::<Vec<_>>();
-    candidate_configuration.reconcile_signed_model_inventory(&manifest);
+    let model_reconciliation_notices =
+        reconcile_signed_models_and_record_notices(&mut candidate_configuration, &manifest);
     // Both synchronous publication callbacks share the persistence compensation state.
     // 两个同步发布回调共享持久化补偿状态。
     let configuration_persistence_attempted = std::sync::atomic::AtomicBool::new(false);
