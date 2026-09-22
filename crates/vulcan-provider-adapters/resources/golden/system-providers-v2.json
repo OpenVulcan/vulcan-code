@@ -2499,24 +2499,24 @@
   },
   "apikeyfun": {
     "id": "apikeyfun",
-    "display_name": "APIKEY.FUN",
+    "display_name": "APIKEY.FAN",
     "kind": "system",
     "category": "relay",
     "credential_directory_visibility": "pinned_onboarding",
     "credential_registration": "direct",
     "promotion": {
-      "signup_url": "https://apikey.fun/register",
-      "referral_url": "https://apikey.fun/register?aff=LY4DT3DCTM9N",
+      "signup_url": "https://apikey.fan/register",
+      "referral_url": "https://apikey.fan/register?aff=LY4DT3DCTM9N",
       "campaign_id": "LY4DT3DCTM9N",
       "partnership_kind": "referral",
       "disclosure_key": "settings.providerPromotion.referralDisclosure"
     },
     "service_entries": [
       {
-        "id": "public-api",
-        "display_name": "APIKEY.FUN Public API",
+        "id": "api",
+        "display_name": "APIKEY.FAN · API 通道",
         "kind": "conversation",
-        "base_url": "https://api.apikey.fun/v1",
+        "base_url": "https://api.apikey.fan/v1",
         "credential_profiles": [
           {
             "id": "api-key",
@@ -2552,9 +2552,151 @@
           },
           {
             "protocol_profile_id": "google.gemini.generate_content",
-            "base_url_override": "https://api.apikey.fun/v1beta",
+            "base_url_override": "https://api.apikey.fan/v1beta",
             "model_discovery_path": "/models",
-            "model_discovery_base_url_override": "https://api.apikey.fun/v1",
+            "model_discovery_base_url_override": "https://api.apikey.fan/v1",
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "slb",
+        "display_name": "APIKEY.FAN · SLB 专线通道",
+        "kind": "conversation",
+        "base_url": "https://slb.apikey.fan/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "default_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "open_ai",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages-video.v1",
+            "endpoint_path": "/messages",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "google.gemini.generate_content",
+            "base_url_override": "https://slb.apikey.fan/v1beta",
+            "model_discovery_path": "/models",
+            "model_discovery_base_url_override": "https://slb.apikey.fan/v1",
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "gpt-image",
+        "display_name": "APIKEY.FAN · GPT 图像",
+        "kind": "conversation",
+        "base_url": "https://api.apikey.fan/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "default_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages-video.v1",
+            "endpoint_path": "/messages",
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "grok-media",
+        "display_name": "APIKEY.FAN · Grok 图像与视频",
+        "kind": "conversation",
+        "base_url": "https://api.apikey.fan/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "provider_managed",
+            "account_usage_query": "unsupported",
+            "default_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-responses.v1",
+            "endpoint_path": "/responses",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages.v1",
+            "endpoint_path": "/messages",
+            "verified": true
+          },
+          {
+            "protocol_profile_id": "anthropic-messages-video.v1",
+            "endpoint_path": "/messages",
             "verified": true
           }
         ],
@@ -2740,6 +2882,7 @@
                   ],
                   "blocked_model_ids": [
                     "claude-fable-5",
+                    "claude-fable-5-1",
                     "claude-opus-4-5-20251101",
                     "claude-opus-4-6",
                     "claude-opus-4-7",
@@ -2755,6 +2898,7 @@
                   ],
                   "blocked_model_ids": [
                     "claude-fable-5",
+                    "claude-fable-5-1",
                     "claude-opus-4-5-20251101",
                     "claude-opus-4-6",
                     "claude-opus-4-7",
@@ -2854,6 +2998,7 @@
                   ],
                   "blocked_model_ids": [
                     "claude-fable-5",
+                    "claude-fable-5-1",
                     "claude-opus-4-5-20251101",
                     "claude-opus-4-6",
                     "claude-opus-4-7",
@@ -2869,6 +3014,7 @@
                   ],
                   "blocked_model_ids": [
                     "claude-fable-5",
+                    "claude-fable-5-1",
                     "claude-opus-4-5-20251101",
                     "claude-opus-4-6",
                     "claude-opus-4-7",
@@ -3142,7 +3288,8 @@
                 ]
               }
             ],
-            "verified": true
+            "verified": true,
+            "reasoning_replay_contract": "deepseek_chat_reasoning_content_v1"
           },
           {
             "protocol_profile_id": "anthropic-messages.v1",
@@ -3203,7 +3350,8 @@
                 ]
               }
             ],
-            "verified": true
+            "verified": true,
+            "reasoning_replay_contract": "deepseek_anthropic_thinking_v1"
           },
           {
             "protocol_profile_id": "openai-responses.v1",
@@ -3224,7 +3372,8 @@
                 ]
               }
             ],
-            "verified": true
+            "verified": true,
+            "reasoning_replay_contract": "deepseek_responses_plaintext_v1"
           }
         ],
         "default_usage_scopes": [
@@ -5714,6 +5863,324 @@
           "interactive_agent",
           "internal_background",
           "external_service"
+        ]
+      }
+    ]
+  },
+  "stepfun": {
+    "id": "stepfun",
+    "display_name": "阶跃星辰 StepFun",
+    "kind": "system",
+    "category": "official",
+    "credential_directory_visibility": "configured_only",
+    "credential_registration": "direct",
+    "service_entries": [
+      {
+        "id": "official-api",
+        "display_name": "StepFun API",
+        "kind": "conversation",
+        "base_url": "https://api.stepfun.com/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "default_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "accepted_mime_types": [
+                  "image/jpeg",
+                  "image/png",
+                  "image/webp",
+                  "image/gif"
+                ],
+                "max_bytes": 128000000,
+                "max_count": 60,
+                "reference_policy": "any",
+                "upload_channel_refs": [
+                  "api.image-file"
+                ]
+              },
+              {
+                "resource_kind": "video",
+                "accepted_mime_types": [
+                  "video/mp4"
+                ],
+                "max_bytes": 128000000,
+                "max_count": 1,
+                "reference_policy": "any",
+                "upload_channel_refs": [
+                  "api.video-file"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "stepfun.chat.sampling.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "copy_request_field",
+                    "path": "/top_p",
+                    "field": "model_parameters.sampling.top_p"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/frequency_penalty",
+                    "field": "model_parameters.sampling.frequency_penalty"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "step-plan",
+        "display_name": "Step Plan",
+        "kind": "conversation",
+        "base_url": "https://api.stepfun.com/step_plan/v1",
+        "credential_profiles": [
+          {
+            "id": "plan-key",
+            "display_name": "Step Plan API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "unsupported",
+            "default_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "accepted_mime_types": [
+                  "image/jpeg",
+                  "image/png",
+                  "image/webp",
+                  "image/gif"
+                ],
+                "max_bytes": 128000000,
+                "max_count": 60,
+                "reference_policy": "any"
+              },
+              {
+                "resource_kind": "video",
+                "accepted_mime_types": [
+                  "video/mp4"
+                ],
+                "max_bytes": 128000000,
+                "max_count": 1,
+                "reference_policy": "any"
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "stepfun.chat.sampling.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "copy_request_field",
+                    "path": "/top_p",
+                    "field": "model_parameters.sampling.top_p"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/frequency_penalty",
+                    "field": "model_parameters.sampling.frequency_penalty"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent"
+        ]
+      },
+      {
+        "id": "international-api",
+        "display_name": "StepFun International API",
+        "kind": "conversation",
+        "base_url": "https://api.stepfun.ai/v1",
+        "credential_profiles": [
+          {
+            "id": "api-key",
+            "display_name": "International API Key",
+            "credential_mode": "token",
+            "billing_kind": "pay_as_you_go",
+            "account_usage_query": "unsupported",
+            "default_usage_scopes": [
+              "interactive_agent",
+              "internal_background",
+              "external_service"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "accepted_mime_types": [
+                  "image/jpeg",
+                  "image/png",
+                  "image/webp",
+                  "image/gif"
+                ],
+                "max_bytes": 128000000,
+                "max_count": 60,
+                "reference_policy": "any",
+                "upload_channel_refs": [
+                  "international-api.image-file"
+                ]
+              },
+              {
+                "resource_kind": "video",
+                "accepted_mime_types": [
+                  "video/mp4"
+                ],
+                "max_bytes": 128000000,
+                "max_count": 1,
+                "reference_policy": "any",
+                "upload_channel_refs": [
+                  "international-api.video-file"
+                ]
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "stepfun.chat.sampling.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "copy_request_field",
+                    "path": "/top_p",
+                    "field": "model_parameters.sampling.top_p"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/frequency_penalty",
+                    "field": "model_parameters.sampling.frequency_penalty"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent",
+          "internal_background",
+          "external_service"
+        ]
+      },
+      {
+        "id": "international-step-plan",
+        "display_name": "Step Plan International",
+        "kind": "conversation",
+        "base_url": "https://api.stepfun.ai/step_plan/v1",
+        "credential_profiles": [
+          {
+            "id": "plan-key",
+            "display_name": "International Step Plan API Key",
+            "credential_mode": "token",
+            "billing_kind": "token_plan",
+            "account_usage_query": "unsupported",
+            "default_usage_scopes": [
+              "interactive_agent"
+            ]
+          }
+        ],
+        "authentication": "bearer_authorization",
+        "model_discovery": "manifest_static",
+        "request_projector": "compatible",
+        "protocol_routes": [
+          {
+            "protocol_profile_id": "openai-chat-completions.v1",
+            "endpoint_path": "/chat/completions",
+            "input_resource_constraints": [
+              {
+                "resource_kind": "image",
+                "accepted_mime_types": [
+                  "image/jpeg",
+                  "image/png",
+                  "image/webp",
+                  "image/gif"
+                ],
+                "max_bytes": 128000000,
+                "max_count": 60,
+                "reference_policy": "any"
+              },
+              {
+                "resource_kind": "video",
+                "accepted_mime_types": [
+                  "video/mp4"
+                ],
+                "max_bytes": 128000000,
+                "max_count": 1,
+                "reference_policy": "any"
+              }
+            ],
+            "request_projection_profiles": [
+              {
+                "profile_id": "stepfun.chat.sampling.v1",
+                "revision": 1,
+                "steps": [
+                  {
+                    "op": "copy_request_field",
+                    "path": "/top_p",
+                    "field": "model_parameters.sampling.top_p"
+                  },
+                  {
+                    "op": "copy_request_field",
+                    "path": "/frequency_penalty",
+                    "field": "model_parameters.sampling.frequency_penalty"
+                  }
+                ]
+              }
+            ],
+            "verified": true
+          }
+        ],
+        "default_usage_scopes": [
+          "interactive_agent"
         ]
       }
     ]

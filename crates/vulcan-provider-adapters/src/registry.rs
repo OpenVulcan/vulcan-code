@@ -741,7 +741,7 @@ mod tests {
         for (provider_id, referral_url, campaign_id) in [
             (
                 "apikeyfun",
-                "https://apikey.fun/register?aff=LY4DT3DCTM9N",
+                "https://apikey.fan/register?aff=LY4DT3DCTM9N",
                 "LY4DT3DCTM9N",
             ),
             (
@@ -784,7 +784,7 @@ mod tests {
         let expected_routes = [
             (
                 "apikeyfun",
-                1,
+                4,
                 vec![
                     "anthropic-messages-video.v1",
                     "anthropic-messages.v1",
@@ -845,7 +845,7 @@ mod tests {
         let expected_routes = [
             (
                 "apikeyfun",
-                "https://api.apikey.fun/v1",
+                "https://api.apikey.fan/v1",
                 "openai-responses.v1",
                 "/responses",
                 None,
@@ -926,38 +926,67 @@ mod tests {
         }
     }
 
-    /// Verifies APIKEY.FUN exposes the single Manifest-owned public service and exact route set.
-    /// 验证 APIKEY.FUN 公开由 Manifest 持有的唯一公共服务及精确路由集合。
+    /// Verifies APIKEY.FUN exposes the four Manifest-owned entries and their exact route sets.
+    /// 验证 APIKEY.FUN 暴露由 Manifest 持有的四个入口及其精确路由集合。
     #[test]
     fn apikeyfun_exposes_exact_manifest_service_entry() {
         let registry = ProviderRegistry::first_batch().expect("built-in registry should be valid");
         let provider = registry
             .provider("apikeyfun")
             .expect("APIKEY.FUN provider should be registered");
-        // entry is the sole signed conversation service owned by the bundled Manifest.
-        // entry 是内置 Manifest 持有的唯一已签名会话服务。
-        let entry = provider
+        // entries closes the channel/media split so a later merge cannot silently widen one node.
+        // entries 封闭通道与媒体节点的拆分，避免后续合并静默扩大某个节点。
+        let entries = provider
             .service_entries
-            .first()
-            .expect("APIKEY.FUN public service should exist");
-        assert_eq!(provider.service_entries.len(), 1);
-        assert_eq!(entry.id, "public-api");
-        assert_eq!(entry.display_name, "APIKEY.FUN Public API");
-        assert_eq!(entry.base_url, "https://api.apikey.fun/v1");
-        // routes closes the complete protocol-to-endpoint contract after Manifest cutover.
-        // routes 封闭 Manifest 切换后的完整协议到入口契约。
-        let routes = entry
-            .protocol_routes
             .iter()
-            .map(|route| {
+            .map(|entry| {
                 (
-                    route.protocol_profile_id.as_str(),
-                    route.endpoint_path.as_deref(),
+                    entry.id.as_str(),
+                    (entry.display_name.as_str(), entry.base_url.as_str()),
                 )
             })
             .collect::<BTreeMap<_, _>>();
         assert_eq!(
-            routes,
+            entries,
+            BTreeMap::from([
+                (
+                    "api",
+                    ("APIKEY.FAN · API 通道", "https://api.apikey.fan/v1")
+                ),
+                (
+                    "slb",
+                    ("APIKEY.FAN · SLB 专线通道", "https://slb.apikey.fan/v1")
+                ),
+                (
+                    "gpt-image",
+                    ("APIKEY.FAN · GPT 图像", "https://api.apikey.fan/v1")
+                ),
+                (
+                    "grok-media",
+                    ("APIKEY.FAN · Grok 图像与视频", "https://api.apikey.fan/v1")
+                ),
+            ])
+        );
+        // entryRoutes closes one entry's complete protocol-to-endpoint contract.
+        // entryRoutes 封闭单个入口的完整协议到入口契约。
+        let entry_routes = |entry_id: &str| {
+            provider
+                .service_entries
+                .iter()
+                .find(|entry| entry.id == entry_id)
+                .unwrap_or_else(|| panic!("APIKEY.FUN `{entry_id}` entry should exist"))
+                .protocol_routes
+                .iter()
+                .map(|route| {
+                    (
+                        route.protocol_profile_id.as_str(),
+                        route.endpoint_path.as_deref(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(
+            entry_routes("api"),
             BTreeMap::from([
                 ("anthropic-messages-video.v1", Some("/messages")),
                 ("anthropic-messages.v1", Some("/messages")),
@@ -965,6 +994,18 @@ mod tests {
                 ("openai-responses.v1", Some("/responses")),
             ])
         );
+        // Media nodes serve a fixed catalog and must not inherit the Gemini discovery route.
+        // 媒体节点服务固定清单，且不得继承 Gemini 发现路由。
+        for entry_id in ["gpt-image", "grok-media"] {
+            assert_eq!(
+                entry_routes(entry_id),
+                BTreeMap::from([
+                    ("anthropic-messages-video.v1", Some("/messages")),
+                    ("anthropic-messages.v1", Some("/messages")),
+                    ("openai-responses.v1", Some("/responses")),
+                ])
+            );
+        }
     }
 
     /// Verifies promotion relationship kinds cannot silently present a different disclosure.

@@ -330,7 +330,7 @@ async fn apikeyfun_manifest_authorizes_discovery_before_credential_access() {
     // apikeyfunConnection 仅保存凭据与服务身份，不保存任何协议历史。
     let mut apikeyfun_connection = connection("apikeyfun-account");
     apikeyfun_connection.provider_id = String::from("apikeyfun");
-    apikeyfun_connection.service_entry_id = String::from("public-api");
+    apikeyfun_connection.service_entry_id = String::from("api");
     configuration.connection_graph.connections.insert(
         apikeyfun_connection.id.clone(),
         apikeyfun_connection.clone(),

@@ -280,7 +280,7 @@ fn provider_tool_targets_obey_account_model_access() {
     // apikeyfunConnection 绑定精确公共服务与 API Key 凭据配置档。
     let mut apikeyfun_connection = connection("apikeyfun-media-account");
     apikeyfun_connection.provider_id = String::from("apikeyfun");
-    apikeyfun_connection.service_entry_id = String::from("public-api");
+    apikeyfun_connection.service_entry_id = String::from("grok-media");
     apikeyfun_connection.credential_profile_id = String::from("api-key");
     configuration
         .connection_graph

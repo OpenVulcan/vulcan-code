@@ -784,7 +784,7 @@ fn discovery_uses_only_active_manifest_routes() {
     let entry = provider
         .service_entries
         .iter()
-        .find(|entry| entry.id == "public-api")
+        .find(|entry| entry.id == "api")
         .expect("APIKEY.FUN public entry must exist");
     assert_eq!(
         entry

@@ -578,11 +578,7 @@ fn apikeyfun_gemini_route_separates_execution_and_discovery_origins() {
         reqwest::Client::new(),
         Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
     );
-    let route = bundled_manifest_route(
-        "apikeyfun",
-        "public-api",
-        GEMINI_GENERATE_CONTENT_PROFILE_ID,
-    );
+    let route = bundled_manifest_route("apikeyfun", "api", GEMINI_GENERATE_CONTENT_PROFILE_ID);
     let mut request = minimal_request();
     request.model_id = String::from("gemini-3-flash");
 
@@ -592,13 +588,13 @@ fn apikeyfun_gemini_route_separates_execution_and_discovery_origins() {
 
     assert_eq!(
         route.request_url(encoded.path.as_str()),
-        "https://api.apikey.fun/v1beta/models/gemini-3-flash:streamGenerateContent?alt=sse"
+        "https://api.apikey.fan/v1beta/models/gemini-3-flash:streamGenerateContent?alt=sse"
     );
     assert_eq!(
         route
             .protocol_route
             .model_discovery_url(&route.entry, "/models"),
-        "https://api.apikey.fun/v1/models"
+        "https://api.apikey.fan/v1/models"
     );
 }
 

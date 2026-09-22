@@ -2113,11 +2113,11 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
         .expect("apikeyfun Gemini protocol route should exist");
     assert_eq!(
         gemini_route["base_url_override"],
-        "https://api.apikey.fun/v1beta"
+        "https://api.apikey.fan/v1beta"
     );
     assert_eq!(
         gemini_route["model_discovery_base_url_override"],
-        "https://api.apikey.fun/v1"
+        "https://api.apikey.fan/v1"
     );
     assert_eq!(gemini_route["model_discovery_path"], "/models");
     // expectedProtocols is the complete local whitelist paired with its only declared wire route.
@@ -2155,6 +2155,10 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
         ("kimi-k2.6", "anthropic-messages-video.v1"),
         ("deepseek-v4-pro", "openai-responses.v1"),
         ("deepseek-v4-flash", "openai-responses.v1"),
+        ("gpt-image-2", "openai-responses.v1"),
+        ("gpt-image-2.5-flare", "openai-responses.v1"),
+        ("gpt-image-2.5-sunburst", "openai-responses.v1"),
+        ("grok-imagine-video-1.5", "openai-responses.v1"),
     ]
     .into_iter()
     .collect::<BTreeMap<_, _>>();

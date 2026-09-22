@@ -285,7 +285,7 @@ fn apikeyfun_catalog_does_not_inherit_account_plan_filtering() {
     let mut configuration = PersistedAiConfiguration::default();
     let mut apikeyfun_connection = connection("apikeyfun-group-account");
     apikeyfun_connection.provider_id = String::from("apikeyfun");
-    apikeyfun_connection.service_entry_id = String::from("public-api");
+    apikeyfun_connection.service_entry_id = String::from("api");
     apikeyfun_connection.credential_profile_id = String::from("api-key");
     configuration
         .connection_graph
@@ -309,10 +309,10 @@ fn apikeyfun_catalog_does_not_inherit_account_plan_filtering() {
     apply_model_catalog_overlays_with_account_access(
         &configuration,
         "apikeyfun",
-        "public-api",
+        "api",
         Some(&unrelated_usage),
         manifest
-            .model_source_policy("public-api")
+            .model_source_policy("api")
             .expect("APIKEY.FUN source policy must compile"),
         Some(manifest.as_ref()),
         &mut catalog,

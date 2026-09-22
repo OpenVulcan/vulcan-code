@@ -95,7 +95,7 @@ fn external_url_is_allowed(url: &str) -> bool {
         Some(
             "github.com"
                 | "context7.com"
-                | "apikey.fun"
+                | "apikey.fan"
                 | "console.apito.ai"
                 | "s.qiniu.com"
                 | "api.fenno.ai"
@@ -1127,7 +1127,7 @@ mod tests {
     #[test]
     fn external_url_allowlist_accepts_provider_referral_https_urls() {
         for url in [
-            "https://apikey.fun/register?aff=LY4DT3DCTM9N",
+            "https://apikey.fan/register?aff=LY4DT3DCTM9N",
             "https://console.apito.ai/register?aff=8jvf",
             "https://s.qiniu.com/reuYBn",
             "https://api.fenno.ai/s/v59N",

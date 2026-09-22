@@ -142,7 +142,7 @@ fn apikeyfun_manifest_uses_model_protocol_binding() {
     // apikeyfunConnection 仅保存凭据与服务身份，协议由当前 Manifest 模型绑定提供。
     let mut apikeyfun_connection = connection("apikeyfun-account");
     apikeyfun_connection.provider_id = String::from("apikeyfun");
-    apikeyfun_connection.service_entry_id = String::from("public-api");
+    apikeyfun_connection.service_entry_id = String::from("api");
     configuration
         .connection_graph
         .connections
@@ -194,7 +194,7 @@ fn apikeyfun_rejects_discovered_model_outside_declared_whitelist() {
     let mut configuration = PersistedAiConfiguration::default();
     let mut apikeyfun = connection("apikeyfun-account");
     apikeyfun.provider_id = String::from("apikeyfun");
-    apikeyfun.service_entry_id = String::from("public-api");
+    apikeyfun.service_entry_id = String::from("api");
     configuration
         .connection_graph
         .add_connection(

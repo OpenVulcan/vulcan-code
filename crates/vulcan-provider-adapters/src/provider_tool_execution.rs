@@ -3975,7 +3975,7 @@ mod tests {
             .descriptor
             .service_entries
             .iter()
-            .find(|entry| entry.id == "public-api")
+            .find(|entry| entry.id == "grok-media")
             .expect("APIKEY.FUN public service entry");
         // target is the verified asynchronous Grok video generator.
         // target 是已验证的异步 Grok 视频生成目标。
@@ -3998,7 +3998,7 @@ mod tests {
         .expect("video content URL should resolve");
         assert_eq!(
             url.as_str(),
-            "https://api.apikey.fun/v1/videos/request-123/content"
+            "https://api.apikey.fan/v1/videos/request-123/content"
         );
     }
 
