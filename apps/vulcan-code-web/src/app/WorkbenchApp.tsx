@@ -102,6 +102,15 @@ export function WorkbenchApp(props: {
     if (notices.length === 0) return;
     const isChinese = startup.uiLocale?.toLowerCase().startsWith("zh") ?? true;
     const identities = notices.map(({ providerId, modelId }) => `${providerId} / ${modelId}`).join("、");
+    // acknowledge clears only notices that the user could see until this toast closed.
+    // acknowledge 仅在用户可见提示关闭后清除对应的待确认记录。
+    const acknowledge = () => {
+      void serviceClient.request<void>("service_ack_public_ai_model_takeover_notices", {
+        request: { notices },
+      }).catch((error: unknown) => {
+        console.error("Failed to acknowledge system model takeover notices", error);
+      });
+    };
     toast.warning(
       isChinese ? "系统模型已接管同名手工模型" : "System models replaced matching manual models",
       {
@@ -110,6 +119,8 @@ export function WorkbenchApp(props: {
           ? `已移除 ${notices.length} 条手工定义并保留原有启用状态：${identities}`
           : `Removed ${notices.length} manual definitions while preserving enabled choices: ${identities}`,
         duration: 20_000,
+        onDismiss: acknowledge,
+        onAutoClose: acknowledge,
       },
     );
   }, [startup]);

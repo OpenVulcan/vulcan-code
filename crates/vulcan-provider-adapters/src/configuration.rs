@@ -825,6 +825,10 @@ pub struct PersistedAiConfiguration {
     /// 为升级清理保留的上一代已激活精确签名模型 ID。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub system_signed_model_inventory: BTreeMap<String, BTreeSet<String>>,
+    /// Signed takeover notices pending acknowledgement by the user interface.
+    /// 等待用户界面确认的签名模型接管提示。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pending_system_model_takeover_notices: BTreeMap<String, BTreeSet<String>>,
     /// Capability defaults grouped by custom provider identifier.
     /// 按自定义供应商标识分组的能力默认值。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1031,6 +1035,7 @@ impl Default for PersistedAiConfiguration {
             custom_provider_manifest_failures_truncated: false,
             custom_models: BTreeMap::new(),
             system_signed_model_inventory: BTreeMap::new(),
+            pending_system_model_takeover_notices: BTreeMap::new(),
             custom_provider_model_defaults: BTreeMap::new(),
             custom_model_template_decisions: BTreeMap::new(),
             custom_model_protocol_preferences: BTreeMap::new(),
@@ -2672,6 +2677,42 @@ impl PersistedAiConfiguration {
             self.custom_models.remove(provider_id);
         }
         collisions
+    }
+
+    /// Records one signed takeover notice in the same durable configuration as the removal.
+    /// 在与移除操作相同的持久配置中记录一条签名接管提示。
+    ///
+    /// `provider_id` and `model_id` identify the exact signed model that took ownership.
+    /// `provider_id` 与 `model_id` 标识已接管的精确签名模型。
+    pub fn record_pending_system_model_takeover_notice(
+        &mut self,
+        provider_id: &str,
+        model_id: &str,
+    ) {
+        self.pending_system_model_takeover_notices
+            .entry(provider_id.to_string())
+            .or_default()
+            .insert(model_id.to_string());
+    }
+
+    /// Acknowledges only takeover notices that the user interface actually displayed.
+    /// 仅确认用户界面实际展示过的接管提示。
+    ///
+    /// `notices` contains exact provider and model identities; other pending notices remain.
+    /// `notices` 包含精确供应商与模型身份；其他待提示项保持不变。
+    pub fn acknowledge_system_model_takeover_notices(&mut self, notices: &[(String, String)]) {
+        for (provider_id, model_id) in notices {
+            if let Some(models) = self
+                .pending_system_model_takeover_notices
+                .get_mut(provider_id)
+            {
+                models.remove(model_id);
+                if models.is_empty() {
+                    self.pending_system_model_takeover_notices
+                        .remove(provider_id);
+                }
+            }
+        }
     }
 
     /// Clears decisions for signed models removed by an activated provider manifest.
@@ -4679,6 +4720,26 @@ mod tests {
         assert_eq!(configuration.model_enabled_overrides.len(), 1);
         configuration.restore_model_enabled("custom-provider", "private-model");
         assert!(configuration.model_enabled_overrides.is_empty());
+    }
+
+    /// Verifies takeover notices survive persistence and exact acknowledgement preserves others.
+    /// 验证接管提示可持久化，且精确确认不会清除其他提示。
+    #[test]
+    fn pending_system_model_takeover_notices_are_durable_and_exact() {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.record_pending_system_model_takeover_notice("openrouter", "model-one");
+        configuration.record_pending_system_model_takeover_notice("openrouter", "model-two");
+        let serialized = serde_json::to_value(&configuration).expect("serialize pending notices");
+        let mut reloaded: PersistedAiConfiguration =
+            serde_json::from_value(serialized).expect("reload pending notices");
+        reloaded.acknowledge_system_model_takeover_notices(&[(
+            String::from("openrouter"),
+            String::from("model-one"),
+        )]);
+        assert_eq!(
+            reloaded.pending_system_model_takeover_notices["openrouter"],
+            BTreeSet::from([String::from("model-two")])
+        );
     }
 
     /// Verifies signed takeover removes manual parameters while retaining provider and account switches.

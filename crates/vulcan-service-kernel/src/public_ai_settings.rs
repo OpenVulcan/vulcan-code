@@ -45,11 +45,12 @@ use catalog_projection::{
 )]
 pub(super) use general_settings::{
     PublicAiContextCompactionWindowNodesSaveRequest,
-    PublicAiContextWindowPolicyOverridesSaveRequest,
+    PublicAiContextWindowPolicyOverridesSaveRequest, PublicAiModelTakeoverNoticeAcknowledgeRequest,
     PublicAiNewSessionContextWindowDefaultSaveRequest, PublicAiProviderPrioritySaveRequest,
     PublicAiUsageRefreshSettingsRequest,
 };
 pub(super) use general_settings::{
+    service_ack_public_ai_model_takeover_notices,
     service_save_public_ai_context_compaction_window_nodes,
     service_save_public_ai_context_window_policy_overrides,
     service_save_public_ai_new_session_context_window_default,

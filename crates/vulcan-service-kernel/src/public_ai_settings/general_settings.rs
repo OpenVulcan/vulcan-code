@@ -2,9 +2,11 @@
 //! 公共 AI 共享默认值与系统级设置写入。
 
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use vulcan_context::{ContextCompactionWindowNodeId, ContextWindowPolicyOverrides};
 use vulcan_provider_adapters::ContextCompactionWindowConfiguration;
 use vulcan_service_api::ServiceEventEmitter;
+use vulcan_service_api::StartupModelReconciliationNotice;
 
 use super::publication::{
     mutate_public_ai_configuration_and_publish_in_transaction,
@@ -68,6 +70,16 @@ pub(crate) struct PublicAiNewSessionContextWindowDefaultSaveRequest {
     /// A fixed node identity, or None to follow the selected model's window.
     /// 固定节点身份，或空值表示遵循所选模型窗口。
     node_id: Option<ContextCompactionWindowNodeId>,
+}
+
+/// Acknowledges signed model takeovers after their startup notice is closed.
+/// 在启动接管提示关闭后确认对应的签名模型接管。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublicAiModelTakeoverNoticeAcknowledgeRequest {
+    /// Exact notices displayed by the user interface.
+    /// 用户界面实际展示的精确提示集合。
+    notices: Vec<StartupModelReconciliationNotice>,
 }
 
 /// Saves the background account-usage refresh interval.
@@ -286,4 +298,49 @@ pub(crate) async fn service_save_public_ai_new_session_context_window_default(
     )?;
     drop(transaction);
     Ok(snapshot)
+}
+
+/// Clears only displayed takeover notices after persisting the acknowledgement.
+/// 持久化确认后仅清除已展示的接管提示。
+///
+/// `state` owns the runtime and startup snapshot; `request` names the exact displayed notices.
+/// `state` 持有运行时与启动快照；`request` 指定精确的已展示提示。
+pub(crate) async fn service_ack_public_ai_model_takeover_notices(
+    state: SharedServiceBridgeState,
+    request: PublicAiModelTakeoverNoticeAcknowledgeRequest,
+) -> Result<(), String> {
+    let notices = request
+        .notices
+        .into_iter()
+        .map(|notice| (notice.provider_id, notice.model_id))
+        .collect::<BTreeSet<_>>();
+    if notices.is_empty() {
+        return Ok(());
+    }
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    mutate_public_ai_configuration_and_publish_using_in_transaction(
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "确认系统模型接管提示失败",
+        |configuration| {
+            configuration.acknowledge_system_model_takeover_notices(
+                &notices.iter().cloned().collect::<Vec<_>>(),
+            );
+            Ok(())
+        },
+        |_| Ok(()),
+        |_| Ok(()),
+    )?;
+    let mut guard = state.lock().map_err(|error| {
+        format!("Failed to lock startup state after notice acknowledgement: {error}")
+    })?;
+    guard
+        .startup
+        .model_reconciliation_notices
+        .retain(|notice| !notices.contains(&(notice.provider_id.clone(), notice.model_id.clone())));
+    drop(guard);
+    drop(transaction);
+    Ok(())
 }

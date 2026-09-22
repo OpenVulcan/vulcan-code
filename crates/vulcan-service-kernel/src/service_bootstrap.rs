@@ -377,19 +377,26 @@ fn reconcile_signed_manual_models_at_startup(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     configuration: &mut vulcan_provider_adapters::PersistedAiConfiguration,
 ) -> Result<Vec<vulcan_service_api::StartupModelReconciliationNotice>, String> {
-    let mut notices = Vec::new();
     for provider_id in runtime.system_manifest_provider_ids()? {
         let Some(manifest) = runtime.staged_system_manifest(provider_id.as_str()) else {
             continue;
         };
         for model_id in configuration.reconcile_signed_manual_model_collisions(&manifest) {
-            notices.push(vulcan_service_api::StartupModelReconciliationNotice {
-                provider_id: provider_id.clone(),
-                model_id,
-            });
+            configuration.record_pending_system_model_takeover_notice(&provider_id, &model_id);
         }
     }
-    Ok(notices)
+    Ok(configuration
+        .pending_system_model_takeover_notices
+        .iter()
+        .flat_map(|(provider_id, models)| {
+            models.iter().map(
+                |model_id| vulcan_service_api::StartupModelReconciliationNotice {
+                    provider_id: provider_id.clone(),
+                    model_id: model_id.clone(),
+                },
+            )
+        })
+        .collect())
 }
 
 /// Runs the real startup sequence owned by the WebUI service.
