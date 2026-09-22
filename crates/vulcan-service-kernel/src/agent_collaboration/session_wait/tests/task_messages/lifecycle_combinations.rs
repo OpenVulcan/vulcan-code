@@ -1243,6 +1243,144 @@ fn admit_wait_question_tool_call(
 ///
 /// # Notes
 /// 说明
+/// The other half of A07: a parent must be able to question its own embedded child.
+/// A07 的另一半：父代理必须能够向自己拥有的嵌入子会话提问。
+///
+/// # Notes
+/// 说明
+/// `child_question_to_parent_round_trips_the_answer_back_to_the_child` proves the child → parent
+/// direction. This test covers the parent → child direction, which previously had no direct test:
+/// an exhaustive scan of every `AskQuestion` call site found that none used a parent invocation with
+/// its own embedded child as the target. Embedded children have no SQLite session-index row, so this
+/// input necessarily exercises the fallback branch of `resolve_authorized_target` rather than the
+/// indexed-locator branch.
+/// `child_question_to_parent_round_trips_the_answer_back_to_the_child` 证明了子 → 父方向。本测试覆盖
+/// 父 → 子方向——该方向此前没有直接测试：穷举全部 `AskQuestion` 调用点后确认没有任何一处以父句柄为
+/// 来源、以其自身嵌入子会话为目标。嵌入子会话在 SQLite 会话索引中没有行，因此该输入必然走到
+/// `resolve_authorized_target` 的回退分支，而不是索引定位分支。
+///
+/// **本测试当前 `#[ignore]`，因为它记录的是一个尚未定性的可复现结果，而不是一个通过的断言。**
+/// 实测结果：`AskQuestion(target = 自有嵌入子会话)` 返回
+/// `Err("ask_parent requires an embedded child session")`。该消息来自
+/// `participants::verified_direct_parent` 在**源句柄自身**用量账本的 `children_by_session_id`
+/// 中查不到源会话时的错误，而 `resolve_authorized_target` 在 `owned == false` 时会以 `?` 直接
+/// 短路调用它，因此该错误会先行返回。
+///
+/// **两种可能，本任务未定论，且刻意不通过放宽生产守卫来判定**：
+/// (a) 夹具缺口——本测试沿用了既有子 → 父用例的夹具形状，而该形状没有把父会话登记进其（或被其
+///     绑定的）用量账本（对比 `bind_child_usage` 所在的生产发布路径）；或
+/// (b) 真实行为——父代理确实不能向自有子会话提问，属于产品规则而非缺陷。
+///
+/// **为什么不改生产代码来区分**：若 (b) 成立，把无条件调用改为 `&&` 短路或改判 `owned` 都会
+/// **放宽一道生产守卫并改变用户可见行为**，而这是被明确禁止的（"不能放松生产守卫以让测试通过"
+/// 与"不静默降级"）。判定归原主代理或领域负责人。
+/// **注意**：请勿以 `--ignored` 之外的方式"修复"本测试；先确定 (a)/(b)。
+#[ignore = "records a reproducible unresolved refusal; see the doc comment before changing it"]
+#[tokio::test]
+async fn parent_question_to_owned_embedded_child_binds_the_question_to_the_child() {
+    let (_root, invocation, parent, _context) = message_fixture(false).await;
+    // The production creator publishes one real embedded child owned by this parent.
+    // 生产创建器发布一个由该父代理持有真实所有权的嵌入子任务。
+    let child_id = Uuid::new_v4();
+    let child = crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1(
+        &invocation.registry,
+        TaskV1ExecutionFacts {
+            root_session_id: parent.session_id(),
+            parent_session_id: parent.session_id(),
+            task_id: child_id,
+            execution_id: String::from("parent-asks-child"),
+            prompt: String::from("Child work the parent will question"),
+            display_title: String::from("parent-asks-child"),
+            is_resumed: false,
+            admitted_at_ms: 5,
+        },
+    )
+    .unwrap();
+    let child_invocation = recovery_invocation(
+        invocation.state.clone(),
+        invocation.controller_runtime.clone(),
+        invocation.registry.clone(),
+        child_id,
+        child.clone(),
+    )
+    .unwrap();
+    // The parent reservation must be the production reducer's own record, not a test flag.
+    // 父预留必须是生产归约器自身的记录，而不是测试标记。
+    let child_identity =
+        participants::participant_for_handle(&child_invocation, child_id, &child, None)
+            .await
+            .unwrap();
+    let parent_turn = parent
+        .read(|document| document.active_turn().unwrap().turn_id)
+        .unwrap();
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.reserve_child_task(ReserveChildTaskInput {
+                    source_tool_name: String::from("spawn_agent"),
+                    operation_id: CollaborationOperationId::try_new("reserve-parent-asks-child")
+                        .unwrap(),
+                    execution_id: CollaborationExecutionId::try_new("parent-asks-child").unwrap(),
+                    task_id: child_identity.task_id.clone().unwrap(),
+                    parent_turn_id: parent_turn,
+                    child: child_identity,
+                    reserved_at_ms: 5,
+                })
+            },
+        )
+        .unwrap();
+    // The parent asks its own embedded child through the real native port.
+    // 父代理通过真实原生端口向自己拥有的嵌入子会话提问。
+    let runtime = session_v1_native_agent_collaboration_runtime(
+        invocation.state.clone(),
+        crate::ServiceEventEmitter::new(vec![]),
+    );
+    let ask_context =
+        admit_real_tool_call(&invocation, ASK_QUESTION_TOOL_ID, "parent-asks-child", 20).await;
+    let asked = runtime
+        .invoke(
+            ask_context,
+            AgentCollaborationCommand::AskQuestion(AskQuestionArgs {
+                target_session_id: child_id.to_string(),
+                question: "Which direction should you take?".into(),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(asked["status"], "ok");
+    let question_id =
+        CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
+    // The question record stays with its asker, which here is the parent.
+    // 问题记录留在提问方，此处即父代理。
+    parent
+        .read(|document| {
+            let question = document
+                .question_snapshot(&question_id)
+                .expect("the asking parent must hold its own question record");
+            assert_eq!(question.state, CollaborationQuestionState::Pending);
+            assert_eq!(question.target.session_id, child_id.to_string());
+            assert_eq!(question.source.session_id, parent.session_id().to_string());
+        })
+        .unwrap();
+    // The child owns the accepted inbound delivery for that exact question.
+    // 子会话持有该精确问题的已接纳入站投递。
+    child
+        .read(|document| {
+            let inbound = document
+                .collaboration_state()
+                .inbound_deliveries
+                .values()
+                .find(|delivery| delivery.question_id == question_id)
+                .expect("the questioned child must hold the inbound delivery");
+            assert_eq!(inbound.source.session_id, parent.session_id().to_string());
+            assert_eq!(inbound.target.session_id, child_id.to_string());
+            assert!(inbound.settlement.is_none());
+        })
+        .unwrap();
+}
+
 /// A07 requires genuine bidirectional asking. The existing evidence proves a child can *send* a
 /// parent question and that the parent receives it, but never that the answer returns to the asking
 /// child, which is what makes the direction usable rather than one-way.
