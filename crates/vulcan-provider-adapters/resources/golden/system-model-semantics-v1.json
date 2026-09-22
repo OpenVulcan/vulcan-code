@@ -9549,7 +9549,7 @@
           "conversation_respond"
         ]
       },
-      "catalog_membership_policy": "declared_and_discovery",
+      "catalog_membership_policy": "declared_only",
       "default_enabled": false,
       "default_operation_refs": [],
       "default_request_profile_refs": [],
@@ -9599,23 +9599,6 @@
         "supported_protocols": [
           "openai-responses.v1",
           "anthropic-messages.v1",
-          "openai-chat-completions.v1"
-        ]
-      },
-      {
-        "default_enabled": true,
-        "matcher": {
-          "kind": "exact",
-          "value": "cohere/rerank-v3.5"
-        },
-        "model_parameters": [],
-        "rule_id": "featured-cohere-rerank-v3.5",
-        "scope": {
-          "credential_profile_ids": [],
-          "service_entry_ids": []
-        },
-        "selected_protocol": "openai-chat-completions.v1",
-        "supported_protocols": [
           "openai-chat-completions.v1"
         ]
       },
@@ -9701,23 +9684,6 @@
         "default_enabled": true,
         "matcher": {
           "kind": "exact",
-          "value": "google/veo-3.1"
-        },
-        "model_parameters": [],
-        "rule_id": "featured-google-veo-3.1",
-        "scope": {
-          "credential_profile_ids": [],
-          "service_entry_ids": []
-        },
-        "selected_protocol": "openai-chat-completions.v1",
-        "supported_protocols": [
-          "openai-chat-completions.v1"
-        ]
-      },
-      {
-        "default_enabled": true,
-        "matcher": {
-          "kind": "exact",
           "value": "minimax/minimax-m3"
         },
         "model_parameters": [],
@@ -9730,23 +9696,6 @@
         "supported_protocols": [
           "openai-responses.v1",
           "anthropic-messages.v1",
-          "openai-chat-completions.v1"
-        ]
-      },
-      {
-        "default_enabled": true,
-        "matcher": {
-          "kind": "exact",
-          "value": "minimax/speech-2.8-turbo"
-        },
-        "model_parameters": [],
-        "rule_id": "featured-minimax-speech-2.8-turbo",
-        "scope": {
-          "credential_profile_ids": [],
-          "service_entry_ids": []
-        },
-        "selected_protocol": "openai-chat-completions.v1",
-        "supported_protocols": [
           "openai-chat-completions.v1"
         ]
       },
@@ -9785,57 +9734,6 @@
         "supported_protocols": [
           "openai-responses.v1",
           "anthropic-messages.v1",
-          "openai-chat-completions.v1"
-        ]
-      },
-      {
-        "default_enabled": true,
-        "matcher": {
-          "kind": "exact",
-          "value": "openai/gpt-image-1"
-        },
-        "model_parameters": [],
-        "rule_id": "featured-openai-gpt-image-1",
-        "scope": {
-          "credential_profile_ids": [],
-          "service_entry_ids": []
-        },
-        "selected_protocol": "openai-chat-completions.v1",
-        "supported_protocols": [
-          "openai-chat-completions.v1"
-        ]
-      },
-      {
-        "default_enabled": true,
-        "matcher": {
-          "kind": "exact",
-          "value": "openai/text-embedding-3-small"
-        },
-        "model_parameters": [],
-        "rule_id": "featured-openai-text-embedding-3-small",
-        "scope": {
-          "credential_profile_ids": [],
-          "service_entry_ids": []
-        },
-        "selected_protocol": "openai-chat-completions.v1",
-        "supported_protocols": [
-          "openai-chat-completions.v1"
-        ]
-      },
-      {
-        "default_enabled": true,
-        "matcher": {
-          "kind": "exact",
-          "value": "openai/whisper-large-v3-turbo"
-        },
-        "model_parameters": [],
-        "rule_id": "featured-openai-whisper-large-v3-turbo",
-        "scope": {
-          "credential_profile_ids": [],
-          "service_entry_ids": []
-        },
-        "selected_protocol": "openai-chat-completions.v1",
-        "supported_protocols": [
           "openai-chat-completions.v1"
         ]
       },
