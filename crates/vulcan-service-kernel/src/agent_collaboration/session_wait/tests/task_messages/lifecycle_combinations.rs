@@ -6,7 +6,7 @@ use crate::session_v1_lifecycle::{SessionV1LifecycleError, publish_guarded_edit_
 use vulcan_agent_runtime::agent_runtime::task_runtime::TaskV1ExecutionFacts;
 use vulcan_agent_runtime::tooling::collaboration::{
     ASK_PARENT_TOOL_ID, ASK_QUESTION_TOOL_ID, AskParentArgs, AskQuestionArgs,
-    SEND_NOTIFICATION_TOOL_ID, SendNotificationArgs,
+    SEND_NOTIFICATION_TOOL_ID, SendNotificationArgs, WAIT_QUESTION_TOOL_ID, WaitQuestionArgs,
 };
 use vulcan_session_core::v1::collaboration::{
     ActivateChildTaskInput, CollaborationChildTaskTerminalOutcome,
@@ -1029,4 +1029,424 @@ async fn history_edit_refuses_an_unsettled_embedded_child_and_names_it() {
             .any(|locator| locator.session_id() == child_id.to_string()),
         "the rejected edit must not detach the embedded child from the root tree"
     );
+}
+
+/// Starts the question-execution API on `handle` and prepares its reply ToolCall.
+/// 在 `handle` 上启动答疑执行 API 并准备其回答工具调用。
+/// Returns the exact context the reply command is validated against.
+/// 返回回答命令进行校验时使用的精确上下文。
+fn start_question_execution_tool_call_for_parent(
+    handle: &Arc<SessionHandle>,
+    now_ms: i64,
+    stream_label: &str,
+) -> VulcanToolInvocationContext {
+    let input = handle
+        .read(|document| {
+            let through_seq = document.events().last().unwrap().seq;
+            PrepareAndStartApiInput {
+                purpose: ApiPurposeKind::QuestionExecution,
+                request: ApiRequestSnapshot::new("openai", "model"),
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                projection: ProviderProjectionProof {
+                    segment_generation: document.segment_generation(),
+                    document_revision: document.memory_revision(),
+                    retained_from_seq: Seq::try_new(1).unwrap(),
+                    through_seq,
+                    fingerprint_sha256: provider_visible_fingerprint(
+                        document.events(),
+                        through_seq,
+                    )
+                    .unwrap(),
+                },
+                locked_baseline: LockedBaselineProjection::empty(),
+                continuation_action_id: None,
+                now_ms,
+            }
+        })
+        .unwrap();
+    let api_call_id = handle
+        .prepare_and_start_api_durable(input)
+        .unwrap()
+        .value
+        .api_call_id;
+    prepare_reply_tool_call_on_active_api(handle, api_call_id, now_ms, stream_label)
+}
+
+/// Prepares one reply ToolCall on the handle's already admitted physical API.
+/// 在句柄已准入的物理 API 上准备一条回答工具调用。
+/// Returns the exact context the reply command is validated against.
+/// 返回回答命令进行校验时使用的精确上下文。
+fn prepare_reply_tool_call_on_active_api(
+    handle: &Arc<SessionHandle>,
+    api_call_id: vulcan_session_core::v1::ApiCallId,
+    now_ms: i64,
+    stream_label: &str,
+) -> VulcanToolInvocationContext {
+    let request_stream_id = RequestStreamId::try_new(format!("{stream_label}-stream")).unwrap();
+    let tool_call_id = handle
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::ToolBoundary,
+            |document| {
+                document.prepare_tool(
+                    api_call_id,
+                    request_stream_id.clone(),
+                    REPLY_QUESTION_TOOL_ID,
+                    ToolPayload::empty(),
+                    None,
+                    now_ms,
+                )
+            },
+        )
+        .unwrap()
+        .value;
+    let tool_seq = handle
+        .read(|document| {
+            document
+                .events()
+                .iter()
+                .find_map(|event| match &event.event {
+                    EventBody::ToolCall(tool) if tool.tool_call_id == tool_call_id => {
+                        Some(event.seq)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        })
+        .unwrap();
+    VulcanToolInvocationContext {
+        session_id: handle.session_id().to_string(),
+        request_stream_id,
+        api_call_id,
+        tool_call_id,
+        tool_seq,
+        controller_tool_call_id: format!("{stream_label}-tool"),
+        provider_tool_call_id: None,
+    }
+}
+
+/// Admits one real `wait_question` ToolCall on an invocation's own open turn.
+/// 在调用的自身开放回合上准入一条真实的 `wait_question` 工具调用。
+/// Returns the exact context the native wait command validates against.
+/// 返回原生命令在等待校验时比对的精确上下文。
+fn admit_wait_question_tool_call(
+    invocation: &ValidatedInvocation,
+    stream_label: &str,
+    now_ms: i64,
+) -> VulcanToolInvocationContext {
+    // Reuse the turn's already admitted API when one exists, as the other test helpers do; starting a
+    // second physical API while one is active is a domain error, not a test setup detail.
+    // 存在已准入 API 时复用它（与其他测试辅助一致）；在已有活动 API 时再启动一个物理 API 属于
+    // 领域错误，而不是夹具细节。
+    let existing = invocation
+        .source_handle
+        .read(|document| document.active_api().map(|api| api.api_call_id))
+        .unwrap();
+    let api_call_id = match existing {
+        Some(api_call_id) => api_call_id,
+        None => {
+            let input = invocation
+                .source_handle
+                .read(|document| {
+                    let through_seq = document.events().last().unwrap().seq;
+                    PrepareAndStartApiInput {
+                        purpose: ApiPurposeKind::MainGeneration,
+                        request: ApiRequestSnapshot::new("openai", "model"),
+                        request_budget_evidence:
+                            crate::session_runtime_registry_v1::test_provider_request_budget_evidence(
+                            ),
+                        projection: vulcan_session_core::v1::event::ProviderProjectionProof {
+                            segment_generation: document.segment_generation(),
+                            document_revision: document.memory_revision(),
+                            retained_from_seq: vulcan_session_core::v1::ids::Seq::try_new(1).unwrap(),
+                            through_seq,
+                            fingerprint_sha256: provider_visible_fingerprint(
+                                document.events(),
+                                through_seq,
+                            )
+                            .unwrap(),
+                        },
+                        locked_baseline: LockedBaselineProjection::empty(),
+                        continuation_action_id: None,
+                        now_ms,
+                    }
+                })
+                .unwrap();
+            invocation
+                .source_handle
+                .prepare_and_start_api_durable(input)
+                .unwrap()
+                .value
+                .api_call_id
+        }
+    };
+    let request_stream_id = RequestStreamId::try_new(format!("{stream_label}-stream")).unwrap();
+    let tool_call_id = invocation
+        .source_handle
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::ToolBoundary,
+            |document| {
+                document.prepare_tool(
+                    api_call_id,
+                    request_stream_id.clone(),
+                    WAIT_QUESTION_TOOL_ID,
+                    ToolPayload::empty(),
+                    None,
+                    now_ms,
+                )
+            },
+        )
+        .unwrap()
+        .value;
+    let tool_seq = invocation
+        .source_handle
+        .read(|document| {
+            document
+                .events()
+                .iter()
+                .find_map(|event| match &event.event {
+                    EventBody::ToolCall(tool) if tool.tool_call_id == tool_call_id => {
+                        Some(event.seq)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        })
+        .unwrap();
+    VulcanToolInvocationContext {
+        session_id: invocation.source_session_id.to_string(),
+        request_stream_id,
+        api_call_id,
+        tool_call_id,
+        tool_seq,
+        controller_tool_call_id: format!("{stream_label}-tool"),
+        provider_tool_call_id: None,
+    }
+}
+
+/// A child-to-parent question must round-trip: the parent answers and the child observes that answer.
+/// 子到主的问题必须完成往返：父代理作答，子代理观察到该答案。
+///
+/// # Notes
+/// 说明
+/// A07 requires genuine bidirectional asking. The existing evidence proves a child can *send* a
+/// parent question and that the parent receives it, but never that the answer returns to the asking
+/// child, which is what makes the direction usable rather than one-way.
+/// A07 要求真正的双向提问。既有证据证明了子代理**能发送**父问题、父代理也能收到，但从未证明
+/// 答案会回到提问的子代理——而这正是该方向可用而非单向的原因。
+#[tokio::test]
+async fn child_question_to_parent_round_trips_the_answer_back_to_the_child() {
+    use vulcan_agent_runtime::tooling::collaboration::{REPLY_QUESTION_TOOL_ID, ReplyQuestionArgs};
+
+    let (_root, invocation, parent, _context) = message_fixture(false).await;
+    // The production creator publishes one real embedded child owned by this parent.
+    // 生产创建器发布一个由该父代理持有真实所有权的嵌入子任务。
+    let child_id = Uuid::new_v4();
+    let child = crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1(
+        &invocation.registry,
+        TaskV1ExecutionFacts {
+            root_session_id: parent.session_id(),
+            parent_session_id: parent.session_id(),
+            task_id: child_id,
+            execution_id: String::from("round-trip-child"),
+            prompt: String::from("Child work that must ask its parent"),
+            display_title: String::from("round-trip-child"),
+            is_resumed: false,
+            admitted_at_ms: 5,
+        },
+    )
+    .unwrap();
+    let child_invocation = recovery_invocation(
+        invocation.state.clone(),
+        invocation.controller_runtime.clone(),
+        invocation.registry.clone(),
+        child_id,
+        child.clone(),
+    )
+    .unwrap();
+    // The parent reservation must be the production reducer's own record, not a test flag.
+    // 父预留必须是生产归约器自身的记录，而不是测试标记。
+    let child_identity =
+        participants::participant_for_handle(&child_invocation, child_id, &child, None)
+            .await
+            .unwrap();
+    let parent_turn = parent
+        .read(|document| document.active_turn().unwrap().turn_id)
+        .unwrap();
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.reserve_child_task(ReserveChildTaskInput {
+                    source_tool_name: String::from("spawn_agent"),
+                    operation_id: CollaborationOperationId::try_new("reserve-round-trip-child")
+                        .unwrap(),
+                    execution_id: CollaborationExecutionId::try_new("round-trip-child").unwrap(),
+                    task_id: child_identity.task_id.clone().unwrap(),
+                    parent_turn_id: parent_turn,
+                    child: child_identity,
+                    reserved_at_ms: 5,
+                })
+            },
+        )
+        .unwrap();
+    // The child asks its verified direct parent through the real native port.
+    // 子代理通过真实原生端口向已校验的直接父代理提问。
+    let runtime = session_v1_native_agent_collaboration_runtime(
+        invocation.state.clone(),
+        crate::ServiceEventEmitter::new(vec![]),
+    );
+    let ask_context =
+        admit_real_tool_call(&child_invocation, ASK_PARENT_TOOL_ID, "round-trip-ask", 20).await;
+    let asked = runtime
+        .invoke(
+            ask_context,
+            AgentCollaborationCommand::AskParent(AskParentArgs {
+                question: "Which direction should I take?".into(),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(asked["status"], "ok");
+    let question_id =
+        CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
+    let delivery_id =
+        CollaborationDeliveryId::try_new(asked["delivery"]["delivery_id"].as_str().unwrap())
+            .unwrap();
+    // The parent owns the accepted inbound delivery; the question record itself stays with its asker.
+    // 父代理持有已接纳的入站投递；问题记录本身留在提问方。
+    let question = child
+        .read(|document| document.question_snapshot(&question_id).cloned())
+        .unwrap()
+        .expect("the child must retain its own question record");
+    assert_eq!(question.state, CollaborationQuestionState::Pending);
+    parent
+        .read(|document| {
+            assert_eq!(
+                document.collaboration_state().inbound_deliveries[&delivery_id].state,
+                CollaborationDeliveryState::Accepted
+            );
+        })
+        .unwrap();
+    // The parent's own question execution must be prepared before it may answer. The preparation takes
+    // the authoritative **source** snapshot (documented on the domain method), while it is applied to
+    // the target document, so the child's record is passed in here exactly as production does.
+    // 父代理必须先准备自身的答疑执行才能作答。该准备接收权威**来源**快照（领域方法已注明），
+    // 却作用于目标文档，因此这里与生产一致地传入子代理的记录。
+    let parent_question = child
+        .read(|document| document.question_snapshot(&question_id).cloned())
+        .unwrap()
+        .expect("the child owns the authoritative question snapshot");
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| document.prepare_question_execution_before_api(parent_question.clone(), 21),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "parent question preparation failed: {error}; active_api={}",
+                parent
+                    .read(|document| document.active_api().is_some())
+                    .unwrap()
+            )
+        });
+    let reply_context =
+        start_question_execution_tool_call_for_parent(&parent, 22, "round-trip-reply");
+    let answer_body = "Take the archived settlement path.";
+    let replied = runtime
+        .invoke(
+            reply_context,
+            AgentCollaborationCommand::ReplyQuestion(ReplyQuestionArgs {
+                question_id: question_id.as_str().to_owned(),
+                answer: answer_body.into(),
+                unable_to_answer: false,
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the parent answer was rejected: {error}"));
+    assert_eq!(replied["status"], "ok");
+    assert_eq!(
+        replied["question_state"].as_str(),
+        Some("answered"),
+        "the parent answer must settle the child question: {replied}"
+    );
+    // The answer must be durably bound to the child's own question, not merely echoed.
+    // 答案必须可靠绑定到子代理自身的问题，而不仅仅是回显。
+    let settled = child
+        .read(|document| {
+            (
+                document.question_snapshot(&question_id).cloned(),
+                document
+                    .collaboration_state()
+                    .outbound_deliveries
+                    .get(&delivery_id)
+                    .cloned(),
+            )
+        })
+        .unwrap();
+    let settled_question = settled
+        .0
+        .expect("the child must retain its own question record");
+    assert_eq!(settled_question.state, CollaborationQuestionState::Answered);
+    assert_eq!(
+        settled_question
+            .answer
+            .as_ref()
+            .map(|answer| answer.body.as_str()),
+        Some(answer_body),
+        "the child must hold the exact answer body produced by its parent"
+    );
+    assert_eq!(
+        settled.1.map(|delivery| delivery.settlement_ack.is_some()),
+        Some(true),
+        "the child must durably acknowledge the settlement of its own question"
+    );
+    // The child observes the answer through the real wait surface, the usable end of the loop.
+    // 子代理通过真实等待入口观察到该答案，这正是该闭环的可用终点。
+    let wait_context = admit_wait_question_tool_call(&child_invocation, "round-trip-wait", 23);
+    let observed = runtime
+        .invoke(
+            wait_context,
+            AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
+                question_id: question_id.as_str().to_owned(),
+                after_revision: None,
+                timeout_ms: 30_000,
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the child could not observe its answer: {error}"));
+    assert_eq!(
+        observed["status"], "ok",
+        "an answered child question must be observed at once: {observed}"
+    );
+    assert_eq!(observed["question_state"].as_str(), Some("answered"));
+    assert_eq!(observed["answer"]["body"].as_str(), Some(answer_body));
+    // The round trip must not silently complete the child task or close the parent's business turn.
+    // 该往返不得静默完成子任务或关闭父代理的业务回合。
+    assert!(
+        child
+            .read(|document| document
+                .collaboration_state()
+                .outbound_task_messages
+                .is_empty())
+            .unwrap(),
+        "asking the parent must not fabricate a child task intent"
+    );
+    parent
+        .read(|document| {
+            assert_eq!(
+                document.active_turn().unwrap().turn_id,
+                parent_turn,
+                "answering a child question must retain the parent turn"
+            );
+            assert!(
+                !document.active_turn().unwrap().closed,
+                "answering a child question must not close the parent turn"
+            );
+        })
+        .unwrap();
 }
