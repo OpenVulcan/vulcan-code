@@ -1,4 +1,5 @@
 import type {
+  ContextCompactionWindowNodeId,
   PublicAiAccountUsage,
   PublicAiConnectionAddRequest,
   PublicAiConnectionUpdateRequest,
@@ -633,6 +634,17 @@ function normalizePublicAiSessionProviderToolSettings(
     ...settings,
     mediaUnderstandingSelections: settings.mediaUnderstandingSelections ?? {},
   };
+}
+
+// savePublicAiNewSessionContextWindowDefault persists the default for future conversations.
+// savePublicAiNewSessionContextWindowDefault 持久化未来新建会话的默认窗口。
+export async function savePublicAiNewSessionContextWindowDefault(
+  nodeId: ContextCompactionWindowNodeId | null,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_new_session_context_window_default",
+    { request: { nodeId } },
+  );
 }
 
 // loadPublicAiSessionProviderToolSelections loads direct and extension targets for one session.

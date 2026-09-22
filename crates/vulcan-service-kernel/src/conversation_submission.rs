@@ -9,6 +9,7 @@ use vulcan_agent_runtime::attachment_asset_index::promote_staged_attachment_to_m
 use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, begin_shared_prompt_turn,
 };
+use vulcan_context::ContextCompactionWindowNodeId;
 use vulcan_service_api::{
     ComposerAttachmentSummary, ServiceEvent, ServiceEventEmitter, SubmitConversationPromptAck,
     UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
@@ -37,8 +38,9 @@ use crate::session_runtime_registry_v1::{
     ContinuationDispatchGuard, SessionHandle, SessionRuntimeError,
 };
 use crate::session_v1_lifecycle::{
-    CreateRootSessionV1Request, PromptAttachmentOrigin, create_and_register_root_session_v1,
-    get_or_load_session_v1, register_project_prompt_attachments_v1,
+    CreateRootSessionV1Request, PromptAttachmentOrigin,
+    create_and_register_root_session_v1_with_context_window, get_or_load_session_v1,
+    register_project_prompt_attachments_v1,
 };
 use crate::webui_prompt_lifecycle::user_root_dispatch_authority_from_v1_handle;
 
@@ -2146,6 +2148,7 @@ async fn materialize_submission_session_v1(
     submission_mode: &ConversationSubmissionMode,
     existing_authority: Option<&ExistingSubmissionV1Authority>,
     bound_request_config: Option<&ActiveRequestConfig>,
+    new_session_context_window_node_id: Option<ContextCompactionWindowNodeId>,
     now_ms: i64,
 ) -> Result<Option<vulcan_session_core::v1::document::ContinueTurnReceipt>, String> {
     // clientActionId preserves the browser-owned durable idempotency identity
@@ -2193,7 +2196,7 @@ async fn materialize_submission_session_v1(
                 accepted_input,
             )
             .map_err(|error| error.to_string())?;
-            create_and_register_root_session_v1(
+            create_and_register_root_session_v1_with_context_window(
                 controller_runtime,
                 session_registry.as_ref(),
                 CreateRootSessionV1Request {
@@ -2209,6 +2212,7 @@ async fn materialize_submission_session_v1(
                     },
                     now_ms,
                 },
+                new_session_context_window_node_id,
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -2784,6 +2788,27 @@ async fn service_start_conversation_execution(
         },
     )?;
     project_admission.validate_materialized_session(&materialized_session)?;
+    // Resolve the new-session default against the actual selected model before publishing the root.
+    // 在发布根输入前，按实际所选模型解析新会话默认窗口。
+    let new_session_context_window_node_id =
+        if materialized_session.kind == PromptSessionMaterializationKind::Created {
+            let runtime = agent_runtime.public_ai_runtime.as_ref();
+            let configuration = runtime.configuration_snapshot()?;
+            let selected_model = if let Some(selection) = model_selection.as_ref() {
+                Some(resolve_enabled_submission_model_selection(
+                    runtime,
+                    &configuration,
+                    selection,
+                )?)
+            } else {
+                crate::public_ai_workbench_selection(&configuration, runtime, None, None)?
+            };
+            configuration.new_session_context_compaction_window_node_for_model(
+                selected_model.and_then(|selected| selected.model.capabilities.context_limit),
+            )?
+        } else {
+            None
+        };
     // V1 materialization is the first durable session boundary after the old
     // selector has fixed session/project/attachment ownership. It intentionally
     // precedes Goal, Plan, output-style, and pending-model mutations.
@@ -2802,6 +2827,7 @@ async fn service_start_conversation_execution(
         &submission_mode,
         existing_submission_v1_authority.as_ref(),
         existing_bound_request_config.as_ref(),
+        new_session_context_window_node_id,
         i64::try_from(materialize_started_at).unwrap_or(i64::MAX),
     )
     .await?;
@@ -2842,6 +2868,13 @@ async fn service_start_conversation_execution(
         // kernel_reservation_id 将已有会话物化结果绑定到加载前捕获的精确准入所有者。
         let kernel_reservation_id = turn_admission.kernel_reservation_id(&materialized_session)?;
         prepare_materialized_submission_session(&mut workspace_snapshot, &materialized_session)?;
+        if materialized_session.kind == PromptSessionMaterializationKind::Created {
+            let runtime_state = workspace_snapshot
+                .session_runtime_state
+                .get_mut(&materialized_session.session_id)
+                .ok_or_else(|| String::from("New conversation has no runtime state."))?;
+            runtime_state.context_compaction_window_node_id = new_session_context_window_node_id;
+        }
         if submission_mode.is_continuation() {
             validate_recovery_submission_model_selection(
                 agent_runtime.public_ai_runtime.as_ref(),

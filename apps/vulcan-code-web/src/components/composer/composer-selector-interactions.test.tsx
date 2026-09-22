@@ -351,6 +351,7 @@ function settings(): PublicAiSettingsSnapshot {
       { id: "compression-window-1", tokens: 200_000 }, { id: "compression-window-2", tokens: 256_000 },
       { id: "compression-window-3", tokens: 272_000 }, { id: "compression-window-4", tokens: 373_000 }, { id: "compression-window-5", tokens: 500_000 },
     ] },
+    newSessionContextCompactionWindowNodeId: null,
     providerPriorities: {}, usageCache: {}, connections: [], providers: [], providerDefaults: {}, catalogs: {}, modelSupportCatalogs: {},
     catalogErrors: {}, sourceCatalogs: {}, catalogStatuses: {}, modelOverrides: {}, modelOverrideRecords: [], modelAccessRecords: [],
     providerToolTemplateModels: [], connectionModelAccessPolicyRecords: [], customModels: {},

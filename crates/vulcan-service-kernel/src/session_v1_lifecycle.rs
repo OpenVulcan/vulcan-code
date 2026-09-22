@@ -692,10 +692,27 @@ pub(crate) fn register_project_prompt_attachments_v1(
 
 /// Creates, fully publishes, and only then registers one root-input V1 session.
 /// 创建并完整发布一个带根输入的 V1 会话，随后才把它注册到内存。
+#[cfg(test)]
 pub(crate) async fn create_and_register_root_session_v1(
     controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     request: CreateRootSessionV1Request,
+) -> Result<Arc<SessionHandle>, SessionV1LifecycleError> {
+    create_and_register_root_session_v1_with_context_window(controller, registry, request, None)
+        .await
+}
+
+/// Creates one root session with its planning window in the initial durable metadata revision.
+/// 在初始持久元数据修订中写入规划窗口并创建根会话。
+///
+/// `controller` owns storage, `registry` owns admission, `request` supplies the root input,
+/// and `node_id` is the already validated default for this new conversation.
+/// `controller` 持有存储，`registry` 持有准入，`request` 提供根输入，`node_id` 是已校验的新会话默认值。
+pub(crate) async fn create_and_register_root_session_v1_with_context_window(
+    controller: &HostRuntimeHandle,
+    registry: &SessionRuntimeRegistry,
+    request: CreateRootSessionV1Request,
+    node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
 ) -> Result<Arc<SessionHandle>, SessionV1LifecycleError> {
     let CreateRootSessionV1Request {
         session_id,
@@ -718,6 +735,7 @@ pub(crate) async fn create_and_register_root_session_v1(
         title.as_str(),
         now_ms,
     );
+    document.set_context_compaction_window_node_id(node_id, now_ms);
     let client_action_id = root_submission.client_action_id.clone();
     match document.submit_root_input(root_submission, now_ms)? {
         IdempotentMutation::Committed(_) => {}
@@ -2281,6 +2299,55 @@ mod tests {
             ))
         ));
         assert!(!project_dir.exists());
+        fixture.shutdown().await;
+    }
+
+    /// The selected planning node survives the first durable root publication and exact reload.
+    /// 选定规划节点随首次根发布持久化，并在精确重载后保持一致。
+    #[tokio::test]
+    async fn root_creation_persists_new_session_window_in_initial_metadata() {
+        let fixture = LifecycleStorageFixture::start().await;
+        let session_id = SessionId::new_v4();
+        let registry = SessionRuntimeRegistry::default();
+        let node_id = vulcan_context::ContextCompactionWindowNodeId::CompressionWindow3;
+        let handle = create_and_register_root_session_v1_with_context_window(
+            &fixture.controller,
+            &registry,
+            CreateRootSessionV1Request {
+                session_id,
+                project_id: String::from("project-explicit"),
+                title: String::from("Window default"),
+                root_submission: ClientInputSubmission::new(
+                    ClientActionId::try_new(format!("root-{session_id}"))
+                        .expect("root client action id"),
+                    "root input",
+                    Vec::new(),
+                ),
+                now_ms: 1_787_788_800_000,
+            },
+            Some(node_id),
+        )
+        .await
+        .expect("create root with planning node");
+        assert_eq!(
+            handle
+                .read(|document| document.metadata.config.context_compaction_window_node_id)
+                .expect("read initial metadata"),
+            Some(node_id)
+        );
+        let reloaded = get_or_load_session_v1(
+            &fixture.controller,
+            &SessionRuntimeRegistry::default(),
+            session_id,
+        )
+        .await
+        .expect("reload root metadata");
+        assert_eq!(
+            reloaded
+                .read(|document| document.metadata.config.context_compaction_window_node_id)
+                .expect("read persisted metadata"),
+            Some(node_id)
+        );
         fixture.shutdown().await;
     }
 

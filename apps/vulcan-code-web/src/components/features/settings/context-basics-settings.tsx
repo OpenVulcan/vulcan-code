@@ -14,6 +14,7 @@ import { useI18n } from "@/i18n"
 import {
   loadPublicAiSettings,
   savePublicAiContextCompactionWindowNodes,
+  savePublicAiNewSessionContextWindowDefault,
   savePublicAiContextWindowPolicyOverrides,
   savePublicAiUsageRefreshSettings,
 } from "@/service/settings-actions-service"
@@ -246,6 +247,74 @@ function ContextCompactionWindowNodesCard(props: {
   )
 }
 
+// NewSessionContextWindowDefaultCard edits only the default applied at conversation creation.
+// NewSessionContextWindowDefaultCard 仅编辑创建会话时应用的默认窗口。
+// Parameters: props supplies the saved node identity, node values and snapshot callback.
+// 参数：props 提供已保存节点身份、节点数值和快照回调。
+function NewSessionContextWindowDefaultCard(props: {
+  // nodeId is null when new conversations follow the selected model.
+  // nodeId 为空时新会话遵循所选模型。
+  nodeId: ContextCompactionWindowNodeId | null
+  // nodes provides the five current system window values.
+  // nodes 提供五个当前系统窗口数值。
+  nodes: PublicAiContextCompactionWindowConfiguration
+  // onSaved adopts the backend-authoritative result.
+  // onSaved 采用后端权威结果。
+  onSaved: (snapshot: PublicAiSettingsSnapshot) => void
+}) {
+  const { t } = useI18n()
+  // draft is the proposed fixed node or the follow-model choice.
+  // draft 是拟选择的固定节点或遵循模型选项。
+  const [draft, setDraft] = React.useState<ContextCompactionWindowNodeId | null>(props.nodeId)
+  // saving prevents overlapping settings writes.
+  // saving 防止设置写入重叠。
+  const [saving, setSaving] = React.useState(false)
+  // error displays one persistence failure.
+  // error 展示一条持久化失败。
+  const [error, setError] = React.useState<string | null>(null)
+  React.useEffect(() => setDraft(props.nodeId), [props.nodeId])
+  // save writes only the new-session default and leaves existing sessions untouched.
+  // save 只写入新会话默认值，不改变已有会话。
+  const save = React.useCallback(async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      props.onSaved(await savePublicAiNewSessionContextWindowDefault(draft))
+      toast.success(t("settings.contextCompactionNodes.defaultSaved"))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setSaving(false)
+    }
+  }, [draft, props, t])
+
+  return (
+    <section className="space-y-4 rounded-xl border p-4">
+      <div>
+        <h3 className="text-sm font-semibold">{t("settings.contextCompactionNodes.defaultTitle")}</h3>
+        <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.defaultDescription")}</p>
+      </div>
+      <Select disabled={saving} onValueChange={(value) => setDraft(value === "follow-model" ? null : value as ContextCompactionWindowNodeId)} value={draft ?? "follow-model"}>
+        <SelectTrigger aria-label={t("settings.contextCompactionNodes.defaultTitle")}><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="follow-model">{t("settings.contextCompactionNodes.followModel")}</SelectItem>
+          {props.nodes.nodes.map((node) => (
+            <SelectItem key={node.id} value={node.id}>
+              {t(CONTEXT_COMPACTION_NODE_LABEL_KEYS[node.id])} · {node.tokens.toLocaleString()} Token
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">{t("settings.contextCompactionNodes.defaultLimitHint")}</p>
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      <Button disabled={saving || draft === props.nodeId} onClick={() => void save()} type="button">
+        {saving ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+        {t("settings.contextCompactionNodes.defaultSave")}
+      </Button>
+    </section>
+  )
+}
+
 // AccountUsageRefreshCard edits the persisted background account-usage cadence.
 // AccountUsageRefreshCard 编辑持久化的后台账号用量刷新周期。
 // Parameters: props supplies the persisted interval and save callback; returns the validated background-usage refresh editor.
@@ -384,6 +453,7 @@ export function ContextBasicsSettingsArea(props: {
             </section>
             <section hidden={activeSection !== "nodes"}>
               <ContextCompactionWindowNodesCard nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, contextCompactionWindowNodes: next.contextCompactionWindowNodes } : next)} />
+              <NewSessionContextWindowDefaultCard nodeId={snapshot.newSessionContextCompactionWindowNodeId} nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, newSessionContextCompactionWindowNodeId: next.newSessionContextCompactionWindowNodeId } : next)} />
             </section>
             <section hidden={activeSection !== "media"}>
               <MediaDeliveryPolicyCard settings={snapshot.mediaDelivery} onSaved={(next) => setSnapshot((current) => current ? { ...current, mediaDelivery: next.mediaDelivery } : next)} />

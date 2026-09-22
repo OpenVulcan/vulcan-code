@@ -2,7 +2,7 @@
 //! 公共 AI 共享默认值与系统级设置写入。
 
 use serde::Deserialize;
-use vulcan_context::ContextWindowPolicyOverrides;
+use vulcan_context::{ContextCompactionWindowNodeId, ContextWindowPolicyOverrides};
 use vulcan_provider_adapters::ContextCompactionWindowConfiguration;
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -58,6 +58,16 @@ pub(crate) struct PublicAiContextCompactionWindowNodesSaveRequest {
     /// Complete five-node configuration with immutable identifiers and order.
     /// 包含不可变标识与顺序的完整五节点配置。
     nodes: ContextCompactionWindowConfiguration,
+}
+
+/// Saves the default planning window for conversations created in the future.
+/// 保存以后新建会话的默认规划窗口。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublicAiNewSessionContextWindowDefaultSaveRequest {
+    /// A fixed node identity, or None to follow the selected model's window.
+    /// 固定节点身份，或空值表示遵循所选模型窗口。
+    node_id: Option<ContextCompactionWindowNodeId>,
 }
 
 /// Saves the background account-usage refresh interval.
@@ -246,6 +256,34 @@ pub(crate) async fn service_save_public_ai_context_compaction_window_nodes(
                 .map(|_| ())
             },
         )?;
+    drop(transaction);
+    Ok(snapshot)
+}
+
+/// Persists a new-session default without changing any existing session metadata.
+/// 持久化新建会话默认值，不改变任何已有会话元数据。
+///
+/// `app` publishes the settings snapshot, `state` owns configuration, and `request` selects a node.
+/// `app` 发布设置快照，`state` 持有配置，`request` 选择节点。
+pub(crate) async fn service_save_public_ai_new_session_context_window_default(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiNewSessionContextWindowDefaultSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "保存新建会话上下文窗口默认值失败",
+        |configuration| {
+            configuration.set_new_session_context_compaction_window_node_id(request.node_id);
+            Ok(())
+        },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
     drop(transaction);
     Ok(snapshot)
 }

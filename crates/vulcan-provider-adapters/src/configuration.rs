@@ -888,6 +888,10 @@ pub struct PersistedAiConfiguration {
     /// Token 值可由用户编辑的固定系统上下文压缩窗口节点。
     #[serde(default)]
     pub context_compaction_window_nodes: ContextCompactionWindowConfiguration,
+    /// Default fixed window node for newly created conversations; None follows the selected model.
+    /// 新建会话默认使用的固定窗口节点；空值表示遵循所选模型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_session_context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
     /// Explicit non-conversation internal-use choices scoped by provider and model.
     /// 按供应商与模型限定作用域的显式非会话内部使用选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1042,6 +1046,7 @@ impl Default for PersistedAiConfiguration {
             provider_capability_overrides: BTreeMap::new(),
             context_window_policy_overrides: ContextWindowPolicyOverrides::default(),
             context_compaction_window_nodes: ContextCompactionWindowConfiguration::default(),
+            new_session_context_compaction_window_node_id: None,
             internal_model_enabled_overrides: BTreeMap::new(),
             inference_profiles: BTreeMap::from([
                 (String::from("vce"), InferenceProfile::default()),
@@ -1957,6 +1962,36 @@ impl PersistedAiConfiguration {
         nodes.validate()?;
         self.context_compaction_window_nodes = nodes;
         Ok(())
+    }
+
+    /// Saves the default node identity for conversations created after this configuration change.
+    /// 保存配置变更后新建会话使用的默认节点身份。
+    ///
+    /// `node_id` is a fixed node or None to follow the selected model; no existing session changes.
+    /// `node_id` 是固定节点，空值表示遵循所选模型；已有会话不受影响。
+    pub fn set_new_session_context_compaction_window_node_id(
+        &mut self,
+        node_id: Option<ContextCompactionWindowNodeId>,
+    ) {
+        self.new_session_context_compaction_window_node_id = node_id;
+    }
+
+    /// Resolves the new-session planning node against the selected model's real context limit.
+    /// 根据所选模型的真实上下文上限解析新建会话规划节点。
+    ///
+    /// A node at or above the model limit falls back to the model limit; missing limits do too.
+    /// 节点达到或超过模型上限时遵循模型；模型上限未知时也遵循模型。
+    pub fn new_session_context_compaction_window_node_for_model(
+        &self,
+        model_context_limit: Option<u64>,
+    ) -> Result<Option<ContextCompactionWindowNodeId>, String> {
+        let Some(node_id) = self.new_session_context_compaction_window_node_id else {
+            return Ok(None);
+        };
+        let node_tokens = self.context_compaction_window_nodes.tokens_for(node_id)?;
+        Ok(model_context_limit
+            .filter(|limit| node_tokens < *limit)
+            .map(|_| node_id))
     }
 
     /// Resolves one complete Codex-compatible compaction policy for one execution turn.
@@ -5937,6 +5972,36 @@ mod tests {
                 (ContextCompactionWindowNodeId::CompressionWindow5, 500_000),
             ]
         );
+    }
+
+    /// Verifies new conversations inherit the configured node only below the real model limit.
+    /// 验证新会话仅在节点低于模型真实上限时继承所配节点。
+    #[test]
+    fn new_session_window_default_respects_model_hard_limit() {
+        let mut configuration = PersistedAiConfiguration::default();
+        assert_eq!(
+            configuration
+                .new_session_context_compaction_window_node_for_model(Some(1_000_000))
+                .expect("follow-model default should resolve"),
+            None
+        );
+        configuration.set_new_session_context_compaction_window_node_id(Some(
+            ContextCompactionWindowNodeId::CompressionWindow3,
+        ));
+        assert_eq!(
+            configuration
+                .new_session_context_compaction_window_node_for_model(Some(1_000_000))
+                .expect("node should fit a 1M model"),
+            Some(ContextCompactionWindowNodeId::CompressionWindow3)
+        );
+        for limit in [Some(272_000), Some(250_000), None] {
+            assert_eq!(
+                configuration
+                    .new_session_context_compaction_window_node_for_model(limit)
+                    .expect("unsupported node should follow the model"),
+                None
+            );
+        }
     }
 
     /// Verifies fixed nodes reject id reassignment and non-ascending token values.

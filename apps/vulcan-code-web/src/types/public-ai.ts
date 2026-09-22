@@ -1291,6 +1291,9 @@ export interface PublicAiSettingsSnapshot {
   // contextCompactionWindowNodes exposes the complete fixed system node configuration.
   // contextCompactionWindowNodes 公开完整的固定系统节点配置。
   contextCompactionWindowNodes: PublicAiContextCompactionWindowConfiguration;
+  // newSessionContextCompactionWindowNodeId applies only to newly created conversations.
+  // newSessionContextCompactionWindowNodeId 仅应用于新建会话。
+  newSessionContextCompactionWindowNodeId: ContextCompactionWindowNodeId | null;
   usageRefreshIntervalSeconds: number;
   // providerPriorities stores sparse provider ordering values; missing entries inherit zero.
   // providerPriorities 保存稀疏供应商排序值；缺失项继承零。

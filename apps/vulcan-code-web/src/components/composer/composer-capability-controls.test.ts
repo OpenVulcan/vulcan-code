@@ -49,6 +49,7 @@ function settingsFixture(): PublicAiSettingsSnapshot {
         { id: "compression-window-5", tokens: 500_000 },
       ],
     },
+    newSessionContextCompactionWindowNodeId: null,
     providerPriorities: {},
     usageCache: {},
     connections: [],

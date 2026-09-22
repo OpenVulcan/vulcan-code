@@ -45,12 +45,14 @@ use catalog_projection::{
 )]
 pub(super) use general_settings::{
     PublicAiContextCompactionWindowNodesSaveRequest,
-    PublicAiContextWindowPolicyOverridesSaveRequest, PublicAiProviderPrioritySaveRequest,
+    PublicAiContextWindowPolicyOverridesSaveRequest,
+    PublicAiNewSessionContextWindowDefaultSaveRequest, PublicAiProviderPrioritySaveRequest,
     PublicAiUsageRefreshSettingsRequest,
 };
 pub(super) use general_settings::{
     service_save_public_ai_context_compaction_window_nodes,
     service_save_public_ai_context_window_policy_overrides,
+    service_save_public_ai_new_session_context_window_default,
     service_save_public_ai_provider_priority, service_save_public_ai_usage_refresh_settings,
 };
 // Preserve nested browser snapshot contracts even when serialization infers their types.

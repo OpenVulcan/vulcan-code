@@ -4,7 +4,7 @@
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{AccountUsageSnapshot, PromptCachePolicy};
-use vulcan_context::ContextWindowPolicyOverrides;
+use vulcan_context::{ContextCompactionWindowNodeId, ContextWindowPolicyOverrides};
 use vulcan_provider_adapters::{
     AccountUsageQueryKind, ActiveAiModelSelection, CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT,
     CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT, CatalogDiscoveryStatus, ConnectionModelCatalog,
@@ -65,6 +65,9 @@ pub(crate) struct PublicAiSettingsSnapshot {
     /// Fixed system context-compaction window nodes in immutable display order.
     /// 按不可变展示顺序排列的固定系统上下文压缩窗口节点。
     context_compaction_window_nodes: ContextCompactionWindowConfiguration,
+    /// Default window node applied only when a new conversation is created.
+    /// 仅在新建会话时应用的默认窗口节点。
+    new_session_context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
     /// Persisted background account-usage refresh interval.
     /// 持久化的后台账号用量刷新间隔。
     usage_refresh_interval_seconds: u64,
@@ -753,6 +756,8 @@ pub(super) fn build_public_ai_settings_snapshot(
         media_delivery: PublicAiMediaDeliverySettingsSnapshot::from_configuration(configuration)?,
         context_window_policy_overrides: configuration.context_window_policy_overrides,
         context_compaction_window_nodes: configuration.context_compaction_window_nodes.clone(),
+        new_session_context_compaction_window_node_id: configuration
+            .new_session_context_compaction_window_node_id,
         usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
         provider_priorities: configuration.provider_priority_overrides.clone(),
         usage_cache,
