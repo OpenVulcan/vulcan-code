@@ -328,9 +328,11 @@ export function CredentialModelAccessDialog(props: CredentialModelAccessDialogPr
               </Select>
             </div>
             {policy ? <p className="text-xs text-muted-foreground">
-              {t(policy.defaultEnabled === false
-                ? "settings.credentialModels.futureDisabled"
-                : "settings.credentialModels.futureEnabled")}
+              {t(policy.inheritModelDefaults
+                ? "settings.credentialModels.futureSignedDefaults"
+                : policy.defaultEnabled
+                  ? "settings.credentialModels.futureEnabled"
+                  : "settings.credentialModels.futureDisabled")}
             </p> : null}
             {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
           </div>

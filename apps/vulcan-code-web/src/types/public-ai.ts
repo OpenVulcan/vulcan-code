@@ -504,6 +504,7 @@ export type PublicAiModelDirectoryKind = "fixed" | "dynamic" | "manual" | "unava
 export interface PublicAiConnectionModelAccessPolicyRecord {
   connectionId: string;
   defaultEnabled: boolean;
+  inheritModelDefaults: boolean;
   modelEnabledOverrides: Record<string, boolean>;
   directoryKind: PublicAiModelDirectoryKind;
 }

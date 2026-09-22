@@ -35,9 +35,12 @@ pub(crate) struct PublicAiConnectionModelAccessPolicyRecord {
     /// Exact credential connection identifier.
     /// 精确凭据连接标识。
     connection_id: String,
-    /// State inherited by current and future models without an exact override.
-    /// 没有精确覆盖时当前与未来模型继承的状态。
+    /// Provider display baseline, or the explicit account-wide state after a bulk choice.
+    /// 供应商展示基线，或批量选择后的显式账号全局状态。
     default_enabled: bool,
+    /// Whether models without an individual choice inherit their signed or manual default.
+    /// 未单独选择的模型是否继承签名或手工默认值。
+    inherit_model_defaults: bool,
     /// Sparse exact model decisions that differ from the account default.
     /// 与账号默认值不同的稀疏精确模型决定。
     model_enabled_overrides: BTreeMap<String, bool>,
@@ -212,6 +215,7 @@ pub(super) fn build_connection_model_access_policy_records(
             Ok(PublicAiConnectionModelAccessPolicyRecord {
                 connection_id: connection.id.clone(),
                 default_enabled: policy.default_enabled,
+                inherit_model_defaults: policy.inherit_model_defaults,
                 model_enabled_overrides: policy.model_enabled_overrides,
                 directory_kind: connection_model_directory_kind(providers, connection),
             })

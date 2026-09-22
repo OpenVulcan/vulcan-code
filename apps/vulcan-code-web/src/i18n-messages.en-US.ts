@@ -3036,6 +3036,7 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "settings.credentialModels.confirmDisable": "Disable all models",
     "settings.credentialModels.futureEnabled": "New models discovered by later syncs will be enabled automatically.",
     "settings.credentialModels.futureDisabled": "New models discovered by later syncs stay disabled until you enable them.",
+    "settings.credentialModels.futureSignedDefaults": "New models follow the signed provider defaults. You can change each model here.",
     "settings.customModels.empty": "No models match the current filter.",
     "settings.customModels.noModelsToImport": "The live catalog has no new models to append.",
     "settings.customModels.removeConfirm": "Remove model “{name}” from this custom provider? The service will block deletion while a session locks the model or an internal route references it; switch those sessions or routes first.",

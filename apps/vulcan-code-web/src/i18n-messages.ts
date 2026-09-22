@@ -3061,6 +3061,7 @@ export type TranslationKey =
   | "settings.credentialModels.confirmDisable"
   | "settings.credentialModels.futureEnabled"
   | "settings.credentialModels.futureDisabled"
+  | "settings.credentialModels.futureSignedDefaults"
   | "settings.customModels.empty"
   | "settings.customModels.noModelsToImport"
   | "settings.customModels.removeConfirm"

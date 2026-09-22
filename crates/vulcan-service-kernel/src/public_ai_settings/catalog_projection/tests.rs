@@ -56,6 +56,7 @@ fn openrouter_account_projection_uses_signed_initial_checks() {
     .expect("initial account records should project");
     assert_eq!(records.len(), 1);
     assert!(!records[0].default_enabled);
+    assert!(records[0].inherit_model_defaults);
     assert!(records[0].model_enabled_overrides.is_empty());
     assert_eq!(
         records[0].directory_kind,
@@ -75,6 +76,7 @@ fn openrouter_account_projection_uses_signed_initial_checks() {
     )
     .expect("explicit account records should project");
     assert!(explicit[0].default_enabled);
+    assert!(!explicit[0].inherit_model_defaults);
     assert!(explicit[0].model_enabled_overrides.is_empty());
 }
 

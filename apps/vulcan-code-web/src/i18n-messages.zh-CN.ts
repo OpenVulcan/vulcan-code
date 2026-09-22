@@ -3036,6 +3036,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "settings.credentialModels.confirmDisable": "关闭全部模型",
     "settings.credentialModels.futureEnabled": "后续同步发现的新模型会自动启用。",
     "settings.credentialModels.futureDisabled": "后续同步发现的新模型保持关闭，直到你手动启用。",
+    "settings.credentialModels.futureSignedDefaults": "新模型按供应商签名清单中的默认开关状态显示，可在此单独调整。",
     "settings.customModels.empty": "当前筛选条件下没有模型。",
     "settings.customModels.noModelsToImport": "当前目录没有可追加的新模型。",
     "settings.customModels.removeConfirm": "确定从自定义供应商中移除模型“{name}”吗？如果模型被会话锁定或被内部推理路由引用，后端会禁止删除，请先切换相关会话或路由。",
