@@ -920,6 +920,47 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
         flash.provenance.provenance_ref.as_deref(),
         Some("https://api-docs.deepseek.com/zh-cn/guides/vision")
     );
+    // v4-pro is its own current identity and must not be mirrored against flash: the official
+    // provider retired v4-flash, and the two surviving models differ in input modalities.
+    // v4-pro 是独立的在用身份，不得与 flash 镜像：官方已下线 v4-flash，且现存两个模型的输入模态不同。
+    let pro = compiled
+        .rule_for_model("official-api", None, "deepseek-v4-pro")
+        .expect("DeepSeek V4 Pro rule must exist");
+    assert_eq!(pro.display_name.as_deref(), Some("DeepSeek V4 Pro"));
+    assert_eq!(pro.selected_protocol.as_deref(), Some("openai-responses.v1"));
+    assert_eq!(
+        pro.supported_protocols
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "anthropic-messages.v1",
+            "openai-chat-completions.v1",
+            "openai-responses.v1",
+        ])
+    );
+    // proCapabilities stays text-only while V4.1 Flash carries image understanding.
+    // proCapabilities 保持纯文本，而 V4.1 Flash 携带图片理解能力。
+    let pro_capabilities = pro
+        .capabilities
+        .as_ref()
+        .expect("DeepSeek V4 Pro capabilities must exist");
+    assert!(
+        pro_capabilities.input_resources.is_empty(),
+        "V4 Pro must not declare image input while V4.1 Flash declares image understanding"
+    );
+    assert!(pro.input_resource_constraints.is_empty());
+    assert_eq!(pro_capabilities.context_limit, Some(1_000_000));
+    assert_eq!(pro_capabilities.output_limit, Some(393_216));
+    assert_eq!(
+        pro_capabilities.reasoning_efforts,
+        vec![
+            vulcan_ai_contract::ReasoningEffort::None,
+            vulcan_ai_contract::ReasoningEffort::High,
+            vulcan_ai_contract::ReasoningEffort::Low,
+            vulcan_ai_contract::ReasoningEffort::Max,
+        ]
+    );
 }
 
 /// Verifies OpenCode Go freezes the source-derived inventory, endpoints, protocols, and model controls.
