@@ -28,12 +28,14 @@
 
 ## 二、按需文档入口
 
-| 任务条件 | 必须先读 |
-| --- | --- |
-| 新增、迁移或维护系统供应商、模型协议、Provider Tool、媒体扩展 | [`新增系统供应商流程.md`](docs/contracts/adding-system-providers.md) 与 [`Provider Manifest 作者手册`](docs/contracts/provider-manifest-authoring.md) |
-| 修改 `shell_command`、`shell_session`、`terminal_session` 或命令会话状态 | [`工具与终端运行时约定.md`](docs/contracts/tooling-and-terminal-runtime.md) |
-| 修改 `ask`、提问状态机、Ask WebUI 或 Markdown 预览/渲染 | [`Ask 与 Markdown 交互约定.md`](docs/contracts/ask-and-markdown-interaction.md) |
-| 修改 LuaSkills 版本、技能配置、Schema、宿主注入或管理链路 | 先读根 [`Cargo.toml`](Cargo.toml) 与 [`Cargo.lock`](Cargo.lock)，再读 [`LuaSkills 技能包配置接入指南`](docs/contracts/luaskills-skill-config-guide.md)；实现以 [`luaskills_runtime`](crates/vulcan-agent-runtime/src/luaskills_runtime/) 和 [`tooling/bridge`](crates/vulcan-agent-runtime/src/tooling/bridge/) 当前源码为准 |
+下表每一行的"红线"是本会话在不打开文档的情况下也必须遵守的约束；右侧链接只提供细节。
+
+| 任务条件 | 红线（不可协商） | 细节 |
+| --- | --- | --- |
+| 修改 `shell_command`、`shell_session`、`terminal_session` 或命令会话状态 | `timeout_ms` 省略表示无限等待；内联输出超过 `200000` 字节转到 `.vulcan/temp/` 分页文件；`shell_session.read` 是轮询不是事件推送；`cwd` 只在 `start` 生效 | [`tooling-and-terminal-runtime.md`](docs/contracts/tooling-and-terminal-runtime.md) |
+| 修改 `ask`、提问状态机、Ask WebUI 或 Markdown 预览/渲染 | 模型可见提问工具只有 `ask`，不保留 `question` 别名；必须复用共享 `QuestionRuntime`，刷新或流式启动不得丢弃等待中的问题；Ask 是会话内非模态面板，不得劫持其他窗口键盘；Markdown 只走当前 `conversation-markdown` 链路 | [`ask-and-markdown-interaction.md`](docs/contracts/ask-and-markdown-interaction.md) |
+| 修改 LuaSkills 版本、技能配置、Schema、宿主注入或管理链路 | 版本以根 `Cargo.toml` 与 `Cargo.lock` 为准；实现以 `luaskills_runtime/` 与 `tooling/bridge/` 当前源码为准 | [`luaskills-skill-config-guide.md`](docs/contracts/luaskills-skill-config-guide.md) |
+| 新增、迁移或维护系统供应商、模型协议、Provider Tool、媒体扩展 | **字段形状的权威是 Schema 与 Rust 编译器的共同校验结果，不是文档**；供应商事实只通过受签名 JSON 发布 | 参考手册（非契约）：[`adding-system-providers.md`](docs/contracts/adding-system-providers.md)、[`provider-manifest-authoring.md`](docs/contracts/provider-manifest-authoring.md) |
 
 ## 三、文档维护规则
 

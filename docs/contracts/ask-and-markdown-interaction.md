@@ -4,11 +4,11 @@
 
 当前源码权威入口：
 
-- [`question_runtime.rs`](../crates/vulcan-agent-runtime/src/agent_runtime/question_runtime.rs)；
-- [`tooling/bridge.rs`](../crates/vulcan-agent-runtime/src/tooling/bridge.rs)；
-- [`AskQuestionDialog.tsx`](../apps/vulcan-code-web/src/components/ask/AskQuestionDialog.tsx)；
-- [`conversation-markdown.tsx`](../apps/vulcan-code-web/src/components/conversation/conversation-markdown.tsx)；
-- [`markdown.css`](../apps/vulcan-code-web/src/styles/markdown.css)。
+- [`question_runtime.rs`](../../crates/vulcan-agent-runtime/src/agent_runtime/question_runtime.rs)；
+- [`tooling/bridge.rs`](../../crates/vulcan-agent-runtime/src/tooling/bridge.rs)；
+- [`AskQuestionDialog.tsx`](../../apps/vulcan-code-web/src/components/ask/AskQuestionDialog.tsx)；
+- [`conversation-markdown.tsx`](../../apps/vulcan-code-web/src/components/conversation/conversation-markdown.tsx)；
+- [`markdown.css`](../../apps/vulcan-code-web/src/styles/markdown.css)。
 
 ## 一、Ask 工具边界
 

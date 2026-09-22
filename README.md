@@ -10,9 +10,9 @@
 - `apps/vulcan-code-web`：React/Vite WebUI，承载工作台、设置、会话、Diff、技能与 VMM 管理界面。
 - `crates/vulcan-service-*`：WebUI 后端服务 API、核心服务内核与运行时适配。
 - `crates/vulcan-agent-runtime`：共享代理运行时，负责 Provider、工具、LuaSkills、MCP、VMM 与流式执行。
-- `docs/plan`：任务执行计划文件目录。
+- `docs/contracts/`：AGENTS.md 要求所有会话必读的契约文档；`docs/` 其余内容（计划、审计、评审与草稿）只保留在本地，不随仓库分发。
 
-仓库不再包含 `apps/vulcan-code-tauri`；WebUI 的 `src/shell/*` 仍保留 Tauri 壳兼容分支，属于尚未决策移除的兼容入口，不属于当前主要桌面壳。
+WebUI 的 `src/shell/*` 是 Electron、浏览器与 Tauri 三种壳共用的抽象层；其中 Tauri 兼容分支（`tauriShell.ts`、`apps/vulcan-code-service/tauri.conf.json`）尚未决定去留，不属于当前主要桌面壳。
 
 ## 运行方式
 

@@ -5,11 +5,11 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 
 当前源码权威入口：
 
-- [`shell_command.rs`](../crates/vulcan-agent-runtime/src/tooling/native/shell_command.rs)；
-- [`shell_session.rs`](../crates/vulcan-agent-runtime/src/tooling/native/shell_session.rs)；
-- [`terminal.rs`](../crates/vulcan-agent-runtime/src/tooling/native/terminal.rs)；
-- [`shell_host.rs`](../crates/vulcan-host-tools/src/shell_host.rs)；
-- [`command_session_runtime`](../crates/vulcan-host-tools/src/command_session_runtime.rs)。
+- [`shell_command.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/shell_command.rs)；
+- [`shell_session.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/shell_session.rs)；
+- [`terminal.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/terminal.rs)；
+- [`shell_host.rs`](../../crates/vulcan-host-tools/src/shell_host.rs)；
+- [`command_session_runtime`](../../crates/vulcan-host-tools/src/command_session_runtime.rs)。
 
 ## 一、AI 工具暴露
 

@@ -1,14 +1,11 @@
 # Provider Manifest 作者、测试与运维手册
 
-本手册对应：
+关联文档：
 
-- `docs/contracts/adding-system-providers.md`；
-- `docs/completed/20260806/01-HOT_UPDATABLE_PROVIDER_MANIFEST_AND_MODEL_PROTOCOL_ROUTING.md`；
-- `docs/completed/20260807/02-PROVIDER_MANIFEST_FULL_REMEDIATION_AND_FIVE_PASS_AUDIT.md`；
-- `docs/completed/20260808/01-PROVIDER_MANIFEST_FINAL_GAP_REMEDIATION.md`。
+- `docs/contracts/adding-system-providers.md`。
 
 它说明如何只通过受签名 JSON 发布供应商与模型事实，以及何时必须修改宿主原语。本文不替代
-`manifest.schema.json`；字段形状以 Schema 和 Rust 编译器的共同校验结果为准。
+`provider-manifests/schema/provider-manifest-v2.schema.json`；字段形状以 Schema 和 Rust 编译器的共同校验结果为准。
 
 ## 1. 权威来源与不可跨越的边界
 
@@ -397,8 +394,7 @@ LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把�
 
 ## 5. 模型级唯一协议与自定义供应商规则
 
-角色、指令合并与跨协议历史恢复遵循
-[`协议角色转换与来源恢复规则`](protocol-role-projection-rules.md)。原角色保存在规范事件及来源元数据中，
+角色、指令合并与跨协议历史恢复必须遵守以下边界：原角色保存在规范事件及来源元数据中，
 不得依赖模型正文标签恢复，也不得将未实现转换的协议直接发送为 Responses 正文。
 
 系统供应商的协议只来自编译后的 Manifest：

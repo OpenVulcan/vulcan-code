@@ -2,7 +2,7 @@
 
 ## 固定 Rust 工具链
 
-仓库根 `rust-toolchain.toml` 固定 Rust `1.97.1`，使用 `minimal` Profile 并安装 `clippy`、`rustfmt`。根工作区采用 Cargo Resolver 3，41 个成员全部通过 `rust-version.workspace = true` 继承同一 `1.97.1` 支持基线；本仓库不再声明或测试更低 MSRV。
+仓库根 `rust-toolchain.toml` 固定 Rust `1.97.1`，使用 `minimal` Profile 并安装 `clippy`、`rustfmt`。根工作区采用 Cargo Resolver 3，49 个成员全部通过 `rust-version.workspace = true` 继承同一 `1.97.1` 支持基线；本仓库不再声明或测试更低 MSRV。
 
 进入仓库后 Rustup 会按该文件解析工具链。不得使用 `--ignore-rust-version` 绕过基线，也不得只修改部分成员版本。`make check-deps` 会同时验证 Resolver、固定频道、必要组件、最小 Profile、成员继承和 Cargo 元数据的实际解析结果。
 
@@ -12,7 +12,7 @@
 
 数据库引擎随 VulcanCode 进程内建运行，不再有独立的控制器进程、端点或配置文件。构建与运行脚本因此不再按 Debug/Release 改写任何数据库端点：`make build`、`make br`、`make run`、`make release` 及其 `release` 变体在这一点上行为一致，也不存在需要保留或迁移的 `output/config/controller.json`。原先的 VLDB 端口 `19802`（Debug）与 `19801`（Release）已随该配置一并移除。
 
-Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。VulcanCode WebUI 服务使用 Release `17891–17920`、Debug `17921–17950`；Release 不配置 Vite 端口。当前受支持的 WebUI 运行环境是浏览器访问（Vite 开发服务器或已构建资源）与 `apps/vulcan-code-desktop` Electron 桌面壳；`apps/vulcan-code-service/tauri.conf.json` 与 `apps/vulcan-code-web/src/shell/*` 的 Tauri 兼容分支仍未决定去留，不列入当前主要壳。内置 VMM 直接运行在 VulcanCode 进程内，不占用独立服务端口；外置 VMM 的端口完全来自用户配置。Windows 使用 PowerShell 构建与运行脚本，Linux x86_64、Linux ARM64 与 macOS 使用对应 Unix-like 脚本执行相同的构建规则。
+Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。VulcanCode WebUI 服务使用 Release `17891–17920`、Debug `17921–17950`；Release 不配置 Vite 端口。当前受支持的 WebUI 运行环境是浏览器访问（Vite 开发服务器或已构建资源）与 `apps/vulcan-code-desktop` Electron 桌面壳；`apps/vulcan-code-service/tauri.conf.json` 与 `apps/vulcan-code-web/src/shell/*` 中并存的 Tauri 兼容分支（`tauriShell.ts`）仍未决定去留，不列入当前主要壳。内置 VMM 直接运行在 VulcanCode 进程内，不占用独立服务端口；外置 VMM 的端口完全来自用户配置。Windows 使用 PowerShell 构建与运行脚本，Linux x86_64、Linux ARM64 与 macOS 使用对应 Unix-like 脚本执行相同的构建规则。
 
 > **关于 `protoc`。** `.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向仓库随附的 `protoc`，使那些构建脚本直接调用 `protoc` 的第三方 crate（例如 `lancedb` 引入的 `lance-encoding`）无需系统级 protobuf 安装即可构建。这里刻意使用绝对路径：`[env]` 条目中的相对路径不会按配置文件位置解析。
 
@@ -73,7 +73,7 @@ make deps-rust-tools
 make check-deps
 ```
 
-该入口检查 Resolver 与工具链政策、工作区版本权威、Hakari 生成状态、RustSec 公告、许可证、来源、第三方公告源码制品、格式和受限并发静态编译，不会自动升级依赖或改写 `Cargo.lock`。完整规则见 [`Rust 依赖治理规范`](rust-dependency-governance.md)。
+该入口检查 Resolver 与工具链政策、工作区版本权威、Hakari 生成状态、RustSec 公告、许可证、来源、第三方公告源码制品、格式和受限并发静态编译，不会自动升级依赖或改写 `Cargo.lock`。完整规则以仓库当前的 `deny.toml`、`about.toml` 与 `make check-deps` 实际实现为准。
 
 ## workspace-hack 依赖去重
 
