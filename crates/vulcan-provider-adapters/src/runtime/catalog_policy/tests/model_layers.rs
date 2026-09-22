@@ -23,7 +23,7 @@ fn custom_catalog_uses_two_hundred_thousand_and_thirty_two_thousand_defaults() {
 
     let model = catalog.models.first().expect("model should remain visible");
     assert_eq!(model.capabilities.context_limit, Some(200_000));
-    assert_eq!(model.capabilities.output_limit, Some(32_768));
+    assert_eq!(model.capabilities.output_limit, Some(32_000));
     assert_eq!(
         model.capabilities.reasoning,
         vulcan_ai_contract::CapabilitySupport::Native
