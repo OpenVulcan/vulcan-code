@@ -118,7 +118,15 @@
 
 ## 当前工作树状态（供审核核对）
 
-第 1 轮审核范围内的并行在途编辑已全部落定，`vulcan-agent-runtime`、`vulcan-provider-adapters`、`vulcan-service-kernel`、`vulcan-session-core` 均可编译：本轮最后一次复跑为 `agent_collaboration::` **113 passed / 0 failed**（连续 3 次一致）与 `vulcan-session-core --lib` **460 passed / 0 failed**。`crates/vulcan-runtime-assets/resources/provider-manifests/` 的改动仍属于**其他会话的供应商工作**，本任务不修改、不暂存、不提交。
+第 1 轮审核范围内的并行在途编辑已全部落定，`vulcan-agent-runtime`、`vulcan-provider-adapters`、`vulcan-service-kernel`、`vulcan-session-core` 均可编译。**最新复跑（供审核直接引用，完整清单见 S5 §四）**：
+
+- `agent_collaboration::` **122 passed / 0 failed**（此前记录的 113 已过期）；
+- `vulcan-session-core --lib` **460 passed / 0 failed**；
+- `vulcan-agent-runtime --lib` **1027 passed / 0 failed / 4 ignored**（`RUST_MIN_STACK=67108864`）；
+- `vulcan-service-kernel --lib` 全量 **1534 passed / 7 failed / 15 ignored**，7 项归属**另一并行会话的供应商与模型工作**，逐项名称与归属判定见 S5 §四，本任务登记不修复；
+- `apps/vulcan-code-web`：`tsc -b` 0 错误；`vitest run` 全量 1842 passed / 4 failed（既有，不属本任务）。
+
+`crates/vulcan-runtime-assets/resources/provider-manifests/` 的改动仍属于**其他会话的供应商工作**，本任务不修改、不暂存、不提交。
 
 检查点标签核对：`refs/tags/checkpoint/agent-communication-20260922` 指向标注对象 `7f4b684d`，其提交为 `280f31a2`（"保存代理协作与动态上下文实现检查点"），与交接方案一致，未被移动；`280f31a2` 仍是当前 `HEAD` 的祖先。
 
