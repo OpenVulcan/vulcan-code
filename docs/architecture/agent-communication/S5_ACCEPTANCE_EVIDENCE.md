@@ -149,28 +149,32 @@
   `recover_rejected_oauth_credential`（`provider_transport_vulcan/streaming.rs`）。
   因此若生产者不再发出该标记，运行时测试仍会通过。真实编排需要可续期凭据租约 + 凭据刷新服务 +
   回环 HTTP，尚未构造。
-- **"父子交叉互问"（A07 的更强组合）未取得证据，且已定位到一处具体矛盾点**。
-  本轮探针在 `resolve_authorized_target` 内实测到：
-  - 解析器**确实进入内嵌目标分支**（`locate_optional_session_v1_storage(child)` 为 `None`），
-    即该函数文档注释描述的路径成立；
-  - 该分支内 `invocation.source_session_id == usage.root_session_id`，且等于夹具父会话的
-    `session_id`，与"只有来源是索引根才接纳内嵌目标"的前置一致；
-  - 但父文档中预留下的 `record.child.root_session_id` 与该 `usage.root_session_id`
-    **是不同的 UUID**，因此 `owned` 的根比较不成立，回退到 `verified_direct_parent`，
-    在父子之间报出 "ask_parent requires an embedded child session"；
-  - 另实测父句柄的 `lifetime_usage_snapshot().children_by_session_id` 为**空**，
-    而子会话的绑定记录发生在**子句柄**上，两者未在同一棵树上往返。
-  **结论边界**：这是可复现的**夹具与生产创建序列不一致**，但**未证明生产路径本身有缺陷**——
-  也可能要求子会话由"真正的根会话"创建，而本夹具的父会话虽自视为根，却不是子记录所引用的根。
-  在定位到确定结论前**不据此断言生产缺陷**。尝试补 `initialize_root_usage` 会替换生产创建器
-  已建立的绑定，已回退；半成品测试与全部探针/调试代码均已从工作树移除，未留下失败测试。
+- **"父子交叉互问"（A07 的更强组合）未取得证据；原因仍未定论，且本轮**推翻了我上一轮记下的
+  一项错误结论**。修正后的实测事实：
+  - **夹具侧是自洽的，不是问题所在**（本轮更正）：父句柄的 `lifetime_usage_snapshot().root_session_id`
+    等于父会话自身 `session_id`；子会话的 `root_session_id` 同样等于父会话；
+    子会话在父的 `children_by_session_id` 中被登记且 `parent_session_id` 指向父；
+    父文档预留的 `record.child.root_session_id` 等于该同一个父会话 ID。
+    这也与生产发布规则一致：`child_creation/publication.rs` 要求
+    `record.child.root_session_id == root_locator.session_id()`，而该函数对嵌入子会话按
+    `parent_session_id == root_session_id` 处理。因此**"两棵树不一致"的推断不成立**，
+    上一轮据此写下的"夹具与生产创建序列不一致"是**错的，已在此更正**。
+  - 仍未定论的部分：以父句柄调用 `resolve_authorized_target(parent_invocation, child_id, Ask)` 时，
+    实测 `owned` 为 `false` 并回退到 `verified_direct_parent`（报 "ask_parent requires an embedded
+    child session"），而上述四项取值按源码逐一比对**均应成立**。**我未能定位到差异出在哪一步。**
+  - **不再继续在此项上投入**：定论需要生产侧插桩，而插桩必须落在生产文件里；我已在上一轮因一次
+    被中断的运行把调试文本留在生产文件中，因此**不再以这种方式继续追查**。全部探针与调试代码
+    已从工作树移除，`git diff` 确认生产文件与测试文件均逐字恢复 HEAD，
+    `agent_collaboration::` 120 passed / 0 failed。
+  - **结论边界**：既不断言生产缺陷，也不断言夹具缺陷；登记为**未定论的待查项**，
+    并附上上述可复现的四项取值与失败点，供后续会话接手。
 - **准备许可失败的生产者阻断**：缺少 preparation barrier 的 test-support 构造器
   （既有同层构造器为 `pub(crate)`），属缺构造器而非缺证据。
 - **continuation 判定与宿主事件保护**：相关函数为私有，无断言测试。
 - **两处未知契约版本拒绝**（provider 路由租约的 `schema_version`、工具结果媒体信封版本）。
 - **线编码器层的相邻前缀稳定性**：需要 `PublicAiRuntime` 与冻结路由/凭据/客户端。
 - **真实 WebUI/RPC 与真实停止事务**；**真实冷注册表重启恢复**（编辑准入的冷态分支）。
-- **多等待者与双向互问**。
+- **父子交叉互问**（见上一条；"多等待者"经核查不适用，"双向提问"已由 `e223082e` 覆盖）。
 - **通知恢复的其余窗口**（`25ecf35d` 修复 `Recorded` 未接纳窗口；`72deb8c0` 补齐"目标停止后拒绝
   且记录完整保留、恢复运行后成功投递"这一跨越停止的时序；`599e630c` 补齐"跨项目授权撤销后拒绝、
   重新授权后投递同一条保留记录"这一授权时序）：目标已接纳但未投影、目标接纳后来源进度写入失败、
