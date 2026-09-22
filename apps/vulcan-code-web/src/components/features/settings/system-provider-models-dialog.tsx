@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { OPENAI_DIRECT_REASONING_EFFORTS } from "@/components/features/settings/direct-provider-model-settings"
 import { useI18n } from "@/i18n"
 import { savePublicAiCustomModels } from "@/service/settings-actions-service"
 import type {
@@ -27,6 +28,7 @@ interface SystemModelDraft {
   outputLimit: string
   enabled: boolean
   inputResources: PublicAiResourceKind[]
+  reasoningEfforts: string[]
 }
 
 // SystemProviderModelsDialogProps binds editing to one exact system provider snapshot.
@@ -39,18 +41,22 @@ interface SystemProviderModelsDialogProps {
   snapshot: PublicAiSettingsSnapshot
 }
 
-// emptyDraft starts a model with no guessed identifier, capacity, or input modality.
-// emptyDraft 以不猜测身份、容量或输入模态的状态开始新增模型。
-function emptyDraft(entry: PublicAiServiceEntry | undefined): SystemModelDraft {
+// emptyDraft starts a model with backend-owned capacity defaults and no guessed identity.
+// emptyDraft 使用后端持有的容量默认值创建模型，不猜测模型身份。
+function emptyDraft(
+  entry: PublicAiServiceEntry | undefined,
+  defaults: PublicAiSettingsSnapshot["manualModelDefaults"],
+): SystemModelDraft {
   return {
     id: "",
     displayName: "",
     serviceEntryId: entry?.id ?? "",
     protocolProfileId: entry?.protocol_routes.find((route) => route.verified)?.protocol_profile_id ?? "",
-    contextLimit: "",
-    outputLimit: "",
+    contextLimit: String(defaults.contextLimit),
+    outputLimit: String(defaults.outputLimit),
     enabled: true,
     inputResources: [],
+    reasoningEfforts: [],
   }
 }
 
@@ -66,6 +72,9 @@ function draftFromModel(model: PublicAiCustomModelDefinition): SystemModelDraft 
     outputLimit: String(model.capabilities.output_limit ?? ""),
     enabled: model.enabled,
     inputResources: [...(model.capabilities.input_resources ?? [])],
+    reasoningEfforts: model.capabilities.reasoning === "native"
+      ? [...(model.capabilities.reasoning_efforts ?? [])]
+      : [],
   }
 }
 
@@ -101,6 +110,12 @@ function modelFromDraft(
   capabilities.context_limit = positiveInteger(draft.contextLimit) ?? undefined
   capabilities.output_limit = positiveInteger(draft.outputLimit) ?? undefined
   capabilities.input_resources = [...draft.inputResources]
+  // Reasoning levels are a user declaration for this exact manual identity.
+  // 思考档位是用户针对这个精确手工模型身份作出的声明。
+  const reasoningEnabled = draft.reasoningEfforts.some((effort) => effort !== "none")
+  capabilities.reasoning = reasoningEnabled ? "native" : "unsupported"
+  capabilities.reasoning_control = reasoningEnabled ? "effort_selection" : "fixed_off"
+  capabilities.reasoning_efforts = reasoningEnabled ? [...draft.reasoningEfforts] : ["none"]
   return {
     id: draft.id.trim(),
     display_name: draft.displayName.trim(),
@@ -147,12 +162,27 @@ export function SystemProviderModelsDialog(props: SystemProviderModelsDialogProp
   const videoDeclared = selectedRoute?.input_resource_constraints?.some((constraint) => (
     constraint.resource_kind === "video"
   )) ?? false
-  const audioEncoded = [
+  // Wire support and signed route declaration must both admit video.
+  // 视频必须同时得到协议编码器和签名路由声明的支持。
+  const videoEncoded = [
     "openai-chat-completions.v1",
-    "gemini-generate-content.v1",
-    "google-code-assist.v1",
+    "anthropic-messages-video.v1",
+    "google.gemini.generate_content",
+    "google.code_assist.generate_content.v1",
     "gemini-interactions.v1",
   ].includes(draft?.protocolProfileId ?? "")
+  const videoAvailable = videoDeclared && videoEncoded
+  const audioEncoded = [
+    "openai-chat-completions.v1",
+    "google.gemini.generate_content",
+    "google.code_assist.generate_content.v1",
+    "gemini-interactions.v1",
+  ].includes(draft?.protocolProfileId ?? "")
+  // Gemini's current request projector accepts only four explicit thinking levels.
+  // 当前 Gemini 请求投影器仅接受四个显式思考档位。
+  const availableReasoningEfforts = ["google.gemini.generate_content", "google.code_assist.generate_content.v1", "gemini-interactions.v1"].includes(draft?.protocolProfileId ?? "")
+    ? OPENAI_DIRECT_REASONING_EFFORTS.filter((effort) => ["minimal", "low", "medium", "high"].includes(effort))
+    : OPENAI_DIRECT_REASONING_EFFORTS
   // persist sends the complete provider-owned replacement and adopts only the returned snapshot.
   // persist 发送完整供应商自有替换集合，且只采用后台返回的快照。
   const persist = async (replacement: PublicAiCustomModelDefinition[]) => {
@@ -184,12 +214,16 @@ export function SystemProviderModelsDialog(props: SystemProviderModelsDialogProp
       setError(t("settings.systemManualModels.limitsInvalid"))
       return
     }
-    if (draft.inputResources.includes("video") && !videoDeclared) {
+    if (draft.inputResources.includes("video") && !videoAvailable) {
       setError(t("settings.systemManualModels.videoUnavailable"))
       return
     }
     if (draft.inputResources.includes("audio") && !audioEncoded) {
       setError(t("settings.systemManualModels.audioUnavailable"))
+      return
+    }
+    if (draft.reasoningEfforts.some((effort) => !availableReasoningEfforts.includes(effort as typeof availableReasoningEfforts[number]))) {
+      setError(t("settings.systemManualModels.required"))
       return
     }
     const previous = models.find((model) => model.id === editingId)
@@ -233,17 +267,18 @@ export function SystemProviderModelsDialog(props: SystemProviderModelsDialogProp
           ))}
           {models.length === 0 ? <p className="text-sm text-muted-foreground">{t("settings.systemManualModels.empty")}</p> : null}
         </div>
-        {!draft ? <Button disabled={busy || entries.length === 0} onClick={() => { setEditingId(null); setDraft(emptyDraft(entries[0])); setError(null) }} type="button" variant="outline"><Plus className="mr-2 size-4" />{t("settings.customModels.addManual")}</Button> : (
+        {!draft ? <Button disabled={busy || entries.length === 0} onClick={() => { setEditingId(null); setDraft(emptyDraft(entries[0], props.snapshot.manualModelDefaults)); setError(null) }} type="button" variant="outline"><Plus className="mr-2 size-4" />{t("settings.customModels.addManual")}</Button> : (
           <div className="space-y-3 rounded-md border p-3">
             <div className="grid grid-cols-2 gap-3">
               <label className="space-y-1 text-sm"><span>{t("settings.customModels.modelId")}</span><Input disabled={busy || editingId !== null} value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
               <label className="space-y-1 text-sm"><span>{t("settings.customModels.displayName")}</span><Input disabled={busy} value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
-              <label className="space-y-1 text-sm"><span>{t("settings.systemManualModels.entry")}</span><Select value={draft.serviceEntryId} onValueChange={(entryId) => { const entry = entries.find((item) => item.id === entryId); setDraft({ ...draft, serviceEntryId: entryId, protocolProfileId: entry?.protocol_routes.find((route) => route.verified)?.protocol_profile_id ?? "", inputResources: draft.inputResources.filter((resource) => resource !== "video") }) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{entries.map((entry) => <SelectItem key={entry.id} value={entry.id}>{entry.display_name}</SelectItem>)}</SelectContent></Select></label>
-              <label className="space-y-1 text-sm"><span>{t("settings.customModels.protocolSelect")}</span><Select value={draft.protocolProfileId} onValueChange={(protocolId) => setDraft({ ...draft, protocolProfileId: protocolId, inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio") })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{selectedEntry?.protocol_routes.filter((route) => route.verified).map((route) => <SelectItem key={route.protocol_profile_id} value={route.protocol_profile_id}>{route.protocol_profile_id}</SelectItem>)}</SelectContent></Select></label>
+              <label className="space-y-1 text-sm"><span>{t("settings.systemManualModels.entry")}</span><Select value={draft.serviceEntryId} onValueChange={(entryId) => { const entry = entries.find((item) => item.id === entryId); setDraft({ ...draft, serviceEntryId: entryId, protocolProfileId: entry?.protocol_routes.find((route) => route.verified)?.protocol_profile_id ?? "", inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] }) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{entries.map((entry) => <SelectItem key={entry.id} value={entry.id}>{entry.display_name}</SelectItem>)}</SelectContent></Select></label>
+              <label className="space-y-1 text-sm"><span>{t("settings.customModels.protocolSelect")}</span><Select value={draft.protocolProfileId} onValueChange={(protocolId) => setDraft({ ...draft, protocolProfileId: protocolId, inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{selectedEntry?.protocol_routes.filter((route) => route.verified).map((route) => <SelectItem key={route.protocol_profile_id} value={route.protocol_profile_id}>{route.protocol_profile_id}</SelectItem>)}</SelectContent></Select></label>
               <label className="space-y-1 text-sm"><span>{t("settings.customModels.contextLimit")}</span><Input disabled={busy} inputMode="numeric" value={draft.contextLimit} onChange={(event) => setDraft({ ...draft, contextLimit: event.target.value })} /></label>
               <label className="space-y-1 text-sm"><span>{t("settings.customModels.outputLimit")}</span><Input disabled={busy} inputMode="numeric" value={draft.outputLimit} onChange={(event) => setDraft({ ...draft, outputLimit: event.target.value })} /></label>
             </div>
-            <fieldset className="space-y-2"><legend className="text-sm font-medium">{t("settings.customModels.input")}</legend><div className="flex flex-wrap gap-4">{(["image", "audio", "video", "file"] as const).map((resource) => <label className="flex items-center gap-2 text-sm" key={resource}><Checkbox checked={draft.inputResources.includes(resource)} disabled={busy || (resource === "audio" && !audioEncoded) || (resource === "video" && !videoDeclared)} onCheckedChange={(checked) => toggleResource(resource, checked === true)} />{t(`settings.systemManualModels.input.${resource}`)}</label>)}</div></fieldset>
+            <fieldset className="space-y-2"><legend className="text-sm font-medium">{t("settings.customModels.input")}</legend><div className="flex flex-wrap gap-4">{(["image", "audio", "video", "file"] as const).map((resource) => <label className="flex items-center gap-2 text-sm" key={resource}><Checkbox checked={draft.inputResources.includes(resource)} disabled={busy || (resource === "audio" && !audioEncoded) || (resource === "video" && !videoAvailable)} onCheckedChange={(checked) => toggleResource(resource, checked === true)} />{t(`settings.systemManualModels.input.${resource}`)}</label>)}</div></fieldset>
+            <fieldset className="space-y-2"><legend className="text-sm font-medium">{t("settings.customModels.reasoning")}</legend><div className="flex flex-wrap gap-3">{availableReasoningEfforts.map((effort) => <label className="flex items-center gap-2 text-sm" key={effort}><Checkbox checked={draft.reasoningEfforts.includes(effort)} disabled={busy} onCheckedChange={(checked) => setDraft({ ...draft, reasoningEfforts: checked ? [...draft.reasoningEfforts, effort] : draft.reasoningEfforts.filter((value) => value !== effort) })} />{effort}</label>)}</div></fieldset>
             <label className="flex items-center gap-2 text-sm"><Checkbox checked={draft.enabled} disabled={busy} onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked === true })} />{t("settings.customModels.enabled")}</label>
             <div className="flex justify-end gap-2"><Button disabled={busy} onClick={() => { setDraft(null); setEditingId(null); setError(null) }} type="button" variant="outline">{t("settings.systemManualModels.cancel")}</Button><Button disabled={busy} onClick={saveDraft} type="button">{busy ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : <ListTree className="mr-2 size-4" />}{t("settings.customModels.save")}</Button></div>
           </div>

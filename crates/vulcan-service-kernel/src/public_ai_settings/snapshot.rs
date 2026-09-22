@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{AccountUsageSnapshot, PromptCachePolicy};
 use vulcan_context::ContextWindowPolicyOverrides;
 use vulcan_provider_adapters::{
-    AccountUsageQueryKind, ActiveAiModelSelection, CatalogDiscoveryStatus, ConnectionModelCatalog,
+    AccountUsageQueryKind, ActiveAiModelSelection, CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT,
+    CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT, CatalogDiscoveryStatus, ConnectionModelCatalog,
     ContextCompactionWindowConfiguration, CredentialBillingKind, CredentialConnection,
     CredentialMode, CustomModelDefinition, CustomModelProtocolPreference,
     CustomModelTemplateDecision, CustomProviderManifestFailure, CustomProviderModelDefaults,
@@ -34,11 +35,27 @@ use super::{
     provider_tools::filter_current_provider_tool_selections,
 };
 
+/// Shares one backend-owned default pair with provider-level manual model forms.
+/// 向供应商级手工模型表单共享一组由后端持有的默认值。
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PublicAiManualModelDefaults {
+    /// Default input context capacity in tokens.
+    /// 默认输入上下文 Token 容量。
+    context_limit: u64,
+    /// Default output ceiling in tokens.
+    /// 默认输出 Token 上限。
+    output_limit: u64,
+}
+
 /// Browser-facing public AI settings snapshot.
 /// 面向浏览器的公共 AI 设置快照。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PublicAiSettingsSnapshot {
+    /// Backend-owned numeric defaults for a newly entered provider-level conversation model.
+    /// 后端持有的供应商级新增会话模型数值默认值。
+    manual_model_defaults: PublicAiManualModelDefaults,
     /// Effective media policy, its independent revision and backend configuration limits.
     /// 生效媒体策略、其独立修订及后端配置限制。
     media_delivery: PublicAiMediaDeliverySettingsSnapshot,
@@ -732,6 +749,10 @@ pub(super) fn build_public_ai_settings_snapshot(
         .filter(|(connection_id, _)| runtime_connection_ids.contains(connection_id.as_str()))
         .collect();
     Ok(PublicAiSettingsSnapshot {
+        manual_model_defaults: PublicAiManualModelDefaults {
+            context_limit: CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT,
+            output_limit: CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT,
+        },
         media_delivery: PublicAiMediaDeliverySettingsSnapshot::from_configuration(configuration)?,
         context_window_policy_overrides: configuration.context_window_policy_overrides,
         context_compaction_window_nodes: configuration.context_compaction_window_nodes.clone(),

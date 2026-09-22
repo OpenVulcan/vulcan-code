@@ -101,6 +101,7 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
   const betaShared = modelFixture("shared/chat", "Shared from Beta", 128_000)
   const betaOnly = modelFixture("beta/chat", "Beta Only", 32_000)
   return {
+    manualModelDefaults: { contextLimit: 200_000, outputLimit: 32_000 },
     usageRefreshIntervalSeconds: 300,
     mediaDelivery: mediaDeliverySettingsFixture(),
     contextCompactionWindowNodes: {

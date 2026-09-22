@@ -346,6 +346,7 @@ it("retains an invalid saved node and lets the user restore the exact model defa
 // settings 返回包含一条精确图片理解目标的完整合成目录。
 function settings(): PublicAiSettingsSnapshot {
   return {
+    manualModelDefaults: { contextLimit: 200_000, outputLimit: 32_000 },
     usageRefreshIntervalSeconds: 300, mediaDelivery: mediaDeliverySettingsFixture(), contextCompactionWindowNodes: { nodes: [
       { id: "compression-window-1", tokens: 200_000 }, { id: "compression-window-2", tokens: 256_000 },
       { id: "compression-window-3", tokens: 272_000 }, { id: "compression-window-4", tokens: 373_000 }, { id: "compression-window-5", tokens: 500_000 },

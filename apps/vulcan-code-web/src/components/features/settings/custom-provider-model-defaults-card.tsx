@@ -250,7 +250,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
         <p className="text-xs text-muted-foreground">
           {t("settings.customModels.outputRecommendation").replace(
             "{count}",
-            Number.isSafeInteger(Number(contextLimit)) && Number(contextLimit) > 0 ? Math.min(32_768, Math.floor(Number(contextLimit) / 4)).toLocaleString() : "-",
+            Number.isSafeInteger(Number(contextLimit)) && Number(contextLimit) > 0 ? Math.min(props.defaults.output_limit, Math.floor(Number(contextLimit) / 4)).toLocaleString() : "-",
           )}
         </p>
         <div className="grid gap-3 sm:grid-cols-2">

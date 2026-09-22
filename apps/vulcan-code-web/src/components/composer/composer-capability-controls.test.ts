@@ -37,6 +37,7 @@ function contextCompactionWindowNodesFixture(): PublicAiContextCompactionWindowN
 // settingsFixture 构建验证过期会话路由所需的最小目录。
 function settingsFixture(): PublicAiSettingsSnapshot {
   return {
+    manualModelDefaults: { contextLimit: 200_000, outputLimit: 32_000 },
     usageRefreshIntervalSeconds: 300,
     mediaDelivery: mediaDeliverySettingsFixture(),
     contextCompactionWindowNodes: {

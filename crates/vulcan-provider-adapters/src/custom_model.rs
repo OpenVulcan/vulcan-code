@@ -22,7 +22,7 @@ pub const CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT: u64 = 200_000;
 
 /// Default output ceiling used with the two-hundred-thousand-token context window.
 /// 与二十万 Token 上下文窗口配套使用的默认输出上限。
-pub const CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT: u64 = 32_768;
+pub const CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT: u64 = 32_000;
 
 /// Lists the OpenAI-compatible reasoning levels used by custom providers unless explicitly changed.
 /// 列出自定义供应商在未被显式修改时使用的 OpenAI 兼容思考档位。
