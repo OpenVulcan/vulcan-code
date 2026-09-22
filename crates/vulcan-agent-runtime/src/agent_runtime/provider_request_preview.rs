@@ -493,6 +493,11 @@ fn render_provider_context_injection_diagnostics(
         vulcan_core::types::ProviderContextMutationKind::HistoricalRewrite => "historical_rewrite",
         vulcan_core::types::ProviderContextMutationKind::EpochReset => "epoch_reset",
     });
+    // Dispatch refuses reuse when any uncovered message is a host event, so the preview must refuse it too.
+    // 分发在任何未覆盖消息为宿主事件时都会拒绝复用，因此预览也必须拒绝。
+    let uncovered_host_event_is_present = uncovered_message_ids.iter().any(|message_id| {
+        message_id.starts_with(vulcan_context::runtime_host::RUNTIME_HOST_MESSAGE_PREFIX)
+    });
     // rewrite_fingerprint_matches proves the cursor covered the exact current system input.
     // rewrite_fingerprint_matches 证明游标覆盖了精确的当前系统输入。
     let rewrite_fingerprint_matches =
@@ -524,6 +529,8 @@ fn render_provider_context_injection_diagnostics(
         "不复用：OpenAI Responses 追加式 VMM continuation 灰度开关已关闭"
     } else if !rewrite_fingerprint_matches {
         "不复用：系统或持久上下文指纹与游标覆盖内容不一致"
+    } else if uncovered_host_event_is_present {
+        "不复用：游标边界之后存在未覆盖的宿主事件消息"
     } else if overlay_reuse_is_proven {
         "允许复用：无历史改写，且锚点覆盖关系可证明安全"
     } else if injection.is_some_and(|injection| injection.requires_historical_rewrite()) {
