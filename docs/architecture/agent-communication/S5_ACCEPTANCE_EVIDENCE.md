@@ -377,17 +377,50 @@ real_controller_nonempty_analysis_materializes_memory_and_profiles}`、
 
 ### 6.4 已知失败与剩余项（不得省略）
 
-- **既有失败（非本任务引入，仅登记）**：前端 4 项（`goal-strip`、`vulcan-plugins-panel`、
-  `conversation-v1-tool-card`、`conversation-tool-presentation-card`）；
-  `vulcan-agent-runtime` 的 `native_compaction_uses_host_history_and_preserves_execution_identity`
-  在默认线程栈下溢出（`RUST_MIN_STACK=67108864` 可通过）。**A16 的用量分离失败已修正**（`2bf00026`），
-  不再属于既有失败。
-- **验收缺口（"证据不足"，见 §二）**：A09（其余要求项）、A10、A16（完整分页重连组合）；R10。
-- **未验证边界（见 §三）**：父子交叉互问（未定论）、真实 OAuth 端到端编排、宿主事件复用正向路径、
-  通知恢复其余窗口、真实 WebUI/RPC 与冷注册表、线编码器相邻前缀、VMM Profile 生产者链。
-- **本会话内被推翻的自身判断（据实保留，供审核追溯）**：共四处——A15 两处"未覆盖"、A16 用量分离
-  "不属本任务所有权"、G4"需领域决策"；另有 `wait_session` 疑点经实测排除、父子交叉互问的两版结论
-  中前一版被推翻。共同原因多为我按单一关键词检索即下结论。
+- **既有失败（非本任务引入，仅登记，不修复）**：
+  - 前端 4 项（`goal-strip`、`vulcan-plugins-panel`、`conversation-v1-tool-card`、
+    `conversation-tool-presentation-card`）；
+  - `vulcan-service-kernel --lib` 全量 **7 项**（供应商/模型选择 2 项、`native_vmm` 2 项、
+    会话队列 1 项、分离子代理 1 项、`vce::manager` 1 项；逐项名称与归属判定见 §四）；
+  - 栈溢出类 2 处：`vulcan-agent-runtime` 的
+    `native_compaction_uses_host_history_and_preserves_execution_identity` 与
+    `vulcan-service-kernel` 的
+    `capability_metadata_reopen_and_rebuild_rpc_preserves_conversation`，均可用
+    `RUST_MIN_STACK=67108864` 通过；
+  - **A16 的用量分离失败已修正**（`2bf00026`），**不再**属于既有失败。
+- **验收缺口（"证据不足"/未定性，见 §二）**：
+  - R10/A10 的**模型级自动唤醒调度一跳**——需要真实 `AgentRuntimeBridge` 与真实调度环境，本层无法构造；
+  - **父子交叉互问**——已定位到可复现矛盾点，但未定论（不断言生产或夹具缺陷）；
+  - **通知"已接纳但未投影"的会话级闸门**——本轮新发现的**具体**待领域判断点，已用测试固定当前行为
+    （`50ea0dbe`）；
+  - 前端既有 4 项失败不属本任务所有权（§二.5）。
+- **未验证边界（见 §三）**：真实 OAuth 端到端一跳（结构性不可达，见 §三 说明）、真实 WebUI/RPC 与真实
+  停止事务、真实冷注册表重启、线编码器相邻前缀稳定性、V1 端到端 `SystemContext → ProjectedItem →
+  provider_v1_sink`、VMM Profile 生产者链（范围外）、通知恢复其余窗口。
+- **本会话内被推翻的自身判断（据实保留，供审核追溯）**：共**七处**——A15 两处"未覆盖"、A16 用量分离
+  "不属本任务所有权"、G4"需领域决策"、宿主事件复用"正向路径不可证"、A16"完整分页重连组合未断言"、
+  R10"工具回复后子代理收到答案未证明"；另有 `wait_session` 疑点经实测排除、父子交叉互问的前一版结论
+  被推翻。**共同原因是同一个方法缺陷：按单一范围检索后即下结论，未换文件、未查公开入口、未读完整测试。**
+  建议审核者对本文件其余"证据不足"主张先假定可能已有覆盖，再复核一遍。
+
+### 6.5 是否改动模型可见契约、持久字段、授权、线程/锁顺序
+
+按交接方案 §六 第 4 项逐类回答（依据为本案全部提交的实际 diff）：
+
+| 类别 | 是否改动 | 说明 |
+| --- | --- | --- |
+| 模型可见契约（工具名/Schema/参数/描述） | **否** | 11 个协作工具的注册与 Schema 未变；`reply_question` 的 `unable_to_answer` 本就存在于 Schema，本案只补断言（`4a52755b`），未改契约。 |
+| 持久字段 | **否** | 未新增/删除/改名任何持久字段；未做历史数据兼容（按要求不支持历史数据）。 |
+| 授权 | **否** | 未改授权模型；仅补逐动作与撤销证据（`6a65e457`）与跨项目撤销时序证据（`599e630c`）。 |
+| 线程/锁顺序 | **否**（本案内） | 未改锁顺序；编辑准入的加锁范围由第 1 轮审核问题 P1-2 的修复（`ca83e0c2`）确定，本案未再改动。 |
+| 生产行为是否变化 | **是，三处已记录的修复性变化** | (1) `9f8a243c` 问题等待游标改用协作状态内容；(2) `1dd4301f` 宿主事件前缀改为引用共享常量 `RUNTIME_HOST_MESSAGE_PREFIX`（AGENTS.md 第十一条）；(3) `25ecf35d` 抽出 `deliver_recorded_notification` 修复通知恢复窗口。三处均在各自提交信息中记录，且有独立证据。 |
+
+### 6.6 原主代理审核结论、问题编号及修复提交
+
+**本案不填写本项**，原因是它按定义只能由原主代理给出：
+第 1 轮审核（范围 `280f31a2..470386c7`）的 3 项逻辑问题与 2 类验收缺口已在其后修复（见
+`IMPLEMENTATION_STATUS.md` 对应小节）。第 2—5 轮**尚未开始**，完整审核仍为 **0/5**。
+实施侧**不得**自行宣布任何一轮通过或归档正式计划。
 
 ## 七、本文件的边界
 
