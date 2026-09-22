@@ -2800,74 +2800,15 @@ impl SessionDocument {
 
     /// Returns whether edit or delete must preserve unresolved collaboration facts.
     /// 判断编辑或删除是否必须保留未解决的协作事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Delegates to the single state-level definition so a warm document and a cold member read
+    /// through its locator can never disagree about what must be settled.
+    /// 委托给唯一的状态级定义，使驻留文档与经定位器读取的冷态成员不会对"必须结清什么"产生分歧。
     pub fn has_unsettled_collaboration_for_edit_or_delete(&self) -> bool {
-        !self.collaboration_state().outbound_task_messages.is_empty()
-            || !self.collaboration_state().inbound_task_messages.is_empty()
-            || self
-                .collaboration_state()
-                .questions
-                .values()
-                .any(|question| {
-                    question.state == CollaborationQuestionState::Pending
-                        || question.answer.as_ref().is_some_and(|answer| {
-                            answer.delivery.state == CollaborationAnswerDeliveryState::Undelivered
-                        })
-                })
-            || self
-                .collaboration_state()
-                .outbound_deliveries
-                .values()
-                .any(|delivery| {
-                    delivery.settlement_ack.is_none()
-                        && self
-                            .collaboration_state()
-                            .questions
-                            .get(&delivery.question_id)
-                            .is_some_and(|question| {
-                                question.state != CollaborationQuestionState::Pending
-                            })
-                })
-            || self
-                .collaboration_state()
-                .inbound_deliveries
-                .values()
-                .any(|delivery| {
-                    delivery.settlement.is_none()
-                        && matches!(
-                            delivery.state,
-                            CollaborationDeliveryState::Accepted
-                                | CollaborationDeliveryState::Projected
-                        )
-                })
-            || self.collaboration_state().child_tasks.values().any(|task| {
-                matches!(
-                    task.state,
-                    CollaborationChildTaskState::Reserved | CollaborationChildTaskState::Active
-                )
-            })
-            || self
-                .collaboration_state()
-                .question_executions
-                .values()
-                .any(|execution| execution.state == CollaborationQuestionExecutionState::Running)
-            || self
-                .collaboration_state()
-                .notifications
-                .values()
-                .any(|notification| {
-                    matches!(
-                        notification.state,
-                        CollaborationNotificationState::Recorded
-                            | CollaborationNotificationState::Accepted
-                    )
-                })
-            || self
-                .collaboration_state()
-                .inbound_notifications
-                .values()
-                .any(|notification| {
-                    matches!(notification.state, CollaborationNotificationState::Accepted)
-                })
+        self.collaboration_state()
+            .requires_edit_or_delete_settlement()
     }
 
     /// Computes all bounded completion obligations associated with one parent turn.

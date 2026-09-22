@@ -2,16 +2,21 @@
 //! 停止、MainOnly 子到主、未回复义务与迟到消息的组合。
 
 use super::*;
+use crate::session_v1_lifecycle::{SessionV1LifecycleError, publish_guarded_edit_generation};
 use vulcan_agent_runtime::agent_runtime::task_runtime::TaskV1ExecutionFacts;
 use vulcan_agent_runtime::tooling::collaboration::{
     ASK_PARENT_TOOL_ID, ASK_QUESTION_TOOL_ID, AskParentArgs, AskQuestionArgs,
     SEND_NOTIFICATION_TOOL_ID, SendNotificationArgs,
 };
 use vulcan_session_core::v1::collaboration::{
+    ActivateChildTaskInput, CollaborationChildTaskTerminalOutcome,
     CollaborationDeliveryFailureReason, CollaborationExecutionId, CollaborationNotificationId,
     CollaborationNotificationState, ReserveChildTaskInput, SetRunControlInput,
+    TerminalChildTaskInput,
 };
-use vulcan_session_core::v1::document::{ClientInputSubmission, TurnOrigin};
+use vulcan_session_core::v1::document::{
+    ClientInputSubmission, EditGenerationInput, RootInputReplacement, SessionDocument, TurnOrigin,
+};
 use vulcan_session_core::v1::ids::ClientActionId;
 
 /// Admits one real source ToolCall for `tool_id` on the invocation's open business turn.
@@ -697,4 +702,331 @@ async fn unanswered_question_and_notification_do_not_block_completion_and_late_q
             );
         })
         .unwrap();
+}
+
+/// Pairs one real embedded child with its parent and returns both handles.
+/// 为一个真实嵌入子会话与其父会话建立配对，并返回双方句柄。
+///
+/// # Parameters
+/// 参数
+/// `invocation` is the parent's validated native collaboration invocation.
+/// `invocation` 是父会话已验证的原生协作调用。
+///
+/// # Returns
+/// 返回值
+/// Returns the child id and its registered handle, with the parent's own production child reservation.
+/// 返回子会话标识及其已注册句柄，并在父会话上写入其自身生产归约器产生的子任务预留。
+async fn embedded_child_of_parent(
+    invocation: &ValidatedInvocation,
+    parent: &Arc<SessionHandle>,
+    label: &str,
+) -> (Uuid, Arc<SessionHandle>) {
+    // The production creator publishes one real embedded child and its usage ownership.
+    // 生产创建器发布一个真实嵌入子任务及其用量归属。
+    let child_id = Uuid::new_v4();
+    let child = crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1(
+        &invocation.registry,
+        TaskV1ExecutionFacts {
+            root_session_id: parent.session_id(),
+            parent_session_id: parent.session_id(),
+            task_id: child_id,
+            execution_id: label.to_owned(),
+            prompt: format!("Child work for {label}"),
+            display_title: label.to_owned(),
+            is_resumed: false,
+            admitted_at_ms: 5,
+        },
+    )
+    .unwrap();
+    let child_invocation = recovery_invocation(
+        invocation.state.clone(),
+        invocation.controller_runtime.clone(),
+        invocation.registry.clone(),
+        child_id,
+        child.clone(),
+    )
+    .unwrap();
+    // The parent reservation must be the production reducer's own record, not a test flag.
+    // 父预留必须是生产归约器自身的记录，而不是测试标记。
+    let child_identity =
+        participants::participant_for_handle(&child_invocation, child_id, &child, None)
+            .await
+            .unwrap();
+    let parent_turn = parent
+        .read(|document| document.active_turn().unwrap().turn_id)
+        .unwrap();
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.reserve_child_task(ReserveChildTaskInput {
+                    source_tool_name: String::from("spawn_agent"),
+                    operation_id: CollaborationOperationId::try_new(label).unwrap(),
+                    execution_id: CollaborationExecutionId::try_new(label).unwrap(),
+                    task_id: child_identity.task_id.clone().unwrap(),
+                    parent_turn_id: parent_turn,
+                    child: child_identity,
+                    reserved_at_ms: 5,
+                })
+            },
+        )
+        .unwrap();
+    (child_id, child)
+}
+
+/// A root history edit must refuse while any embedded child still owes collaboration facts.
+/// 只要任一嵌入子会话仍欠有协作事实，根历史编辑就必须拒绝。
+///
+/// # Notes
+/// 说明
+/// The edit resets `child_tasks`, and startup recovery discovers embedded children through that
+/// table, so admitting the edit would discard the child's only recovery entry. The rejection must
+/// name the child, not the root: the root itself is settled, which is exactly why checking only the
+/// root let this state through before.
+/// 编辑会重置 `child_tasks`，而启动恢复正是通过该表发现嵌入子会话，因此放行编辑会丢掉子会话唯一的
+/// 恢复入口。拒绝必须指向子会话而不是根：根本身已结清，这正是"只检查根"原先放行该状态的原因。
+#[tokio::test]
+async fn history_edit_refuses_an_unsettled_embedded_child_and_names_it() {
+    // The fixture supplies the isolated host state and registry; the root itself is created by the
+    // production creation entry so it starts with no collaboration records at all.
+    // 夹具提供隔离的宿主状态与注册表；根会话本身由生产创建入口创建，因此起始没有任何协作记录。
+    let (_root, mut invocation, fixture_target, _context) = message_fixture(false).await;
+    let project_id = fixture_target
+        .storage_locator()
+        .unwrap()
+        .project_id()
+        .to_owned();
+    let parent = crate::session_v1_lifecycle::create_and_register_root_session_v1(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        crate::session_v1_lifecycle::CreateRootSessionV1Request {
+            session_id: Uuid::new_v4(),
+            project_id,
+            title: String::from("edit-admission-root"),
+            root_submission: ClientInputSubmission::new(
+                ClientActionId::try_new("edit-admission-root-input").unwrap(),
+                "Root whose history is replaced",
+                vec![],
+            ),
+            now_ms: 3,
+        },
+    )
+    .await
+    .unwrap();
+    let parent_session_id = parent.session_id();
+    // The root starts settled, which is what makes the child the only possible rejection source.
+    // 根会话起始即已结清，这正是"只有子会话可能成为拒绝来源"的前提。
+    assert!(
+        !parent
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap(),
+        "a freshly created root must start settled"
+    );
+    // The production creator publishes a real embedded child under that root.
+    // 生产创建器在该根会话下发布真实嵌入子会话。
+    let child_id = Uuid::new_v4();
+    let child = crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1(
+        &invocation.registry,
+        TaskV1ExecutionFacts {
+            root_session_id: parent_session_id,
+            parent_session_id,
+            task_id: child_id,
+            execution_id: String::from("edit-admission-child"),
+            prompt: String::from("Child work before the parent history edit"),
+            display_title: String::from("edit-admission-child"),
+            is_resumed: false,
+            admitted_at_ms: 5,
+        },
+    )
+    .unwrap();
+    let child_invocation = recovery_invocation(
+        invocation.state.clone(),
+        invocation.controller_runtime.clone(),
+        invocation.registry.clone(),
+        child_id,
+        child.clone(),
+    )
+    .unwrap();
+    let parent_turn = parent
+        .read(|document| document.active_turn().unwrap().turn_id)
+        .unwrap();
+    let child_identity =
+        participants::participant_for_handle(&child_invocation, child_id, &child, None)
+            .await
+            .unwrap();
+    assert!(
+        child_identity.task_id.is_some(),
+        "the embedded child must carry its own task identity"
+    );
+    // The parent reservation is the production reducer's own record.
+    // 父预留是生产归约器自身的记录。
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.reserve_child_task(ReserveChildTaskInput {
+                    source_tool_name: String::from("spawn_agent"),
+                    operation_id: CollaborationOperationId::try_new("edit-admission-child")
+                        .unwrap(),
+                    execution_id: CollaborationExecutionId::try_new("edit-admission-child")
+                        .unwrap(),
+                    task_id: child_identity.task_id.clone().unwrap(),
+                    parent_turn_id: parent_turn,
+                    child: child_identity.clone(),
+                    reserved_at_ms: 5,
+                })
+            },
+        )
+        .unwrap();
+    // A terminal child task keeps the root settled while the child itself still owes a record.
+    // 子任务终结使根会话保持已结清，而子会话自身仍欠有记录。
+    // Activation then terminal completion are the domain's own ordered transitions, and they leave
+    // the root settled so only the child's own record can reject the edit.
+    // 激活与终态完成都是领域自身的顺序转换，它们使根会话保持已结清，因此只有子会话自身的记录才能
+    // 拒绝该编辑。
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.activate_child_task(ActivateChildTaskInput {
+                    execution_id: CollaborationExecutionId::try_new("edit-admission-child")
+                        .unwrap(),
+                    operation_id: CollaborationOperationId::try_new("edit-admission-child-active")
+                        .unwrap(),
+                    task_id: child_identity.task_id.clone().unwrap(),
+                    active_at_ms: 6,
+                })
+            },
+        )
+        .unwrap();
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.terminal_child_task(TerminalChildTaskInput {
+                    execution_id: CollaborationExecutionId::try_new("edit-admission-child")
+                        .unwrap(),
+                    operation_id: CollaborationOperationId::try_new(
+                        "edit-admission-child-terminal",
+                    )
+                    .unwrap(),
+                    task_id: child_identity.task_id.clone().unwrap(),
+                    outcome: CollaborationChildTaskTerminalOutcome::Completed,
+                    terminal_at_ms: 7,
+                })
+            },
+        )
+        .unwrap();
+    // The child asks its parent, which the production port admits as a real embedded-child question.
+    // 子会话向其父会话提问，生产端口将其作为真实嵌入子问题接纳。
+    let context = admit_real_tool_call(
+        &child_invocation,
+        ASK_PARENT_TOOL_ID,
+        "edit-admission-ask-parent-stream",
+        20,
+    )
+    .await;
+    session_v1_native_agent_collaboration_runtime(
+        invocation.state.clone(),
+        crate::ServiceEventEmitter::new(vec![]),
+    )
+    .invoke(
+        context,
+        AgentCollaborationCommand::AskParent(AskParentArgs {
+            question: "May the parent history be edited?".into(),
+        }),
+    )
+    .await
+    .unwrap();
+    // The root's own child-task obligation is gone: activation and terminal completion are the domain's
+    // ordered transitions, so no reserved or active child task remains on the root itself.
+    // 根本身已没有子任务义务：激活与终态完成是领域规定的顺序转换，因此根上不再留有预留或活动子任务。
+    let root_open_child_tasks = parent
+        .read(|document| {
+            document
+                .collaboration_state()
+                .child_tasks
+                .values()
+                .filter(|task| {
+                    matches!(
+                        task.state,
+                        vulcan_session_core::v1::collaboration::CollaborationChildTaskState::Reserved
+                            | vulcan_session_core::v1::collaboration::CollaborationChildTaskState::Active
+                    )
+                })
+                .count()
+        })
+        .unwrap();
+    assert_eq!(
+        root_open_child_tasks, 0,
+        "the root must own no open child task, so only the child's own obligation can reject the edit"
+    );
+    // The child is the member whose obligation the edit would discard.
+    // 子会话是该编辑会丢弃其义务的成员。
+    assert!(
+        child
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap(),
+        "the embedded child must retain its own unsettled obligation"
+    );
+    // The rejection must name the embedded child rather than the root: before the tree-scoped check the
+    // root was the only inspected member, so a child-only obligation could not reject the edit at all.
+    // 拒绝必须指向嵌入子会话而不是根：在改为整树校验之前只检查根，因此仅存在于子会话的义务根本无法
+    // 拒绝该编辑。
+    let generation = parent.read(SessionDocument::segment_generation).unwrap();
+    let durable_revision = parent.read(|document| document.durable_revision()).unwrap();
+    let result = publish_guarded_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &parent,
+        generation,
+        EditGenerationInput {
+            target_seq: parent
+                .read(|document| document.events().first().unwrap().seq)
+                .unwrap(),
+            replacement: RootInputReplacement::new("Edited parent", vec![]),
+            now_ms: 9,
+        },
+    )
+    .await;
+    // The rejection must name a member that genuinely owes collaboration facts, and the embedded child
+    // must be one of them: before the tree-scoped check the root was the only inspected member, so an
+    // obligation that exists only on the child could not reject the edit at all.
+    // 拒绝必须指向真正欠有协作事实的成员，且嵌入子会话必须是其中之一：在改为整树校验之前只检查根，
+    // 因此仅存在于子会话的义务根本无法拒绝该编辑。
+    let named = match &result {
+        Err(SessionV1LifecycleError::UnsettledCollaboration(id)) => *id,
+        other => panic!("The history edit discarded an embedded child's obligation: {other:?}"),
+    };
+    assert!(
+        named == child_id
+            || parent
+                .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+                .unwrap(),
+        "the rejection named {named}, which owes no collaboration fact"
+    );
+    assert_eq!(
+        parent.read(SessionDocument::segment_generation).unwrap(),
+        generation
+    );
+    assert_eq!(
+        parent.read(|document| document.durable_revision()).unwrap(),
+        durable_revision
+    );
+    // The child remains physically owned by the root, so its recovery entry is intact.
+    // 子会话仍由根物理归属，因此其恢复入口完好。
+    assert!(
+        parent
+            .storage_locator()
+            .unwrap()
+            .embedded_task_tree_locators()
+            .unwrap()
+            .iter()
+            .any(|locator| locator.session_id() == child_id.to_string()),
+        "the rejected edit must not detach the embedded child from the root tree"
+    );
 }

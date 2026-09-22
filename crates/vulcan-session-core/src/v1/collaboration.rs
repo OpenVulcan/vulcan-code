@@ -1103,6 +1103,69 @@ pub struct CollaborationState {
 }
 
 impl CollaborationState {
+    /// Returns whether edit or delete must preserve unresolved collaboration facts.
+    /// 判断编辑或删除是否必须保留未解决的协作事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns true when any question, delivery, task message, child task, question execution or
+    /// notification still owes a peer a fact that replacing or deleting this history would discard.
+    /// 当仍存在任何问题、投递、任务消息、子任务、问题执行或通知对某个对端欠有会被替换或删除历史的
+    /// 事实时返回真。
+    ///
+    /// # Notes
+    /// 说明
+    /// This is the single definition of that boundary: the canonical document delegates to it, and a
+    /// cold member verified through its locator reads the same state and applies the same predicate.
+    /// 这是该边界的唯一定义：规范文档委托给它，而通过定位器校验的冷态成员读取同一状态并施加同一判定。
+    pub fn requires_edit_or_delete_settlement(&self) -> bool {
+        !self.outbound_task_messages.is_empty()
+            || !self.inbound_task_messages.is_empty()
+            || self.questions.values().any(|question| {
+                question.state == CollaborationQuestionState::Pending
+                    || question.answer.as_ref().is_some_and(|answer| {
+                        answer.delivery.state == CollaborationAnswerDeliveryState::Undelivered
+                    })
+            })
+            || self.outbound_deliveries.values().any(|delivery| {
+                delivery.settlement_ack.is_none()
+                    && self
+                        .questions
+                        .get(&delivery.question_id)
+                        .is_some_and(|question| {
+                            question.state != CollaborationQuestionState::Pending
+                        })
+            })
+            || self.inbound_deliveries.values().any(|delivery| {
+                delivery.settlement.is_none()
+                    && matches!(
+                        delivery.state,
+                        CollaborationDeliveryState::Accepted
+                            | CollaborationDeliveryState::Projected
+                    )
+            })
+            || self.child_tasks.values().any(|task| {
+                matches!(
+                    task.state,
+                    CollaborationChildTaskState::Reserved | CollaborationChildTaskState::Active
+                )
+            })
+            || self
+                .question_executions
+                .values()
+                .any(|execution| execution.state == CollaborationQuestionExecutionState::Running)
+            || self.notifications.values().any(|notification| {
+                matches!(
+                    notification.state,
+                    CollaborationNotificationState::Recorded
+                        | CollaborationNotificationState::Accepted
+                )
+            })
+            || self.inbound_notifications.values().any(|notification| {
+                matches!(notification.state, CollaborationNotificationState::Accepted)
+            })
+    }
+
     /// Builds a fresh empty collaboration state.
     /// 构建一份全新的空协作状态。
     pub fn new() -> Self {

@@ -113,6 +113,56 @@ fn write_gate_ids(
     Ok(identities)
 }
 
+/// Verifies unsettled collaboration on every member of `tree`, returning the warm handles.
+/// 校验 `tree` 每个成员上的未结协作，并返回驻留句柄。
+///
+/// # Parameters
+/// 参数
+/// `registry` is the unique runtime registry; `tree` is the physically declared edit membership.
+/// `registry` 是唯一运行时注册表；`tree` 是物理声明的编辑成员集合。
+///
+/// # Returns
+/// 返回值
+/// Returns the registered members' handles in stable session-id order. Warm and cold are explicit
+/// registry states, exactly as peer resolution treats them: an unregistered member is read through its
+/// locator's recovery state instead of being skipped, so a cold child cannot hide an unsettled receipt.
+/// 按稳定的会话标识顺序返回已注册成员的句柄。驻留与冷态是明确的注册表状态，与对端解析的处理一致：
+/// 未注册成员改为通过其定位器的恢复状态读取而不是被跳过，因此冷态子会话无法隐藏未结回执。
+fn settled_tree_owner_handles(
+    registry: &SessionRuntimeRegistry,
+    tree: &BTreeMap<SessionId, SessionV1StorageLocator>,
+) -> Result<Vec<Arc<SessionHandle>>, SessionV1LifecycleError> {
+    let mut handles = Vec::with_capacity(tree.len());
+    for (id, locator) in tree {
+        match registry.get(*id) {
+            Ok(handle) => {
+                if handle.storage_locator()? != *locator {
+                    return Err(SessionV1LifecycleError::CanonicalOwnerUnavailable {
+                        session_id: *id,
+                    });
+                }
+                if handle.read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)? {
+                    return Err(SessionV1LifecycleError::UnsettledCollaboration(*id));
+                }
+                handles.push(handle);
+            }
+            Err(SessionRuntimeError::SessionNotRegistered(_)) => {
+                // The locator is the only remaining authority for a cold member, and the unsettled
+                // predicate has a single definition shared with the warm document.
+                // 定位器是冷态成员仅存的权威，且未结判定与驻留文档共享唯一定义。
+                if locator
+                    .read_collaboration_recovery_state()?
+                    .requires_edit_or_delete_settlement()
+                {
+                    return Err(SessionV1LifecycleError::UnsettledCollaboration(*id));
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(handles)
+}
+
 /// Verifies terminal inbound receipts on `handles` against source acknowledgement under all peer gates.
 /// 在持有全部对端锁时，对照来源确认校验 `handles` 上的入站终态回执。
 /// `controller` owns SQLite locator existence; `registry` supplies canonical source documents.
@@ -412,12 +462,16 @@ pub(crate) async fn admit_edit_generation<'a>(
     if !Arc::ptr_eq(&current, target) || current.storage_locator()? != target.storage_locator()? {
         return Err(SessionV1LifecycleError::CanonicalOwnerUnavailable { session_id });
     }
-    if target.read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)? {
-        return Err(SessionV1LifecycleError::UnsettledCollaboration(session_id));
-    }
+    // Every physically owned descendant is edited with the root, so each member must be settled.
+    // 每个物理归属的后代都与根一起被编辑，因此每个成员都必须已结清。
+    // Checking only the root would discard an embedded child's only recovery entry: the edit resets
+    // `child_tasks`, and startup recovery discovers embedded children through that table.
+    // 只检查根会丢掉嵌入子会话唯一的恢复入口：编辑会重置 `child_tasks`，而启动恢复正是通过该表
+    // 发现嵌入子会话。
+    let tree_handles = settled_tree_owner_handles(registry, &tree)?;
     // Retained terminal receipts must carry a durable source acknowledgement, unchanged from deletion.
     // 保留的终态回执必须携带可靠来源确认，与删除一致。
-    require_source_acknowledgements(controller, registry, std::slice::from_ref(target)).await?;
+    require_source_acknowledgements(controller, registry, &tree_handles).await?;
     Ok(EditGenerationAdmission {
         _target: target,
         _peers: guards,
