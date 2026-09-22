@@ -197,22 +197,37 @@
   （既有问题，`RUST_MIN_STACK=67108864` 可通过）；该溢出会中断 `--lib` 全量运行，
   因此 `vulcan-agent-runtime` 的全量计数需带该变量获取。
 
-## 四、复跑基线（本轮实际执行）
+## 四、复跑基线（最近一轮实际执行）
 
 | 命令 | 结果 |
 | --- | --- |
 | `cargo test -p vulcan-session-core --lib -- --test-threads=1` | 460 passed / 0 failed |
-| `cargo test -p vulcan-service-kernel --lib "agent_collaboration::" -- --test-threads=1` | 114 passed / 0 failed |
-| `cargo test -p vulcan-agent-runtime --lib "provider_transport_vulcan"` | 49 passed / 0 failed |
+| `cargo test -p vulcan-service-kernel --lib "agent_collaboration::" -- --test-threads=1` | 120 passed / 0 failed |
+| `cargo test -p vulcan-agent-runtime --lib "provider_transport_vulcan::" -- --test-threads=1` | 50 passed / 0 failed |
 | `cargo test -p vulcan-agent-runtime --lib "standalone_compaction_tests"` | 3 passed / 0 failed |
 | `cargo test -p vulcan-provider-adapters --lib "responses_compact"` | 9 passed / 0 failed |
-| `cargo test -p vulcan-agent-runtime --lib`（`RUST_MIN_STACK=67108864`） | 1021 passed / **1 failed**（§二.4）/ 4 ignored |
+| `cargo test -p vulcan-agent-runtime --lib`（`RUST_MIN_STACK=67108864`） | 1022 passed / **1 failed**（§二.4）/ 4 ignored |
 | `cargo test -p vulcan-context-injection --lib` | 20 passed / 0 failed |
 | `npx vitest run src/components/conversation/conversation-collaboration-card.test.tsx` | 8 passed / 0 failed |
 | `npx tsc -b`（`apps/vulcan-code-web`） | 0 错误 |
 | `npx vitest run`（`apps/vulcan-code-web` 全量） | 1842 passed / **4 failed**（§二.5）/ 1 skipped |
 
-## 五、本文件的边界
+## 五、引用完整性闸门（本轮新增，建议原主代理审核前复跑）
+
+本文件的证据价值取决于**它引用的每个名字在当前源码里仍然存在**。为此本轮对本文件做了一次
+自动化引用核验：
+
+- 方法：提取本文件全部反引号内的 snake_case 标识符（共 42 个），逐一在 `crates/`、`apps/` 中
+  查找同名项。
+- 结果：**36 个测试函数名全部存在**（`fn <name>`）；**6 个非测试标识符全部存在**，分别为
+  `provider_request_bridge_messages`、`provider_request_bridge`、`open_child_task_ids`、
+  `wakes_retained_parent_turn`、`children_by_session_id`、`child_task_non_success_projected`。
+  **无死引用。**
+- 边界：该闸门只证明**引用可达**，不证明被测行为仍然正确，也不证明断言强度。行为正确性仍需按
+  §四 复跑。
+- 后续维护：任何一次重命名或删除测试后，必须重新执行本闸门；本文件新增证据行时同样适用。
+
+## 六、本文件的边界
 
 - 本文件只做**对照与登记**，不新增实现，也不改变任何状态判定的严格程度。
 - "已实现并已验证"仅表示存在可复跑证据，**不等于**原主代理的五轮完整审核通过。
