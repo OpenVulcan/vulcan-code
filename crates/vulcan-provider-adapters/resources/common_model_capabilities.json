@@ -22,10 +22,8 @@
                                        "anthropic: claude opus 4.8",
                                        "claude-opus-4.8"
                                    ],
-                       "context_window":  200000,
+                       "context_window":  1000000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
                                                 "text"
                                             ],
                        "output_modalities":  [
@@ -37,10 +35,8 @@
                        "aliases":  [
 
                                    ],
-                       "context_window":  200000,
+                       "context_window":  1000000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
                                                 "text"
                                             ],
                        "output_modalities":  [
@@ -213,20 +209,6 @@
                                              ]
                    },
                    {
-                       "key":  "cohere/rerank-v3.5",
-                       "aliases":  [
-                                       "cohere: rerank v3.5",
-                                       "rerank-v3.5"
-                                   ],
-                       "context_window":  200000,
-                       "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-
-                                             ]
-                   },
-                   {
                        "key":  "deepseek/deepseek-v4.1-flash",
                        "aliases":  [
                                        "deepseek/deepseek-v4.1-flash-20260910",
@@ -342,7 +324,7 @@
                                        "deepseek/deepseek-v4-flash-20260731",
                                        "deepseek: deepseek v4 flash 0731"
                                    ],
-                       "context_window":  200000,
+                       "context_window":  1310720,
                        "input_modalities":  [
                                                 "text"
                                             ],
@@ -357,7 +339,8 @@
                                    ],
                        "context_window":  1000000,
                        "input_modalities":  [
-                                                "image"
+                                                "image",
+                                                "text"
                                             ],
                        "output_modalities":  [
                                                  "text"
@@ -413,7 +396,7 @@
                                        "google/gemini-3.1-flash-lite-image-20260630",
                                        "google: nano banana 2 lite (gemini 3.1 flash lite image)"
                                    ],
-                       "context_window":  200000,
+                       "context_window":  65536,
                        "input_modalities":  [
                                                 "text"
                                             ],
@@ -575,13 +558,9 @@
                                        "google/gemini-3.1-pro-preview-20260219",
                                        "google: gemini 3.1 pro preview"
                                    ],
-                       "context_window":  200000,
+                       "context_window":  1048576,
                        "input_modalities":  [
-                                                "audio",
-                                                "file",
-                                                "image",
-                                                "text",
-                                                "video"
+                                                "text"
                                             ],
                        "output_modalities":  [
                                                  "text"
@@ -661,22 +640,6 @@
                                             ],
                        "output_modalities":  [
                                                  "text"
-                                             ]
-                   },
-                   {
-                       "key":  "google/veo-3.1",
-                       "aliases":  [
-                                       "google/veo-3.1-20260320",
-                                       "google: veo 3.1",
-                                       "veo-3.1"
-                                   ],
-                       "context_window":  200000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "video"
                                              ]
                    },
                    {
@@ -833,7 +796,6 @@
                                        "openai/gpt-image-2.5-flare-20260908",
                                        "openai: gpt image 2.5 flare"
                                    ],
-                       "context_window":  200000,
                        "input_modalities":  [
                                                 "text"
                                             ],
@@ -847,7 +809,6 @@
                                        "openai/gpt-image-2.5-sunburst-20260908",
                                        "openai: gpt image 2.5 sunburst"
                                    ],
-                       "context_window":  200000,
                        "input_modalities":  [
                                                 "text"
                                             ],
@@ -888,7 +849,6 @@
                        "aliases":  [
 
                                    ],
-                       "context_window":  200000,
                        "input_modalities":  [
                                                 "text"
                                             ],
@@ -902,7 +862,6 @@
                                        "spacexai: grok imagine image quality",
                                        "x-ai/grok-imagine-image-quality-20260512"
                                    ],
-                       "context_window":  200000,
                        "input_modalities":  [
                                                 "text"
                                             ],
@@ -916,7 +875,6 @@
                                        "spacexai: grok imagine video",
                                        "x-ai/grok-imagine-video-20260512"
                                    ],
-                       "context_window":  200000,
                        "input_modalities":  [
                                                 "image",
                                                 "text"
@@ -931,7 +889,6 @@
                                        "spacexai: grok imagine video 1.5",
                                        "x-ai/grok-imagine-video-1.5-20260719"
                                    ],
-                       "context_window":  200000,
                        "input_modalities":  [
                                                 "image",
                                                 "text"
@@ -1216,6 +1173,7 @@
                        "input_modalities":  [
                                                 "audio",
                                                 "image",
+                                                "text",
                                                 "video"
                                             ],
                        "output_modalities":  [
@@ -1244,10 +1202,11 @@
                        "input_modalities":  [
                                                 "audio",
                                                 "file",
-                                                "image"
+                                                "image",
+                                                "text"
                                             ],
                        "output_modalities":  [
-
+                                                 "text"
                                              ]
                    },
                    {
@@ -1257,10 +1216,10 @@
                                    ],
                        "context_window":  1048576,
                        "input_modalities":  [
-
+                                                "text"
                                             ],
                        "output_modalities":  [
-
+                                                 "text"
                                              ]
                    },
                    {
@@ -1276,21 +1235,6 @@
                                             ],
                        "output_modalities":  [
                                                  "text"
-                                             ]
-                   },
-                   {
-                       "key":  "minimax/speech-2.8-turbo",
-                       "aliases":  [
-                                       "minimax/speech-2.8-turbo-20260716",
-                                       "minimax: speech 2.8 turbo",
-                                       "speech-2.8-turbo"
-                                   ],
-                       "context_window":  200000,
-                       "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-
                                              ]
                    },
                    {
@@ -1367,6 +1311,7 @@
                        "context_window":  1000000,
                        "input_modalities":  [
                                                 "image",
+                                                "text",
                                                 "video"
                                             ],
                        "output_modalities":  [
@@ -1531,7 +1476,8 @@
                                    ],
                        "context_window":  1048576,
                        "input_modalities":  [
-                                                "image"
+                                                "image",
+                                                "text"
                                             ],
                        "output_modalities":  [
                                                  "text"
@@ -1557,10 +1503,8 @@
                        "aliases":  [
 
                                    ],
-                       "context_window":  200000,
+                       "context_window":  1050000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
                                                 "text"
                                             ],
                        "output_modalities":  [
@@ -1572,57 +1516,12 @@
                        "aliases":  [
 
                                    ],
-                       "context_window":  200000,
+                       "context_window":  1050000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
                                                 "text"
                                             ],
                        "output_modalities":  [
                                                  "text"
-                                             ]
-                   },
-                   {
-                       "key":  "openai/gpt-image-1",
-                       "aliases":  [
-                                       "gpt-image-1",
-                                       "openai: gpt image 1"
-                                   ],
-                       "context_window":  200000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "image"
-                                             ]
-                   },
-                   {
-                       "key":  "openai/text-embedding-3-small",
-                       "aliases":  [
-                                       "openai: text embedding 3 small",
-                                       "text-embedding-3-small"
-                                   ],
-                       "context_window":  200000,
-                       "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-
-                                             ]
-                   },
-                   {
-                       "key":  "openai/whisper-large-v3-turbo",
-                       "aliases":  [
-                                       "openai: whisper large v3 turbo",
-                                       "whisper-large-v3-turbo"
-                                   ],
-                       "context_window":  200000,
-                       "input_modalities":  [
-                                                "audio"
-                                            ],
-                       "output_modalities":  [
-
                                              ]
                    },
                    {
@@ -1959,7 +1858,6 @@
                        "aliases":  [
 
                                    ],
-                       "context_window":  200000,
                        "input_modalities":  [
                                                 "text"
                                             ],
@@ -1991,10 +1889,11 @@
                        "context_window":  262144,
                        "input_modalities":  [
                                                 "image",
+                                                "text",
                                                 "video"
                                             ],
                        "output_modalities":  [
-
+                                                 "text"
                                              ]
                    },
                    {
@@ -2005,10 +1904,11 @@
                        "context_window":  262144,
                        "input_modalities":  [
                                                 "image",
+                                                "text",
                                                 "video"
                                             ],
                        "output_modalities":  [
-
+                                                 "text"
                                              ]
                    },
                    {
@@ -2212,7 +2112,6 @@
                        "aliases":  [
 
                                    ],
-                       "context_window":  200000,
                        "input_modalities":  [
                                                 "text"
                                             ],
@@ -2279,7 +2178,7 @@
                        "aliases":  [
 
                                    ],
-                       "context_window":  200000,
+                       "context_window":  1048576,
                        "input_modalities":  [
                                                 "text"
                                             ],

@@ -39,13 +39,39 @@ function Format-ModalityList {
     return @($Values | Where-Object { $_ } | Sort-Object -Unique)
 }
 
+# Resolves effective model capabilities with the same field-presence inheritance used by the manifest compiler.
+# 按清单编译器的字段存在性继承规则解析模型的生效能力。
+function New-ProviderCapabilityRecord {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][object]$Manifest,
+        [AllowNull()][object]$Rule
+    )
+
+    $defaults = $Manifest.model_defaults.capabilities
+    $specific = if ($null -ne $Rule) { $Rule.capabilities } else { $null }
+    $operations = @(if ($null -ne $specific -and $null -ne $specific.operations) { $specific.operations } else { $defaults.operations })
+    $declaredInputs = @(if ($null -ne $specific -and $null -ne $specific.input_resources) { $specific.input_resources } else { $defaults.input_resources })
+    $declaredOutputs = @(if ($null -ne $specific -and $null -ne $specific.output_resources) { $specific.output_resources } else { $defaults.output_resources })
+    $contextWindow = if ($null -ne $specific -and $null -ne $specific.context_limit) { $specific.context_limit } else { $defaults.context_limit }
+    if ($null -ne $contextWindow -and [long]$contextWindow -le 0) { $contextWindow = $null }
+    $inputs = Format-ModalityList (@($(if ($operations.Count -gt 0) { "text" })) + @($declaredInputs | ForEach-Object { ConvertTo-VulcanModality ([string]$_) }))
+    $outputs = Format-ModalityList (@($(if ($operations -contains "conversation_respond") { "text" })) + @($declaredOutputs | ForEach-Object { ConvertTo-VulcanModality ([string]$_) }))
+    $tail = ($Key -split "/")[-1]
+    return [pscustomobject]@{
+        key = $Key
+        aliases = if ($tail -ne $Key) { @($tail) } else { @() }
+        context_window = $contextWindow
+        input_modalities = $inputs
+        output_modalities = $outputs
+    }
+}
+
 # Builds provider-owned records from every bundled manifest model rule.
 # 从全部内置清单的模型规则构建供应商自有记录。 (CN)
 #
-# Bundled manifests declare only non-text resources, so text is implicit: every declared
-# operation accepts text input, and only conversation returns text output.
-# 内置清单只声明非文本资源，因此 text 是隐含的：所有已声明 operation 都接受文本输入，
-# 只有 conversation 返回文本输出。
+# Bundled manifests declare only non-text resources; effective operations determine implicit text.
+# 内置清单只声明非文本资源；生效 operation 决定隐含的文本模态。
 function Get-ProviderConfiguredModelRecords {
     param([Parameter(Mandatory = $true)][string]$Directory)
 
@@ -64,44 +90,11 @@ function Get-ProviderConfiguredModelRecords {
             $key = ConvertTo-NormalizedModelKey ([string]$rule.matcher.value)
             if ([string]::IsNullOrWhiteSpace($key)) { continue }
             if (-not $keys.Add($key)) { continue }
-            $operations = @($rule.capabilities.operations | Where-Object { $_ })
-            $declaredInputs = @($rule.capabilities.input_resources |
-                ForEach-Object { ConvertTo-VulcanModality ([string]$_) })
-            $declaredOutputs = @($rule.capabilities.output_resources |
-                ForEach-Object { ConvertTo-VulcanModality ([string]$_) })
-            $inputs = if ($operations.Count -gt 0) {
-                Format-ModalityList (@("text") + $declaredInputs)
-            } else {
-                Format-ModalityList $declaredInputs
-            }
-            $outputs = if ($operations -contains "conversation_respond") {
-                Format-ModalityList (@("text") + $declaredOutputs)
-            } else {
-                Format-ModalityList $declaredOutputs
-            }
-            $contextWindow = if ($null -ne $rule.capabilities.context_limit -and [long]$rule.capabilities.context_limit -gt 0) {
-                [long]$rule.capabilities.context_limit
-            } else {
-                # Preserve unknown here so a remote cross reference can fill it before fallback.
-                # 此处保留未知状态，使远端交叉参照可在最终回退前补全。
-                0
-            }
-            $tail = ($key -split "/")[-1]
-            $aliases = if ($tail -ne $key) { @($tail) } else { @() }
-            $records.Add([pscustomobject]@{
-                key = $key
-                aliases = @($aliases)
-                context_window = $contextWindow
-                input_modalities = $inputs
-                output_modalities = $outputs
-            })
+            $records.Add((New-ProviderCapabilityRecord -Key $key -Manifest $manifest -Rule $rule))
         }
 
-        # Catalog-declared identities are configured models too, even when a family prefix rule
-        # covers them. Their capabilities stay unknown until the upstream cross reference fills
-        # them, and `0` means unknown here so the document fallback applies when nothing fills it.
-        # 目录声明的身份同样是已配置模型，即使它们由族前缀规则覆盖。其能力在上游交叉参照填充前保持
-        # 未知；此处 `0` 表示未知，最终无人填充时适用文档化回退。
+        # Catalog identities covered by a family rule inherit the same effective capability fields.
+        # 族规则覆盖的目录身份继承相同的生效能力字段。
         foreach ($service in $manifest.services) {
             $catalog = $service.model_catalog
             if ($null -eq $catalog) { continue }
@@ -109,15 +102,11 @@ function Get-ProviderConfiguredModelRecords {
                 $key = ConvertTo-NormalizedModelKey ([string]$model.model_id)
                 if ([string]::IsNullOrWhiteSpace($key)) { continue }
                 if (-not $keys.Add($key)) { continue }
-                $tail = ($key -split "/")[-1]
-                $aliases = if ($tail -ne $key) { @($tail) } else { @() }
-                $records.Add([pscustomobject]@{
-                    key = $key
-                    aliases = @($aliases)
-                    context_window = 0
-                    input_modalities = @()
-                    output_modalities = @()
-                })
+                $matchingRule = @($manifest.model_rules | Where-Object {
+                    ($_.matcher.kind -eq "exact" -and (ConvertTo-NormalizedModelKey ([string]$_.matcher.value)) -eq $key) -or
+                    ($_.matcher.kind -eq "prefix" -and $key.StartsWith((ConvertTo-NormalizedModelKey ([string]$_.matcher.value))))
+                } | Sort-Object @{ Expression = { if ($_.matcher.kind -eq "exact") { 0 } else { 1 } } }, @{ Expression = { -([string]$_.matcher.value).Length } } | Select-Object -First 1)
+                $records.Add((New-ProviderCapabilityRecord -Key $key -Manifest $manifest -Rule $matchingRule[0]))
             }
         }
     }
@@ -148,11 +137,8 @@ function Get-RemoteModelRecords {
         $reportedOutputs = @($model.architecture.output_modalities)
         $inputs = Format-ModalityList (@($reportedInputs | ForEach-Object { ConvertTo-VulcanModality ([string]$_) }))
         $outputs = Format-ModalityList (@($reportedOutputs | ForEach-Object { ConvertTo-VulcanModality ([string]$_) }))
-        # Missing modality metadata receives the documented conservative fallback; an explicit
-        # unsupported-only modality list remains empty so it cannot be mislabeled as text.
-        # 缺失模态元数据时使用文档化的保守回退；明确的仅非支持模态列表保持为空，避免被误标为文本。 (CN)
-        if ($reportedInputs.Count -eq 0) { $inputs = @("text") }
-        if ($reportedOutputs.Count -eq 0) { $outputs = @("text") }
+        # Missing upstream modality metadata remains unknown; only signed manifests supply text defaults.
+        # 上游模态元数据缺失时维持未知；只有受签名清单提供文本默认值。
 
         $candidateAliases = [System.Collections.Generic.List[string]]::new()
         foreach ($candidate in @($model.canonical_slug, $model.name, ($key -split "/")[-1])) {
@@ -164,7 +150,7 @@ function Get-RemoteModelRecords {
         $records.Add([pscustomobject]@{
             key = $key
             aliases = @($candidateAliases | Sort-Object -Unique)
-            context_window = if ($null -ne $model.context_length -and [long]$model.context_length -gt 0) { [long]$model.context_length } else { 200000 }
+            context_window = if ($null -ne $model.context_length -and [long]$model.context_length -gt 0) { [long]$model.context_length } else { $null }
             input_modalities = $inputs
             output_modalities = $outputs
         })
@@ -186,7 +172,7 @@ function Get-ExistingModelRecords {
         [pscustomobject]@{
             key = [string]$_.key
             aliases = @($_.aliases)
-            context_window = [long]$_.context_window
+            context_window = if ($null -ne $_.context_window) { [long]$_.context_window } else { $null }
             input_modalities = @($_.input_modalities)
             output_modalities = @($_.output_modalities)
         }
@@ -212,7 +198,7 @@ function Merge-RemoteCapabilityMetadata {
     foreach ($record in $RemoteRecords) {
         if (-not $byKey.ContainsKey($record.key)) { $byKey[$record.key] = $record }
         $tail = ($record.key -split "/")[-1]
-        if (-not $byTail.ContainsKey($tail)) { $byTail[$tail] = $record }
+        if (-not $byTail.ContainsKey($tail)) { $byTail[$tail] = $record } else { $byTail[$tail] = $null }
     }
 
     $records = [System.Collections.Generic.List[object]]::new()
@@ -226,14 +212,16 @@ function Merge-RemoteCapabilityMetadata {
         } elseif ($byTail.ContainsKey($tail)) {
             $reference = $byTail[$tail]
         }
-        $contextWindow = [long]$record.context_window
+        $contextWindow = $record.context_window
         $inputs = @($record.input_modalities)
         $outputs = @($record.output_modalities)
         $aliases = @($record.aliases)
         if ($null -ne $reference) {
             [void]$matchedKeys.Add($reference.key)
             $enrichedCount++
-            if ($contextWindow -le 0 -and [long]$reference.context_window -gt 0) { $contextWindow = [long]$reference.context_window }
+            # A remote token window is not proof of a media-generation endpoint's input budget.
+            # 远端 Token 窗口不是媒体生成入口输入预算的证明。
+            if ($null -eq $contextWindow -and (@($outputs) -contains "text") -and $null -ne $reference.context_window -and [long]$reference.context_window -gt 0) { $contextWindow = [long]$reference.context_window }
             if ($inputs.Count -eq 0) { $inputs = @($reference.input_modalities) }
             if ($outputs.Count -eq 0) { $outputs = @($reference.output_modalities) }
             $aliases = @(@($record.aliases) + @($reference.aliases) | Sort-Object -Unique)
@@ -275,13 +263,18 @@ function New-CommonModelCapabilityDocument {
                 Where-Object { $aliasOwners[$_].Count -eq 1 -and -not $canonicalKeys.Contains($_) } |
                 Sort-Object -Unique
         )
-        [ordered]@{
+        $entry = [ordered]@{
             key = $record.key
             aliases = $uniqueAliases
-            context_window = if ([long]$record.context_window -gt 0) { [long]$record.context_window } else { 200000 }
-            input_modalities = @($record.input_modalities)
-            output_modalities = @($record.output_modalities)
         }
+        if ($null -ne $record.context_window -and [long]$record.context_window -gt 0) {
+            $entry.context_window = [long]$record.context_window
+        } elseif (@($record.output_modalities) -contains "text") {
+            $entry.context_window = 200000
+        }
+        $entry.input_modalities = @($record.input_modalities)
+        $entry.output_modalities = @($record.output_modalities)
+        $entry
     }
 
     return [ordered]@{

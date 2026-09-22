@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openrouter",
-  "revision": 10,
-  "published_at": "2026-09-13T14:41:39Z",
+  "revision": 11,
+  "published_at": "2026-09-22T15:17:52Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -100,8 +100,21 @@
       ],
       "request_projector": "routed_compatible",
       "model_catalog": {
-        "source_policy": "manifest_and_discovery",
-        "discovery_kind": "open_router"
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          { "model_id": "openai/gpt-5.6-sol", "display_name": "GPT-5.6 Sol" },
+          { "model_id": "openai/gpt-5.6-terra", "display_name": "GPT-5.6 Terra" },
+          { "model_id": "anthropic/claude-sonnet-5", "display_name": "Claude Sonnet 5" },
+          { "model_id": "anthropic/claude-opus-4.8", "display_name": "Claude Opus 4.8" },
+          { "model_id": "google/gemini-3.1-pro-preview", "display_name": "Gemini 3.1 Pro Preview" },
+          { "model_id": "google/gemini-3.5-flash", "display_name": "Gemini 3.5 Flash" },
+          { "model_id": "deepseek/deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" },
+          { "model_id": "deepseek/deepseek-v4-flash", "display_name": "DeepSeek V4 Flash" },
+          { "model_id": "qwen/qwen3.6-plus", "display_name": "Qwen3.6 Plus" },
+          { "model_id": "z-ai/glm-5.2", "display_name": "GLM-5.2" },
+          { "model_id": "minimax/minimax-m3", "display_name": "MiniMax M3" }
+        ]
       },
       "protocol_routes": [
         {
@@ -157,8 +170,8 @@
   ],
   "model_defaults": {
     "default_enabled": false,
-    "catalog_membership_policy": "declared_and_discovery",
-    "unknown_model_policy": "default_binding_allowed",
+    "catalog_membership_policy": "declared_only",
+    "unknown_model_policy": "declared_rule_required",
     "supported_protocols": [
       "anthropic-messages.v1",
       "openai-chat-completions.v1",
@@ -383,108 +396,6 @@
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-responses.v1",
-      "model_parameters": [],
-      "default_enabled": true
-    },
-    {
-      "rule_id": "featured-openai-text-embedding-3-small",
-      "scope": {
-        "service_entry_ids": [],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "openai/text-embedding-3-small"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "model_parameters": [],
-      "default_enabled": true
-    },
-    {
-      "rule_id": "featured-cohere-rerank-v3.5",
-      "scope": {
-        "service_entry_ids": [],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "cohere/rerank-v3.5"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "model_parameters": [],
-      "default_enabled": true
-    },
-    {
-      "rule_id": "featured-openai-gpt-image-1",
-      "scope": {
-        "service_entry_ids": [],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "openai/gpt-image-1"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "model_parameters": [],
-      "default_enabled": true
-    },
-    {
-      "rule_id": "featured-google-veo-3.1",
-      "scope": {
-        "service_entry_ids": [],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "google/veo-3.1"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "model_parameters": [],
-      "default_enabled": true
-    },
-    {
-      "rule_id": "featured-minimax-speech-2.8-turbo",
-      "scope": {
-        "service_entry_ids": [],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "minimax/speech-2.8-turbo"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "model_parameters": [],
-      "default_enabled": true
-    },
-    {
-      "rule_id": "featured-openai-whisper-large-v3-turbo",
-      "scope": {
-        "service_entry_ids": [],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "openai/whisper-large-v3-turbo"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
       "model_parameters": [],
       "default_enabled": true
     }

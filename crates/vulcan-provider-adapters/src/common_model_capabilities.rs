@@ -22,9 +22,10 @@ struct CommonModelCapabilityRecord {
     /// 无歧义的精确匹配别名。
     #[serde(default)]
     aliases: Vec<String>,
-    /// Maximum context window in tokens.
-    /// 最大上下文 Token 窗口。
-    context_window: u64,
+    /// Declared context window in tokens, absent when a media model has no token limit.
+    /// 已声明的上下文 Token 窗口；媒体模型没有 Token 上限时缺省。
+    #[serde(default)]
+    context_window: Option<u64>,
     /// Supported input modalities.
     /// 支持的输入模态。
     input_modalities: Vec<CommonModelModality>,
@@ -127,9 +128,9 @@ pub struct CommonModelCapabilityResolution {
     /// Whether the catalog matched an exact key or registered alias.
     /// 目录是否命中了精确键或已登记别名。
     pub matched: bool,
-    /// Resolved context window.
-    /// 解析后的上下文窗口。
-    pub context_window: u64,
+    /// Resolved context window when one is actually known or a text fallback applies.
+    /// 已知真实窗口或适用文本回退值时解析出的上下文窗口。
+    pub context_window: Option<u64>,
     /// Whether the source explicitly supports text input.
     /// 来源是否明确支持文本输入。
     pub supports_text_input: bool,
@@ -262,7 +263,12 @@ pub fn resolve_common_model_capabilities(model_id: &str) -> CommonModelCapabilit
     match record {
         Some(record) => CommonModelCapabilityResolution {
             matched: true,
-            context_window: record.context_window,
+            context_window: record.context_window.or_else(|| {
+                record
+                    .output_modalities
+                    .contains(&CommonModelModality::Text)
+                    .then_some(COMMON_MODEL_FALLBACK_CONTEXT_WINDOW)
+            }),
             supports_text_input: record.input_modalities.contains(&CommonModelModality::Text),
             supports_text_output: record
                 .output_modalities
@@ -272,7 +278,7 @@ pub fn resolve_common_model_capabilities(model_id: &str) -> CommonModelCapabilit
         },
         None => CommonModelCapabilityResolution {
             matched: false,
-            context_window: COMMON_MODEL_FALLBACK_CONTEXT_WINDOW,
+            context_window: Some(COMMON_MODEL_FALLBACK_CONTEXT_WINDOW),
             supports_text_input: true,
             supports_text_output: true,
             input_resources: Vec::new(),
@@ -299,7 +305,7 @@ pub fn apply_common_model_capability_defaults(
 ) -> bool {
     let resolution = resolve_common_model_capabilities(model_id);
     if capabilities.context_limit.is_none() {
-        capabilities.context_limit = Some(resolution.context_window);
+        capabilities.context_limit = resolution.context_window;
     }
     if capabilities.input_resources.is_empty() {
         capabilities.input_resources = resolution.input_resources;
@@ -333,7 +339,7 @@ pub fn apply_common_model_context_default(
 ) -> bool {
     let resolution = resolve_common_model_capabilities(model_id);
     if capabilities.context_limit.is_none() {
-        capabilities.context_limit = Some(resolution.context_window);
+        capabilities.context_limit = resolution.context_window;
     }
     resolution.matched
 }
@@ -384,8 +390,8 @@ fn common_model_capability_index() -> &'static CommonModelCapabilityIndex {
                 "embedded common model capability keys must be normalized"
             );
             assert!(
-                record.context_window > 0,
-                "embedded common model capability context windows must be positive"
+                record.context_window.is_none_or(|limit| limit > 0),
+                "embedded common model capability context windows must be positive when declared"
             );
             let key = record.key.clone();
             assert!(
@@ -605,7 +611,9 @@ fn template_suggestion(
         template_key: record.key.clone(),
         template_revision: String::from(CUSTOM_MODEL_TEMPLATE_REVISION),
         match_kind,
-        context_limit: record.context_window,
+        context_limit: record
+            .context_window
+            .unwrap_or(COMMON_MODEL_FALLBACK_CONTEXT_WINDOW),
         supports_text_input: record.input_modalities.contains(&CommonModelModality::Text),
         supports_text_output: record
             .output_modalities
@@ -640,7 +648,7 @@ mod tests {
     fn exact_identifier_resolves_generated_capabilities() {
         let resolution = resolve_common_model_capabilities("deepseek/deepseek-v3.2");
         assert!(resolution.matched);
-        assert!(resolution.context_window > 0);
+        assert!(resolution.context_window.is_some_and(|limit| limit > 0));
     }
 
     /// Verifies an unknown identifier gets the documented conservative fallback.
@@ -649,7 +657,7 @@ mod tests {
     fn unknown_model_uses_text_only_two_hundred_thousand_fallback() {
         let resolution = resolve_common_model_capabilities("vendor/private-model-never-listed");
         assert!(!resolution.matched);
-        assert_eq!(resolution.context_window, 200_000);
+        assert_eq!(resolution.context_window, Some(200_000));
         assert!(resolution.supports_text_input);
         assert!(resolution.supports_text_output);
         assert!(resolution.input_resources.is_empty());
@@ -666,7 +674,7 @@ mod tests {
         };
 
         let matched = apply_common_model_capability_defaults(
-            "openai/text-embedding-3-small",
+            "qwen3.7-text-embedding",
             &mut capabilities,
         );
 
@@ -676,6 +684,20 @@ mod tests {
                 .operations
                 .contains(&vulcan_ai_contract::AiOperation::ConversationRespond)
         );
+    }
+
+    /// Verifies a media model with no declared token window remains unspecified in the catalog.
+    /// 验证未声明 Token 窗口的媒体模型在目录中继续保持未设置状态。
+    #[test]
+    fn media_model_without_declared_window_does_not_receive_text_fallback() {
+        let resolution = resolve_common_model_capabilities("grok-imagine-video");
+        assert!(resolution.matched);
+        assert_eq!(resolution.context_window, None);
+        assert!(!resolution.supports_text_output);
+        let mut capabilities = ModelCapabilities::default();
+        apply_common_model_capability_defaults("grok-imagine-video", &mut capabilities);
+        assert_eq!(capabilities.context_limit, None);
+        assert_eq!(capabilities.output_resources, vec![ResourceKind::Video]);
     }
 
     /// Verifies specific declarations are never overwritten by the common catalog.
@@ -737,7 +759,7 @@ mod tests {
     fn gpt_five_three_codex_spark_uses_explicit_context() {
         let resolution = resolve_common_model_capabilities("GPT 5,3 Codex Spark");
         assert!(resolution.matched);
-        assert_eq!(resolution.context_window, 128_000);
+        assert_eq!(resolution.context_window, Some(128_000));
         assert!(resolution.supports_text_input);
         assert!(resolution.supports_text_output);
     }

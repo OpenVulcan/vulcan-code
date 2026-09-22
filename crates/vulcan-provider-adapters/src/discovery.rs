@@ -2626,15 +2626,15 @@ fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabi
 fn openrouter_capability_evidence(model: &OpenRouterModelEntry) -> ModelCapabilityEvidence {
     let architecture = model.architecture.as_ref();
     ModelCapabilityEvidence {
-        context_limit_declared: model.context_length.is_some()
+        context_limit_declared: openrouter_declared_token_limit(model.context_length).is_some()
             || model
                 .top_provider
                 .as_ref()
-                .is_some_and(|provider| provider.context_length.is_some()),
+                .is_some_and(|provider| openrouter_declared_token_limit(provider.context_length).is_some()),
         output_limit_declared: model
             .top_provider
             .as_ref()
-            .is_some_and(|provider| provider.max_completion_tokens.is_some()),
+            .is_some_and(|provider| openrouter_declared_token_limit(provider.max_completion_tokens).is_some()),
         input_modalities_declared: architecture
             .is_some_and(|architecture| architecture.input_modalities.is_some()),
         output_modalities_declared: architecture
@@ -2662,13 +2662,21 @@ fn openrouter_effective_context_limit(model: &OpenRouterModelEntry) -> Option<u6
     let provider_context_limit = model
         .top_provider
         .as_ref()
-        .and_then(|provider| provider.context_length);
-    match (model.context_length, provider_context_limit) {
+        .and_then(|provider| openrouter_declared_token_limit(provider.context_length));
+    match (openrouter_declared_token_limit(model.context_length), provider_context_limit) {
         (Some(model_limit), Some(provider_limit)) => Some(model_limit.min(provider_limit)),
         (Some(model_limit), None) => Some(model_limit),
         (None, Some(provider_limit)) => Some(provider_limit),
         (None, None) => None,
     }
+}
+
+/// Treats a zero reported token limit as an absent declaration.
+/// 将上游报告的零 Token 上限视为未声明。
+/// `value` is one optional upstream limit; returns only a positive declared limit.
+/// `value` 是上游可选上限；只返回明确声明的正数上限。
+fn openrouter_declared_token_limit(value: Option<u64>) -> Option<u64> {
+    value.filter(|limit| *limit > 0)
 }
 
 /// Bounds OpenRouter's top-provider completion limit by the resolved context boundary.
@@ -2689,7 +2697,7 @@ fn openrouter_effective_output_limit(
     let output_limit = model
         .top_provider
         .as_ref()
-        .and_then(|provider| provider.max_completion_tokens)?;
+        .and_then(|provider| openrouter_declared_token_limit(provider.max_completion_tokens))?;
     // Dedicated media discovery must preserve reported limits without applying a chat window.
     // 专用媒体模型的发现结果保留原始限制，不套用文本会话窗口进行收敛。
     let evidence = openrouter_capability_evidence(model);
