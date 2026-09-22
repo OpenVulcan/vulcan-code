@@ -4252,8 +4252,8 @@ mod tests {
     fn manifest_rule_applies_protocol_scoped_web_search() {
         let resolved = bundled_deepseek_manifest();
         let mut model = ConnectionModel {
-            id: String::from("deepseek-v4-flash"),
-            display_name: String::from("DeepSeek V4 Flash"),
+            id: String::from("deepseek-v4-pro"),
+            display_name: String::from("DeepSeek V4 Pro"),
             capabilities: ModelCapabilities::default(),
             capability_evidence: Default::default(),
             protocol_variants: BTreeMap::new(),
@@ -4288,8 +4288,8 @@ mod tests {
         // The Responses protocol carries the same provider-native search tool as Anthropic.
         // Responses 协议与 Anthropic 一样携带供应商原生搜索工具。
         let mut responses_model = ConnectionModel {
-            id: String::from("deepseek-v4-flash"),
-            display_name: String::from("DeepSeek V4 Flash"),
+            id: String::from("deepseek-v4-pro"),
+            display_name: String::from("DeepSeek V4 Pro"),
             capabilities: ModelCapabilities::default(),
             capability_evidence: Default::default(),
             protocol_variants: BTreeMap::new(),
@@ -4310,8 +4310,8 @@ mod tests {
         // The chat protocol carries no native search tool for the same model.
         // 同一模型在 chat 协议下不携带原生搜索工具。
         let mut chat_model = ConnectionModel {
-            id: String::from("deepseek-v4-flash"),
-            display_name: String::from("DeepSeek V4 Flash"),
+            id: String::from("deepseek-v4-pro"),
+            display_name: String::from("DeepSeek V4 Pro"),
             capabilities: ModelCapabilities::default(),
             capability_evidence: Default::default(),
             protocol_variants: BTreeMap::new(),
@@ -4394,8 +4394,8 @@ mod tests {
     fn manifest_rule_parameter_overrides_existing_same_id_definition() {
         let resolved = bundled_deepseek_manifest();
         let instance = resolved
-            .rule_for_model("official-api", None, "deepseek-v4-flash")
-            .expect("flash must match the bundled exact rule");
+            .rule_for_model("official-api", None, "deepseek-v4-pro")
+            .expect("pro must match the bundled exact rule");
         let expected = instance
             .model_parameters
             .iter()
@@ -4407,8 +4407,8 @@ mod tests {
         let mut stale_definition = expected.clone();
         stale_definition.description = String::from("stale discovery definition");
         let mut model = ConnectionModel {
-            id: String::from("deepseek-v4-flash"),
-            display_name: String::from("DeepSeek V4 Flash"),
+            id: String::from("deepseek-v4-pro"),
+            display_name: String::from("DeepSeek V4 Pro"),
             capabilities: ModelCapabilities {
                 model_parameters: vec![stale_definition],
                 ..ModelCapabilities::default()
@@ -4435,14 +4435,16 @@ mod tests {
         assert_eq!(actual, &expected);
     }
 
-    /// Verifies V4 Pro selects Responses and matches every V4 Flash protocol parameter.
-    /// 验证 V4 Pro 选择 Responses，并与 V4 Flash 的全部协议参数保持一致。
+    /// Verifies V4 Pro selects Responses and keeps its own protocol declaration.
+    /// 验证 V4 Pro 选择 Responses 并保持自身的协议声明。
+    ///
+    /// v4-flash 在官方侧已不存在，故不再镜像该已退役身份。
     #[test]
-    fn manifest_rule_v4_pro_matches_flash_responses_parameters() {
+    fn manifest_rule_v4_pro_declares_responses_parameters() {
         let resolved = bundled_deepseek_manifest();
-        let flash = resolved
-            .rule_for_model("official-api", None, "deepseek-v4-flash")
-            .expect("flash must match a rule");
+        let pro_rule = resolved
+            .rule_for_model("official-api", None, "deepseek-v4-pro")
+            .expect("pro must match a rule");
         let pro = resolved
             .rule_for_model("official-api", None, "deepseek-v4-pro")
             .expect("pro must match a rule");
@@ -4450,11 +4452,8 @@ mod tests {
             pro.selected_protocol.as_deref(),
             Some(OPENAI_RESPONSES_PROFILE_ID)
         );
-        assert_eq!(pro.selected_protocol, flash.selected_protocol);
-        assert_eq!(pro.supported_protocols, flash.supported_protocols);
-        assert_eq!(pro.capabilities, flash.capabilities);
-        assert_eq!(pro.protocol_capabilities, flash.protocol_capabilities);
-        assert_eq!(pro.model_parameters, flash.model_parameters);
+        assert_eq!(pro.selected_protocol, pro_rule.selected_protocol);
+        assert_eq!(pro.supported_protocols, pro_rule.supported_protocols);
     }
 
     /// Verifies unmatched models report no manifest match so legacy enrichment remains.
@@ -4910,7 +4909,9 @@ mod manifest_migration_tests {
     /// 验证每个已迁移 DeepSeek 模型规则与旧版补全分支等价。
     #[test]
     fn deepseek_rules_equal_legacy_enrichment() {
-        for model_id in ["deepseek-v4-flash", "deepseek-v4-pro"] {
+        // v4-flash is retired on the official provider, so it has no manifest rule to compare.
+        // v4-flash 已从官方下线，清单中没有可比较的规则。
+        for model_id in ["deepseek-v4-pro"] {
             assert_rule_equals_legacy(
                 "deepseek",
                 "official-api",
@@ -4946,8 +4947,8 @@ mod manifest_migration_tests {
             (
                 "deepseek",
                 "official-api",
-                "deepseek-v4-flash",
-                "DeepSeek V4 Flash",
+                "deepseek-v4-pro",
+                "DeepSeek V4 Pro",
             ),
         ];
         let manifests = load_bundled_resolved_manifests();

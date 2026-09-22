@@ -794,7 +794,10 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
         .iter()
         .map(|model| model.model_id.as_str())
         .collect::<BTreeSet<_>>();
-    assert_eq!(declared_model_ids, BTreeSet::from(["deepseek-flash"]));
+    assert_eq!(
+        declared_model_ids,
+        BTreeSet::from(["deepseek-flash", "deepseek-v4-pro"])
+    );
     assert_eq!(
         compiled.catalog_membership_policy,
         vulcan_provider_adapters::CatalogMembershipPolicy::DeclaredOnly
@@ -812,7 +815,6 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
         "deepseek-v4-flash",
         "deepseek-v4.1-flash-expires-on-0910",
         "deepseek-v4-flash-vision-exp",
-        "deepseek-v4-pro",
     ];
     // retiredModelId checks every removed identity against the compiled exact-rule table.
     // retiredModelId 逐一检查所有已移除身份不会命中编译后的精确规则表。
@@ -824,8 +826,8 @@ fn deepseek_manifest_declares_only_current_official_models_and_protocols() {
             "retired DeepSeek model {retired_model_id} must not remain declared"
         );
     }
-    // flash is the only current official model identity exposed by the static catalog.
-    // flash 是静态目录公开的唯一当前官方模型身份。
+    // flash is the current V4.1 official identity of the static catalog; v4-pro is the retained V4 identity.
+    // flash 是静态目录内的当前 V4.1 官方身份；v4-pro 是保留在用的 V4 身份。
     let flash = compiled
         .rule_for_model("official-api", None, "deepseek-flash")
         .expect("DeepSeek V4.1 Flash rule must exist");
@@ -2191,7 +2193,9 @@ fn apikeyfan_manifest_is_a_closed_group_intersection() {
     // deepseekDocument 是中转一致性检查所使用的官方能力权威。
     let deepseek_document: Value =
         serde_json::from_str(&deepseek_text).expect("deepseek manifest should parse");
-    for model_id in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+    // v4-flash is intentionally absent: the official provider retired it, while the relay still serves it.
+    // v4-flash 有意排除：官方已下线该身份，中转侧仍在提供，名值镜像对它不再成立。
+    for model_id in ["deepseek-v4-pro"] {
         // officialRule is the exact official DeepSeek model declaration.
         // officialRule 是精确的 DeepSeek 官方模型声明。
         let official_rule = deepseek_document["model_rules"]

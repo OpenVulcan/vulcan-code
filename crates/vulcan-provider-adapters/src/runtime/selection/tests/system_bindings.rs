@@ -363,7 +363,9 @@ fn deepseek_manifest_identity_supplies_current_protocol_variants() {
     let catalog = catalogs
         .get("deepseek-existing-account")
         .expect("existing DeepSeek account catalog should exist");
-    assert_eq!(catalog.models.len(), 1);
+    // The fixed catalog declares both retained official identities: V4.1 Flash and V4 Pro.
+    // 定死目录同时声明两个仍在用的官方身份：V4.1 Flash 与 V4 Pro。
+    assert_eq!(catalog.models.len(), 2);
     // flash must bind Responses while retaining Chat and Anthropic protocol variants.
     // flash 必须绑定 Responses，同时保留 Chat 与 Anthropic 协议变体。
     let flash = catalog

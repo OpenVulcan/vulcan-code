@@ -391,9 +391,9 @@ mod tests {
             &manifest,
             "official-api",
             Some("api-key"),
-            "deepseek-v4-flash",
+            "deepseek-flash",
         )
-        .expect("v4-flash must bind");
+        .expect("deepseek flash must bind");
         assert_eq!(flash.protocol_profile_id, "openai-responses.v1");
         assert_eq!(binding.protocol_profile_id, flash.protocol_profile_id);
     }

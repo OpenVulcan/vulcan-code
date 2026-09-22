@@ -97,7 +97,7 @@ fn model_scoped_profiles_freeze_into_the_execution_route() {
     let rule = manifest
         .rule_instances
         .iter_mut()
-        .find(|rule| rule.matcher.matches("deepseek-v4-flash"))
+        .find(|rule| rule.matcher.matches("deepseek-flash"))
         .expect("DeepSeek flash rule must compile");
     rule.usage_profile_refs = vec![String::from("deepseek.chat.sse.usage.v1")];
     rule.request_profile_refs = vec![String::from("deepseek.chat.thinking.v1")];
@@ -107,7 +107,7 @@ fn model_scoped_profiles_freeze_into_the_execution_route() {
         &manifest,
         "official-api",
         Some("api-key"),
-        "deepseek-v4-flash",
+        "deepseek-flash",
         vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
         Vec::new(),
     )
@@ -128,7 +128,7 @@ fn model_scoped_profiles_freeze_into_the_execution_route() {
         &manifest,
         "official-api",
         Some("api-key"),
-        "deepseek-v4-flash",
+        "deepseek-flash",
         Vec::new(),
     )
     .expect("matched request profile must resolve");
@@ -147,7 +147,7 @@ fn model_scoped_profiles_freeze_into_the_execution_route() {
         &manifest,
         "official-api",
         Some("api-key"),
-        "deepseek-v4-flash",
+        "deepseek-flash",
         Vec::new(),
     )
     .expect("matched response profile must resolve");
@@ -213,7 +213,7 @@ fn explicit_empty_model_profiles_clear_route_special_cases() {
     let rule = manifest
         .rule_instances
         .iter_mut()
-        .find(|rule| rule.matcher.matches("deepseek-v4-flash"))
+        .find(|rule| rule.matcher.matches("deepseek-flash"))
         .expect("DeepSeek flash rule must compile");
     rule.usage_profile_refs.clear();
     rule.request_profile_refs.clear();
@@ -236,7 +236,7 @@ fn explicit_empty_model_profiles_clear_route_special_cases() {
         &manifest,
         "official-api",
         Some("api-key"),
-        "deepseek-v4-flash",
+        "deepseek-flash",
         vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
         route_usage_default,
     )
@@ -245,7 +245,7 @@ fn explicit_empty_model_profiles_clear_route_special_cases() {
         &manifest,
         "official-api",
         Some("api-key"),
-        "deepseek-v4-flash",
+        "deepseek-flash",
         route_request_default,
     )
     .expect("explicit request clear must resolve");
@@ -253,7 +253,7 @@ fn explicit_empty_model_profiles_clear_route_special_cases() {
         &manifest,
         "official-api",
         Some("api-key"),
-        "deepseek-v4-flash",
+        "deepseek-flash",
         route_response_default,
     )
     .expect("explicit response clear must resolve");
