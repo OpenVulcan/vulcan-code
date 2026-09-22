@@ -41,7 +41,7 @@ use vulcan_workspace_store::{data_plane::HostRuntimeHandle, workspace_store::Wor
 
 use super::{
     AgentRuntimeBridge, ServiceBridgeState, SharedServiceBridgeState,
-    StreamTaskLaunchFailureCommit, active_public_ai_model_capabilities,
+    StreamTaskLaunchFailureCommit, session_public_ai_model_capabilities,
     active_reasoning_selection_effort, active_stream_task_matches_id,
     append_runtime_event_projection_and_release_barrier,
     append_webui_session_message_entry_to_state, apply_observed_usage_to_context_budget,

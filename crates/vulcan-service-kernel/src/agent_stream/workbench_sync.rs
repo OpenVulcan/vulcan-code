@@ -116,12 +116,9 @@ pub(crate) fn apply_execution_preparation(
                     .insert(preparation.session_id, context_budget);
             }
             let live_context_budgets = guard.live_context_budgets.clone();
-            let public_model_capabilities = active_public_ai_model_capabilities(
-                guard
-                    .agent_runtime
-                    .as_ref()
-                    .map(|runtime| runtime.public_ai_runtime.as_ref()),
-            );
+            // public_model_capabilities belongs to the frozen route prepared for this request.
+            // public_model_capabilities 属于本次请求准备阶段冻结的路由。
+            let public_model_capabilities = &preparation.model_blueprint.public_capabilities;
             let context_usage = {
                 // workspace passed preflight before live budget and runtime identity mutation.
                 // workspace 在 live budget 与运行时身份变更前已通过预检。
@@ -183,7 +180,7 @@ pub(crate) fn apply_execution_preparation(
                     workspace.session_runtime_state.get(&preparation.session_id),
                     v1_usage_facts.as_ref(),
                     &live_context_budgets,
-                    public_model_capabilities.as_ref(),
+                    Some(public_model_capabilities),
                     preparation
                         .context_compaction_policy
                         .and_then(|policy| policy.compression_window_limit),

@@ -57,11 +57,13 @@ pub(crate) fn context_compaction_budget_snapshot_from_state(
             (
                 guard.live_context_budgets.get(&session_id).cloned(),
                 runtime_state.clone(),
-                active_public_ai_model_capabilities(
+                session_public_ai_model_capabilities(
                     guard
                         .agent_runtime
                         .as_ref()
                         .map(|runtime| runtime.public_ai_runtime.as_ref()),
+                    session_id,
+                    runtime_state.as_ref(),
                 ),
                 crate::context_compaction_window_limit_from_configuration(
                     runtime_state.as_ref(),

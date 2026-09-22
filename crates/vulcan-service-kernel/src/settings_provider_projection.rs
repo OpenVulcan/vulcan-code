@@ -537,7 +537,10 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use super::{public_ai_workbench_selection, public_ai_workbench_selection_from_runtime_state};
+    use super::{
+        public_ai_workbench_selection, public_ai_workbench_selection_from_runtime_state,
+        session_public_ai_model_capabilities,
+    };
     use vulcan_provider_adapters::{
         ActiveAiModelSelection, CredentialConnection, CredentialMode, PersistedAiConfiguration,
         ProtocolModelVariant, PublicAiRuntime, UnavailableCredentialSecretResolver,
@@ -687,6 +690,39 @@ mod tests {
         assert_eq!(selection.model.id, "openai/gpt-5.6-terra");
     }
 
+    /// Verifies historical session budgets cannot inherit the configured global model limits.
+    /// 验证历史会话预算不能继承已配置全局模型的容量限制。
+    #[test]
+    fn session_capabilities_require_the_exact_current_session_route() {
+        let (_configuration, runtime) = runtime_with_global_selection();
+        let session_id = crate::SessionId::from_u128(0x7120);
+        let unrelated_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("commandcode")),
+            active_connection_id: Some(String::from("commandcode-account")),
+            active_model_id: Some(String::from("deepseek/deepseek-v4-flash")),
+            ..Default::default()
+        };
+        assert!(
+            session_public_ai_model_capabilities(
+                Some(&runtime),
+                session_id,
+                Some(&unrelated_state),
+            )
+            .is_none()
+        );
+        let matching_state = vulcan_workbench_model::SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("openrouter")),
+            active_connection_id: Some(String::from("global-account")),
+            active_model_id: Some(String::from("openai/gpt-5.6-terra")),
+            ..Default::default()
+        };
+        assert_eq!(
+            session_public_ai_model_capabilities(Some(&runtime), session_id, Some(&matching_state))
+                .and_then(|capabilities| capabilities.context_limit),
+            Some(8192)
+        );
+    }
+
     /// An unread existing session must not masquerade as a draft and adopt the global model.
     /// 未读取配置的既有会话不得伪装成草稿并采用全局模型。
     #[test]
@@ -743,25 +779,38 @@ mod tests {
     }
 }
 
-/// Resolves the active public model capability snapshot without exposing credential material.
-/// 在不暴露凭据材料的前提下解析当前公共模型能力快照。
+/// Resolves the exact current session model capability snapshot without using global selection.
+/// 按当前会话的精确模型解析能力快照，不使用全局选择。
 ///
 /// # Parameters
 /// 参数
-/// `runtime` is the optional process-local public AI runtime.
-/// `runtime` 是可选的进程内公共 AI 运行时。
+/// `runtime` owns the process-local route, `session_id` identifies its lease, and
+/// `runtime_state` supplies the persisted current route when no coherent lease exists.
+/// `runtime` 持有进程内路由，`session_id` 标识其租约；没有一致租约时，
+/// `runtime_state` 提供持久化的当前路由。
 ///
 /// # Returns
 /// 返回值
-/// The active model capabilities when configuration and selection are both valid.
-/// 当配置与选择均有效时返回当前模型能力。
-pub(crate) fn active_public_ai_model_capabilities(
+/// The current session model capabilities when its exact route remains executable.
+/// 当前会话精确路由仍可执行时返回该模型的能力。
+pub(crate) fn session_public_ai_model_capabilities(
     runtime: Option<&vulcan_provider_adapters::PublicAiRuntime>,
+    session_id: crate::SessionId,
+    runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
 ) -> Option<vulcan_ai_contract::ModelCapabilities> {
     let runtime = runtime?;
+    let runtime_state = runtime_state?;
+    if let Ok(Some(selection)) =
+        session_process_public_ai_selection(runtime, session_id, Some(runtime_state))
+    {
+        return Some(selection.model.capabilities);
+    }
+    let provider_id = runtime_state.active_provider_id.as_deref()?;
+    let connection_id = runtime_state.active_connection_id.as_deref()?;
+    let model_id = runtime_state.active_model_id.as_deref()?;
     let configuration = runtime.configuration_snapshot().ok()?;
     runtime
-        .resolve_active_selection(&configuration)
+        .resolve_connection_model_selection(&configuration, connection_id, provider_id, model_id)
         .ok()
         .map(|selection| selection.model.capabilities)
 }
