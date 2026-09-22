@@ -44,7 +44,7 @@
 | A09 | 未回复不阻止完成；仅主动等待才等待；晚到答案不复活旧任务；无法回答可明确表达 | `unanswered_question_and_notification_do_not_block_completion_and_late_question_does_not_revive`、`late_answer_after_settlement_is_rejected_without_reviving_target_task` | **已实现，证据不足**（`unable_to_answer` 只有回显无持久化效果，见 §二.2） |
 | A10 | 自然空闲仅答疑不二次完成；MainOnly 可恢复；停止拒收；全树停止后迟到不复活 | `question_finished_...`、`question_launch_admits_main_only_...`、`stopped_target_wakeup_...` | **已实现，证据不足**（自动唤醒调度一跳，见 §二.1） |
 | A11 | 重复与并发按稳定标识结算；回执丢失后恢复原记录；同键不同正文明确冲突 | 操作身份幂等与 `RequestIdentityMismatch` 证据；S2.3 服务端 11 项 | 已实现并已验证 |
-| A12 | 各类崩溃窗口无静默丢失与虚假成功 | 归档/删除/冷加载证据；`remote_compaction_confirmation_failure_blocks_the_producer_without_fabricating_success` | 已实现并已验证 |
+| A12 | 各类崩溃窗口无静默丢失与虚假成功 | 归档/删除/冷加载证据；`remote_compaction_confirmation_failure_blocks_the_producer_without_fabricating_success`；**通知"来源已提交、目标未接纳"窗口的修复**（`25ecf35d`：修复计数 0→1、身份逐字不变、二次修复为 0） | 已实现并已验证 |
 | A13 | 压缩与尾段加载后仍能确定问题双方/状态/授权/未结事项；失效提示不被恢复成当前指令 | S3.1 作用域修正（`42651b34`、`523fa6cd`）；压缩前后协作证据 | 已实现并已验证 |
 | A14 | 标签伪造、错误收件人、跨树、未授权跨项目、撤销后发送均不能越权 | `cross_project_*` 三项 + `document_grant_allows` 逐动作（`6a65e457`） | 已实现并已验证 |
 | A15 | 仅支持当前新契约；未知版本明确拒绝；写入中断有可恢复边界 | 严格版本读取与拒绝路径 | **已实现，证据不足**（两处未知版本拒绝无测试，见 §三） |
@@ -77,7 +77,8 @@
    （`3df19776`）；提问方业务完成后首次答案到达仍正确结算且不复活旧业务（`f6a497c6`）；
    答案先到时立即观察到而不等满超时（`550a5c75`）；超时/重等/撤销与游标语义（`61718ca4`、`9f8a243c`）。
    **未证明**：子代理提问真正触发调度（需要知识访问解析、WebUI 准备代次所有者、Agent 运行时桥
-   与宿主句柄，本层无法构造）；工具回复后子代理收到答案；多等待者；双向互问；通知投递丢失后恢复。
+   与宿主句柄，本层无法构造）；工具回复后子代理收到答案；多等待者；双向互问。
+   通知投递丢失后恢复已由 `25ecf35d` 补齐（原为**实现缺口**而非证据不足）。
 
 2. **`reply_question` 的 `unable_to_answer`**（A09）。
    源码事实（本轮逐行核对）：该字段是回复工具的一个**布尔开关**（Schema 中 `default: false`，
@@ -143,7 +144,10 @@
 - **两处未知契约版本拒绝**（provider 路由租约的 `schema_version`、工具结果媒体信封版本）。
 - **线编码器层的相邻前缀稳定性**：需要 `PublicAiRuntime` 与冻结路由/凭据/客户端。
 - **真实 WebUI/RPC 与真实停止事务**；**真实冷注册表重启恢复**（编辑准入的冷态分支）。
-- **多等待者与双向互问**；**通知投递丢失后恢复**。
+- **多等待者与双向互问**。
+- **通知恢复的其余窗口**（`25ecf35d` 只修复了 `Recorded` 未接纳这一窗口）：目标已接纳但未投影、
+  目标接纳后来源进度写入失败、授权撤销时的恢复、`Failed` 状态通知的恢复语义；
+  以及真实进程重启与冷注册表重建下的通知恢复一跳。
 - **VMM Profile 生产者链**（本任务范围外，未触碰）。
 - `native_compaction_uses_host_history_and_preserves_execution_identity` 在默认线程栈下溢出
   （既有问题，`RUST_MIN_STACK=67108864` 可通过）；该溢出会中断 `--lib` 全量运行，
