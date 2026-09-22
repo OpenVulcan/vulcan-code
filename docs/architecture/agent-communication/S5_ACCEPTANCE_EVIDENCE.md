@@ -143,12 +143,24 @@
 
 - **运行中的真实 Provider 流**：V1 `SystemContext → ProjectedItem → provider_v1_sink` 的物理消息、
   真实模型回答、`RuntimeOnly` 远端压缩端到端一跳、真实 401 → OAuth 刷新 → 第二次真实 HTTP。
-- **"401 → 刷新 → 重放"两端各自被测、中间无连接证据**（本轮把该缺口定位得更准确）：
-  运行时重试判定 `refreshed_oauth_credential_retry_decision` 的测试**自行伪造**"凭据已刷新"标记
-  （直接把 `OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY` 写入夹具），而该标记的真实生产者是适配器的
-  `recover_rejected_oauth_credential`（`provider_transport_vulcan/streaming.rs`）。
-  因此若生产者不再发出该标记，运行时测试仍会通过。真实编排需要可续期凭据租约 + 凭据刷新服务 +
-  回环 HTTP，尚未构造。
+- **"401 → 刷新 → 重放"的中间连接已补齐并加守护**（`b619280a`），但**仍缺真实端到端编排**。
+  已修复的结构性风险：运行时重试判定 `refreshed_oauth_credential_retry_decision` 的原有测试
+  **自行复刻**"凭据已刷新"标记，不经过生产者也不经过适配器的 Core 错误投影，因此**若适配器不再
+  发出该子类别或不再置 `retryable`，该测试仍会通过**而真实重放失效。
+  修复方式：把生产者的标注抽成唯一来源
+  `provider_transport_vulcan::streaming::mark_credential_refreshed_after_unauthorized`，
+  并新增跨层测试 `host_retry_decision_accepts_the_adapters_real_credential_recovery_marker`：
+  先断言未恢复的 401 不授权重放，再**调用适配器自身的标注函数**并经 `public_execution_failure`
+  投影，最后断言宿主判定给出一次性零延迟重放。**已做变异验证**（把生产者写成 "MUTANT" 后该测试
+  确实失败，恢复后通过），因此它是真断言而非永真测试。
+  仍缺：**真实的"401 → 真实刷新 → 第二次真实 HTTP"**。合成凭据不可续期，
+  `refresh_after_unauthorized` 会走 `Ok(false)` 分支，无法驱动重放路径；补齐需要可注入的凭据覆盖。
+  本项另两个子缺口经复核**已有覆盖**，不需新增：
+  `standalone_confirmation_refusal_and_vanished_consumer_fail_within_bounds`（许可被拒绝 →
+  生产者收到强类型拒绝而非被丢弃的许可）与
+  `provider_v1_sink/tests/remote_checkpoint.rs` 的
+  `remote_compaction_confirmation_failure_blocks_the_producer_without_fabricating_success`
+  （终态持久化失败 → 不跨屏障、不伪造成功）。
 - **"父子交叉互问"（A07 的更强组合）未取得证据；原因仍未定论，且本轮**推翻了我上一轮记下的
   一项错误结论**。修正后的实测事实：
   - **夹具侧是自洽的，不是问题所在**（本轮更正）：父句柄的 `lifetime_usage_snapshot().root_session_id`
