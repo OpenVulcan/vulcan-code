@@ -56,6 +56,10 @@ mod child_question_launch;
 mod child_question_request;
 #[cfg(test)]
 mod execution_binding_tests;
+#[cfg(test)]
+mod native_dispatch_tests;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod launch;
 pub(crate) mod lifecycle_write;
 mod notifications;
