@@ -4,7 +4,11 @@
   "base_manifest": "alibaba.json",
   "production_target_refs": [
     "alibaba::model-studio-cn.qwen3-asr-flash.speech-transcribe",
-    "alibaba::model-studio-singapore.qwen3-asr-flash.speech-transcribe"
+    "alibaba::model-studio-singapore.qwen3-asr-flash.speech-transcribe",
+    "alibaba::token-plan-personal-cn.qwen-audio-3.0-asr-flash.speech-transcribe",
+    "alibaba::token-plan-personal-global.qwen-audio-3.0-asr-flash.speech-transcribe",
+    "alibaba::token-plan-team-cn.qwen-audio-3.0-asr-flash.speech-transcribe",
+    "alibaba::token-plan-team-global.qwen-audio-3.0-asr-flash.speech-transcribe"
   ],
   "tool_target": {
     "target_id": "model-studio-cn.fixture-qwen-asr-sync-generic",

@@ -14,6 +14,7 @@
     "alibaba::token-plan-team-cn.happyhorse-1.1-t2v",
     "alibaba::token-plan-team-cn.happyhorse-1.1-i2v",
     "alibaba::token-plan-personal-cn.happyhorse-1.1-r2v",
+    "alibaba::token-plan-personal-global.happyhorse-1.1-r2v",
     "alibaba::template.alibaba.model-studio-cn.wan-t2v.v1.27f17332cf683a6824333ef3ab59e5b0d31537bcf1d5afa2be7abd31d35c9e06"
   ],
   "tool_target": {

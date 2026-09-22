@@ -21,7 +21,11 @@
     "alibaba::model-studio-singapore.cosyvoice-v3-flash.speech-synthesize",
     "alibaba::model-studio-singapore.cosyvoice-v3-plus.speech-synthesize",
     "alibaba::model-studio-singapore.qwen3-tts-flash.speech-synthesize",
-    "alibaba::model-studio-singapore.qwen3-tts-instruct-flash.speech-synthesize"
+    "alibaba::model-studio-singapore.qwen3-tts-instruct-flash.speech-synthesize",
+    "alibaba::token-plan-personal-cn.qwen-audio-3.0-tts-plus.speech-synthesize",
+    "alibaba::token-plan-personal-global.qwen-audio-3.0-tts-plus.speech-synthesize",
+    "alibaba::token-plan-team-cn.qwen-audio-3.0-tts-plus.speech-synthesize",
+    "alibaba::token-plan-team-global.qwen-audio-3.0-tts-plus.speech-synthesize"
   ],
   "tool_target": {
     "target_id": "global:fixture-speech-generic",
