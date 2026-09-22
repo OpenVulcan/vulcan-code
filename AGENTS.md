@@ -30,10 +30,10 @@
 
 | 任务条件 | 必须先读 |
 | --- | --- |
-| 新增、迁移或维护系统供应商、模型协议、Provider Tool、媒体扩展 | [`新增系统供应商流程.md`](docs/新增系统供应商流程.md) 与 [`Provider Manifest 作者手册`](docs/provider-manifest-authoring.md) |
-| 修改 `shell_command`、`shell_session`、`terminal_session` 或命令会话状态 | [`工具与终端运行时约定.md`](docs/工具与终端运行时约定.md) |
-| 修改 `ask`、提问状态机、Ask WebUI 或 Markdown 预览/渲染 | [`Ask 与 Markdown 交互约定.md`](docs/Ask与Markdown交互约定.md) |
-| 修改 LuaSkills 版本、技能配置、Schema、宿主注入或管理链路 | 先读根 [`Cargo.toml`](Cargo.toml) 与 [`Cargo.lock`](Cargo.lock)，再读 [`LuaSkills 技能包配置接入指南`](docs/luaskills-skill-config-guide.md)；实现以 [`luaskills_runtime`](crates/vulcan-agent-runtime/src/luaskills_runtime/) 和 [`tooling/bridge`](crates/vulcan-agent-runtime/src/tooling/bridge/) 当前源码为准 |
+| 新增、迁移或维护系统供应商、模型协议、Provider Tool、媒体扩展 | [`新增系统供应商流程.md`](docs/contracts/adding-system-providers.md) 与 [`Provider Manifest 作者手册`](docs/contracts/provider-manifest-authoring.md) |
+| 修改 `shell_command`、`shell_session`、`terminal_session` 或命令会话状态 | [`工具与终端运行时约定.md`](docs/contracts/tooling-and-terminal-runtime.md) |
+| 修改 `ask`、提问状态机、Ask WebUI 或 Markdown 预览/渲染 | [`Ask 与 Markdown 交互约定.md`](docs/contracts/ask-and-markdown-interaction.md) |
+| 修改 LuaSkills 版本、技能配置、Schema、宿主注入或管理链路 | 先读根 [`Cargo.toml`](Cargo.toml) 与 [`Cargo.lock`](Cargo.lock)，再读 [`LuaSkills 技能包配置接入指南`](docs/contracts/luaskills-skill-config-guide.md)；实现以 [`luaskills_runtime`](crates/vulcan-agent-runtime/src/luaskills_runtime/) 和 [`tooling/bridge`](crates/vulcan-agent-runtime/src/tooling/bridge/) 当前源码为准 |
 
 ## 三、文档维护规则
 
@@ -48,4 +48,4 @@
 3. **共享资源测试必须串行。** 涉及共享 Provider Manifest、服务内核注册表、端口或其他进程级资源的测试，使用 `--test-threads=1`；nextest 使用 `cargo nextest run --test-threads=1`，避免并行测试互相争用导致假失败。
 4. **优先小范围验证。** 修改后先执行目标 crate 的 `cargo check` 或定向测试，再决定是否运行工作区级测试；工作区全量测试可能同时启动大量测试进程，不得默认无约束执行。
 5. **doctest 单独执行。** `cargo nextest` 不覆盖 doctest；需要验证文档测试时必须额外执行 `cargo test --doc`。
-6. **新环境入口。** 新开发环境优先执行 `make init-system`，不要要求会话手工拼接宿主、Lua、VMM、代码语义索引和 Rust 测试工具安装命令；初始化入口的变更必须同步更新 `docs/development-environment.md`。
+6. **新环境入口。** 新开发环境优先执行 `make init-system`，不要要求会话手工拼接宿主、Lua、VMM、代码语义索引和 Rust 测试工具安装命令；初始化入口的变更必须同步更新 `docs/contracts/development-environment.md`。

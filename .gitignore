@@ -29,13 +29,12 @@ target
 /.vulcan/
 /output
 
-# Keep documentation local by default; explicitly selected files can be added with git add -f.
-# 默认将文档保留在本地；需要公开的文件可通过 git add -f 单独加入。
-**/docs/
-
-# Local review and audit artifacts.
-# 本地审核与审计产物。
-/docs/reviews/
+# Documentation stays local by default: plans, audits, reviews, and drafts are not shipped.
+# 文档默认仅保留在本地：计划、审计、评审与草稿都不随仓库分发。
+# Only docs/contracts/ ships: those are the documents AGENTS.md requires every session to read.
+# 只有 docs/contracts/ 随仓库分发：那里放的是 AGENTS.md 要求所有会话必读的文档。
+**/docs/*
+!/docs/contracts/
 .codex_tmp*
 
 # Local task board state.

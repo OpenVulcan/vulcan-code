@@ -2,7 +2,7 @@
 
 本手册对应：
 
-- `docs/新增系统供应商流程.md`；
+- `docs/contracts/adding-system-providers.md`；
 - `docs/completed/20260806/01-HOT_UPDATABLE_PROVIDER_MANIFEST_AND_MODEL_PROTOCOL_ROUTING.md`；
 - `docs/completed/20260807/02-PROVIDER_MANIFEST_FULL_REMEDIATION_AND_FIVE_PASS_AUDIT.md`；
 - `docs/completed/20260808/01-PROVIDER_MANIFEST_FINAL_GAP_REMEDIATION.md`。

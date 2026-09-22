@@ -66,4 +66,4 @@ pnpm --dir apps/vulcan-code-web run check:build-budget
 
 ## 开发环境初始化
 
-新环境先执行 `make init-system`，统一安装 Rust 工作区工具与仓库依赖；Cargo 并发限制、workspace-hack、nextest 分组与依赖治理入口见 [`docs/development-environment.md`](docs/development-environment.md)。
+新环境先执行 `make init-system`，统一安装 Rust 工作区工具与仓库依赖；Cargo 并发限制、workspace-hack、nextest 分组与依赖治理入口见 [`docs/contracts/development-environment.md`](docs/contracts/development-environment.md)。

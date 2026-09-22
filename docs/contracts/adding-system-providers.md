@@ -6,7 +6,7 @@ APIKEY.FUN 多分组中转站接入过程中已经实际遇到的错误。本文
 
 完整字段定义仍以以下文件为准：
 
-- `docs/provider-manifest-authoring.md`；
+- `docs/contracts/provider-manifest-authoring.md`；
 - `crates/vulcan-runtime-assets/resources/provider-manifests/schema/provider-manifest-v2.schema.json`；
 - `crates/vulcan-provider-adapters/src/provider_manifest/` 下的编译器和验证器。
 
