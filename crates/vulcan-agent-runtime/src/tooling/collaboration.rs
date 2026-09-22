@@ -63,7 +63,10 @@ pub const ASK_QUESTION_TOOL_ID: &str = "ask_question";
 
 /// Stable public id for the legacy child-agent wait tool's collaboration wake binding.
 /// 旧子代理等待工具协作唤醒绑定的稳定公开标识。
-pub const WAIT_AGENT_TOOL_ID: &str = "wait_agent";
+///
+/// The identity is owned by the subagent core tool surface; this binding must not redeclare it.
+/// 该身份由子代理核心工具面持有；此处绑定不得重复声明它。
+pub const WAIT_AGENT_TOOL_ID: &str = vulcan_subagent_core::WAIT_AGENT_TOOL;
 
 /// Stable public id for the direct parent question tool.
 /// 直接向父会话提问工具的稳定公开标识。
