@@ -265,7 +265,7 @@
   我此前记的"未定论"与"可复现拒绝"**均为我的夹具错误**，已撤销，详见 §二.1。
   仅"子代理提问真正触发调度"仍属更高层未构造。
 - **通知"目标已接纳但未投影"的恢复会话级闸门（本轮新增，源码级已确认，未修复、未定性质）**：
-  这是本轮唯一新增的**具体**发现，值得审核者优先看。行为链如下（均为逐行核对的源码事实）：
+  这是本任务登记过的最具体的一条待判断发现，值得审核者优先看。行为链如下（均为逐行核对的源码事实）：
   1. `project_collaboration_before_api` 会把 `Accepted` 且未投影的入站通知列为待投影
      （`pending_projections` 第二段只筛 `state == Accepted`，**不要求**它是未接纳），因此该状态
      **确实存在**且是设计上要投影的；
@@ -274,26 +274,44 @@
      未接纳、`task_results` 未确认、`inbound_task_messages` 的 `TaskStart` 无效果、以及
      `outbound_deliveries` 的状态/结算确认；
   3. 该闸门在 `startup_recovery.rs:126` 为假时 `continue`，**整会话跳过修复**。
-  **推论**：若某会话的待办**仅**为"已接纳但未投影的入站通知"，重启后该会话不会被修复。
-  **已由测试固定当前行为**：`accepted_but_unprojected_inbound_notification_is_not_a_session_level_recovery_trigger`
-  （`startup_recovery.rs` 的 `#[cfg(test)] mod tests`）构造仅含该状态的 `CollaborationState`，
-  断言 `needs_delivery_recovery` 为**假**。**变异验证**：在闸门中加入
-  `inbound_notifications ... == Accepted` 后该测试 FAILED（失败信息点明"若此行为改变，请更新 S5 §三"），
-  证明它确实锁定该行为；生产改动已回退（`git diff` 无删除行）。
-  **同一状态在另一处判定下的相反结果（本轮补全）**：`CollaborationState::requires_edit_or_delete_settlement`
-  （`crates/vulcan-session-core/src/v1/collaboration.rs:1121`）**确实**把
-  `inbound_notifications` 中 `Accepted` 的项算作"仍欠对端的事实"，因此**会阻止编辑/删除**
-  （其唯一消费者是 `session_v1_lifecycle/guards.rs:155`；冷态成员走同一谓词）。
-  也就是说：**同一个状态会阻止删除，却不触发启动修复**。
-  **但我没有把这一点判为规则十一缺陷（本轮实测）**：两者是**不同语义**的谓词——前者是"替换或删除
-  历史是否会丢弃欠对端的事实"（单一定义，注释明确写明"canonical document delegates to it"），
-  后者是"是否需要加载规范文档以修复"。因此这不构成同一个边界值的重复定义；只是两者的覆盖集合
-  在此处产生差异，属需要领域判断的点，而非已确认缺陷。
-  **我没有断言的是**：(a) 该通知被永久丢失——下一次物理 API 准备仍会经
-  `project_collaboration_before_api` 投影它，所以更可能是**延迟到下一次请求**；(b) 这是缺陷。
-  **为什么本轮不修**：会话级闸门的成本/收益与是否属既有并行边界均需判断，且
-  `25ecf35d` 修的是同一功能的相邻窗口，直接扩大闸门有改变启动恢复成本特征的风险。
-  据实登记为**待领域判断的具体点**，不弱化任何守卫、不改生产代码。
+  4. **恢复端确实修通知，但只修来源侧的 `Recorded`，不修目标侧的 `Accepted`**：
+     `reconcile_canonical_collaboration_outbox` 内有一段专门重放"来源已提交、目标未接纳"的通知
+     （`collaboration.rs:2122-2149`，注释明确 "Notifications live in their own map … the same
+     source-commit-before-target-acceptance window strands them unless they are replayed here"），
+     但它筛的是**来源** `notifications` 中 state == `Recorded` 的记录；`deliver_recorded_notification`
+     只把目标推进到 **`Accepted`**（`AcceptNotification`），**不投影**。
+   **因此可确认的窗口**：`accept_notification` 成功、而随后来源侧
+   `record_notification_progress(Accepted)` 失败或进程中止时，目标处于
+   **`Accepted` 且未投影**，而该状态**不在任何恢复路径的筛选条件内**：
+   - 目标侧：会话级闸门不检查 `inbound_notifications`（第 2 点），整会话被跳过；
+   - 来源侧：该通知已是 `Accepted`，不满足来源恢复的 `Recorded` 筛选，也不会被重放。
+   **推论**：若该目标会话此后不再发生物理 API 准备，这条通知不会被投影。
+   **已由测试固定当前行为**：`accepted_but_unprojected_inbound_notification_is_not_a_session_level_recovery_trigger`
+   （`startup_recovery.rs` 的 `#[cfg(test)] mod tests`）构造仅含该状态的 `CollaborationState`，
+   断言 `needs_delivery_recovery` 为**假**。**变异验证**：在闸门中加入
+   `inbound_notifications ... == Accepted` 后该测试 FAILED（失败信息点明"若此行为改变，请更新 S5 §三"），
+   证明它确实锁定该行为；生产改动已回退（`git diff` 无删除行）。
+   **本轮复查确认这不是夹具问题**（前一轮我在 A07 上正是栽在夹具误判，故此项重新核对）：
+   该观察**不依赖任何夹具**——`pending_projections` 与 `needs_delivery_recovery` 的谓词是逐行读源码
+   读出的，并有一条只针对纯谓词的断言；用 `Select-String "notification"` 核对该函数区间**零命中**，
+   确认它确实完全不检查通知。
+   **同一状态在另一处判定下的相反结果（本轮补全）**：`CollaborationState::requires_edit_or_delete_settlement`
+   （`crates/vulcan-session-core/src/v1/collaboration.rs:1121`）**确实**把
+   `inbound_notifications` 中 `Accepted` 的项算作"仍欠对端的事实"，因此**会阻止编辑/删除**
+   （其唯一消费者是 `session_v1_lifecycle/guards.rs:155`；冷态成员走同一谓词）。
+   也就是说：**同一个状态会阻止删除，却不触发启动修复**。
+   **但我没有把这一点判为规则十一缺陷（本轮实测）**：两者是**不同语义**的谓词——前者是"替换或删除
+   历史是否会丢弃欠对端的事实"（单一定义，注释明确写明"canonical document delegates to it"），
+   后者是"是否需要加载规范文档以修复"。因此这不构成同一个边界值的重复定义；只是两者的覆盖集合
+   在此处产生差异，属需要领域判断的点，而非已确认缺陷。
+   **我没有断言的是**：(a) 该通知被永久丢失——下一次物理 API 准备仍会经
+   `project_collaboration_before_api` 投影它；(b) **这是缺陷**——通知按设计是在目标**下一次 API 准备**
+   时才投影（`PendingProjection::Notification` 无其他消费者），所以"目标不再运行则不投影"可能与设计一致，
+   而不是漏修。区分 (a)/(b) 需要领域判断，或需要一条"恢复期也投影目标侧通知"的新路径（那会改变
+   启动恢复的行为面，超出本任务不扩大改动范围的约束）。
+   **为什么本轮不修**：会话级闸门与恢复期投影都属启动恢复的行为面；`25ecf35d` 修的是同一功能的
+   **相邻**窗口（来源侧 `Recorded`），直接扩大闸门或新增恢复期投影有改变启动恢复成本与行为特征的风险。
+   据实登记为**待领域判断的具体点**，不弱化任何守卫、不改生产代码。
 - **通知恢复的其余窗口**（`25ecf35d` 修复 `Recorded` 未接纳窗口；`72deb8c0` 补齐"目标停止后拒绝
   且记录完整保留、恢复运行后成功投递"这一跨越停止的时序；`599e630c` 补齐"跨项目授权撤销后拒绝、
   重新授权后投递同一条保留记录"这一授权时序）：目标接纳后来源进度写入失败、
@@ -407,8 +425,10 @@ real_controller_nonempty_analysis_materializes_memory_and_profiles}`、
   - R10/A10 的**模型级自动唤醒调度一跳**——需要真实 `AgentRuntimeBridge` 与真实调度环境，本层无法构造；
   - **父子交叉互问**——**已双向验证**（本轮更正，我此前的错误登记已撤销）：子 → 父由 `e223082e`、
     父 → 子由 `parent_question_to_owned_embedded_child_binds_the_question_to_the_child` 覆盖，详见 §二.1；
-  - **通知"已接纳但未投影"的会话级闸门**——本轮新发现的**具体**待领域判断点，已用测试固定当前行为
-    （`50ea0dbe`）；
+  - **通知"已接纳但未投影"的会话级闸门**——已定位到完整窗口（详见 §三），并用测试固定当前行为
+    （`50ea0dbe`）；**它不是夹具问题**（本轮已按 A07 的教训重新核对：结论来自逐行读谓词 +
+    一条只针对纯谓词的断言，且已用检索确认闸门完全不检查通知）。仍未定性为"缺陷"还是"符合设计的
+    延迟投影"——通知按设计在目标下一次 API 准备时才投影；
   - 前端既有 4 项失败不属本任务所有权（§二.5）。
 - **未验证边界（见 §三）**：真实 OAuth 端到端一跳（结构性不可达，见 §三 说明）、真实 WebUI/RPC 与真实
   停止事务、真实冷注册表重启、线编码器相邻前缀稳定性、V1 端到端 `SystemContext → ProjectedItem →
