@@ -578,6 +578,90 @@ fn start_question_execution_tool_call(
     prepare_reply_question_tool_call(target, api_call_id, now_ms, stream_label)
 }
 
+/// Verifies an explicit unable-to-answer reply is an answer whose meaning travels in its body.
+/// 验证"明确无法回答"是一次回答，其语义随正文传递。
+///
+/// # Notes
+/// 说明
+/// The durable answer record documents its `body` as "the exact answer body, including explicit
+/// inability to answer", and the reply schema requires a non-empty `answer`, so the inability is
+/// carried by the body rather than by a separate durable field. The tool argument is therefore an
+/// acknowledgement echoed back to the responder: the question owner sees the body only. This test
+/// pins that contract so the two surfaces cannot drift apart silently.
+/// 可靠答案记录把 `body` 记为"精确答案正文，包括明确无法回答的结果"，且回答 Schema 要求非空的
+/// `answer`，因此"无法回答"由正文承载，而不是由独立的可靠字段承载。工具参数因此是回显给回答方的
+/// 确认：问题所有者只看到正文。本测试固定该契约，避免两个面静默漂移。
+#[tokio::test]
+async fn explicit_unable_to_answer_is_echoed_and_travels_in_the_durable_body() {
+    use vulcan_agent_runtime::tooling::collaboration::{REPLY_QUESTION_TOOL_ID, ReplyQuestionArgs};
+
+    let (_storage, invocation, target_handle, question, _operation) =
+        unacknowledged_settlement_fixture(false).await;
+    target_handle
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| document.prepare_question_execution_before_api(question.clone(), 8),
+        )
+        .unwrap();
+    let context = start_question_execution_tool_call(
+        &target_handle,
+        ApiPurposeKind::QuestionExecution,
+        9,
+        REPLY_QUESTION_TOOL_ID,
+    );
+    let body = "I cannot answer: the referenced run predates this workspace.";
+    let runtime = session_v1_native_agent_collaboration_runtime(
+        invocation.state.clone(),
+        crate::ServiceEventEmitter::new(vec![]),
+    );
+    let replied = runtime
+        .invoke(
+            context,
+            AgentCollaborationCommand::ReplyQuestion(ReplyQuestionArgs {
+                question_id: question.question_id.as_str().to_owned(),
+                answer: body.into(),
+                unable_to_answer: true,
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the unable-to-answer reply was rejected: {error}"));
+    // The responder's own acknowledgement must carry the declaration it submitted.
+    // 回答方自身的确认必须回显其提交的声明。
+    assert_eq!(replied["status"], "ok");
+    assert_eq!(replied["question_state"].as_str(), Some("answered"));
+    assert_eq!(replied["unable_to_answer"], true);
+    // The question owner reads the authoritative record: the body, and no separate flag.
+    // 问题所有者读取权威记录：正文，且没有独立标志位。
+    let owner_view = invocation
+        .source_handle
+        .read(|document| {
+            document
+                .collaboration_state()
+                .questions
+                .get(&question.question_id)
+                .cloned()
+        })
+        .unwrap()
+        .expect("the question owner must hold the authoritative record");
+    let answer = owner_view
+        .answer
+        .expect("the refusal must settle as an answer");
+    assert_eq!(answer.body, body);
+    assert_eq!(
+        owner_view.state,
+        CollaborationQuestionState::Answered,
+        "an explicit inability to answer must still settle the question"
+    );
+    assert_eq!(
+        serde_json::to_value(&answer)
+            .unwrap()
+            .get("unable_to_answer"),
+        None,
+        "the declaration must not be persisted as a separate durable field"
+    );
+}
+
 /// Prepares one additional reply tool call on an already admitted physical API.
 /// 在已准入物理 API 上准备一条额外的回答工具调用。
 /// Returns the exact context a later answer attempt is validated against.
