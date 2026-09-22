@@ -182,6 +182,16 @@ fn terminal_report_backfills_complete_usage_when_checkpoint_omits_usage() {
 
 /// Verifies child-agent usage remains separate from direct parent totals.
 /// 验证子代理用量保持独立，不会污染父级直接统计。
+///
+/// # Notes
+/// 说明
+/// A child-agent usage segment is deliberately filtered out of the parent turn entirely (both its
+/// totals/groups and its retained segment list), because that usage is accounted for by the root
+/// lifetime ledger instead. This test therefore asserts the exclusion on every parent-facing surface
+/// rather than expecting the parent turn to carry a `Subagent` group.
+/// 子代理用量分段被有意从父回合中完全过滤（既不含其总数与分组，也不保留其分段记录），因为该用量由
+/// 根生命周期累计负责统计。因此本测试在父级各个可见面上断言这一排除，而不是期望父回合携带
+/// `Subagent` 分组。
 #[test]
 fn terminal_report_separates_subagent_usage_from_parent_totals() {
     let session_id = test_session_id();
@@ -215,15 +225,49 @@ fn terminal_report_separates_subagent_usage_from_parent_totals() {
     assert_eq!(turn_stats.provider_call_count, 1);
     assert_eq!(turn_stats.input_tokens, 31);
     assert_eq!(turn_stats.total_tokens, 34);
-    let subagent_group = turn_stats
-        .usage_groups
-        .iter()
-        .find(|group| group.kind == SessionTurnUsageGroupKind::Subagent)
-        .expect("subagent group should exist");
-    assert_eq!(subagent_group.provider_call_count, 1);
-    assert_eq!(subagent_group.tool_call_count, 2);
-    assert_eq!(subagent_group.input_tokens, 100);
-    assert_eq!(subagent_group.total_tokens, 130);
+    // The parent turn retains exactly its own provider call, never the child's extra call.
+    // 父回合只保留自己的供应商调用，绝不并入子代理的额外调用。
+    assert_eq!(
+        turn_stats
+            .usage_groups
+            .iter()
+            .map(|group| group.kind)
+            .collect::<Vec<_>>(),
+        vec![SessionTurnUsageGroupKind::Regular],
+        "child usage must not add a parent-turn usage group"
+    );
+    assert_eq!(
+        turn_stats
+            .usage_segments
+            .iter()
+            .map(|segment| segment.kind)
+            .collect::<Vec<_>>(),
+        vec![SessionTurnUsageSegmentKind::AssistantResponse],
+        "child usage must not be retained as a parent-turn usage segment"
+    );
+    // The child's larger figures must not leak into any parent-facing aggregate.
+    // 子代理更大的数值不得渗入任何父级聚合。
+    for group in &turn_stats.usage_groups {
+        assert_eq!(
+            group.total_tokens, 34,
+            "no parent group may carry the child's total"
+        );
+        assert_eq!(
+            group.input_tokens, 31,
+            "no parent group may carry the child's input"
+        );
+        assert_ne!(
+            group.tool_call_count, 2,
+            "no parent group may carry the child's tool calls"
+        );
+    }
+    assert!(
+        !turn_stats
+            .usage_segments
+            .iter()
+            .any(|segment| segment.kind == SessionTurnUsageSegmentKind::SubagentTask),
+        "the child segment belongs to the root lifetime ledger, not the parent turn"
+    );
 }
 
 /// Verifies a terminal identity collision leaves the complete runtime adapter unchanged.
