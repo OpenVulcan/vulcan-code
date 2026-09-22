@@ -312,7 +312,6 @@ pub(super) async fn execute_durable(
             }
             PreparedPhysicalApi::ExcludedNonSession {
                 exact_request,
-                controller_snapshot,
                 request_snapshot,
                 context_budget,
                 ..
