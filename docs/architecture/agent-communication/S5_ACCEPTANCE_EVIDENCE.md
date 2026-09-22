@@ -208,8 +208,13 @@
     `RUNTIME_HOST_MESSAGE_PREFIX`，使守卫与生产者由同一常量相连。
   - **变异验证**：分别去掉连续判定里的 `dispatch_outcome != Unknown`、把宿主前缀判定改为
     `ends_with`，两处新测试各自 FAILED 并点出对应原因；生产改动均已恢复。
-  - **仍未断言**：宿主事件复用守卫的正向路径（覆盖后允许复用）——需要 ContextInjection 生产者
-    持有的改写指纹快照，已在测试注释中写明，不虚构证据。
+  - **正向路径已补齐（本轮更正）**：我上一轮曾判定"证明正向路径需要复现 ContextInjection 持有的
+    改写指纹快照，本层无法构造"并据此删掉了正向断言。该判断**是错的**：
+    `ControllerConfig::provider_rewrite_fingerprint()` 是公开方法，仓库既有测试已在用它构造合法延续。
+    已补回对照断言（`b2650597`）：同一夹具去掉宿主事件、并把
+    `continuation.context_rewrite_fingerprint` 设为该公开指纹后，构建器必须返回 `Some`。
+    **变异验证**：在构建器末尾插入 `return None;` 后该断言 FAILED，证明它是有效断言而非恒真。
+    因此"宿主事件复用守卫的正向路径未断言"这一旧登记**已失效**。
 - **A15 的"写入中断可恢复边界"（此前登记为未覆盖——本轮更正：实为已有覆盖）**：我此前只按
   "归档/删除生命周期"检索，漏掉了 `question_finish_fixture` 的**脚本化刷写故障注入**
   （`crates/vulcan-service-kernel/src/tests/question_execution_finish_tests.rs`，经

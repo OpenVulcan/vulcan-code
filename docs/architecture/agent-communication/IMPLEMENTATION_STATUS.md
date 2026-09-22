@@ -66,7 +66,10 @@
 - [x] S3.2 逐生产者到最终请求的可达性与固定顶部边界。**纠正了任务书的假设**：`provider_layers` 并**不是**未守护缺口——它由三重事实守护（唯一消费者是闸门前候选、该候选明确拒绝非会话派发、V1 所有者整体重建），因此只做文档化与回归断言，未做结构性改造。新增证据：`request_dynamic_producers_stay_out_of_fixed_top_layers`、`session_plan_context_reaches_request_as_tagged_user_event`、`two_adjacent_requests_keep_fixed_top_and_append_dynamic_user_items`（相邻两次真实请求，断言固定顶部字节不变、更新只追加、被替代旧正文保留）、`ttl_expiry_appends_tagged_user_item_without_rewriting_emitted_prefix`。提交 `bca79df4`。
 - [x] S3.3 continuation 的真实安全判定与重建诊断一致性；工具配对、并行结果、媒体交错与插入边界。已修正两个确认缺陷：(1) 同一生效锚点上的多条系统更新**逆序**插入，违反与输入一致的时间顺序契约（提交 `fc65b351`）；(2) dispatch 因边界后存在未覆盖 `runtime-host:` 消息返回 None，而预览诊断缺少该分支并会渲染"允许复用"，即判定与诊断不一致（提交 `fa1daa28`）。另补充工具配对校验、乱序并行结果按身份配对、媒体交错与插入边界的 12 项证据。
   **后续已补齐（本轮更正，原记"未覆盖"已失效）**：提交 `1dd4301f` 为两处"输出只被传递、从未被断言"的判定补了直接断言——`provider_continuation_eligibility_requires_a_replay_safe_attempt`（失败供应商尝试能否续跑）与 `uncovered_host_event_blocks_continuation_reuse`（未覆盖宿主事件阻止延续复用）；两处均经变异验证。同一提交把宿主前缀守卫由字面量 `"runtime-host:"` 改为引用生产者的 `RUNTIME_HOST_MESSAGE_PREFIX`（AGENTS.md 第十一条单一来源）。两处未知契约版本拒绝亦已由 `e71b0b30`、`f586e9e3` 补齐。
-  **仍未断言**：宿主事件复用守卫的**正向路径**（覆盖后允许复用），需要 ContextInjection 生产者持有的改写指纹快照，已在测试注释中写明原因，不虚构证据。
+  **正向路径已补齐（本轮更正）**：我上一轮判定"证明正向路径需要复现 ContextInjection 持有的改写指纹快照，
+  本层无法构造"并据此删掉了正向断言——该判断**是错的**：`ControllerConfig::provider_rewrite_fingerprint()`
+  是公开方法，仓库既有测试已在用它构造合法延续。已补回对照断言（`b2650597`），并经变异验证
+  （在构建器末尾插入 `return None;` 后该断言 FAILED）。
 
 ### S4 协作与界面
 
