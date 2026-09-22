@@ -746,6 +746,7 @@ async fn try_remote_responses_compaction(
     model_target: &PromptCompactionModelTarget,
     reasoning_effort: ReasoningEffortLevel,
     durable_events: Option<&tokio::sync::mpsc::UnboundedSender<PromptCompactionStreamEvent>>,
+    ownership: PromptCompactionOwnership,
 ) -> Result<Option<PromptCompactionExecution>, String> {
     if plan.source_messages.is_empty() {
         if durable_events.is_some() {
@@ -861,6 +862,7 @@ async fn try_remote_responses_compaction(
             // opt-in; the permit's session trace owner never substitutes for it.
             // 逐分派冻结的系统设置决策是原生压缩追踪的唯一开关；许可中的会话追踪 owner 绝不替代它。
             provider_configuration.provider_request_trace_enabled,
+            ownership,
         )
         .await
         .map(Some);
@@ -1172,6 +1174,10 @@ pub fn stream_prompt_compaction_job(
                 model_target,
                 request.reasoning_effort,
                 Some(&remote_sender),
+                // This legacy job is consumed by the session compaction stream, which owns a V1
+                // provider sink and confirms every barrier; it is never a standalone owner.
+                // 该遗留任务由会话压缩流消费，后者持有 V1 供应商接收器并确认每个屏障；它绝不是独立所有者。
+                PromptCompactionOwnership::SessionV1,
             );
             tokio::pin!(remote_execution);
             let remote_result = loop {
@@ -1407,7 +1413,14 @@ pub fn stream_prompt_compaction_foundation_job(
             // The explicit caller mode prevents an unowned standalone consumer from awaiting V1 acknowledgements.
             // 显式调用方模式避免没有所有者的独立消费方等待 V1 确认。
             let (remote_sender, mut remote_receiver) = tokio::sync::mpsc::unbounded_channel();
-            let durable_events = (request.ownership == PromptCompactionOwnership::SessionV1).then_some(&remote_sender);
+            // Every physical remote attempt publishes mandatory preparation and durability barriers, and
+            // each ownership declares its own confirmation authority. A standalone RuntimeOnly run has no
+            // V1 ledger, so its standalone owner confirms those barriers; withholding the sender would
+            // dispatch a physical request that no owner could account for.
+            // 每次真实远端尝试都会发布强制准备与可靠性屏障，且每种归属各自声明确认权威。独立的
+            // RuntimeOnly 运行没有 V1 账本，因此由其独立所有者确认这些屏障；若不提供发送端，
+            // 就会派发一次没有任何所有者能记账的真实请求。
+            let durable_events = Some(&remote_sender);
             let remote_execution = try_remote_responses_compaction(
                 runtime.as_ref(),
                 &request.foundation,
@@ -1423,6 +1436,7 @@ pub fn stream_prompt_compaction_foundation_job(
                 model_target,
                 request.reasoning_effort,
                 durable_events,
+                request.ownership,
             );
             tokio::pin!(remote_execution);
             let remote_result = loop {

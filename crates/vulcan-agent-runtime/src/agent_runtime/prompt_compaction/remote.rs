@@ -7,6 +7,7 @@ use crate::agent_runtime::events::{
     provider_request_durability_barrier, provider_request_preparation_barrier,
 };
 use crate::agent_runtime::execution_models::ExecutionPreparation;
+use crate::agent_runtime::prompt_compaction::PromptCompactionOwnership;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_request_telemetry::{
@@ -224,6 +225,7 @@ pub(super) async fn execute_durable(
     plan: &CompactionPlan,
     events: &UnboundedSender<PromptCompactionStreamEvent>,
     provider_request_trace_enabled: bool,
+    ownership: PromptCompactionOwnership,
 ) -> Result<PromptCompactionExecution, String> {
     // The tracker retains a distinct request identity and independent usage for each admitted attempt.
     // 跟踪器为每次准入尝试保留不同的请求身份及独立用量。
@@ -308,11 +310,27 @@ pub(super) async fn execute_durable(
                     "Remote compaction inputs changed before dispatch; rebuild the compaction plan.",
                 ));
             }
-            PreparedPhysicalApi::ExcludedNonSession { .. } => {
-                tracker.reject_prepared_request();
-                return Err(String::from(
-                    "A session remote compaction cannot use an excluded non-session permit.",
-                ));
+            PreparedPhysicalApi::ExcludedNonSession {
+                exact_request,
+                controller_snapshot,
+                request_snapshot,
+                context_budget,
+                ..
+            } => {
+                // A standalone RuntimeOnly run owns no V1 session ledger, so its own standalone owner
+                // releases an excluded non-session permit; accepting it here is what lets that owner
+                // account for the physical attempt instead of dispatching an unacknowledged request.
+                // 独立的 RuntimeOnly 运行不持有 V1 会话账本，因此由其自身独立所有者放行排除非会话
+                // 许可；在这里接受它，才能让该所有者对该真实尝试记账，而不是派发一次无人确认的请求。
+                if ownership != PromptCompactionOwnership::RuntimeOnly {
+                    tracker.reject_prepared_request();
+                    return Err(String::from(
+                        "A session remote compaction cannot use an excluded non-session permit.",
+                    ));
+                }
+                // No session ledger means no session trace owner, so the frozen opt-in renders nothing.
+                // 没有会话账本就没有会话追踪 owner，因此冻结开关不会渲染任何制品。
+                (exact_request, request_snapshot, context_budget, None)
             }
         };
         let started = tracker.confirm_prepared_request(&snapshot, budget.as_ref())?;
