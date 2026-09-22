@@ -15,7 +15,7 @@ describe("provider icon library", () => {
     expect(resolveProviderIconKey({ providerId: "openai" })).toBe("compatibility")
     expect(resolveProviderIconKey({ providerId: "anthropic" })).toBe("claude")
     expect(resolveProviderIconKey({ providerId: "google" })).toBe("gemini")
-    expect(resolveProviderIconKey({ providerId: "apikeyfun" })).toBe("apikeyfun")
+    expect(resolveProviderIconKey({ providerId: "apikeyfan" })).toBe("apikeyfan")
     expect(resolveProviderIconKey({ providerId: "claudeapi" })).toBe("claudeapi")
     expect(resolveProviderIconKey({ providerId: "qiniu" })).toBe("qiniu")
     expect(resolveProviderIconKey({ providerId: "stepfun" })).toBe("stepfun")

@@ -270,41 +270,41 @@ fn custom_manifest_tool_targets_publish_as_one_frozen_generation() {
 /// 验证账号模型访问仍对扩展目标可用性保持权威。
 #[test]
 fn provider_tool_targets_obey_account_model_access() {
-    // runtime owns the bundled APIKEY.FUN manifest and its reviewed fixed targets.
-    // runtime 持有内置 APIKEY.FUN Manifest 及其已审核固定目标。
+    // runtime owns the bundled APIKEY.FAN manifest and its reviewed fixed targets.
+    // runtime 持有内置 APIKEY.FAN Manifest 及其已审核固定目标。
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
-    // configuration owns one exact APIKEY.FUN credential account.
-    // configuration 持有一个精确的 APIKEY.FUN 凭据账号。
+    // configuration owns one exact APIKEY.FAN credential account.
+    // configuration 持有一个精确的 APIKEY.FAN 凭据账号。
     let mut configuration = PersistedAiConfiguration::default();
-    // apikeyfunConnection binds the exact public service and API-key credential profile.
-    // apikeyfunConnection 绑定精确公共服务与 API Key 凭据配置档。
-    let mut apikeyfun_connection = connection("apikeyfun-media-account");
-    apikeyfun_connection.provider_id = String::from("apikeyfun");
-    apikeyfun_connection.service_entry_id = String::from("grok-media");
-    apikeyfun_connection.credential_profile_id = String::from("api-key");
+    // apikeyfanConnection binds the exact public service and API-key credential profile.
+    // apikeyfanConnection 绑定精确公共服务与 API Key 凭据配置档。
+    let mut apikeyfan_connection = connection("apikeyfan-media-account");
+    apikeyfan_connection.provider_id = String::from("apikeyfan");
+    apikeyfan_connection.service_entry_id = String::from("grok-media");
+    apikeyfan_connection.credential_profile_id = String::from("api-key");
     configuration
         .connection_graph
         .add_connection(
             &runtime
                 .providers()
                 .expect("provider registry should resolve"),
-            apikeyfun_connection,
+            apikeyfan_connection,
         )
-        .expect("APIKEY.FUN media connection should register");
-    // sourceCatalog reproduces the exact per-key `/models` evidence required by APIKEY.FUN.
-    // sourceCatalog 复现 APIKEY.FUN 所需的精确逐密钥 `/models` 证据。
+        .expect("APIKEY.FAN media connection should register");
+    // sourceCatalog reproduces the exact per-key `/models` evidence required by APIKEY.FAN.
+    // sourceCatalog 复现 APIKEY.FAN 所需的精确逐密钥 `/models` 证据。
     let source_catalog = parse_openai_model_catalog(
-        "apikeyfun-media-account",
+        "apikeyfan-media-account",
         1,
         r#"{"data":[{"id":"grok-imagine-video"}]}"#,
     )
-    .expect("APIKEY.FUN discovery fixture should parse");
+    .expect("APIKEY.FAN discovery fixture should parse");
     install_source_catalog(&runtime, source_catalog);
     tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("test async runtime should initialize")
         .block_on(runtime.activate_staged_manifest_catalogs(&configuration, &[]))
-        .expect("APIKEY.FUN generation should publish");
+        .expect("APIKEY.FAN generation should publish");
     // initialTarget proves the account catalog initially exposes the fixed video model.
     // initialTarget 证明账号目录最初公开固定视频模型。
     let initial_target = runtime
@@ -316,13 +316,13 @@ fn provider_tool_targets_obey_account_model_access() {
     // selection freezes the exact credential and extension target used for execution revalidation.
     // selection 冻结用于执行重新校验的精确凭据与扩展目标。
     let selection = ProviderToolTargetSelection {
-        connection_id: String::from("apikeyfun-media-account"),
+        connection_id: String::from("apikeyfan-media-account"),
         target_id: initial_target.target.target_id,
     };
     // Account access remains authoritative even though conversation publication is independent.
     // 即使会话发布保持独立，账号访问仍保持权威。
     configuration.set_connection_model_enabled(
-        "apikeyfun-media-account",
+        "apikeyfan-media-account",
         "grok-imagine-video",
         false,
     );

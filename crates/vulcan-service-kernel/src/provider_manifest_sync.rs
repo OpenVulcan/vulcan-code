@@ -8457,10 +8457,10 @@ mod tests {
         );
     }
 
-    /// Verifies APIKEY.FUN status reflects Manifest cutover while Alibaba template instances remain visible.
-    /// 验证 APIKEY.FUN 状态反映 Manifest 切换，同时保持 Alibaba 模板实例可见。
+    /// Verifies APIKEY.FAN status reflects Manifest cutover while Alibaba template instances remain visible.
+    /// 验证 APIKEY.FAN 状态反映 Manifest 切换，同时保持 Alibaba 模板实例可见。
     #[test]
-    fn provider_manifest_status_exposes_apikeyfun_cutover_and_template_instances() {
+    fn provider_manifest_status_exposes_apikeyfan_cutover_and_template_instances() {
         // directory isolates manifest-store state so both statuses come only from bundled facts.
         // directory 隔离 Manifest 存储状态，使两份状态都只来自内置事实。
         let directory = tempfile::tempdir().expect("temp dir should create");
@@ -8474,13 +8474,13 @@ mod tests {
         // runtime 持有权威的已编译内置代际。
         let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
 
-        // apikeyfun proves the bundled Manifest is now the active binding authority.
-        // apikeyfun 证明内置 Manifest 现已成为活动绑定权威。
-        let apikeyfun = service
-            .provider_manifest_status(&runtime, "apikeyfun")
-            .expect("APIKEY.FUN status should build");
-        assert!(apikeyfun.bundled.is_some());
-        assert!(apikeyfun.active.is_some());
+        // apikeyfan proves the bundled Manifest is now the active binding authority.
+        // apikeyfan 证明内置 Manifest 现已成为活动绑定权威。
+        let apikeyfan = service
+            .provider_manifest_status(&runtime, "apikeyfan")
+            .expect("APIKEY.FAN status should build");
+        assert!(apikeyfan.bundled.is_some());
+        assert!(apikeyfan.active.is_some());
 
         // alibaba exposes generated targets without requiring the UI to recompute templates.
         // alibaba 公开生成目标，无需 UI 重新计算模板。

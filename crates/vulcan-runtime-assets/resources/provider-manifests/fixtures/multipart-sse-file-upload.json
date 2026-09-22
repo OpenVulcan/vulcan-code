@@ -1,18 +1,16 @@
 {
   "schema_version": "provider-manifest-execution-fixture.v1",
-  "fixture_id": "apikeyfun-gpt-image-edit-multipart-sse",
+  "fixture_id": "multipart-sse-file-upload",
   "base_manifest": "tavily.json",
-  "production_target_refs": [
-    "apikeyfun::gpt-image-2.edit"
-  ],
+  "production_target_refs": [],
   "tool_target": {
-    "target_id": "public-api.fixture-apikeyfun-gpt-image-edit",
-    "description": "APIKEY.FUN GPT Image 2 masked multipart SSE editing fixture.",
+    "target_id": "public-api.fixture-multipart-sse-file-upload",
+    "description": "Synthetic multipart SSE fixture covering a file part plus scalar fields; no production target derives from it.",
     "service_entry_id": "public-api",
     "credential_profile_ids": ["api-key"],
     "upstream_target_id": "gpt-image-2",
-    "display_name": "APIKEY.FUN GPT Image 2 Edit Fixture",
-    "tool_id": "fixture_apikeyfun_gpt_image_edit",
+    "display_name": "Multipart SSE File Upload Fixture",
+    "tool_id": "fixture_multipart_sse_file_upload",
     "capability": "image_edit",
     "input_schema": {
       "type": "object",
@@ -67,7 +65,7 @@
       ]
     },
     "execution": {
-      "endpoint_path": "/fixtures/apikeyfun-gpt-image-edit",
+      "endpoint_path": "/fixtures/multipart-sse-file-upload",
       "authentication": "bearer_authorization",
       "adapter": "generic_json",
       "execution_kind": "http_multipart_sse",
@@ -93,20 +91,20 @@
     }
   },
   "operation": {
-    "operation_id": "fixture.apikeyfun-gpt-image-edit-multipart-sse",
+    "operation_id": "fixture.multipart-sse-file-upload-multipart-sse",
     "operation": "image_edit",
     "carrier": "provider_tool",
     "input_resources": ["image"],
     "output_resources": ["image"],
-    "tool_target_refs": ["public-api.fixture-apikeyfun-gpt-image-edit"],
+    "tool_target_refs": ["public-api.fixture-multipart-sse-file-upload"],
     "request_profile_refs": [],
     "response_profile_refs": [],
-    "upload_channel_refs": ["fixture.apikeyfun-inline-image", "fixture.apikeyfun-inline-mask"],
+    "upload_channel_refs": ["fixture.inline-image", "fixture.inline-mask"],
     "upload_bindings": [
       {
         "source_path": "/image_path",
         "target_path": "/image",
-        "upload_channel_refs": ["fixture.apikeyfun-inline-image"],
+        "upload_channel_refs": ["fixture.inline-image"],
         "mime_type": "image/png",
         "required": true,
         "remove_source": true
@@ -114,7 +112,7 @@
       {
         "source_path": "/mask_path",
         "target_path": "/mask",
-        "upload_channel_refs": ["fixture.apikeyfun-inline-mask"],
+        "upload_channel_refs": ["fixture.inline-mask"],
         "mime_type": "image/png",
         "required": true,
         "remove_source": true
@@ -125,7 +123,7 @@
   },
   "upload_channels": [
     {
-      "upload_channel_id": "fixture.apikeyfun-inline-image",
+      "upload_channel_id": "fixture.inline-image",
       "description": "Fixture source image Data URL channel.",
       "primitive": "inline_data_url",
       "accepted_mime_types": ["image/png"],
@@ -136,7 +134,7 @@
       "reference_encoding": "response_url"
     },
     {
-      "upload_channel_id": "fixture.apikeyfun-inline-mask",
+      "upload_channel_id": "fixture.inline-mask",
       "description": "Fixture PNG mask Data URL channel.",
       "primitive": "inline_data_url",
       "accepted_mime_types": ["image/png"],
@@ -163,7 +161,7 @@
   "interactions": [
     {
       "method": "POST",
-      "path": "/fixtures/apikeyfun-gpt-image-edit",
+      "path": "/fixtures/multipart-sse-file-upload",
       "response_status": 200,
       "response_text_body": "data: {\"type\":\"image_generation.partial_image\"}\n\ndata: {\"type\":\"image_generation.completed\",\"data\":[{\"b64_json\":\"iVBORw0KGgo=\"}]}\n\ndata: [DONE]\n\n",
       "response_content_type": "text/event-stream"

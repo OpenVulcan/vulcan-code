@@ -320,27 +320,27 @@ fn activated_custom_catalog_publishes_discovery_and_manual_union() {
     assert_eq!(retained_source.models[0].id, "discovered/chat");
 }
 
-/// Verifies APIKEY.FUN authorizes Manifest discovery before reading the credential.
-/// 验证 APIKEY.FUN 会先授权 Manifest 发现路由，再读取凭据。
+/// Verifies APIKEY.FAN authorizes Manifest discovery before reading the credential.
+/// 验证 APIKEY.FAN 会先授权 Manifest 发现路由，再读取凭据。
 #[tokio::test]
-async fn apikeyfun_manifest_authorizes_discovery_before_credential_access() {
+async fn apikeyfan_manifest_authorizes_discovery_before_credential_access() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
-    // apikeyfunConnection stores only credential and service identity.
-    // apikeyfunConnection 仅保存凭据与服务身份，不保存任何协议历史。
-    let mut apikeyfun_connection = connection("apikeyfun-account");
-    apikeyfun_connection.provider_id = String::from("apikeyfun");
-    apikeyfun_connection.service_entry_id = String::from("api");
+    // apikeyfanConnection stores only credential and service identity.
+    // apikeyfanConnection 仅保存凭据与服务身份，不保存任何协议历史。
+    let mut apikeyfan_connection = connection("apikeyfan-account");
+    apikeyfan_connection.provider_id = String::from("apikeyfan");
+    apikeyfan_connection.service_entry_id = String::from("api");
     configuration.connection_graph.connections.insert(
-        apikeyfun_connection.id.clone(),
-        apikeyfun_connection.clone(),
+        apikeyfan_connection.id.clone(),
+        apikeyfan_connection.clone(),
     );
 
     // The unavailable store is the first expected boundary after discovery authorization. A
     // discovery-identity error here would prove the Manifest route was not used.
     // 不可用存储是发现授权后的首个预期边界；若此处出现发现身份错误，则证明未使用 Manifest 路由。
     let error = runtime
-        .refresh_connection_catalog(&configuration, apikeyfun_connection.id.as_str())
+        .refresh_connection_catalog(&configuration, apikeyfan_connection.id.as_str())
         .await
         .expect_err("the unavailable test store must reject the credential read");
     assert!(

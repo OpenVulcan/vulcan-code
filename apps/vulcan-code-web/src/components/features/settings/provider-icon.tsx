@@ -2,7 +2,7 @@ import type { ReactElement } from "react"
 
 import antigravityIcon from "@/assets/provider-icons/provider-antigravity.svg"
 import agentSpaceIcon from "@/assets/provider-icons/provider-agentspace.png"
-import apiKeyFunIcon from "@/assets/provider-icons/provider-apikeyfun.svg"
+import apiKeyFunIcon from "@/assets/provider-icons/provider-apikeyfan.svg"
 import claudeIcon from "@/assets/provider-icons/provider-claude.svg"
 import claudeApiIcon from "@/assets/provider-icons/provider-claudeapi.svg"
 import code0Icon from "@/assets/provider-icons/provider-code0.svg"
@@ -35,7 +35,7 @@ import type { PublicAiProviderCategory } from "@/types"
 export type ProviderIconKey =
   | "antigravity"
   | "agentspace"
-  | "apikeyfun"
+  | "apikeyfan"
   | "claude"
   | "claudeapi"
   | "code0"
@@ -83,7 +83,7 @@ interface ProviderIconAsset {
 const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> = {
   antigravity: { light: antigravityIcon },
   agentspace: { light: agentSpaceIcon, transparent: true },
-  apikeyfun: { light: apiKeyFunIcon, transparent: true },
+  apikeyfan: { light: apiKeyFunIcon, transparent: true },
   claude: { light: claudeIcon },
   claudeapi: { light: claudeApiIcon, transparent: true },
   code0: { light: code0Icon, transparent: true },
@@ -120,7 +120,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
 // providerIconMap 将稳定供应商标识绑定到系列图标。
 const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   alibaba: "qwen",
-  apikeyfun: "apikeyfun",
+  apikeyfan: "apikeyfan",
   anthropic: "claude",
   agentspace: "agentspace",
   claude: "claude",

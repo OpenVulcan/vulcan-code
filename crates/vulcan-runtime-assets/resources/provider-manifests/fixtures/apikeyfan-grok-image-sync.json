@@ -1,19 +1,19 @@
 {
   "schema_version": "provider-manifest-execution-fixture.v1",
-  "fixture_id": "apikeyfun-grok-image-sync",
+  "fixture_id": "apikeyfan-grok-image-sync",
   "base_manifest": "tavily.json",
   "production_target_refs": [
-    "apikeyfun::grok-imagine-image.generate",
-    "apikeyfun::grok-imagine-image-quality.generate"
+    "apikeyfan::grok-imagine-image.generate",
+    "apikeyfan::grok-imagine-image-quality.generate"
   ],
   "tool_target": {
-    "target_id": "public-api.fixture-apikeyfun-grok-image",
-    "description": "APIKEY.FUN Grok Imagine synchronous image generation fixture.",
+    "target_id": "public-api.fixture-apikeyfan-grok-image",
+    "description": "APIKEY.FAN Grok Imagine synchronous image generation fixture.",
     "service_entry_id": "public-api",
     "credential_profile_ids": ["api-key"],
     "upstream_target_id": "grok-imagine-image",
-    "display_name": "APIKEY.FUN Grok Imagine Fixture",
-    "tool_id": "fixture_apikeyfun_grok_image_generate",
+    "display_name": "APIKEY.FAN Grok Imagine Fixture",
+    "tool_id": "fixture_apikeyfan_grok_image_generate",
     "capability": "image_generate",
     "input_schema": {
       "type": "object",
@@ -46,19 +46,19 @@
       ]
     },
     "execution": {
-      "endpoint_path": "/fixtures/apikeyfun-grok-image",
+      "endpoint_path": "/fixtures/apikeyfan-grok-image",
       "authentication": "bearer_authorization",
       "adapter": "generic_json",
       "execution_kind": "http_json_sync"
     }
   },
   "operation": {
-    "operation_id": "fixture.apikeyfun-grok-image-sync",
+    "operation_id": "fixture.apikeyfan-grok-image-sync",
     "operation": "image_generate",
     "carrier": "provider_tool",
     "input_resources": [],
     "output_resources": ["image"],
-    "tool_target_refs": ["public-api.fixture-apikeyfun-grok-image"],
+    "tool_target_refs": ["public-api.fixture-apikeyfan-grok-image"],
     "request_profile_refs": [],
     "response_profile_refs": [],
     "upload_channel_refs": [],
@@ -80,7 +80,7 @@
   "interactions": [
     {
       "method": "POST",
-      "path": "/fixtures/apikeyfun-grok-image",
+      "path": "/fixtures/apikeyfan-grok-image",
       "expected_json_body": {
         "model": "grok-imagine-image",
         "prompt": "draw a cinematic coastline",

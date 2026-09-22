@@ -2859,7 +2859,7 @@ export type TranslationKey =
   | "settings.providerDescription.deepseek"
   | "settings.providerDescription.alibaba"
   | "settings.providerDescription.openrouter"
-  | "settings.providerDescription.apikeyfun"
+  | "settings.providerDescription.apikeyfan"
   | "settings.providerDescription.claudeapi"
   | "settings.providerDescription.qiniu"
   | "settings.providerDescription.fennoai"

@@ -7,7 +7,7 @@ import type { ProjectSummary } from "../../src/types";
 
 // providerIds is the explicit provider artwork map from the production component.
 // providerIds 是生产组件中明确的供应商图标映射。
-const providerIds = ["alibaba", "apikeyfun", "anthropic", "agentspace", "claude", "claudeapi", "code0", "commandcode", "deepseek", "fennoai", "google", "kimi", "minimax", "openai", "opencode-go", "openrouter", "qwen", "qiniu", "tavily", "tokenrhythm", "vertex", "xai", "zhipu", "custom:audit"];
+const providerIds = ["alibaba", "apikeyfan", "anthropic", "agentspace", "claude", "claudeapi", "code0", "commandcode", "deepseek", "fennoai", "google", "kimi", "minimax", "openai", "opencode-go", "openrouter", "qwen", "qiniu", "tavily", "tokenrhythm", "vertex", "xai", "zhipu", "custom:audit"];
 // projects are in-memory records with known badge and catalog formats; their paths are never opened.
 // projects 是使用已知徽标与目录格式的内存记录；绝不打开其中路径。
 const projects: ProjectSummary[] = [

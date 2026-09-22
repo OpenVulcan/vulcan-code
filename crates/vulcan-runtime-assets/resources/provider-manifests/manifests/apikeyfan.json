@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
-  "provider_id": "apikeyfun",
-"revision": 7,
+  "provider_id": "apikeyfan",
+"revision": 8,
 "published_at": "2026-09-22T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
@@ -14,7 +14,6 @@
     "required_execution_primitives": [
       "http_json_sync",
       "http_json_sse",
-      "http_multipart_sse",
       "http_json_async_poll"
     ],
     "required_upload_primitives": ["inline_data_url"],
@@ -172,10 +171,10 @@
       "reasoning_control": "unknown",
       "reasoning_efforts": [],
       "prompt_cache": {
-        "provider_default_behavior": "APIKEY.FUN relay caching follows the selected upstream group.",
+        "provider_default_behavior": "APIKEY.FAN relay caching follows the selected upstream group.",
         "supports_managed_explicit": false
       },
-      "evidence_revision": "apikeyfun.verified-groups.2026-08-14"
+      "evidence_revision": "apikeyfan.verified-groups.2026-08-14"
     },
     "default_usage_profile_refs": [],
     "default_request_profile_refs": [],
@@ -398,7 +397,7 @@
         "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
         "reasoning_efforts": ["low", "medium", "high", "xhigh"], "context_limit": 500000,
-        "evidence_revision": "apikeyfun.grok-4.6.user-confirmed.2026-08-13"
+        "evidence_revision": "apikeyfan.grok-4.6.user-confirmed.2026-08-13"
       }
     },
     {
@@ -412,7 +411,7 @@
         "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfun.grok-imagine-image.2026-08-13"
+        "evidence_revision": "apikeyfan.grok-imagine-image.2026-08-13"
       }
     },
     {
@@ -426,7 +425,7 @@
         "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfun.grok-imagine-image-quality.2026-08-13"
+        "evidence_revision": "apikeyfan.grok-imagine-image-quality.2026-08-13"
       }
     },
     {
@@ -440,7 +439,7 @@
         "operations": ["video_generate"], "input_resources": ["image"], "output_resources": ["video"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfun.grok-imagine-video.2026-08-13"
+        "evidence_revision": "apikeyfan.grok-imagine-video.2026-08-13"
       }
     },
     {
@@ -450,7 +449,7 @@
       "matcher": {"kind": "exact", "value": "gemini-3.6-flash"},
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
-      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
@@ -466,7 +465,7 @@
       "matcher": {"kind": "exact", "value": "gemini-3.5-flash"},
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
-      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
@@ -482,7 +481,7 @@
       "matcher": {"kind": "exact", "value": "gemini-3.1-pro"},
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
-      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
@@ -498,7 +497,7 @@
       "matcher": {"kind": "exact", "value": "gemini-3.1-flash-lite"},
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
-      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
@@ -514,7 +513,7 @@
       "matcher": {"kind": "exact", "value": "gemini-3-flash"},
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
-      "request_profile_refs": ["apikeyfun.gemini.max-output.v1"],
+      "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
@@ -532,7 +531,7 @@
         "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
         "reasoning_efforts": ["high", "max"], "context_limit": 1000000, "output_limit": 128000,
-        "evidence_revision": "zhipu.glm-5.2.apikeyfun-responses.2026-08-13"
+        "evidence_revision": "zhipu.glm-5.2.apikeyfan-responses.2026-08-13"
       }
     },
     {
@@ -544,7 +543,7 @@
         "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
         "reasoning_efforts": [], "context_limit": 200000, "output_limit": 128000,
-        "evidence_revision": "zhipu.glm-5.1.apikeyfun-responses.2026-08-13"
+        "evidence_revision": "zhipu.glm-5.1.apikeyfan-responses.2026-08-13"
       }
     },
     {
@@ -552,7 +551,7 @@
       "display_name": "Kimi K3",
       "matcher": {"kind": "exact", "value": "kimi-k3"},
       "supported_protocols": ["anthropic-messages-video.v1"], "selected_protocol": "anthropic-messages-video.v1",
-      "request_profile_refs": ["apikeyfun.kimi.default-output.v1"],
+      "request_profile_refs": ["apikeyfan.kimi.default-output.v1"],
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": ["image", "video"], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
@@ -565,7 +564,7 @@
       "display_name": "Kimi K2.7 Code",
       "matcher": {"kind": "exact", "value": "kimi-k2.7-code"},
       "supported_protocols": ["anthropic-messages-video.v1"], "selected_protocol": "anthropic-messages-video.v1",
-      "request_profile_refs": ["apikeyfun.kimi.default-output.v1"],
+      "request_profile_refs": ["apikeyfan.kimi.default-output.v1"],
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": ["image", "video"], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
@@ -578,7 +577,7 @@
       "display_name": "Kimi K2.6",
       "matcher": {"kind": "exact", "value": "kimi-k2.6"},
       "supported_protocols": ["anthropic-messages-video.v1"], "selected_protocol": "anthropic-messages-video.v1",
-      "request_profile_refs": ["apikeyfun.kimi.default-output.v1"],
+      "request_profile_refs": ["apikeyfan.kimi.default-output.v1"],
       "capabilities": {
         "operations": ["conversation_respond"], "input_resources": ["image", "video"], "output_resources": [],
         "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
@@ -597,7 +596,7 @@
         "reasoning_efforts": ["none", "high", "low", "max"], "context_limit": 1048576,
         "evidence_revision": "deepseek.v4.2026-08-13"
       },
-      "response_profile_refs": ["apikeyfun.deepseek.responses.reasoning-mirror.v1"]
+      "response_profile_refs": ["apikeyfan.deepseek.responses.reasoning-mirror.v1"]
     },
     {
       "rule_id": "deepseek-v4-flash",
@@ -610,7 +609,7 @@
         "reasoning_efforts": ["none", "high", "low", "max"], "context_limit": 1048576,
         "evidence_revision": "deepseek.v4.2026-08-13"
       },
-      "response_profile_refs": ["apikeyfun.deepseek.responses.reasoning-mirror.v1"]
+      "response_profile_refs": ["apikeyfan.deepseek.responses.reasoning-mirror.v1"]
     },
     {
       "rule_id": "gpt-image-2-5-sunburst",
@@ -623,7 +622,7 @@
         "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfun.image-gen-skill.2026-09-22"
+        "evidence_revision": "apikeyfan.image-gen-skill.2026-09-22"
       }
     },
     {
@@ -637,7 +636,7 @@
         "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfun.image-gen-skill.2026-09-22"
+        "evidence_revision": "apikeyfan.image-gen-skill.2026-09-22"
       }
     },
     {
@@ -651,7 +650,7 @@
         "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfun.verified-groups.2026-08-14"
+        "evidence_revision": "apikeyfan.verified-groups.2026-08-14"
       }
     },
     {
@@ -665,16 +664,16 @@
         "operations": ["video_generate"], "input_resources": ["image"], "output_resources": ["video"],
         "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
         "reasoning_efforts": [],
-        "evidence_revision": "apikeyfun.grok-imagine-video-1.5.user-confirmed.2026-09-22"
+        "evidence_revision": "apikeyfan.grok-imagine-video-1.5.user-confirmed.2026-09-22"
       }
     }  ],
   "usage_profiles": [],
   "request_profiles": [
     {
-      "profile_id": "apikeyfun.gemini.max-output.v1",
+      "profile_id": "apikeyfan.gemini.max-output.v1",
       "description": "Always request the verified 65,536-token Gemini output budget instead of the relay default of 8,192.",
       "payload": {
-        "profile_id": "apikeyfun.gemini.max-output.v1",
+        "profile_id": "apikeyfan.gemini.max-output.v1",
         "revision": 1,
         "steps": [
           {"op": "set_literal", "path": "/generationConfig/maxOutputTokens", "value": 65536}
@@ -682,10 +681,10 @@
       }
     },
     {
-      "profile_id": "apikeyfun.kimi.default-output.v1",
-      "description": "Use the user-confirmed conservative 32,768-token request budget for APIKEY.FUN Kimi models.",
+      "profile_id": "apikeyfan.kimi.default-output.v1",
+      "description": "Use the user-confirmed conservative 32,768-token request budget for APIKEY.FAN Kimi models.",
       "payload": {
-        "profile_id": "apikeyfun.kimi.default-output.v1",
+        "profile_id": "apikeyfan.kimi.default-output.v1",
         "revision": 1,
         "steps": [
           {
@@ -702,10 +701,10 @@
   ],
   "response_profiles": [
     {
-      "profile_id": "apikeyfun.deepseek.responses.reasoning-mirror.v1",
-      "description": "Ignore APIKEY.FUN DeepSeek reasoning_text mirror events and retain reasoning_summary_text as the single reasoning channel.",
+      "profile_id": "apikeyfan.deepseek.responses.reasoning-mirror.v1",
+      "description": "Ignore APIKEY.FAN DeepSeek reasoning_text mirror events and retain reasoning_summary_text as the single reasoning channel.",
       "payload": {
-        "profile_id": "apikeyfun.deepseek.responses.reasoning-mirror.v1",
+        "profile_id": "apikeyfan.deepseek.responses.reasoning-mirror.v1",
         "revision": 1,
         "steps": [
           {
@@ -714,8 +713,8 @@
             "source": "body_json_pointer",
             "source_path": "/type",
             "mapping": {
-              "response.reasoning_text.delta": "response.apikeyfun.reasoning_text_mirror.delta",
-              "response.reasoning_text.done": "response.apikeyfun.reasoning_text_mirror.done"
+              "response.reasoning_text.delta": "response.apikeyfan.reasoning_text_mirror.delta",
+              "response.reasoning_text.done": "response.apikeyfan.reasoning_text_mirror.done"
             },
             "unmatched": "keep_literal"
           }
@@ -734,22 +733,11 @@
       "progress_supported": false,
       "cancellation_supported": false,
       "reference_encoding": "response_url"
-    },
-    {
-      "upload_channel_id": "inline.mask-data-url",
-      "description": "Materialize one local PNG edit mask as an inline Data URL.",
-      "primitive": "inline_data_url",
-      "accepted_mime_types": ["image/png"],
-      "max_bytes": 20971520,
-      "max_count": 1,
-      "progress_supported": false,
-      "cancellation_supported": false,
-      "reference_encoding": "response_url"
     }
   ],
   "operations": [
     {
-      "operation_id": "apikeyfun.gpt-image-2.generate",
+      "operation_id": "apikeyfan.gpt-image-2.generate",
       "operation": "image_generate",
       "carrier": "provider_tool",
       "input_resources": [],
@@ -760,31 +748,7 @@
       "timeout_ms": 900000, "idempotent": false
     },
     {
-      "operation_id": "apikeyfun.gpt-image-2.edit",
-      "operation": "image_edit",
-      "carrier": "provider_tool",
-      "input_resources": ["image"],
-      "output_resources": ["image"],
-      "tool_target_refs": ["gpt-image-2.edit"],
-      "request_profile_refs": [], "response_profile_refs": [],
-      "upload_channel_refs": ["inline.image-data-url", "inline.mask-data-url"],
-      "upload_bindings": [
-        {
-          "source_path": "/image_path", "target_path": "/image",
-          "upload_channel_refs": ["inline.image-data-url"],
-          "mime_types_by_extension": {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"},
-          "required": true, "remove_source": true
-        },
-        {
-          "source_path": "/mask_path", "target_path": "/mask",
-          "upload_channel_refs": ["inline.mask-data-url"],
-          "mime_type": "image/png", "required": true, "remove_source": true
-        }
-      ],
-      "timeout_ms": 900000, "idempotent": false
-    },
-    {
-      "operation_id": "apikeyfun.grok-imagine-image.generate",
+      "operation_id": "apikeyfan.grok-imagine-image.generate",
       "operation": "image_generate",
       "carrier": "provider_tool",
       "input_resources": [], "output_resources": ["image"],
@@ -794,7 +758,7 @@
       "timeout_ms": 300000, "idempotent": false
     },
     {
-      "operation_id": "apikeyfun.grok-imagine-video.generate",
+      "operation_id": "apikeyfan.grok-imagine-video.generate",
       "operation": "video_generate",
       "carrier": "provider_tool",
       "input_resources": ["image"], "output_resources": ["video"],
@@ -843,16 +807,36 @@
           }
         }
       }
+    },
+    {
+      "operation_id": "apikeyfan.gpt-image-2.5-sunburst.generate",
+      "operation": "image_generate",
+      "carrier": "provider_tool",
+      "input_resources": [], "output_resources": ["image"],
+      "tool_target_refs": ["gpt-image-2.5-sunburst.generate"],
+      "request_profile_refs": [], "response_profile_refs": [],
+      "upload_channel_refs": [], "upload_bindings": [],
+      "timeout_ms": 900000, "idempotent": false
+    },
+    {
+      "operation_id": "apikeyfan.gpt-image-2.5-flare.generate",
+      "operation": "image_generate",
+      "carrier": "provider_tool",
+      "input_resources": [], "output_resources": ["image"],
+      "tool_target_refs": ["gpt-image-2.5-flare.generate"],
+      "request_profile_refs": [], "response_profile_refs": [],
+      "upload_channel_refs": [], "upload_bindings": [],
+      "timeout_ms": 900000, "idempotent": false
     }
   ],
   "tool_targets": [
     {
       "target_id": "gpt-image-2.generate",
-      "description": "Generate one image with GPT Image 2 through the verified APIKEY.FUN SSE endpoint.",
+      "description": "Generate one image with GPT Image 2 through the verified APIKEY.FAN SSE endpoint.",
       "service_entry_id": "gpt-image",
       "credential_profile_ids": ["api-key"],
       "upstream_target_id": "gpt-image-2",
-      "availability_model_ids_any": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      "availability_model_ids_any": ["gpt-image-2"],
       "display_name": "GPT Image 2 Generation",
       "tool_id": "image_generate",
       "capability": "image_generate",
@@ -870,12 +854,12 @@
         "required": ["prompt"]
       },
       "extension_profile": {
-        "summary": "Generate a new image with GPT Image 2; this target is available only when the current API key exposes at least one GPT-5.6 model.",
+        "summary": "Generate a new image with GPT Image 2; this target is available while the GPT Image node keeps the model enabled.",
         "characteristics": ["Strong complex-UI composition and comparatively accurate Chinese text in verified samples.", "Supports ordinary text-to-image generation."],
         "input_modes": ["text_to_image"],
         "resolution_policy": {"mode": "provider_managed", "aspect_ratios": ["custom_size_ratio"]},
         "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
-        "constraints": ["Exactly one image is generated.", "Reference-image generation is not exposed because the APIKEY.FUN request shape has not been verified."],
+        "constraints": ["Exactly one image is generated.", "Reference-image generation is not exposed because the APIKEY.FAN request shape has not been verified."],
         "limitations": ["Requested size is not a pixel guarantee; verified outputs normalize to about 1.57 million pixels.", "2048x1152 and 3840x2160 both produced 1672x941; high quality did not produce native 4K."],
         "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#四codex-分组隐式图片能力"]
       },
@@ -884,73 +868,21 @@
         "resource_decoders": [
           {"source_path": "/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "image"},
           {"source_path": "/data/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "data-image"},
-          {"source_path": "/item/result", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "item-image"}
+          {"source_path": "/item/result", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "item-image"},
+          {"source_path": "/base64", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "base64-image"},
+          {"source_path": "/images/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "images-image"},
+          {"source_path": "/output/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "output-image"},
+          {"source_path": "/response/output/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "response-output-image"}
         ]
       },
       "execution": {
         "endpoint_path": "/images/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_sse",
-        "sse_events": {"event_type_path": "/type", "nonterminal_event_types": ["image_generation.partial_image"], "terminal_event_types": ["image_generation.completed"], "allow_done_record": true}
-      }
-    },
-    {
-      "target_id": "gpt-image-2.edit",
-      "description": "Edit a masked region of one source image with GPT Image 2 through the verified APIKEY.FUN multipart SSE endpoint.",
-      "service_entry_id": "gpt-image", "credential_profile_ids": ["api-key"],
-      "upstream_target_id": "gpt-image-2",
-      "availability_model_ids_any": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-      "display_name": "GPT Image 2 Masked Edit", "tool_id": "image_edit", "capability": "image_edit",
-      "input_schema": {
-        "type": "object", "additionalProperties": false,
-        "properties": {
-          "image_path": {"type": "string", "minLength": 1, "description": "Local JPEG, PNG, or WebP source image path."},
-          "mask_path": {"type": "string", "minLength": 1, "description": "Local PNG mask path that defines the edit region."},
-          "prompt": {"type": "string", "minLength": 1, "description": "Exact masked edit instruction."},
-          "model": {"type": "string", "const": "gpt-image-2", "default": "gpt-image-2"},
-          "n": {"type": "integer", "const": 1, "default": 1},
-          "quality": {"type": "string", "enum": ["auto", "low", "medium", "high"], "default": "auto"},
-          "size": {"type": "string", "pattern": "^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$", "default": "1024x1024"},
-          "stream": {"type": "boolean", "const": true, "default": true},
-          "response_format": {"type": "string", "const": "b64_json", "default": "b64_json"}
-        },
-        "required": ["image_path", "mask_path", "prompt"]
-      },
-      "extension_profile": {
-        "summary": "Edit an explicitly masked region of one source image with GPT Image 2.",
-        "characteristics": ["Independent masked-edit capability; it is never selected merely because image generation has a reference image."],
-        "input_modes": ["masked_image_edit"],
-        "resolution_policy": {"mode": "provider_managed", "aspect_ratios": ["custom_size_ratio"]},
-        "format_policy": {"input_formats": ["image/jpeg", "image/png", "image/webp", "mask:image/png"], "output_formats": ["image/png"]},
-        "constraints": ["A source image, PNG mask, and prompt are mandatory in the product contract.", "Exactly one output image is requested."],
-        "limitations": ["Mask transparency and dimension rules still require provider-side acceptance testing.", "Requested size remains provider-managed rather than guaranteed."],
-        "evidence_refs": ["docs/plan/20260813-04-APIKEYFUN_VERIFIED_PROVIDER_FACTS.md#43-图片编辑-ai-扩展"]
-      },
-      "output": {
-        "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/png"],
-        "resource_decoders": [
-          {"source_path": "/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "image"},
-          {"source_path": "/data/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "data-image"},
-          {"source_path": "/item/result", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "item-image"}
-        ]
-      },
-      "execution": {
-        "endpoint_path": "/images/edits", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_multipart_sse",
-        "multipart_request": {"fields": [
-          {"argument_path": "/image", "field_name": "image", "file": true, "required": true},
-          {"argument_path": "/mask", "field_name": "mask", "file": true, "required": true},
-          {"argument_path": "/prompt", "field_name": "prompt", "required": true},
-          {"argument_path": "/model", "field_name": "model", "required": true},
-          {"argument_path": "/n", "field_name": "n", "required": true},
-          {"argument_path": "/quality", "field_name": "quality", "required": true},
-          {"argument_path": "/size", "field_name": "size", "required": true},
-          {"argument_path": "/stream", "field_name": "stream", "required": true},
-          {"argument_path": "/response_format", "field_name": "response_format", "required": true}
-        ]},
-        "sse_events": {"event_type_path": "/type", "nonterminal_event_types": ["image_generation.partial_image"], "terminal_event_types": ["image_generation.completed"], "allow_done_record": true}
+        "sse_events": {"event_type_path": "/type", "nonterminal_event_types": ["image_generation.partial_image", "response.image_generation_call.partial_image"], "terminal_event_types": ["image_generation.completed"], "allow_done_record": true}
       }
     },
     {
       "target_id": "grok-imagine-image.generate",
-      "description": "Generate one image with the standard Grok Imagine image model through the verified synchronous APIKEY.FUN endpoint.",
+      "description": "Generate one image with the standard Grok Imagine image model through the verified synchronous APIKEY.FAN endpoint.",
       "service_entry_id": "grok-media", "credential_profile_ids": ["api-key"],
       "upstream_target_id": "grok-imagine-image", "availability_model_ids_any": ["grok-imagine-image"],
       "display_name": "Grok Imagine Image", "tool_id": "image_generate", "capability": "image_generate",
@@ -983,7 +915,7 @@
     },
     {
       "target_id": "grok-imagine-image-quality.generate",
-      "description": "Generate one image with the independent high-quality Grok Imagine model through the verified synchronous APIKEY.FUN endpoint.",
+      "description": "Generate one image with the independent high-quality Grok Imagine model through the verified synchronous APIKEY.FAN endpoint.",
       "service_entry_id": "grok-media", "credential_profile_ids": ["api-key"],
       "upstream_target_id": "grok-imagine-image-quality", "availability_model_ids_any": ["grok-imagine-image-quality"],
       "display_name": "Grok Imagine Image Quality", "tool_id": "image_generate", "capability": "image_generate",
@@ -1016,7 +948,7 @@
     },
     {
       "target_id": "grok-imagine-video.generate",
-      "description": "Generate a Grok Imagine video through the verified APIKEY.FUN asynchronous start, poll, and authenticated content route.",
+      "description": "Generate a Grok Imagine video through the verified APIKEY.FAN asynchronous start, poll, and authenticated content route.",
       "service_entry_id": "grok-media", "credential_profile_ids": ["api-key"],
       "upstream_target_id": "grok-imagine-video", "availability_model_ids_any": ["grok-imagine-video"],
       "display_name": "Grok Imagine Video", "tool_id": "video_generate", "capability": "video_generate",
@@ -1062,6 +994,98 @@
         "resource_decoders": [{"source_path": "/", "encoding": "binary_body", "resource_kind": "video", "mime_type": "video/mp4", "max_bytes": 104857600, "output_id_prefix": "video"}]
       },
       "execution": {"endpoint_path": "/videos/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_async_poll"}
+    },
+    {
+      "target_id": "gpt-image-2.5-sunburst.generate",
+      "description": "Generate one image with GPT Image 2.5 Sunburst through the verified APIKEY.FAN SSE endpoint.",
+      "service_entry_id": "gpt-image", "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "gpt-image-2.5-sunburst", "availability_model_ids_any": ["gpt-image-2.5-sunburst"],
+      "display_name": "GPT Image 2.5 Sunburst", "tool_id": "image_generate", "capability": "image_generate",
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "model": {"type": "string", "const": "gpt-image-2.5-sunburst", "default": "gpt-image-2.5-sunburst"},
+          "prompt": {"type": "string", "minLength": 1, "description": "Complete image generation instruction."},
+          "n": {"type": "integer", "const": 1, "default": 1},
+          "size": {"type": "string", "pattern": "^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$", "default": "1024x1024", "description": "Requested aspect-ratio carrier; actual output dimensions are provider-managed."},
+          "quality": {"type": "string", "enum": ["auto", "low", "medium", "high"], "default": "auto"},
+          "stream": {"type": "boolean", "const": true, "default": true},
+          "response_format": {"type": "string", "const": "b64_json", "default": "b64_json"}
+        },
+        "required": ["prompt"]
+      },
+      "extension_profile": {
+        "summary": "Generate a new image with GPT Image 2.5 Sunburst, which the provider image-gen skill package ships as its default image model.",
+        "characteristics": ["Streaming base64 image delivery over the verified /images/generations route."],
+        "input_modes": ["text_to_image"],
+        "resolution_policy": {"mode": "provider_managed", "aspect_ratios": ["custom_size_ratio"]},
+        "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
+        "constraints": ["Exactly one image is requested.", "Reference-image and masked-edit inputs are not exposed."],
+        "limitations": ["Requested size is not a pixel guarantee; output dimensions remain provider-managed."],
+        "evidence_refs": ["apikeyfan.image-gen-skill.2026-09-22"]
+      },
+      "output": {
+        "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/png"],
+        "resource_decoders": [
+          {"source_path": "/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "image"},
+          {"source_path": "/data/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "data-image"},
+          {"source_path": "/item/result", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "item-image"},
+          {"source_path": "/base64", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "base64-image"},
+          {"source_path": "/images/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "images-image"},
+          {"source_path": "/output/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "output-image"},
+          {"source_path": "/response/output/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "response-output-image"}
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_sse",
+        "sse_events": {"event_type_path": "/type", "nonterminal_event_types": ["image_generation.partial_image", "response.image_generation_call.partial_image"], "terminal_event_types": ["image_generation.completed"], "allow_done_record": true}
+      }
+    },
+    {
+      "target_id": "gpt-image-2.5-flare.generate",
+      "description": "Generate one image with GPT Image 2.5 Flare through the verified APIKEY.FAN SSE endpoint.",
+      "service_entry_id": "gpt-image", "credential_profile_ids": ["api-key"],
+      "upstream_target_id": "gpt-image-2.5-flare", "availability_model_ids_any": ["gpt-image-2.5-flare"],
+      "display_name": "GPT Image 2.5 Flare", "tool_id": "image_generate", "capability": "image_generate",
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "model": {"type": "string", "const": "gpt-image-2.5-flare", "default": "gpt-image-2.5-flare"},
+          "prompt": {"type": "string", "minLength": 1, "description": "Complete image generation instruction."},
+          "n": {"type": "integer", "const": 1, "default": 1},
+          "size": {"type": "string", "pattern": "^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$", "default": "1024x1024", "description": "Requested aspect-ratio carrier; actual output dimensions are provider-managed."},
+          "quality": {"type": "string", "enum": ["auto", "low", "medium", "high"], "default": "auto"},
+          "stream": {"type": "boolean", "const": true, "default": true},
+          "response_format": {"type": "string", "const": "b64_json", "default": "b64_json"}
+        },
+        "required": ["prompt"]
+      },
+      "extension_profile": {
+        "summary": "Generate a new image with GPT Image 2.5 Flare, a supported image model of the provider image-gen skill package.",
+        "characteristics": ["Streaming base64 image delivery over the verified /images/generations route."],
+        "input_modes": ["text_to_image"],
+        "resolution_policy": {"mode": "provider_managed", "aspect_ratios": ["custom_size_ratio"]},
+        "format_policy": {"input_formats": ["text"], "output_formats": ["image/png"]},
+        "constraints": ["Exactly one image is requested.", "Reference-image and masked-edit inputs are not exposed."],
+        "limitations": ["Requested size is not a pixel guarantee; output dimensions remain provider-managed."],
+        "evidence_refs": ["apikeyfan.gpt-image-2.5-flare.user-confirmed.2026-09-22"]
+      },
+      "output": {
+        "kind": "resources", "source_path": "/", "normalized_result_path": "resources", "resource_kind": "image", "mime_types": ["image/png"],
+        "resource_decoders": [
+          {"source_path": "/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "image"},
+          {"source_path": "/data/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "data-image"},
+          {"source_path": "/item/result", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "item-image"},
+          {"source_path": "/base64", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "base64-image"},
+          {"source_path": "/images/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "images-image"},
+          {"source_path": "/output/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "output-image"},
+          {"source_path": "/response/output/0/b64_json", "encoding": "base64", "resource_kind": "image", "mime_type": "image/png", "optional": true, "max_bytes": 104857600, "output_id_prefix": "response-output-image"}
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations", "authentication": "bearer_authorization", "adapter": "generic_json", "execution_kind": "http_json_sse",
+        "sse_events": {"event_type_path": "/type", "nonterminal_event_types": ["image_generation.partial_image", "response.image_generation_call.partial_image"], "terminal_event_types": ["image_generation.completed"], "allow_done_record": true}
+      }
     }
   ],
   "provenance": {

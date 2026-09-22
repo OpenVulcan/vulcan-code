@@ -570,21 +570,21 @@ fn gemini_generate_content_route_uses_native_model_path_and_controls() {
     );
 }
 
-/// Verifies APIKEY.FUN uses native Gemini execution without moving credential discovery to v1beta.
-/// 验证 APIKEY.FUN 使用原生 Gemini 执行入口，同时不把凭据级模型发现迁移到 v1beta。
+/// Verifies APIKEY.FAN uses native Gemini execution without moving credential discovery to v1beta.
+/// 验证 APIKEY.FAN 使用原生 Gemini 执行入口，同时不把凭据级模型发现迁移到 v1beta。
 #[test]
-fn apikeyfun_gemini_route_separates_execution_and_discovery_origins() {
+fn apikeyfan_gemini_route_separates_execution_and_discovery_origins() {
     let client = ProviderExecutionClient::new(
         reqwest::Client::new(),
         Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
     );
-    let route = bundled_manifest_route("apikeyfun", "api", GEMINI_GENERATE_CONTENT_PROFILE_ID);
+    let route = bundled_manifest_route("apikeyfan", "api", GEMINI_GENERATE_CONTENT_PROFILE_ID);
     let mut request = minimal_request();
     request.model_id = String::from("gemini-3-flash");
 
     let encoded = client
         .encode_request(&route, &request)
-        .expect("APIKEY.FUN Gemini request should encode");
+        .expect("APIKEY.FAN Gemini request should encode");
 
     assert_eq!(
         route.request_url(encoded.path.as_str()),

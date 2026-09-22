@@ -24,7 +24,7 @@ const providerDescriptionKeys: Readonly<Record<string, TranslationKey>> = {
   deepseek: "settings.providerDescription.deepseek",
   alibaba: "settings.providerDescription.alibaba",
   openrouter: "settings.providerDescription.openrouter",
-  apikeyfun: "settings.providerDescription.apikeyfun",
+  apikeyfan: "settings.providerDescription.apikeyfan",
   claudeapi: "settings.providerDescription.claudeapi",
   qiniu: "settings.providerDescription.qiniu",
   fennoai: "settings.providerDescription.fennoai",

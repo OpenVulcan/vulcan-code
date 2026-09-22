@@ -1,18 +1,18 @@
 {
   "schema_version": "provider-manifest-execution-fixture.v1",
-  "fixture_id": "apikeyfun-gpt-image-generate-sse",
+  "fixture_id": "apikeyfan-gpt-image-generate-sse",
   "base_manifest": "tavily.json",
   "production_target_refs": [
-    "apikeyfun::gpt-image-2.generate"
+    "apikeyfan::gpt-image-2.generate"
   ],
   "tool_target": {
-    "target_id": "public-api.fixture-apikeyfun-gpt-image-generate",
-    "description": "APIKEY.FUN GPT Image 2 SSE generation fixture.",
+    "target_id": "public-api.fixture-apikeyfan-gpt-image-generate",
+    "description": "APIKEY.FAN GPT Image 2 SSE generation fixture.",
     "service_entry_id": "public-api",
     "credential_profile_ids": ["api-key"],
     "upstream_target_id": "gpt-image-2",
-    "display_name": "APIKEY.FUN GPT Image 2 Fixture",
-    "tool_id": "fixture_apikeyfun_gpt_image_generate",
+    "display_name": "APIKEY.FAN GPT Image 2 Fixture",
+    "tool_id": "fixture_apikeyfan_gpt_image_generate",
     "capability": "image_generate",
     "input_schema": {
       "type": "object",
@@ -65,7 +65,7 @@
       ]
     },
     "execution": {
-      "endpoint_path": "/fixtures/apikeyfun-gpt-image-generate",
+      "endpoint_path": "/fixtures/apikeyfan-gpt-image-generate",
       "authentication": "bearer_authorization",
       "adapter": "generic_json",
       "execution_kind": "http_json_sse",
@@ -78,12 +78,12 @@
     }
   },
   "operation": {
-    "operation_id": "fixture.apikeyfun-gpt-image-generate-sse",
+    "operation_id": "fixture.apikeyfan-gpt-image-generate-sse",
     "operation": "image_generate",
     "carrier": "provider_tool",
     "input_resources": [],
     "output_resources": ["image"],
-    "tool_target_refs": ["public-api.fixture-apikeyfun-gpt-image-generate"],
+    "tool_target_refs": ["public-api.fixture-apikeyfan-gpt-image-generate"],
     "request_profile_refs": [],
     "response_profile_refs": [],
     "upload_channel_refs": [],
@@ -106,7 +106,7 @@
   "interactions": [
     {
       "method": "POST",
-      "path": "/fixtures/apikeyfun-gpt-image-generate",
+      "path": "/fixtures/apikeyfan-gpt-image-generate",
       "expected_json_body": {
         "model": "gpt-image-2",
         "prompt": "draw a blue mountain",

@@ -37,14 +37,14 @@ const LEGACY_SYSTEM_ERROR_BODY = "Vulcan 公共契约流式执行失败：provid
 
 // EMPTY_MESSAGE_502_BODY mirrors an upstream 502 that supplies retry metadata but no display text.
 // EMPTY_MESSAGE_502_BODY 对应携带重试元数据但没有展示文本的上游 502。
-const EMPTY_MESSAGE_502_BODY = `Vulcan 公共契约流式执行失败：provider apikeyfun failure: ${JSON.stringify({
+const EMPTY_MESSAGE_502_BODY = `Vulcan 公共契约流式执行失败：provider apikeyfan failure: ${JSON.stringify({
   category: "provider_unavailable",
   subcategory: "http",
   stage: "response_headers",
   http_status: 502,
   transport: "http",
   upstream_message: "",
-  provider_id: "apikeyfun",
+  provider_id: "apikeyfan",
   entry_id: "public-api",
   model_id: "gpt-5.6-luna",
   message: "",
@@ -57,7 +57,7 @@ const EMPTY_MESSAGE_502_BODY = `Vulcan 公共契约流式执行失败：provider
     delay_milliseconds: 60_000,
     source: "header_seconds",
   },
-})}。 [provider_route: provider=apikeyfun, model=gpt-5.6-luna, protocol=openai-chat-completions.v1, manifest_revision=0, manifest_generation=2, request_profiles=[], response_profiles=[]]`;
+})}。 [provider_route: provider=apikeyfan, model=gpt-5.6-luna, protocol=openai-chat-completions.v1, manifest_revision=0, manifest_generation=2, request_profiles=[], response_profiles=[]]`;
 
 // AGENTSPACE_RECONCILIATION_BODY mirrors the route-aware closed pending-confirmation classification.
 // AGENTSPACE_RECONCILIATION_BODY 模拟感知路由的封闭待确认分类。
@@ -111,7 +111,7 @@ describe("system provider error card", () => {
   // 验证空上游消息仍会保留结构化卡片与精确重试事实。
   it("keeps retryable 502 failures card-ready when message fields are empty", () => {
     expect(parseSystemProviderError(EMPTY_MESSAGE_502_BODY)).toMatchObject({
-      provider: "apikeyfun",
+      provider: "apikeyfan",
       category: "provider_unavailable",
       stage: "response_headers",
       httpStatus: "502",

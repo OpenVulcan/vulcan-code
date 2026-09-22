@@ -774,18 +774,18 @@ async fn custom_discovery_transport_failure_is_temporarily_unavailable() {
 #[test]
 fn discovery_uses_only_active_manifest_routes() {
     let registry = crate::ProviderRegistry::first_batch().expect("provider registry");
-    // provider is the cut-over APIKEY.FUN descriptor compiled from the bundled Manifest.
-    // provider 是从内置 Manifest 编译得到的已切换 APIKEY.FUN 描述器。
+    // provider is the cut-over APIKEY.FAN descriptor compiled from the bundled Manifest.
+    // provider 是从内置 Manifest 编译得到的已切换 APIKEY.FAN 描述器。
     let provider = registry
-        .provider("apikeyfun")
-        .expect("APIKEY.FUN provider must register");
+        .provider("apikeyfan")
+        .expect("APIKEY.FAN provider must register");
     // entry owns every route that the signed system Manifest authorizes for this credential kind.
     // entry 持有已签名系统 Manifest 为此凭据类型授权的全部路由。
     let entry = provider
         .service_entries
         .iter()
         .find(|entry| entry.id == "api")
-        .expect("APIKEY.FUN public entry must exist");
+        .expect("APIKEY.FAN public entry must exist");
     assert_eq!(
         entry
             .protocol_routes

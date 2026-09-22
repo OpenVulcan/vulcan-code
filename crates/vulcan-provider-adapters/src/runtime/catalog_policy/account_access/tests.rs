@@ -277,23 +277,23 @@ fn manifest_account_model_access_projects_commandcode_catalog() {
 /// Verifies providers without an account-model-access declaration keep their own catalog logic.
 /// 验证未声明账号模型访问投影的供应商保持其自身目录逻辑。
 #[test]
-fn apikeyfun_catalog_does_not_inherit_account_plan_filtering() {
+fn apikeyfan_catalog_does_not_inherit_account_plan_filtering() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let manifest = runtime
-        .system_manifest("apikeyfun")
-        .expect("APIKEY.FUN manifest must exist");
+        .system_manifest("apikeyfan")
+        .expect("APIKEY.FAN manifest must exist");
     let mut configuration = PersistedAiConfiguration::default();
-    let mut apikeyfun_connection = connection("apikeyfun-group-account");
-    apikeyfun_connection.provider_id = String::from("apikeyfun");
-    apikeyfun_connection.service_entry_id = String::from("api");
-    apikeyfun_connection.credential_profile_id = String::from("api-key");
+    let mut apikeyfan_connection = connection("apikeyfan-group-account");
+    apikeyfan_connection.provider_id = String::from("apikeyfan");
+    apikeyfan_connection.service_entry_id = String::from("api");
+    apikeyfan_connection.credential_profile_id = String::from("api-key");
     configuration
         .connection_graph
         .connections
-        .insert(apikeyfun_connection.id.clone(), apikeyfun_connection);
+        .insert(apikeyfan_connection.id.clone(), apikeyfan_connection);
     let mut catalog = with_protocol_variants(
         parse_openai_model_catalog(
-            "apikeyfun-group-account",
+            "apikeyfan-group-account",
             1,
             r#"{"data":[{"id":"deepseek-v4-flash"}]}"#,
         )
@@ -301,23 +301,23 @@ fn apikeyfun_catalog_does_not_inherit_account_plan_filtering() {
         &[OPENAI_RESPONSES_PROFILE_ID],
     );
     let unrelated_usage = account_usage(
-        "credential-apikeyfun-group-account",
+        "credential-apikeyfan-group-account",
         Some("Go"),
         Some("individual-go"),
         Vec::new(),
     );
     apply_model_catalog_overlays_with_account_access(
         &configuration,
-        "apikeyfun",
+        "apikeyfan",
         "api",
         Some(&unrelated_usage),
         manifest
             .model_source_policy("api")
-            .expect("APIKEY.FUN source policy must compile"),
+            .expect("APIKEY.FAN source policy must compile"),
         Some(manifest.as_ref()),
         &mut catalog,
     )
-    .expect("APIKEY.FUN catalog projection should remain independent");
+    .expect("APIKEY.FAN catalog projection should remain independent");
     assert_eq!(
         catalog
             .models

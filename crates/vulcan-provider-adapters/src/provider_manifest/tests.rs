@@ -315,25 +315,25 @@ fn media_input_projection_is_closed_by_manifest_validation() {
     );
 }
 
-/// Verifies APIKEY.FUN DeepSeek keeps one canonical reasoning channel without weakening Responses validation.
-/// 验证 APIKEY.FUN DeepSeek 在不放宽 Responses 校验的前提下只保留一条规范思考通道。
+/// Verifies APIKEY.FAN DeepSeek keeps one canonical reasoning channel without weakening Responses validation.
+/// 验证 APIKEY.FAN DeepSeek 在不放宽 Responses 校验的前提下只保留一条规范思考通道。
 #[test]
-fn apikeyfun_deepseek_response_profile_filters_only_mirrored_reasoning_events() {
+fn apikeyfan_deepseek_response_profile_filters_only_mirrored_reasoning_events() {
     // manifestPath owns the exact bundled provider definition under test.
     // manifestPath 指向本测试使用的精确内置供应商定义。
     let manifest_path =
-        vulcan_runtime_assets::source_bundled_provider_manifests_directory().join("apikeyfun.json");
+        vulcan_runtime_assets::source_bundled_provider_manifests_directory().join("apikeyfan.json");
     // manifestText is compiled through the same system-manifest path used at publication.
     // manifestText 通过发布时使用的同一系统 Manifest 路径编译。
     let manifest_text = std::fs::read_to_string(&manifest_path)
-        .unwrap_or_else(|_| panic!("missing APIKEY.FUN manifest at {}", manifest_path.display()));
+        .unwrap_or_else(|_| panic!("missing APIKEY.FAN manifest at {}", manifest_path.display()));
     // compiled freezes model-scoped response-profile ownership and executable payloads.
     // compiled 冻结模型作用域响应 Profile 的归属与可执行载荷。
     let compiled = super::compiler::compile_manifest_text(
         manifest_text.as_str(),
         super::ManifestOwnership::System,
     )
-    .expect("APIKEY.FUN manifest must compile");
+    .expect("APIKEY.FAN manifest must compile");
     // deepseekRule must own the relay-specific response projection while unrelated models do not.
     // deepseekRule 必须持有中转站专属响应投影，而无关模型不得继承该投影。
     let deepseek_rule = compiled
@@ -344,7 +344,7 @@ fn apikeyfun_deepseek_response_profile_filters_only_mirrored_reasoning_events() 
     assert_eq!(
         deepseek_rule.response_profile_refs,
         vec![String::from(
-            "apikeyfun.deepseek.responses.reasoning-mirror.v1"
+            "apikeyfan.deepseek.responses.reasoning-mirror.v1"
         )]
     );
     let unrelated_rule = compiled
@@ -359,7 +359,7 @@ fn apikeyfun_deepseek_response_profile_filters_only_mirrored_reasoning_events() 
     let response_profile = compiled
         .response_profiles
         .iter()
-        .find(|profile| profile.profile_id == "apikeyfun.deepseek.responses.reasoning-mirror.v1")
+        .find(|profile| profile.profile_id == "apikeyfan.deepseek.responses.reasoning-mirror.v1")
         .and_then(|profile| profile.payload.clone())
         .expect("DeepSeek reasoning mirror profile must compile");
     // cases prove only the invalid duplicated channel is renamed into ignored lifecycle metadata.
@@ -367,11 +367,11 @@ fn apikeyfun_deepseek_response_profile_filters_only_mirrored_reasoning_events() 
     let cases = [
         (
             "response.reasoning_text.delta",
-            "response.apikeyfun.reasoning_text_mirror.delta",
+            "response.apikeyfan.reasoning_text_mirror.delta",
         ),
         (
             "response.reasoning_text.done",
-            "response.apikeyfun.reasoning_text_mirror.done",
+            "response.apikeyfan.reasoning_text_mirror.done",
         ),
         (
             "response.reasoning_summary_text.delta",
@@ -384,7 +384,7 @@ fn apikeyfun_deepseek_response_profile_filters_only_mirrored_reasoning_events() 
             std::slice::from_ref(&response_profile),
             serde_json::json!({"type": wire_type, "delta": "verified"}),
         )
-        .expect("APIKEY.FUN response projection must succeed");
+        .expect("APIKEY.FAN response projection must succeed");
         assert_eq!(projected["type"], expected_type);
         assert_eq!(projected["delta"], "verified");
     }

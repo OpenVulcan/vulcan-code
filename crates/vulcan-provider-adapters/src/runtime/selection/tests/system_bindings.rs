@@ -132,28 +132,28 @@ fn model_level_protocol_routing_uses_declared_bindings_per_model() {
     );
 }
 
-/// Verifies APIKEY.FUN routes a credential-only connection through its signed model binding.
-/// 验证 APIKEY.FUN 会通过已签名模型绑定路由仅含凭据身份的连接。
+/// Verifies APIKEY.FAN routes a credential-only connection through its signed model binding.
+/// 验证 APIKEY.FAN 会通过已签名模型绑定路由仅含凭据身份的连接。
 #[test]
-fn apikeyfun_manifest_uses_model_protocol_binding() {
+fn apikeyfan_manifest_uses_model_protocol_binding() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
-    // apikeyfunConnection stores only credential and service identity.
-    // apikeyfunConnection 仅保存凭据与服务身份，协议由当前 Manifest 模型绑定提供。
-    let mut apikeyfun_connection = connection("apikeyfun-account");
-    apikeyfun_connection.provider_id = String::from("apikeyfun");
-    apikeyfun_connection.service_entry_id = String::from("api");
+    // apikeyfanConnection stores only credential and service identity.
+    // apikeyfanConnection 仅保存凭据与服务身份，协议由当前 Manifest 模型绑定提供。
+    let mut apikeyfan_connection = connection("apikeyfan-account");
+    apikeyfan_connection.provider_id = String::from("apikeyfan");
+    apikeyfan_connection.service_entry_id = String::from("api");
     configuration
         .connection_graph
         .connections
-        .insert(apikeyfun_connection.id.clone(), apikeyfun_connection);
+        .insert(apikeyfan_connection.id.clone(), apikeyfan_connection);
 
     let model_id = "deepseek-v4-flash";
     // sourceCatalog represents one `/models` identity projected through the signed Responses rule.
     // sourceCatalog 表示一个通过已签名 Responses 规则投影的 `/models` 身份。
     let source_catalog = with_protocol_variants(
         parse_openai_model_catalog(
-            "apikeyfun-account",
+            "apikeyfan-account",
             1,
             format!(r#"{{"data":[{{"id":"{model_id}"}}]}}"#).as_str(),
         )
@@ -166,16 +166,16 @@ fn apikeyfun_manifest_uses_model_protocol_binding() {
         .expect("catalog should install");
     runtime
         .reapply_model_catalog_overlays(&configuration)
-        .expect("APIKEY.FUN Manifest catalog should publish");
+        .expect("APIKEY.FAN Manifest catalog should publish");
 
     let selection = runtime
         .resolve_connection_model_selection(
             &configuration,
-            "apikeyfun-account",
-            "apikeyfun",
+            "apikeyfan-account",
+            "apikeyfan",
             model_id,
         )
-        .expect("declared APIKEY.FUN model should resolve");
+        .expect("declared APIKEY.FAN model should resolve");
     assert_eq!(
         selection.route.protocol_route.protocol_profile_id,
         OPENAI_RESPONSES_PROFILE_ID
@@ -186,29 +186,29 @@ fn apikeyfun_manifest_uses_model_protocol_binding() {
     );
 }
 
-/// Verifies APIKEY.FUN rejects a discovered model outside the reviewed declaration whitelist.
-/// 验证 APIKEY.FUN 会拒绝已发现但不在已审核声明白名单中的模型。
+/// Verifies APIKEY.FAN rejects a discovered model outside the reviewed declaration whitelist.
+/// 验证 APIKEY.FAN 会拒绝已发现但不在已审核声明白名单中的模型。
 #[test]
-fn apikeyfun_rejects_discovered_model_outside_declared_whitelist() {
+fn apikeyfan_rejects_discovered_model_outside_declared_whitelist() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
-    let mut apikeyfun = connection("apikeyfun-account");
-    apikeyfun.provider_id = String::from("apikeyfun");
-    apikeyfun.service_entry_id = String::from("api");
+    let mut apikeyfan = connection("apikeyfan-account");
+    apikeyfan.provider_id = String::from("apikeyfan");
+    apikeyfan.service_entry_id = String::from("api");
     configuration
         .connection_graph
         .add_connection(
             &runtime
                 .providers()
                 .expect("provider registry should resolve"),
-            apikeyfun,
+            apikeyfan,
         )
-        .expect("APIKEY.FUN connection should register");
+        .expect("APIKEY.FAN connection should register");
 
     let model_id = "future-provider-model";
     let catalog = with_protocol_variants(
         parse_openai_model_catalog(
-            "apikeyfun-account",
+            "apikeyfan-account",
             1,
             format!(r#"{{"data":[{{"id":"{model_id}"}}]}}"#).as_str(),
         )
@@ -219,7 +219,7 @@ fn apikeyfun_rejects_discovered_model_outside_declared_whitelist() {
     runtime
         .replace_catalog(catalog)
         .expect("catalog should install");
-    configuration.set_model_enabled("apikeyfun", model_id, true);
+    configuration.set_model_enabled("apikeyfan", model_id, true);
     runtime
         .reapply_model_catalog_overlays(&configuration)
         .expect("reviewed provider catalog should publish");
@@ -227,11 +227,11 @@ fn apikeyfun_rejects_discovered_model_outside_declared_whitelist() {
     let error = runtime
         .resolve_connection_model_selection(
             &configuration,
-            "apikeyfun-account",
-            "apikeyfun",
+            "apikeyfan-account",
+            "apikeyfan",
             model_id,
         )
-        .expect_err("undeclared APIKEY.FUN model must not resolve");
+        .expect_err("undeclared APIKEY.FAN model must not resolve");
     assert!(
         error.contains("not present in the effective catalog"),
         "rejection must identify the exact effective-catalog boundary: {error}"

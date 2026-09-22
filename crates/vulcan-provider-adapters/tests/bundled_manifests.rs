@@ -2079,18 +2079,18 @@ fn commandcode_manifest_freezes_the_verified_provider_contract() {
     );
 }
 
-/// Verifies APIKEY.FUN remains a strict intersection of group-visible models and local rules.
-/// 验证 APIKEY.FUN 仍是分组可见模型与本地规则的严格交集。
+/// Verifies APIKEY.FAN remains a strict intersection of group-visible models and local rules.
+/// 验证 APIKEY.FAN 仍是分组可见模型与本地规则的严格交集。
 #[test]
-fn apikeyfun_manifest_is_a_closed_group_intersection() {
-    // text is the exact bundled APIKEY.FUN authority read by production tests.
-    // text 是生产测试读取的精确内置 APIKEY.FUN 权威。
+fn apikeyfan_manifest_is_a_closed_group_intersection() {
+    // text is the exact bundled APIKEY.FAN authority read by production tests.
+    // text 是生产测试读取的精确内置 APIKEY.FAN 权威。
     let text = load_bundled_manifests()
-        .remove("apikeyfun")
-        .expect("apikeyfun bundled manifest should exist");
+        .remove("apikeyfan")
+        .expect("apikeyfan bundled manifest should exist");
     // document retains presence-sensitive rule and target declarations for structural guards.
     // document 保留存在性敏感的规则与目标声明用于结构守卫。
-    let document: Value = serde_json::from_str(&text).expect("apikeyfun manifest should parse");
+    let document: Value = serde_json::from_str(&text).expect("apikeyfan manifest should parse");
     assert_eq!(
         document["services"][0]["model_catalog"]["source_policy"],
         "discovery_only"
@@ -2107,10 +2107,10 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
     // geminiRoute 将原生 v1beta 执行基址与 OpenAI 风格模型发现入口分离。
     let gemini_route = document["services"][0]["protocol_routes"]
         .as_array()
-        .expect("apikeyfun protocol_routes should be an array")
+        .expect("apikeyfan protocol_routes should be an array")
         .iter()
         .find(|route| route["protocol_profile_id"] == "google.gemini.generate_content")
-        .expect("apikeyfun Gemini protocol route should exist");
+        .expect("apikeyfan Gemini protocol route should exist");
     assert_eq!(
         gemini_route["base_url_override"],
         "https://api.apikey.fan/v1beta"
@@ -2166,17 +2166,17 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
     // actualProtocols 拒绝前缀并捕获每个精确发现交集成员。
     let actual_protocols = document["model_rules"]
         .as_array()
-        .expect("apikeyfun model_rules should be an array")
+        .expect("apikeyfan model_rules should be an array")
         .iter()
         .map(|rule| {
             assert_eq!(rule["matcher"]["kind"], "exact");
             (
                 rule["matcher"]["value"]
                     .as_str()
-                    .expect("apikeyfun rule should declare an exact model id"),
+                    .expect("apikeyfan rule should declare an exact model id"),
                 rule["selected_protocol"]
                     .as_str()
-                    .expect("apikeyfun rule should bind one protocol"),
+                    .expect("apikeyfan rule should bind one protocol"),
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -2200,18 +2200,18 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
             .iter()
             .find(|rule| rule["matcher"]["value"] == model_id)
             .expect("official DeepSeek model rule should exist");
-        // relayRule is the matching APIKEY.FUN relay declaration.
-        // relayRule 是对应的 APIKEY.FUN 中转声明。
+        // relayRule is the matching APIKEY.FAN relay declaration.
+        // relayRule 是对应的 APIKEY.FAN 中转声明。
         let relay_rule = document["model_rules"]
             .as_array()
-            .expect("apikeyfun model_rules should be an array")
+            .expect("apikeyfan model_rules should be an array")
             .iter()
             .find(|rule| rule["matcher"]["value"] == model_id)
-            .expect("APIKEY.FUN DeepSeek model rule should exist");
+            .expect("APIKEY.FAN DeepSeek model rule should exist");
         assert_eq!(
             relay_rule["capabilities"]["reasoning_efforts"],
             official_rule["capabilities"]["reasoning_efforts"],
-            "APIKEY.FUN reasoning levels must match official DeepSeek for `{model_id}`"
+            "APIKEY.FAN reasoning levels must match official DeepSeek for `{model_id}`"
         );
     }
 
@@ -2219,7 +2219,7 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
     // targets 是精确已审核扩展清单；不可用的 Grok 编辑标识不存在。
     let targets = document["tool_targets"]
         .as_array()
-        .expect("apikeyfun tool_targets should be an array");
+        .expect("apikeyfan tool_targets should be an array");
     // targetIds protects the five verified media routes as a closed set.
     // targetIds 把五条已验证媒体路由保护为封闭集合。
     let target_ids = targets
@@ -2227,14 +2227,15 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
         .map(|target| {
             target["target_id"]
                 .as_str()
-                .expect("apikeyfun target should have an id")
+                .expect("apikeyfan target should have an id")
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(
         target_ids,
         BTreeSet::from([
             "gpt-image-2.generate",
-            "gpt-image-2.edit",
+            "gpt-image-2.5-flare.generate",
+            "gpt-image-2.5-sunburst.generate",
             "grok-imagine-image.generate",
             "grok-imagine-image-quality.generate",
             "grok-imagine-video.generate",
@@ -2249,9 +2250,9 @@ fn apikeyfun_manifest_is_a_closed_group_intersection() {
     // referenceBinding 保证本地多参考路径不会泄漏到 Wire 请求正文。
     let reference_binding = document["operations"]
         .as_array()
-        .expect("apikeyfun operations should be an array")
+        .expect("apikeyfan operations should be an array")
         .iter()
-        .find(|operation| operation["operation_id"] == "apikeyfun.grok-imagine-video.generate")
+        .find(|operation| operation["operation_id"] == "apikeyfan.grok-imagine-video.generate")
         .and_then(|operation| operation["upload_bindings"].as_array())
         .and_then(|bindings| {
             bindings

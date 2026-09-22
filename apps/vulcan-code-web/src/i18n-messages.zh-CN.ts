@@ -2834,7 +2834,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "settings.providerDescription.deepseek": "DeepSeek 官方模型 API 与账号服务。",
     "settings.providerDescription.alibaba": "Alibaba Cloud Model Studio 与 Token Plan 服务。",
     "settings.providerDescription.openrouter": "聚合多个模型与上游节点的统一模型路由平台。",
-    "settings.providerDescription.apikeyfun": "提供多种兼容协议的第三方模型中转服务。",
+    "settings.providerDescription.apikeyfan": "提供多种兼容协议的第三方模型中转服务。",
     "settings.providerDescription.claudeapi": "提供 Anthropic 兼容协议的第三方模型中转服务。",
     "settings.providerDescription.qiniu": "七牛云提供的模型推理与兼容协议服务。",
     "settings.providerDescription.fennoai": "提供多种兼容协议的第三方模型中转服务。",

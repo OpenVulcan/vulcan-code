@@ -1,18 +1,18 @@
 {
   "schema_version": "provider-manifest-execution-fixture.v1",
-  "fixture_id": "apikeyfun-grok-video-async",
+  "fixture_id": "apikeyfan-grok-video-async",
   "base_manifest": "tavily.json",
   "production_target_refs": [
-    "apikeyfun::grok-imagine-video.generate"
+    "apikeyfan::grok-imagine-video.generate"
   ],
   "tool_target": {
-    "target_id": "public-api.fixture-apikeyfun-grok-video",
-    "description": "APIKEY.FUN Grok Imagine asynchronous video generation fixture.",
+    "target_id": "public-api.fixture-apikeyfan-grok-video",
+    "description": "APIKEY.FAN Grok Imagine asynchronous video generation fixture.",
     "service_entry_id": "public-api",
     "credential_profile_ids": ["api-key"],
     "upstream_target_id": "grok-imagine-video",
-    "display_name": "APIKEY.FUN Grok Imagine Video Fixture",
-    "tool_id": "fixture_apikeyfun_grok_video_generate",
+    "display_name": "APIKEY.FAN Grok Imagine Video Fixture",
+    "tool_id": "fixture_apikeyfan_grok_video_generate",
     "capability": "video_generate",
     "input_schema": {
       "type": "object",
@@ -43,19 +43,19 @@
       ]
     },
     "execution": {
-      "endpoint_path": "/fixtures/apikeyfun-grok-video-start",
+      "endpoint_path": "/fixtures/apikeyfan-grok-video-start",
       "authentication": "bearer_authorization",
       "adapter": "generic_json",
       "execution_kind": "http_json_async_poll"
     }
   },
   "operation": {
-    "operation_id": "fixture.apikeyfun-grok-video-async",
+    "operation_id": "fixture.apikeyfan-grok-video-async",
     "operation": "video_generate",
     "carrier": "provider_tool",
     "input_resources": ["image"],
     "output_resources": ["video"],
-    "tool_target_refs": ["public-api.fixture-apikeyfun-grok-video"],
+    "tool_target_refs": ["public-api.fixture-apikeyfan-grok-video"],
     "request_profile_refs": [],
     "response_profile_refs": [],
     "upload_channel_refs": [],
@@ -68,7 +68,7 @@
       "timeout_ms": 2000,
       "cancellation_supported": false,
       "generic_json": {
-        "poll_endpoint_path": "/fixtures/apikeyfun-grok-video-status",
+        "poll_endpoint_path": "/fixtures/apikeyfan-grok-video-status",
         "poll_method": "get",
         "task_id_pointer": "/request_id",
         "task_id_in_path": true,
@@ -79,7 +79,7 @@
         "failure_statuses": ["failed", "error"],
         "cancelled_statuses": ["cancelled"],
         "success_follow_up": {
-          "endpoint_path": "/fixtures/apikeyfun-grok-video-content",
+          "endpoint_path": "/fixtures/apikeyfan-grok-video-content",
           "method": "get",
           "identifier_source": "provider_task_id",
           "identifier_in_path": true,
@@ -101,7 +101,7 @@
   "interactions": [
     {
       "method": "POST",
-      "path": "/fixtures/apikeyfun-grok-video-start",
+      "path": "/fixtures/apikeyfan-grok-video-start",
       "expected_json_body": {
         "model": "grok-imagine-video",
         "prompt": "a corgi runs along the beach",
@@ -113,19 +113,19 @@
     },
     {
       "method": "GET",
-      "path": "/fixtures/apikeyfun-grok-video-status/video-task-1",
+      "path": "/fixtures/apikeyfan-grok-video-status/video-task-1",
       "response_status": 200,
       "response_json_body": {"status": "pending"}
     },
     {
       "method": "GET",
-      "path": "/fixtures/apikeyfun-grok-video-status/video-task-1",
+      "path": "/fixtures/apikeyfan-grok-video-status/video-task-1",
       "response_status": 200,
       "response_json_body": {"status": "completed"}
     },
     {
       "method": "GET",
-      "path": "/fixtures/apikeyfun-grok-video-content/video-task-1/content",
+      "path": "/fixtures/apikeyfan-grok-video-content/video-task-1/content",
       "response_status": 200,
       "response_text_body": "fixture-video-bytes",
       "response_content_type": "video/mp4"

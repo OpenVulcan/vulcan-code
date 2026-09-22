@@ -2497,8 +2497,8 @@
       }
     ]
   },
-  "apikeyfun": {
-    "id": "apikeyfun",
+  "apikeyfan": {
+    "id": "apikeyfan",
     "display_name": "APIKEY.FAN",
     "kind": "system",
     "category": "relay",

@@ -241,13 +241,13 @@ fn custom_gemini_system_baseline_preserves_protocol_reasoning_evidence() {
 fn unknown_compatible_conversation_defaults_to_enabled_reasoning() {
     let configuration = PersistedAiConfiguration::default();
     let mut catalog = crate::parse_openai_model_catalog(
-        "apikeyfun-account",
+        "apikeyfan-account",
         1,
         r#"{"data":[{"id":"gpt-5.6-luna"}]}"#,
     )
     .expect("compatible source catalog should parse");
 
-    apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
+    apply_model_catalog_overlays(&configuration, "apikeyfan", &mut catalog)
         .expect("host reasoning defaults should resolve");
 
     let model = catalog.models.first().expect("model should remain visible");

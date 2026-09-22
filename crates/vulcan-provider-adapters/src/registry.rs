@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn native_onboarding_providers_have_exact_categories() {
         let registry = ProviderRegistry::first_batch().expect("built-in registry should be valid");
-        for provider_id in ["apikeyfun", "claudeapi", "fennoai", "code0"] {
+        for provider_id in ["apikeyfan", "claudeapi", "fennoai", "code0"] {
             let provider = registry
                 .provider(provider_id)
                 .expect("relay provider should be registered");
@@ -740,7 +740,7 @@ mod tests {
         let registry = ProviderRegistry::first_batch().expect("built-in registry should be valid");
         for (provider_id, referral_url, campaign_id) in [
             (
-                "apikeyfun",
+                "apikeyfan",
                 "https://apikey.fan/register?aff=LY4DT3DCTM9N",
                 "LY4DT3DCTM9N",
             ),
@@ -783,7 +783,7 @@ mod tests {
         // 预期路由按供应商封闭，禁止继承其他供应商能力。
         let expected_routes = [
             (
-                "apikeyfun",
+                "apikeyfan",
                 4,
                 vec![
                     "anthropic-messages-video.v1",
@@ -844,7 +844,7 @@ mod tests {
         // 每个元组封闭一条供应商路由契约，避免后续通用合并静默改变它。
         let expected_routes = [
             (
-                "apikeyfun",
+                "apikeyfan",
                 "https://api.apikey.fan/v1",
                 "openai-responses.v1",
                 "/responses",
@@ -926,14 +926,14 @@ mod tests {
         }
     }
 
-    /// Verifies APIKEY.FUN exposes the four Manifest-owned entries and their exact route sets.
-    /// 验证 APIKEY.FUN 暴露由 Manifest 持有的四个入口及其精确路由集合。
+    /// Verifies APIKEY.FAN exposes the four Manifest-owned entries and their exact route sets.
+    /// 验证 APIKEY.FAN 暴露由 Manifest 持有的四个入口及其精确路由集合。
     #[test]
-    fn apikeyfun_exposes_exact_manifest_service_entry() {
+    fn apikeyfan_exposes_exact_manifest_service_entry() {
         let registry = ProviderRegistry::first_batch().expect("built-in registry should be valid");
         let provider = registry
-            .provider("apikeyfun")
-            .expect("APIKEY.FUN provider should be registered");
+            .provider("apikeyfan")
+            .expect("APIKEY.FAN provider should be registered");
         // entries closes the channel/media split so a later merge cannot silently widen one node.
         // entries 封闭通道与媒体节点的拆分，避免后续合并静默扩大某个节点。
         let entries = provider
@@ -974,7 +974,7 @@ mod tests {
                 .service_entries
                 .iter()
                 .find(|entry| entry.id == entry_id)
-                .unwrap_or_else(|| panic!("APIKEY.FUN `{entry_id}` entry should exist"))
+                .unwrap_or_else(|| panic!("APIKEY.FAN `{entry_id}` entry should exist"))
                 .protocol_routes
                 .iter()
                 .map(|route| {
@@ -1014,13 +1014,13 @@ mod tests {
     fn rejects_mismatched_promotion_disclosure() {
         let mut provider = ProviderRegistry::first_batch()
             .expect("built-in registry should be valid")
-            .provider("apikeyfun")
+            .provider("apikeyfan")
             .cloned()
-            .expect("APIKEY.FUN should be registered from its Manifest");
+            .expect("APIKEY.FAN should be registered from its Manifest");
         provider
             .promotion
             .as_mut()
-            .expect("APIKEY.FUN should expose registration metadata")
+            .expect("APIKEY.FAN should expose registration metadata")
             .disclosure_key = ProviderPromotionDisclosureKey::NeutralRegistration;
         let mut registry = ProviderRegistry::default();
         let error = registry
@@ -1035,13 +1035,13 @@ mod tests {
     fn rejects_undisclosed_referral_url() {
         let mut provider = ProviderRegistry::first_batch()
             .expect("built-in registry should be valid")
-            .provider("apikeyfun")
+            .provider("apikeyfan")
             .cloned()
-            .expect("APIKEY.FUN should be registered from its Manifest");
+            .expect("APIKEY.FAN should be registered from its Manifest");
         let promotion = provider
             .promotion
             .as_mut()
-            .expect("APIKEY.FUN should expose registration metadata");
+            .expect("APIKEY.FAN should expose registration metadata");
         promotion.partnership_kind = ProviderPartnershipKind::None;
         promotion.disclosure_key = ProviderPromotionDisclosureKey::NeutralRegistration;
         let mut registry = ProviderRegistry::default();

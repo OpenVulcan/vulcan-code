@@ -988,19 +988,19 @@ fn runtime_settings_projection_isolates_one_failed_system_provider() {
     );
 }
 
-/// Verifies APIKEY.FUN fails closed when its authoritative bundled Manifest is unavailable.
-/// 验证 APIKEY.FUN 的权威内置 Manifest 不可用时会失败封闭。
+/// Verifies APIKEY.FAN fails closed when its authoritative bundled Manifest is unavailable.
+/// 验证 APIKEY.FAN 的权威内置 Manifest 不可用时会失败封闭。
 #[test]
-fn runtime_settings_projection_isolates_invalid_apikeyfun_manifest() {
+fn runtime_settings_projection_isolates_invalid_apikeyfan_manifest() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let current = runtime
         .selection_catalog_snapshot()
         .expect("published generation should resolve");
     let mut manifests = current.manifests.manifests.clone();
-    manifests.remove("apikeyfun");
+    manifests.remove("apikeyfan");
     let mut bundled_failures = current.manifests.bundled_failures.clone();
     bundled_failures.insert(
-        String::from("apikeyfun"),
+        String::from("apikeyfan"),
         crate::provider_manifest::BundledProviderManifestFailure {
             failure_kind: String::from("bundled_baseline_invalid"),
             message: String::from("isolated authoritative baseline"),
@@ -1022,16 +1022,16 @@ fn runtime_settings_projection_isolates_invalid_apikeyfun_manifest() {
         .expect("published generation lock should remain healthy") = Arc::new(isolated_generation);
 
     let mut configuration = PersistedAiConfiguration::default();
-    // apikeyfunConnection represents persisted account state that must be removed from the
+    // apikeyfanConnection represents persisted account state that must be removed from the
     // executable projection when its signed provider authority is unavailable.
-    // apikeyfunConnection 表示持久化账号状态；其已签名供应商权威不可用时，必须从可执行投影移除。
-    let mut apikeyfun_connection = connection("apikeyfun-account");
-    apikeyfun_connection.provider_id = String::from("apikeyfun");
-    apikeyfun_connection.service_entry_id = String::from("public-api");
+    // apikeyfanConnection 表示持久化账号状态；其已签名供应商权威不可用时，必须从可执行投影移除。
+    let mut apikeyfan_connection = connection("apikeyfan-account");
+    apikeyfan_connection.provider_id = String::from("apikeyfan");
+    apikeyfan_connection.service_entry_id = String::from("public-api");
     configuration
         .connection_graph
         .connections
-        .insert(apikeyfun_connection.id.clone(), apikeyfun_connection);
+        .insert(apikeyfan_connection.id.clone(), apikeyfan_connection);
     // configuredGeneration installs the intentional isolated-provider fixture as one image.
     // configuredGeneration 把刻意构造的隔离供应商夹具作为一份完整镜像安装。
     let mut configured_generation = runtime
@@ -1055,9 +1055,9 @@ fn runtime_settings_projection_isolates_invalid_apikeyfun_manifest() {
             .runtime_configuration
             .connection_graph
             .connections
-            .contains_key("apikeyfun-account")
+            .contains_key("apikeyfan-account")
     );
-    assert!(snapshot.providers.provider("apikeyfun").is_none());
+    assert!(snapshot.providers.provider("apikeyfan").is_none());
 }
 
 /// Verifies template-only media models ignore conversation publication and remain extension targets.

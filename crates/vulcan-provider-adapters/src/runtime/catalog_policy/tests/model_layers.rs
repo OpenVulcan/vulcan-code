@@ -78,7 +78,7 @@ fn custom_catalog_clamps_discovered_output_to_default_context_window() {
 fn native_only_conversation_declaration_defaults_to_enabled_reasoning() {
     let configuration = PersistedAiConfiguration::default();
     let mut catalog = crate::parse_openai_model_catalog(
-        "apikeyfun-account",
+        "apikeyfan-account",
         1,
         r#"{"data":[{"id":"gpt-5.6-luna"}]}"#,
     )
@@ -89,7 +89,7 @@ fn native_only_conversation_declaration_defaults_to_enabled_reasoning() {
         .expect("compatible model should exist");
     model.capabilities.reasoning = CapabilitySupport::Native;
 
-    apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
+    apply_model_catalog_overlays(&configuration, "apikeyfan", &mut catalog)
         .expect("partial reasoning declaration should resolve");
 
     let model = catalog.models.first().expect("model should remain visible");
@@ -110,7 +110,7 @@ fn native_only_conversation_declaration_defaults_to_enabled_reasoning() {
 fn system_model_reasoning_disablement_override_is_ignored() {
     let mut configuration = PersistedAiConfiguration::default();
     configuration.model_capability_overrides.insert(
-        PersistedAiConfiguration::provider_model_key("apikeyfun", "gpt-5.6-luna"),
+        PersistedAiConfiguration::provider_model_key("apikeyfan", "gpt-5.6-luna"),
         crate::ModelCapabilityOverrides {
             reasoning: Some(CapabilitySupport::Unsupported),
             reasoning_control: Some(ReasoningControlMode::FixedOff),
@@ -119,13 +119,13 @@ fn system_model_reasoning_disablement_override_is_ignored() {
         },
     );
     let mut catalog = crate::parse_openai_model_catalog(
-        "apikeyfun-account",
+        "apikeyfan-account",
         1,
         r#"{"data":[{"id":"gpt-5.6-luna"}]}"#,
     )
     .expect("compatible source catalog should parse");
 
-    apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
+    apply_model_catalog_overlays(&configuration, "apikeyfan", &mut catalog)
         .expect("system capability override should be ignored");
 
     let model = catalog.models.first().expect("model should remain visible");
@@ -147,7 +147,7 @@ fn system_model_reasoning_enablement_override_is_ignored() {
     let model_id = "gpt-5.6-luna";
     let mut configuration = PersistedAiConfiguration::default();
     configuration.model_capability_overrides.insert(
-        PersistedAiConfiguration::provider_model_key("apikeyfun", model_id),
+        PersistedAiConfiguration::provider_model_key("apikeyfan", model_id),
         crate::ModelCapabilityOverrides {
             reasoning: Some(CapabilitySupport::Native),
             reasoning_control: Some(ReasoningControlMode::EffortSelection),
@@ -156,7 +156,7 @@ fn system_model_reasoning_enablement_override_is_ignored() {
         },
     );
     let mut catalog = crate::parse_openai_model_catalog(
-        "apikeyfun-account",
+        "apikeyfan-account",
         1,
         r#"{"data":[{"id":"gpt-5.6-luna"}]}"#,
     )
@@ -170,7 +170,7 @@ fn system_model_reasoning_enablement_override_is_ignored() {
     source_capabilities.reasoning_control = ReasoningControlMode::FixedOff;
     source_capabilities.reasoning_efforts = vec![vulcan_ai_contract::ReasoningEffort::None];
 
-    apply_model_catalog_overlays(&configuration, "apikeyfun", &mut catalog)
+    apply_model_catalog_overlays(&configuration, "apikeyfan", &mut catalog)
         .expect("system capability override should be ignored");
 
     let model = catalog.models.first().expect("model should remain visible");

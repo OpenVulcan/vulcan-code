@@ -2834,7 +2834,7 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "settings.providerDescription.deepseek": "Official DeepSeek model API and account services.",
     "settings.providerDescription.alibaba": "Alibaba Cloud Model Studio and Token Plan services.",
     "settings.providerDescription.openrouter": "A unified model routing platform spanning multiple models and upstream endpoints.",
-    "settings.providerDescription.apikeyfun": "A third-party model relay supporting multiple compatible protocols.",
+    "settings.providerDescription.apikeyfan": "A third-party model relay supporting multiple compatible protocols.",
     "settings.providerDescription.claudeapi": "A third-party model relay providing Anthropic-compatible access.",
     "settings.providerDescription.qiniu": "Model inference and compatible protocol services from Qiniu Cloud.",
     "settings.providerDescription.fennoai": "A third-party model relay supporting multiple compatible protocols.",

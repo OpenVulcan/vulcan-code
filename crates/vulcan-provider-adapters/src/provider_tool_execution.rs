@@ -3957,18 +3957,18 @@ mod tests {
         }
     }
 
-    /// Verifies APIKEY.FUN video completion resolves the authenticated binary content route.
-    /// 验证 APIKEY.FUN 视频完成流程解析到带鉴权的二进制内容路由。
+    /// Verifies APIKEY.FAN video completion resolves the authenticated binary content route.
+    /// 验证 APIKEY.FAN 视频完成流程解析到带鉴权的二进制内容路由。
     #[test]
-    fn apikeyfun_video_follow_up_builds_exact_content_url() {
+    fn apikeyfan_video_follow_up_builds_exact_content_url() {
         // catalog is the same bundled authority used by production startup.
         // catalog 是生产启动流程使用的同一份内置权威目录。
         let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
         // manifest owns both the public service origin and video target contract.
         // manifest 同时持有公共服务源地址与视频目标契约。
         let manifest = catalog
-            .manifest("apikeyfun")
-            .expect("bundled APIKEY.FUN manifest");
+            .manifest("apikeyfan")
+            .expect("bundled APIKEY.FAN manifest");
         // entry is the exact credential-bearing public API service.
         // entry 是携带凭据的精确公共 API 服务入口。
         let entry = manifest
@@ -3976,14 +3976,14 @@ mod tests {
             .service_entries
             .iter()
             .find(|entry| entry.id == "grok-media")
-            .expect("APIKEY.FUN public service entry");
+            .expect("APIKEY.FAN public service entry");
         // target is the verified asynchronous Grok video generator.
         // target 是已验证的异步 Grok 视频生成目标。
         let target = manifest
             .tool_targets
             .iter()
             .find(|target| target.target_id == "grok-imagine-video.generate")
-            .expect("APIKEY.FUN Grok video target");
+            .expect("APIKEY.FAN Grok video target");
         // url must match GET /v1/videos/{request_id}/content without query fallback.
         // url 必须精确匹配 GET /v1/videos/{request_id}/content，且不使用查询参数兜底。
         let url = generic_json_async_url(

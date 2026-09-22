@@ -1,7 +1,7 @@
 # 新增系统供应商流程
 
 本文记录 Vulcan Code 新增、迁移和维护系统供应商时必须遵守的完整流程，以及 OpenCode Go、
-APIKEY.FUN 多分组中转站接入过程中已经实际遇到的错误。本文面向内置系统供应商，不适用于
+APIKEY.FAN 多分组中转站接入过程中已经实际遇到的错误。本文面向内置系统供应商，不适用于
 `custom:` 自定义供应商。
 
 完整字段定义仍以以下文件为准：
@@ -107,7 +107,7 @@ Wire 编解码、上传、异步生命周期或安全边界时，才允许扩展
 
 ### 3.2 中转站和 Key 分组的特殊规则
 
-APIKEY.FUN 证明了一个常见陷阱：同一个供应商的每个 API Key 可能只属于一个模型分组，切换分组后
+APIKEY.FAN 证明了一个常见陷阱：同一个供应商的每个 API Key 可能只属于一个模型分组，切换分组后
 `GET /models` 返回完全不同的集合。此类供应商的最终模型目录必须按下式计算：
 
 ```text
@@ -134,7 +134,7 @@ APIKEY.FUN 证明了一个常见陷阱：同一个供应商的每个 API Key 可
 - `plan_rules` 声明每个精确套餐允许的模型分组与 `blocked_model_ids`；
 - `unrestricted_when_quota_remaining` 声明哪些额度窗口在剩余值大于零时解锁全部已声明模型；
 - 在线用量刷新触发对应凭据目录重建，暂时失败保留最后确认的访问证据；
-- 没有声明该策略的供应商不会进入套餐过滤。APIKEY.FUN 仍仅采用 Key 级 `/models` 与本地精确规则
+- 没有声明该策略的供应商不会进入套餐过滤。APIKEY.FAN 仍仅采用 Key 级 `/models` 与本地精确规则
   的交集，不能因为其他供应商使用套餐策略而改变。
 
 ## 四、编写供应商与服务入口
@@ -439,7 +439,7 @@ AI 可见工具 Schema 必须稳定，不能因为用户刷新模型或改变多
 
 ```json
 {
-  "model": "apikeyfun/gpt-image-2",
+  "model": "apikeyfan/gpt-image-2",
   "args": {
     "prompt": "..."
   }
@@ -472,7 +472,7 @@ AI 可见工具 Schema 必须稳定，不能因为用户刷新模型或改变多
 
 ### 7.4 图片生成与图片编辑不能自动互相路由
 
-APIKEY.FUN 的实测纠正了一个重要误区：
+APIKEY.FAN 的实测纠正了一个重要误区：
 
 - 无参考图的文生图属于 `image_generate`；
 - 有参考图、无 Mask 的参考条件生成仍属于 `image_generate`；
@@ -610,7 +610,7 @@ Manifest 内容修改后，只要以下任意一项没同步，整个 Bundled �
 - Manifest 文件集合；
 - 最低引擎契约。
 
-APIKEY.FUN 曾因为 Manifest 已修改而 Index 仍保存旧 SHA-256 和旧字节数，状态页显示：
+APIKEY.FAN 曾因为 Manifest 已修改而 Index 仍保存旧 SHA-256 和旧字节数，状态页显示：
 
 ```text
 内置回退不可用：bundled_baseline_invalid
@@ -717,7 +717,7 @@ rtk git diff --check
 | `output` 仍是旧配置 | 只修改源码资源未同步，或运行进程仍加载旧二进制 | 执行 `make.ps1 sync`，重新编译并重启 |
 | `fixture-check` 报其他供应商签名不一致 | 并行任务修改了其他生产 target 或 fixture | 报告边界，不越权修复无关模块 |
 
-## 十一、OpenCode Go 与 APIKEY.FUN 的关键经验
+## 十一、OpenCode Go 与 APIKEY.FAN 的关键经验
 
 ### 11.1 OpenCode Go
 
@@ -727,7 +727,7 @@ rtk git diff --check
 - 一个模型不支持 Responses 时，只从该模型规则移除 Responses，不能删除供应商整个 Responses route；
 - 新模型先进入静态目录和 Exact rule，再配置模态、上下文、输出、思考和搜索声明。
 
-### 11.2 APIKEY.FUN
+### 11.2 APIKEY.FAN
 
 - 它是按 API Key 分组的中转站，不是一个 Key 自动拥有全部模型；
 - 实际启用模型必须取 `/models` 与本地预设规则的交集；
