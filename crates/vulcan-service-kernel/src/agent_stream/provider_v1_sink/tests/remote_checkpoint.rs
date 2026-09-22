@@ -3,6 +3,13 @@
 
 use super::super::remote_checkpoint as projection;
 use super::*;
+use vulcan_agent_runtime::agent_runtime::events::{
+    ExecutionStreamEvent, test_provider_request_durability_barrier,
+};
+use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::{
+    ProviderRequestTelemetryEvent, ProviderRequestTelemetryEventKind,
+};
+use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport,
     PreparedCompactionSource,
@@ -748,5 +755,554 @@ fn remote_checkpoint_native_source_requires_exact_prefix_and_keeps_attempt_modes
             .unwrap()
             .sourced_items,
         snapshot.sourced_items
+    );
+}
+
+/// Owns one real durable session, its registered service state and its isolated storage directory.
+/// 持有真实可靠会话、其已注册服务状态及隔离存储目录。
+fn remote_attempt_session() -> (
+    tempfile::TempDir,
+    Arc<SessionHandle>,
+    crate::ServiceBridgeState,
+) {
+    let (directory, handle) = published_stored_open_turn();
+    // The service registry is the same owner a real compaction stream resolves before dispatch.
+    // 服务注册表就是真实压缩流在分派前解析的同一所有者。
+    let service_state =
+        crate::tests::test_support::test_service_state_with_parent_session(SessionId::new_v4());
+    service_state
+        .session_runtime_registry
+        .register(Arc::clone(&handle))
+        .expect("register the durable session owner");
+    (directory, handle, service_state)
+}
+
+/// Returns the exact request facts of one physical remote compaction attempt.
+/// 返回一次真实远端压缩尝试的精确请求事实。
+fn compaction_facts(provider_call_id: &str) -> ProviderV1RequestFacts {
+    let mut facts = request_facts();
+    facts.provider_call_id = provider_call_id.to_owned();
+    facts.purpose = ApiPurposeKind::Compaction;
+    facts.request.profile = Some(checkpoint().protocol_profile_id);
+    facts
+}
+
+/// Starts one real durable compact attempt and freezes its native route on the sink.
+/// 启动一次真实可靠压缩尝试，并在接收器上冻结其原生路由。
+fn start_remote_attempt(
+    handle: &SessionHandle,
+    sink: &mut ProviderV1StreamSink,
+    facts: ProviderV1RequestFacts,
+) -> ApiCallId {
+    prepare_sink_request_with_facts(handle, sink, facts);
+    let active = sink
+        .active
+        .as_mut()
+        .expect("an admitted attempt must own the sink");
+    // The admitted route is the fixture's own frozen Codex identity.
+    // 准入路由使用夹具自身的冻结 Codex 身份。
+    active.remote_compaction_route = Some(route());
+    active.api_call_id
+}
+
+/// Returns one rejected physical attempt terminal for `facts`.
+/// 返回针对`facts`的一份被拒物理尝试终态。
+fn rejected_attempt_terminal(
+    facts: ProviderV1RequestFacts,
+    http_status: u16,
+) -> ProviderV1ApiTerminalFacts {
+    let mut terminal = terminal_facts(0);
+    terminal.request_facts = facts;
+    terminal.status = ApiCallStatus::Failed;
+    // An upstream auth rejection is a provider error with an auth category, exactly as
+    // `provider_end_reason` classifies it; any other pairing is rejected by the durable document.
+    // 上游鉴权拒绝属于 provider error 且分类为 auth，与`provider_end_reason`的分类一致；
+    // 其它组合会被可靠文档拒绝。
+    terminal.end_reason = Some(ApiEndReason::ProviderError);
+    terminal.provider_source = None;
+    terminal.error = Some(RedactedApiError {
+        category: ApiErrorCategory::Auth,
+        error_code: Some(format!("http_{http_status}")),
+        message: format!("the upstream rejected this physical attempt with HTTP {http_status}"),
+    });
+    terminal
+}
+
+/// Returns one successful native compact terminal for `facts`; it carries no assistant semantics.
+/// 返回针对`facts`的一份成功原生压缩终态；它不携带助手语义。
+fn native_attempt_terminal(facts: ProviderV1RequestFacts) -> ProviderV1ApiTerminalFacts {
+    let mut terminal = terminal_facts(0);
+    terminal.request_facts = facts;
+    terminal.provider_source = None;
+    terminal
+}
+
+/// Drives one real durability boundary through the production service consumer.
+/// 通过生产服务消费方驱动一次真实可靠性边界。
+/// Returns the host result and the exact receipt the waiting producer observed.
+/// 返回宿主结果与等待中生产者观察到的精确回执。
+async fn drive_terminal_boundary(
+    app: &crate::ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    handle: &SessionHandle,
+    sink: &mut ProviderV1StreamSink,
+    telemetry: &mut crate::ProviderTelemetryHookGuard,
+    terminal: ProviderV1ApiTerminalFacts,
+) -> (
+    Result<Option<ExecutionStreamEvent>, String>,
+    Result<(), String>,
+) {
+    let mut output_id = None;
+    let mut raw = String::new();
+    // completion is the same one-shot barrier a real Provider completion uses.
+    // completion 与真实 Provider 完成使用同一一次性屏障。
+    let (completion, waiter) = test_provider_request_durability_barrier();
+    let host = crate::context_compaction::apply_context_compaction_stream_event(
+        app,
+        state,
+        None,
+        &mut output_id,
+        &mut raw,
+        sink,
+        telemetry,
+        ExecutionStreamEvent::ProviderRequestDurabilityBoundary {
+            event: ProviderRequestTelemetryEvent {
+                kind: ProviderRequestTelemetryEventKind::Completed,
+                session_id: handle.session_id(),
+                payload: json!({}),
+                completed_usage: None,
+                v1_lifecycle: Some(ProviderV1LifecycleFacts::ApiTerminal(terminal)),
+            },
+            completion,
+        },
+    )
+    .await;
+    let receipt = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+        .await
+        .expect("the producer barrier must settle instead of hanging");
+    (host, receipt)
+}
+
+/// Verifies a rejected compact attempt is durably settled before a new permit owns the retried result.
+/// 验证被拒压缩尝试先被可靠结算，再由新许可持有重试结果。
+#[tokio::test]
+async fn remote_compaction_retry_settles_failed_permit_then_confirms_only_the_new_permit() {
+    let (_directory, handle, service_state) = remote_attempt_session();
+    let state = Arc::new(std::sync::Mutex::new(service_state));
+    let app = crate::ServiceEventEmitter::new(Vec::new());
+    let mut sink = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    let mut telemetry =
+        crate::ProviderTelemetryHookGuard::new_with_persistence(Arc::clone(&state), None);
+
+    // firstAttempt is the physical request the upstream actually rejected.
+    // firstAttempt 是被上游实际拒绝的物理请求。
+    let first_facts = compaction_facts("remote-attempt-1");
+    let first_api = start_remote_attempt(&handle, &mut sink, first_facts.clone());
+    let (host, receipt) = drive_terminal_boundary(
+        &app,
+        &state,
+        &handle,
+        &mut sink,
+        &mut telemetry,
+        rejected_attempt_terminal(first_facts.clone(), 401),
+    )
+    .await;
+    assert!(
+        host.expect("the rejected attempt must settle durably")
+            .is_none()
+    );
+    receipt.expect("the producer must observe its failed attempt settlement");
+    // The failed attempt is durably closed, so its permit can no longer be reused.
+    // 失败尝试已可靠闭合，因此其许可不可再次使用。
+    let first_durability = sink.take_finished_durability();
+    assert!(first_durability.api_terminal_failure_persisted);
+    assert!(
+        sink.active.is_none(),
+        "a settled failed attempt must release its permit"
+    );
+    handle
+        .read(|document| {
+            assert!(document.active_api().is_none());
+            let failed = document
+                .events()
+                .iter()
+                .find_map(|row| match &row.event {
+                    EventBody::ApiStats(stats) if stats.api_call_id == first_api => Some(stats),
+                    _ => None,
+                })
+                .expect("the rejected attempt must persist its own statistics fact");
+            assert_eq!(failed.status, ApiCallStatus::Failed);
+        })
+        .unwrap();
+
+    // The retried attempt obtains a new independently identified physical permit.
+    // 重试尝试获得一份新的、身份独立的物理许可。
+    let second_facts = compaction_facts("remote-attempt-2");
+    let second_api = start_remote_attempt(&handle, &mut sink, second_facts.clone());
+    assert_ne!(second_api, first_api);
+    // The settled attempt's stale result can never be attributed to the new permit.
+    // 已结算尝试的过期结果绝不能归属到新许可。
+    let (stale_host, stale_receipt) = drive_terminal_boundary(
+        &app,
+        &state,
+        &handle,
+        &mut sink,
+        &mut telemetry,
+        rejected_attempt_terminal(first_facts, 401),
+    )
+    .await;
+    assert!(stale_host.is_err());
+    assert_eq!(stale_receipt.as_ref().err(), stale_host.as_ref().err());
+    assert!(
+        sink.active
+            .as_ref()
+            .is_some_and(|active| active.api_call_id == second_api)
+    );
+
+    // The retried attempt confirms its own dedicated native terminal.
+    // 重试尝试确认属于自身的专用原生终态。
+    let (completion, waiter) = test_provider_request_durability_barrier();
+    let applied = crate::context_compaction::apply_remote_compaction_completion(
+        &app,
+        &state,
+        "",
+        &mut sink,
+        &mut telemetry,
+        ProviderRequestTelemetryEvent {
+            kind: ProviderRequestTelemetryEventKind::Completed,
+            session_id: handle.session_id(),
+            payload: json!({}),
+            completed_usage: None,
+            v1_lifecycle: Some(ProviderV1LifecycleFacts::ApiTerminal(
+                native_attempt_terminal(second_facts),
+            )),
+        },
+        checkpoint(),
+        completion,
+    )
+    .await;
+    applied.expect("the retried attempt must confirm its own native checkpoint");
+    tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+        .await
+        .expect("the native terminal barrier must settle")
+        .expect("the producer must observe the confirmed native terminal");
+    let durability = sink.take_finished_durability();
+    assert_eq!(
+        durability
+            .completed_remote_compaction
+            .expect("the confirmed native receipt")
+            .api_call_id,
+        second_api,
+        "the native checkpoint may only be attributed to the permit that produced it"
+    );
+    handle
+        .read(|document| {
+            let status = |api_call_id: ApiCallId| {
+                document.events().iter().find_map(|row| match &row.event {
+                    EventBody::ApiStats(stats) if stats.api_call_id == api_call_id => {
+                        Some(stats.status)
+                    }
+                    _ => None,
+                })
+            };
+            assert_eq!(status(first_api), Some(ApiCallStatus::Failed));
+            assert_eq!(status(second_api), Some(ApiCallStatus::Completed));
+            assert!(document.active_api().is_none());
+        })
+        .unwrap();
+    assert!(sink.active.is_none());
+}
+
+/// Verifies the sink refuses a second physical permit while one attempt is still active.
+/// 验证接收器在已有尝试仍活动时拒绝第二份物理许可。
+#[tokio::test]
+async fn remote_compaction_permit_refusal_keeps_the_admitted_attempt_unmodified() {
+    let (_directory, handle, service_state) = remote_attempt_session();
+    let state = Arc::new(std::sync::Mutex::new(service_state));
+    let mut sink = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    let active_facts = compaction_facts("remote-attempt-active");
+    // candidate is the production state-only fixture; it is built before the first admitted API so
+    // the refusal under test is the active-request guard rather than an unrelated baseline guard.
+    // candidate 是生产纯状态夹具；它在第一份 API 准入前构建，使被测拒绝来自活动请求守卫，
+    // 而不是无关的基线守卫。
+    let candidate = super::super::memory_acceptance::rebuild_memory_acceptance_request(
+        handle.capture_controller_projection_snapshot().unwrap(),
+        Default::default(),
+    )
+    .expect("state-only candidate");
+    let active_api = start_remote_attempt(&handle, &mut sink, active_facts);
+    let refused = sink
+        .prepare_request(
+            &state,
+            compaction_facts("remote-attempt-refused"),
+            candidate,
+        )
+        .await;
+    let error = match refused {
+        Ok(_) => panic!("a second physical permit must be refused while one attempt is active"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("already active"), "{error}");
+    assert_eq!(
+        sink.active
+            .as_ref()
+            .expect("the admitted attempt stays active")
+            .api_call_id,
+        active_api
+    );
+    handle
+        .read(|document| {
+            assert_eq!(
+                document
+                    .active_api()
+                    .expect("the admitted API stays durable")
+                    .api_call_id,
+                active_api
+            );
+            assert_eq!(
+                document
+                    .events()
+                    .iter()
+                    .filter(|row| matches!(row.event, EventBody::ApiStats(_)))
+                    .count(),
+                0,
+                "a refused permit must not consume or close any physical API"
+            );
+        })
+        .unwrap();
+}
+
+/// Verifies a failed preparation or durability confirmation blocks the producing attempt.
+/// 验证准备或可靠确认失败会阻断正在生产的尝试。
+#[tokio::test]
+async fn remote_compaction_confirmation_failure_blocks_the_producer_without_fabricating_success() {
+    for case in 0..2 {
+        let (_directory, handle, service_state) = remote_attempt_session();
+        let state = Arc::new(std::sync::Mutex::new(service_state));
+        let app = crate::ServiceEventEmitter::new(Vec::new());
+        let mut sink = ProviderV1StreamSink::new(
+            Arc::clone(&handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        let mut telemetry =
+            crate::ProviderTelemetryHookGuard::new_with_persistence(Arc::clone(&state), None);
+        let facts = compaction_facts("remote-attempt-confirmation");
+        let api = start_remote_attempt(&handle, &mut sink, facts.clone());
+        // case 0 rejects assistant semantics on a native terminal; case 1 rejects foreign bytes.
+        // 用例 0 拒绝原生终态携带助手语义；用例 1 拒绝外来字节。
+        let (raw_assistant_output, confirmed_checkpoint) = if case == 0 {
+            ("unexpected assistant summary", checkpoint())
+        } else {
+            let mut foreign = checkpoint();
+            foreign.provider_id.push_str("-foreign");
+            ("", foreign)
+        };
+        let (completion, waiter) = test_provider_request_durability_barrier();
+        let applied = crate::context_compaction::apply_remote_compaction_completion(
+            &app,
+            &state,
+            raw_assistant_output,
+            &mut sink,
+            &mut telemetry,
+            ProviderRequestTelemetryEvent {
+                kind: ProviderRequestTelemetryEventKind::Completed,
+                session_id: handle.session_id(),
+                payload: json!({}),
+                completed_usage: None,
+                v1_lifecycle: Some(ProviderV1LifecycleFacts::ApiTerminal(
+                    native_attempt_terminal(facts),
+                )),
+            },
+            confirmed_checkpoint,
+            completion,
+        )
+        .await;
+        let error = applied.expect_err("an unconfirmable native terminal must fail");
+        // The waiting producer receives the identical error instead of a silent acknowledgement.
+        // 等待中的生产者收到同一错误，而不是静默确认。
+        let receipt = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("the producer barrier must settle instead of hanging");
+        assert_eq!(receipt.as_ref().err(), Some(&error));
+        // No native success may be fabricated and the admitted permit stays attributable.
+        // 不得伪造原生成功，且已准入许可保持可归属。
+        assert!(sink.completed_remote_compaction.is_none());
+        assert!(sink.api_terminal_completion.is_none());
+        assert_eq!(
+            sink.active
+                .as_ref()
+                .expect("the unconfirmed attempt keeps its permit")
+                .api_call_id,
+            api
+        );
+        handle
+            .read(|document| {
+                assert!(document.active_api().is_some());
+                assert_eq!(
+                    document
+                        .events()
+                        .iter()
+                        .filter(|row| matches!(row.event, EventBody::ApiStats(_)))
+                        .count(),
+                    0
+                );
+                assert!(
+                    !document
+                        .events()
+                        .iter()
+                        .any(|row| matches!(row.event, EventBody::AssistantText(_)))
+                );
+            })
+            .unwrap();
+    }
+}
+
+/// Commits one real durable remote checkpoint whose admitted baseline carries the fixed host guidance.
+/// 提交一份真实可靠的远端检查点，其准入基线携带固定宿主指引。
+///
+/// Production records the baseline admitted with the physical compact API; committing the shared
+/// empty-baseline fixture would instead trip the unrelated host-guidance guard before any entry
+/// could even read the checkpoint.
+/// 生产记录随物理压缩 API 准入的基线；若使用空基线夹具，会在任何入口读到检查点之前先触发
+/// 无关的宿主指引守卫。
+fn stored_host_guided_checkpoint() -> (tempfile::TempDir, Arc<SessionHandle>) {
+    let (directory, handle) = published_stored_open_turn();
+    // baseline is exactly the projection `prepare_request` admits for a real physical request.
+    // baseline 正是`prepare_request`为真实物理请求准入的投影。
+    let baseline = initial_locked_baseline_with_host_guidance(&LockedBaselineProjection::empty())
+        .expect("admitted locked baseline");
+    let mut facts = request_facts();
+    facts.purpose = ApiPurposeKind::Compaction;
+    facts.request.profile = Some(checkpoint().protocol_profile_id);
+    facts.prepared_at_ms = 10;
+    let request = facts.request.clone();
+    let projection = handle
+        .read(|document| {
+            let through_seq = document
+                .events()
+                .last()
+                .map(|event| event.seq)
+                .expect("submitted root input");
+            ProviderProjectionProof {
+                segment_generation: document.segment_generation(),
+                document_revision: document.memory_revision(),
+                retained_from_seq: Seq::try_new(1).unwrap(),
+                through_seq,
+                fingerprint_sha256: provider_visible_fingerprint(document.events(), through_seq)
+                    .unwrap(),
+            }
+        })
+        .expect("exact provider projection proof");
+    let prepared = handle
+        .prepare_and_start_api_durable(PrepareAndStartApiInput {
+            purpose: facts.purpose,
+            request: request.clone(),
+            request_budget_evidence:
+                crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+            projection,
+            locked_baseline: baseline.clone(),
+            continuation_action_id: None,
+            now_ms: facts.prepared_at_ms,
+        })
+        .expect("durably prepare the compact API");
+    assert!(
+        prepared.changed,
+        "the admitted compact API preparation must commit"
+    );
+    let api = prepared.value.api_call_id;
+    let terminal = handle
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::ApiCompleted,
+            |document| {
+                document.complete_api_group(
+                    api,
+                    ApiCompletion {
+                        request,
+                        usage: Default::default(),
+                        status: ApiCallStatus::Completed,
+                        end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                        error: None,
+                        continuation_eligibility: ContinuationEligibility::Forbidden,
+                        timing: ApiTimings::default(),
+                        provider_source: None,
+                        completed_at_ms: 11,
+                    },
+                )
+            },
+        )
+        .unwrap()
+        .value
+        .stats_seq;
+    handle
+        .record_compaction(
+            CompactionCommitInput::remote_responses(
+                api,
+                terminal,
+                Seq::try_new(1).unwrap(),
+                checkpoint(),
+                baseline,
+            ),
+            12,
+        )
+        .unwrap();
+    (directory, handle)
+}
+
+/// Verifies the main-session physical entry consumes the durable native checkpoint without a text fallback.
+/// 验证主会话物理入口消费可靠原生检查点，且不降级为文本。
+#[test]
+fn main_session_physical_entry_consumes_the_durable_native_checkpoint() {
+    let (_directory, handle) = stored_host_guided_checkpoint();
+    let snapshot = handle.capture_controller_projection_snapshot().unwrap();
+    // The durable main-session projection carries exactly one native checkpoint item.
+    // 可靠主会话投影恰好携带一个原生检查点条目。
+    assert_eq!(
+        snapshot
+            .items
+            .iter()
+            .filter(|item| matches!(item, ProjectedItem::RemoteCompactionCheckpoint { .. }))
+            .count(),
+        1
+    );
+    // The logical controller projection consumes those exact durable bytes, located by payload
+    // rather than by an evolving position, and never turns them into assistant text.
+    // 逻辑控制器投影消费同一份可靠字节，并按载荷而非易变位置定位，且绝不把它们变成助手正文。
+    let controller =
+        provider_projection_controller_state(&snapshot).expect("controller projection");
+    let expected_native =
+        serde_json::to_value(projection::controller_payload(&checkpoint()).unwrap()).unwrap();
+    assert_eq!(
+        controller
+            .messages
+            .iter()
+            .filter(|message| serde_json::to_value(&message.payload).unwrap() == expected_native)
+            .count(),
+        1
+    );
+    assert!(controller.messages.iter().all(|message| !matches!(
+        &message.payload,
+        SessionConversationPayload::Assistant { text, .. } if !text.is_empty()
+    )));
+    // The same production entry used by `prepare_request` must consume the checkpoint for the main
+    // session's ordinary next request; dropping it would silently corrupt the compacted history.
+    // `prepare_request` 使用的同一生产入口必须为主会话下一次普通请求消费检查点；丢弃它会静默
+    // 破坏已压缩历史。
+    let error = match super::super::memory_acceptance::rebuild_memory_acceptance_request(
+        snapshot,
+        Default::default(),
+    ) {
+        Ok(_) => panic!("a native checkpoint cannot be rebuilt without its frozen execution route"),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("Opaque compaction checkpoint requires a frozen execution route"),
+        "{error}"
     );
 }

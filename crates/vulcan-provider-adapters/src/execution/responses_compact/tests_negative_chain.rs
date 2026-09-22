@@ -212,7 +212,10 @@ async fn compact_retry_attempts_keep_independent_physical_identity_and_results()
     assert!(second_received.starts_with("POST /responses/compact HTTP/1.1\r\n"));
     // The retry resends the frozen projection unchanged instead of mutating the rejected request.
     // 重试原样重发冻结投影，而不是修改被拒请求。
-    assert_eq!(received_body(&first_received), received_body(&second_received));
+    assert_eq!(
+        received_body(&first_received),
+        received_body(&second_received)
+    );
     assert_eq!(
         received_body(&first_received)["model"],
         received_body(&second_received)["model"]
