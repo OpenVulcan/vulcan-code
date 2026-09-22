@@ -27,7 +27,7 @@
 | R11 同项目可查找/读取/提问/引导；跨项目需明确授权 | `list_authorized_sessions` 项目范围；`document_grant_allows` 逐动作 | `native_dispatch_list_and_read_session_project_bounded_ranges`、`cross_project_*` 三项授权证据 | 已实现并已验证 |
 | R12 临时记忆到期保留已发送正文并追加失效标记；压缩排除失效内容 | `state.rs` 的 `TRANSIENT_TURN_SCOPE` 生产者侧声明；失效事件不重写历史 | `ttl_expiry_appends_tagged_user_item_without_rewriting_emitted_prefix` | 已实现并已验证 |
 | R13 单向通知不要求回复且独立于任务/方向/问题；下一合法边界自然插队 | `notifications.rs` 的发送与目标接纳；`projection.rs` 的通知投影 | `native_dispatch_send_notification_records_without_reply_contract`、`unanswered_...`（通知不阻塞完成） | 已实现并已验证 |
-| R14 代理通知/问题/答案/任务回报使用独立交互框，视觉上区别真实用户提示 | 前端 `conversation-event-display-projection` 与协作卡片 | 前端 123 项事件窗口测试通过（含"协作信封保持严格可见"、"通知信封是独立节点"） | **已实现，证据不足**（见 §二.3） |
+| R14 代理通知/问题/答案/任务回报使用独立交互框，视觉上区别真实用户提示 | 前端 `conversation-event-display-projection` 与协作卡片；卡片自身按后状态派生卡片身份、撤销与导航控件 | 事件投影与事件窗口测试；**协作卡片自身 8 项行为测试**（`298a29bc`，直接挂载并触发回调：身份路由、通知无回复控件、导航按可路由集合、撤销三条件、单次提交、失败可重试、时间戳保留） | 已实现并已验证 |
 
 ### 1.2 A01—A18（验收语句）
 
@@ -91,11 +91,13 @@
    方案 A 持久化该开关；方案 B 移除该字段并让正文单独承载。本任务不擅自决定领域语义，
    登记为待决策缺口，并在 §二 的状态中标注为"证据不足"而非"缺陷"。
 
-3. **协作卡片的组件级行为**（R14、P11）。
-   已有：前端事件投影 16 项、窗口存储 47 项、窗口控制器 39 项（含分页）、窗口注册表 17 项
-   （含多窗口隔离）、React 绑定 4 项，共 **123 项通过**；`tsc -b` 通过。
-   **未覆盖**：`conversation-collaboration-card.tsx` 自身没有任何导入它的测试，
-   其挂载、回调与渲染只有类型检查，没有行为证据。
+3. **协作卡片的组件级行为**（R14、P11）——**已于 `298a29bc` 闭合**。
+   新增 `apps/vulcan-code-web/src/components/conversation/conversation-collaboration-card.test.tsx`
+   直接挂载生产组件并触发其回调，覆盖卡片身份路由、通知不提供回复控件、会话导航按可路由集合门控、
+   撤销控件的三个可用条件、连续点击的单次提交、失败后可重试，以及投递更新后保留宿主原始时间戳。
+   该文件 8 项通过，`tsc -b` 无错误。
+   仍**未覆盖**：`task-message` 身份分支与 `child_task_non_success_projected` 的正文抑制分支
+   （既有显示渲染器测试覆盖 6 种 task-message 事件，本包未重复）；真实浏览器路由跳转与真实宿主撤销往返。
 
 4. **`terminal_report_separates_subagent_usage_from_parent_totals` 当前失败**（A16）。
    该失败**与本任务无关，也不属本任务所有权**（涉及独立用量统计，任务约束明确不改动）。
@@ -121,6 +123,15 @@
    归因证据：`git log 280f31a2..HEAD -- crates/vulcan-agent-runtime/src/session_event_runtime`
    与 `-- crates/vulcan-agent-runtime/src/turn_stats.rs` **均为空**；本任务的提交只触及
    协作、压缩与测试文件。
+
+5. **前端 4 项既有失败**（不属本任务所有权）。
+   `npx vitest run` 全量为 1842 passed / 4 failed / 1 skipped。四项失败位于
+   `composer-panel/goal-strip.test.tsx`（期望 `150 / 20K`）、
+   `features/skills/vulcan-plugins-panel.test.tsx`（期望 Playwright MCP / Core 浏览器就绪文案）、
+   `conversation/conversation-v1-tool-card.test.tsx` 与
+   `conversation/conversation-tool-presentation-card.test.tsx`（均期望 `subagent-orchestration-compact-usage`）。
+   归因证据：这四个文件与其生产代码在 `280f31a2..HEAD` 均**未被任何提交改动**，
+   且在本任务的卡片测试加入之前即已失败。按 AGENTS.md 一.2 记录边界，不越界修复。
 
 ## 三、未验证边界（需要本层无法构造的环境）
 
@@ -149,6 +160,9 @@
 | `cargo test -p vulcan-provider-adapters --lib "responses_compact"` | 9 passed / 0 failed |
 | `cargo test -p vulcan-agent-runtime --lib`（`RUST_MIN_STACK=67108864`） | 1021 passed / **1 failed**（§二.4）/ 4 ignored |
 | `cargo test -p vulcan-context-injection --lib` | 20 passed / 0 failed |
+| `npx vitest run src/components/conversation/conversation-collaboration-card.test.tsx` | 8 passed / 0 failed |
+| `npx tsc -b`（`apps/vulcan-code-web`） | 0 错误 |
+| `npx vitest run`（`apps/vulcan-code-web` 全量） | 1842 passed / **4 failed**（§二.5）/ 1 skipped |
 
 ## 五、本文件的边界
 
