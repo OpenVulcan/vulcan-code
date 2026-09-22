@@ -48,7 +48,7 @@
 | A13 | 压缩与尾段加载后仍能确定问题双方/状态/授权/未结事项；失效提示不被恢复成当前指令 | S3.1 作用域修正（`42651b34`、`523fa6cd`）；压缩前后协作证据 | 已实现并已验证 |
 | A14 | 标签伪造、错误收件人、跨树、未授权跨项目、撤销后发送均不能越权 | `cross_project_*` 三项 + `document_grant_allows` 逐动作（`6a65e457`） | 已实现并已验证 |
 | A15 | 仅支持当前新契约；未知版本明确拒绝；写入中断有可恢复边界 | 严格版本读取与拒绝路径；**两处未知版本拒绝已补齐**：`persisted_route_lease_with_unknown_schema_version_is_refused`（`e71b0b30`）、`media_output_rejects_unknown_envelope_version`（`f586e9e3`），两者均经变异验证 | **已实现，证据不足**（两处版本拒绝已补齐，但"写入中断可恢复边界"仍缺独立证据，见 §三） |
-| A16 | 多窗口/分页重连按 ID/游标恢复；结果/答案/回执不互相冒充；消耗只计一次 | 前端窗口注册表 17 项 + 分页 39 项；`terminal_report_*` 用量分离 | **已实现，证据不足**（见 §二.4：用量分离测试当前失败） |
+| A16 | 多窗口/分页重连按 ID/游标恢复；结果/答案/回执不互相冒充；消耗只计一次 | 前端窗口注册表 17 项 + 分页 39 项；`terminal_report_*` 用量分离（**失败已修正**，`2bf00026`） | **已实现，证据不足**（用量分离失败已消除；仍缺多窗口/分页重连与"不互相冒充"的直接证据，见 §二.4） |
 | A17 | 归档仍可结算；未结时删除受阻；取消/结算后删除及重启时迟到操作有确定状态 | 归档/删除生命周期 19 项 + 编辑准入修复（`ca83e0c2`） | 已实现并已验证 |
 | A18 | 子代理可继续工作；主代理在合法边界收到通知且无回答义务；交互框区分 | 通知投影与独立节点证据；前端 123 项 | 已实现并已验证 |
 
@@ -105,9 +105,7 @@
    仍**未覆盖**：`task-message` 身份分支与 `child_task_non_success_projected` 的正文抑制分支
    （既有显示渲染器测试覆盖 6 种 task-message 事件，本包未重复）；真实浏览器路由跳转与真实宿主撤销往返。
 
-4. **`terminal_report_separates_subagent_usage_from_parent_totals` 当前失败**（A16）。
-   该失败**与本任务无关，也不属本任务所有权**（涉及独立用量统计，任务约束明确不改动）。
-
+4. **`terminal_report_separates_subagent_usage_from_parent_totals` 曾长期失败（A16），已修正**。
    **根因（已定位到具体语句）**：生产代码在 `crates/vulcan-agent-runtime/src/turn_stats.rs`
    中**有意**把子代理分段排除在父回合统计之外：
    - 第 234—237 行在合并显式分段前过滤掉 `SessionTurnUsageSegmentKind::SubagentTask`，
@@ -122,9 +120,14 @@
    而它末尾的组断言恰好要求把子代理用量并入父回合分组，与前 4 条断言（`provider_call_count == 1`、
    `input_tokens == 31`、`total_tokens == 34`，即父统计未被污染）自相矛盾。
 
-   **建议处置（交由拥有用量统计的会话）**：该测试应改为断言"子代理分段不进入父回合分组"
-   或断言子代理用量出现在根生命周期累计中，而不是断言父回合存在 `Subagent` 分组。
-   本任务只登记，未修改该文件。
+   **已按此方向修正（`2bf00026`）**：该测试改为在**两个**父级可见面上断言排除——
+   `usage_groups` 只含 `Regular`、`usage_segments` 只含 `AssistantResponse`，并逐组断言不含子代理的
+   `total_tokens`/`input_tokens`/`tool_call_count`。实测父回合为
+   `groups=["Regular"]`、`segments=["AssistantResponse"]`，即分组与分段**两路**都过滤。
+   **变异验证**：把生产过滤器改成不排除 `SubagentTask` 后，修正后的测试 FAILED，父回合分段变为
+   `[SubagentTask, AssistantResponse]`，证明测试守的是真实泄漏路径；生产文件已恢复且无 diff。
+   修正后 `vulcan-agent-runtime --lib` 全量 **1025 passed / 0 failed**，该 crate 首次全绿。
+   **本项只关闭"用量分离测试失败"；A16 仍为"证据不足"**，原因见其行内说明。
 
    归因证据：`git log 280f31a2..HEAD -- crates/vulcan-agent-runtime/src/session_event_runtime`
    与 `-- crates/vulcan-agent-runtime/src/turn_stats.rs` **均为空**；本任务的提交只触及
@@ -207,7 +210,7 @@
 | `cargo test -p vulcan-agent-runtime --lib "provider_transport_vulcan::" -- --test-threads=1` | 50 passed / 0 failed |
 | `cargo test -p vulcan-agent-runtime --lib "standalone_compaction_tests"` | 3 passed / 0 failed |
 | `cargo test -p vulcan-provider-adapters --lib "responses_compact"` | 9 passed / 0 failed |
-| `cargo test -p vulcan-agent-runtime --lib`（`RUST_MIN_STACK=67108864`） | 1022 passed / **1 failed**（§二.4）/ 4 ignored |
+| `cargo test -p vulcan-agent-runtime --lib`（`RUST_MIN_STACK=67108864`） | 1025 passed / **0 failed** / 4 ignored（既有失败已于 `2bf00026` 修正） |
 | `cargo test -p vulcan-context-injection --lib` | 20 passed / 0 failed |
 | `npx vitest run src/components/conversation/conversation-collaboration-card.test.tsx` | 8 passed / 0 failed |
 | `npx tsc -b`（`apps/vulcan-code-web`） | 0 错误 |
