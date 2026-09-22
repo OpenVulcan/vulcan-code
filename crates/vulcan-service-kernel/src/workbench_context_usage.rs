@@ -359,6 +359,30 @@ fn proportional_integer_shares(total: usize, weights: &[usize]) -> Vec<usize> {
     shares
 }
 
+/// Returns the current context total reported by one Provider response.
+/// 返回一份 Provider 响应报告的当前上下文总量。
+///
+/// # Parameters
+/// 参数
+/// `usage` supplies the observed total or output dimensions; `input_tokens` is the
+/// already validated input dimension used when the Provider omitted its total.
+/// `usage` 提供实测总量或输出维度；Provider 未提供总量时，`input_tokens` 是已校验的输入维度。
+///
+/// # Returns
+/// 返回值
+/// The total context following the response, with saturating arithmetic for omitted totals.
+/// 返回响应完成后的上下文总量；缺失总量时使用饱和运算。
+pub(crate) fn provider_context_tokens_from_usage(
+    usage: &vulcan_core::types::ProviderUsageSnapshot,
+    input_tokens: usize,
+) -> usize {
+    usage.total_tokens.unwrap_or_else(|| {
+        input_tokens
+            .saturating_add(usage.output_tokens.unwrap_or_default())
+            .saturating_add(usage.reasoning_tokens.unwrap_or_default())
+    })
+}
+
 /// Builds one historical context-budget snapshot from the last persisted provider usage.
 /// 根据最近一次持久化 Provider 用量构建历史上下文预算快照。
 ///
@@ -418,7 +442,11 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
     let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(&observed_usage))
         .or(observed_usage.total_tokens)
         .unwrap_or_default();
-    let active_context_tokens = input_tokens;
+    // The latest response belongs to the next request context; use the same Provider total
+    // as a live budget so a restored session cannot undercount a model-switch boundary.
+    // 最近一次响应属于下一次请求上下文；与实时预算使用同一 Provider 总量，
+    // 避免恢复后的会话低估模型切换边界。
+    let active_context_tokens = provider_context_tokens_from_usage(&observed_usage, input_tokens);
     let auto_compact_context_tokens = match window_policy.auto_compact_scope {
         vulcan_context::ContextWindowUsageScope::Total => active_context_tokens,
         vulcan_context::ContextWindowUsageScope::BodyAfterPrefix => active_context_tokens
@@ -466,11 +494,7 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         estimated_input_tokens: input_tokens,
         active_context_tokens,
         auto_compact_context_tokens,
-        estimated_total_tokens: observed_usage.total_tokens.unwrap_or_else(|| {
-            input_tokens
-                .saturating_add(observed_usage.output_tokens.unwrap_or_default())
-                .saturating_add(observed_usage.reasoning_tokens.unwrap_or_default())
-        }),
+        estimated_total_tokens: active_context_tokens,
         usage_ratio,
         observed_usage: Some(observed_usage.clone()),
         accounting_source: vulcan_context::ContextBudgetAccountingSource::ProviderReported,
@@ -671,6 +695,23 @@ pub(crate) fn provider_usage_label(usage: &vulcan_core::types::ProviderUsageSnap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies restored and live budgets include the last response before model switching.
+    /// 验证恢复与实时预算在切换模型前都计入最近一次响应。
+    #[test]
+    fn provider_context_total_includes_the_latest_response() {
+        let usage = vulcan_core::types::ProviderUsageSnapshot {
+            input_tokens: Some(249_000),
+            output_tokens: Some(3_000),
+            ..Default::default()
+        };
+        assert_eq!(provider_context_tokens_from_usage(&usage, 249_000), 252_000);
+        let usage_with_total = vulcan_core::types::ProviderUsageSnapshot {
+            total_tokens: Some(251_000),
+            ..usage
+        };
+        assert_eq!(provider_context_tokens_from_usage(&usage_with_total, 249_000), 251_000);
+    }
 
     /// Builds one context budget snapshot for tooltip row tests.
     /// 为提示浮层行测试构建单个上下文预算快照。

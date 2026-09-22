@@ -1245,11 +1245,7 @@ fn apply_observed_usage_to_context_budget_with_local_state(
         return;
     };
     context_budget.estimated_input_tokens = input_tokens;
-    let provider_context_tokens = usage.total_tokens.unwrap_or_else(|| {
-        input_tokens
-            .saturating_add(usage.output_tokens.unwrap_or_default())
-            .saturating_add(usage.reasoning_tokens.unwrap_or_default())
-    });
+    let provider_context_tokens = provider_context_tokens_from_usage(usage, input_tokens);
     // Codex adds messages written after the last model-generated item to the latest Provider total.
     // Codex 会把最近一次模型输出之后写入的消息增量加到最近一次 Provider 总量上。
     let local_context_tokens = conversation_state
