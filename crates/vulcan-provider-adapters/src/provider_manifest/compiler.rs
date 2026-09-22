@@ -26,7 +26,10 @@ use super::{
 const BUNDLED_MANIFEST_INDEX_MAX_BYTES: u64 = 1024 * 1024;
 /// Maximum byte length accepted for one packaged bundled provider manifest.
 /// 单份打包内置供应商 Manifest 允许的最大字节长度。
-const BUNDLED_MANIFEST_MAX_BYTES: u64 = 4 * 1024 * 1024;
+///
+/// Derived from the single manifest byte bound; never restate it as an independent literal.
+/// 由唯一的清单字节上限派生；不要为它重写独立字面量。
+const BUNDLED_MANIFEST_MAX_BYTES: u64 = super::MAX_MANIFEST_BYTES as u64;
 /// Shared schema identifier used by both signed remote and packaged integrity indexes.
 /// 签名远端 Index 与打包完整性 Index 共用的 Schema 标识。
 const BUNDLED_MANIFEST_INDEX_SCHEMA_VERSION: &str = "vulcan.provider-index.v1";

@@ -944,8 +944,14 @@ fn manifest_files(target: &Path) -> Result<Vec<PathBuf>, CliError> {
 /// Reads one bounded manifest file.
 /// 读取一份有界清单文件。
 fn read_bounded(path: &Path) -> Result<String, CliError> {
-    const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
-    read_bounded_utf8(path, MAX_MANIFEST_BYTES, "manifest file")
+    // Reuse the single manifest byte bound instead of restating it: this CLI must never accept a
+    // manifest that the runtime validator would reject.
+    // 复用唯一的清单字节上限而不是重述它：本 CLI 绝不能接受运行时校验会拒绝的清单。
+    read_bounded_utf8(
+        path,
+        vulcan_provider_adapters::MAX_MANIFEST_BYTES as u64,
+        "manifest file",
+    )
 }
 
 /// Reads one regular UTF-8 file without crossing its post-open byte boundary.

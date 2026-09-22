@@ -16,10 +16,16 @@ use std::path::{Path, PathBuf};
 
 /// Maximum bytes accepted for one staged manifest candidate.
 /// 单个 staged 清单候选接受的最大字节数。
-pub const MANIFEST_CANDIDATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+///
+/// Derived from the single manifest byte bound in `vulcan-provider-adapters`; never restate it.
+/// 由 `vulcan-provider-adapters` 中唯一的清单字节上限派生；不要重写该字面量。
+pub const MANIFEST_CANDIDATE_MAX_BYTES: u64 = vulcan_provider_adapters::MAX_MANIFEST_BYTES as u64;
 /// Maximum bytes accepted for one standalone custom provider manifest file.
 /// 单个独立自定义供应商清单文件接受的最大字节数。
-pub const CUSTOM_MANIFEST_MAX_BYTES: u64 = 4 * 1024 * 1024;
+///
+/// Derived from the same single manifest byte bound; never restate it.
+/// 由同一个唯一的清单字节上限派生；不要重写该字面量。
+pub const CUSTOM_MANIFEST_MAX_BYTES: u64 = vulcan_provider_adapters::MAX_MANIFEST_BYTES as u64;
 /// Maximum standalone custom provider manifests accepted from one host-owned directory.
 /// 单个宿主持有目录允许接受的独立自定义供应商 Manifest 最大数量。
 const CUSTOM_MANIFEST_MAX_FILES: usize = 256;

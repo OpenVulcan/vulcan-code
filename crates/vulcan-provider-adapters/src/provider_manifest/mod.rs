@@ -26,7 +26,13 @@ pub use validation::*;
 
 /// Maximum UTF-8 bytes accepted for one manifest document.
 /// 单份清单文档允许的最大 UTF-8 字节数。
-pub const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
+///
+/// Single source of truth for every manifest byte bound: the packaged manifest read bound, the
+/// store's candidate and custom-provider file bounds, and the provider-manifest CLI file read
+/// bound all derive from this constant. Change the manifest byte policy here only.
+/// 所有清单字节上限的唯一来源：随包清单读取上限、存储的候选与自定义供应商文件上限、以及
+/// provider-manifest CLI 的文件读取上限均由它派生。清单字节策略只在此处修改。
+pub const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 
 /// Maximum service entries declared by one manifest.
 /// 单份清单声明的最大服务入口数量。
