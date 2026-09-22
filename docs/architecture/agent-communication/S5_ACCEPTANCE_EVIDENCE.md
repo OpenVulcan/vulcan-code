@@ -39,7 +39,7 @@
 | A04 | 启动最终回复归对应任务；queue 与 interrupt 绑定正确 | 排队任务终态与后继绑定证据；`stopped_target_wakeup_fails_queued_task_without_resuming_business` | 已实现并已验证 |
 | A05 | 主问子/子问主/同项目独立会话问答发送即返回；回执与答案分开 | `native_dispatch_ask_question_...`、`native_dispatch_wait_...`、S2.3 服务端 11 项 | 已实现并已验证 |
 | A06 | 父等待多个子任务时一个子问题立即唤醒；问题不计作子任务完成 | `wait_agent_returns_incoming_question_without_consuming_it`；完成门不含问题义务 | 已实现并已验证 |
-| A07 | 双向提问、答案先到、多等待者、超时再等待不丢答复、不互等 | 超时/重等/撤销三项（`61718ca4`）+ 游标修复（`9f8a243c`）+ 答案先到（`550a5c75`）+ **双向提问闭环**（`e223082e`：子问父→父作答→子经真实等待入口观察到答案，且问题记录权威留在提问方） | 已实现并已验证（多等待者不适用，见 §二.1） |
+| A07 | 双向提问、答案先到、多等待者、超时再等待不丢答复、不互等 | 超时/重等/撤销三项（`61718ca4`）+ 游标修复（`9f8a243c`）+ 答案先到（`550a5c75`）+ **双向提问闭环**（`e223082e`：子问父→父作答→子经真实等待入口观察到答案，且问题记录权威留在提问方）+ **父 → 子方向**（`parent_question_to_owned_embedded_child_binds_the_question_to_the_child`） | 已实现并已验证（多等待者不适用，见 §二.1） |
 | A08 | 主模型先 final 而子仍运行时各层保持未完成 | 完成门 `open_child_task_ids`；`main_only_parent_...` 不解冻 | 已实现并已验证 |
 | A09 | 未回复不阻止完成；仅主动等待才等待；晚到答案不复活旧任务；无法回答可明确表达 | `unanswered_question_and_notification_do_not_block_completion_and_late_question_does_not_revive`、`late_answer_after_settlement_is_rejected_without_reviving_target_task`、**无法回答声明契约**（`explicit_unable_to_answer_is_echoed_and_travels_in_the_durable_body`，`4a52755b`） | **已实现，证据不足**（"无法回答明确表达"已补证据；A09 其余要求项未在本包覆盖，见 §二.2） |
 | A10 | 自然空闲仅答疑不二次完成；MainOnly 可恢复；停止拒收；全树停止后迟到不复活 | `question_finished_...`、`question_launch_admits_main_only_...`、`stopped_target_wakeup_...` | **已实现，证据不足**（自动唤醒调度一跳，见 §二.1） |
@@ -91,23 +91,21 @@
    `question_state == "answered"`、且 `answer.body` **逐字等于**父代理产出的正文。
    **"父子交叉互问"已收敛为可核查的具体范围（本轮重写，替换此前含糊的"未定论"）**：
    - **子 → 父方向：已证明**（`e223082e`），父代理的作答经 `ReplyQuestion` 落盘为规范答案。
-   - **父 → 子方向：没有直接测试，且已用一个 `#[ignore]` 复现器取得可复现结果（本轮新增）**。
-     穷举全部 12 处 `AskQuestion(AskQuestionArgs …)` 调用点的 `target_session_id`：11 处取
-     `dispatch.target.session_id()`，1 处显式取父会话（`lifecycle_combinations.rs` 内，
-     方向为"陌生根 → 父"）。**没有任何一处以父句柄为来源、以其自身嵌入子会话为目标**。
-     新增的 `parent_question_to_owned_embedded_child_binds_the_question_to_the_child` 正是该输入，
-     实测返回 **`Err("ask_parent requires an embedded child session")`**。
-     该消息来自 `participants::verified_direct_parent` 在**源句柄自身**用量账本的
-     `children_by_session_id` 中查不到源会话时的错误；而 `resolve_authorized_target` 在
-     `owned == false` 时会以 `?` 直接短路调用它，因此该错误先行返回。
-   - **两种可能，本任务未定论**：(a) **夹具缺口**——该用例沿用了既有子 → 父用例的夹具形状，
-     而该形状未把父会话登记进其（或被其绑定的）用量账本（对比 `bind_child_usage` 所在的生产
-     发布路径）；(b) **真实行为**——父代理确实不能向自有子会话提问，属产品规则而非缺陷。
-   - **为什么不通过改生产代码来区分**：若 (b) 成立，把无条件调用改为 `&&` 短路、或改判 `owned`，
-     都会**放宽一道生产守卫并改变用户可见行为**，而交接方案与仓库规则明确禁止
-     "放松生产守卫以让测试通过"和"静默降级"。因此复现器保持 `#[ignore]`，判定归原主代理或领域负责人。
-     **请勿以 `--ignored` 之外的方式"修复"它；先确定 (a)/(b)。**
-   - **`owned == false` 本身不是异常**（前一轮的关键更正仍然成立）：它是设计上的回退条件。
+   **"父子交叉互问"已双向验证（本轮更正——我上一轮的错误登记已撤销）**：
+   - **子 → 父方向：已证明**（`e223082e`）。
+   - **父 → 子方向：已证明（本轮新增）**。
+     `parent_question_to_owned_embedded_child_binds_the_question_to_the_child` 由提问会话以
+     `AskQuestion(target = 其自有嵌入子会话)` 提问，断言：返回 `status == "ok"`；问题记录留在提问方
+     且 `state == Pending`、`target.session_id == 子会话`、`source.session_id == 提问方`；
+     子会话持有该精确问题的已接纳入站投递、`source` 为提问方、`target` 为子会话、`settlement` 为 `None`。
+   - **我上一轮的登记是错的，已撤销**：我曾把它写成 `#[ignore]` 的"可复现拒绝"
+     （`Err("ask_parent requires an embedded child session")`）并称"未定论"。**那是我的夹具错误**：
+     我把嵌入子会话建在 `message_fixture` 第三个返回值 `target` 之下，却用**另一个**会话
+     （`invocation.source_handle`）去提问；归属是对**调用方自身**用量账本的证明，因此被拒。
+     逐值诊断确认：提问方与 `target` 是两个不同会话，提问方账本 `children_by_session_id` 为空。
+     更正后（子会话建在提问会话之下并由其预留 `child_task`，此时账本登记该子会话）请求成功。
+   - **由此得到的教训已固化**：该测试现在额外断言提问方账本确实登记了该子会话，
+     使同类夹具漂移**明确失败**，而不是伪装成一次"产品授权拒绝"。
    **仍未证明**：子代理提问真正触发调度（需要知识访问解析、WebUI 准备代次所有者、
    Agent 运行时桥与宿主句柄，本层无法构造）。
    通知投递丢失后恢复已由 `25ecf35d` 补齐（原为**实现缺口**而非证据不足）。
@@ -222,8 +220,8 @@
     实测 `owned` 为 `false` 并回退到 `verified_direct_parent`。**本轮已判定该"矛盾"结论不可靠**，
     原因见 §二.1：`owned == false` 本就是设计上的回退条件，而把 `false` 当成异常依赖了生产侧插桩；
     那段插桩已全部移除，`git diff` 确认生产与测试文件均逐字恢复 HEAD。
-  - **结论边界**：既不断言生产缺陷，也不断言夹具缺陷。真正可交付的事实是**父 → 子方向没有测试**，
-    以及用一条不需要插桩的用例即可闭合——详见 §二.1。
+  - **结论边界**：曾记为"未定论"的父 → 子拒绝**已被证明是我的夹具错误**（详见 §二.1），
+    既不是生产缺陷也不是夹具缺陷本身，而是夹具构造有误；更正后该方向**已通过**。
 - **准备许可失败的生产者阻断**：缺少 preparation barrier 的 test-support 构造器
   （既有同层构造器为 `pub(crate)`），属缺构造器而非缺证据。
 - **两处"输出只被传递、从未被断言"的判定已补证据**（`1dd4301f`），并更正我此前"函数私有、
@@ -262,9 +260,10 @@
   可复跑证据**。此前把它列为缺口是我检索范围过窄所致，据此更正。
 - **线编码器层的相邻前缀稳定性**：需要 `PublicAiRuntime` 与冻结路由/凭据/客户端。
 - **真实 WebUI/RPC 与真实停止事务**；**真实冷注册表重启恢复**（编辑准入的冷态分支）。
-- **"父 → 子"方向的提问（父子交叉互问的另一半）**：见 §二.1。子 → 父已证明；父 → 子**无通过用例**，
-  本轮补的 `#[ignore]` 复现器记录了一个**可复现的拒绝**（`Err("ask_parent requires an embedded child
-  session")`），但**未定论**属夹具缺口还是产品规则。区分它们**不得通过放宽生产守卫**。
+- **父子交叉互问**：**两个方向均已证明**（子 → 父 `e223082e`；父 → 子
+  `parent_question_to_owned_embedded_child_binds_the_question_to_the_child`）。
+  我此前记的"未定论"与"可复现拒绝"**均为我的夹具错误**，已撤销，详见 §二.1。
+  仅"子代理提问真正触发调度"仍属更高层未构造。
 - **通知"目标已接纳但未投影"的恢复会话级闸门（本轮新增，源码级已确认，未修复、未定性质）**：
   这是本轮唯一新增的**具体**发现，值得审核者优先看。行为链如下（均为逐行核对的源码事实）：
   1. `project_collaboration_before_api` 会把 `Accepted` 且未投影的入站通知列为待投影
@@ -406,10 +405,8 @@ real_controller_nonempty_analysis_materializes_memory_and_profiles}`、
   - **A16 的用量分离失败已修正**（`2bf00026`），**不再**属于既有失败。
 - **验收缺口（"证据不足"/未定性，见 §二）**：
   - R10/A10 的**模型级自动唤醒调度一跳**——需要真实 `AgentRuntimeBridge` 与真实调度环境，本层无法构造；
-  - **"父 → 子"方向的提问**——见 §二.1：穷举 12 处 `AskQuestion` 调用点确认无此方向测试。
-    本轮已补一个 `#[ignore]` 复现器取得**可复现结果**（`Err("ask_parent requires an embedded child
-    session")`），但**未定论**它是夹具缺口还是产品规则；**刻意不改生产代码去区分**（那会放宽守卫
-    并改变用户可见行为）。判定归原主代理或领域负责人；
+  - **父子交叉互问**——**已双向验证**（本轮更正，我此前的错误登记已撤销）：子 → 父由 `e223082e`、
+    父 → 子由 `parent_question_to_owned_embedded_child_binds_the_question_to_the_child` 覆盖，详见 §二.1；
   - **通知"已接纳但未投影"的会话级闸门**——本轮新发现的**具体**待领域判断点，已用测试固定当前行为
     （`50ea0dbe`）；
   - 前端既有 4 项失败不属本任务所有权（§二.5）。
