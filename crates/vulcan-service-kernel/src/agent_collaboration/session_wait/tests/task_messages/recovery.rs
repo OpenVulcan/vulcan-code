@@ -4,7 +4,7 @@
 use super::*;
 use vulcan_session_core::v1::collaboration::{
     CollaborationDeliveryId, CollaborationNotificationId, CollaborationNotificationState,
-    CollaborationTaskMessage, SendNotificationInput,
+    CollaborationTaskMessage, SendNotificationInput, SetRunControlInput,
 };
 use vulcan_session_core::v1::document::SessionDocument;
 
@@ -725,6 +725,180 @@ async fn session_task_outbox_recovery_isolates_obsolete_turns() {
 
 /// Revocation blocks first delivery but permits copying a preexisting acceptance without new input.
 /// 撤销授权阻止首次投递，但允许复制已有接纳且不新增输入。
+/// Builds both participant coordinates from the actual durable documents, never from labels.
+/// 从实际可靠文档构建双方参与者坐标，绝不依赖标签。
+async fn notification_participants(
+    invocation: &ValidatedInvocation,
+    source: &Arc<SessionHandle>,
+    target: &Arc<SessionHandle>,
+) -> (CollaborationParticipant, CollaborationParticipant) {
+    let source_participant = source
+        .read(|document| {
+            CollaborationParticipant::new(
+                source.session_id().to_string(),
+                source.session_id().to_string(),
+                invocation.source_locator.project_id(),
+                document.segment_generation(),
+                document
+                    .active_turn()
+                    .filter(|turn| !turn.closed)
+                    .map(|turn| turn.turn_id),
+                None,
+            )
+            .unwrap()
+        })
+        .unwrap();
+    let target_participant = target
+        .read(|document| {
+            CollaborationParticipant::new(
+                target.session_id().to_string(),
+                target.session_id().to_string(),
+                invocation.source_locator.project_id(),
+                document.segment_generation(),
+                document
+                    .active_turn()
+                    .filter(|turn| !turn.closed)
+                    .map(|turn| turn.turn_id),
+                None,
+            )
+            .unwrap()
+        })
+        .unwrap();
+    (source_participant, target_participant)
+}
+
+/// A notification stranded before acceptance must not be forced onto a target that has since stopped.
+/// 停留在接纳之前的通知不得被强行投递给此后已停止的目标。
+///
+/// # Notes
+/// 说明
+/// The stranded window can be entered while the target is running and only closed after the target
+/// stopped. Recovery must therefore re-evaluate the target's durable run control instead of replaying
+/// the acceptance blindly, so a stop genuinely protects the stopped agent (A10, A12).
+/// 滞留窗口可能在目标仍在运行时进入，而在目标停止之后才被修复。因此恢复必须重新判定目标的可靠
+/// 运行控制，而不是盲目重放接纳，停止才能真正保护已停止的代理（A10、A12）。
+#[tokio::test]
+async fn stranded_notification_is_refused_after_the_target_stops() {
+    let (_root, invocation, target, _) = message_fixture(false).await;
+    let source = invocation.source_handle.clone();
+    let (source_participant, target_participant) =
+        notification_participants(&invocation, &source, &target).await;
+    let notification_id = CollaborationNotificationId::try_new("stopped-notification").unwrap();
+    let delivery_id = CollaborationDeliveryId::try_new("stopped-delivery").unwrap();
+    let body = "Recorded while the target was running.";
+    // The source half is committed while the target is still running, which is the legal send window.
+    // 来源一半在目标仍在运行时提交，这正是合法的发送窗口。
+    source
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.send_notification(SendNotificationInput {
+                    operation_id: CollaborationOperationId::try_new("stopped-send").unwrap(),
+                    notification_id: notification_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    source: source_participant.clone(),
+                    target: target_participant.clone(),
+                    body: body.into(),
+                    created_at_ms: 5,
+                })
+            },
+        )
+        .unwrap();
+    // The target then stops before the acceptance half ever ran.
+    // 目标在接纳一半尚未执行之前停止。
+    target
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.set_collaboration_run_control(SetRunControlInput {
+                    operation_id: CollaborationOperationId::try_new("stopped-control").unwrap(),
+                    state: CollaborationRunControl::Stopped,
+                    changed_at_ms: 6,
+                })
+            },
+        )
+        .unwrap();
+    // Recovery must report the refusal instead of claiming repair or silently dropping the record.
+    // 恢复必须报告拒绝，而不是声称已修复或静默丢弃该记录。
+    let failure = reconcile_session_v1_collaboration_outbox(
+        &crate::ServiceEventEmitter::new(vec![]),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .expect_err("recovery must not deliver to a stopped target");
+    assert!(
+        failure.contains(notification_id.as_str()),
+        "the refusal must name the exact notification it could not deliver: {failure}"
+    );
+    // The stopped target must remain untouched by the attempted delivery.
+    // 已停止的目标必须未被本次投递尝试改动。
+    assert!(
+        target
+            .read(|document| document
+                .collaboration_state()
+                .inbound_notifications
+                .get(&notification_id)
+                .is_none())
+            .unwrap(),
+        "a stopped target must not receive the notification"
+    );
+    // The source keeps the recorded fact so a later pass can still deliver it.
+    // 来源保留已记录事实，使后续修复仍可投递。
+    let retained = source
+        .read(|document| {
+            document
+                .collaboration_state()
+                .notifications
+                .get(&notification_id)
+                .cloned()
+        })
+        .unwrap()
+        .expect("the recorded notification must survive a refused recovery");
+    assert_eq!(retained.state, CollaborationNotificationState::Recorded);
+    assert_eq!(retained.body, body);
+    // An explicit restart admits the same recorded identity, proving the record was retained intact.
+    // 显式恢复运行会接纳同一已记录身份，证明该记录被完整保留。
+    target
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.set_collaboration_run_control(SetRunControlInput {
+                    operation_id: CollaborationOperationId::try_new("restarted-control").unwrap(),
+                    state: CollaborationRunControl::Running,
+                    changed_at_ms: 7,
+                })
+            },
+        )
+        .unwrap();
+    let repaired = reconcile_session_v1_collaboration_outbox(
+        &crate::ServiceEventEmitter::new(vec![]),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .expect("a running target must accept the retained notification");
+    assert_eq!(
+        repaired, 1,
+        "the retained notification must be delivered once after restart"
+    );
+    let inbound = target
+        .read(|document| {
+            document
+                .collaboration_state()
+                .inbound_notifications
+                .get(&notification_id)
+                .cloned()
+        })
+        .unwrap()
+        .expect("the restarted target must hold the acceptance");
+    assert_eq!(inbound.body, body);
+    assert_eq!(inbound.delivery_id, delivery_id);
+}
+
 #[tokio::test]
 async fn session_task_outbox_recovery_separates_new_delivery_from_receipt_repair() {
     let (_root, invocation, target, _) = message_fixture(true).await;
