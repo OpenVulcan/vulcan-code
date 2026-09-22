@@ -341,7 +341,7 @@
 | 命令 | 结果 |
 | --- | --- |
 | `cargo test -p vulcan-session-core --lib -- --test-threads=1` | 460 passed / 0 failed |
-| `cargo test -p vulcan-service-kernel --lib "agent_collaboration::" -- --test-threads=1` | 122 passed / 0 failed |
+| `cargo test -p vulcan-service-kernel --lib "agent_collaboration::" -- --test-threads=1` | 123 passed / 0 failed / 0 ignored |
 | `cargo test -p vulcan-service-kernel --lib "question_finished_" -- --test-threads=1` | 5 passed / 0 failed |
 | `cargo test -p vulcan-service-kernel --lib`（全量，`RUST_MIN_STACK=67108864`） | 1534 passed / **7 failed** / 15 ignored，见下方说明 |
 | `cargo test -p vulcan-agent-runtime --lib "provider_transport_vulcan::" -- --test-threads=1` | 51 passed / 0 failed |
