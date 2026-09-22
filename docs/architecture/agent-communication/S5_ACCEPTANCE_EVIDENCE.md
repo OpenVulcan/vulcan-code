@@ -47,7 +47,7 @@
 | A12 | 各类崩溃窗口无静默丢失与虚假成功 | 归档/删除/冷加载证据；`remote_compaction_confirmation_failure_blocks_the_producer_without_fabricating_success`；**通知"来源已提交、目标未接纳"窗口的修复**（`25ecf35d`：修复计数 0→1、身份逐字不变、二次修复为 0） | 已实现并已验证 |
 | A13 | 压缩与尾段加载后仍能确定问题双方/状态/授权/未结事项；失效提示不被恢复成当前指令 | S3.1 作用域修正（`42651b34`、`523fa6cd`）；压缩前后协作证据 | 已实现并已验证 |
 | A14 | 标签伪造、错误收件人、跨树、未授权跨项目、撤销后发送均不能越权 | `cross_project_*` 三项 + `document_grant_allows` 逐动作（`6a65e457`） | 已实现并已验证 |
-| A15 | 仅支持当前新契约；未知版本明确拒绝；写入中断有可恢复边界 | 严格版本读取与拒绝路径；**两处未知版本拒绝已补齐**：`persisted_route_lease_with_unknown_schema_version_is_refused`（`e71b0b30`）、`media_output_rejects_unknown_envelope_version`（`f586e9e3`），两者均经变异验证 | **已实现，证据不足**（两处版本拒绝已补齐，但"写入中断可恢复边界"仍缺独立证据，见 §三） |
+| A15 | 仅支持当前新契约；未知版本明确拒绝；写入中断有可恢复边界 | 严格版本读取与拒绝路径；**两处未知版本拒绝已补齐**（`persisted_route_lease_with_unknown_schema_version_is_refused`、`media_output_rejects_unknown_envelope_version`，`e71b0b30`/`f586e9e3`，均经变异验证）；**写入中断可恢复边界**由既有 `question_finished_storage_failure_recovers_committed_outcome` 与 `question_finished_persists_queued_successor_and_recovers_failed_publication` 覆盖（脚本化刷写故障注入） | 已实现并已验证 |
 | A16 | 多窗口/分页重连按 ID/游标恢复；结果/答案/回执不互相冒充；消耗只计一次 | 前端窗口注册表 17 项 + 分页 39 项；`terminal_report_*` 用量分离（**失败已修正**，`2bf00026`） | **已实现，证据不足**（用量分离失败已消除；仍缺多窗口/分页重连与"不互相冒充"的直接证据，见 §二.4） |
 | A17 | 归档仍可结算；未结时删除受阻；取消/结算后删除及重启时迟到操作有确定状态 | 归档/删除生命周期 19 项 + 编辑准入修复（`ca83e0c2`） | 已实现并已验证 |
 | A18 | 子代理可继续工作；主代理在合法边界收到通知且无回答义务；交互框区分 | 通知投影与独立节点证据；前端 123 项 | 已实现并已验证 |
@@ -210,8 +210,19 @@
     `ends_with`，两处新测试各自 FAILED 并点出对应原因；生产改动均已恢复。
   - **仍未断言**：宿主事件复用守卫的正向路径（覆盖后允许复用）——需要 ContextInjection 生产者
     持有的改写指纹快照，已在测试注释中写明，不虚构证据。
-- **A15 的"写入中断可恢复边界"**：两处未知契约版本拒绝已补齐（provider 路由租约 `schema_version`、
-  工具结果媒体信封版本），但 A15 还要求写入中断具备可恢复边界的独立证据，该部分仍未覆盖。
+- **A15 的"写入中断可恢复边界"（此前登记为未覆盖——本轮更正：实为已有覆盖）**：我此前只按
+  "归档/删除生命周期"检索，漏掉了 `question_finish_fixture` 的**脚本化刷写故障注入**
+  （`crates/vulcan-service-kernel/src/tests/question_execution_finish_tests.rs`，经
+  `register_test_session_v1_document_with_scripted_flush_failures`）。两处既有测试已经断言了
+  A15 所要求的三件事：
+  - `question_finished_storage_failure_recovers_committed_outcome`：让执行完成刷写与随后意图刷写
+    （序号 2、3）失败后，断言处理返回 false、**终态持久化所有者被保留**、
+    `retry_pre_intent_terminal_settlement` 返回 `SettledByRetry`，且终态记录仍为 `None`
+    （边界可恢复而非伪造成功）、完成事件恰好一条、`memory_revision == durable_revision`；
+  - `question_finished_persists_queued_successor_and_recovers_failed_publication`：对后继发布失败
+    （序号 4、5）注入故障，断言未结算且所有权保留，并在同一测试内与未注入故障的一轮对照。
+  因此 A15 的"仅支持当前新契约 + 未知版本明确拒绝 + 写入中断有可恢复边界"三部分**均已有本仓库内
+  可复跑证据**。此前把它列为缺口是我检索范围过窄所致，据此更正。
 - **线编码器层的相邻前缀稳定性**：需要 `PublicAiRuntime` 与冻结路由/凭据/客户端。
 - **真实 WebUI/RPC 与真实停止事务**；**真实冷注册表重启恢复**（编辑准入的冷态分支）。
 - **父子交叉互问**（见上一条；"多等待者"经核查不适用，"双向提问"已由 `e223082e` 覆盖）。
