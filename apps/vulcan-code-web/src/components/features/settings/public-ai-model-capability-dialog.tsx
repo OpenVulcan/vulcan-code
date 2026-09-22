@@ -38,8 +38,8 @@ import type {
   PublicAiStructuredOutputCapability,
 } from "@/types"
 
-// ContextWindowPolicyEditor edits one sparse Codex window layer and leaves empty fields inherited.
-// ContextWindowPolicyEditor 编辑一层稀疏 Codex 窗口策略，并让空字段继续继承上级。
+// ContextWindowPolicyEditor edits the global sparse window policy and uses built-in values for empty fields.
+// ContextWindowPolicyEditor 编辑全局稀疏窗口策略，空字段使用系统内置值。
 export function ContextWindowPolicyEditor(props: {
   onChange: (value: PublicAiContextWindowPolicyOverrides | undefined) => void
   value?: PublicAiContextWindowPolicyOverrides
@@ -233,9 +233,6 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   // reasoningEfforts is the complete OpenAI-compatible model level set.
   // reasoningEfforts 是完整的 OpenAI 兼容模型档位集合。
   const [reasoningEfforts, setReasoningEfforts] = React.useState<string[]>([])
-  // contextWindowPolicy is the sparse Codex threshold layer edited for this scope.
-  // contextWindowPolicy 是此作用域正在编辑的稀疏 Codex 阈值层。
-  const [contextWindowPolicy, setContextWindowPolicy] = React.useState<PublicAiContextWindowPolicyOverrides | undefined>(undefined)
   const [requestProjection, setRequestProjection] = React.useState<PublicAiCustomModelRequestProjection>(emptyRequestProjection())
   // touchedFields preserves sparse provider edits instead of copying one model's full effective values.
   // touchedFields 保留供应商级稀疏编辑，避免把某一个模型的完整有效值复制给整个供应商。
@@ -270,9 +267,8 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     reasoning_efforts: isCustomProvider
       ? (reasoningEnabled ? reasoningEfforts : ["none"])
       : reasoningEfforts,
-    context_window_policy: contextWindowPolicy,
     ...(isCustomProvider ? { request_projection: requestProjection } : {}),
-  }), [contextLimit, contextWindowPolicy, inputResources, isCustomProvider, outputLimit, reasoningControl, reasoningEfforts, reasoningEnabled, reasoningSupport, requestProjection, structuredOutput])
+  }), [contextLimit, inputResources, isCustomProvider, outputLimit, reasoningControl, reasoningEfforts, reasoningEnabled, reasoningSupport, requestProjection, structuredOutput])
   // dirty is true only when the visible model layer differs semantically from its authoritative baseline.
   // dirty 仅在可见模型层与权威基线存在语义差异时为真。
   const dirty = !directProviderModelSettingsEqual(currentSettings, baselineSettings)
@@ -310,7 +306,6 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
     setReasoningEfforts(isCustomProvider
       ? projectOpenAiReasoningEfforts(settings.reasoning_efforts ?? [])
       : [...(settings.reasoning_efforts ?? [])])
-    setContextWindowPolicy(settings.context_window_policy ?? undefined)
     setRequestProjection(normalizeRequestProjection(settings.request_projection))
     setTouchedFields(new Set())
     setEdited(false)
@@ -437,11 +432,6 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
             value={outputLimit}
           />
         </div>
-        <ContextWindowPolicyEditor
-          disabled={saving}
-          onChange={(value) => { markField("context_window_policy"); setContextWindowPolicy(value) }}
-          value={contextWindowPolicy}
-        />
         {isCustomProvider ? (
           <>
             <InputResourceEditor onChange={(value) => { markField("input_resources"); setInputResources(value) }} value={inputResources} />
@@ -572,11 +562,6 @@ export function buildCapabilityOverridePatch(
   if (touchedFields.has("structured_output")) {
     patch.structured_output = current.structured_output
   }
-  if (touchedFields.has("context_window_policy")) {
-    // Null must survive JSON serialization so clearing the editor removes the persisted layer.
-    // 清空编辑器时必须保留 null，确保 JSON 序列化后真正移除已持久化的策略层。
-    patch.context_window_policy = current.context_window_policy ?? null
-  }
   if (touchedFields.has("request_projection")) {
     patch.request_projection = current.request_projection
   }
@@ -613,7 +598,6 @@ function customProviderCapabilitySettingsDraft(
           overrides?.reasoning_efforts ?? capabilities.reasoning_efforts ?? [],
         )
       : ["none"],
-    context_window_policy: overrides?.context_window_policy ?? undefined,
     request_projection: normalizeRequestProjection(overrides?.request_projection),
   }
 }

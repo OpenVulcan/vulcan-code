@@ -56,19 +56,6 @@ describe("buildCapabilityOverridePatch", () => {
     })
   })
 
-  it("serializes a cleared context policy as null so the backend removes it", () => {
-    expect(buildCapabilityOverridePatch(
-      { ...currentSettingsFixture, context_window_policy: undefined },
-      {
-        output_limit: 2_048,
-        context_window_policy: { auto_compact_percent: 90 },
-      },
-      new Set(["context_window_policy"]),
-    )).toEqual({
-      output_limit: 2_048,
-      context_window_policy: null,
-    })
-  })
 })
 
 describe("normalizeRequestProjection", () => {

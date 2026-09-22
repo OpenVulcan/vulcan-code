@@ -1402,7 +1402,7 @@ impl PublicAiRuntime {
                 .model_capability_overrides
                 .remove(provider_model_key.as_str());
         }
-        candidate_configuration.validate_context_window_policy_layers()?;
+        candidate_configuration.validate_context_window_policy()?;
 
         // Candidate validation consumes staged discovery and usage as one immutable local image.
         // 候选校验把暂存发现与用量作为一份不可变本地镜像使用。
@@ -1546,7 +1546,7 @@ impl PublicAiRuntime {
                 .provider_capability_overrides
                 .remove(provider_id);
         }
-        candidate_configuration.validate_context_window_policy_layers()?;
+        candidate_configuration.validate_context_window_policy()?;
         let catalogs = self.resolved_model_catalog_snapshot(&candidate_configuration)?;
         let matched = candidate_configuration
             .connection_graph

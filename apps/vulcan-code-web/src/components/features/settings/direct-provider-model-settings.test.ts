@@ -53,7 +53,6 @@ describe("direct provider model settings", () => {
 
     expect(draft).toEqual({
       context_limit: 64_000,
-      context_window_policy: undefined,
       output_limit: 8_000,
       input_resources: ["image"],
       structured_output: "json_object",
@@ -67,7 +66,6 @@ describe("direct provider model settings", () => {
   it("keeps explicit disablement and complete model-level values", () => {
     const draft = directCustomModelSettingsDraft(rowWithCapabilities({
       context_limit: 32_000,
-      context_window_policy: undefined,
       output_limit: 4_000,
       input_resources: [],
       structured_output: "json_object",
@@ -78,7 +76,6 @@ describe("direct provider model settings", () => {
 
     expect(draft).toEqual({
       context_limit: 32_000,
-      context_window_policy: undefined,
       output_limit: 4_000,
       input_resources: [],
       structured_output: "json_object",
@@ -139,7 +136,6 @@ describe("direct provider model settings", () => {
       },
     })).toEqual({
       context_limit: 128_000,
-      context_window_policy: undefined,
       output_limit: 16_000,
       input_resources: ["image", "video"],
       structured_output: "json_schema",
@@ -160,7 +156,6 @@ describe("direct provider model settings", () => {
       reasoning: "native",
       reasoning_control: "toggle",
       reasoning_efforts: ["none", "adaptive"],
-      context_window_policy: null,
       request_projection: {
         reasoning: {},
         model_parameter_paths: {},
@@ -171,7 +166,6 @@ describe("direct provider model settings", () => {
     })).toEqual({
       context_limit: 128_000,
       output_limit: 16_000,
-      context_window_policy: null,
     })
   })
 

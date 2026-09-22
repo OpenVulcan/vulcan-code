@@ -733,7 +733,7 @@ pub(crate) async fn service_save_public_ai_custom_provider_model_defaults(
         provider_id.as_str(),
         defaults.as_ref(),
     );
-    candidate_configuration.validate_context_window_policy_layers()?;
+    candidate_configuration.validate_context_window_policy()?;
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
     let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
         &app,

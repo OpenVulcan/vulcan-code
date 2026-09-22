@@ -65,9 +65,6 @@ pub(crate) struct PublicAiSettingsSnapshot {
     /// Fixed system context-compaction window nodes in immutable display order.
     /// 按不可变展示顺序排列的固定系统上下文压缩窗口节点。
     context_compaction_window_nodes: ContextCompactionWindowConfiguration,
-    /// Explicit provider-level sparse Codex context-window policies.
-    /// 显式供应商级稀疏 Codex 上下文窗口策略。
-    provider_context_window_policy_overrides: BTreeMap<String, ContextWindowPolicyOverrides>,
     /// Persisted background account-usage refresh interval.
     /// 持久化的后台账号用量刷新间隔。
     usage_refresh_interval_seconds: u64,
@@ -756,9 +753,6 @@ pub(super) fn build_public_ai_settings_snapshot(
         media_delivery: PublicAiMediaDeliverySettingsSnapshot::from_configuration(configuration)?,
         context_window_policy_overrides: configuration.context_window_policy_overrides,
         context_compaction_window_nodes: configuration.context_compaction_window_nodes.clone(),
-        provider_context_window_policy_overrides: configuration
-            .provider_context_window_policy_overrides
-            .clone(),
         usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
         provider_priorities: configuration.provider_priority_overrides.clone(),
         usage_cache,

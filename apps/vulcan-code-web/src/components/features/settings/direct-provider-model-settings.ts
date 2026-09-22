@@ -26,9 +26,6 @@ export function resolveDirectCustomProviderDefaults(
     reasoning: source.reasoning,
     reasoning_control: source.reasoning_control,
     reasoning_efforts: [...source.reasoning_efforts],
-    // contextWindowPolicy keeps the provider-level Codex threshold layer intact when other fields are edited.
-    // contextWindowPolicy 在编辑其他字段时保持供应商级 Codex 阈值层不丢失。
-    context_window_policy: source.context_window_policy,
     request_projection: source.request_projection,
   }
 }
@@ -59,7 +56,6 @@ export function systemProviderCapabilitySettingsDraft(
     reasoning: capabilities.reasoning,
     reasoning_control: capabilities.reasoning_control,
     reasoning_efforts: [...(capabilities.reasoning_efforts ?? [])],
-    context_window_policy: overrides?.context_window_policy ?? undefined,
   }
 }
 
@@ -76,9 +72,6 @@ export function systemProviderEditableOverrides(
   }
   if (overrides.output_limit !== undefined) {
     editable.output_limit = overrides.output_limit
-  }
-  if (overrides.context_window_policy !== undefined) {
-    editable.context_window_policy = overrides.context_window_policy
   }
   return editable
 }
@@ -112,9 +105,6 @@ export function directCustomModelSettingsDraft(row: CustomProviderModelRow): Pub
     reasoning_efforts: reasoningEnabled
       ? projectOpenAiReasoningEfforts(inheritedEfforts)
       : ["none"],
-    // contextWindowPolicy is owned only when this exact model already has a sparse override.
-    // contextWindowPolicy 仅在该精确模型已有稀疏覆盖时由模型层持有。
-    context_window_policy: row.capabilityOverrides?.context_window_policy ?? undefined,
     ...(requestProjection ? { request_projection: requestProjection } : {}),
   }
 }
@@ -140,7 +130,6 @@ function normalizeDirectProviderModelSettings(settings: PublicAiModelCapabilityO
     reasoning: settings.reasoning ?? null,
     reasoningControl: settings.reasoning_control ?? null,
     reasoningEfforts: [...(settings.reasoning_efforts ?? [])].sort(),
-    contextWindowPolicy: settings.context_window_policy ?? null,
     requestProjection: settings.request_projection ?? null,
   }
 }

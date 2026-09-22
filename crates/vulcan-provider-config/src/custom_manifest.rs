@@ -20,10 +20,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use vulcan_provider_adapters::{
-    ContextWindowPolicyOverrides, CustomModelDefinition, CustomModelProtocolPreference,
-    CustomModelTemplateDecision, CustomProviderManifestFailure, CustomProviderModelDefaults,
-    InternalModelOverrides, MAX_STRING_LEN, ManifestOwnership, ModelCapabilityOverrides,
-    ModelExecutionOverrides, PersistedAiConfiguration, ProviderDescriptor, ProviderManifestV1,
+    CustomModelDefinition, CustomModelProtocolPreference, CustomModelTemplateDecision,
+    CustomProviderManifestFailure, CustomProviderModelDefaults, InternalModelOverrides,
+    MAX_STRING_LEN, ManifestOwnership, ModelCapabilityOverrides, ModelExecutionOverrides,
+    PersistedAiConfiguration, ProviderDescriptor, ProviderManifestV1,
     validate_custom_provider_identifier,
 };
 
@@ -176,14 +176,6 @@ pub struct CustomProviderLocalOverridesV1 {
     /// 精确供应商/模型能力覆盖。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_capability_overrides: BTreeMap<String, ModelCapabilityOverrides>,
-    /// Optional provider-wide context-window policy override.
-    /// 可选的供应商级上下文窗口策略覆盖。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_context_window_policy_override: Option<ContextWindowPolicyOverrides>,
-    /// Exact provider/model context-window policy overrides.
-    /// 精确供应商/模型上下文窗口策略覆盖。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub model_context_window_policy_overrides: BTreeMap<String, ContextWindowPolicyOverrides>,
     /// Exact provider/model/protocol execution overrides.
     /// 精确供应商/模型/协议执行覆盖。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -276,16 +268,6 @@ fn local_overrides_from_configuration(
             .filter(|(key, _)| filter(key))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
-        provider_context_window_policy_override: configuration
-            .provider_context_window_policy_overrides
-            .get(provider_id)
-            .cloned(),
-        model_context_window_policy_overrides: configuration
-            .model_context_window_policy_overrides
-            .iter()
-            .filter(|(key, _)| filter(key))
-            .map(|(key, value)| (key.clone(), *value))
-            .collect(),
         model_execution_overrides: configuration
             .model_overrides
             .iter()
@@ -336,13 +318,6 @@ fn validate_local_override_ownership(
             "model capability override",
             overrides
                 .model_capability_overrides
-                .keys()
-                .collect::<Vec<_>>(),
-        ),
-        (
-            "model context-window override",
-            overrides
-                .model_context_window_policy_overrides
                 .keys()
                 .collect::<Vec<_>>(),
         ),
@@ -405,9 +380,6 @@ fn remove_hydrated_provider_owned_state(
     configuration
         .provider_capability_overrides
         .remove(provider_id);
-    configuration
-        .provider_context_window_policy_overrides
-        .remove(provider_id);
     let retain_other_provider = |key: &String| !composite_key_belongs_to_provider(key, provider_id);
     configuration
         .custom_model_template_decisions
@@ -420,9 +392,6 @@ fn remove_hydrated_provider_owned_state(
         .retain(|key, _| retain_other_provider(key));
     configuration
         .model_capability_overrides
-        .retain(|key, _| retain_other_provider(key));
-    configuration
-        .model_context_window_policy_overrides
         .retain(|key, _| retain_other_provider(key));
     configuration
         .model_overrides
@@ -459,11 +428,6 @@ fn apply_local_overrides(
             .provider_capability_overrides
             .insert(provider_id.to_string(), value);
     }
-    if let Some(value) = overrides.provider_context_window_policy_override {
-        configuration
-            .provider_context_window_policy_overrides
-            .insert(provider_id.to_string(), value);
-    }
     configuration
         .custom_model_template_decisions
         .extend(overrides.model_template_decisions);
@@ -476,9 +440,6 @@ fn apply_local_overrides(
     configuration
         .model_capability_overrides
         .extend(overrides.model_capability_overrides);
-    configuration
-        .model_context_window_policy_overrides
-        .extend(overrides.model_context_window_policy_overrides);
     configuration
         .model_overrides
         .extend(overrides.model_execution_overrides);

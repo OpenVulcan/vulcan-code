@@ -8,7 +8,6 @@ use vulcan_ai_contract::{
     CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort, ResourceKind,
     StructuredOutputCapability,
 };
-use vulcan_context::ContextWindowPolicyOverrides;
 
 use crate::provider_manifest::ToolSchemaProjectionMode;
 use crate::{
@@ -77,13 +76,6 @@ pub struct CustomProviderModelDefaults {
     /// 供应商级可选思考档位。
     #[serde(default = "default_custom_provider_reasoning_efforts")]
     pub reasoning_efforts: Vec<ReasoningEffort>,
-    /// Provider-wide sparse Codex context-window defaults.
-    /// 供应商级稀疏 Codex 上下文窗口默认值。
-    #[serde(
-        default,
-        skip_serializing_if = "ContextWindowPolicyOverrides::is_empty"
-    )]
-    pub context_window_policy: ContextWindowPolicyOverrides,
     /// Provider-wide request projection inherited by compatible models.
     /// 由兼容模型继承的供应商级请求投影。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,7 +95,6 @@ impl Default for CustomProviderModelDefaults {
             reasoning: default_custom_provider_reasoning(),
             reasoning_control: default_custom_provider_reasoning_control(),
             reasoning_efforts: default_custom_provider_reasoning_efforts(),
-            context_window_policy: ContextWindowPolicyOverrides::default(),
             request_projection: None,
         }
     }
@@ -143,7 +134,6 @@ impl CustomProviderModelDefaults {
             self.reasoning_control,
             self.reasoning_efforts.as_slice(),
         )?;
-        self.context_window_policy.validate()?;
         if let Some(request_projection) = self.request_projection.as_ref() {
             request_projection.validate_paths()?;
         }

@@ -64,10 +64,6 @@ pub struct ModelCapabilityOverrides {
     /// 可选的完整思考档位替换值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_efforts: Option<Vec<ReasoningEffort>>,
-    /// Optional sparse Codex context-window policy carried with this provider/model layer.
-    /// 随供应商或模型层保存的可选稀疏 Codex 上下文窗口策略。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window_policy: Option<ContextWindowPolicyOverrides>,
     /// Optional exact request projection used by the selected model.
     /// 可选的选定模型精确请求投影。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,7 +87,6 @@ impl ModelCapabilityOverrides {
             && self.reasoning.is_none()
             && self.reasoning_control.is_none()
             && self.reasoning_efforts.is_none()
-            && self.context_window_policy.is_none()
             && self.request_projection.is_none()
     }
 
@@ -135,9 +130,6 @@ impl ModelCapabilityOverrides {
         ) {
             validate_custom_provider_reasoning_settings(reasoning, control, efforts)?;
         }
-        if let Some(context_window_policy) = self.context_window_policy {
-            context_window_policy.validate()?;
-        }
         if let Some(request_projection) = self.request_projection.as_ref() {
             request_projection.validate_paths()?;
         }
@@ -154,15 +146,15 @@ impl ModelCapabilityOverrides {
     ///
     /// # Returns
     /// 返回值
-    /// Success only when system providers contain limit/window fields and custom providers satisfy the full direct contract.
-    /// 仅当系统供应商只包含限制/窗口字段，或自定义供应商满足完整直接契约时成功。
+    /// Custom providers may declare capabilities; system providers accept only an empty override.
+    /// 自定义供应商可声明能力；系统供应商仅接受空覆盖。
     pub fn validate_for_provider(&self, provider_id: &str) -> Result<(), String> {
         self.validate()?;
-        if provider_id.starts_with("custom:") || !self.has_provider_contract_overrides() {
+        if provider_id.starts_with("custom:") || self.is_empty() {
             return Ok(());
         }
         Err(String::from(
-            "System provider capability overrides are limited to context, output, and context-window policy settings.",
+            "System model capabilities are owned by the signed manifest and cannot be overridden.",
         ))
     }
 
@@ -896,14 +888,6 @@ pub struct PersistedAiConfiguration {
     /// Token 值可由用户编辑的固定系统上下文压缩窗口节点。
     #[serde(default)]
     pub context_compaction_window_nodes: ContextCompactionWindowConfiguration,
-    /// Provider-scoped sparse Codex context-window defaults.
-    /// 供应商级稀疏 Codex 上下文窗口默认值。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub provider_context_window_policy_overrides: BTreeMap<String, ContextWindowPolicyOverrides>,
-    /// Exact provider-model sparse Codex context-window defaults.
-    /// 精确供应商模型级稀疏 Codex 上下文窗口默认值。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub model_context_window_policy_overrides: BTreeMap<String, ContextWindowPolicyOverrides>,
     /// Explicit non-conversation internal-use choices scoped by provider and model.
     /// 按供应商与模型限定作用域的显式非会话内部使用选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1058,8 +1042,6 @@ impl Default for PersistedAiConfiguration {
             provider_capability_overrides: BTreeMap::new(),
             context_window_policy_overrides: ContextWindowPolicyOverrides::default(),
             context_compaction_window_nodes: ContextCompactionWindowConfiguration::default(),
-            provider_context_window_policy_overrides: BTreeMap::new(),
-            model_context_window_policy_overrides: BTreeMap::new(),
             internal_model_enabled_overrides: BTreeMap::new(),
             inference_profiles: BTreeMap::from([
                 (String::from("vce"), InferenceProfile::default()),
@@ -1516,7 +1498,7 @@ impl PersistedAiConfiguration {
         // normalizedMediaBackends 在保留旧活动选择的同时，创建会话级后端选择所需的独立模式槽位。
         changed |= self.normalize_media_understanding_backend_options();
         self.context_compaction_window_nodes.validate()?;
-        self.validate_context_window_policy_layers()?;
+        self.validate_context_window_policy()?;
         self.effective_media_delivery_policy().validate()?;
         Ok(changed)
     }
@@ -1944,128 +1926,16 @@ impl PersistedAiConfiguration {
         self.provider_capability_overrides.get(provider_id)
     }
 
-    /// Returns the merged sparse window policy for one exact provider-model route.
-    /// 返回一条精确供应商模型路由合并后的稀疏窗口策略。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `provider_id` and `model_id` identify the route whose layer precedence is being resolved.
-    /// `provider_id` 与 `model_id` 标识正在解析分层优先级的路由。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The sparse policy after applying built-in, system, provider, and model layers.
-    /// 应用内置、系统、供应商与模型层之后的稀疏策略。
-    fn context_window_policy_sparse_for_route(
-        &self,
-        provider_id: &str,
-        model_id: &str,
-    ) -> ContextWindowPolicyOverrides {
-        let provider_overrides = self
-            .provider_context_window_policy_overrides
-            .get(provider_id)
-            .copied()
-            .unwrap_or_default();
-        let provider_capability_policy = self
-            .provider_capability_overrides(provider_id)
-            .and_then(|overrides| overrides.context_window_policy)
-            .unwrap_or_default();
-        let custom_provider_policy = self
-            .custom_provider_model_defaults
-            .get(provider_id)
-            .map(|defaults| defaults.context_window_policy)
-            .unwrap_or_default();
-        let model_overrides = self
-            .model_context_window_policy_overrides
-            .get(Self::provider_model_key(provider_id, model_id).as_str())
-            .copied()
-            .unwrap_or_default();
-        let model_capability_policy = self
-            .model_capability_overrides(provider_id, model_id)
-            .and_then(|overrides| overrides.context_window_policy)
-            .unwrap_or_default();
-        ContextWindowPolicyOverrides::default()
-            .merged_with(self.context_window_policy_overrides)
-            .merged_with(custom_provider_policy)
-            .merged_with(provider_overrides)
-            .merged_with(provider_capability_policy)
-            .merged_with(model_overrides)
-            .merged_with(model_capability_policy)
-    }
-
-    /// Validates every persisted context-window layer and every known inherited route.
-    /// 校验所有已持久化上下文窗口层以及所有已知的继承路由。
+    /// Validates the single global context-window policy and its resolved percentages.
+    /// 校验唯一的全局上下文窗口策略及其解析后的百分比。
     ///
     /// # Returns
     /// 返回值
     /// `Ok(())` when no resolved route violates the Codex window ordering rules.
     /// 当所有解析路由都符合 Codex 窗口顺序规则时返回 `Ok(())`。
-    pub fn validate_context_window_policy_layers(&self) -> Result<(), String> {
+    pub fn validate_context_window_policy(&self) -> Result<(), String> {
         self.context_window_policy_overrides.validate()?;
-        for overrides in self.provider_context_window_policy_overrides.values() {
-            overrides.validate()?;
-        }
-        for overrides in self.model_context_window_policy_overrides.values() {
-            overrides.validate()?;
-        }
-        for overrides in self.provider_capability_overrides.values() {
-            if let Some(policy) = overrides.context_window_policy {
-                policy.validate()?;
-            }
-        }
-        for overrides in self.model_capability_overrides.values() {
-            if let Some(policy) = overrides.context_window_policy {
-                policy.validate()?;
-            }
-        }
-        for defaults in self.custom_provider_model_defaults.values() {
-            defaults.context_window_policy.validate()?;
-        }
-
-        let mut routes = BTreeSet::<(String, String)>::new();
-        routes.insert((String::new(), String::new()));
-        for provider_id in self
-            .provider_context_window_policy_overrides
-            .keys()
-            .chain(self.provider_capability_overrides.keys())
-            .chain(self.custom_provider_model_defaults.keys())
-        {
-            routes.insert((provider_id.clone(), String::new()));
-        }
-        for (provider_id, models) in &self.custom_models {
-            for model_id in models.keys() {
-                routes.insert((provider_id.clone(), model_id.clone()));
-            }
-        }
-        for key in self
-            .model_context_window_policy_overrides
-            .keys()
-            .chain(self.model_capability_overrides.keys())
-        {
-            let Some((provider_id, model_id)) = Self::provider_model_key_parts(key) else {
-                return Err(format!(
-                    "Malformed provider-model context window policy key `{key}`."
-                ));
-            };
-            routes.insert((provider_id.to_string(), model_id.to_string()));
-        }
-
-        for (provider_id, model_id) in routes {
-            let policy = self
-                .context_window_policy_sparse_for_route(provider_id.as_str(), model_id.as_str())
-                .resolve();
-            policy.validate().map_err(|error| {
-                let scope = if provider_id.is_empty() {
-                    String::from("system")
-                } else if model_id.is_empty() {
-                    format!("provider `{provider_id}`")
-                } else {
-                    format!("provider `{provider_id}` model `{model_id}`")
-                };
-                format!("Context window policy for {scope} is invalid: {error}")
-            })?;
-        }
-        Ok(())
+        self.context_window_policy_overrides.resolve().validate()
     }
 
     /// Replaces all five fixed context-compaction window values after strict validation.
@@ -2107,13 +1977,13 @@ impl PersistedAiConfiguration {
     /// 为当前执行回合冻结的一份完整策略。
     pub fn resolve_context_compaction_policy(
         &self,
-        provider_id: &str,
-        model_id: &str,
+        _provider_id: &str,
+        _model_id: &str,
         context_limit: Option<usize>,
         compression_window_node_id: Option<ContextCompactionWindowNodeId>,
         session_policy: Option<ContextCompactionPolicy>,
     ) -> Result<ContextCompactionPolicy, String> {
-        let sparse = self.context_window_policy_sparse_for_route(provider_id, model_id);
+        let sparse = self.context_window_policy_overrides;
         let resolved_window = sparse.resolve();
         // A fully explicit seed already froze both the node identity and its resolved value.
         // 完整显式种子已经冻结节点身份及其解析值。
@@ -2211,69 +2081,8 @@ impl PersistedAiConfiguration {
         overrides.validate()?;
         let mut candidate = self.clone();
         candidate.context_window_policy_overrides = overrides;
-        candidate.validate_context_window_policy_layers()?;
+        candidate.validate_context_window_policy()?;
         self.context_window_policy_overrides = overrides;
-        Ok(())
-    }
-
-    /// Saves or clears one provider-level sparse context-window policy.
-    /// 保存或清除一条供应商级稀疏上下文窗口策略。
-    pub fn set_provider_context_window_policy_overrides(
-        &mut self,
-        provider_id: &str,
-        overrides: ContextWindowPolicyOverrides,
-    ) -> Result<(), String> {
-        overrides.validate()?;
-        let mut candidate = self.clone();
-        if overrides.is_empty() {
-            candidate
-                .provider_context_window_policy_overrides
-                .remove(provider_id);
-        } else {
-            candidate
-                .provider_context_window_policy_overrides
-                .insert(provider_id.to_string(), overrides);
-        }
-        candidate.validate_context_window_policy_layers()?;
-        if overrides.is_empty() {
-            self.provider_context_window_policy_overrides
-                .remove(provider_id);
-        } else {
-            self.provider_context_window_policy_overrides
-                .insert(provider_id.to_string(), overrides);
-        }
-        Ok(())
-    }
-
-    /// Saves or clears one exact provider-model sparse context-window policy.
-    /// 保存或清除一条精确供应商模型级稀疏上下文窗口策略。
-    pub fn set_model_context_window_policy_overrides(
-        &mut self,
-        provider_id: &str,
-        model_id: &str,
-        overrides: ContextWindowPolicyOverrides,
-    ) -> Result<(), String> {
-        overrides.validate()?;
-        let key = Self::provider_model_key(provider_id, model_id);
-        let mut candidate = self.clone();
-        if overrides.is_empty() {
-            candidate
-                .model_context_window_policy_overrides
-                .remove(key.as_str());
-        } else {
-            candidate
-                .model_context_window_policy_overrides
-                .insert(key, overrides);
-        }
-        candidate.validate_context_window_policy_layers()?;
-        let key = Self::provider_model_key(provider_id, model_id);
-        if overrides.is_empty() {
-            self.model_context_window_policy_overrides
-                .remove(key.as_str());
-        } else {
-            self.model_context_window_policy_overrides
-                .insert(key, overrides);
-        }
         Ok(())
     }
 
@@ -2719,8 +2528,6 @@ impl PersistedAiConfiguration {
                 }
                 !options.is_empty()
             });
-        self.model_context_window_policy_overrides
-            .remove(provider_model_key.as_str());
         self.custom_model_template_decisions
             .remove(provider_model_key.as_str());
         self.custom_model_protocol_preferences
@@ -2895,9 +2702,6 @@ impl PersistedAiConfiguration {
                 .custom_provider_model_defaults
                 .contains_key(provider_id)
             || self.provider_capability_overrides.contains_key(provider_id)
-            || self
-                .provider_context_window_policy_overrides
-                .contains_key(provider_id)
         {
             return true;
         }
@@ -2917,10 +2721,6 @@ impl PersistedAiConfiguration {
                 .any(|key| key.starts_with(provider_model_prefix.as_str()))
             || self
                 .model_capability_overrides
-                .keys()
-                .any(|key| key.starts_with(provider_model_prefix.as_str()))
-            || self
-                .model_context_window_policy_overrides
                 .keys()
                 .any(|key| key.starts_with(provider_model_prefix.as_str()))
             || self
@@ -3147,8 +2947,6 @@ impl PersistedAiConfiguration {
         self.custom_provider_model_defaults.remove(provider_id);
         self.provider_capability_overrides.remove(provider_id);
         self.provider_priority_overrides.remove(provider_id);
-        self.provider_context_window_policy_overrides
-            .remove(provider_id);
         self.custom_model_template_decisions
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.custom_model_protocol_preferences
@@ -3184,8 +2982,6 @@ impl PersistedAiConfiguration {
                 }
                 !options.is_empty()
             });
-        self.model_context_window_policy_overrides
-            .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.model_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.internal_model_enabled_overrides
@@ -5046,6 +4842,15 @@ mod tests {
     /// 验证系统供应商忽略全部持久化模型能力覆盖。
     #[test]
     fn system_provider_capability_contract_is_not_user_overridable() {
+        assert!(
+            ModelCapabilityOverrides {
+                context_limit: Some(200_000),
+                output_limit: Some(32_000),
+                ..Default::default()
+            }
+            .validate_for_provider("system-provider")
+            .is_err()
+        );
         let mut configuration = PersistedAiConfiguration::default();
         let key = PersistedAiConfiguration::provider_model_key("minimax", "MiniMax-M2.7");
         let stale = ModelCapabilityOverrides {
@@ -6091,47 +5896,28 @@ mod tests {
         );
     }
 
-    /// Verifies Codex context-window policy inherits sparsely from system to provider and model.
-    /// 验证 Codex 上下文窗口策略按系统、供应商、模型逐字段稀疏继承。
+    /// Verifies every provider and model uses the same global percentage policy.
+    /// 验证所有供应商与模型使用同一份全局百分比策略。
     #[test]
-    fn context_window_policy_inherits_by_layer_without_shrinking_raw_window() {
-        let provider_id = "custom:proxy";
-        let model_id = "gpt-5.6-luna";
-        let mut configuration = PersistedAiConfiguration {
+    fn context_window_policy_is_identical_for_all_routes() {
+        let configuration = PersistedAiConfiguration {
             context_window_policy_overrides: ContextWindowPolicyOverrides {
                 effective_context_window_percent: Some(95),
-                ..ContextWindowPolicyOverrides::default()
-            },
-            ..PersistedAiConfiguration::default()
-        };
-        configuration
-            .provider_context_window_policy_overrides
-            .insert(
-                String::from(provider_id),
-                ContextWindowPolicyOverrides {
-                    auto_compact_percent: Some(88),
-                    ..ContextWindowPolicyOverrides::default()
-                },
-            );
-        configuration.model_context_window_policy_overrides.insert(
-            PersistedAiConfiguration::provider_model_key(provider_id, model_id),
-            ContextWindowPolicyOverrides {
+                auto_compact_percent: Some(88),
                 auto_compact_token_limit: Some(123_456),
-                ..ContextWindowPolicyOverrides::default()
+                ..Default::default()
             },
-        );
-
-        let policy = configuration
-            .resolve_context_compaction_policy(provider_id, model_id, Some(500_000), None, None)
-            .expect("route policy should resolve");
-        assert_eq!(policy.window.effective_context_window_percent, 95);
-        assert_eq!(policy.window.auto_compact_percent, 88);
-        assert_eq!(policy.window.auto_compact_token_limit, Some(123_456));
-        assert_eq!(policy.window.fallback_buffer_tokens, 0);
-        assert!(policy.window_policy_is_explicit);
-        assert_eq!(policy.tail_context_limit, Some(500_000));
-        assert_eq!(policy.tail_turns, 10);
-        assert_eq!(policy.preserve_recent_tokens, 25_000);
+            ..Default::default()
+        };
+        for (provider_id, model_id) in [("system", "model-a"), ("custom:proxy", "model-b")] {
+            let policy = configuration
+                .resolve_context_compaction_policy(provider_id, model_id, Some(500_000), None, None)
+                .expect("global policy must resolve for every route");
+            assert_eq!(policy.window.effective_context_window_percent, 95);
+            assert_eq!(policy.window.auto_compact_percent, 88);
+            assert_eq!(policy.window.auto_compact_token_limit, Some(123_456));
+            assert_eq!(policy.tail_context_limit, Some(500_000));
+        }
     }
 
     /// Verifies the five fixed node ids and their default low-to-high token values.
@@ -6226,15 +6012,10 @@ mod tests {
         let provider_id = "custom:proxy";
         let model_id = "gpt-5.6-luna";
         let mut configuration = PersistedAiConfiguration::default();
-        configuration
-            .provider_context_window_policy_overrides
-            .insert(
-                String::from(provider_id),
-                ContextWindowPolicyOverrides {
-                    effective_context_window_percent: Some(92),
-                    ..ContextWindowPolicyOverrides::default()
-                },
-            );
+        configuration.context_window_policy_overrides = ContextWindowPolicyOverrides {
+            effective_context_window_percent: Some(92),
+            ..ContextWindowPolicyOverrides::default()
+        };
 
         let behavior_only = ContextCompactionPolicy {
             auto: false,
@@ -6258,32 +6039,32 @@ mod tests {
         assert_eq!(policy.preserve_recent_tokens, 15_000);
     }
 
-    /// Verifies inherited hard and compaction percentages are validated after layer merging.
-    /// 验证硬窗口与压缩百分比在分层合并后仍会进行顺序校验。
+    /// Verifies global ordering is atomic and scoped policy fields are rejected at decoding.
+    /// 验证全局顺序校验为原子操作，并在解码时拒绝局部策略字段。
     #[test]
-    fn context_window_policy_rejects_invalid_inherited_layer_ordering() {
+    fn context_window_policy_rejects_invalid_global_ordering() {
         let mut configuration = PersistedAiConfiguration::default();
-        configuration
+        let previous = configuration.context_window_policy_overrides;
+        let error = configuration
             .set_context_window_policy_overrides(ContextWindowPolicyOverrides {
                 effective_context_window_percent: Some(95),
-                ..ContextWindowPolicyOverrides::default()
+                auto_compact_percent: Some(96),
+                ..Default::default()
             })
-            .expect("system policy should be valid");
-
-        let error = configuration
-            .set_provider_context_window_policy_overrides(
-                "custom:proxy",
-                ContextWindowPolicyOverrides {
-                    auto_compact_percent: Some(96),
-                    ..ContextWindowPolicyOverrides::default()
-                },
-            )
-            .expect_err("a stronger inherited compacting threshold must be rejected");
+            .expect_err("compaction cannot exceed the effective window");
         assert!(error.contains("cannot exceed"));
+        assert_eq!(configuration.context_window_policy_overrides, previous);
         assert!(
-            !configuration
-                .provider_context_window_policy_overrides
-                .contains_key("custom:proxy")
+            serde_json::from_value::<ModelCapabilityOverrides>(serde_json::json!({
+                "context_window_policy": {"auto_compact_percent": 90}
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<CustomProviderModelDefaults>(serde_json::json!({
+                "context_window_policy": {"auto_compact_percent": 90}
+            }))
+            .is_err()
         );
     }
 

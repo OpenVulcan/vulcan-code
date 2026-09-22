@@ -343,11 +343,6 @@ export interface PublicAiModelCapabilityOverrides {
   reasoning?: string;
   reasoning_control?: string;
   reasoning_efforts?: string[];
-  // Optional sparse Codex context-window policy for this provider or model layer.
-  // 此供应商或模型层的可选稀疏 Codex 上下文窗口策略。
-  // Null explicitly removes a previously persisted sparse policy from this layer.
-  // null 用于显式移除该层之前持久化的稀疏策略。
-  context_window_policy?: PublicAiContextWindowPolicyOverrides | null;
   // Optional exact request projection shared by custom and native provider models.
   // 自定义供应商与系统供应商模型共同使用的可选精确请求投影。
   request_projection?: PublicAiCustomModelRequestProjection;
@@ -407,9 +402,6 @@ export interface PublicAiCustomProviderModelDefaults {
   reasoning: string;
   reasoning_control: string;
   reasoning_efforts: string[];
-  // Provider-wide sparse Codex context-window defaults.
-  // 供应商级稀疏 Codex 上下文窗口默认值。
-  context_window_policy?: PublicAiContextWindowPolicyOverrides;
   // Optional provider-wide request projection inherited by compatible models.
   // 可选的兼容模型继承供应商级请求投影。
   request_projection?: PublicAiCustomModelRequestProjection;
@@ -1299,9 +1291,6 @@ export interface PublicAiSettingsSnapshot {
   // contextCompactionWindowNodes exposes the complete fixed system node configuration.
   // contextCompactionWindowNodes 公开完整的固定系统节点配置。
   contextCompactionWindowNodes: PublicAiContextCompactionWindowConfiguration;
-  // providerContextWindowPolicyOverrides stores explicit provider-level window policies.
-  // providerContextWindowPolicyOverrides 保存显式供应商级窗口策略。
-  providerContextWindowPolicyOverrides?: Record<string, PublicAiContextWindowPolicyOverrides>;
   usageRefreshIntervalSeconds: number;
   // providerPriorities stores sparse provider ordering values; missing entries inherit zero.
   // providerPriorities 保存稀疏供应商排序值；缺失项继承零。
