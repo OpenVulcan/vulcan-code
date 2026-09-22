@@ -1259,34 +1259,27 @@ fn admit_wait_question_tool_call(
 /// 来源、以其自身嵌入子会话为目标。嵌入子会话在 SQLite 会话索引中没有行，因此该输入必然走到
 /// `resolve_authorized_target` 的回退分支，而不是索引定位分支。
 ///
-/// **本测试当前 `#[ignore]`，因为它记录的是一个尚未定性的可复现结果，而不是一个通过的断言。**
-/// 实测结果：`AskQuestion(target = 自有嵌入子会话)` 返回
-/// `Err("ask_parent requires an embedded child session")`。该消息来自
-/// `participants::verified_direct_parent` 在**源句柄自身**用量账本的 `children_by_session_id`
-/// 中查不到源会话时的错误，而 `resolve_authorized_target` 在 `owned == false` 时会以 `?` 直接
-/// 短路调用它，因此该错误会先行返回。
-///
-/// **两种可能，本任务未定论，且刻意不通过放宽生产守卫来判定**：
-/// (a) 夹具缺口——本测试沿用了既有子 → 父用例的夹具形状，而该形状没有把父会话登记进其（或被其
-///     绑定的）用量账本（对比 `bind_child_usage` 所在的生产发布路径）；或
-/// (b) 真实行为——父代理确实不能向自有子会话提问，属于产品规则而非缺陷。
-///
-/// **为什么不改生产代码来区分**：若 (b) 成立，把无条件调用改为 `&&` 短路或改判 `owned` 都会
-/// **放宽一道生产守卫并改变用户可见行为**，而这是被明确禁止的（"不能放松生产守卫以让测试通过"
-/// 与"不静默降级"）。判定归原主代理或领域负责人。
-/// **注意**：请勿以 `--ignored` 之外的方式"修复"本测试；先确定 (a)/(b)。
-#[ignore = "records a reproducible unresolved refusal; see the doc comment before changing it"]
+/// **我此前一度把本用例写成"父 → 子被拒绝"的 `#[ignore]` 复现器——那是我的夹具错误，已更正。**
+/// 根因：把嵌入子会话建在了 `message_fixture` 的第三个返回值 `target` 之下，却用另一个会话
+/// （`invocation.source_handle`）去提问。归属针对的是**调用方自身**的用量账本，因此那次调用被拒；
+/// 实测确认提问方与 `target` 是两个不同会话，前者账本中无任何子会话。
+/// 更正后子会话建在提问会话之下并由其预留 `child_task`，`owned == true`，请求成功。
+/// 为避免此类夹具漂移再次表现为"看似产品拒绝"，本测试额外断言提问方的账本确实登记了该子会话。
 #[tokio::test]
 async fn parent_question_to_owned_embedded_child_binds_the_question_to_the_child() {
-    let (_root, invocation, parent, _context) = message_fixture(false).await;
-    // The production creator publishes one real embedded child owned by this parent.
-    // 生产创建器发布一个由该父代理持有真实所有权的嵌入子任务。
+    let (_root, invocation, _target, _context) = message_fixture(false).await;
+    // The asking session is `invocation.source_handle`; the embedded child must be created under THAT
+    // session, because ownership is proved against the caller's own usage ledger.
+    // 提问方是 `invocation.source_handle`；嵌入子会话必须建在**该**会话之下，因为归属是对调用方
+    // 自身的用量账本证明的。
+    let asking = Arc::clone(&invocation.source_handle);
+    let asking_id = invocation.source_session_id;
     let child_id = Uuid::new_v4();
     let child = crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1(
         &invocation.registry,
         TaskV1ExecutionFacts {
-            root_session_id: parent.session_id(),
-            parent_session_id: parent.session_id(),
+            root_session_id: asking_id,
+            parent_session_id: asking_id,
             task_id: child_id,
             execution_id: String::from("parent-asks-child"),
             prompt: String::from("Child work the parent will question"),
@@ -1310,10 +1303,10 @@ async fn parent_question_to_owned_embedded_child_binds_the_question_to_the_child
         participants::participant_for_handle(&child_invocation, child_id, &child, None)
             .await
             .unwrap();
-    let parent_turn = parent
+    let parent_turn = asking
         .read(|document| document.active_turn().unwrap().turn_id)
         .unwrap();
-    parent
+    asking
         .mutate_durable(
             SessionMutationAdmission::ControlPlane,
             SessionFlushReason::MetadataChanged,
@@ -1331,6 +1324,19 @@ async fn parent_question_to_owned_embedded_child_binds_the_question_to_the_child
             },
         )
         .unwrap();
+    // The asking parent owns this child in its own usage ledger, which is the authority the resolver
+    // proves ownership against; assert it here so a fixture drift fails loudly instead of surfacing
+    // as a misleading authorization refusal.
+    // 提问的父代理在自己的用量账本中拥有该子会话，而这正是解析器据以证明归属的权威；
+    // 在此断言它，使夹具漂移明确失败，而不是表现为一个误导性的授权拒绝。
+    let usage = asking.lifetime_usage_snapshot().unwrap();
+    assert_eq!(usage.root_session_id, asking_id.to_string());
+    assert!(
+        usage
+            .children_by_session_id
+            .contains_key(&child_id.to_string()),
+        "the asking session's ledger must register the child it owns"
+    );
     // The parent asks its own embedded child through the real native port.
     // 父代理通过真实原生端口向自己拥有的嵌入子会话提问。
     let runtime = session_v1_native_agent_collaboration_runtime(
@@ -1352,16 +1358,16 @@ async fn parent_question_to_owned_embedded_child_binds_the_question_to_the_child
     assert_eq!(asked["status"], "ok");
     let question_id =
         CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
-    // The question record stays with its asker, which here is the parent.
-    // 问题记录留在提问方，此处即父代理。
-    parent
+    // The question record stays with its asker, which here is the asking parent session.
+    // 问题记录留在提问方，此处即发起提问的父会话。
+    asking
         .read(|document| {
             let question = document
                 .question_snapshot(&question_id)
                 .expect("the asking parent must hold its own question record");
             assert_eq!(question.state, CollaborationQuestionState::Pending);
             assert_eq!(question.target.session_id, child_id.to_string());
-            assert_eq!(question.source.session_id, parent.session_id().to_string());
+            assert_eq!(question.source.session_id, asking_id.to_string());
         })
         .unwrap();
     // The child owns the accepted inbound delivery for that exact question.
@@ -1374,7 +1380,7 @@ async fn parent_question_to_owned_embedded_child_binds_the_question_to_the_child
                 .values()
                 .find(|delivery| delivery.question_id == question_id)
                 .expect("the questioned child must hold the inbound delivery");
-            assert_eq!(inbound.source.session_id, parent.session_id().to_string());
+            assert_eq!(inbound.source.session_id, asking_id.to_string());
             assert_eq!(inbound.target.session_id, child_id.to_string());
             assert!(inbound.settlement.is_none());
         })
