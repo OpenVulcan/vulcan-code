@@ -52,9 +52,9 @@
 | A04 | 启动最终回复归对应任务；queue 与 interrupt 绑定正确 | 排队任务终态与后继绑定证据；`stopped_target_wakeup_fails_queued_task_without_resuming_business` | 已实现并已验证 |
 | A05 | 主问子/子问主/同项目独立会话问答发送即返回；回执与答案分开 | `native_dispatch_ask_question_...`、`native_dispatch_wait_...`、S2.3 服务端 11 项 | 已实现并已验证 |
 | A06 | 父等待多个子任务时一个子问题立即唤醒；问题不计作子任务完成 | `wait_agent_returns_incoming_question_without_consuming_it`；完成门不含问题义务 | 已实现并已验证 |
-| A07 | 双向提问、答案先到、多等待者、超时再等待不丢答复、不互等 | 超时/重等/撤销三项（`61718ca4`）+ 游标修复（`9f8a243c`）+ 答案先到（`550a5c75`）+ **双向提问闭环**（`e223082e`：子问父→父作答→子经真实等待入口观察到答案，且问题记录权威留在提问方）+ **父 → 子方向**（`parent_question_to_owned_embedded_child_binds_the_question_to_the_child`） | 已实现并已验证（多等待者不适用，见 §二.1） |
+| A07 | 双向提问、答案先到、多等待者、超时再等待不丢答复、不互等 | 超时/重等/撤销三项（`61718ca4`）+ 游标修复（`9f8a243c`）+ 答案先到（`550a5c75`）+ **双向提问闭环**（`e223082e`：子问父→父作答→子经真实等待入口观察到答案，且问题记录权威留在提问方）+ **父 → 子方向**（`parent_question_to_owned_embedded_child_binds_the_question_to_the_child`） | 已实现并已验证（"多等待者"不适用；仅"子代理提问触发调度"属 §二.1 的更高层未构造项） |
 | A08 | 主模型先 final 而子仍运行时各层保持未完成 | 完成门 `open_child_task_ids`；`main_only_parent_...` 不解冻 | 已实现并已验证 |
-| A09 | 未回复不阻止完成；仅主动等待才等待；晚到答案不复活旧任务；无法回答可明确表达 | `unanswered_question_and_notification_do_not_block_completion_and_late_question_does_not_revive`、`late_answer_after_settlement_is_rejected_without_reviving_target_task`、**无法回答声明契约**（`explicit_unable_to_answer_is_echoed_and_travels_in_the_durable_body`，`4a52755b`） | **已实现，证据不足**（"无法回答明确表达"已补证据；A09 其余要求项未在本包覆盖，见 §二.2） |
+| A09 | 未回复不阻止完成；仅主动等待才等待；晚到答案不复活旧任务；无法回答可明确表达 | `unanswered_question_and_notification_do_not_block_completion_and_late_question_does_not_revive`、`late_answer_after_settlement_is_rejected_without_reviving_target_task`、**无法回答声明契约**（`explicit_unable_to_answer_is_echoed_and_travels_in_the_durable_body`，`4a52755b`） | 已实现并已验证（四项要求均有证据；`unable_to_answer` 的载体由领域指定、本案只补断言，见 §二.2） |
 | A10 | 自然空闲仅答疑不二次完成；MainOnly 可恢复；停止拒收；全树停止后迟到不复活 | `question_finished_...`、`question_launch_admits_main_only_...`、`stopped_target_wakeup_...` | **已实现，证据不足**（自动唤醒调度一跳，见 §二.1） |
 | A11 | 重复与并发按稳定标识结算；回执丢失后恢复原记录；同键不同正文明确冲突 | 操作身份幂等与 `RequestIdentityMismatch` 证据；S2.3 服务端 11 项 | 已实现并已验证 |
 | A12 | 各类崩溃窗口无静默丢失与虚假成功 | 归档/删除/冷加载证据；`remote_compaction_confirmation_failure_blocks_the_producer_without_fabricating_success`；**通知"来源已提交、目标未接纳"窗口的修复**（`25ecf35d`：修复计数 0→1、身份逐字不变、二次修复为 0） | 已实现并已验证 |
@@ -86,10 +86,12 @@
 ## 二、尚未闭合的验收缺口（都是证据不足，不是已知实现错误）
 
 > 本节按"每条缺口单独编号"记录，**其中已闭合的条目保留原文并就地标注闭合提交**，便于审核追溯
-> 判断的演进过程。当前**仍然开放**的只有第 1 项（R10/A10 的模型级一跳）与第 5 项（前端既有失败，
-> 不属本任务）。第 2、3、4 项均已闭合。
+> 判断的演进过程。当前**仍然开放**的只有第 1 项中"子代理提问真正触发调度"这一条（R10/A10 的
+> 模型级一跳，需要本层无法构造的 Agent 运行时桥与真实调度环境）与第 5 项（前端既有失败，
+> 不属本任务）。**"多等待者"经核查不适用；"父子交叉互问"两个方向均已证明**（见第 1 项内）。
+> 第 2、3、4 项均已闭合。
 
-1. **MainOnly 自动恢复的完整一跳与多等待者/父子交叉互问**（R10、A07、A10）。
+1. **MainOnly 自动恢复的模型级完整一跳**（R10、A07、A10）。
    已证明：真实启动闸门准入并声明 `wakes_retained_parent_turn`、两种停止状态拒绝、闸门为纯读取方
    （`3df19776`）；提问方业务完成后首次答案到达仍正确结算且不复活旧业务（`f6a497c6`）；
    答案先到时立即观察到而不等满超时（`550a5c75`）；超时/重等/撤销与游标语义（`61718ca4`、`9f8a243c`）；
@@ -123,17 +125,15 @@
    Agent 运行时桥与宿主句柄，本层无法构造）。
    通知投递丢失后恢复已由 `25ecf35d` 补齐（原为**实现缺口**而非证据不足）。
 
-2. **`reply_question` 的 `unable_to_answer`**（A09）。
+2. **`reply_question` 的 `unable_to_answer`**（A09）——**已收口（`4a52755b`）**。
    源码事实（本轮逐行核对）：该字段是回复工具的一个**布尔开关**（Schema 中 `default: false`，
    且 `required` 只含 `question_id` 与 `answer`），服务端读取它、并在返回给调用方的回执中
    以 `unable_to_answer` 回显；**它不进入任何持久字段**。
    但"无法回答"这一语义**仍有可靠承载**：`answer` 正文是必填的、并且是规范答案记录，
    模型在声明无法回答时仍必须给出正文，因此该声明随答案正文一起持久化。
-   结论：A09 的"可通过工具明确表达无法回答"在"必填正文 + 显式开关"这一形态下是可达的，
-   **缺的是把该开关本身作为可独立查询的终态事实**。
-   是否要把"无法回答"提升为独立领域状态（而不是由正文承载）是一项**领域模型决策**：
-   方案 A 持久化该开关；方案 B 移除该字段并让正文单独承载。本任务不擅自决定领域语义，
-   登记为待决策缺口，并在 §二 的状态中标注为"证据不足"而非"缺陷"。
+   结论：A09 的"可通过工具明确表达无法回答"在"必填正文 + 显式开关"这一形态下是可达的。
+   **这一段的早期判断（"缺的是把该开关本身作为可独立查询的终态事实"、需领域决策）已被下面的
+   收口取代**，保留在此仅供追溯；**以收口结论为准**。
 
    **本轮收口（`4a52755b`）并撤回上述"需领域决策"的登记**：领域记录**已经指定了载体**——
    `CollaborationAnswerRecord.body` 的注释即"Exact answer body, **including explicit inability to
