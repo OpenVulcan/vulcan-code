@@ -157,42 +157,6 @@ impl ModelCapabilityOverrides {
             "System model capabilities are owned by the signed manifest and cannot be overridden.",
         ))
     }
-
-    /// Reports whether this layer attempts to replace immutable provider-declared capabilities.
-    /// 报告此层是否尝试替换不可变的供应商声明能力。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` for media input, structured output, reasoning, or request-projection fields.
-    /// 当存在媒体输入、结构化输出、思考或请求投影字段时返回 `true`。
-    fn has_provider_contract_overrides(&self) -> bool {
-        self.input_resources.is_some()
-            || self.structured_output.is_some()
-            || self.output_resources.is_some()
-            || self.reasoning.is_some()
-            || self.reasoning_control.is_some()
-            || self.reasoning_efforts.is_some()
-            || self.request_projection.is_some()
-    }
-
-    /// Removes fields that system providers cannot own and reports whether the record changed.
-    /// 移除系统供应商不能持有的字段，并报告记录是否发生变化。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when at least one immutable provider-contract field was removed.
-    /// 当至少移除一个不可变供应商契约字段时返回 `true`。
-    fn remove_system_provider_contract_overrides(&mut self) -> bool {
-        let changed = self.has_provider_contract_overrides();
-        self.input_resources = None;
-        self.structured_output = None;
-        self.output_resources = None;
-        self.reasoning = None;
-        self.reasoning_control = None;
-        self.reasoning_efforts = None;
-        self.request_projection = None;
-        changed
-    }
 }
 
 /// Applies only the fields explicitly owned by one sparse capability layer.
@@ -1558,21 +1522,41 @@ impl PersistedAiConfiguration {
                 .retain(|_, defaults| *defaults != CustomProviderModelDefaults::default());
             changed = true;
         }
-        for (key, overrides) in &mut self.model_capability_overrides {
-            let system_provider = Self::provider_model_key_parts(key)
-                .is_some_and(|(provider_id, _)| !provider_id.starts_with("custom:"));
-            changed |= if system_provider {
-                overrides.remove_system_provider_contract_overrides()
-            } else {
-                overrides.output_resources.take().is_some()
-            };
+        // System providers are entirely owned by signed manifests, including context and output
+        // limits. Retaining a partial stale record would re-expose a setting the current product
+        // contract no longer allows users to own.
+        // 系统供应商的全部能力（包括上下文和输出上限）均由签名清单持有。保留残缺旧记录会再次暴露
+        // 当前产品契约已禁止用户持有的设置。
+        let system_model_override_count = self
+            .model_capability_overrides
+            .keys()
+            .filter(|key| {
+                Self::provider_model_key_parts(key)
+                    .is_some_and(|(provider_id, _)| !provider_id.starts_with("custom:"))
+            })
+            .count();
+        if system_model_override_count > 0 {
+            self.model_capability_overrides.retain(|key, _| {
+                Self::provider_model_key_parts(key)
+                    .is_none_or(|(provider_id, _)| provider_id.starts_with("custom:"))
+            });
+            changed = true;
         }
-        for (provider_id, overrides) in &mut self.provider_capability_overrides {
-            changed |= if provider_id.starts_with("custom:") {
-                overrides.output_resources.take().is_some()
-            } else {
-                overrides.remove_system_provider_contract_overrides()
-            };
+        for overrides in self.model_capability_overrides.values_mut() {
+            changed |= overrides.output_resources.take().is_some();
+        }
+        let system_provider_override_count = self
+            .provider_capability_overrides
+            .keys()
+            .filter(|provider_id| !provider_id.starts_with("custom:"))
+            .count();
+        if system_provider_override_count > 0 {
+            self.provider_capability_overrides
+                .retain(|provider_id, _| provider_id.starts_with("custom:"));
+            changed = true;
+        }
+        for overrides in self.provider_capability_overrides.values_mut() {
+            changed |= overrides.output_resources.take().is_some();
         }
         // legacy_limits merges protocol-specific limits into their exact provider-model scope.
         // legacy_limits 将协议专属限制合并到其精确供应商模型作用域。
@@ -1584,6 +1568,11 @@ impl PersistedAiConfiguration {
             let Some(model_key) = provider_model_key_from_protocol_key(key) else {
                 continue;
             };
+            if !Self::provider_model_key_parts(model_key.as_str())
+                .is_some_and(|(provider_id, _)| provider_id.starts_with("custom:"))
+            {
+                continue;
+            }
             let entry = legacy_limits.entry(model_key).or_default();
             entry.0 = conservative_legacy_limit(entry.0, overrides.context_limit);
             entry.1 = conservative_legacy_limit(entry.1, overrides.output_limit);
@@ -4988,13 +4977,40 @@ mod tests {
         );
         assert_eq!(effective.reasoning_efforts, [ReasoningEffort::Adaptive]);
         assert!(configuration.normalize_direct_provider_model_settings());
-        assert_eq!(
-            configuration.model_capability_overrides.get(&key),
-            Some(&ModelCapabilityOverrides {
+        assert!(!configuration.model_capability_overrides.contains_key(&key));
+    }
+
+    /// Verifies legacy protocol limits cannot recreate a forbidden system-model override.
+    /// 验证旧协议限额不能重新生成已禁止的系统模型覆盖。
+    #[test]
+    fn system_provider_protocol_limits_are_discarded_during_normalization() {
+        let mut configuration = PersistedAiConfiguration::default();
+        let protocol_key = PersistedAiConfiguration::provider_model_protocol_key(
+            "minimax",
+            "MiniMax-M2.7",
+            "anthropic-messages.v1",
+        );
+        configuration.model_overrides.insert(
+            protocol_key.clone(),
+            ModelExecutionOverrides {
+                context_limit: Some(128_000),
+                output_limit: Some(16_000),
+                ..ModelExecutionOverrides::default()
+            },
+        );
+        configuration.provider_capability_overrides.insert(
+            String::from("minimax"),
+            ModelCapabilityOverrides {
                 context_limit: Some(128_000),
                 ..ModelCapabilityOverrides::default()
-            })
+            },
         );
+
+        assert!(configuration.normalize_direct_provider_model_settings());
+
+        assert!(!configuration.model_overrides.contains_key(&protocol_key));
+        assert!(configuration.model_capability_overrides.is_empty());
+        assert!(configuration.provider_capability_overrides.is_empty());
     }
 
     /// Verifies misspelled capability fields fail instead of appearing to persist successfully.
