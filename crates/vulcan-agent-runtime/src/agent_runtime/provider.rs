@@ -633,4 +633,46 @@ mod tests {
             assert!(!provider_route_lease_identity_matches(&expected, &actual));
         }
     }
+
+    /// Verifies a persisted route lease from an unknown schema version is refused before it is used.
+    /// 验证来自未知契约版本的持久化路由租约在被使用之前即被拒绝。
+    ///
+    /// # Notes
+    /// 说明
+    /// The version check precedes every runtime lookup, so an unavailable runtime is enough to prove the
+    /// refusal happens on the version boundary itself and never degrades into route reuse. A future
+    /// version is used rather than a past one because this contract is unreleased and has no historical
+    /// form to remain compatible with.
+    /// 版本判定先于任何运行时查询，因此不可用的运行时足以证明拒绝发生在版本边界本身、而不会退化为
+    /// 路由复用。这里取未来版本而非过去版本，因为本契约尚未发布、没有需要兼容的历史形态。
+    #[test]
+    fn persisted_route_lease_with_unknown_schema_version_is_refused() {
+        use vulcan_provider_adapters::PublicAiRuntime;
+        let runtime = PublicAiRuntime::unavailable().expect("isolated runtime");
+        let mut lease = test_route_lease_identity();
+        lease.schema_version = SESSION_PROVIDER_ROUTE_LEASE_SCHEMA_VERSION + 1;
+        let error = resolve_public_ai_provider_blueprint(
+            &runtime,
+            "session-with-unknown-lease-version",
+            Some(&lease),
+            ReasoningEffortLevel::Off,
+            None,
+            None,
+            None,
+        )
+        .expect_err("an unknown route lease schema version must be refused");
+        assert!(
+            error.contains("unsupported schema version"),
+            "the refusal must name the version boundary: {error}"
+        );
+        // The recorded lease must not have been accepted, reused or rewritten by the refusal.
+        // 该拒绝不得接纳、复用或改写被记录下来的租约。
+        assert!(
+            runtime
+                .session_selection_lease("session-with-unknown-lease-version")
+                .expect("lease lookup must remain readable")
+                .is_none(),
+            "refusing an unknown lease version must not install a route lease"
+        );
+    }
 }
