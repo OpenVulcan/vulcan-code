@@ -733,32 +733,11 @@ pub fn validate_system_manual_model_definition(
                 binding.service_entry_id, binding.protocol_profile_id, model.id
             )
         })?;
-    for profile in &entry.credential_profiles {
-        if manifest
-            .rule_for_model(
-                entry.id.as_str(),
-                Some(profile.id.as_str()),
-                model.id.as_str(),
-            )
-            .is_some()
-        {
-            // Compare the compiled effective binding because a signed rule may inherit its
-            // protocol from the manifest default rather than declaring selected_protocol.
-            // 比较编译后的有效绑定，因为签名规则可能继承清单默认协议而非单独声明。
-            let signed = crate::provider_manifest::resolve_system_model_protocol_binding(
-                manifest,
-                entry.id.as_str(),
-                Some(profile.id.as_str()),
-                model.id.as_str(),
-            )
-            .map_err(|error| error.to_string())?;
-            if signed.protocol_profile_id != binding.protocol_profile_id {
-                return Err(format!(
-                    "System manual model `{}` cannot replace the signed protocol selected for credential profile `{}`.",
-                    model.id, profile.id
-                ));
-            }
-        }
+    if manifest.has_signed_exact_model_identity(model.id.as_str()) {
+        return Err(format!(
+            "System manual model `{}` conflicts with a signed model identity for provider `{}`.",
+            model.id, manifest.descriptor.id
+        ));
     }
     if model.capabilities.operations.as_slice()
         != [vulcan_ai_contract::AiOperation::ConversationRespond]
@@ -1176,6 +1155,13 @@ mod tests {
         };
         validate_system_manual_model_definition(manifest, &model)
             .expect("verified text route should admit a user model");
+        model.id = String::from("deepseek-flash");
+        assert!(
+            validate_system_manual_model_definition(manifest, &model)
+                .expect_err("a signed exact identity cannot be redefined by the user")
+                .contains("conflicts with a signed model identity")
+        );
+        model.id = String::from("deepseek-manual-probe");
         model.capabilities.output_limit = Some(256_000);
         assert!(
             validate_system_manual_model_definition(manifest, &model)
@@ -1210,6 +1196,33 @@ mod tests {
                 .expect_err("Anthropic has no native audio encoder")
                 .contains("cannot encode Audio input")
         );
+    }
+
+    /// Verifies prefix capability rules do not claim an unlisted exact user model identity.
+    /// 验证前缀能力规则不会占有未列入签名目录的精确用户模型身份。
+    #[test]
+    fn system_manual_model_may_choose_route_under_prefix_rule() {
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        let manifest = catalog.manifest("openai").expect("bundled OpenAI manifest");
+        let model = CustomModelDefinition {
+            id: String::from("gpt-5.4-pro-manual-probe"),
+            display_name: String::from("Manual Prefix Probe"),
+            enabled: true,
+            capabilities: ModelCapabilities {
+                operations: vec![vulcan_ai_contract::AiOperation::ConversationRespond],
+                context_limit: Some(200_000),
+                output_limit: Some(32_000),
+                ..ModelCapabilities::default()
+            },
+            request_projection: CustomModelRequestProjection::default(),
+            tool_schema_projection: ToolSchemaProjectionMode::Lightweight,
+            system_binding: Some(SystemManualModelBinding {
+                service_entry_id: String::from("public-api"),
+                protocol_profile_id: String::from("openai-responses.v1"),
+            }),
+        };
+        validate_system_manual_model_definition(manifest, &model)
+            .expect("a prefix rule cannot forbid an explicitly selected verified route");
     }
 
     /// Verifies custom-provider defaults do not imply a video route they cannot declare.

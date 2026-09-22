@@ -322,6 +322,29 @@ impl ResolvedProviderManifest {
                 .is_some()
     }
 
+    /// Reports whether this provider signs one exact model identity in any conversation entry.
+    /// 判断该供应商是否在任一会话入口签署了一个精确模型身份。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `model_id` is the provider-level identity checked before accepting a user definition.
+    /// `model_id` 是接纳用户定义前检查的供应商级身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when an exact inventory member or exact rule owns this identifier.
+    /// 当精确目录成员或精确规则持有此标识时返回 `true`。
+    pub fn has_signed_exact_model_identity(&self, model_id: &str) -> bool {
+        self.catalog_models
+            .values()
+            .flatten()
+            .any(|model| model.model_id == model_id)
+            || self
+                .rule_instances
+                .iter()
+                .any(|rule| rule.matcher.precedence() == 0 && rule.matcher.value == model_id)
+    }
+
     /// Resolves one operation's request-profile references into ordered frozen payloads.
     /// 将一个操作的请求 Profile 引用解析为有序冻结载荷。
     ///

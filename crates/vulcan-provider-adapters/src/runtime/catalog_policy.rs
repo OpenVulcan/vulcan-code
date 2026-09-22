@@ -530,29 +530,7 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
             // with the same ID remains in the configuration awaiting reconciliation.
             // 精确签名身份拥有其能力与路由，即使同 ID 手工条目尚待配置对账清理。
             let signed_identity = if let Some(manifest) = manifest.filter(|_| !custom_provider) {
-                let connection = configuration
-                    .connection_graph
-                    .connections
-                    .get(catalog.connection_id.as_str())
-                    .ok_or_else(|| {
-                        format!(
-                            "Credential connection `{}` is not configured for manual model projection.",
-                            catalog.connection_id
-                        )
-                    })?;
-                manifest
-                    .catalog_models
-                    .get(service_entry_id)
-                    .is_some_and(|models| {
-                        models.iter().any(|model| model.model_id == definition.id)
-                    })
-                    || manifest
-                        .rule_for_model(
-                            service_entry_id,
-                            Some(connection.credential_profile_id.as_str()),
-                            definition.id.as_str(),
-                        )
-                        .is_some_and(|rule| rule.matcher.precedence() == 0)
+                manifest.has_signed_exact_model_identity(definition.id.as_str())
             } else {
                 false
             };

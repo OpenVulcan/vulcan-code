@@ -92,20 +92,14 @@ fn signed_system_model_capabilities_win_over_user_overlay() {
     assert_eq!(effective_model.capabilities, signed_capabilities);
 }
 
-/// Verifies an exact signed identity wins over a colliding manual definition.
-/// 验证精确签名身份高于同 ID 的手工定义。
+/// Verifies an exact signed identity rejects a colliding manual definition.
+/// 验证精确签名身份拒绝同 ID 的手工定义。
 #[test]
-fn signed_model_identity_wins_over_colliding_manual_definition() {
+fn signed_model_identity_rejects_colliding_manual_definition() {
     let (runtime, mut configuration) = two_account_runtime();
     runtime
         .reapply_model_catalog_overlays(&configuration)
         .expect("signed baseline should resolve");
-    let signed = runtime.catalog_snapshot().unwrap()["one"]
-        .models
-        .iter()
-        .find(|model| model.id == "openai/gpt-5.6-sol")
-        .expect("signed model should exist")
-        .clone();
     configuration
         .custom_models
         .entry(String::from("openrouter"))
@@ -130,20 +124,11 @@ fn signed_model_identity_wins_over_colliding_manual_definition() {
                 }),
             },
         );
-    runtime
-        .reapply_model_catalog_overlays(&configuration)
-        .expect("a colliding manual definition cannot replace a signed model");
-    let effective = runtime.catalog_snapshot().unwrap()["one"]
-        .models
-        .iter()
-        .find(|model| model.id == "openai/gpt-5.6-sol")
-        .expect("signed model should remain visible")
-        .clone();
-    assert_eq!(effective.display_name, signed.display_name);
-    assert_eq!(effective.capabilities, signed.capabilities);
-    assert_eq!(
-        effective.resolved_protocol_binding,
-        signed.resolved_protocol_binding
+    assert!(
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect_err("a colliding manual definition must be rejected")
+            .contains("conflicts with a signed model identity")
     );
 }
 
