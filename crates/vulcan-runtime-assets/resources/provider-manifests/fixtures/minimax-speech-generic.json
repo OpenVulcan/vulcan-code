@@ -10,22 +10,7 @@
     "minimax::cn.speech-2.8-hd",
     "minimax::cn.speech-2.8-turbo",
     "minimax::cn.speech-2.6",
-    "minimax::cn.speech-02",
-    "alibaba::model-studio-cn.cosyvoice-v2.speech-synthesize",
-    "alibaba::model-studio-cn.cosyvoice-v3-flash.speech-synthesize",
-    "alibaba::model-studio-cn.cosyvoice-v3-plus.speech-synthesize",
-    "alibaba::model-studio-cn.cosyvoice-v3.5-flash.speech-synthesize",
-    "alibaba::model-studio-cn.cosyvoice-v3.5-plus.speech-synthesize",
-    "alibaba::model-studio-cn.qwen3-tts-flash.speech-synthesize",
-    "alibaba::model-studio-cn.qwen3-tts-instruct-flash.speech-synthesize",
-    "alibaba::model-studio-singapore.cosyvoice-v3-flash.speech-synthesize",
-    "alibaba::model-studio-singapore.cosyvoice-v3-plus.speech-synthesize",
-    "alibaba::model-studio-singapore.qwen3-tts-flash.speech-synthesize",
-    "alibaba::model-studio-singapore.qwen3-tts-instruct-flash.speech-synthesize",
-    "alibaba::token-plan-personal-cn.qwen-audio-3.0-tts-plus.speech-synthesize",
-    "alibaba::token-plan-personal-global.qwen-audio-3.0-tts-plus.speech-synthesize",
-    "alibaba::token-plan-team-cn.qwen-audio-3.0-tts-plus.speech-synthesize",
-    "alibaba::token-plan-team-global.qwen-audio-3.0-tts-plus.speech-synthesize"
+    "minimax::cn.speech-02"
   ],
   "tool_target": {
     "target_id": "global:fixture-speech-generic",
