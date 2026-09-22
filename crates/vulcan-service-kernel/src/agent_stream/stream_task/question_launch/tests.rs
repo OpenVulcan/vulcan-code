@@ -304,3 +304,101 @@ fn question_launch_rejects_completed_execution() {
         .unwrap();
     assert!(question_launch_restart_state(&document, session_id, &execution).is_err());
 }
+
+/// MainOnly admits the retained business turn's question launch; both stop modes refuse it unchanged.
+/// MainOnly 允许其保留业务回合的问题启动；两种停止模式都在不修改任何事实的前提下拒绝。
+///
+/// # Notes
+/// 说明
+/// This drives the same gate the production question stream task calls before it touches any child
+/// configuration or provider service, so a MainOnly admission here is what lets a subagent question
+/// resume the retained parent turn instead of merely being stored.
+/// 本测试驱动生产问题流任务在接触任何子配置或供应商服务之前调用的同一闸门，因此此处的 MainOnly
+/// 准入正是"子代理问题恢复其保留父回合"而非仅被存储的依据。
+/// The receiving parent is stopped for main execution in exactly one of these states, so the accepted
+/// delivery and its bound execution must survive every refusal byte-for-byte.
+/// 三种状态中恰好有一种停止主执行，因此每次拒绝后已接纳投递及其绑定执行都必须逐字保留。
+#[test]
+fn question_launch_admits_main_only_resume_and_refuses_stop_states_unchanged() {
+    for (control, admitted) in [
+        (CollaborationRunControl::MainOnly, true),
+        (CollaborationRunControl::Stopped, false),
+        (CollaborationRunControl::MainAndSubagents, false),
+    ] {
+        let (mut document, session_id, execution) = launch_fixture(true);
+        document
+            .set_collaboration_run_control(SetRunControlInput {
+                operation_id: CollaborationOperationId::try_new(format!("control-{control:?}"))
+                    .unwrap(),
+                state: control,
+                changed_at_ms: 6,
+            })
+            .unwrap();
+        // Every state retains the same open parent turn and the same admitted QA execution.
+        // 三种状态都保留同一个开放父回合与同一条已准入答疑执行。
+        let before = (
+            document.active_turn().map(|turn| turn.turn_id),
+            document
+                .collaboration_state()
+                .question_executions
+                .get(&execution.execution_id)
+                .cloned(),
+            document
+                .collaboration_state()
+                .inbound_deliveries
+                .values()
+                .map(|delivery| (delivery.state.clone(), delivery.bound_turn_id))
+                .collect::<Vec<_>>(),
+            document.durable_revision(),
+        );
+        let result = question_launch_restart_state(&document, session_id, &execution);
+        if admitted {
+            // MainOnly resumes the retained parent turn rather than opening a separate business turn.
+            // MainOnly 恢复其保留的父回合，而不是另开一个业务回合。
+            assert!(
+                result.is_ok(),
+                "MainOnly must admit its retained turn's question launch: {result:?}"
+            );
+            let admission = crate::agent_collaboration_execution::admit_collaboration_execution(
+                control,
+                execution.purpose,
+            )
+            .unwrap();
+            assert!(
+                admission.wakes_retained_parent_turn,
+                "MainOnly must declare that the retained parent turn is woken"
+            );
+            assert!(
+                admission.suppresses_business_completion,
+                "the resumed auxiliary execution must not create a second business completion"
+            );
+        } else {
+            let error = result.expect_err("an explicit stop must refuse the question launch");
+            assert!(
+                !error.is_empty(),
+                "a refused question launch must report a concrete reason"
+            );
+        }
+        // The gate is a pure reader: neither admission nor refusal may change any durable fact.
+        // 该闸门是纯读取方：准入与拒绝都不得改变任何可靠事实。
+        let after = (
+            document.active_turn().map(|turn| turn.turn_id),
+            document
+                .collaboration_state()
+                .question_executions
+                .get(&execution.execution_id)
+                .cloned(),
+            document
+                .collaboration_state()
+                .inbound_deliveries
+                .values()
+                .map(|delivery| (delivery.state.clone(), delivery.bound_turn_id))
+                .collect::<Vec<_>>(),
+            document.durable_revision(),
+        );
+        assert_eq!(
+            before, after,
+            "the question launch gate must not mutate the document in state {control:?}"
+        );
+    }
+}
