@@ -2225,38 +2225,29 @@ fn apikeyfan_manifest_is_a_closed_group_intersection() {
         .collect::<BTreeMap<_, _>>();
     assert_eq!(actual_protocols, expected_protocols);
 
-    // deepseekReasoningEfforts keeps relay declarations identical to the official DeepSeek rules.
-    // deepseekReasoningEfforts 确保中转声明与 DeepSeek 官方规则完全一致。
-    let deepseek_text = load_bundled_manifests()
-        .remove("deepseek")
-        .expect("deepseek bundled manifest should exist");
-    // deepseekDocument is the official capability authority used for relay parity checks.
-    // deepseekDocument 是中转一致性检查所使用的官方能力权威。
-    let deepseek_document: Value =
-        serde_json::from_str(&deepseek_text).expect("deepseek manifest should parse");
-    // v4-flash is intentionally absent: the official provider retired it, while the relay still serves it.
-    // v4-flash 有意排除：官方已下线该身份，中转侧仍在提供，名值镜像对它不再成立。
-    for model_id in ["deepseek-v4-pro"] {
-        // officialRule is the exact official DeepSeek model declaration.
-        // officialRule 是精确的 DeepSeek 官方模型声明。
-        let official_rule = deepseek_document["model_rules"]
-            .as_array()
-            .expect("deepseek model_rules should be an array")
-            .iter()
-            .find(|rule| rule["matcher"]["value"] == model_id)
-            .expect("official DeepSeek model rule should exist");
-        // relayRule is the matching APIKEY.FAN relay declaration.
-        // relayRule 是对应的 APIKEY.FAN 中转声明。
+    // The relay DeepSeek declarations are frozen against the relay's own reviewed facts.
+    // The official DeepSeek manifest is deliberately not consulted: one provider's
+    // configuration must not depend on another provider's configuration.
+    // 中转的 DeepSeek 声明按中转自身的已验证事实冻结；刻意不查阅官方清单：
+    // 任何供应商的配置都不应依赖另一个供应商的配置。
+    for model_id in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+        // relayRule is the relay's own reviewed DeepSeek declaration.
+        // relayRule 是中转自身已审核的 DeepSeek 声明。
         let relay_rule = document["model_rules"]
             .as_array()
             .expect("apikeyfan model_rules should be an array")
             .iter()
             .find(|rule| rule["matcher"]["value"] == model_id)
-            .expect("APIKEY.FAN DeepSeek model rule should exist");
+            .unwrap_or_else(|| panic!("APIKEY.FAN DeepSeek model rule `{model_id}` should exist"));
+        assert_eq!(
+            relay_rule["selected_protocol"],
+            "openai-responses.v1",
+            "APIKEY.FAN DeepSeek rule `{model_id}` must bind Responses"
+        );
         assert_eq!(
             relay_rule["capabilities"]["reasoning_efforts"],
-            official_rule["capabilities"]["reasoning_efforts"],
-            "APIKEY.FAN reasoning levels must match official DeepSeek for `{model_id}`"
+            serde_json::json!(["none", "high", "low", "max"]),
+            "APIKEY.FAN reasoning levels for `{model_id}` must match the relay's reviewed declaration"
         );
     }
 
