@@ -537,10 +537,13 @@ fn vl_seq(value: u64) -> vulcan_session_core::v1::ids::Seq {
 /// 启动一次真实物理答疑 API，并返回其精确模型工具调用上下文。
 /// `purpose` selects the auxiliary or parent purpose that the caller already proved admissible.
 /// `purpose` 选择调用方已经证明可准入的辅助或父级用途。
+/// `stream_label` gives this physical attempt its own request stream and controller tool identity.
+/// `stream_label` 为本次物理尝试提供独立的请求流与控制器工具身份。
 fn start_question_execution_tool_call(
     target: &Arc<SessionHandle>,
     purpose: ApiPurposeKind,
     now_ms: i64,
+    stream_label: &str,
 ) -> VulcanToolInvocationContext {
     let input = target
         .read(|document| {
@@ -572,7 +575,20 @@ fn start_question_execution_tool_call(
         .unwrap()
         .value
         .api_call_id;
-    let request_stream_id = RequestStreamId::try_new("archived-answer-stream").unwrap();
+    prepare_reply_question_tool_call(target, api_call_id, now_ms, stream_label)
+}
+
+/// Prepares one additional reply tool call on an already admitted physical API.
+/// 在已准入物理 API 上准备一条额外的回答工具调用。
+/// Returns the exact context a later answer attempt is validated against.
+/// 返回后续回答尝试进行校验时使用的精确上下文。
+fn prepare_reply_question_tool_call(
+    target: &Arc<SessionHandle>,
+    api_call_id: vulcan_session_core::v1::ApiCallId,
+    now_ms: i64,
+    stream_label: &str,
+) -> VulcanToolInvocationContext {
+    let request_stream_id = RequestStreamId::try_new(format!("{stream_label}-stream")).unwrap();
     let tool_call_id = target
         .mutate_durable(
             SessionMutationAdmission::ExistingTurn,
@@ -612,7 +628,7 @@ fn start_question_execution_tool_call(
         api_call_id,
         tool_call_id,
         tool_seq,
-        controller_tool_call_id: "archived-answer".into(),
+        controller_tool_call_id: format!("{stream_label}-tool"),
         provider_tool_call_id: None,
     }
 }
@@ -638,8 +654,12 @@ async fn archived_target_model_answer_completes_durable_settlement() {
             |document| document.prepare_question_execution_before_api(question.clone(), 8),
         )
         .unwrap();
-    let context =
-        start_question_execution_tool_call(&target_handle, ApiPurposeKind::QuestionExecution, 9);
+    let context = start_question_execution_tool_call(
+        &target_handle,
+        ApiPurposeKind::QuestionExecution,
+        9,
+        "archived-answer",
+    );
     let execution_id = target_handle
         .read(|document| {
             document
@@ -830,4 +850,157 @@ async fn edit_admission_holds_target_lifecycle_gate() {
     .await
     .unwrap();
     assert_eq!(receipt.segment_generation, generation + 1);
+}
+
+/// A late second answer is refused after settlement and revives no target business task.
+/// 结算后的迟到第二次回答被拒绝，且不复活任何目标业务任务。
+/// Uses the real native reply port, the canonical question reducer and both real session files.
+/// 使用真实原生回答端口、规范问题归约器以及双方真实会话文件。
+#[tokio::test]
+async fn late_answer_after_settlement_is_rejected_without_reviving_target_task() {
+    // The question is pending and unanswered, and both business turns remain open.
+    // 问题待处理且未回答，双方业务回合保持开放。
+    let (_storage, invocation, target_handle, question, _operation) =
+        unacknowledged_settlement_fixture(false).await;
+    // The running target owns a real in-turn question execution before its first answer.
+    // 运行中的目标在首次回答之前持有真实回合内答疑执行。
+    target_handle
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| document.prepare_question_execution_before_api(question.clone(), 8),
+        )
+        .unwrap();
+    let runtime = session_v1_native_agent_collaboration_runtime(
+        invocation.state.clone(),
+        ServiceEventEmitter::new(Vec::new()),
+    );
+    let settled = runtime
+        .invoke(
+            start_question_execution_tool_call(
+                &target_handle,
+                ApiPurposeKind::QuestionExecution,
+                9,
+                "settling-answer",
+            ),
+            AgentCollaborationCommand::ReplyQuestion(ReplyQuestionArgs {
+                question_id: question.question_id.as_str().to_owned(),
+                answer: "First answer".into(),
+                unable_to_answer: false,
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the first answer must settle the question: {error}"));
+    assert_eq!(settled["question_state"].as_str(), Some("answered"));
+    // Capture the settled durable facts, including the source acknowledgement.
+    // 捕获已结算的可靠事实，包括来源确认。
+    let source_locator = invocation.source_handle.storage_locator().unwrap();
+    let target_locator = target_handle.storage_locator().unwrap();
+    let (_, source_question, source_acknowledged) = invocation
+        .source_handle
+        .read(|document| {
+            (
+                document.durable_revision(),
+                document
+                    .collaboration_state()
+                    .questions
+                    .get(&question.question_id)
+                    .cloned()
+                    .unwrap(),
+                document
+                    .collaboration_state()
+                    .outbound_deliveries
+                    .values()
+                    .any(|delivery| delivery.settlement_ack.is_some()),
+            )
+        })
+        .unwrap();
+    assert_eq!(source_question.state, CollaborationQuestionState::Answered);
+    assert_eq!(
+        source_question.answer.as_ref().unwrap().body,
+        "First answer"
+    );
+    assert!(source_acknowledged);
+    let active_api = target_handle
+        .read(|document| document.active_api().unwrap().api_call_id)
+        .unwrap();
+    // The late attempt owns its own real prepared ToolCall before the answer is validated.
+    // 迟到尝试在回答被校验之前持有其自身的真实已准备工具调用。
+    let late_context =
+        prepare_reply_question_tool_call(&target_handle, active_api, 10, "late-answer");
+    // Capture both durable frontiers after that legitimate preparation, so the rejected answer
+    // itself must leave every durable fact untouched.
+    // 在该合法准备之后捕获双方可靠前沿，使被拒回答本身必须不改变任何可靠事实。
+    let source_revision = invocation
+        .source_handle
+        .read(|document| document.durable_revision())
+        .unwrap();
+    let (target_revision, target_state) = target_handle
+        .read(|document| {
+            (
+                document.durable_revision(),
+                document.collaboration_state().clone(),
+            )
+        })
+        .unwrap();
+    // A second independently admitted tool call is a late answer for the settled question.
+    // 独立准入的第二次工具调用构成对该已结算问题的迟到回答。
+    let rejected = runtime
+        .invoke(
+            late_context,
+            AgentCollaborationCommand::ReplyQuestion(ReplyQuestionArgs {
+                question_id: question.question_id.as_str().to_owned(),
+                answer: "Late answer".into(),
+                unable_to_answer: false,
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        rejected.contains("already settled as answered"),
+        "a settled question must refuse a second answer: {rejected}"
+    );
+    // The source keeps exactly one answer and neither side gains a new business turn.
+    // 来源只保留一个回答，双方都不新增业务回合。
+    invocation
+        .source_handle
+        .read(|document| {
+            assert_eq!(document.durable_revision(), source_revision);
+            let current = &document.collaboration_state().questions[&question.question_id];
+            assert_eq!(current.state, CollaborationQuestionState::Answered);
+            assert_eq!(current.answer.as_ref().unwrap().body, "First answer");
+            assert_eq!(
+                document
+                    .collaboration_state()
+                    .questions
+                    .values()
+                    .filter(|question| question.answer.is_some())
+                    .count(),
+                1
+            );
+        })
+        .unwrap();
+    target_handle
+        .read(|document| {
+            assert_eq!(document.durable_revision(), target_revision);
+            assert_eq!(document.collaboration_state(), &target_state);
+            assert!(document.active_turn().is_some_and(|turn| !turn.closed));
+            assert!(document.active_api().is_some());
+        })
+        .unwrap();
+    // The real files must still carry the single original answer after the rejected attempt.
+    // 拒绝之后真实文件仍必须只携带原回答。
+    let loaded_source = load_session_v1_for_runtime(&source_locator)
+        .unwrap()
+        .document;
+    let loaded_question = &loaded_source.collaboration_state().questions[&question.question_id];
+    assert_eq!(loaded_question.state, CollaborationQuestionState::Answered);
+    assert_eq!(
+        loaded_question.answer.as_ref().unwrap().body,
+        "First answer"
+    );
+    let loaded_target = load_session_v1_for_runtime(&target_locator)
+        .unwrap()
+        .document;
+    assert_eq!(loaded_target.durable_revision(), target_revision);
 }

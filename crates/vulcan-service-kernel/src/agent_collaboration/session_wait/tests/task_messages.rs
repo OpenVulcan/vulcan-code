@@ -4,6 +4,7 @@
 use super::*;
 
 mod child_lifecycle;
+mod lifecycle_combinations;
 mod recovery;
 mod results;
 use vulcan_agent_runtime::tooling::collaboration::{
