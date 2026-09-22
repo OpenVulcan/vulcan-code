@@ -81,6 +81,23 @@ pub struct StartupSnapshot {
     /// Recent startup log lines.
     /// 最近启动日志行。
     pub recent_logs: Vec<String>,
+    /// Signed model identities that replaced conflicting user definitions during this startup.
+    /// 本次启动时接管冲突用户定义的签名模型身份。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_reconciliation_notices: Vec<StartupModelReconciliationNotice>,
+}
+
+/// Identifies one provider model whose manual definition was removed on startup.
+/// 标识启动期间移除手工定义的一条供应商模型。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupModelReconciliationNotice {
+    /// Exact provider identifier owning the signed model.
+    /// 持有签名模型的精确供应商标识。
+    pub provider_id: String,
+    /// Exact model identifier taken over by the signed catalog.
+    /// 被签名目录接管的精确模型标识。
+    pub model_id: String,
 }
 
 /// Summarizes one runtime module shown in the startup and status panels.

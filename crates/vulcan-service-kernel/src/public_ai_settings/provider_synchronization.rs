@@ -302,6 +302,39 @@ async fn publish_synced_provider_projections_or_restore(
             ));
         }
     };
+    // The staged after-images are signed, exact provider authorities. Reconcile only the
+    // candidate copy; durable user definitions are removed after manifest commit succeeds.
+    // 暂存后镜像是经过签名的精确供应商权威。先只对候选副本对账；清单提交成功后才持久移除用户定义。
+    let mut candidate_configuration = configuration.clone();
+    let mut model_reconciliation_notices = Vec::new();
+    for snapshot in &manifest_snapshots {
+        let Some(manifest) = snapshot
+            .staged_manifest_mutation
+            .staged_manifest(snapshot.provider_id.as_str())
+        else {
+            cancellation_guard.disarm();
+            return Err(compensate_unpublished_provider_activation(
+                service,
+                runtime,
+                reports,
+                &manifest_snapshots,
+                format!(
+                    "Staged manifest `{}` disappeared before model reconciliation.",
+                    snapshot.provider_id
+                ),
+            ));
+        };
+        for model_id in candidate_configuration.reconcile_signed_manual_model_collisions(&manifest)
+        {
+            model_reconciliation_notices.push(
+                vulcan_service_api::StartupModelReconciliationNotice {
+                    provider_id: snapshot.provider_id.clone(),
+                    model_id,
+                },
+            );
+        }
+        candidate_configuration.reconcile_signed_model_inventory(&manifest);
+    }
     // catalogTransaction remains owned until success or every compensation/republish step ends.
     // catalogTransaction 持续持有到成功或全部补偿/重新发布步骤结束。
     let catalog_transaction = runtime.begin_catalog_activation_transaction().await;
@@ -335,12 +368,13 @@ async fn publish_synced_provider_projections_or_restore(
     // activationResult 是本事务中的最后一个异步取消边界。
     let activation_result = activate_synced_provider_catalogs(
         runtime,
-        &configuration,
+        &candidate_configuration,
         provider_ids,
         &catalog_transaction,
     )
     .await;
     cancellation_guard.disarm();
+    let mut configuration_persistence_attempted = false;
     let (runtime_after_image, publication) = match activation_result {
         Ok(after_image) => {
             // publication keeps browser state unchanged while check-state persistence and journal
@@ -351,13 +385,21 @@ async fn publish_synced_provider_projections_or_restore(
                 app,
                 state,
                 runtime,
-                &configuration,
+                &candidate_configuration,
                 || {
                     // Check state remains inside the Applying before-image until it is durable;
                     // only then may the journal cross its commit boundary.
                     // 检查状态在持久化完成前始终处于 Applying 前镜像保护内；之后日志才可越过提交边界。
                     service.record_sync_check_reports(reports)?;
-                    service.commit_activation_snapshots(&manifest_snapshots)
+                    service.commit_activation_snapshots(&manifest_snapshots)?;
+                    if candidate_configuration != configuration {
+                        configuration_persistence_attempted = true;
+                        vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
+                            &candidate_configuration,
+                            &vulcan_workspace_store::data_plane::application_data_root(),
+                        )?;
+                    }
+                    Ok(())
                 },
             )
             .map(|_| ());
@@ -368,9 +410,32 @@ async fn publish_synced_provider_projections_or_restore(
     match publication {
         Ok(()) => {
             service.record_committed_activation_events(runtime, reports);
+            if !model_reconciliation_notices.is_empty()
+                && let Ok(mut guard) = state.lock()
+            {
+                guard
+                    .startup
+                    .model_reconciliation_notices
+                    .extend(model_reconciliation_notices);
+                let startup = guard.startup.clone();
+                drop(guard);
+                crate::emit_service_event_with_trace(
+                    app,
+                    "startup_snapshot_emit",
+                    vulcan_service_api::ServiceEvent::Startup(Box::new(startup)),
+                );
+            }
             Ok(())
         }
         Err(primary) => {
+            let configuration_restore = if configuration_persistence_attempted {
+                vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
+                    &configuration,
+                    &vulcan_workspace_store::data_plane::application_data_root(),
+                )
+            } else {
+                Ok(())
+            };
             let manifest_restore =
                 service.restore_activation_snapshots(runtime, &manifest_snapshots);
             let runtime_restore = runtime_after_image.as_ref().map_or(Ok(()), |after_image| {
@@ -385,8 +450,10 @@ async fn publish_synced_provider_projections_or_restore(
                     "Old-generation Workbench projection was not republished because runtime compensation failed.",
                 )),
             };
-            let compensation_complete =
-                manifest_restore.is_ok() && runtime_restore.is_ok() && workbench_republish.is_ok();
+            let compensation_complete = configuration_restore.is_ok()
+                && manifest_restore.is_ok()
+                && runtime_restore.is_ok()
+                && workbench_republish.is_ok();
             if compensation_complete {
                 service.record_compensated_rollback_events(
                     runtime,
@@ -395,7 +462,7 @@ async fn publish_synced_provider_projections_or_restore(
                 );
             }
             let diagnostic = format!(
-                "Provider manifest projection publication failed: {primary}; manifest compensation: {manifest_restore:?}; runtime compensation: {runtime_restore:?}; old-generation Workbench republication: {workbench_republish:?}"
+                "Provider manifest projection publication failed: {primary}; configuration compensation: {configuration_restore:?}; manifest compensation: {manifest_restore:?}; runtime compensation: {runtime_restore:?}; old-generation Workbench republication: {workbench_republish:?}"
             );
             if compensation_complete {
                 Err(ProviderProjectionPublicationFailure::Compensated(
@@ -790,27 +857,84 @@ pub(crate) async fn service_rollback_provider_manifest(
         .map_err(|error| {
             crate::provider_manifest_sync::bounded_public_manifest_diagnostic(error.as_str())
         })?;
+    // Reconcile the exact rollback generation before validating its model catalog.
+    // 在校验模型目录前，按照精确的回滚代际清理模型归属。
+    let Some(manifest) = report
+        .activation_snapshot
+        .staged_manifest_mutation
+        .staged_manifest(&provider_id)
+    else {
+        service.abort_rollback(runtime.as_ref(), &report)?;
+        return Err(String::from("Staged rollback manifest is missing."));
+    };
+    let mut candidate_configuration = configuration.clone();
+    let model_reconciliation_notices = candidate_configuration
+        .reconcile_signed_manual_model_collisions(&manifest)
+        .into_iter()
+        .map(
+            |model_id| vulcan_service_api::StartupModelReconciliationNotice {
+                provider_id: provider_id.clone(),
+                model_id,
+            },
+        )
+        .collect::<Vec<_>>();
+    candidate_configuration.reconcile_signed_model_inventory(&manifest);
+    // Both synchronous publication callbacks share the persistence compensation state.
+    // 两个同步发布回调共享持久化补偿状态。
+    let configuration_persistence_attempted = std::sync::atomic::AtomicBool::new(false);
     let result = service
         .finalize_rollback_projection(
             runtime.as_ref(),
-            &configuration,
+            &candidate_configuration,
             report,
             |commit| {
                 publish_public_ai_workbench_with_commit(
                     &app,
                     &state,
                     runtime.as_ref(),
-                    &configuration,
-                    commit,
+                    &candidate_configuration,
+                    || {
+                        commit()?;
+                        if candidate_configuration != configuration {
+                            configuration_persistence_attempted.store(true, std::sync::atomic::Ordering::Relaxed);
+                            vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
+                                &candidate_configuration,
+                                &vulcan_workspace_store::data_plane::application_data_root(),
+                            )?;
+                        }
+                        Ok(())
+                    },
                 )
                 .map(|_| ())
             },
             || {
+                if configuration_persistence_attempted.load(std::sync::atomic::Ordering::Relaxed) {
+                    vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
+                        &configuration,
+                        &vulcan_workspace_store::data_plane::application_data_root(),
+                    )?;
+                }
                 publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
                     .map(|_| ())
             },
         )
         .await;
+    if result.is_ok()
+        && !model_reconciliation_notices.is_empty()
+        && let Ok(mut guard) = state.lock()
+    {
+        guard
+            .startup
+            .model_reconciliation_notices
+            .extend(model_reconciliation_notices);
+        let startup = guard.startup.clone();
+        drop(guard);
+        crate::emit_service_event_with_trace(
+            &app,
+            "startup_snapshot_emit",
+            vulcan_service_api::ServiceEvent::Startup(Box::new(startup)),
+        );
+    }
     drop(configuration_transaction);
     result.map_err(|error| {
         crate::provider_manifest_sync::bounded_public_manifest_diagnostic(error.as_str())

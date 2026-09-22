@@ -48,6 +48,27 @@ pub struct ProviderStagedManifestCatalogMutation {
     after: Arc<crate::provider_manifest::ResolvedProviderCatalog>,
 }
 
+impl ProviderStagedManifestCatalogMutation {
+    /// Returns one exact signed candidate from the immutable staged after-image.
+    /// 从不可变暂存后镜像返回一份精确签名候选。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` selects the provider staged by the caller's activation report.
+    /// `provider_id` 选择调用方激活报告暂存的供应商。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The staged manifest when present, without exposing mutable catalog state.
+    /// 存在时返回暂存清单，不暴露可变目录状态。
+    pub fn staged_manifest(
+        &self,
+        provider_id: &str,
+    ) -> Option<Arc<crate::provider_manifest::ResolvedProviderManifest>> {
+        self.after.manifest_arc(provider_id)
+    }
+}
+
 /// Opaque ownership proof that serializes one complete provider-catalog activation transaction.
 /// 串行化一次完整供应商目录激活事务的不透明所有权证明。
 pub struct ProviderCatalogActivationTransaction {
@@ -900,8 +921,7 @@ impl PublicAiRuntime {
     /// 返回值
     /// The staged manifest, which may differ from the published generation until activation.
     /// 返回暂存 Manifest；在激活前它可能与已发布代际不同。
-    #[cfg(test)]
-    pub(crate) fn staged_system_manifest(
+    pub fn staged_system_manifest(
         &self,
         provider_id: &str,
     ) -> Option<Arc<ResolvedProviderManifest>> {

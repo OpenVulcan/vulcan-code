@@ -32,6 +32,7 @@ pub(crate) fn startup_snapshot_with_phase(
             steps
         },
         recent_logs: logs.to_vec(),
+        model_reconciliation_notices: Vec::new(),
     }
 }
 

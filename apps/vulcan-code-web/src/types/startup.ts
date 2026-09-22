@@ -84,6 +84,9 @@ export interface StartupSnapshot {
   // Recent startup log lines.
   // 最近启动日志行。
   recentLogs: string[];
+  // Signed identities that replaced local manual definitions during this service startup.
+  // 本次服务启动时接管本地手工定义的签名身份。
+  modelReconciliationNotices?: { providerId: string; modelId: string }[];
 }
 
 // RuntimeModuleSnapshot describes one runtime module card.

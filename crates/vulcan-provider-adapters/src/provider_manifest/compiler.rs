@@ -345,6 +345,27 @@ impl ResolvedProviderManifest {
                 .any(|rule| rule.matcher.precedence() == 0 && rule.matcher.value == model_id)
     }
 
+    /// Collects provider-owned exact model identities without treating prefix rules as members.
+    /// 收集供应商持有的精确模型身份，不把前缀规则当作成员。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Every exact inventory or rule identifier in stable order.
+    /// 按稳定顺序返回全部精确目录或规则标识。
+    pub fn signed_exact_model_ids(&self) -> BTreeSet<String> {
+        self.catalog_models
+            .values()
+            .flatten()
+            .map(|model| model.model_id.clone())
+            .chain(
+                self.rule_instances
+                    .iter()
+                    .filter(|rule| rule.matcher.precedence() == 0)
+                    .map(|rule| rule.matcher.value.clone()),
+            )
+            .collect()
+    }
+
     /// Resolves one operation's request-profile references into ordered frozen payloads.
     /// 将一个操作的请求 Profile 引用解析为有序冻结载荷。
     ///

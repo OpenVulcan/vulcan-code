@@ -361,6 +361,37 @@ fn luaskills_startup_warning_message(error: &str) -> String {
     String::from("LuaSkills 不可用，插件内容组件继续运行；请查看启动日志了解原因。")
 }
 
+/// Removes manual definitions newly owned by the verified staged startup catalog.
+/// 移除已由经过验证的暂存启动目录接管的手工定义。
+///
+/// # Parameters
+/// 参数
+/// `runtime` supplies staged manifest identities and `configuration` owns user model records.
+/// `runtime` 提供暂存清单身份，`configuration` 持有用户模型记录。
+///
+/// # Returns
+/// 返回值
+/// Exact provider-model notices for every removed definition, or a catalog read error.
+/// 返回每条已移除定义的精确供应商模型提示，或目录读取错误。
+fn reconcile_signed_manual_models_at_startup(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    configuration: &mut vulcan_provider_adapters::PersistedAiConfiguration,
+) -> Result<Vec<vulcan_service_api::StartupModelReconciliationNotice>, String> {
+    let mut notices = Vec::new();
+    for provider_id in runtime.system_manifest_provider_ids()? {
+        let Some(manifest) = runtime.staged_system_manifest(provider_id.as_str()) else {
+            continue;
+        };
+        for model_id in configuration.reconcile_signed_manual_model_collisions(&manifest) {
+            notices.push(vulcan_service_api::StartupModelReconciliationNotice {
+                provider_id: provider_id.clone(),
+                model_id,
+            });
+        }
+    }
+    Ok(notices)
+}
+
 /// Runs the real startup sequence owned by the WebUI service.
 /// 运行由 WebUI 服务持有的真实启动顺序。
 fn run_service_bootstrap(
@@ -1036,9 +1067,7 @@ fn run_service_bootstrap(
             },
         )?,
     );
-    public_ai_runtime
-        .replace_configuration(public_ai_configuration.clone())
-        .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+    let original_public_ai_configuration = public_ai_configuration.clone();
     // Post-dispatch media tools reuse the existing ordered WebUI upload progress surface.
     // 分派后媒体工具复用现有有序 WebUI 上传进度界面。
     crate::media_upload::install_runtime_media_upload_progress_bridge(
@@ -1073,6 +1102,44 @@ fn run_service_bootstrap(
                 .map(|report| format!("{}({})", report.provider_id, report.layer))
                 .collect::<Vec<_>>()
                 .join(", ")
+        ));
+    }
+    // Only the recovered signed generation owns identities; bundled predecessors cannot take over models.
+    // 仅恢复后的签名代际拥有模型身份；内置旧代际不能接管手工模型。
+    let model_reconciliation_notices = reconcile_signed_manual_models_at_startup(
+        public_ai_runtime.as_ref(),
+        &mut public_ai_configuration,
+    )
+    .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+    for provider_id in public_ai_runtime
+        .system_manifest_provider_ids()
+        .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?
+    {
+        if let Some(manifest) = public_ai_runtime.staged_system_manifest(provider_id.as_str()) {
+            public_ai_configuration.reconcile_signed_model_inventory(&manifest);
+        }
+    }
+    if public_ai_configuration != original_public_ai_configuration {
+        let app_data_root = vulcan_workspace_store::data_plane::application_data_root();
+        vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
+            &public_ai_configuration,
+            &app_data_root,
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "workspace",
+                "Workspace",
+                format!("保存系统模型接管后的供应商配置失败：{error}"),
+            )
+        })?;
+    }
+    if !model_reconciliation_notices.is_empty() {
+        if let Ok(mut guard) = state.lock() {
+            guard.startup.model_reconciliation_notices = model_reconciliation_notices.clone();
+        }
+        logs.push(format!(
+            "系统模型已接管 {} 条同 ID 手工定义。",
+            model_reconciliation_notices.len()
         ));
     }
     // The provider-manifest sync service is injected once into the shared state so RPCs and
@@ -1627,6 +1694,7 @@ fn run_service_bootstrap(
         &logs,
     );
     startup.ui_locale = provider_configuration.ui_locale.clone();
+    startup.model_reconciliation_notices = model_reconciliation_notices;
     // initial_projection_started_at measures selected-session locator validation and first workbench projection.
     // initial_projection_started_at 测量选中会话定位校验与首次工作台投影。
     let initial_projection_started_at = start_bootstrap_stage("initial_workbench_projection");

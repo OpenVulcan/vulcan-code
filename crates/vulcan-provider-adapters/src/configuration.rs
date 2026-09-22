@@ -829,6 +829,10 @@ pub struct PersistedAiConfiguration {
     /// 按自定义供应商标识分组的用户自有模型定义。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub custom_models: BTreeMap<String, BTreeMap<String, CustomModelDefinition>>,
+    /// Last activated exact signed model IDs retained for upgrade cleanup.
+    /// 为升级清理保留的上一代已激活精确签名模型 ID。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub system_signed_model_inventory: BTreeMap<String, BTreeSet<String>>,
     /// Capability defaults grouped by custom provider identifier.
     /// 按自定义供应商标识分组的能力默认值。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1038,6 +1042,7 @@ impl Default for PersistedAiConfiguration {
             custom_provider_manifest_failure_total_count: 0,
             custom_provider_manifest_failures_truncated: false,
             custom_models: BTreeMap::new(),
+            system_signed_model_inventory: BTreeMap::new(),
             custom_provider_model_defaults: BTreeMap::new(),
             custom_model_template_decisions: BTreeMap::new(),
             custom_model_protocol_preferences: BTreeMap::new(),
@@ -2743,7 +2748,130 @@ impl PersistedAiConfiguration {
                 .remove(Self::connection_model_key(connection_id.as_str(), model_id).as_str());
             self.custom_model_connection_enabled_overrides
                 .remove(Self::connection_model_key(connection_id.as_str(), model_id).as_str());
+            if let Some(policy) = self
+                .connection_model_access_policies
+                .get_mut(connection_id.as_str())
+            {
+                policy.model_enabled_overrides.remove(model_id);
+                if *policy == ConnectionModelAccessPolicy::default() {
+                    self.connection_model_access_policies
+                        .remove(connection_id.as_str());
+                }
+            }
         }
+    }
+
+    /// Replaces colliding user model definitions with signed identities while keeping switches.
+    /// 用签名身份接管冲突的用户模型定义，同时保留开关状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `manifest` is the active signed provider authority for this reconciliation boundary.
+    /// `manifest` 是本次对账边界生效的签名供应商权威。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Exact model identifiers removed from the provider-owned manual directory.
+    /// 从供应商持有的手工目录移除的精确模型标识。
+    pub fn reconcile_signed_manual_model_collisions(
+        &mut self,
+        manifest: &crate::provider_manifest::ResolvedProviderManifest,
+    ) -> Vec<String> {
+        let provider_id = manifest.descriptor.id.as_str();
+        let collisions = self
+            .custom_models
+            .get(provider_id)
+            .into_iter()
+            .flat_map(|models| models.keys())
+            .filter(|model_id| manifest.has_signed_exact_model_identity(model_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for model_id in &collisions {
+            let manual_enabled = self
+                .custom_models
+                .get_mut(provider_id)
+                .and_then(|models| models.remove(model_id))
+                .expect("collision was collected from this provider's manual directory")
+                .enabled;
+            let model_key = Self::provider_model_key(provider_id, model_id);
+            let provider_enabled = self.model_enabled_overrides.get(&model_key).copied();
+            let account_decisions = self
+                .connection_graph
+                .connections
+                .values()
+                .filter(|connection| connection.provider_id == provider_id)
+                .filter_map(|connection| {
+                    let explicit_decision = self
+                        .connection_model_access_policies
+                        .get(connection.id.as_str())
+                        .and_then(|policy| policy.model_enabled_overrides.get(model_id))
+                        .copied();
+                    let manual_decision = self.custom_model_connection_enabled_override(
+                        connection.id.as_str(),
+                        model_id.as_str(),
+                    );
+                    explicit_decision
+                        .or(manual_decision)
+                        .map(|enabled| (connection.id.clone(), enabled))
+                })
+                .collect::<Vec<_>>();
+            self.remove_model_owned_settings(provider_id, model_id);
+            self.model_enabled_overrides
+                .insert(model_key, provider_enabled.unwrap_or(manual_enabled));
+            for (connection_id, enabled) in account_decisions {
+                self.set_connection_model_enabled(connection_id.as_str(), model_id, enabled);
+            }
+        }
+        if self
+            .custom_models
+            .get(provider_id)
+            .is_some_and(BTreeMap::is_empty)
+        {
+            self.custom_models.remove(provider_id);
+        }
+        collisions
+    }
+
+    /// Clears decisions for signed models removed by an activated provider manifest.
+    /// 清理已激活供应商清单中消失的签名模型决定。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `manifest` is the exact signed provider generation being activated.
+    /// `manifest` 是正在激活的精确签名供应商代际。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Whether the remembered inventory or any removed model's settings changed.
+    /// 返回已记录目录或消失模型的设置是否改变。
+    pub fn reconcile_signed_model_inventory(
+        &mut self,
+        manifest: &crate::provider_manifest::ResolvedProviderManifest,
+    ) -> bool {
+        let provider_id = manifest.descriptor.id.as_str();
+        let current_ids = manifest.signed_exact_model_ids();
+        if self.system_signed_model_inventory.get(provider_id) == Some(&current_ids) {
+            return false;
+        }
+        let removed = self
+            .system_signed_model_inventory
+            .get(provider_id)
+            .into_iter()
+            .flat_map(|previous| previous.difference(&current_ids))
+            .filter(|model_id| {
+                !self
+                    .custom_models
+                    .get(provider_id)
+                    .is_some_and(|models| models.contains_key(*model_id))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for model_id in &removed {
+            self.remove_model_owned_settings(provider_id, model_id);
+        }
+        self.system_signed_model_inventory
+            .insert(provider_id.to_string(), current_ids);
+        true
     }
 
     /// Reports whether a provider still owns any user-customized model or route state.
@@ -4720,6 +4848,149 @@ mod tests {
         assert_eq!(configuration.model_enabled_overrides.len(), 1);
         configuration.restore_model_enabled("custom-provider", "private-model");
         assert!(configuration.model_enabled_overrides.is_empty());
+    }
+
+    /// Verifies signed takeover removes manual parameters while retaining provider and account switches.
+    /// 验证签名接管移除手工参数，同时保留供应商及账号开关。
+    #[test]
+    fn signed_model_takeover_preserves_enabled_decisions() {
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        let manifest = catalog
+            .manifest("openrouter")
+            .expect("bundled OpenRouter manifest");
+        let model_id = "openai/gpt-5.6-sol";
+        let mut configuration = PersistedAiConfiguration::default();
+        for connection_id in ["one", "two"] {
+            configuration.connection_graph.connections.insert(
+                connection_id.to_string(),
+                custom_provider_connection(connection_id, "openrouter"),
+            );
+        }
+        configuration.custom_models.insert(
+            String::from("openrouter"),
+            BTreeMap::from([(
+                model_id.to_string(),
+                CustomModelDefinition {
+                    id: model_id.to_string(),
+                    display_name: String::from("Old manual entry"),
+                    enabled: true,
+                    capabilities: ModelCapabilities::default(),
+                    request_projection: Default::default(),
+                    tool_schema_projection: Default::default(),
+                    system_binding: None,
+                },
+            )]),
+        );
+        configuration
+            .custom_model_connection_enabled_overrides
+            .insert(
+                PersistedAiConfiguration::connection_model_key("one", model_id),
+                false,
+            );
+        configuration.set_connection_model_enabled("two", model_id, false);
+        let model_key = PersistedAiConfiguration::provider_model_key("openrouter", model_id);
+        configuration.model_capability_overrides.insert(
+            model_key.clone(),
+            ModelCapabilityOverrides {
+                context_limit: Some(8_192),
+                ..ModelCapabilityOverrides::default()
+            },
+        );
+
+        assert_eq!(
+            configuration.reconcile_signed_manual_model_collisions(manifest),
+            vec![model_id]
+        );
+        assert!(configuration.custom_model("openrouter", model_id).is_none());
+        assert!(
+            !configuration
+                .model_capability_overrides
+                .contains_key(&model_key)
+        );
+        assert!(configuration.model_is_enabled("openrouter", model_id));
+        assert!(!configuration.connection_model_is_enabled("one", model_id));
+        assert!(!configuration.connection_model_is_enabled("two", model_id));
+        assert!(
+            configuration
+                .custom_model_connection_enabled_overrides
+                .is_empty()
+        );
+        assert!(
+            configuration
+                .reconcile_signed_manual_model_collisions(manifest)
+                .is_empty()
+        );
+    }
+
+    /// Verifies removed signed identities lose stale choices while manual identities retain theirs.
+    /// 验证消失的签名身份清除过期选择，而手工身份保留自己的选择。
+    #[test]
+    fn signed_inventory_cleanup_preserves_manual_models() {
+        let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+        let manifest = catalog
+            .manifest("openrouter")
+            .expect("bundled OpenRouter manifest");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.connection_graph.connections.insert(
+            String::from("account"),
+            custom_provider_connection("account", "openrouter"),
+        );
+        configuration.system_signed_model_inventory.insert(
+            String::from("openrouter"),
+            BTreeSet::from([
+                String::from("retired-model"),
+                String::from("retained-manual"),
+            ]),
+        );
+        configuration.custom_models.insert(
+            String::from("openrouter"),
+            BTreeMap::from([(
+                String::from("retained-manual"),
+                CustomModelDefinition {
+                    id: String::from("retained-manual"),
+                    display_name: String::from("Retained Manual"),
+                    enabled: true,
+                    capabilities: ModelCapabilities::default(),
+                    request_projection: Default::default(),
+                    tool_schema_projection: Default::default(),
+                    system_binding: None,
+                },
+            )]),
+        );
+        for model_id in ["retired-model", "retained-manual"] {
+            configuration.set_connection_model_enabled("account", model_id, false);
+            configuration.model_capability_overrides.insert(
+                PersistedAiConfiguration::provider_model_key("openrouter", model_id),
+                ModelCapabilityOverrides {
+                    context_limit: Some(8_192),
+                    ..Default::default()
+                },
+            );
+        }
+        assert!(configuration.reconcile_signed_model_inventory(manifest));
+        let account_policy = &configuration.connection_model_access_policies["account"];
+        assert!(
+            !account_policy
+                .model_enabled_overrides
+                .contains_key("retired-model")
+        );
+        assert_eq!(
+            account_policy
+                .model_enabled_overrides
+                .get("retained-manual"),
+            Some(&false)
+        );
+        assert!(
+            configuration
+                .model_capability_overrides("openrouter", "retired-model")
+                .is_none()
+        );
+        assert!(
+            configuration
+                .model_capability_overrides("openrouter", "retained-manual")
+                .is_some()
+        );
+        assert!(!configuration.reconcile_signed_model_inventory(manifest));
     }
 
     /// Verifies capability differences replace only declared fields on the effective model copy.

@@ -16,6 +16,7 @@ pub(crate) fn update_startup<F>(
         startup_snapshot_with_phase(phase, build_steps(OffsetDateTime::now_utc()), logs);
     if let Ok(mut guard) = state.lock() {
         startup.ui_locale = guard.startup.ui_locale.clone();
+        startup.model_reconciliation_notices = guard.startup.model_reconciliation_notices.clone();
         guard.startup = startup.clone();
     }
     emit_service_event_with_trace(
@@ -145,6 +146,7 @@ pub(crate) fn update_service_failure(
     let mut workbench = fallback_workbench_snapshot(&logs);
     if let Ok(mut guard) = state.lock() {
         startup.ui_locale = guard.startup.ui_locale.clone();
+        startup.model_reconciliation_notices = guard.startup.model_reconciliation_notices.clone();
         workbench.ui_locale = guard.startup.ui_locale.clone();
         guard.startup = startup.clone();
         crate::preserve_project_settings_revisions(&mut workbench, &guard.workbench);

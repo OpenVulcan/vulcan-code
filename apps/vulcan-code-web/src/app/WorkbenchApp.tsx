@@ -87,6 +87,32 @@ export function WorkbenchApp(props: {
   // startup stores the latest startup snapshot.
   // startup 保存最近一次启动快照。
   const [startup, setStartup] = React.useState<StartupSnapshot>(props.initialStartup);
+  // shownModelReconciliations de-duplicates later startup events in this workbench mount.
+  // shownModelReconciliations 在当前工作台挂载期间去重后续启动事件。
+  const shownModelReconciliations = React.useRef(new Set<string>());
+  // Startup takeover notices are shown once the workbench toaster mounts.
+  // 启动接管提示在工作台提示框挂载后展示。
+  React.useEffect(() => {
+    const notices = (startup.modelReconciliationNotices ?? []).filter(({ providerId, modelId }) => {
+      const identity = `${providerId.length}:${providerId}:${modelId}`;
+      if (shownModelReconciliations.current.has(identity)) return false;
+      shownModelReconciliations.current.add(identity);
+      return true;
+    });
+    if (notices.length === 0) return;
+    const isChinese = startup.uiLocale?.toLowerCase().startsWith("zh") ?? true;
+    const identities = notices.map(({ providerId, modelId }) => `${providerId} / ${modelId}`).join("、");
+    toast.warning(
+      isChinese ? "系统模型已接管同名手工模型" : "System models replaced matching manual models",
+      {
+        id: "startup-manual-model-reconciliation",
+        description: isChinese
+          ? `已移除 ${notices.length} 条手工定义并保留原有启用状态：${identities}`
+          : `Removed ${notices.length} manual definitions while preserving enabled choices: ${identities}`,
+        duration: 20_000,
+      },
+    );
+  }, [startup]);
   // workbench stores the latest workbench snapshot.
   // workbench 保存最近一次工作台快照。
   const [workbench, setWorkbench] = React.useState<WorkbenchSnapshot | null>(null);
