@@ -328,9 +328,9 @@ real_controller_nonempty_analysis_materializes_memory_and_profiles}`、
 本文件的证据价值取决于**它引用的每个名字在当前源码里仍然存在**。为此本轮对本文件做了一次
 自动化引用核验：
 
-- 方法：提取本文件全部反引号内的 snake_case 标识符（共 64 个），逐一在 `crates/`、`apps/` 中
+- 方法：提取本文件全部反引号内的 snake_case 标识符（共 65 个），逐一在 `crates/`、`apps/` 中
   查找同名项。
-- 结果：**64 个标识符全部存在，无死引用**（其中 6 个为非测试标识符：`provider_request_bridge_messages`、
+- 结果：**65 个标识符全部存在，无死引用**（其中 6 个为非测试标识符：`provider_request_bridge_messages`、
   `provider_request_bridge`、`open_child_task_ids`、`wakes_retained_parent_turn`、
   `children_by_session_id`、`child_task_non_success_projected`）。
 - 同一闸门已在状态入口 `IMPLEMENTATION_STATUS.md` 上复跑：其 33 个引用全部存在；该文件原有
