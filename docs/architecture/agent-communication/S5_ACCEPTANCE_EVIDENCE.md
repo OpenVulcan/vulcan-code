@@ -143,6 +143,18 @@
 
 - **运行中的真实 Provider 流**：V1 `SystemContext → ProjectedItem → provider_v1_sink` 的物理消息、
   真实模型回答、`RuntimeOnly` 远端压缩端到端一跳、真实 401 → OAuth 刷新 → 第二次真实 HTTP。
+- **"401 → 刷新 → 重放"两端各自被测、中间无连接证据**（本轮把该缺口定位得更准确）：
+  运行时重试判定 `refreshed_oauth_credential_retry_decision` 的测试**自行伪造**"凭据已刷新"标记
+  （直接把 `OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY` 写入夹具），而该标记的真实生产者是适配器的
+  `recover_rejected_oauth_credential`（`provider_transport_vulcan/streaming.rs`）。
+  因此若生产者不再发出该标记，运行时测试仍会通过。真实编排需要可续期凭据租约 + 凭据刷新服务 +
+  回环 HTTP，尚未构造。
+- **"父子交叉互问"（A07 的更强组合）未取得证据**：构造到"父代理向自有嵌入子代理提问"时，
+  `resolve_authorized_target` 的自有子代理分支未生效，回退到 `verified_direct_parent` 并报
+  "ask_parent requires an embedded child session"。**原因未定位到确定结论**——可能是夹具缺少某个
+  生产步骤，也可能是该路径本身不支持，因此在定位前**不据此断言生产缺陷**。
+  尝试补 `initialize_root_usage` 会替换生产创建器已建立的父子绑定，已回退；相关半成品测试已从
+  工作树移除，未留下失败测试。
 - **准备许可失败的生产者阻断**：缺少 preparation barrier 的 test-support 构造器
   （既有同层构造器为 `pub(crate)`），属缺构造器而非缺证据。
 - **continuation 判定与宿主事件保护**：相关函数为私有，无断言测试。
