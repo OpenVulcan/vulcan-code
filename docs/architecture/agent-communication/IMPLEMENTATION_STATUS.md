@@ -33,15 +33,15 @@
 ### S2 压缩收尾
 
 - [x] S2.1 非 V1 独立运行时的压缩屏障消费及明确所有权：已修复。RuntimeOnly 启动在派发前显式声明非会话归属，独立消费方成为强类型确认所有者；准备边界走 `into_excluded_non_session()`，可靠性边界校验后恰好确认一次，任何会话投影事实一律 fail-closed。提交 `8fd2dbad`。
-- [ ] S2.2 原生压缩请求诊断制品接线：已完成事实调查。压缩路径当前**完全不产生**诊断制品（许可里的追踪归属被丢弃、请求捕获显式传空、传输层无响应捕获），且用户开关 `provider_request_trace_enabled` 在压缩分派链不可达。已决定按"复用既有机制 + 只传逐分派冻结开关"实施，不新建日志平台、不绕过用户开关。实施中。
-- [ ] S2.3 OAuth 刷新后的新尝试、可靠确认失败阻断、主会话入口的专门验证。实施中。
+- [x] S2.2 原生压缩请求诊断制品接线。已确认改动前压缩路径**零制品**（许可里的追踪归属被丢弃、请求捕获显式传空、传输层无响应捕获），且用户开关在压缩分派链不可达。按"复用既有机制 + 只传逐分派冻结开关"实施：开关关闭时行为与改动前完全一致（不预留、不接触追踪目录），开启时复用同一 `ProviderApiTraceStore` 与同一渲染器（制品结构与脱敏规则未改），请求与响应两条捕获通道都接上。证据：`native_compaction_request_publishes_the_reused_provider_api_trace_artifact`（真实路由 + 回环 HTTP + 双通道捕获，断言制品路由/路径/正文逐值相等、终态分类、请求头凭据已脱敏、制品原始字节不含凭据）、`native_compaction_trace_requires_the_frozen_opt_in_decision`（关闭时不预留且追踪根目录不存在）、`ordinary_trace_reservation_requires_the_frozen_opt_in`、`ordinary_provider_request_trace_shape_is_unchanged`。提交 `09d5e25a`（`responses_compact.rs` 的生产部分因暂存区竞态落在 `c3707e3d`，已在该提交信息中如实说明）。
+- [x] S2.3 OAuth 刷新后的新尝试、可靠确认失败阻断、主会话入口的专门验证。**结论：三段生产逻辑改动前已正确接线，缺的是可执行证据**，因此只补测试未改生产逻辑。证据：服务端 `remote_checkpoint` 11 项（含 `remote_compaction_retry_settles_failed_permit_then_confirms_only_the_new_permit`、`remote_compaction_confirmation_failure_blocks_the_producer_without_fabricating_success`、`remote_compaction_permit_refusal_keeps_the_admitted_attempt_unmodified`、`main_session_physical_entry_consumes_the_durable_native_checkpoint`），适配器 9 项（含真实回环 401→200、各自尝试身份、无隐藏重试）。提交 `c3707e3d`、`f3b325f4`。
+- **S2.3 未验证边界（精确登记）**：真实 401 → OAuth 刷新 → 第二次真实 HTTP 的端到端一跳未驱动；**准备许可失败的生产者侧阻断无法跨 crate 驱动，缺少 preparation barrier 的 test-support 构造器**（应与 `events.rs` 既有 durability barrier 测试构造器同层，现有同层构造器为 `pub(crate)`），而不是缺少证据；主会话真实 provider 往返回路未驱动。
 
 ### S3 协议及动态注入
 
-- [x] S3.1 动态生产者逐项到最终请求的连续前缀、更新、到期及压缩验证（第一部分：已确认缺陷修复）。临时注入宿主块作用域与会话作用域不一致，导致任何真实会话作用域临时注入在 V1 请求准备时直接失败；同一内容项的失效事件却硬编码回合作用域，属合同内部矛盾。已修正生产者侧声明（临时块恒为回合作用域，持久块保留声明作用域）。提交 `42651b34`、`523fa6cd`。
-- [ ] S3.1（第二部分）逐生产者到最终请求的可达性与相邻两次真实请求前缀证据；实施中。
-- [ ] S3.2 实际可达协议对照、工具配对及媒体交错组合：工具配对、并行结果、媒体交错与插入边界证据已完成并修正同锚点系统更新逆序缺陷（提交 `fc65b351`）；协议路由与逐生产者可达性实施中。
-- [ ] S3.3 continuation 的真实安全判定与重建诊断一致性。已核实 dispatch 与预览诊断之间存在不一致：`build_public_continuation` 会因边界后存在未覆盖 `runtime-host:` 消息返回 None，而预览原因链缺少该分支并会渲染"允许复用"。修复实施中。
+- [x] S3.1 动态生产者逐项到最终请求的连续前缀、更新、到期及压缩验证。已修正确认缺陷：临时注入宿主块作用域与会话作用域不一致，导致任何真实会话作用域临时注入在 V1 请求准备时直接失败；同一内容项的失效事件却硬编码回合作用域，属合同内部矛盾。修正生产者侧声明（临时块恒为回合作用域，持久块保留声明作用域），并把作用域常量收敛为单一来源。提交 `42651b34`、`523fa6cd`。
+- [x] S3.2 逐生产者到最终请求的可达性与固定顶部边界。**纠正了任务书的假设**：`provider_layers` 并**不是**未守护缺口——它由三重事实守护（唯一消费者是闸门前候选、该候选明确拒绝非会话派发、V1 所有者整体重建），因此只做文档化与回归断言，未做结构性改造。新增证据：`request_dynamic_producers_stay_out_of_fixed_top_layers`、`session_plan_context_reaches_request_as_tagged_user_event`、`two_adjacent_requests_keep_fixed_top_and_append_dynamic_user_items`（相邻两次真实请求，断言固定顶部字节不变、更新只追加、被替代旧正文保留）、`ttl_expiry_appends_tagged_user_item_without_rewriting_emitted_prefix`。提交 `bca79df4`。
+- [x] S3.3 continuation 的真实安全判定与重建诊断一致性；工具配对、并行结果、媒体交错与插入边界。已修正两个确认缺陷：(1) 同一生效锚点上的多条系统更新**逆序**插入，违反与输入一致的时间顺序契约（提交 `fc65b351`）；(2) dispatch 因边界后存在未覆盖 `runtime-host:` 消息返回 None，而预览诊断缺少该分支并会渲染"允许复用"，即判定与诊断不一致（提交 `fa1daa28`）。另补充工具配对校验、乱序并行结果按身份配对、媒体交错与插入边界的 12 项证据。**未覆盖**：continuation 五项判定与宿主事件保护仍无断言测试（相关函数为私有）；两处未知契约版本拒绝仍无测试。
 
 ### S4 协作与界面
 
