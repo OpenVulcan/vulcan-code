@@ -316,10 +316,10 @@ fn apikeyfan_rejects_discovered_model_outside_declared_whitelist() {
     );
 }
 
-/// Verifies an unchecked OpenRouter discovery is manageable before account selection.
-/// 验证未勾选的 OpenRouter 发现模型在账号选择前仍可管理。
+/// Verifies account toggles cannot admit an OpenRouter discovery outside the signed inventory.
+/// 验证账号开关不能准入受签名清单之外的 OpenRouter 发现模型。
 #[test]
-fn unchecked_openrouter_discovery_can_be_selected_per_account() {
+fn unsigned_openrouter_discovery_requires_provider_manual_definition() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -356,7 +356,7 @@ fn unchecked_openrouter_discovery_can_be_selected_per_account() {
         .expect("catalog should install");
     runtime
         .reapply_model_catalog_overlays(&configuration)
-        .expect("unchecked discovered model should publish as support evidence");
+        .expect("unreviewed discovery should remain outside account support");
 
     let settings = runtime
         .settings_catalog_snapshot(&configuration)
@@ -365,14 +365,15 @@ fn unchecked_openrouter_discovery_can_be_selected_per_account() {
         settings.model_support_catalogs["one"]
             .models
             .iter()
-            .any(|model| model.id == "openai/gpt-4o")
+            .all(|model| model.id != "openai/gpt-4o")
     );
     assert!(
         runtime
             .catalog_snapshot()
             .expect("effective catalog should resolve")["one"]
             .models
-            .is_empty()
+            .iter()
+            .all(|model| model.id != "openai/gpt-4o")
     );
     configuration.connection_model_access_policies.insert(
         String::from("one"),
@@ -381,26 +382,15 @@ fn unchecked_openrouter_discovery_can_be_selected_per_account() {
     configuration.set_connection_model_enabled("one", "openai/gpt-4o", true);
     runtime
         .reapply_model_catalog_overlays(&configuration)
-        .expect("explicit account selection should publish");
+        .expect("account toggle should not publish an unsigned identity");
 
     let published_catalogs = runtime
         .catalog_snapshot()
         .expect("published catalogs should remain readable");
-    let published_model = published_catalogs
-        .get("one")
-        .and_then(|catalog| catalog.models.first())
-        .expect("the selected discovered identity remains visible");
-    assert!(published_model.resolved_protocol_binding.is_some());
-    assert!(
-        published_model
-            .capabilities
-            .operations
-            .contains(&vulcan_ai_contract::AiOperation::ConversationRespond)
-    );
-
-    runtime
+    assert!(published_catalogs["one"].models.iter().all(|model| model.id != "openai/gpt-4o"));
+    assert!(runtime
         .resolve_connection_model_selection(&configuration, "one", "openrouter", "openai/gpt-4o")
-        .expect("selected discovered text model should resolve");
+        .is_err());
 }
 
 /// Verifies the DeepSeek manifest supplies exact protocol variants for its current identities.

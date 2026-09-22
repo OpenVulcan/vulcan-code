@@ -223,8 +223,8 @@ fn disabled_connection_is_excluded_from_fallback_and_exact_routing() {
     assert!(exact_error.contains("disabled"));
 }
 
-/// Verifies workbench selectors and resolution reject operation-only internal models.
-/// 验证工作台选择器与解析会拒绝仅供内部操作使用的模型。
+/// Verifies workbench selection rejects a discovered operation-only model.
+/// 验证工作台选择会拒绝发现结果中仅支持内部操作的模型。
 #[test]
 fn workbench_models_require_bidirectional_text_conversation() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
@@ -284,19 +284,18 @@ fn workbench_models_require_bidirectional_text_conversation() {
         .reapply_model_catalog_overlays(&configuration)
         .expect("mixed-model generation should publish");
 
-    assert_eq!(
-        runtime
-            .available_model_selectors(&configuration)
-            .expect("selectors should resolve"),
-        BTreeSet::from([String::from("openrouter/openai/gpt-5.6-sol")])
-    );
+    let selectors = runtime
+        .available_model_selectors(&configuration)
+        .expect("selectors should resolve");
+    assert!(selectors.contains("openrouter/openai/gpt-5.6-sol"));
+    assert!(!selectors.contains("openrouter/openai/gpt-5.6-terra"));
     let Err(error) = runtime.resolve_connection_model_selection(
         &configuration,
         "one",
         "openrouter",
         "openai/gpt-5.6-terra",
     ) else {
-        panic!("embedding-only model must not resolve as a workbench model");
+        panic!("embedding-only discovery must not resolve as a workbench model");
     };
     assert!(error.contains("does not expose bidirectional text conversation"));
 }

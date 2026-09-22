@@ -241,10 +241,11 @@ OpenRouter 应用归因由其随包 Manifest 的固定非秘密请求头声明�
 - `discovery_and_manual`：合并发现与手动模型；
 - `manifest_discovery_and_manual`：合并三者。
 
-内置 OpenRouter 的 `public-api` 使用 `manifest_only` 与 `manifest_static`，账号列表只展示清单明确列出的
-文本会话模型。清单中的模型规则决定初始勾选状态，账号开关可覆盖初始状态；远端发现结果和账号勾选均不能
-单独增加模型身份。用户需要在供应商层手工添加其他文本会话模型；向量、重排及图片、视频、音频等专用输出
-模型不能作为普通对话模型加入。新增系统推荐模型时，必须同时更新静态身份目录与精确规则。
+内置 OpenRouter 的 `public-api` 使用 `manifest_and_discovery` 与 `open_router` 发现器保留远端模型事实，
+但 `catalog_membership_policy: declared_only` 使账号列表只展示清单明确列出的文本会话模型。清单中的模型
+规则决定初始勾选状态，账号开关可覆盖初始状态；远端发现结果和账号勾选均不能单独增加模型身份。用户需要在
+供应商层手工添加其他文本会话模型；向量、重排及图片、视频、音频等专用输出模型不能作为普通对话模型加入。
+新增系统推荐模型时，必须同时更新静态身份目录与精确规则。
 
 `model_catalog.discovery_kind: manifest_static` 表示不发远程目录请求，模型身份、顺序与基础能力完全
 由当前已编译 Manifest 持有。它的封闭约束为：
