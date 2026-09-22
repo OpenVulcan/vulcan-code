@@ -265,9 +265,17 @@
   断言 `needs_delivery_recovery` 为**假**。**变异验证**：在闸门中加入
   `inbound_notifications ... == Accepted` 后该测试 FAILED（失败信息点明"若此行为改变，请更新 S5 §三"），
   证明它确实锁定该行为；生产改动已回退（`git diff` 无删除行）。
+  **同一状态在另一处判定下的相反结果（本轮补全）**：`CollaborationState::requires_edit_or_delete_settlement`
+  （`crates/vulcan-session-core/src/v1/collaboration.rs:1121`）**确实**把
+  `inbound_notifications` 中 `Accepted` 的项算作"仍欠对端的事实"，因此**会阻止编辑/删除**
+  （其唯一消费者是 `session_v1_lifecycle/guards.rs:155`；冷态成员走同一谓词）。
+  也就是说：**同一个状态会阻止删除，却不触发启动修复**。
+  **但我没有把这一点判为规则十一缺陷（本轮实测）**：两者是**不同语义**的谓词——前者是"替换或删除
+  历史是否会丢弃欠对端的事实"（单一定义，注释明确写明"canonical document delegates to it"），
+  后者是"是否需要加载规范文档以修复"。因此这不构成同一个边界值的重复定义；只是两者的覆盖集合
+  在此处产生差异，属需要领域判断的点，而非已确认缺陷。
   **我没有断言的是**：(a) 该通知被永久丢失——下一次物理 API 准备仍会经
-  `project_collaboration_before_api` 投影它，所以更可能是**延迟到下一次请求**；(b) 这是缺陷——
-  也可能是有意的成本取舍（避免为一条通知加载整个会话）。
+  `project_collaboration_before_api` 投影它，所以更可能是**延迟到下一次请求**；(b) 这是缺陷。
   **为什么本轮不修**：会话级闸门的成本/收益与是否属既有并行边界均需判断，且
   `25ecf35d` 修的是同一功能的相邻窗口，直接扩大闸门有改变启动恢复成本特征的风险。
   据实登记为**待领域判断的具体点**，不弱化任何守卫、不改生产代码。
