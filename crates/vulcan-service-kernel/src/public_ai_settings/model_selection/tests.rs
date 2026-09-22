@@ -5,6 +5,15 @@ use super::*;
 use vulcan_ai_contract::{AiOperation, ModelCapabilities};
 use vulcan_provider_adapters::{CredentialConnection, CredentialMode};
 
+/// Verifies an oversized existing conversation is rejected before switching to a smaller model.
+/// 验证已有会话过大时，会在切换到较小模型之前被拒绝。
+#[test]
+fn model_switch_rejects_context_above_target_real_limit() {
+    assert!(model_switch_exceeds_target_context_limit(500_000, 250_000));
+    assert!(model_switch_exceeds_target_context_limit(250_000, 250_000));
+    assert!(!model_switch_exceeds_target_context_limit(249_999, 250_000));
+}
+
 /// Verifies an invalid global account rebinds to the same model on its preferred account.
 /// 验证失效的全局账号会重新绑定到首选账号上的同一模型。
 #[test]

@@ -232,6 +232,23 @@ pub(crate) async fn service_select_public_ai_model(
         request.provider_id.as_str(),
         request.model_id.as_str(),
     )?;
+    let target_context_limit = selected_model.model.capabilities.context_limit;
+    if let Some(session_id) = conversation_id
+        && let Some(target_context_limit) = target_context_limit
+        && let Some(current_budget) =
+            crate::context_compaction::context_compaction_budget_snapshot_from_state(
+                &state, session_id,
+            )
+        && model_switch_exceeds_target_context_limit(
+            current_budget.active_context_tokens,
+            target_context_limit,
+        )
+    {
+        return Err(format!(
+            "当前会话上下文约 {} Token，已达到或超过目标模型 `{}` 的真实上下文上限 {} Token，不能切换到该模型。请先缩短上下文或选择容量足够的模型。",
+            current_budget.active_context_tokens, request.model_id, target_context_limit
+        ));
+    }
     if let Some(node_id) = session_context_compaction_window_node_id {
         // node_tokens resolves the stable persisted id against the current global configuration.
         // node_tokens 根据当前全局配置解析持久化的稳定标识。
@@ -390,6 +407,22 @@ pub(crate) async fn service_select_public_ai_model(
         )?;
     drop(transaction);
     Ok(snapshot)
+}
+
+/// Reports whether current session context cannot fit the target model's real maximum window.
+/// 报告当前会话上下文是否无法放入目标模型的真实最大窗口。
+///
+/// `active_context_tokens` is the latest live or reconstructed session budget; `target_limit`
+/// is the target model's declared capability.
+/// `active_context_tokens` 是最新实时或重建会话预算；`target_limit` 是目标模型声明的能力。
+fn model_switch_exceeds_target_context_limit(
+    active_context_tokens: usize,
+    target_limit: u64,
+) -> bool {
+    match u64::try_from(active_context_tokens) {
+        Ok(active_context_tokens) => active_context_tokens >= target_limit,
+        Err(_) => true,
+    }
 }
 
 /// Reports whether one exact provider-model-account selection is still executable.
