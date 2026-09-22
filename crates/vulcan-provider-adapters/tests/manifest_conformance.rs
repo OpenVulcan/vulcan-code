@@ -663,3 +663,45 @@ fn every_bundled_target_capability_matches_its_operation() {
         }
     }
 }
+
+/// Checks every declared fixed resolution menu against its executable input schema.
+/// 检查全部固定分辨率菜单与可执行输入 Schema 是否一致。
+///
+/// A menu advertising a value rejected by the schema, or a schema accepting a hidden value,
+/// would give the agent contradictory capability and execution contracts.
+/// 菜单宣称 Schema 拒绝的值，或 Schema 接受菜单未列的值，都会使智能体能力与执行契约矛盾。
+#[test]
+fn every_fixed_resolution_menu_matches_its_input_schema() {
+    for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
+        let document = parse_manifest(&stem, &text);
+        for target in document["tool_targets"]
+            .as_array()
+            .expect("tool_targets array")
+        {
+            let target_id = target["target_id"].as_str().expect("target identifier");
+            let policy = &target["extension_profile"]["resolution_policy"];
+            if policy["mode"].as_str() != Some("fixed_presets") {
+                continue;
+            }
+            let Some(schema_values) =
+                target["input_schema"]["properties"]["resolution"]["enum"].as_array()
+            else {
+                continue;
+            };
+            let menu = policy["presets"]
+                .as_array()
+                .expect("fixed resolution presets")
+                .iter()
+                .map(|preset| preset["value"].as_str().expect("resolution preset"))
+                .collect::<BTreeSet<_>>();
+            let schema = schema_values
+                .iter()
+                .map(|value| value.as_str().expect("resolution enum value"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                menu, schema,
+                "target `{target_id}` in manifest `{stem}` exposes a resolution menu that differs from its executable schema"
+            );
+        }
+    }
+}

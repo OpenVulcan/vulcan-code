@@ -925,6 +925,23 @@ rtk cargo run -p vulcan-provider-manifest-cli -- fixture-check
 rtk cargo test -p vulcan-provider-adapters
 ```
 
+### 全目录模型语义回归
+
+`golden_snapshot.rs` 对全部内置清单统一抽取 `model_defaults` 与每条 `model_rules` 的语义字段，
+不按供应商名称编写测试。受版本控制的 `resources/golden/system-model-semantics-v1.json`
+是独立的审核基线；思考档位、上下文长度、协议选择、Codex 行为等已声明事实漂移时，
+单项群检会失败。清单 Schema、编译校验与 `manifest_conformance.rs` 继续覆盖新规则的结构和引用；
+后者还统一核对固定分辨率菜单与可执行输入 Schema 的枚举是否一致。
+
+有证据支持模型事实变更或增删模型时，运行以下命令更新基线，再审查生成文件的 Git 差异；
+不得把重新生成本身视为事实正确性的证据。新增供应商或模型不需要编写新的测试函数，
+但语义基线必须随受审核的清单事实同步更新。
+
+```powershell
+rtk proxy powershell -NoProfile -Command '$env:VULCAN_GENERATE_MODEL_SEMANTICS_GOLDEN = "1"; rtk cargo test -p vulcan-provider-adapters --test golden_snapshot all_bundled_model_semantics_match_reviewed_golden -- --exact'
+rtk cargo test -p vulcan-provider-adapters --test golden_snapshot
+```
+
 ## 9. CLI
 
 ```powershell

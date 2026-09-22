@@ -110,7 +110,8 @@
 - 线上字段名 `resolution`（`480p`／`720p`）与 `duration`（`1`–`15` 秒整数），**默认时长 8 秒**。
 - 单图生视频：线上结构 `image: {"url": "..."}`，**不发** `aspect_ratio`，输出画幅由输入图决定（实测 `1280x720` MP4、约 2.04 秒、H.264 + AAC）。
 - 多参考生视频：`reference_images` ≤ 7、`reference_audios` ≤ 3，二者至少一类，且必填 `prompt` 与 `aspect_ratio`。
-- `grok-imagine-video-1.5` 是 Grok Build 的固定视频模型名；apikey.fan 目录当前返回 `grok-imagine-video`，**两者不得提前视为同一模型**。本仓库按用户确认把它声明为**独立模型与独立视频目标**（执行契约与 `grok-imagine-video` 同构，但模型 ID 与门控各自独立），并在目标声明里标注该模型 ID 在中转侧的真实可用性尚未验证。
+- `grok-imagine-video-1.5` 是独立模型 ID，不与 `grok-imagine-video` 合并；用户已确认 APIKEY.FAN 中转对该精确 ID 的可用性经过验证，因此清单以独立模型与独立视频目标发布，不再标注“中转尚未验证”。这项中转验证依据为用户确认；仓库尚未保存可重放的原始请求样例。
+- 1.5 的文生视频、单图生视频支持 `1080p`；多参考模式最高 `720p`。请求 Schema 按模式限制分辨率，普通 `grok-imagine-video` 仍只开放 `480p`、`720p`。此模式边界依据 [xAI 视频生成文档](https://docs.x.ai/developers/model-capabilities/video/generation)，1.5 中转可用性依据上述用户确认。
 
 <a id="unknown"></a>
 ## 七、必须保持未知的内容
@@ -118,7 +119,7 @@
 - 带 `mask` 的局部编辑、文件限制、多图行为与错误格式。
 - 带参考图的 GPT 生图入口、图片字段与请求格式。
 - `grok-imagine-edit`：实测两次均 HTTP 404（`not_found_error`），仅出现在目录中，后台无可调用模型——不得再作为候选。
-- `grok-imagine-video-1.5` 在中转侧的真实可用性：`/v1/models` 未返回该 ID，当前声明仅依据用户确认，尚无真实调用样例。
+- `grok-imagine-video-1.5` 中转验证的原始请求与响应尚未归档；当前可用性结论由用户确认，不应再描述为“尚未验证”。
 - `grok-imagine-video` 的多参考图、参考音频、15 秒边界与 `480p` 输出的真实调用结果，以及失败、取消、超时与内容下载的错误格式。
 - `grok-imagine-image` 与 `grok-imagine-image-quality` 除单样本、原始计费刻度之外的稳定能力差异。
 - `gpt-image-2.5-sunburst` 与 `gpt-image-2.5-flare` 在中转侧的**实际尺寸行为**，以及中转侧是否接受 2.5 新增的 `xhigh` / `max` 质量档位。（两者的官方定位与相对质量、耗时已由官方资料确认，见 §三。）
