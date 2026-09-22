@@ -91,11 +91,29 @@
    其挂载、回调与渲染只有类型检查，没有行为证据。
 
 4. **`terminal_report_separates_subagent_usage_from_parent_totals` 当前失败**（A16）。
-   归因证据：该测试文件与其生产实现 `session_event_runtime/` 在本检查点 `280f31a2` 之后
-   **逐字节未变**（`git log 280f31a2..HEAD -- <该目录>` 为空），却在本轮隔离复跑中稳定失败于
-   `subagent group should exist`。本任务的提交只触及协作、压缩与测试文件，
-   **从未触及用量统计代码**（该文件属独立用量统计，本任务按约束不改动）。
-   该失败需由拥有用量统计的会话处置，本文件只登记不修复。
+   该失败**与本任务无关，也不属本任务所有权**（涉及独立用量统计，任务约束明确不改动）。
+
+   **根因（已定位到具体语句）**：生产代码在 `crates/vulcan-agent-runtime/src/turn_stats.rs`
+   中**有意**把子代理分段排除在父回合统计之外：
+   - 第 234—237 行在合并显式分段前过滤掉 `SessionTurnUsageSegmentKind::SubagentTask`，
+     注释写明"子代理用量属于根生命周期累计，不属于父会话回合"；
+   - `merge_explicit_usage_segment_into_turn_stats` 与相邻助手分段路径对同一类型**再次提前返回**。
+   因此父回合的 `usage_groups` 中永远不会出现 `SessionTurnUsageGroupKind::Subagent`，
+   而测试末尾却 `.expect("subagent group should exist")`。
+
+   **测试与生产在检查点 `280f31a2` 已同时如此**：`git show 280f31a2:<两个文件>` 显示过滤语句与
+   该断言当时即已共存。因此这不是本任务引入的回归，而是**测试相对其自身生产不变式已经过期**——
+   该测试的文档注释本身就写着"验证子代理用量保持独立，不会污染父级直接统计"，
+   而它末尾的组断言恰好要求把子代理用量并入父回合分组，与前 4 条断言（`provider_call_count == 1`、
+   `input_tokens == 31`、`total_tokens == 34`，即父统计未被污染）自相矛盾。
+
+   **建议处置（交由拥有用量统计的会话）**：该测试应改为断言"子代理分段不进入父回合分组"
+   或断言子代理用量出现在根生命周期累计中，而不是断言父回合存在 `Subagent` 分组。
+   本任务只登记，未修改该文件。
+
+   归因证据：`git log 280f31a2..HEAD -- crates/vulcan-agent-runtime/src/session_event_runtime`
+   与 `-- crates/vulcan-agent-runtime/src/turn_stats.rs` **均为空**；本任务的提交只触及
+   协作、压缩与测试文件。
 
 ## 三、未验证边界（需要本层无法构造的环境）
 
