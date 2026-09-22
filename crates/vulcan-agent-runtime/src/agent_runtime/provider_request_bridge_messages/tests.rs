@@ -923,3 +923,585 @@ fn canonical_fixture_image_and_video_understanding_respects_model_capabilities()
     assert_eq!(openai_attachments.len(), 2);
     assert_eq!(text, "理解图片和视频");
 }
+
+// S3.3 tool pairing, parallel results, media interleaving, and insertion-boundary coverage.
+// S3.3 工具配对、并行结果、媒体交错与插入边界覆盖。
+
+/// Builds one canonical tool call whose provider-visible wire id may differ from its local runtime id.
+/// 构建一条 Provider 可见线协议标识可能不同于本地运行时标识的规范工具调用。
+fn canonical_tool_call(
+    local_id: &str,
+    provider_visible_id: Option<&str>,
+    tool_name: &str,
+) -> CoreConversationToolCall {
+    CoreConversationToolCall {
+        id: local_id.to_string(),
+        tool_call_id: provider_visible_id.map(str::to_string),
+        tool_name: tool_name.to_string(),
+        arguments: serde_json::json!({ "path": "Cargo.toml" }),
+        argument_parse_error: None,
+    }
+}
+
+/// Builds one canonical assistant message that owns an ordered tool-call batch.
+/// 构建一条持有有序工具调用批次的规范助手消息。
+fn assistant_tool_batch(
+    message_id: &str,
+    tool_calls: Vec<CoreConversationToolCall>,
+) -> CoreConversationMessage {
+    CoreConversationMessage {
+        id: message_id.to_string(),
+        payload: CoreConversationPayload::Assistant {
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: Some(String::from("provider-response-1")),
+            provider_message_state: None,
+            usage: None,
+            tool_calls,
+        },
+    }
+}
+
+/// Builds one canonical tool-result message bound to an exact call identifier.
+/// 构建一条绑定到精确调用标识的规范工具结果消息。
+fn tool_result_message(
+    message_id: &str,
+    tool_call_id: Option<&str>,
+    text: &str,
+) -> CoreConversationMessage {
+    CoreConversationMessage {
+        id: message_id.to_string(),
+        payload: CoreConversationPayload::ToolResult {
+            tool_call_id: tool_call_id.map(str::to_string),
+            is_error: false,
+            text: text.to_string(),
+        },
+    }
+}
+
+/// Builds one canonical user message carrying ordered native attachments.
+/// 构建一条携带有序原生附件的规范用户消息。
+fn user_message_with_attachments(
+    message_id: &str,
+    text: &str,
+    attachments: Vec<ConversationAttachment>,
+) -> CoreConversationMessage {
+    CoreConversationMessage {
+        id: message_id.to_string(),
+        payload: CoreConversationPayload::UserText {
+            text: text.to_string(),
+            attachments,
+        },
+    }
+}
+
+/// Builds one host-managed MCP media result through the production envelope producer.
+/// 通过生产 envelope 生产者构建一份宿主管理的 MCP 媒体结果。
+fn matched_media_tool_result_text() -> String {
+    let canonical = crate::agent_runtime::tool_result_media::canonicalize_tool_model_output(
+        serde_json::json!({
+            "content": [
+                { "type": "text", "text": "screenshot captured" },
+                { "type": "image", "data": "aGVsbG8=", "mimeType": "image/png" }
+            ]
+        }),
+    )
+    .expect("valid MCP media result envelope");
+    canonical
+        .as_str()
+        .expect("a validated media result is persisted as a JSON string")
+        .to_string()
+}
+
+/// Returns the exact position of one projected message located by identity rather than by ordinal.
+/// 按身份而不是序号返回一条投影消息的精确位置。
+fn projected_position(projected: &[CoreConversationMessage], message_id: &str) -> usize {
+    projected
+        .iter()
+        .position(|message| message.id == message_id)
+        .unwrap_or_else(|| panic!("projected history must still contain `{message_id}`"))
+}
+
+/// Verifies a final assistant tool batch whose remaining results never arrived is rejected instead of replayed.
+/// 验证末尾助手工具批次缺失剩余结果时会被拒绝，而不是被回放。
+#[test]
+fn provider_visible_tool_topology_validator_rejects_unfinished_final_tool_batch() {
+    let messages = vec![
+        assistant_tool_batch(
+            "assistant-1",
+            vec![
+                canonical_tool_call("local-1", Some("provider-1"), "first_tool"),
+                canonical_tool_call("local-2", Some("provider-2"), "second_tool"),
+            ],
+        ),
+        tool_result_message("tool-result-1", Some("provider-1"), "first done"),
+    ];
+
+    let error = validate_provider_visible_tool_topology(&messages)
+        .expect_err("a batch missing one result must fail closed");
+    assert!(
+        error.contains("ended without all tool results"),
+        "unexpected validator error: {error}"
+    );
+}
+
+/// Verifies a second assistant tool batch cannot start before the previous batch completed.
+/// 验证前一批次完成之前不得开始第二个助手工具批次。
+#[test]
+fn provider_visible_tool_topology_validator_rejects_second_tool_batch_before_completion() {
+    let messages = vec![
+        assistant_tool_batch(
+            "assistant-1",
+            vec![canonical_tool_call(
+                "local-1",
+                Some("provider-1"),
+                "first_tool",
+            )],
+        ),
+        assistant_tool_batch(
+            "assistant-2",
+            vec![canonical_tool_call(
+                "local-2",
+                Some("provider-2"),
+                "second_tool",
+            )],
+        ),
+    ];
+
+    let error = validate_provider_visible_tool_topology(&messages)
+        .expect_err("a nested tool batch must fail closed");
+    assert!(
+        error.contains("started a new tool batch before index"),
+        "unexpected validator error: {error}"
+    );
+}
+
+/// Verifies an assistant tool call without a provider-visible identifier is rejected as unreplayable.
+/// 验证缺少 Provider 可见标识的助手工具调用会因不可回放而被拒绝。
+#[test]
+fn provider_visible_tool_topology_validator_rejects_tool_call_without_provider_visible_identifier()
+{
+    let messages = vec![
+        assistant_tool_batch(
+            "assistant-1",
+            vec![canonical_tool_call("local-only", None, "ask")],
+        ),
+        tool_result_message("tool-result-1", Some("local-only"), "answer"),
+    ];
+
+    let error = validate_provider_visible_tool_topology(&messages)
+        .expect_err("a call without a provider-visible id must fail closed");
+    assert!(
+        error.contains("without unique provider-visible identifiers"),
+        "unexpected validator error: {error}"
+    );
+}
+
+/// Verifies two calls in one batch cannot share one provider-visible identifier.
+/// 验证同一批次内的两个调用不能共享同一个 Provider 可见标识。
+#[test]
+fn provider_visible_tool_topology_validator_rejects_duplicate_provider_visible_identifiers() {
+    let messages = vec![
+        assistant_tool_batch(
+            "assistant-1",
+            vec![
+                canonical_tool_call("local-1", Some("provider-duplicate"), "first_tool"),
+                canonical_tool_call("local-2", Some("provider-duplicate"), "second_tool"),
+            ],
+        ),
+        tool_result_message("tool-result-1", Some("provider-duplicate"), "first done"),
+        tool_result_message("tool-result-2", Some("provider-duplicate"), "second done"),
+    ];
+
+    let error = validate_provider_visible_tool_topology(&messages)
+        .expect_err("duplicate provider-visible ids must fail closed");
+    assert!(
+        error.contains("without unique provider-visible identifiers"),
+        "unexpected validator error: {error}"
+    );
+}
+
+/// Verifies tool results without an exact replayable call identifier are rejected in both degraded forms.
+/// 验证两种缺失形态的工具结果都会因缺少精确可回放调用标识而被拒绝。
+#[test]
+fn provider_visible_tool_topology_validator_rejects_tool_result_without_replayable_identifier() {
+    for missing_identifier in [None, Some("   ")] {
+        let messages = vec![
+            assistant_tool_batch(
+                "assistant-1",
+                vec![canonical_tool_call(
+                    "local-1",
+                    Some("provider-1"),
+                    "read_file",
+                )],
+            ),
+            tool_result_message("tool-result-1", missing_identifier, "file body"),
+        ];
+
+        let error = validate_provider_visible_tool_topology(&messages)
+            .expect_err("a result without a replayable id must fail closed");
+        assert!(
+            error.contains("does not carry a replayable tool_call_id"),
+            "unexpected validator error for {missing_identifier:?}: {error}"
+        );
+    }
+}
+
+/// Verifies parallel tool results pair by call identity, not by arrival position or alias form.
+/// 验证并行工具结果按调用身份配对，而不是按到达位置或别名形态配对。
+#[test]
+fn provider_visible_history_pairs_parallel_results_out_of_order_by_identity() {
+    let messages = vec![
+        assistant_tool_batch(
+            "assistant-1",
+            vec![
+                canonical_tool_call("local-1", Some("provider-1"), "first_tool"),
+                canonical_tool_call("local-2", Some("provider-2"), "second_tool"),
+            ],
+        ),
+        tool_result_message("tool-result-2", Some("provider-2"), "second done"),
+        tool_result_message("tool-result-1", Some("local-1"), "first done"),
+    ];
+
+    let projected = core_messages_to_provider_visible_history_for_model(
+        &messages,
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        None,
+    )
+    .expect("out-of-order parallel results should project");
+
+    assert_eq!(projected.len(), 3);
+    let CoreConversationPayload::Assistant { tool_calls, .. } = &projected[0].payload else {
+        panic!("a fully completed parallel batch must stay a native assistant batch");
+    };
+    assert_eq!(
+        tool_calls[0].tool_call_id.as_deref(),
+        Some("provider-1"),
+        "provider-visible ids must follow the canonical call order"
+    );
+    assert_eq!(tool_calls[1].tool_call_id.as_deref(), Some("provider-2"));
+
+    let CoreConversationPayload::ToolResult {
+        tool_call_id, text, ..
+    } = &projected[1].payload
+    else {
+        panic!("the second arriving result must stay a native tool response");
+    };
+    assert_eq!(tool_call_id.as_deref(), Some("provider-2"));
+    assert_eq!(text, "second done");
+
+    let CoreConversationPayload::ToolResult {
+        tool_call_id, text, ..
+    } = &projected[2].payload
+    else {
+        panic!("a local-id result must be rewritten to its provider-visible response");
+    };
+    assert_eq!(tool_call_id.as_deref(), Some("provider-1"));
+    assert_eq!(text, "first done");
+    validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
+}
+
+/// Verifies one tool call identity completes exactly once, so a duplicate result degrades to labelled text.
+/// 验证一个工具调用身份只被完成一次，因此重复结果会降级为带标签文本。
+#[test]
+fn provider_visible_history_completes_each_tool_call_identity_exactly_once() {
+    let messages = vec![
+        assistant_tool_batch(
+            "assistant-1",
+            vec![canonical_tool_call(
+                "local-1",
+                Some("provider-1"),
+                "read_file",
+            )],
+        ),
+        tool_result_message("tool-result-1", Some("provider-1"), "first body"),
+        tool_result_message("tool-result-2", Some("provider-1"), "duplicate body"),
+    ];
+
+    let projected = core_messages_to_provider_visible_history_for_model(
+        &messages,
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        None,
+    )
+    .expect("a duplicated result must not abort projection");
+
+    assert_eq!(projected.len(), 3);
+    let CoreConversationPayload::ToolResult {
+        tool_call_id, text, ..
+    } = &projected[1].payload
+    else {
+        panic!("the first result must remain the single native tool response");
+    };
+    assert_eq!(tool_call_id.as_deref(), Some("provider-1"));
+    assert_eq!(text, "first body");
+    let CoreConversationPayload::UserText { text, attachments } = &projected[2].payload else {
+        panic!("a duplicate result must become plain labelled history text");
+    };
+    assert!(attachments.is_empty());
+    assert!(text.contains("cannot be replayed"), "{text}");
+    assert!(text.contains("duplicate body"), "{text}");
+    validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
+}
+
+/// Verifies a media-bearing user message between a tool call and its result never splits a native pair.
+/// 验证工具调用与结果之间的媒体用户消息绝不会拆开原生配对。
+#[test]
+fn provider_visible_history_degrades_tool_pair_split_by_media_and_keeps_media_native() {
+    let capabilities = ModelCapabilities {
+        input_resources: vec![ResourceKind::Image],
+        ..ModelCapabilities::default()
+    };
+    let messages = vec![
+        assistant_tool_batch(
+            "assistant-1",
+            vec![canonical_tool_call(
+                "local-1",
+                Some("provider-1"),
+                "read_file",
+            )],
+        ),
+        user_message_with_attachments(
+            "user-media",
+            "看这张图",
+            vec![replayable_attachment(
+                ConversationAttachmentKind::Image,
+                "scene.png",
+                "image/png",
+            )],
+        ),
+        tool_result_message("tool-result-1", Some("provider-1"), "file body"),
+    ];
+
+    let projected = core_messages_to_provider_visible_history_for_model(
+        &messages,
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(&capabilities),
+    )
+    .expect("a media-interleaved tool pair must degrade instead of failing");
+
+    assert_eq!(projected.len(), 3);
+    let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
+        panic!("an interrupted tool batch must never be replayed as live tool protocol state");
+    };
+    assert!(attachments.is_empty());
+    assert!(
+        text.contains("interrupted before every requested tool returned"),
+        "{text}"
+    );
+
+    let CoreConversationPayload::UserText { text, attachments } = &projected[1].payload else {
+        panic!("the interleaved media message must stay native user content");
+    };
+    assert_eq!(text, "看这张图");
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].kind, ConversationAttachmentKind::Image);
+
+    let CoreConversationPayload::UserText { text, attachments } = &projected[2].payload else {
+        panic!("the split tool result must become labelled historical text");
+    };
+    assert!(attachments.is_empty());
+    assert!(text.contains("cannot be replayed"), "{text}");
+    assert!(text.contains("file body"), "{text}");
+    validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
+}
+
+/// Verifies a matched tool-result media envelope survives projection byte-for-byte for native transport projection.
+/// 验证已匹配的工具结果媒体 envelope 逐字节保留到原生传输投影。
+#[test]
+fn provider_visible_history_preserves_matched_tool_result_media_envelope() {
+    let media_envelope = matched_media_tool_result_text();
+    let messages = vec![
+        assistant_tool_batch(
+            "assistant-1",
+            vec![canonical_tool_call(
+                "local-1",
+                Some("provider-1"),
+                "screenshot",
+            )],
+        ),
+        tool_result_message("tool-result-1", Some("provider-1"), &media_envelope),
+    ];
+
+    let projected = core_messages_to_provider_visible_history_for_model(
+        &messages,
+        Some(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID),
+        None,
+    )
+    .expect("a matched media tool result should project");
+
+    let CoreConversationPayload::ToolResult {
+        tool_call_id, text, ..
+    } = &projected[1].payload
+    else {
+        panic!("a matched media result must remain a native tool response");
+    };
+    assert_eq!(tool_call_id.as_deref(), Some("provider-1"));
+    assert_eq!(
+        text, &media_envelope,
+        "transport media projection requires the exact persisted envelope bytes"
+    );
+    validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
+}
+
+/// Verifies an orphaned media tool result becomes explicit non-replayable history text without native structure.
+/// 验证孤立媒体工具结果会变成明确不可回放的历史文本，且不保留原生结构。
+#[test]
+fn provider_visible_history_orphan_media_result_becomes_labelled_plain_text() {
+    let media_envelope = matched_media_tool_result_text();
+    let messages = vec![tool_result_message(
+        "tool-result-orphan",
+        Some("compacted-away-call"),
+        &media_envelope,
+    )];
+
+    let projected = core_messages_to_provider_visible_history_for_model(
+        &messages,
+        Some(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID),
+        None,
+    )
+    .expect("an orphan tool result must degrade instead of aborting");
+
+    assert_eq!(projected.len(), 1);
+    let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
+        panic!("an orphan tool result cannot stay a native tool response");
+    };
+    assert!(attachments.is_empty());
+    assert!(text.contains("cannot be replayed"), "{text}");
+    assert!(text.contains("compacted-away-call"), "{text}");
+    assert!(
+        text.contains("Treat the following as historical text only"),
+        "{text}"
+    );
+    assert!(
+        !projected
+            .iter()
+            .any(|message| matches!(message.payload, CoreConversationPayload::ToolResult { .. })),
+        "no unmatched native tool response may survive projection"
+    );
+    validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
+}
+
+/// Verifies a system update anchored on a media message is inserted outside the following tool pair.
+/// 验证锚定在媒体消息上的 system update 会插入到后续工具配对之外。
+#[test]
+fn provider_visible_history_inserts_system_update_after_media_message_outside_tool_pair() {
+    let capabilities = ModelCapabilities {
+        input_resources: vec![ResourceKind::Image],
+        ..ModelCapabilities::default()
+    };
+    let messages = vec![
+        user_message_with_attachments(
+            "user-media",
+            "先看这张图",
+            vec![replayable_attachment(
+                ConversationAttachmentKind::Image,
+                "scene.png",
+                "image/png",
+            )],
+        ),
+        assistant_tool_batch(
+            "assistant-1",
+            vec![canonical_tool_call(
+                "local-1",
+                Some("provider-1"),
+                "read_file",
+            )],
+        ),
+        tool_result_message("tool-result-1", Some("provider-1"), "file body"),
+    ];
+    let updates = vec![runtime_system_update(
+        "system-update-after-media",
+        Some("user-media"),
+        RuntimeSystemUpdateLoweringHint::Auto,
+    )];
+
+    let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
+        &messages,
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(&capabilities),
+        &updates,
+        ProviderSystemUpdateLoweringPolicy::default(),
+    )
+    .expect("a media-anchored system update should project");
+
+    assert_eq!(projected.len(), 4);
+    let media_position = projected_position(&projected, "user-media");
+    let update_position = projected_position(
+        &projected,
+        "runtime-system-update:system-update-after-media",
+    );
+    let assistant_position = projected_position(&projected, "assistant-1");
+    let result_position = projected_position(&projected, "tool-result-1");
+    assert!(
+        media_position < update_position && update_position < assistant_position,
+        "the lowered wrapper must land between the media message and the tool pair"
+    );
+    assert!(
+        assistant_position < result_position,
+        "the tool pair itself must stay contiguous and ordered"
+    );
+    let CoreConversationPayload::UserText { attachments, .. } = &projected[media_position].payload
+    else {
+        panic!("the media message must stay native user content");
+    };
+    assert_eq!(attachments.len(), 1);
+    validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
+}
+
+/// Verifies system updates sharing one effective anchor keep their chronological input order.
+/// 验证共享同一生效锚点的 system update 会保持时间顺序的输入顺序。
+#[test]
+fn provider_visible_history_keeps_same_anchor_system_updates_in_input_order() {
+    let messages = vec![
+        assistant_tool_batch(
+            "assistant-1",
+            vec![canonical_tool_call(
+                "local-1",
+                Some("provider-1"),
+                "read_file",
+            )],
+        ),
+        tool_result_message("tool-result-1", Some("provider-1"), "file body"),
+    ];
+    let updates = vec![
+        runtime_system_update(
+            "system-update-first",
+            Some("assistant-1"),
+            RuntimeSystemUpdateLoweringHint::Auto,
+        ),
+        runtime_system_update(
+            "system-update-second",
+            Some("assistant-1"),
+            RuntimeSystemUpdateLoweringHint::Auto,
+        ),
+    ];
+
+    let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
+        &messages,
+        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        None,
+        &updates,
+        ProviderSystemUpdateLoweringPolicy::default(),
+    )
+    .expect("two updates sharing one anchor should project");
+
+    let lowered_ids = projected
+        .iter()
+        .filter(|message| message.id.starts_with("runtime-system-update:"))
+        .map(|message| message.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lowered_ids,
+        vec![
+            "runtime-system-update:system-update-first",
+            "runtime-system-update:system-update-second",
+        ],
+        "same-anchor updates must not be reordered by insertion"
+    );
+    assert!(
+        projected_position(&projected, "tool-result-1")
+            < projected_position(&projected, "runtime-system-update:system-update-first"),
+        "every lowered wrapper must stay after the completed tool batch"
+    );
+    validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
+}

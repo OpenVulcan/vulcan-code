@@ -1,5 +1,9 @@
 use super::*;
 
+/// Stable message-id prefix shared by every lowered provider-visible runtime system update.
+/// 所有已转换 Provider 可见 runtime system update 共享的稳定消息标识前缀。
+const PROVIDER_VISIBLE_SYSTEM_UPDATE_MESSAGE_ID_PREFIX: &str = "runtime-system-update:";
+
 /// Converts canonical core messages into the provider-visible history that will actually be sent upstream.
 /// 将规范 core 消息转换为真正会发送给上游 Provider 的可见历史。
 pub(crate) fn core_messages_to_provider_visible_history(
@@ -266,9 +270,39 @@ fn provider_visible_system_update_insert_index(
     advance_insert_index_past_tool_batch(projected, insert_index)
 }
 
+/// Moves an insertion point out of a live assistant tool-call batch and after already lowered updates.
+/// 将插入点移出正在进行的助手工具调用批次，并移到已经转换完成的更新之后。
+///
+/// # Parameters
+/// 参数
+/// `projected` is the current provider-visible history and `insert_index` is the anchor-derived position.
+/// `projected` 是当前 Provider 可见历史，`insert_index` 是根据锚点解析出的位置。
+///
+/// # Returns
+/// 返回值
+/// The first safe position that preserves both tool pairing and chronological update order.
+/// 返回同时保持工具配对与更新时间顺序的首个安全位置。
+fn advance_insert_index_past_tool_batch(
+    projected: &[CoreConversationMessage],
+    insert_index: usize,
+) -> usize {
+    let batch_index = advance_insert_index_past_live_tool_batch(projected, insert_index);
+    // Updates sharing one effective anchor keep their input order, so an earlier update is never reordered later.
+    // 共享同一生效锚点的更新保持输入顺序，使较早的更新绝不会被排到后面。
+    let mut ordered_index = batch_index;
+    while ordered_index < projected.len()
+        && projected[ordered_index]
+            .id
+            .starts_with(PROVIDER_VISIBLE_SYSTEM_UPDATE_MESSAGE_ID_PREFIX)
+    {
+        ordered_index += 1;
+    }
+    ordered_index
+}
+
 /// Moves an insertion point out of a live assistant tool-call batch when possible.
 /// 在可能时将插入点移出正在进行的助手工具调用批次。
-fn advance_insert_index_past_tool_batch(
+fn advance_insert_index_past_live_tool_batch(
     projected: &[CoreConversationMessage],
     insert_index: usize,
 ) -> usize {
@@ -350,7 +384,10 @@ fn contiguous_tool_result_end(
 /// Builds a stable synthetic message id for one provider-visible system-update wrapper.
 /// 为一条 Provider 可见 system-update 包装消息构建稳定的合成消息标识。
 fn provider_visible_system_update_message_id(update: &RuntimeSystemUpdateEvent) -> String {
-    format!("runtime-system-update:{}", update.update_id)
+    format!(
+        "{PROVIDER_VISIBLE_SYSTEM_UPDATE_MESSAGE_ID_PREFIX}{}",
+        update.update_id
+    )
 }
 
 /// Validates that provider-visible tool calls and tool results form a strict replayable topology.
