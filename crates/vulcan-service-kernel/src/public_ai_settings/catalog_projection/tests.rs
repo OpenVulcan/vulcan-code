@@ -56,17 +56,18 @@ fn openrouter_account_projection_uses_signed_initial_checks() {
     .expect("initial account records should project");
     assert_eq!(records.len(), 1);
     assert!(!records[0].default_enabled);
-    assert_eq!(records[0].model_enabled_overrides.len(), 17);
+    assert!(records[0].model_enabled_overrides.is_empty());
     assert_eq!(
         records[0].directory_kind,
         PublicAiModelDirectoryKind::Dynamic
     );
     assert!(configuration.connection_model_access_policies.is_empty());
 
-    configuration.connection_model_access_policies.insert(
-        String::from("openrouter-account"),
-        ConnectionModelAccessPolicy::default(),
-    );
+    let mut explicit_enable_all = ConnectionModelAccessPolicy::default();
+    explicit_enable_all.set_all_models_enabled(true);
+    configuration
+        .connection_model_access_policies
+        .insert(String::from("openrouter-account"), explicit_enable_all);
     let explicit = build_connection_model_access_policy_records(
         &providers,
         &configuration,

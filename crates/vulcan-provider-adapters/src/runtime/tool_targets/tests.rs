@@ -305,14 +305,38 @@ fn provider_tool_targets_obey_account_model_access() {
         .expect("test async runtime should initialize")
         .block_on(runtime.activate_staged_manifest_catalogs(&configuration, &[]))
         .expect("APIKEY.FAN generation should publish");
-    // initialTarget proves the account catalog initially exposes the fixed video model.
-    // initialTarget 证明账号目录最初公开固定视频模型。
+    assert!(
+        runtime
+            .settings_catalog_snapshot(&configuration)
+            .expect("settings support catalog should resolve")
+            .model_support_catalogs["apikeyfan-media-account"]
+            .models
+            .iter()
+            .any(|model| model.id == "grok-imagine-video")
+    );
+    // Signed media starts disabled until the account explicitly opts in.
+    // 签名媒体初始关闭，只有账号明确勾选后才可使用。
+    assert!(
+        runtime
+            .available_provider_tool_targets(&configuration)
+            .expect("initial extension target inventory should resolve")
+            .into_iter()
+            .all(|available| available.target.upstream_target_id != "grok-imagine-video")
+    );
+    configuration.set_connection_model_enabled(
+        "apikeyfan-media-account",
+        "grok-imagine-video",
+        true,
+    );
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("explicit account opt-in should rebuild effective catalogs");
     let initial_target = runtime
         .available_provider_tool_targets(&configuration)
-        .expect("initial extension target inventory should resolve")
+        .expect("enabled extension target inventory should resolve")
         .into_iter()
         .find(|available| available.target.upstream_target_id == "grok-imagine-video")
-        .expect("Grok Imagine video target should initially be available");
+        .expect("Grok Imagine video target should be available after account opt-in");
     // selection freezes the exact credential and extension target used for execution revalidation.
     // selection 冻结用于执行重新校验的精确凭据与扩展目标。
     let selection = ProviderToolTargetSelection {

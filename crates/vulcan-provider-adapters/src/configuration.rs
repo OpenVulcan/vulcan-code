@@ -506,17 +506,21 @@ pub struct InternalModelOverrides {
     pub rerank_return_content: Option<bool>,
 }
 
-/// Stores one credential account's default model access and sparse per-model differences.
-/// 保存一个凭据账号的默认模型访问状态与稀疏逐模型差异。
+/// Stores account-wide access and explicit per-model decisions.
+/// 保存账号全局访问状态与显式单模型决定。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionModelAccessPolicy {
-    /// Default enabled state inherited by every current and future supported model.
-    /// 当前及未来所有受支持模型继承的默认启用状态。
+    /// Account-wide state used only after the user explicitly changes all models.
+    /// 仅在用户明确修改全部模型后使用的账号全局状态。
     #[serde(default = "default_connection_model_enabled")]
     pub default_enabled: bool,
-    /// Exact model decisions that differ from the account default.
-    /// 与账号默认状态不同的精确模型决定。
+    /// Whether unmentioned models inherit their exact signed or manual default.
+    /// 未单独指定的模型是否继承精确签名或手工默认值。
+    #[serde(default = "default_connection_model_enabled")]
+    pub inherit_model_defaults: bool,
+    /// Explicit per-model decisions independent of the current signed baseline.
+    /// 独立于当前签名基线的单模型显式决定。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_enabled_overrides: BTreeMap<String, bool>,
 }
@@ -527,45 +531,67 @@ impl Default for ConnectionModelAccessPolicy {
     fn default() -> Self {
         Self {
             default_enabled: true,
+            inherit_model_defaults: true,
             model_enabled_overrides: BTreeMap::new(),
         }
     }
 }
 
 impl ConnectionModelAccessPolicy {
-    /// Resolves the effective enabled state for one exact model.
-    /// 解析一个精确模型的有效启用状态。
+    /// Applies only explicit account gates before exact catalog membership is checked.
+    /// 在校验精确目录成员资格之前仅应用显式账号门控。
     ///
     /// # Parameters
     /// 参数
-    /// `model_id` is the exact provider model identifier.
-    /// `model_id` 是精确供应商模型标识。
+    /// model_id identifies the exact provider model.
+    /// model_id 标识精确供应商模型。
     ///
     /// # Returns
     /// 返回值
-    /// The sparse override when present, otherwise the account default.
-    /// 存在时返回稀疏覆盖，否则返回账号默认值。
+    /// The explicit model or account-wide decision, otherwise true for signed catalog evaluation.
+    /// 返回显式模型或账号全局决定，否则交由签名目录继续判定。
     pub fn model_is_enabled(&self, model_id: &str) -> bool {
         self.model_enabled_overrides
             .get(model_id)
             .copied()
-            .unwrap_or(self.default_enabled)
+            .unwrap_or(self.inherit_model_defaults || self.default_enabled)
     }
 
-    /// Stores one model decision while retaining only differences from the account default.
-    /// 保存一个模型决定，并仅保留与账号默认值不同的差异。
+    /// Resolves a model against its signed default unless the user chose an account-wide state.
+    /// 除非用户设置了账号全局状态，否则按模型签名默认值解析。
     ///
     /// # Parameters
     /// 参数
-    /// `model_id` identifies the exact model and `enabled` is the desired state.
-    /// `model_id` 标识精确模型，`enabled` 是期望状态。
+    /// `model_id` identifies the exact model and `inherited_default` is its signed or manual state.
+    /// `model_id` 标识精确模型，`inherited_default` 是其签名或手工默认状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The individual decision, account-wide decision, or inherited model state.
+    /// 返回单模型决定、账号全局决定或继承的模型状态。
+    pub fn model_is_enabled_with_default(&self, model_id: &str, inherited_default: bool) -> bool {
+        self.model_enabled_overrides
+            .get(model_id)
+            .copied()
+            .unwrap_or_else(|| {
+                if self.inherit_model_defaults {
+                    inherited_default
+                } else {
+                    self.default_enabled
+                }
+            })
+    }
+
+    /// Stores an explicit model decision even when it equals the account-wide state.
+    /// 即使与账号全局状态相同也保存显式单模型决定。
+    ///
+    /// # Parameters
+    /// 参数
+    /// model_id identifies the exact model and enabled is the requested state.
+    /// model_id 标识精确模型，enabled 是所选状态。
     pub fn set_model_enabled(&mut self, model_id: &str, enabled: bool) {
-        if enabled == self.default_enabled {
-            self.model_enabled_overrides.remove(model_id);
-        } else {
-            self.model_enabled_overrides
-                .insert(model_id.to_string(), enabled);
-        }
+        self.model_enabled_overrides
+            .insert(model_id.to_string(), enabled);
     }
 
     /// Replaces the account-wide default and removes now-redundant model differences.
@@ -577,6 +603,7 @@ impl ConnectionModelAccessPolicy {
     /// `enabled` 成为所有受支持模型继承的状态。
     pub fn set_all_models_enabled(&mut self, enabled: bool) {
         self.default_enabled = enabled;
+        self.inherit_model_defaults = false;
         self.model_enabled_overrides.clear();
     }
 }
@@ -2240,7 +2267,7 @@ impl PersistedAiConfiguration {
         self.connection_model_access_policies
             .get(connection_id)
             .map_or(inherited_default, |policy| {
-                policy.model_is_enabled(model_id)
+                policy.model_is_enabled_with_default(model_id, inherited_default)
             })
     }
 
@@ -2275,15 +2302,11 @@ impl PersistedAiConfiguration {
     /// `connection_id` identifies one credential and `enabled` is the new inherited state.
     /// `connection_id` 标识一个凭据，`enabled` 是新的继承状态。
     pub fn set_connection_models_enabled(&mut self, connection_id: &str, enabled: bool) {
-        if enabled {
-            self.connection_model_access_policies.remove(connection_id);
-            return;
-        }
         let policy = self
             .connection_model_access_policies
             .entry(connection_id.to_string())
             .or_default();
-        policy.set_all_models_enabled(false);
+        policy.set_all_models_enabled(enabled);
     }
 
     /// Removes every model access decision owned by one deleted credential account.
@@ -2305,10 +2328,10 @@ impl PersistedAiConfiguration {
     /// `connection_id` identifies the account whose access filter must be bypassed in a clone.
     /// `connection_id` 标识要在配置副本中绕过访问筛选的账号。
     pub fn allow_all_connection_models_for_support(&mut self, connection_id: &str) {
-        self.connection_model_access_policies.insert(
-            connection_id.to_string(),
-            ConnectionModelAccessPolicy::default(),
-        );
+        let mut policy = ConnectionModelAccessPolicy::default();
+        policy.set_all_models_enabled(true);
+        self.connection_model_access_policies
+            .insert(connection_id.to_string(), policy);
     }
 
     /// Reports whether one connection is isolated pending explicit model validation.
@@ -2597,67 +2620,25 @@ impl PersistedAiConfiguration {
         }
     }
 
-    /// Builds one account's signed initial policy and remaining manual-model defaults.
-    /// 构建一个账号的签名初始策略及其余手工模型默认值。
+    /// Builds an account policy that follows each signed model default until the user acts.
+    /// 构建在用户操作前逐模型遵循签名默认值的账号策略。
     ///
     /// # Parameters
     /// 参数
-    /// `manifest` owns signed defaults and `connection` selects the exact service and credential.
-    /// `manifest` 持有签名默认值，`connection` 选择精确服务与凭据。
+    /// manifest supplies the provider-wide display baseline.
+    /// manifest 提供供应商级展示基线。
     ///
     /// # Returns
     /// 返回值
-    /// The policy that applies before this account has an explicit user decision.
-    /// 返回该账号尚无显式用户决定时适用的策略。
+    /// An inheriting policy without any user decisions.
+    /// 返回尚无用户决定的继承型策略。
     pub fn initial_connection_model_access_policy_from_manifest(
-        &self,
         manifest: &crate::provider_manifest::ResolvedProviderManifest,
-        connection: &crate::CredentialConnection,
     ) -> ConnectionModelAccessPolicy {
-        // default_enabled is the signed account baseline for this provider generation.
-        // default_enabled 是当前供应商代际的签名账号基线。
-        let default_enabled = manifest.default_enabled;
-        // model_enabled_overrides retains signed exact choices and manual declarations.
-        // model_enabled_overrides 保留签名精确选择与手工声明。
-        let mut model_enabled_overrides = BTreeMap::new();
-        if !default_enabled {
-            for rule in &manifest.rule_instances {
-                if rule.service_entry_id != connection.service_entry_id
-                    || rule.matcher.kind != crate::provider_manifest::MatcherKind::Exact
-                    || (!rule.credential_profile_ids.is_empty()
-                        && !rule
-                            .credential_profile_ids
-                            .contains(&connection.credential_profile_id))
-                {
-                    continue;
-                }
-                // enabled resolves the exact service and credential rule before persistence.
-                // enabled 在持久化前解析精确服务与凭据规则。
-                let enabled = crate::provider_manifest::manifest_default_enabled(
-                    manifest,
-                    connection.service_entry_id.as_str(),
-                    Some(connection.credential_profile_id.as_str()),
-                    rule.matcher.value.as_str(),
-                );
-                if enabled {
-                    model_enabled_overrides.insert(rule.matcher.value.clone(), true);
-                }
-            }
-            if let Some(models) = self.custom_models.get(connection.provider_id.as_str()) {
-                for model in models.values() {
-                    if model.enabled
-                        && model.system_binding.as_ref().is_some_and(|binding| {
-                            binding.service_entry_id == connection.service_entry_id
-                        })
-                    {
-                        model_enabled_overrides.insert(model.id.clone(), true);
-                    }
-                }
-            }
-        }
         ConnectionModelAccessPolicy {
-            default_enabled,
-            model_enabled_overrides,
+            default_enabled: manifest.default_enabled,
+            inherit_model_defaults: true,
+            model_enabled_overrides: BTreeMap::new(),
         }
     }
 
@@ -2708,7 +2689,9 @@ impl PersistedAiConfiguration {
                     let inherited_decision = self
                         .connection_model_access_policies
                         .get(connection.id.as_str())
-                        .map_or(manual_enabled, |policy| policy.model_is_enabled(model_id));
+                        .map_or(manual_enabled, |policy| {
+                            policy.model_is_enabled_with_default(model_id, manual_enabled)
+                        });
                     // enabled preserves the effective account check across signed takeover.
                     // enabled 在签名接管时保留账号的有效勾选状态。
                     let enabled = self
@@ -2732,8 +2715,8 @@ impl PersistedAiConfiguration {
                 {
                     // initial_policy seeds other signed and manual choices before restoring this one.
                     // initial_policy 先播种其他签名及手工选择，再恢复当前模型状态。
-                    let initial_policy = self
-                        .initial_connection_model_access_policy_from_manifest(manifest, &connection);
+                    let initial_policy =
+                        Self::initial_connection_model_access_policy_from_manifest(manifest);
                     self.connection_model_access_policies
                         .insert(connection.id.clone(), initial_policy);
                 }
@@ -4397,7 +4380,7 @@ mod tests {
     /// Verifies one account stores only model decisions that differ from its inherited default.
     /// 验证一个账号仅保存与其继承默认值不同的模型决定。
     #[test]
-    fn connection_model_access_policy_persists_sparse_differences() {
+    fn connection_model_access_policy_persists_explicit_decisions() {
         let mut configuration = PersistedAiConfiguration::default();
         configuration.set_connection_model_enabled("account-a", "model-a", false);
         assert!(!configuration.connection_model_is_enabled("account-a", "model-a"));
@@ -4412,7 +4395,34 @@ mod tests {
         );
 
         configuration.set_connection_model_enabled("account-a", "model-a", true);
-        assert!(configuration.connection_model_access_policies.is_empty());
+        assert_eq!(
+            configuration.connection_model_access_policies["account-a"].model_enabled_overrides["model-a"],
+            true
+        );
+        assert!(!configuration.connection_model_is_enabled_with_default(
+            "account-a",
+            "new-model",
+            false,
+        ));
+    }
+
+    /// Verifies account choices remain explicit while new signed models inherit their own defaults.
+    /// 验证账号选择保持显式，而新增签名模型继承各自的默认值。
+    #[test]
+    fn account_model_policy_keeps_signed_defaults_independent() {
+        let mut policy = ConnectionModelAccessPolicy::default();
+        assert!(policy.model_is_enabled_with_default("recommended", true));
+        assert!(!policy.model_is_enabled_with_default("media", false));
+        policy.set_model_enabled("recommended", false);
+        policy.set_model_enabled("media", true);
+        assert!(!policy.model_is_enabled_with_default("recommended", true));
+        assert!(policy.model_is_enabled_with_default("media", false));
+        assert!(policy.model_is_enabled_with_default("new-recommended", true));
+        assert!(!policy.model_is_enabled_with_default("new-media", false));
+        policy.set_all_models_enabled(true);
+        assert!(policy.model_is_enabled_with_default("new-media", false));
+        policy.set_all_models_enabled(false);
+        assert!(!policy.model_is_enabled_with_default("new-recommended", true));
     }
 
     /// Verifies a bulk-disabled account keeps future discovered models disabled until the user changes it.

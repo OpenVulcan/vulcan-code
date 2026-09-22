@@ -281,8 +281,9 @@ fn openrouter_account_excludes_unreviewed_discovery() {
         .get("one")
         .expect("first account should have an initial policy");
     assert!(!initial.default_enabled);
-    assert!(initial.model_is_enabled("openai/gpt-5.6-sol"));
-    assert!(!initial.model_is_enabled("vendor/future-model"));
+    assert!(initial.inherit_model_defaults);
+    assert!(initial.model_is_enabled_with_default("openai/gpt-5.6-sol", true));
+    assert!(!initial.model_is_enabled_with_default("vendor/future-model", false));
     assert!(!settings.model_default_enabled_by_key.contains_key(
         PersistedAiConfiguration::provider_model_key("openrouter", "vendor/future-model").as_str()
     ));

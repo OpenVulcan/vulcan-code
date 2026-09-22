@@ -194,7 +194,6 @@ fn set_connection_models_enabled_respecting_provider_access(
     connection_id: &str,
     provider_id: &str,
     enabled: bool,
-    initial_default_enabled: bool,
     support_catalog: &ConnectionModelCatalog,
 ) -> Result<(), String> {
     // connection_provider_id validates the exact caller scope before mutating sparse access state.
@@ -213,16 +212,6 @@ fn set_connection_models_enabled_respecting_provider_access(
     configuration.set_connection_models_enabled(connection_id, enabled);
     if !enabled {
         return Ok(());
-    }
-    if !initial_default_enabled {
-        // Explicit Enable All must persist as an account decision; removing the policy would
-        // otherwise restore the signed 17-model initial selection on the next projection.
-        // 显式“全部启用”必须持久化为账号决定；否则删除策略会在下次投影时恢复签名的
-        // 17 个初始选择。
-        configuration.connection_model_access_policies.insert(
-            connection_id.to_string(),
-            ConnectionModelAccessPolicy::default(),
-        );
     }
     for model in &support_catalog.models {
         // Enable All never grants access to a model quarantined by its resolved limits.
@@ -437,18 +426,12 @@ pub(crate) async fn service_save_public_ai_connection_models_enabled(
     }
 
     let mut candidate_configuration = current_configuration.clone();
-    let initial_policy = initial_connection_model_policy(
-        runtime.as_ref(),
-        &current_configuration,
-        request.connection_id.as_str(),
-    )?;
     set_connection_models_enabled_respecting_provider_access(
         runtime.as_ref(),
         &mut candidate_configuration,
         request.connection_id.as_str(),
         connection.provider_id.as_str(),
         request.enabled,
-        initial_policy.default_enabled,
         &support_catalog,
     )?;
     let candidate_catalogs = runtime.resolved_model_catalog_snapshot(&candidate_configuration)?;

@@ -617,8 +617,9 @@ impl PublicAiRuntime {
             connection_model_initial_policies.insert(
                 connection.id.clone(),
                 scoped_manifest.map_or_else(ConnectionModelAccessPolicy::default, |manifest| {
-                    configuration
-                        .initial_connection_model_access_policy_from_manifest(manifest, connection)
+                    PersistedAiConfiguration::initial_connection_model_access_policy_from_manifest(
+                        manifest,
+                    )
                 }),
             );
         }
@@ -635,25 +636,7 @@ impl PublicAiRuntime {
             let scoped_manifest = generation
                 .manifests
                 .manifest(connection.provider_id.as_str());
-            let mut initial_policy = connection_model_initial_policies
-                .remove(connection_id)
-                .ok_or_else(|| format!("Account `{connection_id}` has no initial model policy."))?;
             for model in &catalog.models {
-                // scoped_default preserves the exact entry and credential rule scope.
-                // scoped_default 保留精确入口与凭据规则作用域。
-                let scoped_default = runtime_model_account_default_enabled_from_manifest(
-                    configuration,
-                    connection.provider_id.as_str(),
-                    connection.service_entry_id.as_str(),
-                    Some(connection.credential_profile_id.as_str()),
-                    model.id.as_str(),
-                    scoped_manifest,
-                );
-                if !initial_policy.default_enabled && scoped_default {
-                    initial_policy
-                        .model_enabled_overrides
-                        .insert(model.id.clone(), scoped_default);
-                }
                 // The conversation-purpose row is independent of account opt-in; exact route
                 // defaults still aggregate with a stable, order-free OR.
                 // 会话用途行独立于账号初始勾选；精确路由默认值仍以稳定且无顺序依赖的 OR 聚合。
@@ -673,7 +656,6 @@ impl PublicAiRuntime {
                     .and_modify(|default_enabled| *default_enabled |= conversation_default)
                     .or_insert(conversation_default);
             }
-            connection_model_initial_policies.insert(connection_id.clone(), initial_policy);
         }
         for model in &provider_tool_template_models {
             // connection restores the credential scope intentionally omitted from the public inventory row.
