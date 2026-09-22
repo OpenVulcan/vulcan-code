@@ -29,7 +29,11 @@ const PROFILE_FIXTURE_SCHEMA_VERSION: &str = "provider-manifest-profile-fixture.
 const MAX_FIXTURE_BYTES: u64 = 2 * 1024 * 1024;
 /// Maximum bundled baseline bytes accepted by the fixture compiler.
 /// fixture 编译器接受的内置基线最大字节数。
-const MAX_FIXTURE_BASE_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+///
+/// This bounds manifest documents the harness compiles, so it derives from the single manifest
+/// byte bound instead of restating it.
+/// 它限制的是验证器要编译的清单文档，因此由唯一的清单字节上限派生，而不是重述字面量。
+const MAX_FIXTURE_BASE_MANIFEST_BYTES: u64 = crate::MAX_MANIFEST_BYTES as u64;
 /// Maximum HTTP interactions allowed in one fixture.
 /// 单个 fixture 允许的最大 HTTP 交互次数。
 const MAX_FIXTURE_INTERACTIONS: usize = 16;
