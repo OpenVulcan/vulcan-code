@@ -194,7 +194,22 @@
     并附上上述可复现的四项取值与失败点，供后续会话接手。
 - **准备许可失败的生产者阻断**：缺少 preparation barrier 的 test-support 构造器
   （既有同层构造器为 `pub(crate)`），属缺构造器而非缺证据。
-- **continuation 判定与宿主事件保护**：相关函数为私有，无断言测试。
+- **两处"输出只被传递、从未被断言"的判定已补证据**（`1dd4301f`），并更正我此前"函数私有、
+  无断言测试"的说法——其中"私有"对两处均不成立：
+  - `provider_failure_continuation_eligibility`（`provider_v1_bridge.rs`）本就是 `pub(crate)`，
+    它决定"失败的供应商尝试能否续跑"，但此前**没有任何直接测试**：唯一调用点把它作为参数传进
+    终态事实，**从未断言返回值**。已由
+    `provider_continuation_eligibility_requires_a_replay_safe_attempt` 固定（威胁点优先：语义输出/
+    副作用三种组合、未知 `dispatch_outcome` 一律禁止；再断言安全方向与重试耗尽）。
+  - `is_runtime_host_event_message_id`（`provider_transport_vulcan/request.rs`）决定"未覆盖的宿主
+    事件是否阻止延续复用"，此前无断言测试。已由
+    `uncovered_host_event_blocks_continuation_reuse` 固定，且该守卫原先把前缀写成字面量
+    `"runtime-host:"`，本轮按 AGENTS.md 第十一条改为引用生产者的
+    `RUNTIME_HOST_MESSAGE_PREFIX`，使守卫与生产者由同一常量相连。
+  - **变异验证**：分别去掉连续判定里的 `dispatch_outcome != Unknown`、把宿主前缀判定改为
+    `ends_with`，两处新测试各自 FAILED 并点出对应原因；生产改动均已恢复。
+  - **仍未断言**：宿主事件复用守卫的正向路径（覆盖后允许复用）——需要 ContextInjection 生产者
+    持有的改写指纹快照，已在测试注释中写明，不虚构证据。
 - **A15 的"写入中断可恢复边界"**：两处未知契约版本拒绝已补齐（provider 路由租约 `schema_version`、
   工具结果媒体信封版本），但 A15 还要求写入中断具备可恢复边界的独立证据，该部分仍未覆盖。
 - **线编码器层的相邻前缀稳定性**：需要 `PublicAiRuntime` 与冻结路由/凭据/客户端。
@@ -216,10 +231,10 @@
 | --- | --- |
 | `cargo test -p vulcan-session-core --lib -- --test-threads=1` | 460 passed / 0 failed |
 | `cargo test -p vulcan-service-kernel --lib "agent_collaboration::" -- --test-threads=1` | 120 passed / 0 failed |
-| `cargo test -p vulcan-agent-runtime --lib "provider_transport_vulcan::" -- --test-threads=1` | 50 passed / 0 failed |
+| `cargo test -p vulcan-agent-runtime --lib "provider_transport_vulcan::" -- --test-threads=1` | 51 passed / 0 failed |
 | `cargo test -p vulcan-agent-runtime --lib "standalone_compaction_tests"` | 3 passed / 0 failed |
 | `cargo test -p vulcan-provider-adapters --lib "responses_compact"` | 9 passed / 0 failed |
-| `cargo test -p vulcan-agent-runtime --lib`（`RUST_MIN_STACK=67108864`） | 1025 passed / **0 failed** / 4 ignored（既有失败已于 `2bf00026` 修正） |
+| `cargo test -p vulcan-agent-runtime --lib`（`RUST_MIN_STACK=67108864`） | 1027 passed / **0 failed** / 4 ignored（既有失败已于 `2bf00026` 修正） |
 | `cargo test -p vulcan-context-injection --lib` | 20 passed / 0 failed |
 | `npx vitest run src/components/conversation/conversation-collaboration-card.test.tsx` | 8 passed / 0 failed |
 | `npx tsc -b`（`apps/vulcan-code-web`） | 0 错误 |
