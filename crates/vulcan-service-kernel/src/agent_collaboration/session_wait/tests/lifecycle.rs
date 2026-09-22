@@ -8,10 +8,17 @@ use crate::session_v1_lifecycle::{
     SessionV1LifecycleError, archive_session_lifecycle_v1, delete_session_lifecycle_v1,
     guards::admit_edit_generation, publish_guarded_edit_generation,
 };
+use vulcan_agent_runtime::tooling::collaboration::{REPLY_QUESTION_TOOL_ID, ReplyQuestionArgs};
+use vulcan_session_core::v1::collaboration::CollaborationQuestionRecord;
+use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_session_core::v1::document::{
-    EditGenerationInput, RootInputReplacement, SessionDocument,
+    EditGenerationInput, PrepareAndStartApiInput, RootInputReplacement, SessionDocument,
 };
-use vulcan_session_core::v1::event::{TurnOutcome, UserInputSource};
+use vulcan_session_core::v1::event::{
+    ApiRequestSnapshot, ToolPayload, TurnOutcome, UserInputSource,
+};
+use vulcan_session_core::v1::ids::RequestStreamId;
+use vulcan_session_core::v1::projection::provider_visible_fingerprint;
 
 /// Deleting the target first must preserve missing source acknowledgement and allow settled cleanup.
 /// 先删目标必须保留缺失的来源确认，并允许已结算清理。
@@ -29,13 +36,17 @@ async fn archived_target_deletion_accepts_already_deleted_settled_source() {
 
 /// Publishes a source cancellation and target settlement, withholding only the source acknowledgement.
 /// 发布来源撤销和目标结算，仅保留来源确认尚未写入。
-/// Returns isolated storage, invocation, target, question identity and the original cancellation operation.
-/// 返回隔离存储、调用、目标、问题身份及原撤销操作。
-async fn unacknowledged_settlement_fixture() -> (
+/// `settle` commits the cancellation and target settlement; otherwise the question stays pending.
+/// `settle` 提交撤销与目标结算；否则问题保持待处理。
+/// Returns isolated storage, invocation, target, the source question record and the cancellation operation.
+/// 返回隔离存储、调用、目标、来源问题记录及撤销操作。
+async fn unacknowledged_settlement_fixture(
+    settle: bool,
+) -> (
     TestHostRuntimeRoot,
     ValidatedInvocation,
     Arc<SessionHandle>,
-    CollaborationQuestionId,
+    CollaborationQuestionRecord,
     String,
 ) {
     // Both indexed roots and every physical write live under the actual isolated host fixture.
@@ -148,6 +159,29 @@ async fn unacknowledged_settlement_fixture() -> (
             },
         )
         .unwrap();
+    // The exact durable question record retained for the caller's answer or settlement assertions.
+    // 为调用方的回答或结算断言保留精确可靠问题记录。
+    let question = source
+        .read(|document| document.question_snapshot(&question_id).cloned())
+        .unwrap()
+        .unwrap();
+    if !settle {
+        // A pending question leaves both sides holding a live obligation under their running businesses,
+        // so both turns stay open for a real in-turn question execution.
+        // 待处理问题使双方在各自运行中的业务下持有活动义务，因此双方回合保持开放以承载真实
+        // 回合内答疑执行。
+        assert!(
+            source
+                .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+                .unwrap()
+        );
+        assert!(
+            target
+                .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+                .unwrap()
+        );
+        return (storage, invocation, target, question, String::new());
+    }
     for handle in [source, &target] {
         handle
             .mutate_durable(
@@ -209,7 +243,7 @@ async fn unacknowledged_settlement_fixture() -> (
             .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
             .unwrap()
     );
-    (storage, invocation, target, question_id, operation)
+    (storage, invocation, target, question, operation)
 }
 
 /// Replays trusted cancellation after cold archive and deletes both roots in `source_first` order.
@@ -219,8 +253,9 @@ async fn unacknowledged_settlement_fixture() -> (
 async fn run_archived_settlement_deletion(source_first: bool) {
     // Reuse the exact durable gap exercised by generation replacement tests.
     // 复用代次替换测试验证的精确可靠间隙。
-    let (_storage, invocation, target, question_id, operation) =
-        unacknowledged_settlement_fixture().await;
+    let (_storage, invocation, target, question, operation) =
+        unacknowledged_settlement_fixture(true).await;
+    let question_id = question.question_id.clone();
     // The earlier owner is retained only for immutable identity and locator assertions.
     // 先前所有者仅用于不可变身份及定位断言。
     let source = &invocation.source_handle;
@@ -335,8 +370,8 @@ fn target_edit_frontier(
 async fn history_edit_preserves_unacknowledged_target_settlement() {
     // Both canonical documents contain the committed settlement gap, with no active business turn.
     // 双方规范文档包含已提交结算间隙，且没有活动业务回合。
-    let (_storage, invocation, target, _question_id, _operation) =
-        unacknowledged_settlement_fixture().await;
+    let (_storage, invocation, target, _question, _operation) =
+        unacknowledged_settlement_fixture(true).await;
     let (generation, durable_revision, target_seq) = target_edit_frontier(&target);
     // The production edit service now takes this exact protected admission before publishing.
     // 生产编辑服务当前在发布前取得此精确受保护准入。
@@ -420,8 +455,8 @@ async fn history_edit_preserves_unacknowledged_target_settlement() {
 async fn history_edit_succeeds_after_source_settlement_acknowledgement() {
     // The fixture withholds exactly the durable source acknowledgement.
     // 夹具精确保留来源确认尚未写入。
-    let (_storage, invocation, target, _question_id, _operation) =
-        unacknowledged_settlement_fixture().await;
+    let (_storage, invocation, target, _question, _operation) =
+        unacknowledged_settlement_fixture(true).await;
     let (generation, _, target_seq) = target_edit_frontier(&target);
     // The real production repair entry point writes the missing acknowledgement from durable facts.
     // 实际生产修复入口依据可靠事实写入缺失确认。
@@ -490,4 +525,309 @@ fn edit_input(target_seq: vulcan_session_core::v1::ids::Seq) -> EditGenerationIn
         replacement: RootInputReplacement::new("Edited target", vec![]),
         now_ms: 9,
     }
+}
+
+/// Converts one literal into the strict V1 seq identity used by request projection proofs.
+/// 将一个字面量转换为请求投影凭据使用的严格 V1 seq 身份。
+fn vl_seq(value: u64) -> vulcan_session_core::v1::ids::Seq {
+    vulcan_session_core::v1::ids::Seq::try_new(value).unwrap()
+}
+
+/// Starts one real physical question-execution API and returns its exact model ToolCall context.
+/// 启动一次真实物理答疑 API，并返回其精确模型工具调用上下文。
+/// `purpose` selects the auxiliary or parent purpose that the caller already proved admissible.
+/// `purpose` 选择调用方已经证明可准入的辅助或父级用途。
+fn start_question_execution_tool_call(
+    target: &Arc<SessionHandle>,
+    purpose: ApiPurposeKind,
+    now_ms: i64,
+) -> VulcanToolInvocationContext {
+    let input = target
+        .read(|document| {
+            let through_seq = document.events().last().unwrap().seq;
+            PrepareAndStartApiInput {
+                purpose,
+                request: ApiRequestSnapshot::new("openai", "model"),
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                projection: vulcan_session_core::v1::event::ProviderProjectionProof {
+                    segment_generation: document.segment_generation(),
+                    document_revision: document.memory_revision(),
+                    retained_from_seq: vl_seq(1),
+                    through_seq,
+                    fingerprint_sha256: provider_visible_fingerprint(
+                        document.events(),
+                        through_seq,
+                    )
+                    .unwrap(),
+                },
+                locked_baseline: LockedBaselineProjection::empty(),
+                continuation_action_id: None,
+                now_ms,
+            }
+        })
+        .unwrap();
+    let api_call_id = target
+        .prepare_and_start_api_durable(input)
+        .unwrap()
+        .value
+        .api_call_id;
+    let request_stream_id = RequestStreamId::try_new("archived-answer-stream").unwrap();
+    let tool_call_id = target
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::ToolBoundary,
+            |document| {
+                document.prepare_tool(
+                    api_call_id,
+                    request_stream_id.clone(),
+                    REPLY_QUESTION_TOOL_ID,
+                    ToolPayload::empty(),
+                    None,
+                    now_ms,
+                )
+            },
+        )
+        .unwrap()
+        .value;
+    let tool_seq = target
+        .read(|document| {
+            document
+                .events()
+                .iter()
+                .find_map(|event| match &event.event {
+                    vulcan_session_core::v1::event::EventBody::ToolCall(tool)
+                        if tool.tool_call_id == tool_call_id =>
+                    {
+                        Some(event.seq)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        })
+        .unwrap();
+    VulcanToolInvocationContext {
+        session_id: target.session_id().to_string(),
+        request_stream_id,
+        api_call_id,
+        tool_call_id,
+        tool_seq,
+        controller_tool_call_id: "archived-answer".into(),
+        provider_tool_call_id: None,
+    }
+}
+
+/// An archived target must still deliver a real model tool answer through the host entry.
+/// 已归档目标仍必须通过宿主入口交付真实模型工具回答。
+/// Covers the controlled answer path retained after archive, not only query and cancellation.
+/// 覆盖归档后保留的受控回答路径，而不只是查询与撤销。
+#[tokio::test]
+async fn archived_target_model_answer_completes_durable_settlement() {
+    // The question is pending and unanswered; the target still owns its open business turn.
+    // 问题待处理且未回答；目标仍持有其开放业务回合。
+    let (_storage, invocation, target_handle, question, _operation) =
+        unacknowledged_settlement_fixture(false).await;
+    let target_locator = target_handle.storage_locator().unwrap();
+    let source_locator = invocation.source_handle.storage_locator().unwrap();
+    // The running target owns a real in-turn question execution before it is archived.
+    // 运行中的目标在被归档之前持有真实回合内答疑执行。
+    target_handle
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| document.prepare_question_execution_before_api(question.clone(), 8),
+        )
+        .unwrap();
+    let context =
+        start_question_execution_tool_call(&target_handle, ApiPurposeKind::QuestionExecution, 9);
+    let execution_id = target_handle
+        .read(|document| {
+            document
+                .collaboration_state()
+                .question_executions
+                .keys()
+                .next()
+                .cloned()
+                .unwrap()
+        })
+        .unwrap();
+    // Archive keeps the open business turn, its auxiliary execution and the accepted delivery.
+    // 归档保留开放业务回合、其辅助执行以及已接纳投递。
+    for handle in [&invocation.source_handle, &target_handle] {
+        archive_session_lifecycle_v1(
+            &invocation.controller_runtime,
+            &invocation.registry,
+            handle.session_id(),
+            10,
+        )
+        .await
+        .unwrap();
+    }
+    // A cold registry excludes every retired resident owner from the answer path.
+    // 冷注册表把全部已退出驻留所有者排除在回答路径之外。
+    let cold = Arc::new(SessionRuntimeRegistry::default());
+    invocation.state.lock().unwrap().session_runtime_registry = cold.clone();
+    // The archived target is loaded from its exact durable locator, not a warm business handle.
+    // 已归档目标从其精确可靠定位器加载，而不是复用驻留业务句柄。
+    let archived_target = SessionHandle::new(
+        target_handle.session_id(),
+        target_locator.clone(),
+        load_session_v1_for_runtime(&target_locator)
+            .unwrap()
+            .document,
+    );
+    cold.register(Arc::clone(&archived_target)).unwrap();
+    assert!(
+        archived_target
+            .read(|document| document.metadata.archived_at_ms.is_some())
+            .unwrap()
+    );
+    assert!(
+        archived_target
+            .read(|document| document
+                .inbound_delivery_snapshot(&question.delivery_id)
+                .is_some())
+            .unwrap()
+    );
+    // Archive must retain the running auxiliary execution and its exact physical API.
+    assert!(
+        archived_target
+            .read(|document| {
+                document.collaboration_state().question_executions[&execution_id].state
+                    == CollaborationQuestionExecutionState::Running
+            })
+            .unwrap()
+    );
+    assert!(
+        archived_target
+            .read(|document| document.active_api().is_some())
+            .unwrap()
+    );
+    assert!(cold.get(invocation.source_session_id).is_err());
+    // The archived source stays legible for the exact question lookup without a resident owner.
+    // 已归档来源在无驻留所有者时仍可被精确问题定位读取。
+    let archived_source = SessionHandle::new(
+        invocation.source_handle.session_id(),
+        source_locator.clone(),
+        load_session_v1_for_runtime(&source_locator)
+            .unwrap()
+            .document,
+    );
+    assert!(
+        archived_source
+            .read(|document| document.metadata.archived_at_ms.is_some())
+            .unwrap()
+    );
+    let runtime = session_v1_native_agent_collaboration_runtime(
+        invocation.state.clone(),
+        ServiceEventEmitter::new(Vec::new()),
+    );
+    let reply = runtime
+        .invoke(
+            context,
+            AgentCollaborationCommand::ReplyQuestion(ReplyQuestionArgs {
+                question_id: question.question_id.as_str().to_owned(),
+                answer: "Use the archived settlement path.".into(),
+                unable_to_answer: false,
+            }),
+        )
+        .await;
+    // The archived answer must settle durably through the real target settlement and source ack.
+    // 归档后的回答必须通过真实目标结算与来源确认可靠结算。
+    let reply = reply.unwrap_or_else(|error| panic!("archived model answer was rejected: {error}"));
+    assert_eq!(reply["status"], "ok");
+    assert_eq!(
+        reply["question_state"].as_str(),
+        Some("answered"),
+        "the archived answer must settle the source question: {reply}"
+    );
+    // The source settlement acknowledgement is the durable fact a later edit or delete relies on.
+    // 来源结算确认是后续编辑或删除所依赖的可靠事实。
+    let source_ack = load_session_v1_for_runtime(&source_locator)
+        .unwrap()
+        .document;
+    assert!(
+        source_ack
+            .collaboration_state()
+            .outbound_deliveries
+            .values()
+            .any(|delivery| delivery.settlement_ack.is_some())
+    );
+    // The archived target holds the terminal settlement receipt needed by that acknowledgement.
+    // 已归档目标持有该确认所需的终态结算回执。
+    assert!(
+        archived_target
+            .read(|document| document
+                .collaboration_state()
+                .inbound_deliveries
+                .values()
+                .any(|delivery| delivery.settlement.is_some()))
+            .unwrap()
+    );
+}
+
+/// An edit admission must hold its own target gate, not only the settlement peers.
+/// 编辑准入必须持有其自身目标门，而不只是结算对端。
+/// While the target gate is held elsewhere, the admission must not complete.
+/// 当目标门已被他处持有时，准入不得完成。
+#[tokio::test]
+async fn edit_admission_holds_target_lifecycle_gate() {
+    // The positive fixture carries the settled receipt; the acknowledgement is repaired first.
+    // 正向夹具携带已结算回执；先修复来源确认。
+    let (_storage, invocation, target, _question, _operation) =
+        unacknowledged_settlement_fixture(true).await;
+    reconcile_session_v1_collaboration_outbox(
+        &ServiceEventEmitter::new(Vec::new()),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .unwrap();
+    let registry = invocation.registry.clone();
+    let session_id = target.session_id();
+    let controller = invocation.controller_runtime.clone();
+    // Hold the exact gate the edit admission must also own for its target.
+    // 持有编辑准入同样必须为其目标拥有的精确门。
+    let held = crate::session_v1_lifecycle::guards::hold_lifecycle_gate(&registry, session_id)
+        .await
+        .unwrap();
+    // A pending admission observes a receipt whose source acknowledgement is already durable.
+    // 挂起的准入观察到来源确认已经可靠的延续回执。
+    let admission_registry = registry.clone();
+    // The admission borrows the canonical owner, so this test intentionally leaks one handle clone.
+    // 准入借用规范所有者，因此本测试有意泄漏一份句柄克隆。
+    let admission_target: &'static Arc<SessionHandle> = Box::leak(Box::new(Arc::clone(&target)));
+    let admission = tokio::spawn(async move {
+        admit_edit_generation(&controller, &admission_registry, admission_target).await
+    });
+    // The admission must still be waiting on the held target gate.
+    // 准入必须仍在等待已持有的目标门。
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !admission.is_finished(),
+        "the edit admission completed without holding its own target gate"
+    );
+    // Releasing the gate lets the admission finish and resolve the acknowledged peer set.
+    // 释放该门后准入完成，并解析已确认的对端集合。
+    drop(held);
+    let admitted = tokio::time::timeout(std::time::Duration::from_secs(5), admission)
+        .await
+        .expect("the edit admission never resumed after its gate was released")
+        .unwrap();
+    assert!(
+        admitted.is_ok(),
+        "the fully acknowledged target must admit an edit: {admitted:?}"
+    );
+    drop(admitted);
+    let generation = target.read(SessionDocument::segment_generation).unwrap();
+    let receipt = publish_guarded_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &target,
+        generation,
+        edit_input(target_edit_frontier(&target).2),
+    )
+    .await
+    .unwrap();
+    assert_eq!(receipt.segment_generation, generation + 1);
 }

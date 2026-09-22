@@ -85,17 +85,32 @@ fn peer_coordinates(
     Ok(peers)
 }
 
-/// Acquires every peer lifecycle gate in one global order and releases them with the returned set.
-/// 按单一全局顺序取得全部对端生命周期门，并随返回集合释放。
-async fn acquire_peer_guards(
+/// Acquires exactly `identities` in one global order and releases them with the returned set.
+/// 按单一全局顺序精确取得 `identities`，并随返回集合释放。
+async fn acquire_lifecycle_guards(
     registry: &SessionRuntimeRegistry,
-    peers: &BTreeSet<SessionId>,
+    identities: &BTreeSet<SessionId>,
 ) -> Result<Vec<SessionLifecycleTransitionGuard>, SessionV1LifecycleError> {
-    let mut guards = Vec::with_capacity(peers.len());
-    for id in peers {
+    let mut guards = Vec::with_capacity(identities.len());
+    for id in identities {
         guards.push(registry.acquire_lifecycle_transition(*id).await?);
     }
     Ok(guards)
+}
+
+/// Returns the exact identities whose lifecycle gate a collaboration write must hold for `tree`.
+/// 返回针对 `tree` 的协作写入必须持有的精确生命周期门身份。
+/// The written target is always a member: production publication acquires the gate of every session
+/// it mutates, so omitting the target would admit a fresh unacknowledged receipt after the check.
+/// 被写入的目标始终是成员：生产发布取得其修改的每个会话的门，遗漏目标会在校验之后放行新的
+/// 未确认回执。
+fn write_gate_ids(
+    registry: &SessionRuntimeRegistry,
+    tree: &BTreeMap<SessionId, SessionV1StorageLocator>,
+) -> Result<BTreeSet<SessionId>, SessionV1LifecycleError> {
+    let mut identities = tree.keys().copied().collect::<BTreeSet<_>>();
+    identities.extend(peer_ids(registry, tree)?);
+    Ok(identities)
 }
 
 /// Verifies terminal inbound receipts on `handles` against source acknowledgement under all peer gates.
@@ -370,15 +385,19 @@ pub(crate) async fn admit_edit_generation<'a>(
         return Err(SessionV1LifecycleError::CanonicalOwnerUnavailable { session_id });
     }
     let tree = deletion_members(&root, session_id)?;
-    let peers = peer_ids(registry, &tree)?;
-    let guards = acquire_peer_guards(registry, &peers).await?;
-    // A delivery admitted while the peer gates were awaited would escape the retained lock set.
-    // 在等待对端门期间获准的投递会逃出保留的锁集合。
-    let current_peers = peer_ids(registry, &tree)?;
-    if current_peers != peers {
+    // The target and every delivery peer share one ordered identity set, so a concurrent target
+    // write cannot publish a new receipt between this admission and the edit publication.
+    // 目标与全部投递对端共享同一有序身份集合，使并发目标写入无法在本次准入与编辑发布之间
+    // 提交新回执。
+    let gate_ids = write_gate_ids(registry, &tree)?;
+    let guards = acquire_lifecycle_guards(registry, &gate_ids).await?;
+    // A delivery admitted while the gates were awaited would escape the retained lock set.
+    // 在等待门期间获准的投递会逃出保留的锁集合。
+    let current_gate_ids = write_gate_ids(registry, &tree)?;
+    if current_gate_ids != gate_ids {
         return Err(invalid(
             session_id,
-            "Settlement peer membership changed before edit admission; retry the edit.",
+            "Settlement write membership changed before edit admission; retry the edit.",
         ));
     }
     // Registrations and physical ownership may have changed while the peer gates were awaited.
@@ -418,9 +437,9 @@ pub(crate) async fn admit_edit_generation<'a>(
 ///
 /// # Returns
 /// 返回值
-/// Returns the exact durable edit receipt; the peer gates are released before this function returns,
+/// Returns the exact durable edit receipt; the write gates are released before this function returns,
 /// so later workbench refresh and provider admission start without any lifecycle lock held.
-/// 返回精确的可靠编辑回执；对端门在本函数返回前释放，后续工作台刷新与供应商准入不持有任何
+/// 返回精确的可靠编辑回执；写入门在本函数返回前释放，后续工作台刷新与供应商准入不持有任何
 /// 生命周期锁。
 pub(crate) async fn publish_guarded_edit_generation(
     controller: &HostRuntimeHandle,
@@ -433,4 +452,27 @@ pub(crate) async fn publish_guarded_edit_generation(
     // 准入保持到下方同步发布完整返回。
     let _admission = admit_edit_generation(controller, registry, target).await?;
     Ok(target.publish_edit_generation(expected_segment_generation, input)?)
+}
+
+/// Retains one lifecycle transition gate for deterministic concurrency tests.
+/// 为确定性并发测试保留一个生命周期转换门。
+/// The gate is the same identity that `admit_edit_generation` must acquire for its edit target.
+/// 该门与 `admit_edit_generation` 必须为其编辑目标取得的身份相同。
+#[cfg(test)]
+pub(crate) struct HeldLifecycleGate {
+    /// Owned gate retained until this guard is dropped.
+    /// 保留至本守卫释放的已持有门。
+    _gate: SessionLifecycleTransitionGuard,
+}
+
+/// Acquires and retains one lifecycle transition gate for the exact session identity.
+/// 为精确会话身份取得并保留一个生命周期转换门。
+#[cfg(test)]
+pub(crate) async fn hold_lifecycle_gate(
+    registry: &SessionRuntimeRegistry,
+    session_id: SessionId,
+) -> Result<HeldLifecycleGate, SessionV1LifecycleError> {
+    Ok(HeldLifecycleGate {
+        _gate: registry.acquire_lifecycle_transition(session_id).await?,
+    })
 }
