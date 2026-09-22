@@ -413,3 +413,97 @@ fn every_availability_gate_stays_inside_its_own_manifest() {
         }
     }
 }
+
+/// Returns the common model catalog document shipped beside this crate.
+/// 返回与本 crate 一同发布的通用模型目录文档。
+fn common_model_catalog() -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("common_model_capabilities.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("read {}", path.display()));
+    serde_json::from_str(&text).expect("common model catalog must parse")
+}
+
+/// Returns every exact model identity our provider manifests configure.
+/// 返回我们所有供应商清单配置的精确模型身份。
+fn configured_model_identities() -> BTreeSet<String> {
+    let mut identities = BTreeSet::new();
+    for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
+        let document = parse_manifest(&stem, &text);
+        for rule in document["model_rules"].as_array().expect("model_rules array") {
+            // Only exact matchers name a model identity; prefix matchers are family selectors.
+            // 只有 exact 匹配器才指向一个模型身份；prefix 匹配器是族选择器。
+            if rule["matcher"]["kind"].as_str() != Some("exact") {
+                continue;
+            }
+            let value = rule["matcher"]["value"]
+                .as_str()
+                .expect("exact matcher value")
+                .to_lowercase();
+            identities.insert(value);
+        }
+    }
+    assert!(
+        !identities.is_empty(),
+        "bundled manifests must configure at least one exact model identity"
+    );
+    identities
+}
+
+/// Returns every catalog lookup key, including declared aliases.
+/// 返回目录的全部查询键，含已声明的别名。
+fn catalog_lookup_keys(catalog: &Value) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    for model in catalog["models"].as_array().expect("catalog models array") {
+        keys.insert(model["key"].as_str().expect("catalog key").to_lowercase());
+        for alias in model["aliases"].as_array().expect("catalog aliases array") {
+            keys.insert(alias.as_str().expect("catalog alias").to_lowercase());
+        }
+    }
+    keys
+}
+
+/// Asserts the common model catalog resolves every model our manifests configure.
+/// 断言通用目录能解析我们清单配置的每一个模型。
+///
+/// This is the machine-checked form of "one shared catalog for every model we configured": adding
+/// a provider or a model fails this check until the catalog is regenerated, and regenerating it
+/// never requires editing this file.
+/// 这是"为我们配置过的每个模型维护一份共享目录"的机器化形式：增删供应商或模型都会让本检测
+/// 失败直到目录被重新生成，而重新生成目录永远不需要修改本文件。
+#[test]
+fn every_configured_model_is_resolvable_in_the_common_catalog() {
+    let lookup = catalog_lookup_keys(&common_model_catalog());
+    for identity in configured_model_identities() {
+        let tail = identity.rsplit('/').next().unwrap_or(identity.as_str());
+        assert!(
+            lookup.contains(&identity) || lookup.contains(tail),
+            "configured model `{identity}` must be resolvable in the common model catalog"
+        );
+    }
+}
+
+/// Asserts the common model catalog never becomes a pull of an upstream model list.
+/// 断言通用目录绝不会变成上游模型清单的拉取结果。
+///
+/// Upstream sources are cross references for context and modality metadata only: every catalog
+/// record must still name a model our own manifests configure.
+/// 上游来源只作为上下文与模态元数据的交叉参照：每条目录记录仍必须指向我们清单配置的模型。
+#[test]
+fn the_common_catalog_contains_only_configured_models() {
+    let identities = configured_model_identities();
+    let tails = identities
+        .iter()
+        .map(|identity| identity.rsplit('/').next().unwrap_or(identity.as_str()))
+        .collect::<BTreeSet<_>>();
+    let catalog = common_model_catalog();
+    for model in catalog["models"].as_array().expect("catalog models array") {
+        let key = model["key"].as_str().expect("catalog key").to_lowercase();
+        let tail = key.rsplit('/').next().unwrap_or(key.as_str()).to_string();
+        assert!(
+            identities.contains(&key) || tails.contains(tail.as_str()),
+            "common model catalog record `{key}` is not a model any bundled manifest configures"
+        );
+    }
+}

@@ -705,11 +705,19 @@ mod tests {
 
     /// Verifies punctuation and letter case normalize to one exact template.
     /// 验证标点与字母大小写会规范化到同一个精确模板。
+    ///
+    /// Record identities are owned by our own provider manifests, so the assertion pins the
+    /// suffix matching contract instead of the upstream `vendor/model` spelling.
+    /// 记录身份由我们自己的供应商清单拥有，因此这里断言后缀匹配契约，而不是上游的 `vendor/model` 写法。
     #[test]
     fn punctuation_and_case_normalization_remains_exact() {
         let suggestions = suggest_common_model_templates("DeepSeek:DeepSeek V3,2");
         assert_eq!(suggestions.len(), 1);
-        assert_eq!(suggestions[0].template_key, "deepseek/deepseek-v3.2");
+        assert!(
+            suggestions[0].template_key.ends_with("deepseek-v3.2"),
+            "unexpected template key {}",
+            suggestions[0].template_key
+        );
     }
 
     /// Verifies resource-producing native models are never suggested to custom conversation providers.
@@ -719,13 +727,17 @@ mod tests {
         assert!(suggest_common_model_templates("openai/gpt-image-1").is_empty());
     }
 
-    /// Verifies the explicit GPT-5.3 Codex Spark record exposes its 128K context window.
-    /// 验证显式 GPT-5.3 Codex Spark 记录公开其 128K 上下文窗口。
+    /// Verifies the explicit GPT-5.3 Codex Spark record exposes its reviewed context window.
+    /// 验证显式 GPT-5.3 Codex Spark 记录公开其已审核的上下文窗口。
+    ///
+    /// The catalog inventory and declared values now derive from our own provider manifests, so
+    /// the reviewed `openai.json` declaration governs this number.
+    /// 目录的清单与声明值现在派生自我们自己的供应商清单，因此该数值由已审核的 `openai.json` 声明决定。
     #[test]
     fn gpt_five_three_codex_spark_uses_explicit_context() {
         let resolution = resolve_common_model_capabilities("GPT 5,3 Codex Spark");
         assert!(resolution.matched);
-        assert_eq!(resolution.context_window, 131_072);
+        assert_eq!(resolution.context_window, 128_000);
         assert!(resolution.supports_text_input);
         assert!(resolution.supports_text_output);
     }
