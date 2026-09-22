@@ -78,9 +78,11 @@
   **"多等待者"经核查不适用**：`wait_question` 只授权问题的来源或目标，一个问题只有一个来源，因此同一问题不存在多个独立等待者。
   **仍未证明**：父子交叉互问（见 `S5_ACCEPTANCE_EVIDENCE.md` §三，已定位到可复现矛盾点但未定论）；"子代理提问真正触发调度"需要更高层构造。
 - [x] S4.2 目录、读取、发送、回复及实际正文交付逐动作核对授权。已核实六种授权动作逐项匹配、跨项目必需授权、撤销即时生效；补 Ask/Notify 端口级逐动作与撤销证据。提交 `6a65e457`。
-- [x] S4.3 当前界面、分页、多窗口重连及消息类型展示复验。证据（本轮累计实测）：`conversation-event-display-projection.test.ts`（16 项）、`conversation-event-window-store.test.ts`（**49 项**，含后补的多窗口与同 seq 跨实体两项）、`conversation-event-window-controller.test.ts`（39 项，含分页）、`selected-conversation-event-window-registry.test.ts`（17 项，含多窗口隔离）、`conversation-event-window-react.test.tsx`（4 项）；`tsc -b` 类型检查通过。
+- [x] S4.3 当前界面、分页、多窗口重连及消息类型展示复验。证据（本轮累计实测）：`conversation-event-display-projection.test.ts`（16 项）、`conversation-event-window-store.test.ts`（**49 项**，含后补的多窗口与同 seq 跨实体两项）、`conversation-event-window-controller.test.ts`（**39 项，含"先恢复分页再重连"的完整组合**）、`selected-conversation-event-window-registry.test.ts`（17 项，含多窗口隔离）、`conversation-event-window-react.test.tsx`（4 项）；`tsc -b` 类型检查通过。
   **后续已补齐（本轮更正，原记"协作卡片无行为证据"已失效）**：`298a29bc` 新增 `conversation-collaboration-card.test.tsx`（8 项），**直接挂载生产卡片并触发回调**：身份路由、通知无回复控件、导航按可路由集合、撤销三条件、单次提交、失败可重试、时间戳保留。
-  **仍在 §二.4/§三 登记**：卡片覆盖不到 `task-message` 身份分支与 `child_task_non_success_projected` 的正文抑制分支；真实浏览器路由跳转与真实宿主撤销往返未驱动。
+  **"完整分页重连组合未断言"这一旧登记亦已失效（本轮更正）**：我此前只检索存储与注册表测试，漏看了控制器测试文件。
+  `restores paged history before reconnecting and retains it while missing events arrive` 已覆盖完整组合。
+  **仍在 §二.3/§三 登记**：卡片覆盖不到 `task-message` 身份分支与 `child_task_non_success_projected` 的正文抑制分支；真实浏览器路由跳转与真实宿主撤销往返未驱动。
 - [x] S4.4 工具注册、模式过滤、执行、结果投影完整暴露链复核。已完成 G1（Plan 可见性过期断言）、G2（七条协作命令端口级分发测试）、G3（`wait_agent` 身份重复定义）、G8（协作工具文档注释不可逆损坏）。
   **G4 已收口（本轮更正，原记"需领域模型决策"已失效）**：`reply_question.unable_to_answer` 此前被我登记为需领域决策，查证后**领域已指定载体**——`CollaborationAnswerRecord.body` 的注释即 "Exact answer body, **including explicit inability to answer**"，且 `answer` 必填（`minLength 1`）；工具参数是回显给回答方的确认，问题所有者只读到正文。因此真实缺口只是**契约从未被断言**，已由 `explicit_unable_to_answer_is_echoed_and_travels_in_the_durable_body`（`4a52755b`）固定：回显为 true、所有者读到的正文逐字一致、结算为 `Answered`、序列化后的可靠答案记录不含该字段（防两面漂移）。
   **仍未做**：G5（仅答疑模式工具收窄范围）、G6/G9（低优先级）。

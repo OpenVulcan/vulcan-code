@@ -48,7 +48,7 @@
 | A13 | 压缩与尾段加载后仍能确定问题双方/状态/授权/未结事项；失效提示不被恢复成当前指令 | S3.1 作用域修正（`42651b34`、`523fa6cd`）；压缩前后协作证据 | 已实现并已验证 |
 | A14 | 标签伪造、错误收件人、跨树、未授权跨项目、撤销后发送均不能越权 | `cross_project_*` 三项 + `document_grant_allows` 逐动作（`6a65e457`） | 已实现并已验证 |
 | A15 | 仅支持当前新契约；未知版本明确拒绝；写入中断有可恢复边界 | 严格版本读取与拒绝路径；**两处未知版本拒绝已补齐**（`persisted_route_lease_with_unknown_schema_version_is_refused`、`media_output_rejects_unknown_envelope_version`，`e71b0b30`/`f586e9e3`，均经变异验证）；**写入中断可恢复边界**由既有 `question_finished_storage_failure_recovers_committed_outcome` 与 `question_finished_persists_queued_successor_and_recovers_failed_publication` 覆盖（脚本化刷写故障注入） | 已实现并已验证 |
-| A16 | 多窗口/分页重连按 ID/游标恢复；结果/答案/回执不互相冒充；消耗只计一次 | 前端窗口注册表 17 项 + 事件窗口存储 49 项（含 **多窗口不抢唯一消息** `keeps two windows over one session independent for the same single event`，`5c848967`；**同 seq 跨实体不互相冒充** `refuses to read a different collaboration kind as a revision of another`，`822bfddc`，经变异验证）；`terminal_report_*` 用量分离（失败已修正，`2bf00026`） | **已实现，证据不足**（多窗口与同 seq 跨实体均已补直接证据；完整分页重连的组合路径仍未逐项断言，见 §二.4） |
+| A16 | 多窗口/分页重连按 ID/游标恢复；结果/答案/回执不互相冒充；消耗只计一次 | 窗口控制器 39 项（含 `restores paged history before reconnecting and retains it while missing events arrive`、`prepends only an adjacent complete-Turn page and advances its cursor`、`shares one in-flight historical page across concurrent prepend requests`、`rehydrates when reconnect reports that the service process changed`）、窗口注册表 17 项、事件窗口存储 49 项（含 **多窗口不抢唯一消息** `keeps two windows over one session independent for the same single event`，`5c848967`；**同 seq 跨实体不互相冒充** `refuses to read a different collaboration kind as a revision of another`，`822bfddc`，经变异验证）；`terminal_report_*` 用量分离（失败已修正，`2bf00026`） | 已实现并已验证 |
 | A17 | 归档仍可结算；未结时删除受阻；取消/结算后删除及重启时迟到操作有确定状态 | 归档/删除生命周期 19 项 + 编辑准入修复（`ca83e0c2`） | 已实现并已验证 |
 | A18 | 子代理可继续工作；主代理在合法边界收到通知且无回答义务；交互框区分 | 通知投影与独立节点证据；前端 123 项 | 已实现并已验证 |
 
@@ -67,10 +67,14 @@
 | P08 父子工具完整暴露 | `d5c2865e`、`433dead7`、`6a65e457` | 已实现并已验证 |
 | P09 独立会话权限 | `6a65e457` | 已实现并已验证 |
 | P10 压缩与当前契约恢复 | `8fd2dbad`、`09d5e25a`、`c311ee31`、`f3b325f4` | 已实现并已验证 |
-| P11 界面与资料 | 前端 123 项 + 本文件 | **部分**（卡片组件行为无导入测试，见 §二.3） |
-| P12 总验收和交付 | 本文件 + 状态入口 | **未完成**（逐项闭合与五轮审核未完成） |
+| P11 界面与资料 | 前端 123 项 + `conversation-collaboration-card.test.tsx`（8 项）+ 本文件 | 已实现并已验证（卡片组件行为已由 `298a29bc` 闭合并直接挂载生产组件；真实浏览器路由跳转与真实宿主撤销往返仍属未验证边界，见 §三） |
+| P12 总验收和交付 | 本文件 + 状态入口 | **未完成**（五轮审核未完成） |
 
 ## 二、尚未闭合的验收缺口（都是证据不足，不是已知实现错误）
+
+> 本节按"每条缺口单独编号"记录，**其中已闭合的条目保留原文并就地标注闭合提交**，便于审核追溯
+> 判断的演进过程。当前**仍然开放**的只有第 1 项（R10/A10 的模型级一跳）与第 5 项（前端既有失败，
+> 不属本任务）。第 2、3、4 项均已闭合。
 
 1. **MainOnly 自动恢复的完整一跳与多等待者/父子交叉互问**（R10、A07、A10）。
    已证明：真实启动闸门准入并声明 `wakes_retained_parent_turn`、两种停止状态拒绝、闸门为纯读取方
@@ -113,6 +117,15 @@
    该文件 8 项通过，`tsc -b` 无错误。
    仍**未覆盖**：`task-message` 身份分支与 `child_task_non_success_projected` 的正文抑制分支
    （既有显示渲染器测试覆盖 6 种 task-message 事件，本包未重复）；真实浏览器路由跳转与真实宿主撤销往返。
+
+   **A16"完整分页重连组合未断言"这一旧登记已失效（本轮更正）**：我此前只检索了存储与注册表测试，
+   漏看了窗口控制器测试文件。`conversation-event-window-controller.test.ts` 的
+   `restores paged history before reconnecting and retains it while missing events arrive`
+   已经覆盖完整组合——先水合并 prepend 更早分页（seq 1–4），dispose 后由新控制器
+   `restoreCachedSnapshot` 立即渲染同一缓存且**不开启**实时订阅，再 `resumeCachedWindow`
+   只恢复缺失修订区间（断言 `reconnect` 以缓存游标 4 调用、旧分页 1–4 保留、最终为 1–5），
+   并断言 `subscribeLive` 恰好一次。同文件的并发 prepend 单飞、分页失败可重试、
+   服务进程代次变化后 rehydrate 等亦已覆盖。据此 A16 升级为**已实现并已验证**。
 
 4. **`terminal_report_separates_subagent_usage_from_parent_totals` 曾长期失败（A16），已修正**。
    **根因（已定位到具体语句）**：生产代码在 `crates/vulcan-agent-runtime/src/turn_stats.rs`
