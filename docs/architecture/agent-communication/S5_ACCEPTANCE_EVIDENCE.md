@@ -294,24 +294,43 @@
 | 命令 | 结果 |
 | --- | --- |
 | `cargo test -p vulcan-session-core --lib -- --test-threads=1` | 460 passed / 0 failed |
-| `cargo test -p vulcan-service-kernel --lib "agent_collaboration::" -- --test-threads=1` | 120 passed / 0 failed |
+| `cargo test -p vulcan-service-kernel --lib "agent_collaboration::" -- --test-threads=1` | 122 passed / 0 failed |
+| `cargo test -p vulcan-service-kernel --lib "question_finished_" -- --test-threads=1` | 5 passed / 0 failed |
+| `cargo test -p vulcan-service-kernel --lib`（全量，`RUST_MIN_STACK=67108864`） | 1534 passed / **7 failed** / 15 ignored，见下方说明 |
 | `cargo test -p vulcan-agent-runtime --lib "provider_transport_vulcan::" -- --test-threads=1` | 51 passed / 0 failed |
 | `cargo test -p vulcan-agent-runtime --lib "standalone_compaction_tests"` | 3 passed / 0 failed |
 | `cargo test -p vulcan-provider-adapters --lib "responses_compact"` | 9 passed / 0 failed |
 | `cargo test -p vulcan-agent-runtime --lib`（`RUST_MIN_STACK=67108864`） | 1027 passed / **0 failed** / 4 ignored（既有失败已于 `2bf00026` 修正） |
 | `cargo test -p vulcan-context-injection --lib` | 20 passed / 0 failed |
+| `npx vitest run src/service/conversation-event-window-store.test.ts` | 49 passed / 0 failed |
+| `npx vitest run src/service/conversation-event-window-controller.test.ts` | 39 passed / 0 failed |
 | `npx vitest run src/components/conversation/conversation-collaboration-card.test.tsx` | 8 passed / 0 failed |
 | `npx tsc -b`（`apps/vulcan-code-web`） | 0 错误 |
 | `npx vitest run`（`apps/vulcan-code-web` 全量） | 1842 passed / **4 failed**（§二.5）/ 1 skipped；本轮全量运行时另见 1 次环境抖动，单独复跑通过 |
+
+**`vulcan-service-kernel --lib` 全量的 7 项失败（本轮首次实测登记，不属本任务所有权）**：
+`conversation_submission::submission_model_selection_tests::{new_session_rebinds_invalid_global_account_for_same_model,
+repeated_submission_selection_preserves_lease_until_target_changes}`、
+`native_vmm::driver::lexical_driver_tests::{real_controller_compaction_dispatches_builtin_vmm_hook,
+real_controller_nonempty_analysis_materializes_memory_and_profiles}`、
+`tests::conversation_submission_queue_tests::queue_service_idempotent_retry_does_not_duplicate_process_mirror_or_hook`、
+`tests::detached_subagent_tests::context_compaction_without_v1_durability_cannot_write_legacy_checkpoint`、
+`vce::manager::jobs::tests::in_process_compaction_recovers_without_duplicate_submission`。
+
+**归属判定（按文件而非按猜测）**：这 7 项分别落在 `conversation_submission`（供应商/模型选择）、
+`native_vmm`、`vce::manager` 等区域，属另一并行会话正在处理的供应商与模型工作。我已逐提交列出
+本任务全部提交实际触碰的文件（51 个），**与这 7 项失败的源文件无交集**；本任务对
+`vulcan-service-kernel` 的改动集中在 `agent_collaboration/**`、`agent_stream/stream_task/question_launch/tests.rs`、
+`session_v1_lifecycle/**` 与 `conversation_generations_v1.rs`。因此这 7 项**登记不修复**。
 
 ## 五、引用完整性闸门（本轮新增，建议原主代理审核前复跑）
 
 本文件的证据价值取决于**它引用的每个名字在当前源码里仍然存在**。为此本轮对本文件做了一次
 自动化引用核验：
 
-- 方法：提取本文件全部反引号内的 snake_case 标识符（共 54 个），逐一在 `crates/`、`apps/` 中
+- 方法：提取本文件全部反引号内的 snake_case 标识符（共 64 个），逐一在 `crates/`、`apps/` 中
   查找同名项。
-- 结果：**54 个标识符全部存在，无死引用**（其中 6 个为非测试标识符：`provider_request_bridge_messages`、
+- 结果：**64 个标识符全部存在，无死引用**（其中 6 个为非测试标识符：`provider_request_bridge_messages`、
   `provider_request_bridge`、`open_child_task_ids`、`wakes_retained_parent_turn`、
   `children_by_session_id`、`child_task_non_success_projected`）。
 - 同一闸门已在状态入口 `IMPLEMENTATION_STATUS.md` 上复跑：其 33 个引用全部存在；该文件原有
