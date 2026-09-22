@@ -2,10 +2,222 @@
 //! 基于真实来源与目标日志的任务出站修复。
 
 use super::*;
-use vulcan_session_core::v1::collaboration::CollaborationTaskMessage;
+use vulcan_session_core::v1::collaboration::{
+    CollaborationDeliveryId, CollaborationNotificationId, CollaborationNotificationState,
+    CollaborationTaskMessage, SendNotificationInput,
+};
+use vulcan_session_core::v1::document::SessionDocument;
 
 mod embedded_tree;
 mod main_business;
+
+/// A notification stranded between source commit and target acceptance must be repairable.
+/// 停留在来源提交与目标接纳之间的通知必须可被修复。
+///
+/// # Notes
+/// 说明
+/// `send_notification` commits the source record first and only then accepts it on the target, so a
+/// process loss in that window leaves a durable notification the target never saw — exactly the window
+/// A12 names. This test records that window through the real domain creation and requires the outbox
+/// pass to close it.
+/// `send_notification` 先提交来源记录，之后才在目标上接纳，因此该窗口内的进程丢失会留下目标
+/// 从未见过的可靠通知——这正是 A12 点名的窗口。本测试通过真实领域创建复现该窗口，并要求出站
+/// 修复把它闭合。
+///
+/// # Requirements
+/// 要求
+/// Recovery must accept the notification on the target and advance the source to `Accepted`, keeping
+/// the same stable notification, delivery and operation identities so a repeat cannot double-accept.
+/// 恢复必须在目标上接纳该通知、并把来源推进到 `Accepted`，且沿用同一稳定通知、投递与操作身份，
+/// 使重复执行不会二次接纳。
+#[tokio::test]
+async fn notification_stranded_before_acceptance_is_repaired_by_the_outbox_pass() {
+    let (_root, invocation, target, _) = message_fixture(false).await;
+    let source = invocation.source_handle.clone();
+    let source_turn = source
+        .read(|document| document.active_turn().unwrap().turn_id)
+        .unwrap();
+    let target_turn = target
+        .read(|document| document.active_turn().unwrap().turn_id)
+        .unwrap();
+    // Both participant coordinates come from the actual durable documents, not from labels.
+    // 双方参与者坐标取自实际可靠文档，而非标签。
+    let (source_participant, target_participant) = {
+        let source_participant = source
+            .read(|document| {
+                CollaborationParticipant::new(
+                    source.session_id().to_string(),
+                    source.session_id().to_string(),
+                    invocation.source_locator.project_id(),
+                    document.segment_generation(),
+                    Some(source_turn),
+                    None,
+                )
+                .unwrap()
+            })
+            .unwrap();
+        let target_participant = target
+            .read(|document| {
+                CollaborationParticipant::new(
+                    target.session_id().to_string(),
+                    target.session_id().to_string(),
+                    invocation.source_locator.project_id(),
+                    document.segment_generation(),
+                    Some(target_turn),
+                    None,
+                )
+                .unwrap()
+            })
+            .unwrap();
+        (source_participant, target_participant)
+    };
+    let notification_id = CollaborationNotificationId::try_new("stranded-notification").unwrap();
+    let delivery_id = CollaborationDeliveryId::try_new("stranded-delivery").unwrap();
+    let notification_body = "Phase one finished; no reply needed.";
+    // Commit only the source half through the real domain creation, reproducing the crash window exactly.
+    // 只通过真实领域创建提交来源一半，精确复现崩溃窗口。
+    let created = source
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.send_notification(SendNotificationInput {
+                    operation_id: CollaborationOperationId::try_new("stranded-send").unwrap(),
+                    notification_id: notification_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    source: source_participant.clone(),
+                    target: target_participant.clone(),
+                    body: notification_body.into(),
+                    created_at_ms: 5,
+                })
+            },
+        )
+        .unwrap()
+        .value
+        .into_value();
+    assert_eq!(
+        created.notification.state,
+        CollaborationNotificationState::Recorded,
+        "a freshly sent notification starts recorded and not yet accepted"
+    );
+    // The crasher left the source owning the notification while the target owns nothing for it.
+    // 崩溃留下的状态是：来源持有通知，而目标对它一无所知。
+    let stranded = source
+        .read(|document| {
+            document
+                .collaboration_state()
+                .notifications
+                .values()
+                .find(|record| record.notification_id == notification_id)
+                .cloned()
+        })
+        .unwrap()
+        .expect("the stranded notification must exist on its source");
+    assert_eq!(stranded.state, CollaborationNotificationState::Recorded);
+    assert_eq!(stranded.delivery_id, delivery_id);
+    assert_eq!(stranded.body, notification_body);
+    assert_eq!(stranded.source, source_participant);
+    assert_eq!(stranded.target, target_participant);
+    assert_eq!(stranded.target_revision, None);
+    assert!(
+        target
+            .read(|document| document
+                .collaboration_state()
+                .inbound_notifications
+                .get(&notification_id)
+                .is_none())
+            .unwrap(),
+        "the crash window must leave the target without the notification"
+    );
+    // The stranding is a live obligation: an unnotified target blocks destructive lifecycle work.
+    // 该滞留是活动义务：未收到通知的目标会阻塞破坏性生命周期操作。
+    assert!(
+        source
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    // The real outbox pass must close the window rather than skipping notifications.
+    // 真实出站修复必须闭合该窗口，而不是跳过通知。
+    let repaired = reconcile_session_v1_collaboration_outbox(
+        &crate::ServiceEventEmitter::new(vec![]),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .expect("outbox reconciliation must repair a stranded notification");
+    assert_eq!(
+        repaired, 1,
+        "the pass must report exactly the one notification it repaired"
+    );
+    // The target must now own the acceptance for the exact same stable identity.
+    // 目标现在必须为同一稳定身份持有接纳记录。
+    let inbound = target
+        .read(|document| {
+            document
+                .collaboration_state()
+                .inbound_notifications
+                .get(&notification_id)
+                .cloned()
+        })
+        .unwrap()
+        .expect("recovery must accept the notification on its target");
+    assert_eq!(inbound.notification_id, notification_id);
+    assert_eq!(inbound.delivery_id, delivery_id);
+    assert_eq!(inbound.body, notification_body);
+    // The source must have advanced to accepted while retaining the recorded body authority.
+    // 来源必须推进到已接纳，同时保留已记录正文权威。
+    let recovered = source
+        .read(|document| {
+            document
+                .collaboration_state()
+                .notifications
+                .get(&notification_id)
+                .cloned()
+        })
+        .unwrap()
+        .expect("the recovered notification must survive on its source");
+    assert_eq!(recovered.state, CollaborationNotificationState::Accepted);
+    assert_eq!(recovered.body, notification_body);
+    assert_eq!(recovered.delivery_id, delivery_id);
+    // The obligation legitimately persists: an accepted-but-unprojected notification has not reached
+    // the target's model yet, so recovery must not pretend the target was informed.
+    // 该义务合理地继续存在：已接纳但未投影的通知尚未到达目标模型，因此恢复不得假装目标已知情。
+    assert!(
+        source
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap(),
+        "an accepted but unprojected notification must keep blocking destructive lifecycle work"
+    );
+    assert_eq!(
+        inbound.state,
+        CollaborationNotificationState::Accepted,
+        "recovery settles the target at accepted, not at projected"
+    );
+    // A second pass must be a no-op: recovery may not double-accept the same identity.
+    // 第二次修复必须无操作：恢复不得对同一身份二次接纳。
+    let second = reconcile_session_v1_collaboration_outbox(
+        &crate::ServiceEventEmitter::new(vec![]),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .expect("a repeated pass must stay clean");
+    assert_eq!(
+        second, 0,
+        "an already accepted notification must not be repaired twice"
+    );
+    let inbound_count = target
+        .read(|document| {
+            document
+                .collaboration_state()
+                .inbound_notifications
+                .keys()
+                .filter(|key| **key == notification_id)
+                .count()
+        })
+        .unwrap();
+    assert_eq!(inbound_count, 1, "exactly one target acceptance may exist");
+}
 
 /// A failed indexed pass retains its worker and retries the actual outbox after the index becomes available.
 /// 索引扫描失败后保留任务，并在索引恢复可用后重试真实出站箱。

@@ -1437,15 +1437,39 @@ async fn resolve_question_target(
     invocation: &ValidatedInvocation,
     question: &vulcan_session_core::v1::collaboration::CollaborationQuestionRecord,
 ) -> Result<(Uuid, ResolvedSession), String> {
-    let target_session_id = Uuid::parse_str(&question.target.session_id)
-        .map_err(|error| format!("question target session identity is invalid: {error}"))?;
+    resolve_participant_target(invocation, &question.target, "question").await
+}
+
+/// Resolves one recorded participant locator without checking a revoked grant.
+/// 根据一条已记录参与者定位解析目标，不检查已撤销的授权。
+///
+/// # Notes
+/// 说明
+/// Both questions and notifications share this resolver so recovery can reach the exact recorded
+/// target. Grant revocation is deliberately not decided here, because callers differ: question
+/// acceptance is already frozen by the durable record, while notification delivery re-evaluates
+/// the notify grant at the delivery step.
+/// 问题与通知共用本解析器，使恢复能到达精确的已记录目标。授权撤销刻意不在此处判定，因为调用方
+/// 不同：问题接纳已由可靠记录冻结，而通知投递在投递步骤重新判定通知授权。
+///
+/// # Parameters
+/// 参数
+/// `label` names the failing concept in error text so a caller can tell which record failed.
+/// `label` 在错误文本中点明失败概念，使调用方能区分是哪类记录失败。
+async fn resolve_participant_target(
+    invocation: &ValidatedInvocation,
+    participant: &vulcan_session_core::v1::collaboration::CollaborationParticipant,
+    label: &str,
+) -> Result<(Uuid, ResolvedSession), String> {
+    let target_session_id = Uuid::parse_str(&participant.session_id)
+        .map_err(|error| format!("{label} target session identity is invalid: {error}"))?;
     if target_session_id == invocation.source_session_id {
         let locator = invocation.source_locator.clone();
-        if locator.project_id() != question.target.project_id
-            || locator_generation(&locator)? != question.target.segment_generation
+        if locator.project_id() != participant.project_id
+            || locator_generation(&locator)? != participant.segment_generation
         {
-            return Err(String::from(
-                "question target participant no longer matches its canonical locator",
+            return Err(format!(
+                "{label} target participant no longer matches its canonical locator"
             ));
         }
         return Ok((
@@ -1457,8 +1481,8 @@ async fn resolve_question_target(
         ));
     }
 
-    let root_session_id = Uuid::parse_str(&question.target.root_session_id)
-        .map_err(|error| format!("question target root identity is invalid: {error}"))?;
+    let root_session_id = Uuid::parse_str(&participant.root_session_id)
+        .map_err(|error| format!("{label} target root identity is invalid: {error}"))?;
     let (root_locator, root_handle) = if root_session_id == invocation.source_session_id {
         (
             invocation.source_locator.clone(),
@@ -1470,23 +1494,23 @@ async fn resolve_question_target(
             root_session_id,
         )
         .await
-        .map_err(|error| format!("failed to load question target root session: {error}"))?;
+        .map_err(|error| format!("failed to load {label} target root session: {error}"))?;
         let root_locator = root_handle
             .storage_locator()
-            .map_err(|error| format!("failed to resolve question target root locator: {error}"))?;
+            .map_err(|error| format!("failed to resolve {label} target root locator: {error}"))?;
         (root_locator, root_handle)
     };
-    if root_locator.project_id() != question.target.project_id {
-        return Err(String::from(
-            "question target root project does not match its participant",
+    if root_locator.project_id() != participant.project_id {
+        return Err(format!(
+            "{label} target root project does not match its participant"
         ));
     }
     if root_session_id == target_session_id {
-        if root_locator.project_id() != question.target.project_id
-            || locator_generation(&root_locator)? != question.target.segment_generation
+        if root_locator.project_id() != participant.project_id
+            || locator_generation(&root_locator)? != participant.segment_generation
         {
-            return Err(String::from(
-                "question target root participant no longer matches its canonical locator",
+            return Err(format!(
+                "{label} target root participant no longer matches its canonical locator"
             ));
         }
         return Ok((
@@ -1500,10 +1524,10 @@ async fn resolve_question_target(
 
     let target_locator =
         locate_embedded_task_session_v1(&root_locator, &target_session_id.to_string())
-            .map_err(|error| format!("failed to locate question target child session: {error}"))?;
-    if locator_generation(&target_locator)? != question.target.segment_generation {
-        return Err(String::from(
-            "question target child generation does not match its participant",
+            .map_err(|error| format!("failed to locate {label} target child session: {error}"))?;
+    if locator_generation(&target_locator)? != participant.segment_generation {
+        return Err(format!(
+            "{label} target child generation does not match its participant"
         ));
     }
     let target_handle = load_embedded_canonical_handle(
@@ -1513,10 +1537,10 @@ async fn resolve_question_target(
     )?;
     let canonical_locator = target_handle
         .storage_locator()
-        .map_err(|error| format!("failed to resolve question target child locator: {error}"))?;
+        .map_err(|error| format!("failed to resolve {label} target child locator: {error}"))?;
     if canonical_locator != target_locator {
-        return Err(String::from(
-            "question target child handle does not match its exact locator",
+        return Err(format!(
+            "{label} target child handle does not match its exact locator"
         ));
     }
     Ok((
@@ -2093,6 +2117,59 @@ async fn reconcile_canonical_collaboration_outbox(
                     )),
                 }
             }
+        }
+    }
+    // Notifications live in their own map and have no question transaction to ride on, so the same
+    // source-commit-before-target-acceptance window strands them unless they are replayed here.
+    // 通知位于独立映射、不依附问题事务，因此若不在此处重放，同一"先提交来源再接纳目标"的窗口
+    // 会把它们滞留。
+    let stranded_notifications = source_handle
+        .read(|document| {
+            document
+                .collaboration_state()
+                .notifications
+                .values()
+                .filter(|record| {
+                    record.state
+                        == vulcan_session_core::v1::collaboration::CollaborationNotificationState::Recorded
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .map_err(|error| format!("failed to read notification outbox snapshot: {error}"))?;
+    for record in stranded_notifications {
+        let (target_session_id, target) =
+            match resolve_participant_target(&invocation, &record.target, "notification").await {
+                Ok(value) => value,
+                Err(error) => {
+                    failures.push(format!(
+                        "notification `{}` target resolution failed: {error}",
+                        record.notification_id.as_str()
+                    ));
+                    continue;
+                }
+            };
+        // The replay performs both halves under their own stable identities, so a target that already
+        // holds the acceptance is satisfied idempotently instead of being accepted twice.
+        // 重放以各自稳定身份执行两半，因此已持有接纳的目标由幂等性满足，而不会被二次接纳。
+        let delivery = notifications::deliver_recorded_notification(
+            &invocation,
+            target_session_id,
+            &target,
+            record.delivery_id.clone(),
+            record.notification_id.clone(),
+            record.operation_id.clone(),
+            record.source.clone(),
+            record.target.clone(),
+            record.body.clone(),
+        )
+        .await;
+        match delivery {
+            Ok(()) => repaired = repaired.saturating_add(1),
+            Err(error) => failures.push(format!(
+                "notification `{}` acceptance repair failed: {error}",
+                record.notification_id.as_str()
+            )),
         }
     }
     if failures.is_empty() {
