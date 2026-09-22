@@ -511,8 +511,8 @@ pub struct InternalModelOverrides {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionModelAccessPolicy {
-    /// Account-wide state used only after the user explicitly changes all models.
-    /// 仅在用户明确修改全部模型后使用的账号全局状态。
+    /// Provider display baseline, or the account-wide state after the user changes all models.
+    /// 供应商展示基线，或用户修改全部模型后采用的账号全局状态。
     #[serde(default = "default_connection_model_enabled")]
     pub default_enabled: bool,
     /// Whether unmentioned models inherit their exact signed or manual default.
