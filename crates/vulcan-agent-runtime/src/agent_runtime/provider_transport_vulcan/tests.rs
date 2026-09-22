@@ -67,6 +67,70 @@ fn public_execution_failure_message_is_json() {
     assert_eq!(value["message"], error.message);
 }
 
+/// Builds the normalized 401 an adapter sees before any credential recovery has run.
+/// 构建适配器在凭据恢复运行之前看到的归一化 401。
+fn rejected_unauthorized_failure() -> vulcan_ai_contract::AiExecutionError {
+    vulcan_ai_contract::AiExecutionError {
+        category: vulcan_ai_contract::AiErrorCategory::Authentication,
+        subcategory: Some(String::from("invalid_api_key")),
+        stage: String::from("response_headers"),
+        http_status: Some(401),
+        transport: Some(vulcan_ai_contract::AiTransportKind::Http),
+        websocket_close_code: None,
+        upstream_code: None,
+        upstream_type: None,
+        upstream_parameter: None,
+        upstream_message: None,
+        request_id: None,
+        provider_id: Some(String::from("openai")),
+        entry_id: Some(String::from("api")),
+        model_id: Some(String::from("gpt")),
+        message: String::from("upstream rejected the credential"),
+        dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Dispatched,
+        semantic_output_observed: false,
+        side_effect_observed: false,
+        terminal: true,
+        retryable: false,
+        retry_after: None,
+    }
+}
+
+/// Verifies the host decision consumes the adapter's real authentication-recovery marker.
+/// 验证宿主判定消费的是适配器真实产生的认证恢复标记。
+///
+/// # Notes
+/// 说明
+/// The runtime-level sibling test builds its own copy of the marker, so it would keep passing even if
+/// the adapter stopped producing the subcategory the host keys on. This test instead runs the
+/// adapter's own annotation and its own Core-error projection before asking the host decision, so the
+/// marker value, its retryability and the host condition stay connected by construction.
+/// 运行时层的同类测试自行复刻标记，因此即使适配器不再产生宿主所依赖的子类别它也仍会通过。本测试
+/// 先执行适配器自身的标注与其自身的 Core 错误投影，再交给宿主判定，使标记取值、可重试性与宿主
+/// 条件天然保持连接。
+#[test]
+fn host_retry_decision_accepts_the_adapters_real_credential_recovery_marker() {
+    use crate::agent_runtime::provider_transport_stream_runtime::refreshed_oauth_credential_retry_decision;
+
+    // unrecovered starts exactly as the adapter's normalized 401 arrives from wire decoding.
+    // unrecovered 的初值正是适配器从线路解码拿到归一化 401 时的状态。
+    let unrecovered = public_execution_failure("openai", rejected_unauthorized_failure());
+    assert!(
+        refreshed_oauth_credential_retry_decision(&unrecovered, 0, false).is_none(),
+        "an unrecovered 401 must not authorize a credential replay"
+    );
+    let mut recovered = rejected_unauthorized_failure();
+    streaming::mark_credential_refreshed_after_unauthorized(&mut recovered);
+    // failure is the adapter's real Core-error projection of that annotated error.
+    // failure 是该已标注错误经适配器真实 Core 错误投影的结果。
+    let failure = public_execution_failure("openai", recovered);
+    let decision = refreshed_oauth_credential_retry_decision(&failure, 0, false).expect(
+        "the adapter's real authentication-recovery marker must authorize exactly one replay",
+    );
+    assert_eq!(decision.retry_number, 1);
+    assert_eq!(decision.max_retries, 1);
+    assert_eq!(decision.delay, std::time::Duration::ZERO);
+}
+
 /// Verifies typed TTL expiration is encoded as a User host message for non-V1 transport.
 /// 验证强类型 TTL 失效事件在非 V1 传输中编码为 User 宿主消息。
 #[test]

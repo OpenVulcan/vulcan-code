@@ -903,7 +903,7 @@ fn structured_provider_failure(
 ///
 /// A one-shot zero-delay decision independent of generic transport retry settings, or `None`.
 /// 返回独立于通用传输重试设置的单次零延迟决策，否则返回 `None`。
-fn refreshed_oauth_credential_retry_decision(
+pub(crate) fn refreshed_oauth_credential_retry_decision(
     error: &CoreError,
     completed_retries: u32,
     unsafe_delta_seen: bool,

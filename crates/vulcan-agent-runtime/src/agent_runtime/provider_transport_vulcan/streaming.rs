@@ -49,6 +49,29 @@ fn public_stream_event_is_terminal(event: &AiStreamEvent) -> bool {
     )
 }
 
+/// Marks one rejected-stream failure after its exact renewable credential was refreshed.
+/// 在精确可续期凭据已刷新后标注一次被拒绝的流失败。
+///
+/// # Parameters
+/// 参数
+///
+/// `error` is the normalized upstream failure owned by the adapter dispatch path.
+/// `error` 是适配器分派路径持有的归一化上游失败。
+///
+/// # Notes
+/// 说明
+/// This is the sole definition of the authentication-recovery marker. The host transport recognizes a
+/// retryable 401 carrying this exact subcategory, so the marker, its retryability and the credentials
+/// that justify it must always change together.
+/// 这是认证恢复标记的唯一来源。宿主传输仅识别携带该精确子类别的可重试 401，因此标记、可重试性
+/// 与使其成立的凭据必须始终一起变化。
+pub(crate) fn mark_credential_refreshed_after_unauthorized(
+    error: &mut vulcan_ai_contract::AiExecutionError,
+) {
+    error.subcategory = Some(String::from(OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY));
+    error.retryable = true;
+}
+
 /// Refreshes one exact renewable credential after a replay-safe upstream 401 response.
 /// 在收到可安全重放的上游 401 响应后刷新一份精确可续期凭据。
 ///
@@ -74,10 +97,7 @@ async fn recover_rejected_oauth_credential(
         .refresh_after_unauthorized(rejected_revision)
         .await
     {
-        Ok(true) => {
-            error.subcategory = Some(String::from(OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY));
-            error.retryable = true;
-        }
+        Ok(true) => mark_credential_refreshed_after_unauthorized(error),
         Ok(false) => {}
         Err(refresh_error) => {
             error.retryable = false;

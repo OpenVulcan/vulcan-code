@@ -30,7 +30,7 @@ mod generated_resources;
 mod input_resources;
 mod message_projection;
 mod request;
-mod streaming;
+pub(super) mod streaming;
 mod trace;
 
 pub(super) use accumulator::public_usage_to_core;
