@@ -39,7 +39,7 @@
 | A04 | 启动最终回复归对应任务；queue 与 interrupt 绑定正确 | 排队任务终态与后继绑定证据；`stopped_target_wakeup_fails_queued_task_without_resuming_business` | 已实现并已验证 |
 | A05 | 主问子/子问主/同项目独立会话问答发送即返回；回执与答案分开 | `native_dispatch_ask_question_...`、`native_dispatch_wait_...`、S2.3 服务端 11 项 | 已实现并已验证 |
 | A06 | 父等待多个子任务时一个子问题立即唤醒；问题不计作子任务完成 | `wait_agent_returns_incoming_question_without_consuming_it`；完成门不含问题义务 | 已实现并已验证 |
-| A07 | 双向提问、答案先到、多等待者、超时再等待不丢答复、不互等 | 超时/重等/撤销三项（`61718ca4`）+ 游标修复（`9f8a243c`） | **已实现，证据不足**（答案先到、多等待者、双向互问未覆盖） |
+| A07 | 双向提问、答案先到、多等待者、超时再等待不丢答复、不互等 | 超时/重等/撤销三项（`61718ca4`）+ 游标修复（`9f8a243c`）+ 答案先到（`550a5c75`） | **已实现，证据不足**（多等待者、双向互问未覆盖） |
 | A08 | 主模型先 final 而子仍运行时各层保持未完成 | 完成门 `open_child_task_ids`；`main_only_parent_...` 不解冻 | 已实现并已验证 |
 | A09 | 未回复不阻止完成；仅主动等待才等待；晚到答案不复活旧任务；无法回答可明确表达 | `unanswered_question_and_notification_do_not_block_completion_and_late_question_does_not_revive`、`late_answer_after_settlement_is_rejected_without_reviving_target_task` | **已实现，证据不足**（`unable_to_answer` 只有回显无持久化效果，见 §二.2） |
 | A10 | 自然空闲仅答疑不二次完成；MainOnly 可恢复；停止拒收；全树停止后迟到不复活 | `question_finished_...`、`question_launch_admits_main_only_...`、`stopped_target_wakeup_...` | **已实现，证据不足**（自动唤醒调度一跳，见 §二.1） |
@@ -63,7 +63,7 @@
 | P04 信封与中立投影 | `bca79df4` | 已实现并已验证 |
 | P05 动态生产者迁移 | `bca79df4`、`42651b34`、`523fa6cd` | 已实现并已验证 |
 | P06 协议生产编码 | `fc65b351`、`fa1daa28` | 已实现并已验证 |
-| P07 临时问答与等待 | `61718ca4`、`9f8a243c`、`77b1cbf0` | **部分**（R10/A07/A10 缺口同 §二.1） |
+| P07 临时问答与等待 | `61718ca4`、`9f8a243c`、`77b1cbf0`、`550a5c75`、`f6a497c6` | **部分**（R10/A07 缺口同 §二.1） |
 | P08 父子工具完整暴露 | `d5c2865e`、`433dead7`、`6a65e457` | 已实现并已验证 |
 | P09 独立会话权限 | `6a65e457` | 已实现并已验证 |
 | P10 压缩与当前契约恢复 | `8fd2dbad`、`09d5e25a`、`c311ee31`、`f3b325f4` | 已实现并已验证 |
@@ -72,10 +72,12 @@
 
 ## 二、尚未闭合的验收缺口（都是证据不足，不是已知实现错误）
 
-1. **MainOnly 自动恢复的完整一跳与答案先到/多等待者**（R10、A07、A09、A10）。
-   已证明：真实启动闸门准入并声明 `wakes_retained_parent_turn`、两种停止状态拒绝、闸门为纯读取方。
+1. **MainOnly 自动恢复的完整一跳与多等待者/双向互问**（R10、A07、A10）。
+   已证明：真实启动闸门准入并声明 `wakes_retained_parent_turn`、两种停止状态拒绝、闸门为纯读取方
+   （`3df19776`）；提问方业务完成后首次答案到达仍正确结算且不复活旧业务（`f6a497c6`）；
+   答案先到时立即观察到而不等满超时（`550a5c75`）；超时/重等/撤销与游标语义（`61718ca4`、`9f8a243c`）。
    **未证明**：子代理提问真正触发调度（需要知识访问解析、WebUI 准备代次所有者、Agent 运行时桥
-   与宿主句柄，本层无法构造）；工具回复后子代理收到答案；提问方业务完成后首次答案到达。
+   与宿主句柄，本层无法构造）；工具回复后子代理收到答案；多等待者；双向互问；通知投递丢失后恢复。
 
 2. **`reply_question` 的 `unable_to_answer`**（A09）。
    源码事实（本轮逐行核对）：该字段是回复工具的一个**布尔开关**（Schema 中 `default: false`，
