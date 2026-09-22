@@ -750,10 +750,24 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
             .iter()
             .any(|candidate| candidate == ASK_QUESTION_TOOL_ID)
     );
+    // Hidden is an invocation-time policy, not a visibility filter: the manager lists every
+    // ai_visible candidate for any mode label, so the descriptor stays and only the call is refused.
+    // Hidden 是调用期策略而非可见性过滤：管理器对任何模式标签都列出全部 ai_visible 候选，
+    // 因此描述符保留，仅拒绝实际调用。
     assert!(
-        !plan_ids
+        plan_ids
             .iter()
             .any(|candidate| candidate == SEND_SESSION_MESSAGE_TOOL_ID),
-        "task message delivery remains hidden in Plan mode"
+        "task message delivery stays listed in Plan and is refused on invocation"
+    );
+    let hidden_plan_tool = manager
+        .resolve_for_execution_mode("Plan")
+        .definitions
+        .into_iter()
+        .find(|definition| definition.descriptor.id == SEND_SESSION_MESSAGE_TOOL_ID)
+        .expect("task message delivery definition must be projected by bridge");
+    assert!(
+        matches!(hidden_plan_tool.plan_policy, VulcanPlanToolPolicy::Hidden),
+        "task message delivery must keep its Hidden Plan policy through the bridge"
     );
 }
