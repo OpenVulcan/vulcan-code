@@ -786,6 +786,141 @@ async fn archived_target_model_answer_completes_durable_settlement() {
     );
 }
 
+/// An answer that arrives after the asker's business already completed must settle without reviving it.
+/// 在提问方业务已经完成之后到达的答案必须完成结算，且不得复活该业务。
+///
+/// # Notes
+/// 说明
+/// The existing late-answer evidence covers a *second* answer while both business turns are still open.
+/// This test covers the reviewer-requested first-answer case: the asker closed its turn before the
+/// answer existed, which is reachable because questions never block business completion.
+/// 既有的迟到回答证据覆盖的是双方业务回合仍开放时的**第二次**回答。本测试覆盖审核要求的
+/// 首次答案场景：提问方在答案存在之前就关闭了自己的回合，而这是可达的，因为问题从不阻塞业务完成。
+#[tokio::test]
+async fn answer_after_asker_completion_settles_without_reviving_the_asker_turn() {
+    // The question is pending and unanswered; both sides still hold their open business turns.
+    // 问题待处理且未回答；双方仍持有各自开放的业务回合。
+    let (_storage, invocation, target_handle, question, _operation) =
+        unacknowledged_settlement_fixture(false).await;
+    let source = invocation.source_handle.clone();
+    let source_turn = source
+        .read(|document| document.active_turn().unwrap().turn_id)
+        .unwrap();
+    // The asker finishes its business before any answer exists; questions do not block completion.
+    // 提问方在任何答案存在之前结束业务；问题不阻塞完成。
+    source
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::TurnCompleted,
+            |document| document.close_turn(TurnOutcome::Completed, 1, 9),
+        )
+        .unwrap();
+    // The running target owns a real in-turn question execution before it answers.
+    // 运行中的目标在回答之前持有真实回合内答疑执行。
+    target_handle
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| document.prepare_question_execution_before_api(question.clone(), 10),
+        )
+        .unwrap();
+    let context = start_question_execution_tool_call(
+        &target_handle,
+        ApiPurposeKind::QuestionExecution,
+        11,
+        "late-answer-after-completion",
+    );
+    // The target answers through the real native port, exactly as a model would after the asker stopped.
+    // 目标通过真实原生端口回答，与提问方停止后模型的真实行为一致。
+    let reply = session_v1_native_agent_collaboration_runtime(
+        invocation.state.clone(),
+        ServiceEventEmitter::new(Vec::new()),
+    )
+    .invoke(
+        context,
+        AgentCollaborationCommand::ReplyQuestion(ReplyQuestionArgs {
+            question_id: question.question_id.as_str().to_owned(),
+            answer: "Answered after the asker had already finished.".into(),
+            unable_to_answer: false,
+        }),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("late answer was rejected: {error}"));
+    assert_eq!(reply["status"], "ok");
+    assert_eq!(
+        reply["question_state"].as_str(),
+        Some("answered"),
+        "a late answer must still settle the question: {reply}"
+    );
+    // The asker's closed turn must stay closed and no new business turn may appear.
+    // 提问方已关闭的回合必须保持关闭，且不得出现新的业务回合。
+    source
+        .read(|document| {
+            assert_eq!(
+                document.active_turn().map(|turn| turn.turn_id),
+                Some(source_turn),
+                "the closed turn must remain the session's only turn"
+            );
+            assert!(
+                document.active_turn().unwrap().closed,
+                "a late answer must not reopen the asker's completed turn"
+            );
+            assert!(
+                document
+                    .collaboration_state()
+                    .question_executions
+                    .is_empty(),
+                "the asker owes no question execution for the late answer"
+            );
+        })
+        .unwrap();
+    // The durable settlement is complete on both sides: the source acknowledged the settlement.
+    // 双方可靠结算均已完成：来源已确认该结算。
+    let settled = source
+        .read(|document| {
+            let delivery = document
+                .collaboration_state()
+                .outbound_deliveries
+                .values()
+                .next()
+                .cloned()
+                .expect("the asker must retain its outbound delivery");
+            let answered = document
+                .collaboration_state()
+                .questions
+                .values()
+                .next()
+                .cloned()
+                .expect("the asker must retain its question");
+            (delivery.settlement_ack.is_some(), answered.answer)
+        })
+        .unwrap();
+    assert!(
+        settled.0,
+        "a late answer must still produce the durable source settlement acknowledgement"
+    );
+    assert_eq!(
+        settled.1.map(|answer| answer.body),
+        Some(String::from(
+            "Answered after the asker had already finished."
+        )),
+        "the late answer body must remain bound to the original question"
+    );
+    // The cold reader observes the same settlement without any resident asker turn.
+    // 冷读取方在没有任何驻留提问方回合的情况下观察到同一结算。
+    let reloaded = load_session_v1_for_runtime(&source.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    assert!(
+        reloaded
+            .collaboration_state()
+            .questions
+            .values()
+            .any(|record| record.answer.is_some()),
+        "the late answer must survive a cold reload"
+    );
+}
+
 /// An edit admission must hold its own target gate, not only the settlement peers.
 /// 编辑准入必须持有其自身目标门，而不只是结算对端。
 /// While the target gate is held elsewhere, the admission must not complete.
