@@ -221,7 +221,7 @@ function Merge-RemoteCapabilityMetadata {
             $enrichedCount++
             # A remote token window is not proof of a media-generation endpoint's input budget.
             # 远端 Token 窗口不是媒体生成入口输入预算的证明。
-            if ($null -eq $contextWindow -and (@($outputs) -contains "text") -and $null -ne $reference.context_window -and [long]$reference.context_window -gt 0) { $contextWindow = [long]$reference.context_window }
+            if ($null -eq $contextWindow -and @($outputs).Count -eq 1 -and (@($outputs) -contains "text") -and $null -ne $reference.context_window -and [long]$reference.context_window -gt 0) { $contextWindow = [long]$reference.context_window }
             if ($inputs.Count -eq 0) { $inputs = @($reference.input_modalities) }
             if ($outputs.Count -eq 0) { $outputs = @($reference.output_modalities) }
             $aliases = @(@($record.aliases) + @($reference.aliases) | Sort-Object -Unique)
@@ -269,7 +269,7 @@ function New-CommonModelCapabilityDocument {
         }
         if ($null -ne $record.context_window -and [long]$record.context_window -gt 0) {
             $entry.context_window = [long]$record.context_window
-        } elseif (@($record.output_modalities) -contains "text") {
+        } elseif (@($record.output_modalities).Count -eq 1 -and (@($record.output_modalities) -contains "text")) {
             $entry.context_window = 200000
         }
         $entry.input_modalities = @($record.input_modalities)

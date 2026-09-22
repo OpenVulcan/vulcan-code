@@ -264,9 +264,7 @@ pub fn resolve_common_model_capabilities(model_id: &str) -> CommonModelCapabilit
         Some(record) => CommonModelCapabilityResolution {
             matched: true,
             context_window: record.context_window.or_else(|| {
-                record
-                    .output_modalities
-                    .contains(&CommonModelModality::Text)
+                (record.output_modalities.as_slice() == [CommonModelModality::Text])
                     .then_some(COMMON_MODEL_FALLBACK_CONTEXT_WINDOW)
             }),
             supports_text_input: record.input_modalities.contains(&CommonModelModality::Text),
@@ -287,6 +285,41 @@ pub fn resolve_common_model_capabilities(model_id: &str) -> CommonModelCapabilit
     }
 }
 
+/// Returns a declared model window or the text-conversation fallback when it is applicable.
+/// 仅在纯文本会话适用时返回默认窗口；其他模型只接受目录明确声明的窗口。
+///
+/// # Parameters
+/// 参数
+/// `model_id` identifies the catalog record and `capabilities` describes the current route.
+/// `model_id` 标识目录记录，`capabilities` 描述当前路由的实际能力。
+/// `resolution` contains the existing exact-match result and text fallback.
+/// `resolution` 包含已有的精确匹配结果和文本默认值。
+///
+/// # Returns
+/// 返回值
+/// A real declared limit for any model, or a fallback only for text-only conversation output.
+/// 对所有模型返回真实声明的上限，仅对纯文本会话输出返回默认值。
+fn context_window_for_declared_capabilities(
+    model_id: &str,
+    capabilities: &ModelCapabilities,
+    resolution: &CommonModelCapabilityResolution,
+) -> Option<u64> {
+    if capabilities
+        .operations
+        .contains(&vulcan_ai_contract::AiOperation::ConversationRespond)
+        && capabilities.output_resources.is_empty()
+    {
+        return resolution.context_window;
+    }
+    deterministic_template_match(model_id)
+        .and_then(|matched| {
+            common_model_capability_index()
+                .records
+                .get(matched.template_key.as_str())
+        })
+        .and_then(|record| record.context_window)
+}
+
 /// Fills only capability fields that have not been declared by a more specific source.
 /// 只填充尚未由更具体来源声明的能力字段。
 ///
@@ -305,7 +338,8 @@ pub fn apply_common_model_capability_defaults(
 ) -> bool {
     let resolution = resolve_common_model_capabilities(model_id);
     if capabilities.context_limit.is_none() {
-        capabilities.context_limit = resolution.context_window;
+        capabilities.context_limit =
+            context_window_for_declared_capabilities(model_id, capabilities, &resolution);
     }
     if capabilities.input_resources.is_empty() {
         capabilities.input_resources = resolution.input_resources;
@@ -339,7 +373,8 @@ pub fn apply_common_model_context_default(
 ) -> bool {
     let resolution = resolve_common_model_capabilities(model_id);
     if capabilities.context_limit.is_none() {
-        capabilities.context_limit = resolution.context_window;
+        capabilities.context_limit =
+            context_window_for_declared_capabilities(model_id, capabilities, &resolution);
     }
     resolution.matched
 }
@@ -698,6 +733,39 @@ mod tests {
         apply_common_model_capability_defaults("grok-imagine-video", &mut capabilities);
         assert_eq!(capabilities.context_limit, None);
         assert_eq!(capabilities.output_resources, vec![ResourceKind::Video]);
+    }
+
+    /// Verifies newly signed media identities cannot inherit an unknown text model's fallback.
+    /// 验证新签名媒体身份不能继承未知文本模型的默认窗口。
+    #[test]
+    fn unknown_media_model_keeps_undeclared_context_limit() {
+        let mut image_capabilities = ModelCapabilities {
+            operations: vec![vulcan_ai_contract::AiOperation::ImageGenerate],
+            output_resources: vec![ResourceKind::Image],
+            ..ModelCapabilities::default()
+        };
+        assert!(!apply_common_model_context_default(
+            "new-signed-image-model",
+            &mut image_capabilities,
+        ));
+        assert_eq!(image_capabilities.context_limit, None);
+
+        let mut text_capabilities = ModelCapabilities {
+            operations: vec![vulcan_ai_contract::AiOperation::ConversationRespond],
+            ..ModelCapabilities::default()
+        };
+        assert!(!apply_common_model_context_default(
+            "new-signed-text-model",
+            &mut text_capabilities,
+        ));
+        assert_eq!(text_capabilities.context_limit, Some(200_000));
+
+        let mut declared_image_capabilities = image_capabilities;
+        assert!(apply_common_model_context_default(
+            "gpt-image-2",
+            &mut declared_image_capabilities,
+        ));
+        assert_eq!(declared_image_capabilities.context_limit, Some(400_000));
     }
 
     /// Verifies specific declarations are never overwritten by the common catalog.
