@@ -32,6 +32,9 @@ if (path.resolve(output) === repository) {
 // Command and profile are explicit; a release launch cannot silently reuse a debug distribution.
 // 命令和模式显式指定，发布启动不能静默复用调试发行物。
 const [command, profile = 'debug'] = process.argv.slice(2);
+// One schema authority is shared by packaging, launching, and the Core restart layout reader.
+// 打包、启动与核心重启布局读取器共享唯一的架构版本权威。
+const runtimeLayoutSchemaVersion = 2;
 // The service describes its compiled profile without starting user services or touching settings.
 // 服务描述自身编译模式，不启动用户服务或修改配置。
 const execFileAsync = promisify(execFile);
@@ -349,8 +352,8 @@ async function main() {
     process.stdout.write(output);
     return;
   }
-  if (!['package', 'run', 'service'].includes(command) || !['debug', 'release'].includes(profile)) {
-    throw new Error('Usage: node scripts/desktop-runtime.mjs root|package|run|service [debug|release]');
+  if (!['package', 'run', 'service', 'layout'].includes(command) || !['debug', 'release'].includes(profile)) {
+    throw new Error('Usage: node scripts/desktop-runtime.mjs root|package|run|service|layout [debug|release]');
   }
   if (command === 'package') {
   // Validate source artifacts before removing an existing generated application tree.
@@ -480,7 +483,7 @@ async function main() {
     await writeChromiumPackageManifest(path.join(output, 'browser/chromium'), entry(chromiumExecutable));
   }
   const layout = {
-    schemaVersion: 2, profile,
+    schemaVersion: runtimeLayoutSchemaVersion, profile,
     serviceExecutable,
     desktopExecutable: `desktop/runtime/${electronBinary}`,
     desktopEntry: `${appEntry}/gui/main.js`, browserHostEntry: 'browser/runtime/chromium-host/main.js',
@@ -499,9 +502,15 @@ async function main() {
   // 进程和静态资源只由生成的布局清单确定。
   const manifestPath = path.join(output, 'runtime-layout.json');
   const layout = JSON.parse(await readFile(manifestPath, 'utf8'));
-  if (layout.schemaVersion !== 2 || layout.profile !== profile
+  if (layout.schemaVersion !== runtimeLayoutSchemaVersion || layout.profile !== profile
     || layout.platform !== process.platform || layout.architecture !== process.arch) {
     throw new Error('The built distribution does not match the requested profile, platform, or architecture. Rebuild first.');
+  }
+  // Core-only replacement needs the authoritative layout identity, without launching or repackaging other components.
+  // 仅替换核心需要权威布局身份，无须启动或重新打包其他组件。
+  if (command === 'layout') {
+    process.stdout.write(JSON.stringify(layout));
+    return;
   }
   await verifyPackagedLayout(layout);
   // The same absolute manifest reaches GUI, Core, and every Core-owned browser host.

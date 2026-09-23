@@ -9,6 +9,42 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { packageRelativePath, verifyPackagedLayout } from './desktop-runtime.mjs';
 
+// Exercise the actual read-only layout CLI used by Core restart, including incompatible identities.
+// 验证核心重启使用的真实只读布局命令，包含不匹配的布局身份。
+// The test owns its isolated root and returns after checking each command's exit status and output.
+// 测试独占隔离目录，检查每次命令退出状态和输出后返回。
+test('core restart layout reader shares current schema and rejects mismatched identities', async (t) => {
+  // All fixtures stay beneath the same target boundary enforced by the production CLI.
+  // 所有夹具均位于生产命令强制要求的同一目标目录边界内。
+  const script = fileURLToPath(new URL('./desktop-runtime.mjs', import.meta.url));
+  const target = path.resolve(path.dirname(script), '..', 'target');
+  await mkdir(target, { recursive: true });
+  const root = await mkdtemp(path.join(target, 'core-layout-test-'));
+  t.after(() => rm(root, { recursive: true }));
+  // Schema 2 is the current emitted layout; no browser or desktop artifacts are required for this metadata read.
+  // 当前产出的布局为架构 2；该元数据读取无需浏览器或桌面制品。
+  const layout = {
+    schemaVersion: 2, profile: 'debug', platform: process.platform, architecture: process.arch,
+    serviceExecutable: 'bin/vulcan-code-service.exe',
+  };
+  for (const override of [{}, { schemaVersion: 1 }, { profile: 'release' }, { platform: 'invalid' }, { architecture: 'invalid' }]) {
+    // Each candidate has exactly one identity mismatch, except the first valid control case.
+    // 除首个有效对照场景外，每个候选均只有一个身份字段不匹配。
+    const candidate = { ...layout, ...override };
+    await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify(candidate));
+    const result = spawnSync(process.execPath, [script, 'layout', 'debug'], {
+      env: { ...process.env, VULCAN_DESKTOP_DISTRIBUTION_ROOT: root }, encoding: 'utf8',
+    });
+    if (Object.keys(override).length === 0) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), layout);
+    } else {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /does not match the requested profile, platform, or architecture/);
+    }
+  }
+});
+
 test('rejects an isolated distribution root outside generated target artifacts', () => {
   const script = fileURLToPath(new URL('./desktop-runtime.mjs', import.meta.url));
   const attemptedRoot = path.parse(script).root;

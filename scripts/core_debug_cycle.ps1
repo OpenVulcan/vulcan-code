@@ -37,11 +37,14 @@ if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
     throw "Missing desktop runtime layout: $ManifestPath. Run 'make build' once first."
 }
 
-# Layout is the authoritative runtime layout already used by the GUI and service.
-# Layout 是 GUI 与服务已经共同使用的权威运行布局。
-$Layout = Get-Content -Raw -LiteralPath $ManifestPath -Encoding UTF8 | ConvertFrom-Json
-if ($Layout.schemaVersion -ne 1 -or $Layout.profile -ne 'debug' -or $Layout.platform -ne 'win32' -or
-    $Layout.serviceExecutable -ne 'bin/vulcan-code-service.exe') {
+# Layout is validated by the same schema/profile/platform authority used to package and launch the desktop.
+# Layout 由桌面打包及启动共用的架构、模式和平台权威进行校验。
+$LayoutJson = & node $RuntimeScriptPath layout debug
+if ($LASTEXITCODE -ne 0) {
+    throw "Core-only Debug build requires a matching Windows Debug layout: $ManifestPath"
+}
+$Layout = $LayoutJson | ConvertFrom-Json
+if ($Layout.serviceExecutable -ne 'bin/vulcan-code-service.exe') {
     throw "Core-only Debug build requires an existing Windows Debug layout: $ManifestPath"
 }
 
@@ -123,6 +126,22 @@ function Get-RunningOutputCore {
     })
 }
 
+# Stop-OutputCoreForRestart terminates only live Core processes selected by the exact output executable path.
+# Stop-OutputCoreForRestart 仅终止通过精确输出可执行路径选中的活动核心进程。
+# It has no parameters and returns after all selected owners exit; failures prevent binary replacement.
+# 无参数；全部选中持有者退出后返回，失败则阻止二进制替换。
+function Stop-OutputCoreForRestart {
+    # CoreProcess retains the verified process object instead of selecting a PID or image name for termination.
+    # CoreProcess 保留已验证进程对象，避免按进程编号或映像名称重新选择终止目标。
+    foreach ($CoreProcess in @(Get-RunningOutputCore)) {
+        Write-Host "Stopping Debug Core for restart: PID $($CoreProcess.Id)"
+        Stop-Process -InputObject $CoreProcess -Force -ErrorAction Stop
+        if (-not $CoreProcess.WaitForExit(10000)) {
+            throw "Debug Core did not exit after forced termination (PID $($CoreProcess.Id)). The old executable was not replaced."
+        }
+    }
+}
+
 # Assert-NoForeignCoreOwner rejects a live Debug owner whose executable is outside this layout.
 # Assert-NoForeignCoreOwner 拒绝可执行文件不属于本布局的活动 Debug 持有者。
 # The discovery PID is only a clue; the live same-name executable path must match this layout.
@@ -174,18 +193,7 @@ if ($Action -eq 'build') {
 
 Assert-NoForeignCoreOwner
 
-# Deadline bounds the wait for the existing tray owner to drain its sessions.
-# Deadline 限定等待现有托盘持有者排空会话的时间。
-$Deadline = (Get-Date).AddSeconds(120)
-if (@(Get-RunningOutputCore).Count -gt 0) {
-    Write-Host 'Debug Core is still running. Click its tray icon > Quit Service; the GUI can stay open.'
-    while (@(Get-RunningOutputCore).Count -gt 0 -and (Get-Date) -lt $Deadline) {
-        Start-Sleep -Milliseconds 500
-    }
-    if (@(Get-RunningOutputCore).Count -gt 0) {
-        throw 'Debug Core did not exit after Quit Service. The old executable was not replaced.'
-    }
-}
+Stop-OutputCoreForRestart
 
 Assert-NoForeignCoreOwner
 
@@ -224,10 +232,10 @@ finally {
 $PriorLayoutEnvironment = [Environment]::GetEnvironmentVariable('VULCAN_RUNTIME_LAYOUT', 'Process')
 try {
     [Environment]::SetEnvironmentVariable('VULCAN_RUNTIME_LAYOUT', $ManifestPath, 'Process')
-    # StartedCore runs independently of this Make invocation and owns one visible Debug console.
-    # StartedCore 独立于本次 Make 调用运行，并持有一个可见的 Debug 控制台。
+    # StartedCore runs independently of Make without opening an unsolicited console window.
+    # StartedCore 独立于 Make 运行，不打开非用户请求的控制台窗口。
     $StartedCore = Start-Process -FilePath $OutputCorePath -ArgumentList '--gui-launch' `
-        -WorkingDirectory $OutputRoot -WindowStyle Normal -PassThru
+        -WorkingDirectory $OutputRoot -WindowStyle Hidden -PassThru
 }
 catch {
     # No child was started, so restoring the previous binary cannot interrupt a live owner.

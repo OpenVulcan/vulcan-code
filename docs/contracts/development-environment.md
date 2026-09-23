@@ -36,9 +36,9 @@ Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。
 make core-restart
 ```
 
-只想验证编译而暂不重启时，使用 `make core-build`；它只把 `vulcan-code-service` 编译到 Cargo 的 Debug 目录，不替换正在运行的服务。`make core-restart` 自带增量编译；如果旧 Core 还在运行，命令提示在托盘点击 **Quit Service**，等待它完成排空后才原子替换 `output/bin/vulcan-code-service.exe` 并启动新 Core。桌面壳与 Vite 保持运行，WebUI 断线后按新 Core 的发现信息重连。重启期间正在执行的 AI 请求会中断，应在重连后重新发起。
+只想验证编译而暂不重启时，使用 `make core-build`；它只把 `vulcan-code-service` 编译到 Cargo 的 Debug 目录，不替换正在运行的服务。`make core-restart` 自带增量编译，使用桌面运行入口共用的布局校验；编译和启动契约校验成功后，自动强制停止精确路径匹配的当前 Debug Core，原子替换 `output/bin/vulcan-code-service.exe` 并启动新 Core，无需手动退出托盘。其他发行目录或 Release 进程不在停止范围内；如果其他程序占有同一 Debug 数据目录，则拒绝重启。桌面壳与 Vite 保持运行，WebUI 断线后按新 Core 的发现信息重连。重启期间正在执行的 AI 请求会中断，应在重连后重新发起；需要优雅排空时可先自行从托盘退出服务。
 
-此入口目前只支持 Windows Debug。修改 `vulcan-terminal-host`、Electron、运行布局或 Core 与壳之间的启动协议时，使用完整 `make build`；修改权威运行资源时，先显式执行 `make sync`。`make core-restart` 不会同步资源，也不会把正在运行的 Core 强行终止。
+此入口目前只支持 Windows Debug。修改 `vulcan-terminal-host`、Electron、运行布局或 Core 与壳之间的启动协议时，使用完整 `make build`；修改权威运行资源时，先显式执行 `make sync`。`make core-restart` 不会同步资源；新 Core 退出且尚未健康就绪时，恢复原可执行文件备份。运行布局架构版本由 `scripts/desktop-runtime.mjs` 定义并校验，核心脚本不再维护独立版本数字。
 
 ## 新环境初始化
 
