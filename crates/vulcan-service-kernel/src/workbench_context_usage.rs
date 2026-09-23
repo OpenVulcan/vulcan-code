@@ -370,16 +370,23 @@ fn proportional_integer_shares(total: usize, weights: &[usize]) -> Vec<usize> {
 ///
 /// # Returns
 /// 返回值
-/// The total context following the response, with saturating arithmetic for omitted totals.
-/// 返回响应完成后的上下文总量；缺失总量时使用饱和运算。
+/// The total context following the response without recounting reasoning inside output.
+/// 返回响应完成后的上下文总量，不重复计入已包含在输出中的思考量。
 pub(crate) fn provider_context_tokens_from_usage(
     usage: &vulcan_core::types::ProviderUsageSnapshot,
     input_tokens: usize,
 ) -> usize {
+    // Public usage profiles include reasoning in output_tokens. When output is absent,
+    // reasoning_tokens still supplies a known lower bound for the generated side.
+    // 公共用量档案的 output_tokens 已包含思考量；输出缺失时，reasoning_tokens
+    // 仍可作为生成侧已知的下界。
     usage.total_tokens.unwrap_or_else(|| {
-        input_tokens
-            .saturating_add(usage.output_tokens.unwrap_or_default())
-            .saturating_add(usage.reasoning_tokens.unwrap_or_default())
+        input_tokens.saturating_add(
+            usage
+                .output_tokens
+                .unwrap_or_default()
+                .max(usage.reasoning_tokens.unwrap_or_default()),
+        )
     })
 }
 
@@ -711,6 +718,28 @@ mod tests {
             ..usage
         };
         assert_eq!(provider_context_tokens_from_usage(&usage_with_total, 249_000), 251_000);
+    }
+
+    /// Verifies reasoning already included in output cannot falsely trip a model-switch limit.
+    /// 验证已包含在输出中的思考量不会错误触发模型切换限制。
+    #[test]
+    fn provider_context_total_does_not_double_count_reasoning() {
+        let usage = vulcan_core::types::ProviderUsageSnapshot {
+            input_tokens: Some(240_000),
+            output_tokens: Some(8_000),
+            reasoning_tokens: Some(6_000),
+            ..Default::default()
+        };
+        assert_eq!(provider_context_tokens_from_usage(&usage, 240_000), 248_000);
+
+        let usage_without_output = vulcan_core::types::ProviderUsageSnapshot {
+            output_tokens: None,
+            ..usage
+        };
+        assert_eq!(
+            provider_context_tokens_from_usage(&usage_without_output, 240_000),
+            246_000
+        );
     }
 
     /// Builds one context budget snapshot for tooltip row tests.
