@@ -50,7 +50,7 @@ impl SessionDocument {
             }
             let result = CollaborationTaskResult {
                 acceptance: self.task_message_acceptance_for_effect(&effect.delivery_id)?,
-                terminal: self.build_task_terminal(turn_id)?,
+                terminal: Some(self.build_task_terminal(turn_id)?),
                 effect,
                 operation_id: operation_id.clone(),
                 target_revision: next_revision(self)?,
@@ -82,6 +82,80 @@ impl SessionDocument {
             )?;
         }
         Ok(())
+    }
+
+    /// Freezes one failed application as a terminal delivery receipt without a business response.
+    /// 将一次应用前失败冻结为没有业务回复的终态投递回执。
+    /// `delivery_id` identifies the target's exact failed effect; retries return its first receipt.
+    /// `delivery_id` 指向目标精确失败效果；重试返回首次回执。
+    pub fn record_failed_task_result(
+        &mut self,
+        delivery_id: CollaborationDeliveryId,
+        now_ms: i64,
+    ) -> Result<IdempotentMutation<CollaborationTaskResult>, DomainError> {
+        validate_timestamp("collaboration.task_result.recorded_at_ms", now_ms)?;
+        let effect = self
+            .collaboration_state()
+            .task_message_effects
+            .get(&delivery_id)
+            .cloned()
+            .ok_or_else(|| DomainError::CollaborationNotFound {
+                kind: "task_message_effect",
+                identity: delivery_id.as_str().to_owned(),
+            })?;
+        if !matches!(effect.outcome, CollaborationTaskMessageEffectKind::Failed { .. }) {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.not_failed",
+            });
+        }
+        if let Some(previous) = self.collaboration_state().task_results.get(&delivery_id) {
+            return Ok(IdempotentMutation::Idempotent(previous.clone()));
+        }
+        let operation_id = CollaborationOperationId::try_new(format!(
+            "task-result:{}",
+            effect.event_seq.value()
+        ))?;
+        let semantic = CollaborationOperationSemantic::RecordTaskResult {
+            delivery_id: delivery_id.clone(),
+        };
+        if self.existing_collaboration_operation(&operation_id, &semantic)?.is_some() {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.missing_snapshot",
+            });
+        }
+        let result = CollaborationTaskResult {
+            acceptance: self.task_message_acceptance_for_effect(&delivery_id)?,
+            effect,
+            terminal: None,
+            operation_id: operation_id.clone(),
+            target_revision: next_revision(self)?,
+            event_seq: next_event_seq(self)?,
+            recorded_at_ms: now_ms,
+        };
+        result.validate()?;
+        let mut state = self.collaboration_state().clone();
+        state.task_results.insert(delivery_id, result.clone());
+        state.operations.insert(
+            operation_id.clone(),
+            CollaborationOperationRecord {
+                operation_id: operation_id.clone(),
+                semantic,
+                event_seq: result.event_seq,
+                result: CollaborationOperationResult::TaskResult {
+                    result: result.clone(),
+                },
+            },
+        );
+        self.commit_collaboration_event(
+            state,
+            operation_id,
+            CollaborationEventKind::TaskResultRecorded,
+            CollaborationAfterState::TaskResult {
+                result: result.clone(),
+            },
+            now_ms,
+        )?;
+        Ok(IdempotentMutation::Committed(result))
     }
 
     /// Reads the unique resident terminal and, on success, its final normal business response.
@@ -247,7 +321,9 @@ impl SessionDocument {
             }) {
                 return Err(DomainError::CollaborationStateViolation { field: "collaboration.task_result.host_fact" });
             }
-            let terminal = &result.terminal;
+            let Some(terminal) = &result.terminal else {
+                continue;
+            };
             if terminal.turn_start_seq.value() >= self.resident_start_seq {
                 if self.build_task_terminal(terminal.turn_id)? != *terminal {
                     return Err(DomainError::CollaborationStateViolation {

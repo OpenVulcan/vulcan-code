@@ -35,6 +35,21 @@ struct TaskResultChunkHeader<'a> {
     total_text_bytes: usize,
 }
 
+/// Fixed model payload for an accepted task message that failed before application.
+/// 已接纳任务消息在应用前失败时使用的固定模型载荷。
+#[derive(Serialize)]
+struct TaskDeliveryFailureBody<'a> {
+    /// Stable payload representation version.
+    /// 稳定载荷表示版本。
+    version: u32,
+    /// Original immutable delivery identity.
+    /// 原始不可变投递身份。
+    delivery_id: &'a CollaborationDeliveryId,
+    /// Host-classified reason without a fabricated business outcome.
+    /// 宿主分类的原因，不伪造业务结果。
+    reason: CollaborationDeliveryFailureReason,
+}
+
 impl TaskResultChunkHeader<'_> {
     /// Serializes the exact header with JSON escaping; returns a stable domain error on failure.
     /// 使用 JSON 转义序列化精确头部；失败时返回稳定领域错误。
@@ -57,9 +72,42 @@ impl CollaborationTaskResult {
         receipt_seq: Seq,
     ) -> Result<Vec<HostMessageEnvelope>, DomainError> {
         self.validate()?;
+        if let CollaborationTaskMessageEffectKind::Failed { reason } = &self.effect.outcome {
+            let body = serde_json::to_string(&TaskDeliveryFailureBody {
+                version: 1,
+                delivery_id: &self.effect.delivery_id,
+                reason: *reason,
+            })
+            .map_err(|_| DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.failure_body",
+            })?;
+            let envelope = HostMessageEnvelope {
+                event_id: format!("task-result:{}:0", receipt_seq.value()),
+                kind: HostMessageKind::TaskDeliveryFailed,
+                source: self.acceptance.message.target.session_id.clone(),
+                target: self.acceptance.message.source.session_id.clone(),
+                task_id: self
+                    .acceptance
+                    .message
+                    .target
+                    .task_id
+                    .as_ref()
+                    .map(|id| id.as_str().to_owned()),
+                question_id: None,
+                scope: String::from("task"),
+                body,
+            };
+            envelope.validate().map_err(|_| DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.failure_envelope",
+            })?;
+            return Ok(vec![envelope]);
+        }
+        let terminal = self.terminal.as_ref().ok_or(DomainError::CollaborationStateViolation {
+            field: "collaboration.task_result.missing_business_terminal",
+        })?;
         // A missing final response is an explicit non-success outcome, never fabricated assistant text.
         // 缺少最终回复表示明确非成功结果，绝不伪造助手正文。
-        let (text, source_text_seq) = match &self.terminal.final_assistant {
+        let (text, source_text_seq) = match &terminal.final_assistant {
             Some(assistant) => (
                 assistant.source_text.text.as_str(),
                 Some(assistant.source_text.event_seq),
@@ -74,8 +122,8 @@ impl CollaborationTaskResult {
         let mut header = TaskResultChunkHeader {
             version: 1,
             delivery_id: &self.effect.delivery_id,
-            turn_id: self.terminal.turn_id,
-            outcome: self.terminal.outcome,
+            turn_id: terminal.turn_id,
+            outcome: terminal.outcome,
             source_text_seq,
             chunk_index: coordinate_bound,
             chunk_count: coordinate_bound,

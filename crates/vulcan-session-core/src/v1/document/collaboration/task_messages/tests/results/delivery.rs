@@ -44,6 +44,64 @@ fn receive(
         .into_value()
 }
 
+/// An application failure returns through both durable owners without inventing a business terminal.
+/// 应用前失败经双方可靠归属回传，不虚构业务终态。
+#[test]
+fn failed_task_delivery_returns_and_releases_both_history_guards() {
+    let (mut source, mut target, message) = fixture(CollaborationTaskMessageKind::TaskSteer);
+    source.send_task_message(message.clone(), 3).unwrap();
+    target
+        .accept_task_message(
+            CollaborationOperationId::try_new("accept-failed").unwrap(),
+            message.clone(),
+            4,
+        )
+        .unwrap();
+    target
+        .fail_task_message(
+            CollaborationOperationId::try_new("fail-application").unwrap(),
+            message.delivery_id.clone(),
+            CollaborationDeliveryFailureReason::InvalidBinding,
+            5,
+        )
+        .unwrap();
+    assert!(target.collaboration_state().requires_edit_or_delete_settlement());
+    let original_turn = target.active_turn().unwrap().turn_id;
+    let result = target
+        .record_failed_task_result(message.delivery_id.clone(), 6)
+        .unwrap()
+        .into_value();
+    assert!(result.terminal.is_none());
+    assert_eq!(target.active_turn().unwrap().turn_id, original_turn);
+    assert_eq!(
+        reload(&target)
+            .record_failed_task_result(message.delivery_id.clone(), 7)
+            .unwrap()
+            .into_value(),
+        result
+    );
+    let receipt = receive(&mut source, result.clone());
+    target
+        .acknowledge_task_result(
+            CollaborationOperationId::try_new("confirm-failed").unwrap(),
+            receipt.clone(),
+            12,
+        )
+        .unwrap();
+    assert!(!source.collaboration_state().requires_edit_or_delete_settlement());
+    assert!(!target.collaboration_state().requires_edit_or_delete_settlement());
+    let envelope = &result.task_result_envelopes(receipt.event_seq).unwrap()[0];
+    assert_eq!(envelope.kind, vulcan_ai_contract::HostMessageKind::TaskDeliveryFailed);
+    assert_eq!(envelope.source, "target");
+    assert_eq!(envelope.target, "source");
+    let body: serde_json::Value = serde_json::from_str(&envelope.body).unwrap();
+    assert_eq!(body["delivery_id"], message.delivery_id.as_str());
+    assert_eq!(body["reason"], "invalid_binding");
+    assert!(!envelope.render().unwrap().contains("task_result"));
+    reload(&source);
+    reload(&target);
+}
+
 /// Late delivery survives a new requester turn and returns the same receipt after either side reloads.
 /// 迟到投递跨越请求者新回合，并在任一方重载后返回相同回执。
 #[test]
@@ -161,6 +219,8 @@ fn task_result_delivery_rejects_conflicts_without_partial_writes() {
     let mut altered = result;
     altered
         .terminal
+        .as_mut()
+        .unwrap()
         .final_assistant
         .as_mut()
         .unwrap()

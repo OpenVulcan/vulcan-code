@@ -59,8 +59,8 @@ pub struct CollaborationTaskTerminal {
     pub completed_at_ms: i64,
 }
 
-/// Target-owned immutable result with all original task-binding proofs.
-/// 携带全部原任务绑定凭据的目标所有不可变结果。
+/// Target-owned immutable result or pre-application delivery failure.
+/// 目标所有的不可变业务结果或应用前投递失败。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CollaborationTaskResult {
@@ -70,9 +70,9 @@ pub struct CollaborationTaskResult {
     /// Original effect freezes the exact turn and optional queue execution identity.
     /// 原效果冻结精确回合及可选的排队执行身份。
     pub effect: CollaborationTaskMessageEffect,
-    /// Actual task outcome and original assistant response when successful.
-    /// 实际任务结果及成功时的原始助手回复。
-    pub terminal: CollaborationTaskTerminal,
+    /// Actual task outcome, absent only when the delivery effect failed before application.
+    /// 实际任务结果；仅投递在应用前失败时缺失。
+    pub terminal: Option<CollaborationTaskTerminal>,
     /// Stable target operation that recorded this result.
     /// 记录此结果的稳定目标操作。
     pub operation_id: CollaborationOperationId,
@@ -90,17 +90,13 @@ pub struct CollaborationTaskResult {
 impl CollaborationTaskResult {
     /// Validates exact binding and ordered proof coordinates without reading another session.
     /// 校验精确绑定与有序凭据坐标，不读取其他会话。
-    /// Returns an error for delivery-only failures or inconsistent final response facts.
-    /// 投递阶段失败或最终回复事实不一致时返回错误。
+    /// Returns an error for a failure with a fake business terminal or inconsistent response facts.
+    /// 投递失败伪造业务终态或回复事实不一致时返回错误。
     pub fn validate(&self) -> Result<(), DomainError> {
         self.effect.validate(&self.acceptance)?;
         validate_timestamp(
             "collaboration.task_result.recorded_at_ms",
             self.recorded_at_ms,
-        )?;
-        validate_timestamp(
-            "collaboration.task_result.completed_at_ms",
-            self.terminal.completed_at_ms,
         )?;
         // The effect alone supplies turn ownership; a receipt never borrows a newer active task.
         // 仅由效果提供回合归属；回执绝不借用较新的活动任务。
@@ -112,30 +108,41 @@ impl CollaborationTaskResult {
                 turn_id, input_seq, ..
             } => (*turn_id, *input_seq),
             CollaborationTaskMessageEffectKind::Failed { .. } => {
-                return Err(DomainError::CollaborationStateViolation {
-                    field: "collaboration.task_result.no_business_effect",
-                });
+                if self.terminal.is_some()
+                    || self.event_seq <= self.effect.event_seq
+                    || self.target_revision <= self.effect.target_revision
+                    || self.recorded_at_ms < self.effect.occurred_at_ms
+                {
+                    return Err(DomainError::CollaborationStateViolation {
+                        field: "collaboration.task_result.failed_delivery_shape",
+                    });
+                }
+                return Ok(());
             }
         };
-        if self.terminal.turn_id != turn_id
-            || self.terminal.turn_start_seq > input_seq
+        let terminal = self.terminal.as_ref().ok_or(DomainError::CollaborationStateViolation {
+            field: "collaboration.task_result.missing_business_terminal",
+        })?;
+        validate_timestamp("collaboration.task_result.completed_at_ms", terminal.completed_at_ms)?;
+        if terminal.turn_id != turn_id
+            || terminal.turn_start_seq > input_seq
             || (matches!(
                 self.effect.outcome,
                 CollaborationTaskMessageEffectKind::Claimed { .. }
-            ) && self.terminal.turn_start_seq != self.effect.event_seq)
-            || self.terminal.turn_stats_seq <= self.effect.event_seq
-            || self.terminal.turn_stats_seq <= input_seq
-            || self.event_seq <= self.terminal.turn_stats_seq
+            ) && terminal.turn_start_seq != self.effect.event_seq)
+            || terminal.turn_stats_seq <= self.effect.event_seq
+            || terminal.turn_stats_seq <= input_seq
+            || self.event_seq <= terminal.turn_stats_seq
             || self.target_revision < self.effect.target_revision
         {
             return Err(DomainError::CollaborationStateViolation {
                 field: "collaboration.task_result.binding",
             });
         }
-        match (&self.terminal.outcome, &self.terminal.final_assistant) {
+        match (&terminal.outcome, &terminal.final_assistant) {
             (TurnOutcome::Completed, Some(assistant)) => {
-                if assistant.api_stats_seq >= self.terminal.turn_stats_seq
-                    || assistant.source_text.event_seq <= self.terminal.turn_start_seq
+                if assistant.api_stats_seq >= terminal.turn_stats_seq
+                    || assistant.source_text.event_seq <= terminal.turn_start_seq
                     || assistant.source_text.event_seq <= input_seq
                     || assistant.source_text.event_seq >= assistant.api_stats_seq
                 {

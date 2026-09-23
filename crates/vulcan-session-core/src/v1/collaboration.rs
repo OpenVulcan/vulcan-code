@@ -1131,9 +1131,11 @@ impl CollaborationState {
                         | CollaborationTaskMessageEffectKind::Steered { .. } => {
                             !self.task_result_acknowledgements.contains_key(delivery_id)
                         }
-                        // A rejected delivery has no requester receipt or acknowledgement protocol.
-                        // 被拒绝的投递没有请求者回执或确认协议，不能丢弃唯一失败凭据。
-                        CollaborationTaskMessageEffectKind::Failed { .. } => true,
+                        // Failed applications use the same durable receiver and executor receipts.
+                        // 应用前失败同样使用可靠的接收方与执行方回执。
+                        CollaborationTaskMessageEffectKind::Failed { .. } => {
+                            !self.task_result_acknowledgements.contains_key(delivery_id)
+                        }
                     },
                     None => true,
                 }

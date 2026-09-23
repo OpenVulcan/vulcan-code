@@ -86,15 +86,22 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   const isNotification = afterState.kind === "outbound_notification" || afterState.kind === "inbound_notification";
   // Task-message cards describe delivery, never a child task's terminal result.
   // 任务消息卡片描述投递，绝不表示子任务终态结果。
+  // Failure receipts describe message application, not the business task's final answer.
+  // 失败回执描述消息应用，不表示业务任务的最终回答。
+  const isFailedTaskDelivery = (afterState.kind === "task_result" && afterState.result.terminal === null)
+    || (afterState.kind === "received_task_result" && afterState.acceptance.result.terminal === null);
   const isTaskMessage = afterState.kind === "outbound_task_message"
-    || afterState.kind === "inbound_task_message" || afterState.kind === "task_message_effect";
+    || afterState.kind === "inbound_task_message" || afterState.kind === "task_message_effect"
+    || isFailedTaskDelivery;
   // A durable child non-success report is a result, while its earlier lifecycle events remain controls.
   // 可靠子非成功报告属于结果，其较早生命周期事件仍属于控制信息。
-  const isTaskResult = afterState.kind === "task_result" || afterState.kind === "received_task_result"
-    || event.event_kind === "child_task_non_success_recorded";
+  const isTaskResult = ((afterState.kind === "task_result" || afterState.kind === "received_task_result")
+    && !isFailedTaskDelivery) || event.event_kind === "child_task_non_success_recorded";
   const participants = collaborationParticipants(afterState);
   const status = collaborationStatus(afterState, t);
-  const title = collaborationTimelineTitle(event.event_kind, t);
+  const title = isFailedTaskDelivery
+    ? t("conversation.collaboration.timeline.taskMessage")
+    : collaborationTimelineTitle(event.event_kind, t);
   const body = event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState);
   const secondaryBody = collaborationSecondaryBody(afterState);
   const pendingQuestion = afterState.kind === "question" && afterState.question.state === "pending"
@@ -282,15 +289,12 @@ function collaborationParticipants(afterState: CollaborationAfterState): Array<{
 function collaborationBody(afterState: CollaborationAfterState): string | null {
   switch (afterState.kind) {
     case "received_task_result":
-      return afterState.acceptance.result.terminal.final_assistant === null
-        ? null : afterState.acceptance.result.terminal.final_assistant.source_text.text;
+      return afterState.acceptance.result.terminal?.final_assistant?.source_text.text ?? null;
     case "task_result_acknowledgement":
     case "task_result_projection":
       return null;
     case "task_result":
-      return afterState.result.terminal.final_assistant === null
-        ? null
-        : afterState.result.terminal.final_assistant.source_text.text;
+      return afterState.result.terminal?.final_assistant?.source_text.text ?? null;
     case "outbound_task_message":
       return afterState.record.message.body;
     case "inbound_task_message":
@@ -403,9 +407,13 @@ function collaborationStatus(
 ): string | null {
   switch (afterState.kind) {
     case "task_result":
-      return collaborationTaskOutcomeLabel(afterState.result.terminal.outcome, t);
+      return afterState.result.terminal === null
+        ? t("conversation.collaboration.status.failed")
+        : collaborationTaskOutcomeLabel(afterState.result.terminal.outcome, t);
     case "received_task_result":
-      return collaborationTaskOutcomeLabel(afterState.acceptance.result.terminal.outcome, t);
+      return afterState.acceptance.result.terminal === null
+        ? t("conversation.collaboration.status.failed")
+        : collaborationTaskOutcomeLabel(afterState.acceptance.result.terminal.outcome, t);
     case "task_result_acknowledgement":
       return t("conversation.collaboration.status.delivered");
     case "task_result_projection":

@@ -779,14 +779,14 @@ export interface CollaborationTaskTerminal {
   completed_at_ms: number;
 }
 
-/** Target-owned result binding the accepted intent to its exact business terminal facts.
- * 目标所有的结果，将已接纳意图绑定至其精确业务终态事实。 */
+/** Target-owned result binding the accepted intent to business closure or pre-application failure.
+ * 目标所有的结果，将已接纳意图绑定至业务闭合或应用前失败。 */
 export interface CollaborationTaskResult {
-  // Original participants, applied effect and immutable business outcome.
-  // 原始参与者、已应用效果及不可变业务结果。
+  // Original participants, application effect and optional immutable business outcome.
+  // 原始参与者、应用效果及可选的不可变业务结果。
   acceptance: CollaborationTaskMessageAcceptance;
   effect: CollaborationTaskMessageEffect;
-  terminal: CollaborationTaskTerminal;
+  terminal: CollaborationTaskTerminal | null;
   // Target recording operation, publication coordinates and recording timestamp.
   // 目标记录操作、发布坐标及记录时间戳。
   operation_id: string;

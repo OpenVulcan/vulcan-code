@@ -6,7 +6,7 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationAnswerDeliveryState, CollaborationDeliveryFailureReason,
     CollaborationInboundDeliveryRecord, CollaborationInboundNotificationRecord,
     CollaborationNotificationState, CollaborationQuestionRecord, FailNotificationInput,
-    RecordNotificationProgressInput,
+    RecordNotificationProgressInput, CollaborationTaskMessageEffectKind,
 };
 
 /// One durable incoming fact ordered by its local acceptance sequence.
@@ -185,7 +185,27 @@ pub(crate) async fn project_collaboration_before_api(
                 task_results::project_task_result(&invocation, handle, acceptance, now_ms).await?;
             }
             PendingProjection::Steering(acceptance) => {
+                let delivery_id = acceptance.message.delivery_id.clone();
                 session_messages::project_steering(&invocation, handle, acceptance, now_ms).await?;
+                let failed = handle
+                    .read(|document| {
+                        document
+                            .collaboration_state()
+                            .task_message_effects
+                            .get(&delivery_id)
+                            .is_some_and(|effect| {
+                                matches!(effect.outcome, CollaborationTaskMessageEffectKind::Failed { .. })
+                            })
+                    })
+                    .map_err(|error| error.to_string())?;
+                if failed {
+                    if let Err(error) =
+                        reconcile_task_results_for_session(state, handle.session_id()).await
+                    {
+                        tracing::warn!(session_id = %handle.session_id(), %error,
+                            "Steering application failure return remains pending");
+                    }
+                }
             }
             PendingProjection::Question(inbound) => {
                 let source =

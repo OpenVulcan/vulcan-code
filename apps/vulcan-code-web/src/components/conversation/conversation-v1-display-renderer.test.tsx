@@ -124,8 +124,8 @@ describe("ConversationV1DisplayRenderer", () => {
     for (const outcome of ["completed", "stopped", "abandoned"] as const) {
       // Each variant is independently rendered so a stale success cannot leak into stopped output.
       // 每个分支独立渲染，避免旧成功正文混入停止输出。
-      const snapshot: CollaborationTaskResult = { ...result, terminal: { ...result.terminal, outcome,
-        final_assistant: outcome === "completed" ? result.terminal.final_assistant : null } };
+      const snapshot: CollaborationTaskResult = { ...result, terminal: { ...result.terminal!, outcome,
+        final_assistant: outcome === "completed" ? result.terminal!.final_assistant : null } };
       const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer
           availableCollaborationSessionIds={new Set(["executor"])}
@@ -171,7 +171,7 @@ describe("ConversationV1DisplayRenderer", () => {
             operation_id: "confirm-result", event_seq: 30, target_revision: 9, acknowledged_at_ms: 11 } },
         }, "host_only")]} />
       </I18nProvider>);
-      expect(confirmed).toContain("任务结果已送达");
+      expect(confirmed).toContain("任务回执已送达");
       expect(confirmed).not.toContain('data-collaboration-card-kind="task-result"');
       expect(confirmed).not.toContain('class="conversation-v1-collaboration-body"');
       expect(confirmed).not.toContain("conversation-v1-collaboration-cancel-button");
@@ -186,11 +186,32 @@ describe("ConversationV1DisplayRenderer", () => {
             receiver_revision: 10, projected_at_ms: 12 } },
         }, "host_only")]} />
       </I18nProvider>);
-      expect(projected).toContain("任务结果已加入上下文");
+      expect(projected).toContain("任务回执已加入上下文");
       expect(projected).not.toContain('class="conversation-v1-collaboration-body"');
       expect(projected).not.toContain("conversation-v1-collaboration-cancel-button");
       expect(projected).not.toContain("user-bubble");
     }
+    // An application failure remains a message-delivery card with no invented business response.
+    // 应用前失败保持为消息投递卡片，不虚构业务回复。
+    const failed: CollaborationTaskResult = {
+      ...result,
+      effect: { ...result.effect, outcome: { kind: "failed", reason: "authorization_revoked" } },
+      terminal: null,
+    };
+    const failedMarkup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+      <ConversationV1DisplayRenderer events={[summary(40, {
+        kind: "collaboration", version: 1, operation_id: failed.operation_id,
+        event_kind: "task_result_accepted", after_state: { kind: "received_task_result", acceptance: {
+          result: failed, operation_id: "receive-failure", event_seq: 40,
+          receiver_revision: 8, accepted_at_ms: 10,
+        } },
+      }, "host_only")]} />
+    </I18nProvider>);
+    expect(failedMarkup).toContain('data-collaboration-card-kind="task-message"');
+    expect(failedMarkup).toContain("代理任务消息");
+    expect(failedMarkup).toContain("失败");
+    expect(failedMarkup).not.toContain("完整最终结果");
+    expect(failedMarkup).not.toContain("assistant-final-output");
   });
   it("renders task intent, acceptance and effects as distinct delivery cards", () => {
     // These are the exact Core after-state variants, not parsed provider User envelopes.

@@ -3,7 +3,8 @@
 
 use super::*;
 use vulcan_session_core::v1::collaboration::{
-    CollaborationTaskMessageKind, CollaborationTaskResult, CollaborationTaskResultAcceptance,
+    CollaborationTaskMessageEffectKind, CollaborationTaskMessageKind, CollaborationTaskResult,
+    CollaborationTaskResultAcceptance,
 };
 
 /// Projects a locally durable `acceptance` under the requester's canonical lifecycle gate.
@@ -54,7 +55,9 @@ pub(super) async fn project_task_result(
             let message = &acceptance.result.acceptance.message;
             // Local accepted content is immutable authority; fresh model disclosure still consumes the original grant.
             // 本地已接纳正文是不可变权威；新的模型内容交付仍消费原授权。
-            if message.source.project_id != message.target.project_id {
+            if acceptance.result.terminal.is_some()
+                && message.source.project_id != message.target.project_id
+            {
                 let executor_id = Uuid::parse_str(&message.target.session_id)
                     .map_err(|error| error.to_string())?;
                 let action = match message.kind {
@@ -110,6 +113,38 @@ pub(crate) async fn reconcile_task_results_for_session(
     let executor = registry
         .get(session_id)
         .map_err(|error| error.to_string())?;
+    // A failed effect is a target-owned fact, but needs its own durable result before transfer.
+    // 失败效果是目标所有事实，但在回传前仍需要独立的可靠结果。
+    let unrecorded_failures = executor
+        .read(|document| {
+            let collaboration = document.collaboration_state();
+            collaboration
+                .task_message_effects
+                .iter()
+                .filter(|(delivery_id, effect)| {
+                    matches!(effect.outcome, CollaborationTaskMessageEffectKind::Failed { .. })
+                        && !collaboration.task_results.contains_key(*delivery_id)
+                })
+                .map(|(delivery_id, _)| delivery_id.clone())
+                .collect::<Vec<_>>()
+        })
+        .map_err(|error| error.to_string())?;
+    let mut failed = 0;
+    for delivery_id in unrecorded_failures {
+        let stamp = now_ms()?;
+        if let Err(error) = mutate_handle_with_admission(
+            &registry,
+            &executor,
+            session_id,
+            SessionMutationAdmission::MetadataOnly,
+            move |document| document.record_failed_task_result(delivery_id, stamp),
+        )
+        .await
+        {
+            failed += 1;
+            tracing::warn!(%session_id, %error, "Task delivery failure result recording remains pending");
+        }
+    }
     let pending = executor
         .read(|document| {
             let collaboration = document.collaboration_state();
@@ -126,7 +161,11 @@ pub(crate) async fn reconcile_task_results_for_session(
         })
         .map_err(|error| error.to_string())?;
     if pending.is_empty() {
-        return Ok(0);
+        return if failed == 0 {
+            Ok(0)
+        } else {
+            Err(format!("{failed} task delivery failures remain unrecorded"))
+        };
     }
     let invocation = recovery_invocation(
         Arc::clone(state),
@@ -138,7 +177,6 @@ pub(crate) async fn reconcile_task_results_for_session(
         Arc::clone(&executor),
     )?;
     let mut delivered = 0;
-    let mut failed = 0;
     for result in pending {
         let delivery_id = result.effect.delivery_id.clone();
         match deliver_task_result(&invocation, &executor, result).await {
@@ -203,7 +241,8 @@ async fn deliver_task_result(
                         .cloned()
                 })
                 .map_err(|error| error.to_string())?;
-            if received.is_none()
+            if result.terminal.is_some()
+                && received.is_none()
                 && result.acceptance.message.source.project_id
                     != result.acceptance.message.target.project_id
             {

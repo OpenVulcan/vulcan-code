@@ -525,7 +525,7 @@ async fn session_task_result_return_is_durable_and_idempotent() {
             .unwrap(),
         source_api
     );
-    assert!(receipt.result.terminal.final_assistant.is_none());
+    assert!(receipt.result.terminal.as_ref().unwrap().final_assistant.is_none());
     let source_revision = invocation
         .source_handle
         .read(|document| document.memory_revision())

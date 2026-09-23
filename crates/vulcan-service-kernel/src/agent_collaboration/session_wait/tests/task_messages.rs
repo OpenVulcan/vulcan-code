@@ -613,10 +613,10 @@ async fn agent_task_wakeup_failure_scenario(
             .document;
     let result_receipt = &receiver.collaboration_state().received_task_results[&delivery_id];
     assert_eq!(
-        result_receipt.result.terminal.outcome,
+        result_receipt.result.terminal.as_ref().unwrap().outcome,
         vulcan_session_core::v1::event::TurnOutcome::Stopped
     );
-    assert!(result_receipt.result.terminal.final_assistant.is_none());
+    assert!(result_receipt.result.terminal.as_ref().unwrap().final_assistant.is_none());
     assert_eq!(
         receiver.collaboration_state().outbound_task_messages[&delivery_id]
             .acceptance
@@ -809,6 +809,25 @@ async fn session_task_message_claim_rechecks_shutdown_and_start_grant() {
                 CollaborationTaskMessageEffectKind::Failed {
                     reason: CollaborationDeliveryFailureReason::AuthorizationRevoked,
                 }
+            );
+            assert_eq!(
+                reconcile_task_results_for_session(&invocation.state, target.session_id())
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert!(
+                invocation
+                    .source_handle
+                    .read(|document| document.collaboration_state().received_task_results[&delivery_id]
+                        .result.terminal.is_none())
+                    .unwrap()
+            );
+            assert!(
+                target
+                    .read(|document| document.collaboration_state().task_result_acknowledgements
+                        .contains_key(&delivery_id))
+                    .unwrap()
             );
         }
         assert!(
@@ -1384,4 +1403,25 @@ async fn session_task_message_grant_actions_and_revocation() {
             );
         })
         .unwrap();
+    let returned = invocation
+        .source_handle
+        .read(|document| {
+            document.collaboration_state().received_task_results[&delivery_id]
+                .result
+                .clone()
+        })
+        .unwrap();
+    assert!(returned.terminal.is_none());
+    assert_eq!(
+        target
+            .read(|document| {
+                document
+                    .collaboration_state()
+                    .task_result_acknowledgements
+                    .get(&delivery_id)
+                    .map(|acknowledgement| acknowledgement.acceptance.result.clone())
+            })
+            .unwrap(),
+        Some(returned)
+    );
 }

@@ -19,8 +19,8 @@ use vulcan_workspace_store::workspace_store::locate_session_v1_storage;
 /// `collaboration` is metadata only; returns whether canonical loading is necessary for repair.
 /// `collaboration` 仅是元数据；返回是否需要为修复加载规范文档。
 fn needs_delivery_recovery(collaboration: &CollaborationState) -> bool {
-    // A claim can survive a crash before dispatch; the full document later proves API eligibility.
-    // 认领可能在分发前崩溃后存续；完整文档随后证明 API 准入资格。
+    // A claim or failed application can survive a crash before its result was recorded.
+    // 认领或应用前失败可能在结果记录前遭遇崩溃后存续。
     if collaboration
         .task_message_effects
         .iter()
@@ -28,6 +28,7 @@ fn needs_delivery_recovery(collaboration: &CollaborationState) -> bool {
             matches!(
                 effect.outcome,
                 CollaborationTaskMessageEffectKind::Claimed { .. }
+                    | CollaborationTaskMessageEffectKind::Failed { .. }
             ) && !collaboration.task_results.contains_key(delivery)
         })
     {

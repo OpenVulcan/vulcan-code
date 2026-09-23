@@ -217,6 +217,11 @@ async fn wake_session_task(
             effect.outcome,
             CollaborationTaskMessageEffectKind::Failed { .. }
         ) {
+            if let Err(error) =
+                reconcile_task_results_for_session(&invocation.state, target_id).await
+            {
+                tracing::warn!(%target_id, %error, "Task application failure return remains pending");
+            }
             continue;
         }
         let preparation = async {

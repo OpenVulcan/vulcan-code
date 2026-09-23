@@ -93,9 +93,10 @@ fn task_result_retains_full_response_and_original_turn_after_successor() {
         assert_eq!(result.target_revision, target.memory_revision());
         assert_eq!(&target.events()[..prefix.len()], prefix);
         assert_eq!(result.acceptance.message, message);
-        assert_eq!(result.terminal.turn_id, turn.turn_id);
-        assert_eq!(result.terminal.turn_start_seq, turn.start_seq);
-        let assistant = result.terminal.final_assistant.as_ref().unwrap();
+        let terminal = result.terminal.as_ref().unwrap();
+        assert_eq!(terminal.turn_id, turn.turn_id);
+        assert_eq!(terminal.turn_start_seq, turn.start_seq);
+        let assistant = terminal.final_assistant.as_ref().unwrap();
         assert_eq!(assistant.api_call_id, api);
         assert_eq!(assistant.source_text.text, text);
         let mut restored = reload(&target);
@@ -126,8 +127,8 @@ fn task_result_non_success_has_no_fabricated_response() {
         let revision = target.memory_revision();
         target.close_turn(outcome, 1, 9).unwrap();
         let result = &target.collaboration_state().task_results[&message.delivery_id];
-        assert_eq!(result.terminal.outcome, outcome);
-        assert!(result.terminal.final_assistant.is_none());
+        assert_eq!(result.terminal.as_ref().unwrap().outcome, outcome);
+        assert!(result.terminal.as_ref().unwrap().final_assistant.is_none());
         assert_eq!(target.memory_revision(), revision + 1);
         assert_eq!(
             reload(&target).collaboration_state().task_results[&message.delivery_id],
@@ -172,6 +173,8 @@ fn task_result_reload_rejects_divergent_original_assistant() {
     let result = &target.collaboration_state().task_results[&message.delivery_id];
     let text_seq = result
         .terminal
+        .as_ref()
+        .unwrap()
         .final_assistant
         .as_ref()
         .unwrap()
@@ -235,7 +238,7 @@ fn task_result_lifetime_requires_closed_turn_and_complete_snapshot() {
         })
     ));
     let mut wrong_start = result;
-    wrong_start.terminal.turn_start_seq = Seq::try_new(1).unwrap();
+    wrong_start.terminal.as_mut().unwrap().turn_start_seq = Seq::try_new(1).unwrap();
     assert!(matches!(
         wrong_start.validate(),
         Err(DomainError::CollaborationStateViolation {
