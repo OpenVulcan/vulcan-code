@@ -185,17 +185,17 @@ pub(super) async fn deliver_recorded_notification(
     Ok(())
 }
 
-/// Copies an already durable target projection receipt back to its notification source.
-/// 将目标已可靠保存的投影回执补记到通知来源。
-/// `record` is the source snapshot and `target` is its exact canonical participant; returns whether a
-/// projected target fact was found and the source progress write completed.
-/// `record` 是来源快照，`target` 是其精确规范参与者；返回是否找到目标投影事实并完成来源进度写入。
-pub(super) async fn recover_projected_notification_progress(
+/// Copies an already durable target acceptance or projection back to its notification source.
+/// 将目标已可靠保存的接纳或投影回执补记到通知来源。
+/// `record` is the source snapshot and `target` is its exact canonical participant; returns whether
+/// a target fact needed and completed a source progress write.
+/// `record` 是来源快照，`target` 是其精确规范参与者；返回目标事实是否需要并完成来源进度写入。
+pub(super) async fn recover_existing_notification_progress(
     invocation: &ValidatedInvocation,
     record: &CollaborationNotificationRecord,
     target: &ResolvedSession,
 ) -> Result<bool, String> {
-    let projected = target
+    let target_progress = target
         .handle
         .read(|document| {
             let Some(inbound) = document
@@ -220,60 +220,90 @@ pub(super) async fn recover_projected_notification_progress(
                     "notification target receipt conflicts with its source authority",
                 ));
             }
-            match inbound.state {
-                CollaborationNotificationState::Accepted => return Ok(None),
-                CollaborationNotificationState::Projected => {}
-                CollaborationNotificationState::Recorded | CollaborationNotificationState::Failed => {
-                    return Err(String::from(
-                        "notification target has no valid pending projection progress",
-                    ));
+            let operation_id = match inbound.state {
+                CollaborationNotificationState::Accepted => inbound.operation_id.clone(),
+                CollaborationNotificationState::Projected => {
+                    CollaborationOperationId::try_new(format!(
+                        "{}:project",
+                        record.delivery_id.as_str()
+                    ))
+                    .map_err(|error| format!("invalid notification projection identity: {error}"))?
                 }
-            }
-            let operation_id = CollaborationOperationId::try_new(format!(
-                "{}:project",
-                record.delivery_id.as_str()
-            ))
-            .map_err(|error| format!("invalid notification projection identity: {error}"))?;
+                CollaborationNotificationState::Recorded | CollaborationNotificationState::Failed => {
+                    return Err(String::from("notification target has no valid progress receipt"));
+                }
+            };
             let operation = document
                 .collaboration_state()
                 .operations
                 .get(&operation_id)
-                .ok_or_else(|| String::from("projected notification has no durable operation"))?;
-            if !matches!(
-                &operation.semantic,
+                .ok_or_else(|| String::from("notification target has no durable progress operation"))?;
+            let matching_operation = match &operation.semantic {
+                CollaborationOperationSemantic::AcceptNotification {
+                    notification_id,
+                    delivery_id,
+                    source_operation_id,
+                    source,
+                    target,
+                } if inbound.state == CollaborationNotificationState::Accepted => {
+                    notification_id == &record.notification_id
+                        && delivery_id == &record.delivery_id
+                        && source_operation_id == &record.operation_id
+                        && source == &record.source
+                        && target == &record.target
+                }
                 CollaborationOperationSemantic::ProjectNotification {
                     notification_id,
                     delivery_id,
                     projected_seq,
                     projected_input_id,
                     projected_turn_id,
-                } if notification_id == &record.notification_id
-                    && delivery_id == &record.delivery_id
-                    && Some(*projected_seq) == inbound.projected_seq
-                    && Some(*projected_input_id) == inbound.projected_input_id
-                    && Some(*projected_turn_id) == inbound.projected_turn_id
-            ) {
+                } if inbound.state == CollaborationNotificationState::Projected => {
+                    notification_id == &record.notification_id
+                        && delivery_id == &record.delivery_id
+                        && Some(*projected_seq) == inbound.projected_seq
+                        && Some(*projected_input_id) == inbound.projected_input_id
+                        && Some(*projected_turn_id) == inbound.projected_turn_id
+                }
+                _ => false,
+            };
+            if !matching_operation {
                 return Err(String::from(
-                    "notification projection operation does not match its target receipt",
+                    "notification progress operation does not match its target receipt",
                 ));
             }
-            Ok(Some((inbound.target_revision, operation.event_seq)))
+            Ok(Some((inbound.state, inbound.target_revision, operation.event_seq)))
         })
         .map_err(|error| format!("failed to read notification target receipt: {error}"))??;
-    let Some((target_revision, target_event_seq)) = projected else {
+    let Some((state, target_revision, target_event_seq)) = target_progress else {
         return Ok(false);
     };
+    if state == CollaborationNotificationState::Accepted
+        && record.state == CollaborationNotificationState::Accepted
+    {
+        return Ok(false);
+    }
     // This records a fact that was already delivered, so a later grant revocation cannot erase it.
     // 此处只确认已经投递的事实，后续授权撤销不能抹去既有投递。
-    let input = RecordNotificationProgressInput {
-        operation_id: CollaborationOperationId::try_new(format!(
+    let operation_id = match state {
+        CollaborationNotificationState::Accepted => format!(
+            "{}:notification-accepted",
+            record.operation_id.as_str()
+        ),
+        CollaborationNotificationState::Projected => format!(
             "{}:source-projected",
             record.delivery_id.as_str()
-        ))
+        ),
+        CollaborationNotificationState::Recorded | CollaborationNotificationState::Failed => {
+            return Err(String::from("notification target progress is not recoverable"));
+        }
+    };
+    let input = RecordNotificationProgressInput {
+        operation_id: CollaborationOperationId::try_new(operation_id)
         .map_err(|error| format!("invalid notification progress identity: {error}"))?,
         notification_id: record.notification_id.clone(),
         delivery_id: record.delivery_id.clone(),
-        state: CollaborationNotificationState::Projected,
+        state,
         failure: None,
         target_revision: Some(target_revision),
         target_event_seq: Some(target_event_seq),

@@ -2155,10 +2155,10 @@ async fn reconcile_canonical_collaboration_outbox(
         // The replay performs both halves under their own stable identities, so a target that already
         // holds the acceptance is satisfied idempotently instead of being accepted twice.
         // 重放以各自稳定身份执行两半，因此已持有接纳的目标由幂等性满足，而不会被二次接纳。
-        // The target may have projected before its source learned even the acceptance. In that
-        // case the durable projection proof wins without re-delivering or rechecking a later grant.
-        // 目标可能在来源获知接纳前已投影；此时可靠投影凭据优先，不重投也不重验后续授权。
-        match notifications::recover_projected_notification_progress(&invocation, &record, &target)
+        // A target receipt can precede its source progress write. Confirm the existing durable
+        // acceptance or projection before attempting new delivery under today's grant state.
+        // 目标回执可能早于来源进度写入；按今天的授权尝试新投递前，先确认既有可靠接纳或投影。
+        match notifications::recover_existing_notification_progress(&invocation, &record, &target)
             .await
         {
             Ok(true) => {

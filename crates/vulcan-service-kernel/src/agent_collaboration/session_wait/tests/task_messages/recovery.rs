@@ -3,9 +3,9 @@
 
 use super::*;
 use vulcan_session_core::v1::collaboration::{
-    CollaborationDeliveryId, CollaborationGrantAction, CollaborationNotificationId,
-    CollaborationNotificationState, CollaborationTaskMessage, SendNotificationInput,
-    SetRunControlInput,
+    AcceptNotificationInput, CollaborationDeliveryId, CollaborationGrantAction,
+    CollaborationNotificationId, CollaborationNotificationState, CollaborationTaskMessage,
+    SendNotificationInput, SetRunControlInput,
 };
 use vulcan_session_core::v1::document::SessionDocument;
 
@@ -280,6 +280,96 @@ async fn projected_notification_with_missing_source_progress_is_repaired() {
             .unwrap(),
         1,
         "repair must not add another target delivery"
+    );
+}
+
+/// A revoked grant cannot undo an acceptance already committed while that grant was valid.
+/// 已有效授权下提交的接纳事实不能被后来撤销的授权抹去。
+/// Recovery must acknowledge the target's existing receipt without attempting another delivery.
+/// 恢复必须确认目标现有回执，而不能再次尝试投递。
+#[tokio::test]
+async fn accepted_notification_progress_survives_later_grant_revocation() {
+    let (_root, invocation, target, _) = message_fixture(true).await;
+    let source = invocation.source_handle.clone();
+    let (source_participant, target_participant) =
+        notification_participants(&invocation, &source, &target).await;
+    let grant = crate::project_conversation_services::service_add_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        target.session_id().to_string(),
+        format!("user-grant-add:v1:{}", Uuid::new_v4()),
+        [CollaborationGrantAction::Notify].into_iter().collect(),
+    )
+    .await
+    .unwrap();
+    let notification_id = CollaborationNotificationId::try_new("accepted-before-revoke").unwrap();
+    let delivery_id = CollaborationDeliveryId::try_new("accepted-before-revoke-delivery").unwrap();
+    let operation_id = CollaborationOperationId::try_new("accepted-before-revoke-send").unwrap();
+    let body = String::from("Delivered while the notify grant was valid.");
+    source
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.send_notification(SendNotificationInput {
+                    operation_id: operation_id.clone(),
+                    notification_id: notification_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    source: source_participant.clone(),
+                    target: target_participant.clone(),
+                    body: body.clone(),
+                    created_at_ms: 5,
+                })
+            },
+        )
+        .unwrap();
+    target
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.accept_notification(AcceptNotificationInput {
+                    operation_id: CollaborationOperationId::try_new("accepted-before-revoke-accept")
+                        .unwrap(),
+                    notification_id: notification_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    source_operation_id: operation_id.clone(),
+                    source: source_participant.clone(),
+                    target: target_participant.clone(),
+                    body: body.clone(),
+                    accepted_at_ms: 6,
+                })
+            },
+        )
+        .unwrap();
+    crate::project_conversation_services::service_remove_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        grant["grant"]["grant_id"].as_str().unwrap().to_owned(),
+        format!("user-grant-remove:v1:{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    let repaired = reconcile_session_v1_collaboration_outbox(
+        &crate::ServiceEventEmitter::new(vec![]),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .expect("the target's earlier acceptance is sufficient to repair source progress");
+    assert_eq!(repaired, 1);
+    assert_eq!(
+        source
+            .read(|document| document.collaboration_state().notifications[&notification_id].state)
+            .unwrap(),
+        CollaborationNotificationState::Accepted
+    );
+    assert_eq!(
+        target
+            .read(|document| document.collaboration_state().inbound_notifications.len())
+            .unwrap(),
+        1,
+        "recovery must not accept the same notification twice"
     );
 }
 
