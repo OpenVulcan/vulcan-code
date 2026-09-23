@@ -96,8 +96,8 @@ pub const READ_SESSION_TOOL_ID: &str = "read_session";
 /// 向现有会话发送消息工具的稳定公开标识。
 pub const SEND_SESSION_MESSAGE_TOOL_ID: &str = "send_session_message";
 
-/// Stable public id for sending a fire-and-forget notification to an authorized parent or self session.
-/// 向获授权父会话或本会话发送即发即忘通知工具的稳定公开标识。
+/// Stable public id for sending a fire-and-forget notification to another authorized session.
+/// 向另一个获授权会话发送即发即忘通知工具的稳定公开标识。
 pub const SEND_NOTIFICATION_TOOL_ID: &str = "send_notification";
 
 /// Stable public id for waiting on an existing session.
@@ -446,7 +446,7 @@ pub fn build_agent_collaboration_tool_candidates(
         build_command_candidate(
             runtime.clone(),
             SEND_NOTIFICATION_TOOL_ID,
-            "Send a fire-and-forget notification to an authorized parent or self session. This returns immediately, does not start or steer a task, does not create a question, and expects no reply.",
+            "Send a fire-and-forget notification to another authorized session, including the current agent's parent. This returns immediately, does not start or steer a task, does not create a question, and expects no reply.",
             send_notification_args_schema(),
             VulcanPlanToolPolicy::Visible,
             parse_send_notification,
