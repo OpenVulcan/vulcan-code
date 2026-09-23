@@ -9,10 +9,11 @@ use vulcan_agent_runtime::tooling::collaboration::{
     SEND_NOTIFICATION_TOOL_ID, SendNotificationArgs, WAIT_QUESTION_TOOL_ID, WaitQuestionArgs,
 };
 use vulcan_session_core::v1::collaboration::{
-    ActivateChildTaskInput, CollaborationChildTaskTerminalOutcome,
-    CollaborationDeliveryFailureReason, CollaborationExecutionId, CollaborationNotificationId,
-    CollaborationNotificationState, ReserveChildTaskInput, SetRunControlInput,
-    TerminalChildTaskInput,
+    AcceptDeliveryInput, ActivateChildTaskInput, CancelQuestionInput,
+    CollaborationChildTaskTerminalOutcome, CollaborationDeliveryFailureReason,
+    CollaborationExecutionId, CollaborationNotificationId, CollaborationNotificationState,
+    CollaborationTargetSettlementState, CreateQuestionInput, ReserveChildTaskInput,
+    SetRunControlInput, SettleInboundDeliveryInput, TerminalChildTaskInput,
 };
 use vulcan_session_core::v1::document::{
     ClientInputSubmission, EditGenerationInput, RootInputReplacement, SessionDocument, TurnOrigin,
@@ -1040,6 +1041,198 @@ async fn history_edit_refuses_an_unsettled_embedded_child_and_names_it() {
             .iter()
             .any(|locator| locator.session_id() == child_id.to_string()),
         "the rejected edit must not detach the embedded child from the root tree"
+    );
+}
+
+/// A cold embedded child's terminal receipt must remain until its external source acknowledges it.
+/// 冷态嵌入子会话的终态回执必须保留到外部来源确认它为止。
+/// The parent is settled and the child has no local pending work, so only the peer receipt check
+/// can reject the edit; both participants and the cold document use real published session files.
+/// 父会话已结清且子会话没有本地待办，因此只有对端回执校验能拒绝编辑；双方参与者及冷态文档均使用
+/// 真实发布的会话文件。
+#[tokio::test]
+async fn cold_child_unacknowledged_settlement_blocks_parent_history_edit() {
+    let (_storage, invocation, parent, _) = message_fixture(false).await;
+    let source = &invocation.source_handle;
+    let (child_id, child) =
+        embedded_child_of_parent(&invocation, &parent, "cold-settlement-child").await;
+    let execution_id = CollaborationExecutionId::try_new("cold-settlement-child").unwrap();
+    let task_id = vulcan_session_core::v1::ids::SubagentTaskId::try_new(child_id.to_string())
+        .unwrap();
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.activate_child_task(ActivateChildTaskInput {
+                    execution_id: execution_id.clone(),
+                    operation_id: CollaborationOperationId::try_new("cold-child-active").unwrap(),
+                    task_id: task_id.clone(),
+                    active_at_ms: 6,
+                })
+            },
+        )
+        .unwrap();
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.terminal_child_task(TerminalChildTaskInput {
+                    execution_id,
+                    operation_id: CollaborationOperationId::try_new("cold-child-terminal")
+                        .unwrap(),
+                    task_id: task_id.clone(),
+                    outcome: CollaborationChildTaskTerminalOutcome::Completed,
+                    terminal_at_ms: 7,
+                })
+            },
+        )
+        .unwrap();
+    let source_identity = source
+        .read(|document| {
+            CollaborationParticipant::new(
+                source.session_id().to_string(),
+                source.session_id().to_string(),
+                invocation.source_locator.project_id(),
+                document.segment_generation(),
+                Some(document.active_turn().unwrap().turn_id),
+                None,
+            )
+            .unwrap()
+        })
+        .unwrap();
+    let child_identity = child
+        .read(|document| {
+            CollaborationParticipant::new(
+                child_id.to_string(),
+                parent.session_id().to_string(),
+                child.storage_locator().unwrap().project_id(),
+                document.segment_generation(),
+                Some(document.active_turn().unwrap().turn_id),
+                Some(task_id),
+            )
+            .unwrap()
+        })
+        .unwrap();
+    let question_id = CollaborationQuestionId::try_new(format!(
+        "cq1/v1:{}:cold-child-settlement",
+        source.session_id()
+    ))
+    .unwrap();
+    let delivery_id = CollaborationDeliveryId::try_new("cold-child-settlement-delivery").unwrap();
+    source
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.create_question(CreateQuestionInput {
+                    operation_id: CollaborationOperationId::try_new("cold-question-create")
+                        .unwrap(),
+                    question_id: question_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    source: source_identity.clone(),
+                    target: child_identity.clone(),
+                    body: "Does the child still own this receipt?".into(),
+                    execution_purpose: CollaborationExecutionPurpose::InTurnQuestion,
+                    created_at_ms: 8,
+                })
+            },
+        )
+        .unwrap();
+    child
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.accept_delivery(AcceptDeliveryInput {
+                    operation_id: CollaborationOperationId::try_new("cold-question-accept")
+                        .unwrap(),
+                    question_id: question_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    source: source_identity.clone(),
+                    target: child_identity.clone(),
+                    bound_turn_id: child_identity.turn_id,
+                    execution_purpose: CollaborationExecutionPurpose::InTurnQuestion,
+                    accepted_at_ms: 9,
+                })
+            },
+        )
+        .unwrap();
+    let cancellation = source
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.cancel_question(CancelQuestionInput {
+                    operation_id: CollaborationOperationId::try_new("cold-question-cancel")
+                        .unwrap(),
+                    question_id: question_id.clone(),
+                    requester: source_identity.clone(),
+                    reason: "No longer required".into(),
+                    cancelled_at_ms: 10,
+                })
+            },
+        )
+        .unwrap()
+        .value
+        .into_value();
+    child
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.settle_inbound_delivery(SettleInboundDeliveryInput {
+                    operation_id: CollaborationOperationId::try_new("cold-target-settlement")
+                        .unwrap(),
+                    delivery_id: delivery_id.clone(),
+                    question_id: question_id.clone(),
+                    source_operation_id: CollaborationOperationId::try_new("cold-question-cancel")
+                        .unwrap(),
+                    settlement: CollaborationTargetSettlementState::Cancelled,
+                    source_event_seq: cancellation.event_seq,
+                    acknowledged_at_ms: 11,
+                })
+            },
+        )
+        .unwrap();
+    assert!(!parent
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    assert!(!child
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    assert!(source
+        .read(|document| document
+            .collaboration_state()
+            .outbound_deliveries[&delivery_id]
+            .settlement_ack
+            .is_none())
+        .unwrap());
+    // Register only the parent in a fresh registry, leaving the child and source cold for admission.
+    // 仅在新注册表登记父会话，使子会话与来源在准入时保持冷态。
+    let cold_registry = SessionRuntimeRegistry::default();
+    let parent_locator = parent.storage_locator().unwrap();
+    let cold_parent = SessionHandle::new(
+        parent.session_id(),
+        parent_locator.clone(),
+        load_session_v1_for_runtime(&parent_locator).unwrap().document,
+    );
+    cold_registry.register(Arc::clone(&cold_parent)).unwrap();
+    let generation = cold_parent.read(SessionDocument::segment_generation).unwrap();
+    let rejected = crate::session_v1_lifecycle::guards::admit_edit_generation(
+        &invocation.controller_runtime,
+        &cold_registry,
+        &cold_parent,
+    )
+    .await;
+    assert!(
+        matches!(rejected, Err(SessionV1LifecycleError::UnsettledCollaboration(id)) if id == child_id),
+        "a cold child lost the only terminal receipt its source has not acknowledged: {rejected:?}"
+    );
+    assert_eq!(
+        cold_parent.read(SessionDocument::segment_generation).unwrap(),
+        generation
     );
 }
 

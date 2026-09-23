@@ -113,8 +113,8 @@ fn write_gate_ids(
     Ok(identities)
 }
 
-/// Verifies unsettled collaboration on every member of `tree`, returning the warm handles.
-/// 校验 `tree` 每个成员上的未结协作，并返回驻留句柄。
+/// Verifies unsettled collaboration on every warm or cold member of `tree`.
+/// 校验 `tree` 每个驻留或冷态成员上的未结协作。
 ///
 /// # Parameters
 /// 参数
@@ -123,16 +123,12 @@ fn write_gate_ids(
 ///
 /// # Returns
 /// 返回值
-/// Returns the registered members' handles in stable session-id order. Warm and cold are explicit
-/// registry states, exactly as peer resolution treats them: an unregistered member is read through its
-/// locator's recovery state instead of being skipped, so a cold child cannot hide an unsettled receipt.
-/// 按稳定的会话标识顺序返回已注册成员的句柄。驻留与冷态是明确的注册表状态，与对端解析的处理一致：
-/// 未注册成员改为通过其定位器的恢复状态读取而不是被跳过，因此冷态子会话无法隐藏未结回执。
-fn settled_tree_owner_handles(
+/// Returns success only when each physical member has no local unsettled obligation.
+/// 仅当每个物理成员均无本地未结义务时返回成功。
+fn require_settled_tree_owners(
     registry: &SessionRuntimeRegistry,
     tree: &BTreeMap<SessionId, SessionV1StorageLocator>,
-) -> Result<Vec<Arc<SessionHandle>>, SessionV1LifecycleError> {
-    let mut handles = Vec::with_capacity(tree.len());
+) -> Result<(), SessionV1LifecycleError> {
     for (id, locator) in tree {
         match registry.get(*id) {
             Ok(handle) => {
@@ -144,7 +140,6 @@ fn settled_tree_owner_handles(
                 if handle.read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)? {
                     return Err(SessionV1LifecycleError::UnsettledCollaboration(*id));
                 }
-                handles.push(handle);
             }
             Err(SessionRuntimeError::SessionNotRegistered(_)) => {
                 // The locator is the only remaining authority for a cold member, and the unsettled
@@ -160,41 +155,50 @@ fn settled_tree_owner_handles(
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(handles)
+    Ok(())
 }
 
-/// Verifies terminal inbound receipts on `handles` against source acknowledgement under all peer gates.
-/// 在持有全部对端锁时，对照来源确认校验 `handles` 上的入站终态回执。
-/// `controller` owns SQLite locator existence; `registry` supplies canonical source documents.
-/// `controller` 持有 SQLite 定位存在性权威；`registry` 提供规范来源文档。
+/// Verifies every physical tree member's terminal receipts against durable source acknowledgements.
+/// 对照可靠来源确认校验物理树每个成员的终态回执。
+/// `controller` owns SQLite existence; `registry` selects each warm owner or cold locator.
+/// `controller` 持有 SQLite 存在性权威；`registry` 为每个成员选择驻留所有者或冷态定位器。
 /// Returns an unsettled error instead of discarding the only evidence needed for source recovery.
 /// 返回未结错误，而不是丢弃来源恢复所需的唯一证据。
 pub(super) async fn require_source_acknowledgements(
     controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
-    handles: &[Arc<SessionHandle>],
+    tree: &BTreeMap<SessionId, SessionV1StorageLocator>,
 ) -> Result<(), SessionV1LifecycleError> {
-    for target in handles {
-        // Clone receipt evidence outside the document lock before resolving an independent source.
-        // 在文档锁外复制回执证据，再解析独立来源。
-        let (inbound, operations, revision) = target.read_full_durable(|document| {
-            (
-                document
-                    .collaboration_state()
-                    .inbound_deliveries
-                    .values()
-                    .filter(|delivery| delivery.settlement.is_some())
-                    .cloned()
-                    .collect::<Vec<_>>(),
-                document.collaboration_state().operations.clone(),
-                document.durable_revision(),
-            )
-        })?;
+    for (target_id, locator) in tree {
+        // Capture terminal evidence before awaiting an independent source. Cold members must take
+        // this same check: local settlement alone cannot prove that their source was acknowledged.
+        // 等待独立来源前先捕获终态凭据。冷态成员也必须受同一校验：本地结算不足以证明来源已确认。
+        let (inbound, operations, revision) = match registry.get(*target_id) {
+            Ok(target) => {
+                if target.storage_locator()? != *locator {
+                    return Err(SessionV1LifecycleError::CanonicalOwnerUnavailable {
+                        session_id: *target_id,
+                    });
+                }
+                target.read_full_durable(terminal_settlement_evidence)?
+            }
+            Err(SessionRuntimeError::SessionNotRegistered(_)) => {
+                let loaded = load_session_v1_full(locator)?;
+                if loaded.metadata.session_id != target_id.to_string() {
+                    return Err(invalid(
+                        *target_id,
+                        "Cold settlement target metadata identity changed.",
+                    ));
+                }
+                terminal_settlement_evidence(&loaded.document)
+            }
+            Err(error) => return Err(error.into()),
+        };
         for delivery in inbound {
             require_source_acknowledgement(
                 controller,
                 registry,
-                target,
+                *target_id,
                 &operations,
                 revision,
                 &delivery,
@@ -205,6 +209,35 @@ pub(super) async fn require_source_acknowledgements(
     Ok(())
 }
 
+/// Captures one target's terminal receipts, operation proofs and durable revision together.
+/// 一次性捕获目标的终态回执、操作凭据与可靠修订。
+/// `document` is the canonical warm document or the exact cold document loaded from its locator.
+/// `document` 是规范驻留文档，或由其精确定位器加载的冷态文档。
+/// Returns owned evidence that remains valid while the caller awaits a separate source owner.
+/// 返回自有凭据，使调用方等待独立来源所有者期间仍保持有效。
+fn terminal_settlement_evidence(
+    document: &SessionDocument,
+) -> (
+    Vec<CollaborationInboundDeliveryRecord>,
+    std::collections::BTreeMap<
+        vulcan_session_core::v1::collaboration::CollaborationOperationId,
+        vulcan_session_core::v1::collaboration::CollaborationOperationRecord,
+    >,
+    u64,
+) {
+    (
+        document
+            .collaboration_state()
+            .inbound_deliveries
+            .values()
+            .filter(|delivery| delivery.settlement.is_some())
+            .cloned()
+            .collect(),
+        document.collaboration_state().operations.clone(),
+        document.durable_revision(),
+    )
+}
+
 /// Verifies one terminal inbound `delivery` of `target` against its durable source acknowledgement.
 /// 对照可靠来源确认校验 `target` 的一条入站终态 `delivery`。
 /// `operations` and `revision` are the target's pinned durable facts captured outside its document lock.
@@ -212,7 +245,7 @@ pub(super) async fn require_source_acknowledgements(
 async fn require_source_acknowledgement(
     controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
-    target: &Arc<SessionHandle>,
+    target_id: SessionId,
     operations: &std::collections::BTreeMap<
         vulcan_session_core::v1::collaboration::CollaborationOperationId,
         vulcan_session_core::v1::collaboration::CollaborationOperationRecord,
@@ -232,14 +265,14 @@ async fn require_source_acknowledgement(
         .get(&settlement.target_operation_id)
         .ok_or_else(|| {
             invalid(
-                target.session_id(),
+                target_id,
                 "Target settlement has no operation receipt.",
             )
         })?
         .event_seq;
     // Both source identities already participate in the caller's global lifecycle lock order.
     // 两个来源身份均已参与调用方的全局生命周期锁顺序。
-    let (source_id, root_id) = coordinates(target.session_id(), &delivery.source)?;
+    let (source_id, root_id) = coordinates(target_id, &delivery.source)?;
     // An absent indexed root is unavailable authority, never permission to search or recreate its files.
     // 缺失索引根意味着权威不可寻址，绝不授权搜索或重建其文件。
     let Some(root) = locate_optional_session_v1_storage(controller, &root_id.to_string()).await?
@@ -250,7 +283,7 @@ async fn require_source_acknowledgement(
     };
     if root.project_id() != delivery.source.project_id {
         return Err(invalid(
-            target.session_id(),
+            target_id,
             "Settlement source root project changed.",
         ));
     }
@@ -267,12 +300,12 @@ async fn require_source_acknowledgement(
         Ok(source) => {
             if source.storage_locator()? != locator {
                 return Err(invalid(
-                    target.session_id(),
+                    target_id,
                     "Settlement source canonical locator changed.",
                 ));
             }
             source.read_full_durable(|document| {
-                verify_acknowledgement(target.session_id(), document, delivery, event_seq, revision)
+                verify_acknowledgement(target_id, document, delivery, event_seq, revision)
             })??;
         }
         Err(SessionRuntimeError::SessionNotRegistered(_)) => {
@@ -281,12 +314,12 @@ async fn require_source_acknowledgement(
             let loaded = load_session_v1_full(&locator)?;
             if loaded.metadata.session_id != source_id.to_string() {
                 return Err(invalid(
-                    target.session_id(),
+                    target_id,
                     "Settlement source metadata identity changed.",
                 ));
             }
             verify_acknowledgement(
-                target.session_id(),
+                target_id,
                 &loaded.document,
                 delivery,
                 event_seq,
@@ -468,10 +501,10 @@ pub(crate) async fn admit_edit_generation<'a>(
     // `child_tasks`, and startup recovery discovers embedded children through that table.
     // 只检查根会丢掉嵌入子会话唯一的恢复入口：编辑会重置 `child_tasks`，而启动恢复正是通过该表
     // 发现嵌入子会话。
-    let tree_handles = settled_tree_owner_handles(registry, &tree)?;
+    require_settled_tree_owners(registry, &tree)?;
     // Retained terminal receipts must carry a durable source acknowledgement, unchanged from deletion.
     // 保留的终态回执必须携带可靠来源确认，与删除一致。
-    require_source_acknowledgements(controller, registry, &tree_handles).await?;
+    require_source_acknowledgements(controller, registry, &tree).await?;
     Ok(EditGenerationAdmission {
         _target: target,
         _peers: guards,

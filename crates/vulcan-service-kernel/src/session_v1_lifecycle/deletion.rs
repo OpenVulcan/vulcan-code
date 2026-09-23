@@ -144,7 +144,7 @@ pub(super) async fn delete_tree(
         }
         handles.push(handle);
     }
-    guards::require_source_acknowledgements(controller, registry, &handles).await?;
+    guards::require_source_acknowledgements(controller, registry, &tree).await?;
     // Seal every owner before unregistering any member or deleting a byte.
     // 注销任何成员或删除任何字节之前，先封存每个所有者。
     let mut sealed = Vec::with_capacity(handles.len());
