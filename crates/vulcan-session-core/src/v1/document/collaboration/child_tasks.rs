@@ -310,8 +310,8 @@ impl SessionDocument {
         ))
     }
 
-    /// Records one explicit terminal outcome for an active child task or startup failure.
-    /// 为活动子任务或启动失败记录一个明确终态结果。
+    /// Records an active child outcome or a failure/stop before activation, without inventing activation.
+    /// 记录活动子任务结果或激活前的失败及停止，不制造激活事实。
     pub fn terminal_child_task(
         &mut self,
         input: TerminalChildTaskInput,
@@ -349,7 +349,11 @@ impl SessionDocument {
         }
         let was_reserved = match current.state {
             CollaborationChildTaskState::Reserved => {
-                if input.outcome != CollaborationChildTaskTerminalOutcome::Failed {
+                if !matches!(
+                    input.outcome,
+                    CollaborationChildTaskTerminalOutcome::Failed
+                        | CollaborationChildTaskTerminalOutcome::Stopped
+                ) {
                     return Err(DomainError::CollaborationStateViolation {
                         field: "collaboration.child_task.reserved_terminal_outcome",
                     });
@@ -369,8 +373,8 @@ impl SessionDocument {
         task.terminal_at_ms = Some(input.terminal_at_ms);
         task.terminal_outcome = Some(input.outcome);
         if was_reserved {
-            // A startup failure never creates an activation fact.
-            // 启动失败不会创建激活事实。
+            // Startup failure or cancellation never creates an activation fact.
+            // 启动失败或取消不会创建激活事实。
             task.active_at_ms = None;
         }
         validate_child_task_record(&task)?;
@@ -725,49 +729,51 @@ mod tests {
         );
     }
 
-    /// Verifies that a reserved task may record an explicit startup failure.
-    /// 验证已预留任务可以记录明确的启动失败终态。
+    /// Verifies that a reserved task records startup failure or stop without an activation event.
+    /// 验证已预留任务记录启动失败或停止时不生成激活事件。
     #[test]
-    fn reserved_startup_failure_can_terminalize_as_failed() {
-        let (mut document, parent_turn_id) = document_with_open_turn();
-        let task_id = task("child-fail");
-        document
-            .reserve_child_task(reserve_input(
-                operation("reserve-fail"),
-                task_id.clone(),
-                parent_turn_id,
-            ))
-            .expect("reservation must commit");
+    fn reserved_startup_failure_or_stop_can_terminalize_without_activation() {
+        for outcome in [
+            CollaborationChildTaskTerminalOutcome::Failed,
+            CollaborationChildTaskTerminalOutcome::Stopped,
+        ] {
+            let (mut document, parent_turn_id) = document_with_open_turn();
+            let task_id = task("child-fail");
+            document
+                .reserve_child_task(reserve_input(
+                    operation("reserve-fail"),
+                    task_id.clone(),
+                    parent_turn_id,
+                ))
+                .expect("reservation must commit");
 
-        let terminal = document
-            .terminal_child_task(terminal_input(
-                operation("terminal-fail"),
-                task_id,
-                CollaborationChildTaskTerminalOutcome::Failed,
-            ))
-            .expect("reserved startup failure must be terminalizable")
-            .into_value();
-        assert_eq!(terminal.task.state, CollaborationChildTaskState::Terminal);
-        assert_eq!(terminal.task.active_at_ms, None);
-        assert_eq!(
-            terminal.task.terminal_outcome,
-            Some(CollaborationChildTaskTerminalOutcome::Failed)
-        );
-        let collaboration_kinds: Vec<_> = document
-            .events()
-            .iter()
-            .filter_map(|event| match &event.event {
-                EventBody::Collaboration(collaboration) => Some(collaboration.event_kind),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            collaboration_kinds,
-            vec![
-                CollaborationEventKind::ChildTaskReserved,
-                CollaborationEventKind::ChildTaskTerminal,
-            ]
-        );
+            let terminal = document
+                .terminal_child_task(terminal_input(
+                    operation("terminal-fail"),
+                    task_id,
+                    outcome,
+                ))
+                .expect("reserved failure or stop must be terminalizable")
+                .into_value();
+            assert_eq!(terminal.task.state, CollaborationChildTaskState::Terminal);
+            assert_eq!(terminal.task.active_at_ms, None);
+            assert_eq!(terminal.task.terminal_outcome, Some(outcome));
+            let collaboration_kinds: Vec<_> = document
+                .events()
+                .iter()
+                .filter_map(|event| match &event.event {
+                    EventBody::Collaboration(collaboration) => Some(collaboration.event_kind),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                collaboration_kinds,
+                vec![
+                    CollaborationEventKind::ChildTaskReserved,
+                    CollaborationEventKind::ChildTaskTerminal,
+                ]
+            );
+        }
     }
 
     /// Verifies that reservation requires the real current open parent turn.

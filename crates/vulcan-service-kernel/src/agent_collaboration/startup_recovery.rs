@@ -151,7 +151,7 @@ async fn recover_indexed_collaboration_owned(
                             .map_err(|error| error.to_string())?;
                         let parent = registry.get(parent_id).map_err(|error| error.to_string())?;
                         if let Err(error) = native_results::recover_terminal_returns(
-                            &registry, parent.clone(), handle.clone(), records.clone(),
+                            state, &registry, parent.clone(), handle.clone(), records.clone(),
                         ).await {
                             failures.push(format!("session {session_id} native results: {error}"));
                         }

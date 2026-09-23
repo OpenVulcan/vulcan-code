@@ -123,6 +123,19 @@ fn missing_initial_child_publication_rejects_stale_owner_and_stop() {
             .is_none()
     );
     assert!(locator.read_collaboration_recovery_snapshot().is_err());
+    // Cancellation before first publication still releases the durable parent obligation.
+    // 首次发布前取消仍须解除可靠父义务。
+    let restored = load_session_v1_for_runtime(&parent.storage_locator().unwrap()).unwrap().document;
+    // The original reservation is terminal without a fabricated activation or child response.
+    // 原预留终结，但不制造激活或子回复。
+    let stopped = &restored.collaboration_state().child_tasks[&record.execution_id];
+    assert_eq!(stopped.state, CollaborationChildTaskState::Terminal);
+    assert_eq!(stopped.terminal_outcome, Some(
+        vulcan_session_core::v1::collaboration::CollaborationChildTaskTerminalOutcome::Stopped,
+    ));
+    assert!(stopped.active_at_ms.is_none());
+    assert!(stopped.non_success_result.is_none());
+    assert!(restored.completion_obligations(record.parent_turn_id).open_child_task_ids.is_empty());
 }
 
 /// Creates a durable parent reservation before publishing its fully captured initial child.

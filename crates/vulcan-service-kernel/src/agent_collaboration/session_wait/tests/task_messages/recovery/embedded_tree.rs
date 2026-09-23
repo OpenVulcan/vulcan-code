@@ -211,6 +211,77 @@ async fn session_collaboration_startup_inspects_unfinished_embedded_execution() 
         .unwrap();
 }
 
+/// Explicit stop survives a lost terminal callback without taking work from a live listener.
+/// 明确停止在终态回调丢失后仍可恢复，且不抢占活动监听器的工作。
+/// Real cold storage must close the original child and release its parent's exact completion duty once.
+/// 真实冷存储必须闭合原子回合，并仅一次解除父会话的精确完成义务。
+#[tokio::test]
+async fn session_collaboration_startup_settles_persisted_child_stop() {
+    use vulcan_session_core::v1::collaboration::{
+        CollaborationChildTaskState, CollaborationChildTaskTerminalOutcome, SetRunControlInput,
+    };
+    for control in [CollaborationRunControl::Stopped, CollaborationRunControl::MainAndSubagents] {
+        // Retain independent stores for each explicit stopping policy.
+        // 为每种明确停止策略保留独立存储。
+        let (_root, invocation, _target, _) = message_fixture(false).await;
+        // This execution has a real root and parent reservation, but no terminal boundary.
+        // 此执行具有真实根输入和父预留，但尚无终态边界。
+        let child = reserved_child(&invocation, &invocation.source_handle, "stop-before-terminal").await;
+        // The durable control write represents the last successful action before process exit.
+        // 可靠控制写入代表进程退出前最后一次成功动作。
+        child.set_collaboration_run_control_durable(SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("durable-stop-intent").unwrap(),
+            state: control,
+            changed_at_ms: 6,
+        }).unwrap();
+        // An existing listener must retain authority to report completed, failed or stopped.
+        // 已有监听器必须保留报告完成、失败或停止的权威。
+        invocation.state.lock().unwrap().detached_subagent_task_listeners.insert(
+            child.session_id(), String::from("stop-before-terminal"),
+        );
+        // The live parent API already owns its turn, so no cold main admission is attempted.
+        // 活动父 API 已拥有其回合，因此不尝试主执行冷准入。
+        startup_recovery::recover_indexed_collaboration(
+            &crate::ServiceEventEmitter::new(vec![]), &invocation.state,
+            [invocation.source_session_id].into_iter().collect(),
+        ).await.unwrap();
+        assert!(child.read(|document| !document.active_turn().unwrap().closed).unwrap());
+        // Simulate process exit by discarding listener ownership and every canonical handle.
+        // 通过丢弃监听归属和全部规范句柄模拟进程退出。
+        let registry = Arc::new(SessionRuntimeRegistry::default());
+        {
+            // Replace both volatile owners under one service lock.
+            // 在同一服务锁内替换两个易失所有者。
+            let mut guard = invocation.state.lock().unwrap();
+            guard.detached_subagent_task_listeners.clear();
+            guard.session_runtime_registry = registry.clone();
+        }
+        recover_tree_with_missing_main_hook(&invocation).await;
+        // Read both sides from disk to exclude an in-memory-only repair.
+        // 从磁盘读取双方，排除仅内存修复。
+        let source = load_session_v1_for_runtime(&child.storage_locator().unwrap()).unwrap().document;
+        // The parent result must preserve its original execution identity and stopped classification.
+        // 父结果必须保留原执行身份和停止分类。
+        let parent = load_session_v1_for_runtime(&invocation.source_handle.storage_locator().unwrap()).unwrap().document;
+        // Select by stable identity rather than map order.
+        // 根据稳定身份选择，而非映射顺序。
+        let execution = CollaborationExecutionId::try_new("stop-before-terminal").unwrap();
+        // Source closure is required as well as the parent-owned receipt.
+        // 除父侧回执外还必须闭合来源。
+        let record = &parent.collaboration_state().child_tasks[&execution];
+        assert_eq!(record.state, CollaborationChildTaskState::Terminal);
+        assert_eq!(record.terminal_outcome, Some(CollaborationChildTaskTerminalOutcome::Stopped));
+        assert!(source.active_turn().is_none_or(|turn| turn.closed));
+        assert!(parent.completion_obligations(record.parent_turn_id).open_child_task_ids.is_empty());
+        // Repeated scans must not duplicate source boundaries or parent terminal receipts.
+        // 重复扫描不得复制来源边界或父终态回执。
+        let revisions = (source.durable_revision(), parent.durable_revision());
+        recover_tree_with_missing_main_hook(&invocation).await;
+        assert_eq!(registry.get(child.session_id()).unwrap().read(|document| document.durable_revision()).unwrap(), revisions.0);
+        assert_eq!(registry.get(invocation.source_session_id).unwrap().read(|document| document.durable_revision()).unwrap(), revisions.1);
+    }
+}
+
 /// Cold startup restores direct and nested successful results from their actual original execution.
 /// 冷启动从实际原执行恢复直接及嵌套成功结果。
 /// No stream receipt, runtime task record or provider request is available to the recovery scan.

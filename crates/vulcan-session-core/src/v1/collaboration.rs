@@ -4591,8 +4591,11 @@ pub fn validate_child_task_record(
             if record.terminal_at_ms.is_none()
                 || record.terminal_outcome.is_none()
                 || (record.active_at_ms.is_none()
-                    && record.terminal_outcome
-                        != Some(CollaborationChildTaskTerminalOutcome::Failed))
+                    && !matches!(
+                        record.terminal_outcome,
+                        Some(CollaborationChildTaskTerminalOutcome::Failed
+                            | CollaborationChildTaskTerminalOutcome::Stopped)
+                    ))
             {
                 return Err(DomainError::InvalidStatistics {
                     field: "collaboration.child_task.terminal_shape",

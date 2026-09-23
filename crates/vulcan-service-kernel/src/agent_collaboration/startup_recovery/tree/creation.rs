@@ -40,21 +40,37 @@ pub(in crate::agent_collaboration::startup_recovery) fn publish_missing(
     }
     // A root-wide stop must prevent rebuilding descendants even when the direct parent is unchanged.
     // 即使直接父节点未变化，整棵根树停止也必须阻止重建后代。
-    let stopped = root
+    let (root_archived, root_stopped) = root
         .read_full_durable(|document| {
             if document.segment_generation() != root_generation {
                 return Err(String::from(
                     "Missing child creation root generation was replaced.",
                 ));
             }
-            Ok(document.metadata.archived_at_ms.is_some()
-                || matches!(
+            Ok((
+                document.metadata.archived_at_ms.is_some(),
+                matches!(
                     document.collaboration_run_control(),
                     CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents
-                ))
+                ),
+            ))
         })
         .map_err(|error| error.to_string())??;
-    if stopped {
+    if root_archived {
+        return Ok(None);
+    }
+    // Explicit tree stop cancels the unpublished reservation; archival alone only defers work.
+    // 明确整树停止取消尚未发布的预留；单独归档仅延后工作。
+    let parent_stopped = parent
+        .read_full_durable(|document| {
+            matches!(
+                document.collaboration_run_control(),
+                CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents
+            )
+        })
+        .map_err(|error| error.to_string())?;
+    if root_stopped || parent_stopped {
+        settle_unpublished_stop(parent, parent_generation, record)?;
         return Ok(None);
     }
     let intent = parent
@@ -128,6 +144,53 @@ pub(in crate::agent_collaboration::startup_recovery) fn publish_missing(
     snapshot_if_present(locator)?
         .map(Some)
         .ok_or_else(|| String::from("Rebuilt child publication is still missing."))
+}
+
+/// Cancels a never-published child using the exact parent's explicit stop authority.
+/// 使用精确父归属及明确停止权威取消从未发布的子任务。
+/// Callers proved storage absence, no live owner and stop intent under root/parent/child gates.
+/// 调用方已在根、父、子锁内证明存储缺失、无活动所有者及停止意图。
+/// Returns after durable parent settlement, without creating child files or a fabricated return.
+/// 父侧可靠结算后返回，不创建子文件或虚构回流。
+fn settle_unpublished_stop(
+    parent: &SessionHandle,
+    parent_generation: u64,
+    record: &CollaborationChildTaskRecord,
+) -> Result<(), String> {
+    // The physical child has a single initial creation reservation before first publication.
+    // 物理子会话在首次发布前仅具有一份初始创建预留。
+    let operation_id = CollaborationOperationId::try_new(format!(
+        "child-creation-stop:{}",
+        record.task_id.as_str(),
+    ))
+    .map_err(|error| error.to_string())?;
+    // Recovery observes the original cancellation without inventing an activation timestamp.
+    // 恢复观测原取消，不制造激活时间。
+    let stopped_at_ms = now_ms()?;
+    parent.mutate_durable_if_changed(
+        SessionMutationAdmission::ControlPlane,
+        SessionFlushReason::SubagentReturned,
+        |document| {
+            if document.segment_generation() != parent_generation
+                || record.parent_segment_generation != parent_generation
+                || record.state != CollaborationChildTaskState::Reserved
+                || document.collaboration_state().child_tasks.get(&record.execution_id) != Some(record)
+                || !document.metadata.child_creation_intents.contains_key(&record.execution_id)
+            {
+                return Err(vulcan_session_core::v1::DomainError::CollaborationStateViolation {
+                    field: "child_creation_stop.reservation",
+                });
+            }
+            document.terminal_child_task(vulcan_session_core::v1::collaboration::TerminalChildTaskInput {
+                operation_id,
+                execution_id: record.execution_id.clone(),
+                task_id: record.task_id.clone(),
+                outcome: vulcan_session_core::v1::collaboration::CollaborationChildTaskTerminalOutcome::Stopped,
+                terminal_at_ms: stopped_at_ms,
+            }).map(session_change)
+        },
+    ).map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// Loads the exact parent ancestry and excludes concurrent lifecycle changes before initial publication.
