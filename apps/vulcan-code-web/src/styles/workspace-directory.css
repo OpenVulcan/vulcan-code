@@ -144,3 +144,61 @@
   .agent-management-surface .agent-definition-row { grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; }
   .agent-management-surface .agent-definition-row-actions { grid-column: auto; justify-content: flex-end; }
 }
+
+/* Tabs mode turns short page menus into one underlined strip; the active tab carries the flame accent. */
+/* 标签模式将较短的页面菜单变为一条下划线标签条，当前标签使用火焰强调色。 */
+.workspace-directory-layout[data-navigation-mode="tabs"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.workspace-directory-layout[data-navigation-mode="tabs"] > .workspace-directory-navigation {
+  max-height: none;
+  padding: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-right: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  scrollbar-width: none;
+}
+.workspace-directory-layout[data-navigation-mode="tabs"] :is(.workspace-directory-heading, .vmm-nav-heading) { display: none; }
+.workspace-directory-layout[data-navigation-mode="tabs"] :is(.workspace-directory-menu-list, .vmm-workspace-nav) {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+.workspace-directory-layout[data-navigation-mode="tabs"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
+  position: relative;
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 38px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  box-shadow: none;
+  white-space: nowrap;
+  transition: color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out), background-color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
+}
+.workspace-directory-layout[data-navigation-mode="tabs"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
+  background: color-mix(in srgb, var(--muted) 60%, transparent);
+  color: var(--foreground);
+}
+.workspace-directory-layout[data-navigation-mode="tabs"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--foreground);
+  font-weight: 600;
+}
+.workspace-directory-layout[data-navigation-mode="tabs"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"])::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--primary);
+  animation: vcn-accent-grow-x var(--vcn-duration-base, 180ms) var(--vcn-ease-out, ease-out);
+}
+.workspace-directory-layout[data-navigation-mode="tabs"] > .workspace-directory-content { padding: 20px 0 0; }

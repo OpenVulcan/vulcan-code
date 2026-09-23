@@ -117,7 +117,7 @@
   align-items: center;
   justify-content: flex-start;
   gap: 0;
-  padding: 2px;
+  padding: 0 8px;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-tree-item {
@@ -132,20 +132,22 @@
   max-height: 34px;
   min-height: 34px;
   margin-inline: 0;
-  padding: 2px;
+  /* Matches the feature buttons: an 18px glyph centred in the 34px hit area. */
+  /* 与功能按钮一致：18px 图形居中于 34px 点击热区。 */
+  padding: 0 8px;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button > svg {
-  width: 30px;
-  height: 30px;
+  width: 18px;
+  height: 18px;
   transform: translateX(0) scale(1);
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button .conversation-tree-project-icon,
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button .project-badge-icon,
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button .project-iconify-icon {
-  width: 30px;
-  height: 30px;
+  width: 18px;
+  height: 18px;
   transform: translateX(0) scale(1);
 }
 
@@ -162,7 +164,7 @@
   height: 34px;
   max-height: 34px;
   place-items: center;
-  padding: 2px;
+  padding: 0;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .pinned-conversation-button.with-pinned-icon .conversation-tree-project-icon {
@@ -171,8 +173,8 @@
 
 .vcn-sidebar[data-collapsible="icon"] .pinned-conversation-button.with-pinned-icon .conversation-tree-project-icon,
 .vcn-sidebar[data-collapsible="icon"] .pinned-conversation-button.with-pinned-icon .conversation-tree-project-icon > svg {
-  width: 30px;
-  height: 30px;
+  width: 18px;
+  height: 18px;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .conversation-tree-trailing {

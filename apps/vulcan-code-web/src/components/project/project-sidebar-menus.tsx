@@ -74,6 +74,12 @@ export function CollapsedFeatureMenu(props: {
   // Accessible label for the grouped entry.
   // 分组入口的无障碍标签。
   label: string;
+  // Optional visible heading shown above the entries.
+  // 显示在入口上方的可选标题。
+  title?: string;
+  // Optional class added to the flyout for caller-specific density.
+  // 追加到悬浮菜单上的可选类名，用于调用方专属密度。
+  flyoutClassName?: string;
 }) {
   // anchorRef points to the grouped trigger used to place the hover flyout.
   // anchorRef 指向分组触发器，用于定位悬浮菜单。
@@ -146,7 +152,7 @@ export function CollapsedFeatureMenu(props: {
       {flyoutOpen && flyoutPosition ? (
         <div
           aria-label={props.label}
-          className="collapsed-project-flyout collapsed-feature-flyout"
+          className={cn("collapsed-project-flyout collapsed-feature-flyout", props.flyoutClassName)}
           onFocus={clearCloseTimer}
           onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) scheduleClose(); }}
           onKeyDown={(event) => moveFlyoutFocus(event, () => { anchorRef.current?.querySelector<HTMLButtonElement>("button")?.focus(); setFlyoutOpen(false); })}
@@ -155,6 +161,7 @@ export function CollapsedFeatureMenu(props: {
           role="menu"
           style={{ left: flyoutPosition.left, top: flyoutPosition.top }}
         >
+          {props.title ? <div className="collapsed-project-flyout-title" role="presentation">{props.title}</div> : null}
           {props.items.map((item) => (
             <button
               aria-current={item.active ? "page" : undefined}

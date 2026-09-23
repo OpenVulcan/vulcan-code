@@ -224,8 +224,10 @@ function FeatureShell(props: {
     : settingsHeaderSummary
       ? {
         ...(props.activeFeature ?? { id: "settings" as MainAreaId, label: t("area.settings"), description: "", status: "" }),
-        label: settingsHeaderSummary.title,
-        description: settingsHeaderSummary.detail,
+        // The page frame owns the page title, so the header only names the area and group.
+        // 页面框架持有页面标题，标题栏只显示所属区域与分组。
+        label: t("area.settings"),
+        description: settingsHeaderSummary.group,
       }
     : props.activeFeature
   // pageDescriptor registers feature-page chrome through the shared workspace contract.

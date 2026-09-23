@@ -336,7 +336,7 @@ export function ProviderManagementArea() {
     : []
 
   return (
-    <WorkspaceDirectoryLayout contentClassName="provider-management-surface space-y-6" navigation={<WorkspaceDirectoryMenu ariaLabel={t("settings.providers.managementTitle")} heading={t("settings.providers.managementTitle")}>
+    <WorkspaceDirectoryLayout contentClassName="provider-management-surface space-y-6" navigationMode="tabs" navigation={<WorkspaceDirectoryMenu ariaLabel={t("settings.providers.managementTitle")} heading={t("settings.providers.managementTitle")}>
             {([
               ["system", t("settings.providers.system"), systemProviders.length],
               ["functional", t("settings.providers.functional"), functionalProviders.length],

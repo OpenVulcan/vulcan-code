@@ -960,7 +960,7 @@ export function ComposerPanel(props: {
             ) : null}
             <ModelPickerControl
               ariaLabel={t("composer.aria.model")}
-              fallbackLabel={t("composer.selectFallback")}
+              fallbackLabel={t("composer.modelPicker.placeholder")}
               filterPlaceholder={t("composer.modelPicker.filter")}
               noMatchesLabel={t("composer.modelPicker.noMatches")}
               onValueChange={(choice) => void handlePersistedModelChoiceChange(choice)}

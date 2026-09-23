@@ -24,6 +24,7 @@ import {
   localizedPluginMountLabel,
 } from "@/components/features/skills/skill-area-types"
 import {
+  normalizeSettingsSubArea,
   settingsSubAreaGroups,
   type SettingsSubAreaGroup,
 } from "@/components/features/settings/settings-navigation"
@@ -45,7 +46,7 @@ import {
   SidebarUserMenu,
 } from "@/components/sidebar/sidebar-profile-menus"
 import { useI18n } from "@/i18n"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { CollapsedFeatureMenu } from "@/components/project/project-sidebar-menus"
 import type {
   FeatureAreaSummary,
   MainAreaId,
@@ -326,7 +327,7 @@ function SettingsSidebarGroupRow(props: {
         {props.group.items.map((area) => (
           <SidebarMenuItem key={area.id}>
             <SidebarMenuButton
-              active={(props.activeSettingsSubArea === "prompt-composer" ? "context-basics" : props.activeSettingsSubArea) === area.id}
+              active={normalizeSettingsSubArea(props.activeSettingsSubArea) === area.id}
               className="conversation-tree-button settings-subarea-button"
               onClick={() => props.onSelectSettingsSubArea(area.id)}
               tooltip={area.label}
@@ -342,8 +343,8 @@ function SettingsSidebarGroupRow(props: {
   )
 }
 
-// CollapsedSettingsGroupMenu exposes a keyboard-accessible category menu with bounded viewport placement.
-// CollapsedSettingsGroupMenu 提供支持键盘操作且受视口约束的分类菜单。
+// CollapsedSettingsGroupMenu opens the category pages on hover or focus, matching the collapsed chat sidebar.
+// CollapsedSettingsGroupMenu 在悬停或聚焦时展开分类页面，与折叠的会话侧栏一致。
 function CollapsedSettingsGroupMenu(props: {
   // Trigger row reused from the expanded settings category.
   // 复用展开设置目录入口的触发行。
@@ -358,23 +359,22 @@ function CollapsedSettingsGroupMenu(props: {
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
 }) {
+  const current = normalizeSettingsSubArea(props.activeSettingsSubArea)
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>{props.children}</DropdownMenuTrigger>
-      <DropdownMenuContent aria-label={props.group.label} side="right" align="start" sideOffset={8} className="min-w-48">
-          <DropdownMenuLabel>{props.group.label}</DropdownMenuLabel>
-          {props.group.items.map((area) => (
-            <DropdownMenuItem
-              key={area.id}
-              aria-current={(props.activeSettingsSubArea === "prompt-composer" ? "context-basics" : props.activeSettingsSubArea) === area.id ? "page" : undefined}
-              onSelect={() => props.onSelectSettingsSubArea(area.id)}
-            >
-              {area.icon}
-              <span>{area.label}</span>
-            </DropdownMenuItem>
-          ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <CollapsedFeatureMenu
+      flyoutClassName="settings-collapsed-flyout"
+      items={props.group.items.map((area) => ({
+        id: area.id,
+        icon: area.icon,
+        label: area.label,
+        active: current === area.id,
+        onSelect: () => props.onSelectSettingsSubArea(area.id),
+      }))}
+      label={props.group.label}
+      title={props.group.label}
+    >
+      {props.children}
+    </CollapsedFeatureMenu>
   )
 }
 

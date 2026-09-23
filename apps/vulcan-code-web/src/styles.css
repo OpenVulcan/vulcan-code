@@ -31,6 +31,7 @@
 @import "./styles/terminal.css";
 @import "./styles/responsive.css";
 @import "./styles/workspace-directory.css";
+@import "./styles/motion.css";
 
 /* Shared directory geometry follows the feature and responsive foundations. */
 /* 共享目录布局位于功能样式与响应式基础之后。 */

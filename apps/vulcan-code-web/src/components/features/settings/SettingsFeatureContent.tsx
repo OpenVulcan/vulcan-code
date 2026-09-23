@@ -3,6 +3,7 @@ import { LogsArea } from "@/components/features/settings/settings-diagnostics-ar
 // 仅属于设置的样式随此懒加载路由载入，避免膨胀初始工作台样式表。
 import "@/styles/settings-pages.css";
 import "@/styles/settings-preferences.css";
+import "@/styles/settings-shell.css";
 import "@/styles/visual-lab.css";
 import { VisualLabSettingsArea } from "@/components/dev/visual-lab-settings-area";
 import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area";
@@ -20,7 +21,8 @@ import {
 } from "@/components/features/settings/provider-list-settings";
 import { ProviderManagementArea } from "@/components/features/settings/provider-management-settings";
 import { ContextBasicsSettingsArea } from "@/components/features/settings/context-basics-settings";
-import { ProviderToolSelectionSettingsArea } from "@/components/features/settings/provider-tool-selection-settings";
+import { AiCapabilitiesSettingsArea } from "@/components/features/settings/ai-capabilities-settings";
+import { SettingsPage, type SettingsPageWidth } from "@/components/features/settings/settings-layout";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
@@ -28,8 +30,10 @@ import { ConversationLinkSettingsSection } from "./conversation-link-settings";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
   activeSettingsHeaderSummary,
+  normalizeSettingsSubArea,
   settingsSubAreaProviderToolCapability,
 } from "@/components/features/settings/settings-navigation";
+import { useI18n } from "@/i18n";
 import type {
   SettingsSubAreaId,
   StartupSnapshot,
@@ -75,14 +79,44 @@ export interface SettingsFeatureContentProps {
   onOpenDiagnostics?: () => void;
 }
 
-// SettingsFeatureContent routes settings sub pages to their specialized modules.
-// SettingsFeatureContent 将设置子页面路由到专用模块。
+// SETTINGS_PAGE_WIDTHS gives forms a readable measure and lets tables and master-detail pages use the full pane.
+// SETTINGS_PAGE_WIDTHS 让表单保持易读宽度，表格与主从页面使用整个面板。
+const SETTINGS_PAGE_WIDTHS: Partial<Record<SettingsSubAreaId, SettingsPageWidth>> = {
+  "context-basics": "narrow",
+  notifications: "narrow",
+  "git-commit": "narrow",
+  "about-licenses": "narrow",
+  "credential-management": "wide",
+  "model-list": "wide",
+  "runtime-diagnostics": "wide",
+  "visual-lab": "wide",
+};
+
+// SettingsFeatureContent frames every settings page with the shared page header; navigation stays in the sidebar.
+// SettingsFeatureContent 用共享页头包裹每个设置页面；导航保留在侧栏。
 export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
+  const { t } = useI18n();
+  const current = normalizeSettingsSubArea(props.activeSettingsSubArea);
+  const summary = activeSettingsHeaderSummary(props.activeSettingsSubArea, t);
+  return (
+    // The key replays the page enter transition on navigation and resets page-local state.
+    // key 使切换页面时重放进入动效，并重置页面内部状态。
+    <SettingsPage description={summary.detail} key={current} title={summary.title} width={SETTINGS_PAGE_WIDTHS[current] ?? "medium"}>
+      <SettingsRoutedPage {...props} />
+    </SettingsPage>
+  );
+}
+
+// SettingsRoutedPage routes settings sub pages to their specialized modules.
+// SettingsRoutedPage 将设置子页面路由到专用模块。
+function SettingsRoutedPage(props: SettingsFeatureContentProps) {
+  // Retired per-capability ids open the merged page on the tab that owns them.
+  // 已退役的单项能力标识打开合并页面中对应的标签页。
   const providerToolCapability = settingsSubAreaProviderToolCapability(
     props.activeSettingsSubArea,
   );
-  if (providerToolCapability) {
-    return <ProviderToolSelectionSettingsArea capability={providerToolCapability} />;
+  if (providerToolCapability || props.activeSettingsSubArea === "ai-capabilities") {
+    return <AiCapabilitiesSettingsArea initialCapability={providerToolCapability} />;
   }
   if (props.activeSettingsSubArea === "model-providers") {
     return <ProviderManagementArea />;

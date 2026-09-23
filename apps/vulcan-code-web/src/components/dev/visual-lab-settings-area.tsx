@@ -302,7 +302,7 @@ export function VisualLabSettingsArea() {
   ]
 
   return (
-    <WorkspaceDirectoryLayout contentClassName="visual-lab" navigation={
+    <WorkspaceDirectoryLayout contentClassName="visual-lab" navigationMode="tabs" navigation={
       <WorkspaceDirectoryMenu ariaLabel={text("视觉实验室分类", "Visual lab categories")} heading={text("分类", "Categories")}>
         {categories.map((category) => <button key={category.id} type="button"
           className={`workspace-tool-panel-menu-row ${activeCategory === category.id ? "active" : ""}`}

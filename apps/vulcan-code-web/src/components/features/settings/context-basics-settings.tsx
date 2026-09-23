@@ -434,7 +434,7 @@ export function ContextBasicsSettingsArea(props: {
   }, [])
 
   return (
-    <WorkspaceDirectoryLayout contentClassName="context-basics-surface space-y-4" navigation={
+    <WorkspaceDirectoryLayout contentClassName="context-basics-surface space-y-4" navigationMode="tabs" navigation={
       <WorkspaceDirectoryMenu ariaLabel={t("settings.contextBasics.title")} heading={t("workspaceToolPanel.category")}>
         {sections.map((section) => <button key={section.id} type="button"
           className={`workspace-tool-panel-menu-row ${activeSection === section.id ? "active" : ""}`}

@@ -13,6 +13,9 @@ interface WorkspaceDirectoryLayoutProps {
   // contentClassName preserves page-specific container queries and presentation.
   // contentClassName 保留页面专属容器查询与呈现。
   contentClassName?: string;
+  // navigationMode renders short menus as a horizontal tab strip instead of a side column; defaults to column.
+  // navigationMode 将较短的菜单渲染为水平标签条而非侧栏，默认 column。
+  navigationMode?: "column" | "tabs";
 }
 
 // WorkspaceDirectoryLayout renders fixed desktop navigation and a bounded top menu on narrow panes.
@@ -21,7 +24,7 @@ interface WorkspaceDirectoryLayoutProps {
 // 参数：导航、正文及可选正文样式。返回双面板页面外壳。
 export function WorkspaceDirectoryLayout(props: WorkspaceDirectoryLayoutProps) {
   return <div className="workspace-directory">
-    <div className="workspace-directory-layout">
+    <div className="workspace-directory-layout" data-navigation-mode={props.navigationMode ?? "column"}>
       <div className="workspace-directory-navigation">{props.navigation}</div>
       <div className={cn("workspace-directory-content", props.contentClassName)}>{props.children}</div>
     </div>

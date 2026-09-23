@@ -133,10 +133,10 @@ it.each([
       expect(container.querySelector(selector)?.textContent?.length).toBeGreaterThan(5);
     }, { timeout: 10000 });
     if (area === "设置") {
-      // leaves are the actual production settings registry projected by its sidebar.
-      // leaves 是生产设置注册表经自身侧栏投影的真实叶节点。
+      // leaves are the actual production settings registry projected by the in-page navigation.
+      // leaves 是生产设置注册表经页内导航投影的真实叶节点。
       const leaves = [...container.querySelectorAll<HTMLButtonElement>(".settings-subarea-button")];
-      expect(leaves).toHaveLength(25);
+      expect(leaves).toHaveLength(12);
       for (const leaf of leaves) {
         await act(async () => leaf.click());
         await vi.waitFor(async () => {

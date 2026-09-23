@@ -29,6 +29,12 @@
   --vcn-space-4: 16px;
   --vcn-space-5: 20px;
   --vcn-page-gutter: clamp(12px, 1.6vw, 24px);
+  /* Motion: one ease-out curve and three durations shared by every transition. */
+  /* 动效：所有过渡共用一条缓出曲线与三档时长。 */
+  --vcn-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --vcn-duration-fast: 120ms;
+  --vcn-duration-base: 180ms;
+  --vcn-duration-slow: 240ms;
 }
 
 /* Keeps semantic status contrast readable on dark surfaces. */

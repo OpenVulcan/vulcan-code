@@ -439,12 +439,16 @@
   max-height: 34px;
   min-height: 34px;
   margin-inline: 0;
-  padding: 2px;
+  /* (34px button - 18px icon) / 2 keeps the glyph centred without changing the flex layout. */
+  /* （34px 按钮 - 18px 图标）/ 2，在不改变弹性布局的前提下让图标居中。 */
+  padding: 0 8px;
 }
 
+/* Collapsed icons stay at a readable 18px; the 34px hit area comes from the button, not an inflated glyph. */
+/* 折叠态图标保持 18px 可读尺寸；34px 点击热区由按钮提供，而不是放大图形本身。 */
 .vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button > svg {
-  width: 30px;
-  height: 30px;
+  width: 18px;
+  height: 18px;
   transform: translateX(0) scale(1);
 }
 
@@ -452,12 +456,12 @@
   width: 34px;
   min-height: 34px;
   justify-content: center;
-  padding: 2px;
+  padding: 0 8px;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-static-item > svg {
-  width: 30px;
-  height: 30px;
+  width: 18px;
+  height: 18px;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-content {

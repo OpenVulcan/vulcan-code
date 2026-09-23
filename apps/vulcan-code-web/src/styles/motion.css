@@ -1,0 +1,48 @@
+/* Shared motion: short, ease-out, never on layout-critical properties, and disabled for reduced motion. */
+/* 共享动效：短时长、缓出，不作用于影响布局的属性，并在减少动效偏好下关闭。 */
+@keyframes vcn-page-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes vcn-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes vcn-accent-grow-y {
+  from { opacity: 0; transform: translateY(-50%) scaleY(0.2); }
+  to { opacity: 1; transform: translateY(-50%) scaleY(1); }
+}
+@keyframes vcn-accent-grow-x {
+  from { opacity: 0; transform: scaleX(0.3); }
+  to { opacity: 1; transform: scaleX(1); }
+}
+
+/* Sidebar rows: hover tint and the active flame bar ease in instead of snapping. */
+/* 侧栏行：悬停底色与当前火焰条平滑出现，而不是突变。 */
+.vcn-sidebar-menu-button {
+  transition: background-color var(--vcn-duration-fast) var(--vcn-ease-out), color var(--vcn-duration-fast) var(--vcn-ease-out);
+}
+.vcn-sidebar-menu-button.active::before {
+  animation: vcn-accent-grow-y var(--vcn-duration-base) var(--vcn-ease-out);
+}
+
+/* Buttons acknowledge presses with a slight sink. */
+/* 按钮按下时轻微下沉以确认操作。 */
+[data-slot="button"] { transition-property: color, background-color, border-color, box-shadow, opacity, transform; }
+[data-slot="button"]:not(:disabled):active { transform: translateY(0.5px) scale(0.985); }
+
+/* Empty states and feature pages fade in so loading swaps do not flash. */
+/* 空状态与功能页淡入，避免加载切换时闪烁。 */
+.settings-empty-state,
+.feature-content > * { animation: vcn-fade-in var(--vcn-duration-base) var(--vcn-ease-out); }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+  [data-slot="button"]:not(:disabled):active { transform: none; }
+}

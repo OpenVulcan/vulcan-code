@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, Cpu, RefreshCw, UserRound } from "lucide-react";
+import { Check, ChevronDown, Cpu, RefreshCw, UserRound } from "lucide-react";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { ModelBuiltinCapabilityIcons } from "@/components/shared/model-builtin-capabilities";
@@ -250,6 +250,9 @@ export function ModelPickerControl(props: {
               <span className="composer-select-copy">
                 <span className="composer-select-label">{selectedModelLabel}</span>
               </span>
+              {/* The chevron marks the trigger as a dropdown, matching the reasoning and account selects. */}
+              {/* 下拉箭头表明这是一个下拉选择，与推理强度、账号选择保持一致。 */}
+              <ChevronDown aria-hidden="true" className="composer-select-chevron" />
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>

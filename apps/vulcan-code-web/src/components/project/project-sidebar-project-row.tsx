@@ -181,7 +181,9 @@ export function SortableProjectRow(props: {
           <SquarePen size={13} />
         </SidebarMenuAction>
       </div>
-      {props.isOpen ? (
+      {/* Empty projects show the placeholder once, on the active project only, so long project lists stay quiet. */}
+      {/* 空项目只在当前项目上显示一次占位行，避免长项目列表中重复出现。 */}
+      {props.isOpen && (props.conversations.length > 0 || props.isActiveProject) ? (
         <SidebarMenu className="project-conversation-list">
           {props.conversations.length > 0 ? (
             <>

@@ -8,6 +8,7 @@ import {
   LoaderCircle,
   LockKeyhole,
   SlidersHorizontal,
+  ChevronDown,
 } from "lucide-react";
 
 import {
@@ -852,6 +853,7 @@ export function ComposerAiCapabilityControl(props: {
                   ))}
                 </span>
               </span>
+              <ChevronDown aria-hidden="true" className="composer-select-chevron" />
             </button>
           </DialogTrigger>
         </TooltipTrigger>

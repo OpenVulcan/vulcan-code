@@ -109,7 +109,7 @@ export function LogsArea(props: {
   }
 
   return (
-    <WorkspaceDirectoryLayout contentClassName="settings-diagnostics-page" navigation={
+    <WorkspaceDirectoryLayout contentClassName="settings-diagnostics-page" navigationMode="tabs" navigation={
       <WorkspaceDirectoryMenu ariaLabel={locale === "zh-CN" ? "诊断分类" : "Diagnostics categories"} heading={t("workspaceToolPanel.category")}>
         {([
           ["startup", t("settings.diagnostics.startupStatus")],

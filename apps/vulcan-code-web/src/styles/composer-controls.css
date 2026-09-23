@@ -493,26 +493,49 @@
 }
 
 .composer-select-trigger.model {
-  flex: 0 1 200px;
-  width: 200px;
-  max-width: 200px;
+  /* Icon + current value + chevron sized to content, so the label never floats in an empty 200px box. */
+  /* 图标 + 当前值 + 下拉箭头按内容取宽，标签不再悬浮在 200px 的空盒中央。 */
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 220px;
   overflow: hidden;
 }
 
+.composer-select-trigger.model .composer-select-copy {
+  width: auto;
+  justify-items: start;
+  text-align: left;
+}
+
 .composer-select-trigger.capability {
-  width: 141px;
+  width: auto;
 }
 
 .composer-capability-trigger {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, auto) 12px;
   align-items: center;
   border: 0;
 }
 
 .composer-capability-trigger .composer-select-copy {
-  justify-items: center;
-  text-align: center;
+  justify-items: start;
+  text-align: left;
+}
+
+/* Shared dropdown indicator for popover and dialog triggers that are not Radix Select triggers. */
+/* 非 Radix Select 触发器（弹层、对话框）共用的下拉指示箭头。 */
+.composer-select-chevron {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  color: var(--muted-foreground);
+  opacity: 0.7;
+  transition: transform 160ms var(--vcn-ease-out, ease-out);
+}
+
+.composer-select-trigger[data-state="open"] .composer-select-chevron {
+  transform: rotate(180deg);
 }
 
 .composer-capability-icon-row {

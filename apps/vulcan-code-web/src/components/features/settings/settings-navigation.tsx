@@ -1,23 +1,23 @@
 import React from "react";
 import {
   Archive,
-  Bot,
-  BrainCircuit,
-  FileSearch,
-  FileText,
-  FolderTree,
-  GitCommitHorizontal,
-  Image,
-  Music,
   Bell,
+  Blocks,
+  Cpu,
+  Database,
+  GitCommitHorizontal,
+  Info,
+  KeyRound,
+  ListTree,
   Palette,
-  RefreshCw,
-  Search,
+  Plug,
   ScrollText,
+  ServerCog,
   Settings,
   SlidersHorizontal,
-  Video,
-  Volume2,
+  Sparkles,
+  Stethoscope,
+  WandSparkles,
 } from "lucide-react";
 import { useI18n } from "@/i18n";
 import type { SettingsSubAreaId } from "@/types";
@@ -28,6 +28,9 @@ export interface SettingsHeaderSummary {
   // Header title shown on the first line.
   // 第一行展示的标题。
   title: string;
+  // Parent group label used by the title-bar breadcrumb.
+  // 标题栏面包屑使用的父级分组名称。
+  group: string;
   // Compact description shown on the second line.
   // 第二行展示的紧凑说明。
   detail: string;
@@ -76,8 +79,8 @@ export interface SettingsSubAreaEntry {
   description: string;
 }
 
-// SettingsSubAreaGroup describes one parent group in the settings sidebar tree.
-// SettingsSubAreaGroup 描述设置侧栏树中的单个父级分组。
+// SettingsSubAreaGroup describes one parent group in the settings navigation.
+// SettingsSubAreaGroup 描述设置导航中的单个父级分组。
 export interface SettingsSubAreaGroup {
   // Stable group identifier.
   // 稳定分组标识。
@@ -93,71 +96,92 @@ export interface SettingsSubAreaGroup {
   items: SettingsSubAreaEntry[];
 }
 
-// activeSettingsHeaderSummary returns the title and description for the current settings page.
-// activeSettingsHeaderSummary 返回当前设置页的标题与说明。
+// normalizeSettingsSubArea maps retired page ids onto the page that now owns their content.
+// normalizeSettingsSubArea 将已退役的页面标识映射到现在承载其内容的页面。
+// Parameters: area is any stored or deep-linked page id; returns the id shown as current in the navigation.
+// 参数：area 为任意已保存或深链接的页面标识；返回在导航中显示为当前页的标识。
+export function normalizeSettingsSubArea(area: SettingsSubAreaId): SettingsSubAreaId {
+  if (area === "prompt-composer") return "context-basics";
+  if (area === "ai-vendors") return "model-providers";
+  if (settingsSubAreaProviderToolCapability(area)) return "ai-capabilities";
+  return area;
+}
+
+// activeSettingsHeaderSummary returns the title, description and group for the current settings page.
+// activeSettingsHeaderSummary 返回当前设置页的标题、说明与所属分组。
 export function activeSettingsHeaderSummary(activeArea: SettingsSubAreaId, t: ReturnType<typeof useI18n>["t"]): SettingsHeaderSummary {
-  const area = settingsSubAreas(t);
-  const entry = area.find((item) => item.id === (activeArea === "prompt-composer" ? "context-basics" : activeArea));
+  const normalized = normalizeSettingsSubArea(activeArea);
+  const group = settingsSubAreaGroups(t).find((candidate) => candidate.items.some((item) => item.id === normalized));
+  const entry = group?.items.find((item) => item.id === normalized);
   return {
     title: entry?.label ?? t("area.settings"),
     detail: entry?.description ?? t("area.settings.description"),
+    group: group?.label ?? t("area.settings"),
   };
 }
 
-// settingsSubAreas returns localized settings sidebar leaf entries.
-// settingsSubAreas 返回本地化设置侧栏叶子入口。
+// settingsSubAreas returns localized settings leaf entries.
+// settingsSubAreas 返回本地化设置叶子入口。
 export function settingsSubAreas(t: ReturnType<typeof useI18n>["t"]): SettingsSubAreaEntry[] {
   return settingsSubAreaGroups(t).flatMap((group) => group.items);
 }
 
-// settingsSubAreaGroups returns the settings tree aligned with the WebUI settings navigation.
-// settingsSubAreaGroups 返回与 WebUI 设置导航对齐的设置树。
+// settingsSubAreaGroups returns the two-level settings tree: six groups, at most five pages each.
+// settingsSubAreaGroups 返回两级设置树：6 个分组，每组最多 5 个页面。
 export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): SettingsSubAreaGroup[] {
   return [
     {
+      id: "general",
+      label: t("settings.group.general"),
+      icon: <Settings size={16} />,
+      items: [
+        { id: "context-basics", label: t("settings.modelBasics"), icon: <SlidersHorizontal size={16} />, description: t("settings.modelBasics.description") },
+        { id: "notifications", label: t("settings.notifications"), icon: <Bell size={16} />, description: t("settings.notifications.description") },
+        { id: "git-commit", label: t("settings.gitCommit"), icon: <GitCommitHorizontal size={16} />, description: t("settings.gitCommit.description") },
+      ],
+    },
+    {
       id: "models",
       label: t("settings.group.models"),
-      icon: <Bot size={16} />,
+      icon: <Cpu size={16} />,
       items: [
-        { id: "model-providers", label: t("settings.modelProviders"), icon: <FileText size={16} />, description: t("settings.modelProviders.description") },
-        { id: "credential-management", label: t("settings.credentialManagement"), icon: <FileText size={16} />, description: t("settings.credentialManagement.description") },
-        { id: "model-list", label: t("settings.modelList"), icon: <FileText size={16} />, description: t("settings.modelList.description") },
-        { id: "context-basics", label: t("settings.modelBasics"), icon: <SlidersHorizontal size={16} />, description: t("settings.modelBasics.description") },
+        { id: "model-providers", label: t("settings.modelProviders"), icon: <ServerCog size={16} />, description: t("settings.modelProviders.description") },
+        { id: "credential-management", label: t("settings.credentialManagement"), icon: <KeyRound size={16} />, description: t("settings.credentialManagement.description") },
+        { id: "model-list", label: t("settings.modelList"), icon: <ListTree size={16} />, description: t("settings.modelList.description") },
       ],
     },
     {
       id: "ai-capabilities",
       label: t("settings.group.aiCapabilities"),
-      icon: <BrainCircuit size={16} />,
+      icon: <Sparkles size={16} />,
       items: [
-        { id: "ai-web-search", label: t("settings.aiWebSearch"), icon: <Search size={16} />, description: t("settings.aiWebSearch.description") },
-        { id: "ai-web-extract", label: t("settings.aiWebExtract"), icon: <FileSearch size={16} />, description: t("settings.aiWebExtract.description") },
-        { id: "ai-understand-image", label: t("settings.aiUnderstandImage"), icon: <Image size={16} />, description: t("settings.aiUnderstandImage.description") },
-        { id: "ai-understand-video", label: t("settings.aiUnderstandVideo"), icon: <Video size={16} />, description: t("settings.aiUnderstandVideo.description") },
-        { id: "ai-understand-audio", label: t("settings.aiUnderstandAudio"), icon: <Volume2 size={16} />, description: t("settings.aiUnderstandAudio.description") },
-        { id: "ai-image-generation", label: t("settings.aiImageGeneration"), icon: <Image size={16} />, description: t("settings.aiImageGeneration.description") },
-        { id: "ai-image-edit", label: t("settings.providerTools.imageEdit"), icon: <Image size={16} />, description: t("settings.aiImageEdit.description") },
-        { id: "ai-video-generation", label: t("settings.aiVideoGeneration"), icon: <Video size={16} />, description: t("settings.aiVideoGeneration.description") },
-        { id: "ai-video-edit", label: t("settings.providerTools.videoEdit"), icon: <Video size={16} />, description: t("settings.aiVideoEdit.description") },
-        { id: "ai-video-extend", label: t("settings.providerTools.videoExtend"), icon: <Video size={16} />, description: t("settings.aiVideoExtend.description") },
-        { id: "ai-speech-synthesis", label: t("settings.aiSpeechSynthesis"), icon: <Volume2 size={16} />, description: t("settings.aiSpeechSynthesis.description") },
-        { id: "ai-speech-transcribe", label: t("settings.providerTools.speechTranscribe"), icon: <Volume2 size={16} />, description: t("settings.aiSpeechTranscribe.description") },
-        { id: "ai-music-generation", label: t("settings.aiMusicGeneration"), icon: <Music size={16} />, description: t("settings.aiMusicGeneration.description") },
-        { id: "ai-music-cover", label: t("settings.aiMusicCover"), icon: <Music size={16} />, description: t("settings.aiMusicCover.description") },
+        { id: "ai-capabilities", label: t("settings.aiCapabilities"), icon: <WandSparkles size={16} />, description: t("settings.aiCapabilities.description") },
       ],
     },
     {
-      id: "system",
-      label: t("area.settings"),
-      icon: <Settings size={16} />,
+      id: "extensions",
+      label: t("settings.group.extensions"),
+      icon: <Blocks size={16} />,
       items: [
-        { id: "mcp-servers", label: t("settings.mcpServers"), icon: <FolderTree size={16} />, description: t("settings.mcpServers.description") },
-        { id: "runtime-diagnostics", label: t("settings.runtimeDiagnostics"), icon: <RefreshCw size={16} />, description: t("settings.runtimeDiagnostics.description") },
-        { id: "visual-lab", label: t("settings.visualLab"), icon: <Palette size={16} />, description: t("settings.visualLab.description") },
-        { id: "notifications", label: t("settings.notifications"), icon: <Bell size={16} />, description: t("settings.notifications.description") },
-        { id: "git-commit", label: t("settings.gitCommit"), icon: <GitCommitHorizontal size={16} />, description: t("settings.gitCommit.description") },
-        { id: "about-licenses", label: t("settings.aboutLicenses"), icon: <ScrollText size={16} />, description: t("settings.aboutLicenses.description") },
+        { id: "mcp-servers", label: t("settings.mcpServers"), icon: <Plug size={16} />, description: t("settings.mcpServers.description") },
+      ],
+    },
+    {
+      id: "data",
+      label: t("settings.group.data"),
+      icon: <Database size={16} />,
+      items: [
         { id: "archived-restore", label: t("settings.archivedRestore"), icon: <Archive size={16} />, description: t("settings.archivedRestore.description") },
+      ],
+    },
+    {
+      id: "about",
+      label: t("settings.group.about"),
+      icon: <Info size={16} />,
+      items: [
+        { id: "runtime-diagnostics", label: t("settings.runtimeDiagnostics"), icon: <Stethoscope size={16} />, description: t("settings.runtimeDiagnostics.description") },
+        { id: "about-licenses", label: t("settings.aboutLicenses"), icon: <ScrollText size={16} />, description: t("settings.aboutLicenses.description") },
+        { id: "visual-lab", label: t("settings.visualLab"), icon: <Palette size={16} />, description: t("settings.visualLab.description") },
       ],
     },
   ];
