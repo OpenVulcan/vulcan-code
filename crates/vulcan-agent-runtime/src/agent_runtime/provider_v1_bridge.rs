@@ -865,13 +865,16 @@ impl ProviderV1RequestTemplate {
         bind_continuation: bool,
         prepared_at_ms: i64,
     ) -> Option<ProviderV1RequestFacts> {
+        // Excluded owners stay outside the V1 ledger even when retry or Continue metadata is present.
+        // 即使带有重试或继续元数据，排除所有者仍必须保持在 V1 账本之外。
+        let base_purpose = self.base_purpose?;
         // continuationActionId binds only the first physical request owned by one manual Continue.
         // continuationActionId 仅绑定一次手动 Continue 所有的首个物理请求。
         // Auxiliary retries retain their purpose and never consume a business Continue action.
         // 辅助重试保留自身用途，绝不消费业务继续动作。
         let is_auxiliary = matches!(
-            self.base_purpose,
-            Some(ApiPurposeKind::QuestionExecution | ApiPurposeKind::Compaction)
+            base_purpose,
+            ApiPurposeKind::QuestionExecution | ApiPurposeKind::Compaction
         );
         let continuation_action_id = (bind_continuation && !is_auxiliary)
             .then(|| self.continuation_action_id.clone())
@@ -879,13 +882,13 @@ impl ProviderV1RequestTemplate {
         // Only business generation changes purpose on retry; isolated execution owners remain stable.
         // 只有业务生成在重试时改变用途；隔离执行所有者保持稳定。
         let purpose = if is_auxiliary {
-            self.base_purpose?
+            base_purpose
         } else if continuation_action_id.is_some() {
             ApiPurposeKind::Continue
         } else if retry_count > 0 {
             ApiPurposeKind::RetryGeneration
         } else {
-            self.base_purpose?
+            base_purpose
         };
         Some(ProviderV1RequestFacts {
             provider_call_id,

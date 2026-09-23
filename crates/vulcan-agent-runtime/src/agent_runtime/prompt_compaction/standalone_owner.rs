@@ -445,6 +445,13 @@ impl StandalonePromptCompactionOwner {
                 record.terminal = true;
             }
             ProviderRequestTelemetryEventKind::Retrying => {
+                // Retrying is informational and may reference only an already settled admitted attempt.
+                // 重试中属于提示遥测，只能引用已准入且已结算的尝试。
+                if !record.started || !record.terminal {
+                    return Err(format!(
+                        "Standalone prompt compaction retried the Provider request `{request_id}` before its terminal boundary."
+                    ));
+                }
                 record.retries = record.retries.saturating_add(1);
             }
         }
@@ -469,9 +476,16 @@ impl StandalonePromptCompactionOwner {
     ) -> Result<(), String> {
         match event.v1_lifecycle.as_ref() {
             Some(ProviderV1LifecycleFacts::ExcludedNonSession) => Ok(()),
-            // First-token telemetry deliberately carries no V1 lifecycle fact.
-            // 首 Token 遥测刻意不携带任何 V1 生命周期事实。
-            None if event.kind == ProviderRequestTelemetryEventKind::FirstToken => Ok(()),
+            // First-token and retry notices deliberately carry no V1 fact; record still validates their admitted identity.
+            // 首 Token 和重试提示刻意不携带 V1 事实；记录流程仍校验其已准入身份。
+            None if matches!(
+                event.kind,
+                ProviderRequestTelemetryEventKind::FirstToken
+                    | ProviderRequestTelemetryEventKind::Retrying
+            ) =>
+            {
+                Ok(())
+            }
             Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) => Err(format!(
                 "Standalone prompt compaction cannot confirm the Provider request for session `{session}` because it is declared as `request_prepared` with session purpose `{purpose:?}`. Declare the standalone owner outside the V1 session ledger before dispatch.",
                 session = self.session_id,

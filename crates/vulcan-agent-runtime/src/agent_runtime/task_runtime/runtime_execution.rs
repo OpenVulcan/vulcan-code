@@ -2077,6 +2077,84 @@ mod standalone_compaction_tests {
         tracker
     }
 
+    /// Accepts a real retry notice only after its admitted request's terminal, rejecting orphan or premature notices.
+    /// 仅在已准入请求终态后接纳真实重试提示，拒绝孤立或过早提示。
+    #[test]
+    fn standalone_retry_notice_requires_an_admitted_terminal_request() {
+        // Generate all facts with the real tracker; retry notices intentionally have no V1 fact.
+        // 使用真实跟踪器生成全部事实；重试提示刻意不带 V1 事实。
+        let preparation = compaction_preparation();
+        let mut tracker = compaction_tracker(&preparation, true);
+        let mut owner = StandalonePromptCompactionOwner::new(preparation.session_id);
+        for event in tracker.start_request(&request_snapshot(), None).unwrap() {
+            owner
+                .observe(ExecutionStreamEvent::ProviderRequestTelemetry(event))
+                .unwrap();
+        }
+        let failure = tracker.complete_failure(true, 1, 1, 0, "oauth_refresh", None, None);
+        let retry = failure
+            .iter()
+            .find(|event| event.kind == ProviderRequestTelemetryEventKind::Retrying)
+            .expect("real tracker must publish a retry notice")
+            .clone();
+        assert!(retry.v1_lifecycle.is_none());
+        assert!(
+            owner
+                .observe(ExecutionStreamEvent::ProviderRequestTelemetry(
+                    retry.clone()
+                ))
+                .is_err()
+        );
+        let mut orphan = StandalonePromptCompactionOwner::new(preparation.session_id);
+        assert!(
+            orphan
+                .observe(ExecutionStreamEvent::ProviderRequestTelemetry(
+                    retry.clone()
+                ))
+                .is_err()
+        );
+        let terminal = failure
+            .into_iter()
+            .find(|event| event.kind == ProviderRequestTelemetryEventKind::Completed)
+            .expect("retry must follow a completed physical failure");
+        owner
+            .observe(ExecutionStreamEvent::ProviderRequestTelemetry(terminal))
+            .unwrap();
+        owner
+            .observe(ExecutionStreamEvent::ProviderRequestTelemetry(retry))
+            .unwrap();
+        assert_eq!(owner.admitted_request_count(), 1);
+        assert_eq!(owner.terminal_request_count(), 1);
+    }
+
+    /// Excluded ownership must survive every retry count and manual continuation flag.
+    /// 排除所有权必须在所有重试次数及手动继续标记下保持。
+    #[test]
+    fn standalone_request_facts_remain_excluded_on_retry_and_continue() {
+        // Use the shared ownership declaration and exact request snapshot.
+        // 使用共享所有权声明及精确请求快照。
+        let mut context = standalone_provider_telemetry_context(&compaction_preparation()).unwrap();
+        context.v1_request_template.continuation_action_id = Some(
+            vulcan_session_core::v1::ids::ClientActionId::try_new("excluded-continue").unwrap(),
+        );
+        for retry_count in [0, 1, 2] {
+            for bind_continuation in [false, true] {
+                assert!(
+                    context
+                        .v1_request_template
+                        .request_facts(
+                            format!("excluded-{retry_count}-{bind_continuation}"),
+                            &request_snapshot(),
+                            retry_count,
+                            bind_continuation,
+                            10,
+                        )
+                        .is_none()
+                );
+            }
+        }
+    }
+
     /// Builds one minimal compaction plan for the terminal execution fixture.
     /// 为终态执行夹具构建一份最小压缩计划。
     fn compaction_plan() -> CompactionPlan {

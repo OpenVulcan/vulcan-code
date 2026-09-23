@@ -7,6 +7,20 @@ use vulcan_agent_runtime::agent_runtime::prompt_compaction::{
     PromptCompactionModelTarget, PromptCompactionOwnership,
 };
 
+/// Drives an actual 401 and token refresh through the standalone confirmation owner.
+/// 经独立确认所有者驱动真实 401 及令牌刷新。
+#[test]
+fn standalone_native_compaction_drives_real_http_refresh_and_confirmation() {
+    // The refreshed retry uses the same physical producer as ordinary standalone compaction.
+    // 刷新重试使用与普通独立压缩相同的物理生产者。
+    let executor = crate::service_bridge_io::webui_service_runtime_builder()
+        .worker_threads(2)
+        .build()
+        .unwrap();
+    let task = executor.spawn(Box::pin(run_child_maintenance(true, true, true)));
+    executor.block_on(task).unwrap();
+}
+
 /// Exercises RuntimeOnly native compaction without mutating the source V1 ledger.
 /// 验证 RuntimeOnly 原生压缩，不修改来源 V1 账本。
 #[test]
