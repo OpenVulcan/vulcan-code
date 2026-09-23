@@ -108,7 +108,7 @@ pub(super) async fn send_notification(
         "notification_id": notification_id.as_str(),
         "delivery_id": delivery_id.as_str(),
         "revision": revision,
-        "status": if delivery_result.is_ok() { "accepted" } else { "recorded" },
+        "status": notification.state,
         "notification": notification,
         "delivery_error": delivery_result.err(),
     }))
@@ -156,20 +156,97 @@ pub(super) async fn deliver_recorded_notification(
     let source_for_write = Arc::clone(&invocation.source_handle);
     let target_for_write = Arc::clone(&target.handle);
     let source_id = invocation.source_session_id;
+    // A pre-accept rejection has its own durable identity and never fabricates target coordinates.
+    // 接纳前拒收拥有独立可靠身份，绝不伪造目标坐标。
+    let rejection_operation = CollaborationOperationId::try_new(format!(
+        "{}:notification-rejected",
+        input.source_operation_id.as_str()
+    ))
+    .map_err(|error| format!("invalid notification rejection identity: {error}"))?;
     let accepted = lifecycle_write::with_canonical_handles(
         &invocation.registry,
         vec![Arc::clone(&source_for_write), Arc::clone(&target_for_write)],
         move || {
+            // Re-read the source under both gates so a stale retry cannot resurrect a failed intent.
+            // 在双方门内重读来源，避免旧重试复活已经失败的意图。
+            let recorded = source_for_write
+                .read(|document| {
+                    document.collaboration_state().notifications.get(&input.notification_id).cloned()
+                })
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| String::from("notification source intent is missing"))?;
+            if recorded.delivery_id != input.delivery_id
+                || recorded.operation_id != input.source_operation_id
+                || recorded.source != input.source
+                || recorded.target != input.target
+                || recorded.body != input.body
+            {
+                return Err(String::from("notification source intent binding changed"));
+            }
+            if recorded.state != CollaborationNotificationState::Recorded {
+                return Ok(None);
+            }
+            // An existing target receipt must be recovered as fact, even after admission changes.
+            // 即使准入改变，已有目标回执仍须作为事实恢复。
+            let target_rejection = target_for_write
+                .read(|document| {
+                    if document.collaboration_state().inbound_notifications.contains_key(&input.notification_id) {
+                        return None;
+                    }
+                    Some(if matches!(
+                        document.collaboration_run_control(),
+                        CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents
+                    ) {
+                        Some(CollaborationDeliveryFailureReason::TargetStopped)
+                    } else if participants::require_document_message_admission(
+                        document, &input.source, &input.target,
+                    ).is_err() {
+                        Some(CollaborationDeliveryFailureReason::InvalidBinding)
+                    } else {
+                        None
+                    })
+                })
+                .map_err(|error| error.to_string())?;
             // Revocation and acceptance share the source gate; an earlier grant read is insufficient.
             // 撤销与接纳共享来源门；先前的授权读取不足以证明本次投递仍获许可。
-            if cross_project
+            let revoked = cross_project
                 && !source_handle_grant_allows(
                     &source_for_write,
                     source_id,
                     target_session_id,
                     CollaborationGrantAction::Notify,
-                )?
-            {
+                )?;
+            if let Some(target_reason) = target_rejection {
+                // Only typed authority or lifecycle facts can settle a pre-accept rejection.
+                // 只有强类型权限或生命周期事实才能结算接纳前拒收。
+                let reason = if revoked {
+                    Some(CollaborationDeliveryFailureReason::AuthorizationRevoked)
+                } else {
+                    target_reason
+                };
+                if let Some(reason) = reason {
+                    source_for_write
+                        .mutate_durable_if_changed(
+                            SessionMutationAdmission::ControlPlane,
+                            SessionFlushReason::MetadataChanged,
+                            move |document| {
+                                document.record_notification_progress(RecordNotificationProgressInput {
+                                    operation_id: rejection_operation,
+                                    notification_id: input.notification_id,
+                                    delivery_id: input.delivery_id,
+                                    state: CollaborationNotificationState::Failed,
+                                    failure: Some(reason),
+                                    target_revision: None,
+                                    target_event_seq: None,
+                                    updated_at_ms: input.accepted_at_ms,
+                                }).map(session_change)
+                            },
+                        )
+                        .map_err(|error| error.to_string())?;
+                    return Ok(None);
+                }
+            }
+            if revoked {
                 return Err(String::from(
                     "notification authorization was revoked before delivery",
                 ));
@@ -187,10 +264,14 @@ pub(super) async fn deliver_recorded_notification(
                         document.accept_notification(input).map(session_change)
                     },
                 )
+                .map(Some)
                 .map_err(|error| error.to_string())
         },
     )
     .await?;
+    let Some(accepted) = accepted else {
+        return Ok(());
+    };
     let input = RecordNotificationProgressInput {
         operation_id: operation_suffix(invocation, "notification-accepted")?,
         notification_id,

@@ -1673,19 +1673,16 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
             },
         )
         .unwrap();
-    // Recovery must report the refusal instead of claiming repair or silently dropping the record.
-    // 恢复必须报告拒绝，而不是声称已修复或静默丢弃该记录。
-    let failure = reconcile_session_v1_collaboration_outbox(
+    // Recovery persists an explicit rejection without delivering to the stopped target.
+    // 恢复持久保存明确拒收，不能投递给已经停止的目标。
+    let repaired = reconcile_session_v1_collaboration_outbox(
         &crate::ServiceEventEmitter::new(vec![]),
         invocation.state.clone(),
         invocation.source_session_id,
     )
     .await
-    .expect_err("recovery must not deliver to a stopped target");
-    assert!(
-        failure.contains(notification_id.as_str()),
-        "the refusal must name the exact notification it could not deliver: {failure}"
-    );
+    .expect("recovery must persist the stopped target rejection");
+    assert_eq!(repaired, 1);
     // The stopped target must remain untouched by the attempted delivery.
     // 已停止的目标必须未被本次投递尝试改动。
     assert!(
@@ -1698,8 +1695,8 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
             .unwrap(),
         "a stopped target must not receive the notification"
     );
-    // The source keeps the recorded fact so a later pass can still deliver it.
-    // 来源保留已记录事实，使后续修复仍可投递。
+    // The source retains the body as failed audit history, without an unresolved obligation.
+    // 来源把正文保留为失败审计历史，不再留下未结义务。
     let retained = source
         .read(|document| {
             document
@@ -1710,10 +1707,14 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
         })
         .unwrap()
         .expect("the recorded notification must survive a refused recovery");
-    assert_eq!(retained.state, CollaborationNotificationState::Recorded);
+    assert_eq!(retained.state, CollaborationNotificationState::Failed);
+    assert_eq!(retained.failure, Some(CollaborationDeliveryFailureReason::TargetStopped));
+    assert_eq!(retained.target_revision, None);
+    assert_eq!(retained.target_event_seq, None);
+    assert!(!source.read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete).unwrap());
     assert_eq!(retained.body, body);
-    // An explicit restart admits the same recorded identity, proving the record was retained intact.
-    // 显式恢复运行会接纳同一已记录身份，证明该记录被完整保留。
+    // Explicit restart cannot resurrect a notification already rejected as stopped.
+    // 显式恢复运行不能复活已经因停止而拒收的通知。
     target
         .mutate_durable(
             SessionMutationAdmission::ControlPlane,
@@ -1733,10 +1734,10 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
         invocation.source_session_id,
     )
     .await
-    .expect("a running target must accept the retained notification");
+    .expect("a failed notification must remain settled after restart");
     assert_eq!(
-        repaired, 1,
-        "the retained notification must be delivered once after restart"
+        repaired, 0,
+        "a rejected notification must not be delivered after restart"
     );
     let inbound = target
         .read(|document| {
@@ -1746,10 +1747,22 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
                 .get(&notification_id)
                 .cloned()
         })
-        .unwrap()
-        .expect("the restarted target must hold the acceptance");
-    assert_eq!(inbound.body, body);
-    assert_eq!(inbound.delivery_id, delivery_id);
+        .unwrap();
+    assert!(inbound.is_none());
+    // Even an already queued retry must re-read the terminal source under the shared gates.
+    // 即使旧重试已经排队，也必须在共享门内重读来源终态。
+    let (_, resolved) = resolve_participant_target(&invocation, &retained.target, "notification")
+        .await.unwrap();
+    notifications::deliver_recorded_notification(
+        &invocation, target.session_id(), &resolved, retained.delivery_id.clone(),
+        retained.notification_id.clone(), retained.operation_id.clone(), retained.source.clone(),
+        retained.target.clone(), retained.body.clone(),
+    ).await.unwrap();
+    assert!(target.read(|document| document.collaboration_state().inbound_notifications.is_empty()).unwrap());
+    // Cold loading preserves the durable rejection and its absent target coordinates.
+    // 冷加载保留可靠拒收及其空目标坐标。
+    let reloaded = load_session_v1_for_runtime(&source.storage_locator().unwrap()).unwrap();
+    assert_eq!(reloaded.document.collaboration_state().notifications[&notification_id], retained);
 }
 
 /// A cross-project notification stranded before acceptance must obey a revoked notify grant.
@@ -1759,9 +1772,9 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
 /// 说明
 /// `deliver_recorded_notification` re-evaluates the cross-project `Notify` grant before it accepts on
 /// the target. A revoke that lands inside the stranded window must therefore block recovery, and
-/// re-granting must deliver the exact same retained record rather than a reconstructed one.
+/// re-granting cannot resurrect the rejected notification.
 /// `deliver_recorded_notification` 在目标接纳之前会重新判定跨项目 `Notify` 授权。因此落在滞留窗口
-/// 内的撤销必须阻断恢复，而重新授权必须投递**同一条**被保留的记录，而不是重建一条。
+/// 内的撤销必须阻断恢复，而重新授权不能复活已经拒收的通知。
 #[tokio::test]
 async fn revoked_cross_project_grant_blocks_stranded_notification_recovery() {
     let (_root, invocation, target, _) = message_fixture(true).await;
@@ -1816,17 +1829,14 @@ async fn revoked_cross_project_grant_blocks_stranded_notification_recovery() {
     .unwrap();
     // Recovery must refuse instead of delivering under the revoked authority.
     // 恢复必须拒绝，而不是在已撤销的授权下投递。
-    let failure = reconcile_session_v1_collaboration_outbox(
+    let repaired = reconcile_session_v1_collaboration_outbox(
         &crate::ServiceEventEmitter::new(vec![]),
         invocation.state.clone(),
         invocation.source_session_id,
     )
     .await
-    .expect_err("recovery must not deliver under a revoked cross-project grant");
-    assert!(
-        failure.contains(notification_id.as_str()),
-        "the refusal must name the exact notification it could not deliver: {failure}"
-    );
+    .expect("recovery must persist the revoked grant rejection");
+    assert_eq!(repaired, 1);
     // The revoked target must remain untouched.
     // 已撤销授权的目标必须未被改动。
     assert!(
@@ -1849,10 +1859,12 @@ async fn revoked_cross_project_grant_blocks_stranded_notification_recovery() {
         })
         .unwrap()
         .expect("the recorded notification must survive a refused recovery");
-    assert_eq!(retained.state, CollaborationNotificationState::Recorded);
+    assert_eq!(retained.state, CollaborationNotificationState::Failed);
+    assert_eq!(retained.failure, Some(CollaborationDeliveryFailureReason::AuthorizationRevoked));
+    assert!(!source.read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete).unwrap());
     assert_eq!(retained.body, body);
-    // Re-granting the same authority delivers that exact retained record.
-    // 重新授予同一授权会投递那条被精确保留的记录。
+    // Re-granting leaves the earlier rejection terminal; a new send needs its own identity.
+    // 重新授权不改变先前拒收终态；再次发送需要独立身份。
     crate::project_conversation_services::service_add_collaboration_grant(
         invocation.state.clone(),
         invocation.source_session_id.to_string(),
@@ -1868,10 +1880,10 @@ async fn revoked_cross_project_grant_blocks_stranded_notification_recovery() {
         invocation.source_session_id,
     )
     .await
-    .expect("a re-granted authority must deliver the retained notification");
+    .expect("re-granting must preserve the earlier rejection");
     assert_eq!(
-        repaired, 1,
-        "the retained notification must be delivered exactly once after re-granting"
+        repaired, 0,
+        "a rejected notification must not be delivered after re-granting"
     );
     let inbound = target
         .read(|document| {
@@ -1881,10 +1893,8 @@ async fn revoked_cross_project_grant_blocks_stranded_notification_recovery() {
                 .get(&notification_id)
                 .cloned()
         })
-        .unwrap()
-        .expect("the re-granted target must hold the acceptance");
-    assert_eq!(inbound.body, body);
-    assert_eq!(inbound.delivery_id, delivery_id);
+        .unwrap();
+    assert!(inbound.is_none());
     assert_eq!(
         source
             .read(|document| {
@@ -1895,7 +1905,7 @@ async fn revoked_cross_project_grant_blocks_stranded_notification_recovery() {
                     .map(|record| record.state)
             })
             .unwrap(),
-        Some(CollaborationNotificationState::Accepted)
+        Some(CollaborationNotificationState::Failed)
     );
 }
 
