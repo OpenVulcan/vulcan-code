@@ -1572,6 +1572,7 @@ export type TranslationKey =
   | "conversation.collaboration.status.recorded"
   | "conversation.collaboration.status.accepted"
   | "conversation.collaboration.status.projected"
+  | "conversation.collaboration.status.resultUnavailable"
   | "conversation.collaboration.status.failed"
   | "conversation.collaboration.status.reserved"
   | "conversation.collaboration.status.active"

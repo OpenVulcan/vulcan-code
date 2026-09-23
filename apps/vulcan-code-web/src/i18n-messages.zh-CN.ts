@@ -1541,6 +1541,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.status.recorded": "已记录",
     "conversation.collaboration.status.accepted": "已接纳",
     "conversation.collaboration.status.projected": "已投影",
+    "conversation.collaboration.status.resultUnavailable": "授权撤销，结果正文不可用",
     "conversation.collaboration.status.failed": "失败",
     "conversation.collaboration.status.reserved": "已预留",
     "conversation.collaboration.status.active": "执行中",

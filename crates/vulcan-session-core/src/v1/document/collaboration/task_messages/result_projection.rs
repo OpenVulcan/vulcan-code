@@ -5,13 +5,14 @@ use super::*;
 use crate::v1::ids::ClientActionId;
 
 impl SessionDocument {
-    /// Appends every accepted result chunk for `delivery_id` at a legal API boundary.
-    /// 在合法 API 边界追加 `delivery_id` 已接纳结果的全部分块。
+    /// Appends the authorized result chunks or one redacted failure at a legal API boundary.
+    /// 在合法 API 边界追加已授权结果分块或一份脱敏失败。
     /// Returns the original durable proof on replay; a closed/replaced turn or active API is rejected.
     /// 重放返回原可靠凭据；已关闭或被替换回合、活动 API 均拒绝新插入。
     pub fn project_task_result_before_api(
         &mut self,
         delivery_id: CollaborationDeliveryId,
+        disclosure: CollaborationTaskResultDisclosure,
         now_ms: i64,
     ) -> Result<IdempotentMutation<CollaborationTaskResultProjection>, DomainError> {
         validate_timestamp("collaboration.task_result.projected_at_ms", now_ms)?;
@@ -75,7 +76,7 @@ impl SessionDocument {
         let mut inputs = Vec::new();
         for envelope in acceptance
             .result
-            .task_result_envelopes(acceptance.event_seq)?
+            .task_result_envelopes(acceptance.event_seq, disclosure)?
         {
             let (input_seq, input_id, projected_turn) =
                 super::super::projection::append_envelope(&mut staged, envelope, now_ms)?;
@@ -93,6 +94,7 @@ impl SessionDocument {
             delivery_id: delivery_id.clone(),
             acceptance_seq: acceptance.event_seq,
             turn_id,
+            disclosure,
             inputs,
             operation_id: operation_id.clone(),
             event_seq: next_event_seq(&staged)?,
@@ -128,8 +130,8 @@ impl SessionDocument {
         Ok(IdempotentMutation::Committed(projection))
     }
 
-    /// Verifies local immutable projection events and every resident chunk against accepted content.
-    /// 按已接纳正文核验本地不可变投影事件及每份驻留分块。
+    /// Verifies immutable projection events and every resident chunk against its frozen disclosure.
+    /// 按冻结的披露决策核验不可变投影事件及每份驻留分块。
     /// Sealed chunks retain metadata proofs; resident chunks must match identity, turn, order and body.
     /// 封存分块保留元数据凭据；驻留分块必须匹配身份、回合、顺序及正文。
     pub(in crate::v1::document) fn validate_task_result_projection_facts(
@@ -159,7 +161,7 @@ impl SessionDocument {
             }
             let envelopes = acceptance
                 .result
-                .task_result_envelopes(acceptance.event_seq)?;
+                .task_result_envelopes(acceptance.event_seq, projection.disclosure)?;
             if envelopes.len() != projection.inputs.len() {
                 return Err(DomainError::CollaborationStateViolation {
                     field: "collaboration.task_result.projection_chunks",

@@ -182,7 +182,7 @@ describe("ConversationV1DisplayRenderer", () => {
         <ConversationV1DisplayRenderer events={[summary(32, {
           kind: "collaboration", version: 1, operation_id: "project-result", event_kind: "task_result_projected",
           after_state: { kind: "task_result_projection", projection: { delivery_id: "delivery", acceptance_seq: 20,
-            turn_id: 1, inputs: [{ input_seq: 31, input_id: 4 }], operation_id: "project-result", event_seq: 32,
+            turn_id: 1, disclosure: "full", inputs: [{ input_seq: 31, input_id: 4 }], operation_id: "project-result", event_seq: 32,
             receiver_revision: 10, projected_at_ms: 12 } },
         }, "host_only")]} />
       </I18nProvider>);
@@ -190,6 +190,18 @@ describe("ConversationV1DisplayRenderer", () => {
       expect(projected).not.toContain('class="conversation-v1-collaboration-body"');
       expect(projected).not.toContain("conversation-v1-collaboration-cancel-button");
       expect(projected).not.toContain("user-bubble");
+      // Revoked result disclosure stays a receipt but names the missing body explicitly.
+      // 撤权后的结果披露仍是回执，但明确说明正文不可用。
+      const revokedProjection = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+        <ConversationV1DisplayRenderer events={[summary(33, {
+          kind: "collaboration", version: 1, operation_id: "project-revoked-result", event_kind: "task_result_projected",
+          after_state: { kind: "task_result_projection", projection: { delivery_id: "delivery", acceptance_seq: 20,
+            turn_id: 1, disclosure: "authorization_revoked", inputs: [{ input_seq: 32, input_id: 5 }],
+            operation_id: "project-revoked-result", event_seq: 33, receiver_revision: 11, projected_at_ms: 13 } },
+        }, "host_only")]} />
+      </I18nProvider>);
+      expect(revokedProjection).toContain("授权撤销，结果正文不可用");
+      expect(revokedProjection).not.toContain('class="conversation-v1-collaboration-body"');
     }
     // An application failure remains a message-delivery card with no invented business response.
     // 应用前失败保持为消息投递卡片，不虚构业务回复。

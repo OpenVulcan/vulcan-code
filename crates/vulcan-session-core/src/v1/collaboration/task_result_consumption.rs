@@ -16,8 +16,21 @@ pub struct CollaborationTaskResultInput {
     pub input_id: PendingInputId,
 }
 
-/// Immutable proof that every chunk entered the original source turn atomically.
-/// 所有分块原子进入原来源回合的不可变凭据。
+/// Content allowed in one immutable requester-side task-result projection.
+/// 一次不可变请求者侧任务结果投影允许包含的内容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationTaskResultDisclosure {
+    /// Include the complete accepted result while the original grant is valid.
+    /// 原授权有效时包含完整已接纳结果。
+    Full,
+    /// Report only that the original authorization was revoked before model disclosure.
+    /// 只报告原授权在模型披露前已撤销。
+    AuthorizationRevoked,
+}
+
+/// Immutable proof that the chosen result disclosure entered the original source turn atomically.
+/// 选定的结果披露内容原子进入原来源回合的不可变凭据。
 /// This proves context insertion, not successful model execution or acknowledgement.
 /// 此记录证明上下文插入，不代表模型执行成功或回复确认。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +45,9 @@ pub struct CollaborationTaskResultProjection {
     /// Original requesting business turn; never the executor's turn.
     /// 原请求业务回合，绝不是执行者回合。
     pub turn_id: TurnId,
+    /// Frozen content decision made under the requester's canonical lifecycle gate.
+    /// 在请求者规范生命周期锁内冻结的内容决策。
+    pub disclosure: CollaborationTaskResultDisclosure,
     /// Complete ordered input proofs with no omitted chunks.
     /// 完整有序输入凭据，不遗漏任何分块。
     pub inputs: Vec<CollaborationTaskResultInput>,
@@ -98,10 +114,15 @@ impl CollaborationState {
                 || projection.acceptance_seq != acceptance.event_seq
                 || Some(projection.turn_id) != acceptance.result.acceptance.message.source.turn_id
                 || projection.receiver_revision <= acceptance.receiver_revision
+                || (projection.disclosure
+                    == CollaborationTaskResultDisclosure::AuthorizationRevoked
+                    && (acceptance.result.terminal.is_none()
+                        || acceptance.result.acceptance.message.source.project_id
+                            == acceptance.result.acceptance.message.target.project_id))
                 || projection.inputs.len()
                     != acceptance
                         .result
-                        .task_result_envelopes(acceptance.event_seq)?
+                        .task_result_envelopes(acceptance.event_seq, projection.disclosure)?
                         .len()
             {
                 return Err(DomainError::CollaborationStateViolation {

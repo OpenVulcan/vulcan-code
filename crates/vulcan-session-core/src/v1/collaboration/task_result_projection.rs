@@ -35,10 +35,10 @@ struct TaskResultChunkHeader<'a> {
     total_text_bytes: usize,
 }
 
-/// Fixed model payload for an accepted task message that failed before application.
-/// 已接纳任务消息在应用前失败时使用的固定模型载荷。
+/// Fixed model payload for a failed task delivery or an unavailable result body.
+/// 任务投递失败或结果正文不可披露时使用的固定模型载荷。
 #[derive(Serialize)]
-struct TaskDeliveryFailureBody<'a> {
+struct TaskStatusBody<'a> {
     /// Stable payload representation version.
     /// 稳定载荷表示版本。
     version: u32,
@@ -61,50 +61,46 @@ impl TaskResultChunkHeader<'_> {
 }
 
 impl CollaborationTaskResult {
-    /// Builds complete model envelopes from this result and its receiver-local acceptance event.
-    /// 从本结果及接收方本地接纳事件构造完整模型信封。
+    /// Builds the authorized model envelopes from this result and its receiver-local acceptance event.
+    /// 从本结果及接收方本地接纳事件构造已授权的模型信封。
     /// `receipt_seq` must be supplied by a verified durable receipt; this pure method grants no authority.
     /// `receipt_seq` 必须来自已核验的可靠回执；此纯方法不授予权限。
-    /// Returns all ordered chunks, each within the shared body limit, with deterministic input keys.
-    /// 返回全部有序块，每块均在共享正文上限内，携带确定性输入键。
+    /// Returns ordered bounded chunks, or one redacted failure when `disclosure` forbids the body.
+    /// 返回有序且有界的分块；`disclosure` 禁止正文时只返回一份脱敏失败。
     pub fn task_result_envelopes(
         &self,
         receipt_seq: Seq,
+        disclosure: CollaborationTaskResultDisclosure,
     ) -> Result<Vec<HostMessageEnvelope>, DomainError> {
         self.validate()?;
-        if let CollaborationTaskMessageEffectKind::Failed { reason } = &self.effect.outcome {
-            let body = serde_json::to_string(&TaskDeliveryFailureBody {
-                version: 1,
-                delivery_id: &self.effect.delivery_id,
-                reason: *reason,
-            })
-            .map_err(|_| DomainError::CollaborationStateViolation {
-                field: "collaboration.task_result.failure_body",
-            })?;
-            let envelope = HostMessageEnvelope {
-                event_id: format!("task-result:{}:0", receipt_seq.value()),
-                kind: HostMessageKind::TaskDeliveryFailed,
-                source: self.acceptance.message.target.session_id.clone(),
-                target: self.acceptance.message.source.session_id.clone(),
-                task_id: self
-                    .acceptance
-                    .message
-                    .target
-                    .task_id
-                    .as_ref()
-                    .map(|id| id.as_str().to_owned()),
-                question_id: None,
-                scope: String::from("task"),
-                body,
-            };
-            envelope.validate().map_err(|_| DomainError::CollaborationStateViolation {
-                field: "collaboration.task_result.failure_envelope",
-            })?;
-            return Ok(vec![envelope]);
+        if disclosure == CollaborationTaskResultDisclosure::AuthorizationRevoked {
+            if self.terminal.is_none()
+                || self.acceptance.message.source.project_id
+                    == self.acceptance.message.target.project_id
+            {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "collaboration.task_result.revoked_disclosure_binding",
+                });
+            }
+            return Ok(vec![self.task_status_envelope(
+                receipt_seq,
+                HostMessageKind::TaskResultUnavailable,
+                CollaborationDeliveryFailureReason::AuthorizationRevoked,
+            )?]);
         }
-        let terminal = self.terminal.as_ref().ok_or(DomainError::CollaborationStateViolation {
-            field: "collaboration.task_result.missing_business_terminal",
-        })?;
+        if let CollaborationTaskMessageEffectKind::Failed { reason } = &self.effect.outcome {
+            return Ok(vec![self.task_status_envelope(
+                receipt_seq,
+                HostMessageKind::TaskDeliveryFailed,
+                *reason,
+            )?]);
+        }
+        let terminal = self
+            .terminal
+            .as_ref()
+            .ok_or(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.missing_business_terminal",
+            })?;
         // A missing final response is an explicit non-success outcome, never fabricated assistant text.
         // 缺少最终回复表示明确非成功结果，绝不伪造助手正文。
         let (text, source_text_seq) = match &terminal.final_assistant {
@@ -184,5 +180,47 @@ impl CollaborationTaskResult {
             envelopes.push(envelope);
         }
         Ok(envelopes)
+    }
+
+    /// Creates one bounded status envelope with the receiver's stable event identity.
+    /// 使用接收方稳定事件身份创建一份有界状态信封。
+    /// `kind` distinguishes application failure from revoked result disclosure; `reason` is stable.
+    /// `kind` 区分应用失败与撤权后结果不可披露；`reason` 是稳定分类。
+    fn task_status_envelope(
+        &self,
+        receipt_seq: Seq,
+        kind: HostMessageKind,
+        reason: CollaborationDeliveryFailureReason,
+    ) -> Result<HostMessageEnvelope, DomainError> {
+        let body = serde_json::to_string(&TaskStatusBody {
+            version: 1,
+            delivery_id: &self.effect.delivery_id,
+            reason,
+        })
+        .map_err(|_| DomainError::CollaborationStateViolation {
+            field: "collaboration.task_result.failure_body",
+        })?;
+        let envelope = HostMessageEnvelope {
+            event_id: format!("task-result:{}:0", receipt_seq.value()),
+            kind,
+            source: self.acceptance.message.target.session_id.clone(),
+            target: self.acceptance.message.source.session_id.clone(),
+            task_id: self
+                .acceptance
+                .message
+                .target
+                .task_id
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+            question_id: None,
+            scope: String::from("task"),
+            body,
+        };
+        envelope
+            .validate()
+            .map_err(|_| DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.failure_envelope",
+            })?;
+        Ok(envelope)
     }
 }

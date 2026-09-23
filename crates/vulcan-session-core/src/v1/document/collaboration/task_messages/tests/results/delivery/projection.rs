@@ -25,7 +25,11 @@ fn collaboration_continuation_tracks_result_consumption_and_original_turn() {
     );
     assert_eq!(source, before);
     source
-        .project_task_result_before_api(acceptance.result.effect.delivery_id, 12)
+        .project_task_result_before_api(
+            acceptance.result.effect.delivery_id,
+            CollaborationTaskResultDisclosure::Full,
+            12,
+        )
         .unwrap();
     assert_eq!(
         reload(&source).pending_collaboration_continuation(),
@@ -140,7 +144,10 @@ fn task_result_projection_late_chunk_conflict_rolls_back_complete_batch() {
     let (mut source, acceptance) = accepted_long_result();
     let envelopes = acceptance
         .result
-        .task_result_envelopes(acceptance.event_seq)
+        .task_result_envelopes(
+            acceptance.event_seq,
+            CollaborationTaskResultDisclosure::Full,
+        )
         .unwrap();
     source
         .append_in_turn_guidance_before_api(
@@ -152,7 +159,11 @@ fn task_result_projection_late_chunk_conflict_rolls_back_complete_batch() {
     let before = source.clone();
     assert!(
         source
-            .project_task_result_before_api(acceptance.result.effect.delivery_id, 13)
+            .project_task_result_before_api(
+                acceptance.result.effect.delivery_id,
+                CollaborationTaskResultDisclosure::Full,
+                13
+            )
             .is_err()
     );
     assert_eq!(source, before);
@@ -190,7 +201,11 @@ fn task_result_projection_is_atomic_complete_and_idempotent() {
     let turn = source.active_turn().unwrap().turn_id;
     let delivery = acceptance.result.effect.delivery_id.clone();
     let receipt = source
-        .project_task_result_before_api(delivery.clone(), 12)
+        .project_task_result_before_api(
+            delivery.clone(),
+            CollaborationTaskResultDisclosure::Full,
+            12,
+        )
         .unwrap()
         .into_value();
     assert_eq!(source.memory_revision(), before_revision + 1);
@@ -199,7 +214,10 @@ fn task_result_projection_is_atomic_complete_and_idempotent() {
     assert!(receipt.inputs.len() > 2);
     let envelopes = acceptance
         .result
-        .task_result_envelopes(acceptance.event_seq)
+        .task_result_envelopes(
+            acceptance.event_seq,
+            CollaborationTaskResultDisclosure::Full,
+        )
         .unwrap();
     for (input, expected) in receipt.inputs.iter().zip(envelopes) {
         let event = source
@@ -217,7 +235,11 @@ fn task_result_projection_is_atomic_complete_and_idempotent() {
     let before = source.clone();
     assert_eq!(
         source
-            .project_task_result_before_api(delivery.clone(), 99)
+            .project_task_result_before_api(
+                delivery.clone(),
+                CollaborationTaskResultDisclosure::Full,
+                99
+            )
             .unwrap(),
         IdempotentMutation::Idempotent(receipt.clone())
     );
@@ -226,7 +248,7 @@ fn task_result_projection_is_atomic_complete_and_idempotent() {
     let before = source.clone();
     assert_eq!(
         source
-            .project_task_result_before_api(delivery, 101)
+            .project_task_result_before_api(delivery, CollaborationTaskResultDisclosure::Full, 101)
             .unwrap(),
         IdempotentMutation::Idempotent(receipt)
     );
@@ -277,7 +299,11 @@ fn task_result_projection_rejects_illegal_boundaries_without_writes() {
         let before = source.clone();
         assert!(
             source
-                .project_task_result_before_api(delivery.clone(), 14)
+                .project_task_result_before_api(
+                    delivery.clone(),
+                    CollaborationTaskResultDisclosure::Full,
+                    14
+                )
                 .is_err()
         );
         assert_eq!(source, before);
@@ -291,7 +317,11 @@ fn task_result_projection_reload_rejects_forged_input_proofs() {
     let (mut source, acceptance) = accepted_long_result();
     let delivery = acceptance.result.effect.delivery_id;
     let receipt = source
-        .project_task_result_before_api(delivery.clone(), 12)
+        .project_task_result_before_api(
+            delivery.clone(),
+            CollaborationTaskResultDisclosure::Full,
+            12,
+        )
         .unwrap()
         .into_value();
     for scenario in 0..4 {

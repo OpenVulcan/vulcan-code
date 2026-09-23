@@ -4,7 +4,7 @@
 use super::*;
 use vulcan_session_core::v1::collaboration::{
     CollaborationTaskMessageEffectKind, CollaborationTaskMessageKind, CollaborationTaskResult,
-    CollaborationTaskResultAcceptance,
+    CollaborationTaskResultAcceptance, CollaborationTaskResultDisclosure,
 };
 
 /// Projects a locally durable `acceptance` under the requester's canonical lifecycle gate.
@@ -55,7 +55,7 @@ pub(super) async fn project_task_result(
             let message = &acceptance.result.acceptance.message;
             // Local accepted content is immutable authority; fresh model disclosure still consumes the original grant.
             // 本地已接纳正文是不可变权威；新的模型内容交付仍消费原授权。
-            if acceptance.result.terminal.is_some()
+            let disclosure = if acceptance.result.terminal.is_some()
                 && message.source.project_id != message.target.project_id
             {
                 let executor_id = Uuid::parse_str(&message.target.session_id)
@@ -70,11 +70,13 @@ pub(super) async fn project_task_result(
                     executor_id,
                     action,
                 )? {
-                    return Err(String::from(
-                        "task result model projection is denied after authorization revocation",
-                    ));
+                    CollaborationTaskResultDisclosure::AuthorizationRevoked
+                } else {
+                    CollaborationTaskResultDisclosure::Full
                 }
-            }
+            } else {
+                CollaborationTaskResultDisclosure::Full
+            };
             requester_for_write
                 .mutate_durable_if_changed(
                     SessionMutationAdmission::MetadataOnly,
@@ -83,6 +85,7 @@ pub(super) async fn project_task_result(
                         document
                             .project_task_result_before_api(
                                 acceptance.result.effect.delivery_id,
+                                disclosure,
                                 stamp,
                             )
                             .map(session_change)
@@ -127,8 +130,10 @@ pub(crate) async fn reconcile_task_results_for_session(
                 .task_message_effects
                 .iter()
                 .filter(|(delivery_id, effect)| {
-                    matches!(effect.outcome, CollaborationTaskMessageEffectKind::Failed { .. })
-                        && !collaboration.task_results.contains_key(*delivery_id)
+                    matches!(
+                        effect.outcome,
+                        CollaborationTaskMessageEffectKind::Failed { .. }
+                    ) && !collaboration.task_results.contains_key(*delivery_id)
                 })
                 .map(|(delivery_id, _)| delivery_id.clone())
                 .collect::<Vec<_>>()

@@ -65,7 +65,11 @@ fn failed_task_delivery_returns_and_releases_both_history_guards() {
             5,
         )
         .unwrap();
-    assert!(target.collaboration_state().requires_edit_or_delete_settlement());
+    assert!(
+        target
+            .collaboration_state()
+            .requires_edit_or_delete_settlement()
+    );
     let original_turn = target.active_turn().unwrap().turn_id;
     let result = target
         .record_failed_task_result(message.delivery_id.clone(), 6)
@@ -88,10 +92,23 @@ fn failed_task_delivery_returns_and_releases_both_history_guards() {
             12,
         )
         .unwrap();
-    assert!(!source.collaboration_state().requires_edit_or_delete_settlement());
-    assert!(!target.collaboration_state().requires_edit_or_delete_settlement());
-    let envelope = &result.task_result_envelopes(receipt.event_seq).unwrap()[0];
-    assert_eq!(envelope.kind, vulcan_ai_contract::HostMessageKind::TaskDeliveryFailed);
+    assert!(
+        !source
+            .collaboration_state()
+            .requires_edit_or_delete_settlement()
+    );
+    assert!(
+        !target
+            .collaboration_state()
+            .requires_edit_or_delete_settlement()
+    );
+    let envelope = &result
+        .task_result_envelopes(receipt.event_seq, CollaborationTaskResultDisclosure::Full)
+        .unwrap()[0];
+    assert_eq!(
+        envelope.kind,
+        vulcan_ai_contract::HostMessageKind::TaskDeliveryFailed
+    );
     assert_eq!(envelope.source, "target");
     assert_eq!(envelope.target, "source");
     let body: serde_json::Value = serde_json::from_str(&envelope.body).unwrap();

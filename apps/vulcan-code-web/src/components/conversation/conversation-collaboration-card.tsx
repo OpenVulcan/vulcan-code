@@ -417,7 +417,9 @@ function collaborationStatus(
     case "task_result_acknowledgement":
       return t("conversation.collaboration.status.delivered");
     case "task_result_projection":
-      return t("conversation.collaboration.status.projected");
+      return afterState.projection.disclosure === "authorization_revoked"
+        ? t("conversation.collaboration.status.resultUnavailable")
+        : t("conversation.collaboration.status.projected");
     case "outbound_task_message":
       return collaborationDeliveryStateLabel(afterState.record.acceptance === null ? "recorded" : "accepted", t);
     case "inbound_task_message":

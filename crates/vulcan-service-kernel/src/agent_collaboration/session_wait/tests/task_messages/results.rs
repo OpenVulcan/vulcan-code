@@ -376,8 +376,8 @@ async fn session_task_result_projection_uses_only_original_requester_turn() {
     }
 }
 
-/// A grant revoked after receipt blocks fresh model insertion; reauthorization permits one durable batch.
-/// 接收后撤销授权会阻止新的模型插入；重新授权允许一次可靠批次。
+/// A revoked result grant projects one redacted failure and never releases the original body later.
+/// 结果授权撤销后只投影一次脱敏失败，后续也不释放原正文。
 #[tokio::test]
 async fn session_task_result_projection_rechecks_original_grant() {
     let (_root, invocation, target, context) = message_fixture(true).await;
@@ -403,32 +403,24 @@ async fn session_task_result_projection_rechecks_original_grant() {
     )
     .await
     .unwrap();
-    let revision = invocation
-        .source_handle
-        .read(|document| document.memory_revision())
+    project_collaboration_before_api(&invocation.state, &invocation.source_handle, 11)
+        .await
         .unwrap();
-    assert!(
-        project_collaboration_before_api(&invocation.state, &invocation.source_handle, 11)
-            .await
-            .unwrap_err()
-            .contains("authorization revocation")
-    );
+    let source = load_session_v1_for_runtime(&invocation.source_handle.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    let proof = source.collaboration_state().task_result_projections[&delivery].clone();
     assert_eq!(
-        invocation
-            .source_handle
-            .read(|document| document.memory_revision())
-            .unwrap(),
-        revision
+        proof.disclosure,
+        vulcan_session_core::v1::collaboration::CollaborationTaskResultDisclosure::AuthorizationRevoked
     );
-    assert!(
-        invocation
-            .source_handle
-            .read(|document| document
-                .collaboration_state()
-                .task_result_projections
-                .is_empty())
-            .unwrap()
-    );
+    assert_eq!(proof.inputs.len(), 1);
+    let input_seq = proof.inputs[0].input_seq;
+    assert!(source.events().iter().any(|event| event.seq == input_seq
+        && matches!(&event.event, EventBody::UserInput(input)
+            if input.text.contains("task_result_unavailable")
+                && input.text.contains("authorization_revoked")
+                && !input.text.contains("Business response"))));
     crate::project_conversation_services::service_add_collaboration_grant(
         invocation.state.clone(),
         invocation.source_session_id.to_string(),
@@ -438,17 +430,20 @@ async fn session_task_result_projection_rechecks_original_grant() {
     )
     .await
     .unwrap();
+    let revision = invocation
+        .source_handle
+        .read(|document| document.memory_revision())
+        .unwrap();
     project_collaboration_before_api(&invocation.state, &invocation.source_handle, 12)
         .await
         .unwrap();
     let source = load_session_v1_for_runtime(&invocation.source_handle.storage_locator().unwrap())
         .unwrap()
         .document;
-    assert!(
-        source
-            .collaboration_state()
-            .task_result_projections
-            .contains_key(&delivery)
+    assert_eq!(source.memory_revision(), revision);
+    assert_eq!(
+        source.collaboration_state().task_result_projections[&delivery],
+        proof
     );
 }
 
@@ -525,7 +520,15 @@ async fn session_task_result_return_is_durable_and_idempotent() {
             .unwrap(),
         source_api
     );
-    assert!(receipt.result.terminal.as_ref().unwrap().final_assistant.is_none());
+    assert!(
+        receipt
+            .result
+            .terminal
+            .as_ref()
+            .unwrap()
+            .final_assistant
+            .is_none()
+    );
     let source_revision = invocation
         .source_handle
         .read(|document| document.memory_revision())

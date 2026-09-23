@@ -293,10 +293,14 @@ fn task_result_envelopes_are_lossless_bounded_and_deterministic() {
     result.effect.delivery_id = long_id.clone();
     result.acceptance.message.delivery_id = long_id;
     let receipt_seq = Seq::try_new(crate::v1::ids::JS_SAFE_INTEGER_MAX).unwrap();
-    let envelopes = result.task_result_envelopes(receipt_seq).unwrap();
+    let envelopes = result
+        .task_result_envelopes(receipt_seq, CollaborationTaskResultDisclosure::Full)
+        .unwrap();
     assert!(envelopes.len() > 1);
     assert_eq!(
-        result.task_result_envelopes(receipt_seq).unwrap(),
+        result
+            .task_result_envelopes(receipt_seq, CollaborationTaskResultDisclosure::Full)
+            .unwrap(),
         envelopes
     );
     let mut restored = String::new();
@@ -327,7 +331,10 @@ fn task_result_envelopes_are_lossless_bounded_and_deterministic() {
     }
     assert_eq!(restored, text);
     let other = result
-        .task_result_envelopes(Seq::try_new(1).unwrap())
+        .task_result_envelopes(
+            Seq::try_new(1).unwrap(),
+            CollaborationTaskResultDisclosure::Full,
+        )
         .unwrap();
     assert_eq!(other.len(), envelopes.len());
     assert!(
@@ -354,7 +361,10 @@ fn task_result_empty_envelopes_preserve_actual_terminal_kind() {
         target.close_turn(outcome, 1, 9).unwrap();
         let result = &target.collaboration_state().task_results[&message.delivery_id];
         let envelopes = result
-            .task_result_envelopes(Seq::try_new(40).unwrap())
+            .task_result_envelopes(
+                Seq::try_new(40).unwrap(),
+                CollaborationTaskResultDisclosure::Full,
+            )
             .unwrap();
         assert_eq!(envelopes.len(), 1);
         let (header, body) = envelopes[0].body.split_once('\n').unwrap();

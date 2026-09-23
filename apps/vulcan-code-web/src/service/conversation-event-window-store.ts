@@ -809,14 +809,17 @@ export interface CollaborationTaskResultAcceptance {
   accepted_at_ms: number;
 }
 
-/** Exact complete input batch committed to the original requesting turn.
- * 提交到原请求回合的精确完整输入批次。 */
+/** Exact authorized or redacted input batch committed to the original requesting turn.
+ * 提交到原请求回合的精确已授权或脱敏输入批次。 */
 export interface CollaborationTaskResultProjection {
   // Original delivery, receiver acceptance and business turn identities.
   // 原投递、接收方接纳及业务回合身份。
   delivery_id: string;
   acceptance_seq: number;
   turn_id: number;
+  // Frozen disclosure decision for the model-visible input batch.
+  // 对模型可见输入批次冻结的披露决策。
+  disclosure: "full" | "authorization_revoked";
   // Ordered input proof for every result chunk.
   // 每份结果分块的有序输入凭据。
   inputs: Array<{ input_seq: number; input_id: number }>;
