@@ -474,6 +474,15 @@ pub(crate) async fn admit_edit_generation<'a>(
     // 提交新回执。
     let gate_ids = write_gate_ids(registry, &tree)?;
     let guards = acquire_lifecycle_guards(registry, &gate_ids).await?;
+    // A child may have been published and its parent task completed while admission waited for
+    // these gates. Re-read physical ownership before relying on the original protected set.
+    // 等待这些锁期间可能已发布子会话并终结其父任务；依赖旧受保护集合前必须重新读取物理归属。
+    if deletion_members(&root, session_id)? != tree {
+        return Err(invalid(
+            session_id,
+            "Embedded membership changed before edit admission; retry the edit.",
+        ));
+    }
     // A delivery admitted while the gates were awaited would escape the retained lock set.
     // 在等待门期间获准的投递会逃出保留的锁集合。
     let current_gate_ids = write_gate_ids(registry, &tree)?;

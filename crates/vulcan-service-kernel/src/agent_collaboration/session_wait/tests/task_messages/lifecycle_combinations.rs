@@ -14,6 +14,7 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationExecutionId, CollaborationNotificationId, CollaborationNotificationState,
     CollaborationTargetSettlementState, CreateQuestionInput, ReserveChildTaskInput,
     SetRunControlInput, SettleInboundDeliveryInput, TerminalChildTaskInput,
+    SendNotificationInput,
 };
 use vulcan_session_core::v1::document::{
     ClientInputSubmission, EditGenerationInput, RootInputReplacement, SessionDocument, TurnOrigin,
@@ -1233,6 +1234,136 @@ async fn cold_child_unacknowledged_settlement_blocks_parent_history_edit() {
     assert_eq!(
         cold_parent.read(SessionDocument::segment_generation).unwrap(),
         generation
+    );
+}
+
+/// An edit waiting for the root gate must reject a child created after its first tree scan.
+/// 等待根会话锁的历史编辑必须拒绝首次扫描后新建的子会话。
+/// The gate holder publishes the child and finishes its parent task before releasing admission;
+/// only a fresh physical membership scan can see the child's remaining notification outbox.
+/// 锁持有方在放行编辑准入前发布子会话并终结父任务；只有重新扫描物理成员才能发现子会话留下的
+/// 通知出站箱。
+#[tokio::test]
+async fn history_edit_rechecks_children_created_while_waiting_for_its_gate() {
+    let (_storage, invocation, parent, _) = message_fixture(false).await;
+    let parent_id = parent.session_id();
+    let held = crate::session_v1_lifecycle::guards::hold_lifecycle_gate(
+        &invocation.registry,
+        parent_id,
+    )
+    .await
+    .unwrap();
+    let registry = invocation.registry.clone();
+    let controller = invocation.controller_runtime.clone();
+    let edit_parent: &'static Arc<SessionHandle> = Box::leak(Box::new(parent.clone()));
+    let admission = tokio::spawn(async move {
+        crate::session_v1_lifecycle::guards::admit_edit_generation(
+            &controller,
+            &registry,
+            edit_parent,
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!admission.is_finished(), "the edit must wait for the parent gate");
+    // This actor owns the parent gate and commits the new child while edit admission is waiting.
+    // 当前参与者持有父会话锁，在编辑准入等待期间提交新子会话。
+    let (child_id, child) =
+        embedded_child_of_parent(&invocation, &parent, "late-edit-child").await;
+    let task_id = vulcan_session_core::v1::ids::SubagentTaskId::try_new(child_id.to_string())
+        .unwrap();
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.activate_child_task(ActivateChildTaskInput {
+                    execution_id: CollaborationExecutionId::try_new("late-edit-child").unwrap(),
+                    operation_id: CollaborationOperationId::try_new("late-edit-child-active")
+                        .unwrap(),
+                    task_id: task_id.clone(),
+                    active_at_ms: 6,
+                })
+            },
+        )
+        .unwrap();
+    parent
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.terminal_child_task(TerminalChildTaskInput {
+                    execution_id: CollaborationExecutionId::try_new("late-edit-child").unwrap(),
+                    operation_id: CollaborationOperationId::try_new("late-edit-child-terminal")
+                        .unwrap(),
+                    task_id: task_id.clone(),
+                    outcome: CollaborationChildTaskTerminalOutcome::Completed,
+                    terminal_at_ms: 7,
+                })
+            },
+        )
+        .unwrap();
+    let source = child
+        .read(|document| {
+            CollaborationParticipant::new(
+                child_id.to_string(),
+                parent_id.to_string(),
+                child.storage_locator().unwrap().project_id(),
+                document.segment_generation(),
+                Some(document.active_turn().unwrap().turn_id),
+                Some(task_id),
+            )
+            .unwrap()
+        })
+        .unwrap();
+    let target = parent
+        .read(|document| {
+            CollaborationParticipant::new(
+                parent_id.to_string(),
+                parent_id.to_string(),
+                parent.storage_locator().unwrap().project_id(),
+                document.segment_generation(),
+                Some(document.active_turn().unwrap().turn_id),
+                None,
+            )
+            .unwrap()
+        })
+        .unwrap();
+    child
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.send_notification(SendNotificationInput {
+                    operation_id: CollaborationOperationId::try_new("late-edit-notification")
+                        .unwrap(),
+                    notification_id: CollaborationNotificationId::try_new("late-edit-note")
+                        .unwrap(),
+                    delivery_id: CollaborationDeliveryId::try_new("late-edit-delivery")
+                        .unwrap(),
+                    source,
+                    target,
+                    body: "Child work reached a checkpoint".into(),
+                    created_at_ms: 8,
+                })
+            },
+        )
+        .unwrap();
+    assert!(!parent
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    assert!(child
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    drop(held);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), admission)
+        .await
+        .expect("edit admission did not resume")
+        .unwrap();
+    assert!(
+        matches!(&result, Err(SessionV1LifecycleError::InvalidDeletionTree { session_id, detail })
+            if *session_id == parent_id && detail.contains("membership")),
+        "an edit admitted a child created after its first tree scan: {result:?}"
     );
 }
 
