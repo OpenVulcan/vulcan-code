@@ -3,8 +3,9 @@
 
 use super::*;
 use vulcan_session_core::v1::collaboration::{
-    AcceptNotificationInput, CollaborationDeliveryId, CollaborationGrantAction,
-    CollaborationNotificationId, CollaborationNotificationState, CollaborationTaskMessage,
+    AcceptNotificationInput, CollaborationDeliveryFailureReason, CollaborationDeliveryId,
+    CollaborationGrantAction, CollaborationNotificationId, CollaborationNotificationState,
+    CollaborationTaskMessage, FailNotificationInput, RecordNotificationProgressInput,
     SendNotificationInput, SetRunControlInput,
 };
 use vulcan_session_core::v1::document::SessionDocument;
@@ -370,6 +371,151 @@ async fn accepted_notification_progress_survives_later_grant_revocation() {
             .unwrap(),
         1,
         "recovery must not accept the same notification twice"
+    );
+    // Revocation before the target's next API must settle the accepted body as a failed delivery,
+    // so neither document retains an unresolvable edit/delete obligation.
+    // 目标下一次 API 前撤销授权时，必须把已接纳正文结算为失败投递，避免两侧文档留下无法解除的
+    // 编辑或删除义务。
+    project_collaboration_before_api(&invocation.state, &target, now_ms().unwrap())
+        .await
+        .expect("revoked accepted notification must settle without exposing its body");
+    assert_eq!(
+        source
+            .read(|document| document.collaboration_state().notifications[&notification_id].state)
+            .unwrap(),
+        CollaborationNotificationState::Failed
+    );
+    assert_eq!(
+        target
+            .read(|document| document.collaboration_state().inbound_notifications[&notification_id].state)
+            .unwrap(),
+        CollaborationNotificationState::Failed
+    );
+    assert!(!source
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    assert!(!target
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+}
+
+/// A crash after target failure but before source progress must not strand the accepted outbox.
+/// 目标失败已落盘但来源进度未写入时，重启恢复不得让已接纳出站记录滞留。
+#[tokio::test]
+async fn failed_target_notification_repairs_missing_source_progress() {
+    let (_root, invocation, target, _) = message_fixture(false).await;
+    let source = invocation.source_handle.clone();
+    let (source_participant, target_participant) =
+        notification_participants(&invocation, &source, &target).await;
+    let notification_id = CollaborationNotificationId::try_new("failed-before-source").unwrap();
+    let delivery_id = CollaborationDeliveryId::try_new("failed-before-source-delivery").unwrap();
+    let operation_id = CollaborationOperationId::try_new("failed-before-source-send").unwrap();
+    let body = String::from("A notification awaiting target projection.");
+    source
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.send_notification(SendNotificationInput {
+                    operation_id: operation_id.clone(),
+                    notification_id: notification_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    source: source_participant.clone(),
+                    target: target_participant.clone(),
+                    body: body.clone(),
+                    created_at_ms: 5,
+                })
+            },
+        )
+        .unwrap();
+    let accepted = target
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.accept_notification(AcceptNotificationInput {
+                    operation_id: CollaborationOperationId::try_new(
+                        "failed-before-source-delivery:notification-accept",
+                    )
+                    .unwrap(),
+                    notification_id: notification_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    source_operation_id: operation_id.clone(),
+                    source: source_participant.clone(),
+                    target: target_participant.clone(),
+                    body: body.clone(),
+                    accepted_at_ms: 6,
+                })
+            },
+        )
+        .unwrap();
+    let accepted = accepted.value.into_value();
+    source
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.record_notification_progress(RecordNotificationProgressInput {
+                    operation_id: CollaborationOperationId::try_new(
+                        "failed-before-source-send:notification-accepted",
+                    )
+                    .unwrap(),
+                    notification_id: notification_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    state: CollaborationNotificationState::Accepted,
+                    failure: None,
+                    target_revision: Some(accepted.notification.target_revision),
+                    target_event_seq: Some(accepted.event_seq),
+                    updated_at_ms: 7,
+                })
+            },
+        )
+        .unwrap();
+    target
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.fail_notification(FailNotificationInput {
+                    operation_id: CollaborationOperationId::try_new(
+                        "failed-before-source-delivery:fail",
+                    )
+                    .unwrap(),
+                    notification_id: notification_id.clone(),
+                    delivery_id: delivery_id.clone(),
+                    reason: CollaborationDeliveryFailureReason::InvalidBinding,
+                    failed_at_ms: 8,
+                })
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        source
+            .read(|document| document.collaboration_state().notifications[&notification_id].state)
+            .unwrap(),
+        CollaborationNotificationState::Accepted
+    );
+    assert_eq!(
+        reconcile_session_v1_collaboration_outbox(
+            &crate::ServiceEventEmitter::new(vec![]),
+            invocation.state.clone(),
+            invocation.source_session_id,
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        source
+            .read(|document| {
+                let record = &document.collaboration_state().notifications[&notification_id];
+                (record.state, record.failure)
+            })
+            .unwrap(),
+        (
+            CollaborationNotificationState::Failed,
+            Some(CollaborationDeliveryFailureReason::InvalidBinding)
+        )
     );
 }
 

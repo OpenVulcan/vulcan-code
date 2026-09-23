@@ -3,9 +3,10 @@
 
 use super::*;
 use vulcan_session_core::v1::collaboration::{
-    CollaborationAnswerDeliveryState, CollaborationInboundDeliveryRecord,
-    CollaborationInboundNotificationRecord, CollaborationNotificationState,
-    CollaborationQuestionRecord, RecordNotificationProgressInput,
+    CollaborationAnswerDeliveryState, CollaborationDeliveryFailureReason,
+    CollaborationInboundDeliveryRecord, CollaborationInboundNotificationRecord,
+    CollaborationNotificationState, CollaborationQuestionRecord, FailNotificationInput,
+    RecordNotificationProgressInput,
 };
 
 /// One durable incoming fact ordered by its local acceptance sequence.
@@ -273,27 +274,59 @@ pub(crate) async fn project_collaboration_before_api(
                         {
                             return Err(String::from("notification inbox does not match its source authority"));
                         }
-                        if delivery.source.project_id != delivery.target.project_id
-                            && !source_handle_grant_allows(&source_for_write, source_id, target_for_write.session_id(), CollaborationGrantAction::Notify)?
-                        {
-                            return Err(String::from("notification body delivery is denied after authorization revocation"));
-                        }
+                        let revoked = delivery.source.project_id != delivery.target.project_id
+                            && !source_handle_grant_allows(&source_for_write, source_id, target_for_write.session_id(), CollaborationGrantAction::Notify)?;
+                        // The accepted body cannot be projected after revocation. Settle it on
+                        // the target first; the source outbox can replay its progress if the
+                        // following source write is interrupted.
+                        // 授权撤销后不能投影已接纳正文。先在目标结算；若后续来源写入中断，来源出站箱
+                        // 可以重放该进度。
                         target_for_write.mutate_durable_if_changed(
                             SessionMutationAdmission::MetadataOnly, SessionFlushReason::MetadataChanged,
-                            move |document| Ok(session_change(document.project_notification_before_api(delivery.notification_id, now_ms)?)),
+                            move |document| {
+                                if revoked {
+                                    let operation_id = CollaborationOperationId::try_new(format!(
+                                        "{}:fail", delivery.delivery_id.as_str()
+                                    ))?;
+                                    Ok(session_change(document.fail_notification(FailNotificationInput {
+                                        operation_id,
+                                        notification_id: delivery.notification_id,
+                                        delivery_id: delivery.delivery_id,
+                                        reason: CollaborationDeliveryFailureReason::AuthorizationRevoked,
+                                        failed_at_ms: now_ms,
+                                    })?))
+                                } else {
+                                    Ok(session_change(document.project_notification_before_api(delivery.notification_id, now_ms)?))
+                                }
+                            },
                         ).map_err(|error| error.to_string())
                     },
                 ).await?;
+                let (operation_suffix, state) = match receipt.value.notification.state {
+                    CollaborationNotificationState::Projected => (
+                        "source-projected",
+                        CollaborationNotificationState::Projected,
+                    ),
+                    CollaborationNotificationState::Failed => {
+                        ("source-failed", CollaborationNotificationState::Failed)
+                    }
+                    CollaborationNotificationState::Recorded
+                    | CollaborationNotificationState::Accepted => {
+                        return Err(String::from(
+                            "notification projection produced no terminal target progress",
+                        ));
+                    }
+                };
                 let input = RecordNotificationProgressInput {
                     operation_id: CollaborationOperationId::try_new(format!(
-                        "{}:source-projected",
+                        "{}:{operation_suffix}",
                         inbound.delivery_id.as_str()
                     ))
                     .map_err(|error| error.to_string())?,
                     notification_id: inbound.notification_id,
                     delivery_id: inbound.delivery_id,
-                    state: CollaborationNotificationState::Projected,
-                    failure: None,
+                    state,
+                    failure: receipt.value.notification.failure,
                     target_revision: Some(receipt.value.notification.target_revision),
                     target_event_seq: Some(receipt.value.event_seq),
                     updated_at_ms: now_ms,

@@ -185,8 +185,8 @@ pub(super) async fn deliver_recorded_notification(
     Ok(())
 }
 
-/// Copies an already durable target acceptance or projection back to its notification source.
-/// 将目标已可靠保存的接纳或投影回执补记到通知来源。
+/// Copies an already durable target acceptance, projection, or failure to its notification source.
+/// 将目标已可靠保存的接纳、投影或失败回执补记到通知来源。
 /// `record` is the source snapshot and `target` is its exact canonical participant; returns whether
 /// a target fact needed and completed a source progress write.
 /// `record` 是来源快照，`target` 是其精确规范参与者；返回目标事实是否需要并完成来源进度写入。
@@ -229,7 +229,14 @@ pub(super) async fn recover_existing_notification_progress(
                     ))
                     .map_err(|error| format!("invalid notification projection identity: {error}"))?
                 }
-                CollaborationNotificationState::Recorded | CollaborationNotificationState::Failed => {
+                CollaborationNotificationState::Failed => {
+                    CollaborationOperationId::try_new(format!(
+                        "{}:fail",
+                        record.delivery_id.as_str()
+                    ))
+                    .map_err(|error| format!("invalid notification failure identity: {error}"))?
+                }
+                CollaborationNotificationState::Recorded => {
                     return Err(String::from("notification target has no valid progress receipt"));
                 }
             };
@@ -265,6 +272,15 @@ pub(super) async fn recover_existing_notification_progress(
                         && Some(*projected_input_id) == inbound.projected_input_id
                         && Some(*projected_turn_id) == inbound.projected_turn_id
                 }
+                CollaborationOperationSemantic::FailNotification {
+                    notification_id,
+                    delivery_id,
+                    reason,
+                } if inbound.state == CollaborationNotificationState::Failed => {
+                    notification_id == &record.notification_id
+                        && delivery_id == &record.delivery_id
+                        && Some(*reason) == inbound.failure
+                }
                 _ => false,
             };
             if !matching_operation {
@@ -272,10 +288,15 @@ pub(super) async fn recover_existing_notification_progress(
                     "notification progress operation does not match its target receipt",
                 ));
             }
-            Ok(Some((inbound.state, inbound.target_revision, operation.event_seq)))
+            Ok(Some((
+                inbound.state,
+                inbound.failure,
+                inbound.target_revision,
+                operation.event_seq,
+            )))
         })
         .map_err(|error| format!("failed to read notification target receipt: {error}"))??;
-    let Some((state, target_revision, target_event_seq)) = target_progress else {
+    let Some((state, failure, target_revision, target_event_seq)) = target_progress else {
         return Ok(false);
     };
     if state == CollaborationNotificationState::Accepted
@@ -294,7 +315,11 @@ pub(super) async fn recover_existing_notification_progress(
             "{}:source-projected",
             record.delivery_id.as_str()
         ),
-        CollaborationNotificationState::Recorded | CollaborationNotificationState::Failed => {
+        CollaborationNotificationState::Failed => format!(
+            "{}:source-failed",
+            record.delivery_id.as_str()
+        ),
+        CollaborationNotificationState::Recorded => {
             return Err(String::from("notification target progress is not recoverable"));
         }
     };
@@ -304,7 +329,7 @@ pub(super) async fn recover_existing_notification_progress(
         notification_id: record.notification_id.clone(),
         delivery_id: record.delivery_id.clone(),
         state,
-        failure: None,
+        failure,
         target_revision: Some(target_revision),
         target_event_seq: Some(target_event_seq),
         updated_at_ms: now_ms()?,
