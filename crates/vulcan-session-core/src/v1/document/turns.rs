@@ -11,6 +11,7 @@ use super::{
     ActiveTurnState, IdempotentMutation, SessionDocument, TurnOrigin, client_action_conflict,
     validate_system_context_content, validate_timestamp,
 };
+use crate::v1::collaboration::CollaborationDeliveryFailureReason;
 use crate::v1::config::{GoalState, MetadataDocument};
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
@@ -646,6 +647,14 @@ impl SessionDocument {
         let turn_id = self.require_open_turn()?.turn_id;
         let mut staged = self.begin_atomic_mutation()?;
         staged.finish_in_turn_question_executions(turn_id, now_ms)?;
+        // Closing the bound turn removes the only legal boundary for unapplied guidance.
+        // 原绑定回合闭合后，未应用方向不再有合法请求边界。
+        let steering_failure = if outcome == TurnOutcome::Stopped {
+            CollaborationDeliveryFailureReason::TargetStopped
+        } else {
+            CollaborationDeliveryFailureReason::InvalidBinding
+        };
+        staged.fail_unapplied_task_steering_for_turn(turn_id, steering_failure, now_ms)?;
         let receipt = staged.close_turn_after_question_attempts(outcome, duration_ms, now_ms)?;
         staged.record_task_results_for_turn(turn_id, now_ms)?;
         self.commit_atomic_mutation(staged);

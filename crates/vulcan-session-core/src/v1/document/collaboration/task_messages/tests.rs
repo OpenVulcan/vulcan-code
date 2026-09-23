@@ -349,6 +349,13 @@ fn task_message_closed_source_acknowledgement_and_stale_successor_are_distinct()
         source.collaboration_state()
     );
     target.close_turn(TurnOutcome::Completed, 1, 7).unwrap();
+    assert_eq!(
+        target.collaboration_state().task_message_effects[&message.delivery_id].outcome,
+        CollaborationTaskMessageEffectKind::Failed {
+            reason: CollaborationDeliveryFailureReason::InvalidBinding,
+        },
+        "unapplied guidance must become an explicit failure when its original turn closes"
+    );
     target
         .submit_root_input(
             ClientInputSubmission::new(
@@ -693,28 +700,30 @@ fn task_message_steering_failure_is_explicit_and_cannot_be_reapplied() {
             .iter()
             .filter(|event| matches!(event.event, EventBody::UserInput(_)))
             .count();
+        // Closing the steering turn already records InvalidBinding; queued starts are still rejected by stop.
+        // 方向回合闭合时已经记录绑定失效；排队启动仍由停止动作拒绝。
+        let failure_reason = if kind == CollaborationTaskMessageKind::TaskSteer {
+            CollaborationDeliveryFailureReason::InvalidBinding
+        } else {
+            CollaborationDeliveryFailureReason::TargetStopped
+        };
         let failure = target
             .fail_task_message(
                 CollaborationOperationId::try_new("fail").unwrap(),
                 message.delivery_id.clone(),
-                CollaborationDeliveryFailureReason::TargetStopped,
+                failure_reason,
                 8,
             )
             .unwrap()
             .into_value();
-        assert!(matches!(
-            failure.outcome,
-            CollaborationTaskMessageEffectKind::Failed {
-                reason: CollaborationDeliveryFailureReason::TargetStopped
-            }
-        ));
+        assert_eq!(failure.outcome, CollaborationTaskMessageEffectKind::Failed { reason: failure_reason });
         let settled = target.clone();
         assert_eq!(
             target
                 .fail_task_message(
                     CollaborationOperationId::try_new("fail").unwrap(),
                     message.delivery_id.clone(),
-                    CollaborationDeliveryFailureReason::TargetStopped,
+                    failure_reason,
                     9
                 )
                 .unwrap()
@@ -726,7 +735,11 @@ fn task_message_steering_failure_is_explicit_and_cannot_be_reapplied() {
                 .fail_task_message(
                     CollaborationOperationId::try_new("conflict").unwrap(),
                     message.delivery_id.clone(),
-                    CollaborationDeliveryFailureReason::InvalidBinding,
+                    if kind == CollaborationTaskMessageKind::TaskSteer {
+                        CollaborationDeliveryFailureReason::TargetStopped
+                    } else {
+                        CollaborationDeliveryFailureReason::InvalidBinding
+                    },
                     10
                 )
                 .is_err()

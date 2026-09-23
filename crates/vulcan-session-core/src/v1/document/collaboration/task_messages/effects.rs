@@ -30,6 +30,38 @@ pub(super) fn task_message_envelope(message: &CollaborationTaskMessage) -> HostM
 }
 
 impl SessionDocument {
+    /// Fails accepted steering that never reached a provider request before its bound turn closes.
+    /// 原绑定回合闭合前从未进入供应商请求的已接纳方向在此失败。
+    /// `turn_id` is the closing business turn and `reason` describes its terminal boundary;
+    /// returns after every matching failure effect is staged with that same closure.
+    /// `turn_id` 是即将闭合的业务回合，`reason` 描述其终态边界；所有匹配的失败效果与闭合一起暂存。
+    pub(in crate::v1::document) fn fail_unapplied_task_steering_for_turn(
+        &mut self,
+        turn_id: TurnId,
+        reason: CollaborationDeliveryFailureReason,
+        now_ms: i64,
+    ) -> Result<(), DomainError> {
+        let pending = self
+            .collaboration_state()
+            .inbound_task_messages
+            .iter()
+            .filter(|(delivery_id, acceptance)| {
+                acceptance.message.kind == CollaborationTaskMessageKind::TaskSteer
+                    && acceptance.message.target.turn_id == Some(turn_id)
+                    && !self.collaboration_state().task_message_effects.contains_key(*delivery_id)
+            })
+            .map(|(delivery_id, _)| delivery_id.clone())
+            .collect::<Vec<_>>();
+        for delivery_id in pending {
+            let operation_id = CollaborationOperationId::try_new(format!(
+                "{}:task-message-effect",
+                delivery_id.as_str()
+            ))?;
+            self.fail_task_message(operation_id, delivery_id, reason, now_ms)?;
+        }
+        Ok(())
+    }
+
     /// Appends accepted `delivery_id` as tagged User guidance under `operation_id` at `now_ms`.
     /// 在 `now_ms` 使用 `operation_id` 将已接纳 `delivery_id` 追加为带标签 User 方向。
     /// Returns the exact effect receipt; input and receipt publish in one mutation revision.
