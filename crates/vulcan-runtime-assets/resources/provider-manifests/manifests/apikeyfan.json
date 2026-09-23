@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "apikeyfan",
-"revision": 9,
-"published_at": "2026-09-22T13:47:52Z",
+"revision": 10,
+"published_at": "2026-09-23T04:30:08Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -1196,7 +1196,7 @@
       {"url": "https://api.apikey.fan/v1/messages", "note": "Verified Anthropic Messages route for the Claude group and configured Kimi group."},
       {"url": "https://api.apikey.fan/v1beta/models/gemini-3-flash:streamGenerateContent", "note": "Verified native Gemini GenerateContent SSE route; the model identifier is carried by the request path."},
       {"url": "https://api.apikey.fan/v1/images/generations", "note": "Verified GPT SSE and Grok synchronous image generation route."},
-      {"url": "https://api.apikey.fan/v1/images/edits", "note": "Verified GPT multipart SSE image-edit route."},
+      {"url": "https://api.apikey.fan/v1/images/edits", "note": "Unmasked multipart SSE connectivity was observed; masked editing remains unverified and no edit target is exposed."},
       {"url": "https://api.apikey.fan/v1/videos/generations", "note": "Verified Grok video task creation route."}
     ]
   }
