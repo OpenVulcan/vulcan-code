@@ -45,6 +45,9 @@ mod startup_snapshot;
 mod startup_updates;
 
 #[cfg(test)]
+mod credential_startup_tests;
+
+#[cfg(test)]
 #[path = "service_bootstrap/vce_startup_tests.rs"]
 mod vce_startup_tests;
 
@@ -1883,20 +1886,11 @@ fn refresh_public_ai_catalogs_at_startup(
     // here would combine bundled provider metadata with recovered manifest rules.
     // 启动恢复已经暂存持久化清单。针对该精确暂存代际刷新每个受影响源目录并只发布一次；
     // 若此处使用普通刷新，会把内置供应商元数据与已恢复清单规则混合。
-    // runtimeConfiguration removes every provider identity without executable authority from a
-    // clone; the authoritative configuration and source bytes remain untouched for repair.
-    // runtimeConfiguration 从克隆中移除全部缺少可执行权威的供应商身份；权威配置与源字节保持
-    // 不变，以供修复。
-    let runtime_configuration = runtime
-        .runtime_configuration_snapshot(configuration)
-        .map_err(|error| {
-            ServiceBootstrapError::new(
-                "workspace",
-                "Workspace",
-                format!("公共 AI 启动配置投影失败：{error}"),
-            )
-        })?;
-    let connection_ids = runtime_configuration
+    // The first activation must consume the saved candidate, not the fresh runtime's empty published image.
+    // 首次激活必须使用已保存候选，不能读取全新运行时中尚为空的已发布镜像。
+    // Activation itself filters isolated and disabled connections against its staged manifests while preserving the full configuration.
+    // 激活入口自行依据暂存清单过滤隔离及停用连接，同时保留完整权威配置。
+    let connection_ids = configuration
         .connection_graph
         .connections
         .values()
@@ -1904,7 +1898,7 @@ fn refresh_public_ai_catalogs_at_startup(
         .collect::<Vec<_>>();
     async_runtime
         .block_on(
-            runtime.activate_staged_manifest_catalogs(&runtime_configuration, &connection_ids),
+            runtime.activate_staged_manifest_catalogs(configuration, &connection_ids),
         )
         .map_err(|error| {
             ServiceBootstrapError::new(
