@@ -123,7 +123,7 @@ fn close_agent_schema_exposes_only_target() {
 /// 验证模型可见的关闭说明符合子代理不可嵌套的策略。
 #[test]
 fn close_agent_description_does_not_advertise_agent_subtrees() {
-    let candidate = build_close_agent_tool_candidate(Arc::new(TaskRuntime::new()));
+    let candidate = build_close_agent_tool_candidate(Arc::new(TaskRuntime::new()), None);
 
     assert_eq!(
         candidate.descriptor.description,

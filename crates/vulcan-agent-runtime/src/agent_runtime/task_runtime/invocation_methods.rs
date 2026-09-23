@@ -918,31 +918,35 @@ impl TaskRuntime {
         current_session_id: SessionId,
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
-        let target = close_agent_target(&args)?;
-        if is_root_agent_target(&target) {
-            return Err(String::from("root is not a spawned agent."));
-        }
-        let normalized_target = normalize_public_task_identifier(&target)?;
-        if self.current_session_matches_public_target(current_session_id, &normalized_target)? {
-            return Err(String::from(
-                "An agent cannot close itself; return your result and let the parent close you if needed.",
-            ));
-        }
-        let parent_session_id = SessionNodeId::from(current_session_id);
-        let entry = self
-                .subagent_registry_snapshot()?
-                .get_for_parent(parent_session_id, &normalized_target)
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "Unknown child agent `{normalized_target}` for parent session `{current_session_id}`."
-                    )
-                })?;
-        if entry.status == SubagentStatus::Archived {
-            return Err(format!(
-                "Child agent `{normalized_target}` is already closed and cannot be closed again."
-            ));
-        }
+        self.invoke_close_agent_with_pre_archive(current_session_id, args, |_| Ok(()))
+    }
+
+    /// Resolves immutable child identities before the host acquires their canonical lifecycle gates.
+    /// 在宿主获取规范生命周期锁前解析不可变子会话身份。
+    /// `current_session_id` owns the target in `args`; returns the selected archived projections without mutation.
+    /// `current_session_id` 拥有 `args` 中的目标；返回选中的归档投影且不修改状态。
+    pub fn close_agent_archive_scope(
+        &self,
+        current_session_id: SessionId,
+        args: &Value,
+    ) -> Result<Vec<SubagentRegistryEntry>, String> {
+        let (_, entry) = self.resolve_close_agent_entry(current_session_id, args)?;
+        Ok(self.prepare_close_agent_archive_entries(entry.session_id)?.entries)
+    }
+
+    /// Closes one child tree after the host durably seals each selected collaboration target.
+    /// 宿主可靠封闭每个选中协作目标后，关闭一棵子代理树。
+    /// `before_archive` receives the exact selected entries while their task locks exclude replacement.
+    /// `before_archive` 在任务锁排除替换期间取得精确的选中条目。
+    /// Returns the same close result as `invoke_close_agent`, or an error before runtime archival.
+    /// 返回与 `invoke_close_agent` 相同的关闭结果，或在运行时归档之前返回错误。
+    pub fn invoke_close_agent_with_pre_archive(
+        &self,
+        current_session_id: SessionId,
+        args: Value,
+        before_archive: impl FnOnce(&[SubagentRegistryEntry]) -> Result<(), String>,
+    ) -> Result<VulcanToolInvocationResult, String> {
+        let (normalized_target, entry) = self.resolve_close_agent_entry(current_session_id, &args)?;
         let previous_status = entry.status;
         let mut prepared_archive = self.prepare_close_agent_archive_entries(entry.session_id)?;
         let transaction_locks =
@@ -967,6 +971,9 @@ impl TaskRuntime {
                     )
                 })?;
         }
+        // Seal the canonical message target before runtime archival can make it unreachable.
+        // 在运行时归档使规范消息目标不可达之前，先封闭其准入。
+        before_archive(&prepared_archive.entries)?;
         let stopped_task_ids =
             self.reserve_and_abort_selected_task_runs(&prepared_archive.task_ids)?;
         self.mark_stopped_tasks_with_transaction_locks_held(&stopped_task_ids, "user_interrupt")?;
@@ -1020,6 +1027,43 @@ impl TaskRuntime {
                 }),
             });
         Ok(result)
+    }
+
+    /// Resolves the open child selected by the shared close tool argument contract.
+    /// 按共享关闭工具参数契约解析选中的开放子会话。
+    /// Returns its normalized public name and current entry, rejecting root, self and archived targets.
+    /// 返回规范公开名称和当前条目，拒绝根、自身和已归档目标。
+    fn resolve_close_agent_entry(
+        &self,
+        current_session_id: SessionId,
+        args: &Value,
+    ) -> Result<(String, SubagentRegistryEntry), String> {
+        let target = close_agent_target(args)?;
+        if is_root_agent_target(&target) {
+            return Err(String::from("root is not a spawned agent."));
+        }
+        let normalized_target = normalize_public_task_identifier(&target)?;
+        if self.current_session_matches_public_target(current_session_id, &normalized_target)? {
+            return Err(String::from(
+                "An agent cannot close itself; return your result and let the parent close you if needed.",
+            ));
+        }
+        let parent_session_id = SessionNodeId::from(current_session_id);
+        let entry = self
+                .subagent_registry_snapshot()?
+                .get_for_parent(parent_session_id, &normalized_target)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "Unknown child agent `{normalized_target}` for parent session `{current_session_id}`."
+                    )
+                })?;
+        if entry.status == SubagentStatus::Archived {
+            return Err(format!(
+                "Child agent `{normalized_target}` is already closed and cannot be closed again."
+            ));
+        }
+        Ok((normalized_target, entry))
     }
 
     /// Prepares immutable archived registry projections without mutating runtime state.

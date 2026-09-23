@@ -615,8 +615,8 @@ pub(crate) fn mark_webui_subagent_tasks_stopped_in_state(
     }
 }
 
-/// Unloads process-local runtime state for closed WebUI subagents without hiding their current-turn rows.
-/// 卸载已关闭 WebUI 子代理的进程内运行状态，同时不隐藏其当前回合列表行。
+/// Unloads closed child UI caches while retaining an active listener until its durable terminal.
+/// 卸载已关闭子会话的界面缓存，同时保留活动监听器直到可靠终态。
 pub(crate) fn unload_webui_closed_subagent_runtime_state(
     guard: &mut ServiceBridgeState,
     task_ids: &[SessionId],
@@ -627,11 +627,11 @@ pub(crate) fn unload_webui_closed_subagent_runtime_state(
     let task_ids = task_ids.iter().copied().collect::<BTreeSet<_>>();
     let mut changed = false;
     for task_id in &task_ids {
-        changed |= guard
-            .detached_subagent_task_listeners
-            .remove(task_id)
-            .is_some();
-        clear_all_webui_subagent_completion_gate_ignored_for_task(guard, *task_id);
+        // Closing a runtime slot cannot revoke ownership of an already admitted child terminal.
+        // 关闭运行时槽位不能撤销已准入子终态的归属。
+        if !guard.detached_subagent_task_listeners.contains_key(task_id) {
+            clear_all_webui_subagent_completion_gate_ignored_for_task(guard, *task_id);
+        }
         changed |= guard
             .subagent_surface_detail_cache
             .remove(task_id)

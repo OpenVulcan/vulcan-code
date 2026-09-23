@@ -362,7 +362,7 @@ pub(super) async fn service_close_subagent_task(
     let task_session_id = task_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid agent task id '{task_id}': {error}"))?;
-    let (resolved_parent_session_id, public_task_id, session_registry) = {
+    let (resolved_parent_session_id, public_task_id) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -377,7 +377,6 @@ pub(super) async fn service_close_subagent_task(
         (
             entry.parent_session_id.as_uuid(),
             entry.agent_id,
-            std::sync::Arc::clone(&guard.session_runtime_registry),
         )
     };
     webui_trace(
@@ -396,21 +395,15 @@ pub(super) async fn service_close_subagent_task(
         task_session_id,
     )
     .await?;
-    let close_result = agent_runtime
-        .task_runtime
-        .invoke_close_agent(
-            resolved_parent_session_id,
-            close_agent_request_arguments(public_task_id.as_str()),
-        )
-        .await?;
+    let close_result = crate::agent_collaboration::close_child_agent_for_parent(
+        &state,
+        &agent_runtime.task_runtime,
+        resolved_parent_session_id,
+        close_agent_request_arguments(public_task_id.as_str()),
+        None,
+    )
+    .await?;
     let closed_task_ids = closed_subagent_task_ids_from_close_result(&close_result)?;
-    for closed_task_id in &closed_task_ids {
-        session_registry
-            .unregister_lifecycle_session(*closed_task_id)
-            .map_err(|error| {
-                format!("failed to unload closed subagent V1 session '{closed_task_id}': {error}")
-            })?;
-    }
     webui_trace(
         "close_subagent_task_result",
         format!(

@@ -1114,25 +1114,8 @@ fn append_runtime_event_projection_with_authority(
     let refreshes_command_sessions = runtime_event_changes_command_sessions(event);
     let refreshes_subagent_navigation = runtime_event_changes_subagent_navigation(event);
     let closed_subagent_task_ids = close_agent_closed_subagent_task_ids_from_event(event)?;
-    if !closed_subagent_task_ids.is_empty() {
-        // session_registry is cloned under the service lock before child handles are unloaded.
-        // session_registry 在服务锁内克隆，随后卸载子会话句柄。
-        let session_registry = {
-            let guard = state
-                .lock()
-                .map_err(|error| format!("failed to lock service state: {error}"))?;
-            std::sync::Arc::clone(&guard.session_runtime_registry)
-        };
-        for closed_task_id in &closed_subagent_task_ids {
-            session_registry
-                .unregister_lifecycle_session(*closed_task_id)
-                .map_err(|error| {
-                    format!(
-                        "failed to unload closed subagent V1 session '{closed_task_id}': {error}"
-                    )
-                })?;
-        }
-    }
+    // The close owner retains active child handles until their original terminal is durable.
+    // 关闭所有者保留活动子句柄，直到其原始终态可靠落盘。
     let subagent_navigation_changed = if closed_subagent_task_ids.is_empty() {
         false
     } else {

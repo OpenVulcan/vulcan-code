@@ -3713,6 +3713,9 @@ mod tests {
                 last_access_ms: 0,
             },
         );
+        service_state
+            .detached_subagent_task_listeners
+            .insert(child.task_id, String::from("original-close-execution"));
         // runtime performs the actual close; state retains the same live cache used by the event handler.
         // runtime 执行真实关闭；state 保留事件处理器使用的同一实时缓存。
         let runtime = service_state.agent_runtime.clone().expect("seeded runtime");
@@ -3816,6 +3819,16 @@ mod tests {
                 .expect("service state")
                 .subagent_surface_detail_cache
                 .contains_key(&child.task_id)
+        );
+        assert_eq!(
+            state
+                .lock()
+                .expect("service state")
+                .detached_subagent_task_listeners
+                .get(&child.task_id)
+                .map(String::as_str),
+            Some("original-close-execution"),
+            "a close navigation projection must retain the original terminal listener"
         );
         assert_eq!(sink.api_terminal_completion.is_none(), tool_call_count == 2);
         assert_eq!(sink.active.is_some(), tool_call_count == 2);

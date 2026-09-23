@@ -131,7 +131,19 @@ pub(super) async fn handle_parent_event(
         // 保留精确监听器及待回流门以便恢复；存储错误不属于子任务结果。
         return Err(format!("Child terminal publication failed: {error}"));
     }
-    if terminal_mailbox.as_ref().is_some_and(|mailbox| {
+    let closed_by_runtime = listener_is_current
+        && is_finished
+        && agent_runtime
+            .task_runtime
+            .subagent_registry_snapshot()?
+            .list_all()
+            .iter()
+            .any(|entry| {
+                entry.session_id.as_uuid() == task_id
+                    && entry.status == vulcan_session_core::SubagentStatus::Archived
+            });
+    let mut question_return_settled = true;
+    if closed_by_runtime || terminal_mailbox.as_ref().is_some_and(|mailbox| {
         mailbox.kind == vulcan_session_boundary::SubagentMailboxEventKind::Stopped
     }) {
         // Question failure delivery is independent of the child's business result publication.
@@ -142,6 +154,7 @@ pub(super) async fn handle_parent_event(
             )
             .await
         {
+            question_return_settled = false;
             tracing::warn!(%task_id, %error, "Stopped child question return remains pending");
         }
     }
@@ -231,6 +244,15 @@ pub(super) async fn handle_parent_event(
             cleaned
         };
         if cleaned_current_listener {
+            if closed_by_runtime && question_return_settled {
+                if let Err(error) = crate::agent_collaboration::release_closed_child_handle(
+                    state, task_id,
+                )
+                .await
+                {
+                    tracing::warn!(%task_id, %error, "Closed child V1 handle remains registered");
+                }
+            }
             emit_webui_subagent_navigation_changed_delta_for_parent(app, state, parent_session_id)?;
         }
     }

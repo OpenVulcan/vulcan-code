@@ -311,6 +311,21 @@ pub enum AgentCollaborationCommand {
 /// 宿主注入的权威代理协作操作运行时端口。
 #[async_trait::async_trait]
 pub trait NativeAgentCollaborationRuntime: fmt::Debug + Send + Sync {
+    /// Closes a child through the host after durably sealing its exact V1 message target.
+    /// 宿主持久封闭精确 V1 消息目标之后关闭子代理。
+    /// `context` authenticates the original ToolCall; `task_runtime` owns runtime archival and `args` names its child.
+    /// `context` 认证原始工具调用；`task_runtime` 拥有运行时归档，`args` 指定其子代理。
+    /// Returns the ordinary close tool result or an explicit host admission error.
+    /// 返回普通关闭工具结果或明确的宿主准入错误。
+    async fn close_child_agent(
+        &self,
+        _context: VulcanToolInvocationContext,
+        _task_runtime: Arc<crate::agent_runtime::task_runtime::TaskRuntime>,
+        _args: Value,
+    ) -> Result<vulcan_tools_manager::VulcanToolInvocationResult, String> {
+        Err(String::from("The collaboration host does not support durable child closure."))
+    }
+
     /// Compacts the exact child through its durable host, returning only a committed canonical snapshot.
     /// 通过可靠宿主压缩精确子任务，仅返回已提交规范快照。
     /// `request` carries trusted execution inputs; None means no source needs compaction, errors forbid continuation.

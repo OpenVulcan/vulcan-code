@@ -11,6 +11,129 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationChildTaskTerminalOutcome, ReserveChildTaskInput,
 };
 
+/// Closes a finished child through the production host path and verifies its cold V1 target stays sealed.
+/// 通过生产宿主路径关闭已结束子代理，并验证冷加载后的 V1 目标仍封闭。
+/// Returns no value; failures identify a missing close admission or a reopened question target.
+/// 不返回值；失败表明关闭准入缺失或问题目标重新开放。
+#[tokio::test]
+async fn finished_child_close_preserves_listener_and_seals_cold_target() {
+    use vulcan_workbench_model::{SubagentTaskPanelState, SubagentTaskRunState};
+
+    let (_storage, invocation, _target, _context) = message_fixture(false).await;
+    let child_id = Uuid::new_v4();
+    let execution = CollaborationExecutionId::try_new("close-cold-child-execution").unwrap();
+    let child_handle = crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1(
+        &invocation.registry,
+        TaskV1ExecutionFacts {
+            root_session_id: invocation.source_session_id,
+            parent_session_id: invocation.source_session_id,
+            task_id: child_id,
+            execution_id: execution.as_str().to_owned(),
+            prompt: String::from("close child work"),
+            display_title: String::from("close worker"),
+            is_resumed: false,
+            admitted_at_ms: 5,
+        },
+    )
+    .unwrap();
+    let child = participants::participant_for_handle(&invocation, child_id, &child_handle, None)
+        .await
+        .unwrap();
+    invocation
+        .source_handle
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.reserve_child_task(ReserveChildTaskInput {
+                    source_tool_name: invocation.source_tool_id.clone(),
+                    operation_id: CollaborationOperationId::try_new("close-child-reserve")
+                        .unwrap(),
+                    execution_id: execution.clone(),
+                    task_id: child.task_id.clone().unwrap(),
+                    parent_turn_id: TurnId::try_new(invocation.source_turn_id).unwrap(),
+                    child,
+                    reserved_at_ms: 5,
+                })
+            },
+        )
+        .unwrap();
+    crate::agent_stream::non_success::publish_non_success(
+        &invocation.source_handle,
+        &child_handle,
+        execution.as_str(),
+        &vulcan_session_boundary::SubagentMailboxEvent {
+            parent_thread_id: invocation.source_session_id.into(),
+            parent_turn_id: None,
+            child_thread_id: child_id.into(),
+            kind: vulcan_session_boundary::SubagentMailboxEventKind::Failed,
+            timestamp_ms: 7,
+            payload: json!({"status": "failed", "error_text": "Original child failure"}),
+        },
+        7,
+    )
+    .unwrap();
+    assert_ne!(
+        child_handle.read(|document| document.collaboration_run_control()).unwrap(),
+        CollaborationRunControl::Stopped
+    );
+    let runtime = {
+        let mut guard = invocation.state.lock().unwrap();
+        crate::tests::test_support::seed_test_live_subagent_registry_from_panel_states(
+            &mut guard,
+            invocation.source_session_id,
+            &[SubagentTaskPanelState {
+                task_id: child_id,
+                parent_session_id: invocation.source_session_id,
+                public_task_id: String::from("close-worker"),
+                subagent_label: String::from("close-worker"),
+                description: None,
+                run_state: SubagentTaskRunState::Failed,
+                result_text: String::from("failed"),
+                conversation_state: None,
+            }],
+        );
+        guard.detached_subagent_task_listeners.insert(child_id, execution.as_str().to_owned());
+        Arc::clone(&guard.agent_runtime.as_ref().unwrap().task_runtime)
+    };
+    let child_locator = child_handle.storage_locator().unwrap();
+    let closed = crate::agent_collaboration::close_child_agent_for_parent(
+        &invocation.state,
+        &runtime,
+        invocation.source_session_id,
+        json!({"target": "close-worker"}),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(closed.model_output["closed"], true);
+    assert!(Arc::ptr_eq(&invocation.registry.get(child_id).unwrap(), &child_handle));
+    {
+        let mut guard = invocation.state.lock().unwrap();
+        assert!(crate::clear_webui_detached_listener_execution_if_current(
+            &mut guard, child_id, execution.as_str(),
+        ));
+    }
+    crate::agent_collaboration::release_closed_child_handle(&invocation.state, child_id)
+        .await
+        .unwrap();
+    assert!(invocation.registry.get(child_id).is_err());
+    let reloaded = load_session_v1_for_runtime(&child_locator).unwrap();
+    assert_eq!(
+        reloaded.document.collaboration_run_control(),
+        CollaborationRunControl::Stopped
+    );
+    let rejected = ask_question(
+        &crate::ServiceEventEmitter::new(vec![]),
+        &invocation,
+        child_id,
+        String::from("Can a closed child still answer?"),
+    )
+    .await
+    .unwrap_err();
+    assert!(rejected.contains("stopped"));
+}
+
 /// Real-storage child reports enter the original parent's request through the production projector once.
 /// 真实存储子报告通过生产投影器恰好一次进入原父请求。
 /// Returns no value; assertions cover concurrent replay, cold reload and completion-gate ownership.

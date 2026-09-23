@@ -48,6 +48,8 @@ use crate::session_runtime_registry_v1::{
 use crate::state::{ServiceBridgeState, SharedServiceBridgeState};
 
 mod child_compaction;
+mod child_close;
+pub(crate) use child_close::{close_child_agent_for_parent, release_closed_child_handle};
 mod child_creation;
 pub(crate) mod child_execution_ownership;
 pub(crate) mod child_maintenance;
@@ -3859,6 +3861,33 @@ async fn incoming_question_snapshot(
 
 #[async_trait]
 impl NativeAgentCollaborationRuntime for SessionV1NativeAgentCollaborationRuntime {
+    /// Authenticates one close ToolCall and seals every selected child before runtime archival.
+    /// 认证关闭工具调用，并在运行时归档前封闭每个选中子会话。
+    /// `context` is the original model invocation; `task_runtime` owns the selected runtime tree.
+    /// `context` 是原始模型调用；`task_runtime` 拥有选中的运行时子树。
+    /// Returns the runtime close result after reliable target admission and question reconciliation.
+    /// 在可靠目标准入和问题回执修复后返回运行时关闭结果。
+    async fn close_child_agent(
+        &self,
+        context: VulcanToolInvocationContext,
+        task_runtime: Arc<vulcan_agent_runtime::agent_runtime::task_runtime::TaskRuntime>,
+        args: Value,
+    ) -> Result<vulcan_tools_manager::VulcanToolInvocationResult, String> {
+        let invocation = validate_invocation(
+            &self.state,
+            &context,
+            vulcan_subagent_core::CLOSE_AGENT_TOOL,
+        )?;
+        child_close::close_child_agent_for_parent(
+            &invocation.state,
+            &task_runtime,
+            invocation.source_session_id,
+            args,
+            Some(context),
+        )
+        .await
+    }
+
     /// Executes child compaction through the authoritative document and returns its committed snapshot.
     /// 通过权威文档执行子压缩，并返回其已提交快照。
     /// The trusted request retains original ownership; unavailable or replaced owners fail explicitly.

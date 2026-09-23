@@ -23,9 +23,9 @@ pub fn build_subagent_tool_candidates(
         build_spawn_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime.clone()),
         build_agent_orchestration_info_tool_candidate(Arc::clone(&task_runtime)),
         build_send_message_tool_candidate(Arc::clone(&task_runtime)),
-        build_wait_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime),
+        build_wait_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime.clone()),
         build_interrupt_agent_tool_candidate(Arc::clone(&task_runtime)),
-        build_close_agent_tool_candidate(Arc::clone(&task_runtime)),
+        build_close_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime),
         build_list_agents_tool_candidate(task_runtime),
     ]
 }
@@ -279,6 +279,7 @@ pub(super) fn build_interrupt_agent_tool_candidate(
 /// 构建模型可见的子代理关闭工具。
 pub(super) fn build_close_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
+    collaboration_runtime: Option<Arc<dyn NativeAgentCollaborationRuntime>>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor::new(
@@ -294,12 +295,18 @@ pub(super) fn build_close_agent_tool_candidate(
         request_streaming: None,
         invoke: Arc::new(move |args, context| {
             let task_runtime = Arc::clone(&task_runtime);
+            let collaboration_runtime = collaboration_runtime.clone();
             Box::pin(async move {
-                let session_id = parse_subagent_tool_session_id(
+                parse_subagent_tool_session_id(
                     Some(context.session_id.as_str()),
                     CLOSE_AGENT_TOOL,
                 )?;
-                task_runtime.invoke_close_agent(session_id, args).await
+                let collaboration_runtime = collaboration_runtime.ok_or_else(|| {
+                    String::from("close_agent requires the durable collaboration host.")
+                })?;
+                collaboration_runtime
+                    .close_child_agent(context, task_runtime, args)
+                    .await
             })
         }),
     }
