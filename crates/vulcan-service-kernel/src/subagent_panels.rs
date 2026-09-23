@@ -318,7 +318,8 @@ pub(super) async fn service_stop_subagent_task(
                 .collect::<Vec<_>>();
             mark_webui_subagent_tasks_stopped_in_state(&mut guard, &stopped_task_pairs);
             for task_id in &stopped_task_id_set {
-                guard.detached_subagent_task_listeners.remove(task_id);
+                // The exact detached listener must publish the stopped V1 turn and parent receipt.
+                // 精确分离监听器必须发布已停止的 V1 回合和父侧回执。
                 if guard
                     .active_subagent_panel
                     .is_some_and(|selection| selection.task_id == *task_id)
@@ -326,10 +327,6 @@ pub(super) async fn service_stop_subagent_task(
                     guard.active_subagent_panel = None;
                 }
             }
-        } else {
-            guard
-                .detached_subagent_task_listeners
-                .remove(&task_session_id);
         }
         let workspace_snapshot = guard
             .workspace_snapshot

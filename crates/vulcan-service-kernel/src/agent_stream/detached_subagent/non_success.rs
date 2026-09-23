@@ -8,7 +8,8 @@ use crate::session_runtime_registry_v1::{
 use vulcan_session_boundary::{SubagentMailboxEvent, SubagentMailboxEventKind};
 use vulcan_session_core::v1::DomainError;
 use vulcan_session_core::v1::collaboration::{
-    CollaborationChildTaskTerminalOutcome, CollaborationExecutionId,
+    CollaborationChildTaskTerminalOutcome, CollaborationExecutionId, CollaborationOperationId,
+    CollaborationRunControl, SetRunControlInput,
 };
 use vulcan_session_core::v1::event::{TurnOutcome, UserInputSource};
 
@@ -192,6 +193,22 @@ pub(crate) fn publish_non_success(
                                 now_ms.saturating_sub(started_at_ms).max(0),
                                 now_ms,
                             )?;
+                            if !matches!(
+                                document.collaboration_run_control(),
+                                CollaborationRunControl::Stopped
+                                    | CollaborationRunControl::MainAndSubagents
+                            ) {
+                                // The verified child closes message admission with its turn in one revision.
+                                // 已验证子会话在闭合回合的同一修订中关闭消息准入。
+                                document.set_collaboration_run_control(SetRunControlInput {
+                                    operation_id: CollaborationOperationId::try_new(format!(
+                                        "child-turn-stopped:{}",
+                                        turn_id.value()
+                                    ))?,
+                                    state: CollaborationRunControl::Stopped,
+                                    changed_at_ms: now_ms,
+                                })?;
+                            }
                         }
                         _ => unreachable!("non-success classification is checked before mutation"),
                     }

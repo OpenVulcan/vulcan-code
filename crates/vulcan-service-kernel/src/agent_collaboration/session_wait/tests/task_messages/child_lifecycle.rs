@@ -93,6 +93,31 @@ async fn child_non_success_service_projects_exact_durable_report_once() {
                 },
             )
             .unwrap();
+        let stopped_question = if status == "stopped" {
+            let asked = ask_question(
+                &crate::ServiceEventEmitter::new(vec![]),
+                &invocation,
+                child_id,
+                String::from("Can you report before the stop?"),
+            )
+            .await
+            .unwrap();
+            let question_id =
+                CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
+            let delivery_id = invocation
+                .source_handle
+                .read(|document| {
+                    document
+                        .question_snapshot(&question_id)
+                        .unwrap()
+                        .delivery_id
+                        .clone()
+                })
+                .unwrap();
+            Some(delivery_id)
+        } else {
+            None
+        };
         if active_api {
             start_api_at(&child_handle, 6);
         }
@@ -150,6 +175,25 @@ async fn child_non_success_service_projects_exact_durable_report_once() {
                 .read(|doc| doc.active_api().is_none() && doc.active_turn().unwrap().closed)
                 .unwrap()
         );
+        if status == "stopped" {
+            assert_eq!(
+                child_handle
+                    .read(|document| document.collaboration_run_control())
+                    .unwrap(),
+                CollaborationRunControl::Stopped,
+                "the stopped child must durably reject later collaboration messages"
+            );
+            let delivery_id = stopped_question.as_ref().unwrap();
+            assert_eq!(
+                child_handle
+                    .read(|document| document
+                        .inbound_delivery_snapshot(delivery_id)
+                        .unwrap()
+                        .state)
+                    .unwrap(),
+                CollaborationDeliveryState::Failed
+            );
+        }
         // Replay through the actual detached listener to verify routing and post-durability mailbox publication.
         // 经实际分离监听器重放，以验证路由及持久化后的邮箱发布。
         replay_non_success_through_listener(
@@ -160,6 +204,16 @@ async fn child_non_success_service_projects_exact_durable_report_once() {
             &mailbox,
         )
         .await;
+        if let Some(delivery_id) = stopped_question.as_ref() {
+            assert_eq!(
+                invocation
+                    .source_handle
+                    .read(|document| document.delivery_snapshot(delivery_id).unwrap().state)
+                    .unwrap(),
+                CollaborationDeliveryState::Failed,
+                "the detached stop listener must return the failure to the question owner"
+            );
+        }
         invocation
             .source_handle
             .mutate_durable(

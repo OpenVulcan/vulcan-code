@@ -131,6 +131,20 @@ pub(super) async fn handle_parent_event(
         // 保留精确监听器及待回流门以便恢复；存储错误不属于子任务结果。
         return Err(format!("Child terminal publication failed: {error}"));
     }
+    if terminal_mailbox.as_ref().is_some_and(|mailbox| {
+        mailbox.kind == vulcan_session_boundary::SubagentMailboxEventKind::Stopped
+    }) {
+        // Question failure delivery is independent of the child's business result publication.
+        // 问题失败回传独立于子任务业务结果发布。
+        if let Err(error) =
+            crate::agent_collaboration::reconcile_stopped_question_deliveries_for_session(
+                state, task_id,
+            )
+            .await
+        {
+            tracing::warn!(%task_id, %error, "Stopped child question return remains pending");
+        }
+    }
     let consumed = if listener_is_current {
         match ingest_webui_subagent_runtime_event_for_listener_execution(
             app,
