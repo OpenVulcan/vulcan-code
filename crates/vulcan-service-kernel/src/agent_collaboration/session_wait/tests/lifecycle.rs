@@ -3,21 +3,24 @@
 
 use super::*;
 use crate::ServiceEventEmitter;
-use crate::agent_collaboration::reconcile_session_v1_collaboration_outbox;
+use crate::agent_collaboration::{
+    reconcile_session_v1_collaboration_outbox, target_inbound_event_seq,
+};
 use crate::session_v1_lifecycle::{
     SessionV1LifecycleError, archive_session_lifecycle_v1, delete_session_lifecycle_v1,
     guards::admit_edit_generation, publish_guarded_edit_generation,
 };
 use vulcan_agent_runtime::tooling::collaboration::{REPLY_QUESTION_TOOL_ID, ReplyQuestionArgs};
 use vulcan_session_core::v1::collaboration::CollaborationQuestionRecord;
+use vulcan_session_core::v1::config::SegmentInfo;
 use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_session_core::v1::document::{
     EditGenerationInput, PrepareAndStartApiInput, RootInputReplacement, SessionDocument,
 };
 use vulcan_session_core::v1::event::{
-    ApiRequestSnapshot, ToolPayload, TurnOutcome, UserInputSource,
+    ApiRequestSnapshot, ToolPayload, TurnOutcome, UserInputSource, next_event_local_id,
 };
-use vulcan_session_core::v1::ids::RequestStreamId;
+use vulcan_session_core::v1::ids::{RequestStreamId, Seq};
 use vulcan_session_core::v1::projection::provider_visible_fingerprint;
 
 /// Deleting the target first must preserve missing source acknowledgement and allow settled cleanup.
@@ -244,6 +247,80 @@ async fn unacknowledged_settlement_fixture(
             .unwrap()
     );
     (storage, invocation, target, question, operation)
+}
+
+/// Question progress recovery reads the accepted operation even after its event is sealed.
+/// 问题进度恢复在接纳事件封存后仍能读取其操作回执。
+/// Rebuilds the target with a real collaboration metadata snapshot and only its later resident tail.
+/// 使用真实协作元数据快照及其后续常驻尾段重建目标。
+#[tokio::test]
+async fn question_progress_recovery_reads_sealed_target_operation() {
+    let (_storage, _invocation, target, question, _operation) =
+        unacknowledged_settlement_fixture(true).await;
+    let (mut metadata, runtime_lock, compactions, events, inbound, expected_seq) = target
+        .read(|document| {
+            let inbound = document.collaboration_state().inbound_deliveries
+                [&question.delivery_id]
+                .clone();
+            let expected_seq = document.collaboration_state().operations
+                [&inbound.operation_id]
+                .event_seq;
+            (
+                document.metadata.clone(),
+                document.runtime_lock.clone(),
+                document.compactions.clone(),
+                document.events().to_vec(),
+                inbound,
+                expected_seq,
+            )
+        })
+        .unwrap();
+    let sealed_count = events
+        .iter()
+        .position(|event| event.seq == expected_seq)
+        .expect("accepted event must be present in the original full document")
+        + 1;
+    let tail = events[sealed_count..].to_vec();
+    assert!(!tail.is_empty(), "the fixture must retain later target events");
+    let sealed_end = events[sealed_count - 1].seq;
+    metadata.split_list = vec![
+        SegmentInfo {
+            segment_number: 1,
+            file_name: String::from("000001.jsonl"),
+            start_seq: Seq::try_new(1).unwrap(),
+            end_seq: Some(sealed_end),
+            event_count: sealed_count as u64,
+            byte_len: 64,
+            next_event_local_id: next_event_local_id(&events[..sealed_count]),
+        },
+        SegmentInfo {
+            segment_number: 2,
+            file_name: String::from("000002.jsonl"),
+            start_seq: tail[0].seq,
+            end_seq: None,
+            event_count: tail.len() as u64,
+            byte_len: 64,
+            next_event_local_id: next_event_local_id(&events),
+        },
+    ];
+    let tail_document = SessionDocument::from_parts(
+        metadata.clone(),
+        runtime_lock,
+        compactions,
+        metadata.split_list.clone(),
+        tail,
+    )
+    .expect("sealed target history should reload with its collaboration metadata");
+    let tail_target = SessionHandle::new(
+        target.session_id(),
+        target.storage_locator().unwrap(),
+        tail_document,
+    );
+    assert!(tail_target.read(|document| document.events().iter().all(|event| event.seq != expected_seq)).unwrap());
+    assert_eq!(
+        target_inbound_event_seq(&tail_target, &inbound).unwrap(),
+        expected_seq,
+    );
 }
 
 /// Replays trusted cancellation after cold archive and deletes both roots in `source_first` order.

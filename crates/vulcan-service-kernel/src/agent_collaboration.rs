@@ -23,6 +23,7 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationDeliveryId, CollaborationDeliveryReceipt, CollaborationDeliverySettlementReceipt,
     CollaborationDeliveryState, CollaborationExecutionId, CollaborationExecutionPurpose,
     CollaborationGrantAction, CollaborationOperationId, CollaborationParticipant,
+    CollaborationOperationResult, CollaborationOperationSemantic,
     CollaborationQuestionExecutionState, CollaborationQuestionId, CollaborationQuestionState,
     CollaborationRunControl, CollaborationTargetSettlementState, CreateQuestionInput,
     DeliverAnswerInput, ProjectDeliveryInput, RecordDeliveryProgressInput, ReplyQuestionInput,
@@ -1712,35 +1713,81 @@ fn read_target_inbound_delivery(
         .map_err(|error| format!("failed to read target collaboration delivery: {error}"))
 }
 
-/// Locates the target collaboration event that last recorded one inbound state.
-/// 定位最近记录该入站状态的目标协作事件。
+/// Resolves the durable operation that recorded one inbound delivery state.
+/// 解析记录一条入站投递状态的可靠操作。
+/// Sealed collaboration events may be absent from the resident tail, so the operation log owns the sequence.
+/// 已封存协作事件可能不在常驻尾段中，因此序列号由操作日志持有。
 fn target_inbound_event_seq(
     target: &Arc<SessionHandle>,
     inbound: &vulcan_session_core::v1::collaboration::CollaborationInboundDeliveryRecord,
 ) -> Result<Seq, String> {
     target
         .read(|document| {
-            document
-                .events()
-                .iter()
-                .rev()
-                .find_map(|event| {
-                    let EventBody::Collaboration(collaboration) = &event.event else {
-                        return None;
+            if document.durable_revision() < inbound.target_revision {
+                return Err(String::from(
+                    "target inbound delivery revision is not durable",
+                ));
+            }
+            let state = document.collaboration_state();
+            let matches = state
+                .operations
+                .values()
+                .filter(|operation| {
+                    let semantic_matches = match (&operation.semantic, inbound.state) {
+                        (
+                            CollaborationOperationSemantic::AcceptDelivery {
+                                delivery_id,
+                                question_id,
+                                source,
+                                target,
+                                bound_turn_id,
+                                execution_purpose,
+                            },
+                            CollaborationDeliveryState::Accepted,
+                        ) => {
+                            operation.operation_id == inbound.operation_id
+                                && delivery_id == &inbound.delivery_id
+                                && question_id == &inbound.question_id
+                                && source == &inbound.source
+                                && target == &inbound.target
+                                && bound_turn_id == &inbound.bound_turn_id
+                                && execution_purpose == &inbound.execution_purpose
+                        }
+                        (
+                            CollaborationOperationSemantic::ProjectDelivery {
+                                delivery_id,
+                                question_id,
+                                projected_seq,
+                                projected_input_id,
+                                projected_turn_id,
+                            },
+                            CollaborationDeliveryState::Projected,
+                        ) => {
+                            delivery_id == &inbound.delivery_id
+                                && question_id == &inbound.question_id
+                                && Some(*projected_seq) == inbound.projected_seq
+                                && Some(*projected_input_id) == inbound.projected_input_id
+                                && Some(*projected_turn_id) == inbound.projected_turn_id
+                        }
+                        _ => false,
                     };
-                    let vulcan_session_core::v1::collaboration::CollaborationAfterState::InboundDelivery {
-                        delivery,
-                    } = &collaboration.after_state
-                    else {
-                        return None;
-                    };
-                    (delivery.delivery_id == inbound.delivery_id
-                        && delivery.state == inbound.state)
-                        .then_some(event.seq)
+                    semantic_matches
+                        && matches!(
+                            &operation.result,
+                            CollaborationOperationResult::Delivery { delivery_id, state }
+                                if delivery_id == &inbound.delivery_id && *state == inbound.state
+                        )
                 })
+                .map(|operation| operation.event_seq)
+                .collect::<Vec<_>>();
+            if matches.len() != 1 {
+                return Err(String::from(
+                    "target inbound state has no unique durable collaboration operation",
+                ));
+            }
+            Ok(matches[0])
         })
         .map_err(|error| format!("failed to read target collaboration event sequence: {error}"))?
-        .ok_or_else(|| String::from("target inbound state has no durable collaboration event"))
 }
 
 /// Replays one missing target acceptance from the source-owned durable question.
