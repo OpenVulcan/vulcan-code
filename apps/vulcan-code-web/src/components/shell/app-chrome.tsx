@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { StatusPill } from "@/components/shared/status";
+import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { areaIconMap } from "@/components/features/feature-shell";
 import { useI18n, type LocaleCode } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -56,7 +57,7 @@ export function BrandHeader(props: {
 }) {
   return (
     <div className="brand" data-tauri-drag-region={props.dragRegion ? "" : undefined}>
-      <img alt="" aria-hidden="true" className="brand-logo app-brand-logo" src="/vulcan-logo.png" />
+      <VulcanSymbol className="brand-logo app-brand-logo" />
       <div>
         <strong>Vulcan Code</strong>
       </div>

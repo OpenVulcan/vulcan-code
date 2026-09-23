@@ -19,6 +19,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { useI18n } from "@/i18n";
 import type { MainAreaId } from "@/types";
 
@@ -56,7 +57,7 @@ export function SidebarBrandMenu(props: {
             data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
             onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
           >
-            <img alt="" aria-hidden="true" className="brand-logo sidebar-brand-logo" src="/vulcan-logo.png" />
+            <VulcanSymbol className="brand-logo sidebar-brand-logo" />
             <span className="vcn-sidebar-label sidebar-profile-label">
               <strong>Vulcan Code</strong>
               <small>{props.currentLabel}</small>

@@ -2,6 +2,7 @@ import React from "react";
 import { LoaderCircle, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ConversationSummary, WorkbenchSnapshot } from "@/types";
 import {
@@ -126,6 +127,10 @@ export function ProjectCollaborationGrantsSection(props: {
   const loadSequenceRef = React.useRef(0);
   const pendingAddRef = React.useRef<PendingAddRequest | null>(null);
   const pendingRemovesRef = React.useRef(new Map<string, PendingRemoveRequest>());
+  // sourceLabelId and targetLabelId name the shared Select triggers, which cannot sit inside a native label.
+  // sourceLabelId 与 targetLabelId 为共享 Select 触发器提供名称，触发器不能放在原生 label 内。
+  const sourceLabelId = React.useId();
+  const targetLabelId = React.useId();
 
   React.useEffect(() => {
     const source = sourceSessions[0]?.id ?? "";
@@ -286,28 +291,36 @@ export function ProjectCollaborationGrantsSection(props: {
         <p className="text-muted-foreground">{labels.noSource}</p>
       ) : (
         <div className="space-y-4">
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium">{labels.source}</span>
-            <select
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+          <div className="space-y-1.5">
+            <span className="block text-xs font-medium" id={sourceLabelId}>{labels.source}</span>
+            <Select
               disabled={addBusy || busyGrantId !== null}
-              onChange={(event) => setSourceSessionId(event.target.value)}
-              value={sourceSessionId}
+              onValueChange={setSourceSessionId}
+              value={sourceSessionId || undefined}
             >
-              {sourceSessions.map((session) => <option key={session.id} value={session.id}>{sessionLabel(session, props.workbench.projects)}</option>)}
-            </select>
-          </label>
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium">{labels.target}</span>
-            <select
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              <SelectTrigger aria-labelledby={sourceLabelId} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {sourceSessions.map((session) => <SelectItem key={session.id} value={session.id}>{sessionLabel(session, props.workbench.projects)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <span className="block text-xs font-medium" id={targetLabelId}>{labels.target}</span>
+            <Select
               disabled={addBusy || busyGrantId !== null || targetOptions.length === 0}
-              onChange={(event) => setTargetSessionId(event.target.value)}
-              value={targetSessionId}
+              onValueChange={setTargetSessionId}
+              value={targetSessionId || undefined}
             >
-              {targetOptions.map((session) => <option key={session.id} value={session.id}>{sessionLabel(session, props.workbench.projects)}</option>)}
-            </select>
-          </label>
+              <SelectTrigger aria-labelledby={targetLabelId} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {targetOptions.map((session) => <SelectItem key={session.id} value={session.id}>{sessionLabel(session, props.workbench.projects)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
           {targetOptions.length === 0 ? <p className="text-sm text-muted-foreground">{labels.noTarget}</p> : null}
           <fieldset className="space-y-2">
             <legend className="text-xs font-medium">{labels.capabilities}</legend>

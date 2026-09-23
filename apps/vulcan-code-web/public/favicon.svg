@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" shape-rendering="geometricPrecision">
+  <defs>
+    <linearGradient id="k2" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF6527"/>
+      <stop offset="100%" stop-color="#F44E1C"/>
+    </linearGradient>
+  </defs>
+  <style>
+    .vulcan-body { fill: #0B0D10; }
+    @media (prefers-color-scheme: dark) {
+      .vulcan-body { fill: #FFFFFF; }
+    }
+  </style>
+  <svg x="11.4826" y="9.0000" width="77.0347" height="86.0000"
+       viewBox="32.0 29.0 232.0 259.0" preserveAspectRatio="xMidYMid meet">
+    <path d="M 2 0
+L 84 0
+C 88 0 91 1 95 5
+L 153 76
+C 159 83 159 95 153 102
+L 95 173
+C 91 177 88 178 84 178
+L 2 178
+L 78 89
+Z" class="vulcan-body" transform="translate(30 110)"/>
+    <path d="M 73 0
+C 64 14 51 28 38 40
+C 21 55 7 68 2 87
+C -2 107 8 129 25 150
+C 39 134 53 119 67 107
+C 82 95 91 79 93 60
+C 95 40 86 18 73 0
+Z" fill="url(#k2)" transform="translate(169 29)"/>
+  </svg>
+</svg>

@@ -248,6 +248,10 @@
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
+  /* The inline symbol has no tile padding, so inset it to match the 15px wordmark weight. */
+  /* 内联图标没有底板留白，内缩后与 15px 字标的视觉重量一致。 */
+  padding: 3px;
+  color: var(--sidebar-foreground);
   transition: width 180ms ease, height 180ms ease, transform 180ms ease;
 }
 
