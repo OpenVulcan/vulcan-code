@@ -3,6 +3,7 @@ import * as React from "react"
 import { Boxes, KeyRound, ListChecks, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
+import { SettingsEmptyState } from "@/components/features/settings/settings-empty-state"
 import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
 import {
   localizedProviderDescription,
@@ -292,16 +293,18 @@ export function CredentialManagementArea() {
             })}
           </div>
         ) : activeProviderId ? (
-          <div className="flex min-h-48 w-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-            <strong>{t("settings.credentials.emptyProvider")}</strong>
-            <p>{t("settings.credentials.emptyProviderDescription")}</p>
-          </div>
+          <SettingsEmptyState
+            description={t("settings.credentials.emptyProviderDescription")}
+            icon={<KeyRound />}
+            title={t("settings.credentials.emptyProvider")}
+          />
         ) : (
-          <div className="flex min-h-48 w-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-            <strong>{locale === "zh-CN" ? "供应商目录为空" : "The provider directory is empty"}</strong>
-            <p>{locale === "zh-CN" ? "加载供应商目录后，即可添加账号凭据。" : "Load the provider directory to add account credentials."}</p>
-            <Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline">{locale === "zh-CN" ? "重新加载目录" : "Reload directory"}</Button>
-          </div>
+          <SettingsEmptyState
+            action={<Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline"><RefreshCw className="size-4" />{locale === "zh-CN" ? "重新加载目录" : "Reload directory"}</Button>}
+            description={locale === "zh-CN" ? "加载供应商目录后，即可添加账号凭据。" : "Load the provider directory to add account credentials."}
+            icon={<Boxes />}
+            title={locale === "zh-CN" ? "供应商目录为空" : "The provider directory is empty"}
+          />
         )}
         <PublicAiConnectionDialog
           connection={null}

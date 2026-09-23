@@ -26,7 +26,7 @@
 .tool-todo-status { flex: none; display: flex; padding-top: 2px; color: var(--muted-foreground); }
 .tool-todo-step { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--foreground); }
 .tool-todo-item[data-status="completed"] .tool-todo-step { color: var(--muted-foreground); }
-.tool-todo-item[data-status="completed"] .tool-todo-status { color: var(--primary); }
+.tool-todo-item[data-status="completed"] .tool-todo-status { color: var(--vcn-content-success); }
 .tool-todo-item[data-status="in_progress"] { background: color-mix(in srgb, var(--primary) 7%, transparent); }
 .tool-todo-item[data-status="in_progress"] .tool-todo-status { color: var(--primary); }
 .tool-todo-active-label { flex: none; font-size: 10px; color: var(--primary); padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--primary) 9%, transparent); }

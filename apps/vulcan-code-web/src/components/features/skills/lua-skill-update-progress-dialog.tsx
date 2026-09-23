@@ -141,7 +141,7 @@ export function LuaSkillUpdateProgressDialog(props: {
             ? "更新期间，其他技能操作将排队等待。" : "Other skill operations wait while this update runs."}</p> : null}
         </div>
         <DialogFooter>
-          <Button type="button" disabled={running} onClick={props.onClose}>{running
+          <Button type="button" variant="outline" disabled={running} onClick={props.onClose}>{running
             ? (chinese ? "更新中…" : "Updating…") : (chinese ? "关闭" : "Close")}</Button>
         </DialogFooter>
       </DialogContent>

@@ -1243,7 +1243,7 @@ export function KnowledgeBaseArea() {
             ) : (
               <>
                 {importOutcome === "failed" && displayedOperationKind === "display_build" && importLibraryId ? <Button disabled={pageBusy} onClick={() => void startDerivedOperation("display-build", importLibraryId)} type="button" variant="outline"><RefreshCw size={14} />{t("knowledge.experience.resume")}</Button> : null}
-                <Button onClick={() => setImportProgressOpen(false)} type="button">{t("knowledge.importDialog.close")}</Button>
+                <Button onClick={() => setImportProgressOpen(false)} type="button" variant="outline">{t("knowledge.importDialog.close")}</Button>
               </>
             )}
           </DialogFooter>

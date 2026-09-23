@@ -1,28 +1,32 @@
 /* Shared light and dark palette, loaded before the application shell. */
 /* 在应用外壳之前加载的统一明暗色板。 */
+/* Vulcan Forge: ink neutrals, flame only as the signal color (primary, ring, active indicators). */
+/* Vulcan Forge：中性色取 ink 系，flame 只作信号色（主操作、焦点环、当前项指示）。 */
+/* Light primary is a deeper flame (#d9420f) so white text and flame text both stay near 4.5:1. */
+/* 亮色 primary 取加深火焰色（#d9420f），使白字与火焰色文字的对比度都接近 4.5:1。 */
 :root {
   color-scheme: light;
   font-family: "Geist Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
   background: var(--background);
   color: var(--foreground);
-  --background: #f7f8fa;
-  --foreground: #242830;
+  --background: #f6f6f4;
+  --foreground: #15171a;
   --card: #ffffff;
-  --card-foreground: #242830;
+  --card-foreground: #15171a;
   --popover: #ffffff;
-  --popover-foreground: #242830;
-  --primary: #303a48;
+  --popover-foreground: #15171a;
+  --primary: #d9420f;
   --primary-foreground: #ffffff;
-  --secondary: #edf0f4;
-  --secondary-foreground: #354052;
-  --muted: #eef0f3;
-  --muted-foreground: #626b79;
-  --accent: #e7edf4;
-  --accent-foreground: #243b55;
-  --destructive: #c43542;
-  --border: #dfe3e9;
-  --input: #ced5de;
-  --ring: #708aa5;
+  --secondary: #efefec;
+  --secondary-foreground: #2a2d33;
+  --muted: #efefec;
+  --muted-foreground: #5d626a;
+  --accent: #ecebe7;
+  --accent-foreground: #15171a;
+  --destructive: #d23b3b;
+  --border: #e3e3df;
+  --input: #d4d4cf;
+  --ring: #d9420f;
   --chart-1: #547cac;
   --chart-2: #368b7c;
   --chart-3: #9970b8;
@@ -31,41 +35,41 @@
   --diff-addition-base: #1f883d;
   --diff-deletion-base: #cf222e;
   --radius: 0.5rem;
-  --sidebar: #eef1f5;
-  --sidebar-foreground: #354052;
-  --sidebar-primary: #303a48;
+  --sidebar: #efefec;
+  --sidebar-foreground: #2a2d33;
+  --sidebar-primary: #d9420f;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #dfe7f0;
-  --sidebar-accent-foreground: #243b55;
-  --sidebar-border: #dfe3e9;
-  --sidebar-ring: #708aa5;
+  --sidebar-accent: #e4e3de;
+  --sidebar-accent-foreground: #15171a;
+  --sidebar-border: #e3e3df;
+  --sidebar-ring: #d9420f;
   --app-header-height: 30px;
-  --vcn-overlay: rgb(25 34 48 / 26%);
-  --vcn-shadow-floating: 0 8px 28px rgb(25 34 48 / 14%), 0 2px 6px rgb(25 34 48 / 6%);
+  --vcn-overlay: rgb(11 13 16 / 26%);
+  --vcn-shadow-floating: 0 8px 28px rgb(11 13 16 / 12%), 0 2px 6px rgb(11 13 16 / 6%);
 }
 
 .dark {
   color-scheme: dark;
-  --vcn-overlay: rgb(5 9 16 / 58%);
-  --vcn-shadow-floating: 0 12px 36px rgb(0 0 0 / 32%), 0 2px 8px rgb(0 0 0 / 16%);
-  --background: #191c22;
-  --foreground: #e1e6ed;
-  --card: #21252d;
-  --card-foreground: #e1e6ed;
-  --popover: #292e38;
-  --popover-foreground: #edf0f5;
-  --primary: #d7e2ef;
-  --primary-foreground: #202a38;
-  --secondary: #2c323c;
-  --secondary-foreground: #dce3ec;
-  --muted: #282e37;
-  --muted-foreground: #a2adbb;
-  --accent: #303d4d;
-  --accent-foreground: #dfebfa;
-  --destructive: #f0838e;
-  --border: #353d49;
-  --input: #46515f;
-  --ring: #8faecf;
+  --vcn-overlay: rgb(0 0 0 / 60%);
+  --vcn-shadow-floating: 0 12px 36px rgb(0 0 0 / 40%), 0 2px 8px rgb(0 0 0 / 20%);
+  --background: #0b0d10;
+  --foreground: #f4f5f6;
+  --card: #111317;
+  --card-foreground: #f4f5f6;
+  --popover: #16191e;
+  --popover-foreground: #f4f5f6;
+  --primary: #ff6527;
+  --primary-foreground: #0b0d10;
+  --secondary: #1d2127;
+  --secondary-foreground: #e4e6e9;
+  --muted: #1d2127;
+  --muted-foreground: #a4a9b1;
+  --accent: #1d2127;
+  --accent-foreground: #f4f5f6;
+  --destructive: #f26d6d;
+  --border: #262a31;
+  --input: #353a43;
+  --ring: #ff6a2e;
   --chart-1: #85a9db;
   --chart-2: #6ec4af;
   --chart-3: #be9bdf;
@@ -73,12 +77,12 @@
   --chart-5: #ed99a1;
   --diff-addition-base: #2ea043;
   --diff-deletion-base: #f85149;
-  --sidebar: #1d2129;
-  --sidebar-foreground: #ccd5e1;
-  --sidebar-primary: #d7e2ef;
-  --sidebar-primary-foreground: #202a38;
-  --sidebar-accent: #303d4d;
-  --sidebar-accent-foreground: #dfebfa;
-  --sidebar-border: #353d49;
-  --sidebar-ring: #8faecf;
+  --sidebar: #0e1013;
+  --sidebar-foreground: #c9ccd1;
+  --sidebar-primary: #ff6527;
+  --sidebar-primary-foreground: #0b0d10;
+  --sidebar-accent: #1a1d22;
+  --sidebar-accent-foreground: #f4f5f6;
+  --sidebar-border: #1f2329;
+  --sidebar-ring: #ff6a2e;
 }

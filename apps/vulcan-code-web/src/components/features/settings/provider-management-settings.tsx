@@ -9,11 +9,13 @@ import {
   LockKeyhole,
   Pencil,
   Plus,
+  Search,
   ServerCog,
   Trash2,
 } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
+import { SettingsEmptyState } from "@/components/features/settings/settings-empty-state"
 import { PublicAiConnectionDialog } from "@/components/features/settings/provider-list-settings"
 import {
   isFunctionalProvider,
@@ -606,16 +608,23 @@ function CustomProviderTable(props: {
       </div>
 
       <Input aria-label={t("settings.modelExperience.searchCustom")} placeholder={t("settings.modelExperience.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
-      {!props.loading && props.providers.length > 0 && visibleProviders.length === 0 ? <p className="text-sm text-muted-foreground">{t("settings.modelExperience.noProviders")}</p> : null}
+      {!props.loading && props.providers.length > 0 && visibleProviders.length === 0 ? <SettingsEmptyState icon={<Search />} title={t("settings.modelExperience.noProviders")} /> : null}
       {props.loading ? (
         <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
           {t("settings.providers.loading")}
         </div>
       ) : props.providers.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          {t("settings.providers.emptyCustom")}
-        </div>
+        <SettingsEmptyState
+          action={(
+            <Button disabled={props.busyProviderId !== null} onClick={props.onCreate} size="sm" type="button">
+              <Plus className="size-4" />
+              {t("settings.providers.addProvider")}
+            </Button>
+          )}
+          icon={<ServerCog />}
+          title={t("settings.providers.emptyCustom")}
+        />
       ) : visibleProviders.length === 0 ? null : (
         <div className="overflow-hidden rounded-xl border">
           <Table className="provider-responsive-table">
@@ -786,7 +795,7 @@ function SystemProviderTable(props: {
       </div>
 
       <Input aria-label={t("settings.modelExperience.searchProvider")} placeholder={t("settings.modelExperience.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
-      {!props.loading && visibleProviders.length === 0 ? <p className="text-sm text-muted-foreground">{t("settings.modelExperience.noProviders")}</p> : null}
+      {!props.loading && visibleProviders.length === 0 ? <SettingsEmptyState icon={search.trim() ? <Search /> : props.variant === "system" ? <LockKeyhole /> : <ServerCog />} title={t("settings.modelExperience.noProviders")} /> : null}
       {props.loading ? (
         <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />

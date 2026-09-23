@@ -12,7 +12,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--primary);
+  /* Selector icons are labels, not actions; flame stays reserved for the send button. */
+  /* 选择器图标只是标识而非操作；火焰色留给发送按钮。 */
+  color: var(--muted-foreground);
+}
+
+.composer-select-icon[data-tone="warning"] {
+  color: var(--vcn-content-warning);
 }
 
 .composer-select-icon svg,

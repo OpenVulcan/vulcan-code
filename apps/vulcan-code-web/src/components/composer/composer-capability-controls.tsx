@@ -829,7 +829,7 @@ export function ComposerAiCapabilityControl(props: {
               className="composer-capability-trigger composer-select-trigger capability"
               type="button"
             >
-              <span className="composer-select-icon">
+              <span className="composer-select-icon" data-tone={loadStatus !== "loading" && (loadStatus === "failed" || conflicts.length) ? "warning" : undefined}>
                 {loadStatus === "loading" ? <LoaderCircle size={15} className="animate-spin" />
                   : loadStatus === "failed" || conflicts.length ? <AlertTriangle size={15} />
                     : <SlidersHorizontal size={15} />}

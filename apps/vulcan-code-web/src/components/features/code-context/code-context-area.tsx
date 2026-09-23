@@ -892,7 +892,7 @@ export function CodeContextArea(props: {
             <p role="alert" className="text-sm text-destructive">
               {props.activityError}
             </p>
-            <Button type="button" disabled={props.busy} onClick={() => void refreshStatus()}>
+            <Button type="button" variant="outline" disabled={props.busy} onClick={() => void refreshStatus()}>
               {copy("重新读取状态", "Reload status")}
             </Button>
           </>

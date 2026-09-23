@@ -34,7 +34,7 @@ export function KnowledgeMessageDialog({ message, onClose, restoreFocus }: { mes
         <DialogFooter className="m-0 shrink-0">
           <span className="self-center text-xs text-muted-foreground" role="status">{copyState === "failed" ? t("knowledge.feedback.copyFailed") : ""}</span>
           <Button variant="outline" onClick={() => void copyDetails()}><Copy size={14} />{t(copyState === "copied" ? "knowledge.feedback.copied" : "knowledge.feedback.copy")}</Button>
-          <Button onClick={onClose}>{t("knowledge.importDialog.close")}</Button>
+          <Button variant="outline" onClick={onClose}>{t("knowledge.importDialog.close")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
