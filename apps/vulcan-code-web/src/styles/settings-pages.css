@@ -774,6 +774,13 @@
   background: transparent;
 }
 .settings-retry-toggle > span { min-width: 0; }
+.settings-retry-toggle small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
 
 .context-basics-tabs > section > section {
   border: 0;

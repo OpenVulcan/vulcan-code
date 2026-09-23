@@ -41,7 +41,7 @@ export function ToolCollapseSettingsSection() {
   };
   return <section className="settings-form-grid mt-6">
     <label className="flex items-center justify-between gap-4">
-      <span>{locale === "zh-CN" ? "默认折叠工具" : "Collapse tools by default"}</span>
+      <span>{locale === "zh-CN" ? "工具调用默认折叠" : "Collapse tool calls by default"}</span>
       <Switch
         checked={pending ?? preferences.defaultEnabled}
         disabled={pending !== null || !preferences.saveDefault}
@@ -49,8 +49,8 @@ export function ToolCollapseSettingsSection() {
       />
     </label>
     <p className="settings-muted-line">{locale === "zh-CN"
-      ? "未单独设置的会话使用此默认值。开启后，最后一组工具在更新期间保持展开，出现后续回复或运行结束后整组折叠；关闭后保持展开。"
-      : "Sessions without an override inherit this default. The latest updating group stays open until a following reply or the end of the run. Disable to keep groups expanded."}</p>
+      ? "开启后，AI 调用的工具只在执行时展开，完成后自动收起；关闭则一直展开。单独设置过的会话不受影响。"
+      : "When on, tool calls stay open while running and collapse when done; when off they stay expanded. Sessions with their own setting aren't affected."}</p>
     {pending !== null ? <p role="status" className="settings-muted-line">{locale === "zh-CN" ? "正在保存…" : "Saving…"}</p> : null}
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
   </section>;

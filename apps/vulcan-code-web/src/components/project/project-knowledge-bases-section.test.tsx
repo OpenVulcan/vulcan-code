@@ -36,21 +36,21 @@ describe("project knowledge authoritative state", () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("read failed");
     expect(host.textContent).not.toContain("knowledge.emptyLibraries");
     await act(async () => host.querySelector("button")!.click());
-    expect(host.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
+    expect(host.querySelectorAll('[role="checkbox"], [role="switch"]')).toHaveLength(2);
     expect(services.save).not.toHaveBeenCalled();
   });
   it("removes the previous project rows when the new project fails to load", async () => {
     await act(async () => root.render(<ProjectKnowledgeBasesSection projectId="a" />));
     services.bindings.mockRejectedValueOnce(new Error("project b unavailable"));
     await act(async () => root.render(<ProjectKnowledgeBasesSection projectId="b" />));
-    expect(host.querySelectorAll("input")).toHaveLength(0);
+    expect(host.querySelectorAll('[role="checkbox"]')).toHaveLength(0);
     expect(host.textContent).not.toContain(library.name);
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("project b unavailable");
   });
   it("reports committed state with failed refresh and does not replay the write on retry", async () => {
     await act(async () => root.render(<ProjectKnowledgeBasesSection projectId="a" />));
     services.libraries.mockRejectedValueOnce(new Error("refresh failed"));
-    await act(async () => host.querySelector<HTMLInputElement>("input")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[role="checkbox"]')!.click());
     expect(services.save).toHaveBeenCalledWith("library", "a", true, false);
     expect(services.success).not.toHaveBeenCalled();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("projectSettings.knowledgeBasesSavedRefreshFailed");

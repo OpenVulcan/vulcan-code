@@ -1,6 +1,7 @@
 import * as React from "react";
 import { LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineDisclosure } from "@/components/ui/disclosure";
 import { Input } from "@/components/ui/input";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { loadPublicAiSettings, resetPublicAiMediaDeliveryPolicy, savePublicAiMediaDeliveryPolicy } from "@/service/settings-actions-service";
@@ -146,13 +147,14 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
       </div>
       {/* Keep detailed delivery rules available without pushing the editable thresholds below a wall of text. */}
       {/* 保留完整投递规则，避免长篇说明将可编辑阈值推到首屏之外。 */}
-      <details className="space-y-2 text-xs text-muted-foreground">
-        <summary className="cursor-pointer">{locale === "zh-CN" ? "投递规则与限制" : "Delivery rules and limits"}</summary>
-        <p>{t("settings.mediaDelivery.uploadRule")}</p>
-        <p>{t("settings.mediaDelivery.historyRule")}</p>
-        <p>{t("settings.mediaDelivery.rawMaximum")}: {settings.maxInlineRawBytes / 1024} KiB；{t("settings.mediaDelivery.totalMaximum")}: {settings.maxTotalEncodedBytes / 1024} KiB</p>
-        <p>{t("settings.mediaDelivery.failureRule")}</p>
-      </details>
+      <InlineDisclosure className="media-delivery-rules" keepMounted label={locale === "zh-CN" ? "它是怎么工作的" : "How it works"} openLabel={locale === "zh-CN" ? "收起说明" : "Hide explanation"}>
+        <ul className="grid list-disc gap-1.5 pl-4 text-xs leading-5 text-muted-foreground">
+          <li>{t("settings.mediaDelivery.uploadRule")}</li>
+          <li>{t("settings.mediaDelivery.historyRule")}</li>
+          <li>{t("settings.mediaDelivery.failureRule")}</li>
+          <li>{t("settings.mediaDelivery.rawMaximum")}: {settings.maxInlineRawBytes / 1024} KiB；{t("settings.mediaDelivery.totalMaximum")}: {settings.maxTotalEncodedBytes / 1024} KiB</li>
+        </ul>
+      </InlineDisclosure>
       {MEDIA_DELIVERY_PURPOSES.map((purpose) => (
         <fieldset className="min-w-0 space-y-3 border-t pt-3" disabled={pending} key={purpose}>
           <legend className="px-1 text-sm font-medium">{t(PURPOSE_LABELS[purpose])}</legend>

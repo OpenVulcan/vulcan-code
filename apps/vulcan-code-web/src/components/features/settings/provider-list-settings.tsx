@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/tooltip"
 import { Combobox } from "@/components/ui/combobox"
 import { useI18n } from "@/i18n"
+import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import {
   addPublicAiConnection,
   cancelPublicAiOAuth,
@@ -233,7 +234,7 @@ export function CredentialManagementArea() {
             </Button>
           </div>
         ) : null}
-        {error ? <div className="settings-error-text" role="alert"><p>{locale === "zh-CN" ? "操作未完成，请重试。" : "The operation did not complete. Please retry."}</p><details><summary>{locale === "zh-CN" ? "查看详情" : "View details"}</summary><pre>{error}</pre></details></div> : null}
+        {error ? <SettingsErrorNotice className="settings-error-text" detail={error} message={locale === "zh-CN" ? "操作没有完成，请再试一次。" : "That didn't finish. Please try again."} /> : null}
         {!snapshot ? (
           <article className="settings-card">
             <strong>{error ? (locale === "zh-CN" ? "凭据目录加载失败" : "Credential directory could not be loaded") : t("settings.credentials.connecting")}</strong>

@@ -15,8 +15,17 @@
 .mcp-overview { display: grid; grid-template-columns: minmax(7rem, auto) minmax(0, 1fr); gap: .6rem 1rem; }
 .mcp-overview dt { color: var(--muted-foreground); }
 .mcp-overview dd { margin: 0; overflow-wrap: anywhere; }
-.mcp-tool, .mcp-schema { border: 1px solid var(--border); border-radius: var(--radius); padding: .7rem; margin-top: .6rem; }
-.mcp-detail summary, .mcp-form summary { cursor: pointer; padding: .3rem 0; overflow-wrap: anywhere; }
+.mcp-schema { border: 1px solid var(--border); border-radius: var(--radius); padding: .7rem; margin-top: .6rem; }
+.mcp-tool { margin-top: .5rem; overflow-wrap: anywhere; }
+.mcp-tool [data-slot="disclosure-content"][data-state="open"] { display: grid; gap: .5rem; font-size: .85rem; }
+.mcp-tool [data-slot="disclosure-content"] > .mcp-schema { margin-top: 0; }
+.mcp-logs { display: grid; gap: .4rem; }
+.mcp-logs h4, .mcp-form-section h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.mcp-form-section { display: flex; flex-direction: column; gap: .8rem; min-width: 0; }
+.mcp-bulk [data-slot="inline-disclosure-content"][data-state="open"] { display: grid; gap: .5rem; }
+.mcp-bulk p { margin: 0; color: var(--muted-foreground); font-size: 12px; }
+.mcp-schema-raw [data-slot="inline-disclosure-content"][data-state="open"] { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.mcp-schema-raw pre { flex-basis: 100%; }
 .mcp-detail pre, .mcp-form pre { max-height: 26rem; overflow: auto; padding: .6rem; background: var(--muted); border-radius: var(--radius); font-size: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mcp-schema-fields { display: grid; gap: .7rem; }
 .mcp-schema-field { padding-left: .6rem; border-left: 2px solid var(--border); overflow-wrap: anywhere; font-size: .85rem; }

@@ -404,7 +404,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
       <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="lg">
         <DialogHeader>
           <DialogTitle>
-            {props.scope === "provider" ? (locale === "zh-CN" ? "供应商默认能力" : "Provider default capabilities") : t("settings.modelCapabilities.title")}
+            {props.scope === "provider" ? (locale === "zh-CN" ? "服务商默认能力" : "Provider defaults") : t("settings.modelCapabilities.title")}
           </DialogTitle>
           <DialogDescription className="flex flex-wrap items-center gap-2">
             <span>
@@ -412,7 +412,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
             </span>
             <Badge variant={props.overrides ? "secondary" : "outline"}>
               {props.scope === "provider"
-                ? (props.overrides ? (locale === "zh-CN" ? "供应商自定义" : "Provider override") : (locale === "zh-CN" ? "继承目录" : "Catalog inheritance"))
+                ? (props.overrides ? (locale === "zh-CN" ? "已自定义" : "Customized") : (locale === "zh-CN" ? "使用内置默认" : "Built-in defaults"))
                 : t(props.overrides
                   ? "settings.modelCapabilities.modelSource"
                   : "settings.modelCapabilities.inheritedSource")}
@@ -452,7 +452,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
                   <SelectItem value="unsupported">{locale === "zh-CN" ? "不支持" : "Unsupported"}</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">{locale === "zh-CN" ? "未明确声明时默认使用 JSON Object。" : "Defaults to JSON Object when not declared."}</p>
+              <p className="text-xs text-muted-foreground">{locale === "zh-CN" ? "没有特别说明时按 JSON Object 处理。" : "Treated as JSON Object unless specified."}</p>
             </fieldset>
             <fieldset className="rounded-lg border p-4">
               <legend className="px-1 text-sm font-medium">{t("settings.customModels.output")}</legend>
@@ -677,9 +677,9 @@ export function ReasoningProjectionEditor(props: {
   }, [props])
   return (
     <fieldset className="space-y-3 rounded-lg border p-4">
-      <legend className="px-1 text-sm font-medium">{locale === "zh-CN" ? "请求投影（详细模式）" : "Request projection (advanced)"}</legend>
+      <legend className="px-1 text-sm font-medium">{locale === "zh-CN" ? "按思考档位改写请求（高级）" : "Rewrite requests per reasoning level (advanced)"}</legend>
       <p className="text-xs text-muted-foreground">
-        {locale === "zh-CN" ? "每个思考档位可配置供应商字段，例如 thinking.type=disabled 或 reasoning_effort=low。" : "Configure provider fields per reasoning effort, such as thinking.type=disabled or reasoning_effort=low."}
+        {locale === "zh-CN" ? "可以为每个思考档位添加或移除发给服务商的字段，例如 thinking.type=disabled 或 reasoning_effort=low。" : "Add or remove fields sent to the provider for each reasoning level, e.g. thinking.type=disabled or reasoning_effort=low."}
       </p>
       {props.efforts.map((effort) => {
         const mutation = normalizedProjection.reasoning[effort] ?? { set: {}, delete: [] }
@@ -733,13 +733,13 @@ export function ReasoningProjectionEditor(props: {
               // 编辑删除路径时保持删除行稳定，避免输入焦点随字符变化而丢失。
               <div className="grid gap-2 sm:grid-cols-[1fr_auto]" key={`${effort}:delete:${index}`}>
                 <Input
-                  aria-label={`${effort} ${locale === "zh-CN" ? "删除字段名" : "field to delete"}`}
+                  aria-label={`${effort} ${locale === "zh-CN" ? "要移除的字段" : "field to remove"}`}
                   onChange={(event) => {
                     const nextDelete = [...mutation.delete]
                     nextDelete[index] = event.target.value
                     updateMutation(effort, { ...mutation, delete: nextDelete })
                   }}
-                  placeholder={locale === "zh-CN" ? "删除字段，例如 thinking.type" : "Field to delete, e.g. thinking.type"}
+                  placeholder={locale === "zh-CN" ? "要移除的字段，例如 thinking.type" : "Field to remove, e.g. thinking.type"}
                   value={path}
                 />
                 <Button
@@ -775,7 +775,7 @@ export function ReasoningProjectionEditor(props: {
               type="button"
               variant="outline"
             >
-              {locale === "zh-CN" ? "添加删除字段" : "Add deletion"}
+              {locale === "zh-CN" ? "添加要移除的字段" : "Add field to remove"}
             </Button>
           </div>
         )

@@ -73,7 +73,7 @@ async function openDependencyView(host: HTMLElement, row: number) {
 // chooseBodyVariant opens the real shared variant select and picks one exact body option.
 // chooseBodyVariant 打开真实共享正文变体选择器，并选择一个精确正文选项。
 async function chooseBodyVariant(label: string) {
-  const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Select original body"]')
+  const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Choose version"]')
   if (!trigger) throw new Error("Missing original body variant selector")
   await act(async () => trigger.click())
   const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')]
@@ -121,7 +121,7 @@ describe("license catalog browsing", () => {
     const view = await mount()
     await openDependencyView(view.host, 0)
     expect(licenseBody()?.textContent).toBe("original-a")
-    await chooseBodyVariant("Body 2")
+    await chooseBodyVariant("Version 2")
     expect(service.body).toHaveBeenLastCalledWith("b", "revision")
     expect(licenseBody()?.textContent).toBe("original-b")
     expect(service.body).toHaveBeenCalledTimes(2)
@@ -169,7 +169,7 @@ describe("license catalog browsing", () => {
     const view = await mount()
     await openDependencyView(view.host, 0)
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("mismatched license revision")
-    await act(async () => button(document.body, "Retry reading").click())
+    await act(async () => button(document.body, "Retry").click())
     expect(service.catalog).toHaveBeenCalledTimes(1)
     expect(licenseBody()?.textContent).toBe("original-a")
     await view.dispose()
@@ -182,7 +182,7 @@ describe("license catalog browsing", () => {
     service.catalog.mockResolvedValueOnce(largeCatalog)
     const view = await mount()
     expect(view.host.querySelectorAll("tbody tr")).toHaveLength(30)
-    await act(async () => view.host.querySelector<HTMLButtonElement>('[aria-label="Next dependency page"]')!.click())
+    await act(async () => view.host.querySelector<HTMLButtonElement>('[aria-label="Next page"]')!.click())
     expect(view.host.querySelectorAll("tbody tr")).toHaveLength(1)
     expect(view.host.querySelector("tbody")?.textContent).toContain("package-30")
     await view.dispose()
@@ -195,7 +195,7 @@ describe("license catalog browsing", () => {
     const view = await mount()
     await openDependencyView(view.host, 0)
     expect(licenseBody()).toBeNull()
-    await chooseBodyVariant("Body 2")
+    await chooseBodyVariant("Version 2")
     expect(licenseBody()?.textContent).toBe("original-b")
     await act(async () => resolveFirst({ section_id: "a", text: "stale-body" }))
     expect(licenseBody()?.textContent).toBe("original-b")

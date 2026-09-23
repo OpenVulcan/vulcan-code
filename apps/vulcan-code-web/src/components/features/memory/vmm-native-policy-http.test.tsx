@@ -187,7 +187,7 @@ it.skipIf(!handshakeDirectory)("saves actual policy components through private H
     await phase(handshakeDirectory, "host")
     // The component declares recall/retrieval/text inheritance controls in exactly this order.
     // 组件明确按召回、检索、文本的顺序声明继承控制项。
-    const inherit = Array.from(container.querySelectorAll("button")).filter((button) => button.textContent === "恢复本组全局继承")
+    const inherit = Array.from(container.querySelectorAll("button")).filter((button) => button.textContent === "改回跟随全局")
     expect(inherit).toHaveLength(3)
     expect(inherit[1].disabled).toBe(false)
     await act(async () => inherit[1].click())

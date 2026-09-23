@@ -110,5 +110,5 @@ it("retains the saved global mode and reports rejected persistence", async () =>
   </I18nProvider>));
   await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
   expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain("系统默认值未更改");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("设置保持不变");
 });

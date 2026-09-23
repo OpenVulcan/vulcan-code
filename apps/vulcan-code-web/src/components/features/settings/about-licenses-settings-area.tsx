@@ -197,7 +197,7 @@ export function AboutLicensesSettingsArea(props: {
                 <Select value={selectedSection?.id} onValueChange={setSectionId}>
                   <SelectTrigger aria-label={t("settings.licenses.variant")}><SelectValue /></SelectTrigger>
                   <SelectContent>{selectedGroup.sections.filter((section) => viewedDependency.sectionIds.includes(section.id)).map((section, index) => <SelectItem key={section.id} value={section.id}>
-                    {t("settings.licenses.body")} {index + 1} · {section.dependencies.length} {t("settings.licenses.dependencies")}
+                    {t("settings.licenses.versionLabel")} {index + 1} · {section.dependencies.length} {t("settings.licenses.dependencies")}
                   </SelectItem>)}</SelectContent>
                 </Select>
               </div>}

@@ -76,7 +76,7 @@ describe("notification preferences and permission UI", () => {
     // testButton and localToggle are the two public actions that must not overlap the pending send.
     // testButton 与 localToggle 是不能和进行中投递重叠的两个公开操作。
     const testButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent?.includes("发送测试通知"))!;
+      .find((button) => button.textContent?.includes("发一条试试"))!;
     const localToggle = container.querySelector<HTMLButtonElement>('[role="switch"]')!;
     await act(async () => { testButton.click(); testButton.click(); });
     expect(shell.showLocalNotification).toHaveBeenCalledTimes(1);
@@ -100,7 +100,7 @@ describe("notification preferences and permission UI", () => {
     await renderSettings();
     expect(container.textContent).toContain("权限检查失败");
     expect(container.textContent).not.toContain("等待权限");
-    const retry = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "重新检查权限")!;
+    const retry = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "重新检查")!;
     await act(async () => retry.click());
     expect(container.textContent).toContain("已启用");
     expect(container.querySelector('[role="alert"]')).toBeNull();
@@ -136,7 +136,7 @@ describe("notification preferences and permission UI", () => {
     // requestButton is visible because this client still lacks authorization.
     // requestButton 可见是因为当前客户端尚未获得授权。
     const requestButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent === "申请通知权限")!;
+      .find((button) => button.textContent === "允许通知")!;
     await act(async () => requestButton.click());
     expect(shell.requestNotificationPermission).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("已启用");
@@ -189,7 +189,7 @@ describe("notification preferences and permission UI", () => {
     await renderSettings();
     // testButton is found by its user-facing purpose rather than DOM position.
     // testButton 按面向用户的用途定位，不依赖 DOM 位置。
-    const testButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("发送测试通知"))!;
+    const testButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("发一条试试"))!;
     await act(async () => testButton.click());
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("native unavailable");
     expect(loadNotificationPreferences().channels.local.enabled).toBe(true);
@@ -208,7 +208,7 @@ describe("notification preferences and permission UI", () => {
     shell.getNotificationPermission.mockRejectedValueOnce(new Error("policy unavailable"));
     // testButton triggers the real component's immediately preceding policy read.
     // testButton 触发真实组件在发送前的即时策略读取。
-    const testButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("发送测试通知"))!;
+    const testButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("发一条试试"))!;
     await act(async () => testButton.click());
     expect(shell.showLocalNotification).not.toHaveBeenCalled();
     expect(container.textContent).toContain("权限检查失败");

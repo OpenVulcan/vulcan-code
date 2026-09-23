@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ArrowRight, Copy, FolderCog } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineDisclosure } from "@/components/ui/disclosure";
 import { useI18n } from "@/i18n";
 import { listProjectKnowledgeBindings, subscribeKnowledgeProjectBindingsChanged } from "@/service/knowledge-base-service";
 import { runVmmMemoryAction } from "@/service/memory-actions-service";
@@ -111,12 +112,23 @@ export function ProjectOverviewSection(props: {
   const openAction = (section: ProjectSettingsSectionId, label: string) => (
     <Button size="sm" variant="ghost" onClick={() => props.onOpenSection(section)} aria-label={label}>{label}<ArrowRight size={13} /></Button>
   );
+  // copyPath writes the project path and reports failure so the visible path can still be selected by hand.
+  // copyPath 写入项目路径并报告失败，使可见路径仍可手动选择复制。
+  const copyPath = async () => {
+    try { await navigator.clipboard.writeText(props.project.path); setCopied("copied"); }
+    catch { setCopied("copyFailed"); }
+  };
   return <div className="project-overview">
     <header className="project-overview-identity"><FolderCog size={22} /><div><h3>{props.project.name}</h3>
-      <span className="project-overview-path" title={props.project.path}>{props.project.path}</span>
+      <span className="project-overview-path-row">
+        <span className="project-overview-path" title={props.project.path}>{props.project.path}</span>
+        <Button size="icon-xs" variant="ghost" aria-label={t("projectOverview.copyPath")} title={t("projectOverview.copyPath")} onClick={() => void copyPath()}><Copy size={12} /></Button>
+        <span className="project-overview-copy-status" role="status">{copied ? t(`projectOverview.${copied}`) : null}</span>
+      </span>
       <span>{t("projectOverview.conversations").replace("{count}", String(props.conversationCount))}{props.project.pinned ? ` · ${t("projectOverview.pinned")}` : ""}</span></div></header>
     {issues.length ? <div className="project-overview-issues" role="alert"><strong>{t("projectOverview.issues")}</strong>{[...new Set(issues)].map((issue) => issue.length > 180 || issue.includes("\n")
-      ? <details key={issue}><summary>{issue.split("\n", 1)[0].slice(0, 180)}…</summary><p>{issue}</p></details>
+      ? <div className="project-overview-issue-long" key={issue}><p>{issue.split("\n", 1)[0].slice(0, 180)}…</p>
+        <InlineDisclosure label={t("projectOverview.issueExpand")} openLabel={t("projectOverview.issueCollapse")}><p>{issue}</p></InlineDisclosure></div>
       : <p key={issue}>{issue}</p>)}</div> : null}
     <div className="project-overview-capabilities">
       <section><div><strong>{t("projectSettings.vmmMemory")}</strong>
@@ -142,10 +154,9 @@ export function ProjectOverviewSection(props: {
         : Object.keys(props.agentOverrides).length ? t("projectOverview.skillsCount").replace("{count}", String(Object.keys(props.agentOverrides).length)) : t("projectOverview.skillsInherited")}</p></div>{openAction("agent-skills", t("projectOverview.skillSettings"))}</section>
     </div>
     <div className="project-overview-maintenance"><span>{t("projectOverview.maintenance")}</span>{openAction("attachments", t("projectOverview.attachments"))}</div>
-    <details className="project-overview-details"><summary>{t("projectOverview.details")}</summary><dl><dt>{t("projectOverview.path")}</dt><dd>{props.project.path}
-      <Button size="sm" variant="ghost" aria-label={t("projectOverview.copyPath")} onClick={async () => {
-        try { await navigator.clipboard.writeText(props.project.path); setCopied("copied"); }
-        catch { setCopied("copyFailed"); }
-      }}><Copy size={13} />{t("projectOverview.copy")}</Button><span role="status">{copied ? t(`projectOverview.${copied}`) : null}</span></dd><dt>{t("projectOverview.attachmentPath")}</dt><dd>{props.attachmentRoot}</dd><dt>{t("projectOverview.id")}</dt><dd>{props.project.id}</dd></dl></details>
+    <section className="project-overview-location" aria-label={t("projectOverview.details")}>
+      <strong>{t("projectOverview.details")}</strong>
+      <dl><dt>{t("projectOverview.attachmentPath")}</dt><dd>{props.attachmentRoot}</dd><dt>{t("projectOverview.id")}</dt><dd>{props.project.id}</dd></dl>
+    </section>
   </div>;
 }

@@ -152,3 +152,79 @@
   .ai-capability-target { grid-column: 2 / -1; grid-row: 2; }
   .ai-capability-status { display: none; }
 }
+
+/* Error notice: a plain-language outcome first, raw error folded behind a quiet toggle with a copy action. */
+/* 错误提示：先给出通俗结果，原始错误收在低调的切换按钮后并提供复制。 */
+.settings-error-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--destructive) 6%, var(--card));
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 400;
+}
+.settings-error-notice-icon { flex-shrink: 0; margin-top: 2px; color: var(--destructive); }
+.settings-error-notice-body { display: grid; gap: 4px; min-width: 0; flex: 1 1 auto; }
+.settings-error-notice-body > p { margin: 0; color: var(--foreground); line-height: 20px; }
+.settings-error-notice pre {
+  max-height: 180px;
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Form groups: a legend is a heading inside its group, never a caption cut into the border line. */
+/* 表单分组：legend 是分组内的标题，而不是嵌进边框线里的旧式标注。 */
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) fieldset > legend {
+  float: left;
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+}
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) fieldset > legend + * { clear: both; }
+
+/* Remaining native disclosures in settings read as quiet text toggles with a turning chevron, not a bare triangle. */
+/* 设置中剩余的原生折叠呈现为带旋转箭头的低调文字按钮，而不是裸露的三角形。 */
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 2px 0;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  list-style: none;
+}
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary::-webkit-details-marker { display: none; }
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  margin-top: -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform var(--vcn-duration-fast) var(--vcn-ease-out);
+}
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class])[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
+:is(.settings-page-body, .project-settings-content, [data-slot="dialog-content"], [data-slot="sheet-content"]) details:not([class]) > summary:hover { color: var(--foreground); }

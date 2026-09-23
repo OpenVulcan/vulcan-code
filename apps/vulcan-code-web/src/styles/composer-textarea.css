@@ -346,6 +346,33 @@
   align-items: end;
 }
 
+/* Attachment kinds read as selectable chips aligned with the date field height.
+ * 附件类型呈现为可选标签，高度与日期输入框对齐。 */
+.project-settings-kind-chip {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--vcn-duration-fast) var(--vcn-ease-out), background-color var(--vcn-duration-fast) var(--vcn-ease-out);
+}
+
+.project-settings-kind-chip:hover {
+  background: var(--muted);
+}
+
+.project-settings-kind-chip:has([data-state="checked"]) {
+  border-color: color-mix(in oklab, var(--primary) 45%, var(--border));
+  background: color-mix(in oklab, var(--primary) 7%, var(--card));
+}
+
+.project-settings-kind-chip:has(:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .project-settings-skill-list {
   display: grid;
   gap: 8px;

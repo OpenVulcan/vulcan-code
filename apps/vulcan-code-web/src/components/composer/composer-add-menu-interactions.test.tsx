@@ -107,8 +107,8 @@ it("exposes thinking choices as radios and preserves the exact typed selection",
 });
 
 it.each([
-  ["前置记忆注入", "precheck", ["false", "true", "false"]],
-  ["后置记忆提交", "writeback", ["false", "false", "true"]],
+  ["回答前回忆", "precheck", ["false", "true", "false"]],
+  ["回答后记住", "writeback", ["false", "false", "true"]],
 ] as const)("retains editable %s policy while memory is not ready", async (label, policy, checked) => {
   await openMenu(); await openSubmenu("记忆选项"); await openSubmenu(label);
   // choices retain inherit/enabled/disabled as separate, source-declared policy states.

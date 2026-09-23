@@ -44,6 +44,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { DisclosureSection } from "@/components/ui/disclosure"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -1005,14 +1006,18 @@ function CustomProtocolRouteDraftCard(props: {
   const [headersText, setHeadersText] = React.useState(() => Object.entries(draft.requestHeaders).map(([name, value]) => `${name}: ${value}`).join("\n"))
   const headersValid = parseCustomProviderHeaderDraft(headersText) !== null
   return (
-    <details className="rounded-lg border bg-muted/30 p-3 text-sm">
-      <summary className="cursor-pointer font-medium text-foreground">
-        {t("settings.customProviders.routeDraftFor").replace(
-          "{protocol}",
-          protocolDisplayName(customProtocolProfileId(protocol)),
-        )}
-      </summary>
-      <div className="mt-3 grid gap-3">
+    // Start open when this protocol already has its own address or headers, so existing overrides stay visible.
+    // 该协议已有独立地址或请求头时默认展开，避免已有覆盖被藏起来。
+    <DisclosureSection
+      defaultOpen={Boolean(draft.baseUrlOverride.trim()) || Object.keys(draft.requestHeaders).length > 0}
+      description={t("settings.customProviders.routeDraftForHint")}
+      keepMounted
+      title={t("settings.customProviders.routeDraftFor").replace(
+        "{protocol}",
+        protocolDisplayName(customProtocolProfileId(protocol)),
+      )}
+    >
+      <div className="grid gap-3 text-sm">
         <label className="settings-form-field">
           <span>{t("settings.customProviders.routeBaseUrl")}</span>
           <Input
@@ -1099,7 +1104,7 @@ function CustomProtocolRouteDraftCard(props: {
           {!headersValid ? <span role="alert" className="text-destructive">{locale === "zh-CN" ? "每行填写完整的名称: 值，请勿重复请求头名称。" : "Complete each row as name: value, without duplicate header names."}</span> : null}
         </label>
       </div>
-    </details>
+    </DisclosureSection>
   )
 }
 
@@ -1541,11 +1546,8 @@ function CustomProviderDialog(props: {
                 <Input onChange={(event) => setModelDiscoveryPath(event.target.value)} placeholder="/models" value={modelDiscoveryPath} />
               </label>
             ) : null}
-            <details className="rounded-lg border bg-muted/30 p-3 text-sm">
-              <summary className="cursor-pointer font-medium text-foreground">
-                {t("settings.customProviders.advancedOptions")}
-              </summary>
-              <div className="mt-3 grid gap-3">
+            <DisclosureSection description={t("settings.customProviders.advancedOptionsHint")} title={t("settings.customProviders.advancedOptions")}>
+              <div className="grid gap-3 text-sm">
                 <label className="settings-form-field">
                   <span>{t("settings.customProviders.sessionHeader")}</span>
                   <Input
@@ -1558,7 +1560,7 @@ function CustomProviderDialog(props: {
                   </span>
                 </label>
               </div>
-            </details>
+            </DisclosureSection>
             {protocols.includes("open_ai_codex_responses") ? (
               <div className="grid gap-3 rounded-xl border bg-muted/30 p-3 text-sm">
                 <p className="font-medium text-foreground">{t("settings.customProviders.codexCapabilities")}</p>

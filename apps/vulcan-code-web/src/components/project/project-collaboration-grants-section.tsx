@@ -2,6 +2,7 @@ import React from "react";
 import { LoaderCircle, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { ConversationSummary, WorkbenchSnapshot } from "@/types";
@@ -327,11 +328,10 @@ export function ProjectCollaborationGrantsSection(props: {
             <div className="grid gap-2 sm:grid-cols-2">
               {GRANT_ACTIONS.map((action) => (
                 <label className="flex items-center gap-2 text-sm" key={action}>
-                  <input
+                  <Checkbox
                     checked={selectedActions[action]}
                     disabled={addBusy || busyGrantId !== null}
-                    onChange={(event) => setSelectedActions((current) => ({ ...current, [action]: event.target.checked }))}
-                    type="checkbox"
+                    onCheckedChange={(checked) => setSelectedActions((current) => ({ ...current, [action]: checked === true }))}
                   />
                   <span>{grantActionLabel(action, t)}</span>
                 </label>

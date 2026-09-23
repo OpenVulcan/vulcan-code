@@ -1,6 +1,7 @@
 import { useMcpText } from "./mcp-text"
 import * as React from "react"
 import { Button } from "@/components/ui/button"
+import { DisclosureSection, InlineDisclosure } from "@/components/ui/disclosure"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { LogEntrySummary, McpServerSummary, RuntimeModuleSnapshot, StartupSnapshot } from "@/types"
@@ -97,7 +98,7 @@ export function McpSettingsArea(props: {
       <div className="mcp-server-list">{filtered.map(row => <button type="button" disabled={removing} className="mcp-server-row" data-active={selectedId === row.id} key={row.id} onClick={() => setSelectedId(row.id)}>
         <strong>{row.name}</strong><span>{row.transport} · {row.source === "plugin" ? text("插件", "Plugin") : text("用户", "User")}</span>
         <span data-status={error ? "unknown" : row.runtime?.state.status}>{row.runtime ? `${error ? text("上次状态：", "Previous state: ") : ""}${statusLabels[row.runtime.state.status]}` : row.config?.enabled === false ? text("禁用", "Disabled") : text("已启用 · 未取得连接状态", "Enabled · State unavailable")}</span>
-        {row.runtime && <span>{row.runtime.tools.length} tools</span>}
+        {row.runtime && <span>{text(`${row.runtime.tools.length} 个工具`, `${row.runtime.tools.length} tools`)}</span>}
         {row.runtime?.state.lastError && <span className="mcp-error">{row.runtime.state.lastError}</span>}
       </button>)}</div>
       {!filtered.length && <p>{rows.length ? text("没有匹配的服务器", "No matches") : text("添加服务器后，在这里查看连接与工具。", "Add a server to inspect its connection and tools.")}</p>}
@@ -118,28 +119,28 @@ export function McpSettingsArea(props: {
           catch (failure) { setActionError(String(failure)) }
           finally { removalInFlight.current = false; setRemoving(false) }
         }}>{text("确认删除", "Confirm removal")}</Button><Button variant="ghost" disabled={removing} onClick={() => setConfirmDelete(false)}>{text("取消", "Cancel")}</Button></div>}
-        <nav className="mcp-tabs" aria-label={text("MCP 详情", "MCP details")}>{[["overview", text("概览", "Overview")], ["tools", text("工具", "Tools")], ["capabilities", "Prompts / Resources"], ["diagnostics", text("诊断", "Diagnostics")]].map(([key, label]) => <Button key={key} size="sm" variant={tab === key ? "secondary" : "ghost"} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</Button>)}</nav>
+        <nav className="mcp-tabs" aria-label={text("MCP 详情", "MCP details")}>{[["overview", text("概览", "Overview")], ["tools", text("工具", "Tools")], ["capabilities", text("提示词与资源", "Prompts & resources")], ["diagnostics", text("诊断", "Diagnostics")]].map(([key, label]) => <Button key={key} size="sm" variant={tab === key ? "secondary" : "ghost"} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</Button>)}</nav>
         {actionError && <p role="alert" className="mcp-error">{actionError}</p>}
         {tab === "overview" && <>
-          <p>{selected.runtime ? `${error ? text("上次状态：", "Previous state: ") : ""}${statusLabels[selected.runtime.state.status]}` : text("运行时尚未返回此服务器的连接状态", "No runtime state available")}</p>
-          {selected.config && <p>{text("配置：", "Configuration: ")}{selected.config.enabled ? text("启用", "Enabled") : text("禁用", "Disabled")}</p>}
+          <p>{selected.runtime ? `${error ? text("上次状态：", "Previous state: ") : ""}${statusLabels[selected.runtime.state.status]}` : text("还没有这台服务器的连接状态", "No connection status yet")}</p>
+          {selected.config && !selected.config.enabled && <p>{text("这台服务器已停用，点「编辑」可以重新启用。", "This server is disabled. Use Edit to turn it back on.")}</p>}
           {selected.runtime && <dl className="mcp-overview">
-            <dt>{text("端点", "Endpoint")}</dt><dd>{selected.runtime.state.endpoint}</dd>
-            <dt>{text("来源", "Source")}</dt><dd>{selected.runtime.state.source} {selected.runtime.state.pluginId} {selected.runtime.state.generation !== null && `generation ${selected.runtime.state.generation}`}</dd>
-            <dt>{text("协议", "Protocol")}</dt><dd>{selected.runtime.state.protocolVersion ?? "—"}</dd>
-            <dt>{text("实现", "Implementation")}</dt><dd>{selected.runtime.state.serverProduct ?? "—"} {selected.runtime.state.serverVersion}</dd>
-            <dt>{text("已发现", "Discovered")}</dt><dd>{selected.runtime.tools.length} tools · {selected.runtime.state.promptCount} prompts · {selected.runtime.state.resourceCount} resources</dd>
+            <dt>{text("地址", "Address")}</dt><dd>{selected.runtime.state.endpoint}</dd>
+            <dt>{text("来源", "Source")}</dt><dd>{selected.runtime.state.source === "plugin" ? text(`插件 ${selected.runtime.state.pluginId ?? ""}`, `Plugin ${selected.runtime.state.pluginId ?? ""}`) : text("你添加的", "Added by you")}{selected.runtime.state.generation !== null && text(`（第 ${selected.runtime.state.generation} 版）`, ` (rev ${selected.runtime.state.generation})`)}</dd>
+            <dt>{text("协议版本", "Protocol version")}</dt><dd>{selected.runtime.state.protocolVersion ?? "—"}</dd>
+            <dt>{text("服务端", "Server")}</dt><dd>{selected.runtime.state.serverProduct ?? "—"} {selected.runtime.state.serverVersion}</dd>
+            <dt>{text("提供", "Provides")}</dt><dd>{text(`${selected.runtime.tools.length} 个工具 · ${selected.runtime.state.promptCount} 个提示词 · ${selected.runtime.state.resourceCount} 个资源`, `${selected.runtime.tools.length} tools · ${selected.runtime.state.promptCount} prompts · ${selected.runtime.state.resourceCount} resources`)}</dd>
           </dl>}
-          <p className="settings-muted-line">{text("工具发现不等于当前 AI 已获调用权限；实际可用工具由会话与策略筛选。", "Discovery does not grant active AI tool permission.")}</p>
+          <p className="settings-muted-line">{text("这里列出服务器提供的全部工具；某个会话里 AI 实际能用哪些，还取决于该会话的权限设置。", "This lists every tool the server offers; what AI can use in a session also depends on that session's permissions.")}</p>
         </>}
         {tab === "tools" && <McpToolCatalog runtime={selected.runtime} stale={Boolean(error)} />}
         {tab === "capabilities" && <McpOptionalCapabilities key={`${selected.id}:${selected.runtime?.inspectionGeneration ?? "unavailable"}`} serverId={selected.id} connected={selected.runtime?.state.status === "connected" && !error} />}
         {tab === "diagnostics" && <>
-          <p>{text("仅显示当前 MCP 服务器的有界诊断。", "Bounded diagnostics for this MCP server only.")}</p>
-          {selected.runtime ? <><p>{text("重试", "Retries:")}{selected.runtime.state.retryCount}</p>
+          <p>{text("这里只显示这台服务器最近的连接情况。", "Recent connection activity for this server only.")}</p>
+          {selected.runtime ? <><p>{text("重试次数：", "Retries: ")}{selected.runtime.state.retryCount}</p>
             {selected.runtime.state.lastError && <p className="mcp-error">{selected.runtime.state.lastError}</p>}
-            <details><summary>{text("传输日志", "Transport logs")} ({selected.runtime.state.recentLogs.length})</summary><pre>{selected.runtime.state.recentLogs.join("\n") || text("暂无日志", "No logs")}</pre></details>
-          </> : <p>{text("暂无运行时诊断", "Runtime diagnostics unavailable")}</p>}
+            <section className="mcp-logs"><h4>{text("最近日志", "Recent logs")} ({selected.runtime.state.recentLogs.length})</h4><pre>{selected.runtime.state.recentLogs.join("\n") || text("暂无日志", "No logs")}</pre></section>
+          </> : <p>{text("暂时没有诊断信息", "No diagnostics yet")}</p>}
           {props.onOpenDiagnostics && <Button variant="outline" onClick={props.onOpenDiagnostics}>{text("打开运行诊断", "Open runtime diagnostics")}</Button>}
         </>}
       </> : <p>{text("选择 MCP 服务器查看详情", "Select an MCP server")}</p>}
@@ -158,12 +159,12 @@ function McpToolCatalog(props: { runtime: McpServerInspection | undefined; stale
   // query filters the full received catalog without another runtime operation.
   // query 过滤已接收的完整目录，不触发其他运行时操作。
   const [query, setQuery] = React.useState("")
-  if (!props.runtime) return <p>{text("工具目录尚未取得", "Tool catalog unavailable")}</p>
+  if (!props.runtime) return <p>{text("还没拿到工具列表", "Tool list not available yet")}</p>
   // Search feedback and rendered rows use the same retained catalog scope.
   // 搜索反馈与渲染条目采用相同的保留目录范围。
   const visibleTools = props.runtime.tools.filter(tool => (tool.name + " " + tool.description).toLowerCase().includes(query.toLowerCase()))
-  return <div><p>{text("已发现工具目录，不代表当前会话可调用。", "Discovered catalog; current session permission may differ.")}</p>
-    {(props.stale || props.runtime.state.status !== "connected") && <p className="mcp-error">{text("连接未确认；下列为保留的最近有效目录。", "Connection unconfirmed; retained last valid catalog.")}</p>}
+  return <div><p>{text("服务器提供的工具。会话里能否使用，取决于该会话的权限设置。", "Tools offered by the server. Whether a session can use them depends on its permissions.")}</p>
+    {(props.stale || props.runtime.state.status !== "connected") && <p className="mcp-error">{text("暂时连不上服务器，下面是上次连接成功时的工具列表。", "Can't reach the server right now; showing the tools from the last successful connection.")}</p>}
     <Input aria-label={text("搜索工具", "Search tools")} value={query} onChange={e => setQuery(e.target.value)} placeholder={text("搜索工具", "Search tools")} />
     {visibleTools.map(tool => <McpToolDetails key={tool.name} tool={tool} />)}
     {!visibleTools.length && <p role="status">{props.runtime.tools.length ? text("没有匹配的工具", "No matching tools") : text("尚未发现工具", "No tools discovered")}</p>}
@@ -177,12 +178,12 @@ function McpToolDetails(props: { tool: McpToolInspection }) {
   // text 与 expanded 控制本地化展示及开销较大的 Schema 挂载。
   const text = useMcpText()
   const [expanded, setExpanded] = React.useState(false)
-  return <details className="mcp-tool" onToggle={event => setExpanded(event.currentTarget.open)}>
-    <summary>{props.tool.name}</summary>{expanded && <><p>{props.tool.description}</p>
+  return <DisclosureSection className="mcp-tool" description={props.tool.description ? <span className="line-clamp-1">{props.tool.description}</span> : undefined} onOpenChange={setExpanded} title={props.tool.name}>
+    {expanded && <><p>{props.tool.description}</p>
       <McpSchemaDetail title={text("输入参数", "Input parameters")} schema={props.tool.inputSchema} />
       <McpSchemaDetail title={text("输出结果", "Output result")} schema={props.tool.outputSchema} />
     </>}
-  </details>
+  </DisclosureSection>
 }
 
 // McpOptionalCapabilities reads metadata only after the user opens this detail tab.
@@ -206,19 +207,19 @@ function McpOptionalCapabilities(props: { serverId: string; connected: boolean }
     void loadMcpServerCapabilities(props.serverId).then(value => { if (active) setResult(value) }).catch(failure => { if (active) setError(String(failure)) }).finally(() => { if (active) setBusy(false) })
     return () => { active = false }
   }, [props.serverId, props.connected, refreshKey])
-  if (!props.connected) return <p>{text("服务器未连接；此页面不会自动建立连接。", "Server disconnected; this page does not connect it.")}</p>
-  return <div><p>{text("仅列出元数据，不读取资源正文或执行工具。", "Metadata only; no resource contents or tool execution.")}</p>
-    <Button size="sm" variant="outline" disabled={busy} onClick={() => setRefreshKey(key => key + 1)}>{busy ? text("正在读取", "Loading") : text("刷新元数据", "Refresh metadata")}</Button>
+  if (!props.connected) return <p>{text("服务器未连接，连接成功后这里会显示内容。", "Server not connected. Content appears here once it connects.")}</p>
+  return <div><p>{text("只显示名称和说明，不会读取内容或执行任何操作。", "Names and descriptions only; nothing is read or run.")}</p>
+    <Button size="sm" variant="outline" disabled={busy} onClick={() => setRefreshKey(key => key + 1)}>{busy ? text("正在读取", "Loading") : text("刷新", "Refresh")}</Button>
     {error && <p role="alert">{error}</p>}{result && <>
-      <h4>Prompts ({result.prompts?.length ?? "—"})</h4>{result.promptError ? <p role="alert">{result.promptError}</p> : result.prompts?.map(prompt => <details className="mcp-tool" key={prompt.name}>
-        <summary>{prompt.name}</summary>{prompt.description && <p>{prompt.description}</p>}
+      <h4>{text("提示词", "Prompts")} ({result.prompts?.length ?? "—"})</h4>{result.promptError ? <p role="alert">{result.promptError}</p> : result.prompts?.map(prompt => <DisclosureSection className="mcp-tool" description={prompt.description ? <span className="line-clamp-1">{prompt.description}</span> : undefined} key={prompt.name} title={prompt.name}>
+        {prompt.description && <p>{prompt.description}</p>}
         {prompt.arguments?.map(argument => <p key={argument.name}><strong>{argument.name}</strong> · {argument.required ? text("必填", "Required") : text("可选", "Optional")} {argument.description}</p>)}
-        <details><summary>{text("完整元数据", "Full metadata")}</summary><pre>{JSON.stringify(prompt, null, 2)}</pre></details>
-      </details>)}
-      <h4>Resources ({result.resources?.length ?? "—"})</h4>{result.resourceError ? <p role="alert">{result.resourceError}</p> : result.resources?.map(resource => <details className="mcp-tool" key={resource.uri}>
-        <summary>{resource.name}</summary><code>{resource.uri}</code>{resource.description && <p>{resource.description}</p>}<p>{resource.mimeType} {resource.size !== undefined && `${resource.size} bytes`}</p>
-        <details><summary>{text("完整元数据", "Full metadata")}</summary><pre>{JSON.stringify(resource, null, 2)}</pre></details>
-      </details>)}
+        <InlineDisclosure label={text("查看原始数据", "View raw data")} openLabel={text("收起原始数据", "Hide raw data")}><pre>{JSON.stringify(prompt, null, 2)}</pre></InlineDisclosure>
+      </DisclosureSection>)}
+      <h4>{text("资源", "Resources")} ({result.resources?.length ?? "—"})</h4>{result.resourceError ? <p role="alert">{result.resourceError}</p> : result.resources?.map(resource => <DisclosureSection className="mcp-tool" description={<span className="line-clamp-1 font-mono">{resource.uri}</span>} key={resource.uri} title={resource.name}>
+        <code>{resource.uri}</code>{resource.description && <p>{resource.description}</p>}<p>{resource.mimeType} {resource.size !== undefined && `${resource.size} bytes`}</p>
+        <InlineDisclosure label={text("查看原始数据", "View raw data")} openLabel={text("收起原始数据", "Hide raw data")}><pre>{JSON.stringify(resource, null, 2)}</pre></InlineDisclosure>
+      </DisclosureSection>)}
     </>}
   </div>
 }

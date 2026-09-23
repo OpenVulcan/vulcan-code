@@ -2,6 +2,8 @@ import * as React from "react";
 import { Bot, BrainCircuit, Calendar, Database, FolderPlus, LoaderCircle, Save, Trash2 } from "lucide-react";
 import { StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DisclosureSection } from "@/components/ui/disclosure";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -316,8 +318,7 @@ export function ProjectVmmSection(props: {
                 />
               </>
             ) : null}
-            <details className="project-vmm-advanced">
-              <summary>{t("projectSettings.vmmAdvanced")}</summary>
+            <DisclosureSection className="project-vmm-advanced" description={t("projectSettings.vmmAdvancedHint")} title={t("projectSettings.vmmAdvanced")}>
               <div className="project-settings-form-grid project-vmm-form">
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.implicitMemoryTtl")} value={props.vmmDraft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => props.onUpdateDraft({ implicitMemoryTurns })} />
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.profileRefreshInterval")} value={props.vmmDraft.profileRefreshTurns} onChange={(profileRefreshTurns) => props.onUpdateDraft({ profileRefreshTurns })} />
@@ -328,7 +329,7 @@ export function ProjectVmmSection(props: {
               <Textarea disabled={!props.vmmDraft.hasOverride} value={props.vmmDraft.injectionDescription} onChange={(event) => props.onUpdateDraft({ injectionDescription: event.target.value })} />
             </label>
               </div>
-            </details>
+            </DisclosureSection>
           </fieldset>
           <div className="project-settings-actions">
             <Button disabled={!props.vmmDirty || props.vmmBusy === "saving"} onClick={() => void props.onSaveDraft()} type="button">
@@ -354,21 +355,22 @@ export function ProjectVmmSection(props: {
                 value={nativeOwnerId || "unbound"}
               />
               {nativeOwnerId ? (
-                <div className="project-settings-form-grid">
+                <div className="project-vmm-linked">
                   <span className="project-vmm-linked-label">{t("projectSettings.vmmNativeLinked")}</span>
+                  <div className="project-vmm-linked-list">
                   {(nativeCatalog?.projects ?? []).filter((project) => String(project.projectId) !== nativeOwnerId).map((project) => (
                     <label className="project-settings-check-row" key={project.projectId}>
-                      <input
+                      <Checkbox
                         disabled={nativeBindingBusy}
                         checked={nativeLinkedIds.includes(project.projectId)}
-                        onChange={() => setNativeLinkedIds((current) => current.includes(project.projectId)
+                        onCheckedChange={() => setNativeLinkedIds((current) => current.includes(project.projectId)
                           ? current.filter((value) => value !== project.projectId)
                           : [...current, project.projectId])}
-                        type="checkbox"
                       />
-                      {project.name}
+                      <span className="truncate" title={project.name}>{project.name}</span>
                     </label>
                   ))}
+                  </div>
                 </div>
               ) : null}
               <Button disabled={nativeBindingBusy || !nativeCatalog} onClick={() => void saveNativeBinding()} type="button" variant="outline">
@@ -383,8 +385,7 @@ export function ProjectVmmSection(props: {
             <Button size="sm" variant="outline" onClick={() => setCatalogAttempt((value) => value + 1)}>{t("toolPresentation.output.retryLoad")}</Button>
           </div> : null}
           {nativeBindingNotice ? <p role="status" className="project-settings-muted">{nativeBindingNotice}</p> : null}
-          <details className="project-vmm-create">
-            <summary>{t("projectSettings.vmmCreateBinding")}</summary>
+          <DisclosureSection className="project-vmm-create" description={t("projectSettings.vmmCreateBindingHint")} title={t("projectSettings.vmmCreateBinding")}>
             <div className="project-vmm-create-body">
             {props.vmmDraft.backendMode === "external_grpc" ? (
               <div className="project-settings-form-grid">
@@ -421,7 +422,7 @@ export function ProjectVmmSection(props: {
               {t("projectSettings.vmmCreateAndBind")}
             </Button>
             </div>
-          </details>
+          </DisclosureSection>
           <p className="project-settings-muted">
             {t(props.vmmDraft.backendMode === "native"
               ? "projectSettings.vmmNativeHostHint"
@@ -609,12 +610,11 @@ export function ProjectAttachmentCleanupSection(props: {
         </label>
         <div className="project-settings-kind-grid">
           {(["image", "audio", "video", "pdf"] as const).map((kind) => (
-            <label className="project-settings-check-row" key={kind}>
-              <input
+            <label className="project-settings-check-row project-settings-kind-chip" key={kind}>
+              <Checkbox
                 checked={props.cleanupKinds[kind]}
                 disabled={props.cleanupBusy !== "idle"}
-                onChange={(event) => props.onChangeCleanupKinds({ ...props.cleanupKinds, [kind]: event.target.checked })}
-                type="checkbox"
+                onCheckedChange={(checked) => props.onChangeCleanupKinds({ ...props.cleanupKinds, [kind]: checked === true })}
               />
               {projectAttachmentKindLabel(kind, t)}
             </label>

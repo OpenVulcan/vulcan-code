@@ -35,7 +35,7 @@ export function ThinkingPopupSettingsSection() {
     setError("");
     try {
       if (!await preference.save(enabled ? "popup_only" : "inline_output")) {
-        setError(locale === "zh-CN" ? "保存失败，系统默认值未更改。" : "Saving failed. The system default is unchanged.");
+        setError(locale === "zh-CN" ? "没能保存，设置保持不变。" : "Saving failed. The system default is unchanged.");
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -46,7 +46,7 @@ export function ThinkingPopupSettingsSection() {
   };
   return <section className="settings-form-grid mt-6">
     <label className="flex items-center justify-between gap-4">
-      <span>{locale === "zh-CN" ? "默认开启思考弹窗" : "Enable thinking popups by default"}</span>
+      <span>{locale === "zh-CN" ? "思考过程用弹窗查看" : "Show thinking in a popup"}</span>
       <Switch
         checked={pending ?? normalizeThinkingDisplayMode(preference.mode) === "popup_only"}
         disabled={pending !== null || !preference.save}
@@ -54,8 +54,8 @@ export function ThinkingPopupSettingsSection() {
       />
     </label>
     <p className="settings-muted-line">{locale === "zh-CN"
-      ? "选择“继承系统”的会话使用此全局默认值。开启时通过思考入口查看弹窗，关闭时在会话中显示思考内容；不会修改单独设置过的会话。"
-      : "Sessions set to inherit use this global default. Enable to view thinking in a popup, or disable to display it inline. Explicit session choices remain unchanged."}</p>
+      ? "开启后，AI 的思考过程收进一个按钮，点开才显示；关闭则直接显示在对话里。单独设置过的会话不受影响。"
+      : "When on, AI thinking is tucked behind a button you can open; when off it appears inline. Sessions with their own setting aren't affected."}</p>
     {pending !== null ? <p role="status" className="settings-muted-line">{locale === "zh-CN" ? "正在保存…" : "Saving…"}</p> : null}
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
   </section>;

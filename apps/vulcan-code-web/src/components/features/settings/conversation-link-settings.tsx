@@ -21,7 +21,7 @@ export function ConversationLinkSettingsSection() {
   if (!readElectronLocalBrowserBridge()) return null;
   return <section className="settings-form-grid mt-6">
     <label className="flex items-center justify-between gap-4">
-      <span>{locale === "zh-CN" ? "默认使用内置浏览器打开会话链接" : "Open conversation links in the built-in browser by default"}</span>
+      <span>{locale === "zh-CN" ? "用内置浏览器打开链接" : "Open links in the built-in browser"}</span>
       <Switch checked={enabled} onCheckedChange={(checked) => {
         try {
           saveConversationLinkPreference(checked);
@@ -33,8 +33,8 @@ export function ConversationLinkSettingsSection() {
       }} />
     </label>
     <p className="settings-muted-line">{locale === "zh-CN"
-      ? "仅在 GUI 中生效。开启后，点击会话内容中的网页链接会在内置浏览器打开并展开侧栏；关闭后使用原来的打开方式。"
-      : "GUI only. Website links in conversation content open in the built-in browser and reveal the sidebar. Disable to keep the original link behavior."}</p>
+      ? "开启后，点击对话里的网页链接会在右侧内置浏览器打开；关闭则用系统默认浏览器。仅桌面版可用。"
+      : "When on, web links in conversations open in the built-in browser on the right; when off they open in your default browser. Desktop app only."}</p>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
   </section>;
 }

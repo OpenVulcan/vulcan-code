@@ -106,7 +106,7 @@ it("deduplicates rapid restores and permits retry after rejection", async () => 
   expect(restore).toHaveBeenCalledTimes(1);
   expect(restore).toHaveBeenLastCalledWith(["archive-1"]);
   await act(async () => rejectRestore(new Error("Synthetic restore failure")));
-  expect(host.textContent).toContain("选择已保留");
+  expect(host.textContent).toContain("已选中的会话保持不变");
   expect(host.querySelector('[aria-label="选择会话 测试会话"]')?.getAttribute("aria-checked")).toBe("true");
   restore.mockResolvedValueOnce(undefined);
   await act(async () => restoreButton.click());

@@ -1,6 +1,7 @@
 import { useMcpText } from "./mcp-text"
 import * as React from "react"
 import { Button } from "@/components/ui/button"
+import { InlineDisclosure } from "@/components/ui/disclosure"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { parseMcpBulkPairs, validateMcpPairs } from "./mcp-form-model"
@@ -23,10 +24,11 @@ export function McpStringRows(props: { label: string; values: string[]; onChange
       <Input aria-label={`${props.label} ${index + 1}`} placeholder={props.placeholder} value={value} onChange={e => props.onChange(props.values.map((current, position) => position === index ? e.target.value : current))} />
       <Button variant="ghost" size="sm" onClick={() => props.onChange(props.values.filter((_, position) => position !== index))}>{text("移除", "Remove")}</Button>
     </div>)}
-    <details><summary>{text("批量粘贴", "Bulk paste")}</summary><Textarea aria-label={`${props.label} bulk`} value={bulk} onChange={e => setBulk(e.target.value)} />
-      <p>{preview.length}{text("行", "rows")}{props.exact && text("· 空行也是参数", "Empty lines are arguments")}</p><pre>{JSON.stringify(preview, null, 2)}</pre>
-      <Button disabled={!bulk} variant="outline" size="sm" onClick={() => { props.onChange([...props.values, ...preview]); setBulk("") }}>{text("确认追加", "Append rows")}</Button>
-    </details>
+    <InlineDisclosure className="mcp-bulk" label={text("一次粘贴多行", "Paste multiple rows")} openLabel={text("收起批量粘贴", "Hide bulk paste")}>
+      <Textarea aria-label={`${props.label} bulk`} placeholder={text("每行一项", "One per line")} value={bulk} onChange={e => setBulk(e.target.value)} />
+      <p>{text(`将添加 ${preview.length} 行`, `${preview.length} rows to add`)}{props.exact && text("（空行也算一个参数）", " (empty lines count as arguments)")}</p><pre>{JSON.stringify(preview, null, 2)}</pre>
+      <Button disabled={!bulk} variant="outline" size="sm" onClick={() => { props.onChange([...props.values, ...preview]); setBulk("") }}>{text("添加这些行", "Add these rows")}</Button>
+    </InlineDisclosure>
   </section>
 }
 
@@ -52,9 +54,10 @@ export function McpKeyValueRows(props: { label: string; values: Array<{ key: str
       <Input autoComplete="off" type={props.secret && !reveal ? "password" : "text"} aria-label={`${props.label} value ${index + 1}`} placeholder={props.valuePlaceholder ?? "VALUE"} value={row.value} onChange={e => props.onChange(props.values.map((current, position) => position === index ? { ...current, value: e.target.value } : current))} />
       <Button variant="ghost" size="sm" onClick={() => props.onChange(props.values.filter((_, position) => position !== index))}>{text("移除", "Remove")}</Button>
     </div>)}
-    <details><summary>{text("批量粘贴 KEY=VALUE", "Bulk paste")}</summary><Textarea aria-label={`${props.label} bulk`} value={bulk} onChange={e => setBulk(e.target.value)} />
-      <p>{preview.length}{text("行", "rows")}</p><ul>{preview.map((row, index) => <li key={index}>{row.key} = {props.secret ? "••••••" : row.value}</li>)}</ul>
-      {bulk && issue && <p role="alert">{issue}</p>}<Button disabled={!bulk || Boolean(issue)} variant="outline" size="sm" onClick={() => { props.onChange([...props.values, ...preview]); setBulk("") }}>{text("确认追加", "Append rows")}</Button>
-    </details>
+    <InlineDisclosure className="mcp-bulk" label={text("一次粘贴多行", "Paste multiple rows")} openLabel={text("收起批量粘贴", "Hide bulk paste")}>
+      <Textarea aria-label={`${props.label} bulk`} placeholder="KEY=VALUE" value={bulk} onChange={e => setBulk(e.target.value)} />
+      <p>{text(`将添加 ${preview.length} 行，每行格式为 KEY=VALUE`, `${preview.length} rows to add, one KEY=VALUE per line`)}</p><ul>{preview.map((row, index) => <li key={index}>{row.key} = {props.secret ? "••••••" : row.value}</li>)}</ul>
+      {bulk && issue && <p role="alert">{issue}</p>}<Button disabled={!bulk || Boolean(issue)} variant="outline" size="sm" onClick={() => { props.onChange([...props.values, ...preview]); setBulk("") }}>{text("添加这些行", "Add these rows")}</Button>
+    </InlineDisclosure>
   </section>
 }

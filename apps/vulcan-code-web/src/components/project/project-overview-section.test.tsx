@@ -67,21 +67,21 @@ describe("project overview authority and navigation", () => {
   it("does not turn unloaded settings or failed binding reads into inherited or empty results", async () => {
     reads.bindings.mockRejectedValue(new Error("authorization unavailable"));
     await renderOverview({ vmmError: "memory unavailable", agentError: "skills unavailable" });
-    expect(host.textContent).toContain("记忆配置尚未取得");
-    expect(host.textContent).toContain("技能覆盖尚未取得");
+    expect(host.textContent).toContain("还没读到记忆设置");
+    expect(host.textContent).toContain("还没读到技能设置");
     expect(host.textContent).toContain("authorization unavailable");
-    expect(host.textContent).not.toContain("继承全局");
-    expect(host.textContent).not.toContain("已授权 0");
+    expect(host.textContent).not.toContain("跟随全局设置");
+    expect(host.textContent).not.toContain("可使用 0");
     expect(reads.catalog).not.toHaveBeenCalled();
   });
   it("shows verified native binding and indexed availability without leaking another session or credentials", async () => {
     reads.bindings.mockResolvedValue([{ projectId: "project-a", libraryId: "library-a", defaultEnabled: true }]);
     await renderOverview({ vmmDraft: draft, agentLoaded: true, vceActivity: createVceActivityFixture() });
-    expect(host.textContent).toContain("Project A memory (#7)");
-    expect(host.textContent).toContain("已授权 1 个知识库 · 默认启用 1 个");
-    expect(host.textContent).toContain("代码语义索引可检索");
-    expect(host.textContent).toContain("此项目暂无当前会话运行快照");
-    expect(host.textContent).not.toContain("当前会话: 记忆作用域已就绪");
+    expect(host.textContent).toContain("「Project A memory」(#7)");
+    expect(host.textContent).toContain("可使用 1 个知识库，其中 1 个默认开启");
+    expect(host.textContent).toContain("代码索引可以搜索");
+    expect(host.textContent).toContain("这个项目当前没有运行中的会话");
+    expect(host.textContent).not.toContain("当前会话: 记忆可用");
     expect(host.textContent).not.toContain("secret-never-render");
     expect(reads.catalog).toHaveBeenCalledTimes(1);
     expect(reads.catalog.mock.calls[0][0]).toMatchObject({ action: "native_project_catalog", scope: "global", projectId: null });
@@ -95,9 +95,9 @@ describe("project overview authority and navigation", () => {
     await renderOverview();
     await renderOverview({ project: { id: "project-b", name: "Project B", path: "D:/workspace/project-b" }, vceActivity: createVceActivityFixture("project-a") });
     await act(async () => finishOld([{ libraryId: "old", projectId: "project-a", defaultEnabled: true }]));
-    expect(host.textContent).toContain("已授权 0 个知识库");
-    expect(host.textContent).not.toContain("已授权 1 个知识库");
-    expect(host.textContent).toContain("索引状态尚未取得");
+    expect(host.textContent).toContain("可使用 0 个知识库");
+    expect(host.textContent).not.toContain("可使用 1 个知识库");
+    expect(host.textContent).toContain("还没读到索引状态");
     expect(reads.unsubscribe).toHaveBeenCalledTimes(1);
   });
   it("routes every setting action in the same project and retains readable paths after clipboard failure", async () => {
@@ -111,8 +111,8 @@ describe("project overview authority and navigation", () => {
     }
     expect(open.mock.calls.map(([section]) => section)).toEqual(["vmm", "code-context", "knowledge-bases", "agent-skills", "attachments"]);
     await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="复制项目路径"]')!.click());
-    expect(host.textContent).toContain("复制失败，请选择路径文本复制");
-    expect(host.querySelector("details")!.textContent).toContain("D:/workspace/project-a");
+    expect(host.textContent).toContain("复制失败，可以直接选中路径手动复制");
+    expect(host.querySelector(".project-overview-path")!.textContent).toContain("D:/workspace/project-a");
   });
   it("exposes a missing native owner and actual model-route failures instead of claiming readiness", async () => {
     reads.catalog.mockResolvedValue({ data: { kind: "native_project_catalog", value: { projects: [], bindings: [{ vulcanProjectId: "project-a", ownerProjectId: 7, linkedProjectIds: [] }] } } });
@@ -121,14 +121,14 @@ describe("project overview authority and navigation", () => {
     const index = createVceActivityFixture();
     index.queryAvailable = false; index.configuration.ready = false; index.configuration.issues = ["embedding route unavailable"];
     await renderOverview({ vmmDraft: draft, vceActivity: index });
-    expect(host.querySelector('[role="alert"]')!.textContent).toContain("记忆绑定目标 #7 不在当前目录中");
+    expect(host.querySelector('[role="alert"]')!.textContent).toContain("关联的记忆项目 #7 已不存在");
     expect(host.querySelector('[role="alert"]')!.textContent).toContain("embedding route unavailable");
-    expect(host.textContent).toContain("代码语义索引暂不可检索");
+    expect(host.textContent).toContain("代码索引暂时无法搜索");
   });
   it("uses the existing locale mechanism for new status and action text", async () => {
     await renderOverview({}, "en-US");
-    expect(host.textContent).toContain("Memory settings unavailable");
-    expect(host.textContent).toContain("0 authorized libraries");
+    expect(host.textContent).toContain("Memory settings not loaded yet");
+    expect(host.textContent).toContain("0 knowledge bases available");
     expect(host.querySelector('button[aria-label="Code semantic index settings"]')).not.toBeNull();
   });
   it("discards a native catalog that returns after project navigation", async () => {
@@ -143,15 +143,15 @@ describe("project overview authority and navigation", () => {
       projects: [{ projectId: 7, name: "Old owner", tag: "old", protected: false, ownerVulcanProjectIds: [], linkedVulcanProjectIds: [] }],
       bindings: [{ vulcanProjectId: "project-b", ownerProjectId: 7, linkedProjectIds: [] }],
     } } }));
-    expect(host.textContent).toContain("尚未绑定记忆项目");
+    expect(host.textContent).toContain("还没有关联记忆项目");
     expect(host.textContent).not.toContain("Old owner");
   });
   it("refreshes binding authority after the existing settings revision changes", async () => {
     await renderOverview({ vmmDraft: draft });
-    expect(host.textContent).toContain("Project A memory (#7)");
+    expect(host.textContent).toContain("「Project A memory」(#7)");
     reads.catalog.mockResolvedValueOnce({ data: { kind: "native_project_catalog", value: { projects: [], bindings: [] } } });
     await renderOverview({ vmmDraft: draft, vmmRevision: 1 });
-    expect(host.textContent).toContain("尚未绑定记忆项目");
+    expect(host.textContent).toContain("还没有关联记忆项目");
     expect(reads.catalog).toHaveBeenCalledTimes(2);
   });
 });

@@ -28,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import { useI18n } from "@/i18n"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import type {
@@ -138,7 +139,7 @@ export function GitCommitSettingsArea(props: {
     <section className="settings-detail-panel settings-preferences-page git-commit-settings-page">
       <fieldset className="settings-preferences-fields" disabled={saveState === "saving"}>
         <section className="settings-preferences-section">
-          <h2><GitCommitHorizontal size={16} />{text("生成模型", "Generation model")}</h2>
+          <h2><GitCommitHorizontal size={16} />{text("谁来写提交说明", "Who writes commit messages")}</h2>
           <div className="settings-form-field">
             <span>{t("settings.gitCommit.summaryModel")}</span>
             <div className="settings-card-actions">
@@ -167,7 +168,7 @@ export function GitCommitSettingsArea(props: {
           </div>
         </section>
         <section className="settings-preferences-section">
-          <h2>{text("提交信息偏好", "Commit message preferences")}</h2>
+          <h2>{text("提交说明的写法", "How commit messages are written")}</h2>
           <label className="settings-form-field">
             <span>{t("settings.gitCommit.summaryExtraPrompt")}</span>
             <Textarea rows={4} value={draft.summaryExtraPrompt}
@@ -179,11 +180,11 @@ export function GitCommitSettingsArea(props: {
         <section className="settings-preferences-section">
           <h2>{text("分支命名", "Branch naming")}</h2>
           <label className="settings-form-field">
-            <span>{text("新分支默认前缀", "Default new-branch prefix")}</span>
+            <span>{text("新分支名称前缀", "New branch name prefix")}</span>
             <Input value={draft.newBranchPrefix} placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
               onChange={(event) => setDraft({ ...draft, newBranchPrefix: event.currentTarget.value })} />
-            <small className="settings-muted-line">{text("预览", "Preview")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code></small>
-            <small className="settings-muted-line">{text("已有命名空间的分支继续使用原命名空间。", "Namespaced branches keep their existing namespace.")}</small>
+            <small className="settings-muted-line">{text("效果", "Example")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code></small>
+            <small className="settings-muted-line">{text("只影响新建的分支；已经带前缀的分支名保持不变。", "Only affects new branches; names that already have a prefix stay as they are.")}</small>
           </label>
         </section>
       </fieldset>
@@ -193,10 +194,7 @@ export function GitCommitSettingsArea(props: {
           <Save size={14} />{saveState === "saving" ? text("保存中…", "Saving…") : text("保存", "Save")}
         </Button>
       </div>
-      {saveError ? <div role="alert" className="settings-save-error">
-        <p>{text("保存失败，修改已保留。", "Saving failed. Your changes are preserved.")}</p>
-        <details><summary>{text("查看详情", "View details")}</summary><pre>{saveError}</pre></details>
-      </div> : null}
+      {saveError ? <SettingsErrorNotice className="settings-save-error" detail={saveError} message={text("没能保存，你的修改还在，可以稍后再试。", "Couldn't save. Your changes are kept, so you can try again.")} /> : null}
     </section>
   )
 }
@@ -252,6 +250,7 @@ export function OutputStyleSettingsSection(props: {
   // saving and error distinguish a pending request from a failed save.
   // saving 与 error 区分进行中的请求和保存失败。
   const [saving, setSaving] = React.useState(false)
+  const [saved, setSaved] = React.useState(false)
   const [error, setError] = React.useState("")
   // savingRef closes the synchronous duplicate-click window.
   // savingRef 关闭同步重复点击窗口。
@@ -267,13 +266,17 @@ export function OutputStyleSettingsSection(props: {
   // saveOutputStyle 保留既有应用边界，错误时保留输入。
   // Parameters: none. Returns when the save settles.
   // 参数：无。返回值：保存结束后完成。
-  const saveOutputStyle = async () => {
+  // Choosing a style saves it at once, matching the neighbouring switches; failures keep the choice for retry.
+  // 选择风格即保存，与相邻开关一致；失败时保留选择以便重试。
+  const saveOutputStyle = async (nextId: string) => {
     if (savingRef.current) return
     savingRef.current = true
     setSaving(true)
+    setSaved(false)
     setError("")
     try {
-      await props.actions.onSavePromptOutputStyle(outputStyleId)
+      await props.actions.onSavePromptOutputStyle(nextId)
+      setSaved(true)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -281,22 +284,25 @@ export function OutputStyleSettingsSection(props: {
       setSaving(false)
     }
   }
+  // selectStyle applies a valid, changed selection and persists it immediately.
+  // selectStyle 应用有效且有变化的选择并立即保存。
+  const selectStyle = (nextId: string) => {
+    setOutputStyleId(nextId)
+    if (nextId !== props.outputStyleCatalog.selectedId && props.outputStyleCatalog.entries.some((entry) => entry.id === nextId)) void saveOutputStyle(nextId)
+  }
   return <div className="settings-form-grid">
     <label className="settings-form-field">
-      <span>{text("新会话默认输出风格", "Default output style for new sessions")}</span>
-      <Select disabled={saving} onValueChange={setOutputStyleId} value={outputStyleId}>
+      <span>{text("新会话的回答风格", "Answer style for new sessions")}</span>
+      <Select disabled={saving} onValueChange={selectStyle} value={outputStyleId}>
         <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
         <SelectContent>{props.outputStyleCatalog.entries.map((entry) => (
           <SelectItem key={entry.id} value={entry.id}>{locale === "zh-CN" ? entry.labelZh : entry.labelEn}</SelectItem>
         ))}</SelectContent>
       </Select>
     </label>
-    <p className="settings-muted-line">{text("用于新会话或下一次上下文压缩，不会中途替换当前系统提示词。", "Applies to new sessions or the next compaction, without replacing the active system prompt mid-context.")}</p>
-    <div className="settings-card-actions">
-      <Button disabled={saving || outputStyleId === props.outputStyleCatalog.selectedId || !props.outputStyleCatalog.entries.some((entry) => entry.id === outputStyleId)}
-        onClick={() => void saveOutputStyle()} type="button"><Save size={14} />{saving ? text("保存中…", "Saving…") : text("保存默认风格", "Save default style")}</Button>
-    </div>
-    {error ? <div role="alert"><p>{text("保存失败，选择已保留。", "Saving failed. Your selection is preserved.")}</p><details><summary>{text("查看详情", "View details")}</summary><pre>{error}</pre></details></div> : null}
+    <p className="settings-muted-line">{text("选择后立即生效于新会话；正在进行的会话会在下次压缩时切换。", "Takes effect for new sessions right away; ongoing sessions switch at their next compression.")}</p>
+    {saving || saved ? <p className="settings-muted-line" role="status">{saving ? text("正在保存…", "Saving…") : text("已保存", "Saved")}</p> : null}
+    {error ? <SettingsErrorNotice detail={error} message={text("没能保存，你的选择还在，可以重新选择一次再试。", "Couldn't save. Your selection is kept; pick it again to retry.")} /> : null}
   </div>
 }
 
@@ -419,7 +425,7 @@ export function ArchivedRestoreSettingsArea(props: {
           </Button>
         </div>
       </div>
-      {actionError ? <div className="settings-validation-error" role="alert"><p>{text("操作失败，选择已保留，请重试。", "The operation failed. Your selection is preserved; please retry.")}</p><details><summary>{text("查看详情", "View details")}</summary><pre>{actionError}</pre></details></div> : null}
+      {actionError ? <SettingsErrorNotice detail={actionError} message={text("操作没有完成，已选中的会话保持不变，请再试一次。", "That didn't finish. Your selected conversations are unchanged; please try again.")} /> : null}
       <AlertDialog onOpenChange={(open) => { if (!open) setDeleteTargetIds([]) }} open={deleteTargetIds.length > 0}>
         <AlertDialogContent>
           <AlertDialogHeader>

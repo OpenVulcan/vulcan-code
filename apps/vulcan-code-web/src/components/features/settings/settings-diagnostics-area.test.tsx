@@ -52,20 +52,20 @@ describe("runtime diagnostics provider request trace setting", () => {
     ));
     // The first view contains startup diagnostics without the unrelated trace form.
     // 初始视图仅展示启动诊断，不混入无关追踪表单。
-    expect(host.textContent).not.toContain("打开当前会话追踪目录");
-    const tab = Array.from(host.querySelectorAll<HTMLButtonElement>('.workspace-directory-navigation button')).find((entry) => entry.textContent === "Provider 请求追踪");
+    expect(host.textContent).not.toContain("打开记录文件夹");
+    const tab = Array.from(host.querySelectorAll<HTMLButtonElement>('.workspace-directory-navigation button')).find((entry) => entry.textContent === "模型请求记录");
     expect(tab).toBeDefined();
     await act(async () => tab!.click());
     expect(tab!.getAttribute("aria-current")).toBe("page");
     expect(host.querySelector('.workspace-directory-content .provider-trace-settings')).not.toBeNull();
     const markup = host.innerHTML;
 
-    expect(markup).toContain("Provider 请求追踪");
+    expect(markup).toContain("模型请求记录");
     expect(markup).toContain("已关闭");
     expect(markup).toContain("temp/provider-api-trace");
-    expect(markup).toContain("解析前原始返回");
-    expect(markup).toContain("打开当前会话追踪目录");
-    expect(markup).toContain("清除当前会话追踪");
+    expect(markup).toContain("原始内容");
+    expect(markup).toContain("打开记录文件夹");
+    expect(markup).toContain("清空当前会话的记录");
     expect(markup).toContain('data-state="unchecked"');
     await act(async () => root.unmount());
     host.remove();

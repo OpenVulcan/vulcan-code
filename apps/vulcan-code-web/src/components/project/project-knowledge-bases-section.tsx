@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { useI18n } from "@/i18n";
 import { formatKnowledgeIndexStatus } from "@/lib/knowledge-index-status";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import {
   listKnowledgeLibraries,
   listProjectKnowledgeBindings,
@@ -197,11 +199,10 @@ export function ProjectKnowledgeBasesSection(props: {
             return (
               <div className="knowledge-binding-row" key={library.id}>
                 <label className="knowledge-binding-access">
-                  <input
+                  <Checkbox
                     checked={authorized}
                     disabled={Boolean(savingLibraryId)}
-                    onChange={(event) => void saveBinding(library.id, event.target.checked, binding?.defaultEnabled ?? false)}
-                    type="checkbox"
+                    onCheckedChange={(checked) => void saveBinding(library.id, checked === true, binding?.defaultEnabled ?? false)}
                   />
                   <span>
                     <strong>{library.name}</strong>
@@ -212,11 +213,10 @@ export function ProjectKnowledgeBasesSection(props: {
                   </span>
                 </label>
                 <label className="knowledge-binding-default">
-                  <input
+                  <Switch
                     checked={binding?.defaultEnabled ?? false}
                     disabled={!authorized || Boolean(savingLibraryId)}
-                    onChange={(event) => void saveBinding(library.id, true, event.target.checked)}
-                    type="checkbox"
+                    onCheckedChange={(checked) => void saveBinding(library.id, true, checked)}
                   />
                   <span>{t("knowledge.sessionDefaultEnabled")}</span>
                 </label>

@@ -26,12 +26,12 @@ describe("media delivery settings card", () => {
       expect(markup).toContain(`id="${purpose}-max_total_encoded_bytes"`);
     }
     expect(markup).toContain('value="0.015625"');
-    expect(markup).toContain("主会话（含子智能体会话）");
+    expect(markup).toContain("主会话（含子智能体）");
     expect(markup).toContain("独立 AI 扩展");
     expect(markup).toContain("4 KiB");
     expect(markup).toContain("8 KiB");
-    expect(markup).toContain("不影响附件保存");
-    expect(markup).toContain("恢复后端默认值");
+    expect(markup).toContain("附件本身始终会保存");
+    expect(markup).toContain("恢复默认");
     expect(onSaved).not.toHaveBeenCalled();
   });
 
@@ -39,10 +39,10 @@ describe("media delivery settings card", () => {
   // 英文使用相同表单契约，并说明历史及上传限制，不显示未翻译键。
   it("renders localized English labels and safety explanations", () => {
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="en-US"><MediaDeliveryPolicyCard settings={mediaDeliverySettingsFixture()} onSaved={() => undefined} /></I18nProvider>);
-    expect(markup).toContain("Media delivery limits");
+    expect(markup).toContain("How files reach the model");
     expect(markup).toContain("Independent AI extensions");
     expect(markup).toContain("File / PDF");
-    expect(markup).toContain("original delivery identity");
+    expect(markup).toContain("uploaded again");
     expect(markup).not.toContain("settings.mediaDelivery.");
   });
 });

@@ -68,8 +68,8 @@ describe("context settings draft navigation", () => {
       // Directory actions change the visible category while keeping each editor mounted.
       // 目录操作切换可见分类，同时保持各编辑器挂载。
       const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('.workspace-directory-navigation button'))
-      const retryTab = tabs.find((tab) => tab.textContent === "请求与重试")
-      const contextTab = tabs.find((tab) => tab.textContent === "上下文与压缩")
+      const retryTab = tabs.find((tab) => tab.textContent === "出错重试")
+      const contextTab = tabs.find((tab) => tab.textContent === "对话长度与压缩")
       expect(retryTab).toBeDefined()
       expect(contextTab).toBeDefined()
       await act(async () => retryTab!.click())
@@ -78,14 +78,14 @@ describe("context settings draft navigation", () => {
       await act(async () => contextTab!.click())
       expect(contextTab!.getAttribute("aria-current")).toBe("page")
       expect(container.querySelector('[aria-label="edit policy"]')?.textContent).toBe("80")
-      expect(container.textContent).toContain("系统默认有未保存更改")
+      expect(container.textContent).toContain("有未保存的修改")
       // saveButton is located within the active panel, not another independently mounted section.
       // saveButton 在活动面板内定位，不命中其他独立挂载分区。
-      const saveButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.context-basics-tabs > section:not([hidden]) button')).find((button) => button.textContent?.includes("保存系统默认"))
+      const saveButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.context-basics-tabs > section:not([hidden]) button')).find((button) => button.textContent?.includes("保存"))
       expect(saveButton).toBeDefined()
       await act(async () => saveButton?.click())
       expect(service.savePolicy).toHaveBeenCalledExactlyOnceWith({ effective_context_window_percent: 80 })
-      expect(container.textContent).toContain("当前系统默认已保存")
+      expect(container.textContent).toContain("已保存")
     } finally {
       await act(async () => root.unmount())
       container.remove()

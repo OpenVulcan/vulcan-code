@@ -41,10 +41,9 @@ describe("MCP runtime inspection boundary", () => {
       await click("工具")
       expect(container.querySelector(".mcp-schema")).toBeNull()
       await act(async () => {
-        // detail models the native disclosure event without invoking a tool action.
-        // detail 模拟原生展开事件，不调用工具动作。
-        const detail = container.querySelector<HTMLDetailsElement>(".mcp-tool")
-        if (detail) { detail.open = true; detail.dispatchEvent(new Event("toggle")) }
+        // trigger expands the tool row without invoking a tool action.
+        // trigger 展开工具条目，不调用工具动作。
+        container.querySelector<HTMLButtonElement>('.mcp-tool [data-slot="disclosure-trigger"]')?.click()
       })
       expect(container.textContent).toContain("x-preserve")
       expect(container.textContent).toContain("必填")
@@ -58,7 +57,7 @@ describe("MCP runtime inspection boundary", () => {
       })
       expect(container.querySelector('[role="status"]')?.textContent).toBe("没有匹配的工具")
       expect(container.querySelectorAll(".mcp-tool")).toHaveLength(0)
-      await click("Prompts / Resources")
+      await click("提示词与资源")
       expect(service.capabilities).toHaveBeenCalledExactlyOnceWith("fixture")
       // A new catalog generation invalidates optional metadata even if the server stays connected under the same ID.
       // 即使服务器保持同标识且已连接，新目录代次也会使可选元数据失效。

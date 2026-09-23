@@ -47,9 +47,9 @@ describe("project native memory controls", () => {
       /></I18nProvider>));
       expect(host.textContent).not.toContain("外置连接");
       expect(host.innerHTML).not.toContain("do-not-render");
-      expect(host.querySelector(".project-vmm-advanced")?.hasAttribute("open")).toBe(false);
+      expect(host.querySelector<HTMLElement>(".project-vmm-advanced")?.dataset.state).toBe("closed");
       expect(host.querySelectorAll('[role="switch"]').length).toBe(3);
-      const saveButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("保存原生绑定"))!;
+      const saveButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("保存存放位置"))!;
       expect(saveButton.disabled).toBe(true);
       expect(host.querySelector('[role="alert"]')?.textContent).toContain("catalog unavailable");
       const reload = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "重新加载")!;

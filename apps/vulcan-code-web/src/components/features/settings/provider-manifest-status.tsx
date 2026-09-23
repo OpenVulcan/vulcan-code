@@ -22,6 +22,7 @@ import type {
 } from "@/types"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { DisclosureSection } from "@/components/ui/disclosure"
 import {
   Table,
   TableBody,
@@ -534,15 +535,17 @@ export function ProviderManifestStatusPanel() {
                 (delta) => delta.change === "removed" && delta.current,
               )
               return (
-                <details className="rounded-lg border px-3 py-2" key={`${status.provider_id}-rules`}>
-                <summary className="cursor-pointer text-sm font-medium">
-                  {status.provider_id}：{status.model_binding_total_count} 条模型绑定，{status.model_rules.length} 条模型规则，{status.operations.length} 个操作，
-                  {status.tool_target_template_instances.length} 个模板实例
-                  {status.active_model_binding_change_baseline
-                    ? `，相对 ${activeLayerLabel(status.active_model_binding_change_baseline.layer)} r${status.active_model_binding_change_baseline.revision} 有 ${status.active_model_binding_change_total_count} 项模型变化`
-                    : ""}
-                </summary>
-                <div className="mt-2 space-y-2">
+                <DisclosureSection
+                  description={<>
+                    {status.model_binding_total_count} 条模型绑定 · {status.model_rules.length} 条模型规则 · {status.operations.length} 个操作 · {status.tool_target_template_instances.length} 个模板实例
+                  </>}
+                  key={`${status.provider_id}-rules`}
+                  meta={status.active_model_binding_change_baseline
+                    ? `${status.active_model_binding_change_total_count} 项模型变化`
+                    : undefined}
+                  title={status.provider_id}
+                >
+                <div className="space-y-2">
                   {status.active_model_binding_change_baseline ? (
                     <p className="text-xs text-muted-foreground">
                       模型变化由后端对比已认证 {activeLayerLabel(status.active_model_binding_change_baseline.layer)} r{status.active_model_binding_change_baseline.revision} 与当前 active 代际得出；共 {status.active_model_binding_change_total_count} 项
@@ -679,7 +682,7 @@ export function ProviderManifestStatusPanel() {
                     </div>
                   ))}
                 </div>
-              </details>
+              </DisclosureSection>
               )
             })}
           </div>

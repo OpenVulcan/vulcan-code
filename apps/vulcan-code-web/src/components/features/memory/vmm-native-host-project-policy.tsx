@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
+import { DisclosureSection } from "@/components/ui/disclosure"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useI18n } from "@/i18n"
@@ -119,11 +120,9 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
     <span>{t(policy!.overrides[group] === null ? "memory.hostPolicy.inherited" : "memory.hostPolicy.overridden")}</span>
     <Button variant="outline" disabled={disabled || policy!.overrides[group] === null} onClick={() => void save(group, null)}>{t("memory.hostPolicy.inherit")}</Button>
   </div>
-  // summary keeps each group's acknowledged source visible while its mounted editor is collapsed.
-  // summary 在已挂载的编辑器折叠时仍显示各组已确认的配置来源。
-  const summary = (group: keyof VmmNativeHostProjectPolicyOverrides, title: string) => <summary>
-    <span>{title}</span><small>{t(policy!.overrides[group] === null ? "projectSettings.inheritGlobal" : "projectSettings.projectOverride")}</small>
-  </summary>
+  // source keeps each group's acknowledged source visible while its mounted editor is collapsed.
+  // source 在已挂载的编辑器折叠时仍显示各组已确认的配置来源。
+  const source = (group: keyof VmmNativeHostProjectPolicyOverrides) => t(policy!.overrides[group] === null ? "projectSettings.inheritGlobal" : "projectSettings.projectOverride")
   return <section className="project-vmm-policy space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="font-medium">{t("memory.hostPolicy.title")}</h3>
@@ -132,8 +131,7 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
     <p className="text-sm text-muted-foreground">{t("memory.hostPolicy.description")}</p>
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
     {policy && draft ? <>
-      <details className="project-vmm-policy-group">
-        {summary("recall", t("memory.policy.title"))}
+      <DisclosureSection className="project-vmm-policy-group" description={t("projectSettings.policyGroup.recallHint")} keepMounted meta={source("recall")} title={t("projectSettings.policyGroup.recall")}>
         <div className="space-y-3">{inheritance("recall")}
         <div className="grid gap-3 sm:grid-cols-2">{recallFields.map((field) => <div key={field.key} className="space-y-1">
           <Label htmlFor={`caller-policy-${field.key}`}>{t(field.label)}</Label>
@@ -151,17 +149,15 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
         {saved ? <p role="status">{t("memory.hostPolicy.saved")}</p> : null}
         <Button disabled={disabled || !parsed || !recallChanged} onClick={() => { if (parsed) void save("recall", parsed) }}>{t("memory.policy.save")}</Button>
         </div>
-      </details>
-      <details className="project-vmm-policy-group">
-        {summary("retrieval", t("memory.ranking.title"))}
+      </DisclosureSection>
+      <DisclosureSection className="project-vmm-policy-group" description={t("projectSettings.policyGroup.rankingHint")} keepMounted meta={source("retrieval")} title={t("projectSettings.policyGroup.ranking")}>
         {inheritance("retrieval")}
         <VmmNativeRetrievalPolicy settings={policy.effective.retrieval} defaults={policy.effective.retrievalDefaults} busy={disabled} onRunAction={saveChild} onSaved={() => {}} />
-      </details>
-      <details className="project-vmm-policy-group">
-        {summary("text", t("memory.textPolicy.title"))}
+      </DisclosureSection>
+      <DisclosureSection className="project-vmm-policy-group" description={t("projectSettings.policyGroup.textHint")} keepMounted meta={source("text")} title={t("projectSettings.policyGroup.text")}>
         {inheritance("text")}
         <VmmNativeTextPolicy settings={policy.effective.text} defaults={policy.effective.textDefaults} busy={disabled} onRunAction={saveChild} onSaved={() => {}} />
-      </details>
+      </DisclosureSection>
     </> : pending ? <p className="text-sm">{t("memory.common.loading")}</p> : null}
   </section>
 }

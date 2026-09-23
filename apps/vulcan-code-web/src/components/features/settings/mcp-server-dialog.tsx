@@ -1,5 +1,6 @@
 import { useMcpText } from "./mcp-text"
 import { Button } from "@/components/ui/button"
+import { DisclosureSection } from "@/components/ui/disclosure"
 import { createMcpDraft, validateMcpDraft } from "./mcp-form-model"
 import { McpStringRows, McpKeyValueRows } from "./mcp-form-fields"
 import * as React from "react"
@@ -121,7 +122,7 @@ export function McpServerDialog(props: {
   return <Dialog open={props.open} onOpenChange={open => { if (!saving.current) props.onOpenChange(open) }}>
     <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="xl">
       <DialogHeader className="shrink-0"><DialogTitle>{draft.serverId ? text("编辑 MCP 服务器", "Edit MCP server") : text("添加 MCP 服务器", "Add MCP server")}</DialogTitle>
-        <DialogDescription>{text("保存后由运行时建立连接；状态以服务器详情为准。", "Runtime connects after saving.")}</DialogDescription>
+        <DialogDescription>{text("保存后会自动尝试连接，结果可以在服务器详情里查看。", "It connects automatically after saving; check the server details for the result.")}</DialogDescription>
       </DialogHeader>
       <div className="mcp-dialog-body">
       <fieldset disabled={busy} className="mcp-form">
@@ -134,27 +135,29 @@ export function McpServerDialog(props: {
         </div>
         {draft.transport === "stdio" ? <>
           <label className="settings-form-field"><span>{text("可执行命令", "Executable")}</span><Input placeholder="node" value={draft.command} onChange={e => change("command", e.target.value)} /></label>
-          <p className="settings-muted-line">{text("只填可执行文件；每个参数占一行，不经过 Shell 拆分。", "Enter the executable only; each row is one exact argument.")}</p>
+          <p className="settings-muted-line">{text("这里只填程序本身（如 node、npx），参数在下方逐行填写，每行原样传入。", "Enter only the program (e.g. node, npx). Add arguments below, one per row, passed exactly as typed.")}</p>
           <McpStringRows label={text("参数", "Arguments")} values={draft.args} onChange={value => change("args", value)} placeholder="server.js" exact />
           <label className="settings-form-field"><span>{text("工作目录", "Working directory")}</span><Input value={draft.cwd} onChange={e => change("cwd", e.target.value)} /></label>
-          <p className="settings-muted-line">{text("留空继承宿主进程工作目录。", "Empty inherits the host process working directory.")}</p>
-          <McpKeyValueRows label={text("显式环境变量", "Explicit environment")} values={draft.env} onChange={value => change("env", value)} secret />
-          <McpStringRows label={text("宿主环境变量透传", "Host environment passthrough")} values={draft.envPassthrough} onChange={value => change("envPassthrough", value)} placeholder="API_TOKEN" />
-          <details><summary>{text("环境继承说明", "Environment inheritance")}</summary><p className="settings-muted-line">{text("当前用户进程默认继承宿主环境。此列表保存显式透传声明，并非环境隔离白名单；同名显式值优先。", "User processes inherit the host environment. This list persists explicit passthrough declarations, not an isolation allowlist; explicit values take precedence.")}</p></details>
+          <p className="settings-muted-line">{text("留空则使用 VulcanCode 的启动目录。", "Leave empty to use VulcanCode's launch directory.")}</p>
+          <McpKeyValueRows label={text("环境变量", "Environment variables")} values={draft.env} onChange={value => change("env", value)} secret />
+          <McpStringRows label={text("从本机传入的变量", "Variables passed from this computer")} values={draft.envPassthrough} onChange={value => change("envPassthrough", value)} placeholder="API_TOKEN" />
+          <p className="settings-muted-line">{text("进程默认就能读到本机的环境变量；这里只是把需要的变量名明确列出来。与上方同名时，以上方填写的值为准。", "The process already sees this computer's environment; this list just names the ones it needs. Values entered above win when names match.")}</p>
         </> : <>
-          <label className="settings-form-field"><span>{text("端点 URL", "Endpoint URL")}</span><Input placeholder="https://example.com/mcp" value={draft.url} onChange={e => change("url", e.target.value)} /></label>
-          <details open><summary>{text("请求头与认证", "Headers and authentication")}</summary>
+          <label className="settings-form-field"><span>{text("服务器地址", "Server URL")}</span><Input placeholder="https://example.com/mcp" value={draft.url} onChange={e => change("url", e.target.value)} /></label>
+          <section className="mcp-form-section"><h3>{text("请求头与认证", "Headers and authentication")}</h3>
             <label className="settings-form-field"><span>Bearer Token</span><Input autoComplete="off" type="password" value={draft.bearerToken} onChange={e => change("bearerToken", e.target.value)} /></label>
-            <McpKeyValueRows headers label={text("静态请求头", "Static headers")} values={draft.headers} onChange={value => change("headers", value)} secret />
-            <McpKeyValueRows headers label={text("从环境变量取请求头", "Headers from environment")} values={draft.headersFromEnv} onChange={value => change("headersFromEnv", value)} valuePlaceholder="ACCESS_TOKEN" />
-            <p className="settings-muted-line">{text("右侧填写宿主变量名，例如 Authorization → ACCESS_TOKEN。使用变量完整值，不自动补 Bearer；同名静态头优先。", "Uses the complete environment value without adding Bearer; explicit headers take precedence.")}</p>
-          </details>
-          <details><summary>{text("OAuth 高级配置", "OAuth configuration")}</summary>
+            <McpKeyValueRows headers label={text("固定请求头", "Fixed headers")} values={draft.headers} onChange={value => change("headers", value)} secret />
+            <McpKeyValueRows headers label={text("从环境变量读取的请求头", "Headers read from environment variables")} values={draft.headersFromEnv} onChange={value => change("headersFromEnv", value)} valuePlaceholder="ACCESS_TOKEN" />
+            <p className="settings-muted-line">{text("左边填请求头名称，右边填本机环境变量名，例如 Authorization → ACCESS_TOKEN。会原样使用变量的值，不会自动加 Bearer；与上方固定请求头同名时以固定值为准。", "Header name on the left, environment variable name on the right, e.g. Authorization → ACCESS_TOKEN. The value is used as-is (no Bearer prefix); fixed headers above win when names match.")}</p>
+          </section>
+          <DisclosureSection className="mcp-oauth" description={text("只有服务器要求 OAuth 登录时才需要填写。", "Only needed if the server requires OAuth sign-in.")} title={text("OAuth 登录", "OAuth sign-in")}>
+            <div className="mcp-form-section">
             <label className="settings-form-field"><span>Client ID</span><Input value={draft.oauthClientId} onChange={e => change("oauthClientId", e.target.value)} /></label>
             <label className="settings-form-field"><span>Client secret</span><Input autoComplete="off" type="password" value={draft.oauthClientSecret} onChange={e => change("oauthClientSecret", e.target.value)} /></label>
             <McpStringRows label="OAuth scopes" values={draft.oauthScopes} onChange={value => change("oauthScopes", value)} placeholder="read" />
             <label className="settings-form-field"><span>Redirect URI</span><Input value={draft.oauthRedirectUri} onChange={e => change("oauthRedirectUri", e.target.value)} /></label>
-          </details>
+            </div>
+          </DisclosureSection>
         </>}
         {error && <p role="alert" className="mcp-error">{error}</p>}
       </fieldset>
