@@ -1,10 +1,10 @@
-//! Returns target stop failures to their original question owners.
-//! 将目标停止失败回传给原问题所有者。
+//! Returns target stop failures to their original question and notification owners.
+//! 将目标停止失败回传给原问题和通知所有者。
 
 use super::*;
 
-/// Returns stopped target deliveries without changing the original pending question.
-/// 回传已停止目标的投递，但不改变原问题的待答状态。
+/// Returns stopped question and notification deliveries without changing pending question state.
+/// 回传停止的问题和通知投递，但不改变待答问题状态。
 /// `state` resolves canonical owners; `target_session_id` identifies the stopped recipient.
 /// `state` 解析规范所有者；`target_session_id` 标识已停止的接收者。
 /// Returns the number of new source receipts after trying every independent failure.
@@ -25,6 +25,9 @@ pub(crate) async fn reconcile_stopped_question_deliveries_for_session(
     let target = registry
         .get(target_session_id)
         .map_err(|error| error.to_string())?;
+    // Notifications share stop publication but retain their independent delivery state machine.
+    // 通知共享停止发布入口，但保留独立投递状态机。
+    let notification_result = notifications::reconcile_stopped_notifications_for_session(state, &target).await;
     let failures = target
         .read(|document| {
             document
@@ -41,7 +44,7 @@ pub(crate) async fn reconcile_stopped_question_deliveries_for_session(
         })
         .map_err(|error| error.to_string())?;
     if failures.is_empty() {
-        return Ok(0);
+        return notification_result;
     }
     let invocation = recovery_invocation(
         Arc::clone(state),
@@ -50,8 +53,10 @@ pub(crate) async fn reconcile_stopped_question_deliveries_for_session(
         target_session_id,
         Arc::clone(&target),
     )?;
-    let mut delivered = 0;
-    let mut errors = Vec::new();
+    let (mut delivered, mut errors) = match notification_result {
+        Ok(count) => (count, Vec::new()),
+        Err(error) => (0, vec![error]),
+    };
     for inbound in failures {
         let question_id = inbound.question_id.clone();
         let source = match participants::load_participant_handle(&invocation, &inbound.source).await

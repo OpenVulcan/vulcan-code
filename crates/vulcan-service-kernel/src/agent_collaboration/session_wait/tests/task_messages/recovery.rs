@@ -12,6 +12,7 @@ use vulcan_session_core::v1::document::SessionDocument;
 
 mod embedded_tree;
 mod batch;
+mod notification_stop;
 mod main_business;
 
 /// Full stop returns an unprojected accepted question as a queryable target-stopped failure.

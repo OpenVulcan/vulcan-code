@@ -3003,12 +3003,12 @@ impl SessionDocument {
             return self.set_collaboration_run_control_one(input);
         }
         let stopped_at_ms = input.changed_at_ms;
-        let rejects_questions = matches!(
+        let rejects_messages = matches!(
             input.state,
             CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents
         );
-        // A stop, rejected task messages, and unprojected questions publish in one revision.
-        // 停止与被拒绝的待处理任务消息和未投影问题必须在同一修订中发布。
+        // Stop and rejected task messages, questions, and notifications publish in one revision.
+        // 停止与被拒绝的任务消息、问题及通知必须在同一修订中发布。
         self.apply_atomic_transition(move |draft| {
             let receipt = draft.set_collaboration_run_control_one(input)?;
             if !matches!(receipt, IdempotentMutation::Committed(_)) {
@@ -3038,7 +3038,25 @@ impl SessionDocument {
                     stopped_at_ms,
                 )?;
             }
-            if rejects_questions {
+            if rejects_messages {
+                // Full stop cancels accepted notifications before another API can project them.
+                // 全停在后续 API 能够投影之前取消已经接纳的通知。
+                let pending_notifications = draft
+                    .collaboration_state()
+                    .inbound_notifications
+                    .values()
+                    .filter(|notification| notification.state == CollaborationNotificationState::Accepted)
+                    .map(|notification| (notification.notification_id.clone(), notification.delivery_id.clone()))
+                    .collect::<Vec<_>>();
+                for (notification_id, delivery_id) in pending_notifications {
+                    draft.fail_notification(FailNotificationInput {
+                        operation_id: CollaborationOperationId::try_new(format!("{}:fail", delivery_id.as_str()))?,
+                        notification_id,
+                        delivery_id,
+                        reason: CollaborationDeliveryFailureReason::TargetStopped,
+                        failed_at_ms: stopped_at_ms,
+                    })?;
+                }
                 // An accepted question that never reached the model cannot be resumed after full stop.
                 // 从未进入模型的已接纳问题在全停之后不能继续处理。
                 let pending_questions = draft

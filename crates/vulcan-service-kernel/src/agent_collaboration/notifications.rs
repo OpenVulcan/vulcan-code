@@ -2,6 +2,8 @@
 //! 可靠单向通知准入与投递。
 
 use super::*;
+mod stopped;
+pub(super) use stopped::reconcile_stopped_notifications_for_session;
 use vulcan_session_core::v1::collaboration::{
     AcceptNotificationInput, CollaborationNotificationId, CollaborationNotificationRecord,
     CollaborationNotificationState, CollaborationOperationSemantic, RecordNotificationProgressInput,
@@ -177,6 +179,9 @@ pub(super) async fn deliver_recorded_notification(
         &invocation.registry,
         vec![Arc::clone(&source_for_write), Arc::clone(&target_for_write)],
         move || {
+            // Publish any staged original intent or failure before returning or creating a remote effect.
+            // 返回或产生远端效果前，先发布暂存的原始意图或失败。
+            source_for_write.flush_all().map_err(|error| error.to_string())?;
             // Re-read the source under both gates so a stale retry cannot resurrect a failed intent.
             // 在双方门内重读来源，避免旧重试复活已经失败的意图。
             let recorded = source_for_write
@@ -324,6 +329,11 @@ pub(super) async fn recover_existing_notification_progress(
                 }
                 return Ok(None);
             };
+            // Volatile state after a failed flush is not a receipt that another journal may acknowledge.
+            // 刷盘失败后的易失状态不能成为另一份日志可确认的回执。
+            if inbound.target_revision > document.durable_revision() {
+                return Err(String::from("notification target progress is not durably published"));
+            }
             if inbound.delivery_id != record.delivery_id
                 || inbound.source_operation_id != record.operation_id
                 || inbound.source != record.source
@@ -413,9 +423,14 @@ pub(super) async fn recover_existing_notification_progress(
     let Some((state, failure, target_revision, target_event_seq)) = target_progress else {
         return Ok(false);
     };
-    if state == CollaborationNotificationState::Accepted
-        && record.state == CollaborationNotificationState::Accepted
+    if record.state == state
+        && record.failure == failure
+        && record.target_revision == Some(target_revision)
+        && record.target_event_seq == Some(target_event_seq)
     {
+        // A prior source flush may have failed after publishing its in-memory progress.
+        // 先前来源刷盘可能在发布内存进度后失败。
+        invocation.source_handle.flush_all().map_err(|error| error.to_string())?;
         return Ok(false);
     }
     // This records a fact that was already delivered, so a later grant revocation cannot erase it.
