@@ -3003,8 +3003,12 @@ impl SessionDocument {
             return self.set_collaboration_run_control_one(input);
         }
         let stopped_at_ms = input.changed_at_ms;
-        // A stop and its rejected pending task messages must publish in one revision.
-        // 停止与被拒绝的待处理任务消息必须在同一修订中发布。
+        let rejects_questions = matches!(
+            input.state,
+            CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents
+        );
+        // A stop, rejected task messages, and unprojected questions publish in one revision.
+        // 停止与被拒绝的待处理任务消息和未投影问题必须在同一修订中发布。
         self.apply_atomic_transition(move |draft| {
             let receipt = draft.set_collaboration_run_control_one(input)?;
             if !matches!(receipt, IdempotentMutation::Committed(_)) {
@@ -3020,9 +3024,7 @@ impl SessionDocument {
                         .task_message_effects
                         .contains_key(*delivery_id)
                 })
-                .map(|(delivery_id, acceptance)| {
-                    (delivery_id.clone(), acceptance.event_seq)
-                })
+                .map(|(delivery_id, acceptance)| (delivery_id.clone(), acceptance.event_seq))
                 .collect::<Vec<_>>();
             for (delivery_id, accepted_seq) in pending {
                 let operation_id = CollaborationOperationId::try_new(format!(
@@ -3035,6 +3037,32 @@ impl SessionDocument {
                     CollaborationDeliveryFailureReason::TargetStopped,
                     stopped_at_ms,
                 )?;
+            }
+            if rejects_questions {
+                // An accepted question that never reached the model cannot be resumed after full stop.
+                // 从未进入模型的已接纳问题在全停之后不能继续处理。
+                let pending_questions = draft
+                    .collaboration_state()
+                    .inbound_deliveries
+                    .values()
+                    .filter(|delivery| {
+                        delivery.state == CollaborationDeliveryState::Accepted
+                            && delivery.settlement.is_none()
+                    })
+                    .map(|delivery| (delivery.delivery_id.clone(), delivery.question_id.clone()))
+                    .collect::<Vec<_>>();
+                for (delivery_id, question_id) in pending_questions {
+                    draft.fail_delivery(FailDeliveryInput {
+                        operation_id: CollaborationOperationId::try_new(format!(
+                            "{}:fail",
+                            delivery_id.as_str()
+                        ))?,
+                        delivery_id,
+                        question_id,
+                        reason: CollaborationDeliveryFailureReason::TargetStopped,
+                        failed_at_ms: stopped_at_ms,
+                    })?;
+                }
             }
             Ok(receipt)
         })

@@ -719,13 +719,22 @@ async fn service_stop_conversation_run_owned(
     drop(stop_admission_guard);
     // The stop can strand already accepted task messages before their next legal API boundary.
     // 停止可能让已接纳任务消息在下一合法 API 边界之前悬空。
-    if let Err(error) = crate::agent_collaboration::reconcile_task_results_for_session(
-        &state,
-        target_session_id,
-    )
-    .await
+    if let Err(error) =
+        crate::agent_collaboration::reconcile_task_results_for_session(&state, target_session_id)
+            .await
     {
         tracing::warn!(%target_session_id, %error, "Stopped task message return remains pending");
+    }
+    // The same stop can reject already accepted questions before their first model projection.
+    // 同一次停止也可能在首次模型投影前拒绝已接纳的问题。
+    if let Err(error) =
+        crate::agent_collaboration::reconcile_stopped_question_deliveries_for_session(
+            &state,
+            target_session_id,
+        )
+        .await
+    {
+        tracing::warn!(%target_session_id, %error, "Stopped question return remains pending");
     }
     let workbench =
         store_and_emit_full_workbench_snapshot_for_cold_refresh(FullWorkbenchColdRefreshRequest {

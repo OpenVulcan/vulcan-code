@@ -224,6 +224,48 @@ fn question_preparation_fixture(in_turn: bool) -> (SessionDocument, Collaboratio
     )
 }
 
+/// Explicit stop must return a failed delivery for an accepted question not yet projected.
+/// 明确停止后，尚未投影的已接纳问题必须得到失败投递回执。
+#[test]
+fn stopped_target_fails_accepted_unprojected_question() {
+    for control in [
+        CollaborationRunControl::Stopped,
+        CollaborationRunControl::MainAndSubagents,
+    ] {
+        let (mut target, question) = question_preparation_fixture(true);
+        target
+            .set_collaboration_run_control(SetRunControlInput {
+                operation_id: CollaborationOperationId::try_new("stop-accepted-question").unwrap(),
+                state: control,
+                changed_at_ms: T0 + 3,
+            })
+            .unwrap();
+        let inbound = target
+            .inbound_delivery_snapshot(&question.delivery_id)
+            .unwrap();
+        assert_eq!(inbound.state, CollaborationDeliveryState::Failed);
+        assert_eq!(
+            inbound.failure,
+            Some(CollaborationDeliveryFailureReason::TargetStopped)
+        );
+    }
+    let (mut parent, question) = question_preparation_fixture(true);
+    parent
+        .set_collaboration_run_control(SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("main-only-accepted-question").unwrap(),
+            state: CollaborationRunControl::MainOnly,
+            changed_at_ms: T0 + 3,
+        })
+        .unwrap();
+    assert_eq!(
+        parent
+            .inbound_delivery_snapshot(&question.delivery_id)
+            .unwrap()
+            .state,
+        CollaborationDeliveryState::Accepted
+    );
+}
+
 /// Atomic preparation publishes all three facts once and replays after persistent reconstruction.
 /// 原子准备只发布一次三个事实，并在持久化重建后幂等重放。
 #[test]

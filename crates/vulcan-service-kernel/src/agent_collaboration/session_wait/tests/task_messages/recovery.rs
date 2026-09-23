@@ -13,6 +13,101 @@ use vulcan_session_core::v1::document::SessionDocument;
 mod embedded_tree;
 mod main_business;
 
+/// Full stop returns an unprojected accepted question as a queryable target-stopped failure.
+/// 全停将尚未投影的已接纳问题回传为可查询的目标停止失败。
+#[tokio::test]
+async fn stopped_target_returns_accepted_question_failure_to_source() {
+    let (_root, invocation, target, _) = message_fixture(false).await;
+    let source = Arc::clone(&invocation.source_handle);
+    let asked = ask_question(
+        &crate::ServiceEventEmitter::new(vec![]),
+        &invocation,
+        target.session_id(),
+        String::from("Please answer before stopping."),
+    )
+    .await
+    .unwrap();
+    let question_id =
+        CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
+    let delivery_id = source
+        .read(|document| {
+            document
+                .question_snapshot(&question_id)
+                .unwrap()
+                .delivery_id
+                .clone()
+        })
+        .unwrap();
+    target
+        .set_collaboration_run_control_durable(SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("stop-accepted-service-question")
+                .unwrap(),
+            state: CollaborationRunControl::MainAndSubagents,
+            changed_at_ms: now_ms().unwrap(),
+        })
+        .unwrap();
+    let inbound = target
+        .read(|document| {
+            document
+                .inbound_delivery_snapshot(&delivery_id)
+                .unwrap()
+                .clone()
+        })
+        .unwrap();
+    assert_eq!(inbound.state, CollaborationDeliveryState::Failed);
+    assert_eq!(
+        inbound.failure,
+        Some(CollaborationDeliveryFailureReason::TargetStopped)
+    );
+    reconcile_stopped_question_deliveries_for_session(&invocation.state, target.session_id())
+        .await
+        .unwrap();
+    let outbound = source
+        .read(|document| document.delivery_snapshot(&delivery_id).unwrap().clone())
+        .unwrap();
+    assert_eq!(outbound.state, CollaborationDeliveryState::Failed);
+    assert_eq!(outbound.failure, inbound.failure);
+    assert_eq!(outbound.target_revision, Some(inbound.target_revision));
+    assert!(outbound.target_event_seq.is_some());
+    assert_eq!(
+        source
+            .read(|document| document.question_snapshot(&question_id).unwrap().state)
+            .unwrap(),
+        CollaborationQuestionState::Pending
+    );
+    let waited = wait_question(&invocation, question_id.as_str().to_owned(), None, 0)
+        .await
+        .unwrap();
+    assert_eq!(waited["status"], "failed");
+    assert_eq!(waited["delivery"]["failure"], "target_stopped");
+    assert_eq!(
+        reconcile_stopped_question_deliveries_for_session(&invocation.state, target.session_id())
+            .await
+            .unwrap(),
+        0
+    );
+    let mut cancel_invocation = invocation.clone();
+    cancel_invocation.operation_id = format!("v1:{}:cancel-after-stop", source.session_id());
+    let cancelled = cancel_question(
+        &cancel_invocation,
+        question_id.as_str().to_owned(),
+        String::from("Target stopped."),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cancelled["question_state"], "cancelled");
+    assert!(
+        !source
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    assert!(
+        !target
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+}
+
 /// An accepted cross-project question must fail on both sides when its Ask grant is revoked
 /// before the target's next provider request.
 /// 跨项目问题已接纳但提问授权在目标下一次供应商请求前撤销时，双方必须记录失败。

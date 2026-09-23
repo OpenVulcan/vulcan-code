@@ -192,6 +192,16 @@ pub(crate) async fn stop_owned_child_question_execution(
         }
     }
     crate::agent_stream::apply_session_phase(app, state, session_id, SessionRunPhase::Stopped)?;
+    // A stopped auxiliary owner may also hold other accepted questions in its durable inbox.
+    // 已停止的辅助所有者也可能在可靠收件箱中持有其他已接纳问题。
+    if let Err(error) =
+        crate::agent_collaboration::reconcile_stopped_question_deliveries_for_session(
+            state, session_id,
+        )
+        .await
+    {
+        tracing::warn!(%session_id, %error, "Stopped child question return remains pending");
+    }
     Ok(true)
 }
 

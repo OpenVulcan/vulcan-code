@@ -64,6 +64,7 @@ mod native_dispatch_tests;
 mod notifications;
 mod participants;
 mod projection;
+mod question_failures;
 mod session_messages;
 mod session_wait;
 mod startup_recovery;
@@ -73,6 +74,7 @@ mod task_results;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) use projection::project_collaboration_before_api;
+pub(crate) use question_failures::reconcile_stopped_question_deliveries_for_session;
 pub(crate) use startup_recovery::start_collaboration_recovery;
 pub(crate) use task_launch::wake_session_tasks_if_idle;
 pub(crate) use task_results::reconcile_task_results_for_session;
