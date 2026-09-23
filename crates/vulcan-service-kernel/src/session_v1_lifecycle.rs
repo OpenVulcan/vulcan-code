@@ -746,6 +746,18 @@ pub(crate) async fn create_and_register_root_session_v1_with_context_window(
             });
         }
     }
+    // Creation bypasses SessionHandle::submit_root_input, so publish its Running transition with the first input.
+    // 创建绕过 SessionHandle::submit_root_input，因此必须将运行状态与首次输入共同发布。
+    document.set_collaboration_run_control(
+        vulcan_session_core::v1::collaboration::SetRunControlInput {
+            operation_id:
+                vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(
+                    format!("root-input-running:{session_id}:{}", client_action_id.as_str()),
+                )?,
+            state: vulcan_session_core::v1::collaboration::CollaborationRunControl::Running,
+            changed_at_ms: now_ms,
+        },
+    )?;
     // candidate contains the exact metadata, runtime, compactions, and active
     // tail belonging to the same memory revision.
     // candidate 包含属于同一内存修订号的精确 metadata、runtime、压缩节点和活动尾段。
@@ -1505,6 +1517,7 @@ mod tests {
     mod collaboration_deletion;
     mod draft_handoff;
     mod model_projection;
+    mod root_turn_completion;
 
     /// Isolated storage fixture used by lifecycle integration tests.
     /// 生命周期集成测试使用的隔离存储夹具。
@@ -2372,14 +2385,24 @@ mod tests {
             })
             .expect("read created document");
         assert_eq!(memory_revision, durable_revision);
-        assert_eq!(event_count, 1);
         assert!(matches!(
             &handle
-                .read(|document| document.events()[0].event.clone())
+                .read(|document| {
+                    document.events().iter().find_map(|event| match &event.event {
+                        EventBody::UserInput(input) => Some(input.clone()),
+                        _ => None,
+                    })
+                })
                 .expect("read root event"),
-            EventBody::UserInput(input)
+            Some(input)
                 if input.text == "root input" && input.resource_ids.len() == 1
         ));
+        assert_eq!(
+            handle
+                .read(|document| document.collaboration_run_control())
+                .expect("created run control"),
+            vulcan_session_core::v1::collaboration::CollaborationRunControl::Running,
+        );
         let created_runtime_state = handle
             .read(|document| document.runtime_lock.initialization_state)
             .expect("read created runtime initialization state");
@@ -2412,6 +2435,12 @@ mod tests {
         assert_eq!(reloaded_last_seq, last_seq);
         assert_eq!(reloaded_frontier, frontier);
         assert_eq!(reloaded_runtime_state, created_runtime_state);
+        assert_eq!(
+            reloaded
+                .read(|document| document.collaboration_run_control())
+                .expect("reloaded run control"),
+            vulcan_session_core::v1::collaboration::CollaborationRunControl::Running,
+        );
 
         assert!(matches!(
             create_and_register_root_session_v1(
