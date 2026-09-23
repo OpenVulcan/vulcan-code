@@ -143,8 +143,18 @@ pub(super) async fn deliver_recorded_notification(
     body: String,
 ) -> Result<(), String> {
     let cross_project = source.project_id != target_identity.project_id;
+    // Recovery handles many notifications in one invocation; each receipt belongs to its source operation.
+    // 一次恢复调用会处理多条通知；每份回执必须归属于自身来源操作。
+    let accept_operation = CollaborationOperationId::try_new(format!(
+        "{}:notification-accept", operation_id.as_str()
+    )).map_err(|error| format!("invalid notification acceptance identity: {error}"))?;
+    // The source acknowledgement shares the same original intent across live delivery and recovery.
+    // 实时投递与恢复的来源确认共享同一原始意图身份。
+    let progress_operation = CollaborationOperationId::try_new(format!(
+        "{}:notification-accepted", operation_id.as_str()
+    )).map_err(|error| format!("invalid notification progress identity: {error}"))?;
     let input = AcceptNotificationInput {
-        operation_id: operation_suffix(invocation, "notification-accept")?,
+        operation_id: accept_operation,
         notification_id: notification_id.clone(),
         delivery_id: delivery_id.clone(),
         source_operation_id: operation_id,
@@ -273,7 +283,7 @@ pub(super) async fn deliver_recorded_notification(
         return Ok(());
     };
     let input = RecordNotificationProgressInput {
-        operation_id: operation_suffix(invocation, "notification-accepted")?,
+        operation_id: progress_operation,
         notification_id,
         delivery_id,
         state: CollaborationNotificationState::Accepted,

@@ -2949,7 +2949,6 @@ async fn fail_question_before_target_acceptance(
     let source_id = invocation.source_session_id;
     let question_id = question_id.clone();
     let delivery_id = delivery_id.clone();
-    let operation_id = operation_suffix(invocation, "fail")?;
     lifecycle_write::with_canonical_handles(
         &invocation.registry,
         vec![Arc::clone(&source_for_write), Arc::clone(&target_for_write)],
@@ -3023,6 +3022,11 @@ async fn fail_question_before_target_acceptance(
                 // 存储及其他临时错误保留 Recorded 意图，交由出站箱恢复。
                 return Ok(None);
             };
+            // A recovery invocation spans multiple questions, so rejection belongs to the original intent.
+            // 恢复调用覆盖多个问题，拒收身份必须归属于原始意图。
+            let operation_id = CollaborationOperationId::try_new(format!(
+                "{}:fail", question.operation_id.as_str()
+            )).map_err(|error| format!("invalid question rejection identity: {error}"))?;
             source_for_write
                 .mutate_durable_if_changed(
                     SessionMutationAdmission::ControlPlane,
