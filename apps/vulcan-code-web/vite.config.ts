@@ -21,6 +21,11 @@ export default defineConfig(({ mode }) => {
   const userVulcanRootName = isRelease ? ".vulcan" : ".vulcan-debug";
 
   return {
+    // Parallel audit servers share this package's default cache; keep their optimizer writes out of the live workbench.
+    // 并行验收服务共用本包默认缓存；隔离其依赖预构建写入，防止污染运行中的工作台。
+    // Unit tests also own a separate cache so their module graph cannot replace the browser's React singleton.
+    // 单元测试也拥有独立缓存，避免其模块图替换浏览器中的 React 单例。
+    cacheDir: path.resolve(__dirname, "node_modules", mode === "test" ? ".vite-workbench-test" : ".vite-workbench"),
     plugins: [react(), tailwindcss(), vulcanServiceDiscoveryPlugin(userVulcanRootName)],
     resolve: {
       alias: {
