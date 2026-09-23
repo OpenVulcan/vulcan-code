@@ -156,25 +156,6 @@
   color: var(--sidebar-accent-foreground);
 }
 
-/* Forge current-page indicator: hover keeps the surface only, the current page adds one flame bar. */
-/* Forge 当前页指示：悬停只有表面色，当前页额外带一条火焰色竖条。 */
-.vcn-sidebar-menu-button.active {
-  position: relative;
-}
-
-.vcn-sidebar-menu-button.active::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 2px;
-  height: 16px;
-  border-radius: 0 2px 2px 0;
-  background: var(--sidebar-primary);
-  transform: translateY(-50%);
-  pointer-events: none;
-}
-
 .vcn-sidebar.project-drag-active .vcn-sidebar-menu-button:hover,
 .vcn-sidebar.project-drag-active .vcn-sidebar-menu-button:focus-visible {
   background: transparent;

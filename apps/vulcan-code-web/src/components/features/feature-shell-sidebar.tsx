@@ -290,13 +290,16 @@ function SettingsSidebarGroupRow(props: {
   // The category arrow controls disclosure rather than unexpectedly navigating to its first page.
   // 分类箭头控制展开收起，不再意外跳转到分类中的第一页。
   const [groupExpanded, setGroupExpanded] = React.useState(true)
+  // containsActivePage lights the collapsed category tile, since its selected leaf is hidden in the flyout.
+  // containsActivePage 点亮折叠后的分类图标，因为选中的子页面此时收在悬浮菜单中。
+  const containsActivePage = props.group.items.some((area) => area.id === normalizeSettingsSubArea(props.activeSettingsSubArea))
   // settingsFolderButton keeps one stable category trigger for expanded and collapsed animation.
   // settingsFolderButton 为展开与折叠动画保留同一个稳定的目录触发入口。
   const settingsFolderButton = (
     <SidebarMenuButton
       aria-expanded={isSidebarCollapsed ? undefined : groupExpanded}
       aria-label={isSidebarCollapsed ? props.group.label : undefined}
-      className={`project-folder-button settings-folder-button ${isSidebarCollapsed ? "collapsed-project-button settings-collapsed-button" : ""}`}
+      className={`project-folder-button settings-folder-button ${isSidebarCollapsed ? "collapsed-project-button settings-collapsed-button" : ""} ${isSidebarCollapsed && containsActivePage ? "project-folder-active" : ""}`}
       onClick={() => { if (!isSidebarCollapsed) setGroupExpanded((expanded) => !expanded) }}
       tooltip={isSidebarCollapsed ? undefined : props.group.label}
     >

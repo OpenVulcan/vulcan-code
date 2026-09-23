@@ -1,0 +1,84 @@
+/* Forge selected state: the current row is an ember-tinted tile with a warm hairline, not a flat grey pill or an edge bar. */
+/* Forge 选中态：当前行是带暖色细描边的余烬色底块，而非扁平灰色胶囊或边缘竖条。 */
+/* Hover stays a neutral surface so "pointing at" and "currently here" never look alike. */
+/* 悬停保持中性表面色，使「指向」与「当前所在」始终可区分。 */
+:root {
+  --vcn-selected-foreground: var(--foreground);
+  --vcn-selected-icon: var(--primary);
+  --vcn-selected-fill: color-mix(in srgb, var(--primary) 7%, var(--sidebar));
+  --vcn-selected-surface-fill: color-mix(in srgb, var(--primary) 6%, var(--card));
+  --vcn-selected-wash: linear-gradient(90deg, color-mix(in srgb, var(--primary) 6%, transparent) 0%, transparent 80%);
+  --vcn-selected-ring: color-mix(in srgb, var(--primary) 22%, transparent);
+  --vcn-selected-lift: 0 1px 2px rgb(21 23 26 / 5%);
+  --vcn-selected-tile: color-mix(in srgb, var(--primary) 12%, var(--sidebar));
+  --vcn-selected-tile-glow: 0 2px 8px -4px color-mix(in srgb, var(--primary) 45%, transparent);
+}
+.dark {
+  --vcn-selected-fill: color-mix(in srgb, var(--primary) 14%, var(--sidebar-accent));
+  --vcn-selected-surface-fill: color-mix(in srgb, var(--primary) 13%, var(--card));
+  --vcn-selected-wash: linear-gradient(90deg, color-mix(in srgb, var(--primary) 12%, transparent) 0%, transparent 80%);
+  --vcn-selected-ring: color-mix(in srgb, var(--primary) 36%, transparent);
+  --vcn-selected-lift: inset 0 1px 0 rgb(255 255 255 / 4%);
+  --vcn-selected-tile: color-mix(in srgb, var(--primary) 22%, var(--sidebar));
+  --vcn-selected-tile-glow: 0 0 12px -3px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+/* Expanded sidebar rows: ember tile, warm hairline and flame icon. */
+/* 展开侧栏行：余烬色底块、暖色细描边与火焰色图标。 */
+.vcn-sidebar .vcn-sidebar-menu-button.active,
+.vcn-sidebar .vcn-sidebar-menu-button.active:hover,
+.vcn-sidebar .vcn-sidebar-menu-button.active:focus-visible,
+.vcn-sidebar .workspace-sidebar-feature-button.active,
+.vcn-sidebar .workspace-sidebar-feature-button.active:hover,
+.vcn-sidebar .workspace-sidebar-feature-button.active:focus-visible,
+.vcn-sidebar .conversation-tree-button.active,
+.vcn-sidebar .conversation-tree-button.active:hover,
+.vcn-sidebar .conversation-tree-button.active:focus-visible {
+  --conversation-tree-row-bg: var(--vcn-selected-fill);
+  background: var(--vcn-selected-wash), var(--vcn-selected-fill);
+  box-shadow: inset 0 0 0 1px var(--vcn-selected-ring), var(--vcn-selected-lift);
+  color: var(--vcn-selected-foreground);
+}
+.vcn-sidebar .vcn-sidebar-menu-button.active > svg {
+  color: var(--vcn-selected-icon);
+}
+.vcn-sidebar .vcn-sidebar-menu-button.active :is(.workspace-sidebar-feature-label, .conversation-tree-label) {
+  font-weight: 500;
+}
+
+/* Collapsed icon rail: a stronger ember tile with a soft glow carries the selection alone. */
+/* 折叠图标栏：由更浓的余烬色底块与柔和光晕单独表达选中。 */
+.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active,
+.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active:hover,
+.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active:focus-visible,
+.vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active,
+.vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active:hover,
+.vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active:focus-visible {
+  background: var(--vcn-selected-tile);
+  box-shadow: inset 0 0 0 1px var(--vcn-selected-ring), var(--vcn-selected-tile-glow);
+  color: var(--vcn-selected-icon);
+}
+
+/* Flyouts and in-page menus reuse the same ember so every "current" row speaks one language. */
+/* 悬浮菜单与页内菜单复用同一余烬色，使所有「当前项」使用同一视觉语言。 */
+.collapsed-project-flyout-item.active,
+.collapsed-project-flyout-item.active:hover,
+.collapsed-project-flyout-item.active:focus-visible,
+.context-dynamic-tabs-menu-item.active,
+.workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]),
+.project-settings-nav-button.active {
+  border-color: transparent;
+  background: var(--vcn-selected-wash), var(--vcn-selected-surface-fill);
+  box-shadow: inset 0 0 0 1px var(--vcn-selected-ring), var(--vcn-selected-lift);
+  color: var(--vcn-selected-foreground);
+}
+.workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]),
+.project-settings-nav-button.active {
+  font-weight: 600;
+}
+.collapsed-project-flyout-item.active svg,
+.context-dynamic-tabs-menu-item.active svg,
+.workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation .workspace-tool-panel-menu-row.active > svg,
+.project-settings-nav-button.active svg {
+  color: var(--vcn-selected-icon);
+}

@@ -17,13 +17,10 @@
   to { opacity: 1; transform: scaleX(1); }
 }
 
-/* Sidebar rows: hover tint and the active flame bar ease in instead of snapping. */
-/* 侧栏行：悬停底色与当前火焰条平滑出现，而不是突变。 */
+/* Sidebar rows: hover tint and the selected tile ease in instead of snapping. */
+/* 侧栏行：悬停底色与选中底块平滑出现，而不是突变。 */
 .vcn-sidebar-menu-button {
   transition: background-color var(--vcn-duration-fast) var(--vcn-ease-out), color var(--vcn-duration-fast) var(--vcn-ease-out);
-}
-.vcn-sidebar-menu-button.active::before {
-  animation: vcn-accent-grow-y var(--vcn-duration-base) var(--vcn-ease-out);
 }
 
 /* Buttons acknowledge presses with a slight sink. */
