@@ -1332,9 +1332,12 @@ fn read_question_source(
 /// 在同一来源锁内读取模型可见快照及其当前跨项目授权。
 /// Internal recovery may inspect revoked records; model-facing waits may not reveal new bodies.
 /// 内部恢复可以检查已撤销记录；面向模型的等待不能泄露新的正文。
+/// `caller_is_source` permits the original author to inspect a failed delivery without a current grant.
+/// `caller_is_source` 允许原作者在当前无授权时读取自己问题的失败投递。
 fn read_question_for_model(
     handle: &Arc<SessionHandle>,
     question_id: &CollaborationQuestionId,
+    caller_is_source: bool,
 ) -> Result<
     (
         vulcan_session_core::v1::collaboration::CollaborationQuestionRecord,
@@ -1348,7 +1351,14 @@ fn read_question_for_model(
             let question = document
                 .question_snapshot(question_id)
                 .ok_or_else(|| String::from("collaboration question was not found"))?;
-            if question.source.project_id != question.target.project_id {
+            let delivery = document
+                .delivery_snapshot(&question.delivery_id)
+                .ok_or_else(|| String::from("collaboration question delivery was not found"))?;
+            if question.source.project_id != question.target.project_id
+                && !(caller_is_source
+                    && delivery.state == CollaborationDeliveryState::Failed
+                    && question.answer.is_none())
+            {
                 let source = Uuid::parse_str(&question.source.session_id)
                     .map_err(|error| error.to_string())?;
                 let target = Uuid::parse_str(&question.target.session_id)
@@ -1364,9 +1374,6 @@ fn read_question_for_model(
                     ));
                 }
             }
-            let delivery = document
-                .delivery_snapshot(&question.delivery_id)
-                .ok_or_else(|| String::from("collaboration question delivery was not found"))?;
             Ok((
                 question.clone(),
                 delivery.clone(),
@@ -3558,7 +3565,8 @@ async fn wait_question(
             }
             return Ok(incoming);
         }
-        let (question, delivery, _) = read_question_for_model(&source_handle, &question_id)?;
+        let (question, delivery, _) =
+            read_question_for_model(&source_handle, &question_id, caller_is_source)?;
         let cursor = question_wait_cursor(&question, &delivery)?;
         if caller_is_source || caller_is_target {
             if delivery.state == CollaborationDeliveryState::Failed {
@@ -3693,7 +3701,8 @@ async fn incoming_question_snapshot(
             .map_err(|error| format!("invalid inbound question identity: {error}"))?;
         let (_source_session_id, source_handle) =
             load_question_source(invocation, &question_id).await?;
-        let (question, delivery, revision) = read_question_for_model(&source_handle, &question_id)?;
+        let (question, delivery, revision) =
+            read_question_for_model(&source_handle, &question_id, false)?;
         if question.question_id != inbound.question_id
             || question.target != inbound.target
             || question.source != inbound.source

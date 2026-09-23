@@ -88,6 +88,11 @@ async fn accepted_question_revoked_before_projection_settles_both_sides() {
                 if input.input_source == vulcan_session_core::v1::event::UserInputSource::AgentMessage
         )))
         .unwrap());
+    let waited = wait_question(&invocation, question_id.as_str().to_owned(), None, 0)
+        .await
+        .expect("the original author can inspect a failed delivery after revocation");
+    assert_eq!(waited["status"], "failed");
+    assert_eq!(waited["delivery"]["failure"], "authorization_revoked");
     let mut cancel_invocation = invocation.clone();
     cancel_invocation.operation_id = format!("v1:{}:cancel-after-revoke", invocation.source_session_id);
     let cancelled = cancel_question(
