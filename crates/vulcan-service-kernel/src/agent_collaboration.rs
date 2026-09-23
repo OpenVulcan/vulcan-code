@@ -2123,21 +2123,24 @@ async fn reconcile_canonical_collaboration_outbox(
     // source-commit-before-target-acceptance window strands them unless they are replayed here.
     // 通知位于独立映射、不依附问题事务，因此若不在此处重放，同一"先提交来源再接纳目标"的窗口
     // 会把它们滞留。
-    let stranded_notifications = source_handle
+    let pending_notifications = source_handle
         .read(|document| {
             document
                 .collaboration_state()
                 .notifications
                 .values()
                 .filter(|record| {
-                    record.state
-                        == vulcan_session_core::v1::collaboration::CollaborationNotificationState::Recorded
+                    matches!(
+                        record.state,
+                        vulcan_session_core::v1::collaboration::CollaborationNotificationState::Recorded
+                            | vulcan_session_core::v1::collaboration::CollaborationNotificationState::Accepted
+                    )
                 })
                 .cloned()
                 .collect::<Vec<_>>()
         })
         .map_err(|error| format!("failed to read notification outbox snapshot: {error}"))?;
-    for record in stranded_notifications {
+    for record in pending_notifications {
         let (target_session_id, target) =
             match resolve_participant_target(&invocation, &record.target, "notification").await {
                 Ok(value) => value,
@@ -2152,24 +2155,50 @@ async fn reconcile_canonical_collaboration_outbox(
         // The replay performs both halves under their own stable identities, so a target that already
         // holds the acceptance is satisfied idempotently instead of being accepted twice.
         // 重放以各自稳定身份执行两半，因此已持有接纳的目标由幂等性满足，而不会被二次接纳。
-        let delivery = notifications::deliver_recorded_notification(
-            &invocation,
-            target_session_id,
-            &target,
-            record.delivery_id.clone(),
-            record.notification_id.clone(),
-            record.operation_id.clone(),
-            record.source.clone(),
-            record.target.clone(),
-            record.body.clone(),
-        )
-        .await;
-        match delivery {
-            Ok(()) => repaired = repaired.saturating_add(1),
-            Err(error) => failures.push(format!(
-                "notification `{}` acceptance repair failed: {error}",
-                record.notification_id.as_str()
-            )),
+        // The target may have projected before its source learned even the acceptance. In that
+        // case the durable projection proof wins without re-delivering or rechecking a later grant.
+        // 目标可能在来源获知接纳前已投影；此时可靠投影凭据优先，不重投也不重验后续授权。
+        match notifications::recover_projected_notification_progress(&invocation, &record, &target)
+            .await
+        {
+            Ok(true) => {
+                repaired = repaired.saturating_add(1);
+                continue;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                failures.push(format!(
+                    "notification `{}` projection progress repair failed: {error}",
+                    record.notification_id.as_str()
+                ));
+                continue;
+            }
+        }
+        if record.state
+            == vulcan_session_core::v1::collaboration::CollaborationNotificationState::Recorded
+        {
+            let delivery = notifications::deliver_recorded_notification(
+                &invocation,
+                target_session_id,
+                &target,
+                record.delivery_id.clone(),
+                record.notification_id.clone(),
+                record.operation_id.clone(),
+                record.source.clone(),
+                record.target.clone(),
+                record.body.clone(),
+            )
+            .await;
+            match delivery {
+                Ok(()) => repaired = repaired.saturating_add(1),
+                Err(error) => {
+                    failures.push(format!(
+                        "notification `{}` acceptance repair failed: {error}",
+                        record.notification_id.as_str()
+                    ));
+                    continue;
+                }
+            }
         }
     }
     if failures.is_empty() {

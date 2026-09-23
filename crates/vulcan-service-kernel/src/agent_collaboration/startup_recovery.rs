@@ -50,7 +50,10 @@ fn needs_delivery_recovery(collaboration: &CollaborationState) -> bool {
                     && !collaboration.task_message_effects.contains_key(delivery)
             })
         || collaboration.notifications.values().any(|notification| {
-            notification.state == CollaborationNotificationState::Recorded
+            matches!(
+                notification.state,
+                CollaborationNotificationState::Recorded | CollaborationNotificationState::Accepted
+            )
         })
         || collaboration.outbound_deliveries.values().any(|delivery| {
             matches!(
@@ -280,7 +283,7 @@ mod tests {
     /// The source outbox replay is unreachable unless this session-level gate selects the record.
     /// 若会话级闸门不选中该记录，来源出站重放就永远不可达。
     #[test]
-    fn recorded_outbound_notification_triggers_startup_recovery() {
+    fn recorded_or_accepted_outbound_notification_triggers_startup_recovery() {
         let participant = |session: &str| CollaborationParticipant {
             session_id: session.to_owned(),
             root_session_id: session.to_owned(),
@@ -311,6 +314,17 @@ mod tests {
         assert!(
             needs_delivery_recovery(&collaboration),
             "the indexed gate must select a source whose notification still needs delivery"
+        );
+        let notification = collaboration
+            .notifications
+            .values_mut()
+            .next()
+            .expect("the notification remains in the source outbox");
+        notification.state = CollaborationNotificationState::Accepted;
+        notification.target_revision = Some(3);
+        assert!(
+            needs_delivery_recovery(&collaboration),
+            "the indexed gate must also select a source awaiting target projection progress"
         );
     }
 

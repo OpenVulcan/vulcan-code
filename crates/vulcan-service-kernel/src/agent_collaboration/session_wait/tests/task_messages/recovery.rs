@@ -220,6 +220,69 @@ async fn notification_stranded_before_acceptance_is_repaired_by_the_outbox_pass(
     assert_eq!(inbound_count, 1, "exactly one target acceptance may exist");
 }
 
+/// A target projection survives even when the later source progress write is lost.
+/// 即使后续来源进度写入丢失，目标投影仍已可靠存在。
+/// Recovery must copy that exact target proof to the source without projecting the body twice.
+/// 恢复必须将目标的精确凭据补回来源，且不能重复投影正文。
+#[tokio::test]
+async fn projected_notification_with_missing_source_progress_is_repaired() {
+    let (_root, invocation, target, _) = message_fixture(false).await;
+    let source = invocation.source_handle.clone();
+    let send = notifications::send_notification(
+        &invocation,
+        target.session_id(),
+        String::from("The child completed a stage; no answer is needed."),
+    )
+    .await
+    .expect("the notification must be accepted before target projection");
+    assert_eq!(send["status"], "accepted");
+    let notification_id = source
+        .read(|document| document.collaboration_state().notifications.keys().next().cloned())
+        .unwrap()
+        .expect("the source must retain the notification identity");
+    target
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| document.project_notification_before_api(notification_id.clone(), now_ms().unwrap()),
+        )
+        .expect("the target must project the accepted notification");
+    assert_eq!(
+        source
+            .read(|document| document.collaboration_state().notifications[&notification_id].state)
+            .unwrap(),
+        CollaborationNotificationState::Accepted,
+        "the crash window leaves only the source progress write missing"
+    );
+    let target_proof = target
+        .read(|document| {
+            document.collaboration_state().inbound_notifications[&notification_id].clone()
+        })
+        .unwrap();
+    assert_eq!(target_proof.state, CollaborationNotificationState::Projected);
+    let repaired = reconcile_session_v1_collaboration_outbox(
+        &crate::ServiceEventEmitter::new(vec![]),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .expect("the recovery pass must reconcile the already projected target");
+    assert_eq!(repaired, 1);
+    let source_proof = source
+        .read(|document| document.collaboration_state().notifications[&notification_id].clone())
+        .unwrap();
+    assert_eq!(source_proof.state, CollaborationNotificationState::Projected);
+    assert_eq!(source_proof.target_revision, Some(target_proof.target_revision));
+    assert!(source_proof.target_event_seq.is_some());
+    assert_eq!(
+        target
+            .read(|document| document.collaboration_state().inbound_notifications.len())
+            .unwrap(),
+        1,
+        "repair must not add another target delivery"
+    );
+}
+
 /// A failed indexed pass retains its worker and retries the actual outbox after the index becomes available.
 /// 索引扫描失败后保留任务，并在索引恢复可用后重试真实出站箱。
 /// Duplicate startup cannot claim another worker; success releases its registry reservation.
