@@ -16,10 +16,18 @@ fn admit_incoming_question(
     target_turn: u64,
 ) -> CollaborationQuestionId {
     let invocation = &dispatch.invocation;
+    // The asking participant carries its indexed project's authority, including foreign scopes.
+    // 提问参与者携带其索引项目的权威身份，包含跨项目范围。
+    let asking_project = dispatch
+        .target
+        .storage_locator()
+        .unwrap()
+        .project_id()
+        .to_owned();
     let asking = CollaborationParticipant::new(
         dispatch.target.session_id().to_string(),
         dispatch.target.session_id().to_string(),
-        invocation.source_locator.project_id(),
+        asking_project,
         1,
         Some(TurnId::try_new(target_turn).unwrap()),
         None,
@@ -145,4 +153,62 @@ async fn wait_agent_returns_incoming_question_without_consuming_it() {
             );
         })
         .unwrap();
+}
+
+/// A revoked foreign question must not turn the incoming mailbox scan into an error.
+/// 已撤权的跨项目问题不得使传入收件箱扫描失败。
+#[tokio::test]
+async fn incoming_question_scan_skips_revoked_foreign_question() {
+    // Keep the waiting session's real open turn and admit an exact foreign source participant.
+    // 保留等待会话的真实开放回合，并接纳精确的跨项目来源参与者。
+    let dispatch = native_dispatch_fixture(true, WAIT_AGENT_TOOL_ID).await;
+    let source_turn = dispatch
+        .source()
+        .read(|document| document.active_turn().unwrap().turn_id.value())
+        .unwrap();
+    let target_turn = dispatch
+        .target
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new("revoked-wake-asker-root").unwrap(),
+                "Ask the foreign waiter for direction",
+                vec![],
+            ),
+            2,
+        )
+        .unwrap()
+        .value
+        .value();
+    // The grant belongs to the question source, which is the fixture's foreign target.
+    // 授权属于问题来源，即夹具中的跨项目目标会话。
+    let granted = crate::project_conversation_services::service_add_collaboration_grant(
+        dispatch.invocation.state.clone(),
+        dispatch.target.session_id().to_string(),
+        dispatch.invocation.source_session_id.to_string(),
+        format!("user-grant-add:v1:{}", Uuid::new_v4()),
+        [CollaborationGrantAction::Ask].into_iter().collect(),
+    )
+    .await
+    .unwrap();
+    let question_id = admit_incoming_question(&dispatch, source_turn, target_turn);
+    let visible = incoming_question_snapshot(&dispatch.invocation)
+        .await
+        .unwrap();
+    assert_eq!(visible.unwrap()["question_id"], question_id.as_str());
+    // Revocation leaves the accepted inbox fact for durable repair but removes model disclosure.
+    // 撤权保留已接纳收件事实供可靠修复，同时移除模型可见性。
+    crate::project_conversation_services::service_remove_collaboration_grant(
+        dispatch.invocation.state.clone(),
+        dispatch.target.session_id().to_string(),
+        granted["grant"]["grant_id"].as_str().unwrap().to_owned(),
+        format!("user-grant-remove:v1:{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    assert!(
+        incoming_question_snapshot(&dispatch.invocation)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

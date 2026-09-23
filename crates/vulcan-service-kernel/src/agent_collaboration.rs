@@ -19,16 +19,15 @@ use vulcan_agent_runtime::tooling::collaboration::{
 use vulcan_session_core::v1::collaboration::{
     AcceptDeliveryInput, AcknowledgeDeliverySettlementInput, ActivateChildTaskInput,
     CancelQuestionInput, CollaborationAnswerDeliveryReceipt, CollaborationAnswerDeliveryState,
-    CollaborationChildTaskReceipt,
-    CollaborationChildTaskTerminalOutcome, CollaborationDeliveryFailureReason,
-    CollaborationDeliveryId, CollaborationDeliveryReceipt, CollaborationDeliverySettlementReceipt,
-    CollaborationDeliveryState, CollaborationExecutionId, CollaborationExecutionPurpose,
-    CollaborationGrantAction, CollaborationOperationId, CollaborationOperationResult,
-    CollaborationOperationSemantic, CollaborationParticipant, CollaborationQuestionExecutionState,
-    CollaborationQuestionId, CollaborationQuestionState, CollaborationRunControl,
-    CollaborationTargetSettlementState, CreateQuestionInput, DeliverAnswerInput,
-    ProjectDeliveryInput, RecordDeliveryProgressInput, ReplyQuestionInput, ReserveChildTaskInput,
-    SettleInboundDeliveryInput, TerminalChildTaskInput,
+    CollaborationChildTaskReceipt, CollaborationChildTaskTerminalOutcome,
+    CollaborationDeliveryFailureReason, CollaborationDeliveryId, CollaborationDeliveryReceipt,
+    CollaborationDeliverySettlementReceipt, CollaborationDeliveryState, CollaborationExecutionId,
+    CollaborationExecutionPurpose, CollaborationGrantAction, CollaborationOperationId,
+    CollaborationOperationResult, CollaborationOperationSemantic, CollaborationParticipant,
+    CollaborationQuestionExecutionState, CollaborationQuestionId, CollaborationQuestionState,
+    CollaborationRunControl, CollaborationTargetSettlementState, CreateQuestionInput,
+    DeliverAnswerInput, ProjectDeliveryInput, RecordDeliveryProgressInput, ReplyQuestionInput,
+    ReserveChildTaskInput, SettleInboundDeliveryInput, TerminalChildTaskInput,
 };
 use vulcan_session_core::v1::document::IdempotentMutation;
 use vulcan_session_core::v1::document::TurnOrigin;
@@ -1361,8 +1360,7 @@ fn read_question_for_model(
                     || question.answer.as_ref().is_some_and(|answer| {
                         answer.delivery.state == CollaborationAnswerDeliveryState::Failed
                     }));
-            if question.source.project_id != question.target.project_id && !source_failure
-            {
+            if question.source.project_id != question.target.project_id && !source_failure {
                 let source = Uuid::parse_str(&question.source.session_id)
                     .map_err(|error| error.to_string())?;
                 let target = Uuid::parse_str(&question.target.session_id)
@@ -1385,6 +1383,60 @@ fn read_question_for_model(
             ))
         })
         .map_err(|error| format!("failed to read authorized collaboration snapshot: {error}"))?
+}
+
+/// Reads an actionable incoming question while silently excluding a revoked foreign delivery.
+/// 读取可处理的传入问题，并静默排除已撤权的跨项目投递。
+///
+/// `handle` owns the authoritative source record and `question_id` identifies its exact question.
+/// `handle` 持有来源权威记录，`question_id` 指向精确问题。
+/// Returns a pending authorized snapshot, or `None` when the question is settled or its Ask grant
+/// was revoked; storage and record-integrity errors remain explicit.
+/// 返回待处理且获授权的快照；问题已结算或提问授权撤销时返回 `None`，存储与记录完整性错误仍显式暴露。
+fn read_pending_incoming_question_for_model(
+    handle: &Arc<SessionHandle>,
+    question_id: &CollaborationQuestionId,
+) -> Result<
+    Option<(
+        vulcan_session_core::v1::collaboration::CollaborationQuestionRecord,
+        vulcan_session_core::v1::collaboration::CollaborationDeliveryRecord,
+        u64,
+    )>,
+    String,
+> {
+    handle
+        .read(|document| {
+            // The source document lock keeps the question, grant, and cloned body consistent.
+            // 来源文档锁使问题、授权与复制的正文保持一致。
+            let question = document
+                .question_snapshot(question_id)
+                .ok_or_else(|| String::from("collaboration question was not found"))?;
+            if question.state != CollaborationQuestionState::Pending {
+                return Ok(None);
+            }
+            // The outbound delivery must belong to this exact source question.
+            // 出站投递必须属于这条精确的来源问题。
+            let delivery = document
+                .delivery_snapshot(&question.delivery_id)
+                .ok_or_else(|| String::from("collaboration question delivery was not found"))?;
+            if question.source.project_id != question.target.project_id {
+                // Grant owners are the durable question participants, never the waiting tool's arguments.
+                // 授权所有者来自可靠问题参与者，绝不取自等待工具参数。
+                let source = Uuid::parse_str(&question.source.session_id)
+                    .map_err(|error| error.to_string())?;
+                let target = Uuid::parse_str(&question.target.session_id)
+                    .map_err(|error| error.to_string())?;
+                if !document_grant_allows(document, source, target, CollaborationGrantAction::Ask) {
+                    return Ok(None);
+                }
+            }
+            Ok(Some((
+                question.clone(),
+                delivery.clone(),
+                document.memory_revision(),
+            )))
+        })
+        .map_err(|error| format!("failed to read authorized incoming question: {error}"))?
 }
 
 /// Loads one embedded task from its exact validated parent locator into the unique registry.
@@ -3758,8 +3810,13 @@ async fn incoming_question_snapshot(
             .map_err(|error| format!("invalid inbound question identity: {error}"))?;
         let (_source_session_id, source_handle) =
             load_question_source(invocation, &question_id).await?;
-        let (question, delivery, revision) =
-            read_question_for_model(&source_handle, &question_id, false)?;
+        // Revoked or already settled questions must not block later actionable inbox entries.
+        // 已撤权或已结算的问题不得阻塞收件箱中后续可处理的条目。
+        let Some((question, delivery, revision)) =
+            read_pending_incoming_question_for_model(&source_handle, &question_id)?
+        else {
+            continue;
+        };
         if question.question_id != inbound.question_id
             || question.target != inbound.target
             || question.source != inbound.source
@@ -3768,9 +3825,6 @@ async fn incoming_question_snapshot(
             return Err(String::from(
                 "inbound collaboration delivery does not match its source question",
             ));
-        }
-        if question.state != CollaborationQuestionState::Pending {
-            continue;
         }
         let mut value = question_value(
             &invocation.operation_id,
