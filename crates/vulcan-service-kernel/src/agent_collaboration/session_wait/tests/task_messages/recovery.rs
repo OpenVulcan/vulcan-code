@@ -5,8 +5,8 @@ use super::*;
 use vulcan_session_core::v1::collaboration::{
     AcceptNotificationInput, CollaborationDeliveryFailureReason, CollaborationDeliveryId,
     CollaborationGrantAction, CollaborationNotificationId, CollaborationNotificationState,
-    CollaborationTaskMessage, FailDeliveryInput, FailNotificationInput, ReplyQuestionInput,
-    RecordNotificationProgressInput, SendNotificationInput, SetRunControlInput,
+    CollaborationTaskMessage, FailDeliveryInput, FailNotificationInput,
+    RecordNotificationProgressInput, ReplyQuestionInput, SendNotificationInput, SetRunControlInput,
 };
 use vulcan_session_core::v1::document::SessionDocument;
 
@@ -94,7 +94,8 @@ async fn accepted_question_revoked_before_projection_settles_both_sides() {
     assert_eq!(waited["status"], "failed");
     assert_eq!(waited["delivery"]["failure"], "authorization_revoked");
     let mut cancel_invocation = invocation.clone();
-    cancel_invocation.operation_id = format!("v1:{}:cancel-after-revoke", invocation.source_session_id);
+    cancel_invocation.operation_id =
+        format!("v1:{}:cancel-after-revoke", invocation.source_session_id);
     let cancelled = cancel_question(
         &cancel_invocation,
         question_id.as_str().to_owned(),
@@ -113,6 +114,97 @@ async fn accepted_question_revoked_before_projection_settles_both_sides() {
             .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
             .unwrap()
     );
+}
+
+/// A revoked accepted question must settle during wakeup even without a target provider request.
+/// 已接纳问题撤权后，即使目标没有供应商请求也必须在唤醒阶段结算。
+#[tokio::test]
+async fn revoked_accepted_question_wakeup_settles_without_provider_boundary() {
+    // The target owns an undispatched business turn, so no provider boundary can perform repair.
+    // 目标持有尚未分发的业务回合，因此没有供应商边界可执行修复。
+    let (_root, invocation, target, _) = message_fixture(true).await;
+    let source = Arc::clone(&invocation.source_handle);
+    assert!(
+        target
+            .read(|document| document.active_api().is_none())
+            .unwrap()
+    );
+    let grant = crate::project_conversation_services::service_add_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        target.session_id().to_string(),
+        format!("user-grant-add:v1:{}", Uuid::new_v4()),
+        [CollaborationGrantAction::Ask].into_iter().collect(),
+    )
+    .await
+    .unwrap();
+    let asked = ask_question(
+        &crate::ServiceEventEmitter::new(vec![]),
+        &invocation,
+        target.session_id(),
+        String::from("Do not leave this accepted question pending after revocation."),
+    )
+    .await
+    .unwrap();
+    let question_id =
+        CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
+    let delivery_id = source
+        .read(|document| {
+            document
+                .question_snapshot(&question_id)
+                .unwrap()
+                .delivery_id
+                .clone()
+        })
+        .unwrap();
+    crate::project_conversation_services::service_remove_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        grant["grant"]["grant_id"].as_str().unwrap().to_owned(),
+        format!("user-grant-remove:v1:{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+
+    // Wakeup is the only live boundary; it must publish the target failure and source receipt.
+    // 唤醒是唯一实时边界；必须发布目标失败与来源回执。
+    let disposition = launch::wake_accepted_question(
+        &crate::ServiceEventEmitter::new(vec![]),
+        &invocation,
+        &question_id,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        disposition,
+        crate::agent_collaboration_execution::QuestionExecutionLaunchDisposition::AlreadyHandled
+    ));
+    let outbound = source
+        .read(|document| document.delivery_snapshot(&delivery_id).unwrap().clone())
+        .unwrap();
+    let inbound = target
+        .read(|document| {
+            document
+                .inbound_delivery_snapshot(&delivery_id)
+                .unwrap()
+                .clone()
+        })
+        .unwrap();
+    assert_eq!(outbound.state, CollaborationDeliveryState::Failed);
+    assert_eq!(inbound.state, CollaborationDeliveryState::Failed);
+    assert_eq!(
+        outbound.failure,
+        Some(CollaborationDeliveryFailureReason::AuthorizationRevoked)
+    );
+    assert_eq!(outbound.target_revision, Some(inbound.target_revision));
+    assert!(outbound.target_event_seq.is_some());
+    assert!(!target
+        .read(|document| document.events().iter().any(|event| matches!(
+            &event.event,
+            EventBody::UserInput(input)
+                if input.input_source == vulcan_session_core::v1::event::UserInputSource::AgentMessage
+        )))
+        .unwrap());
 }
 
 /// Recovery must copy the target's durable failure when the source acknowledgement was interrupted.
@@ -216,9 +308,12 @@ async fn answered_question_revoked_before_model_delivery_redacts_failure() {
         invocation.source_session_id.to_string(),
         target.session_id().to_string(),
         format!("user-grant-add:v1:{}", Uuid::new_v4()),
-        [CollaborationGrantAction::Ask, CollaborationGrantAction::Reply]
-            .into_iter()
-            .collect(),
+        [
+            CollaborationGrantAction::Ask,
+            CollaborationGrantAction::Reply,
+        ]
+        .into_iter()
+        .collect(),
     )
     .await
     .unwrap();
@@ -253,8 +348,10 @@ async fn answered_question_revoked_before_model_delivery_redacts_failure() {
         .value
         .into_value();
     let mut settlement_invocation = invocation.clone();
-    settlement_invocation.operation_id =
-        format!("v1:{}:answer-before-revoke-settlement", invocation.source_session_id);
+    settlement_invocation.operation_id = format!(
+        "v1:{}:answer-before-revoke-settlement",
+        invocation.source_session_id
+    );
     settle_and_acknowledge_delivery(
         &settlement_invocation,
         &source,
@@ -283,7 +380,10 @@ async fn answered_question_revoked_before_model_delivery_redacts_failure() {
         .read(|document| document.question_snapshot(&question_id).unwrap().clone())
         .unwrap();
     let answer_delivery = &withheld.answer.as_ref().unwrap().delivery;
-    assert_eq!(answer_delivery.state, CollaborationAnswerDeliveryState::Failed);
+    assert_eq!(
+        answer_delivery.state,
+        CollaborationAnswerDeliveryState::Failed
+    );
     assert_eq!(
         answer_delivery.failure,
         Some(CollaborationDeliveryFailureReason::AuthorizationRevoked)
@@ -299,19 +399,33 @@ async fn answered_question_revoked_before_model_delivery_redacts_failure() {
         .await
         .expect("the original source must see redacted failure metadata");
     assert_eq!(waited["status"], "failed");
-    assert_eq!(waited["answer"]["delivery"]["failure"], "authorization_revoked");
+    assert_eq!(
+        waited["answer"]["delivery"]["failure"],
+        "authorization_revoked"
+    );
     assert!(!waited.to_string().contains(answer_body));
-    assert!(!source
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
-    assert!(!target
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
+    assert!(
+        !source
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    assert!(
+        !target
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
     let reloaded = load_session_v1_for_runtime(&source.storage_locator().unwrap())
         .unwrap()
         .document;
     assert_eq!(
-        reloaded.question_snapshot(&question_id).unwrap().answer.as_ref().unwrap().delivery.state,
+        reloaded
+            .question_snapshot(&question_id)
+            .unwrap()
+            .answer
+            .as_ref()
+            .unwrap()
+            .delivery
+            .state,
         CollaborationAnswerDeliveryState::Failed
     );
 }

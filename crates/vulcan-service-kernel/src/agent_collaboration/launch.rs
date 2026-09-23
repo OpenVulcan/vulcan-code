@@ -7,7 +7,8 @@ use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptTurnBeginInput, begin_shared_prompt_turn,
 };
 use vulcan_session_core::{
-    ActiveTurnKind, v1::collaboration::CollaborationQuestionExecutionRecord,
+    ActiveTurnKind,
+    v1::collaboration::{CollaborationQuestionExecutionRecord, FailDeliveryInput},
 };
 use vulcan_workbench_model::{PendingSessionPromptSource, SessionRunPhase};
 
@@ -40,6 +41,164 @@ pub(super) fn schedule_question_wakeup(
     });
 }
 
+/// Settles a revoked, accepted question under its source and target lifecycle gates.
+/// 在来源和目标生命周期锁内结算已撤权且已接纳的问题。
+///
+/// `source` and `target` are canonical handles already locked by the caller; `question_id` selects
+/// their exact durable exchange and `stamp` timestamps any new failure receipt.
+/// `source` 和 `target` 是调用方已锁定的规范句柄；`question_id` 选择双方精确可靠交换，`stamp`
+/// 标记新失败回执的时间。
+/// Returns true after a target failure and source progress are both durable, including recovery
+/// of an earlier target failure; an accepted authorized question returns false.
+/// 目标失败及来源进度都可靠落盘后返回真，包括修复此前已有的目标失败；仍获授权的已接纳问题返回假。
+fn settle_revoked_accepted_question_locked(
+    source: &Arc<SessionHandle>,
+    target: &Arc<SessionHandle>,
+    question_id: &CollaborationQuestionId,
+    stamp: i64,
+) -> Result<bool, String> {
+    // The source record identifies the only question and outbound delivery allowed to settle.
+    // 来源记录确定唯一允许结算的问题与出站投递。
+    let (question, delivery, _) = read_question_source(source, question_id)?;
+    if question.state != CollaborationQuestionState::Pending {
+        return Ok(false);
+    }
+    if question.source.session_id != source.session_id().to_string()
+        || question.target.session_id != target.session_id().to_string()
+    {
+        return Err(String::from(
+            "question wakeup participants do not match their canonical owners",
+        ));
+    }
+    // The target receipt must match the source before grant revocation can change its state.
+    // 授权撤销改变目标状态前，目标回执必须与来源精确匹配。
+    let inbound = target
+        .read(|document| {
+            validate_question_target_delivery(document, &question, &delivery)
+                .map_err(|error| error.to_string())?;
+            document
+                .inbound_delivery_snapshot(&delivery.delivery_id)
+                .cloned()
+                .ok_or_else(|| String::from("accepted question has no target inbound receipt"))
+        })
+        .map_err(|error| format!("failed to read question wakeup target receipt: {error}"))??;
+    // An existing failure is copied even if authorization was subsequently granted again.
+    // 已有失败即使随后重新授权也要复制，不能让终态倒退。
+    let (target_revision, target_event_seq, failure) = match inbound.state {
+        CollaborationDeliveryState::Failed => (
+            inbound.target_revision,
+            target_inbound_event_seq(target, &inbound)?,
+            inbound
+                .failure
+                .ok_or_else(|| String::from("failed target question has no failure reason"))?,
+        ),
+        CollaborationDeliveryState::Accepted => {
+            if question.source.project_id == question.target.project_id
+                || source_handle_grant_allows(
+                    source,
+                    source.session_id(),
+                    target.session_id(),
+                    CollaborationGrantAction::Ask,
+                )?
+            {
+                return Ok(false);
+            }
+            // Reuse the provider-boundary operation identity so concurrent wake and projection agree.
+            // 复用供应商边界的操作身份，使并发唤醒与投影收敛到同一结果。
+            let operation_id = CollaborationOperationId::try_new(format!(
+                "{}:fail",
+                delivery.delivery_id.as_str()
+            ))
+            .map_err(|error| error.to_string())?;
+            let delivery_id = delivery.delivery_id.clone();
+            let question_id = question.question_id.clone();
+            let receipt = target
+                .mutate_durable_if_changed(
+                    SessionMutationAdmission::MetadataOnly,
+                    SessionFlushReason::MetadataChanged,
+                    move |document| {
+                        document
+                            .fail_delivery(FailDeliveryInput {
+                                operation_id,
+                                delivery_id,
+                                question_id,
+                                reason: CollaborationDeliveryFailureReason::AuthorizationRevoked,
+                                failed_at_ms: stamp,
+                            })
+                            .map(session_change)
+                    },
+                )
+                .map_err(|error| format!("failed to settle revoked target question: {error}"))?;
+            (
+                receipt.value.revision,
+                receipt.value.event_seq,
+                CollaborationDeliveryFailureReason::AuthorizationRevoked,
+            )
+        }
+        CollaborationDeliveryState::Projected => return Ok(false),
+        CollaborationDeliveryState::Recorded => {
+            return Err(String::from(
+                "target question has no accepted delivery state",
+            ));
+        }
+    };
+    // The source progress follows the target's exact published revision and event sequence.
+    // 来源进度跟随目标精确已发布的修订与事件序列。
+    let progress = RecordDeliveryProgressInput {
+        operation_id: CollaborationOperationId::try_new(format!(
+            "{}:source-failed",
+            delivery.delivery_id.as_str()
+        ))
+        .map_err(|error| error.to_string())?,
+        delivery_id: delivery.delivery_id,
+        question_id: question.question_id,
+        state: CollaborationDeliveryState::Failed,
+        failure: Some(failure),
+        target_revision: Some(target_revision),
+        target_event_seq: Some(target_event_seq),
+        updated_at_ms: stamp,
+    };
+    source
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                document
+                    .record_delivery_progress(progress)
+                    .map(session_change)
+            },
+        )
+        .map_err(|error| format!("failed to acknowledge revoked question: {error}"))?;
+    Ok(true)
+}
+
+/// Repairs an accepted question whose Ask grant was revoked before any provider boundary.
+/// 修复在任何供应商边界之前提问授权已撤销的已接纳问题。
+///
+/// `invocation` owns the durable source and `target` is its exact resolved recipient.
+/// `invocation` 持有可靠来源，`target` 是精确解析的接收者。
+/// Returns whether the question reached a durable delivery failure.
+/// 返回问题是否已达到可靠的投递失败状态。
+async fn settle_revoked_accepted_question(
+    invocation: &ValidatedInvocation,
+    target: &ResolvedSession,
+    question_id: &CollaborationQuestionId,
+) -> Result<bool, String> {
+    // Both owners are retained until the target and source publications complete.
+    // 双方所有者在目标与来源发布完成前持续保留。
+    let source = Arc::clone(&invocation.source_handle);
+    let receiver = Arc::clone(&target.handle);
+    let question_id = question_id.clone();
+    lifecycle_write::with_canonical_handles(
+        &invocation.registry,
+        vec![Arc::clone(&source), Arc::clone(&receiver)],
+        move || {
+            settle_revoked_accepted_question_locked(&source, &receiver, &question_id, now_ms()?)
+        },
+    )
+    .await
+}
+
 /// Launches one accepted question, or reports why the existing execution owns its delivery.
 /// 启动一个已接纳问题，或报告现有执行为何继续拥有该投递。
 /// Uses fresh source state and target admission; returns after preparation has been scheduled.
@@ -56,6 +215,11 @@ pub(super) async fn wake_accepted_question(
         return Ok(QuestionExecutionLaunchDisposition::AlreadyHandled);
     }
     let (session_id, target) = resolve_question_target(invocation, &question).await?;
+    // An idle target has no provider boundary at which revocation could otherwise be settled.
+    // 空闲目标没有其他供应商边界来结算撤权。
+    if settle_revoked_accepted_question(invocation, &target, question_id).await? {
+        return Ok(QuestionExecutionLaunchDisposition::AlreadyHandled);
+    }
     let (control, active_api, undispatched_business, completed) = target
         .handle
         .read(|document| {
@@ -176,16 +340,6 @@ pub(super) async fn wake_accepted_question(
     if question.state != CollaborationQuestionState::Pending {
         return Ok(QuestionExecutionLaunchDisposition::AlreadyHandled);
     }
-    if question.source.project_id != question.target.project_id
-        && !source_handle_grant_allows(
-            &invocation.source_handle,
-            invocation.source_session_id,
-            session_id,
-            CollaborationGrantAction::Ask,
-        )?
-    {
-        return Err(String::from("Question wakeup authorization was revoked."));
-    }
     // Shared QA setup creates no business Hook or human input; run it before durable execution admission.
     // 共享答疑设置不创建业务 Hook 或人类输入；在可靠执行准入之前完成。
     let start = {
@@ -220,17 +374,69 @@ pub(super) async fn wake_accepted_question(
         )?
     };
     let started_at_ms = now_ms()?;
-    let execution = mutate_target(invocation, &target, session_id, move |document| {
-        participants::require_document_message_admission(
-            document,
-            &question.source,
-            &question.target,
-        )?;
-        document.prepare_question_execution_before_api(question, started_at_ms)
-    })
-    .await?
-    .value
-    .execution;
+    // The final authorization decision and actual question projection share both lifecycle gates.
+    // 最终授权判断与实际问题投影共享双方生命周期锁。
+    let source_for_write = Arc::clone(&invocation.source_handle);
+    let target_for_write = Arc::clone(&target.handle);
+    let question_id_for_write = question_id.clone();
+    let execution = lifecycle_write::with_canonical_handles(
+        &invocation.registry,
+        vec![Arc::clone(&source_for_write), Arc::clone(&target_for_write)],
+        move || {
+            if settle_revoked_accepted_question_locked(
+                &source_for_write,
+                &target_for_write,
+                &question_id_for_write,
+                started_at_ms,
+            )? {
+                return Ok(None);
+            }
+            let (current, _, _) = read_question_source(&source_for_write, &question_id_for_write)?;
+            if current.state != CollaborationQuestionState::Pending {
+                return Ok(None);
+            }
+            let target_id = target_for_write.session_id();
+            if current.target.session_id != target_id.to_string() {
+                return Err(String::from(
+                    "question target changed before execution admission",
+                ));
+            }
+            // A prior projection already owns the question; never start another execution.
+            // 先前投影已经拥有该问题，绝不能再启动一次执行。
+            let inbound_state = target_for_write
+                .read(|document| {
+                    document
+                        .inbound_delivery_snapshot(&current.delivery_id)
+                        .map(|inbound| inbound.state)
+                })
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| String::from("question target lost its accepted delivery"))?;
+            if inbound_state != CollaborationDeliveryState::Accepted {
+                return Ok(None);
+            }
+            let receipt = target_for_write
+                .mutate_durable_if_changed(
+                    SessionMutationAdmission::MetadataOnly,
+                    SessionFlushReason::MetadataChanged,
+                    move |document| {
+                        participants::require_document_message_admission(
+                            document,
+                            &current.source,
+                            &current.target,
+                        )?;
+                        document
+                            .prepare_question_execution_before_api(current, started_at_ms)
+                            .map(session_change)
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(Some(receipt.value.execution))
+        },
+    )
+    .await?;
+    let Some(execution) = execution else {
+        return Ok(QuestionExecutionLaunchDisposition::AlreadyHandled);
+    };
     // Once durable admission succeeds, every later error must settle this execution rather than the business turn.
     // 可靠准入成功后，每个后续错误都必须结算此执行，而不是业务回合。
     let registration = (|| {
