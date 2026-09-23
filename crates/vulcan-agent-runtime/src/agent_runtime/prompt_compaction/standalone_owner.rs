@@ -248,6 +248,30 @@ impl StandalonePromptCompactionOwner {
         }
     }
 
+    /// Confirms a native remote compaction terminal for the exact standalone physical request.
+    /// 确认精确独立物理请求的原生远端压缩终态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `event` is the completed telemetry paired with the remote compaction barrier.
+    /// `event` 是与远端压缩屏障配对的完成遥测。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only for an admitted, standalone-owned request that has not terminated before.
+    /// 仅当请求已准入、归属独立所有者且尚未终结时返回成功。
+    pub(crate) fn confirm_remote_terminal(
+        &mut self,
+        event: &ProviderRequestTelemetryEvent,
+    ) -> Result<(), String> {
+        if event.kind != ProviderRequestTelemetryEventKind::Completed {
+            return Err(String::from(
+                "Standalone remote compaction requires completed Provider telemetry.",
+            ));
+        }
+        self.record(event)
+    }
+
     /// Verifies the standalone run admitted a physical request and consumed its terminal boundary.
     /// 校验独立运行已准入物理请求并消费了其终态边界。
     ///

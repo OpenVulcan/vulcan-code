@@ -1235,13 +1235,25 @@ impl ProviderRequestTelemetryTracker {
         let context = self.context.as_ref().ok_or_else(|| {
             String::from("Native compaction success has no frozen telemetry context.")
         })?;
-        let facts = active.v1_request_facts.as_ref().ok_or_else(|| {
-            String::from("Native compaction success requires typed session request facts.")
-        })?;
+        // A native compaction has exactly two declared owners: the session V1 compaction purpose,
+        // or the standalone RuntimeOnly compaction whose V1 projection was explicitly excluded.
+        // 原生压缩仅有两种声明的所有者：会话 V1 压缩用途，或显式排除 V1 投影的独立 RuntimeOnly 压缩。
+        let declared_compaction = match active.v1_request_facts.as_ref() {
+            Some(facts) => {
+                facts.purpose == vulcan_session_core::v1::event::ApiPurposeKind::Compaction
+                    && facts.request.profile.as_deref()
+                        == Some(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID)
+            }
+            None => {
+                context.v1_request_template.base_purpose.is_none()
+                    && context.owner_kind == "context_compaction"
+                    && context.operation == "compact"
+                    && context.v1_request_template.profile
+                        == vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+            }
+        };
         if self.pending_request.is_some()
-            || facts.purpose != vulcan_session_core::v1::event::ApiPurposeKind::Compaction
-            || facts.request.profile.as_deref()
-                != Some(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID)
+            || !declared_compaction
             || context.protocol_profile_id != vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
             || active.transport != Some(AiTransportKind::Http)
             || active.dispatched_at_ms.is_none()

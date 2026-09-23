@@ -1670,15 +1670,20 @@ where
                 return Ok((execution, owner));
             }
             PromptCompactionStreamEvent::Stream(event) => owner.observe(event)?,
-            PromptCompactionStreamEvent::RemoteCompleted { completion, .. } => {
-                // A RuntimeOnly stream owns no session remote-compaction terminal; refuse it and
-                // release the waiting producer instead of leaving its barrier open.
-                // RuntimeOnly 流不持有会话远端压缩终态；拒绝它并放行等待中的生产者，避免其屏障一直开放。
-                let error = String::from(
-                    "A standalone RuntimeOnly compaction stream cannot own a session remote compaction terminal.",
-                );
-                let _ = completion.complete(Err(error.clone()));
-                return Err(error);
+            PromptCompactionStreamEvent::RemoteCompleted {
+                event,
+                checkpoint,
+                completion,
+            } => {
+                // Confirm the exact standalone terminal and native checkpoint before releasing
+                // the physical barrier to the remote producer.
+                // 向远端生产者放行物理屏障前，确认精确独立终态和原生检查点。
+                let result = checkpoint
+                    .validate()
+                    .map_err(|error| error.to_string())
+                    .and_then(|()| owner.confirm_remote_terminal(&event));
+                let _ = completion.complete(result.clone());
+                result?;
             }
             PromptCompactionStreamEvent::PreparedRemoteSource { .. }
             | PromptCompactionStreamEvent::PreparedSource { .. }
@@ -2269,6 +2274,108 @@ mod standalone_compaction_tests {
                 String::from("terminal")
             ]
         );
+    }
+
+    /// A standalone native Responses compaction must confirm its own typed terminal boundary.
+    /// 独立原生 Responses 压缩必须确认自身强类型终态边界。
+    /// The remote stream publishes `RemoteCompleted` rather than a normal stream durability event.
+    /// 远端流发布的是 `RemoteCompleted`，而不是普通流的可靠性事件。
+    #[tokio::test(flavor = "current_thread")]
+    async fn standalone_remote_compaction_confirms_excluded_non_session_terminal() {
+        let mut preparation = compaction_preparation();
+        preparation.model_blueprint.protocol_profile_id =
+            String::from(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID);
+        let session_id = preparation.session_id;
+        let snapshot = request_snapshot();
+        let mut tracker = compaction_tracker(&preparation, true);
+        tracker.prepare_request(&snapshot, None).unwrap();
+        let started = tracker.confirm_prepared_request(&snapshot, None).unwrap();
+        let dispatched = tracker
+            .observe_transport(
+                AiTransportKind::Http,
+                2_000,
+                Some(2_000),
+                Some(200),
+                Some(String::from("remote-request-1")),
+                Default::default(),
+            )
+            .unwrap();
+        let completed = tracker.complete_native_compaction_success(None).unwrap();
+        assert_eq!(
+            completed.v1_lifecycle,
+            Some(ProviderV1LifecycleFacts::ExcludedNonSession)
+        );
+        let checkpoint = vulcan_session_core::v1::context::RemoteResponsesCheckpoint {
+            provider_id: String::from("provider-1"),
+            connection_id: String::from("connection-1"),
+            route_fingerprint: String::from("https://provider.invalid/v1/responses"),
+            protocol_profile_id: String::from("openai-codex-responses.v1"),
+            model_id: String::from("model-1"),
+            output_items: vec![serde_json::json!({
+                "type": "compaction",
+                "encrypted_content": "opaque-checkpoint-bytes"
+            })],
+            response_id: Some(String::from("remote-result-id")),
+        };
+        let stream = async_stream::stream! {
+            yield PromptCompactionStreamEvent::Stream(
+                ExecutionStreamEvent::ProviderRequestTelemetry(started),
+            );
+            let (completion, receiver) = provider_request_durability_barrier();
+            yield PromptCompactionStreamEvent::Stream(
+                ExecutionStreamEvent::ProviderRequestDurabilityBoundary {
+                    event: dispatched,
+                    completion,
+                },
+            );
+            receiver.await.unwrap().unwrap();
+            let (completion, receiver) = provider_request_durability_barrier();
+            yield PromptCompactionStreamEvent::RemoteCompleted {
+                event: completed,
+                checkpoint,
+                completion,
+            };
+            receiver.await.unwrap().unwrap();
+            let mut result = compaction_execution();
+            result.execution_profile = PromptCompactionExecutionProfile::RemoteResponses;
+            yield PromptCompactionStreamEvent::Finished(Ok(result));
+        };
+        let (execution, mut owner) = drive_standalone_prompt_compaction_stream(stream, session_id)
+            .await
+            .expect("the standalone remote owner must confirm its own physical terminal");
+        assert_eq!(
+            execution.execution_profile,
+            PromptCompactionExecutionProfile::RemoteResponses
+        );
+        assert_eq!(owner.admitted_request_count(), 1);
+        assert_eq!(owner.terminal_request_count(), 1);
+
+        // A session V1 remote terminal still belongs to the session owner, even when the
+        // protocol and physical transport are identical to this standalone request.
+        // 会话 V1 远端终态仍归会话所有者，即使协议与物理传输和当前独立请求完全相同。
+        let mut session_tracker = compaction_tracker(&preparation, false);
+        session_tracker.prepare_request(&snapshot, None).unwrap();
+        session_tracker
+            .confirm_prepared_request(&snapshot, None)
+            .unwrap();
+        session_tracker
+            .observe_transport(
+                AiTransportKind::Http,
+                2_000,
+                Some(2_000),
+                Some(200),
+                None,
+                Default::default(),
+            )
+            .unwrap();
+        let session_completed = session_tracker
+            .complete_native_compaction_success(None)
+            .unwrap();
+        let error = owner
+            .confirm_remote_terminal(&session_completed)
+            .unwrap_err();
+        assert!(error.contains("api_terminal"), "{error}");
+        assert_eq!(owner.terminal_request_count(), 1);
     }
 
     /// Verifies an undeclared session request is refused with a typed error and that a vanished
