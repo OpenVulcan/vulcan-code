@@ -217,6 +217,125 @@ async fn native_dispatch_cancel_question_settles_pending_question() {
     );
 }
 
+/// Cancelling a rejected question must finish locally when no target acceptance exists.
+/// 拒收问题没有目标接纳时，撤销必须在来源侧完成。
+#[tokio::test]
+async fn native_dispatch_cancel_failed_question_needs_no_target_acknowledgement() {
+    let dispatch = native_dispatch_fixture(false, WAIT_QUESTION_TOOL_ID).await;
+    let target_session_id = dispatch.target.session_id();
+    let target = resolve_authorized_target(
+        &dispatch.invocation,
+        target_session_id,
+        CollaborationGrantAction::Ask,
+    )
+    .await
+    .unwrap();
+    let source = source_participant(&dispatch.invocation).await.unwrap();
+    let (execution_purpose, bound_turn_id) = dispatch.target.read(target_question_binding).unwrap();
+    let target_participant = target_participant(
+        &dispatch.invocation,
+        target_session_id,
+        &target,
+        bound_turn_id,
+    )
+    .await
+    .unwrap();
+    let question_id = collaboration_question_id(&dispatch.invocation).unwrap();
+    let delivery_id = collaboration_delivery_id(&dispatch.invocation).unwrap();
+    dispatch
+        .source()
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document
+                    .create_question(CreateQuestionInput {
+                        operation_id: CollaborationOperationId::try_new(format!(
+                            "{}:seed",
+                            dispatch.operation_id()
+                        ))
+                        .unwrap(),
+                        question_id: question_id.clone(),
+                        delivery_id: delivery_id.clone(),
+                        source: source.clone(),
+                        target: target_participant.clone(),
+                        body: String::from("Rejected before acceptance"),
+                        execution_purpose,
+                        created_at_ms: 10,
+                    })
+                    .map(session_change)
+            },
+        )
+        .unwrap();
+    dispatch
+        .target
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document
+                    .set_collaboration_run_control(
+                        vulcan_session_core::v1::collaboration::SetRunControlInput {
+                            operation_id: CollaborationOperationId::try_new(format!(
+                                "{}:target-stopped",
+                                dispatch.operation_id()
+                            ))
+                            .unwrap(),
+                            state: CollaborationRunControl::Stopped,
+                            changed_at_ms: 11,
+                        },
+                    )
+                    .map(session_change)
+            },
+        )
+        .unwrap();
+    let failure = fail_question_before_target_acceptance(
+        &dispatch.invocation,
+        &target,
+        target_session_id,
+        &question_id,
+        &delivery_id,
+        12,
+    )
+    .await
+    .unwrap();
+    assert_eq!(failure, Some(CollaborationDeliveryFailureReason::TargetStopped));
+    let waited = dispatch
+        .invoke(AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
+            question_id: question_id.as_str().to_owned(),
+            after_revision: None,
+            timeout_ms: 50,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(waited["status"], "failed");
+    let dispatch = dispatch.retool(CANCEL_QUESTION_TOOL_ID).await;
+    let cancelled = dispatch
+        .invoke(AgentCollaborationCommand::CancelQuestion(CancelQuestionArgs {
+            question_id: question_id.as_str().to_owned(),
+            reason: String::from("Rejected delivery no longer needed"),
+        }))
+        .await
+        .unwrap();
+    assert_eq!(cancelled["status"], "ok");
+    assert_eq!(cancelled["question_state"], "cancelled");
+    let settled = dispatch
+        .source()
+        .read(|document| {
+            (
+                document.collaboration_state().requires_edit_or_delete_settlement(),
+                document.delivery_snapshot(&delivery_id).cloned(),
+            )
+        })
+        .unwrap();
+    assert!(!settled.0, "failed delivery needs no nonexistent target acknowledgement");
+    assert_eq!(settled.1.unwrap().state, CollaborationDeliveryState::Failed);
+    assert!(dispatch
+        .target
+        .read(|document| document.inbound_delivery_snapshot(&delivery_id).is_none())
+        .unwrap());
+}
+
 /// Waiting on the caller's own unresolved question must return a bounded pending snapshot.
 /// 等待调用方自己未解决的问题必须返回有界的待处理快照。
 #[tokio::test]

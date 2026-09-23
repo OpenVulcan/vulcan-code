@@ -2368,6 +2368,13 @@ impl SessionDocument {
                 kind: "delivery",
                 identity: question.delivery_id.as_str().to_string(),
             })?;
+        if delivery.state == CollaborationDeliveryState::Failed {
+            // No target execution may answer a source question that never reached its target.
+            // 未送达目标的问题不允许任何目标执行写入回答。
+            return Err(DomainError::CollaborationStateViolation {
+                field: "collaboration.answer.failed_delivery",
+            });
+        }
         let mut state = self.collaboration_state().clone();
         state
             .questions

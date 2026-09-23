@@ -1976,7 +1976,8 @@ async fn reconcile_canonical_collaboration_outbox(
                         CollaborationDeliveryState::Recorded
                             | CollaborationDeliveryState::Accepted
                             | CollaborationDeliveryState::Projected
-                    ) || (delivery.settlement_ack.is_none()
+                    ) || (delivery.state != CollaborationDeliveryState::Failed
+                        && delivery.settlement_ack.is_none()
                         && question.state != CollaborationQuestionState::Pending)
                 })
                 .collect::<Vec<_>>()
@@ -2039,10 +2040,26 @@ async fn reconcile_canonical_collaboration_outbox(
                     )?
                 }
                 Err(error) => {
-                    failures.push(format!(
-                        "question `{}` target acceptance repair failed: {error}",
-                        question.question_id.as_str()
-                    ));
+                    match fail_question_before_target_acceptance(
+                        &invocation,
+                        &target,
+                        target_session_id,
+                        &question.question_id,
+                        &delivery.delivery_id,
+                        now_ms()?,
+                    )
+                    .await
+                    {
+                        Ok(Some(_reason)) => repaired = repaired.saturating_add(1),
+                        Ok(None) => failures.push(format!(
+                            "question `{}` target acceptance repair remains pending: {error}",
+                            question.question_id.as_str()
+                        )),
+                        Err(failure_error) => failures.push(format!(
+                            "question `{}` target acceptance repair failed: {error}; failure repair failed: {failure_error}",
+                            question.question_id.as_str()
+                        )),
+                    }
                     continue;
                 }
             }
@@ -2782,6 +2799,122 @@ pub(crate) async fn session_v1_deliver_collaboration_answer(
     Ok(receipt.value)
 }
 
+/// Records a definitive question rejection while neither participant can accept the delivery.
+/// 在双方均无法接纳投递的锁内记录确定性问题拒绝。
+/// `question_id` and `delivery_id` identify the durable source intent; the return value is the
+/// recorded failure reason, or `None` when an accepted target or transient error needs recovery.
+/// `question_id` 与 `delivery_id` 指向可靠来源意图；返回已记录的失败原因，若目标已接纳或错误可恢复则返回 `None`。
+async fn fail_question_before_target_acceptance(
+    invocation: &ValidatedInvocation,
+    target: &ResolvedSession,
+    target_session_id: Uuid,
+    question_id: &CollaborationQuestionId,
+    delivery_id: &CollaborationDeliveryId,
+    failed_at_ms: i64,
+) -> Result<Option<CollaborationDeliveryFailureReason>, String> {
+    let source_for_write = Arc::clone(&invocation.source_handle);
+    let target_for_write = Arc::clone(&target.handle);
+    let source_id = invocation.source_session_id;
+    let question_id = question_id.clone();
+    let delivery_id = delivery_id.clone();
+    let operation_id = operation_suffix(invocation, "fail")?;
+    lifecycle_write::with_canonical_handles(
+        &invocation.registry,
+        vec![Arc::clone(&source_for_write), Arc::clone(&target_for_write)],
+        move || {
+            let (question, delivery) = source_for_write
+                .read(|document| {
+                    let question = document.question_snapshot(&question_id).cloned();
+                    let delivery = document.delivery_snapshot(&delivery_id).cloned();
+                    (question, delivery)
+                })
+                .map_err(|error| error.to_string())?;
+            let question = question.ok_or_else(|| String::from("question source intent is missing"))?;
+            let delivery = delivery.ok_or_else(|| String::from("question source delivery is missing"))?;
+            if question.delivery_id != delivery_id || delivery.question_id != question_id {
+                return Err(String::from("question source delivery binding changed"));
+            }
+            if delivery.state == CollaborationDeliveryState::Failed {
+                return Ok(delivery.failure);
+            }
+            if delivery.state != CollaborationDeliveryState::Recorded {
+                return Ok(None);
+            }
+            let target_state = target_for_write
+                .read(|document| {
+                    if document.inbound_delivery_snapshot(&delivery_id).is_some() {
+                        return None;
+                    }
+                    let (purpose, turn_id) = target_question_binding(document);
+                    let reason = if matches!(
+                        document.collaboration_run_control(),
+                        CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents
+                    ) {
+                        Some(CollaborationDeliveryFailureReason::TargetStopped)
+                    } else if purpose != question.execution_purpose
+                        || turn_id != question.target.turn_id
+                        || participants::require_document_message_admission(
+                            document,
+                            &question.source,
+                            &question.target,
+                        )
+                        .is_err()
+                    {
+                        Some(CollaborationDeliveryFailureReason::InvalidBinding)
+                    } else {
+                        None
+                    };
+                    Some(reason)
+                })
+                .map_err(|error| error.to_string())?;
+            let Some(target_reason) = target_state else {
+                // An earlier target commit may have lost its source acknowledgement.
+                // 较早的目标提交可能尚未写入来源确认。
+                return Ok(None);
+            };
+            let reason = if question.source.project_id != question.target.project_id
+                && !source_handle_grant_allows(
+                    &source_for_write,
+                    source_id,
+                    target_session_id,
+                    CollaborationGrantAction::Ask,
+                )?
+            {
+                Some(CollaborationDeliveryFailureReason::AuthorizationRevoked)
+            } else {
+                target_reason
+            };
+            let Some(reason) = reason else {
+                // Storage and other transient errors leave a Recorded intent for the outbox.
+                // 存储及其他临时错误保留 Recorded 意图，交由出站箱恢复。
+                return Ok(None);
+            };
+            source_for_write
+                .mutate_durable_if_changed(
+                    SessionMutationAdmission::ControlPlane,
+                    SessionFlushReason::MetadataChanged,
+                    move |document| {
+                        document
+                            .record_delivery_progress(RecordDeliveryProgressInput {
+                                operation_id,
+                                delivery_id,
+                                question_id,
+                                state: CollaborationDeliveryState::Failed,
+                                failure: Some(reason),
+                                target_revision: None,
+                                target_event_seq: None,
+                                updated_at_ms: failed_at_ms,
+                            })
+                            .map(session_change)
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(Some(reason))
+        },
+    )
+    .await
+}
+
 /// Records one source question, accepts it on the target, and durably acknowledges the outbox.
 /// 记录来源问题、在目标接纳并可靠确认出站投递。
 async fn ask_question(
@@ -2838,157 +2971,83 @@ async fn ask_question(
     })
     .await?;
 
-    let target_stopped = target
-        .handle
-        .read(|document| {
-            matches!(
-                document.collaboration_run_control(),
-                CollaborationRunControl::Stopped
+    let accept_input = AcceptDeliveryInput {
+        operation_id: operation_suffix(invocation, "accept")?,
+        delivery_id: delivery_id.clone(),
+        question_id: question_id.clone(),
+        source,
+        target: target_participant,
+        bound_turn_id,
+        execution_purpose,
+        accepted_at_ms: now_ms,
+    };
+    let target_receipt = match accept_question_target(
+        invocation,
+        &target,
+        target_session_id,
+        accept_input,
+        SessionMutationAdmission::MetadataOnly,
+        "collaboration.accept.target_turn_binding",
+    )
+    .await
+    {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let failure = fail_question_before_target_acceptance(
+                invocation,
+                &target,
+                target_session_id,
+                &question_id,
+                &delivery_id,
+                now_ms,
             )
-        })
-        .map_err(|error| format!("failed to read target collaboration run control: {error}"))?;
-    let grant_still_allows_delivery = !cross_project
-        || source_handle_grant_allows(
-            &invocation.source_handle,
-            invocation.source_session_id,
-            target_session_id,
-            CollaborationGrantAction::Ask,
-        )?;
-    let target_receipt = if target_stopped || !grant_still_allows_delivery {
-        None
-    } else {
-        let accept_operation = operation_suffix(invocation, "accept")?;
-        let accept_input = AcceptDeliveryInput {
-            operation_id: accept_operation,
-            delivery_id: delivery_id.clone(),
-            question_id: question_id.clone(),
-            source,
-            target: target_participant,
-            bound_turn_id,
-            execution_purpose,
-            accepted_at_ms: now_ms,
-        };
-        match accept_question_target(
-            invocation,
-            &target,
-            target_session_id,
-            accept_input,
-            SessionMutationAdmission::MetadataOnly,
-            "collaboration.accept.target_turn_binding",
-        )
-        .await
-        {
-            Ok(receipt) => Some(receipt),
-            Err(error) => {
-                let reason = if error.contains("grant") || error.contains("authorization") {
-                    CollaborationDeliveryFailureReason::AuthorizationRevoked
-                } else {
-                    CollaborationDeliveryFailureReason::TargetMissing
-                };
-                let failure_operation = operation_suffix(invocation, "fail")?;
-                let failure_delivery_id = delivery_id.clone();
-                let failure_question_id = question_id.clone();
-                let failure_repair = mutate_source(invocation, move |document| {
-                    document.record_delivery_progress(RecordDeliveryProgressInput {
-                        operation_id: failure_operation,
-                        delivery_id: failure_delivery_id,
-                        question_id: failure_question_id,
-                        state: CollaborationDeliveryState::Failed,
-                        failure: Some(reason),
-                        target_revision: None,
-                        target_event_seq: None,
-                        updated_at_ms: now_ms,
-                    })
-                })
-                .await;
-                if let Err(failure_error) = failure_repair {
+            .await;
+            match failure {
+                Ok(Some(_reason)) => {
+                    let (question, delivery, revision) = invocation
+                        .source_handle
+                        .read(|document| {
+                            (
+                                document.question_snapshot(&question_id).cloned(),
+                                document.delivery_snapshot(&delivery_id).cloned(),
+                                document.memory_revision(),
+                            )
+                        })
+                        .map_err(|read_error| {
+                            format!("failed to read failed question receipt: {read_error}")
+                        })?;
+                    let question = question.ok_or_else(|| {
+                        String::from("source question disappeared after failure repair")
+                    })?;
+                    return question_value(
+                        &invocation.operation_id,
+                        &question,
+                        delivery.as_ref(),
+                        revision,
+                        "failed",
+                    );
+                }
+                Ok(None) => {
+                    return queryable_question_after_repair_failure(
+                        invocation,
+                        &question_id,
+                        &delivery_id,
+                        format!("target acceptance needs outbox recovery: {error}"),
+                    );
+                }
+                Err(failure_error) => {
                     return queryable_question_after_repair_failure(
                         invocation,
                         &question_id,
                         &delivery_id,
                         format!(
-                            "target delivery failed: {error}; source failure repair failed: {failure_error}"
+                            "target acceptance failed: {error}; source failure repair failed: {failure_error}"
                         ),
                     );
                 }
-                let (question, delivery, revision) = invocation
-                    .source_handle
-                    .read(|document| {
-                        (
-                            document.question_snapshot(&question_id).cloned(),
-                            document.delivery_snapshot(&delivery_id).cloned(),
-                            document.memory_revision(),
-                        )
-                    })
-                    .map_err(|read_error| {
-                        format!("failed to read failed question receipt: {read_error}")
-                    })?;
-                let question = question.ok_or_else(|| {
-                    String::from("source question disappeared after failure repair")
-                })?;
-                return question_value(
-                    &invocation.operation_id,
-                    &question,
-                    delivery.as_ref(),
-                    revision,
-                    "failed",
-                );
             }
         }
     };
-
-    if target_stopped || !grant_still_allows_delivery {
-        let failure_operation = operation_suffix(invocation, "stopped")?;
-        let failure_delivery_id = delivery_id.clone();
-        let failure_question_id = question_id.clone();
-        let failure_repair = mutate_source(invocation, move |document| {
-            document.record_delivery_progress(RecordDeliveryProgressInput {
-                operation_id: failure_operation,
-                delivery_id: failure_delivery_id,
-                question_id: failure_question_id,
-                state: CollaborationDeliveryState::Failed,
-                failure: Some(if target_stopped {
-                    CollaborationDeliveryFailureReason::TargetStopped
-                } else {
-                    CollaborationDeliveryFailureReason::AuthorizationRevoked
-                }),
-                target_revision: None,
-                target_event_seq: None,
-                updated_at_ms: now_ms,
-            })
-        })
-        .await;
-        if let Err(error) = failure_repair {
-            return queryable_question_after_repair_failure(
-                invocation,
-                &question_id,
-                &delivery_id,
-                format!("target delivery is unavailable and source failure repair failed: {error}"),
-            );
-        }
-        let (question, delivery, revision) = invocation
-            .source_handle
-            .read(|document| {
-                (
-                    document.question_snapshot(&question_id).cloned(),
-                    document.delivery_snapshot(&delivery_id).cloned(),
-                    document.memory_revision(),
-                )
-            })
-            .map_err(|error| format!("failed to read stopped question receipt: {error}"))?;
-        let question = question
-            .ok_or_else(|| String::from("source question disappeared after stopped repair"))?;
-        return question_value(
-            &invocation.operation_id,
-            &question,
-            delivery.as_ref(),
-            revision,
-            "failed",
-        );
-    }
-
-    let target_receipt = target_receipt
-        .ok_or_else(|| String::from("target acceptance did not produce a receipt"))?;
     let progress_operation = operation_suffix(invocation, "accepted")?;
     let progress_delivery_id = delivery_id.clone();
     let progress_question_id = question_id.clone();
@@ -3200,17 +3259,21 @@ async fn cancel_question(
         },
     )
     .await?;
-    settle_and_acknowledge_delivery(
-        invocation,
-        &source_handle,
-        source_session_id,
-        &question,
-        &delivery,
-        source_operation_id,
-        result.value.event_seq,
-        CollaborationTargetSettlementState::Cancelled,
-    )
-    .await?;
+    if delivery.state != CollaborationDeliveryState::Failed {
+        // A failed delivery never created the target receipt required by this settlement chain.
+        // 失败投递从未创建本结算链所需的目标回执。
+        settle_and_acknowledge_delivery(
+            invocation,
+            &source_handle,
+            source_session_id,
+            &question,
+            &delivery,
+            source_operation_id,
+            result.value.event_seq,
+            CollaborationTargetSettlementState::Cancelled,
+        )
+        .await?;
+    }
     let (question, delivery, current_revision) =
         read_question_source(&source_handle, &question_id)?;
     question_value(
@@ -3368,17 +3431,21 @@ pub(crate) async fn service_cancel_collaboration_question(
     .await?;
     let mut settlement_invocation = invocation.clone();
     settlement_invocation.operation_id = operation_id.as_str().to_owned();
-    settle_and_acknowledge_delivery(
-        &settlement_invocation,
-        &source_handle,
-        source_session_id,
-        &question,
-        &delivery,
-        operation_id.clone(),
-        result.value.event_seq,
-        CollaborationTargetSettlementState::Cancelled,
-    )
-    .await?;
+    if delivery.state != CollaborationDeliveryState::Failed {
+        // Trusted user cancellation also settles locally when the target never accepted it.
+        // 受信任用户撤销遇到目标未接纳时也只在来源侧结算。
+        settle_and_acknowledge_delivery(
+            &settlement_invocation,
+            &source_handle,
+            source_session_id,
+            &question,
+            &delivery,
+            operation_id.clone(),
+            result.value.event_seq,
+            CollaborationTargetSettlementState::Cancelled,
+        )
+        .await?;
+    }
     let (question, delivery, current_revision) =
         read_question_source(&source_handle, &question_id)?;
     question_value(
@@ -3478,6 +3545,15 @@ async fn wait_question(
         let (question, delivery, _) = read_question_for_model(&source_handle, &question_id)?;
         let cursor = question_wait_cursor(&question, &delivery)?;
         if caller_is_source || caller_is_target {
+            if delivery.state == CollaborationDeliveryState::Failed {
+                return question_value(
+                    &invocation.operation_id,
+                    &question,
+                    Some(&delivery),
+                    cursor,
+                    "failed",
+                );
+            }
             // A settled question and a genuinely advanced cursor both end the wait; a cursor that the
             // waiter's own ToolCall advanced no longer can, because it never enters this cursor.
             // 已结算问题与真实推进的游标都会结束等待；被等待者自身工具调用推进的会话修订不再能结束

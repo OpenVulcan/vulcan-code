@@ -1145,7 +1145,10 @@ impl CollaborationState {
                     })
             })
             || self.outbound_deliveries.values().any(|delivery| {
+                // A rejection before target acceptance has no target settlement to acknowledge.
+                // 目标接纳前的拒收没有需要确认的目标结算。
                 delivery.settlement_ack.is_none()
+                    && delivery.state != CollaborationDeliveryState::Failed
                     && self
                         .questions
                         .get(&delivery.question_id)
