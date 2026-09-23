@@ -1,5 +1,5 @@
-//! Session-owned native compaction dispatch with one permit and terminal per physical attempt.
-//! 会话持有的原生压缩分派，每次物理尝试分别持有许可与终态。
+//! Native compaction dispatch with one declared owner, permit, and terminal per physical attempt.
+//! 原生压缩分派，每次物理尝试分别持有一位已声明所有者、一份许可与一个终态。
 
 use super::*;
 use crate::agent_runtime::events::{
@@ -15,6 +15,7 @@ use crate::agent_runtime::provider_request_telemetry::{
     ProviderRequestTelemetryEventKind, ProviderRequestTelemetryTracker,
 };
 use crate::agent_runtime::provider_runtime_context::RuntimePromptLayers;
+use crate::agent_runtime::provider_runtime_context::synchronize_runtime_host_events;
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_vulcan::{
     ProviderApiTraceAttemptCapture, ProviderApiTraceAttemptState, ProviderApiTraceRenderIdentity,
@@ -33,55 +34,33 @@ use vulcan_session_core::v1::context::RemoteResponsesCheckpoint;
 /// `execution`冻结路由；`preparation`冻结预算控制；提示词和工具保留普通可见性。
 /// `state` and `plan` select lossless history; temperature/reasoning retain the owning agent's settings.
 /// `state`与`plan`选择无损历史；温度和推理保留所属代理设置。
-/// Returns an unprepared candidate; only the session owner may materialize media or authorize dispatch.
-/// 返回未准备候选；只有会话所有者可以物化媒体或授权分派。
+/// Returns an unprepared candidate; its declared owner must authorize physical dispatch.
+/// 返回未准备候选；其已声明所有者必须授权物理分派。
 pub(super) async fn build_candidate(
     execution: &Arc<ResolvedPublicAiExecution>,
     preparation: &ExecutionPreparation,
     prompt: RuntimePromptLayers,
+    ownership: PromptCompactionOwnership,
     tools: Vec<ProviderToolDefinition>,
     state: &SessionConversationState,
     plan: &CompactionPlan,
     temperature: Option<f32>,
     reasoning: ReasoningEffortLevel,
 ) -> Result<ProviderRequestPreparationCandidate, String> {
-    // Selection uses canonical IDs in their original order, never reconstructed transcript text.
-    // 选择使用原始顺序的规范 ID，绝不使用重建的转录正文。
-    let source_ids = plan
-        .source_messages
-        .iter()
-        .map(|message| message.id.as_str())
-        .collect::<BTreeSet<_>>();
-    if source_ids.is_empty() || source_ids.len() != plan.source_messages.len() {
-        return Err(String::from(
-            "Remote compaction requires unique nonempty source identities.",
-        ));
-    }
-    let mut snapshot = build_core_conversation_snapshot(state)?;
-    snapshot
-        .messages
-        .retain(|message| source_ids.contains(message.id.as_str()));
-    if !snapshot
-        .messages
-        .iter()
-        .map(|message| message.id.as_str())
-        .eq(plan
-            .source_messages
-            .iter()
-            .map(|message| message.id.as_str()))
-    {
-        return Err(String::from(
-            "Remote compaction source differs from the canonical history order.",
-        ));
-    }
+    let mut snapshot = prepare_candidate_snapshot(state, plan, &prompt, ownership)?;
     // Compact has no response continuation; each attempt sends its full permitted source window.
     // Compact 不使用响应延续；每次尝试发送完整的已许可来源窗口。
     snapshot.continuation = Default::default();
+    let prompt_layers = candidate_prompt_layers(&prompt, ownership);
     let config = ControllerConfig {
         provider_id: execution.route.provider.id.clone(),
         model_id: execution.model.id.clone(),
         system_prompt: prompt.fallback_text,
-        prompt_layers: prompt.provider_layers,
+        // RuntimeOnly dispatches this exact candidate. Its dynamic instructions must stay in
+        // tagged User history, never in the stable System prefix rendered by the adapter.
+        // RuntimeOnly 直接分派此候选；动态指令必须留在带标签 User 历史中，绝不能进入适配器渲染的
+        // 稳定 System 前缀。
+        prompt_layers,
         temperature: temperature.map(f64::from),
         max_turns: 1,
         additional_params: None,
@@ -148,6 +127,196 @@ pub(super) async fn build_candidate(
         locked_baseline: prompt.locked_baseline,
         dynamic_prompt_layers: prompt.dynamic_prompt_layers,
     })
+}
+
+/// Selects the prompt layers whose rendering is authorized at the candidate's top boundary.
+/// 选择允许在候选请求顶部渲染的提示词层。
+/// `prompt` supplies the composed layers; `ownership` states whether the candidate is dispatched directly.
+/// `prompt` 提供已组合层；`ownership` 声明候选请求是否被直接分派。
+/// Returns the session-only projection or an empty projection that renders the stable fallback.
+/// 返回仅供会话使用的投影，或渲染稳定回退提示词的空投影。
+fn candidate_prompt_layers(
+    prompt: &RuntimePromptLayers,
+    ownership: PromptCompactionOwnership,
+) -> vulcan_core::types::ProviderPromptLayers {
+    match ownership {
+        PromptCompactionOwnership::SessionV1 => prompt.provider_layers.clone(),
+        PromptCompactionOwnership::RuntimeOnly => Default::default(),
+    }
+}
+
+/// Selects the exact compaction source and appends standalone dynamic guidance as tagged User history.
+/// 选择精确压缩来源，并把独立执行的动态指引追加为带标签 User 历史。
+///
+/// # Parameters
+/// 参数
+/// `state` is the full canonical window; `plan` names the exact selected source messages.
+/// `state` 是完整规范窗口；`plan` 指定精确选中的来源消息。
+/// `prompt` owns current dynamic candidates; `ownership` selects whether this candidate is dispatched directly.
+/// `prompt` 持有当前动态候选；`ownership` 决定是否直接分派此候选。
+///
+/// # Returns
+/// 返回值
+/// The selected source followed by newly synchronized host User events, or a source/ledger error.
+/// 返回选中来源及随后新同步的宿主 User 事件，或来源、账本错误。
+fn prepare_candidate_snapshot(
+    state: &SessionConversationState,
+    plan: &CompactionPlan,
+    prompt: &RuntimePromptLayers,
+    ownership: PromptCompactionOwnership,
+) -> Result<vulcan_core::types::ConversationSnapshot, String> {
+    // Source selection uses canonical IDs in their original order, never reconstructed text.
+    // 来源选择使用原始顺序的规范 ID，绝不使用重建正文。
+    let source_ids = plan
+        .source_messages
+        .iter()
+        .map(|message| message.id.as_str())
+        .collect::<BTreeSet<_>>();
+    if source_ids.is_empty() || source_ids.len() != plan.source_messages.len() {
+        return Err(String::from(
+            "Remote compaction requires unique nonempty source identities.",
+        ));
+    }
+    let mut snapshot = build_core_conversation_snapshot(state)?;
+    let original_message_count = snapshot.messages.len();
+    if ownership == PromptCompactionOwnership::RuntimeOnly {
+        // Synchronize against the complete canonical ledger before selecting a partial source;
+        // dropping older messages first would make their still-live ledger records invalid.
+        // 必须先对完整规范账本同步再截取部分来源；提前丢弃旧消息会使其仍有效的账本记录失效。
+        synchronize_runtime_host_events(&mut snapshot, &prompt.host_events, None)?;
+    }
+    let appended_host_ids = snapshot.messages[original_message_count..]
+        .iter()
+        .map(|message| message.id.clone())
+        .collect::<BTreeSet<_>>();
+    snapshot.messages.retain(|message| {
+        source_ids.contains(message.id.as_str()) || appended_host_ids.contains(&message.id)
+    });
+    if !snapshot
+        .messages
+        .iter()
+        .filter(|message| source_ids.contains(message.id.as_str()))
+        .map(|message| message.id.as_str())
+        .eq(plan
+            .source_messages
+            .iter()
+            .map(|message| message.id.as_str()))
+    {
+        return Err(String::from(
+            "Remote compaction source differs from the canonical history order.",
+        ));
+    }
+    Ok(snapshot)
+}
+
+#[cfg(test)]
+mod candidate_tests {
+    use super::*;
+    use crate::agent_runtime::provider_runtime_context::RuntimeHostEventCandidate;
+    use vulcan_context::{
+        SessionMessageEntry, SessionMessageKind, conversation_state_from_session_messages,
+    };
+    use vulcan_core::types::ProviderPromptLayers;
+
+    /// Builds a request with distinct stable and dynamic instructions for candidate projection.
+    /// 构建稳定与动态指令明确不同的请求，供候选投影测试使用。
+    /// Returns a prompt whose current Plan guidance must not enter the standalone System prefix.
+    /// 返回当前 Plan 指引不能进入独立请求 System 前缀的提示词。
+    fn prompt() -> RuntimePromptLayers {
+        RuntimePromptLayers {
+            fallback_text: String::from("stable baseline"),
+            provider_layers: ProviderPromptLayers::from_system_prompt("dynamic Plan guidance"),
+            dynamic_prompt_layers: ProviderPromptLayers::from_system_prompt(
+                "dynamic Plan guidance",
+            ),
+            locked_baseline: vulcan_session_core::v1::context::LockedBaselineProjection::empty(),
+            host_events: vec![RuntimeHostEventCandidate {
+                source_id: String::from("plan:current"),
+                source: String::from("plan"),
+                target: String::from("model"),
+                task_id: None,
+                scope: String::from("request"),
+                body: String::from("dynamic Plan guidance"),
+                occurrence_id: None,
+                content_hash: None,
+                event_id: None,
+                kind: vulcan_ai_contract::HostMessageKind::ContextUpdate,
+                expires_source: false,
+            }],
+        }
+    }
+
+    /// Verifies standalone native compaction places dynamic guidance after the selected source as User history.
+    /// 验证独立原生压缩把动态指引作为 User 历史放在选中来源之后。
+    /// The session-owned candidate remains unchanged because its V1 owner rebuilds the physical request.
+    /// 会话候选保持原样，因为其 V1 所有者会重建物理请求。
+    #[test]
+    fn standalone_candidate_keeps_dynamic_guidance_out_of_top_system() {
+        let source = SessionMessageEntry::new(SessionMessageKind::User, "", "source")
+            .with_runtime_metadata("source-1", "t1");
+        let omitted_tail = SessionMessageEntry::new(SessionMessageKind::User, "", "tail")
+            .with_runtime_metadata("tail-1", "t1");
+        let state = conversation_state_from_session_messages(&[source.clone(), omitted_tail])
+            .expect("canonical source should replay");
+        let policy = vulcan_context::ContextCompactionPolicy::default();
+        let plan = CompactionPlan {
+            source_messages: vec![source],
+            source_until_message_id: None,
+            source_until_turn_index: None,
+            retained_tail_start_turn_index: None,
+            compaction_id: String::from("remote-candidate-test"),
+            created_at: String::from("t1"),
+            policy,
+            tail_selection: vulcan_context_compaction::CompactionTailSelectionReport {
+                context_limit: policy.tail_context_limit,
+                policy_source: policy.tail_policy_source,
+                nominal_token_budget: policy.preserve_recent_tokens,
+                segment_limit: policy.tail_turns,
+                retained_segment_count: 0,
+                retained_message_ids: Vec::new(),
+                retained_token_estimate: 0,
+                previewed_tool_output_count: 0,
+                omitted_tool_output_token_estimate: 0,
+                newest_segment_exceeds_nominal_budget: false,
+            },
+        };
+        let prompt = prompt();
+        let standalone = prepare_candidate_snapshot(
+            &state,
+            &plan,
+            &prompt,
+            PromptCompactionOwnership::RuntimeOnly,
+        )
+        .expect("standalone candidate should synchronize current host guidance");
+        assert_eq!(standalone.messages.len(), 2);
+        assert_eq!(standalone.messages[0].id, "source-1");
+        let vulcan_core::types::ConversationPayload::UserText { text, .. } =
+            &standalone.messages[1].payload
+        else {
+            panic!("dynamic host guidance must use a User message");
+        };
+        assert!(text.contains("<vulcan_context_update"));
+        assert!(text.contains("dynamic Plan guidance"));
+        assert_eq!(
+            candidate_prompt_layers(&prompt, PromptCompactionOwnership::RuntimeOnly)
+                .render_or_legacy(&prompt.fallback_text),
+            "stable baseline"
+        );
+
+        let session = prepare_candidate_snapshot(
+            &state,
+            &plan,
+            &prompt,
+            PromptCompactionOwnership::SessionV1,
+        )
+        .expect("session candidate should keep its selected source");
+        assert_eq!(session.messages.len(), 1);
+        assert!(
+            candidate_prompt_layers(&prompt, PromptCompactionOwnership::SessionV1)
+                .render_or_legacy(&prompt.fallback_text)
+                .contains("dynamic Plan guidance")
+        );
+    }
 }
 
 /// Sends `event` to the owning consumer; returns an explicit error if it has disappeared.

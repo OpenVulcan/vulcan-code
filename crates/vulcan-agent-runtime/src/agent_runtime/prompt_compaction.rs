@@ -838,6 +838,7 @@ async fn try_remote_responses_compaction(
             &prepared_execution,
             &tooling_preparation.preparation,
             runtime_prompt,
+            ownership,
             provider_tools,
             full_context_state,
             plan,
