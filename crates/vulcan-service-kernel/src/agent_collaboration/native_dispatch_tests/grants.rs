@@ -199,9 +199,25 @@ async fn cross_project_listing_and_reading_follow_read_grant_scope() {
         .unwrap();
     assert_eq!(read["status"], "ok");
     assert_eq!(read["session_id"], foreign);
+    // Resolve first, then revoke before the physical read: a stale locator grants no access.
+    // 先解析再于实际读取前撤权：旧定位器不授予任何读取权限。
+    let resolved_before_revoke =
+        resolve_read_target(&dispatch.invocation, dispatch.target.session_id())
+            .await
+            .unwrap();
     // Revocation removes the read authority, so the same id can no longer be read.
     // 撤销移除读取权威，因此同一 ID 不再可读取。
     revoke_grant(&dispatch, read_grant).await;
+    let denied_at_admission = read_authorized_event_range_at_admission(
+        &dispatch.invocation,
+        resolved_before_revoke,
+        dispatch.target.session_id(),
+        None,
+        10,
+    )
+    .await
+    .unwrap_err();
+    assert!(denied_at_admission.contains("grant"), "{denied_at_admission}");
     let dispatch = dispatch.retool(READ_SESSION_TOOL_ID).await;
     let revoked = dispatch
         .invoke(AgentCollaborationCommand::ReadSession(ReadSessionArgs {

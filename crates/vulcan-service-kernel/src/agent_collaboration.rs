@@ -2484,6 +2484,43 @@ fn read_authorized_event_range(
     )
 }
 
+/// Reads one foreign event range while the source grant remains stable until the read completes.
+/// 在来源授权保持稳定直到读取完成的期间读取一段外部会话事件。
+/// The locator was resolved before this call; the source grant is checked again inside its
+/// canonical lifecycle gate so revocation cannot race the physical event read.
+/// 定位器在调用前已解析；在来源规范生命周期锁内重新核验授权，使撤权不能与实际事件读取竞态。
+async fn read_authorized_event_range_at_admission(
+    invocation: &ValidatedInvocation,
+    locator: SessionV1StorageLocator,
+    target_session_id: Uuid,
+    after_seq: Option<u64>,
+    limit: u32,
+) -> Result<Value, String> {
+    if locator.project_id() == invocation.source_locator.project_id() {
+        return read_authorized_event_range(invocation, &locator, after_seq, limit);
+    }
+    let invocation_for_read = invocation.clone();
+    let source_handle = Arc::clone(&invocation.source_handle);
+    lifecycle_write::with_canonical_handles(
+        &invocation.registry,
+        vec![Arc::clone(&source_handle)],
+        move || {
+            if !source_handle_grant_allows(
+                &source_handle,
+                invocation_for_read.source_session_id,
+                target_session_id,
+                CollaborationGrantAction::Read,
+            )? {
+                return Err(String::from(
+                    "cross-project collaboration requires an active source-owned grant",
+                ));
+            }
+            read_authorized_event_range(&invocation_for_read, &locator, after_seq, limit)
+        },
+    )
+    .await
+}
+
 /// Serializes one exact event range without logging its potentially sensitive body.
 /// 序列化精确事件范围，不记录其中可能敏感的正文。
 fn event_range_value(
@@ -3821,12 +3858,14 @@ impl NativeAgentCollaborationRuntime for SessionV1NativeAgentCollaborationRuntim
                 let target_session_id = Uuid::parse_str(&args.session_id)
                     .map_err(|error| format!("invalid target session_id: {error}"))?;
                 let target_locator = resolve_read_target(&invocation, target_session_id).await?;
-                read_authorized_event_range(
+                read_authorized_event_range_at_admission(
                     &invocation,
-                    &target_locator,
+                    target_locator,
+                    target_session_id,
                     args.after_seq,
                     args.limit,
                 )
+                .await
             }
             AgentCollaborationCommand::AskQuestion(args) => {
                 let target_session_id = Uuid::parse_str(&args.target_session_id)
