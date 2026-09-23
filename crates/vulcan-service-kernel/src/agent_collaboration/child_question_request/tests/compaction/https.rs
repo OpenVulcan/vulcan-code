@@ -55,12 +55,15 @@ pub(super) fn stage_native_fixture_model(runtime: &vulcan_provider_adapters::Pub
         .replace_system_manifest("openai", Arc::new(compiled))
         .unwrap();
 }
-/// Immutable fake secrets, unrelated to any user credential store.
-/// 不可变假秘密，与任何用户凭据存储无关。
+/// Isolated fake secrets with revision-checked OAuth replacement, unrelated to user credentials.
+/// 隔离假秘密支持按修订校验的 OAuth 替换，与用户凭据无关。
 pub(super) struct Secrets {
     /// Selects the fixture's explicitly declared OAuth or API-key material.
     /// 选择夹具显式声明的 OAuth 或 API 密钥材料。
     pub(super) native: bool,
+    /// Last refreshed envelope, empty until the real refresh path persists a replacement.
+    /// 最近刷新信封，在真实刷新路径持久化替换前为空。
+    pub(super) refreshed: Mutex<Option<CredentialSecretEnvelope>>,
 }
 
 #[async_trait::async_trait]
@@ -73,6 +76,9 @@ impl CredentialSecretResolver for Secrets {
     ) -> Result<Option<CredentialSecretEnvelope>, String> {
         if reference != "compaction-test-secret" {
             return Err("Unknown compaction fixture credential.".into());
+        }
+        if let Some(secret) = self.refreshed.lock().unwrap().clone() {
+            return Ok(Some(secret));
         }
         if self.native {
             return Ok(Some(CredentialSecretEnvelope::new(
@@ -108,15 +114,22 @@ impl CredentialSecretStore for Secrets {
     ) -> Result<(), String> {
         Err("Immutable compaction fixture.".into())
     }
-    /// Rejects replacement at any `revision`; returns an immutable-store error.
-    /// 拒绝任何 `revision` 的替换；返回不可变存储错误。
+    /// Replaces `reference` only at the exact `revision`; returns a conflict for stale writers.
+    /// 仅在精确 `revision` 替换 `reference`；过期写入返回冲突。
     async fn replace_secret(
         &self,
-        _reference: &str,
-        _revision: u64,
-        _secret: &CredentialSecretEnvelope,
+        reference: &str,
+        revision: u64,
+        secret: &CredentialSecretEnvelope,
     ) -> Result<(), String> {
-        Err("Immutable compaction fixture.".into())
+        let original = self.read_optional_secret(reference).await?.unwrap();
+        let mut stored = self.refreshed.lock().unwrap();
+        let current = stored.as_ref().unwrap_or(&original);
+        if current.revision != revision || secret.revision != revision + 1 {
+            return Err("Compaction fixture credential revision conflict.".into());
+        }
+        *stored = Some(secret.clone());
+        Ok(())
     }
     /// Rejects deletion of `reference`; returns an immutable-store error.
     /// 拒绝删除 `reference`；返回不可变存储错误。
@@ -143,6 +156,9 @@ pub(super) struct Server {
     /// Actually transmitted requests, in arrival order.
     /// 实际传输的请求，按到达顺序保存。
     pub(super) requests: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Number of actual token refresh requests received by the isolated OAuth endpoint.
+    /// 隔离 OAuth 端点实际收到的令牌刷新请求数。
+    pub(super) refreshes: Arc<std::sync::atomic::AtomicUsize>,
     /// Owning task, aborted on unwind and explicitly joined on successful completion.
     /// 持有任务，展开时中止，正常完成时明确等待退出。
     task: Option<tokio::task::JoinHandle<()>>,
@@ -151,7 +167,11 @@ pub(super) struct Server {
 impl Server {
     /// Starts private TLS returning `summary` or native output according to `native`; returns isolated transport.
     /// 按`native`启动返回`summary`或原生输出的私有 TLS；返回隔离传输。
-    pub(super) async fn start(summary: &str, native: bool) -> Self {
+    pub(super) async fn start(summary: &str, native: bool, refresh: bool) -> Self {
+        assert!(
+            !refresh || native,
+            "OAuth refresh requires the native fixture"
+        );
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
         // Bind no external interface and retain the OS-assigned private port.
         // 不绑定外部接口，保留操作系统分配的私有端口。
@@ -165,6 +185,7 @@ impl Server {
             HOST.into(),
             "dashscope.aliyuncs.com".into(),
             "chatgpt.com".into(),
+            "auth.openai.com".into(),
         ])
         .unwrap();
         // Generate isolated ephemeral server credentials.
@@ -195,6 +216,10 @@ impl Server {
         // Share observations with the owning test.
         // 与所属测试共享观察记录。
         let observed = requests.clone();
+        // Only the OAuth HTTP handler advances this counter.
+        // 仅 OAuth HTTP 处理器推进此计数。
+        let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_refreshes = refreshes.clone();
         // Keep model output independent from the real request encoder.
         // 保持模型输出独立于真实请求编码器。
         let summary = summary.to_owned();
@@ -207,7 +232,15 @@ impl Server {
                     // Decode real TLS before inspecting HTTP framing.
                     // 检查 HTTP 分帧前解码真实 TLS。
                     let mut stream = acceptor.accept(socket).await.unwrap();
-                    serve(&mut stream, &observed, &summary, native).await;
+                    serve(
+                        &mut stream,
+                        &observed,
+                        &summary,
+                        native,
+                        refresh,
+                        &observed_refreshes,
+                    )
+                    .await;
                 })
                 .await
                 .expect("bounded summary request");
@@ -222,12 +255,14 @@ impl Server {
             .resolve(HOST, address)
             .resolve("dashscope.aliyuncs.com", address)
             .resolve("chatgpt.com", address)
+            .resolve("auth.openai.com", address)
             .timeout(Duration::from_secs(25))
             .build()
             .unwrap();
         Self {
             http,
             requests,
+            refreshes,
             task: Some(task),
         }
     }
@@ -258,6 +293,8 @@ async fn serve(
     requests: &Mutex<Vec<serde_json::Value>>,
     summary: &str,
     native: bool,
+    refresh: bool,
+    refreshes: &std::sync::atomic::AtomicUsize,
 ) {
     // Read exact framing without consuming body bytes as headers.
     // 精确读取分帧，不将正文字节作为请求头消费。
@@ -293,11 +330,6 @@ async fn serve(
         return;
     }
     assert!(header.lines().next().unwrap().starts_with("POST "));
-    assert!(header.lines().next().unwrap().ends_with(if native {
-        "/responses/compact HTTP/1.1"
-    } else {
-        "/chat/completions HTTP/1.1"
-    }));
     // HTTP header field names are case-insensitive.
     // HTTP 请求头字段名称不区分大小写。
     let length = header
@@ -313,10 +345,65 @@ async fn serve(
     // 精确接收声明的 JSON 正文。
     let mut body = vec![0; length];
     stream.read_exact(&mut body).await.unwrap();
+    if header.lines().next().unwrap() == "POST /oauth/token HTTP/1.1" {
+        // Exercise the real form encoder and refresh decoder without retaining secret material.
+        // 验证真实表单编码器及刷新解码器，不保留秘密材料。
+        assert!(native && refresh);
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            refreshes.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        let form = String::from_utf8(body).unwrap();
+        assert!(form.contains("grant_type=refresh_token"));
+        assert!(form.contains("refresh_token=compaction-local-refresh"));
+        let response = serde_json::json!({
+            "access_token":"compaction-local-renewed",
+            "refresh_token":"compaction-refresh-renewed",
+            "expires_in":3600
+        })
+        .to_string();
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+        stream.shutdown().await.unwrap();
+        return;
+    }
+    assert!(header.lines().next().unwrap().ends_with(if native {
+        "/responses/compact HTTP/1.1"
+    } else {
+        "/chat/completions HTTP/1.1"
+    }));
     requests
         .lock()
         .unwrap()
         .push(serde_json::from_slice(&body).unwrap());
+    if refresh {
+        // Reject only the original token; the second physical request must carry the refreshed token.
+        // 仅拒绝原令牌；第二次物理请求必须携带刷新令牌。
+        let attempt = requests.lock().unwrap().len();
+        let expected = if attempt == 1 {
+            "compaction-local-only"
+        } else {
+            "compaction-local-renewed"
+        };
+        assert!(
+            header
+                .lines()
+                .any(|line| line.split_once(':').is_some_and(|(name, value)| {
+                    name.eq_ignore_ascii_case("authorization")
+                        && value.trim() == format!("Bearer {expected}")
+                }))
+        );
+        if attempt == 1 {
+            assert_eq!(refreshes.load(std::sync::atomic::Ordering::SeqCst), 0);
+            let response =
+                r#"{"error":{"message":"fixture token expired","type":"authentication_error"}}"#;
+            stream.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+            return;
+        }
+        assert_eq!(attempt, 2);
+        assert_eq!(refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
     if native {
         // Opaque unary output is independent from the actual compact encoder and durable checkpoint writer.
         // 不透明的一元输出独立于实际压缩编码器和可靠检查点写入器。

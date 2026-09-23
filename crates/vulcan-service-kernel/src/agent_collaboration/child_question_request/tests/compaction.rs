@@ -144,7 +144,7 @@ fn local_child_maintenance_commits_real_http_summary_and_reloads() {
         .unwrap();
     // Poll the real stream on its owning service worker, not the smaller harness thread stack.
     // 在所属服务工作线程轮询真实流，而非较小的测试框架线程栈。
-    let task = executor.spawn(Box::pin(run_child_maintenance(false)));
+    let task = executor.spawn(Box::pin(run_child_maintenance(false, false)));
     executor.block_on(task).unwrap();
 }
 
@@ -158,13 +158,27 @@ fn native_child_maintenance_commits_real_http_checkpoint_and_reloads() {
         .worker_threads(2)
         .build()
         .unwrap();
-    let task = executor.spawn(Box::pin(run_child_maintenance(true)));
+    let task = executor.spawn(Box::pin(run_child_maintenance(true, false)));
+    executor.block_on(task).unwrap();
+}
+
+/// Verifies a physical 401, actual OAuth refresh, second permit and durable checkpoint in one execution.
+/// 在同一次执行验证物理 401、真实 OAuth 刷新、第二个许可及可靠检查点。
+#[test]
+fn native_child_maintenance_refreshes_oauth_and_retries_with_a_new_durable_api() {
+    // Use the production stack and isolated test HTTP client for both execution and OAuth.
+    // 使用生产线程栈，以及执行和 OAuth 共用的隔离测试 HTTP 客户端。
+    let executor = crate::service_bridge_io::webui_service_runtime_builder()
+        .worker_threads(2)
+        .build()
+        .unwrap();
+    let task = executor.spawn(Box::pin(run_child_maintenance(true, true)));
     executor.block_on(task).unwrap();
 }
 
 /// Executes the complete fixture on the service runtime; returns only after all assertions and cleanup.
 /// 在服务运行时执行完整夹具；仅在全部断言和清理后返回。
-async fn run_child_maintenance(native: bool) {
+async fn run_child_maintenance(native: bool, refresh: bool) {
     // Both modes use actual bundled service routes; native mode adds an explicit direct-tool test model.
     // 两种模式使用实际内置服务路线；原生模式增加明确的直接工具测试模型。
     let (provider, entry, model, credential_profile, credential_mode, reasoning) = if native {
@@ -188,12 +202,18 @@ async fn run_child_maintenance(native: bool) {
     };
     // The returned text passes the same tagged summary parser used by real models.
     // 返回正文通过真实模型使用的同一标签摘要解析器。
-    let server = https::Server::start("<summary>Review complete. Preserve child ownership and chronological injected messages.</summary>", native).await;
-    // Public runtime and immutable fake secrets exercise the actual provider pipeline.
-    // 公共运行时和不可变假秘密验证实际供应商链路。
+    let server = https::Server::start("<summary>Review complete. Preserve child ownership and chronological injected messages.</summary>", native, refresh).await;
+    // This private store permits only revision-checked replacement through the real refresh path.
+    // 此私有存储仅允许经真实刷新路径按修订校验替换。
+    let secrets = Arc::new(https::Secrets {
+        native,
+        refreshed: Mutex::new(None),
+    });
+    // Public runtime and isolated secrets exercise the actual provider pipeline.
+    // 公共运行时和隔离秘密验证实际供应商链路。
     let public_ai = Arc::new(
         vulcan_provider_adapters::PublicAiRuntime::first_batch_with_http_client_for_testing(
-            Arc::new(https::Secrets { native }),
+            secrets.clone(),
             server.http.clone(),
         )
         .unwrap(),
@@ -448,7 +468,22 @@ async fn run_child_maintenance(native: bool) {
     // The wire request must contain the original task and assistant body, not an empty synthetic source.
     // 传输请求必须包含原任务和助手正文，而非空合成来源。
     let requests = server.requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), if refresh { 2 } else { 1 });
+    assert_eq!(
+        server.refreshes.load(std::sync::atomic::Ordering::SeqCst),
+        usize::from(refresh)
+    );
+    if refresh {
+        assert_eq!(
+            requests.first(),
+            requests.last(),
+            "retry must preserve the original compact payload"
+        );
+        assert!(
+            secrets.refreshed.lock().unwrap().is_some(),
+            "real refresh must persist the replacement"
+        );
+    }
     assert_eq!(requests[0]["model"], model);
     assert!(requests[0].get("temperature").is_none());
     assert!(
@@ -459,6 +494,44 @@ async fn run_child_maintenance(native: bool) {
     // Reloading validates the actual journal, maintenance record and successful node association.
     // 重载校验实际日志、维护记录及成功节点关联。
     let reloaded = load_session_v1_for_runtime(&locator).unwrap().document;
+    if refresh {
+        // Both physical attempts must survive cold reload with independent identities and ordered terminals.
+        // 两次物理尝试必须以独立身份和有序终态在冷重载后保留。
+        let attempts = reloaded
+            .events()
+            .iter()
+            .filter_map(|event| match &event.event {
+                EventBody::ApiStarted(started) if started.purpose == ApiPurposeKind::Compaction => {
+                    Some((event.seq, started.api_call_id))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(attempts.len(), 2);
+        assert_ne!(attempts[0].1, attempts[1].1);
+        for (index, (started_seq, api_call_id)) in attempts.iter().enumerate() {
+            let terminal = reloaded
+                .events()
+                .iter()
+                .find_map(|event| match &event.event {
+                    EventBody::ApiStats(stats) if stats.api_call_id == *api_call_id => {
+                        Some((event.seq, stats))
+                    }
+                    _ => None,
+                })
+                .expect("every physical compact attempt must have durable terminal accounting");
+            assert!(terminal.0 > *started_seq);
+            if index == 0 {
+                assert_ne!(terminal.1.status, ApiCallStatus::Completed);
+                assert!(
+                    terminal.0 < attempts[1].0,
+                    "failed attempt must settle before retry admission"
+                );
+            } else {
+                assert_eq!(terminal.1.status, ApiCallStatus::Completed);
+            }
+        }
+    }
     assert_eq!(
         reloaded.metadata.child_execution_profile.as_ref(),
         Some(&profile)
