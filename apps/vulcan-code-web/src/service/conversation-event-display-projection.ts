@@ -336,8 +336,9 @@ export function projectConversationTranscriptDisplay(
 
   for (const item of items) {
     if (item.kind === "collaboration") {
-      // Collaboration events are HostOnly control facts that remain user-visible in this timeline.
-      // 协作事件是仍需在此时间线向用户展示的 HostOnly 控制事实。
+      if (!collaborationEventIsUserVisible(item.collaboration)) continue;
+      // Agent messages remain visible, while internal run-control transitions stay in the event store.
+      // 代理消息保持可见，内部运行控制转换仅保留在事件存储中。
       flushProcess();
       nodes.push({
         kind: "collaboration",
@@ -432,6 +433,12 @@ export function projectConversationTranscriptDisplay(
   }
   flushProcess();
   return nodes;
+}
+
+/** Returns whether a typed collaboration fact belongs in user-facing chat; internal run control has no message body.
+ * 返回强类型协作事实是否属于用户聊天内容；内部运行控制没有消息正文。 */
+export function collaborationEventIsUserVisible(event: CollaborationEvent): boolean {
+  return event.event_kind !== "run_control_changed";
 }
 
 /** Selects at most one final assistant text for each logical Turn.

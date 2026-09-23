@@ -16,7 +16,7 @@ import type {
   StatBucket,
 } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
-import { requestConfigChangeKind } from "@/service/conversation-event-display-projection";
+import { collaborationEventIsUserVisible, requestConfigChangeKind } from "@/service/conversation-event-display-projection";
 import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conversation-usage-coverage";
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
 import { goalNoticeTitle } from "./conversation-goal-notice";
@@ -228,6 +228,9 @@ function conversationMessagesForV1Event(
       return [];
     case "subagent_return":
     case "collaboration":
+      // Share the timeline visibility rule without deleting durable control facts or hiding real agent messages.
+      // 复用时间线可见性规则，不删除持久控制事实，也不隐藏真实代理消息。
+      if (summary.event.kind === "collaboration" && !collaborationEventIsUserVisible(summary.event)) return [];
       return [{
         ...base,
         role: "system",
