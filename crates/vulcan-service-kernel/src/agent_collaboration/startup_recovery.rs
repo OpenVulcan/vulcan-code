@@ -56,12 +56,15 @@ fn needs_delivery_recovery(collaboration: &CollaborationState) -> bool {
             )
         })
         || collaboration.outbound_deliveries.values().any(|delivery| {
+            // Failed delivery has no target settlement to replay after the source is cancelled.
+            // 失败投递在来源撤销后没有需要重放的目标结算。
             matches!(
                 delivery.state,
                 CollaborationDeliveryState::Recorded
                     | CollaborationDeliveryState::Accepted
                     | CollaborationDeliveryState::Projected
-            ) || (delivery.settlement_ack.is_none()
+            ) || (delivery.state != CollaborationDeliveryState::Failed
+                && delivery.settlement_ack.is_none()
                 && collaboration
                     .questions
                     .get(&delivery.question_id)
