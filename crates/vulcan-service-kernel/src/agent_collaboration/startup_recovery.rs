@@ -10,7 +10,6 @@ pub(super) mod worker;
 use std::collections::BTreeSet;
 use vulcan_session_core::v1::collaboration::{
     CollaborationNotificationState, CollaborationState, CollaborationTaskMessageEffectKind,
-    CollaborationTaskMessageKind,
 };
 use vulcan_workspace_store::workspace_store::locate_session_v1_storage;
 
@@ -45,10 +44,9 @@ fn needs_delivery_recovery(collaboration: &CollaborationState) -> bool {
         })
         || collaboration
             .inbound_task_messages
-            .iter()
-            .any(|(delivery, acceptance)| {
-                acceptance.message.kind == CollaborationTaskMessageKind::TaskStart
-                    && !collaboration.task_message_effects.contains_key(delivery)
+            .keys()
+            .any(|delivery| {
+                !collaboration.task_message_effects.contains_key(delivery)
             })
         || collaboration.notifications.values().any(|notification| {
             matches!(

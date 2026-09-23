@@ -849,6 +849,64 @@ async fn session_task_message_claim_rechecks_shutdown_and_start_grant() {
     }
 }
 
+/// User stop returns every accepted but unapplied task intent without starting new business.
+/// 用户停止后回传每条已接纳但未应用的任务意图，不启动新业务。
+#[tokio::test]
+async fn session_task_message_stop_returns_pending_start_and_steer() {
+    for mode in [
+        SessionMessageDeliveryMode::Queue,
+        SessionMessageDeliveryMode::Interrupt,
+    ] {
+        let (_root, invocation, target, context) = message_fixture(false).await;
+        let sent = send(&invocation, &target, context, mode, "Pending before stop")
+            .await
+            .unwrap();
+        let delivery_id =
+            CollaborationDeliveryId::try_new(sent["delivery_id"].as_str().unwrap()).unwrap();
+        target
+            .set_collaboration_run_control_durable(
+                vulcan_session_core::v1::collaboration::SetRunControlInput {
+                    operation_id: CollaborationOperationId::try_new("stop-before-application")
+                        .unwrap(),
+                    state: CollaborationRunControl::MainOnly,
+                    changed_at_ms: 5,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            reconcile_task_results_for_session(&invocation.state, target.session_id())
+                .await
+                .unwrap(),
+            1
+        );
+        let result = invocation
+            .source_handle
+            .read(|document| {
+                document.collaboration_state().received_task_results[&delivery_id]
+                    .result
+                    .clone()
+            })
+            .unwrap();
+        assert_eq!(
+            result.effect.outcome,
+            CollaborationTaskMessageEffectKind::Failed {
+                reason: CollaborationDeliveryFailureReason::TargetStopped,
+            }
+        );
+        assert!(result.terminal.is_none());
+        target
+            .read(|document| {
+                assert!(document.active_turn().is_some_and(|turn| !turn.closed));
+                assert!(document.collaboration_state().task_result_acknowledgements
+                    .contains_key(&delivery_id));
+                assert!(!document.collaboration_state().requires_edit_or_delete_settlement());
+            })
+            .unwrap();
+        assert!(!invocation.source_handle.read(|document| document.collaboration_state()
+            .requires_edit_or_delete_settlement()).unwrap());
+    }
+}
+
 /// A retry after target completion keeps its first turn and records failure against that old binding.
 /// 目标完成后的重试保留首次回合，并针对该旧绑定记录失败。
 #[tokio::test]

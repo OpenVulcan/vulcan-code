@@ -76,6 +76,43 @@ fn reload(document: &SessionDocument) -> SessionDocument {
     .unwrap()
 }
 
+/// Stop publishes failure effects for every accepted task intent in the same durable revision.
+/// 停止在同一可靠修订内为每条已接纳任务意图发布失败效果。
+#[test]
+fn stopping_target_atomically_fails_unapplied_start_and_steer() {
+    for kind in [
+        CollaborationTaskMessageKind::TaskStart,
+        CollaborationTaskMessageKind::TaskSteer,
+    ] {
+        let (_, mut target, message) = fixture(kind);
+        target
+            .accept_task_message(
+                CollaborationOperationId::try_new("accept-before-stop").unwrap(),
+                message.clone(),
+                3,
+            )
+            .unwrap();
+        let previous_revision = target.memory_revision();
+        target
+            .set_collaboration_run_control(SetRunControlInput {
+                operation_id: CollaborationOperationId::try_new("stop-pending-task").unwrap(),
+                state: CollaborationRunControl::MainOnly,
+                changed_at_ms: 4,
+            })
+            .unwrap();
+        let effect = &target.collaboration_state().task_message_effects[&message.delivery_id];
+        assert_eq!(target.memory_revision(), previous_revision + 1);
+        assert_eq!(effect.target_revision, target.memory_revision());
+        assert_eq!(
+            effect.outcome,
+            CollaborationTaskMessageEffectKind::Failed {
+                reason: CollaborationDeliveryFailureReason::TargetStopped,
+            }
+        );
+        assert_eq!(reload(&target).collaboration_state().task_message_effects[&message.delivery_id], *effect);
+    }
+}
+
 /// The three durable steps retain original receipts, and acceptance does not create a new turn.
 /// 三步可靠过程保留原始回执，接纳不创建新回合。
 #[test]

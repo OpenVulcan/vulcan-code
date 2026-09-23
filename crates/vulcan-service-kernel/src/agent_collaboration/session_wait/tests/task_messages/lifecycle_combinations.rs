@@ -321,8 +321,8 @@ async fn stopped_target_wakeup_fails_queued_task_without_resuming_business() {
             })
             .unwrap();
         let revision = target.read(|document| document.durable_revision()).unwrap();
-        // The real idle-wake entry must settle the queued task, never start it.
-        // 真实空闲唤醒入口必须结算排队任务，绝不启动它。
+        // Stop already settled the queue atomically; an idle wake must be a read-only no-op.
+        // 停止已原子结算队列；空闲唤醒必须成为只读的空操作。
         let started = crate::agent_collaboration::wake_session_tasks_if_idle(
             &crate::ServiceEventEmitter::new(vec![]),
             &invocation.state,
@@ -362,7 +362,7 @@ async fn stopped_target_wakeup_fails_queued_task_without_resuming_business() {
                         .count(),
                     user_inputs
                 );
-                assert_eq!(document.durable_revision(), revision + 1);
+                assert_eq!(document.durable_revision(), revision);
                 assert_eq!(document.memory_revision(), document.durable_revision());
             })
             .unwrap();

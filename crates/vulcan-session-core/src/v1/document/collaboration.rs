@@ -2869,6 +2869,58 @@ impl SessionDocument {
         &mut self,
         input: SetRunControlInput,
     ) -> Result<IdempotentMutation<CollaborationRunControlReceipt>, DomainError> {
+        if !matches!(
+            input.state,
+            CollaborationRunControl::Stopped
+                | CollaborationRunControl::MainOnly
+                | CollaborationRunControl::MainAndSubagents
+        ) {
+            return self.set_collaboration_run_control_one(input);
+        }
+        let stopped_at_ms = input.changed_at_ms;
+        // A stop and its rejected pending task messages must publish in one revision.
+        // 停止与被拒绝的待处理任务消息必须在同一修订中发布。
+        self.apply_atomic_transition(move |draft| {
+            let receipt = draft.set_collaboration_run_control_one(input)?;
+            if !matches!(receipt, IdempotentMutation::Committed(_)) {
+                return Ok(receipt);
+            }
+            let pending = draft
+                .collaboration_state()
+                .inbound_task_messages
+                .iter()
+                .filter(|(delivery_id, _)| {
+                    !draft
+                        .collaboration_state()
+                        .task_message_effects
+                        .contains_key(*delivery_id)
+                })
+                .map(|(delivery_id, acceptance)| {
+                    (delivery_id.clone(), acceptance.event_seq)
+                })
+                .collect::<Vec<_>>();
+            for (delivery_id, accepted_seq) in pending {
+                let operation_id = CollaborationOperationId::try_new(format!(
+                    "task-stopped:{}",
+                    accepted_seq.value()
+                ))?;
+                draft.fail_task_message(
+                    operation_id,
+                    delivery_id,
+                    CollaborationDeliveryFailureReason::TargetStopped,
+                    stopped_at_ms,
+                )?;
+            }
+            Ok(receipt)
+        })
+    }
+
+    /// Publishes exactly one run-control event; stop callers own the surrounding task settlement.
+    /// 仅发布一条运行控制事件；停止调用方负责外层任务结算。
+    fn set_collaboration_run_control_one(
+        &mut self,
+        input: SetRunControlInput,
+    ) -> Result<IdempotentMutation<CollaborationRunControlReceipt>, DomainError> {
         validate_timestamp(
             "collaboration.run_control.changed_at_ms",
             input.changed_at_ms,

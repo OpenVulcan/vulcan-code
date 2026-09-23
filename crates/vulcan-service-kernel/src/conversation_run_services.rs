@@ -717,6 +717,16 @@ async fn service_stop_conversation_run_owned(
     // The Stop admission reservation is equally live state and must not contaminate the successful Continue summary.
     // Stop 准入预留同样属于实时状态，不得污染成功响应中的 Continue 摘要。
     drop(stop_admission_guard);
+    // The stop can strand already accepted task messages before their next legal API boundary.
+    // 停止可能让已接纳任务消息在下一合法 API 边界之前悬空。
+    if let Err(error) = crate::agent_collaboration::reconcile_task_results_for_session(
+        &state,
+        target_session_id,
+    )
+    .await
+    {
+        tracing::warn!(%target_session_id, %error, "Stopped task message return remains pending");
+    }
     let workbench =
         store_and_emit_full_workbench_snapshot_for_cold_refresh(FullWorkbenchColdRefreshRequest {
             app: &app,

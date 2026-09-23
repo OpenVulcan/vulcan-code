@@ -113,6 +113,11 @@ pub(crate) async fn reconcile_task_results_for_session(
     let executor = registry
         .get(session_id)
         .map_err(|error| error.to_string())?;
+    let mut failed = 0;
+    if let Err(error) = settle_stopped_task_messages(&registry, &executor).await {
+        failed += 1;
+        tracing::warn!(%session_id, %error, "Stopped task message settlement remains pending");
+    }
     // A failed effect is a target-owned fact, but needs its own durable result before transfer.
     // 失败效果是目标所有事实，但在回传前仍需要独立的可靠结果。
     let unrecorded_failures = executor
@@ -129,7 +134,6 @@ pub(crate) async fn reconcile_task_results_for_session(
                 .collect::<Vec<_>>()
         })
         .map_err(|error| error.to_string())?;
-    let mut failed = 0;
     for delivery_id in unrecorded_failures {
         let stamp = now_ms()?;
         if let Err(error) = mutate_handle_with_admission(
@@ -164,7 +168,7 @@ pub(crate) async fn reconcile_task_results_for_session(
         return if failed == 0 {
             Ok(0)
         } else {
-            Err(format!("{failed} task delivery failures remain unrecorded"))
+            Err(format!("{failed} task message settlements remain pending"))
         };
     }
     let invocation = recovery_invocation(
@@ -189,10 +193,76 @@ pub(crate) async fn reconcile_task_results_for_session(
     }
     if failed > 0 {
         return Err(format!(
-            "{delivered} task results delivered; {failed} results remain pending"
+            "{delivered} task results delivered; {failed} task message settlements remain pending"
         ));
     }
     Ok(delivered)
+}
+
+/// Converts accepted but unapplied messages into exact failure effects after a target stop.
+/// 目标停止后将已接纳但未应用的消息转换为精确失败效果。
+/// The stop state and pending set are checked under the target's canonical lifecycle gate.
+/// 停止状态和待处理集合都在目标规范生命周期门内检查。
+async fn settle_stopped_task_messages(
+    registry: &Arc<SessionRuntimeRegistry>,
+    executor: &Arc<SessionHandle>,
+) -> Result<(), String> {
+    let executor_for_write = Arc::clone(executor);
+    lifecycle_write::with_canonical_handles(registry, vec![Arc::clone(executor)], move || {
+        let stamp = now_ms()?;
+        executor_for_write
+            .mutate_durable_if_changed(
+                SessionMutationAdmission::MetadataOnly,
+                SessionFlushReason::MetadataChanged,
+                move |document| {
+                    let stopped = document.metadata.archived_at_ms.is_some()
+                        || matches!(
+                            document.collaboration_run_control(),
+                            CollaborationRunControl::Stopped
+                                | CollaborationRunControl::MainOnly
+                                | CollaborationRunControl::MainAndSubagents
+                        );
+                    if !stopped {
+                        return Ok(SessionMutationChange::Unchanged(0));
+                    }
+                    let pending = document
+                        .collaboration_state()
+                        .inbound_task_messages
+                        .iter()
+                        .filter(|(delivery_id, _)| {
+                            !document
+                                .collaboration_state()
+                                .task_message_effects
+                                .contains_key(*delivery_id)
+                        })
+                        .map(|(delivery_id, acceptance)| {
+                            (delivery_id.clone(), acceptance.event_seq)
+                        })
+                        .collect::<Vec<_>>();
+                    if pending.is_empty() {
+                        return Ok(SessionMutationChange::Unchanged(0));
+                    }
+                    document.apply_atomic_transition(move |draft| {
+                        for (delivery_id, accepted_seq) in &pending {
+                            let operation_id = CollaborationOperationId::try_new(format!(
+                                "task-stopped:{}",
+                                accepted_seq.value()
+                            ))?;
+                            draft.fail_task_message(
+                                operation_id,
+                                delivery_id.clone(),
+                                CollaborationDeliveryFailureReason::TargetStopped,
+                                stamp,
+                            )?;
+                        }
+                        Ok(SessionMutationChange::Changed(pending.len()))
+                    })
+                },
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// Publishes `result` at its exact requester and then confirms the immutable receiver receipt.
