@@ -21,6 +21,143 @@ use vulcan_session_core::v1::document::{
 };
 use vulcan_session_core::v1::ids::ClientActionId;
 
+/// A requester may edit completed task history only after the executor durably confirms its receipt.
+/// 请求者只能在执行者可靠确认结果回执后编辑已完成的任务历史。
+/// Exercises the real two-session lifecycle admission around the interrupted acknowledgement window.
+/// 在确认写入中断窗口前后驱动真实双会话生命周期准入。
+#[tokio::test]
+async fn completed_task_edit_waits_for_executor_result_acknowledgement() {
+    let (_root, invocation, target, context) = message_fixture(false).await;
+    let source = invocation.source_handle.clone();
+    let sent = send(
+        &invocation,
+        &target,
+        context,
+        SessionMessageDeliveryMode::Interrupt,
+        "Complete the current work",
+    )
+    .await
+    .expect("task steering should be durably accepted");
+    let delivery_id = CollaborationDeliveryId::try_new(
+        sent["delivery_id"].as_str().expect("delivery identity"),
+    )
+    .unwrap();
+    target
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.apply_task_steering_before_api(
+                    CollaborationOperationId::try_new("edit-guard-steering").unwrap(),
+                    delivery_id.clone(),
+                    now_ms().unwrap(),
+                )
+            },
+        )
+        .unwrap();
+    target
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.close_turn(
+                    vulcan_session_core::v1::event::TurnOutcome::Stopped,
+                    1,
+                    now_ms().unwrap(),
+                )
+            },
+        )
+        .unwrap();
+    let result = target
+        .read(|document| document.collaboration_state().task_results[&delivery_id].clone())
+        .unwrap();
+    let acceptance = source
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.accept_task_result(
+                    CollaborationOperationId::try_new("edit-guard-result-received").unwrap(),
+                    result,
+                    now_ms().unwrap(),
+                )
+            },
+        )
+        .unwrap()
+        .value
+        .into_value();
+
+    assert!(!source
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    assert!(target
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    let blocked = crate::session_v1_lifecycle::guards::admit_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &source,
+    )
+    .await;
+    assert!(matches!(blocked, Err(SessionV1LifecycleError::UnsettledCollaboration(id)) if id == source.session_id()));
+    let cold_registry = SessionRuntimeRegistry::default();
+    let source_locator = source.storage_locator().unwrap();
+    let cold_source = SessionHandle::new(
+        source.session_id(),
+        source_locator.clone(),
+        load_session_v1_for_runtime(&source_locator).unwrap().document,
+    );
+    cold_registry.register(Arc::clone(&cold_source)).unwrap();
+    let cold_blocked = crate::session_v1_lifecycle::guards::admit_edit_generation(
+        &invocation.controller_runtime,
+        &cold_registry,
+        &cold_source,
+    )
+    .await;
+    assert!(matches!(cold_blocked, Err(SessionV1LifecycleError::UnsettledCollaboration(id)) if id == source.session_id()));
+
+    target
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.acknowledge_task_result(
+                    CollaborationOperationId::try_new("edit-guard-result-acknowledged").unwrap(),
+                    acceptance,
+                    now_ms().unwrap(),
+                )
+            },
+        )
+        .unwrap();
+    assert!(!target
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    let source_admission = crate::session_v1_lifecycle::guards::admit_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &source,
+    )
+    .await
+    .expect("requester edit should be admitted after executor acknowledgement");
+    drop(source_admission);
+    let target_admission = crate::session_v1_lifecycle::guards::admit_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &target,
+    )
+    .await
+    .expect("executor edit should be admitted after its result is acknowledged");
+    drop(target_admission);
+    let cold_source_admission = crate::session_v1_lifecycle::guards::admit_edit_generation(
+        &invocation.controller_runtime,
+        &cold_registry,
+        &cold_source,
+    )
+    .await
+    .expect("requester edit should accept a cold acknowledged executor");
+    drop(cold_source_admission);
+}
+
 /// Admits one real source ToolCall for `tool_id` on the invocation's open business turn.
 /// 在调用的开放业务回合上为 `tool_id` 准入一条真实来源工具调用。
 /// Starts a real Core physical API, prepares the tool event and returns its exact context.

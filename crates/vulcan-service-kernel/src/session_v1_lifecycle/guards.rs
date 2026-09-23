@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_session_core::v1::collaboration::{
     CollaborationInboundDeliveryRecord, CollaborationInboundNotificationRecord,
     CollaborationNotificationState, CollaborationOperationSemantic, CollaborationParticipant,
+    CollaborationTaskResultAcceptance,
 };
 use vulcan_session_core::v1::document::EditGenerationInput;
 use vulcan_workspace_store::workspace_store::SessionV1StorageLocator;
@@ -78,7 +79,9 @@ fn peer_coordinates(
         Err(error) => return Err(error.into()),
     };
     let mut peers = Vec::with_capacity(
-        state.inbound_deliveries.len() + state.inbound_notifications.len(),
+        state.inbound_deliveries.len()
+            + state.inbound_notifications.len()
+            + state.outbound_task_messages.len(),
     );
     for inbound in state.inbound_deliveries.values() {
         // Root ownership must remain stable even when the source is embedded rather than indexed.
@@ -87,6 +90,11 @@ fn peer_coordinates(
     }
     for inbound in state.inbound_notifications.values() {
         peers.push(coordinates(id, &inbound.source)?);
+    }
+    // A source may already hold the result while its executor has not acknowledged that receipt.
+    // 来源可能已收到结果，而执行者尚未确认该回执，因此两侧代际必须一起受锁保护。
+    for outbound in state.outbound_task_messages.values() {
+        peers.push(coordinates(id, &outbound.message.target)?);
     }
     Ok(peers)
 }
@@ -179,27 +187,28 @@ pub(super) async fn require_source_acknowledgements(
         // Capture terminal evidence before awaiting an independent source. Cold members must take
         // this same check: local settlement alone cannot prove that their source was acknowledged.
         // 等待独立来源前先捕获终态凭据。冷态成员也必须受同一校验：本地结算不足以证明来源已确认。
-        let (inbound, notifications, operations, revision) = match registry.get(*target_id) {
-            Ok(target) => {
-                if target.storage_locator()? != *locator {
-                    return Err(SessionV1LifecycleError::CanonicalOwnerUnavailable {
-                        session_id: *target_id,
-                    });
+        let (inbound, notifications, task_receipts, operations, revision) =
+            match registry.get(*target_id) {
+                Ok(target) => {
+                    if target.storage_locator()? != *locator {
+                        return Err(SessionV1LifecycleError::CanonicalOwnerUnavailable {
+                            session_id: *target_id,
+                        });
+                    }
+                    target.read_full_durable(terminal_settlement_evidence)?
                 }
-                target.read_full_durable(terminal_settlement_evidence)?
-            }
-            Err(SessionRuntimeError::SessionNotRegistered(_)) => {
-                let loaded = load_session_v1_full(locator)?;
-                if loaded.metadata.session_id != target_id.to_string() {
-                    return Err(invalid(
-                        *target_id,
-                        "Cold settlement target metadata identity changed.",
-                    ));
+                Err(SessionRuntimeError::SessionNotRegistered(_)) => {
+                    let loaded = load_session_v1_full(locator)?;
+                    if loaded.metadata.session_id != target_id.to_string() {
+                        return Err(invalid(
+                            *target_id,
+                            "Cold settlement target metadata identity changed.",
+                        ));
+                    }
+                    terminal_settlement_evidence(&loaded.document)
                 }
-                terminal_settlement_evidence(&loaded.document)
-            }
-            Err(error) => return Err(error.into()),
-        };
+                Err(error) => return Err(error.into()),
+            };
         for delivery in inbound {
             require_source_acknowledgement(
                 controller,
@@ -221,6 +230,15 @@ pub(super) async fn require_source_acknowledgements(
             )
             .await?;
         }
+        for receipt in task_receipts {
+            require_task_target_acknowledgement(
+                controller,
+                registry,
+                *target_id,
+                &receipt,
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -236,6 +254,7 @@ fn terminal_settlement_evidence(
 ) -> (
     Vec<CollaborationInboundDeliveryRecord>,
     Vec<CollaborationInboundNotificationRecord>,
+    Vec<CollaborationTaskResultAcceptance>,
     std::collections::BTreeMap<
         vulcan_session_core::v1::collaboration::CollaborationOperationId,
         vulcan_session_core::v1::collaboration::CollaborationOperationRecord,
@@ -257,9 +276,105 @@ fn terminal_settlement_evidence(
             .filter(|notification| notification.state == CollaborationNotificationState::Projected)
             .cloned()
             .collect(),
+        document
+            .collaboration_state()
+            .received_task_results
+            .values()
+            .cloned()
+            .collect(),
         document.collaboration_state().operations.clone(),
         document.durable_revision(),
     )
+}
+
+/// Verifies that the executor durably acknowledged a result already accepted by the requester.
+/// 校验执行者已可靠确认请求者接纳的任务结果。
+/// `source_id` owns `receipt`; the target is resolved only through its frozen participant locator.
+/// `source_id` 拥有 `receipt`；目标只能经冻结的参与者定位器解析。
+/// Returns an unsettled error while the executor still needs this requester receipt.
+/// 当执行者仍需该请求者回执时返回未结错误。
+async fn require_task_target_acknowledgement(
+    controller: &HostRuntimeHandle,
+    registry: &SessionRuntimeRegistry,
+    source_id: SessionId,
+    receipt: &CollaborationTaskResultAcceptance,
+) -> Result<(), SessionV1LifecycleError> {
+    let target_participant = &receipt.result.acceptance.message.target;
+    let (target_id, root_id) = coordinates(source_id, target_participant)?;
+    let Some(root) = locate_optional_session_v1_storage(controller, &root_id.to_string()).await?
+    else {
+        // A deleted executor had to pass its own result-acknowledgement guard first.
+        // 已删除的执行者此前必须通过自身的结果确认保护。
+        return Ok(());
+    };
+    if root.project_id() != target_participant.project_id {
+        return Err(invalid(source_id, "Task executor root project changed."));
+    }
+    let locator = if target_id == root_id {
+        root
+    } else {
+        locate_embedded_task_session_v1(&root, &target_id.to_string())?
+    };
+    match registry.get(target_id) {
+        Ok(target) => {
+            if target.storage_locator()? != locator {
+                return Err(invalid(
+                    source_id,
+                    "Task executor canonical locator changed.",
+                ));
+            }
+            target.read_full_durable(|document| {
+                verify_task_target_acknowledgement(source_id, document, receipt)
+            })??;
+        }
+        Err(SessionRuntimeError::SessionNotRegistered(_)) => {
+            let loaded = load_session_v1_full(&locator)?;
+            if loaded.metadata.session_id != target_id.to_string() {
+                return Err(invalid(
+                    source_id,
+                    "Cold task executor metadata identity changed.",
+                ));
+            }
+            verify_task_target_acknowledgement(source_id, &loaded.document, receipt)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+/// Compares the executor's durable acknowledgement with the exact requester-owned result receipt.
+/// 将执行者可靠确认与请求者拥有的精确结果回执逐项比对。
+/// A newer executor generation is safe only because its prior edit already required this acknowledgement.
+/// 只有先前编辑已要求该确认时，执行者更新代际才是安全的。
+fn verify_task_target_acknowledgement(
+    source_id: SessionId,
+    document: &SessionDocument,
+    receipt: &CollaborationTaskResultAcceptance,
+) -> Result<(), SessionV1LifecycleError> {
+    let participant = &receipt.result.acceptance.message.target;
+    if document.segment_generation() > participant.segment_generation {
+        return Ok(());
+    }
+    if document.segment_generation() != participant.segment_generation {
+        return Err(invalid(
+            source_id,
+            "Task executor generation differs from its result receipt.",
+        ));
+    }
+    let acknowledgement = document
+        .collaboration_state()
+        .task_result_acknowledgements
+        .get(&receipt.result.effect.delivery_id)
+        .ok_or(SessionV1LifecycleError::UnsettledCollaboration(source_id))?;
+    if acknowledgement.acceptance != *receipt
+        || acknowledgement.target_revision > document.durable_revision()
+    {
+        return Err(invalid(
+            source_id,
+            "Task executor acknowledgement conflicts with the requester receipt.",
+        ));
+    }
+    Ok(())
 }
 
 /// Verifies one terminal inbound `delivery` of `target` against its durable source acknowledgement.

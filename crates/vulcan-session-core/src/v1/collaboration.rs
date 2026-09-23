@@ -1119,8 +1119,25 @@ impl CollaborationState {
     /// cold member verified through its locator reads the same state and applies the same predicate.
     /// 这是该边界的唯一定义：规范文档委托给它，而通过定位器校验的冷态成员读取同一状态并施加同一判定。
     pub fn requires_edit_or_delete_settlement(&self) -> bool {
-        !self.outbound_task_messages.is_empty()
-            || !self.inbound_task_messages.is_empty()
+        self.outbound_task_messages
+            .iter()
+            .any(|(delivery_id, record)| {
+                record.acceptance.is_none() || !self.received_task_results.contains_key(delivery_id)
+            })
+            || self.inbound_task_messages.keys().any(|delivery_id| {
+                match self.task_message_effects.get(delivery_id) {
+                    Some(effect) => match effect.outcome {
+                        CollaborationTaskMessageEffectKind::Claimed { .. }
+                        | CollaborationTaskMessageEffectKind::Steered { .. } => {
+                            !self.task_result_acknowledgements.contains_key(delivery_id)
+                        }
+                        // A rejected delivery has no requester receipt or acknowledgement protocol.
+                        // 被拒绝的投递没有请求者回执或确认协议，不能丢弃唯一失败凭据。
+                        CollaborationTaskMessageEffectKind::Failed { .. } => true,
+                    },
+                    None => true,
+                }
+            })
             || self.questions.values().any(|question| {
                 question.state == CollaborationQuestionState::Pending
                     || question.answer.as_ref().is_some_and(|answer| {

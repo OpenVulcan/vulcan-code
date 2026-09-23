@@ -118,6 +118,39 @@ fn task_result_delivery_preserves_closed_source_and_exact_replay() {
     }
 }
 
+/// A completed task clears local edit guards only after each owner has its required terminal receipt.
+/// 已完成任务只有在双方各自取得所需终态回执后才解除本地编辑保护。
+/// The service still checks the executor acknowledgement before replacing requester history.
+/// 服务层在替换请求者历史前还会核对执行者确认。
+#[test]
+fn completed_task_result_clears_local_edit_guards_after_receipts() {
+    let (mut source, mut target, result) = completed_pair();
+    assert!(source.has_unsettled_collaboration_for_edit_or_delete());
+    assert!(target.has_unsettled_collaboration_for_edit_or_delete());
+
+    let acceptance = receive(&mut source, result);
+    assert!(
+        !source.has_unsettled_collaboration_for_edit_or_delete(),
+        "a durable requester result is locally complete"
+    );
+    assert!(
+        target.has_unsettled_collaboration_for_edit_or_delete(),
+        "the executor must retain its result until requester acceptance is acknowledged"
+    );
+
+    target
+        .acknowledge_task_result(
+            CollaborationOperationId::try_new("confirm-completed-edit-guard").unwrap(),
+            acceptance,
+            12,
+        )
+        .unwrap();
+    assert!(
+        !target.has_unsettled_collaboration_for_edit_or_delete(),
+        "both terminal receipts permit a settled task history to be edited"
+    );
+}
+
 /// Conflicting receipt bodies, receiver coordinates and occupied operation keys cannot alter either owner.
 /// 冲突回执正文、接收坐标与被占用操作键不能改变任一所有者。
 #[test]
