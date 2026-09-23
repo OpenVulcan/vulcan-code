@@ -998,7 +998,9 @@ impl ProviderV1ApiTerminalFacts {
         };
         // endReason preserves retry exhaustion only when the transport made that terminal decision.
         // endReason 仅在传输层作出终态决定时保留重试耗尽事实。
-        let end_reason = if retry_exhausted {
+        let end_reason = if status == ApiCallStatus::Cancelled {
+            Some(ApiEndReason::Cancelled)
+        } else if retry_exhausted {
             Some(ApiEndReason::RetryExhausted)
         } else {
             Some(provider_end_reason(error))
@@ -1008,8 +1010,14 @@ impl ProviderV1ApiTerminalFacts {
             usage: usage_snapshot(usage),
             status,
             end_reason,
-            error: Some(redacted_api_error(error)),
-            continuation_eligibility,
+            // Cancellation is a control outcome; the domain forbids attaching a failure to it.
+            // 取消属于控制结果；领域禁止在取消终态附加失败错误。
+            error: (status != ApiCallStatus::Cancelled).then(|| redacted_api_error(error)),
+            continuation_eligibility: if status == ApiCallStatus::Cancelled {
+                ContinuationEligibility::Forbidden
+            } else {
+                continuation_eligibility
+            },
             timing,
             provider_source: None,
             tool_call_count: 0,
@@ -1040,11 +1048,7 @@ impl ProviderV1ApiTerminalFacts {
             usage: UsageSnapshot::default(),
             status: ApiCallStatus::Cancelled,
             end_reason: Some(ApiEndReason::Cancelled),
-            error: Some(RedactedApiError {
-                category: ApiErrorCategory::Unknown,
-                error_code: Some(String::from("consumer_stream_dropped")),
-                message: String::from("The Provider stream was cancelled by the host."),
-            }),
+            error: None,
             continuation_eligibility: ContinuationEligibility::Forbidden,
             provider_source: None,
             tool_call_count: 0,
@@ -1113,7 +1117,9 @@ pub(crate) fn provider_failure_continuation_eligibility(
     error: Option<&AiExecutionError>,
     retry_exhausted: bool,
 ) -> ContinuationEligibility {
-    let reason = if retry_exhausted {
+    let reason = if error.is_some_and(|value| value.category == AiErrorCategory::Cancelled) {
+        ApiEndReason::Cancelled
+    } else if retry_exhausted {
         ApiEndReason::RetryExhausted
     } else {
         provider_end_reason(error)
@@ -1175,12 +1181,17 @@ fn redacted_api_error(error: Option<&AiExecutionError>) -> RedactedApiError {
             message: String::from("The Provider request failed without structured error facts."),
         };
     };
+    // Use the same transport classification as the terminal reason, including unknown dispatch.
+    // 与终态原因使用同一传输分类，包含分派结果未知的场景。
     let category = match error.category {
+        AiErrorCategory::Timeout => ApiErrorCategory::Timeout,
+        _ if provider_end_reason(Some(error)) == ApiEndReason::NetworkError => {
+            ApiErrorCategory::Network
+        }
         AiErrorCategory::Authentication | AiErrorCategory::PermissionDenied => {
             ApiErrorCategory::Auth
         }
         AiErrorCategory::PaymentRequired => ApiErrorCategory::Balance,
-        AiErrorCategory::Timeout => ApiErrorCategory::Timeout,
         AiErrorCategory::InvalidRequest | AiErrorCategory::ContextLengthExceeded => {
             ApiErrorCategory::Protocol
         }
@@ -1219,6 +1230,9 @@ pub(crate) fn test_provider_v1_source_input() -> ProviderSourceInput {
         )),
     }
 }
+
+#[cfg(test)]
+mod terminal_tests;
 
 #[cfg(test)]
 mod tests {

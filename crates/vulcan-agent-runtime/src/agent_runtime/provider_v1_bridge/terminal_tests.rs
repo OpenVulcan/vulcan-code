@@ -1,0 +1,185 @@
+//! Actual domain acceptance of transport failures and cancellation projections.
+//! 传输失败与取消投影的真实领域接纳验证。
+
+use super::*;
+use vulcan_ai_contract::AiTransportKind;
+use vulcan_session_core::v1::{
+    ProviderRequestBudgetEvidence, ProviderRequestContextBreakdown, ProviderRequestTextMeasurement,
+    context::LockedBaselineProjection,
+    document::{ApiCompletion, ClientInputSubmission, PrepareAndStartApiInput, SessionDocument},
+    event::{EventBody, ProviderProjectionProof},
+    ids::Seq,
+    projection::provider_visible_fingerprint,
+};
+
+/// Returns a controlled error for `category`, `transport` and `dispatch_outcome`, without secrets.
+/// 为 `category`、`transport` 和 `dispatch_outcome` 返回不含秘密的受控错误。
+fn failure(
+    category: AiErrorCategory,
+    transport: Option<AiTransportKind>,
+    dispatch_outcome: DispatchOutcome,
+) -> AiExecutionError {
+    AiExecutionError {
+        category,
+        transport,
+        dispatch_outcome,
+        subcategory: None,
+        stage: "transport".into(),
+        http_status: None,
+        websocket_close_code: None,
+        upstream_code: None,
+        upstream_type: None,
+        upstream_parameter: None,
+        upstream_message: None,
+        request_id: None,
+        provider_id: None,
+        entry_id: None,
+        model_id: None,
+        message: "Controlled transport failure".into(),
+        semantic_output_observed: false,
+        side_effect_observed: false,
+        terminal: true,
+        retryable: false,
+        retry_after: None,
+    }
+}
+
+/// Returns one physical request identity accepted by the domain fixture below.
+/// 返回下方领域夹具接纳的一次物理请求身份。
+fn request() -> ProviderV1RequestFacts {
+    ProviderV1RequestFacts {
+        provider_call_id: "terminal-contract".into(),
+        purpose: ApiPurposeKind::MainGeneration,
+        continuation_action_id: None,
+        request: ApiRequestSnapshot::new("provider", "model"),
+        prepared_at_ms: 2,
+    }
+}
+
+/// Finishes a real admitted API with `terminal` and asserts its terminal event is retained.
+/// 使用 `terminal` 完成真实准入的 API，并断言其终态事件保留。
+fn assert_domain_accepts(terminal: ProviderV1ApiTerminalFacts) {
+    // The immutable projection and budget evidence are explicit fixture inputs, not production fallbacks.
+    // 不可变投影和预算证据是明确的夹具输入，不是生产回退。
+    let mut document = SessionDocument::new("terminal-fixture", "project", "Terminal", 1);
+    document
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new("terminal-input").unwrap(),
+                "Test transport closure",
+                vec![],
+            ),
+            1,
+        )
+        .unwrap();
+    let through_seq = document.events().last().unwrap().seq;
+    let api = document
+        .prepare_and_start_api(PrepareAndStartApiInput {
+            purpose: terminal.request_facts.purpose,
+            request: terminal.request_facts.request.clone(),
+            projection: ProviderProjectionProof {
+                segment_generation: document.segment_generation(),
+                document_revision: document.memory_revision(),
+                retained_from_seq: Seq::try_new(1).unwrap(),
+                through_seq,
+                fingerprint_sha256: provider_visible_fingerprint(document.events(), through_seq)
+                    .unwrap(),
+            },
+            request_budget_evidence: ProviderRequestBudgetEvidence {
+                request_assembly_fingerprint: format!("sha256:{}", "0".repeat(64)),
+                model_route_fingerprint: format!("sha256:{}", "1".repeat(64)),
+                toolset_fingerprint: format!("sha256:{}", "2".repeat(64)),
+                system_prompt_fingerprint: format!("sha256:{}", "3".repeat(64)),
+                request_text_measurement: ProviderRequestTextMeasurement {
+                    character_count: 0,
+                    utf8_byte_count: 0,
+                    structural_units: 0,
+                    history_message_count: 0,
+                    prompt_in_history: false,
+                    history_fingerprint: format!("sha256:{}", "4".repeat(64)),
+                    prefix_invariant_fingerprint: format!("sha256:{}", "5".repeat(64)),
+                    context_breakdown: ProviderRequestContextBreakdown::default(),
+                },
+            },
+            locked_baseline: LockedBaselineProjection::empty(),
+            continuation_action_id: None,
+            now_ms: 2,
+        })
+        .unwrap()
+        .into_value()
+        .api_call_id;
+    document
+        .complete_api_group(
+            api,
+            ApiCompletion {
+                request: terminal.request_facts.request,
+                usage: terminal.usage,
+                status: terminal.status,
+                end_reason: terminal.end_reason,
+                error: terminal.error,
+                continuation_eligibility: terminal.continuation_eligibility,
+                timing: terminal.timing,
+                provider_source: None,
+                completed_at_ms: terminal.completed_at_ms,
+            },
+        )
+        .expect("the real domain must accept the producer's terminal classification");
+    assert!(document.active_api().is_none());
+    assert!(document.events().iter().any(|event| matches!(&event.event, EventBody::ApiStats(stats) if stats.api_call_id == api && stats.status == terminal.status)));
+}
+
+/// All normalized categories, dispatch outcomes and retry endings must produce valid domain terminal facts.
+/// 所有规范类别、分派结果及重试结束组合都必须产生合法领域终态事实。
+#[test]
+fn failure_and_cancellation_projections_finish_real_domain_api() {
+    for category in [
+        AiErrorCategory::Authentication,
+        AiErrorCategory::PermissionDenied,
+        AiErrorCategory::PaymentRequired,
+        AiErrorCategory::RateLimited,
+        AiErrorCategory::ProviderOverloaded,
+        AiErrorCategory::ProviderUnavailable,
+        AiErrorCategory::Timeout,
+        AiErrorCategory::InvalidRequest,
+        AiErrorCategory::ContextLengthExceeded,
+        AiErrorCategory::ContentPolicy,
+        AiErrorCategory::Cancelled,
+        AiErrorCategory::Unclassified,
+    ] {
+        for transport in [
+            None,
+            Some(AiTransportKind::Http),
+            Some(AiTransportKind::ResponsesWebsocket),
+        ] {
+            for dispatch in [
+                DispatchOutcome::NotDispatched,
+                DispatchOutcome::Dispatched,
+                DispatchOutcome::Unknown,
+            ] {
+                for exhausted in [false, true] {
+                    let error = failure(category, transport, dispatch);
+                    let terminal = ProviderV1ApiTerminalFacts::failed(
+                        request(),
+                        &CoreProviderUsageSnapshot::default(),
+                        ApiTimings::default(),
+                        Some(&error),
+                        exhausted,
+                        provider_failure_continuation_eligibility(Some(&error), exhausted),
+                        3,
+                    );
+                    assert_domain_accepts(terminal);
+                }
+            }
+        }
+    }
+    assert_domain_accepts(ProviderV1ApiTerminalFacts::cancelled(request(), 3));
+    assert_domain_accepts(ProviderV1ApiTerminalFacts::failed(
+        request(),
+        &CoreProviderUsageSnapshot::default(),
+        ApiTimings::default(),
+        None,
+        false,
+        ContinuationEligibility::Forbidden,
+        3,
+    ));
+}
