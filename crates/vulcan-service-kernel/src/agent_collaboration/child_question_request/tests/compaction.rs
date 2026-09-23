@@ -26,6 +26,7 @@ use vulcan_workspace_store::workspace_store::{
 };
 
 mod https;
+mod main_only;
 mod standalone;
 
 /// Completes `document` through real API terminals for the declared `provider` and `model`; returns nothing.

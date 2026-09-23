@@ -8,6 +8,23 @@ use vulcan_provider_adapters::{
     CredentialSecretEnvelope, CredentialSecretResolver, CredentialSecretStore,
 };
 
+mod question;
+
+/// Closed response scenarios served exclusively through the private TLS endpoint.
+/// 仅通过私有 TLS 端点提供的封闭响应场景。
+#[derive(Clone, Copy)]
+enum ResponseMode {
+    /// Ordinary local summary.
+    /// 普通本地摘要。
+    Summary,
+    /// Native compaction, optionally rejecting the first credential.
+    /// 原生压缩，可选拒绝首次凭据。
+    Native { refresh: bool },
+    /// Model tool reply followed by a final answer for auxiliary question execution.
+    /// 辅助问答执行的模型工具回复及后续最终答复。
+    Question,
+}
+
 /// The declared Model Studio workspace host redirected exclusively to loopback.
 /// 声明的 Model Studio 工作空间主机，仅重定向到回环。
 pub(super) const HOST: &str = "compaction.cn-beijing.maas.aliyuncs.com";
@@ -172,6 +189,26 @@ impl Server {
             !refresh || native,
             "OAuth refresh requires the native fixture"
         );
+        Self::start_mode(
+            summary,
+            if native {
+                ResponseMode::Native { refresh }
+            } else {
+                ResponseMode::Summary
+            },
+        )
+        .await
+    }
+
+    /// Starts a real Chat model that replies to the tagged question using its advertised tool.
+    /// 启动通过已暴露工具回复带标签问题的真实 Chat 模型。
+    pub(super) async fn start_question_answerer() -> Self {
+        Self::start_mode("", ResponseMode::Question).await
+    }
+
+    /// Starts the isolated endpoint for `mode` and optional `summary`; returns its transport and observations.
+    /// 为 `mode` 及可选 `summary` 启动隔离端点；返回传输及观察记录。
+    async fn start_mode(summary: &str, mode: ResponseMode) -> Self {
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
         // Bind no external interface and retain the OS-assigned private port.
         // 不绑定外部接口，保留操作系统分配的私有端口。
@@ -232,15 +269,7 @@ impl Server {
                     // Decode real TLS before inspecting HTTP framing.
                     // 检查 HTTP 分帧前解码真实 TLS。
                     let mut stream = acceptor.accept(socket).await.unwrap();
-                    serve(
-                        &mut stream,
-                        &observed,
-                        &summary,
-                        native,
-                        refresh,
-                        &observed_refreshes,
-                    )
-                    .await;
+                    serve(&mut stream, &observed, &summary, mode, &observed_refreshes).await;
                 })
                 .await
                 .expect("bounded summary request");
@@ -292,10 +321,13 @@ async fn serve(
     stream: &mut tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
     requests: &Mutex<Vec<serde_json::Value>>,
     summary: &str,
-    native: bool,
-    refresh: bool,
+    mode: ResponseMode,
     refreshes: &std::sync::atomic::AtomicUsize,
 ) {
+    // Derive transport behavior once from the explicit fixture scenario.
+    // 从显式夹具场景一次性派生传输行为。
+    let native = matches!(mode, ResponseMode::Native { .. });
+    let refresh = matches!(mode, ResponseMode::Native { refresh: true });
     // Read exact framing without consuming body bytes as headers.
     // 精确读取分帧，不将正文字节作为请求头消费。
     let mut header = Vec::new();
@@ -376,6 +408,10 @@ async fn serve(
         .lock()
         .unwrap()
         .push(serde_json::from_slice(&body).unwrap());
+    if matches!(mode, ResponseMode::Question) {
+        question::respond(stream, requests).await;
+        return;
+    }
     if refresh {
         // Reject only the original token; the second physical request must carry the refreshed token.
         // 仅拒绝原令牌；第二次物理请求必须携带刷新令牌。
