@@ -399,10 +399,17 @@ pub(super) async fn execute_durable(
     // The tracker retains a distinct request identity and independent usage for each admitted attempt.
     // 跟踪器为每次准入尝试保留不同的请求身份及独立用量。
     let mut tracker = ProviderRequestTelemetryTracker::default();
-    tracker.install_context(ProviderRequestTelemetryContext::from_preparation(
-        &preparation,
-        None,
-    )?);
+    // Remote transport bypasses the ordinary launch, so declare its confirmation owner here as well.
+    // 远端传输绕过普通启动，因此也必须在此声明其确认所有者。
+    let telemetry_context = match ownership {
+        PromptCompactionOwnership::SessionV1 => {
+            ProviderRequestTelemetryContext::from_preparation(&preparation, None)?
+        }
+        PromptCompactionOwnership::RuntimeOnly => {
+            super::standalone_owner::standalone_provider_telemetry_context(&preparation)?
+        }
+    };
+    tracker.install_context(telemetry_context);
     // traceAttemptState preserves the ordinary per-API physical-attempt numbering across retries.
     // traceAttemptState 跨重试保留普通请求相同的按 API 物理尝试编号。
     let trace_attempt_state = std::sync::Mutex::new(ProviderApiTraceAttemptState::default());

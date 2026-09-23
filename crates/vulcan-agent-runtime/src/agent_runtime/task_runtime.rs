@@ -1128,6 +1128,39 @@ pub struct TaskRuntime {
     max_depth: usize,
 }
 
+/// Runs `request` through the actual standalone producer and consumer for network acceptance fixtures.
+/// 为网络验收夹具通过真实独立生产者及消费方运行 `request`。
+/// Returns the completed execution only when every physical attempt has matching admission and terminal accounting.
+/// 仅当每个物理尝试均有对应准入及终态记账时返回完成执行。
+#[cfg(feature = "test-support")]
+pub async fn run_standalone_compaction_for_testing(
+    request: PromptCompactionFoundationJobRequest,
+) -> Result<crate::agent_runtime::prompt_compaction::PromptCompactionExecution, String> {
+    if request.ownership
+        != crate::agent_runtime::prompt_compaction::PromptCompactionOwnership::RuntimeOnly
+    {
+        return Err(String::from(
+            "Standalone acceptance requires RuntimeOnly ownership.",
+        ));
+    }
+    // The production driver remains the sole confirmation authority; this helper injects no stream events.
+    // 生产驱动器仍是唯一确认权威；此辅助入口不注入任何流事件。
+    let session_id = request.session_id;
+    let (execution, owner) = runtime_execution::drive_standalone_prompt_compaction_stream(
+        stream_prompt_compaction_foundation_job(request),
+        session_id,
+    )
+    .await?;
+    if owner.admitted_request_count() != execution.provider_request_count
+        || owner.terminal_request_count() != execution.provider_request_count
+    {
+        return Err(String::from(
+            "Standalone acceptance physical request accounting mismatch.",
+        ));
+    }
+    Ok(execution)
+}
+
 /// Test-only input for seeding one resident subagent registry entry.
 /// 用于播种一条常驻子代理注册表条目的仅测试输入。
 #[cfg(feature = "test-support")]

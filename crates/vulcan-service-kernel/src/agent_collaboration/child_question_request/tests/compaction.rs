@@ -26,6 +26,7 @@ use vulcan_workspace_store::workspace_store::{
 };
 
 mod https;
+mod standalone;
 
 /// Completes `document` through real API terminals for the declared `provider` and `model`; returns nothing.
 /// 经声明的`provider`和`model`的真实 API 终态完成`document`；无返回值。
@@ -144,7 +145,7 @@ fn local_child_maintenance_commits_real_http_summary_and_reloads() {
         .unwrap();
     // Poll the real stream on its owning service worker, not the smaller harness thread stack.
     // 在所属服务工作线程轮询真实流，而非较小的测试框架线程栈。
-    let task = executor.spawn(Box::pin(run_child_maintenance(false, false)));
+    let task = executor.spawn(Box::pin(run_child_maintenance(false, false, false)));
     executor.block_on(task).unwrap();
 }
 
@@ -158,7 +159,7 @@ fn native_child_maintenance_commits_real_http_checkpoint_and_reloads() {
         .worker_threads(2)
         .build()
         .unwrap();
-    let task = executor.spawn(Box::pin(run_child_maintenance(true, false)));
+    let task = executor.spawn(Box::pin(run_child_maintenance(true, false, false)));
     executor.block_on(task).unwrap();
 }
 
@@ -172,13 +173,13 @@ fn native_child_maintenance_refreshes_oauth_and_retries_with_a_new_durable_api()
         .worker_threads(2)
         .build()
         .unwrap();
-    let task = executor.spawn(Box::pin(run_child_maintenance(true, true)));
+    let task = executor.spawn(Box::pin(run_child_maintenance(true, true, false)));
     executor.block_on(task).unwrap();
 }
 
 /// Executes the complete fixture on the service runtime; returns only after all assertions and cleanup.
 /// 在服务运行时执行完整夹具；仅在全部断言和清理后返回。
-async fn run_child_maintenance(native: bool, refresh: bool) {
+async fn run_child_maintenance(native: bool, refresh: bool, standalone: bool) {
     // Both modes use actual bundled service routes; native mode adds an explicit direct-tool test model.
     // 两种模式使用实际内置服务路线；原生模式增加明确的直接工具测试模型。
     let (provider, entry, model, credential_profile, credential_mode, reasoning) = if native {
@@ -423,6 +424,20 @@ async fn run_child_maintenance(native: bool, refresh: bool) {
     .unwrap()
     .unwrap();
     assert_eq!(target.remote_compaction_enabled, native);
+    if standalone {
+        standalone::verify(
+            preparation,
+            target,
+            bridge.provider_configuration,
+            Arc::new(foundation),
+            &handle,
+            &server,
+            refresh,
+        )
+        .await;
+        server.shutdown().await;
+        return;
+    }
     // Invocation identity comes entirely from the original captured profile.
     // 调用身份完全来自原捕获档案。
     let invocation = TaskExecutionRequest {
