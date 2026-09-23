@@ -271,6 +271,7 @@ export type CollaborationEventKind =
   | "question_answered"
   | "question_cancelled"
   | "answer_delivered"
+  | "answer_delivery_failed"
   | "child_task_reserved"
   | "child_task_activated"
   | "child_task_terminal"
@@ -313,7 +314,7 @@ export type CollaborationAnswerDeliveryKind = "wait_tool" | "user_event";
 
 /** Current state of the independent answer delivery record.
  * 独立答案交付记录的当前状态。 */
-export type CollaborationAnswerDeliveryState = "undelivered" | "delivered";
+export type CollaborationAnswerDeliveryState = "undelivered" | "delivered" | "failed";
 
 /** Lifecycle state of one child task reservation.
  * 一条子任务预留的生命周期状态。 */
@@ -366,6 +367,9 @@ export interface CollaborationParticipant {
  * 一条已结算答案的独立交付修订记录。 */
 export interface CollaborationAnswerDeliveryRecord {
   state: CollaborationAnswerDeliveryState;
+  /** Stable reason when delivery failed before the source model received the answer.
+   * 答案进入来源模型前交付失败时的稳定原因。 */
+  failure?: CollaborationDeliveryFailureReason;
   delivery_revision: number;
   kind?: CollaborationAnswerDeliveryKind;
   projected_seq?: number;

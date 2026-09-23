@@ -222,6 +222,30 @@ it("offers no question control for a received notification", async () => {
   );
 });
 
+it("shows a failed answer delivery as failed after authorization revocation", async () => {
+  // A revoked reply is a durable failed delivery, not an answer sent to the source model.
+  // 撤权后的回复属于可靠失败交付，不是已经发给来源模型的答案。
+  await mount({
+    kind: "collaboration",
+    version: 1,
+    operation_id: "operation-answer-failed",
+    event_kind: "answer_delivery_failed",
+    after_state: {
+      kind: "answer_delivery",
+      question_id: "question-1",
+      delivery: {
+        state: "failed",
+        failure: "authorization_revoked",
+        delivery_revision: 2,
+        last_operation_id: "operation-answer-failed",
+        updated_at_ms: 200,
+      },
+    },
+  });
+  expect(host.querySelector(".conversation-v1-collaboration-status")?.textContent).toBe("Failed");
+  expect(host.querySelector(".conversation-v1-collaboration-details")?.textContent).toContain("authorization_revoked");
+});
+
 it("enables session navigation only for a routable participant", async () => {
   // A route whose target is missing must stay inert rather than navigating to a dead session.
   // 目标缺失的路由必须保持不可用，而不是导航到死会话。

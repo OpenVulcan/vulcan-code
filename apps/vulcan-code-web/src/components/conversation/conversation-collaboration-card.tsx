@@ -366,6 +366,7 @@ function collaborationTimelineTitle(kind: CollaborationEventKind, t: (key: Trans
       return t("conversation.collaboration.timeline.question");
     case "question_answered":
     case "answer_delivered":
+    case "answer_delivery_failed":
       return t("conversation.collaboration.timeline.answer");
     case "delivery_recorded":
     case "delivery_accepted":
@@ -513,6 +514,7 @@ function collaborationAnswerDeliveryStateLabel(state: CollaborationAnswerDeliver
   switch (state) {
     case "undelivered": return t("conversation.collaboration.status.undelivered");
     case "delivered": return t("conversation.collaboration.status.delivered");
+    case "failed": return t("conversation.collaboration.status.failed");
   }
 }
 
