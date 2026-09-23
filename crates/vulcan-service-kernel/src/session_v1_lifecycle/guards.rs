@@ -4,7 +4,8 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_session_core::v1::collaboration::{
-    CollaborationInboundDeliveryRecord, CollaborationParticipant,
+    CollaborationInboundDeliveryRecord, CollaborationInboundNotificationRecord,
+    CollaborationNotificationState, CollaborationOperationSemantic, CollaborationParticipant,
 };
 use vulcan_session_core::v1::document::EditGenerationInput;
 use vulcan_workspace_store::workspace_store::SessionV1StorageLocator;
@@ -76,10 +77,15 @@ fn peer_coordinates(
         }
         Err(error) => return Err(error.into()),
     };
-    let mut peers = Vec::with_capacity(state.inbound_deliveries.len());
+    let mut peers = Vec::with_capacity(
+        state.inbound_deliveries.len() + state.inbound_notifications.len(),
+    );
     for inbound in state.inbound_deliveries.values() {
         // Root ownership must remain stable even when the source is embedded rather than indexed.
         // 即使来源为嵌入会话而非索引会话，根归属仍必须稳定。
+        peers.push(coordinates(id, &inbound.source)?);
+    }
+    for inbound in state.inbound_notifications.values() {
         peers.push(coordinates(id, &inbound.source)?);
     }
     Ok(peers)
@@ -173,7 +179,7 @@ pub(super) async fn require_source_acknowledgements(
         // Capture terminal evidence before awaiting an independent source. Cold members must take
         // this same check: local settlement alone cannot prove that their source was acknowledged.
         // 等待独立来源前先捕获终态凭据。冷态成员也必须受同一校验：本地结算不足以证明来源已确认。
-        let (inbound, operations, revision) = match registry.get(*target_id) {
+        let (inbound, notifications, operations, revision) = match registry.get(*target_id) {
             Ok(target) => {
                 if target.storage_locator()? != *locator {
                     return Err(SessionV1LifecycleError::CanonicalOwnerUnavailable {
@@ -205,6 +211,16 @@ pub(super) async fn require_source_acknowledgements(
             )
             .await?;
         }
+        for notification in notifications {
+            require_notification_source_acknowledgement(
+                controller,
+                registry,
+                *target_id,
+                &operations,
+                &notification,
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -219,6 +235,7 @@ fn terminal_settlement_evidence(
     document: &SessionDocument,
 ) -> (
     Vec<CollaborationInboundDeliveryRecord>,
+    Vec<CollaborationInboundNotificationRecord>,
     std::collections::BTreeMap<
         vulcan_session_core::v1::collaboration::CollaborationOperationId,
         vulcan_session_core::v1::collaboration::CollaborationOperationRecord,
@@ -231,6 +248,13 @@ fn terminal_settlement_evidence(
             .inbound_deliveries
             .values()
             .filter(|delivery| delivery.settlement.is_some())
+            .cloned()
+            .collect(),
+        document
+            .collaboration_state()
+            .inbound_notifications
+            .values()
+            .filter(|notification| notification.state == CollaborationNotificationState::Projected)
             .cloned()
             .collect(),
         document.collaboration_state().operations.clone(),
@@ -405,6 +429,152 @@ fn verify_acknowledgement(
         return Err(invalid(
             target,
             "Settlement source acknowledgement conflicts with the target receipt.",
+        ));
+    }
+    Ok(())
+}
+
+/// Verifies that a projected target notification has a matching durable source progress receipt.
+/// 校验目标已投影通知在来源侧具有匹配的可靠进度回执。
+/// The target's operation map supplies the exact event sequence; the source and its root are already gated.
+/// 目标操作表提供精确事件序号；来源及其根已经被生命周期锁保护。
+async fn require_notification_source_acknowledgement(
+    controller: &HostRuntimeHandle,
+    registry: &SessionRuntimeRegistry,
+    target_id: SessionId,
+    operations: &BTreeMap<
+        vulcan_session_core::v1::collaboration::CollaborationOperationId,
+        vulcan_session_core::v1::collaboration::CollaborationOperationRecord,
+    >,
+    notification: &CollaborationInboundNotificationRecord,
+) -> Result<(), SessionV1LifecycleError> {
+    let projection_id = vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(
+        format!("{}:project", notification.delivery_id.as_str()),
+    )
+    .map_err(|error| invalid(target_id, error.to_string()))?;
+    let operation = operations.get(&projection_id).ok_or_else(|| {
+        invalid(target_id, "Projected notification has no target operation receipt.")
+    })?;
+    if !matches!(
+        &operation.semantic,
+        CollaborationOperationSemantic::ProjectNotification {
+            notification_id,
+            delivery_id,
+            projected_seq,
+            projected_input_id,
+            projected_turn_id,
+        } if notification_id == &notification.notification_id
+            && delivery_id == &notification.delivery_id
+            && Some(*projected_seq) == notification.projected_seq
+            && Some(*projected_input_id) == notification.projected_input_id
+            && Some(*projected_turn_id) == notification.projected_turn_id
+    ) {
+        return Err(invalid(
+            target_id,
+            "Target notification projection operation conflicts with its receipt.",
+        ));
+    }
+    let (source_id, root_id) = coordinates(target_id, &notification.source)?;
+    let Some(root) = locate_optional_session_v1_storage(controller, &root_id.to_string()).await?
+    else {
+        // A source already deleted after its own progress was settled has no remaining receipt.
+        // 来源在自身进度结清后已被删除时，不再留下需要核对的回执。
+        return Ok(());
+    };
+    if root.project_id() != notification.source.project_id {
+        return Err(invalid(target_id, "Notification source root project changed."));
+    }
+    let locator = if source_id == root_id {
+        root
+    } else {
+        locate_embedded_task_session_v1(&root, &source_id.to_string())?
+    };
+    match registry.get(source_id) {
+        Ok(source) => {
+            if source.storage_locator()? != locator {
+                return Err(invalid(
+                    target_id,
+                    "Notification source canonical locator changed.",
+                ));
+            }
+            source.read_full_durable(|document| {
+                verify_notification_acknowledgement(
+                    target_id,
+                    document,
+                    notification,
+                    operation.event_seq,
+                )
+            })??;
+        }
+        Err(SessionRuntimeError::SessionNotRegistered(_)) => {
+            let loaded = load_session_v1_full(&locator)?;
+            if loaded.metadata.session_id != source_id.to_string() {
+                return Err(invalid(
+                    target_id,
+                    "Cold notification source metadata identity changed.",
+                ));
+            }
+            verify_notification_acknowledgement(
+                target_id,
+                &loaded.document,
+                notification,
+                operation.event_seq,
+            )?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+/// Compares the source's recorded notification progress with one pinned target projection.
+/// 将来源已记录的通知进度与固定目标投影逐项比对。
+/// Newer source generations are independently protected by Core's edit admission.
+/// 较新的来源代际由 Core 编辑准入另行保护。
+fn verify_notification_acknowledgement(
+    target_id: SessionId,
+    document: &SessionDocument,
+    inbound: &CollaborationInboundNotificationRecord,
+    target_event_seq: Seq,
+) -> Result<(), SessionV1LifecycleError> {
+    if document.segment_generation() > inbound.source.segment_generation {
+        return Ok(());
+    }
+    if document.segment_generation() != inbound.source.segment_generation {
+        return Err(invalid(
+            target_id,
+            "Notification source generation differs from its target receipt.",
+        ));
+    }
+    let outbound = document
+        .collaboration_state()
+        .notifications
+        .get(&inbound.notification_id)
+        .ok_or_else(|| {
+            invalid(
+                target_id,
+                "Notification source record is missing in the same generation.",
+            )
+        })?;
+    if outbound.delivery_id != inbound.delivery_id
+        || outbound.operation_id != inbound.source_operation_id
+        || outbound.source != inbound.source
+        || outbound.target != inbound.target
+        || outbound.body != inbound.body
+    {
+        return Err(invalid(
+            target_id,
+            "Notification source record conflicts with its target receipt.",
+        ));
+    }
+    if outbound.state != CollaborationNotificationState::Projected {
+        return Err(SessionV1LifecycleError::UnsettledCollaboration(target_id));
+    }
+    if outbound.target_revision != Some(inbound.target_revision)
+        || outbound.target_event_seq != Some(target_event_seq)
+    {
+        return Err(invalid(
+            target_id,
+            "Notification source progress conflicts with the target projection.",
         ));
     }
     Ok(())

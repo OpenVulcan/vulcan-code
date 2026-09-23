@@ -1367,6 +1367,92 @@ async fn history_edit_rechecks_children_created_while_waiting_for_its_gate() {
     );
 }
 
+/// A projected notification remains the only target proof until its source records the receipt.
+/// 通知已投影后，在来源记录回执之前，目标仍持有唯一的投影凭据。
+/// Editing the target must wait for that source confirmation and then admit the same edit.
+/// 编辑目标必须等待来源确认；确认后相同编辑准入应当通过。
+#[tokio::test]
+async fn history_edit_preserves_unacknowledged_notification_projection() {
+    let (_storage, invocation, target, _) = message_fixture(false).await;
+    let source = invocation.source_handle.clone();
+    let sent = notifications::send_notification(
+        &invocation,
+        target.session_id(),
+        String::from("The child reached a checkpoint; no reply needed."),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sent["status"], "accepted");
+    let notification_id = source
+        .read(|document| document.collaboration_state().notifications.keys().next().cloned())
+        .unwrap()
+        .unwrap();
+    target
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| document.project_notification_before_api(notification_id.clone(), now_ms().unwrap()),
+        )
+        .unwrap();
+    assert!(!target
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    assert_eq!(
+        source
+            .read(|document| document.collaboration_state().notifications[&notification_id].state)
+            .unwrap(),
+        CollaborationNotificationState::Accepted
+    );
+    let rejected = crate::session_v1_lifecycle::guards::admit_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &target,
+    )
+    .await;
+    assert!(
+        matches!(rejected, Err(SessionV1LifecycleError::UnsettledCollaboration(id)) if id == target.session_id()),
+        "the target projection is still needed to repair its source: {rejected:?}"
+    );
+    let cold_registry = SessionRuntimeRegistry::default();
+    let target_locator = target.storage_locator().unwrap();
+    let cold_target = SessionHandle::new(
+        target.session_id(),
+        target_locator.clone(),
+        load_session_v1_for_runtime(&target_locator).unwrap().document,
+    );
+    cold_registry.register(Arc::clone(&cold_target)).unwrap();
+    let cold_rejected = crate::session_v1_lifecycle::guards::admit_edit_generation(
+        &invocation.controller_runtime,
+        &cold_registry,
+        &cold_target,
+    )
+    .await;
+    assert!(
+        matches!(cold_rejected, Err(SessionV1LifecycleError::UnsettledCollaboration(id)) if id == target.session_id()),
+        "a cold source must retain the same acknowledgement gate: {cold_rejected:?}"
+    );
+    reconcile_session_v1_collaboration_outbox(
+        &crate::ServiceEventEmitter::new(vec![]),
+        invocation.state.clone(),
+        invocation.source_session_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        source
+            .read(|document| document.collaboration_state().notifications[&notification_id].state)
+            .unwrap(),
+        CollaborationNotificationState::Projected
+    );
+    let admitted = crate::session_v1_lifecycle::guards::admit_edit_generation(
+        &invocation.controller_runtime,
+        &invocation.registry,
+        &target,
+    )
+    .await;
+    assert!(admitted.is_ok(), "acknowledged notification still blocked edit: {admitted:?}");
+}
+
 /// Starts the question-execution API on `handle` and prepares its reply ToolCall.
 /// 在 `handle` 上启动答疑执行 API 并准备其回答工具调用。
 /// Returns the exact context the reply command is validated against.
