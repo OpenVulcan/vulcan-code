@@ -1487,3 +1487,4 @@ async fn late_answer_after_settlement_is_rejected_without_reviving_target_task()
         .document;
     assert_eq!(loaded_target.durable_revision(), target_revision);
 }
+mod concurrent_wait;
