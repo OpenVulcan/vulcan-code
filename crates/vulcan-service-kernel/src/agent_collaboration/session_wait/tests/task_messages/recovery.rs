@@ -5,13 +5,200 @@ use super::*;
 use vulcan_session_core::v1::collaboration::{
     AcceptNotificationInput, CollaborationDeliveryFailureReason, CollaborationDeliveryId,
     CollaborationGrantAction, CollaborationNotificationId, CollaborationNotificationState,
-    CollaborationTaskMessage, FailNotificationInput, RecordNotificationProgressInput,
-    SendNotificationInput, SetRunControlInput,
+    CollaborationTaskMessage, FailDeliveryInput, FailNotificationInput,
+    RecordNotificationProgressInput, SendNotificationInput, SetRunControlInput,
 };
 use vulcan_session_core::v1::document::SessionDocument;
 
 mod embedded_tree;
 mod main_business;
+
+/// An accepted cross-project question must fail on both sides when its Ask grant is revoked
+/// before the target's next provider request.
+/// 跨项目问题已接纳但提问授权在目标下一次供应商请求前撤销时，双方必须记录失败。
+#[tokio::test]
+async fn accepted_question_revoked_before_projection_settles_both_sides() {
+    let (_root, invocation, target, _) = message_fixture(true).await;
+    let source = invocation.source_handle.clone();
+    let grant = crate::project_conversation_services::service_add_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        target.session_id().to_string(),
+        format!("user-grant-add:v1:{}", Uuid::new_v4()),
+        [CollaborationGrantAction::Ask].into_iter().collect(),
+    )
+    .await
+    .unwrap();
+    let asked = ask_question(
+        &crate::ServiceEventEmitter::new(vec![]),
+        &invocation,
+        target.session_id(),
+        String::from("A question accepted while the grant is valid."),
+    )
+    .await
+    .unwrap();
+    assert_eq!(asked["status"], "ok");
+    let question_id =
+        CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
+    let delivery_id = source
+        .read(|document| {
+            document
+                .question_snapshot(&question_id)
+                .unwrap()
+                .delivery_id
+                .clone()
+        })
+        .unwrap();
+    crate::project_conversation_services::service_remove_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        grant["grant"]["grant_id"].as_str().unwrap().to_owned(),
+        format!("user-grant-remove:v1:{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+
+    project_collaboration_before_api(&invocation.state, &target, now_ms().unwrap())
+        .await
+        .expect("revocation must durably fail the accepted question");
+    let outbound = source
+        .read(|document| document.delivery_snapshot(&delivery_id).unwrap().clone())
+        .unwrap();
+    let inbound = target
+        .read(|document| {
+            document
+                .inbound_delivery_snapshot(&delivery_id)
+                .unwrap()
+                .clone()
+        })
+        .unwrap();
+    assert_eq!(outbound.state, CollaborationDeliveryState::Failed);
+    assert_eq!(inbound.state, CollaborationDeliveryState::Failed);
+    assert_eq!(
+        outbound.failure,
+        Some(CollaborationDeliveryFailureReason::AuthorizationRevoked)
+    );
+    assert_eq!(inbound.failure, outbound.failure);
+    assert_eq!(outbound.target_revision, Some(inbound.target_revision));
+    assert!(outbound.target_event_seq.is_some());
+    assert!(!target
+        .read(|document| document.events().iter().any(|event| matches!(
+            &event.event,
+            EventBody::UserInput(input)
+                if input.input_source == vulcan_session_core::v1::event::UserInputSource::AgentMessage
+        )))
+        .unwrap());
+    let mut cancel_invocation = invocation.clone();
+    cancel_invocation.operation_id = format!("v1:{}:cancel-after-revoke", invocation.source_session_id);
+    let cancelled = cancel_question(
+        &cancel_invocation,
+        question_id.as_str().to_owned(),
+        String::from("Delivery failed."),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cancelled["question_state"], "cancelled");
+    assert!(
+        !source
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    assert!(
+        !target
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+}
+
+/// Recovery must copy the target's durable failure when the source acknowledgement was interrupted.
+/// 来源确认中断后，恢复必须复制目标的可靠失败回执。
+#[tokio::test]
+async fn failed_accepted_question_repairs_missing_source_progress() {
+    let (_root, invocation, target, _) = message_fixture(true).await;
+    let source = invocation.source_handle.clone();
+    crate::project_conversation_services::service_add_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        target.session_id().to_string(),
+        format!("user-grant-add:v1:{}", Uuid::new_v4()),
+        [CollaborationGrantAction::Ask].into_iter().collect(),
+    )
+    .await
+    .unwrap();
+    let asked = ask_question(
+        &crate::ServiceEventEmitter::new(vec![]),
+        &invocation,
+        target.session_id(),
+        String::from("A question whose failure acknowledgement is interrupted."),
+    )
+    .await
+    .unwrap();
+    let question_id =
+        CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
+    let delivery_id = source
+        .read(|document| {
+            document
+                .question_snapshot(&question_id)
+                .unwrap()
+                .delivery_id
+                .clone()
+        })
+        .unwrap();
+    let failed = target
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.fail_delivery(FailDeliveryInput {
+                    operation_id: CollaborationOperationId::try_new("interrupted-target-failure")
+                        .unwrap(),
+                    delivery_id: delivery_id.clone(),
+                    question_id: question_id.clone(),
+                    reason: CollaborationDeliveryFailureReason::AuthorizationRevoked,
+                    failed_at_ms: now_ms().unwrap(),
+                })
+            },
+        )
+        .unwrap()
+        .value
+        .into_value();
+    assert_eq!(
+        source
+            .read(|document| document.delivery_snapshot(&delivery_id).unwrap().state)
+            .unwrap(),
+        CollaborationDeliveryState::Accepted
+    );
+    assert_eq!(
+        reconcile_session_v1_collaboration_outbox(
+            &crate::ServiceEventEmitter::new(vec![]),
+            invocation.state.clone(),
+            invocation.source_session_id,
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    let recovered = source
+        .read(|document| document.delivery_snapshot(&delivery_id).unwrap().clone())
+        .unwrap();
+    assert_eq!(recovered.state, CollaborationDeliveryState::Failed);
+    assert_eq!(
+        recovered.failure,
+        Some(CollaborationDeliveryFailureReason::AuthorizationRevoked)
+    );
+    assert_eq!(recovered.target_revision, Some(failed.revision));
+    assert_eq!(recovered.target_event_seq, Some(failed.event_seq));
+    assert_eq!(
+        reconcile_session_v1_collaboration_outbox(
+            &crate::ServiceEventEmitter::new(vec![]),
+            invocation.state.clone(),
+            invocation.source_session_id,
+        )
+        .await
+        .unwrap(),
+        0
+    );
+}
 
 /// A notification stranded between source commit and target acceptance must be repairable.
 /// 停留在来源提交与目标接纳之间的通知必须可被修复。
@@ -238,14 +425,23 @@ async fn projected_notification_with_missing_source_progress_is_repaired() {
     .expect("the notification must be accepted before target projection");
     assert_eq!(send["status"], "accepted");
     let notification_id = source
-        .read(|document| document.collaboration_state().notifications.keys().next().cloned())
+        .read(|document| {
+            document
+                .collaboration_state()
+                .notifications
+                .keys()
+                .next()
+                .cloned()
+        })
         .unwrap()
         .expect("the source must retain the notification identity");
     target
         .mutate_durable(
             SessionMutationAdmission::MetadataOnly,
             SessionFlushReason::MetadataChanged,
-            |document| document.project_notification_before_api(notification_id.clone(), now_ms().unwrap()),
+            |document| {
+                document.project_notification_before_api(notification_id.clone(), now_ms().unwrap())
+            },
         )
         .expect("the target must project the accepted notification");
     assert_eq!(
@@ -260,7 +456,10 @@ async fn projected_notification_with_missing_source_progress_is_repaired() {
             document.collaboration_state().inbound_notifications[&notification_id].clone()
         })
         .unwrap();
-    assert_eq!(target_proof.state, CollaborationNotificationState::Projected);
+    assert_eq!(
+        target_proof.state,
+        CollaborationNotificationState::Projected
+    );
     let repaired = reconcile_session_v1_collaboration_outbox(
         &crate::ServiceEventEmitter::new(vec![]),
         invocation.state.clone(),
@@ -272,8 +471,14 @@ async fn projected_notification_with_missing_source_progress_is_repaired() {
     let source_proof = source
         .read(|document| document.collaboration_state().notifications[&notification_id].clone())
         .unwrap();
-    assert_eq!(source_proof.state, CollaborationNotificationState::Projected);
-    assert_eq!(source_proof.target_revision, Some(target_proof.target_revision));
+    assert_eq!(
+        source_proof.state,
+        CollaborationNotificationState::Projected
+    );
+    assert_eq!(
+        source_proof.target_revision,
+        Some(target_proof.target_revision)
+    );
     assert!(source_proof.target_event_seq.is_some());
     assert_eq!(
         target
@@ -330,8 +535,10 @@ async fn accepted_notification_progress_survives_later_grant_revocation() {
             SessionFlushReason::MetadataChanged,
             |document| {
                 document.accept_notification(AcceptNotificationInput {
-                    operation_id: CollaborationOperationId::try_new("accepted-before-revoke-accept")
-                        .unwrap(),
+                    operation_id: CollaborationOperationId::try_new(
+                        "accepted-before-revoke-accept",
+                    )
+                    .unwrap(),
                     notification_id: notification_id.clone(),
                     delivery_id: delivery_id.clone(),
                     source_operation_id: operation_id.clone(),
@@ -387,16 +594,23 @@ async fn accepted_notification_progress_survives_later_grant_revocation() {
     );
     assert_eq!(
         target
-            .read(|document| document.collaboration_state().inbound_notifications[&notification_id].state)
+            .read(
+                |document| document.collaboration_state().inbound_notifications[&notification_id]
+                    .state
+            )
             .unwrap(),
         CollaborationNotificationState::Failed
     );
-    assert!(!source
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
-    assert!(!target
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
+    assert!(
+        !source
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    assert!(
+        !target
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
 }
 
 /// A crash after target failure but before source progress must not strand the accepted outbox.

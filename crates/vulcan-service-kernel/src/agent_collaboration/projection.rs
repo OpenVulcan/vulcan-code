@@ -5,8 +5,9 @@ use super::*;
 use vulcan_session_core::v1::collaboration::{
     CollaborationAnswerDeliveryState, CollaborationDeliveryFailureReason,
     CollaborationInboundDeliveryRecord, CollaborationInboundNotificationRecord,
-    CollaborationNotificationState, CollaborationQuestionRecord, FailNotificationInput,
-    RecordNotificationProgressInput, CollaborationTaskMessageEffectKind,
+    CollaborationNotificationState, CollaborationQuestionRecord,
+    CollaborationTaskMessageEffectKind, FailDeliveryInput, FailNotificationInput,
+    RecordNotificationProgressInput,
 };
 
 /// One durable incoming fact ordered by its local acceptance sequence.
@@ -194,7 +195,10 @@ pub(crate) async fn project_collaboration_before_api(
                             .task_message_effects
                             .get(&delivery_id)
                             .is_some_and(|effect| {
-                                matches!(effect.outcome, CollaborationTaskMessageEffectKind::Failed { .. })
+                                matches!(
+                                    effect.outcome,
+                                    CollaborationTaskMessageEffectKind::Failed { .. }
+                                )
                             })
                     })
                     .map_err(|error| error.to_string())?;
@@ -225,26 +229,39 @@ pub(crate) async fn project_collaboration_before_api(
                         if question.state != CollaborationQuestionState::Pending {
                             return Ok(None);
                         }
-                        if delivery.source.project_id != delivery.target.project_id
+                        let revoked = delivery.source.project_id != delivery.target.project_id
                             && !source_handle_grant_allows(
                                 &source_for_write,
                                 source_id,
                                 target_for_write.session_id(),
                                 CollaborationGrantAction::Ask,
-                            )?
-                        {
-                            return Err(String::from(
-                                "question body delivery is denied after authorization revocation",
-                            ));
-                        }
+                            )?;
+                        // Settle an already accepted question on its target before returning
+                        // failure to the source. A crash between those writes is repaired from
+                        // the target's durable failure fact by the source outbox.
+                        // 已接纳问题先在目标结算，再把失败回传来源；两次写入之间崩溃时，来源出站箱
+                        // 根据目标的可靠失败事实修复。
                         target_for_write
                             .mutate_durable_if_changed(
                                 SessionMutationAdmission::MetadataOnly,
                                 SessionFlushReason::MetadataChanged,
                                 move |document| {
-                                    Ok(session_change(
-                                        document.project_question_before_api(question, now_ms)?,
-                                    ))
+                                    if revoked {
+                                        let operation_id = CollaborationOperationId::try_new(
+                                            format!("{}:fail", delivery.delivery_id.as_str()),
+                                        )?;
+                                        Ok(session_change(document.fail_delivery(FailDeliveryInput {
+                                            operation_id,
+                                            delivery_id: delivery.delivery_id,
+                                            question_id: delivery.question_id,
+                                            reason: CollaborationDeliveryFailureReason::AuthorizationRevoked,
+                                            failed_at_ms: now_ms,
+                                        })?))
+                                    } else {
+                                        Ok(session_change(
+                                            document.project_question_before_api(question, now_ms)?,
+                                        ))
+                                    }
                                 },
                             )
                             .map(Some)
@@ -257,16 +274,23 @@ pub(crate) async fn project_collaboration_before_api(
                 };
                 // Acknowledgement is a later source transaction, outside the two-participant write.
                 // 确认是之后独立的来源事务，位于双方写入范围之外。
+                let failed = receipt.value.state == CollaborationDeliveryState::Failed;
                 let input = RecordDeliveryProgressInput {
                     operation_id: CollaborationOperationId::try_new(format!(
-                        "{}:source-projected",
-                        inbound.delivery_id.as_str()
+                        "{}:{}",
+                        inbound.delivery_id.as_str(),
+                        if failed {
+                            "source-failed"
+                        } else {
+                            "source-projected"
+                        }
                     ))
                     .map_err(|error| error.to_string())?,
                     delivery_id: inbound.delivery_id,
                     question_id: inbound.question_id,
-                    state: CollaborationDeliveryState::Projected,
-                    failure: None,
+                    state: receipt.value.state,
+                    failure: failed
+                        .then_some(CollaborationDeliveryFailureReason::AuthorizationRevoked),
                     target_revision: Some(receipt.value.revision),
                     target_event_seq: Some(receipt.value.event_seq),
                     updated_at_ms: now_ms,

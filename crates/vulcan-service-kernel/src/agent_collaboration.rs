@@ -22,12 +22,12 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationChildTaskTerminalOutcome, CollaborationDeliveryFailureReason,
     CollaborationDeliveryId, CollaborationDeliveryReceipt, CollaborationDeliverySettlementReceipt,
     CollaborationDeliveryState, CollaborationExecutionId, CollaborationExecutionPurpose,
-    CollaborationGrantAction, CollaborationOperationId, CollaborationParticipant,
-    CollaborationOperationResult, CollaborationOperationSemantic,
-    CollaborationQuestionExecutionState, CollaborationQuestionId, CollaborationQuestionState,
-    CollaborationRunControl, CollaborationTargetSettlementState, CreateQuestionInput,
-    DeliverAnswerInput, ProjectDeliveryInput, RecordDeliveryProgressInput, ReplyQuestionInput,
-    ReserveChildTaskInput, SettleInboundDeliveryInput, TerminalChildTaskInput,
+    CollaborationGrantAction, CollaborationOperationId, CollaborationOperationResult,
+    CollaborationOperationSemantic, CollaborationParticipant, CollaborationQuestionExecutionState,
+    CollaborationQuestionId, CollaborationQuestionState, CollaborationRunControl,
+    CollaborationTargetSettlementState, CreateQuestionInput, DeliverAnswerInput,
+    ProjectDeliveryInput, RecordDeliveryProgressInput, ReplyQuestionInput, ReserveChildTaskInput,
+    SettleInboundDeliveryInput, TerminalChildTaskInput,
 };
 use vulcan_session_core::v1::document::IdempotentMutation;
 use vulcan_session_core::v1::document::TurnOrigin;
@@ -1769,6 +1769,18 @@ fn target_inbound_event_seq(
                                 && Some(*projected_input_id) == inbound.projected_input_id
                                 && Some(*projected_turn_id) == inbound.projected_turn_id
                         }
+                        (
+                            CollaborationOperationSemantic::FailDelivery {
+                                delivery_id,
+                                question_id,
+                                reason,
+                            },
+                            CollaborationDeliveryState::Failed,
+                        ) => {
+                            delivery_id == &inbound.delivery_id
+                                && question_id == &inbound.question_id
+                                && Some(*reason) == inbound.failure
+                        }
                         _ => false,
                     };
                     semantic_matches
@@ -2071,7 +2083,9 @@ async fn reconcile_canonical_collaboration_outbox(
             if delivery.state != next_state
                 && matches!(
                     next_state,
-                    CollaborationDeliveryState::Accepted | CollaborationDeliveryState::Projected
+                    CollaborationDeliveryState::Accepted
+                        | CollaborationDeliveryState::Projected
+                        | CollaborationDeliveryState::Failed
                 )
             {
                 let progress_operation = CollaborationOperationId::try_new(format!(
@@ -2080,6 +2094,7 @@ async fn reconcile_canonical_collaboration_outbox(
                     match next_state {
                         CollaborationDeliveryState::Accepted => "accepted",
                         CollaborationDeliveryState::Projected => "projected",
+                        CollaborationDeliveryState::Failed => "failed",
                         _ => "other",
                     }
                 ))
@@ -2095,7 +2110,7 @@ async fn reconcile_canonical_collaboration_outbox(
                     delivery_id: delivery.delivery_id.clone(),
                     question_id: delivery.question_id.clone(),
                     state: next_state,
-                    failure: None,
+                    failure: inbound.failure,
                     target_revision,
                     target_event_seq,
                     updated_at_ms: now_ms()?,
@@ -2136,10 +2151,9 @@ async fn reconcile_canonical_collaboration_outbox(
                     continue;
                 };
                 if inbound.state == CollaborationDeliveryState::Failed {
-                    failures.push(format!(
-                        "question `{}` target delivery is failed and cannot receive settlement",
-                        question.question_id.as_str()
-                    ));
+                    // A failed target never receives a question settlement. The source
+                    // failure progress is its terminal delivery receipt instead.
+                    // 失败目标不接收问题结算；来源的失败进度即为该投递的终态回执。
                     continue;
                 }
                 let (target_event_seq, target_revision) = if let Some(record) =
@@ -2829,8 +2843,10 @@ async fn fail_question_before_target_acceptance(
                     (question, delivery)
                 })
                 .map_err(|error| error.to_string())?;
-            let question = question.ok_or_else(|| String::from("question source intent is missing"))?;
-            let delivery = delivery.ok_or_else(|| String::from("question source delivery is missing"))?;
+            let question =
+                question.ok_or_else(|| String::from("question source intent is missing"))?;
+            let delivery =
+                delivery.ok_or_else(|| String::from("question source delivery is missing"))?;
             if question.delivery_id != delivery_id || delivery.question_id != question_id {
                 return Err(String::from("question source delivery binding changed"));
             }
@@ -2848,7 +2864,8 @@ async fn fail_question_before_target_acceptance(
                     let (purpose, turn_id) = target_question_binding(document);
                     let reason = if matches!(
                         document.collaboration_run_control(),
-                        CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents
+                        CollaborationRunControl::Stopped
+                            | CollaborationRunControl::MainAndSubagents
                     ) {
                         Some(CollaborationDeliveryFailureReason::TargetStopped)
                     } else if purpose != question.execution_purpose
@@ -2878,8 +2895,7 @@ async fn fail_question_before_target_acceptance(
                     source_id,
                     target_session_id,
                     CollaborationGrantAction::Ask,
-                )?
-            {
+                )? {
                 Some(CollaborationDeliveryFailureReason::AuthorizationRevoked)
             } else {
                 target_reason
