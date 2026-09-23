@@ -1,4 +1,5 @@
 import { useI18n } from "@/i18n";
+import { ChevronDown } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { SessionLifetimeUsage, SessionUsageBucket, UsageMeasurement } from "@/types/session-lifetime-usage";
 import "./session-lifetime-usage.css";
@@ -61,7 +62,9 @@ export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsag
     {total ? <div className="lifetime-usage-total"><strong>{total}</strong><span>tokens</span></div> : null}
     <LifetimeMetricRows rows={primaryRows} />
     {detailRows.some(([, value]) => value !== null) ? <details className="lifetime-usage-details">
-      <summary>{zh ? "更多统计" : "More statistics"}</summary>
+      <summary aria-label={zh ? "展开或收起更多统计" : "Toggle additional statistics"}>
+        <ChevronDown aria-hidden="true" size={16} strokeWidth={1.5} />
+      </summary>
       <LifetimeMetricRows rows={detailRows} />
     </details> : null}
     {bucket.unknownUsageCount > 0 ? <p className="lifetime-usage-note">{zh ? `${bucket.unknownUsageCount} 次请求未上报用量，累计值不完整` : `${bucket.unknownUsageCount} requests did not report usage; totals are incomplete`}</p> : null}

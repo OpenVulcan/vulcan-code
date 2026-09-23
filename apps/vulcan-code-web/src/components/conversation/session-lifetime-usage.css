@@ -86,16 +86,42 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Keep the disclosure quiet at rest while preserving a full-width keyboard and pointer target. */
+/* 折叠控件默认保持浅淡，同时保留整行键盘及指针操作区域。 */
 .lifetime-usage-details summary {
-  width: fit-content;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 24px;
   cursor: pointer;
   color: var(--muted-foreground);
-  font-size: 11px;
-  border-radius: 4px;
+  background: transparent;
+  border-radius: 6px;
+  list-style: none;
 }
 
-.lifetime-usage-details summary:hover {
+.lifetime-usage-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.lifetime-usage-details summary svg {
+  opacity: 0.45;
+}
+
+.lifetime-usage-details summary:hover,
+.lifetime-usage-details summary:focus-visible {
+  background: var(--accent);
   color: var(--popover-foreground);
+}
+
+.lifetime-usage-details summary:hover svg,
+.lifetime-usage-details summary:focus-visible svg {
+  opacity: 1;
+}
+
+.lifetime-usage-details[open] summary svg {
+  transform: rotate(180deg);
 }
 
 .lifetime-usage-details summary:focus-visible {
