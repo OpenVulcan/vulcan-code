@@ -5,6 +5,9 @@ use std::collections::BTreeMap;
 
 use vulcan_session_core::v1::config::{ActiveRequestConfig, PendingRequestConfig};
 use vulcan_workbench_model::{SessionPendingModelSelection, SessionRuntimeStateEntry};
+use vulcan_workspace_store::workspace_store::{
+    SessionV1StoragePreflightOutcome, WorkspaceSnapshot, preflight_session_v1_storage,
+};
 
 use crate::session_runtime_registry_v1::{
     SessionLifecycleTransitionGuard, SessionRuntimeError, SessionRuntimeRegistry,
@@ -26,6 +29,99 @@ pub(crate) struct SessionModelProjectionV1 {
     /// Keeps archive/delete from invalidating the selected owner before publication.
     /// 防止归档或删除在发布前使选中的 owner 失效。
     _lifecycle: SessionLifecycleTransitionGuard,
+}
+
+/// Isolates an automatic session restore from workspace availability.
+/// 将会话自动恢复与工作台可用性隔离。
+pub(crate) struct AutomaticSessionModelProjectionV1 {
+    /// Exact selection examined before asynchronous publication.
+    /// 异步发布前检查的精确选中身份。
+    session_id: SessionId,
+    /// Successfully captured metadata and its publication lifecycle guard.
+    /// 成功捕获的元数据及其发布生命周期守卫。
+    projection: Option<SessionModelProjectionV1>,
+    /// True only after exact-path preflight confirmed absence and removed the index.
+    /// 仅在精确路径预检确认缺失且已删除索引后为真。
+    missing_storage: bool,
+}
+
+/// Reads optional startup/refresh metadata for `session_id` using the indexed `controller` and `registry`.
+/// 使用索引 `controller` 与 `registry` 读取 `session_id` 的可选启动或刷新元数据。
+/// Returns an infallible publication result; read failures are ignored and confirmed missing indexes removed.
+/// 返回不会失败的发布结果；读取失败忽略，确认缺失的索引删除。
+pub(crate) async fn read_automatic_session_model_projection_v1(
+    controller: &HostRuntimeHandle,
+    registry: &SessionRuntimeRegistry,
+    session_id: SessionId,
+) -> AutomaticSessionModelProjectionV1 {
+    // Keep nil selection free of storage access and never classify a read error as file absence.
+    // 空选择不访问存储，且绝不把读取错误视为文件缺失。
+    let mut result = AutomaticSessionModelProjectionV1 {
+        session_id,
+        projection: None,
+        missing_storage: false,
+    };
+    if session_id != SessionId::nil() {
+        match preflight_session_v1_storage(controller, &session_id.to_string()).await {
+            Ok(SessionV1StoragePreflightOutcome::Ready { .. }) => {
+                result.projection =
+                    read_session_model_projection_v1(controller, registry, session_id)
+                        .await
+                        .ok();
+            }
+            Ok(SessionV1StoragePreflightOutcome::MissingStorageIndexRemoved { .. }) => {
+                result.missing_storage = true;
+            }
+            Err(_) => {}
+        }
+    }
+    result
+}
+
+impl AutomaticSessionModelProjectionV1 {
+    /// Applies captured metadata to `workspace` using the latest resident `registry` state.
+    /// 使用 `registry` 最新常驻状态将已捕获元数据应用到 `workspace`。
+    /// Returns no error; unavailable selections are cleared without overriding concurrent navigation.
+    /// 不返回错误；清除不可用选择，但不覆盖并发导航。
+    pub(crate) fn apply(
+        &self,
+        registry: &SessionRuntimeRegistry,
+        workspace: &mut WorkspaceSnapshot,
+    ) {
+        if self.missing_storage {
+            // Remove every in-memory reference to the deleted index, keeping files and other sessions intact.
+            // 移除已删除索引的所有内存引用，保留文件及其他会话。
+            workspace
+                .sessions
+                .retain(|session| session.id != self.session_id);
+            workspace
+                .archived_sessions
+                .retain(|session| session.id != self.session_id);
+            for project in workspace
+                .task_projects
+                .iter_mut()
+                .chain(&mut workspace.archived_task_projects)
+            {
+                project.session_ids.retain(|id| *id != self.session_id);
+            }
+            workspace.session_runtime_state.remove(&self.session_id);
+            workspace
+                .archived_session_runtime_state
+                .remove(&self.session_id);
+            workspace.session_run_phases.remove(&self.session_id);
+            workspace.hydrated_session_ids.remove(&self.session_id);
+        }
+        if workspace.selected_session != self.session_id {
+            return;
+        }
+        if self.projection.as_ref().is_none_or(|projection| {
+            projection
+                .apply(registry, &mut workspace.session_runtime_state)
+                .is_err()
+        }) {
+            workspace.selected_session = SessionId::nil();
+        }
+    }
 }
 
 /// Reads one indexed session's model settings without constructing its interaction runtime.

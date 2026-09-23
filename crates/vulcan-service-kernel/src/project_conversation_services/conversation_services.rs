@@ -515,10 +515,9 @@ pub(crate) async fn service_select_conversation(
         false
     };
     if cleanup_result {
-        // Refresh the retained projection before returning the user-facing deletion notice.
-        // 返回面向用户的删除提示前先刷新保留的工作台投影。
-        refresh_workbench_snapshot(state.clone()).await?;
-        return Err(String::from("会话已被删除，已经清理。"));
+        // A missing session is already removed; publish the remaining workspace without a navigation error.
+        // 丢失会话已删除；发布其余工作台，不产生导航错误。
+        return refresh_workbench_snapshot(state).await;
     }
     // Resolve metadata before entering the retained navigation path, which deliberately never loads history.
     // 进入保留导航路径前解析 metadata；该路径刻意不加载历史。

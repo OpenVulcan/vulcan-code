@@ -274,24 +274,14 @@ async fn refresh_workbench_snapshot_with_selected_session(
     let selected_session_id = refreshed_snapshot.selected_session;
     // Hold the selected owner's lifecycle guard until the refreshed snapshot is published.
     // 保留选中 owner 的生命周期守卫，直至刷新快照发布。
-    let model_projection = if selected_session_id != SessionId::nil() {
-        Some(
-            crate::session_model_projection_v1::read_session_model_projection_v1(
-                &controller_runtime,
-                session_runtime_registry.as_ref(),
-                selected_session_id,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    if let Some(projection) = model_projection.as_ref() {
-        projection.apply(
+    let model_projection =
+        crate::session_model_projection_v1::read_automatic_session_model_projection_v1(
+            &controller_runtime,
             session_runtime_registry.as_ref(),
-            &mut refreshed_snapshot.session_runtime_state,
-        )?;
-    }
+            selected_session_id,
+        )
+        .await;
+    model_projection.apply(session_runtime_registry.as_ref(), &mut refreshed_snapshot);
     let vulcan_plugin_catalog = agent_runtime_for_status
         .as_ref()
         .and_then(|agent_runtime| agent_runtime.extension_generation.plugin_catalog());
@@ -400,14 +390,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
             selected_session_id_after_refresh(&refreshed_snapshot, target_session_id);
         // A concurrent navigation owns the final selected session; never apply another session's model to it.
         // 并发导航拥有最终选中会话；绝不向它应用另一会话的模型。
-        if refreshed_snapshot.selected_session == selected_session_id
-            && let Some(projection) = model_projection.as_ref()
-        {
-            projection.apply(
-                session_runtime_registry.as_ref(),
-                &mut refreshed_snapshot.session_runtime_state,
-            )?;
-        }
+        model_projection.apply(session_runtime_registry.as_ref(), &mut refreshed_snapshot);
         reconcile_workbench_conversation_lifecycle_projection(
             &mut workbench,
             &guard,

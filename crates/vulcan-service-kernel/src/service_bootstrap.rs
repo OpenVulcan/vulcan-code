@@ -1608,31 +1608,17 @@ fn run_service_bootstrap(
     );
     // Keep lifecycle ownership through initial publication; this does not load a Turn or its context.
     // 贯穿首次发布保留生命周期所有权；这不会加载回合或其上下文。
-    let selected_model_projection = if selected_session_id != crate::SessionId::nil() {
-        Some(bootstrap_step(
-            runtime.block_on(
-                crate::session_model_projection_v1::read_session_model_projection_v1(
-                    &controller_runtime,
-                    session_registry.as_ref(),
-                    selected_session_id,
-                ),
-            ),
-            "workspace",
-            "Workspace",
-        )?)
-    } else {
-        None
-    };
-    if let Some(projection) = selected_model_projection.as_ref() {
-        bootstrap_step(
-            projection.apply(
-                session_registry.as_ref(),
-                &mut workspace_snapshot.session_runtime_state,
-            ),
-            "workspace",
-            "Workspace",
-        )?;
-    }
+    let selected_model_projection = runtime.block_on(
+        crate::session_model_projection_v1::read_automatic_session_model_projection_v1(
+            &controller_runtime,
+            session_registry.as_ref(),
+            selected_session_id,
+        ),
+    );
+    selected_model_projection.apply(session_registry.as_ref(), &mut workspace_snapshot);
+    // A failed restore may have cleared the initial selection or removed a missing session.
+    // 恢复失败可能已清除初始选择，或移除丢失的会话。
+    let selected_session_id = workspace_snapshot.selected_session;
     // Initial reasoning controls follow the same selected-session metadata as the model, without rewriting global defaults.
     // 初始思考控件与模型使用同一选中会话 metadata，不改写全局默认值。
     let mut selected_provider_configuration = provider_configuration.clone();

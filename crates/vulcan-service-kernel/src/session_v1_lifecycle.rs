@@ -1504,6 +1504,7 @@ mod tests {
 
     mod collaboration_deletion;
     mod draft_handoff;
+    mod model_projection;
 
     /// Isolated storage fixture used by lifecycle integration tests.
     /// 生命周期集成测试使用的隔离存储夹具。

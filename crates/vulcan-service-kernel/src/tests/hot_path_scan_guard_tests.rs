@@ -307,8 +307,8 @@ fn startup_and_index_refresh_never_hydrate_selected_session() {
     );
     // Metadata-only model restoration is required, but must never become interaction hydration.
     // 必须恢复纯 metadata 模型配置，但绝不能变成交互水合。
-    assert!(bootstrap_source.contains("read_session_model_projection_v1("));
-    assert!(refresh_source.contains("read_session_model_projection_v1("));
+    assert!(bootstrap_source.contains("read_automatic_session_model_projection_v1("));
+    assert!(refresh_source.contains("read_automatic_session_model_projection_v1("));
     assert!(!bootstrap_source.contains("public_ai_provider_rows("));
     // Navigation and settings refresh share the same session-sensitive model authority.
     // 导航与设置刷新共享同一会话敏感模型权威。
