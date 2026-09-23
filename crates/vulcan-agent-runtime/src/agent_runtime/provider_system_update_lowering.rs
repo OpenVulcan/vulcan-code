@@ -128,8 +128,8 @@ mod tests {
         }
     }
 
-    /// Verifies trusted updates use native lowering when the provider supports it.
-    /// 验证 Provider 支持时受信更新会使用原生转换。
+    /// Verifies even an explicit native preference lowers dynamic updates into User envelopes.
+    /// 验证即使显式偏好原生角色，动态更新也统一转换为 User 信封。
     #[test]
     fn trusted_update_uses_user_envelope_when_native_was_requested() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::PreferNative);
@@ -143,8 +143,8 @@ mod tests {
         ));
     }
 
-    /// Verifies unsupported native lowering falls back to a user-scoped wrapper by default.
-    /// 验证不支持原生转换时默认降级为用户作用域包装。
+    /// Verifies automatic policy uses the same User envelope without protocol capability probing.
+    /// 验证自动策略使用同一 User 信封，不探测协议能力。
     #[test]
     fn automatic_lowering_uses_user_envelope() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::Auto);
