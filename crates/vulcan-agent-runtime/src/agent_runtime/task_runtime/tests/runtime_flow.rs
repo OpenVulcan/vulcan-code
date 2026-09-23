@@ -3397,6 +3397,111 @@ async fn inter_agent_successor_run_suppresses_superseded_terminal_event() {
     );
 }
 
+/// Closing an active child must retain its exact stopped return after the registry is archived.
+/// 关闭活动子任务后，即使注册表先归档也必须保留其精确停止回执。
+/// Returns nothing; assertions cover terminal publication without reopening archived state.
+/// 不返回值；断言覆盖终态发布且不复活归档状态。
+#[tokio::test]
+async fn close_agent_archive_keeps_original_active_stop_return() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let request = build_task_start_test_invocation(parent_session_id, task_id, "close-active-run");
+    let controller_config = build_test_controller_config("Base prompt");
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &request.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 0,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(STOPPED_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Stopped,
+        usage_segments: Vec::new(),
+    };
+    let _active = task_runtime
+        .reserve_active_task_run(task_id, &request.execution_id)
+        .unwrap();
+    let mut running = outcome.clone();
+    running.execution_status = TaskExecutionStatus::Running;
+    running.final_output_text = String::from(RUNNING_TASK_RESULT_SUMMARY);
+    assert!(
+        task_runtime
+            .store_task_outcome_without_parent_mailbox(parent_session_id, &request, &running)
+            .unwrap()
+    );
+    {
+        let mut sessions = task_runtime.sessions.write().unwrap();
+        let archived = sessions.get_mut(&task_id).unwrap();
+        archived.last_status = String::from("archived");
+        archived.stop_reason = Some(String::from("close_agent"));
+    }
+    task_runtime
+        .active_task_runs
+        .write()
+        .unwrap()
+        .get_mut(&task_id)
+        .unwrap()
+        .stop_requested = true;
+    task_runtime
+        .open_detached_task_event_stream_for_run(task_id, &request.execution_id)
+        .unwrap();
+    let mut stream = Box::pin(
+        task_runtime
+            .subscribe_detached_task_events(task_id, &request.execution_id)
+            .unwrap(),
+    );
+    let stale_request =
+        build_task_start_test_invocation(parent_session_id, task_id, "replacement-run");
+    assert!(
+        !task_runtime
+            .store_task_outcome_without_parent_mailbox(parent_session_id, &stale_request, &outcome)
+            .unwrap(),
+        "the archived exception must not authorize another execution"
+    );
+    let committed = task_runtime
+        .store_task_outcome_without_parent_mailbox(parent_session_id, &request, &outcome)
+        .unwrap();
+    assert!(
+        committed,
+        "close must preserve the original stopped terminal"
+    );
+    publish_task_finished_to_parent_after_resume_decision(
+        &task_runtime,
+        &request,
+        &outcome,
+        "closed active child",
+        committed,
+        false,
+    );
+    let event = tokio::time::timeout(std::time::Duration::from_millis(50), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        event,
+        DetachedTaskRuntimeEvent::ParentRuntime { .. }
+    ));
+    assert_eq!(
+        task_runtime.sessions.read().unwrap()[&task_id].last_status,
+        "archived"
+    );
+    task_runtime
+        .active_task_runs
+        .write()
+        .unwrap()
+        .get_mut(&task_id)
+        .unwrap()
+        .stop_requested = false;
+    assert!(
+        !task_runtime
+            .store_task_outcome_without_parent_mailbox(parent_session_id, &request, &outcome)
+            .unwrap(),
+        "an archived execution without an active close reservation is stale"
+    );
+}
+
 /// Verifies a queued successor startup failure replaces the obsolete completion with explicit parent feedback.
 /// 验证排队后继启动失败会用显式父级反馈替代过期完成结果。
 #[tokio::test]

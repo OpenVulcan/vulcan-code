@@ -110,6 +110,20 @@ impl TaskRuntime {
             )
         })?;
         let status = task_session_status_from_execution_status(outcome.execution_status);
+        // A close may archive the runtime projection before its original run reports a terminal.
+        // 关闭操作可能在原执行上报终态之前归档运行时投影。
+        if matches!(
+            status,
+            TaskSessionStatus::Completed | TaskSessionStatus::Failed | TaskSessionStatus::Stopped
+        ) && self.archived_close_retains_original_terminal(invocation)?
+        {
+            // Publish the exact terminal while leaving the archived task and public id closed.
+            // 发布精确终态，同时保持已归档任务和公开标识处于关闭状态。
+            if publish_parent_mailbox {
+                self.publish_task_outcome_to_parent_mailbox(invocation, outcome);
+            }
+            return Ok(true);
+        }
         if !self.task_execution_can_commit_status(invocation, status)? {
             task_runtime_trace(
                 "task_outcome_stale_execution_skipped",
@@ -132,6 +146,38 @@ impl TaskRuntime {
             self.publish_task_outcome_to_parent_mailbox(invocation, outcome);
         }
         Ok(true)
+    }
+
+    /// Recognizes only the original active run stopped by a committed close-agent archive.
+    /// 仅识别由已提交关闭归档停止的原活动执行。
+    /// `invocation` identifies the physical run; returns whether its terminal still belongs to the parent.
+    /// `invocation` 标识物理执行；返回其终态是否仍属于父会话。
+    fn archived_close_retains_original_terminal(
+        &self,
+        invocation: &TaskExecutionRequest,
+    ) -> Result<bool, String> {
+        // The archive record and active stop reservation must name the same execution generation.
+        // 归档记录与活动停止预留必须指向同一执行代次。
+        let archived_original = self
+            .sessions
+            .read()
+            .map_err(|_| String::from("The task-session registry is locked."))?
+            .get(&invocation.task_id)
+            .is_some_and(|record| {
+                record.last_status
+                    == status_name_for_task_session_status(TaskSessionStatus::Archived)
+                    && record.stop_reason.as_deref() == Some(CLOSE_AGENT_TOOL)
+                    && record.execution_id.as_deref() == Some(invocation.execution_id.as_str())
+            });
+        if !archived_original {
+            return Ok(false);
+        }
+        Ok(self
+            .active_task_runs
+            .read()
+            .map_err(|_| String::from("The active task registry is locked."))?
+            .get(&invocation.task_id)
+            .is_some_and(|run| run.execution_id == invocation.execution_id && run.stop_requested))
     }
 
     /// Stores one running child-task outcome in the process-local task projections.
@@ -602,6 +648,14 @@ impl TaskRuntime {
                 .contains_key(&invocation.task_id)
         {
             return Ok(false);
+        }
+        if self.archived_close_retains_original_terminal(invocation)? {
+            // A concurrent host failure still needs its exact parent report after close.
+            // 关闭并发发生的宿主失败仍须向父会话回传精确报告。
+            if publish_parent_mailbox {
+                self.publish_task_failure_to_parent_mailbox(invocation, error);
+            }
+            return Ok(true);
         }
         if !self.task_execution_can_commit_status(invocation, TaskSessionStatus::Failed)? {
             task_runtime_trace(
