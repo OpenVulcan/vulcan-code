@@ -39,7 +39,8 @@ describe("session lifetime usage", () => {
     expect(markup).toContain("0.600 s");
     expect(markup).toContain("20.0 t/s");
     expect(markup).toContain("60.0%");
-    expect(markup).toContain("first token 1");
+    expect(markup).not.toContain("Samples:");
+    expect(markup).not.toContain("Cache write");
   });
 
   it("preserves zero, missing and partial dimensions and exposes an own-child chip", () => {

@@ -214,7 +214,7 @@ export function ContextUsageOrb(props: {
       <PopoverContent
         align="end"
         aria-label={title}
-        className="context-usage-tooltip"
+        className="context-usage-tooltip context-usage-popover"
         collisionPadding={12}
         ref={contentRef}
         onOpenAutoFocus={(event) => { event.preventDefault(); if (!openedByHover.current) contentRef.current?.focus(); }}
@@ -240,13 +240,12 @@ export function ContextUsageOrb(props: {
             ))}
           </div>
         ) : null}
-        <div className="context-usage-cache-row">
+        {snapshot.cacheHitBasisPoints != null ? <div className="context-usage-cache-row">
           <span>{t("composer.contextUsage.cacheHitRate")}</span>
           <strong>
-            <ContextUsageValue value={snapshot.cacheHitBasisPoints == null ? "-" : formatBasisPoints(snapshot.cacheHitBasisPoints)}
-              hint={snapshot.cacheHitBasisPoints == null ? t("composer.contextUsage.noData") : undefined} />
+            {formatBasisPoints(snapshot.cacheHitBasisPoints)}
           </strong>
-        </div>
+        </div> : null}
         <SessionLifetimeUsagePanel usage={providerUsage?.lifetime} error={providerUsage?.lifetimeError} />
         <div className="context-usage-window-section">
           <span className="context-usage-window-title">{t("composer.contextWindow.title")}</span>
@@ -1505,18 +1504,6 @@ function providerToolSettingsSignature(
             ]),
     ],
   );
-}
-
-/** Renders a compact metric with keyboard-accessible missing-data guidance.
- * 渲染紧凑指标，并为缺失数据提供可键盘访问的说明。
- * Parameters: value is the formatted metric; hint is present only when a missing value needs explanation.
- * 参数：value 是格式化指标；hint 仅在缺失值需要解释时提供；返回指标或带说明的占位符。
- */
-function ContextUsageValue({ value, hint }: { value: string; hint?: string }) {
-  if (!hint) return <>{value}</>;
-  return <Tooltip><TooltipTrigger asChild>
-    <span tabIndex={0} aria-label={hint} className="cursor-help rounded-sm border-b border-dotted border-muted-foreground/50 text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">{value}</span>
-  </TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip>;
 }
 
 // normalizedComposerProviderToolSettings upgrades an older in-memory draft with the exact route map.
