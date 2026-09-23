@@ -195,6 +195,11 @@ windows = "=0.62.2"
 xz2 = { version = "0.1.7", features = ["static"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
+# Keep the kernel archive readable by MSVC while preserving source locations in debug builds.
+# 在调试构建中保留源码位置，同时避免内核归档体积增长到 MSVC 无法读取的符号表格式。
+[profile.dev.package.vulcan-service-kernel]
+debug = "limited"
+
 [workspace.lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
