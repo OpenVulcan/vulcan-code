@@ -279,6 +279,9 @@ pub enum CollaborationAnswerDeliveryState {
     /// The answer has been delivered at the recorded revision.
     /// 答案已在记录的修订处完成交付。
     Delivered,
+    /// Delivery was denied before the answer body entered the source model context.
+    /// 答案正文进入来源模型上下文前，交付被拒绝。
+    Failed,
 }
 
 /// Lifecycle state of one child-task reservation.
@@ -522,6 +525,10 @@ pub struct CollaborationAnswerDeliveryRecord {
     /// Current answer delivery state.
     /// 当前答案交付状态。
     pub state: CollaborationAnswerDeliveryState,
+    /// Stable reason when the answer was denied before model delivery.
+    /// 答案进入模型前被拒绝时的稳定原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CollaborationDeliveryFailureReason>,
     /// Monotonic delivery revision, independent from question settlement.
     /// 独立于问题结算状态的单调交付修订。
     pub delivery_revision: u64,
@@ -1990,6 +1997,9 @@ pub enum CollaborationEventKind {
     /// A source recorded an independent answer delivery revision.
     /// 来源记录独立答案交付修订。
     AnswerDelivered,
+    /// A source recorded that an authoritative answer cannot enter its model context.
+    /// 来源记录权威答案无法进入其模型上下文。
+    AnswerDeliveryFailed,
     /// A parent reserved a child task.
     /// 父回合预留子任务。
     ChildTaskReserved,
@@ -2255,6 +2265,9 @@ impl CollaborationEvent {
                 CollaborationEventKind::AnswerDelivered,
                 CollaborationAfterState::AnswerDelivery { .. }
             ) | (
+                CollaborationEventKind::AnswerDeliveryFailed,
+                CollaborationAfterState::AnswerDelivery { .. }
+            ) | (
                 CollaborationEventKind::ChildTaskReserved
                     | CollaborationEventKind::ChildTaskActivated
                     | CollaborationEventKind::ChildTaskTerminal
@@ -2422,9 +2435,18 @@ impl CollaborationEvent {
                     "collaboration_event.answer_delivery.updated_at_ms",
                     delivery.updated_at_ms,
                 )?;
-                if delivery.state != CollaborationAnswerDeliveryState::Delivered
-                    || delivery.kind.is_none()
-                {
+                let shape_matches_kind = match self.event_kind {
+                    CollaborationEventKind::AnswerDelivered => {
+                        delivery.state == CollaborationAnswerDeliveryState::Delivered
+                            && delivery.kind.is_some()
+                    }
+                    CollaborationEventKind::AnswerDeliveryFailed => {
+                        delivery.state == CollaborationAnswerDeliveryState::Failed
+                            && delivery.failure.is_some()
+                    }
+                    _ => false,
+                };
+                if !shape_matches_kind {
                     return Err(DomainError::CollaborationStateViolation {
                         field: "collaboration_event.answer_delivery.state",
                     });
@@ -2924,6 +2946,16 @@ pub enum CollaborationOperationSemantic {
         /// Physical ToolCall event seq for Tool-result delivery.
         /// ToolResult 浜や粯鎵€鐢ㄧ殑鐗╃悊 ToolCall 浜嬩欢 seq銆?
         tool_result_seq: Option<Seq>,
+    },
+    /// Failed answer-delivery fingerprint.
+    /// 失败答案交付语义指纹。
+    FailAnswerDelivery {
+        /// Question identity.
+        /// 问题身份。
+        question_id: CollaborationQuestionId,
+        /// Stable failure reason.
+        /// 稳定失败原因。
+        reason: CollaborationDeliveryFailureReason,
     },
     /// Child reservation fingerprint.
     /// 子任务预留语义指纹。
@@ -3697,6 +3729,25 @@ pub struct DeliverAnswerInput {
     pub delivered_at_ms: i64,
 }
 
+/// Input used by the source to close an answer that cannot be shown to its model.
+/// 来源用于结清无法向其模型展示的答案的输入。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FailAnswerDeliveryInput {
+    /// Stable source operation identity.
+    /// 稳定来源操作身份。
+    pub operation_id: CollaborationOperationId,
+    /// Exact answered question identity.
+    /// 精确的已回答问题身份。
+    pub question_id: CollaborationQuestionId,
+    /// Stable reason for withholding the body.
+    /// 不展示正文的稳定原因。
+    pub reason: CollaborationDeliveryFailureReason,
+    /// Failure time in Unix milliseconds.
+    /// 失败时间（Unix 毫秒）。
+    pub failed_at_ms: i64,
+}
+
 /// Input used to reserve one child task against a parent turn.
 /// 将一条子任务预留绑定到父回合的输入。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4120,6 +4171,7 @@ pub fn validate_answer_delivery_record(
     match record.state {
         CollaborationAnswerDeliveryState::Undelivered => {
             if record.delivery_revision != 0
+                || record.failure.is_some()
                 || record.kind.is_some()
                 || record.projected_seq.is_some()
                 || record.projected_input_id.is_some()
@@ -4132,7 +4184,10 @@ pub fn validate_answer_delivery_record(
             }
         }
         CollaborationAnswerDeliveryState::Delivered => {
-            if record.delivery_revision == 0 || record.kind.is_none() {
+            if record.delivery_revision == 0
+                || record.failure.is_some()
+                || record.kind.is_none()
+            {
                 return Err(DomainError::InvalidStatistics {
                     field: "collaboration.answer_delivery.delivered_shape",
                 });
@@ -4159,6 +4214,20 @@ pub fn validate_answer_delivery_record(
                     });
                 }
                 _ => {}
+            }
+        }
+        CollaborationAnswerDeliveryState::Failed => {
+            if record.delivery_revision == 0
+                || record.failure.is_none()
+                || record.kind.is_some()
+                || record.projected_seq.is_some()
+                || record.projected_input_id.is_some()
+                || record.tool_call_id.is_some()
+                || record.tool_result_seq.is_some()
+            {
+                return Err(DomainError::InvalidStatistics {
+                    field: "collaboration.answer_delivery.failed_shape",
+                });
             }
         }
     }

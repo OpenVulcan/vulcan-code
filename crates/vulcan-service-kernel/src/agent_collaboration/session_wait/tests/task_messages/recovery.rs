@@ -5,7 +5,7 @@ use super::*;
 use vulcan_session_core::v1::collaboration::{
     AcceptNotificationInput, CollaborationDeliveryFailureReason, CollaborationDeliveryId,
     CollaborationGrantAction, CollaborationNotificationId, CollaborationNotificationState,
-    CollaborationTaskMessage, FailDeliveryInput, FailNotificationInput,
+    CollaborationTaskMessage, FailDeliveryInput, FailNotificationInput, ReplyQuestionInput,
     RecordNotificationProgressInput, SendNotificationInput, SetRunControlInput,
 };
 use vulcan_session_core::v1::document::SessionDocument;
@@ -202,6 +202,117 @@ async fn failed_accepted_question_repairs_missing_source_progress() {
         .await
         .unwrap(),
         0
+    );
+}
+
+/// An already answered cross-project question must close without showing its answer after Reply revocation.
+/// 跨项目问题已回答后撤销回复授权时，必须结清交付且不展示答案正文。
+#[tokio::test]
+async fn answered_question_revoked_before_model_delivery_redacts_failure() {
+    let (_root, invocation, target, _) = message_fixture(true).await;
+    let source = invocation.source_handle.clone();
+    let grant = crate::project_conversation_services::service_add_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        target.session_id().to_string(),
+        format!("user-grant-add:v1:{}", Uuid::new_v4()),
+        [CollaborationGrantAction::Ask, CollaborationGrantAction::Reply]
+            .into_iter()
+            .collect(),
+    )
+    .await
+    .unwrap();
+    let asked = ask_question(
+        &crate::ServiceEventEmitter::new(vec![]),
+        &invocation,
+        target.session_id(),
+        String::from("Answer this before the reply grant is removed."),
+    )
+    .await
+    .unwrap();
+    let question_id =
+        CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
+    let (question, delivery, _) = read_question_source(&source, &question_id).unwrap();
+    let answer_body = "private answer withheld after revocation";
+    let reply_operation = CollaborationOperationId::try_new("answer-before-revoke").unwrap();
+    let answered = source
+        .mutate_durable(
+            SessionMutationAdmission::ControlPlane,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.reply_question(ReplyQuestionInput {
+                    operation_id: reply_operation.clone(),
+                    question_id: question_id.clone(),
+                    responder: question.target.clone(),
+                    body: answer_body.into(),
+                    answered_at_ms: now_ms().unwrap(),
+                })
+            },
+        )
+        .unwrap()
+        .value
+        .into_value();
+    let mut settlement_invocation = invocation.clone();
+    settlement_invocation.operation_id =
+        format!("v1:{}:answer-before-revoke-settlement", invocation.source_session_id);
+    settle_and_acknowledge_delivery(
+        &settlement_invocation,
+        &source,
+        invocation.source_session_id,
+        &question,
+        &delivery,
+        reply_operation,
+        answered.event_seq,
+        CollaborationTargetSettlementState::Answered,
+    )
+    .await
+    .unwrap();
+    crate::project_conversation_services::service_remove_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        grant["grant"]["grant_id"].as_str().unwrap().to_owned(),
+        format!("user-grant-remove:v1:{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+
+    project_collaboration_before_api(&invocation.state, &source, now_ms().unwrap())
+        .await
+        .expect("revoked answer delivery must become a durable failure");
+    let withheld = source
+        .read(|document| document.question_snapshot(&question_id).unwrap().clone())
+        .unwrap();
+    let answer_delivery = &withheld.answer.as_ref().unwrap().delivery;
+    assert_eq!(answer_delivery.state, CollaborationAnswerDeliveryState::Failed);
+    assert_eq!(
+        answer_delivery.failure,
+        Some(CollaborationDeliveryFailureReason::AuthorizationRevoked)
+    );
+    assert!(!source
+        .read(|document| document.events().iter().any(|event| matches!(
+            &event.event,
+            EventBody::UserInput(input)
+                if input.input_source == vulcan_session_core::v1::event::UserInputSource::AgentMessage
+        )))
+        .unwrap());
+    let waited = wait_question(&invocation, question_id.as_str().to_owned(), None, 0)
+        .await
+        .expect("the original source must see redacted failure metadata");
+    assert_eq!(waited["status"], "failed");
+    assert_eq!(waited["answer"]["delivery"]["failure"], "authorization_revoked");
+    assert!(!waited.to_string().contains(answer_body));
+    assert!(!source
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    assert!(!target
+        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+        .unwrap());
+    let reloaded = load_session_v1_for_runtime(&source.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    assert_eq!(
+        reloaded.question_snapshot(&question_id).unwrap().answer.as_ref().unwrap().delivery.state,
+        CollaborationAnswerDeliveryState::Failed
     );
 }
 

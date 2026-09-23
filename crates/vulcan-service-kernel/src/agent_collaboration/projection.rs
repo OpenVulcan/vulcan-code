@@ -6,7 +6,8 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationAnswerDeliveryState, CollaborationDeliveryFailureReason,
     CollaborationInboundDeliveryRecord, CollaborationInboundNotificationRecord,
     CollaborationNotificationState, CollaborationQuestionRecord,
-    CollaborationTaskMessageEffectKind, FailDeliveryInput, FailNotificationInput,
+    CollaborationTaskMessageEffectKind, FailAnswerDeliveryInput, FailDeliveryInput,
+    FailNotificationInput,
     RecordNotificationProgressInput,
 };
 
@@ -390,31 +391,53 @@ pub(crate) async fn project_collaboration_before_api(
                     &invocation.registry,
                     vec![Arc::clone(handle)],
                     move || {
-                        if question.source.project_id != question.target.project_id
+                        let still_undelivered = source_for_write
+                            .read(|document| {
+                                document
+                                    .question_snapshot(&question.question_id)
+                                    .and_then(|current| current.answer.as_ref())
+                                    .is_some_and(|answer| {
+                                        answer.delivery.state
+                                            == CollaborationAnswerDeliveryState::Undelivered
+                                    })
+                            })
+                            .map_err(|error| error.to_string())?;
+                        if !still_undelivered {
+                            return Ok(None);
+                        }
+                        let revoked = question.source.project_id != question.target.project_id
                             && !source_handle_grant_allows(
                                 &source_for_write,
                                 source_for_write.session_id(),
                                 target_id,
                                 CollaborationGrantAction::Reply,
-                            )?
-                        {
-                            return Err(String::from(
-                                "answer body delivery is denied after authorization revocation",
-                            ));
-                        }
+                            )?;
                         source_for_write
                             .mutate_durable_if_changed(
                                 SessionMutationAdmission::MetadataOnly,
                                 SessionFlushReason::MetadataChanged,
                                 move |document| {
-                                    Ok(session_change(
-                                        document.project_answer_before_api(
+                                    if revoked {
+                                        let operation_id = CollaborationOperationId::try_new(
+                                            format!("{}:answer:fail", question.delivery_id.as_str()),
+                                        )?;
+                                        Ok(session_change(document.fail_answer_delivery(
+                                            FailAnswerDeliveryInput {
+                                                operation_id,
+                                                question_id: question.question_id,
+                                                reason: CollaborationDeliveryFailureReason::AuthorizationRevoked,
+                                                failed_at_ms: now_ms,
+                                            },
+                                        )?))
+                                    } else {
+                                        Ok(session_change(document.project_answer_before_api(
                                             question.question_id,
                                             now_ms,
-                                        )?,
-                                    ))
+                                        )?))
+                                    }
                                 },
                             )
+                            .map(Some)
                             .map_err(|error| error.to_string())
                     },
                 )

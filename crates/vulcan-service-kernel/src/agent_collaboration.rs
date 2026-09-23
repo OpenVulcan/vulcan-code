@@ -18,7 +18,8 @@ use vulcan_agent_runtime::tooling::collaboration::{
 };
 use vulcan_session_core::v1::collaboration::{
     AcceptDeliveryInput, AcknowledgeDeliverySettlementInput, ActivateChildTaskInput,
-    CancelQuestionInput, CollaborationAnswerDeliveryReceipt, CollaborationChildTaskReceipt,
+    CancelQuestionInput, CollaborationAnswerDeliveryReceipt, CollaborationAnswerDeliveryState,
+    CollaborationChildTaskReceipt,
     CollaborationChildTaskTerminalOutcome, CollaborationDeliveryFailureReason,
     CollaborationDeliveryId, CollaborationDeliveryReceipt, CollaborationDeliverySettlementReceipt,
     CollaborationDeliveryState, CollaborationExecutionId, CollaborationExecutionPurpose,
@@ -1354,10 +1355,13 @@ fn read_question_for_model(
             let delivery = document
                 .delivery_snapshot(&question.delivery_id)
                 .ok_or_else(|| String::from("collaboration question delivery was not found"))?;
-            if question.source.project_id != question.target.project_id
-                && !(caller_is_source
-                    && delivery.state == CollaborationDeliveryState::Failed
+            let source_failure = caller_is_source
+                && ((delivery.state == CollaborationDeliveryState::Failed
                     && question.answer.is_none())
+                    || question.answer.as_ref().is_some_and(|answer| {
+                        answer.delivery.state == CollaborationAnswerDeliveryState::Failed
+                    }));
+            if question.source.project_id != question.target.project_id && !source_failure
             {
                 let source = Uuid::parse_str(&question.source.session_id)
                     .map_err(|error| error.to_string())?;
@@ -2524,6 +2528,11 @@ fn answer_value(
         .answer
         .as_ref()
         .map(|answer| {
+            if answer.delivery.state == CollaborationAnswerDeliveryState::Failed {
+                // A revoked reply may be retained for audit but never exposed to a model.
+                // 已撤权答案可为审计保留，但绝不能向模型展示正文。
+                return Ok(json!({ "delivery": answer.delivery }));
+            }
             serde_json::to_value(answer)
                 .map_err(|error| format!("failed to serialize collaboration answer: {error}"))
         })
@@ -3570,6 +3579,17 @@ async fn wait_question(
         let cursor = question_wait_cursor(&question, &delivery)?;
         if caller_is_source || caller_is_target {
             if delivery.state == CollaborationDeliveryState::Failed {
+                return question_value(
+                    &invocation.operation_id,
+                    &question,
+                    Some(&delivery),
+                    cursor,
+                    "failed",
+                );
+            }
+            if question.answer.as_ref().is_some_and(|answer| {
+                answer.delivery.state == CollaborationAnswerDeliveryState::Failed
+            }) {
                 return question_value(
                     &invocation.operation_id,
                     &question,

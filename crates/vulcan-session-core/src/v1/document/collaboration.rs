@@ -2346,6 +2346,7 @@ impl SessionDocument {
             settled_at_ms: input.answered_at_ms,
             delivery: CollaborationAnswerDeliveryRecord {
                 state: CollaborationAnswerDeliveryState::Undelivered,
+                failure: None,
                 delivery_revision: 0,
                 kind: None,
                 projected_seq: None,
@@ -2695,13 +2696,14 @@ impl SessionDocument {
                 field: "collaboration.answer_delivery.question_state",
             });
         }
-        if answer.delivery.state == CollaborationAnswerDeliveryState::Delivered {
+        if answer.delivery.state != CollaborationAnswerDeliveryState::Undelivered {
             return Err(DomainError::CollaborationAlreadySettled {
                 question_id: input.question_id.as_str().to_string(),
-                state: "answer_delivered",
+                state: "answer_delivery_closed",
             });
         }
         answer.delivery.state = CollaborationAnswerDeliveryState::Delivered;
+        answer.delivery.failure = None;
         answer.delivery.delivery_revision = answer
             .delivery
             .delivery_revision
@@ -2746,6 +2748,129 @@ impl SessionDocument {
                 question_id: input.question_id,
                 delivery_revision: revision,
                 state: CollaborationAnswerDeliveryState::Delivered,
+                event_seq,
+            },
+        ))
+    }
+
+    /// Closes an authoritative answer without revealing its body in a model request.
+    /// 不向模型请求展示正文的情况下结清一条权威答案。
+    /// `input` identifies the exact question, failure reason and durable operation; the return
+    /// value is the terminal answer-delivery receipt.
+    /// `input` 标识精确问题、失败原因及可靠操作；返回答案交付的终态回执。
+    pub fn fail_answer_delivery(
+        &mut self,
+        input: FailAnswerDeliveryInput,
+    ) -> Result<IdempotentMutation<CollaborationAnswerDeliveryReceipt>, DomainError> {
+        validate_timestamp(
+            "collaboration.answer_delivery.failed_at_ms",
+            input.failed_at_ms,
+        )?;
+        let semantic = CollaborationOperationSemantic::FailAnswerDelivery {
+            question_id: input.question_id.clone(),
+            reason: input.reason,
+        };
+        if let Some(existing) =
+            self.existing_collaboration_operation(&input.operation_id, &semantic)?
+        {
+            let CollaborationOperationResult::AnswerDelivery { question_id, .. } = existing.result
+            else {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "collaboration.operation.result",
+                });
+            };
+            let delivery = self
+                .collaboration_state()
+                .questions
+                .get(&question_id)
+                .and_then(|question| question.answer.as_ref())
+                .map(|answer| &answer.delivery)
+                .ok_or_else(|| DomainError::CollaborationNotFound {
+                    kind: "answer_delivery",
+                    identity: question_id.as_str().to_string(),
+                })?;
+            return Ok(IdempotentMutation::Idempotent(
+                CollaborationAnswerDeliveryReceipt {
+                    question_id,
+                    delivery_revision: delivery.delivery_revision,
+                    state: delivery.state,
+                    event_seq: existing.event_seq,
+                },
+            ));
+        }
+        let mut question = self
+            .collaboration_state()
+            .questions
+            .get(&input.question_id)
+            .cloned()
+            .ok_or_else(|| DomainError::CollaborationNotFound {
+                kind: "question",
+                identity: input.question_id.as_str().to_string(),
+            })?;
+        if question.source.session_id != self.metadata.session_id {
+            return Err(DomainError::CollaborationUnauthorized {
+                action: "fail_answer_delivery",
+                identity: question.source.session_id,
+            });
+        }
+        if question.state != CollaborationQuestionState::Answered {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "collaboration.answer_delivery.failure_question_state",
+            });
+        }
+        let answer = question
+            .answer
+            .as_mut()
+            .ok_or(DomainError::CollaborationStateViolation {
+                field: "collaboration.answer_delivery.answer_missing",
+            })?;
+        if answer.delivery.state != CollaborationAnswerDeliveryState::Undelivered {
+            return Err(DomainError::CollaborationAlreadySettled {
+                question_id: input.question_id.as_str().to_string(),
+                state: "answer_delivery_closed",
+            });
+        }
+        answer.delivery.state = CollaborationAnswerDeliveryState::Failed;
+        answer.delivery.failure = Some(input.reason);
+        answer.delivery.delivery_revision = answer
+            .delivery
+            .delivery_revision
+            .checked_add(1)
+            .ok_or_else(|| DomainError::invalid_id("answer_delivery_revision", u64::MAX))?;
+        answer.delivery.last_operation_id = input.operation_id.clone();
+        answer.delivery.updated_at_ms = input.failed_at_ms;
+        validate_answer_delivery_record(&answer.delivery)?;
+        let delivery = answer.delivery.clone();
+        let mut state = self.collaboration_state().clone();
+        state.questions.insert(input.question_id.clone(), question);
+        let event_seq = next_event_seq(self)?;
+        state.operations.insert(
+            input.operation_id.clone(),
+            CollaborationOperationRecord {
+                operation_id: input.operation_id.clone(),
+                semantic,
+                event_seq,
+                result: CollaborationOperationResult::AnswerDelivery {
+                    question_id: input.question_id.clone(),
+                    delivery_revision: delivery.delivery_revision,
+                },
+            },
+        );
+        let event_seq = self.commit_collaboration_event(
+            state,
+            input.operation_id,
+            CollaborationEventKind::AnswerDeliveryFailed,
+            CollaborationAfterState::AnswerDelivery {
+                question_id: input.question_id.clone(),
+                delivery: delivery.clone(),
+            },
+            input.failed_at_ms,
+        )?;
+        Ok(IdempotentMutation::Committed(
+            CollaborationAnswerDeliveryReceipt {
+                question_id: input.question_id,
+                delivery_revision: delivery.delivery_revision,
+                state: delivery.state,
                 event_seq,
             },
         ))
