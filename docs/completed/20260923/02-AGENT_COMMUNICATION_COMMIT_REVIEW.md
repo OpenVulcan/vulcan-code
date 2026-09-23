@@ -1,6 +1,6 @@
 # 代理通信提交审核与五轮清零计划
 
-日期：2026 年 9 月 23 日；当日序号：02。状态：执行中。连续完整无问题审核：2/5。
+日期：2026 年 9 月 23 日；当日序号：02。状态：已完成，最终编译检查通过并归档。连续完整无问题审核：5/5。
 
 ## 任务目标
 
@@ -179,6 +179,9 @@
 
 1. **第一轮，正向调用链：未发现新问题。** 从严格参数及真实工具事件认证，逐一追踪开始、方向、通知、问题、回复与等待到双方日志及模型投影；回查原生子任务停止和关闭、根与父停止的冷恢复、非顶部动态消息的用户角色及界面独立卡片。拒收、已接纳和已投影具有各自事实，不将普通通知或问题加入业务完成义务。
 2. **第二轮，逆向权威链：未发现新问题。** 从界面状态、工具回执、模型信封及最终助手结果逆向核对来源参与者、原始操作、目标回合、终态事件和持久修订；核对主任务与答疑执行结束、关闭监听器保留、问题失败可查、结果撤权脱敏、通知重复确认以及动态失效与压缩的角色保持。没有把显示标签作为权限，也没有由最终助手正文伪造问题回答。
+3. **第三轮，并发与取消：未发现新问题。** 对本区间修改的调用链重新检查反向消息取锁顺序、等待者取消后阻塞写入仍持锁、授权撤销与目标接纳、目标停止与投影、原子失败与来源确认、答复和撤销的首个结算、子关闭与迟到终态、界面重复操作以及工具批次间的动态输入位置。来源已有终态时先保证刷写，再阻止旧投递复活；目标已接纳的事实不被后续撤权重分类为“从未投递”。
+4. **第四轮，中断与冷恢复：未发现新问题。** 按来源提交、目标接纳、投影、失败、来源确认、子根发布及父终态发布之间的退出点，重新核对持久凭据、索引扫描、真实嵌入祖先、服务所有者换代、暂停及重试。确认未发布初始子与未发布后继只结算对应预留，不改写前序子历史；旧子监听器仍持有终态责任。再次核对删除与历史编辑持有对端锁并保留必要回执，协议压缩不把动态用户信封提升至顶部，界面与等待工具只投影已确认状态。旧版数据迁移仍不纳入实现。
+5. **第五轮，检查点与验收交叉复核：未发现新问题。** 对照检查点到最终修复 `8c74365` 的相关提交及文件状态，复核消息分类、主子归属、跨项目授权、可靠投递、独立等待与回复、子终态和停止恢复、动态用户信封、实际协议编码夹具、工具完整暴露及独立界面卡片。核对本次三个通知修复的最终代码及新增用例，确认失败原因和原始操作身份一致；差异空白检查通过，最终服务协作一百五十五项、领域协作九十项通过。供应商配置、说明文档整理和另一会话的未跟踪遥测文件未纳入修复或暂存。
 
 ## 审核轮次
 
@@ -204,3 +207,65 @@
 | 完整第 4 轮发现问题 | 目标已接纳未投影问题后全停，来源没有 `TargetStopped` 回执；按正式停止契约修复后清零重审 | 0/5 |
 | 清零后停止链复核发现问题 | 普通子代理停止没有写入可靠运行控制，面板还提前撤销终态监听器；修复并重新计数 | 0/5 |
 | 清零后关闭链复核发现问题 | `close_agent` 先归档活动子任务，原终态因此被过期过滤；修复并重新计数 | 0/5 |
+
+## 最终验收与执行变更总结
+
+### 一、核心修复与调整概述
+
+本次按固定检查点 `280f31a27e7e42705bdacf70823d7eaeb58fd0aa` 审核后续相关提交。审核中确认的缺陷均已修复并独立提交，最新代码修复为 `8c74365f`。上表保留此前发现问题、清零和排除疑点的历史；最终计数以「最后一次修复后的完整复核记录」为准，已连续五轮没有新问题。
+
+- 修复跨项目读取、问答和通知接纳的撤权竞态；失败回执保留原参与者与原操作身份，已接纳事实不因后续撤权被抹去。
+- 修复任务消息、答案、通知及任务结果的失败或撤权结算，避免历史保护永久悬空；不能披露的结果不伪装成业务失败。
+- 修复主子停止、关闭归档、监听器保留和原终态回传；明确停止后的未发布初始子、未发布后继及开放原子回合均有可验证的恢复路径。
+- 修复通知来源恢复扫描、投影进度恢复、批量操作键冲突、接纳前确定拒收和全停后已接纳通知遗漏；临时存储错误保留重试，明确失败不自动复活。
+- 修复动态压缩指令进入固定顶部的问题，并核对普通请求、独立压缩、用户信封顺序、工具配对、失效标记及压缩后裁剪。
+- 修复前端失败状态契约和交互呈现缺口；通知、问题、方向及任务终态保留独立卡片，普通用户提示词不被识别为宿主权威。
+
+### 二、文件变更清单
+
+完整逐提交差异保存在上述固定检查点至 `8c74365f` 的 Git 历史中；供应商配置和文档整理差异不属于本审核修复。主要修复文件如下，新增测试与生产链路分别列出。
+
+| 类型 | 文件或模块 | 用途 |
+| --- | --- | --- |
+| 新增 | `crates/vulcan-service-kernel/src/agent_collaboration/child_close.rs` | 模型与面板共用可靠子关闭入口及延后卸载 |
+| 新增 | `crates/vulcan-service-kernel/src/agent_collaboration/question_failures.rs` | 停止后的问题与通知失败回传 |
+| 新增 | `crates/vulcan-service-kernel/src/agent_collaboration/notifications/stopped.rs` | 精确通知停止回执的来源确认 |
+| 新增 | `crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests/task_messages/recovery/batch.rs` | 多通知、多问题恢复身份回归 |
+| 新增 | `crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests/task_messages/recovery/notification_stop.rs` | 通知停止、冷恢复和持久前沿回归 |
+| 新增或扩充 | `agent_collaboration/native_dispatch_tests/`、`agent_collaboration/test_support.rs`、`session_wait/tests/task_messages/lifecycle_combinations.rs` | 原生端口、真实存储、主子与独立会话组合验收 |
+| 修改 | `crates/vulcan-service-kernel/src/agent_collaboration.rs` 及其 `notifications.rs`、`launch.rs`、`projection.rs`、`task_launch.rs`、`task_results.rs` | 准入、撤权、回执、投影和结果回传 |
+| 修改 | `agent_collaboration/startup_recovery.rs`、`startup_recovery/native_results.rs`、`startup_recovery/tree/creation.rs` 及相关测试 | 扫描、停止和未发布子任务的精确恢复 |
+| 修改 | `crates/vulcan-service-kernel/src/agent_stream/detached_subagent/non_success.rs`、`terminal.rs` | 子停止可靠状态、原终态所有者与回流 |
+| 修改 | `crates/vulcan-agent-runtime/src/agent_runtime/task_runtime/` 中的调用、运行、记录和工具入口及相应测试 | 关闭前宿主准入、归档后原执行终态和工具说明 |
+| 修改 | `crates/vulcan-session-core/src/v1/collaboration.rs`、`document/collaboration.rs`、`document/collaboration/child_tasks.rs`、`document/collaboration/task_messages/`、`document/turns.rs` | 可靠状态与原子停止、回合闭合及结果契约 |
+| 修改 | `crates/vulcan-service-kernel/src/session_v1_lifecycle/`、`conversation_generations_v1.rs` | 历史编辑及删除的完整子树和对端回执保护 |
+| 修改 | `crates/vulcan-agent-runtime/src/agent_runtime/prompt_compaction/remote.rs`、`crates/vulcan-ai-contract/src/host_message.rs` 及相关请求投影文件 | 动态指令角色、失败信封及原生压缩终态 |
+| 修改 | `apps/vulcan-code-web/src/components/conversation/conversation-collaboration-card.tsx`、`service/conversation-event-window-store.ts` 及相关测试与文案 | 失败状态解析和独立协作展示 |
+| 迁移 | 本审核计划从 `docs/plan/` 移至 `docs/completed/20260923/02-AGENT_COMMUNICATION_COMMIT_REVIEW.md` | 保存执行决策、五轮结论与验证证据 |
+| 删除说明 | 本次没有因修复删除业务模块；此前文档取消跟踪保持原边界 | `ceb8bd23` 仅纠正误恢复的设计文档索引，本地文件保留 |
+
+### 三、关键代码调整与验证
+
+最后三个独立修复提交：
+
+| 提交 | 修复 | 决策原因 |
+| --- | --- | --- |
+| `b665048d` | 通知接纳前的确定拒收 | 停止或撤权是明确结果，不能留下不可解除的待投递状态 |
+| `0522bfda` | 批量通知与问题恢复操作身份 | 扫描器身份不能代替逐条来源意图，否则第二条回执冲突 |
+| `8c74365f` | 已接纳通知的全停结算及可靠回传 | 原子停止必须覆盖尚未进入模型的通知，跨文档确认必须以已落盘目标事实为依据 |
+
+最终验证：
+
+- `cargo test -p vulcan-service-kernel --lib agent_collaboration -- --test-threads=1`：155 项通过，包含最终持久前沿回归；此次耗时约 49 秒是测试执行耗时，不包括编译。
+- `cargo test -p vulcan-session-core --lib collaboration -- --test-threads=1`：90 项通过。
+- `cargo check -p vulcan-service-kernel --all-targets`：通过，零错误，十九项既有警告。
+- 范围内代码 `git diff --check` 通过；未执行全局格式改写。
+- 之前各独立提交的服务、领域、运行时关闭、前端卡片及类型检查结果记录在对应发现章节；没有将历史结果伪称为本轮重新执行。
+
+### 四、遗留问题与注意事项
+
+- 本检查点区间、指定任务范围内，没有已确认但尚未修复的缺陷。连续五轮无新发现是代码审核结论，不代表能够证明所有运行环境零缺陷。
+- Windows 上扩大到整个任务运行时测试筛选时曾出现 `STATUS_STACK_OVERFLOW`；已记录，未宣称该扩大测试通过。相关关闭定向八项已通过。本次未运行完整工作区测试，也未进行真实供应商联网验收。
+- 原架构方案与设计文件仍按此前文档整理要求保留在本地，不重新纳入 Git 跟踪；本报告独立保留审核决策与最终证据。
+- 另一会话的供应商、配置、说明文档优化及未跟踪 `crates/vulcan-provider-adapters/src/telemetry.rs` 均未修改或暂存。没有推送远端，没有引入旧版数据迁移。
+- 按用户要求本轮独自执行，没有创建或委派子代理。
