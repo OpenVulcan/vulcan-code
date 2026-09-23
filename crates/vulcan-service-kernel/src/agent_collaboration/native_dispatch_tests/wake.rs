@@ -211,4 +211,22 @@ async fn incoming_question_scan_skips_revoked_foreign_question() {
             .unwrap()
             .is_none()
     );
+    // A corrupt target receipt is still rejected before the revoked grant can hide the mismatch.
+    // 损坏的目标回执仍须在撤权筛选前被拒绝，不能借撤权掩盖绑定冲突。
+    let mut mismatched = dispatch
+        .source()
+        .read(|document| {
+            document
+                .collaboration_state()
+                .inbound_deliveries
+                .values()
+                .find(|inbound| inbound.question_id == question_id)
+                .unwrap()
+                .clone()
+        })
+        .unwrap();
+    mismatched.delivery_id = CollaborationDeliveryId::try_new("wrong-wake-delivery").unwrap();
+    let mismatch =
+        read_pending_incoming_question_for_model(&dispatch.target, &mismatched).unwrap_err();
+    assert!(mismatch.contains("does not match"), "{mismatch}");
 }

@@ -1388,14 +1388,14 @@ fn read_question_for_model(
 /// Reads an actionable incoming question while silently excluding a revoked foreign delivery.
 /// 读取可处理的传入问题，并静默排除已撤权的跨项目投递。
 ///
-/// `handle` owns the authoritative source record and `question_id` identifies its exact question.
-/// `handle` 持有来源权威记录，`question_id` 指向精确问题。
+/// `handle` owns the authoritative source record and `inbound` binds its exact target receipt.
+/// `handle` 持有来源权威记录，`inbound` 绑定其精确目标回执。
 /// Returns a pending authorized snapshot, or `None` when the question is settled or its Ask grant
 /// was revoked; storage and record-integrity errors remain explicit.
 /// 返回待处理且获授权的快照；问题已结算或提问授权撤销时返回 `None`，存储与记录完整性错误仍显式暴露。
 fn read_pending_incoming_question_for_model(
     handle: &Arc<SessionHandle>,
-    question_id: &CollaborationQuestionId,
+    inbound: &vulcan_session_core::v1::collaboration::CollaborationInboundDeliveryRecord,
 ) -> Result<
     Option<(
         vulcan_session_core::v1::collaboration::CollaborationQuestionRecord,
@@ -1409,16 +1409,25 @@ fn read_pending_incoming_question_for_model(
             // The source document lock keeps the question, grant, and cloned body consistent.
             // 来源文档锁使问题、授权与复制的正文保持一致。
             let question = document
-                .question_snapshot(question_id)
+                .question_snapshot(&inbound.question_id)
                 .ok_or_else(|| String::from("collaboration question was not found"))?;
-            if question.state != CollaborationQuestionState::Pending {
-                return Ok(None);
-            }
             // The outbound delivery must belong to this exact source question.
             // 出站投递必须属于这条精确的来源问题。
             let delivery = document
                 .delivery_snapshot(&question.delivery_id)
                 .ok_or_else(|| String::from("collaboration question delivery was not found"))?;
+            if question.question_id != inbound.question_id
+                || question.target != inbound.target
+                || question.source != inbound.source
+                || delivery.delivery_id != inbound.delivery_id
+            {
+                return Err(String::from(
+                    "inbound collaboration delivery does not match its source question",
+                ));
+            }
+            if question.state != CollaborationQuestionState::Pending {
+                return Ok(None);
+            }
             if question.source.project_id != question.target.project_id {
                 // Grant owners are the durable question participants, never the waiting tool's arguments.
                 // 授权所有者来自可靠问题参与者，绝不取自等待工具参数。
@@ -3813,19 +3822,10 @@ async fn incoming_question_snapshot(
         // Revoked or already settled questions must not block later actionable inbox entries.
         // 已撤权或已结算的问题不得阻塞收件箱中后续可处理的条目。
         let Some((question, delivery, revision)) =
-            read_pending_incoming_question_for_model(&source_handle, &question_id)?
+            read_pending_incoming_question_for_model(&source_handle, &inbound)?
         else {
             continue;
         };
-        if question.question_id != inbound.question_id
-            || question.target != inbound.target
-            || question.source != inbound.source
-            || delivery.delivery_id != inbound.delivery_id
-        {
-            return Err(String::from(
-                "inbound collaboration delivery does not match its source question",
-            ));
-        }
         let mut value = question_value(
             &invocation.operation_id,
             &question,
