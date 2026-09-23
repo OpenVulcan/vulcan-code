@@ -9,7 +9,8 @@ pub(super) mod tree;
 pub(super) mod worker;
 use std::collections::BTreeSet;
 use vulcan_session_core::v1::collaboration::{
-    CollaborationState, CollaborationTaskMessageEffectKind, CollaborationTaskMessageKind,
+    CollaborationNotificationState, CollaborationState, CollaborationTaskMessageEffectKind,
+    CollaborationTaskMessageKind,
 };
 use vulcan_workspace_store::workspace_store::locate_session_v1_storage;
 
@@ -48,6 +49,9 @@ fn needs_delivery_recovery(collaboration: &CollaborationState) -> bool {
                 acceptance.message.kind == CollaborationTaskMessageKind::TaskStart
                     && !collaboration.task_message_effects.contains_key(delivery)
             })
+        || collaboration.notifications.values().any(|notification| {
+            notification.state == CollaborationNotificationState::Recorded
+        })
         || collaboration.outbound_deliveries.values().any(|delivery| {
             matches!(
                 delivery.state,
@@ -267,9 +271,48 @@ mod tests {
     use super::*;
     use vulcan_session_core::v1::collaboration::{
         CollaborationDeliveryId, CollaborationInboundNotificationRecord,
-        CollaborationNotificationId, CollaborationNotificationState, CollaborationOperationId,
-        CollaborationParticipant,
+        CollaborationNotificationId, CollaborationNotificationRecord,
+        CollaborationNotificationState, CollaborationOperationId, CollaborationParticipant,
     };
+
+    /// A source-only recorded notification must make the indexed recovery pass load its owner.
+    /// 只有来源侧已记录的通知也必须让索引恢复扫描加载其所有者。
+    /// The source outbox replay is unreachable unless this session-level gate selects the record.
+    /// 若会话级闸门不选中该记录，来源出站重放就永远不可达。
+    #[test]
+    fn recorded_outbound_notification_triggers_startup_recovery() {
+        let participant = |session: &str| CollaborationParticipant {
+            session_id: session.to_owned(),
+            root_session_id: session.to_owned(),
+            project_id: String::from("project-1"),
+            segment_generation: 1,
+            turn_id: None,
+            task_id: None,
+        };
+        let notification_id = CollaborationNotificationId::try_new("notification-1").unwrap();
+        let mut collaboration = CollaborationState::default();
+        collaboration.notifications.insert(
+            notification_id.clone(),
+            CollaborationNotificationRecord {
+                notification_id,
+                delivery_id: CollaborationDeliveryId::try_new("delivery-1").unwrap(),
+                operation_id: CollaborationOperationId::try_new("operation-source").unwrap(),
+                source: participant("session-source"),
+                target: participant("session-target"),
+                body: String::from("child reached validation"),
+                state: CollaborationNotificationState::Recorded,
+                failure: None,
+                target_revision: None,
+                target_event_seq: None,
+                created_at_ms: 10,
+                updated_at_ms: 10,
+            },
+        );
+        assert!(
+            needs_delivery_recovery(&collaboration),
+            "the indexed gate must select a source whose notification still needs delivery"
+        );
+    }
 
     /// A stuck inbound notification alone must be visible to the session-level recovery gate.
     /// 单独滞留的入站通知必须能被会话级恢复闸门看见。
