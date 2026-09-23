@@ -1396,37 +1396,6 @@ impl SessionHandle {
         )
     }
 
-    /// Applies a run-control transition only while its expected durable state is still current.
-    /// 仅当预期的可靠状态仍然当前时应用运行控制转换。
-    pub(crate) fn set_collaboration_run_control_if_current_durable(
-        &self,
-        expected_state: CollaborationRunControl,
-        input: SetRunControlInput,
-    ) -> Result<
-        SessionConditionalMutationReceipt<Option<CollaborationRunControlReceipt>>,
-        SessionRuntimeError,
-    > {
-        self.mutate_durable_if_changed(
-            SessionMutationAdmission::ControlPlane,
-            SessionFlushReason::MetadataChanged,
-            move |document| {
-                if document.collaboration_run_control() != expected_state {
-                    return Ok(SessionMutationChange::Unchanged(None));
-                }
-                document
-                    .set_collaboration_run_control(input)
-                    .map(|mutation| match mutation {
-                        IdempotentMutation::Committed(receipt) => {
-                            SessionMutationChange::Changed(Some(receipt))
-                        }
-                        IdempotentMutation::Idempotent(receipt) => {
-                            SessionMutationChange::Unchanged(Some(receipt))
-                        }
-                    })
-            },
-        )
-    }
-
     /// Durably queues one uniquely identified input for a future Turn.
     /// 可靠排队一条具有唯一身份、用于未来回合的输入。
     ///
@@ -2568,6 +2537,7 @@ impl SessionHandle {
     ///
     /// The committed or idempotently replayed parent receipt after durable publication.
     /// 可靠发布后已提交或幂等重放的父级回执。
+    #[cfg(test)]
     pub(crate) fn append_subagent_return(
         &self,
         input: SubagentReturnInput,

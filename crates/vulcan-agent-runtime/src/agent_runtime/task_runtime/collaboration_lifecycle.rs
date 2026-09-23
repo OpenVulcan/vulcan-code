@@ -179,25 +179,6 @@ impl ChildTaskLifecycleBinding {
             active_at_ms,
         })
     }
-
-    /// Builds the typed terminal request from the original reservation identity.
-    /// 根据原始预留身份构建类型化终态请求。
-    pub(crate) fn terminal_request(
-        &self,
-        outcome: CollaborationChildTaskTerminalOutcome,
-        terminal_at_ms: i64,
-    ) -> Result<ChildTaskTerminalRequest, String> {
-        Ok(ChildTaskTerminalRequest {
-            invocation: self.reservation.invocation.clone(),
-            operation_id: phase_operation_id(
-                &self.reservation.operation_id,
-                terminal_operation_suffix(outcome),
-            )?,
-            execution: self.reservation.execution.clone(),
-            outcome,
-            terminal_at_ms,
-        })
-    }
 }
 
 /// Derives a stable phase operation id without changing the invocation-owned base identity.
@@ -208,17 +189,6 @@ fn phase_operation_id(
 ) -> Result<CollaborationOperationId, String> {
     CollaborationOperationId::try_new(format!("{}:{phase}", base.as_str()))
         .map_err(|error| format!("failed to derive child lifecycle operation identity: {error}"))
-}
-
-/// Maps a terminal outcome to the idempotent operation suffix for that terminal attempt.
-/// 将终态结果映射为该终态尝试使用的幂等操作后缀。
-fn terminal_operation_suffix(outcome: CollaborationChildTaskTerminalOutcome) -> &'static str {
-    match outcome {
-        CollaborationChildTaskTerminalOutcome::Completed => "terminal:completed",
-        CollaborationChildTaskTerminalOutcome::Failed => "terminal:failed",
-        CollaborationChildTaskTerminalOutcome::Stopped => "terminal:stopped",
-        CollaborationChildTaskTerminalOutcome::Cancelled => "terminal:cancelled",
-    }
 }
 
 /// Request that begins a dedicated question execution.

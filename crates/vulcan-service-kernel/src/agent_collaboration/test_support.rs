@@ -11,7 +11,7 @@ use vulcan_workspace_store::workspace_store::{CreateSessionV1Request, create_ind
 /// 在隔离数据库创建两个索引会话；`cross_project` 决定目标项目范围。
 /// Returns the storage owner, a service invocation fixture, and the canonical target handle.
 /// 返回存储所有者、服务调用夹具和规范目标句柄。
-pub(crate) async fn fixture(
+pub(super) async fn fixture(
     cross_project: bool,
 ) -> (TestHostRuntimeRoot, ValidatedInvocation, Arc<SessionHandle>) {
     // All persistent files are owned by this fixture, outside real application roots.

@@ -35,7 +35,7 @@ async fn undispatched_question_failure_preserves_business_scope() {
         // 生产服务注册表拥有与失败助手使用的同一领域执行。
         let (document, session_id, execution) = launch_fixture(in_parent);
         let expected_control = document.collaboration_run_control();
-        let mut service_state =
+        let service_state =
             crate::tests::test_support::test_service_state_with_parent_session(session_id);
         let handle = crate::session_runtime_registry_v1::SessionHandle::with_backend(
             session_id,
@@ -93,7 +93,7 @@ async fn undispatched_question_failure_rejects_active_kernel() {
     // 保留原可靠答疑夹具，同时刻意设置另一个进程所有者。
     let (document, session_id, execution) = launch_fixture(true);
     let before_revision = document.memory_revision();
-    let mut service_state =
+    let service_state =
         crate::tests::test_support::test_service_state_with_parent_session(session_id);
     let handle = crate::session_runtime_registry_v1::SessionHandle::with_backend(
         session_id,

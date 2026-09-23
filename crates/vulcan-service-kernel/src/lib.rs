@@ -342,7 +342,7 @@ use session_goal_lifecycle::{
 #[cfg(test)]
 use session_goal_lifecycle::{
     render_goal_budget_limited_context, render_goal_continuation_context,
-    render_goal_objective_updated_context, render_goal_turn_usage_context,
+    render_goal_objective_updated_context,
     render_session_goal_context_for_prompt,
 };
 use session_goals::*;

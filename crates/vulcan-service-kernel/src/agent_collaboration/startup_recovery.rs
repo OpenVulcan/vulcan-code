@@ -75,6 +75,7 @@ fn needs_delivery_recovery(collaboration: &CollaborationState) -> bool {
 /// 使用精确索引定位器和已发布状态，独立修复 `session_ids`。
 /// `app` emits launches and `state` supplies service ownership; returns collected per-session failures.
 /// `app` 发出启动，`state` 提供服务所有权；返回汇总的逐会话失败。
+#[cfg(test)]
 pub(super) async fn recover_indexed_collaboration(
     app: &crate::ServiceEventEmitter,
     state: &SharedServiceBridgeState,

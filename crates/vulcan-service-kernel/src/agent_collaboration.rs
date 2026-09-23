@@ -18,7 +18,7 @@ use vulcan_agent_runtime::tooling::collaboration::{
 };
 use vulcan_session_core::v1::collaboration::{
     AcceptDeliveryInput, AcknowledgeDeliverySettlementInput, ActivateChildTaskInput,
-    CancelQuestionInput, CollaborationAnswerDeliveryReceipt, CollaborationAnswerDeliveryState,
+    CancelQuestionInput, CollaborationAnswerDeliveryState,
     CollaborationChildTaskReceipt, CollaborationChildTaskTerminalOutcome,
     CollaborationDeliveryFailureReason, CollaborationDeliveryId, CollaborationDeliveryReceipt,
     CollaborationDeliverySettlementReceipt, CollaborationDeliveryState, CollaborationExecutionId,
@@ -26,7 +26,7 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationOperationResult, CollaborationOperationSemantic, CollaborationParticipant,
     CollaborationQuestionExecutionState, CollaborationQuestionId, CollaborationQuestionState,
     CollaborationRunControl, CollaborationTargetSettlementState, CreateQuestionInput,
-    DeliverAnswerInput, ProjectDeliveryInput, RecordDeliveryProgressInput, ReplyQuestionInput,
+    RecordDeliveryProgressInput, ReplyQuestionInput,
     ReserveChildTaskInput, SettleInboundDeliveryInput, TerminalChildTaskInput,
 };
 use vulcan_session_core::v1::document::IdempotentMutation;
@@ -2002,8 +2002,11 @@ async fn recover_target_acceptance(
     .await
 }
 
-/// Reconciles one source outbox after startup or a canonical session load.
-/// 在启动或规范会话加载后修复一份来源出站箱。
+/// Resolves a fixture source and invokes the canonical outbox repair used by startup recovery.
+/// 解析测试来源并调用启动恢复所使用的规范出站箱修复。
+/// Takes the fixture host, state and source ID; returns the production repair count or error.
+/// 接收测试宿主、状态及来源标识，返回生产修复数量或错误。
+#[cfg(test)]
 pub(crate) async fn reconcile_session_v1_collaboration_outbox(
     app: &crate::ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -2714,24 +2717,6 @@ fn queryable_question_after_repair_failure(
     Ok(value)
 }
 
-/// Returns one durable delivery DTO with no hidden success path.
-/// 返回一份可靠投递 DTO，不隐藏任何成功路径。
-fn delivery_value(
-    operation_id: &str,
-    receipt: &vulcan_session_core::v1::collaboration::CollaborationDeliveryReceipt,
-    status: &str,
-) -> Value {
-    json!({
-        "status": status,
-        "operation_id": operation_id,
-        "delivery_id": receipt.delivery_id.as_str(),
-        "question_id": receipt.question_id.as_str(),
-        "delivery_state": receipt.state,
-        "revision": receipt.revision,
-        "event_seq": receipt.event_seq.value(),
-    })
-}
-
 /// Applies one source-owned collaboration mutation under its lifecycle gate.
 /// 在来源生命周期门内应用一次来源拥有的协作修改。
 async fn mutate_handle<T, Mutation>(
@@ -2819,116 +2804,6 @@ where
         mutation,
     )
     .await
-}
-
-/// Applies one target-owned collaboration mutation under its lifecycle gate.
-/// 在目标生命周期门内应用一次目标拥有的协作修改。
-async fn mutate_target<T, Mutation>(
-    invocation: &ValidatedInvocation,
-    target: &ResolvedSession,
-    target_session_id: Uuid,
-    mutation: Mutation,
-) -> Result<SessionConditionalMutationReceipt<T>, String>
-where
-    T: Send + 'static,
-    Mutation: FnOnce(
-            &mut vulcan_session_core::v1::document::SessionDocument,
-        )
-            -> Result<IdempotentMutation<T>, vulcan_session_core::v1::errors::DomainError>
-        + Send
-        + 'static,
-{
-    mutate_handle(
-        &invocation.registry,
-        &target.handle,
-        target_session_id,
-        mutation,
-    )
-    .await
-}
-
-/// Persists a target projection only after the caller has appended the real UserInput fact.
-/// 仅在调用方追加真实 UserInput 事实后持久化目标投影确认。
-pub(crate) async fn session_v1_mark_collaboration_delivery_projected(
-    state: SharedServiceBridgeState,
-    target_session_id: Uuid,
-    input: ProjectDeliveryInput,
-) -> Result<CollaborationDeliveryReceipt, String> {
-    let handle =
-        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, target_session_id)
-            .await
-            .map_err(|error| format!("failed to load collaboration projection target: {error}"))?;
-    let registry = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        Arc::clone(&guard.session_runtime_registry)
-    };
-    let receipt = mutate_handle_with_admission(
-        &registry,
-        &handle,
-        target_session_id,
-        SessionMutationAdmission::ControlPlane,
-        move |document| document.mark_delivery_projected(input),
-    )
-    .await?;
-    Ok(receipt.value)
-}
-
-/// Persists source-side delivery progress after a target receipt is durably observed.
-/// 在可靠观测目标回执后持久化来源侧投递进度。
-pub(crate) async fn session_v1_record_collaboration_delivery_progress(
-    state: SharedServiceBridgeState,
-    source_session_id: Uuid,
-    input: RecordDeliveryProgressInput,
-) -> Result<CollaborationDeliveryReceipt, String> {
-    let handle =
-        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, source_session_id)
-            .await
-            .map_err(|error| format!("failed to load collaboration progress source: {error}"))?;
-    let registry = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        Arc::clone(&guard.session_runtime_registry)
-    };
-    let receipt = mutate_handle_with_admission(
-        &registry,
-        &handle,
-        source_session_id,
-        SessionMutationAdmission::ControlPlane,
-        move |document| document.record_delivery_progress(input),
-    )
-    .await?;
-    Ok(receipt.value)
-}
-
-/// Persists source answer delivery only after a real User or completed ToolResult fact exists.
-/// 仅在真实 User 或已完成 ToolResult 事实存在后持久化来源答案交付游标。
-pub(crate) async fn session_v1_deliver_collaboration_answer(
-    state: SharedServiceBridgeState,
-    source_session_id: Uuid,
-    input: DeliverAnswerInput,
-) -> Result<CollaborationAnswerDeliveryReceipt, String> {
-    let handle =
-        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, source_session_id)
-            .await
-            .map_err(|error| format!("failed to load collaboration answer source: {error}"))?;
-    let registry = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        Arc::clone(&guard.session_runtime_registry)
-    };
-    let receipt = mutate_handle_with_admission(
-        &registry,
-        &handle,
-        source_session_id,
-        SessionMutationAdmission::ControlPlane,
-        move |document| document.deliver_answer(input),
-    )
-    .await?;
-    Ok(receipt.value)
 }
 
 /// Records a definitive question rejection while neither participant can accept the delivery.
@@ -3490,17 +3365,15 @@ pub(crate) async fn service_cancel_collaboration_question(
     let root_locator = root_handle.storage_locator().map_err(|error| {
         format!("failed to resolve user cancellation source root locator: {error}")
     })?;
-    let (source_handle, source_locator) = if source_session_id == source_root_session_id {
-        (Arc::clone(&root_handle), root_locator.clone())
+    let source_handle = if source_session_id == source_root_session_id {
+        Arc::clone(&root_handle)
     } else {
         let source_locator =
             locate_embedded_task_session_v1(&root_locator, &source_session_id.to_string())
                 .map_err(|error| {
                     format!("failed to locate embedded user cancellation source: {error}")
                 })?;
-        let source_handle =
-            load_embedded_canonical_handle(&registry, source_locator.clone(), source_session_id)?;
-        (source_handle, source_locator)
+        load_embedded_canonical_handle(&registry, source_locator, source_session_id)?
     };
     let source_locator = source_handle
         .storage_locator()

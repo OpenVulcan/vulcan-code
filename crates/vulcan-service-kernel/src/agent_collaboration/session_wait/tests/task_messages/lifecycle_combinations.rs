@@ -943,7 +943,7 @@ async fn history_edit_refuses_an_unsettled_embedded_child_and_names_it() {
     // The fixture supplies the isolated host state and registry; the root itself is created by the
     // production creation entry so it starts with no collaboration records at all.
     // 夹具提供隔离的宿主状态与注册表；根会话本身由生产创建入口创建，因此起始没有任何协作记录。
-    let (_root, mut invocation, fixture_target, _context) = message_fixture(false).await;
+    let (_root, invocation, fixture_target, _context) = message_fixture(false).await;
     let project_id = fixture_target
         .storage_locator()
         .unwrap()
@@ -1942,7 +1942,7 @@ async fn parent_question_to_owned_embedded_child_binds_the_question_to_the_child
 /// 答案会回到提问的子代理——而这正是该方向可用而非单向的原因。
 #[tokio::test]
 async fn child_question_to_parent_round_trips_the_answer_back_to_the_child() {
-    use vulcan_agent_runtime::tooling::collaboration::{REPLY_QUESTION_TOOL_ID, ReplyQuestionArgs};
+    use vulcan_agent_runtime::tooling::collaboration::ReplyQuestionArgs;
 
     let (_root, invocation, parent, _context) = message_fixture(false).await;
     // The production creator publishes one real embedded child owned by this parent.
