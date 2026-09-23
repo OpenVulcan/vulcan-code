@@ -9,7 +9,10 @@
 # make 保留此旧文件名；服务和工作台是独立进程。
 
 param(
-    [switch]$Release
+    [switch]$Release,
+    # Restart authorizes releasing this distribution's processes after successful compilation.
+    # Restart 授权在编译成功后释放本发行实例的进程。
+    [switch]$Restart
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,6 +30,7 @@ if ($PSVersionTable.PSEdition -ne "Core") {
         if ($Release) {
             $ForwardedArguments += "-Release"
         }
+        if ($Restart) { $ForwardedArguments += "-Restart" }
         & $PowerShellCore.Source -NoProfile -ExecutionPolicy Bypass -File $CurrentScriptPath @ForwardedArguments
         exit $LASTEXITCODE
     }
@@ -39,6 +43,7 @@ $ProjectDir = Split-Path $PSScriptRoot -Parent
 # Load the shared successful-build artifact tracker for both Cargo profiles.
 # 加载两个 Cargo 模式共用的成功构建制品跟踪器。
 . (Join-Path $PSScriptRoot 'cargo_artifact_cleanup.ps1')
+. (Join-Path $PSScriptRoot 'distribution_processes.ps1')
 
 # WebAppDir points at the Vite React WebUI project.
 # WebAppDir 指向 Vite React WebUI 工程。
@@ -57,61 +62,6 @@ $TauriAppDir = Join-Path $ProjectDir "apps\vulcan-code-service"
 $IsWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 
 Set-Location $ProjectDir
-
-# Test whether one PowerShell file-operation failure is a Windows sharing or lock violation.
-# 判断一次 PowerShell 文件操作失败是否属于 Windows 共享冲突或锁冲突。
-# ErrorRecord is the exact caught PowerShell error, including nested native exceptions.
-# ErrorRecord 是捕获到的精确 PowerShell 错误，包含嵌套的本机异常。
-# This function returns true only for Win32 error 32 or 33 and never masks other failures.
-# 此函数仅对 Win32 错误 32 或 33 返回 true，绝不掩盖其他失败。
-function Test-IsLockedFileError {
-    param(
-        [System.Management.Automation.ErrorRecord]$ErrorRecord
-    )
-
-    # CurrentException walks every nested exception because Copy-Item may wrap the native IOException.
-    # CurrentException 遍历每层嵌套异常，因为 Copy-Item 可能包装本机 IOException。
-    $CurrentException = $ErrorRecord.Exception
-    while ($null -ne $CurrentException) {
-        # NativeErrorCode extracts the low Win32 status word from the HRESULT.
-        # NativeErrorCode 从 HRESULT 中提取低位 Win32 状态码。
-        $NativeErrorCode = $CurrentException.HResult -band 0xFFFF
-        if ($NativeErrorCode -eq 32 -or $NativeErrorCode -eq 33) {
-            return $true
-        }
-        $CurrentException = $CurrentException.InnerException
-    }
-    return $false
-}
-
-# Copy one file while allowing an already-running application to retain a locked destination version.
-# 复制单个文件，同时允许运行中的应用继续保留被锁定的目标版本。
-# SourceFile is the exact source artifact and DestinationFile is its exact output path.
-# SourceFile 是精确源制品，DestinationFile 是其精确输出路径。
-# This function returns true when copied, false when skipped for a lock, and throws for every other error.
-# 此函数复制成功时返回 true，因占用跳过时返回 false，其他任何错误都会抛出。
-function Copy-FileAllowLockedDestination {
-    param(
-        [string]$SourceFile,
-        [string]$DestinationFile
-    )
-
-    # DestinationParent is created before the guarded copy so missing-directory failures remain explicit.
-    # DestinationParent 在受保护复制前创建，使目录缺失类失败保持显式。
-    $DestinationParent = Split-Path $DestinationFile -Parent
-    New-Item -ItemType Directory -Path $DestinationParent -Force | Out-Null
-    try {
-        Copy-Item -LiteralPath $SourceFile -Destination $DestinationFile -Force -ErrorAction Stop
-        return $true
-    }
-    catch {
-        if (Test-IsLockedFileError -ErrorRecord $_) {
-            Write-Warning "Skipped locked output file; restart the running application before using the new artifact: $DestinationFile"
-            return $false
-        }
-        throw
-    }
-}
 
 if ($Release) {
     if (-not (Test-Path -LiteralPath (Join-Path $WebAppDir "node_modules"))) {
@@ -190,24 +140,9 @@ $BuiltTerminalHostPath = [string]($CargoBuildResult.Artifacts | Where-Object { $
 
 # DistributionRoot selects the same validated output boundary as sync and desktop packaging.
 # DistributionRoot 选择与同步和桌面打包相同的已验证输出边界。
-$DistributionRoot = Join-Path $ProjectDir "output"
-if (-not [string]::IsNullOrWhiteSpace($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)) {
-    if (-not [System.IO.Path]::IsPathFullyQualified($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)) {
-        throw "VULCAN_DESKTOP_DISTRIBUTION_ROOT must be an absolute path."
-    }
-    # TargetRoot confines isolated distributions to generated artifacts inside this workspace.
-    # TargetRoot 将独立发行物限制在本工作区生成的 target 制品内。
-    $TargetRoot = [System.IO.Path]::GetFullPath((Join-Path $ProjectDir "target"))
-    # SelectedRoot is the caller-owned exact distribution root.
-    # SelectedRoot 是调用方拥有的精确发行根目录。
-    $SelectedRoot = [System.IO.Path]::GetFullPath($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)
-    # PathComparison follows the platform's case-sensitive or case-insensitive path semantics.
-    # PathComparison 遵循平台路径区分或不区分大小写的语义。
-    $PathComparison = if ($IsWindowsPlatform) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
-    if (-not $SelectedRoot.StartsWith($TargetRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar, $PathComparison)) {
-        throw "VULCAN_DESKTOP_DISTRIBUTION_ROOT must be inside the repository target directory."
-    }
-    $DistributionRoot = $SelectedRoot
+$DistributionRoot = (& node (Join-Path $PSScriptRoot "desktop-runtime.mjs") root | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::IsPathFullyQualified($DistributionRoot)) {
+    throw "Could not resolve the desktop distribution root."
 }
 # OutputBinDir stores the runtime executables beneath the selected distribution root.
 # OutputBinDir 保存选定发行根目录下的运行时可执行文件。
@@ -230,6 +165,9 @@ if (-not (Test-Path -LiteralPath $BuiltTerminalHostPath)) {
 
 # Publish compiled executables into the stable output directory used by make run.
 # 把已编译可执行文件发布到 make run 使用的稳定 output 目录。
+if ($IsWindowsPlatform) {
+    Prepare-DistributionPublication -DistributionRoot $DistributionRoot -Restart:$Restart
+}
 New-Item -ItemType Directory -Path $OutputBinDir -Force | Out-Null
 # ObsoleteWindowsConsoleHelperPath identifies the removed pre-unification terminal executable.
 # ObsoleteWindowsConsoleHelperPath 标识跨平台统一前已移除的旧终端可执行文件。
@@ -239,29 +177,10 @@ if (Test-Path -LiteralPath $ObsoleteWindowsConsoleHelperPath) {
     # 删除此生成制品可避免原地升级后继续残留双宿主目录布局。
     Remove-Item -LiteralPath $ObsoleteWindowsConsoleHelperPath -Force
 }
-# BinaryCopied records whether the running desktop process allowed the executable to be refreshed.
-# BinaryCopied 记录运行中的桌面进程是否允许刷新可执行文件。
-$BinaryCopied = Copy-FileAllowLockedDestination -SourceFile $BuiltBinaryPath -DestinationFile $OutputBinaryPath
-# TerminalHostCopied records whether the isolated terminal host was refreshed.
-# TerminalHostCopied 记录隔离终端宿主是否已刷新。
-$TerminalHostCopied = Copy-FileAllowLockedDestination -SourceFile $BuiltTerminalHostPath -DestinationFile $OutputTerminalHostPath
-
-if ($BinaryCopied) {
-    Write-Host "==> Done. Binary: $OutputBinaryPath"
-}
-else {
-    Write-Host "==> Done. Binary remained unchanged because it is in use: $OutputBinaryPath"
-}
-if ($TerminalHostCopied) {
-    Write-Host "==> Done. Terminal host: $OutputTerminalHostPath"
-}
-else {
-    Write-Host "==> Done. Terminal host remained unchanged because it is in use: $OutputTerminalHostPath"
-}
-# Never label an old locked executable as a newly published profile.
-# 绝不将被锁定的旧可执行文件标记为新发布模式。
-if (-not $BinaryCopied -or -not $TerminalHostCopied) {
-    throw 'Distribution was not published because an output executable is locked.'
-}
+# Copy failures abort publication immediately.
+# 复制失败时立即终止发布。
+Copy-Item -LiteralPath $BuiltBinaryPath -Destination $OutputBinaryPath -Force -ErrorAction Stop
+Copy-Item -LiteralPath $BuiltTerminalHostPath -Destination $OutputTerminalHostPath -Force -ErrorAction Stop
 & node (Join-Path $PSScriptRoot 'desktop-runtime.mjs') package $BuildProfileName
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "==> Distribution published: $DistributionRoot"

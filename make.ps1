@@ -111,9 +111,12 @@ function Normalize-Command {
 # Invoke-TauriBuild 用于把当前模式转发给 scripts/build_tauri.ps1。
 # IsRelease controls whether the Tauri shell should target Cargo release output.
 # IsRelease 用于控制 Tauri 桌面壳是否构建 Cargo release 产物。
+# Restart stops this distribution after compilation and before publishing; returns after a successful build.
+# Restart 在编译后、发布前停止本发行实例；构建成功后返回。
 function Invoke-TauriBuild {
     param(
-        [bool]$IsRelease
+        [bool]$IsRelease,
+        [switch]$Restart
     )
 
     if (-not (Test-Path -LiteralPath $TauriBuildScriptPath)) {
@@ -121,10 +124,10 @@ function Invoke-TauriBuild {
     }
 
     if ($IsRelease) {
-        & $TauriBuildScriptPath -Release
+        & $TauriBuildScriptPath -Release -Restart:$Restart
     }
     else {
-        & $TauriBuildScriptPath
+        & $TauriBuildScriptPath -Restart:$Restart
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -199,7 +202,7 @@ function Invoke-TauriBuildAndRun {
         [bool]$IsRelease
     )
 
-    Invoke-TauriBuild -IsRelease $IsRelease
+    Invoke-TauriBuild -IsRelease $IsRelease -Restart
     Invoke-TauriRun -IsRelease $IsRelease
 }
 
