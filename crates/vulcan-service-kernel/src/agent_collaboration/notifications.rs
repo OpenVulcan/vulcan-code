@@ -142,17 +142,7 @@ pub(super) async fn deliver_recorded_notification(
     target_identity: vulcan_session_core::v1::collaboration::CollaborationParticipant,
     body: String,
 ) -> Result<(), String> {
-    if source.project_id != target_identity.project_id
-        && !source_grant_allows(
-            invocation,
-            target_session_id,
-            CollaborationGrantAction::Notify,
-        )?
-    {
-        return Err(String::from(
-            "notification authorization was revoked before delivery",
-        ));
-    }
+    let cross_project = source.project_id != target_identity.project_id;
     let input = AcceptNotificationInput {
         operation_id: operation_suffix(invocation, "notification-accept")?,
         notification_id: notification_id.clone(),
@@ -163,10 +153,43 @@ pub(super) async fn deliver_recorded_notification(
         body,
         accepted_at_ms: now_ms()?,
     };
-    let accepted = mutate_target(invocation, target, target_session_id, move |document| {
-        participants::require_document_message_admission(document, &input.source, &input.target)?;
-        document.accept_notification(input)
-    })
+    let source_for_write = Arc::clone(&invocation.source_handle);
+    let target_for_write = Arc::clone(&target.handle);
+    let source_id = invocation.source_session_id;
+    let accepted = lifecycle_write::with_canonical_handles(
+        &invocation.registry,
+        vec![Arc::clone(&source_for_write), Arc::clone(&target_for_write)],
+        move || {
+            // Revocation and acceptance share the source gate; an earlier grant read is insufficient.
+            // 撤销与接纳共享来源门；先前的授权读取不足以证明本次投递仍获许可。
+            if cross_project
+                && !source_handle_grant_allows(
+                    &source_for_write,
+                    source_id,
+                    target_session_id,
+                    CollaborationGrantAction::Notify,
+                )?
+            {
+                return Err(String::from(
+                    "notification authorization was revoked before delivery",
+                ));
+            }
+            target_for_write
+                .mutate_durable_if_changed(
+                    SessionMutationAdmission::MetadataOnly,
+                    SessionFlushReason::MetadataChanged,
+                    move |document| {
+                        participants::require_document_message_admission(
+                            document,
+                            &input.source,
+                            &input.target,
+                        )?;
+                        document.accept_notification(input).map(session_change)
+                    },
+                )
+                .map_err(|error| error.to_string())
+        },
+    )
     .await?;
     let input = RecordNotificationProgressInput {
         operation_id: operation_suffix(invocation, "notification-accepted")?,

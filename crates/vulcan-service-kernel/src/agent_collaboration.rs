@@ -1790,6 +1790,89 @@ fn target_inbound_event_seq(
         .map_err(|error| format!("failed to read target collaboration event sequence: {error}"))?
 }
 
+/// Accepts a source-owned question under both canonical lifecycle gates.
+/// 在双方规范生命周期门内接纳一条来源拥有的问题。
+/// `input` is the frozen target intent; `admission` and `binding_field` preserve the caller's domain boundary.
+/// `input` 是冻结的目标意图；`admission` 与 `binding_field` 保留调用方的领域边界。
+/// Returns the durable target receipt only while the source intent and grant still authorize delivery.
+/// 仅在来源意图与授权仍允许投递时返回可靠目标回执。
+async fn accept_question_target(
+    invocation: &ValidatedInvocation,
+    target: &ResolvedSession,
+    target_session_id: Uuid,
+    input: AcceptDeliveryInput,
+    admission: SessionMutationAdmission,
+    binding_field: &'static str,
+) -> Result<SessionConditionalMutationReceipt<CollaborationDeliveryReceipt>, String> {
+    let source_for_write = Arc::clone(&invocation.source_handle);
+    let target_for_write = Arc::clone(&target.handle);
+    let source_id = invocation.source_session_id;
+    lifecycle_write::with_canonical_handles(
+        &invocation.registry,
+        vec![Arc::clone(&source_for_write), Arc::clone(&target_for_write)],
+        move || {
+            let source_matches = source_for_write
+                .read(|document| {
+                    let state = document.collaboration_state();
+                    state.questions.get(&input.question_id).is_some_and(|question| {
+                        question.delivery_id == input.delivery_id
+                            && question.source == input.source
+                            && question.target == input.target
+                            && question.execution_purpose == input.execution_purpose
+                    }) && state.outbound_deliveries.get(&input.delivery_id).is_some_and(|delivery| {
+                        delivery.question_id == input.question_id
+                            && delivery.source == input.source
+                            && delivery.target == input.target
+                            && delivery.state != CollaborationDeliveryState::Failed
+                    })
+                })
+                .map_err(|error| error.to_string())?;
+            if !source_matches {
+                return Err(String::from(
+                    "question target acceptance has no active durable source intent",
+                ));
+            }
+            if input.source.project_id != input.target.project_id
+                && !source_handle_grant_allows(
+                    &source_for_write,
+                    source_id,
+                    target_session_id,
+                    CollaborationGrantAction::Ask,
+                )?
+            {
+                return Err(String::from(
+                    "question authorization was revoked before target acceptance",
+                ));
+            }
+            target_for_write
+                .mutate_durable_if_changed(
+                    admission,
+                    SessionFlushReason::MetadataChanged,
+                    move |document| {
+                        let (current_purpose, current_turn_id) = target_question_binding(document);
+                        if current_purpose != input.execution_purpose
+                            || current_turn_id != input.bound_turn_id
+                        {
+                            return Err(
+                                vulcan_session_core::v1::errors::DomainError::CollaborationStateViolation {
+                                    field: binding_field,
+                                },
+                            );
+                        }
+                        participants::require_document_message_admission(
+                            document,
+                            &input.source,
+                            &input.target,
+                        )?;
+                        document.accept_delivery(input).map(session_change)
+                    },
+                )
+                .map_err(|error| error.to_string())
+        },
+    )
+    .await
+}
+
 /// Replays one missing target acceptance from the source-owned durable question.
 /// 根据来源拥有的可靠问题重放一条缺失的目标接纳。
 async fn recover_target_acceptance(
@@ -1799,19 +1882,6 @@ async fn recover_target_acceptance(
     let target_session_id = Uuid::parse_str(&question.target.session_id)
         .map_err(|error| format!("question target session identity is invalid: {error}"))?;
     let (_, target) = resolve_question_target(invocation, question).await?;
-    let cross_project = question.source.project_id != question.target.project_id;
-    if cross_project
-        && !source_handle_grant_allows(
-            &invocation.source_handle,
-            invocation.source_session_id,
-            target_session_id,
-            CollaborationGrantAction::Ask,
-        )?
-    {
-        return Err(String::from(
-            "collaboration outbox repair requires an active source-owned grant",
-        ));
-    }
     let operation_id = CollaborationOperationId::try_new(format!(
         "{}:recovery:accept",
         question.operation_id.as_str()
@@ -1823,39 +1893,23 @@ async fn recover_target_acceptance(
     let delivery_id = question.delivery_id.clone();
     let execution_purpose = question.execution_purpose;
     let bound_turn_id = question.target.turn_id;
-    let source_session_id = invocation.source_session_id;
-    let target_operation_id = operation_id.clone();
     let accepted_at_ms = now_ms()?;
-    mutate_handle_with_admission(
-        &invocation.registry,
-        &target.handle,
+    accept_question_target(
+        invocation,
+        &target,
         target_session_id,
-        SessionMutationAdmission::ControlPlane,
-        move |document| {
-            let (current_purpose, current_turn_id) = target_question_binding(document);
-            if current_purpose != execution_purpose || current_turn_id != bound_turn_id {
-                return Err(
-                    vulcan_session_core::v1::errors::DomainError::CollaborationStateViolation {
-                        field: "collaboration.recovery.accept.target_turn_binding",
-                    },
-                );
-            }
-            participants::require_document_message_admission(
-                document,
-                &source,
-                &target_participant,
-            )?;
-            document.accept_delivery(AcceptDeliveryInput {
-                operation_id: target_operation_id,
-                delivery_id,
-                question_id,
-                source,
-                target: target_participant,
-                bound_turn_id,
-                execution_purpose,
-                accepted_at_ms,
-            })
+        AcceptDeliveryInput {
+            operation_id,
+            delivery_id,
+            question_id,
+            source,
+            target: target_participant,
+            bound_turn_id,
+            execution_purpose,
+            accepted_at_ms,
         },
+        SessionMutationAdmission::ControlPlane,
+        "collaboration.recovery.accept.target_turn_binding",
     )
     .await
 }
@@ -2814,24 +2868,14 @@ async fn ask_question(
             execution_purpose,
             accepted_at_ms: now_ms,
         };
-        match mutate_target(invocation, &target, target_session_id, move |document| {
-            let (current_purpose, current_turn_id) = target_question_binding(document);
-            if current_purpose != accept_input.execution_purpose
-                || current_turn_id != accept_input.bound_turn_id
-            {
-                return Err(
-                    vulcan_session_core::v1::errors::DomainError::CollaborationStateViolation {
-                        field: "collaboration.accept.target_turn_binding",
-                    },
-                );
-            }
-            participants::require_document_message_admission(
-                document,
-                &accept_input.source,
-                &accept_input.target,
-            )?;
-            document.accept_delivery(accept_input)
-        })
+        match accept_question_target(
+            invocation,
+            &target,
+            target_session_id,
+            accept_input,
+            SessionMutationAdmission::MetadataOnly,
+            "collaboration.accept.target_turn_binding",
+        )
         .await
         {
             Ok(receipt) => Some(receipt),
