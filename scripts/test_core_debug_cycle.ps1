@@ -1,6 +1,7 @@
 # Verify forced Core restart ownership using disposable real Windows processes, never the user's Core.
 # 使用可丢弃的真实 Windows 进程验证强制核心重启归属，绝不操作用户核心进程。
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'distribution_processes.ps1')
 
 # ScriptPath identifies the production functions; AST extraction avoids running its Cargo and publication steps.
 # ScriptPath 标识生产函数；通过语法树提取避免执行其中的编译及发布步骤。

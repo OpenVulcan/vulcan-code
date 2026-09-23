@@ -200,8 +200,40 @@ pub fn run_with_tray() {
                 })?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run Vulcan Code service tray");
+        .build(tauri::generate_context!())
+        .expect("failed to build Vulcan Code service tray")
+        .run(|_app, event| {
+            // HTTP starts before the native shell; acknowledge the tray only after setup and event-loop readiness.
+            // HTTP 先于原生外壳启动；仅在托盘设置和事件循环就绪后确认托盘已启动。
+            if matches!(event, tauri::RunEvent::Ready) {
+                // Windows can reject tray registration while the library still returns a tray handle.
+                // Windows 可能拒绝托盘注册，而库仍然返回托盘句柄。
+                #[cfg(windows)]
+                match _app.tray_by_id(SERVICE_TRAY_ID).map(|tray| tray.rect()) {
+                    Some(Ok(Some(rect))) => {
+                        eprintln!("[vulcan-code-service] tray registered: {rect:?}");
+                    }
+                    result => {
+                        eprintln!("[vulcan-code-service] tray registration not confirmed: {result:?}");
+                        return;
+                    }
+                }
+                eprintln!("[vulcan-code-service] tray ready (pid {})", std::process::id());
+                // Restart tools request a separate acknowledgement because Debug owns its visible console streams.
+                // 重启工具请求独立确认，因为调试模式拥有可见控制台输出流。
+                if let Some(path) = std::env::var_os("VULCAN_CORE_STARTUP_REPORT") {
+                    // The acknowledgement carries only this process identity and native registration outcome.
+                    // 确认仅包含本进程身份及原生注册结果。
+                    let report = serde_json::json!({
+                        "pid": std::process::id(),
+                        "trayRegistered": true,
+                    });
+                    if let Err(error) = std::fs::write(path, report.to_string()) {
+                        eprintln!("[vulcan-code-service] startup acknowledgement failed: {error}");
+                    }
+                }
+            }
+        });
 }
 
 /// Opens the desktop client named by the runtime layout manifest.

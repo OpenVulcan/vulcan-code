@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 # ProjectDir is the repository root used for Cargo and the desktop runtime resolver.
 # ProjectDir 是 Cargo 与桌面运行时解析器共同使用的仓库根目录。
 $ProjectDir = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'distribution_processes.ps1')
 Set-Location $ProjectDir
 
 if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
@@ -136,7 +137,7 @@ function Stop-OutputCoreForRestart {
     foreach ($CoreProcess in @(Get-RunningOutputCore)) {
         Write-Host "Stopping Debug Core for restart: PID $($CoreProcess.Id)"
         Stop-Process -InputObject $CoreProcess -Force -ErrorAction Stop
-        if (-not $CoreProcess.WaitForExit(10000)) {
+        if (-not $CoreProcess.WaitForExit($OutputProcessExitTimeoutMilliseconds)) {
             throw "Debug Core did not exit after forced termination (PID $($CoreProcess.Id)). The old executable was not replaced."
         }
     }
@@ -191,6 +192,11 @@ if ($Action -eq 'build') {
     exit 0
 }
 
+# Prepare acknowledgement storage before stopping a usable Core or replacing its binary.
+# 在停止可用核心或替换二进制前准备启动确认目录。
+$DiagnosticDirectory = Join-Path $ProjectDir 'target/core-restart'
+New-Item -ItemType Directory -Path $DiagnosticDirectory -Force | Out-Null
+
 Assert-NoForeignCoreOwner
 
 Stop-OutputCoreForRestart
@@ -230,12 +236,17 @@ finally {
 # PriorLayoutEnvironment restores the caller's runtime selection after the child inherits it.
 # PriorLayoutEnvironment 在子进程继承运行布局后恢复调用者原有选择。
 $PriorLayoutEnvironment = [Environment]::GetEnvironmentVariable('VULCAN_RUNTIME_LAYOUT', 'Process')
+# A unique path and matching PID prevent an older process from acknowledging this restart.
+# 唯一路径及进程编号匹配避免旧进程被误认成本次重启确认。
+$StartupReportPath = Join-Path $DiagnosticDirectory "$ReplacementId.startup.json"
+$PriorStartupReportEnvironment = [Environment]::GetEnvironmentVariable('VULCAN_CORE_STARTUP_REPORT', 'Process')
 try {
     [Environment]::SetEnvironmentVariable('VULCAN_RUNTIME_LAYOUT', $ManifestPath, 'Process')
-    # StartedCore runs independently of Make without opening an unsolicited console window.
-    # StartedCore 独立于 Make 运行，不打开非用户请求的控制台窗口。
+    [Environment]::SetEnvironmentVariable('VULCAN_CORE_STARTUP_REPORT', $StartupReportPath, 'Process')
+    # The user explicitly requires a visible Debug console, matching an ordinary desktop Debug launch.
+    # 用户明确要求可见的调试控制台，与正常桌面调试启动保持一致。
     $StartedCore = Start-Process -FilePath $OutputCorePath -ArgumentList '--gui-launch' `
-        -WorkingDirectory $OutputRoot -WindowStyle Hidden -PassThru
+        -WorkingDirectory $OutputRoot -WindowStyle Normal -PassThru
 }
 catch {
     # No child was started, so restoring the previous binary cannot interrupt a live owner.
@@ -246,6 +257,7 @@ catch {
 }
 finally {
     [Environment]::SetEnvironmentVariable('VULCAN_RUNTIME_LAYOUT', $PriorLayoutEnvironment, 'Process')
+    [Environment]::SetEnvironmentVariable('VULCAN_CORE_STARTUP_REPORT', $PriorStartupReportEnvironment, 'Process')
 }
 
 # ReadyDeadline bounds the new owner's discovery and health handshake.
@@ -269,6 +281,15 @@ while ((Get-Date) -lt $ReadyDeadline) {
                 $Ready = $Health.status -eq 'ready' -and $Health.pid -eq $Discovery.pid -and
                     $Health.startedAt -eq $Discovery.startedAt -and
                     $Health.serviceToken -eq $Discovery.serviceToken
+                # A responsive HTTP bridge cannot prove that the native tray finished starting.
+                # HTTP 桥能响应并不能证明原生托盘已经完成启动。
+                $Ready = $Ready -and (Test-Path -LiteralPath $StartupReportPath -PathType Leaf)
+                if ($Ready) {
+                    # StartupReport is written only after native registration and event-loop readiness.
+                    # StartupReport 仅在原生注册及事件循环就绪后写入。
+                    $StartupReport = Get-Content -LiteralPath $StartupReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                    $Ready = $StartupReport.pid -eq $StartedCore.Id -and $StartupReport.trayRegistered -eq $true
+                }
                 if ($Ready) { break }
             }
         }
@@ -283,10 +304,10 @@ if (-not $Ready) {
         # 新进程失败退出后不再持有文件；恢复此前已知可启动的制品。
         [IO.File]::Replace($BackupPath, $OutputCorePath, $FailedPath, $true)
         Remove-Item -LiteralPath $FailedPath -Force
-        throw "New Debug Core exited before becoming ready; the previous binary was restored (exit=$($StartedCore.ExitCode))."
+        throw "New Debug Core exited before becoming ready; the previous binary was restored (exit=$($StartedCore.ExitCode)). Startup report: $StartupReportPath"
     }
-    throw "New Debug Core did not publish matching ready health. Previous binary retained at $BackupPath; inspect the Core console."
+    throw "New Debug Core did not confirm both HTTP and tray readiness. Previous binary retained at $BackupPath. Inspect the Debug console and startup report: $StartupReportPath"
 }
 
 Remove-Item -LiteralPath $BackupPath -Force
-Write-Host "Debug Core restarted: pid=$($StartedCore.Id), url=$($Discovery.baseUrl). Electron GUI and Vite were not restarted."
+Write-Host "Debug Core and tray ready: pid=$($StartedCore.Id), url=$($Discovery.baseUrl). Debug console opened. Electron GUI and Vite were not restarted."

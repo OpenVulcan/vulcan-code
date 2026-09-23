@@ -30,6 +30,8 @@ Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。
 
 首次启动或修改 Electron 壳、运行布局时，先执行 `make build`，再执行 `make run`。仅修改 WebUI 页面时，保留 Vite 与桌面壳运行即可，页面由 Vite 热更新。
 
+Windows 下需要完整重建并重新启动时使用 `make br`（发布模式为 `make br release`）。全部编译成功后、写入发行目录之前，它会强制停止可执行文件属于当前发行目录的进程，包括核心、桌面壳、终端宿主和内置浏览器，等待退出后发布并启动新桌面；其他发行目录及外部 Vite 不在停止范围内。普通 `make build` 不自动停止程序，发现发行目录仍有进程时在发布前明确拒绝。强制重启会中断运行中的任务；需要先排空时可先从托盘退出服务。
+
 仅修改 Rust Core 时，不必重新构建或关闭桌面壳。日常直接执行：
 
 ```powershell
@@ -39,6 +41,8 @@ make core-restart
 只想验证编译而暂不重启时，使用 `make core-build`；它只把 `vulcan-code-service` 编译到 Cargo 的 Debug 目录，不替换正在运行的服务。`make core-restart` 自带增量编译，使用桌面运行入口共用的布局校验；编译和启动契约校验成功后，自动强制停止精确路径匹配的当前 Debug Core，原子替换 `output/bin/vulcan-code-service.exe` 并启动新 Core，无需手动退出托盘。其他发行目录或 Release 进程不在停止范围内；如果其他程序占有同一 Debug 数据目录，则拒绝重启。桌面壳与 Vite 保持运行，WebUI 断线后按新 Core 的发现信息重连。重启期间正在执行的 AI 请求会中断，应在重连后重新发起；需要优雅排空时可先自行从托盘退出服务。
 
 此入口目前只支持 Windows Debug。修改 `vulcan-terminal-host`、Electron、运行布局或 Core 与壳之间的启动协议时，使用完整 `make build`；修改权威运行资源时，先显式执行 `make sync`。`make core-restart` 不会同步资源；新 Core 退出且尚未健康就绪时，恢复原可执行文件备份。运行布局架构版本由 `scripts/desktop-runtime.mjs` 定义并校验，核心脚本不再维护独立版本数字。
+
+核心重启保留可见的 Debug 控制台，不再隐藏窗口。宣布成功必须同时满足新进程健康身份匹配、托盘事件循环就绪以及 Windows 确认托盘注册；本次进程通过启动器指定的 `VULCAN_CORE_STARTUP_REPORT` 写入独立确认文件，位于 `target/core-restart/`。该变量只用于重启确认，不替代服务发现。Windows 可以将已注册图标放在折叠区域；图标外观改变不意味着服务未启动。关闭工作台窗口仍只结束桌面客户端，后台核心退出使用托盘菜单。
 
 ## 新环境初始化
 
