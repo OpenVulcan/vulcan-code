@@ -88,6 +88,36 @@ pub struct CollaborationTaskResult {
 }
 
 impl CollaborationTaskResult {
+    /// Returns the exact source-storable representation for a frozen disclosure decision.
+    /// 根据冻结的披露决策返回来源可存储的精确表示。
+    /// Revoked cross-project results retain their result identity and outcome but clear final text.
+    /// 跨项目撤权结果保留结果身份和终态，但清除最终正文。
+    pub fn for_disclosure(
+        &self,
+        disclosure: CollaborationTaskResultDisclosure,
+    ) -> Result<Self, DomainError> {
+        self.validate()?;
+        let mut result = self.clone();
+        if disclosure == CollaborationTaskResultDisclosure::AuthorizationRevoked {
+            if self.terminal.is_none()
+                || self.acceptance.message.source.project_id
+                    == self.acceptance.message.target.project_id
+            {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "collaboration.task_result.revoked_acceptance_binding",
+                });
+            }
+            if let Some(assistant) = result
+                .terminal
+                .as_mut()
+                .and_then(|terminal| terminal.final_assistant.as_mut())
+            {
+                assistant.source_text.text.clear();
+            }
+        }
+        Ok(result)
+    }
+
     /// Validates exact binding and ordered proof coordinates without reading another session.
     /// 校验精确绑定与有序凭据坐标，不读取其他会话。
     /// Returns an error for a failure with a fake business terminal or inconsistent response facts.
@@ -120,10 +150,16 @@ impl CollaborationTaskResult {
                 return Ok(());
             }
         };
-        let terminal = self.terminal.as_ref().ok_or(DomainError::CollaborationStateViolation {
-            field: "collaboration.task_result.missing_business_terminal",
-        })?;
-        validate_timestamp("collaboration.task_result.completed_at_ms", terminal.completed_at_ms)?;
+        let terminal = self
+            .terminal
+            .as_ref()
+            .ok_or(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.missing_business_terminal",
+            })?;
+        validate_timestamp(
+            "collaboration.task_result.completed_at_ms",
+            terminal.completed_at_ms,
+        )?;
         if terminal.turn_id != turn_id
             || terminal.turn_start_seq > input_seq
             || (matches!(

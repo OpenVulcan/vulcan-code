@@ -79,6 +79,7 @@ async fn completed_task_edit_waits_for_executor_result_acknowledgement() {
                 document.accept_task_result(
                     CollaborationOperationId::try_new("edit-guard-result-received").unwrap(),
                     result,
+                    vulcan_session_core::v1::collaboration::CollaborationTaskResultDisclosure::Full,
                     now_ms().unwrap(),
                 )
             },

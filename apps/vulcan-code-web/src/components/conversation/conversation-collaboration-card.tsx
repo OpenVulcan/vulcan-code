@@ -289,7 +289,9 @@ function collaborationParticipants(afterState: CollaborationAfterState): Array<{
 function collaborationBody(afterState: CollaborationAfterState): string | null {
   switch (afterState.kind) {
     case "received_task_result":
-      return afterState.acceptance.result.terminal?.final_assistant?.source_text.text ?? null;
+      return afterState.acceptance.disclosure === "authorization_revoked"
+        ? null
+        : afterState.acceptance.result.terminal?.final_assistant?.source_text.text ?? null;
     case "task_result_acknowledgement":
     case "task_result_projection":
       return null;
@@ -411,7 +413,9 @@ function collaborationStatus(
         ? t("conversation.collaboration.status.failed")
         : collaborationTaskOutcomeLabel(afterState.result.terminal.outcome, t);
     case "received_task_result":
-      return afterState.acceptance.result.terminal === null
+      return afterState.acceptance.disclosure === "authorization_revoked"
+        ? t("conversation.collaboration.status.resultUnavailable")
+        : afterState.acceptance.result.terminal === null
         ? t("conversation.collaboration.status.failed")
         : collaborationTaskOutcomeLabel(afterState.acceptance.result.terminal.outcome, t);
     case "task_result_acknowledgement":

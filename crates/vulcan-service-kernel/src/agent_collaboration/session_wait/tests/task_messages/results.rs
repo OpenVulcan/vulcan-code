@@ -553,8 +553,8 @@ async fn session_task_result_return_is_durable_and_idempotent() {
     );
 }
 
-/// Revoked grants block first result disclosure; already accepted results can still repair internal confirmation.
-/// 已撤销授权阻止首次结果交付；已接纳结果仍可修复内部确认。
+/// Revoked grants freeze a redacted first receipt; earlier full receipts still repair confirmation.
+/// 撤权后首次回执冻结为脱敏形式；较早的完整回执仍可修复确认。
 #[tokio::test]
 async fn session_task_result_return_rechecks_grants_and_repairs_acknowledgement() {
     for already_received in [false, true] {
@@ -584,6 +584,7 @@ async fn session_task_result_return_rechecks_grants_and_repairs_acknowledgement(
                                 .accept_task_result(
                                     CollaborationOperationId::try_new("already-received").unwrap(),
                                     result,
+                                    vulcan_session_core::v1::collaboration::CollaborationTaskResultDisclosure::Full,
                                     7,
                                 )
                                 .map(session_change)
@@ -619,22 +620,41 @@ async fn session_task_result_return_rechecks_grants_and_repairs_acknowledgement(
                 receipt
             );
         } else {
-            assert!(returned.unwrap_err().contains("remain pending"));
+            assert_eq!(returned.unwrap(), 1);
+            let receipt = invocation
+                .source_handle
+                .read(|document| {
+                    document.collaboration_state().received_task_results[&delivery_id].clone()
+                })
+                .unwrap();
+            assert_eq!(
+                receipt.disclosure,
+                vulcan_session_core::v1::collaboration::CollaborationTaskResultDisclosure::AuthorizationRevoked
+            );
+            assert_eq!(
+                target
+                    .read(
+                        |document| document.collaboration_state().task_result_acknowledgements
+                            [&delivery_id]
+                            .acceptance
+                            .clone()
+                    )
+                    .unwrap(),
+                receipt
+            );
             assert!(
-                invocation
+                !invocation
                     .source_handle
                     .read(|document| document
                         .collaboration_state()
-                        .received_task_results
-                        .is_empty())
+                        .requires_edit_or_delete_settlement())
                     .unwrap()
             );
             assert!(
-                target
+                !target
                     .read(|document| document
                         .collaboration_state()
-                        .task_result_acknowledgements
-                        .is_empty())
+                        .requires_edit_or_delete_settlement())
                     .unwrap()
             );
             crate::project_conversation_services::service_add_collaboration_grant(
@@ -650,8 +670,143 @@ async fn session_task_result_return_rechecks_grants_and_repairs_acknowledgement(
                 reconcile_task_results_for_session(&invocation.state, target.session_id())
                     .await
                     .unwrap(),
-                1
+                0
             );
         }
     }
+}
+
+/// Revocation before receipt stores only a derived result without final text and settles both sides.
+/// 接收前撤权只保存派生且无最终正文的结果，并结算双方。
+#[tokio::test]
+async fn session_completed_task_result_revoked_before_receipt_is_redacted() {
+    let (_root, invocation, target, context) = message_fixture(true).await;
+    let grant = crate::project_conversation_services::service_add_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        target.session_id().to_string(),
+        format!("user-grant-add:v1:{}", Uuid::new_v4()),
+        [CollaborationGrantAction::Steer].into_iter().collect(),
+    )
+    .await
+    .unwrap();
+    let sent = send(
+        &invocation,
+        &target,
+        context,
+        SessionMessageDeliveryMode::Interrupt,
+        "Check the original task",
+    )
+    .await
+    .unwrap();
+    let delivery_id =
+        CollaborationDeliveryId::try_new(sent["delivery_id"].as_str().unwrap()).unwrap();
+    project_collaboration_before_api(&invocation.state, &target, 5)
+        .await
+        .unwrap();
+    finish_business_response(&target);
+    target
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::TurnCompleted,
+            |document| {
+                document.close_turn(
+                    vulcan_session_core::v1::event::TurnOutcome::Completed,
+                    1,
+                    10,
+                )
+            },
+        )
+        .unwrap();
+    let full_result = target
+        .read(|document| document.collaboration_state().task_results[&delivery_id].clone())
+        .unwrap();
+    assert_eq!(
+        full_result
+            .terminal
+            .as_ref()
+            .unwrap()
+            .final_assistant
+            .as_ref()
+            .unwrap()
+            .source_text
+            .text,
+        "Business response"
+    );
+    crate::project_conversation_services::service_remove_collaboration_grant(
+        invocation.state.clone(),
+        invocation.source_session_id.to_string(),
+        grant["grant"]["grant_id"].as_str().unwrap().to_owned(),
+        format!("user-grant-remove:v1:{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reconcile_task_results_for_session(&invocation.state, target.session_id())
+            .await
+            .unwrap(),
+        1
+    );
+    let source = load_session_v1_for_runtime(&invocation.source_handle.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    let receipt = &source.collaboration_state().received_task_results[&delivery_id];
+    assert_eq!(
+        receipt.disclosure,
+        vulcan_session_core::v1::collaboration::CollaborationTaskResultDisclosure::AuthorizationRevoked
+    );
+    assert_eq!(
+        receipt
+            .result
+            .terminal
+            .as_ref()
+            .unwrap()
+            .final_assistant
+            .as_ref()
+            .unwrap()
+            .source_text
+            .text,
+        ""
+    );
+    let target_document = load_session_v1_for_runtime(&target.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    assert_eq!(
+        target_document
+            .collaboration_state()
+            .task_result_acknowledgements[&delivery_id]
+            .acceptance,
+        *receipt
+    );
+    assert!(
+        !source
+            .collaboration_state()
+            .requires_edit_or_delete_settlement()
+    );
+    assert!(
+        !target_document
+            .collaboration_state()
+            .requires_edit_or_delete_settlement()
+    );
+    close_requester_api(&invocation);
+    project_collaboration_before_api(&invocation.state, &invocation.source_handle, 11)
+        .await
+        .unwrap();
+    let source = load_session_v1_for_runtime(&invocation.source_handle.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    let proof = &source.collaboration_state().task_result_projections[&delivery_id];
+    assert_eq!(
+        proof.disclosure,
+        vulcan_session_core::v1::collaboration::CollaborationTaskResultDisclosure::AuthorizationRevoked
+    );
+    assert!(
+        source
+            .events()
+            .iter()
+            .any(|event| event.seq == proof.inputs[0].input_seq
+                && matches!(&event.event, EventBody::UserInput(input)
+            if input.text.contains("task_result_unavailable")
+                && !input.text.contains("Business response")))
+    );
 }

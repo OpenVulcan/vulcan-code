@@ -4,21 +4,23 @@
 use super::*;
 
 impl SessionDocument {
-    /// Accepts `result` at its original requester using `operation_id` and `now_ms`.
-    /// 使用 `operation_id` 和 `now_ms` 在原请求者接纳 `result`。
+    /// Accepts the authorized representation of `result` at its original requester.
+    /// 在原请求者接纳 `result` 的已授权表示。
     /// Returns the original durable receipt on replay; no active business or model execution is created.
     /// 重放返回原始可靠回执；不创建活动业务或模型执行。
     pub fn accept_task_result(
         &mut self,
         operation_id: CollaborationOperationId,
         result: CollaborationTaskResult,
+        disclosure: CollaborationTaskResultDisclosure,
         now_ms: i64,
     ) -> Result<IdempotentMutation<CollaborationTaskResultAcceptance>, DomainError> {
-        result.validate()?;
+        let result = result.for_disclosure(disclosure)?;
         self.validate_source_participant(&result.acceptance.message.source, true)?;
         validate_timestamp("collaboration.task_result.accepted_at_ms", now_ms)?;
         let semantic = CollaborationOperationSemantic::AcceptTaskResult {
             result: result.clone(),
+            disclosure,
         };
         if let Some(previous) = self.existing_collaboration_operation(&operation_id, &semantic)? {
             let CollaborationOperationResult::TaskResultAccepted { acceptance } = previous.result
@@ -34,7 +36,7 @@ impl SessionDocument {
             .received_task_results
             .get(&result.effect.delivery_id)
         {
-            if existing.result != result {
+            if existing.result != result || existing.disclosure != disclosure {
                 return Err(DomainError::CollaborationConflict {
                     operation_id: operation_id.as_str().to_owned(),
                 });
@@ -59,6 +61,7 @@ impl SessionDocument {
         }
         let acceptance = CollaborationTaskResultAcceptance {
             result,
+            disclosure,
             operation_id: operation_id.clone(),
             event_seq: next_event_seq(self)?,
             receiver_revision: next_revision(self)?,
@@ -131,7 +134,16 @@ impl SessionDocument {
             }
             return Ok(IdempotentMutation::Idempotent(existing.clone()));
         }
-        if self.collaboration_state().task_results.get(delivery_id) != Some(&acceptance.result) {
+        if !self
+            .collaboration_state()
+            .task_results
+            .get(delivery_id)
+            .is_some_and(|result| {
+                result
+                    .for_disclosure(acceptance.disclosure)
+                    .is_ok_and(|stored| stored == acceptance.result)
+            })
+        {
             return Err(DomainError::CollaborationStateViolation {
                 field: "collaboration.task_result.ack_result_binding",
             });

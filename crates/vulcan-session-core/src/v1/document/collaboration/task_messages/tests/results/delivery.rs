@@ -38,6 +38,7 @@ fn receive(
         .accept_task_result(
             CollaborationOperationId::try_new("receive-result").unwrap(),
             result,
+            CollaborationTaskResultDisclosure::Full,
             11,
         )
         .unwrap()
@@ -130,6 +131,7 @@ fn task_result_delivery_preserves_closed_source_and_exact_replay() {
             .accept_task_result(
                 CollaborationOperationId::try_new("receive-result").unwrap(),
                 result.clone(),
+                CollaborationTaskResultDisclosure::Full,
                 10
             )
             .is_err()
@@ -161,6 +163,7 @@ fn task_result_delivery_preserves_closed_source_and_exact_replay() {
             .accept_task_result(
                 CollaborationOperationId::try_new(operation).unwrap(),
                 result.clone(),
+                CollaborationTaskResultDisclosure::Full,
                 50,
             )
             .unwrap();
@@ -249,6 +252,7 @@ fn task_result_delivery_rejects_conflicts_without_partial_writes() {
                 .accept_task_result(
                     CollaborationOperationId::try_new(operation).unwrap(),
                     altered.clone(),
+                    CollaborationTaskResultDisclosure::Full,
                     20
                 )
                 .is_err()

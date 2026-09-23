@@ -26,6 +26,13 @@ impl SessionDocument {
                 identity: delivery_id.as_str().to_owned(),
             })?;
         self.validate_source_participant(&acceptance.result.acceptance.message.source, true)?;
+        if acceptance.disclosure == CollaborationTaskResultDisclosure::AuthorizationRevoked
+            && disclosure == CollaborationTaskResultDisclosure::Full
+        {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.projection_disclosure",
+            });
+        }
         if let Some(projection) = self
             .collaboration_state()
             .task_result_projections
@@ -146,6 +153,13 @@ impl SessionDocument {
                     field: "collaboration.task_result.projection_acceptance",
                 })?;
             self.validate_source_participant(&acceptance.result.acceptance.message.source, true)?;
+            if acceptance.disclosure == CollaborationTaskResultDisclosure::AuthorizationRevoked
+                && projection.disclosure == CollaborationTaskResultDisclosure::Full
+            {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "collaboration.task_result.projection_disclosure",
+                });
+            }
             if projection.receiver_revision > self.memory_revision {
                 return Err(DomainError::CollaborationStateViolation {
                     field: "collaboration.task_result.projection_future_revision",

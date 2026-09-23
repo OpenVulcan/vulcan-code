@@ -795,12 +795,13 @@ export interface CollaborationTaskResult {
   recorded_at_ms: number;
 }
 
-/** Original requester receipt for the complete immutable result, separate from model consumption.
- * 原请求者对完整不可变结果的回执，与模型消费区分。 */
+/** Original requester receipt for a full or redacted immutable result, separate from model consumption.
+ * 原请求者对完整或脱敏不可变结果的回执，与模型消费区分。 */
 export interface CollaborationTaskResultAcceptance {
-  // Complete original result and immutable receiver operation.
-  // 完整原始结果及不可变接收操作。
+  // Source-storable result and frozen disclosure decision.
+  // 来源可存储结果及冻结的披露决策。
   result: CollaborationTaskResult;
+  disclosure: "full" | "authorization_revoked";
   operation_id: string;
   // Receiver-local publication coordinates and original acceptance time.
   // 接收方本地发布坐标及原接纳时间。

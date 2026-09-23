@@ -2611,6 +2611,9 @@ pub enum CollaborationOperationSemantic {
         /// Immutable authoritative result.
         /// 不可变权威结果。
         result: CollaborationTaskResult,
+        /// Frozen disclosure decision for this requester receipt.
+        /// 此请求者回执冻结的披露决策。
+        disclosure: CollaborationTaskResultDisclosure,
     },
     /// Confirm the exact requester's receipt at the executor.
     /// 在执行者确认精确请求者回执。
@@ -4184,10 +4187,7 @@ pub fn validate_answer_delivery_record(
             }
         }
         CollaborationAnswerDeliveryState::Delivered => {
-            if record.delivery_revision == 0
-                || record.failure.is_some()
-                || record.kind.is_none()
-            {
+            if record.delivery_revision == 0 || record.failure.is_some() || record.kind.is_none() {
                 return Err(DomainError::InvalidStatistics {
                     field: "collaboration.answer_delivery.delivered_shape",
                 });

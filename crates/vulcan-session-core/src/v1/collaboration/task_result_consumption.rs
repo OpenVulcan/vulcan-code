@@ -114,6 +114,9 @@ impl CollaborationState {
                 || projection.acceptance_seq != acceptance.event_seq
                 || Some(projection.turn_id) != acceptance.result.acceptance.message.source.turn_id
                 || projection.receiver_revision <= acceptance.receiver_revision
+                || (acceptance.disclosure
+                    == CollaborationTaskResultDisclosure::AuthorizationRevoked
+                    && projection.disclosure == CollaborationTaskResultDisclosure::Full)
                 || (projection.disclosure
                     == CollaborationTaskResultDisclosure::AuthorizationRevoked
                     && (acceptance.result.terminal.is_none()

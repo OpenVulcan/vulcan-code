@@ -3,14 +3,17 @@
 
 use super::*;
 
-/// Requester-owned receipt for a complete result, independent of its current business turn.
-/// 请求者持有的完整结果回执，独立于其当前业务回合。
+/// Requester-owned receipt for a full or redacted result, independent of its current business turn.
+/// 请求者持有的完整或脱敏结果回执，独立于其当前业务回合。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CollaborationTaskResultAcceptance {
-    /// Exact executor-owned immutable result and original participants.
-    /// 精确执行者所有不可变结果及原始参与者。
+    /// Exact source-storable representation of the executor result and original participants.
+    /// 执行者结果与原始参与者的精确来源可存储表示。
     pub result: CollaborationTaskResult,
+    /// Frozen disclosure decision made before the requester accepted this result.
+    /// 请求者接纳结果前冻结的披露决策。
+    pub disclosure: CollaborationTaskResultDisclosure,
     /// Stable receiver operation and local event identity.
     /// 稳定接收操作及本地事件身份。
     pub operation_id: CollaborationOperationId,
@@ -30,6 +33,21 @@ impl CollaborationTaskResultAcceptance {
     /// 校验不可变结果及接收方发布坐标；冲突时返回领域错误。
     pub fn validate(&self) -> Result<(), DomainError> {
         self.result.validate()?;
+        if self.disclosure == CollaborationTaskResultDisclosure::AuthorizationRevoked
+            && (self.result.terminal.is_none()
+                || self.result.acceptance.message.source.project_id
+                    == self.result.acceptance.message.target.project_id
+                || self
+                    .result
+                    .terminal
+                    .as_ref()
+                    .and_then(|terminal| terminal.final_assistant.as_ref())
+                    .is_some_and(|assistant| !assistant.source_text.text.is_empty()))
+        {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.acceptance_disclosure",
+            });
+        }
         validate_timestamp(
             "collaboration.task_result.accepted_at_ms",
             self.accepted_at_ms,
@@ -116,6 +134,7 @@ impl CollaborationState {
                 || operation.semantic
                     != (CollaborationOperationSemantic::AcceptTaskResult {
                         result: result.clone(),
+                        disclosure: acceptance.disclosure,
                     })
                 || operation.result
                     != (CollaborationOperationResult::TaskResultAccepted {
@@ -130,7 +149,11 @@ impl CollaborationState {
         for (delivery_id, acknowledgement) in &self.task_result_acknowledgements {
             acknowledgement.validate()?;
             if acknowledgement.acceptance.result.effect.delivery_id != *delivery_id
-                || self.task_results.get(delivery_id) != Some(&acknowledgement.acceptance.result)
+                || !self.task_results.get(delivery_id).is_some_and(|result| {
+                    result
+                        .for_disclosure(acknowledgement.acceptance.disclosure)
+                        .is_ok_and(|stored| stored == acknowledgement.acceptance.result)
+                })
             {
                 return Err(DomainError::CollaborationStateViolation {
                     field: "collaboration.task_result.ack_result_binding",

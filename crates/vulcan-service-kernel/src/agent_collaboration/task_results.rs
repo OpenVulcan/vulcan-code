@@ -55,7 +55,11 @@ pub(super) async fn project_task_result(
             let message = &acceptance.result.acceptance.message;
             // Local accepted content is immutable authority; fresh model disclosure still consumes the original grant.
             // 本地已接纳正文是不可变权威；新的模型内容交付仍消费原授权。
-            let disclosure = if acceptance.result.terminal.is_some()
+            let disclosure = if acceptance.disclosure
+                == CollaborationTaskResultDisclosure::AuthorizationRevoked
+            {
+                CollaborationTaskResultDisclosure::AuthorizationRevoked
+            } else if acceptance.result.terminal.is_some()
                 && message.source.project_id != message.target.project_id
             {
                 let executor_id = Uuid::parse_str(&message.target.session_id)
@@ -316,8 +320,9 @@ async fn deliver_task_result(
                         .cloned()
                 })
                 .map_err(|error| error.to_string())?;
-            if result.terminal.is_some()
-                && received.is_none()
+            let disclosure = if let Some(receipt) = &received {
+                receipt.disclosure
+            } else if result.terminal.is_some()
                 && result.acceptance.message.source.project_id
                     != result.acceptance.message.target.project_id
             {
@@ -331,11 +336,13 @@ async fn deliver_task_result(
                     executor_for_write.session_id(),
                     action,
                 )? {
-                    return Err(String::from(
-                        "task result authorization was revoked before requester acceptance",
-                    ));
+                    CollaborationTaskResultDisclosure::AuthorizationRevoked
+                } else {
+                    CollaborationTaskResultDisclosure::Full
                 }
-            }
+            } else {
+                CollaborationTaskResultDisclosure::Full
+            };
             let stamp = now_ms()?;
             // UUID plus target-local result sequence is bounded and collision-free in the receiver's operation log.
             // UUID 加目标本地结果序号在接收操作日志中长度有界且身份唯一。
@@ -360,7 +367,12 @@ async fn deliver_task_result(
                             .contains_key(&result_for_accept.effect.delivery_id)
                         {
                             return document
-                                .accept_task_result(accept_operation, result_for_accept, stamp)
+                                .accept_task_result(
+                                    accept_operation,
+                                    result_for_accept,
+                                    disclosure,
+                                    stamp,
+                                )
                                 .map(session_change);
                         }
                         document.apply_atomic_transition(move |document| {
@@ -370,7 +382,12 @@ async fn deliver_task_result(
                                 stamp,
                             )?;
                             document
-                                .accept_task_result(accept_operation, result_for_accept, stamp)
+                                .accept_task_result(
+                                    accept_operation,
+                                    result_for_accept,
+                                    disclosure,
+                                    stamp,
+                                )
                                 .map(session_change)
                         })
                     },

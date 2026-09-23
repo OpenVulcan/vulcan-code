@@ -149,7 +149,7 @@ describe("ConversationV1DisplayRenderer", () => {
       expect(markup).toMatch(/aria-label="打开目标会话"[^>]*disabled/);
       // The requester receives a result card; an internal acknowledgement never becomes another answer.
       // 请求者收到结果卡片；内部确认绝不成为另一份回答。
-      const acceptance = { result: snapshot, operation_id: "receive-result", event_seq: 20, receiver_revision: 8, accepted_at_ms: 10 };
+      const acceptance = { result: snapshot, disclosure: "full" as const, operation_id: "receive-result", event_seq: 20, receiver_revision: 8, accepted_at_ms: 10 };
       const received = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer
           availableCollaborationSessionIds={new Set(["executor"])}
@@ -203,6 +203,24 @@ describe("ConversationV1DisplayRenderer", () => {
       expect(revokedProjection).toContain("授权撤销，结果正文不可用");
       expect(revokedProjection).not.toContain('class="conversation-v1-collaboration-body"');
     }
+    // A revoked receipt reports the disclosure state without showing the target's final text.
+    // 撤权回执说明披露状态，不显示目标的最终正文。
+    const redactedResult: CollaborationTaskResult = { ...result, terminal: { ...result.terminal!,
+      final_assistant: { ...result.terminal!.final_assistant!, source_text: {
+        ...result.terminal!.final_assistant!.source_text, text: "",
+      } },
+    } };
+    const redactedMarkup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+      <ConversationV1DisplayRenderer events={[summary(35, {
+        kind: "collaboration", version: 1, operation_id: "redacted-receipt", event_kind: "task_result_accepted",
+        after_state: { kind: "received_task_result", acceptance: { result: redactedResult,
+          disclosure: "authorization_revoked", operation_id: "redacted-receipt", event_seq: 35,
+          receiver_revision: 12, accepted_at_ms: 14 } },
+      }, "host_only")]} />
+    </I18nProvider>);
+    expect(redactedMarkup).toContain("授权撤销，结果正文不可用");
+    expect(redactedMarkup).not.toContain("完整最终结果");
+    expect(redactedMarkup).not.toContain('class="conversation-v1-collaboration-body"');
     // An application failure remains a message-delivery card with no invented business response.
     // 应用前失败保持为消息投递卡片，不虚构业务回复。
     const failed: CollaborationTaskResult = {
@@ -214,7 +232,7 @@ describe("ConversationV1DisplayRenderer", () => {
       <ConversationV1DisplayRenderer events={[summary(40, {
         kind: "collaboration", version: 1, operation_id: failed.operation_id,
         event_kind: "task_result_accepted", after_state: { kind: "received_task_result", acceptance: {
-          result: failed, operation_id: "receive-failure", event_seq: 40,
+          result: failed, disclosure: "full", operation_id: "receive-failure", event_seq: 40,
           receiver_revision: 8, accepted_at_ms: 10,
         } },
       }, "host_only")]} />
