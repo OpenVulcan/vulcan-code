@@ -6,6 +6,123 @@ use crate::session_model_projection_v1::read_automatic_session_model_projection_
 use vulcan_workbench_model::TaskProjectSummary;
 use vulcan_workspace_store::workspace_store::{load_workspace_index_snapshot, persist_new_project};
 
+/// Loads a real mixed active/archive index and removes every missing record without selecting it first.
+/// 加载真实混合活动及归档索引，无需先选中便移除每个缺失记录。
+/// Returns after checking durable cleanup, healthy membership and zero runtime hydration.
+/// 检查持久化清理、正常成员与零运行态水合后返回。
+#[tokio::test]
+async fn workspace_index_cleans_all_missing_active_and_archived_sessions() {
+    // Each fixture owns a private production schema and all session files.
+    // 每个夹具独占生产表结构及全部会话文件。
+    let fixture = LifecycleStorageFixture::start().await;
+    vulcan_workspace_store::data_plane::prepare_application_schema_for_test(&fixture.controller)
+        .await
+        .unwrap();
+    // Project membership must come from the real database loader.
+    // 项目成员关系必须来自真实数据库加载器。
+    let project = TaskProjectSummary::new(
+        "project-explicit",
+        "Cleanup",
+        fixture.controller.data_root.to_string_lossy(),
+        false,
+        0,
+        None,
+        None,
+        Vec::new(),
+    );
+    persist_new_project(fixture.controller.clone(), &project)
+        .await
+        .unwrap();
+    // Creation owns live handles; the index loader must not depend on those handles.
+    // 创建过程拥有活动句柄；索引加载器不能依赖这些句柄。
+    let registry = SessionRuntimeRegistry::default();
+    let healthy_id = SessionId::new_v4();
+    create_fixture_session(&fixture, &registry, healthy_id).await;
+    // Keep one parse-failed file to prove existence checks never delete corrupt-but-present data.
+    // 保留一个解析失败文件，证明存在检查不会删除损坏但仍存在的数据。
+    let corrupt_id = SessionId::new_v4();
+    let corrupt = create_fixture_session(&fixture, &registry, corrupt_id).await;
+    let corrupt_path = fixture
+        .controller
+        .data_root
+        .join(SESSION_V1_STORAGE_PARTITION)
+        .join(corrupt.storage_locator().unwrap().relative_path())
+        .join("metadata.json");
+    std::fs::write(&corrupt_path, b"{corrupt").unwrap();
+    // Both active and archived rows must disappear in the same load.
+    // 活动及归档行必须在同一次加载中消失。
+    let mut missing_ids = Vec::new();
+    for archived in [false, false, true] {
+        let session_id = SessionId::new_v4();
+        let handle = create_fixture_session(&fixture, &registry, session_id).await;
+        let locator = handle.storage_locator().unwrap();
+        if archived {
+            archive_session_lifecycle_v1(
+                &fixture.controller,
+                &registry,
+                session_id,
+                1_787_788_800_300,
+            )
+            .await
+            .unwrap();
+        }
+        // Remove only this fixture's exact metadata file, leaving other files untouched.
+        // 仅移除该夹具的精确元数据文件，保持其他文件不变。
+        let metadata_path = fixture
+            .controller
+            .data_root
+            .join(SESSION_V1_STORAGE_PARTITION)
+            .join(locator.relative_path())
+            .join("metadata.json");
+        std::fs::remove_file(metadata_path).unwrap();
+        missing_ids.push(session_id);
+    }
+    for _ in 0..2 {
+        // Repeated load proves the cleaned durable indexes cannot resurrect ghost sidebar rows.
+        // 重复加载证明已清理的持久化索引不会复活幽灵侧栏行。
+        let workspace = load_workspace_index_snapshot(fixture.controller.clone())
+            .await
+            .unwrap();
+        assert!(
+            workspace
+                .sessions
+                .iter()
+                .any(|session| session.id == healthy_id)
+        );
+        assert!(
+            workspace
+                .sessions
+                .iter()
+                .any(|session| session.id == corrupt_id)
+        );
+        assert!(workspace.session_runtime_state.is_empty());
+        assert!(workspace.hydrated_session_ids.is_empty());
+        for session_id in &missing_ids {
+            assert!(
+                !workspace
+                    .sessions
+                    .iter()
+                    .chain(&workspace.archived_sessions)
+                    .any(|session| session.id == *session_id)
+            );
+            assert!(
+                workspace
+                    .task_projects
+                    .iter()
+                    .chain(&workspace.archived_task_projects)
+                    .all(|project| !project.session_ids.contains(session_id))
+            );
+            assert!(
+                locate_session_v1_storage(&fixture.controller, &session_id.to_string())
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(std::fs::read(&corrupt_path).unwrap(), b"{corrupt");
+    }
+    fixture.shutdown().await;
+}
+
 /// Verifies corrupt reads are ignored, missing files remove only their index, and healthy navigation survives.
 /// 验证损坏读取被忽略、丢失文件仅删除对应索引、正常导航保持有效。
 /// Uses an isolated SQLite host and real session files; returns after checking durable and projected state.

@@ -463,6 +463,18 @@ async fn load_workspace_snapshot_with_runtime_state(
             );
             continue;
         }
+        // Validate every indexed metadata path before exposing sidebar or archive membership.
+        // 暴露侧栏或归档成员前，检查每个索引声明的元数据路径。
+        // Only confirmed absence deletes the stale row; unreadable paths are ignored without deletion.
+        // 仅确认缺失才删除陈旧记录；不可读路径忽略且不删除。
+        // This checks exact file existence and never hydrates history or scans sibling directories.
+        // 这里只检查精确文件是否存在，绝不水合历史或扫描同级目录。
+        match preflight_session_v1_storage(&host_runtime, &row.session_id).await {
+            Ok(SessionV1StoragePreflightOutcome::Ready { .. }) => {}
+            Ok(SessionV1StoragePreflightOutcome::MissingStorageIndexRemoved { .. }) | Err(_) => {
+                continue;
+            }
+        }
         // project_name is the authoritative persisted display name of the existing project row.
         // project_name 是现有项目行的权威持久化展示名称。
         let project_name = project_row.stored.name.as_str();

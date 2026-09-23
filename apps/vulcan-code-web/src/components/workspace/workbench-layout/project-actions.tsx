@@ -178,7 +178,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
       if (current && snapshot.conversations.some((conversation) => conversation.id === current)) {
         return current;
       }
-      return snapshot.selectedConversationId ?? snapshot.conversations[0]?.id ?? null;
+      return snapshot.selectedConversationId ?? null;
     });
     return true;
   }, [

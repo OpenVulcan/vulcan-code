@@ -94,8 +94,8 @@ export function mergeWorkbenchSnapshot(
     current.selectedConversationId,
   );
   const selectedConversationId = options.selectedConversationSource === "incoming"
-    ? incomingSelectedConversationId ?? localSelectedConversationId ?? incoming.conversations[0]?.id ?? null
-    : localSelectedConversationId ?? incomingSelectedConversationId ?? incoming.conversations[0]?.id ?? null;
+    ? incomingSelectedConversationId
+    : localSelectedConversationId ?? incomingSelectedConversationId;
   const incomingSubagentNavigations = deriveIncomingSubagentNavigations(incoming);
   const mergedWorkbench = {
     ...incoming,

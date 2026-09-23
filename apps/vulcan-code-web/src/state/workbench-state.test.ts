@@ -13,6 +13,39 @@ import {
 // Verifies a lower revision remains stale inside one service instance.
 // 验证同一服务实例内较低版本仍会被视为过期。
 describe("mergeWorkbenchSnapshot service instance ordering", () => {
+  // A cleared authoritative selection must not fall back to the local route or an arbitrary indexed row.
+  // 权威空选择不能回退到本地路由或任意索引行。
+  it("honors an explicitly cleared incoming selection with visible conversations", () => {
+    // Both rows remain visible, modeling a metadata read failure that must not authorize deletion.
+    // 两行仍可见，模拟不允许删除数据的元数据读取失败。
+    const current = {
+      ...browserFallbackSnapshot(), revision: 1, selectedConversationId: "unavailable",
+      conversations: [{ id: "unavailable", title: "Unavailable", status: "ready" }, { id: "peer", title: "Peer", status: "ready" }],
+    };
+    const incoming = { ...current, revision: 2, selectedConversationId: null };
+    expect(mergeWorkbenchSnapshot(current, incoming, { selectedConversationSource: "incoming" }).selectedConversationId).toBeNull();
+    // Ordinary refresh still preserves a legitimate local choice when navigation owns it.
+    // 普通刷新在导航拥有合法本地选择时仍保留它。
+    expect(mergeWorkbenchSnapshot(current, incoming).selectedConversationId).toBe("unavailable");
+  });
+
+  // A removed target cannot reappear merely because another indexed row remains in the list.
+  // 不能仅因列表中仍有其他索引行就复活已移除目标。
+  it("keeps the cleared selection after missing-index cleanup and accepts a valid replacement", () => {
+    const current = {
+      ...browserFallbackSnapshot(), revision: 1, selectedConversationId: "missing",
+      conversations: [{ id: "missing", title: "Missing", status: "ready" }],
+    };
+    const incoming = {
+      ...current, revision: 2, selectedConversationId: null,
+      conversations: [{ id: "peer", title: "Peer", status: "ready" }],
+    };
+    const merged = mergeWorkbenchSnapshot(current, incoming);
+    expect(merged.selectedConversationId).toBeNull();
+    expect(merged.conversations.map((conversation) => conversation.id)).toEqual(["peer"]);
+    expect(mergeWorkbenchSnapshot(current, { ...incoming, selectedConversationId: "peer" }, { selectedConversationSource: "incoming" }).selectedConversationId).toBe("peer");
+  });
+
   it("rejects a lower revision without an instance reset", () => {
     const current = {
       ...browserFallbackSnapshot(),

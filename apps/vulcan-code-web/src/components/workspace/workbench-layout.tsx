@@ -361,7 +361,6 @@ export function WorkbenchLayout(props: {
   // selectedConversationId 保存侧栏当前选中的会话。
   const [selectedConversationId, setSelectedConversationId] = React.useState<string | null>(
     props.workbench.selectedConversationId
-      ?? props.workbench.conversations[0]?.id
       ?? initialDraftConversation?.id
     ?? null,
   );
@@ -1348,6 +1347,21 @@ export function WorkbenchLayout(props: {
         if (conversationSelectionRequestVersionRef.current !== requestVersion) {
           return null;
         }
+        // A non-null service snapshot is authoritative even when missing storage changed or cleared its selection.
+        // 非空服务快照始终具有权威性，即使存储缺失使其选择改变或清空。
+        if (snapshot && snapshot.selectedConversationId !== conversationId) {
+          selectedConversationIdRef.current = snapshot.selectedConversationId ?? null;
+          setSelectedConversationId(snapshot.selectedConversationId ?? null);
+          setConversationNavigation(null);
+          liveStreamStore.resetForWorkbenchSnapshot();
+          liveStreamStore.flushNotifications();
+          setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
+            current,
+            snapshot,
+            { selectedConversationSource: "incoming" },
+          ));
+          return null;
+        }
         // Commit the route and its session-sensitive controls atomically after the exact selection response arrives.
         // 精确选择响应到达后，原子提交路由及其会话敏感控制字段。
         selectedConversationIdRef.current = conversationId;
@@ -1393,7 +1407,7 @@ export function WorkbenchLayout(props: {
           setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
         }
       })
-      .catch(async (error) => {
+      .catch((error) => {
         if (conversationSelectionRequestVersionRef.current !== requestVersion) {
           return;
         }
@@ -1404,27 +1418,12 @@ export function WorkbenchLayout(props: {
           }
         }, 200);
         const message = error instanceof Error ? error.message : String(error);
-        if (message === "会话已被删除，已经清理。") {
-          // Clear the deleted route before applying the refreshed authoritative snapshot.
-          // 应用刷新后的权威快照前先清理已删除会话的路由选择。
-          selectedConversationIdRef.current = null;
-          setSelectedConversationId(null);
-          try {
-            const snapshot = await loadWorkbenchSnapshot();
-            applyProjectActionSnapshot(snapshot);
-          } catch (refreshError) {
-            toast.error(`${message} 列表刷新失败：${refreshError instanceof Error ? refreshError.message : String(refreshError)}`);
-            return;
-          }
-        }
         toast.error(message);
       });
   }, [
-    applyProjectActionSnapshot,
     handleOpenWorkspaceChat,
     props.isConversationInitialized,
     liveStreamStore,
-    loadWorkbenchSnapshot,
     selectedConversationIdRef,
     setSelectedConversationId,
   ]);
@@ -1669,11 +1668,12 @@ export function WorkbenchLayout(props: {
         props.workbench,
         {
           allowServiceRevisionReset: serviceInstanceChanged,
+          selectedConversationSource: serviceInstanceChanged ? "incoming" : undefined,
           preserveExpandedProjectIds: expandedProjectIdsLocallyEditedRef.current,
         },
       )
     ));
-    const nextSelected = props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null;
+    const nextSelected = props.workbench.selectedConversationId ?? null;
     setSelectedConversationId((current) => {
       if (current && current === draftConversationIdRef.current) {
         return current;
@@ -1681,7 +1681,7 @@ export function WorkbenchLayout(props: {
       if (current && current === pendingMaterializedConversationIdRef.current) {
         return current;
       }
-      if (current && props.workbench.conversations.some((conversation) => conversation.id === current)) {
+      if (!serviceInstanceChanged && current && props.workbench.conversations.some((conversation) => conversation.id === current)) {
         return current;
       }
       return nextSelected;
@@ -1968,7 +1968,7 @@ export function WorkbenchLayout(props: {
         && workbenchState.conversations.some((conversation) => conversation.id === nextSelectedConversationId)) {
         return nextSelectedConversationId;
       }
-      return workbenchState.conversations[0]?.id ?? null;
+      return null;
     });
   }, [workbenchState.conversations, workbenchState.selectedConversationId]);
 
