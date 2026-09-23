@@ -4,7 +4,7 @@
 use super::*;
 mod main_execution;
 pub(super) mod native_execution;
-mod native_results;
+pub(in crate::agent_collaboration) mod native_results;
 pub(super) mod tree;
 pub(super) mod worker;
 use std::collections::BTreeSet;
@@ -150,8 +150,16 @@ async fn recover_indexed_collaboration_owned(
                         let parent_id = Uuid::parse_str(nodes[*parent_index].locator.session_id())
                             .map_err(|error| error.to_string())?;
                         let parent = registry.get(parent_id).map_err(|error| error.to_string())?;
+                        // The indexed root owns tree-wide stop authority across every descendant level.
+                        // 索引根拥有贯穿全部后代层级的整树停止权威。
+                        let root_id = Uuid::parse_str(nodes[0].locator.session_id())
+                            .map_err(|error| error.to_string())?;
+                        // Loading the ancestry established this exact canonical storage owner.
+                        // 加载祖先链已建立此精确规范存储所有者。
+                        let root = registry.get(root_id).map_err(|error| error.to_string())?;
                         if let Err(error) = native_results::recover_terminal_returns(
-                            state, &registry, parent.clone(), handle.clone(), records.clone(),
+                            state, &registry, root, nodes[0].snapshot.segment_generation,
+                            parent.clone(), handle.clone(), records.clone(),
                         ).await {
                             failures.push(format!("session {session_id} native results: {error}"));
                         }

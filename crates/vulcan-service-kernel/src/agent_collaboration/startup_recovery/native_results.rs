@@ -10,11 +10,15 @@ use vulcan_session_core::v1::collaboration::{
 /// 修复已闭合来源执行，同时保持未完成任务开放。
 /// `state` identifies live owners; `records` are hints revalidated with canonical parents and children under lifecycle gates.
 /// `state` 识别活动所有者；`records` 是在线生命周期锁内与规范父子文档重新校验的线索。
+/// `root` and `root_generation` retain discovered storage and tree-stop authority through those same gates.
+/// `root` 与 `root_generation` 通过相同锁保留发现时的存储及整树停止权威。
 /// Returns the number of newly published terminal results; never starts a provider or fabricates text.
 /// 返回新发布终态结果数量；绝不启动供应商或制造正文。
-pub(super) async fn recover_terminal_returns(
+pub(in crate::agent_collaboration) async fn recover_terminal_returns(
     state: &SharedServiceBridgeState,
     registry: &Arc<SessionRuntimeRegistry>,
+    root: Arc<SessionHandle>,
+    root_generation: u64,
     parent: Arc<SessionHandle>,
     child: Arc<SessionHandle>,
     records: Vec<CollaborationChildTaskRecord>,
@@ -27,9 +31,16 @@ pub(super) async fn recover_terminal_returns(
     let owned_registry = registry.clone();
     lifecycle_write::with_canonical_handles(
         registry,
-        vec![parent.clone(), child.clone()],
+        vec![root.clone(), parent.clone(), child.clone()],
         move || {
             worker::require_active_owner(&state, &owned_registry)?;
+            if root
+                .read(|document| document.segment_generation())
+                .map_err(|error| error.to_string())?
+                != root_generation
+            {
+                return Err(String::from("native result root generation changed"));
+            }
             // A physical child can retain several historical executions, each with separate source proof.
             // 一个物理子会话可保留多次历史执行，每次都有独立来源凭据。
             let mut repaired = 0;
@@ -50,6 +61,7 @@ pub(super) async fn recover_terminal_returns(
                     })
                     .map_err(|error| error.to_string())??;
                 if current.child != original.child
+                    || current.child.root_session_id != root.session_id().to_string()
                     || current.task_id != original.task_id
                     || current.parent_turn_id != original.parent_turn_id
                     || current.reservation_operation_id != original.reservation_operation_id
@@ -60,6 +72,16 @@ pub(super) async fn recover_terminal_returns(
                     ));
                 }
                 if current.state == CollaborationChildTaskState::Terminal {
+                    continue;
+                }
+                // A whole-tree stop may have persisted before its descendant control writes.
+                // 整树停止可能在后代控制写入前已经落盘。
+                let stopped_without_owner =
+                    stopped_child_has_no_live_owner(&state, &root, &parent, &child)?;
+                if stopped_without_owner
+                    && settle_unpublished_resumption_stop(&parent, &child, &current)?
+                {
+                    repaired += 1;
                     continue;
                 }
                 // Resolve the original root action and business terminal from full durable source history.
@@ -90,8 +112,10 @@ pub(super) async fn recover_terminal_returns(
                         .map_err(|error| error.to_string())?
                         .map_err(|error| error.to_string())?;
                     let Some(input) = non_success else {
-                        repaired +=
-                            usize::from(recover_explicit_stop(&state, &parent, &child, &current)?);
+                        if stopped_without_owner {
+                            repaired +=
+                                usize::from(recover_explicit_stop(&parent, &child, &current)?);
+                        }
                         continue;
                     };
                     // Commit the result and parent-owned terminal in the same existing durable transition.
@@ -154,18 +178,32 @@ pub(super) async fn recover_terminal_returns(
     .await
 }
 
-/// Settles a persisted stop whose original source terminal was lost on process exit.
-/// 结算持久停止后因进程退出丢失原来源终态的执行。
-/// Callers hold canonical parent and child lifecycle gates; `record` is the revalidated reservation.
-/// 调用方持有规范父子生命周期锁；`record` 是已重新校验的预留。
-/// Returns whether the exact stopped execution was published; live owners and other turns are untouched.
-/// 返回是否发布精确停止执行；不修改活动所有者和其他回合。
-fn recover_explicit_stop(
+/// Checks explicit tree/parent/child stop and absence of process-local execution ownership.
+/// 检查整树、父或子明确停止，以及进程内执行所有权缺失。
+/// Callers hold root, parent and child lifecycle gates; returns whether stop repair is authorized.
+/// 调用方持有根、父、子生命周期锁；返回是否授权停止修复。
+fn stopped_child_has_no_live_owner(
     state: &SharedServiceBridgeState,
+    root: &SessionHandle,
     parent: &SessionHandle,
     child: &SessionHandle,
-    record: &CollaborationChildTaskRecord,
 ) -> Result<bool, String> {
+    // Only explicit stop controls authorize recovery; archive and missing workers do not.
+    // 只有明确停止控制授权恢复；归档和工作者缺失均不授权。
+    let mut explicitly_stopped = false;
+    for handle in [root, parent, child] {
+        explicitly_stopped |= handle
+            .read_full_durable(|document| {
+                matches!(
+                    document.collaboration_run_control(),
+                    CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents,
+                )
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    if !explicitly_stopped {
+        return Ok(false);
+    }
     // A process-local owner is still responsible for its true terminal outcome.
     // 进程内所有者仍负责其真实终态结果。
     let runtime = {
@@ -185,16 +223,109 @@ fn recover_explicit_stop(
     {
         return Ok(false);
     }
-    // Persisted explicit control, not absence of a worker, authorizes a stopped outcome.
-    // 授权停止结果的是持久明确控制，而非工作者缺失。
+    Ok(true)
+}
+
+/// Cancels an unpublished successor without closing or rewriting its predecessor.
+/// 取消尚未发布的后继，不闭合或改写其前序。
+/// `record` and canonical handles are guarded; callers proved explicit stop and no live child owner.
+/// `record` 和规范句柄均受锁保护；调用方已证明明确停止且子任务无活动所有者。
+/// Returns true only for a reserved resumption whose exact root input was never published.
+/// 仅对尚未发布精确根输入的已预留后继返回 true。
+fn settle_unpublished_resumption_stop(
+    parent: &SessionHandle,
+    child: &SessionHandle,
+    record: &CollaborationChildTaskRecord,
+) -> Result<bool, String> {
+    if record.state != CollaborationChildTaskState::Reserved {
+        return Ok(false);
+    }
+    // The parent-owned captured intent proves this is a successor, not damaged initial storage.
+    // 父侧捕获意图证明这是后继，而非损坏的初始存储。
+    let reservation_seq = parent
+        .read_full_durable(|document| {
+            if !document.metadata.child_creation_intents.get(&record.execution_id)
+            .is_some_and(|intent| matches!(intent.origin,
+                vulcan_session_core::v1::child_execution::ChildCreationOrigin::Resumption { .. }))
+        {
+            return Ok(None);
+        }
+            document
+                .collaboration_state()
+                .operations
+                .get(&record.reservation_operation_id)
+                .map(|operation| Some(operation.event_seq))
+                .ok_or_else(|| String::from("stopped successor reservation operation is missing"))
+        })
+        .map_err(|error| error.to_string())??;
+    let Some(reservation_seq) = reservation_seq else {
+        return Ok(false);
+    };
+    // Original root identity is the publication boundary; profile age alone is insufficient.
+    // 原根身份是发布边界；仅凭配置的新旧程度不足以判断。
+    let has_root = child
+        .read_full_durable(|document| {
+            if document.segment_generation() != record.child.segment_generation
+                || document.metadata.session_id != record.child.session_id
+            {
+                return Err(String::from("stopped successor child scope changed"));
+            }
+            Ok(document.events().iter().any(|event| {
+                matches!(&event.event,
+            EventBody::UserInput(input)
+                if input.input_source == vulcan_session_core::v1::event::UserInputSource::Root
+                    && input.client_action_id.as_str() == record.execution_id.as_str())
+            }))
+        })
+        .map_err(|error| error.to_string())??;
+    if has_root {
+        return Ok(false);
+    }
+    // The immutable reservation key preserves retry identity without manufacturing a child result.
+    // 不可变预留键保留重试身份，不制造子结果。
+    let operation_id = CollaborationOperationId::try_new(format!(
+        "child-resumption-stop:{}:{}",
+        record.parent_segment_generation,
+        reservation_seq.value(),
+    ))
+    .map_err(|error| error.to_string())?;
+    // Observe cancellation now while keeping all original creation timestamps unchanged.
+    // 当前观测取消，全部原创建时间保持不变。
+    let stopped_at_ms = now_ms()?;
+    parent.mutate_durable_if_changed(
+        SessionMutationAdmission::ControlPlane,
+        SessionFlushReason::SubagentReturned,
+        |document| {
+            if document.collaboration_state().child_tasks.get(&record.execution_id) != Some(record) {
+                return Err(vulcan_session_core::v1::DomainError::CollaborationStateViolation {
+                    field: "stopped_successor.reservation_changed",
+                });
+            }
+            document.terminal_child_task(vulcan_session_core::v1::collaboration::TerminalChildTaskInput {
+                operation_id,
+                execution_id: record.execution_id.clone(),
+                task_id: record.task_id.clone(),
+                outcome: vulcan_session_core::v1::collaboration::CollaborationChildTaskTerminalOutcome::Stopped,
+                terminal_at_ms: stopped_at_ms,
+            }).map(session_change)
+        },
+    ).map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+/// Closes the original open source after explicit stop and absence of live ownership were proved.
+/// 在已证明明确停止且没有活动所有者后闭合原开放来源。
+/// `record` is the exact parent reservation; returns false for a different or already closed turn.
+/// `record` 是精确父预留；回合不同或已闭合时返回 false。
+fn recover_explicit_stop(
+    parent: &SessionHandle,
+    child: &SessionHandle,
+    record: &CollaborationChildTaskRecord,
+) -> Result<bool, String> {
+    // Retain source identity even when stop intent was recorded only on an ancestor.
+    // 即使停止意图只记录于祖先，也保持来源身份。
     let stopped_original = child
         .read_full_durable(|document| {
-            if !matches!(
-                document.collaboration_run_control(),
-                CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents
-            ) {
-                return false;
-            }
             // Only the original open root can be closed; a later question or task is unrelated.
             // 只能闭合原开放根回合；后续问题或任务与此无关。
             let Some(turn) = document.active_turn().filter(|turn| !turn.closed) else {

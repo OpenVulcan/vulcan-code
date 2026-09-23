@@ -220,7 +220,11 @@ async fn session_collaboration_startup_settles_persisted_child_stop() {
     use vulcan_session_core::v1::collaboration::{
         CollaborationChildTaskState, CollaborationChildTaskTerminalOutcome, SetRunControlInput,
     };
-    for control in [CollaborationRunControl::Stopped, CollaborationRunControl::MainAndSubagents] {
+    for (control, stop_parent) in [
+        (CollaborationRunControl::Stopped, false),
+        (CollaborationRunControl::MainAndSubagents, false),
+        (CollaborationRunControl::MainAndSubagents, true),
+    ] {
         // Retain independent stores for each explicit stopping policy.
         // 为每种明确停止策略保留独立存储。
         let (_root, invocation, _target, _) = message_fixture(false).await;
@@ -229,7 +233,10 @@ async fn session_collaboration_startup_settles_persisted_child_stop() {
         let child = reserved_child(&invocation, &invocation.source_handle, "stop-before-terminal").await;
         // The durable control write represents the last successful action before process exit.
         // 可靠控制写入代表进程退出前最后一次成功动作。
-        child.set_collaboration_run_control_durable(SetRunControlInput {
+        // Ancestor-only control models exit before stop propagation reached the child.
+        // 仅祖先控制模拟停止尚未传播到子会话就已退出。
+        let stop_owner = if stop_parent { &invocation.source_handle } else { &child };
+        stop_owner.set_collaboration_run_control_durable(SetRunControlInput {
             operation_id: CollaborationOperationId::try_new("durable-stop-intent").unwrap(),
             state: control,
             changed_at_ms: 6,
@@ -256,7 +263,14 @@ async fn session_collaboration_startup_settles_persisted_child_stop() {
             guard.detached_subagent_task_listeners.clear();
             guard.session_runtime_registry = registry.clone();
         }
-        recover_tree_with_missing_main_hook(&invocation).await;
+        if stop_parent {
+            startup_recovery::recover_indexed_collaboration(
+                &crate::ServiceEventEmitter::new(vec![]), &invocation.state,
+                [invocation.source_session_id].into_iter().collect(),
+            ).await.unwrap();
+        } else {
+            recover_tree_with_missing_main_hook(&invocation).await;
+        }
         // Read both sides from disk to exclude an in-memory-only repair.
         // 从磁盘读取双方，排除仅内存修复。
         let source = load_session_v1_for_runtime(&child.storage_locator().unwrap()).unwrap().document;
@@ -276,7 +290,14 @@ async fn session_collaboration_startup_settles_persisted_child_stop() {
         // Repeated scans must not duplicate source boundaries or parent terminal receipts.
         // 重复扫描不得复制来源边界或父终态回执。
         let revisions = (source.durable_revision(), parent.durable_revision());
-        recover_tree_with_missing_main_hook(&invocation).await;
+        if stop_parent {
+            startup_recovery::recover_indexed_collaboration(
+                &crate::ServiceEventEmitter::new(vec![]), &invocation.state,
+                [invocation.source_session_id].into_iter().collect(),
+            ).await.unwrap();
+        } else {
+            recover_tree_with_missing_main_hook(&invocation).await;
+        }
         assert_eq!(registry.get(child.session_id()).unwrap().read(|document| document.durable_revision()).unwrap(), revisions.0);
         assert_eq!(registry.get(invocation.source_session_id).unwrap().read(|document| document.durable_revision()).unwrap(), revisions.1);
     }

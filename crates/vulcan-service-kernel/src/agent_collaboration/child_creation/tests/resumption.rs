@@ -260,6 +260,61 @@ fn child_resumption_cold_publication_reuses_original_intent() {
     );
 }
 
+/// A parent stop before successor publication cancels only the reserved successor.
+/// 后继发布前父会话停止时，只取消已预留的后继。
+/// Real disk assertions retain predecessor history and prove idempotent parent settlement.
+/// 真实磁盘断言保留前序历史，并证明父侧结算幂等。
+#[tokio::test]
+async fn stopped_unpublished_child_resumption_releases_parent_without_rewriting_child() {
+    // This successor is durably reserved while its predecessor still owns the physical history.
+    // 此后继已可靠预留，而前序仍拥有物理历史。
+    let (_temporary, parent, registry, child, record, _) = reserved_resumption_source();
+    registry.register(parent.clone()).unwrap();
+    parent.set_collaboration_run_control_durable(
+        vulcan_session_core::v1::collaboration::SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("stop-before-successor").unwrap(),
+            state: CollaborationRunControl::MainAndSubagents,
+            changed_at_ms: 22,
+        },
+    ).unwrap();
+    // Capture physical source events before recovery; no successor root is present.
+    // 恢复前捕获物理来源事件；此时没有后继根输入。
+    let before = child.read_full_durable(|document| (
+        document.durable_revision(), document.events().to_vec(),
+    )).unwrap();
+    // Use a service owner matching the canonical registry without starting an inference runtime.
+    // 使用与规范注册表匹配的服务所有者，不启动推理运行时。
+    let mut service = crate::tests::test_support::test_service_state_with_parent_session(parent.session_id());
+    service.session_runtime_registry = registry.clone();
+    // The normal recovery entry takes ownership from this exact service state.
+    // 正常恢复入口从此精确服务状态取得所有权。
+    let state = Arc::new(Mutex::new(service));
+    // The root and direct parent coincide for this concrete successor.
+    // 此具体后继的根与直接父会话相同。
+    let generation = parent.read(|document| document.segment_generation()).unwrap();
+    assert_eq!(startup_recovery::native_results::recover_terminal_returns(
+        &state, &registry, parent.clone(), generation, parent.clone(), child.clone(), vec![record.clone()],
+    ).await.unwrap(), 1);
+    // Parent terminal evidence has no fabricated child response or activation.
+    // 父终态凭据没有虚构子回复或激活。
+    let restored = load_session_v1_for_runtime(&parent.storage_locator().unwrap()).unwrap().document;
+    // Stable execution identity selects the exact successor obligation.
+    // 稳定执行身份选择精确后继义务。
+    let terminal = &restored.collaboration_state().child_tasks[&record.execution_id];
+    assert_eq!(terminal.terminal_outcome, Some(CollaborationChildTaskTerminalOutcome::Stopped));
+    assert!(terminal.active_at_ms.is_none());
+    assert!(terminal.non_success_result.is_none());
+    assert!(restored.completion_obligations(record.parent_turn_id).open_child_task_ids.is_empty());
+    assert_eq!(startup_recovery::native_results::recover_terminal_returns(
+        &state, &registry, parent.clone(), generation, parent.clone(), child.clone(), vec![record],
+    ).await.unwrap(), 0);
+    // Source bytes remain unchanged after both recovery attempts.
+    // 两次恢复尝试后来源字节保持不变。
+    let after = load_session_v1_for_runtime(&child.storage_locator().unwrap()).unwrap().document;
+    assert_eq!(after.durable_revision(), before.0);
+    assert_eq!(after.events(), before.1.as_slice());
+}
+
 /// A changed source is rejected in live and cold publication without adopting the predecessor for cleanup.
 /// 来源变化时实时和冷发布均拒绝，且不取得清理前序的权限。
 /// Returns nothing; stopped predecessor history remains byte-for-byte equivalent after both attempts.
