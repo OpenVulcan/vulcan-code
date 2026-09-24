@@ -13,6 +13,122 @@ use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
 /// 即使断言失败也恢复进程级屏障策略。
 struct BarrierPolicyGuard;
 
+/// EOF or cancellation releases exact listener ownership while preserving published and replacement results.
+/// 流结束或取消释放精确监听归属，同时保留已发布及替代执行结果。
+/// Returns no value; exercises the same captured guard used by production spawned listeners.
+/// 无返回值；覆盖生产派生监听器使用的同一捕获守卫。
+#[tokio::test]
+async fn detached_listener_exit_releases_only_unpublished_exact_owner() {
+    for exit in ["eof", "cancel_before_poll", "replacement", "published"] {
+        // Every case owns an isolated registry and runtime without a Provider request.
+        // 每个用例拥有隔离注册表与运行时，不发起 Provider 请求。
+        let parent = SessionId::new_v4();
+        // Stable child identity is reused only inside this isolated case.
+        // 稳定子身份只在本隔离用例内部复用。
+        let child = SessionId::new_v4();
+        // The listener registration must match the gate before its future is captured.
+        // 捕获 Future 前，监听注册必须与门控匹配。
+        let state = Arc::new(std::sync::Mutex::new(
+            test_service_state_with_parent_session(parent),
+        ));
+        // This runtime retains both unpublished and published return evidence.
+        // 此运行时保留尚未发布与已发布回流凭据。
+        let runtime = test_agent_runtime_bridge();
+        state
+            .lock()
+            .unwrap()
+            .detached_subagent_task_listeners
+            .insert(child, "original".into());
+        runtime
+            .task_runtime
+            .expect_durable_task_return(child, "original")
+            .unwrap();
+        // Capture the guard outside the future, as production admission does.
+        // 与生产准入一致，在 Future 外捕获守卫。
+        let owner = listener_owner::ListenerOwner::new(
+            state.clone(),
+            runtime.clone(),
+            child,
+            "original".into(),
+        );
+        if exit == "replacement" {
+            state
+                .lock()
+                .unwrap()
+                .detached_subagent_task_listeners
+                .insert(child, "replacement".into());
+            runtime
+                .task_runtime
+                .expect_durable_task_return(child, "replacement")
+                .unwrap();
+        }
+        if exit == "published" {
+            runtime
+                .task_runtime
+                .publish_durable_task_return(
+                    "original",
+                    vulcan_session_boundary::SubagentMailboxEvent {
+                        parent_thread_id: parent.into(),
+                        parent_turn_id: None,
+                        child_thread_id: child.into(),
+                        kind: vulcan_session_boundary::SubagentMailboxEventKind::Failed,
+                        timestamp_ms: 7,
+                        payload: serde_json::json!({"status":"failed", "execution_id":"original"}),
+                    },
+                )
+                .unwrap();
+        }
+        // A stream without a terminal exits naturally; an unpolled future is also cancellable.
+        // 没有终态的流自然退出；未轮询的 Future 同样可以取消。
+        let listener = async move {
+            let _owner = owner;
+            let mut stream = futures_util::stream::empty::<DetachedTaskRuntimeEvent>();
+            while stream.next().await.is_some() {}
+        };
+        if exit == "cancel_before_poll" {
+            drop(listener);
+        } else {
+            listener.await;
+        }
+        if exit == "replacement" {
+            assert_eq!(
+                state
+                    .lock()
+                    .unwrap()
+                    .detached_subagent_task_listeners
+                    .get(&child)
+                    .unwrap(),
+                "replacement"
+            );
+            assert!(
+                runtime
+                    .task_runtime
+                    .release_unpublished_task_return(child, "replacement")
+                    .unwrap()
+            );
+        } else {
+            assert!(
+                !state
+                    .lock()
+                    .unwrap()
+                    .detached_subagent_task_listeners
+                    .contains_key(&child)
+            );
+            // A leaked gate would make this bounded wait fail instead of producing an outcome.
+            // 门控泄漏会使此有界等待失败，而非产生结果。
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                runtime
+                    .task_runtime
+                    .wait_for_durable_task_return(child, "original"),
+            )
+            .await
+            .expect("exited listener must not retain an unpublished return gate");
+            assert_eq!(result.is_ok(), exit == "published");
+        }
+    }
+}
+
 impl Drop for BarrierPolicyGuard {
     /// Releases pending test receipts and restores the disabled test default.
     /// 释放待处理测试回执并恢复测试默认的禁用状态。
