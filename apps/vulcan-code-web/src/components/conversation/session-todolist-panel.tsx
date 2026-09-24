@@ -999,7 +999,9 @@ function ConversationSessionCommitPanel(props: {
   const backendReady = Boolean(props.conversationId && props.workspacePath);
   const controlsDisabled = props.busyState !== null || !backendReady;
   const commitActionDisabled = controlsDisabled || !hasIncludedChanges || !hasValidCommitTarget;
-  const pushOnlyActionDisabled = controlsDisabled || hasIncludedChanges || !hasPushOnlyChanges;
+  // Push-only publishes existing commits and never touches the worktree, so uncommitted changes must not block it.
+  // 仅推送只发布已有提交、不触及工作区，因此未提交变更不得阻止推送。
+  const pushOnlyActionDisabled = controlsDisabled || !hasPushOnlyChanges;
 
   React.useEffect(() => {
     if (!hasUnstagedChanges) {
