@@ -406,10 +406,9 @@ async fn unified_wait_releases_missing_child_and_acknowledges_only_committed_rep
             },
         )
         .unwrap();
-    let first = dispatch
-        .invoke(AgentCollaborationCommand::WaitAgentsResult(
-            WaitAgentsResultArgs { timeout_ms: 60_000 },
-        ))
+    // A zero internal budget deterministically expires during repair; production admission stays unchanged.
+    // 内部零预算确保修复时已到截止点；生产准入规则保持不变。
+    let first = result_wait::wait_agents_result(&dispatch.invocation, 0)
         .await
         .unwrap();
     assert_eq!(first["reports"][0]["outcome"], "abandoned");

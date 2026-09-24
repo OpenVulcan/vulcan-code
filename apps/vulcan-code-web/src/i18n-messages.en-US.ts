@@ -1471,6 +1471,8 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "conversation.subagent.detail.message": "Send message to agent",
     "conversation.subagent.detail.wait": "Waiting for agent message",
     "conversation.subagent.detail.waitPending": "Waiting",
+    "conversation.subagent.detail.waitNeedsReply": "Incoming question needs a reply",
+    "conversation.subagent.detail.waitCheckFailed": "Target state could not be checked",
     "conversation.subagent.detail.waitCompleted": "Agent message received",
     "conversation.subagent.detail.waitInterrupted": "Wait interrupted",
     "conversation.subagent.detail.waitTimedOut": "Wait timed out",

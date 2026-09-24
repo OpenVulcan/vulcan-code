@@ -1504,6 +1504,8 @@ export type TranslationKey =
   | "conversation.subagent.detail.waitPending"
   | "conversation.subagent.detail.waitCompleted"
   | "conversation.subagent.detail.waitInterrupted"
+  | "conversation.subagent.detail.waitNeedsReply"
+  | "conversation.subagent.detail.waitCheckFailed"
   | "conversation.subagent.detail.waitTimedOut"
   | "conversation.subagent.detail.templateCollection"
   | "conversation.subagent.detail.statusCollection"

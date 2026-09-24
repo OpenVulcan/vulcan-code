@@ -116,13 +116,37 @@ fn reported_work(
         };
         if let Some(reports) = snapshot.get("reports").and_then(Value::as_array) {
             for report in reports {
-                if let Some(id) = report.get("work_id").and_then(Value::as_str) {
-                    reported.insert(id.to_owned());
+                if let Some(identity) = report_identity(report) {
+                    reported.insert(identity);
                 }
             }
         }
     }
     reported
+}
+
+/// Keys one acknowledged observation by work, outcome and reason, without suppressing later changes.
+/// 按工作、结果和原因标识已确认观测，不抑制之后发生的变化。
+/// `report` must contain the declared report fields; malformed historical output proves no acknowledgement.
+/// `report` 必须包含声明字段；畸形历史输出不能证明已确认。
+fn report_identity(report: &Value) -> Option<String> {
+    Some(
+        json!([
+            report.get("work_id")?.as_str()?,
+            report.get("outcome")?.as_str()?,
+            report.get("reason")?
+        ])
+        .to_string(),
+    )
+}
+
+/// Retains a new observation unless the same outcome and reason were already durably delivered.
+/// 保留新观测，除非相同结果及原因已经可靠交付。
+/// Returns the unchanged report or no duplicate; it never changes live-work selection.
+/// 返回原报告或去除重复项；绝不改变活动工作选择。
+fn unreported(report: Value, reported: &BTreeSet<String>) -> Option<Value> {
+    (!report_identity(&report).is_some_and(|identity| reported.contains(&identity)))
+        .then_some(report)
 }
 
 /// Checks all process-owned preparation, execution and terminal-publication phases.
@@ -204,15 +228,14 @@ fn has_live_child_owner(
 fn failed_questions(state: &CollaborationState, reported: &BTreeSet<String>) -> Vec<Value> {
     state.questions.values().filter_map(|question| {
         let id = format!("question:{}", question.question_id.as_str());
-        if reported.contains(&id) { return None; }
         let delivery = state.outbound_deliveries.get(&question.delivery_id)?;
         let answer_failed = question.answer.as_ref().is_some_and(|answer|
             answer.delivery.state == vulcan_session_core::v1::collaboration::CollaborationAnswerDeliveryState::Failed);
         if question.state == CollaborationQuestionState::Cancelled || delivery.state == CollaborationDeliveryState::Failed || answer_failed {
-            Some(json!({"work_id": id, "session_id": question.target.session_id,
+            unreported(json!({"work_id": id, "session_id": question.target.session_id,
                 "question_id": question.question_id, "outcome": if question.state == CollaborationQuestionState::Cancelled { "cancelled" }
                 else if delivery.failure == Some(CollaborationDeliveryFailureReason::TargetStopped) { "stopped" } else { "failed" },
-                "reason": if answer_failed { json!("answer_delivery_failed") } else { json!(delivery.failure) }}))
+                "reason": if answer_failed { json!("answer_delivery_failed") } else { json!(delivery.failure) }}), reported)
         } else { None }
     }).collect()
 }
@@ -312,6 +335,11 @@ async fn observe_work(
         if !invocation.source_handle.read(|document| pending_work(document.collaboration_state()).contains(&work))
             .map_err(|error| error.to_string())? { return Ok((false, None)); }
         let live = has_live_owner(&invocation, session_id)?;
+        // A new owner may appear after the storage probe; never close it using the older absence.
+        // 存储探测后可能出现新所有者；绝不使用较早缺失观测将其关闭。
+        if target.is_none() && live {
+            return Err(String::from("Target execution appeared during storage observation; retry the check."));
+        }
         let question_source = invocation.source_handle.read(|document| match &work.kind {
             WorkKind::Question(question_id) => document.collaboration_state().questions.get(question_id).map(|question| question.source.clone()),
             _ => None,
@@ -375,10 +403,146 @@ async fn observe_work(
                     .map_err(|error| error.to_string())?;
             }
         }
+        // Child loss is persisted above; its first report must match later durable replays even at deadline.
+        // 子任务丢失已在上方持久化；即使到达截止点，首次报告也必须与后续持久重放一致。
         Ok((false, Some(json!({"work_id":work.id,"session_id":session_id,
             "outcome":if stopped {"stopped"} else {"abandoned"},
-            "reason":if stopped {"user_stopped"} else if target.is_none() {"target_unavailable"} else if !eligible {"original_execution_ended_without_result"} else {"execution_not_running"}}))))
+            "reason":if stopped {"user_stopped"} else if matches!(work.kind, WorkKind::Child(_)) {"execution_not_running"}
+                else if target.is_none() {"target_unavailable"} else if !eligible {"original_execution_ended_without_result"} else {"execution_not_running"}}))))
     }).await
+}
+
+/// Describes `work` without duplicating bodies; `state` is its current observation.
+/// 描述 `work` 且不复制正文；`state` 是当前观测状态。
+/// Returns immutable routing identity for the remaining-work summary.
+/// 返回剩余工作摘要所需的不可变路由身份。
+fn work_summary(work: &PendingWork, state: &str) -> Value {
+    json!({"work_id":work.id,"session_id":work.target.session_id,"state":state,
+        "kind":match &work.kind { WorkKind::Question(_) => "question", WorkKind::Child(_) => "child_task", WorkKind::Task(_) => "session_task" }})
+}
+
+/// Reads actionable inbox and current-turn reply obligations at the frozen `api_seq` frontier.
+/// 在冻结的 `api_seq` 前沿读取可处理收件与当前回合待答事项。
+/// Returns source state, message identities, unanswered accepted questions, and user interruption.
+/// 返回来源状态、消息身份、已接纳未回答问题以及用户插队事实。
+fn inbox_snapshot(
+    invocation: &ValidatedInvocation,
+    api_seq: Option<vulcan_session_core::v1::ids::Seq>,
+) -> Result<(CollaborationState, Vec<Value>, Vec<Value>, bool), String> {
+    invocation.source_handle.read(|document| {
+        // Child results already exist as model-visible durable events.
+        // 子任务结果已经作为模型可见可靠事件存在。
+        let mut messages = projection::inbox_messages(document)?;
+        for event in document.events().iter().filter(|event| api_seq.is_some_and(|seq| event.seq > seq)) {
+            if let EventBody::SubagentReturn(child) = &event.event {
+                messages.push(json!({"kind":"task_result","execution_id":child.child_root_action_id,"session_id":child.child_session_id,"outcome":"completed"}));
+            }
+        }
+        // Only questions delivered into this turn require attention before another blocking wait.
+        // 只有已投递到此回合的问题要求在再次阻塞等待前处理。
+        let questions = document.collaboration_state().inbound_deliveries.values().filter(|inbound|
+            matches!(inbound.state, CollaborationDeliveryState::Accepted | CollaborationDeliveryState::Projected) && inbound.settlement.is_none()
+            && (inbound.bound_turn_id.is_some_and(|turn| turn.value() == invocation.source_turn_id)
+                || document.collaboration_state().question_executions.values().any(|execution|
+                    execution.question_id == inbound.question_id
+                    && execution.state == CollaborationQuestionExecutionState::Running
+                    && execution.execution_turn_id.is_some_and(|turn| turn.value() == invocation.source_turn_id))))
+            .map(|inbound| json!({"question_id":inbound.question_id,"session_id":inbound.source.session_id,"action":"reply_question"})).collect();
+        // Human future queueing does not interrupt this turn.
+        // 用户未来任务排队不打断此回合。
+        let interrupted = document.active_api().is_none_or(|api| Some(api.api_call_id) != invocation.source_api_call_id)
+            || document.metadata.input_state.pending_in_turn_inputs.iter().any(|input| input.turn_id.value() == invocation.source_turn_id);
+        Ok((document.collaboration_state().clone(), messages, questions, interrupted))
+    }).map_err(|error| error.to_string())?
+}
+
+/// Checks one exact work item; errors remain local to this target and never prove abandonment.
+/// 检查一个精确工作项；错误只属于此目标，绝不证明执行中断。
+/// Returns live ownership and a terminal observation, or a retryable check failure.
+/// 返回实际存活与终态观测，或可重试的检查失败。
+async fn inspect_work(
+    invocation: &ValidatedInvocation,
+    work: &PendingWork,
+) -> Result<(bool, Option<Value>), String> {
+    let session_id = Uuid::parse_str(&work.target.session_id).map_err(|error| error.to_string())?;
+    // Resolve only the source-owned participant; later canonical gates recheck its ownership.
+    // 仅解析来源拥有的参与者；后续规范锁内重新检查其所有权。
+    let target = match participants::load_participant_handle(invocation, &work.target).await {
+        Ok(target) => Some(target),
+        Err(error) => {
+            // Absence is an independent typed storage fact, never inferred from a read error.
+            // 缺失是独立的强类型存储事实，绝不从读取错误推断。
+            if has_live_owner(invocation, session_id)?
+                || !participants::participant_storage_missing(invocation, &work.target).await?
+            {
+                return Err(error);
+            }
+            None
+        }
+    };
+    if let Some(target) = &target {
+        // Live requests need only resident facts; reconstruct full history only for terminal repair.
+        // 活动请求只需常驻事实；仅在终态修复时重建完整历史。
+        let execution_live = match &work.kind {
+            WorkKind::Child(record) => has_live_child_owner(invocation, record, false)?,
+            _ => has_live_owner(invocation, session_id)?,
+        };
+        let repair_results = !execution_live
+            || target
+                .read(|document| {
+                    document.active_turn().is_some_and(|turn| turn.closed)
+                        || match &work.kind {
+                            WorkKind::Task(delivery_id) => document
+                                .collaboration_state()
+                                .task_results
+                                .contains_key(delivery_id),
+                            _ => false,
+                        }
+                })
+                .map_err(|error| error.to_string())?;
+        if repair_results {
+            task_results::reconcile_task_results_for_session(&invocation.state, session_id).await?;
+        }
+        if matches!(&work.kind, WorkKind::Question(_)) {
+            question_failures::reconcile_stopped_question_deliveries_for_session(
+                &invocation.state,
+                session_id,
+            )
+            .await?;
+        }
+        if repair_results && let WorkKind::Child(record) = &work.kind {
+            let root_id = Uuid::parse_str(&record.child.root_session_id)
+                .map_err(|error| error.to_string())?;
+            let root = invocation
+                .registry
+                .get(root_id)
+                .map_err(|error| error.to_string())?;
+            let generation = root
+                .read(|document| document.segment_generation())
+                .map_err(|error| error.to_string())?;
+            startup_recovery::native_results::recover_terminal_returns(
+                &invocation.state,
+                &invocation.registry,
+                root,
+                generation,
+                invocation.source_handle.clone(),
+                target.clone(),
+                vec![record.clone()],
+            )
+            .await?;
+        }
+    }
+    let task_target = if matches!(&work.kind, WorkKind::Task(_)) {
+        target.as_ref().map(|target| target.session_id())
+    } else {
+        None
+    };
+    let (live, report) = observe_work(invocation, work.clone(), target).await?;
+    if !live && let Some(target_id) = task_target {
+        task_results::reconcile_task_results_for_session(&invocation.state, target_id).await?;
+    }
+
+    Ok((live, report))
 }
 
 /// Waits for any actionable inbox fact, or returns immediately when no associated work remains live.
@@ -389,11 +553,13 @@ pub(super) async fn wait_agents_result(
     invocation: &ValidatedInvocation,
     timeout_ms: u64,
 ) -> Result<Value, String> {
+    // One absolute budget bounds re-observation even when publications keep changing.
+    // 一个绝对预算约束重新观测，即使发布不断变化也不延长等待。
     let deadline = tokio::time::Instant::now()
         .checked_add(std::time::Duration::from_millis(timeout_ms))
         .ok_or_else(|| String::from("agent wait timeout exceeds runtime range"))?;
-    // Historical acknowledgements and the frozen request frontier do not change within this invocation.
-    // 历史确认与冻结请求边界在本次调用内不会变化。
+    // The frozen request frontier identifies messages not already included in this model request.
+    // 冻结的请求前沿标识尚未包含在本次模型请求中的消息。
     let (api_seq, reported) = invocation
         .source_handle
         .read_full_durable(|document| {
@@ -413,10 +579,9 @@ pub(super) async fn wait_agents_result(
             )
         })
         .map_err(|error| error.to_string())?;
-    // Always inspect ownership once, but bound retries caused by concurrent durable changes.
-    // 始终检查一次所有权，但限制并发可靠状态变化引起的重试时间。
-    let mut observed = false;
     loop {
+        // Only the canonical owner may observe or reconcile this inbox.
+        // 只有规范所有者可以观测或对账此收件箱。
         let canonical = invocation
             .registry
             .get(invocation.source_session_id)
@@ -424,166 +589,112 @@ pub(super) async fn wait_agents_result(
         if !Arc::ptr_eq(&canonical, &invocation.source_handle) {
             return Err("Agent wait owner was replaced.".into());
         }
-        let (state, messages, interrupted) = invocation.source_handle.read(|document| {
-            // Child final output is already a provider-visible durable event, not a separate mailbox copy.
-            // 子最终输出已经是供应商可见的可靠事件，不是另一份邮箱副本。
-            let mut messages = projection::inbox_messages(document)?;
-            for event in document.events().iter().filter(|event| api_seq.is_some_and(|seq| event.seq > seq)) {
-                if let EventBody::SubagentReturn(child) = &event.event {
-                    messages.push(json!({"kind":"task_result","execution_id":child.child_root_action_id,"session_id":child.child_session_id,"outcome":"completed"}));
-                }
-            }
-            // Human interjections release the wait; queued future tasks deliberately do not.
-            // 用户回合内插队解除等待；未来任务排队刻意不解除。
-            let interrupted = document.active_api().is_none_or(|api| Some(api.api_call_id) != invocation.source_api_call_id)
-                || document.metadata.input_state.pending_in_turn_inputs.iter().any(|input| input.turn_id.value() == invocation.source_turn_id);
-            Ok::<_, String>((document.collaboration_state().clone(), messages, interrupted))
-        }).map_err(|error| error.to_string())??;
-        if interrupted {
-            return Ok(json!({"status":"interrupted", "interrupted":true,
-                "context_messages_pending":!messages.is_empty(), "messages":messages, "reports":[],
-                "operation_id":invocation.operation_id}));
-        }
-        let ready = !messages.is_empty();
+        // Refresh messages and question obligations from one source snapshot.
+        // 从同一来源快照刷新消息与待答问题。
+        let (state, _, _, interrupted) = inbox_snapshot(invocation, api_seq)?;
+        // Source failure reports are durable; external inspection errors are deliberately not acknowledged.
+        // 来源失败报告可靠持久化；外部检查错误刻意不确认。
         let mut reports = failed_questions(&state, &reported);
-        // Lost child ownership is a durable terminal, so a cancelled wait can report it on retry.
-        // 丢失子所有权是可靠终态，因此取消的等待可在重试时报告它。
         for child in state
             .child_tasks
             .values()
             .filter(|child| child.state == CollaborationChildTaskState::Terminal)
         {
+            // A cancelled earlier wait still needs to report its durably released child.
+            // 被取消的先前等待仍需要报告已经可靠释放的子任务。
             let operation = CollaborationOperationId::try_new(format!(
                 "wait-lost-child:{}",
                 child.execution_id.as_str()
             ))
             .map_err(|error| error.to_string())?;
             let id = format!("child:{}", child.execution_id.as_str());
-            if state.operations.contains_key(&operation) && !reported.contains(&id) {
+            if state.operations.contains_key(&operation) {
                 let stopped = child.terminal_outcome == Some(vulcan_session_core::v1::collaboration::CollaborationChildTaskTerminalOutcome::Stopped);
-                reports.push(json!({"work_id":id,"session_id":child.child.session_id,"outcome":if stopped {"stopped"} else {"abandoned"},
-                    "reason":if stopped {"user_stopped"} else {"execution_not_running"}}));
+                reports.extend(unreported(json!({"work_id":id,"session_id":child.child.session_id,"outcome":if stopped {"stopped"} else {"abandoned"},
+                    "reason":if stopped {"user_stopped"} else {"execution_not_running"}}), &reported));
             }
         }
-        // Ready messages win over stale target observations and require no remote storage reads.
-        // 就绪消息优先于过期目标观测，且不需要读取远端存储。
-        if ready {
-            return Ok(
-                json!({"status":"messages", "context_messages_pending":true, "messages":messages,"reports":reports,
-                "operation_id":invocation.operation_id}),
-            );
-        }
-        if observed && reports.is_empty() && tokio::time::Instant::now() >= deadline {
-            return Ok(json!({"status":"timeout", "context_messages_pending":false,
-                "messages":[], "reports":[], "operation_id":invocation.operation_id}));
-        }
-        observed = true;
-        let mut active = 0;
+        // Every exit includes the same work summary; unknown work is never counted as completed.
+        // 每个出口包含同样的工作摘要；未知工作绝不计为完成。
+        let mut remaining = Vec::new();
+        // Target-local failures must not hide another participant's ready message.
+        // 目标局部失败不得隐藏其他参与者的就绪消息。
+        let mut errors = Vec::new();
         for work in pending_work(&state) {
-            if reported.contains(&work.id) && !matches!(&work.kind, WorkKind::Child(_)) {
+            // User interruption takes precedence over remote reads and durable repair.
+            // 用户插队优先于远端读取与可靠修复。
+            if interrupted {
+                remaining.push(work_summary(&work, "unchecked"));
                 continue;
             }
-            let session_id =
-                Uuid::parse_str(&work.target.session_id).map_err(|error| error.to_string())?;
-            // Resolve only the source-owned participant; later canonical gates recheck its ownership.
-            // 仅解析来源拥有的参与者；后续规范锁内重新检查其所有权。
-            let target = match participants::load_participant_handle(invocation, &work.target).await
-            {
-                Ok(target) => Some(target),
+            match inspect_work(invocation, &work).await {
+                Ok((true, _)) => remaining.push(work_summary(&work, "running")),
+                Ok((false, report)) => {
+                    // Acknowledging an observation suppresses only repetition, never future liveness checks.
+                    // 确认观测仅抑制重复报告，绝不抑制今后的存活检查。
+                    if let Some(report) = report {
+                        reports.extend(unreported(report, &reported));
+                    }
+                }
                 Err(error) => {
-                    tracing::warn!(%session_id, %error, "Unified wait target cannot be resolved");
-                    None
+                    remaining.push(work_summary(&work, "check_failed"));
+                    errors.push(
+                        json!({"work_id":work.id,"session_id":work.target.session_id,
+                        "code":"target_check_failed","retryable":true,"detail":error}),
+                    );
                 }
-            };
-            if let Some(target) = &target {
-                // Live requests need only resident facts; reconstruct full history only for terminal repair.
-                // 活动请求只需常驻事实；仅在终态修复时重建完整历史。
-                let execution_live = match &work.kind {
-                    WorkKind::Child(record) => has_live_child_owner(invocation, record, false)?,
-                    _ => has_live_owner(invocation, session_id)?,
-                };
-                let repair_results = !execution_live
-                    || target
-                        .read(|document| {
-                            document.active_turn().is_some_and(|turn| turn.closed)
-                                || match &work.kind {
-                                    WorkKind::Task(delivery_id) => document
-                                        .collaboration_state()
-                                        .task_results
-                                        .contains_key(delivery_id),
-                                    _ => false,
-                                }
-                        })
-                        .map_err(|error| error.to_string())?;
-                if repair_results {
-                    task_results::reconcile_task_results_for_session(&invocation.state, session_id)
-                        .await?;
-                }
-                if matches!(&work.kind, WorkKind::Question(_)) {
-                    question_failures::reconcile_stopped_question_deliveries_for_session(
-                        &invocation.state,
-                        session_id,
-                    )
-                    .await?;
-                }
-                if repair_results && let WorkKind::Child(record) = &work.kind {
-                    let root_id = Uuid::parse_str(&record.child.root_session_id)
-                        .map_err(|error| error.to_string())?;
-                    let root = invocation
-                        .registry
-                        .get(root_id)
-                        .map_err(|error| error.to_string())?;
-                    let generation = root
-                        .read(|document| document.segment_generation())
-                        .map_err(|error| error.to_string())?;
-                    startup_recovery::native_results::recover_terminal_returns(
-                        &invocation.state,
-                        &invocation.registry,
-                        root,
-                        generation,
-                        invocation.source_handle.clone(),
-                        target.clone(),
-                        vec![record.clone()],
-                    )
-                    .await?;
-                }
-            }
-            let already_reported = reported.contains(&work.id);
-            let task_target = if matches!(&work.kind, WorkKind::Task(_)) {
-                target.as_ref().map(|target| target.session_id())
-            } else {
-                None
-            };
-            let (live, report) = observe_work(invocation, work, target).await?;
-            if !live && let Some(target_id) = task_target {
-                task_results::reconcile_task_results_for_session(&invocation.state, target_id)
-                    .await?;
-            }
-            if live {
-                active += 1;
-            }
-            if !already_reported && let Some(report) = report {
-                reports.push(report);
             }
         }
-        // Publication may have raced liveness inspection; re-read the inbox before reporting lost work.
-        // 发布可能与存活检查竞态；报告工作丢失前重新读取收件箱。
-        let changed = invocation
-            .source_handle
-            .read(|document| document.collaboration_state() != &state)
-            .map_err(|error| error.to_string())?;
-        if changed {
+        // Re-read after reconciliation so a produced terminal or concurrently received question is returned now.
+        // 对账后重新读取，立即返回刚产生的终态或并发收到的问题。
+        let (current, messages, questions, fresh_interrupted) =
+            inbox_snapshot(invocation, api_seq)?;
+        if current != state
+            && !interrupted
+            && !fresh_interrupted
+            && tokio::time::Instant::now() < deadline
+        {
             continue;
         }
-        if ready || !reports.is_empty() || active == 0 || tokio::time::Instant::now() >= deadline {
-            return Ok(
-                json!({"status": if ready || !reports.is_empty() {"messages"} else if active == 0 {"no_pending_work"} else {"timeout"},
-                "context_messages_pending":ready,"messages":messages,"reports":reports,"pending_work_count":active,
-                "operation_id":invocation.operation_id}),
-            );
+        if current != state {
+            // An exhausted budget returns an honest unchecked snapshot instead of stale completion claims.
+            // 预算耗尽时返回真实的未检查快照，而非过期的完成断言。
+            remaining = pending_work(&current)
+                .iter()
+                .map(|work| work_summary(work, "unchecked"))
+                .collect();
+            errors.retain(|error| {
+                remaining
+                    .iter()
+                    .any(|work| work["work_id"] == error["work_id"])
+            });
         }
-        // Periodic ownership reconciliation covers lost stop notifications without model-side polling.
-        // 周期性所有权对账覆盖丢失的停止通知，无需模型侧轮询。
+        // Fresh source facts are authoritative even on timeout and user interruption.
+        // 即使超时或用户插队，新来源事实仍是权威。
+        let interrupted = interrupted || fresh_interrupted;
+        let status = if interrupted {
+            "interrupted"
+        } else if !messages.is_empty() || !reports.is_empty() {
+            "messages"
+        } else if !questions.is_empty() {
+            "needs_reply"
+        } else if !errors.is_empty() {
+            "check_failed"
+        } else if remaining.is_empty() {
+            "no_pending_work"
+        } else {
+            "timeout"
+        };
+        if status != "timeout" || tokio::time::Instant::now() >= deadline {
+            return Ok(json!({
+                "status":status, "interrupted":interrupted,
+                "context_messages_pending":!messages.is_empty(), "messages":messages, "reports":reports,
+                "pending_work_count":remaining.iter().filter(|work| work["state"] == "running").count(),
+                "unverified_work_count":remaining.iter().filter(|work| work["state"] != "running").count(),
+                "remaining_work":remaining, "pending_questions":questions, "check_errors":errors,
+                "operation_id":invocation.operation_id
+            }));
+        }
         tokio::time::sleep(
             deadline
                 .saturating_duration_since(tokio::time::Instant::now())

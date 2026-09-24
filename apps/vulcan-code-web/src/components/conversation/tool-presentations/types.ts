@@ -621,6 +621,12 @@ export interface SubagentOrchestrationPresentation {
   // Whether a wait_agent call ended by timeout.
   // wait_agent 调用是否因超时结束。
   timedOut?: boolean | null;
+  // An incoming unanswered question requires a tool reply before another blocking wait.
+  // 传入未回答问题要求先通过工具回复，再进行下一次阻塞等待。
+  waitNeedsReply?: boolean;
+  // Target state could not be verified; this is not task completion or an ongoing wait.
+  // 无法验证目标状态；这不表示任务完成或仍在等待。
+  waitCheckFailed?: boolean;
   // Whether wait_agent returned immediately because no active child or queued feedback exists.
   // wait_agent 是否因为不存在活动子代理或排队反馈而立即返回。
   noActiveAgents?: boolean;

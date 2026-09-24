@@ -88,6 +88,8 @@ export function resolveSubagentOrchestrationPresentation(
     stoppedTaskIds: operationStopsAgents ? stoppedTaskIds(payload) : [],
     target: subagentTarget(args, payload),
     timedOut: operation === "wait" ? waitTimedOut(payload) : null,
+    waitNeedsReply: operation === "wait" && isUnifiedWaitPayload(payload) && payload?.status === "needs_reply",
+    waitCheckFailed: operation === "wait" && isUnifiedWaitPayload(payload) && payload?.status === "check_failed",
     noActiveAgents: operation === "wait" ? subagentWaitHasNoActiveAgents(payload) : false,
     interrupted: operation === "wait" ? booleanValue(payload?.interrupted) : null,
     terminalEventReceived: operation === "wait" ? subagentWaitTerminalEventReceived(payload) : false,
@@ -169,6 +171,10 @@ function mergeSubagentPayload(
     timedOut: presentation.operation === "wait"
       ? waitTimedOut(payload) ?? presentation.timedOut
       : presentation.timedOut,
+    waitNeedsReply: presentation.operation === "wait" && isUnifiedWaitPayload(payload)
+      ? payload.status === "needs_reply" : presentation.waitNeedsReply,
+    waitCheckFailed: presentation.operation === "wait" && isUnifiedWaitPayload(payload)
+      ? payload.status === "check_failed" : presentation.waitCheckFailed,
     noActiveAgents: presentation.operation === "wait"
       ? subagentWaitHasNoActiveAgents(payload) || presentation.noActiveAgents
       : presentation.noActiveAgents,
@@ -629,7 +635,8 @@ function subagentWaitHasNoActiveAgents(
 function isUnifiedWaitPayload(payload: Record<string, unknown> | null): boolean {
   return payload !== null && Array.isArray(payload.reports)
     && typeof payload.context_messages_pending === "boolean"
-    && (payload.status === "messages" || payload.status === "timeout" || payload.status === "no_pending_work" || payload.status === "interrupted");
+    && (payload.status === "messages" || payload.status === "timeout" || payload.status === "no_pending_work" || payload.status === "interrupted"
+      || payload.status === "needs_reply" || payload.status === "check_failed");
 }
 
 // waitTimedOut reads the declared unified result or the existing native mailbox contract.

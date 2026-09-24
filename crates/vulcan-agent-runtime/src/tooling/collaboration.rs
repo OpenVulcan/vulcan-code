@@ -441,7 +441,7 @@ pub fn build_agent_collaboration_tool_candidates(
         build_command_candidate(
             runtime.clone(),
             WAIT_AGENTS_RESULT_TOOL_ID,
-            "Wait for any agent question, answer, notification or task result addressed to this session. Messages arrive through the host-tagged context after this tool returns; do not read another session to reconstruct them. No target or revision cursor is required. Returns immediately when no related work can still produce a result. Stopped or lost executions are reported explicitly. Timeout only ends this wait and never cancels work.",
+            "Wait for any agent question, answer, notification or task result addressed to this session. Messages arrive through the host-tagged context after this tool returns; do not read another session to reconstruct them. No target or revision cursor is required. Every return includes remaining_work, pending_questions and check_errors: messages means partial inbox delivery, not that all work completed. On needs_reply, answer the incoming question with reply_question (or explicitly unable) before waiting again; this prevents circular waits. On check_failed, the target's state is unknown, not abandoned: report or investigate the error instead of tight polling. No pending work returns immediately; stopped or lost executions are reported explicitly. Timeout ends only this wait and never cancels work.",
             wait_agents_result_args_schema(),
             VulcanPlanToolPolicy::Visible,
             parse_wait_agents_result,

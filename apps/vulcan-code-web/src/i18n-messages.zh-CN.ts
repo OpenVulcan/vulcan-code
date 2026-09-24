@@ -1471,6 +1471,8 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "conversation.subagent.detail.message": "向智能体发送消息",
     "conversation.subagent.detail.wait": "等待智能体消息",
     "conversation.subagent.detail.waitPending": "等待中",
+    "conversation.subagent.detail.waitNeedsReply": "有问题需要智能体回复",
+    "conversation.subagent.detail.waitCheckFailed": "目标状态暂时无法确认",
     "conversation.subagent.detail.waitCompleted": "已收到智能体消息",
     "conversation.subagent.detail.waitInterrupted": "等待已被打断",
     "conversation.subagent.detail.waitTimedOut": "等待超时",

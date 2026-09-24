@@ -500,6 +500,12 @@ function subagentWaitStatusText(
 ): string {
   // Unified inbox outcomes are host-owned; delivery receipts are not completion signals.
   // 统一收件结果由宿主拥有，投递回执不是完成信号。
+  if (payload?.status === "needs_reply") {
+    return text(t, "conversation.subagent.detail.waitNeedsReply", "Incoming question needs a reply");
+  }
+  if (payload?.status === "check_failed") {
+    return text(t, "conversation.subagent.detail.waitCheckFailed", "Target state could not be checked");
+  }
   if (payload?.status === "messages") {
     return text(t, "conversation.subagent.detail.waitCompleted", "Agent message received");
   }

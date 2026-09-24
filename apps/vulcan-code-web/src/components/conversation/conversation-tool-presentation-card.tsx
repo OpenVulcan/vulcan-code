@@ -2346,6 +2346,12 @@ function subagentWaitStatusText(
   // 翻译辅助函数。
   t: (key: TranslationKey) => string,
 ): string {
+  if (presentation.waitNeedsReply) {
+    return t("conversation.subagent.detail.waitNeedsReply");
+  }
+  if (presentation.waitCheckFailed) {
+    return t("conversation.subagent.detail.waitCheckFailed");
+  }
   if (presentation.noActiveAgents) {
     return t("conversation.subagent.detail.noPendingWork");
   }

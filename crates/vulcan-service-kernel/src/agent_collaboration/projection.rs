@@ -2,6 +2,9 @@
 //! 经过来源核验的投递，进入下一合法 Provider 请求边界。
 
 use super::*;
+
+#[cfg(test)]
+mod tests;
 use vulcan_session_core::v1::collaboration::{
     CollaborationAnswerDeliveryState, CollaborationDeliveryFailureReason,
     CollaborationInboundDeliveryRecord, CollaborationInboundNotificationRecord,
@@ -9,6 +12,15 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationTaskMessageEffectKind, FailAnswerDeliveryInput, FailDeliveryInput,
     FailNotificationInput, RecordNotificationProgressInput,
 };
+
+/// Maximum stage notifications admitted at one provider boundary.
+/// 一次供应商边界接纳的阶段通知最大条数。
+const NOTIFICATION_BATCH_LIMIT: usize = 8;
+
+/// One batch shares a single envelope-sized body budget instead of multiplying it by notification count.
+/// 一批共享单个信封大小的正文预算，避免按通知数量倍增。
+const NOTIFICATION_BATCH_BYTES: usize =
+    vulcan_ai_contract::host_message::HOST_MESSAGE_MAX_BODY_BYTES;
 
 /// One durable incoming fact ordered by its local acceptance sequence.
 /// 按本地接纳序号排序的一条持久传入事实。
@@ -147,8 +159,31 @@ fn pending_projections(
             ));
         }
     }
-    pending.sort_by_key(|(seq, _)| *seq);
-    Ok(pending.into_iter().map(|(_, fact)| fact).collect())
+    // Questions and terminal results precede stage updates; sequence remains stable within each class.
+    // 问题与最终结果先于阶段更新；各类内部序号顺序保持稳定。
+    pending.sort_by_key(|(seq, fact)| (matches!(fact, PendingProjection::Notification(_)), *seq));
+    // Retain excess notifications as Accepted; this selector never marks deferred bodies delivered.
+    // 超额通知保持已接纳；此选择器绝不把延后正文标记为已投递。
+    let mut notification_count = 0;
+    let mut notification_bytes = 0;
+    let mut notification_batch_full = false;
+    Ok(pending
+        .into_iter()
+        .filter_map(|(_, fact)| {
+            if let PendingProjection::Notification(notification) = &fact {
+                if notification_batch_full
+                    || notification_count >= NOTIFICATION_BATCH_LIMIT
+                    || notification_bytes + notification.body.len() > NOTIFICATION_BATCH_BYTES
+                {
+                    notification_batch_full = true;
+                    return None;
+                }
+                notification_count += 1;
+                notification_bytes += notification.body.len();
+            }
+            Some(fact)
+        })
+        .collect())
 }
 
 /// Reports actionable inbox readiness through the same selector used for actual context delivery.

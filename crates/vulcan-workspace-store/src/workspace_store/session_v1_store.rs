@@ -151,6 +151,14 @@ pub struct SessionV1StorageLocator {
 }
 
 impl SessionV1StorageLocator {
+    /// Checks the exact metadata file without parsing it or changing storage.
+    /// 检查精确元数据文件，不解析或修改存储。
+    /// Returns false only for a missing path; malformed file types and I/O failures remain errors.
+    /// 仅路径不存在时返回假；异常文件类型及读写失败仍返回错误。
+    pub fn metadata_exists(&self) -> Result<bool, SessionV1StoreError> {
+        exact_metadata_file_exists(self)
+    }
+
     /// Reads only the exact metadata file, validating its contract and locator identity.
     /// 仅读取精确 metadata 文件，校验契约及定位器身份。
     /// Returns metadata without reading runtime, compactions, or interaction segments.
