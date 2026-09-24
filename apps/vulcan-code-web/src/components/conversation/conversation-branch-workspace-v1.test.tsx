@@ -25,6 +25,7 @@ import type { SelectedConversationEventWindowCommands } from "@/service/selected
 import {
   clientActionId,
   type ConversationEventSummary,
+  type CollaborationTaskResult,
 } from "@/service/conversation-event-window-store";
 import type { ConversationSummary } from "@/types";
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
@@ -413,6 +414,58 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(container.querySelector('[data-seq="3"]')).toBeNull();
     expect(container.querySelectorAll("details, .conversation-v1-collaboration-details")).toHaveLength(0);
     expect([...cards].every((card) => card.textContent?.includes("相同消息正文"))).toBe(true);
+  });
+
+  it.each(["branch", "native"] as const)("attaches result receipts to their exact card in %s", (surface) => {
+    // Distinct deliveries may have identical text; only the first receives progress receipts.
+    // 不同投递可以正文相同；此处只有首条收到进度回执。
+    const result: CollaborationTaskResult = {
+      acceptance: { message: { operation_id: "send", delivery_id: "result-one", kind: "task_start", body: "任务",
+        source: { session_id: "source", root_session_id: "source", project_id: "p", segment_generation: 1 },
+        target: { session_id: "target", root_session_id: "target", project_id: "p", segment_generation: 1 } },
+        operation_id: "accept", target_revision: 2, event_seq: 2, accepted_at_ms: 2 },
+      effect: { delivery_id: "result-one", operation_id: "claim", target_revision: 3, event_seq: 3, occurred_at_ms: 3,
+        outcome: { kind: "claimed", execution_id: "execution", turn_id: 2, input_id: 2, input_seq: 4 } },
+      terminal: { turn_id: 2, turn_start_seq: 3, turn_stats_seq: 9, outcome: "completed", completed_at_ms: 9,
+        final_assistant: { api_call_id: 2, api_stats_seq: 7, source_text: { event_seq: 6, text: "相同结果正文" } } },
+      operation_id: "result", target_revision: 6, event_seq: 10, recorded_at_ms: 9,
+    };
+    // Build independent result anchors with exact producer identities.
+    // 使用精确生产者身份构造独立结果锚点。
+    const resultEvent = (seq: number, deliveryId: string): ConversationEventSummary => eventSummary(seq, {
+      kind: "collaboration", version: 1, operation_id: `result-${deliveryId}`, event_kind: "task_result_recorded",
+      after_state: { kind: "task_result", result: { ...result,
+        acceptance: { ...result.acceptance, message: { ...result.acceptance.message, delivery_id: deliveryId } },
+        effect: { ...result.effect, delivery_id: deliveryId } } },
+    }, "host_only");
+    // Receipt progression must preserve both the original result and its timeline position.
+    // 回执进度必须保留原始结果及时间线位置。
+    const acceptance = { result, disclosure: "full" as const, operation_id: "receive", event_seq: 20, receiver_revision: 8, accepted_at_ms: 10 };
+    const acknowledged = eventSummary(3, { kind: "collaboration", version: 1, operation_id: "ack", event_kind: "task_result_acknowledged",
+      after_state: { kind: "task_result_acknowledgement", acknowledgement: { acceptance, operation_id: "ack", event_seq: 3, target_revision: 9, acknowledged_at_ms: 11 } } }, "host_only");
+    const projected = eventSummary(4, { kind: "collaboration", version: 1, operation_id: "project", event_kind: "task_result_projected",
+      after_state: { kind: "task_result_projection", projection: { delivery_id: "result-one", acceptance_seq: 20, turn_id: 1,
+        disclosure: "full", inputs: [{ input_seq: 31, input_id: 4 }], operation_id: "project", event_seq: 4, receiver_revision: 10, projected_at_ms: 12 } } }, "host_only");
+    const events = [resultEvent(1, "result-one"), resultEvent(2, "result-two"), acknowledged, projected,
+      { ...acknowledged, seq: 5 }];
+    for (const length of [2, 3, 4, 5]) {
+      // Both production surfaces must update the owner without emitting receipt-only cards.
+      // 两种生产展示链路都应更新所属卡片，不能生成纯回执卡片。
+      const history = events.slice(0, length);
+      const markup = surface === "branch" ? renderWorkspace(history) : renderToStaticMarkup(
+        <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={history} /></I18nProvider>,
+      );
+      const container = document.createElement("div");
+      container.innerHTML = markup;
+      expect(container.querySelectorAll(".conversation-v1-collaboration-card")).toHaveLength(2);
+      expect(container.querySelector('[data-seq="1"] .conversation-v1-collaboration-badge')?.textContent)
+        .toBe(length === 2 ? "已完成" : length === 3 ? "已完成 · 已送达" : "已完成 · 已加入上下文");
+      expect(container.querySelector('[data-seq="2"] .conversation-v1-collaboration-badge')?.textContent).toBe("已完成");
+      expect(container.querySelector('[data-seq="1"]')?.textContent).toContain("相同结果正文");
+      expect(container.querySelector('[data-seq="2"]')?.textContent).toContain("相同结果正文");
+      expect(markup).not.toContain("任务回执已");
+      expect(markup).not.toContain("已投影");
+    }
   });
 
   it("updates historical question status after settlement without offering cancellation", () => {

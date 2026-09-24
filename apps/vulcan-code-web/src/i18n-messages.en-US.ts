@@ -1555,6 +1555,8 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.status.accepted": "Accepted",
     "conversation.collaboration.status.projected": "Projected",
     "conversation.collaboration.status.resultUnavailable": "Result unavailable after authorization revocation",
+    "conversation.collaboration.status.resultDelivered": "Delivered",
+    "conversation.collaboration.status.resultInContext": "Added to context",
     "conversation.collaboration.status.failed": "Failed",
     "conversation.collaboration.status.reserved": "Reserved",
     "conversation.collaboration.status.active": "Active",

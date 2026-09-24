@@ -1586,6 +1586,8 @@ export type TranslationKey =
   | "conversation.collaboration.status.accepted"
   | "conversation.collaboration.status.projected"
   | "conversation.collaboration.status.resultUnavailable"
+  | "conversation.collaboration.status.resultDelivered"
+  | "conversation.collaboration.status.resultInContext"
   | "conversation.collaboration.status.failed"
   | "conversation.collaboration.status.reserved"
   | "conversation.collaboration.status.active"

@@ -106,7 +106,17 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
     && !isFailedTaskDelivery) || event.event_kind === "child_task_non_success_recorded";
   const participants = collaborationParticipants(afterState);
   const taskMessageEffect = taskMessageId !== null ? collaborationState.taskMessageEffects.get(taskMessageId) : undefined;
-  const status = collaborationStatus(taskMessageEffect ?? afterState, t);
+  // Only result snapshots own result receipts; message cards keep their independent application state.
+  // 只有结果快照承载结果回执，消息卡保留独立的应用状态。
+  const taskResultId = afterState.kind === "task_result" ? afterState.result.effect.delivery_id
+    : afterState.kind === "received_task_result" ? afterState.acceptance.result.effect.delivery_id : null;
+  const resultProgress = taskResultId !== null ? collaborationState.taskResultProgress.get(taskResultId) : undefined;
+  const resultProgressLabel = resultProgress?.kind === "task_result_projection"
+    ? (resultProgress.projection.disclosure === "authorization_revoked"
+      ? t("conversation.collaboration.status.resultUnavailable") : t("conversation.collaboration.status.resultInContext"))
+    : resultProgress?.kind === "task_result_acknowledgement" || afterState.kind === "received_task_result"
+      ? t("conversation.collaboration.status.resultDelivered") : null;
+  const status = [...new Set([collaborationStatus(taskMessageEffect ?? afterState, t), resultProgressLabel].filter(Boolean))].join(" · ");
   const title = isFailedTaskDelivery
     ? t("conversation.collaboration.timeline.taskMessage")
     : collaborationTimelineTitle(event.event_kind, t);

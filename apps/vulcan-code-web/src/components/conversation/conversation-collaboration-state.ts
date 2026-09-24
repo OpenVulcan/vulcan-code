@@ -19,12 +19,15 @@ export interface ConversationCollaborationState {
   /** Application outcomes enrich the original message without replacing its body.
    * 应用结果补充原消息，不替换其正文。 */
   taskMessageEffects: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "task_message_effect" }>>;
+  /** Result transport progress keyed by the original task delivery, separate from business outcomes.
+   * 按原任务投递索引的结果传输进度，与业务结果分离。 */
+  taskResultProgress: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "task_result_acknowledgement" | "task_result_projection" }>>;
 }
 
 /** Shares the exact mounted session's facts with both tool and message cards.
  * 向工具与消息卡片共享精确已挂载会话的事实。 */
 export const ConversationCollaborationStateContext = React.createContext<ConversationCollaborationState>({
-  questions: new Map(), deliveries: new Map(), tasks: new Map(), taskMessages: new Map(), taskMessageEffects: new Map(),
+  questions: new Map(), deliveries: new Map(), tasks: new Map(), taskMessages: new Map(), taskMessageEffects: new Map(), taskResultProgress: new Map(),
 });
 
 /** Folds canonical event order into latest snapshots without modifying persisted history.
@@ -41,12 +44,25 @@ export function projectConversationCollaborationState(events: readonly Conversat
   // 正文与效果快照分开保留，避免纯状态回执擦除消息。
   const taskMessages = new Map<string, Extract<CollaborationAfterState, { kind: "outbound_task_message" | "inbound_task_message" }>>();
   const taskMessageEffects = new Map<string, Extract<CollaborationAfterState, { kind: "task_message_effect" }>>();
+  // Receipts enrich their result card; they never replace the final text or task outcome.
+  // 回执补充所属结果卡，绝不替换最终正文或任务结局。
+  const taskResultProgress = new Map<string, Extract<CollaborationAfterState, { kind: "task_result_acknowledgement" | "task_result_projection" }>>();
   for (const summary of events) {
     if (summary.event.kind !== "collaboration") continue;
     // The discriminant fixes ownership; no chronological-neighbor or name matching is permitted.
     // 判别字段确定归属；不按相邻时间或名称匹配。
     const state = summary.event.after_state;
     switch (state.kind) {
+      case "task_result_acknowledgement":
+        // A delayed acknowledgement cannot regress an already projected result.
+        // 迟到的送达确认不能回退已加入上下文的结果状态。
+        if (taskResultProgress.get(state.acknowledgement.acceptance.result.effect.delivery_id)?.kind !== "task_result_projection") {
+          taskResultProgress.set(state.acknowledgement.acceptance.result.effect.delivery_id, state);
+        }
+        break;
+      case "task_result_projection":
+        taskResultProgress.set(state.projection.delivery_id, state);
+        break;
       case "outbound_task_message":
         taskMessages.set(state.record.message.delivery_id, state);
         break;
@@ -69,5 +85,5 @@ export function projectConversationCollaborationState(events: readonly Conversat
         break;
     }
   }
-  return { questions, deliveries, tasks, taskMessages, taskMessageEffects };
+  return { questions, deliveries, tasks, taskMessages, taskMessageEffects, taskResultProgress };
 }

@@ -185,7 +185,8 @@ describe("ConversationV1DisplayRenderer", () => {
             operation_id: "confirm-result", event_seq: 30, target_revision: 9, acknowledged_at_ms: 11 } },
         }, "host_only")]} />
       </I18nProvider>);
-      expect(confirmed).toContain("任务回执已送达");
+      expect(confirmed).not.toContain("任务回执已送达");
+      expect(confirmed).not.toContain("conversation-v1-collaboration-card");
       expect(confirmed).not.toContain('data-collaboration-card-kind="task-result"');
       expect(confirmed).not.toContain('class="conversation-v1-collaboration-body"');
       expect(confirmed).not.toContain("conversation-v1-collaboration-cancel-button");
@@ -200,12 +201,13 @@ describe("ConversationV1DisplayRenderer", () => {
             receiver_revision: 10, projected_at_ms: 12 } },
         }, "host_only")]} />
       </I18nProvider>);
-      expect(projected).toContain("任务回执已加入上下文");
+      expect(projected).not.toContain("任务回执已加入上下文");
+      expect(projected).not.toContain("conversation-v1-collaboration-card");
       expect(projected).not.toContain('class="conversation-v1-collaboration-body"');
       expect(projected).not.toContain("conversation-v1-collaboration-cancel-button");
       expect(projected).not.toContain("user-bubble");
-      // Revoked result disclosure stays a receipt but names the missing body explicitly.
-      // 撤权后的结果披露仍是回执，但明确说明正文不可用。
+      // A receipt-only window never invents a card, including a redacted projection receipt.
+      // 仅含回执的窗口绝不生成卡片，脱敏投影回执也不例外。
       const revokedProjection = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer events={[summary(33, {
           kind: "collaboration", version: 1, operation_id: "project-revoked-result", event_kind: "task_result_projected",
@@ -214,7 +216,7 @@ describe("ConversationV1DisplayRenderer", () => {
             operation_id: "project-revoked-result", event_seq: 33, receiver_revision: 11, projected_at_ms: 13 } },
         }, "host_only")]} />
       </I18nProvider>);
-      expect(revokedProjection).toContain("授权撤销，结果正文不可用");
+      expect(revokedProjection).not.toContain("conversation-v1-collaboration-card");
       expect(revokedProjection).not.toContain('class="conversation-v1-collaboration-body"');
     }
     // A revoked receipt reports the disclosure state without showing the target's final text.
