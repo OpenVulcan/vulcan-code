@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { ProjectFolderPickerDialog } from "@/components/project/folder-picker-dialog";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -942,7 +943,7 @@ export function KnowledgeBaseArea() {
       </div>
       <div className="knowledge-layout">
         <aside className="knowledge-library-list">
-          {librariesLoading ? <div className="knowledge-sources-state" role="status">{t("knowledge.librariesLoading")}</div> : null}
+          {librariesLoading ? <StreamPlaceholder label={t("knowledge.librariesLoading")} shape="rows" count={4} /> : null}
           {librariesError ? <KnowledgeReadFailure busy={pageBusy || librariesLoading} error={librariesError} onRetry={() => void refreshLibraryList()} /> : null}
           {filteredLibraries.map((library) => (
             <div className={library.id === selectedLibraryId ? "knowledge-library-row active" : "knowledge-library-row"} key={library.id}>
@@ -990,7 +991,7 @@ export function KnowledgeBaseArea() {
                     </span>
                   ) : null}
                 </header>
-                {indexIntegrityLoading ? <div className="knowledge-sources-state">{t("knowledge.indexHealth.loading")}</div> : null}
+                {indexIntegrityLoading ? <StreamPlaceholder label={t("knowledge.indexHealth.loading")} shape="tiles" count={3} /> : null}
                 {indexIntegrityError ? <KnowledgeReadFailure busy={pageBusy || indexIntegrityLoading} error={indexIntegrityError} onRetry={() => void refreshIndexIntegrity(selectedLibrary.id).catch(() => undefined)} /> : null}
                 {!indexIntegrityLoading && indexIntegrity ? (
                   <>
@@ -1040,7 +1041,7 @@ export function KnowledgeBaseArea() {
                     <p>{t("knowledge.sources.description")}</p>
                   </div>
                 </header>
-                {sourcesLoading ? <div className="knowledge-sources-state">{t("knowledge.sources.loading")}</div> : null}
+                {sourcesLoading ? <StreamPlaceholder label={t("knowledge.sources.loading")} shape="rows" count={3} /> : null}
                 {sourcesError ? <KnowledgeReadFailure busy={pageBusy || sourcesLoading} error={sourcesError} onRetry={() => void refreshSources(selectedLibrary.id).catch(() => undefined)} /> : null}
                 {!sourcesLoading && !sourcesError && sources.length === 0 ? <div className="knowledge-sources-state">{t("knowledge.sources.empty")}</div> : null}
                 {!sourcesLoading ? (

@@ -140,6 +140,17 @@
   font-size: 12px;
 }
 
+/* A loading folder shows indented shimmer lines where its children will appear. */
+/* 正在加载的目录在子项将出现的位置显示缩进的流光行。 */
+.diff-file-tree-placeholder {
+  gap: 8px;
+  padding: 6px 10px 8px 26px;
+}
+
+.diff-file-tree-placeholder .vcn-shimmer {
+  height: 9px;
+}
+
 .diff-file-tree-node {
   min-width: 0;
 }

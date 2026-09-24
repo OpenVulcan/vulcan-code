@@ -1,5 +1,6 @@
 import * as React from "react";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
+import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Archive, ArrowUp, Check, ChevronRight, FileArchive, Folder, FolderOpen, HardDrive, RefreshCw, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -176,7 +177,7 @@ export function KnowledgePackagePickerDialog(props: {
             ))}
           </aside>
           <section className="project-folder-picker-directory">
-            <div className="project-folder-picker-current"><FolderOpen size={16} /><span>{listing?.directory.path ?? t("workspaceFiles.loading")}</span></div>
+            <div className="project-folder-picker-current"><FolderOpen size={16} /><span>{listing?.directory.path ?? <InlineStreamPlaceholder label={t("workspaceFiles.loading")} />}</span></div>
             <div className="project-folder-picker-list" role="list">
               {listing?.directory.entries.map((entry) => (
                 <button className="project-folder-picker-row" disabled={loading || submitting} key={entry.path} onClick={() => void loadDirectory(entry.path)} type="button"><Folder size={16} /><span>{entry.name}</span></button>

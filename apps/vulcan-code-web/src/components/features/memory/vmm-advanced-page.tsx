@@ -2,6 +2,7 @@ import * as React from "react"
 import { Database, Save, Settings2, Stethoscope, Unplug } from "lucide-react"
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -174,7 +175,7 @@ export function NativeFixedProjectSelect({ disabled, label, onChange, onRunActio
     <Combobox ariaLabel={label} disabled={disabled || loading || catalog === null} options={options}
       placeholder={t("memory.profile.selectProject")} searchPlaceholder={t("memory.profile.searchProject")}
       emptyText={t("memory.profile.noProject")} onValueChange={onChange} value={value} />
-    {loading ? <p role="status" className="text-xs text-muted-foreground">{t("memory.advanced.catalogLoading")}</p> : null}
+    {loading ? <StreamPlaceholder label={t("memory.advanced.catalogLoading")} count={2} /> : null}
     {failed ? <div className="space-y-2">
       <p role="alert" className="text-sm text-destructive">{t("memory.advanced.catalogFailed")}</p>
       <Button type="button" variant="outline" disabled={disabled || loading} onClick={() => void load()}>{t("memory.advanced.catalogRetry")}</Button>

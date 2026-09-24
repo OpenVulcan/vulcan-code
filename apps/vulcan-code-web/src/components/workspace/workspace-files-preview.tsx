@@ -13,6 +13,7 @@ import {
 import { escapeHtml, tokenSpansToHtml } from "@/diff/diff-shiki-shared";
 import type { DiffFile, DiffLine } from "@/diff/types";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { workspaceFileTreeExtensionLabel } from "@/components/workspace/WorkspaceFileTreeDrawer";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/types";
@@ -75,7 +76,7 @@ export function WorkspaceFilePreview(props: {
     );
   }
   if (props.loading) {
-    return <div className="workspace-file-preview empty" role="status">{t("workspaceFilePreview.loading")}</div>;
+    return <div className="workspace-file-preview"><StreamPlaceholder className="p-4" label={t("workspaceFilePreview.loading")} count={8} /></div>;
   }
   if (props.error) {
     return <div className="workspace-file-preview empty error" role="alert">

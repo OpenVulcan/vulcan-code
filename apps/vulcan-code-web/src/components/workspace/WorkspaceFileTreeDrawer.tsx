@@ -1,4 +1,5 @@
 import React from "react";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { ChevronDown, ChevronRight, FileWarning, Folder, ListCollapse, ListTree, Search } from "lucide-react";
 import { useI18n } from "@/i18n";
 
@@ -439,7 +440,7 @@ function WorkspaceFileTreeNodeView<RowFile>(props: {
           />
         )) : null}
         {isOpen && isLoading ? (
-          <div className="diff-file-tree-empty">{props.loadingDirectoryLabel ?? t("workspaceFiles.loading")}</div>
+          <StreamPlaceholder className="diff-file-tree-placeholder" label={props.loadingDirectoryLabel ?? t("workspaceFiles.loading")} count={3} />
         ) : null}
         {isOpen && !isLoading && props.node.children.length === 0 && props.emptyDirectoryLabel ? (
           <div className="diff-file-tree-empty">{props.emptyDirectoryLabel}</div>

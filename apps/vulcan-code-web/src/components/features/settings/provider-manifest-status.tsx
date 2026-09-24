@@ -21,6 +21,7 @@ import type {
   ProviderSyncReport,
 } from "@/types"
 import { Badge } from "@/components/ui/badge"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
 import { DisclosureSection } from "@/components/ui/disclosure"
 import {
@@ -345,7 +346,7 @@ export function ProviderManifestStatusPanel() {
       ) : null}
 
       {!statuses ? (
-        <div className="mt-3 text-sm text-muted-foreground">加载中…</div>
+        <StreamPlaceholder className="mt-3" label="加载中…" shape="rows" count={3} />
       ) : statuses.length === 0 ? (
         <div className="mt-3 text-sm text-muted-foreground">暂无系统供应商。</div>
       ) : (

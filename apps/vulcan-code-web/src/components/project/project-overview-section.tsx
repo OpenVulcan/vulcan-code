@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ArrowRight, Copy, FolderCog } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { InlineDisclosure } from "@/components/ui/disclosure";
 import { useI18n } from "@/i18n";
 import { listProjectKnowledgeBindings, subscribeKnowledgeProjectBindingsChanged } from "@/service/knowledge-base-service";
@@ -132,7 +133,7 @@ export function ProjectOverviewSection(props: {
       : <p key={issue}>{issue}</p>)}</div> : null}
     <div className="project-overview-capabilities">
       <section><div><strong>{t("projectSettings.vmmMemory")}</strong>
-        {props.vmmLoading ? <p>{t("projectOverview.memoryLoading")}</p> : props.vmmDraft === null ? <p>{t("projectOverview.memoryUnknown")}</p> : <>
+        {props.vmmLoading ? <StreamPlaceholder label={t("projectOverview.memoryLoading")} count={2} /> : props.vmmDraft === null ? <p>{t("projectOverview.memoryUnknown")}</p> : <>
           <p>{t(props.vmmDraft.backendMode === "native" ? "projectOverview.native" : "projectOverview.external")} · {t(props.vmmDraft.enabled ? "projectOverview.enabled" : "projectOverview.disabled")} · {t(props.vmmDraft.hasOverride ? "projectOverview.override" : "projectOverview.inherited")}{props.vmmDirty ? ` · ${t("projectOverview.unsaved")}` : ""}</p>
           <p>{props.vmmDraft.backendMode === "native" ? nativeCatalog?.value ? binding
             ? t("projectOverview.nativeBinding").replace("{name}", owner ? owner.name : t("projectOverview.ownerUnknown")).replace("{id}", String(binding.ownerProjectId)).replace("{count}", String(binding.linkedProjectIds.length))
@@ -149,8 +150,8 @@ export function ProjectOverviewSection(props: {
       </div>{openAction("code-context", t("projectOverview.codeSettings"))}</section>
       <section><div><strong>{t("projectSettings.knowledgeBases")}</strong><p>{projectKnowledge?.rows
         ? t("projectOverview.knowledgeCount").replace("{total}", String(projectKnowledge.rows.length)).replace("{enabled}", String(projectKnowledge.rows.filter((item) => item.defaultEnabled).length))
-        : t(projectKnowledge?.error ? "projectOverview.knowledgeFailed" : "projectOverview.knowledgeLoading")}</p></div>{openAction("knowledge-bases", t("projectOverview.knowledgeSettings"))}</section>
-      <section><div><strong>{t("projectSettings.agentTitle")}</strong><p>{props.agentLoading ? t("projectOverview.skillsLoading") : !props.agentLoaded ? t("projectOverview.skillsUnknown")
+        : projectKnowledge?.error ? t("projectOverview.knowledgeFailed") : <InlineStreamPlaceholder label={t("projectOverview.knowledgeLoading")} />}</p></div>{openAction("knowledge-bases", t("projectOverview.knowledgeSettings"))}</section>
+      <section><div><strong>{t("projectSettings.agentTitle")}</strong><p>{props.agentLoading ? <InlineStreamPlaceholder label={t("projectOverview.skillsLoading")} /> : !props.agentLoaded ? t("projectOverview.skillsUnknown")
         : Object.keys(props.agentOverrides).length ? t("projectOverview.skillsCount").replace("{count}", String(Object.keys(props.agentOverrides).length)) : t("projectOverview.skillsInherited")}</p></div>{openAction("agent-skills", t("projectOverview.skillSettings"))}</section>
     </div>
     <div className="project-overview-maintenance"><span>{t("projectOverview.maintenance")}</span>{openAction("attachments", t("projectOverview.attachments"))}</div>

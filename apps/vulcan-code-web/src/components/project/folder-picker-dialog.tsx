@@ -9,6 +9,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -251,7 +252,7 @@ export function ProjectFolderPickerDialog({
           <section className="project-folder-picker-directory">
             <div className="project-folder-picker-current">
               <FolderOpen size={16} />
-              <span>{listing?.path ?? t("workspaceFiles.loading")}</span>
+              <span>{listing?.path ?? <InlineStreamPlaceholder label={t("workspaceFiles.loading")} />}</span>
             </div>
             <div className="project-folder-picker-list" role="list">
               {listing?.entries.map((entry) => (

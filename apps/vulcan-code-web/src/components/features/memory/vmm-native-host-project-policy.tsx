@@ -1,5 +1,6 @@
 import * as React from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
 import { DisclosureSection } from "@/components/ui/disclosure"
 import { Input } from "@/components/ui/input"
@@ -158,6 +159,6 @@ export function VmmNativeHostProjectPolicy({ hostProjectId, busy, onRunAction }:
         {inheritance("text")}
         <VmmNativeTextPolicy settings={policy.effective.text} defaults={policy.effective.textDefaults} busy={disabled} onRunAction={saveChild} onSaved={() => {}} />
       </DisclosureSection>
-    </> : pending ? <p className="text-sm">{t("memory.common.loading")}</p> : null}
+    </> : pending ? <StreamPlaceholder label={t("memory.common.loading")} shape="fields" count={3} /> : null}
   </section>
 }

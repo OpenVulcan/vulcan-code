@@ -709,3 +709,11 @@
   min-height: 0;
   overflow: auto;
 }
+
+/* History that is still loading shows a message-shaped silhouette in the timeline column. */
+/* 仍在加载的历史在时间线列中显示消息形状的轮廓。 */
+.conversation-history-placeholder {
+  width: min(560px, 100%);
+  gap: 10px;
+  padding: 12px 2px;
+}

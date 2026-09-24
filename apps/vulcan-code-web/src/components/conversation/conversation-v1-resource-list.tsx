@@ -1,4 +1,5 @@
 import React from "react";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import type {
@@ -31,7 +32,7 @@ export function ConversationV1ResourceList(props: ConversationV1ResourceListProp
     return null;
   }
   if (props.catalog === null || props.catalog.status === "loading") {
-    return <div className="conversation-v1-resources-state">正在读取附件信息…</div>;
+    return <StreamPlaceholder className="conversation-v1-resources-state" label="正在读取附件信息…" shape="tiles" count={2} />;
   }
   if (props.catalog.status === "failed") {
     return (
@@ -97,7 +98,7 @@ export function ConversationV1GeneratedResourceList(
     return null;
   }
   if (props.catalog === null || props.catalog.status === "loading") {
-    return <div className="conversation-v1-resources-state">正在读取生成资源…</div>;
+    return <StreamPlaceholder className="conversation-v1-resources-state" label="正在读取生成资源…" shape="tiles" count={2} />;
   }
   if (props.catalog.status === "failed") {
     return (

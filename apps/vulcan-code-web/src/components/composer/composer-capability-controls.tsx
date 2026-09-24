@@ -3,6 +3,7 @@ import { SessionLifetimeUsagePanel } from "@/components/conversation/session-lif
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
   AlertTriangle,
   LoaderCircle,
@@ -887,7 +888,15 @@ export function ComposerAiCapabilityControl(props: {
                 <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-all">{error}</pre>
               </details>
             </div> : null}
-        {loadStatus === "loading" ? <p role="status">{t("composer.capability.loading")}</p> : null}
+        {loadStatus === "loading" ? (
+          <div className="composer-capability-dialog-grid composer-capability-dialog-placeholder flex-1">
+            <StreamPlaceholder className="composer-capability-dialog-left" label={t("composer.capability.loading")} shape="rows" count={6} />
+            <div className="composer-capability-dialog-right grid content-start gap-4">
+              <StreamPlaceholder decorative shape="fields" count={1} />
+              <StreamPlaceholder decorative shape="rows" count={4} />
+            </div>
+          </div>
+        ) : null}
         {loadStatus === "failed" ? (
           <div>
             {props.conversationId ? <p className="settings-muted-line">{t("composer.capability.rebuildHint")}</p> : null}
@@ -904,7 +913,7 @@ export function ComposerAiCapabilityControl(props: {
             </div>
           </div>
         ) : null}
-        {settingsReady ? <div className="composer-capability-dialog-grid flex-1">
+        {settingsReady ? <div className="composer-capability-dialog-grid vcn-stream-reveal flex-1">
           <aside className="composer-capability-dialog-left">
             {capabilities.map((capability) => {
               // directMode controls whether the capability uses one selected route and a switch.
@@ -1446,7 +1455,7 @@ export function ComposerAiCapabilityControl(props: {
         <DialogFooter className="composer-capability-dialog-footer">
           <span className="composer-capability-dialog-save-hint">
             {!settingsReady
-              ? t(loadStatus === "failed" ? "composer.capability.loadFailed" : "composer.capability.loading")
+              ? loadStatus === "failed" ? t("composer.capability.loadFailed") : <InlineStreamPlaceholder decorative />
               : hasUnsavedChanges
               ? t("composer.capability.saveHint.unsaved")
               : t("composer.capability.saveHint.clean")}

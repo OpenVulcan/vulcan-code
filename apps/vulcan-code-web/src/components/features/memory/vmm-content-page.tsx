@@ -2,6 +2,7 @@ import * as React from "react"
 import { CircleAlert, FileText, Plus, Search, Trash2 } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -311,7 +312,7 @@ function VmmContentPage({
         <div className="mb-4 flex items-start justify-between gap-3"><h3 className="text-base font-semibold">{selectedHit.summary}</h3><Button variant="ghost" size="sm" onClick={() => { setSelectedHit(null); setTurnDetail(null) }}>{t("memory.common.close")}</Button></div>
           <div className="space-y-4 px-4 pb-4">
             {busy && !turnDetail ? (
-              <p className="text-sm text-muted-foreground">{t("memory.common.loading")}</p>
+              <StreamPlaceholder label={t("memory.common.loading")} count={4} />
             ) : null}
             {turnDetail?.question ? (
               <DetailBlock label={t("memory.content.sourceConversation")} value={turnDetail.question} />

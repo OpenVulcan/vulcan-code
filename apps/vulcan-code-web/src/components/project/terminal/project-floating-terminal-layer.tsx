@@ -15,6 +15,7 @@ import {
 
 import { TerminalViewport } from "@/components/terminal/terminal-viewport";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { acquireVisibleTerminalDisplayListener } from "@/components/terminal/terminal-display-listener";
 import { useTerminalDisplayConnectionState } from "@/components/terminal/use-terminal-display-connection-epoch";
@@ -593,7 +594,7 @@ export function ProjectFloatingTerminalLayer(props: ProjectFloatingTerminalLayer
           </div> : null}
           {!catalog ? (
             <div className="project-terminal-placeholder" role="status">
-              {catalogLoading ? t("workspaceAudit.terminalLoading") : (
+              {catalogLoading ? <StreamPlaceholder className="w-full max-w-sm" label={t("workspaceAudit.terminalLoading")} shape="rows" count={3} /> : (
                 <Button size="sm" variant="outline" onClick={() => setCatalogReload((current) => current + 1)}>
                   {t("workspaceAudit.retry")}
                 </Button>

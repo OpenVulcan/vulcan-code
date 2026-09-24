@@ -1,5 +1,6 @@
 import * as React from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { RefreshCw, RotateCcw, Save } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -187,7 +188,7 @@ export function VmmNativeRuntimePolicy({ busy, onRunAction }: VmmNativeRuntimePo
       <CardDescription>{t("memory.policy.description")}</CardDescription>
     </CardHeader>
     <CardContent className="space-y-4">
-      {policy || disabled ? <p className="text-sm text-muted-foreground">{policy ? t(policy.userOverride ? "memory.policy.userSource" : "memory.policy.defaultSource") : t("memory.common.loading")}</p> : null}
+      {policy ? <p className="text-sm text-muted-foreground">{t(policy.userOverride ? "memory.policy.userSource" : "memory.policy.defaultSource")}</p> : disabled ? <StreamPlaceholder label={t("memory.common.loading")} shape="fields" count={2} /> : null}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       {saved ? <p role="status" className="text-sm text-muted-foreground">{t("memory.policy.saved")}</p> : null}
       {draft ? <div className="grid gap-4 sm:grid-cols-2">

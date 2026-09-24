@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Combobox } from "@/components/ui/combobox";
 import { VceEmbeddingSettings } from "./vce-embedding-settings";
 import { VceHelpTooltip } from "./vce-help-tooltip";
@@ -439,10 +440,7 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
           </span>
         </div>
         {!snapshot || !readiness ? (
-          <div className="flex items-center gap-2 px-4 py-8 text-sm text-muted-foreground">
-            <LoaderCircle className="size-4 animate-spin" />
-            {copy("正在读取公共 AI 模型目录…", "Loading the public AI model catalog…")}
-          </div>
+          <StreamPlaceholder className="px-2 py-3" label={copy("正在读取公共 AI 模型目录…", "Loading the public AI model catalog…")} shape="rows" count={4} />
         ) : (
           <div className="divide-y">
             <div className="hidden gap-3 px-4 py-2 text-xs text-muted-foreground @xl/vce:grid @xl/vce:grid-cols-[8rem_minmax(12rem,1fr)_9.5rem]">

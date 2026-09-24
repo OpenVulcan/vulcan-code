@@ -1,4 +1,5 @@
 import { createConversationV1CollaborationNavigation, type ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 export { createConversationV1CollaborationNavigation, conversationV1CollaborationSessionIds } from "./conversation-collaboration-navigation";
 import * as React from "react";
 import { runConversationControlAction } from "./conversation-control-feedback";
@@ -198,10 +199,7 @@ export function ConversationV1Workspace(props: ConversationV1WorkspaceProps) {
       <div className="conversation-scroll-content">
         <div className="timeline conversation-v1-timeline">
           {!ownerReady ? (
-            <article className="message-card system" data-v1-owner-loading="true">
-              <span>system</span>
-              <p>{t("conversation.history.loading")}</p>
-            </article>
+            <StreamPlaceholder className="conversation-history-placeholder" data-v1-owner-loading="true" label={t("conversation.history.loading")} count={4} />
           ) : null}
           {ownerReady && events.length === 0 && !props.suppressEmptyPlaceholder ? (
             <article className="message-card system">

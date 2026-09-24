@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useI18n } from "@/i18n";
 import { formatKnowledgeIndexStatus } from "@/lib/knowledge-index-status";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -176,7 +177,7 @@ export function ProjectKnowledgeBasesSection(props: {
         </div>
       </div>
       {loading || loadedProjectId !== props.projectId && !loadError ? (
-        <div className="knowledge-empty" role="status"><LoaderCircle className="spin" size={18} /> {t("projectSettings.knowledgeBasesLoading")}</div>
+        <StreamPlaceholder label={t("projectSettings.knowledgeBasesLoading")} shape="rows" count={3} />
       ) : loadError ? (
         <div role="alert" className="space-y-2">
           <p className="break-words text-destructive">{loadError}</p>

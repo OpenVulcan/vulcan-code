@@ -12,6 +12,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
+import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -266,7 +267,7 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
         <div><h2 className="text-lg font-semibold">{t("memory.resources.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.resources.description")}</p></div>
         <Button disabled={busy} inert={filePending} onClick={() => void loadCatalog().then(() => setFileReadRevision((revision) => revision + 1))} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
       </div>
-      <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><span>{t("memory.resources.overrideDirectory")}: </span><span className="break-all font-mono">{catalog?.overrideRoot ?? t("memory.resources.loading")}</span></div>
+      <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><span>{t("memory.resources.overrideDirectory")}: </span><span className="break-all font-mono">{catalog?.overrideRoot ?? <InlineStreamPlaceholder label={t("memory.resources.loading")} />}</span></div>
       {error ? <p className="settings-error-text text-sm">{error}</p> : null}
 
       {/* Keep short reads non-interactive without toggling every control's disabled opacity. */}

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { RefreshCw, Settings2, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Button, IconButton } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -699,7 +700,7 @@ export function LuaSkillConfigDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <div className="lua-skill-config-body min-h-0">
-        {busy && !descriptor ? <div className="skill-empty-state" role="status">{t("skills.luaConfig.loading")}</div> : null}
+        {busy && !descriptor ? <StreamPlaceholder label={t("skills.luaConfig.loading")} shape="fields" count={4} /> : null}
         {!busy && !descriptor && !errorMessage ? <div className="skill-empty-state">{t("skills.luaConfig.empty")}</div> : null}
         {descriptor ? (
           <div className="grid gap-3">

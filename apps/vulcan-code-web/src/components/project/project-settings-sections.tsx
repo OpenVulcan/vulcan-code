@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Bot, BrainCircuit, Calendar, Database, FolderPlus, LoaderCircle, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls";
 import { DisclosureSection } from "@/components/ui/disclosure";
@@ -273,7 +274,7 @@ export function ProjectVmmSection(props: {
         </div>
       </header>
       {props.vmmBusy === "loading" || !props.vmmDraft ? (
-        <p className="project-settings-muted">{t("projectSettings.vmmLoading")}</p>
+        <StreamPlaceholder label={t("projectSettings.vmmLoading")} shape="fields" count={4} />
       ) : (
         <>
           <label className="project-settings-toggle-row">
@@ -377,7 +378,7 @@ export function ProjectVmmSection(props: {
               </Button>
             </div>
           ) : null}
-          {catalogLoading ? <p role="status" className="project-settings-muted">{t("memory.common.loading")}</p> : null}
+          {catalogLoading ? <StreamPlaceholder label={t("memory.common.loading")} shape="rows" count={2} /> : null}
           {catalogError ? <div role="alert" className="project-vmm-catalog-error">
             <p>{catalogError}</p>
             <Button size="sm" variant="outline" onClick={() => setCatalogAttempt((value) => value + 1)}>{t("toolPresentation.output.retryLoad")}</Button>
@@ -514,7 +515,7 @@ export function ProjectAgentSkillsSection(props: {
         <Button type="button" variant="outline" disabled={props.agentLoading || props.agentBusySkill !== null} onClick={props.onRetry}>{locale === "zh-CN" ? "重新读取项目设置" : "Reload project settings"}</Button>
       </div> : null}
       {props.agentLoading ? (
-        <p className="project-settings-muted">{t("projectSettings.agentLoading")}</p>
+        <StreamPlaceholder className="project-settings-skill-list py-1.5" label={t("projectSettings.agentLoading")} shape="rows" count={4} />
         ) : !props.agentLoaded || props.agentError ? (
         <p className="project-settings-muted">{locale === "zh-CN" ? "项目技能设置尚未读取成功。" : "Project skill settings have not been loaded successfully."}</p>
         ) : props.workbench.agentSkills.records.filter((skill) => skill.effective).length === 0 ? (

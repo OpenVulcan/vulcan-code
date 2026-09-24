@@ -3,6 +3,7 @@ import { Settings2 } from "lucide-react";
 
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { Button } from "@/components/ui/button";
+import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useI18n } from "@/i18n";
@@ -162,7 +163,7 @@ export function AiCapabilitiesSettingsArea(props: {
                         <small>{t(item.descriptionKey)}</small>
                       </span>
                       <span className={cn("ai-capability-target", !summary?.target && "empty")}>
-                        {summary ? summary.target ?? t("settings.aiCapabilities.notConfigured") : t("settings.providerTools.loading")}
+                        {summary ? summary.target ?? t("settings.aiCapabilities.notConfigured") : <InlineStreamPlaceholder label={t("settings.providerTools.loading")} />}
                       </span>
                       <span className="ai-capability-status" data-enabled={summary?.enabled ? "true" : "false"}>
                         {summary?.enabled ? t("settings.aiCapabilities.enabled") : t("settings.aiCapabilities.disabled")}

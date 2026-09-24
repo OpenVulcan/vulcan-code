@@ -3,6 +3,7 @@ import "@/styles/licenses-settings.css"
 import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react"
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -150,7 +151,7 @@ export function AboutLicensesSettingsArea(props: {
         <Button variant="outline" onClick={() => setReload((value) => value + 1)}><RefreshCw size={14} />{t("settings.licenses.reload")}</Button>
       </div>
       {catalogError ? <div role="alert" className="settings-license-error"><strong>{t("settings.licenses.loadError")}</strong><p>{catalogError}</p></div>
-        : !catalog ? <p role="status">{t("settings.licenses.loading")}</p>
+        : !catalog ? <StreamPlaceholder label={t("settings.licenses.loading")} shape="rows" count={6} />
         : filteredGroups.length === 0 ? <p role="status">{t("settings.licenses.emptySearch")}</p>
         : <div className="settings-license-browser">
           <nav className="settings-license-directory" aria-label={t("settings.licenses.types")}>

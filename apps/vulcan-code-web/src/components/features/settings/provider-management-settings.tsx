@@ -31,6 +31,7 @@ import {
   localizedProviderName,
 } from "@/components/features/settings/provider-presentation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -609,10 +610,7 @@ function CustomProviderTable(props: {
       <Input aria-label={t("settings.modelExperience.searchCustom")} placeholder={t("settings.modelExperience.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
       {!props.loading && props.providers.length > 0 && visibleProviders.length === 0 ? <SettingsEmptyState icon={<Search />} title={t("settings.modelExperience.noProviders")} /> : null}
       {props.loading ? (
-        <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
-          <LoaderCircle className="size-4 animate-spin" />
-          {t("settings.providers.loading")}
-        </div>
+        <StreamPlaceholder className="rounded-xl border p-1.5" label={t("settings.providers.loading")} shape="rows" count={4} />
       ) : props.providers.length === 0 ? (
         <SettingsEmptyState
           action={(
@@ -787,10 +785,7 @@ function SystemProviderTable(props: {
       <Input aria-label={t("settings.modelExperience.searchProvider")} placeholder={t("settings.modelExperience.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
       {!props.loading && visibleProviders.length === 0 ? <SettingsEmptyState icon={search.trim() ? <Search /> : props.variant === "system" ? <LockKeyhole /> : <ServerCog />} title={t("settings.modelExperience.noProviders")} /> : null}
       {props.loading ? (
-        <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
-          <LoaderCircle className="size-4 animate-spin" />
-          {t("settings.providers.loading")}
-        </div>
+        <StreamPlaceholder className="rounded-xl border p-1.5" label={t("settings.providers.loading")} shape="rows" count={4} />
       ) : visibleProviders.length === 0 ? null : (
         <div className="overflow-hidden rounded-xl border">
           <Table className="provider-responsive-table">

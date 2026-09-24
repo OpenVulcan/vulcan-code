@@ -1,5 +1,6 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -260,7 +261,7 @@ export function ProjectIconDialog(props: {
                       />
                       <span>{streamedIconOptions.length} / {visibleIconOptions.length} / {activeIconOptions.length}</span>
                     </div>
-                    {catalogLoading && <p role="status">{locale === "zh-CN" ? "正在加载图标目录…" : "Loading icon catalog…"}</p>}
+                    {catalogLoading && <StreamPlaceholder label={locale === "zh-CN" ? "正在加载图标目录…" : "Loading icon catalog…"} shape="tiles" count={6} />}
                     {catalogError && <div role="alert"><p className="text-sm text-destructive">{catalogError}</p><Button type="button" size="sm" variant="outline" onClick={() => setCatalogRevision(value => value + 1)}>{locale === "zh-CN" ? "重试" : "Retry"}</Button></div>}
                     {!catalogLoading && !catalogError && visibleIconOptions.length === 0 && <p>{locale === "zh-CN" ? "没有匹配的图标" : "No matching icons"}</p>}
                     <div className="project-icon-grid picker-icon-grid" onScroll={handleIconGridScroll}>

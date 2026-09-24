@@ -2,6 +2,7 @@ import React from "react";
 import { Check, RefreshCw, Route, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -283,7 +284,7 @@ export function ModelSecondaryRouteControl(props: {
           <summary>{locale.startsWith("zh") ? "路由操作失败，可重试" : "Route action failed. Retry."}</summary>
           <pre className="whitespace-pre-wrap break-words">{loadError || selectionError}</pre>
         </details> : null}
-        {loading ? <div role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("composer.secondaryRoute.loading")}</div> : null}
+        {loading ? <StreamPlaceholder label={t("composer.secondaryRoute.loading")} shape="rows" count={3} /> : null}
           <div className="model-picker-list">
             <DropdownMenuItem asChild onSelect={() => void chooseRoute(null)} textValue="Auto">
             <Button variant="ghost"

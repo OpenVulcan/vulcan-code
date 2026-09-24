@@ -1,4 +1,5 @@
 import React from "react";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { BookMarked, RefreshCw, Settings2 } from "lucide-react";
 
 import {
@@ -292,7 +293,7 @@ export function ComposerKnowledgeControl(props: ComposerKnowledgeControlProps) {
           {t("knowledge.composer.inherit")}
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
-        {loading ? <p role="status" className="px-2 py-1.5 text-xs text-muted-foreground">{t("knowledge.composer.loading")}</p> : null}
+        {loading ? <StreamPlaceholder className="px-2 py-1.5" label={t("knowledge.composer.loading")} count={2} /> : null}
         {error ? (
           <>
             <p role="alert" className="px-2 py-1.5 text-xs text-destructive">{t(`knowledge.composer.${error.phase}Failed`)}</p>

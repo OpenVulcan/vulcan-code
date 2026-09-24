@@ -20,6 +20,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -918,12 +919,7 @@ export function CodeContextArea(props: {
             {t("projectSettings.codeContext.generating")}
           </p>
         ) : (
-          <>
-            <LoaderCircle className="animate-spin" size={18} />
-            <p className="project-settings-muted">
-              {copy("正在加载代码语义索引…", "Loading code semantic index…")}
-            </p>
-          </>
+          <StreamPlaceholder className="w-full" label={copy("正在加载代码语义索引…", "Loading code semantic index…")} shape="fields" count={3} />
         )}
       </div>
     );
@@ -1112,10 +1108,7 @@ export function CodeContextArea(props: {
               : undefined
           }
         />
-      ) : indexingStatusVisible ? <p className="vce-job-rehydrating" role="status">
-        <LoaderCircle size={16} className="motion-safe:animate-spin" />
-        {copy("正在读取索引任务进度…", "Loading index task progress…")}
-      </p> : null}
+      ) : indexingStatusVisible ? <StreamPlaceholder className="vce-job-rehydrating" label={copy("正在读取索引任务进度…", "Loading index task progress…")} count={2} /> : null}
       {indexing.error ? (
         <p role="alert" className="text-sm text-destructive">
           {copy("索引状态暂不可用：", "Index status unavailable: ")}
@@ -1742,10 +1735,7 @@ export function CodeContextArea(props: {
       ) : null}
 
       {managementBusy ? (
-        <p className="project-settings-muted">
-          <LoaderCircle className="mr-2 inline animate-spin" size={14} />
-          {copy("正在加载管理数据…", "Loading management data…")}
-        </p>
+        <StreamPlaceholder label={copy("正在加载管理数据…", "Loading management data…")} shape="rows" count={3} />
       ) : null}
       {managementError ? (
         <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">

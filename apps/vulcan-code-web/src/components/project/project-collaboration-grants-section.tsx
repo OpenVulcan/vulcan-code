@@ -2,6 +2,7 @@ import React from "react";
 import { LoaderCircle, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -345,7 +346,7 @@ export function ProjectCollaborationGrantsSection(props: {
           {pendingAdd ? <p className="text-xs text-muted-foreground">{labels.pending}</p> : null}
           {mutationError ? <p className="break-words text-sm text-destructive" role="alert">{mutationError}</p> : null}
           {loading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status"><LoaderCircle className="animate-spin" size={16} /> {labels.loading}</div>
+            <StreamPlaceholder label={labels.loading} shape="rows" count={3} />
           ) : loadError ? (
             <div className="space-y-2" role="alert">
               <p className="break-words text-sm text-destructive">{loadError}</p>

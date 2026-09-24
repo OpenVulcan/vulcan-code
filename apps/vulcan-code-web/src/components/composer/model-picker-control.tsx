@@ -8,6 +8,7 @@ import {
   usageCapabilitySupportsQuotaWindows,
 } from "@/components/public-ai/credential-usage-overview";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
   Card,
   CardContent,
@@ -642,7 +643,7 @@ export function ModelAccountPickerControl(props: {
                 usage={usage}
               />
             ) : !connection && detailsLoading ? (
-              <p className="py-3 text-center text-xs text-muted-foreground">{t("composer.accountCard.loading")}</p>
+              <StreamPlaceholder className="py-1" label={t("composer.accountCard.loading")} shape="tiles" count={2} />
             ) : !connection ? (
               <p className="py-3 text-center text-xs text-muted-foreground">{t("composer.accountCard.metadataUnavailable")}</p>
             ) : null}

@@ -32,6 +32,84 @@
   from { height: var(--radix-collapsible-content-height); opacity: 1; }
   to { height: 0; opacity: 0; }
 }
+/* A light band travels across loading silhouettes. */
+/* 亮带在加载轮廓上横向扫过。 */
+@keyframes vcn-shimmer {
+  from { background-position: 200% 0, 0 0; }
+  to { background-position: -100% 0, 0 0; }
+}
+
+/* Streaming loading: instead of a "Loading…" sentence that is later swapped for a full page, a silhouette of the
+   content shimmers in place. It appears only after a short beat, so fast loads never flash it, and whatever replaces
+   it rises in with the same enter motion. */
+/* 流式加载：不再显示一句「正在加载…」再突然换成整页，而是在原位显示内容轮廓的流光。
+   轮廓在短暂停顿后才出现，快速加载不会闪一下；替换它的内容以相同的进入动效浮现。 */
+.vcn-shimmer {
+  background-color: transparent;
+  background-image:
+    linear-gradient(100deg, transparent 20%, var(--vcn-shimmer-highlight) 50%, transparent 80%),
+    linear-gradient(var(--vcn-shimmer-base), var(--vcn-shimmer-base));
+  background-repeat: no-repeat;
+  background-size: 50% 100%, 100% 100%;
+  animation: vcn-shimmer 1.6s var(--vcn-ease-in-out) infinite;
+}
+.vcn-stream-placeholder {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  animation: vcn-fade-in var(--vcn-duration-slow) var(--vcn-ease-out) var(--vcn-duration-fast) both;
+}
+.vcn-stream-placeholder[data-shape="rows"] { gap: 2px; }
+.vcn-stream-placeholder[data-shape="fields"] { gap: 14px; }
+.vcn-stream-placeholder[data-shape="tiles"] {
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+}
+.vcn-stream-placeholder-row {
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+}
+.vcn-stream-placeholder-copy,
+.vcn-stream-placeholder-field,
+.vcn-stream-placeholder-tile {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.vcn-stream-placeholder-copy .vcn-shimmer:last-child { max-width: 70%; }
+.vcn-stream-placeholder-tile {
+  gap: 8px;
+  border-radius: 9px;
+  background: var(--vcn-fill-subtle);
+  padding: 11px 12px;
+}
+/* Later rows fade toward the bottom so the silhouette suggests "more below" instead of ending on a hard edge. */
+/* 靠后的行逐渐变淡，轮廓暗示“下方还有”，而不是在硬边处截止。 */
+.vcn-stream-placeholder > :nth-child(n + 4) { opacity: 0.82; }
+.vcn-stream-placeholder > :nth-child(n + 5) { opacity: 0.64; }
+.vcn-stream-placeholder > :nth-child(n + 6) { opacity: 0.46; }
+.vcn-stream-inline {
+  width: 9em;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  min-height: 1lh;
+  vertical-align: middle;
+  animation: vcn-fade-in var(--vcn-duration-slow) var(--vcn-ease-out) var(--vcn-duration-fast) both;
+}
+/* Content that replaces a silhouette streams in; direct children follow one stagger beat apart, capped. */
+/* 替换轮廓的内容流式浮现；直接子元素依次错开一个节拍，并设上限。 */
+.vcn-stream-reveal { animation: vcn-page-enter var(--vcn-duration-slow) var(--vcn-ease-out) both; }
+.vcn-stream-reveal-children > * { animation: vcn-page-enter var(--vcn-duration-slow) var(--vcn-ease-out) both; }
+.vcn-stream-reveal-children > :nth-child(2) { animation-delay: calc(var(--vcn-stagger) * 1); }
+.vcn-stream-reveal-children > :nth-child(3) { animation-delay: calc(var(--vcn-stagger) * 2); }
+.vcn-stream-reveal-children > :nth-child(4) { animation-delay: calc(var(--vcn-stagger) * 3); }
+.vcn-stream-reveal-children > :nth-child(5) { animation-delay: calc(var(--vcn-stagger) * 4); }
+.vcn-stream-reveal-children > :nth-child(n + 6) { animation-delay: calc(var(--vcn-stagger) * 5); }
 
 /* Sidebar rows: hover tint and the selected tile ease in instead of snapping. */
 /* 侧栏行：悬停底色与选中底块平滑出现，而不是突变。 */

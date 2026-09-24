@@ -2,6 +2,7 @@ import React from "react";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { AskQuestionDialog } from "@/components/ask/AskQuestionDialog";
 import { Button } from "@/components/ui/button";
+import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -60,7 +61,7 @@ function DeferredProjectFolderPicker(props: ProjectFolderPickerDialogProps) {
   const recovery = (error?: Error) => <Dialog open={props.open} onOpenChange={props.onOpenChange}>
     <DialogContent size="md">
       <DialogHeader><DialogTitle>{props.title ?? t("projectFolderPicker.title")}</DialogTitle>
-        <DialogDescription>{error ? (locale === "zh-CN" ? "目录选择器加载失败" : "Unable to load the folder picker") : t("workspaceFiles.loading")}</DialogDescription>
+        <DialogDescription>{error ? (locale === "zh-CN" ? "目录选择器加载失败" : "Unable to load the folder picker") : <InlineStreamPlaceholder label={t("workspaceFiles.loading")} />}</DialogDescription>
       </DialogHeader>
       {error ? <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="whitespace-pre-wrap break-words">{error.message}</pre></details> : null}
       <DialogFooter>

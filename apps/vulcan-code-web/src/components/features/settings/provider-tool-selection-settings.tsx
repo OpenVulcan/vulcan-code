@@ -2,6 +2,7 @@ import * as React from "react";
 import { FlaskConical } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Combobox } from "@/components/ui/combobox";
 import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import {
@@ -252,7 +253,7 @@ export function ProviderToolSelectionSettingsArea(props: {
     <div className="settings-direct-content settings-capability-page">
       {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
       {!snapshot && error ? <Button onClick={() => setLoadAttempt((value) => value + 1)} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : !snapshot ? (
-        <p className="settings-muted-line">{t("settings.providerTools.loading")}</p>
+        <StreamPlaceholder label={t("settings.providerTools.loading")} shape="fields" count={3} />
       ) : mediaUnderstandingMode ? (
         <MediaUnderstandingDefaults
           candidates={mediaModelCandidates}

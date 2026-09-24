@@ -8,6 +8,7 @@ import { ProviderRetrySettingsArea } from "@/components/features/settings/provid
 import { MediaDeliveryPolicyCard } from "@/components/features/settings/media-delivery-policy-card"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import { Button } from "@/components/ui/button"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
@@ -463,7 +464,7 @@ export function ContextBasicsSettingsArea(props: {
               {props.onOpenUsageStatistics ? <Button onClick={props.onOpenUsageStatistics} type="button" variant="outline">{t("settings.modelExperience.statistics")}</Button> : null}
             </section>
           </>
-        ) : !error ? <p className="settings-muted-line">{t("settings.contextBasics.loading")}</p> : null}
+        ) : !error ? <StreamPlaceholder label={t("settings.contextBasics.loading")} shape="fields" count={4} /> : null}
         <section hidden={activeSection !== "retry"}>
           <ProviderRetrySettingsArea actions={props.actions} embedded settings={props.retrySettings} />
         </section>

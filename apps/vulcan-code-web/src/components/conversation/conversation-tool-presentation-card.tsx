@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
 import { Button } from "@/components/ui/button";
@@ -714,7 +715,7 @@ function BranchToolDomainResult(props: { event: ToolCallEvent; id: string; tabbe
     <Button size="sm" variant="outline" onClick={() => setAttempt((value) => value + 1)}>{t("toolPresentation.output.retryLoad")}</Button>
     <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="whitespace-pre-wrap break-words">{error.message}</pre></details>
   </div>}>
-    <React.Suspense fallback={<div role="status">{t("toolPresentation.output.loading")}</div>}>
+    <React.Suspense fallback={<StreamPlaceholder className="py-1" label={t("toolPresentation.output.loading")} count={3} />}>
       <LazyDomain event={props.event} id={props.id} tabbed={props.tabbed} />
     </React.Suspense>
   </RenderErrorBoundary>;
