@@ -16,6 +16,9 @@ pub struct ConversationCompletionRequest {
     /// Logical turn id associated with this completed turn.
     /// 与该完成回合关联的逻辑回合标识。
     turn_id: String,
+    /// Whether completion may notify external observers; internal turn cleanup always proceeds.
+    /// 完成是否可通知外部观察器；内部回合清理始终执行。
+    dispatch_enabled: bool,
 }
 
 impl ConversationCompletionRequest {
@@ -26,12 +29,14 @@ impl ConversationCompletionRequest {
         session_id: SessionId,
         payload: Value,
         turn_id: impl Into<String>,
+        dispatch_enabled: bool,
     ) -> Self {
         Self {
             dispatcher,
             session_id,
             payload,
             turn_id: turn_id.into(),
+            dispatch_enabled,
         }
     }
 
@@ -76,6 +81,14 @@ impl ConversationCompletionRequest {
     /// Runs the completed-turn hook dispatch on a worker thread.
     /// 在工作线程执行完成回合 hook 调度。
     pub async fn run(self) -> ConversationCompletionOutcome {
+        if !self.dispatch_enabled {
+            return ConversationCompletionOutcome {
+                session_id: self.session_id,
+                turn_id: self.turn_id,
+                report: Ok(HookDispatchReport::empty(HookPayload { value: self.payload })),
+                vmm_writeback_effects: Vec::new(),
+            };
+        }
         self.run_on_worker_thread().await
     }
 

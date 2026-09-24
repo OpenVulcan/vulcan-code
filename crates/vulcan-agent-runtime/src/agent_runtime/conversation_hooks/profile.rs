@@ -16,6 +16,9 @@ pub struct ConversationProfileRequest {
     /// Logical turn id associated with this profile request.
     /// 与该画像请求关联的逻辑回合标识。
     turn_id: String,
+    /// Whether the admitted turn may dispatch external profile observers.
+    /// 已准入回合是否允许派发外部画像观察器。
+    dispatch_enabled: bool,
 }
 
 impl ConversationProfileRequest {
@@ -53,12 +56,14 @@ impl ConversationProfileRequest {
         session_id: SessionId,
         payload: Value,
         turn_id: impl Into<String>,
+        dispatch_enabled: bool,
     ) -> Self {
         Self {
             dispatcher,
             session_id,
             payload,
             turn_id: turn_id.into(),
+            dispatch_enabled,
         }
     }
 
@@ -81,17 +86,19 @@ impl ConversationProfileRequest {
     /// The completed profile outcome, including continued-handler failures.
     /// 返回已完成的画像结果，其中包含允许继续的处理器失败。
     pub async fn run(self) -> ConversationProfileOutcome {
+        if !self.dispatch_enabled {
+            return self.skip();
+        }
         self.run_on_worker_thread().await
     }
 
-    /// Builds an empty profile outcome for crate-local regression tests without dispatching handlers.
-    /// 为 crate 内回归测试构建不派发处理器的空画像结果。
+    /// Builds an empty profile outcome when observation is disabled, without dispatching handlers.
+    /// 观察被禁用时构建不派发处理器的空画像结果。
     ///
     /// # Returns
     /// 返回值
-    /// An empty successful test outcome retaining the original turn correlation.
-    /// 返回保留原始回合关联的空成功测试结果。
-    #[cfg(test)]
+    /// An empty successful outcome retaining the original turn correlation.
+    /// 返回保留原始回合关联的空成功结果。
     pub(crate) fn skip(self) -> ConversationProfileOutcome {
         ConversationProfileOutcome {
             session_id: self.session_id,

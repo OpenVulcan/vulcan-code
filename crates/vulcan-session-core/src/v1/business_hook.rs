@@ -135,6 +135,9 @@ pub struct BusinessHookBinding {
     /// VMM readiness captured by the original Hook admission; recovery cannot upgrade it.
     /// 原 Hook 准入捕获的 VMM 就绪状态；恢复不能提升。
     pub vmm_runtime_ready: bool,
+    /// Whether this business lifecycle may notify user observers; independent agent tasks disable it.
+    /// 该业务生命周期是否可通知用户观察器；独立代理任务禁用此项。
+    pub observes_user: bool,
 }
 
 impl BusinessHookMetadata {

@@ -488,9 +488,14 @@ pub(super) fn apply_execution_report_to_memory(
     if !report_is_regular_session {
         return apply_task_session_execution_report_to_memory(state, report);
     }
+    // Agent-originated work retains internal ownership but cannot consume the user-memory lifecycle.
+    // 代理发起工作保留内部归属，但不能消费用户记忆生命周期。
+    let observes_user = agent_runtime.conversation_hook_runtime.lock()
+        .map_err(|error| format!("Failed to read business observer policy: {error}"))?
+        .permits_user_observation(session_id);
     // Both immutable admission and current service readiness are required for terminal VMM work.
     // 终态 VMM 工作同时要求不可变准入事实与当前服务就绪。
-    let vmm_runtime_ready = report
+    let vmm_runtime_ready = observes_user && report
         .preparation
         .as_ref()
         .is_some_and(|preparation| preparation.vmm_runtime_ready)

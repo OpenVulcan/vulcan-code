@@ -349,6 +349,8 @@ fn agent_task_preparation_preserves_canonical_input_without_human_side_effects()
     assert!(runtime_state.conversation_state.records.is_empty());
     assert_eq!(runtime_state.conversation_state.messages.len(), 1);
     assert!(!start.source.runs_user_prompt_precheck());
+    assert!(!start.observes_user);
+    assert!(start.deferred_user_event.is_none());
     // Run the actual continuation reducer, preserving its exact Hook correlation.
     // 执行真实续接归约器，保留其精确 Hook 关联。
     let turn_id = start.preparation_turn_id.clone();

@@ -203,6 +203,7 @@ impl SessionDocument {
         let turn = self.require_open_turn()?;
         if turn.turn_id != binding.turn_id
             || turn.start_seq != binding.start_seq
+            || binding.observes_user != (turn.origin != TurnOrigin::AgentTask)
             || turn.origin == TurnOrigin::QuestionExecution
             || self.active_api().is_some()
         {
@@ -225,6 +226,14 @@ impl SessionDocument {
             .business_hook
             .validate(self.segment_generation())?;
         if let Some(binding) = &self.metadata.business_hook.binding {
+            // Restored ownership cannot promote an agent task into a user-memory lifecycle.
+            // 恢复归属不能把代理任务提升为用户记忆生命周期。
+            if self.active_turn().is_some_and(|turn| turn.turn_id == binding.turn_id
+                && binding.observes_user != (turn.origin != TurnOrigin::AgentTask)) {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "business_hook.observation_origin",
+                });
+            }
             if binding.session_id != self.metadata.session_id
                 || binding.turn_id.value() >= self.id_frontier().next_local_id
                 || binding.start_seq.value() >= self.id_frontier().next_seq
@@ -285,6 +294,7 @@ impl SessionDocument {
         )?;
         if turn.turn_id != binding.turn_id
             || turn.start_seq != binding.start_seq
+            || binding.observes_user != (turn.origin != TurnOrigin::AgentTask)
             || turn.origin == TurnOrigin::QuestionExecution
             || self.active_api().is_some()
             || self.collaboration_run_control()

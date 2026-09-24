@@ -562,6 +562,7 @@ fn fixture() -> (SessionDocument, BusinessHookBinding) {
         hook_turn_id: "original-hook".into(),
         user_content: "sanitized original work".into(),
         vmm_runtime_ready: false,
+        observes_user: true,
     };
     (document, binding)
 }
@@ -677,6 +678,10 @@ fn business_hook_capture_is_immutable_and_requires_durable_recovery() {
     // 冲突身份不得改变修订或部分替换已捕获种子。
     let before = document.clone();
     for changed in [
+        BusinessHookBinding {
+            observes_user: false,
+            ..binding.clone()
+        },
         BusinessHookBinding {
             hook_turn_id: "replacement".into(),
             ..binding.clone()
