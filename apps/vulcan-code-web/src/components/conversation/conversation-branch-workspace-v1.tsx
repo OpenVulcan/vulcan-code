@@ -1,8 +1,7 @@
 import * as React from "react";
 import { ConversationAgentInteractionActionsContext } from "./conversation-collaboration-card";
 import { conversationV1SubagentNames, createConversationV1CollaborationNavigation, type ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
-import { cancelCollaborationQuestion } from "@/service/collaboration-question-service";
-import { pendingCollaborationQuestionIds } from "@/service/conversation-event-display-projection";
+import { ConversationCollaborationStateContext, projectConversationCollaborationState } from "./conversation-collaboration-state";
 import { ThinkingPopupContext } from "./thinking-preview";
 
 import type { GeneratedMediaAttachment, GeneratedMediaKind } from "@/components/media/generated-media";
@@ -183,18 +182,16 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     () => props.collaborationNavigation ? createConversationV1CollaborationNavigation(props.collaborationNavigation) : null,
     [props.collaborationNavigation],
   );
-  // collaborationActions keeps cancellation source-bound and refreshes through the exact window owner.
-  // collaborationActions 让撤销绑定问题来源，并通过精确窗口所有者刷新。
+  // Navigation remains host-owned; the UI never decides whether an agent question should be cancelled.
+  // 导航仍归宿主所有；界面不决定是否撤销代理问题。
   const collaborationActions = React.useMemo(() => ({
-    cancellableQuestionIds: pendingCollaborationQuestionIds(events),
     onOpenSession: collaborationRoutes?.onOpenSession,
     availableSessionIds: collaborationRoutes?.availableSessionIds,
     subagentNames: conversationV1SubagentNames(events, collaborationRoutes?.subagentNames),
-    onCancelQuestion: async (questionId: string, sourceRootSessionId: string): Promise<void> => {
-      await cancelCollaborationQuestion(questionId, sourceRootSessionId);
-      await props.commands.rehydrate();
-    },
-  }), [collaborationRoutes, props.commands, events]);
+  }), [collaborationRoutes, events]);
+  // Latest facts update the original cards without creating independent delivery rows.
+  // 最新事实更新原卡片，不创建独立投递行。
+  const collaborationState = React.useMemo(() => projectConversationCollaborationState(events), [events]);
   // resourceIds preserves first occurrence order across typed user and generated-resource references.
   // resourceIds 保留强类型用户资源与生成资源引用的首次出现顺序。
   const resourceIds = React.useMemo(() => collectConversationResourceIdsV1(events), [events]);
@@ -293,6 +290,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   return (
     <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "popup_only"}>
     <ConversationAgentInteractionActionsContext.Provider value={collaborationActions}>
+    <ConversationCollaborationStateContext.Provider value={collaborationState}>
     <ConversationWorkspace
       autoExpandStreamingThinking={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "inline_output"}
       commandSessions={props.commandSessions}
@@ -329,6 +327,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       transientReasoningStatus={props.transientReasoningStatus}
       workspacePath={props.workspacePath}
     />
+    </ConversationCollaborationStateContext.Provider>
     </ConversationAgentInteractionActionsContext.Provider>
     </ThinkingPopupContext.Provider>
   );

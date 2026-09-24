@@ -1582,8 +1582,6 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.answerDelivery": "Answer delivery",
     "conversation.collaboration.deliveryMode.waitTool": "Wait tool",
     "conversation.collaboration.deliveryMode.userEvent": "User event",
-    "conversation.collaboration.cancelQuestion": "Cancel question",
-    "conversation.collaboration.cancelFailed": "Could not cancel question",
     "conversation.collaboration.grantAction.read": "Read session",
     "conversation.collaboration.grantAction.ask": "Ask target",
     "conversation.collaboration.grantAction.steer": "Steer task",

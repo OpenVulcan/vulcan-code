@@ -1613,8 +1613,6 @@ export type TranslationKey =
   | "conversation.collaboration.answerDelivery"
   | "conversation.collaboration.deliveryMode.waitTool"
   | "conversation.collaboration.deliveryMode.userEvent"
-  | "conversation.collaboration.cancelQuestion"
-  | "conversation.collaboration.cancelFailed"
    | "conversation.collaboration.grantAction.read"
    | "conversation.collaboration.grantAction.ask"
    | "conversation.collaboration.grantAction.steer"

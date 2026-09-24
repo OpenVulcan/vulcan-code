@@ -2,7 +2,7 @@ import * as React from "react";
 import { ChevronDown, MessagesSquare } from "lucide-react";
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "./conversation-measured-collapse";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { runConversationControlAction } from "./conversation-control-feedback";
+import { ConversationCollaborationStateContext } from "./conversation-collaboration-state";
 import { MarkdownMessage } from "./conversation-markdown";
 import type { ConversationAgentInteraction } from "@/types/conversation";
 import type {
@@ -28,18 +28,12 @@ export interface ConversationAgentInteractionActions {
   // Names keyed by exact child session id from persisted tools and current host navigation.
   // 来自持久工具记录与当前宿主导航、以精确子会话身份索引的名字。
   subagentNames?: ReadonlyMap<string, string>;
-  // Latest pending IDs in the mounted event window; missing means no state summary was supplied.
-  // 已挂载事件窗口中的最新待处理身份；缺失表示未提供状态摘要。
-  cancellableQuestionIds?: ReadonlySet<string>;
   // Opens an exact participant session through an already resolved host route.
   // 通过已解析的宿主路由打开精确参与会话。
   onOpenSession?: (sessionId: string) => void;
   // Contains the current host-owned set of routable session identities.
   // 包含当前宿主持有的可路由会话身份集合。
   availableSessionIds?: ReadonlySet<string>;
-  // Requests cancellation of the exact source-owned question and reports failure by rejection.
-  // 请求撤销由精确来源持有的问题，通过拒绝报告失败。
-  onCancelQuestion?: (questionId: string, sourceRootSessionId: string) => Promise<void> | void;
 }
 
 // ConversationAgentInteractionActionsContext scopes navigation and user actions to one mounted surface.
@@ -85,12 +79,13 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   createdAtMs: number;
 }) {
   const { locale, t } = useI18n();
-  // cancellation holds one click until its durable receipt, without changing the persisted question state.
-  // cancellation 在可靠回执到达前保持单次点击，不修改持久化问题状态。
-  const cancellation = React.useRef(false);
-  const [cancelSubmitted, setCancelSubmitted] = React.useState(false);
+  // Live display state updates historical question cards without rewriting their source event.
+  // 实时展示状态更新历史问题卡片，不改写其来源事件。
+  const collaborationState = React.useContext(ConversationCollaborationStateContext);
   const event = props.event;
-  const afterState = event.after_state;
+  const afterState = event.after_state.kind === "question"
+    ? collaborationState.questions.get(event.after_state.question.question_id) ?? event.after_state
+    : event.after_state;
   const isNotification = afterState.kind === "outbound_notification" || afterState.kind === "inbound_notification";
   // Task-message cards describe delivery, never a child task's terminal result.
   // 任务消息卡片描述投递，绝不表示子任务终态结果。
@@ -112,9 +107,11 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
     : collaborationTimelineTitle(event.event_kind, t);
   const body = event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState);
   const secondaryBody = collaborationSecondaryBody(afterState);
-  const pendingQuestion = afterState.kind === "question" && afterState.question.state === "pending"
-    ? afterState.question
-    : null;
+  // Question content is user-facing; transport envelopes and execution internals are not.
+  // 问题正文面向用户，传输信封和执行内部信息不面向用户。
+  const isQuestion = afterState.kind === "question" || afterState.kind === "inbound_delivery"
+    || afterState.kind === "outbound_delivery" || afterState.kind === "question_execution"
+    || afterState.kind === "answer_delivery";
   return (
     <CollaborationToolCard
       id={`collaboration:${event.operation_id}:${props.seq}`} seq={props.seq}
@@ -130,30 +127,7 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
           {secondaryBody.body}
         </p>
       ) : null}
-      {pendingQuestion ? (
-        <button
-          className="conversation-v1-collaboration-cancel-button"
-          disabled={!props.onCancelQuestion || cancelSubmitted || (props.cancellableQuestionIds !== undefined && !props.cancellableQuestionIds.has(pendingQuestion.question_id))}
-          onClick={async () => {
-            if (cancellation.current || !props.onCancelQuestion) return;
-            cancellation.current = true;
-            setCancelSubmitted(true);
-            // A failed request remains retryable; the service wrapper retains its operation identity.
-            // 失败请求仍可重试，服务封装保留其操作身份。
-            const accepted = await runConversationControlAction(
-              () => props.onCancelQuestion!(pendingQuestion.question_id, pendingQuestion.source.root_session_id),
-              t("conversation.collaboration.cancelFailed"),
-            );
-            if (!accepted) {
-              cancellation.current = false;
-              setCancelSubmitted(false);
-            }
-          }}
-          type="button"
-        >
-          {t("conversation.collaboration.cancelQuestion")}
-        </button>
-      ) : null}
+      {afterState.kind === "question" ? <ConversationCollaborationStatus questionId={afterState.question.question_id} /> : null}
       {participants.length > 0 ? (
         <div className="conversation-v1-collaboration-participants">
           {participants.map((participant) => (
@@ -168,7 +142,7 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
           ))}
         </div>
       ) : null}
-      <details className="conversation-v1-collaboration-details">
+      {!isQuestion ? <details className="conversation-v1-collaboration-details">
         <summary>{t("conversation.collaboration.technicalDetails")}</summary>
         <dl>
           <dt>event_kind</dt>
@@ -179,12 +153,29 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
           <dd>{afterState.kind}</dd>
         </dl>
         <pre>{JSON.stringify(afterState, null, 2)}</pre>
-      </details>
+      </details> : null}
       <time dateTime={new Date(props.createdAtMs).toISOString()}>
         {new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
       </time>
     </CollaborationToolCard>
   );
+}
+
+/** Renders delivery and lifecycle status inside its owning tool card, never as a timeline entry.
+ * 在所属工具卡内部渲染投递与生命周期状态，绝不成为独立时间线条目。
+ * Exact question/execution identities select current snapshots; absent facts render nothing.
+ * 精确问题或执行身份选择当前快照；没有事实时不渲染。 */
+export function ConversationCollaborationStatus(props: { questionId?: string | null; executionId?: string | null }) {
+  // Context belongs to the mounted session, so identical foreign IDs cannot leak across panes.
+  // 上下文归已挂载会话所有，避免其他面板的身份串入。
+  const state = React.useContext(ConversationCollaborationStateContext);
+  const { t } = useI18n();
+  const question = props.questionId ? state.questions.get(props.questionId) : undefined;
+  const delivery = props.questionId ? state.deliveries.get(props.questionId) : undefined;
+  const task = props.executionId ? state.tasks.get(props.executionId) : undefined;
+  const labels = [delivery, question, task].flatMap((fact) => fact ? [collaborationStatus(fact, t)] : []).filter(Boolean);
+  if (labels.length === 0) return null;
+  return <span className="conversation-v1-collaboration-status" data-collaboration-attached-status>{labels.join(" · ")}</span>;
 }
 
 /** Renders collaboration facts with the shared tool-card layout and measured folding.

@@ -52,6 +52,13 @@ export function resolveSubagentOrchestrationPresentation(
   const operationClosesAgents = operation === "close";
   const operationStopsAgents = operation === "close" || operation === "interrupt";
   return {
+    // ask_question returns the new ID; reply/wait/cancel receive an existing ID in their input.
+    // ask_question 返回新身份；回复、等待及撤销工具通过输入接收已有身份。
+    questionId: operation === "collaboration_question" ? stringValue(payload?.question_id)
+      : operation === "collaboration_answer" || operation === "collaboration_question_wait" || operation === "collaboration_cancel"
+        ? stringValue(args?.question_id) : null,
+    executionId: operation === "create" ? stringValue(payload?.execution_id) : null,
+    answerText: isCollaborationOperation(operation) ? stringValue(objectValue(payload?.answer)?.body) : null,
     agents: operationHasAgents ? subagentAgents(payload, blocks) : [],
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : true,
     debugSummary: subagentDebugSummary(payload?.debug),
@@ -127,6 +134,9 @@ function mergeSubagentPayload(
   const operationStopsAgents = presentation.operation === "close" || presentation.operation === "interrupt";
   return {
     ...presentation,
+    // Hydrated collaboration receipts carry the same typed answer body as the initial payload.
+    // 补载协作回执携带与初始载荷相同的强类型回答正文。
+    answerText: isCollaborationOperation(presentation.operation) ? stringValue(objectValue(payload.answer)?.body) : presentation.answerText,
     agents,
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : presentation.agentsKnown,
     debugSummary: isCollaborationOperation(presentation.operation)

@@ -454,6 +454,24 @@ describe("ConversationV1ToolCard", () => {
     expect(availableMarkup).not.toContain('class="v1-tool-card-navigation-button" disabled=""');
   });
 
+  it.each(["ask_question", "reply_question", "wait_question"])("hides protocol details in the expanded %s card", (toolName) => {
+    // Real receipt fields must not leak through the generic technical or raw-output panel.
+    // 真实回执字段不得通过通用技术详情或原始输出面板泄漏。
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
+      <ConversationV1ToolCard defaultExpanded item={cardItem({ toolName,
+        input: toolName === "ask_question" ? { target_session_id: "private-session-id", question: "请确认结果" }
+          : { question_id: "private-question-id", answer: "已确认结果" },
+        output: { model_output: { operation_id: "private-operation-id", question_id: "private-question-id",
+          answer: { body: "已确认结果" }, delivery: { state: "projected" } } },
+      })} />
+    </I18nProvider>);
+    expect(markup).toContain("已确认结果");
+    expect(markup).not.toContain("技术详情");
+    expect(markup).not.toContain("工具回执");
+    expect(markup).not.toContain("private-operation-id");
+    expect(markup).not.toContain("private-session-id");
+  });
+
   it("renders ask, dynamic subagent, and terminal events through the same persisted card shell", () => {
     const askMarkup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">

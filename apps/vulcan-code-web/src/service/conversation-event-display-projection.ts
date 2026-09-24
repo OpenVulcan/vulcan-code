@@ -77,23 +77,6 @@ export type AuxiliaryConversationEvent = Exclude<
   AssistantReasoningEvent | AssistantTextEvent | ToolCallEvent | RequestConfigChangedEvent | CollaborationEvent
 >;
 
-// pendingCollaborationQuestionIds derives action availability from the latest visible authoritative snapshots.
-// pendingCollaborationQuestionIds 从可见窗口中最新的权威快照派生操作可用性。
-// Parameters: events follow canonical sequence order; returns pending source-owned question IDs only.
-// 参数：events 遵循规范序号顺序；仅返回仍待处理的来源问题身份。
-export function pendingCollaborationQuestionIds(events: readonly ConversationEventSummary[]): ReadonlySet<string> {
-  // pending is view state only; the service revalidates the question at the durable mutation boundary.
-  // pending 仅是视图状态，服务仍在可靠变更边界重新校验问题。
-  const pending = new Set<string>();
-  for (const summary of events) {
-    if (summary.event.kind !== "collaboration" || summary.event.after_state.kind !== "question") continue;
-    const question = summary.event.after_state.question;
-    if (question.state === "pending") pending.add(question.question_id);
-    else pending.delete(question.question_id);
-  }
-  return pending;
-}
-
 /** Stable API grouping coordinates derived only from typed event fields.
  * 仅从强类型事件字段派生的稳定 API 分组坐标。 */
 export interface ConversationDisplayGroup {
@@ -440,7 +423,11 @@ export function projectConversationTranscriptDisplay(
  * Terminal bookkeeping stays in storage; subagent_return and non-success records own actual results.
  * 终态记账保留在存储中；真实结果由 subagent_return 与非成功报告负责展示。 */
 export function collaborationEventIsUserVisible(event: CollaborationEvent): boolean {
-  return event.event_kind !== "run_control_changed"
+  // Transport progress is attached by exact identity to its original tool/message card.
+  // 传输进度按精确身份附加到原工具或消息卡片。
+  return event.after_state.kind !== "outbound_delivery"
+    && event.after_state.kind !== "inbound_delivery"
+    && event.event_kind !== "run_control_changed"
     && event.event_kind !== "child_task_reserved"
     && event.event_kind !== "child_task_activated"
     && event.event_kind !== "child_task_terminal";

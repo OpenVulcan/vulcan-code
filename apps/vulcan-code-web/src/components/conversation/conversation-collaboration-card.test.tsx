@@ -129,9 +129,7 @@ function button(text: string): HTMLButtonElement {
 async function mount(
   event: Extract<ConversationEventBody, { kind: "collaboration" }>,
   actions: {
-    onCancelQuestion?: (questionId: string, sourceRootSessionId: string) => Promise<void> | void;
     onOpenSession?: (sessionId: string) => void;
-    cancellableQuestionIds?: ReadonlySet<string>;
     availableSessionIds?: ReadonlySet<string>;
   } = {},
 ) {
@@ -233,7 +231,7 @@ it("renders the interaction view for a collaboration envelope and the result car
 it("offers no question control for a received notification", async () => {
   // A18 requires notifications to carry no reply obligation; a cancel control would imply one.
   // A18 要求通知不携带回复义务；撤销控件会暗示存在义务。
-  await mount(inboundNotificationEvent(), { onCancelQuestion: vi.fn() });
+  await mount(inboundNotificationEvent());
   expect(Array.from(host.querySelectorAll("button")).map((element) => element.textContent)).not.toContain(
     "Cancel question",
   );
@@ -260,7 +258,7 @@ it("shows a failed answer delivery as failed after authorization revocation", as
     },
   });
   expect(host.querySelector(".conversation-v1-collaboration-status")?.textContent).toBe("Failed");
-  expect(host.querySelector(".conversation-v1-collaboration-details")?.textContent).toContain("authorization_revoked");
+  expect(host.querySelector(".conversation-v1-collaboration-details")).toBeNull();
 });
 
 it("enables session navigation only for a routable participant", async () => {
@@ -277,57 +275,11 @@ it("enables session navigation only for a routable participant", async () => {
   expect(onOpenSession).toHaveBeenCalledTimes(1);
 });
 
-it("keeps cancellation disabled without an exact cancellable identity or handler", async () => {
-  // Cancellation requires all three: a handler, a pending question, and that question in the window set.
-  // 撤销需要三者齐备：处理器、待处理问题，以及该问题位于窗口集合中。
-  await mount(questionEvent(), { onCancelQuestion: vi.fn() });
-  expect(button("Cancel question").disabled).toBe(false);
-  await act(async () => root.unmount());
-  root = createRoot(host);
-  await mount(questionEvent(), { onCancelQuestion: vi.fn(), cancellableQuestionIds: new Set(["other"]) });
-  expect(button("Cancel question").disabled).toBe(true);
-  await act(async () => root.unmount());
-  root = createRoot(host);
-  await mount(questionEvent(), { cancellableQuestionIds: new Set(["question-1"]) });
-  expect(button("Cancel question").disabled).toBe(true);
-  await act(async () => root.unmount());
-  root = createRoot(host);
-  // An already answered question is no longer cancellable, whatever the window set says.
-  // 已回答问题不再可撤销，无论窗口集合如何声明。
-  await mount(questionEvent("answered"), {
-    onCancelQuestion: vi.fn(),
-    cancellableQuestionIds: new Set(["question-1"]),
-  });
+it.each(["pending", "answered"] as const)("shows no cancellation control or technical details for a %s question", async (state) => {
+  await mount(questionEvent(state));
   expect(host.querySelector(".conversation-v1-collaboration-cancel-button")).toBeNull();
-});
-
-it("submits one cancellation with the exact question and source identity", async () => {
-  // A11 requires stable identity: the callback must receive the question and its source root verbatim.
-  // A11 要求稳定身份：回调必须逐字收到该问题及其来源根。
-  const onCancelQuestion = vi.fn(async () => {});
-  await mount(questionEvent(), { onCancelQuestion, cancellableQuestionIds: new Set(["question-1"]) });
-  await act(async () => button("Cancel question").click());
-  await act(async () => button("Cancel question").click());
-  expect(onCancelQuestion).toHaveBeenCalledTimes(1);
-  expect(onCancelQuestion).toHaveBeenCalledWith("question-1", "session-source");
-});
-
-it("keeps a failed cancellation retryable while it holds the click", async () => {
-  // A rejected request must release the single-flight guard so the user can retry the same identity.
-  // 被拒绝的请求必须释放单次提交保护，使用户能以同一身份重试。
-  const onCancelQuestion = vi
-    .fn<(questionId: string, sourceRootSessionId: string) => Promise<void>>()
-    .mockRejectedValueOnce(new Error("durable cancellation failed"))
-    .mockResolvedValueOnce(undefined);
-  await mount(questionEvent(), { onCancelQuestion, cancellableQuestionIds: new Set(["question-1"]) });
-  await act(async () => button("Cancel question").click());
-  expect(onCancelQuestion).toHaveBeenCalledTimes(1);
-  // The failed attempt must not leave the control permanently disabled.
-  // 失败的一次尝试不得让控件永久禁用。
-  expect(button("Cancel question").disabled).toBe(false);
-  await act(async () => button("Cancel question").click());
-  expect(onCancelQuestion).toHaveBeenCalledTimes(2);
-  expect(onCancelQuestion).toHaveBeenLastCalledWith("question-1", "session-source");
+  expect(host.querySelector(".conversation-v1-collaboration-details")).toBeNull();
+  expect(host.textContent).toContain("Which file owns this behavior?");
 });
 
 it("retains the original event timestamp across a delivery update", async () => {

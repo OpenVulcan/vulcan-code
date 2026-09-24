@@ -106,9 +106,6 @@ export interface ConversationV1WorkspaceProps {
   /** Host-owned navigation inputs for direct and embedded collaboration sessions.
    * 宿主持有的直接会话与嵌入式协作会话导航输入。*/
   collaborationNavigation?: ConversationV1CollaborationNavigation | null;
-  /** Cancels one exact pending collaboration question through the frozen host wrapper.
-   * 通过已冻结的宿主包装器取消一个精确待处理协作问题。*/
-  onCancelCollaborationQuestion?: (questionId: string, sourceRootSessionId: string) => void;
   /** Receives distinct edit-root and completed-Turn fork actions.
    * 接收彼此独立的编辑根操作与完整回合分叉操作。
    */
@@ -226,7 +223,6 @@ export function ConversationV1Workspace(props: ConversationV1WorkspaceProps) {
               events={events}
               availableCollaborationSessionIds={availableCollaborationSessionIds}
               subagentNames={collaborationNavigation?.subagentNames}
-              onCancelCollaborationQuestion={props.onCancelCollaborationQuestion}
               onCopyText={props.onCopyText}
               onOpenCollaborationSession={onOpenCollaborationSession}
               onOpenExternalRef={props.onOpenExternalRef}

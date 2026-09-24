@@ -547,6 +547,15 @@ export type CollaborationToolArguments =
 // SubagentOrchestrationPresentation describes one inline subagent or agent-collaboration display.
 // SubagentOrchestrationPresentation 描述一条内联子代理或代理协作展示。
 export interface SubagentOrchestrationPresentation {
+  // Exact question identity from the ask receipt or the related tool's declared input.
+  // 来自提问回执或关联工具声明输入的精确问题身份。
+  questionId?: string | null;
+  // Human-readable answer from the typed question receipt, excluding its protocol envelope.
+  // 来自强类型问题回执的可读回答，不含协议信封。
+  answerText?: string | null;
+  // Exact child execution identity from the creation host result.
+  // 来自创建宿主结果的精确子执行身份。
+  executionId?: string | null;
   // Discriminator for subagent orchestration cards.
   // 子代理调度卡片的判别字段。
   kind: "subagent_orchestration";

@@ -1,5 +1,6 @@
 import { ConversationAgentInteractionActionsContext, ConversationAgentInteractionView, ConversationCollaborationCard } from "./conversation-collaboration-card";
 import { conversationV1SubagentNames } from "./conversation-collaboration-navigation";
+import { ConversationCollaborationStateContext, projectConversationCollaborationState } from "./conversation-collaboration-state";
 import { ThinkingPopupContext, ThinkingPreview } from "./thinking-preview";
 import { normalizeThinkingDisplayMode } from "./thinking-display";
 import React from "react";
@@ -21,7 +22,6 @@ import { ConversationV1TurnStatsCard } from "./conversation-v1-turn-stats-card";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import {
   projectConversationEventDisplay,
-  pendingCollaborationQuestionIds,
   projectConversationTranscriptDisplay,
   requestConfigChangeKind,
   type ConversationAssistantTranscriptNode,
@@ -101,9 +101,6 @@ export interface ConversationV1DisplayRendererProps {
   /** Collaboration session ids that still have live navigation targets.
    * 当前仍有实时导航目标的协作会话 ID。 */
   availableCollaborationSessionIds?: ReadonlySet<string>;
-  /** Cancels one exact pending collaboration question through the host-owned wrapper.
-   * 通过宿主持有的 wrapper 撤销一条精确的待处理协作问题。 */
-  onCancelCollaborationQuestion?: (questionId: string, sourceRootSessionId: string) => void;
   /** Kind-qualified external references that still have a live navigation target.
    * 当前仍有实时导航目标的带类型外部引用。 */
   availableExternalRefKeys?: ReadonlySet<string>;
@@ -162,7 +159,6 @@ export function ConversationV1EventWindowView(props: ConversationV1EventWindowVi
       onOpenExternalRef={props.onOpenExternalRef}
       onOpenCollaborationSession={props.onOpenCollaborationSession}
       availableCollaborationSessionIds={props.availableCollaborationSessionIds}
-      onCancelCollaborationQuestion={props.onCancelCollaborationQuestion}
       onOpenMarkdownMedia={props.onOpenMarkdownMedia}
       onCopyText={props.onCopyText}
       reasoningDisplayMode={props.reasoningDisplayMode}
@@ -215,7 +211,6 @@ export function ConversationV1SessionDisplayRenderer(
       onOpenExternalRef={props.onOpenExternalRef}
       onOpenCollaborationSession={props.onOpenCollaborationSession}
       availableCollaborationSessionIds={props.availableCollaborationSessionIds}
-      onCancelCollaborationQuestion={props.onCancelCollaborationQuestion}
       onOpenMarkdownMedia={props.onOpenMarkdownMedia}
       onCopyText={props.onCopyText}
       onRootInputGenerationAction={props.onRootInputGenerationAction}
@@ -239,9 +234,9 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
   // Historical creation records keep names available after live navigation removes closed agents.
   // 历史创建记录让实时导航移除已关闭智能体后仍能显示名字。
   const subagentNames = React.useMemo(() => conversationV1SubagentNames(props.events, props.subagentNames), [props.events, props.subagentNames]);
-  // cancellableQuestions prevents historical pending cards from exposing stale actions after settlement.
-  // cancellableQuestions 防止历史待处理卡片在结算后暴露过期操作。
-  const cancellableQuestions = React.useMemo(() => pendingCollaborationQuestionIds(props.events), [props.events]);
+  // Latest collaboration facts enrich their owning cards without becoming standalone transport rows.
+  // 最新协作事实补充所属卡片，不成为独立传输行。
+  const collaborationState = React.useMemo(() => projectConversationCollaborationState(props.events), [props.events]);
   // transcriptNodes validates the complete ledger before deriving the established visual hierarchy.
   // transcriptNodes 在派生既有视觉层级前校验完整账本。
   const transcriptNodes = React.useMemo(
@@ -256,10 +251,10 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
   return (
     <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode ?? "inline_output") === "popup_only"}>
     <MarkdownImageWorkspacePathProvider value={props.workspacePath}>
+    <ConversationCollaborationStateContext.Provider value={collaborationState}>
       <div className="conversation-v1-display" data-conversation-v1-display="true">
         {transcriptNodes.map((node) => (
           <ConversationV1TranscriptNodeView
-            cancellableQuestionIds={cancellableQuestions}
             subagentNames={subagentNames}
             providers={props.providers}
             defaultExpandedTools={props.defaultExpandedTools}
@@ -270,7 +265,6 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
             onOpenExternalRef={props.onOpenExternalRef}
             onOpenCollaborationSession={props.onOpenCollaborationSession}
             availableCollaborationSessionIds={props.availableCollaborationSessionIds}
-            onCancelCollaborationQuestion={props.onCancelCollaborationQuestion}
             onOpenMarkdownMedia={props.onOpenMarkdownMedia}
             onRootInputGenerationAction={props.onRootInputGenerationAction}
             resourceCatalog={props.resourceCatalog}
@@ -278,6 +272,7 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
           />
         ))}
       </div>
+    </ConversationCollaborationStateContext.Provider>
     </MarkdownImageWorkspacePathProvider>
     </ThinkingPopupContext.Provider>
   );
@@ -289,9 +284,6 @@ interface ConversationV1TranscriptNodeViewProps {
   /** Host-owned child labels keyed by exact session id.
    * 由宿主持有、按精确会话身份索引的子代理标签。 */
   subagentNames?: ReadonlyMap<string, string>;
-  // Latest pending question identities from this exact event window.
-  // 当前精确事件窗口中最新的待处理问题身份。
-  cancellableQuestionIds: ReadonlySet<string>;
   /** Provider/model display catalog owned by the containing surface.
    * 所属界面持有的供应商和模型显示目录。 */
   providers?: readonly ProviderSummary[];
@@ -313,9 +305,6 @@ interface ConversationV1TranscriptNodeViewProps {
   /** Collaboration session ids that still have live navigation targets.
    * 当前仍有实时导航目标的协作会话 ID。 */
   availableCollaborationSessionIds?: ReadonlySet<string>;
-  /** Cancels one exact pending collaboration question through the host-owned wrapper.
-   * 通过宿主持有的 wrapper 撤销一条精确的待处理协作问题。 */
-  onCancelCollaborationQuestion?: (questionId: string, sourceRootSessionId: string) => void;
   /** Optional assistant-Markdown media callback.
    * 可选的 assistant Markdown 媒体回调。 */
   onOpenMarkdownMedia?: (attachment: GeneratedMediaAttachment) => void;
@@ -361,13 +350,11 @@ function ConversationV1TranscriptNodeView(props: ConversationV1TranscriptNodeVie
       return (
         <ConversationCollaborationCard
           key={props.node.item.collaboration.operation_id}
-          cancellableQuestionIds={props.cancellableQuestionIds}
           availableSessionIds={props.availableCollaborationSessionIds}
           subagentNames={props.subagentNames}
           event={props.node.item.collaboration}
           seq={props.node.seq}
           createdAtMs={props.node.item.created_at_ms}
-          onCancelQuestion={props.onCancelCollaborationQuestion}
           onOpenSession={props.onOpenCollaborationSession}
         />
       );

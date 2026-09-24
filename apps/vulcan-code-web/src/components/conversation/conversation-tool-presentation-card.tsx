@@ -1,4 +1,6 @@
 import * as React from "react";
+import { ConversationCollaborationStatus } from "./conversation-collaboration-card";
+import { ConversationCollaborationStateContext } from "./conversation-collaboration-state";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
@@ -1896,6 +1898,7 @@ function SubagentOrchestrationPresentationCard(props: {
         <Bot className="subagent-orchestration-icon" size={15} />
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
         <span className="tool-presentation-command"><span className="tool-presentation-command-text">{subagentCardSummaryText(hydratedPresentation, t)}</span></span>
+        <ConversationCollaborationStatus questionId={hydratedPresentation.questionId} executionId={hydratedPresentation.executionId} />
         {canExpand ? (
           expanded ? (
             <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -2121,6 +2124,17 @@ function CollaborationToolDetail(props: {
   t: (key: TranslationKey) => string;
 }) {
   const { presentation, t } = props;
+  // Question tools expose conversation content, never the internal request/receipt JSON.
+  // 问题工具仅展示对话内容，不展示内部请求或回执 JSON。
+  const isQuestion = presentation.operation === "collaboration_question"
+    || presentation.operation === "collaboration_answer" || presentation.operation === "collaboration_question_wait"
+    || presentation.operation === "collaboration_cancel";
+  const collaborationState = React.useContext(ConversationCollaborationStateContext);
+  const question = presentation.questionId ? collaborationState.questions.get(presentation.questionId) : undefined;
+  const answer = question?.question.answer;
+  // A newer failed delivery revokes historical answer disclosure as well.
+  // 较新的失败交付也撤销历史回答的展示。
+  const answerText = answer ? (answer.delivery.state === "failed" ? null : answer.body) : presentation.answerText;
   const argumentText = presentation.collaborationArguments
     ? JSON.stringify(presentation.collaborationArguments, null, 2)
     : null;
@@ -2140,9 +2154,10 @@ function CollaborationToolDetail(props: {
           <strong>{presentation.deliveryMode === "queue" ? t("conversation.subagent.queue.followup") : t("conversation.subagent.queue.steering")}</strong>
         </div>
       ) : null}
-      {argumentText ? <SubagentTextBlock label={t("conversation.collaboration.detail.arguments")} text={argumentText} /> : null}
-      {presentation.result ? <SubagentTextBlock label={t("conversation.collaboration.detail.output")} text={presentation.result} /> : null}
-      {!presentation.prompt && !argumentText && !presentation.result ? (
+      {!isQuestion && argumentText ? <SubagentTextBlock label={t("conversation.collaboration.detail.arguments")} text={argumentText} /> : null}
+      {!isQuestion && presentation.result ? <SubagentTextBlock label={t("conversation.collaboration.detail.output")} text={presentation.result} /> : null}
+      {isQuestion && presentation.operation !== "collaboration_answer" && answerText ? <SubagentTextBlock label={t("conversation.collaboration.detail.answer")} text={answerText} /> : null}
+      {!presentation.prompt && (isQuestion ? !answerText : !argumentText && !presentation.result) ? (
         <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.empty")}</div>
       ) : null}
     </div>

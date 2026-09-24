@@ -32,13 +32,12 @@ import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-st
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
+import { ConversationV1DisplayRenderer } from "./conversation-v1-display-renderer";
 import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
 import type { ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
-import { cancelCollaborationQuestion } from "@/service/collaboration-question-service";
 
-vi.mock("@/service/collaboration-question-service", () => ({ cancelCollaborationQuestion: vi.fn() }));
 
 // collaborationEvents builds a notification and a child result after the parent's real final answer.
 // collaborationEvents 构建父会话真实最终回复之后的通知与子任务结果。
@@ -333,7 +332,61 @@ describe("ConversationBranchWorkspaceV1", () => {
     }
   });
 
-  it("disables historical question actions once a later authoritative snapshot settles the question", () => {
+  it.each(["branch", "native"] as const)("attaches exact delivery progress to the owning tools in %s", (surface) => {
+    // Two independent questions detect accidental association by adjacent event or display name.
+    // 两个独立问题用于发现按相邻事件或展示名称错误关联的情况。
+    const created = questionEvent();
+    if (created.event.kind !== "collaboration" || created.event.after_state.kind !== "question") throw new Error("Invalid question fixture");
+    const tool = (seq: number, questionId: string): ConversationEventSummary => eventSummary(seq, {
+      kind: "tool_call", api_call_id: 1, tool_call_id: seq, tool_name: "ask_question",
+      input: { target: "same-agent", question: questionId }, request_stream_id: `ask-${seq}`, status: "completed",
+      output: { model_output: { question_id: questionId, status: "accepted" } },
+    });
+    const events = [tool(7, "question-1"), tool(8, "question-2"), created,
+      eventSummary(10, { kind: "collaboration", version: 1, operation_id: "delivery-progress", event_kind: "delivery_projected",
+        after_state: { kind: "outbound_delivery", delivery: { ...created.event.after_state.delivery, state: "projected" } } }, "host_only")];
+    const markup = surface === "branch" ? renderWorkspace(events) : renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={events} defaultExpandedTools /></I18nProvider>,
+    );
+    const container = document.createElement("div");
+    container.innerHTML = markup;
+    const cards = [...container.querySelectorAll(".tool-presentation-card:not(.conversation-v1-collaboration-card)")];
+    expect(cards).toHaveLength(2);
+    expect(cards.find((card) => card.querySelector("[data-collaboration-attached-status]"))?.textContent).toContain("已投影");
+    expect(cards.filter((card) => card.querySelector("[data-collaboration-attached-status]"))).toHaveLength(1);
+    expect(container.querySelector('[data-collaboration-event-kind="delivery_projected"]')).toBeNull();
+    expect(markup).not.toContain("协作投递");
+  });
+
+  it.each(["branch", "native"] as const)("attaches child completion by execution identity in %s", (surface) => {
+    // Reused child names must not let an older execution update the new creation card.
+    // 复用子代理名称不得让旧执行更新新创建卡片。
+    const create = (seq: number, executionId: string): ConversationEventSummary => eventSummary(seq, {
+      kind: "tool_call", api_call_id: 1, tool_call_id: seq, tool_name: "spawn_agent",
+      input: { task_id: "same-agent", prompt: "work" }, request_stream_id: `create-${seq}`, status: "completed",
+      output: { model_output: "created", host_result: { kind: "subagent_task", payload: {
+        task_id: "same-agent", execution_id: executionId, display_title: "same-agent", prompt: "work", execution_status: "running",
+      } } },
+    });
+    const events = [create(1, "old-execution"), create(2, "new-execution"), eventSummary(3, {
+      kind: "collaboration", version: 1, operation_id: "terminal-old", event_kind: "child_task_terminal",
+      after_state: { kind: "child_task", task: { reservation_operation_id: "reserve-old", source_tool_name: "spawn_agent",
+        execution_id: "old-execution", task_id: "same-agent", parent_segment_generation: 1, parent_turn_id: 11,
+        child: { session_id: "same-child", root_session_id: "session-branch-v1", project_id: "project-1", segment_generation: 1 },
+        state: "terminal", reserved_at_ms: 1000, terminal_outcome: "completed", terminal_at_ms: 1010,
+        non_success_result: null, non_success_projection: null } },
+    }, "host_only")];
+    const markup = surface === "branch" ? renderWorkspace(events) : renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={events} defaultExpandedTools /></I18nProvider>,
+    );
+    const container = document.createElement("div");
+    container.innerHTML = markup;
+    expect(container.querySelectorAll("[data-collaboration-attached-status]"), markup).toHaveLength(1);
+    expect(container.querySelector("[data-collaboration-attached-status]")?.textContent).toContain("已完成");
+    expect(container.querySelector('[data-collaboration-card-kind]')).toBeNull();
+  });
+
+  it("updates historical question status after settlement without offering cancellation", () => {
     // created is the old pending snapshot retained as immutable history.
     // created 是作为不可变历史保留的旧待处理快照。
     const created = questionEvent();
@@ -345,7 +398,9 @@ describe("ConversationBranchWorkspaceV1", () => {
       question: { ...created.event.after_state.question, state: "cancelled", cancellation: { operation_id: "cancel-op", requester: created.event.after_state.question.source, reason: "user_cancelled", cancelled_at_ms: 1010 } },
     } }, "host_only");
     const markup = renderWorkspace([created, settled]);
-    expect(markup).toContain('class="conversation-v1-collaboration-cancel-button" disabled=""');
+    expect(markup).not.toContain("conversation-v1-collaboration-cancel-button");
+    expect(markup).not.toContain("等待处理");
+    expect(markup).not.toContain("技术详情");
     expect(markup).toContain("user_cancelled");
   });
   it("keeps notification and child-result cards distinct from human input and parent completion", () => {
@@ -374,7 +429,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(projectConversationTimelineItems(late.renderItems, undefined, true).map((entry) => entry.kind)).toEqual(["item"]);
   });
 
-  it("routes known participants and cancels one exact source-owned question only once", async () => {
+  it("routes known participants without allowing the UI to cancel agent questions", async () => {
     // container mounts production buttons so callbacks cannot pass on static markup alone.
     // container 挂载生产按钮，避免只用静态标记证明回调有效。
     const container = document.createElement("div");
@@ -382,10 +437,6 @@ describe("ConversationBranchWorkspaceV1", () => {
     const root = createRoot(container);
     const onSelectConversation = vi.fn();
     const onOpenSubagentPanel = vi.fn(async () => true);
-    // resolveCancellation controls one outstanding request to test synchronous duplicate clicks.
-    // resolveCancellation 控制一个未完成请求，验证同步重复点击。
-    let resolveCancellation!: (value: Awaited<ReturnType<typeof cancelCollaborationQuestion>>) => void;
-    vi.mocked(cancelCollaborationQuestion).mockImplementationOnce(() => new Promise((resolve) => { resolveCancellation = resolve; }));
     try {
       await React.act(async () => { root.render(workspaceTree([questionEvent()], "inline_output", [], false, {
         conversations: [{ id: "session-source" }], navigation: null, onSelectConversation, onOpenSubagentPanel,
@@ -397,16 +448,10 @@ describe("ConversationBranchWorkspaceV1", () => {
       await React.act(async () => { sourceButton.click(); targetButton.click(); });
       expect(onSelectConversation).toHaveBeenCalledExactlyOnceWith("session-source");
       expect(onOpenSubagentPanel).not.toHaveBeenCalled();
-      const cancelButton = container.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-cancel-button")!;
-      await React.act(async () => { cancelButton.click(); cancelButton.click(); });
-      expect(cancelCollaborationQuestion).toHaveBeenCalledExactlyOnceWith("question-1", "root-source");
-      expect(cancelButton.disabled).toBe(true);
-      await React.act(async () => { resolveCancellation({ status: "accepted", question_id: "question-1", question_state: "cancelled", operation_id: "cancel-operation", revision: 2 }); });
-      expect(cancelButton.disabled).toBe(true);
+      expect(container.querySelector(".conversation-v1-collaboration-cancel-button")).toBeNull();
     } finally {
       await React.act(async () => root.unmount());
       container.remove();
-      vi.mocked(cancelCollaborationQuestion).mockReset();
     }
   });
   // The same live sequence must hand reasoning to exactly one tool under either popup preference.

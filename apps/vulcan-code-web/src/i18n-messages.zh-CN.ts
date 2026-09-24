@@ -1582,8 +1582,6 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.answerDelivery": "答案交付",
     "conversation.collaboration.deliveryMode.waitTool": "等待工具",
     "conversation.collaboration.deliveryMode.userEvent": "用户事件",
-    "conversation.collaboration.cancelQuestion": "撤销问题",
-    "conversation.collaboration.cancelFailed": "撤销问题失败",
     "conversation.collaboration.grantAction.read": "读取会话",
     "conversation.collaboration.grantAction.ask": "向目标提问",
     "conversation.collaboration.grantAction.steer": "引导任务",

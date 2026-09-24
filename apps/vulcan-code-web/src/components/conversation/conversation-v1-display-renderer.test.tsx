@@ -327,7 +327,6 @@ describe("ConversationV1DisplayRenderer", () => {
   });
   it("renders HostOnly collaboration questions as localized cards with exact session navigation", () => {
     const onOpenSession = vi.fn();
-    const onCancelQuestion = vi.fn();
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer
@@ -387,7 +386,6 @@ describe("ConversationV1DisplayRenderer", () => {
               },
             }, "host_only"),
           ]}
-          onCancelCollaborationQuestion={onCancelQuestion}
           onOpenCollaborationSession={onOpenSession}
         />
       </I18nProvider>,
@@ -399,10 +397,10 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup).toContain("Which file owns this behavior?");
     expect(markup).toContain("打开来源会话");
     expect(markup).toContain("打开目标会话");
-    expect(markup).toContain("撤销问题");
+    expect(markup).not.toContain("撤销问题");
+    expect(markup).not.toContain("技术详情");
     expect(markup).toContain("operation-question-1");
-    expect(markup).toContain("session-source");
-    expect(markup).toContain("session-target");
+    expect(markup).not.toContain('"session_id"');
     expect(markup).not.toContain("ask-question-dialog");
   });
 
