@@ -12,6 +12,8 @@ Rust Core · Electron 桌面壳 · React WebUI
 [![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/OpenVulcan/vulcan-code/pulls)
 
+**简体中文** | [English](README.en.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Русский](README.ru.md) | [Português](README.pt-BR.md)
+
 </div>
 
 ---
@@ -223,7 +225,7 @@ Vulcan Code 构建在众多优秀的开源项目之上，感谢这些项目的�
 
 - [LINUX DO](https://linux.do/)：感谢 LINUX DO 社区的支持与交流
 
-完整的第三方依赖及许可证见 [`THIRD_PARTY_NOTICES.md`](crates/vulcan-runtime-assets/resources/licenses/THIRD_PARTY_NOTICES.md)，也可以在应用内的「许可证浏览」中查看。
+完整的第三方依赖及许可证见 [`THIRD_PARTY_NOTICES.md`](crates/vulcan-runtime-assets/resources/licenses/THIRD_PARTY_NOTICES.md)，也可以在应用内的「设置 → 关于与许可证」中查看。
 
 ## 许可证
 
