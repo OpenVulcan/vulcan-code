@@ -182,8 +182,48 @@ make sync            # 改了资源、配置、技能或插件后需要重新同
 
 ## 致谢
 
+Vulcan Code 构建在众多优秀的开源项目之上，感谢这些项目的作者和社区。
+
+**内置组件与工具**
+
+- [RTK](https://github.com/rtk-ai/rtk)：命令输出压缩，减少 Token 消耗（Vulcan RTK 插件）
+- [Context7](https://github.com/upstash/context7)：按版本检索最新的库文档（Context7 插件）
+- [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp)：AI 浏览器的驱动与工具
+- [LuaSkills](https://github.com/LuaSkills/luaskills)：LuaSkills 技能运行时
+- [ripgrep](https://github.com/BurntSushi/ripgrep) 与 [ast-grep](https://github.com/ast-grep/ast-grep)：随包提供的文本与语法树搜索工具
+
+**桌面端与界面**
+
+- [Electron](https://www.electronjs.org/)：桌面壳
+- [React](https://react.dev/) 与 [Vite](https://vite.dev/)：WebUI 框架与构建工具
+- [shadcn/ui](https://ui.shadcn.com/)、[Radix UI](https://www.radix-ui.com/)、[Tailwind CSS](https://tailwindcss.com/)：组件体系与样式
+- [xterm.js](https://xtermjs.org/)：终端渲染
+- [Shiki](https://shiki.style/)：代码与 Diff 语法高亮
+- [Mermaid](https://mermaid.js.org/)：图表渲染
+- [Lucide](https://lucide.dev/)、[Iconify](https://iconify.design/)：图标
+
+**Rust Core**
+
+- [Tokio](https://tokio.rs/) 与 [Axum](https://github.com/tokio-rs/axum)：异步运行时与服务框架
+- [rmcp](https://github.com/modelcontextprotocol/rust-sdk)：MCP 官方 Rust SDK
+- [LanceDB](https://github.com/lancedb/lancedb) 与 [Apache Arrow](https://arrow.apache.org/)：向量索引与列式数据
+- [SQLite](https://sqlite.org/)（[rusqlite](https://github.com/rusqlite/rusqlite)）：本地数据存储
+- [jieba-rs](https://github.com/messense/jieba-rs)：中文分词，用于知识库全文检索
+- [portable-pty](https://github.com/wezterm/wezterm)（WezTerm）：跨平台伪终端
+
+**设计与实现参考**
+
+- [OpenAI Codex](https://github.com/openai/codex)：Responses 协议通讯、重试与上下文压缩的实现参考
+- [cc-switch](https://github.com/farion1231/cc-switch)：多协议转换、流式工具调用与模型价格数据参考
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)：Gemini 协议与兼容转换参考
+- [OpenCode](https://github.com/anomalyco/opencode)：供应商目录与系统提示词参考
 - [agency-agents](https://github.com/msitarzewski/agency-agents)：子代理角色模板来源
-- 所有第三方依赖及其许可证见 [`THIRD_PARTY_NOTICES.md`](crates/vulcan-runtime-assets/resources/licenses/THIRD_PARTY_NOTICES.md)，也可以在应用内的「许可证浏览」中查看
+
+**社区**
+
+- [LINUX DO](https://linux.do/)：感谢 LINUX DO 社区的支持与交流
+
+完整的第三方依赖及许可证见 [`THIRD_PARTY_NOTICES.md`](crates/vulcan-runtime-assets/resources/licenses/THIRD_PARTY_NOTICES.md)，也可以在应用内的「许可证浏览」中查看。
 
 ## 许可证
 
