@@ -536,6 +536,16 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(processes).toHaveLength(kind === "claimed" ? 2 : 1);
     const process = processes.at(-1)!;
     if (process.kind !== "process") throw new Error("Expected task process");
+    // New tasks precede the work divider; steering remains among that same turn's process items.
+    // 新任务位于工作分隔线之前；插队仍位于同一回合的过程项中。
+    const incomingRow = presentation.renderItems.find((item) => item.sourceMessage?.agentInteraction?.event.kind === "collaboration"
+      && item.sourceMessage.agentInteraction.event.after_state.kind === "inbound_task_message")!;
+    expect(process.process.items.some((item) => item.id === incomingRow.id)).toBe(kind === "steered");
+    if (kind === "claimed") {
+      const startIndex = timeline.findIndex((entry) => entry.kind === "item" && entry.item.id === incomingRow.id);
+      expect(startIndex).toBeGreaterThanOrEqual(0);
+      expect(startIndex).toBeLessThan(timeline.indexOf(process));
+    }
     expect(process.process.items.some((item) => item.blocks.some((block) => block.kind === "thinking"))).toBe(false);
     expect(process.process.items.some((item) => item.leadingThinking?.length)).toBe(true);
     expect(presentation.messages.filter((message) => message.role === "user")).toHaveLength(1);
@@ -577,14 +587,20 @@ describe("ConversationBranchWorkspaceV1", () => {
     const onOpenSubagentPanel = vi.fn(async () => true);
     try {
       await React.act(async () => { root.render(workspaceTree([questionEvent()], "inline_output", [], false, {
-        conversations: [{ id: "session-source" }], navigation: null, onSelectConversation, onOpenSubagentPanel,
+        conversations: [{ id: "session-target", title: "接收会话" }], navigation: null, onSelectConversation, onOpenSubagentPanel,
       })); });
-      const sourceButton = container.querySelector<HTMLButtonElement>('[aria-label="打开来源会话"]')!;
+      expect(container.querySelector('[aria-label="打开来源会话"]')).toBeNull();
       const targetButton = container.querySelector<HTMLButtonElement>('[aria-label="打开目标会话"]')!;
-      expect(sourceButton.disabled).toBe(false);
-      expect(targetButton.disabled).toBe(true);
-      await React.act(async () => { sourceButton.click(); targetButton.click(); });
-      expect(onSelectConversation).toHaveBeenCalledExactlyOnceWith("session-source");
+      expect(targetButton.disabled).toBe(false);
+      const fold = container.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-fold")!;
+      const expanded = fold.getAttribute("aria-expanded");
+      await React.act(async () => { targetButton.click(); });
+      expect(fold.getAttribute("aria-expanded")).toBe(expanded);
+      await React.act(async () => { fold.click(); });
+      expect(fold.getAttribute("aria-expanded")).not.toBe(expanded);
+      await React.act(async () => { fold.click(); });
+      expect(fold.getAttribute("aria-expanded")).toBe(expanded);
+      expect(onSelectConversation).toHaveBeenCalledExactlyOnceWith("session-target");
       expect(onOpenSubagentPanel).not.toHaveBeenCalled();
       expect(container.querySelector(".conversation-v1-collaboration-cancel-button")).toBeNull();
     } finally {

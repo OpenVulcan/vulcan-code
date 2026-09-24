@@ -84,6 +84,7 @@ describe("ConversationV1DisplayRenderer", () => {
     // 通过实际事件时间线及其协作导航上下文渲染。
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
       <ConversationV1DisplayRenderer availableCollaborationSessionIds={new Set(["executor"])}
+        subagentNames={new Map([["executor", "执行智能体"]])}
         onOpenCollaborationSession={() => undefined} events={[summary(12, event, "host_only")]} />
     </I18nProvider>);
     expect(markup).toContain('data-collaboration-card-kind="task-result"');
@@ -143,6 +144,7 @@ describe("ConversationV1DisplayRenderer", () => {
       const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer
           availableCollaborationSessionIds={new Set(["executor"])}
+          subagentNames={new Map([["executor", "执行会话"], ["requester", "请求会话"]])}
           onOpenCollaborationSession={() => undefined}
           events={[summary(10, {
           kind: "collaboration", version: 1, operation_id: result.operation_id,
@@ -156,10 +158,11 @@ describe("ConversationV1DisplayRenderer", () => {
       expect(markup).not.toContain("user-bubble");
       expect(markup).not.toContain("assistant-final-output");
       expect(markup).not.toContain("conversation-v1-collaboration-cancel-button");
-      // Only the executor route is available: this verifies the reversed result direction.
-      // 只有执行者路由可用：据此验证结果回传方向确实反转。
-      expect(markup).toMatch(/aria-label="打开来源会话"[^>]*class="conversation-v1-collaboration-session-button"[^>]*type="button">/);
-      expect(markup).not.toMatch(/aria-label="打开来源会话"[^>]*disabled/);
+      // Outgoing results show only the original requester, even when the executor is routable.
+      // 发出结果仅显示原请求者，即使执行者自身可路由也不展示。
+      expect(markup).not.toContain("打开来源会话");
+      expect(markup).not.toContain("执行会话");
+      expect(markup).toContain("请求会话");
       expect(markup).toMatch(/aria-label="打开目标会话"[^>]*disabled/);
       // The requester receives a result card; an internal acknowledgement never becomes another answer.
       // 请求者收到结果卡片；内部确认绝不成为另一份回答。
@@ -167,6 +170,7 @@ describe("ConversationV1DisplayRenderer", () => {
       const received = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer
           availableCollaborationSessionIds={new Set(["executor"])}
+          subagentNames={new Map([["executor", "执行会话"], ["requester", "请求会话"]])}
           onOpenCollaborationSession={() => undefined}
           events={[summary(20, { kind: "collaboration", version: 1, operation_id: acceptance.operation_id,
             event_kind: "task_result_accepted", after_state: { kind: "received_task_result", acceptance },
@@ -176,8 +180,11 @@ describe("ConversationV1DisplayRenderer", () => {
       expect(received).toContain("会话任务结果");
       expect(received.includes("完整最终结果")).toBe(outcome === "completed");
       expect(received).not.toMatch(/aria-label="打开来源会话"[^>]*disabled/);
-      expect(received).toMatch(/aria-label="打开目标会话"[^>]*disabled/);
-      expect(received).not.toContain("user-bubble");
+      expect(received).not.toContain("打开目标会话");
+      expect(received).not.toContain("请求会话");
+      expect(received).toContain("执行会话");
+      expect(received).toContain("user-bubble conversation-v1-collaboration-bubble");
+      expect(received).toContain("conversation-v1-collaboration-incoming");
       const confirmed = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer events={[summary(30, {
           kind: "collaboration", version: 1, operation_id: "confirm-result", event_kind: "task_result_acknowledged",
@@ -335,6 +342,7 @@ describe("ConversationV1DisplayRenderer", () => {
       <I18nProvider initialLocale="zh-CN">
         <ConversationV1DisplayRenderer
           availableCollaborationSessionIds={new Set(["session-source", "session-target"])}
+          subagentNames={new Map([["session-target", "接收会话"]])}
           events={[
             summary(1, {
               kind: "collaboration",
@@ -399,7 +407,7 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup).toContain("代理提问");
     expect(markup).toContain("等待处理");
     expect(markup).toContain("Which file owns this behavior?");
-    expect(markup).toContain("打开来源会话");
+    expect(markup).not.toContain("打开来源会话");
     expect(markup).toContain("打开目标会话");
     expect(markup).not.toContain("撤销问题");
     expect(markup).not.toContain("技术详情");
@@ -413,6 +421,7 @@ describe("ConversationV1DisplayRenderer", () => {
       <I18nProvider initialLocale="en-US">
         <ConversationV1DisplayRenderer
           availableCollaborationSessionIds={new Set(["session-source", "session-target"])}
+          subagentNames={new Map([["session-target", "Receiver"]])}
           events={[
             summary(2, {
               kind: "collaboration",
@@ -456,7 +465,7 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup).toContain("Agent phase notification");
     expect(markup).toContain("Recorded");
     expect(markup).toContain("The child agent reached the validation phase.");
-    expect(markup).toContain("Open source session");
+    expect(markup).not.toContain("Open source session");
     expect(markup).toContain("Open target session");
     expect(markup).not.toContain("Cancel collaboration question");
   });

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ChevronDown, MessagesSquare } from "lucide-react";
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "./conversation-measured-collapse";
+import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ConversationCollaborationStateContext } from "./conversation-collaboration-state";
 import { collaborationTaskMessageId } from "@/service/conversation-event-display-projection";
@@ -56,10 +57,9 @@ export function ConversationAgentInteractionView({ interaction }: { interaction:
   return (
     <CollaborationToolCard id={`subagent-return:${interaction.event.child_session_id}:${interaction.seq}`} seq={interaction.seq}
       eventKind="subagent_return" cardKind="task-result" title={t("conversation.collaboration.agentCompleted")}
-      name={actions.subagentNames?.get(interaction.event.child_session_id)}>
+      participant={<CollaborationSessionButton {...actions} sessionId={interaction.event.child_session_id} title={t("conversation.collaboration.openSource")} />}>
       <div className="conversation-v1-collaboration-content"><MarkdownMessage content={interaction.event.content} eager /></div>
       <footer className="conversation-v1-collaboration-footer">
-        <CollaborationSessionButton {...actions} sessionId={interaction.event.child_session_id} label={t("conversation.collaboration.source")} title={t("conversation.collaboration.openSource")} />
         <time dateTime={new Date(interaction.created_at_ms).toISOString()}>{new Date(interaction.created_at_ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
       </footer>
     </CollaborationToolCard>
@@ -105,6 +105,10 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   const isTaskResult = ((afterState.kind === "task_result" || afterState.kind === "received_task_result")
     && !isFailedTaskDelivery) || event.event_kind === "child_task_non_success_recorded";
   const participants = collaborationParticipants(afterState);
+  // Direction is declared by the stored receiver variant, never inferred from names or message text.
+  // 方向由持久化的接收方分支声明，绝不通过名称或消息正文推断。
+  const incoming = afterState.kind === "inbound_task_message" || afterState.kind === "received_task_result"
+    || afterState.kind === "inbound_notification";
   const taskMessageEffect = taskMessageId !== null ? collaborationState.taskMessageEffects.get(taskMessageId) : undefined;
   // Only result snapshots own result receipts; message cards keep their independent application state.
   // 只有结果快照承载结果回执，消息卡保留独立的应用状态。
@@ -120,6 +124,11 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   const title = isFailedTaskDelivery
     ? t("conversation.collaboration.timeline.taskMessage")
     : collaborationTimelineTitle(event.event_kind, t);
+  // Directional sentences surround the linked name; unnamed participants retain the generic heading.
+  // 方向句围绕可跳转的名称显示；尚无名称的参与者保留通用标题。
+  const messageDirection = participants.some((participant) => props.subagentNames?.get(participant.sessionId))
+    ? afterState.kind === "outbound_task_message" ? "sent" : afterState.kind === "inbound_task_message" ? "received" : null
+    : null;
   const body = event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState);
   const secondaryBody = collaborationSecondaryBody(afterState);
   return (
@@ -127,8 +136,21 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
       id={taskMessageId !== null ? `collaboration:task-message:${taskMessageId}` : `collaboration:${event.operation_id}:${props.seq}`} seq={props.seq}
       eventKind="collaboration" collaborationEventKind={event.event_kind}
       cardKind={isTaskResult ? "task-result" : isNotification ? "notification" : isTaskMessage ? "task-message" : "interaction"}
-      title={title} status={status}
-      name={[...new Set(participants.map((participant) => props.subagentNames?.get(participant.sessionId)).filter(Boolean))].join(" · ")}
+      title={title} status={status} incoming={incoming}
+      titlePrefix={messageDirection === "sent" ? t("conversation.collaboration.message.sentPrefix")
+        : messageDirection === "received" ? t("conversation.collaboration.message.receivedPrefix") : undefined}
+      titleSuffix={messageDirection === "sent" ? t("conversation.collaboration.message.sentSuffix")
+        : messageDirection === "received" ? t("conversation.collaboration.message.receivedSuffix") : undefined}
+      participant={participants.map((participant) => (
+        <CollaborationSessionButton {...props} key={`${participant.role}:${participant.sessionId}`}
+          sessionId={participant.sessionId}
+          title={participant.role === "source" ? t("conversation.collaboration.openSource") : t("conversation.collaboration.openTarget")} />
+      ))}
+      footer={<footer className={incoming ? "user-message-meta conversation-v1-collaboration-time" : "conversation-v1-collaboration-footer"}>
+        <time dateTime={new Date(props.createdAtMs).toISOString()}>
+          {new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
+        </time>
+      </footer>}
     >
       {body ? <div className="conversation-v1-collaboration-content"><MarkdownMessage content={body} eager /></div> : null}
       {secondaryBody ? (
@@ -138,26 +160,6 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
         </section>
       ) : null}
       {afterState.kind === "question" ? <ConversationCollaborationStatus questionId={afterState.question.question_id} /> : null}
-      <footer className="conversation-v1-collaboration-footer">
-        {participants.length > 0 ? (
-          <div className="conversation-v1-collaboration-participants">
-            {participants.map((participant) => (
-              <CollaborationSessionButton
-                availableSessionIds={props.availableSessionIds}
-                subagentNames={props.subagentNames}
-                key={`${participant.role}:${participant.sessionId}`}
-                label={participant.role === "source" ? t("conversation.collaboration.source") : t("conversation.collaboration.target")}
-                onOpenSession={props.onOpenSession}
-                sessionId={participant.sessionId}
-                title={participant.role === "source" ? t("conversation.collaboration.openSource") : t("conversation.collaboration.openTarget")}
-              />
-            ))}
-          </div>
-        ) : null}
-        <time dateTime={new Date(props.createdAtMs).toISOString()}>
-          {new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
-        </time>
-      </footer>
     </CollaborationToolCard>
   );
 }
@@ -181,8 +183,8 @@ export function ConversationCollaborationStatus(props: { questionId?: string | n
 
 /** Renders collaboration facts with the shared tool-card layout and measured folding.
  * 使用共享工具卡布局和测量折叠渲染协作事实。
- * Props retain exact event identity, host names and detail content; returns an initially folded card.
- * 属性保留精确事件身份、宿主名字及详情正文；返回默认收起的卡片。 */
+ * Props retain event identity and host names; incoming bubbles show content immediately, other cards start folded.
+ * 属性保留事件身份及宿主名字；收到的气泡直接显示正文，其他卡片默认收起。 */
 function CollaborationToolCard(props: React.PropsWithChildren<{
   // Stable fold identity and persisted event coordinates.
   // 稳定折叠身份与持久事件坐标。
@@ -190,30 +192,44 @@ function CollaborationToolCard(props: React.PropsWithChildren<{
   // Distinct semantic card kind and optional collaboration subtype.
   // 独立语义卡片类型与可选协作子类型。
   cardKind: string; collaborationEventKind?: CollaborationEventKind;
-  // Localized heading and state, plus the authoritative participant label when available.
-  // 本地化标题和状态，以及可用时的权威参与者标签。
-  title: string; status?: string | null; name?: string;
+  // Localized heading and state, plus independent navigation to the remote participant.
+  // 本地化标题与状态，以及指向对端参与者的独立导航。
+  title: string; status?: string | null; participant?: React.ReactNode;
+  // Optional sentence parts place the navigable participant inside a directional heading.
+  // 可选句子片段将可跳转参与者放入表示方向的标题。
+  titlePrefix?: string; titleSuffix?: string;
+  // Received session messages reuse the user bubble appearance without adopting the user role.
+  // 收到的会话消息复用用户气泡外观，不采用用户角色。
+  incoming?: boolean;
+  // Timestamp stays visible even when excess body lines are collapsed.
+  // 超出正文行收起时仍显示时间。
+  footer?: React.ReactNode;
 }>) {
   // Expansion follows the same session-scoped memory and viewport measurement as tool calls.
   // 展开状态遵循与工具调用一致的会话记忆与视口测量。
   const [expanded, setExpanded] = useConversationMeasuredExpansion(props.id, false);
   return (
-    <article className={`tool-presentation-card subagent-orchestration conversation-v1-collaboration-card${expanded ? " expanded" : ""}${props.cardKind === "notification" ? " conversation-v1-collaboration-notification-card" : ""}`}
+    <article className={`tool-presentation-card subagent-orchestration conversation-v1-collaboration-card${expanded ? " expanded" : ""}${props.incoming ? " conversation-v1-collaboration-incoming" : ""}${props.cardKind === "notification" ? " conversation-v1-collaboration-notification-card" : ""}`}
       data-event-kind={props.eventKind} data-collaboration-card-kind={props.cardKind}
       data-collaboration-event-kind={props.collaborationEventKind} data-seq={props.seq}>
-      <button type="button" className="tool-presentation-summary subagent-orchestration-summary"
-        aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+      <div className="tool-presentation-summary subagent-orchestration-summary">
         <MessagesSquare size={14} className="subagent-orchestration-icon" aria-hidden="true" />
         <span className="conversation-v1-collaboration-heading">
-          <span className="conversation-v1-collaboration-title">{props.title}</span>
-          {props.name ? <span className="conversation-v1-collaboration-name" title={props.name}>{props.name}</span> : null}
+          <span className="conversation-v1-collaboration-title">{props.titlePrefix ?? props.title}</span>
+          {props.participant}
+          {props.titleSuffix ? <span className="conversation-v1-collaboration-title">{props.titleSuffix}</span> : null}
         </span>
         {props.status ? <span className="conversation-v1-collaboration-badge">{props.status}</span> : null}
-        <ChevronDown size={14} className="tool-presentation-toggle" aria-hidden="true" />
-      </button>
-      <ConversationMeasuredCollapse collapseId={props.id} expanded={expanded}>
-        <div className="subagent-orchestration-detail">{props.children}</div>
-      </ConversationMeasuredCollapse>
+        {!props.incoming ? <button type="button" className="conversation-v1-collaboration-fold" aria-label={props.title}
+          aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+          <ChevronDown size={14} aria-hidden="true" />
+        </button> : null}
+      </div>
+      {props.incoming ? <IncomingCollaborationBubble id={props.id} footer={props.footer}>{props.children}</IncomingCollaborationBubble> : (
+        <ConversationMeasuredCollapse collapseId={props.id} expanded={expanded}>
+          <div className="subagent-orchestration-detail">{props.children}{props.footer}</div>
+        </ConversationMeasuredCollapse>
+      )}
     </article>
   );
 }
@@ -224,7 +240,6 @@ function CollaborationSessionButton(props: {
   // Authoritative session or agent labels; absent labels never expose internal IDs.
   // 权威会话或代理名称；缺少名称时绝不暴露内部身份。
   subagentNames?: ReadonlyMap<string, string>;
-  label: string;
   title: string;
   sessionId: string;
   onOpenSession?: (sessionId: string) => void;
@@ -235,6 +250,9 @@ function CollaborationSessionButton(props: {
   // Names come from the exact host route, rather than being inferred from message text.
   // 名称来自精确宿主路由，不从消息正文推断。
   const name = props.subagentNames?.get(props.sessionId);
+  // Unknown names do not create empty navigation controls or expose internal identifiers.
+  // 未知名称不创建空导航控件，也不暴露内部标识。
+  if (!name) return null;
   return (
     <button
       aria-label={props.title}
@@ -243,14 +261,15 @@ function CollaborationSessionButton(props: {
       onClick={() => props.onOpenSession?.(props.sessionId)}
       type="button"
     >
-      <span className="conversation-v1-collaboration-caption">{props.label}</span>
-      {name ? <span className="conversation-v1-collaboration-participant-name" title={name}>{name}</span> : null}
+      <span className="conversation-v1-collaboration-participant-name" title={name}>{name}</span>
     </button>
   );
 }
 
-/** Extracts exact source and target locators from the typed after-state variants.
- * 从强类型后状态分支提取精确的来源和目标定位。 */
+/** Selects only the remote participant from each owner-specific persisted variant.
+ * 从各个具有明确所有者的持久化分支中仅选择对端参与者。
+ * Receivers expose the sender; senders expose the recipient. No label or message parsing is used.
+ * 接收方展示发送者，发送方展示接收者；不解析标签或消息来推测。 */
 function collaborationParticipants(afterState: CollaborationAfterState): Array<{
   role: "source" | "target";
   sessionId: string;
@@ -259,7 +278,6 @@ function collaborationParticipants(afterState: CollaborationAfterState): Array<{
     case "received_task_result":
       return [
         { role: "source", sessionId: afterState.acceptance.result.acceptance.message.target.session_id },
-        { role: "target", sessionId: afterState.acceptance.result.acceptance.message.source.session_id },
       ];
     case "task_result_acknowledgement":
     case "task_result_projection":
@@ -268,18 +286,15 @@ function collaborationParticipants(afterState: CollaborationAfterState): Array<{
       // The executor sends the result back to the original task requester.
       // 执行者将结果发回原任务请求者。
       return [
-        { role: "source", sessionId: afterState.result.acceptance.message.target.session_id },
         { role: "target", sessionId: afterState.result.acceptance.message.source.session_id },
       ];
     case "outbound_task_message":
       return [
-        { role: "source", sessionId: afterState.record.message.source.session_id },
         { role: "target", sessionId: afterState.record.message.target.session_id },
       ];
     case "inbound_task_message":
       return [
         { role: "source", sessionId: afterState.acceptance.message.source.session_id },
-        { role: "target", sessionId: afterState.acceptance.message.target.session_id },
       ];
     case "task_message_effect":
       // This receipt contains no participant snapshot; do not guess one from delivery identity.
@@ -287,28 +302,19 @@ function collaborationParticipants(afterState: CollaborationAfterState): Array<{
       return [];
     case "question":
       return [
-        { role: "source", sessionId: afterState.question.source.session_id },
         { role: "target", sessionId: afterState.question.target.session_id },
       ];
     case "outbound_delivery":
-      return [
-        { role: "source", sessionId: afterState.delivery.source.session_id },
-        { role: "target", sessionId: afterState.delivery.target.session_id },
-      ];
+      return [{ role: "target", sessionId: afterState.delivery.target.session_id }];
     case "inbound_delivery":
       return [
         { role: "source", sessionId: afterState.delivery.source.session_id },
-        { role: "target", sessionId: afterState.delivery.target.session_id },
       ];
     case "outbound_notification":
-      return [
-        { role: "source", sessionId: afterState.notification.source.session_id },
-        { role: "target", sessionId: afterState.notification.target.session_id },
-      ];
+      return [{ role: "target", sessionId: afterState.notification.target.session_id }];
     case "inbound_notification":
       return [
         { role: "source", sessionId: afterState.notification.source.session_id },
-        { role: "target", sessionId: afterState.notification.target.session_id },
       ];
     case "child_task":
       return [{ role: afterState.task.non_success_result === null ? "target" : "source", sessionId: afterState.task.child.session_id }];
@@ -316,7 +322,6 @@ function collaborationParticipants(afterState: CollaborationAfterState): Array<{
       return [{ role: "target", sessionId: afterState.execution.participant.session_id }];
     case "grant":
       return [
-        { role: "source", sessionId: afterState.grant.source_session_id },
         { role: "target", sessionId: afterState.grant.target_session_id },
       ];
     case "answer_delivery":
@@ -513,6 +518,47 @@ function collaborationTaskOutcomeLabel(outcome: CollaborationTaskTerminal["outco
     case "stopped": return t("conversation.collaboration.status.stopped");
     case "abandoned": return t("conversation.collaboration.status.abandoned");
   }
+}
+
+/** Shows received content immediately and folds only lines beyond the shared prompt preview limit.
+ * 立即显示收到的正文，仅折叠超出共享提示词预览限制的行。
+ * Props contain stable delivery identity, rendered body and timestamp; returns a right-aligned bubble.
+ * 属性包含稳定投递身份、已渲染正文与时间；返回右对齐气泡。 */
+function IncomingCollaborationBubble(props: React.PropsWithChildren<{ id: string; footer?: React.ReactNode }>) {
+  const { t } = useI18n();
+  // Measure natural content height, not the clipped wrapper, so expanding cannot change overflow detection.
+  // 测量正文自然高度而非裁切容器，避免展开操作改变溢出判定。
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const [previewHeight, setPreviewHeight] = React.useState(0);
+  const [overflowing, setOverflowing] = React.useState(false);
+  // Body expansion has its own identity; the former whole-card fold state must not hide short content.
+  // 正文展开使用独立身份；此前整卡折叠状态不得隐藏短正文。
+  const bodyId = `collaboration-bubble-body:${props.id}`;
+  const [expanded, setExpanded] = useConversationMeasuredExpansion(bodyId, false);
+  React.useLayoutEffect(() => {
+    const element = contentRef.current;
+    if (!element) return;
+    /** Recomputes the line budget after layout, resizing or Markdown media load; returns nothing.
+     * 布局、缩放或 Markdown 媒体加载后重新计算行数预算；无返回值。 */
+    const measure = () => {
+      const lineHeight = Number.parseFloat(window.getComputedStyle(element).lineHeight);
+      const height = lineHeight * USER_PROMPT_COLLAPSE_LINE_LIMIT;
+      setPreviewHeight(height);
+      setOverflowing(element.scrollHeight > height + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [props.children]);
+  return <><div className="user-bubble conversation-v1-collaboration-bubble">
+    <ConversationMeasuredCollapse collapseId={bodyId} expanded={!overflowing || expanded} collapsedHeight={previewHeight}>
+      <div className="conversation-v1-collaboration-bubble-body" ref={contentRef}>{props.children}</div>
+    </ConversationMeasuredCollapse>
+    {overflowing ? <button type="button" className="conversation-v1-collaboration-fold conversation-v1-collaboration-overflow-toggle"
+      aria-label={expanded ? t("conversation.userPrompt.collapse") : t("conversation.userPrompt.expand")}
+      aria-expanded={expanded} onClick={() => setExpanded(!expanded)}><ChevronDown size={14} aria-hidden="true" /></button> : null}
+  </div>{props.footer}</>;
 }
 
 /** Maps question settlement state to localized status.

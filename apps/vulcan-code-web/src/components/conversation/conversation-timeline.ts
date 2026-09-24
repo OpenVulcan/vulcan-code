@@ -145,6 +145,16 @@ export function projectConversationTimelineItems(
       continue;
     }
     if (!currentTurn) {
+      // A claimed task starts the turn above its work divider; in-turn steering stays inside the process.
+      // 已认领任务在工作分隔线上方开启回合；回合内插队仍保留在过程内部。
+      const interaction = item.sourceMessage?.agentInteraction?.event;
+      if (itemTurnId !== null && interaction?.kind === "collaboration"
+        && interaction.after_state.kind === "inbound_task_message"
+        && interaction.after_state.acceptance.message.kind === "task_start") {
+        timeline.push({ kind: "item", item });
+        currentTurn = newProjectedTurn(null, item);
+        continue;
+      }
       if ((itemTurnId !== null
         && (item.blocks.some((block) => block.kind === "thinking" || block.kind === "markdown" || isMergeableToolBlock(block))
           || item.sourceMessage?.agentInteraction?.event.kind === "collaboration"

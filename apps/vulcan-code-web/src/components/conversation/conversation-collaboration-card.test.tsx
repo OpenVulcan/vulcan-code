@@ -10,13 +10,32 @@ import type {
 } from "@/service/conversation-event-window-store";
 import type { ConversationAgentInteraction } from "@/types/conversation";
 import { ConversationCollaborationCard, ConversationAgentInteractionView, ConversationAgentInteractionActionsContext } from "./conversation-collaboration-card";
+import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 
 // This file mounts the card directly; the display renderer only proves it renders somewhere.
 // 本文件直接挂载该卡片；显示渲染器只证明它被渲染，不证明其自身行为。
 
 let host: HTMLDivElement;
 let root: Root;
+// Controlled geometry stands in for browser line layout, which jsdom does not implement.
+// 可控几何替代 jsdom 未实现的浏览器行布局。
+let contentHeight: number;
 beforeEach(() => {
+  contentHeight = 40;
+  const computedStyle = window.getComputedStyle.bind(window);
+  vi.spyOn(window, "getComputedStyle").mockImplementation((element) => element.classList.contains("conversation-v1-collaboration-bubble-body")
+    ? { lineHeight: "20px" } as CSSStyleDeclaration : computedStyle(element));
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("conversation-v1-collaboration-bubble-body") ? contentHeight : 0;
+  });
+  vi.stubGlobal("ResizeObserver", class {
+    // Geometry is controlled by the test; no asynchronous resize notifications are needed.
+    // 几何由测试控制，不需要异步尺寸通知。
+    observe() {}
+    // Release the inert observer; returns nothing.
+    // 释放空观察器；无返回值。
+    disconnect() {}
+  });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -26,6 +45,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 // participant builds one typed participant coordinate for source or target.
@@ -131,6 +151,7 @@ async function mount(
   actions: {
     onOpenSession?: (sessionId: string) => void;
     availableSessionIds?: ReadonlySet<string>;
+    subagentNames?: ReadonlyMap<string, string>;
   } = {},
 ) {
   await act(async () =>
@@ -147,8 +168,8 @@ async function mount(
   );
   // Existing action assertions inspect the real expanded body; the initial surface must stay folded.
   // 既有操作断言检查真实展开正文；初始界面必须保持收起。
-  const toggle = host.querySelector<HTMLButtonElement>(".tool-presentation-summary")!;
-  if (toggle.getAttribute("aria-expanded") === "false") {
+  const toggle = host.querySelector<HTMLButtonElement>(".tool-presentation-summary .conversation-v1-collaboration-fold");
+  if (toggle?.getAttribute("aria-expanded") === "false") {
     await act(async () => toggle.click());
   }
 }
@@ -218,7 +239,7 @@ it("renders the interaction view for a collaboration envelope and the result car
   expect(resultCard.textContent).toContain("yes_agent");
   expect(resultCard.querySelector(".lucide-messages-square")).not.toBeNull();
   expect(resultCard.textContent).not.toContain("Child final content");
-  const toggle = resultCard.querySelector<HTMLButtonElement>(".tool-presentation-summary")!;
+  const toggle = resultCard.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-fold")!;
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   await act(async () => toggle.click());
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
@@ -265,14 +286,36 @@ it("enables session navigation only for a routable participant", async () => {
   // A route whose target is missing must stay inert rather than navigating to a dead session.
   // 目标缺失的路由必须保持不可用，而不是导航到死会话。
   const onOpenSession = vi.fn();
-  await mount(questionEvent(), { onOpenSession, availableSessionIds: new Set(["session-source"]) });
-  expect(button("Source").disabled).toBe(false);
+  const names = new Map([["session-source", "Source"], ["session-target", "Target"]]);
+  await mount(questionEvent(), { onOpenSession, availableSessionIds: new Set(["session-source"]), subagentNames: names });
+  expect(host.querySelector('[aria-label="Open source session"]')).toBeNull();
   expect(button("Target").disabled).toBe(true);
-  await act(async () => button("Source").click());
-  expect(onOpenSession).toHaveBeenCalledTimes(1);
-  expect(onOpenSession).toHaveBeenCalledWith("session-source");
   await act(async () => button("Target").click());
-  expect(onOpenSession).toHaveBeenCalledTimes(1);
+  expect(onOpenSession).not.toHaveBeenCalled();
+  await mount(questionEvent(), { onOpenSession, availableSessionIds: new Set(["session-target"]), subagentNames: names });
+  await act(async () => button("Target").click());
+  expect(onOpenSession).toHaveBeenCalledExactlyOnceWith("session-target");
+});
+
+it.each([false, true])("shows incoming content immediately, folding only excess lines (long: %s)", async (long) => {
+  contentHeight = long ? 20 * (USER_PROMPT_COLLAPSE_LINE_LIMIT + 1) : 40;
+  await mount(inboundNotificationEvent());
+  const bubble = host.querySelector(".user-bubble")!;
+  expect(bubble.textContent).toContain("Phase one finished.");
+  expect(bubble.querySelector("time")).toBeNull();
+  expect(host.querySelector("article > .user-message-meta > time")).not.toBeNull();
+  expect(host.querySelector(".tool-presentation-summary .conversation-v1-collaboration-fold")).toBeNull();
+  expect(host.querySelector(".user-message-copy")).toBeNull();
+  const toggle = bubble.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-overflow-toggle");
+  expect(Boolean(toggle)).toBe(long);
+  if (toggle) {
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(bubble.textContent).toContain("Phase one finished.");
+  }
 });
 
 it.each(["pending", "answered"] as const)("shows no cancellation control or technical details for a %s question", async (state) => {
