@@ -1345,6 +1345,23 @@ fn continue_api_binding_and_transport_observation_are_restart_idempotent() -> Re
         0,
         "an unobserved Continue remains dispatchable after restart"
     );
+    // Explicit new input supersedes the prepared request after the host proves it has no worker.
+    // 宿主证明没有工作器后，显式新输入取代已准备的请求。
+    let mut replaced = restored.clone();
+    replaced.submit_root_input_after_execution_ended(
+        ClientInputSubmission::new(
+            ClientActionId::try_new("supersede-undispatched-continue")?,
+            "new task",
+            Vec::new(),
+        ),
+        T0 + 5,
+    )?;
+    assert!(replaced.active_api().is_none());
+    replaced.rebuild_derived_state()?;
+    assert_ne!(
+        replaced.active_turn().unwrap().turn_id,
+        restored.active_turn().unwrap().turn_id
+    );
     let revision_before_retry = restored.memory_revision();
     let retried = restored.prepare_and_start_api(PrepareAndStartApiInput {
         purpose: ApiPurposeKind::Continue,
