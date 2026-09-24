@@ -150,7 +150,7 @@ describe("ConversationV1DisplayRenderer", () => {
         }, "host_only")]} />
       </I18nProvider>);
       expect(markup).toContain('data-collaboration-card-kind="task-result"');
-      expect(markup).toContain("代理任务结果");
+      expect(markup).toContain("会话任务结果");
       expect(markup).toContain(outcome === "completed" ? "已完成" : outcome === "stopped" ? "已停止" : "已放弃");
       expect(markup.includes("完整最终结果")).toBe(outcome === "completed");
       expect(markup).not.toContain("user-bubble");
@@ -173,7 +173,7 @@ describe("ConversationV1DisplayRenderer", () => {
           }, "host_only")]} />
       </I18nProvider>);
       expect(received).toContain('data-collaboration-card-kind="task-result"');
-      expect(received).toContain("代理任务结果");
+      expect(received).toContain("会话任务结果");
       expect(received.includes("完整最终结果")).toBe(outcome === "completed");
       expect(received).not.toMatch(/aria-label="打开来源会话"[^>]*disabled/);
       expect(received).toMatch(/aria-label="打开目标会话"[^>]*disabled/);
@@ -254,7 +254,7 @@ describe("ConversationV1DisplayRenderer", () => {
       }, "host_only")]} />
     </I18nProvider>);
     expect(failedMarkup).toContain('data-collaboration-card-kind="task-message"');
-    expect(failedMarkup).toContain("代理任务消息");
+    expect(failedMarkup).toContain("会话任务消息");
     expect(failedMarkup).toContain("失败");
     expect(failedMarkup).not.toContain("完整最终结果");
     expect(failedMarkup).not.toContain("assistant-final-output");
@@ -295,7 +295,7 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup.match(/data-collaboration-card-kind="task-message"/g)).toHaveLength(1);
     expect(markup).not.toContain("技术详情");
     expect(markup).toContain('data-seq="1"');
-    expect(markup).toContain("代理任务消息");
+    expect(markup).toContain("会话任务消息");
     expect(markup).toContain("任务已认领");
     expect(markup).toContain("先检查身份绑定");
     expect(markup).not.toContain('data-collaboration-card-kind="task-result"');

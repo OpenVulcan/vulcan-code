@@ -466,6 +466,19 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(markup).not.toContain("任务回执已");
       expect(markup).not.toContain("已投影");
     }
+    // Result publication follows durable statistics, but its display belongs before those exact statistics.
+    // 结果发布晚于可靠统计，但展示应位于精确归属的统计之前。
+    const stats = completeTurnEvents().find((summary) => summary.event.kind === "turn_stats")!;
+    const resultHistory = [{ ...stats, seq: 1, turn_id: result.terminal!.turn_id }, { ...resultEvent(2, "result-one"), turn_id: null }];
+    const presentation = projectConversationBranchPresentationV1("session-branch-v1", resultHistory, emptyResourceCatalog(), (key) => key);
+    expect(presentation.messages.map((message) => message.recordKind)).toEqual(["agent-interaction", "turn-stats"]);
+    const resultMarkup = surface === "branch" ? renderWorkspace(resultHistory) : renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={resultHistory} /></I18nProvider>,
+    );
+    expect(resultMarkup.indexOf("相同结果正文")).toBeGreaterThanOrEqual(0);
+    // Moving the display anchor never rewrites the result's durable sequence identity.
+    // 移动展示锚点绝不改写结果的可靠序列身份。
+    expect(presentation.messages.find((message) => message.agentInteraction)?.agentInteraction?.seq).toBe(2);
   });
 
   it("updates historical question status after settlement without offering cancellation", () => {
@@ -484,6 +497,49 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(markup).not.toContain("等待处理");
     expect(markup).not.toContain("技术详情");
     expect(markup).toContain("user_cancelled");
+  });
+
+  it.each([
+    { kind: "claimed", acceptedWhileBusy: false },
+    { kind: "claimed", acceptedWhileBusy: true },
+    { kind: "steered", acceptedWhileBusy: false },
+  ] as const)("groups cross-session $kind work (busy acceptance: $acceptedWhileBusy) by its canonical turn", ({ kind, acceptedWhileBusy }) => {
+    // Reuse real reasoning/tool fixtures but bind the received message through its exact effect.
+    // 复用真实思考与工具夹具，通过精确效果绑定收到的消息。
+    const previous = completeTurnEvents();
+    const turnId = kind === "claimed" ? 22 : 11;
+    const message = { operation_id: "incoming", delivery_id: "incoming-delivery", kind: kind === "claimed" ? "task_start" as const : "task_steer" as const,
+      source: { session_id: "other-session", root_session_id: "other-session", project_id: "p", segment_generation: 1 },
+      target: { session_id: "session-branch-v1", root_session_id: "session-branch-v1", project_id: "p", segment_generation: 1 }, body: "检查仓库，不是用户提示词" };
+    const incoming = eventSummary(9, { kind: "collaboration", version: 1, operation_id: "accepted", event_kind: "task_message_accepted",
+      after_state: { kind: "inbound_task_message", acceptance: { message, operation_id: "accepted", target_revision: 2, event_seq: 9, accepted_at_ms: 1009 } } }, "host_only");
+    const effect = { delivery_id: message.delivery_id, operation_id: "effect", target_revision: 3, event_seq: 10, occurred_at_ms: 1010,
+      outcome: kind === "claimed" ? { kind, execution_id: "task-execution", turn_id: turnId, input_id: 12, input_seq: 11 }
+        : { kind, turn_id: turnId, input_id: 12, input_seq: 11 } };
+    const suffix = [incoming, eventSummary(10, { kind: "collaboration", version: 1, operation_id: "effect", event_kind: "task_message_effect",
+      after_state: { kind: "task_message_effect", effect } }, "host_only"),
+      eventSummary(11, { kind: "user_input", client_action_id: clientActionId("agent-mirror"), input_id: 12, input_source: "agent_message", text: "隐藏协议镜像" }),
+      ...previous.filter((summary) => ["assistant_reasoning", "tool_call", "assistant_text", "turn_stats"].includes(summary.event.kind))
+        .map((summary, index) => ({ ...summary, seq: index + 12 })),
+    ].map((summary) => ({ ...summary, turn_id: summary.seq === 9 ? null : turnId }));
+    // A running turn has no terminal statistics yet; an idle turn keeps its completed predecessor.
+    // 运行中的回合尚无终态统计；空闲启动保留已经结束的前一回合。
+    // Accepting a queued task before prior statistics must not split its predecessor's process.
+    // 在前一回合统计前接纳排队任务，不能拆散前一回合的过程。
+    const events = (acceptedWhileBusy
+      ? [...previous.flatMap((summary) => summary.event.kind === "turn_stats" ? [suffix[0], summary] : [summary]), ...suffix.slice(1)]
+      : [...(kind === "claimed" ? previous : previous.filter((summary) => summary.event.kind === "user_input")), ...suffix])
+      .map((summary, index) => ({ ...summary, seq: index + 1 }));
+    const presentation = projectConversationBranchPresentationV1("session-branch-v1", events, emptyResourceCatalog(), (key) => key);
+    const timeline = projectConversationTimelineItems(presentation.renderItems, undefined, false);
+    const processes = timeline.filter((entry) => entry.kind === "process");
+    expect(processes).toHaveLength(kind === "claimed" ? 2 : 1);
+    const process = processes.at(-1)!;
+    if (process.kind !== "process") throw new Error("Expected task process");
+    expect(process.process.items.some((item) => item.blocks.some((block) => block.kind === "thinking"))).toBe(false);
+    expect(process.process.items.some((item) => item.leadingThinking?.length)).toBe(true);
+    expect(presentation.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(presentation.messages.some((message) => message.body === "隐藏协议镜像")).toBe(false);
   });
   it("keeps notification and child-result cards distinct from human input and parent completion", () => {
     // presentation and timeline exercise the same adapter and grouping path used by ChatArea.

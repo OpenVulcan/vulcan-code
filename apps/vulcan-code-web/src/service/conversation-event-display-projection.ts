@@ -5,6 +5,7 @@ import {
   ConversationEventVisibility,
 } from "./conversation-event-window-store";
 import { projectTurnUsageCoverage, type TurnUsageCoverage } from "./conversation-usage-coverage";
+import { projectCollaborationTurnLayout } from "./conversation-collaboration-turn-layout";
 
 /** Assistant reasoning event rendered directly from the V1 event stream.
  * 直接从 V1 事件流渲染的 assistant 思考事件。 */
@@ -257,10 +258,10 @@ export type ConversationTranscriptDisplayNode =
 /** Builds the visual transcript without exposing structural persistence events as UI rows.
  * 构建视觉转录，同时不把结构性持久化事件暴露为 UI 行。
  *
- * @param items complete projected items in strict canonical seq order.
- *              按严格 canonical seq 顺序排列的完整投影项。
- * @returns visual nodes anchored to the same facts without sorting or parsing text.
- *          不排序也不解析文本、锚定到同一事实的视觉节点。 */
+ * @param items complete projected items after explicit collaboration turn placement.
+ *              完成显式协作回合定位后的完整投影项。
+ * @returns visual nodes retaining canonical identities without parsing text for ownership.
+ *          保留规范身份、不解析文本推测归属的视觉节点。 */
 export function projectConversationTranscriptDisplay(
   items: readonly ConversationEventDisplayItem[],
 ): ConversationTranscriptDisplayNode[] {
@@ -507,13 +508,13 @@ function turnKey(turnId: number | null): string {
   return turnId === null ? "turn:none" : `turn:${turnId}`;
 }
 
-/** Validates and projects the already-windowed V1 event sequence without reordering it.
- * 在不重新排序的情况下校验并投影窗口层已经组织好的 V1 事件序列。 */
+/** Validates canonical order before applying presentation-only collaboration ownership and result placement.
+ * 先校验规范顺序，再应用仅用于展示的协作归属与结果位置调整。 */
 export function projectConversationEventDisplay(
   events: readonly ConversationEventSummary[],
 ): ConversationEventDisplayItem[] {
   let previousSeq: number | null = null;
-  return events.map((summary) => {
+  for (const summary of events) {
     assertSafeSeq(summary.seq);
     if (previousSeq !== null && summary.seq !== previousSeq + 1) {
       throw new Error(
@@ -521,8 +522,8 @@ export function projectConversationEventDisplay(
       );
     }
     previousSeq = summary.seq;
-    return projectConversationEvent(summary);
-  });
+  }
+  return projectCollaborationTurnLayout(events).map(projectConversationEvent);
 }
 
 /** Projects one event without text parsing, tool merging, detail loading, or filesystem reads.

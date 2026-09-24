@@ -3,7 +3,7 @@ import type {
   ConversationRenderItem,
   ConversationTimelineItem,
 } from "@/components/conversation/conversation-model";
-import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
+import { isContextCompactionBlock, isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
 import { metadataString, metadataValue } from "@/components/conversation/conversation-metadata";
 import { isSubagentFeedbackMetadata } from "@/components/conversation/conversation-tool-metadata";
 import type { LocaleCode } from "@/i18n";
@@ -119,6 +119,13 @@ export function projectConversationTimelineItems(
   };
 
   for (const item of renderItems) {
+    // Canonical turn identity also covers agent-started work without a visible human prompt.
+    // 规范回合身份同样覆盖没有可见人类提示词的代理发起工作。
+    const itemTurnId = canonicalRenderTurnId(item);
+    const currentTurnId = currentTurn ? canonicalRenderTurnId(currentTurn.anchorItem) : null;
+    if (currentTurn && itemTurnId !== null && currentTurnId !== null && itemTurnId !== currentTurnId) {
+      flushTurn(false);
+    }
     if (item.role === "user") {
       if (!currentTurn || currentTurn.statsItem) {
         flushTurn(false);
@@ -138,7 +145,11 @@ export function projectConversationTimelineItems(
       continue;
     }
     if (!currentTurn) {
-      if (timelineCanStartImplicitProcessTurn(timeline, item, conversationRunning)) {
+      if ((itemTurnId !== null
+        && (item.blocks.some((block) => block.kind === "thinking" || block.kind === "markdown" || isMergeableToolBlock(block))
+          || item.sourceMessage?.agentInteraction?.event.kind === "collaboration"
+            && item.sourceMessage.agentInteraction.event.after_state.kind === "inbound_task_message"))
+        || timelineCanStartImplicitProcessTurn(timeline, item, conversationRunning)) {
         currentTurn = newProjectedTurn(null, item, [item]);
         continue;
       }
@@ -159,6 +170,15 @@ export function projectConversationTimelineItems(
 
   flushTurn(conversationRunning || Boolean(conversation && conversation.status.trim().toLowerCase() === "running"));
   return timeline;
+}
+
+/** Reads the adapter's authoritative V1 turn identity, or null for unbound host facts.
+ * 读取适配器的权威 V1 回合身份；未绑定宿主事实返回空值。
+ * The input is one display row; no user message or neighboring timestamp is inferred.
+ * 输入为单条展示行；不推测用户消息或相邻时间戳。 */
+function canonicalRenderTurnId(item: ConversationRenderItem): number | null {
+  const value = metadataValue(item.sourceMessage?.metadata ?? item.userMessage?.metadata, ["v1_turn_id"]);
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 // conversationTimelineItemKey returns the stable business key for one projected timeline entry.

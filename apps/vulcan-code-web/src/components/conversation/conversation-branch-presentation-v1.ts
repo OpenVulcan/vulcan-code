@@ -17,6 +17,7 @@ import type {
 } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { collaborationEventIsUserVisible, collaborationTaskMessageId, requestConfigChangeKind } from "@/service/conversation-event-display-projection";
+import { projectCollaborationTurnLayout } from "@/service/conversation-collaboration-turn-layout";
 import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conversation-usage-coverage";
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
 import { goalNoticeTitle } from "./conversation-goal-notice";
@@ -100,13 +101,13 @@ export function projectConversationBranchPresentationV1(
     }
   }
 
-  // messages preserves the canonical event order and only expands one tool event into adjacent call/result display records.
-  // messages 保持规范事件顺序，仅把一条工具事件展开为相邻的调用/结果展示记录。
+  // Display copies bind collaboration to its real turn and put execution results before that turn's statistics.
+  // 展示副本将协作绑定到真实回合，并把执行结果放到所属回合统计之前。
   const messages: ConversationMessage[] = [];
   // Source and target receipts update the first card for the exact same delivery.
   // 来源与目标回执更新同一精确投递的首张卡片。
   const taskMessageIds = new Set<string>();
-  for (const summary of events) {
+  for (const summary of projectCollaborationTurnLayout(events)) {
     if (summary.event.kind === "collaboration") {
       const deliveryId = collaborationTaskMessageId(summary.event.after_state);
       if (deliveryId !== null) {
