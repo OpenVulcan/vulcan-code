@@ -549,6 +549,35 @@ export async function readPluginTextAsset(pluginId: string, path: string): Promi
   });
 }
 
+// One host-owned renderer nonce isolates invocation status from other windows.
+// 单个宿主持有的渲染器随机标识将调用状态与其他窗口隔离。
+const pluginActionClientId = crypto.randomUUID();
+// Registration-race polling only queries admission; it never replays an action.
+// 注册竞态轮询仅查询准入；绝不重放 Action。
+const ACTION_REGISTRATION_POLL_MS = 50;
+
+// Safe diagnostic projection deliberately excludes action arguments and result bodies.
+// 安全诊断投影刻意排除 Action 参数与结果正文。
+export interface PluginActionStatus {
+  invocationId: string;
+  pluginId: string;
+  actionId: string;
+  phase: string;
+  terminal: boolean;
+  deadlineExceeded: boolean;
+  elapsedMs: number;
+  stagesMs: Record<string, number>;
+}
+
+// Failure retains a query capability for the actual invocation, without replaying it.
+// 失败保留实际调用的查询能力，不重放该调用。
+export class PluginActionError extends Error {
+  constructor(message: string, readonly invocationId: string, readonly queryStatus: () => Promise<PluginActionStatus>) {
+    super(message);
+    this.name = "PluginActionError";
+  }
+}
+
 // invokePluginAction invokes one action through the plugin-owning mounted UI identity.
 // invokePluginAction 通过插件所属挂载界面身份调用一个 Action。
 //
@@ -560,17 +589,57 @@ export async function invokePluginAction<Result>(
   pluginId: string,
   actionId: string,
   argumentsValue: unknown,
+  runtimeIdentity: string,
   workspacePath?: string | null,
+  cancellation?: AbortSignal,
 ): Promise<Result> {
   if (!hasServiceRuntime()) {
     throw new Error("Plugin actions require the Vulcan service runtime.");
   }
-  return serviceClient.request<Result>("service_invoke_plugin_action", {
+  // Identity is generated outside the plugin; a timeout can never become an implicit retry.
+  // 身份在插件之外生成；超时绝不转变为隐式重试。
+  const identity = { clientId: pluginActionClientId, invocationId: crypto.randomUUID() };
+  cancellation?.throwIfAborted();
+  const queryAdmission = (cancel: boolean) => serviceClient.request<PluginActionStatus | null>("service_plugin_action_status", { pluginId, runtimeIdentity, identity, cancel });
+  const queryStatus = async () => {
+    const status = await queryAdmission(false);
+    if (!status) throw new Error("Plugin invocation status is unavailable or expired; outcome is unknown.");
+    return status;
+  };
+  // The original response bounds cancellation polling even if registration is rejected.
+  // 即使注册被拒绝，原始响应也限定取消轮询的生命周期。
+  let settled = false;
+  let stopPolling!: () => void;
+  const completed = new Promise<void>(resolve => { stopPolling = resolve; });
+  const cancelQueued = async () => {
+    while (!settled) {
+      try { if (await queryAdmission(true)) return; }
+      catch { return; } // Transport failure is not evidence of cancellation. / 传输失败不能证明取消成功。
+      let timer!: ReturnType<typeof setTimeout>;
+      await Promise.race([completed, new Promise<void>(resolve => { timer = setTimeout(resolve, ACTION_REGISTRATION_POLL_MS); })]);
+      clearTimeout(timer);
+    }
+  };
+  const withdraw = () => { void cancelQueued(); };
+  cancellation?.addEventListener("abort", withdraw, { once: true });
+  try { return await serviceClient.request<Result>("service_invoke_plugin_action", {
+    identity,
+    runtimeIdentity,
     pluginId,
     actionId,
     arguments: argumentsValue,
     workspacePath: workspacePath ?? null,
-  });
+  }); } catch (error) {
+    const diagnostic = error instanceof Error ? error.message : String(error);
+    let status: PluginActionStatus;
+    try { status = await queryStatus(); }
+    catch { throw new PluginActionError(`${diagnostic} (invocation ${identity.invocationId}; execution outcome unavailable, do not automatically replay)`, identity.invocationId, queryStatus); }
+    throw new PluginActionError(`${diagnostic} (invocation ${identity.invocationId}; ${status.phase}${status.terminal ? ", execution finished" : ", execution or cleanup is still pending"})`, identity.invocationId, queryStatus);
+  } finally {
+    settled = true;
+    stopPolling();
+    cancellation?.removeEventListener("abort", withdraw);
+  }
 }
 
 // uninstallLuaSkill removes one ordinary Lua Skill package.

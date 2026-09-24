@@ -1024,6 +1024,9 @@ export interface PluginSummary {
   // Optional manifest-owned extension surfaces for real Vulcan plugins.
   // 真实 Vulcan 插件可用的可选清单自有扩展面。
   extension?: {
+    // Exact service incarnation and plugin generation for module invalidation.
+    // 用于模块失效的精确服务实例及插件代次。
+    runtimeIdentity: string;
     // Stable package origin.
     // 稳定的包来源。
     origin: "bundled" | "userInstalled";
@@ -1116,6 +1119,12 @@ export interface PluginSummary {
 // PluginUiModuleSource carries one bounded uncompressed plugin ESM module.
 // PluginUiModuleSource 携带一个有大小边界的未压缩插件 ESM 模块。
 export interface PluginUiModuleSource {
+  // Exact service and plugin generation that authorized this module.
+  // 授权当前模块的精确服务及插件代次。
+  runtimeIdentity: string;
+  // Explicit query policy comes from the validated manifest.
+  // 明确查询策略来自已校验清单。
+  actionPolicies: PluginUiActionPolicy[];
   // Exact owning plugin identifier.
   // 精确的所属插件标识。
   pluginId: string;
@@ -1131,6 +1140,20 @@ export interface PluginUiModuleSource {
   // Plugin-owned UI messages grouped by locale and stable message key.
   // 按语言与稳定消息键组织的插件自有界面文案。
   messagesByLocale: Record<string, Record<string, string>>;
+}
+
+// Authenticated policy distinguishes reusable reads from explicitly submitted effects.
+// 已认证策略区分可复用只读操作及显式提交操作。
+export interface PluginUiActionPolicy {
+  // Exact declared action identifier.
+  // 精确声明的 Action 标识。
+  id: string;
+  // Semantic effect is never inferred from the identifier.
+  // 不得从标识推测语义效果。
+  effect: "read" | "mutation";
+  // Zero allows in-flight sharing without retaining a completed result.
+  // 零允许共享在途任务，但不保留已完成结果。
+  resultCacheMs: number;
 }
 
 // PluginTextAssetSource carries one bounded manifest-declared UTF-8 plugin asset.

@@ -15,7 +15,7 @@ vi.mock("@/service/core-browser-service", () => ({
 const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", status: "disabled", runtimeState: "disabled",
   capability: "Synthetic", nameByLocale: {}, capabilityByLocale: {}, enabled: false, desiredEnabled: false,
   available: true, toolCount: 0, tools: [], hookCount: 0, skillCount: 0, agentCount: 0, activeSessionCount: 0,
-  diagnostics: [], managementKind: "vulcanPlugin", extension: { origin: "userInstalled", permissions: [], hooks: [],
+  diagnostics: [], managementKind: "vulcanPlugin", extension: { runtimeIdentity: "fixture:1", origin: "userInstalled", permissions: [], hooks: [],
     actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: false, mcpServers: [] } };
 let root: Root;
 let host: HTMLDivElement;
