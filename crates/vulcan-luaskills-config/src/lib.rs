@@ -384,12 +384,12 @@ impl Default for LuaSkillsRuntimeSettings {
             vm_pool: LuaVmPoolSettings {
                 min_size: 4,
                 max_size: 8,
-                idle_ttl_secs: 30,
+                idle_ttl_secs: 60,
             },
             run_lua_pool: LuaVmPoolSettings {
                 min_size: 1,
-                max_size: 2,
-                idle_ttl_secs: 60,
+                max_size: 4,
+                idle_ttl_secs: 30,
             },
             tool_cache: LuaSkillsToolCacheSettings {
                 max_entries: 1_000,

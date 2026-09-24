@@ -169,6 +169,13 @@ WebUI. Do not request or relay sensitive values.
 
 ## 8. 安全边界
 
+LuaSkills VM 池的宿主默认值由 `vulcan-luaskills-config::LuaSkillsRuntimeSettings::default()`
+定义：主 VM 池最小 4、最大 8，多余空闲 VM 在 60 秒后可回收；隔离 runLua 池最小 1、最大 4，
+多余空闲 VM 在 30 秒后可回收。缺少 `luaskills-runtime-setting.json` 时使用这些内存默认值，
+不会自动创建用户配置文件。新安装配置模板 `config/luaskills-runtime-setting.json` 与编译默认值
+通过测试保持一致；默认值变更时必须同步模板和本段说明。已有配置仍按用户保存值加载，
+资源同步仅在目标文件缺失时播种，不覆盖已有配置；已有文件缺少必填池字段仍显式报错。
+
 服务端先读取不含值的声明，只为 `sensitive=false` 且当前合法的配置项读取和规范化有效值。写入结果同样会删除敏感项的规范值，再跨越 RPC 边界。
 
 `sensitive=true` 是宿主披露策略，不代表 LuaSkills 配置文件提供静态加密。配置仍位于当前用户的数据目录中，部署方必须依靠操作系统账户、文件权限和磁盘安全策略保护该目录。秘密不得写入默认值、示例、日志、错误信息或技能提示词。
@@ -399,7 +406,7 @@ LuaSkills 相关工作线程按上游实际资源拆成三类：
 | 一次性文件型/内联 runLua | `runtime_settings.run_lua_pool.max_size` | 隔离 runLua VM 池 |
 | 公开持久 runLua 会话操作 | `LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY`，当前为 8 | 公共 Runtime Session manager 的租约上限 |
 
-公开持久会话没有复用一次性 runLua 默认上限 2。LuaSkills 0.5.7 对 manager 的持久会话租约上限公开 `MAX_RUNTIME_SESSION_LEASES_PER_MANAGER`；Vulcan 的会话入场器直接引用该常量，保持与上游容量一致。宿主只对公开会话入口使用该容量；System lease 与插件运行时仍由独立 manager 管理，不与公开会话的入场器混用。
+公开持久会话没有复用一次性 runLua 默认上限 4。LuaSkills 0.5.7 对 manager 的持久会话租约上限公开 `MAX_RUNTIME_SESSION_LEASES_PER_MANAGER`；Vulcan 的会话入场器直接引用该常量，保持与上游容量一致。宿主只对公开会话入口使用该容量；System lease 与插件运行时仍由独立 manager 管理，不与公开会话的入场器混用。
 
 ### 15.2 入场与取消语义
 

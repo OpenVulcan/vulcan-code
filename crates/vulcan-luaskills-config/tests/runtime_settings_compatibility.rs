@@ -172,10 +172,10 @@ fn compiled_defaults_match_the_frozen_capacity_policy() {
 
     assert_eq!(defaults.vm_pool.min_size, 4);
     assert_eq!(defaults.vm_pool.max_size, 8);
-    assert_eq!(defaults.vm_pool.idle_ttl_secs, 30);
+    assert_eq!(defaults.vm_pool.idle_ttl_secs, 60);
     assert_eq!(defaults.run_lua_pool.min_size, 1);
-    assert_eq!(defaults.run_lua_pool.max_size, 2);
-    assert_eq!(defaults.run_lua_pool.idle_ttl_secs, 60);
+    assert_eq!(defaults.run_lua_pool.max_size, 4);
+    assert_eq!(defaults.run_lua_pool.idle_ttl_secs, 30);
 
     // New defaults must differ from the frozen user document, otherwise the preservation test above
     // could pass without proving anything.
