@@ -12,6 +12,7 @@ import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
+import { formatTokenCount, tokenUnitLabel } from "@/lib/usage-format"
 import {
   loadPublicAiSettings,
   savePublicAiContextCompactionWindowNodes,
@@ -146,7 +147,7 @@ function ContextCompactionWindowNodesCard(props: {
   // onSaved 在保存成功后接收权威设置快照。
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   // draft is the complete five-node edit buffer; identities are never editable.
   // draft 是完整五节点编辑缓冲；节点身份始终不可编辑。
   const [draft, setDraft] = React.useState(() => cloneContextCompactionWindowConfiguration(props.nodes))
@@ -233,7 +234,7 @@ function ContextCompactionWindowNodesCard(props: {
               type="number"
               value={node.tokens}
             />
-            <span className="text-xs text-muted-foreground">Token</span>
+            <span className="text-xs text-muted-foreground">{tokenUnitLabel(locale)}</span>
           </label>
         ))}
       </div>
@@ -263,7 +264,7 @@ function NewSessionContextWindowDefaultCard(props: {
   // onSaved 采用后端权威结果。
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   // draft is the proposed fixed node or the follow-model choice.
   // draft 是拟选择的固定节点或遵循模型选项。
   const [draft, setDraft] = React.useState<ContextCompactionWindowNodeId | null>(props.nodeId)
@@ -301,7 +302,7 @@ function NewSessionContextWindowDefaultCard(props: {
           <SelectItem value="follow-model">{t("settings.contextCompactionNodes.followModel")}</SelectItem>
           {props.nodes.nodes.map((node) => (
             <SelectItem key={node.id} value={node.id}>
-              {t(CONTEXT_COMPACTION_NODE_LABEL_KEYS[node.id])} · {node.tokens.toLocaleString()} Token
+              {t(CONTEXT_COMPACTION_NODE_LABEL_KEYS[node.id])} · {formatTokenCount(node.tokens)} {tokenUnitLabel(locale)}
             </SelectItem>
           ))}
         </SelectContent>

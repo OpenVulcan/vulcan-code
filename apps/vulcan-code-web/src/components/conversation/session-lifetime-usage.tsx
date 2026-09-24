@@ -1,5 +1,5 @@
 import { useI18n } from "@/i18n";
-import { formatDurationSeconds, formatTokenCount } from "@/lib/usage-format";
+import { formatDurationSeconds, formatTokenCount, formatTokenSpeed, tokenUnitLabel } from "@/lib/usage-format";
 import { ChevronDown } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { SessionLifetimeUsage, SessionUsageBucket, UsageMeasurement } from "@/types/session-lifetime-usage";
@@ -29,7 +29,7 @@ export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsag
   // Averages use reporting samples and never treat missing timing as zero.
   // 均值使用已上报样本，不将缺失计时视为零。
   const first = bucket.firstTokenMs.samples > 0 && bucket.firstTokenMs.sum > 0 ? formatDurationSeconds(bucket.firstTokenMs.sum / bucket.firstTokenMs.samples) : null;
-  const speed = bucket.outputDurationMs.samples > 0 && bucket.outputDurationMs.sum > 0 && bucket.measuredOutputTokens > 0 ? `${(bucket.measuredOutputTokens * 1000 / bucket.outputDurationMs.sum).toFixed(1)} t/s` : null;
+  const speed = bucket.outputDurationMs.samples > 0 && bucket.outputDurationMs.sum > 0 && bucket.measuredOutputTokens > 0 ? formatTokenSpeed(bucket.measuredOutputTokens * 1000 / bucket.outputDurationMs.sum, locale) : null;
   // Keep partial totals explicit, but omit zero and unreported token dimensions from the visible layout.
   // 保留部分上报累计的明确标记，但不让零值及未上报维度占据界面。
   const tokenValue = (value: UsageMeasurement): string | null => value.samples > 0 && value.sum > 0
@@ -65,7 +65,7 @@ export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsag
     <summary className="lifetime-usage-heading">
       <strong>{props.title}</strong>
       <span className="lifetime-usage-total">
-        <strong>{total}</strong><span>Tokens</span>
+        <strong>{total}</strong><span>{tokenUnitLabel(locale)}</span>
         <ChevronDown className="lifetime-usage-chevron" aria-hidden="true" size={12} />
       </span>
     </summary>

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { formatCompactProviderCount } from "@/components/composer/composer-capability-controls";
 import { ComposerPanelToolbarRight } from "@/components/composer/composer-panel/toolbar-right";
 import { I18nProvider } from "@/i18n";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -117,13 +116,5 @@ describe("composer toolbar primary action", () => {
 
     expect(markup).toContain('aria-label="Context capacity"');
     expect(markup).not.toContain("Total tokens: 35.04M");
-  });
-
-  it("formats Provider request and token counts with compact units", () => {
-    expect(formatCompactProviderCount(1_234, "unknown")).toBe("1.23K");
-    expect(formatCompactProviderCount(1_234_567, "unknown")).toBe("1.23M");
-    expect(formatCompactProviderCount(1_234_567_890, "unknown")).toBe("1.23B");
-    expect(formatCompactProviderCount(1_234_567_890_123, "unknown")).toBe("1.23T");
-    expect(formatCompactProviderCount(272, "unknown")).toBe("272");
   });
 });

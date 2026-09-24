@@ -7,7 +7,7 @@ import {
 } from "@/components/conversation/conversation-metadata";
 import type { ConversationBlockKind } from "@/components/conversation/conversation-model";
 import type { TranslationKey } from "@/i18n";
-import { formatTokenCount } from "@/lib/usage-format";
+import { formatTokenCount, formatTokenSpeedValue } from "@/lib/usage-format";
 
 // SUBAGENT_HOST_KIND_VALUES lists every host kind emitted by built-in subagent orchestration tools.
 // SUBAGENT_HOST_KIND_VALUES 列出内置子智能体编排工具会产生的全部宿主类型。
@@ -159,7 +159,7 @@ export function turnStatsSummary(
   const speed = outputDurationMs !== null && outputDurationMs > 0 ? numericMetadata(stats.output_tokens_per_second) : null;
   if (speed && Number.isFinite(speed) && speed > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.outputSpeed", {
-      speed: speed.toFixed(1),
+      speed: formatTokenSpeedValue(speed),
     }));
   }
   return parts.join(" · ");
@@ -300,7 +300,7 @@ function defaultTurnStatsTranslation(key: TranslationKey): string {
     case "conversation.stats.cachedTokensCompact":
       return "Cache {count} tokens";
     case "conversation.stats.outputSpeed":
-      return "{speed}/s";
+      return "{speed} tokens/s";
     case "conversation.stats.group.regular":
       return "Regular {count} tokens";
     case "conversation.stats.group.subagent":

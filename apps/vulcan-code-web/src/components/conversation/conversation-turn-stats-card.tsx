@@ -8,7 +8,7 @@ import {
   objectValue,
 } from "@/components/conversation/conversation-metadata";
 import { readUsageCoverage, type UsageCoverage } from "@/service/conversation-usage-coverage";
-import { formatDurationSeconds } from "@/lib/usage-format";
+import { formatDurationSeconds, formatTokenSpeed } from "@/lib/usage-format";
 import { usageCacheRatio, usageMetricDisplay } from "./conversation-usage-display";
 
 // TurnStatsUsageSnapshot contains only the accounting fields shown in the compact statistics card.
@@ -87,7 +87,7 @@ export function TurnStatsTooltipCard(props: {
   // speedLabel keeps the average speed compact in the card header.
   // speedLabel 在卡片标题中紧凑展示平均速度。
   const speedLabel = speed != null && Number.isFinite(speed) && speed >= 0
-    ? `${speed > 0 && speed < 0.1 ? "<0.1" : speed.toFixed(1)} tokens/s`
+    ? formatTokenSpeed(speed, props.locale)
     : "-";
 
   return (
@@ -122,7 +122,7 @@ export function TurnStatsTooltipCard(props: {
       </div>
       {subagent ? (
         <section className="turn-stats-subagent-section">
-          <div className="turn-stats-section-title">{zh ? "智能体 Tokens" : "Subagent tokens"}</div>
+          <div className="turn-stats-section-title">{zh ? "智能体 Token" : "Subagent tokens"}</div>
           <TurnStatsUsageRows locale={props.locale} usage={subagent} />
         </section>
       ) : null}
@@ -172,15 +172,15 @@ function TurnStatsUsageRows(props: {
         rightValue={formatTurnStatsNumber(props.usage.toolCallCount, props.locale)}
       />
       <TurnStatsMetricRow
-        leftLabel={zh ? "缓存 Tokens" : "Cached tokens"}
+        leftLabel={zh ? "缓存 Token" : "Cached tokens"}
         leftValue={cached}
         rightLabel={zh ? "无缓存输入" : "Uncached input"}
         rightValue={uncached}
       />
       <TurnStatsMetricRow
-        leftLabel={zh ? "输出 Tokens" : "Output tokens"}
+        leftLabel={zh ? "输出 Token" : "Output tokens"}
         leftValue={output}
-        rightLabel={zh ? "合计 Tokens" : "Total tokens"}
+        rightLabel={zh ? "合计 Token" : "Total tokens"}
         rightValue={total}
       />
       {props.children}

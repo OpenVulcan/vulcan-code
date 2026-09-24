@@ -39,3 +39,37 @@ export function formatDurationSeconds(milliseconds: number): string {
   const normalized = Number.isFinite(milliseconds) ? Math.max(0, milliseconds) : 0;
   return `${(normalized / 1000).toFixed(1)} s`;
 }
+
+// tokenUnitLabel returns the token unit word written after compact counts and speeds in the active locale.
+// tokenUnitLabel 返回当前语言下写在紧凑数量与速度之后的 Token 单位词。
+//
+// Parameters:
+// 参数：locale 是当前界面语言。
+// Returns "Token" for Chinese and "tokens" for other locales.
+// 中文返回 "Token"，其他语言返回 "tokens"。
+export function tokenUnitLabel(locale: string): string {
+  return locale.startsWith("zh") ? "Token" : "tokens";
+}
+
+// formatTokenSpeedValue renders the numeric part of an output speed with one decimal, keeping tiny rates distinct from zero.
+// formatTokenSpeedValue 以一位小数渲染输出速度的数值部分，并让极小速率与零区分。
+//
+// Parameters:
+// 参数：tokensPerSecond 是每秒 Token 数；非有限值与负数按 0 处理。
+// Returns "<0.1" for positive rates below 0.1, otherwise the one-decimal value.
+// 正数且低于 0.1 时返回 "<0.1"，否则返回一位小数数值。
+export function formatTokenSpeedValue(tokensPerSecond: number): string {
+  const normalized = Number.isFinite(tokensPerSecond) ? Math.max(0, tokensPerSecond) : 0;
+  return normalized > 0 && normalized < 0.1 ? "<0.1" : normalized.toFixed(1);
+}
+
+// formatTokenSpeed renders a full output speed label such as "343.8 Token/s" or "343.8 tokens/s".
+// formatTokenSpeed 渲染完整输出速度文本，例如 "343.8 Token/s" 或 "343.8 tokens/s"。
+//
+// Parameters:
+// 参数：tokensPerSecond 是每秒 Token 数，locale 是当前界面语言。
+// Returns the speed with the locale token unit per second.
+// 返回带当前语言 Token 单位的每秒速度文本。
+export function formatTokenSpeed(tokensPerSecond: number, locale: string): string {
+  return `${formatTokenSpeedValue(tokensPerSecond)} ${tokenUnitLabel(locale)}/s`;
+}

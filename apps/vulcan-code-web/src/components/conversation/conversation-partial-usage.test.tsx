@@ -41,7 +41,7 @@ describe("partial usage display from old persisted V1 events", () => {
     const metadata = branch.messages.find((message) => message.recordKind === "turn-stats")!.metadata;
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
     expect(markup).toContain("平均 -");
-    expect(markup).not.toContain("53.0 tokens/s");
+    expect(markup).not.toContain("53.0 Token/s");
     expect(markup).toContain("缺少配对的首 Token 时间与输出用量");
   });
 
@@ -62,7 +62,7 @@ describe("partial usage display from old persisted V1 events", () => {
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
     expect(markup).toContain("179.5K");
     expect(markup).toContain("16.1K");
-    expect(markup).toContain("缓存 Tokens</span>");
+    expect(markup).toContain("缓存 Token</span>");
     expect(markup).toContain("无缓存输入</span>");
     expect(markup).toContain("缓存命中率</span>");
     expect(markup).toContain("91.8%");
@@ -119,7 +119,7 @@ describe("partial usage display from old persisted V1 events", () => {
     const node = nodes.find((candidate) => candidate.kind === "turn_stats");
     if (!node || node.kind !== "turn_stats") throw new Error("expected terminal stats node");
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationV1TurnStatsCard node={node} /></I18nProvider>);
-    expect(markup).toContain("缓存 Tokens</span><strong>-</strong>");
+    expect(markup).toContain("缓存 Token</span><strong>-</strong>");
     expect(markup).toContain("无缓存输入</span><strong>-</strong>");
     expect(node.item.event.buckets.total.usage.cache_read_tokens).toBeUndefined();
     expect(markup).toContain("尚无完整输入用量，无法计算缓存命中率");
@@ -136,7 +136,7 @@ describe("partial usage display from old persisted V1 events", () => {
     // Render the actual main-card body so missing-value formatting and layout are verified together.
     // 渲染真实主卡正文，同时验证缺失值格式与布局。
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
-    expect(markup).toContain("缓存 Tokens</span><strong>-</strong>");
+    expect(markup).toContain("缓存 Token</span><strong>-</strong>");
     expect(markup).toContain("无缓存输入</span><strong>-</strong>");
     expect(markup.match(/class="turn-stats-metric-row"/g)).toHaveLength(3);
     expect(metadata.turn_stats).not.toHaveProperty("cached_input_tokens");

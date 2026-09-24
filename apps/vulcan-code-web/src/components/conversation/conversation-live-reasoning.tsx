@@ -11,6 +11,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n";
+import { formatTokenCount } from "@/lib/usage-format";
 import { cn } from "@/lib/utils";
 import type { ConversationBlock } from "@/components/conversation/conversation-model";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
@@ -29,15 +30,15 @@ export function TransientReasoningStatusLine(props: {
   // 最新请求局部瞬态状态。
   status: TransientReasoningStatus;
 }) {
-  // locale and t format the status through the active interface language.
-  // locale 与 t 使用当前界面语言格式化状态。
-  const { locale, t } = useI18n();
+  // t formats the status through the active interface language.
+  // t 使用当前界面语言格式化状态。
+  const { t } = useI18n();
   // tokenSuffix is omitted when the provider exposes no dynamic reasoning count.
   // tokenSuffix 在供应商未公开动态推理计数时省略。
   const tokenSuffix = typeof props.status.reasoningTokens === "number"
     ? t("runtime.thinkingTokenCount").replace(
         "{count}",
-        new Intl.NumberFormat(locale).format(props.status.reasoningTokens),
+        formatTokenCount(props.status.reasoningTokens),
       )
     : "";
   // summaries preserves provider node order and discards empty transport fragments.

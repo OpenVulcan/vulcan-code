@@ -45,7 +45,7 @@ import type {
   ComposerSelectOption,
 } from "@/components/composer/composer-model";
 import { useI18n } from "@/i18n";
-import { formatTokenCount } from "@/lib/usage-format";
+import { formatTokenCount, tokenUnitLabel } from "@/lib/usage-format";
 import { cn } from "@/lib/utils";
 import {
   isDirectProviderToolCapability,
@@ -227,7 +227,7 @@ export function ContextUsageOrb(props: {
       >
         <div className="context-usage-card-header">
           <strong>{title}</strong>
-          <span>{formatContextUsageTotal(snapshot)}</span>
+          <span>{formatContextUsageTotal(snapshot, locale)}</span>
         </div>
         <ContextUsageProgressBar breakdown={breakdown} usageBasisPoints={usageBasisPoints} />
         {detailVisible || snapshot.cacheHitBasisPoints != null ? (
@@ -309,40 +309,6 @@ export function ContextUsageOrb(props: {
       </PopoverContent>
     </Popover>
   );
-}
-
-// formatCompactProviderCount formats request and token counts with up to two decimals and K/M/B/T units.
-// formatCompactProviderCount 使用最多两位小数以及 K/M/B/T 单位格式化请求次数与 Token 数量。
-// Parameters: value is the non-negative count to format, and unknownLabel is shown when the count is unavailable.
-// 参数：value 是待格式化的非负数量，unknownLabel 是数量不可用时显示的文本。
-// Returns: a compact count string without a redundant trailing decimal zero.
-// 返回值：去除多余尾随零的小数紧凑数量文本。
-export function formatCompactProviderCount(value: number | null | undefined, unknownLabel: string): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return unknownLabel;
-  }
-  // normalizedValue prevents negative accounting values from leaking into the display.
-  // normalizedValue 防止负数统计值泄漏到界面展示中。
-  const normalizedValue = Math.max(0, value);
-  // unitIndex selects the largest supported compact unit without probing unknown formats.
-  // unitIndex 选择最大的已支持紧凑单位，不探测未知格式。
-  let unitIndex = 0;
-  // scaledValue is the count after applying the selected unit divisor.
-  // scaledValue 是应用所选单位除数后的数量。
-  let scaledValue = normalizedValue;
-  // units lists the only compact units accepted by the WebUI display contract.
-  // units 列出 WebUI 展示契约唯一接受的紧凑单位。
-  const units = ["", "K", "M", "B", "T"];
-  while (scaledValue >= 1_000 && unitIndex < units.length - 1) {
-    scaledValue /= 1_000;
-    unitIndex += 1;
-  }
-  // formattedValue keeps small values exact and larger values within two decimals.
-  // formattedValue 保持小数值精确，并将较大数值限制在两位小数内。
-  const formattedValue = unitIndex === 0
-    ? String(scaledValue)
-    : scaledValue.toFixed(2).replace(/\.?(0+)$/u, "");
-  return `${formattedValue}${units[unitIndex]}`;
 }
 
 // contextWindowNodeIdFromSwitchValue validates one switch value against the authoritative node list.
@@ -437,14 +403,14 @@ function contextUsageBreakdown(snapshot: ContextUsageSnapshot): ContextUsageBrea
 
 // formatContextUsageTotal renders the compact current-window summary.
 // formatContextUsageTotal 渲染紧凑的当前窗口摘要。
-function formatContextUsageTotal(snapshot: ContextUsageSnapshot): string {
+function formatContextUsageTotal(snapshot: ContextUsageSnapshot, locale: string): string {
   const usageBasisPoints = contextUsageBasisPoints(snapshot);
   if (typeof snapshot.usedTokens !== "number" || !Number.isFinite(snapshot.usedTokens)) {
     return formatBasisPoints(usageBasisPoints);
   }
   const used = formatTokenCount(snapshot.usedTokens);
   if (typeof snapshot.maxTokens !== "number" || !Number.isFinite(snapshot.maxTokens)) {
-    return `${used} Token`;
+    return `${used} ${tokenUnitLabel(locale)}`;
   }
   return `${used}/${formatTokenCount(snapshot.maxTokens)} (${formatBasisPoints(usageBasisPoints)})`;
 }

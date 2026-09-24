@@ -7,7 +7,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n";
-import { formatDurationSeconds } from "@/lib/usage-format";
+import { formatDurationSeconds, formatTokenSpeed } from "@/lib/usage-format";
 import type { StatBucket } from "@/service/conversation-event-window-store";
 import type { ConversationTurnStatsTranscriptNode } from "@/service/conversation-event-display-projection";
 import type { UsageCoverage } from "@/service/conversation-usage-coverage";
@@ -60,7 +60,7 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
   const speed = averageTurnOutputSpeed(timing?.outputTokens, timing?.outputDurationMs);
   // Tiny positive measurements remain distinct from a measured zero.
   // 微小正数测量仍与测得零值区分。
-  const speedLabel = speed === null ? "-" : `${speed > 0 && speed < 0.1 ? "<0.1" : speed.toFixed(1)} tokens/s`;
+  const speedLabel = speed === null ? "-" : formatTokenSpeed(speed, locale);
   // statisticsRow is the always-visible bordered chip restored from the previous transcript surface.
   // statisticsRow 是从旧转录界面恢复的始终可见带边框胶囊。
   const statisticsRow = (
@@ -156,15 +156,15 @@ function TurnStatsUsageRows(props: {
         rightValue={formatNumber(props.bucket.subagent_return_count, props.locale)}
       />
       <TurnStatsMetricRow
-        leftLabel={zh ? "缓存 Tokens" : "Cached tokens"}
+        leftLabel={zh ? "缓存 Token" : "Cached tokens"}
         leftValue={cached}
         rightLabel={zh ? "无缓存输入" : "Uncached input"}
         rightValue={uncached}
       />
       <TurnStatsMetricRow
-        leftLabel={zh ? "输出 Tokens" : "Output tokens"}
+        leftLabel={zh ? "输出 Token" : "Output tokens"}
         leftValue={output}
-        rightLabel={zh ? "合计 Tokens" : "Total tokens"}
+        rightLabel={zh ? "合计 Token" : "Total tokens"}
         rightValue={total}
       />
       {props.children}

@@ -1,6 +1,6 @@
 // 验证 Token 统计的紧凑单位格式与耗时的一位小数格式。
 import { describe, expect, it } from "vitest";
-import { formatDurationSeconds, formatTokenCount } from "./usage-format";
+import { formatDurationSeconds, formatTokenCount, formatTokenSpeed, tokenUnitLabel } from "./usage-format";
 
 describe("formatTokenCount", () => {
   it("keeps counts below 1000 exact", () => {
@@ -33,5 +33,15 @@ describe("formatDurationSeconds", () => {
     expect(formatDurationSeconds(5_089)).toBe("5.1 s");
     expect(formatDurationSeconds(2_080)).toBe("2.1 s");
     expect(formatDurationSeconds(-1)).toBe("0.0 s");
+  });
+});
+
+describe("formatTokenSpeed", () => {
+  it("uses one decimal and the locale token unit", () => {
+    expect(formatTokenSpeed(343.84, "zh-CN")).toBe("343.8 Token/s");
+    expect(formatTokenSpeed(343.84, "en-US")).toBe("343.8 tokens/s");
+    expect(formatTokenSpeed(0.04, "zh-CN")).toBe("<0.1 Token/s");
+    expect(formatTokenSpeed(0, "en-US")).toBe("0.0 tokens/s");
+    expect(tokenUnitLabel("zh-CN")).toBe("Token");
   });
 });

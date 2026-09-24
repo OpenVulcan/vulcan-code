@@ -787,7 +787,7 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "conversation.stats.totalTokens": "{count} tokens",
     "conversation.stats.cachedTokens": "Cache hit {count}",
     "conversation.stats.cachedTokensCompact": "Cache {count} tokens",
-    "conversation.stats.outputSpeed": "{speed}/s",
+    "conversation.stats.outputSpeed": "{speed} tokens/s",
     "conversation.stats.group.regular": "Regular {count} tokens",
     "conversation.stats.group.subagent": "Agent {count} tokens",
     "conversation.stats.group.contextCompaction": "Compaction {count} tokens",
