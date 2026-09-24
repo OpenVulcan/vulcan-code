@@ -435,10 +435,12 @@ export function projectConversationTranscriptDisplay(
   return nodes;
 }
 
-/** Returns whether a typed collaboration fact belongs in user-facing chat; internal run control has no message body.
- * 返回强类型协作事实是否属于用户聊天内容；内部运行控制没有消息正文。 */
+/** Returns whether a typed collaboration fact belongs in chat; execution bookkeeping has no message body.
+ * 返回强类型协作事实是否属于聊天内容；执行记账没有消息正文。 */
 export function collaborationEventIsUserVisible(event: CollaborationEvent): boolean {
-  return event.event_kind !== "run_control_changed";
+  return event.event_kind !== "run_control_changed"
+    && event.event_kind !== "child_task_reserved"
+    && event.event_kind !== "child_task_activated";
 }
 
 /** Selects at most one final assistant text for each logical Turn.

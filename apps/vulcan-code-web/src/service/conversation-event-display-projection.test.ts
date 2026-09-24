@@ -246,6 +246,52 @@ function asTool(item: ReturnType<typeof projectConversationEventDisplay>[number]
 }
 
 describe("conversation V1 event display projection", () => {
+  it.each(["child_task_reserved", "child_task_activated"] as const)(
+    "retains %s in event data but omits its bookkeeping card from chat",
+    (eventKind) => {
+      /** Real child ownership is retained for navigation and runtime state.
+       * 保留真实子任务归属，供导航及运行状态使用。 */
+      const event: ConversationEventBody = {
+        kind: "collaboration",
+        version: 1,
+        operation_id: eventKind,
+        event_kind: eventKind,
+        after_state: {
+          kind: "child_task",
+          task: {
+            reservation_operation_id: "reserve-child",
+            source_tool_name: "spawn_agent",
+            execution_id: "execution-child",
+            task_id: "child",
+            parent_segment_generation: 1,
+            parent_turn_id: 7,
+            child: {
+              session_id: "child",
+              root_session_id: SESSION_ID,
+              project_id: "project-1",
+              segment_generation: 1,
+              task_id: "child",
+            },
+            state: eventKind === "child_task_reserved" ? "reserved" : "active",
+            reserved_at_ms: 1,
+            non_success_result: null,
+            non_success_projection: null,
+          },
+        },
+      };
+      /** Include a real agent notification to ensure meaningful content remains visible.
+       * 加入真实代理通知，确保有意义的正文仍然可见。 */
+      const projected = projectConversationEventDisplay([
+        summary(1, event, 101, 1, "host_only"),
+        summary(2, collaborationNotificationSentFixture(), 102, 1, "host_only"),
+      ]);
+      expect(projected).toHaveLength(2);
+      expect(projectConversationTranscriptDisplay(projected)).toMatchObject([
+        { kind: "collaboration", seq: 2 },
+      ]);
+    },
+  );
+
   it("keeps the serde collaboration envelope strict and visible on the HostOnly timeline", () => {
     const event = collaborationQuestionCreatedFixture();
     const projected = projectConversationEventDisplay([summary(1, event, 101, 1, "host_only")]);
