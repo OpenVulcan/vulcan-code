@@ -15,6 +15,7 @@ pub mod event_window;
 pub mod generation;
 pub mod layout;
 pub mod loader;
+mod metadata_migration;
 pub mod segment;
 pub mod writer;
 

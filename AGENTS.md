@@ -34,6 +34,7 @@
 
 | 任务条件 | 红线（不可协商） | 细节 |
 | --- | --- | --- |
+| 修改会话元数据持久字段、模式版本或读取入口 | 递增 `METADATA_SCHEMA_VERSION` 并提供逐版本迁移；升级前保留原字节备份，未知版本不得降级，用户观察权限不得猜测 | [`session-metadata-migrations.md`](docs/contracts/session-metadata-migrations.md) |
 | 修改 `shell_command`、`shell_session`、`terminal_session` 或命令会话状态 | `timeout_ms` 省略表示无限等待；内联输出超过 `200000` 字节转到 `.vulcan/temp/` 分页文件；`shell_session.read` 是轮询不是事件推送；`cwd` 只在 `start` 生效 | [`tooling-and-terminal-runtime.md`](docs/contracts/tooling-and-terminal-runtime.md) |
 | 修改 `ask`、提问状态机、Ask WebUI 或 Markdown 预览/渲染 | 模型可见提问工具只有 `ask`，不保留 `question` 别名；必须复用共享 `QuestionRuntime`，刷新或流式启动不得丢弃等待中的问题；Ask 是会话内非模态面板，不得劫持其他窗口键盘；会话 Markdown 复用当前 `conversation-markdown` 链路，不建立第二套解析器 | [`ask-and-markdown-interaction.md`](docs/contracts/ask-and-markdown-interaction.md) |
 | 修改 LuaSkills 版本、技能配置、Schema、宿主注入或管理链路 | 版本以根 `Cargo.toml` 与 `Cargo.lock` 为准；实现以 `luaskills_runtime/` 与 `tooling/bridge/` 当前源码为准 | [`luaskills-skill-config-guide.md`](docs/contracts/luaskills-skill-config-guide.md) |

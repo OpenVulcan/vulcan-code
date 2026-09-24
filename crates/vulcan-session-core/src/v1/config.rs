@@ -20,6 +20,10 @@ use crate::v1::ids::{ApiCallId, ClientActionId, PendingInputId, ResourceId, Seq,
 /// V1 会话元数据文档的文件契约。
 pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 
+/// Current metadata schema; storage migrations are required whenever this version increases.
+/// 当前元数据模式版本；每次递增都必须提供存储迁移。
+pub const METADATA_SCHEMA_VERSION: u32 = 2;
+
 /// Maximum number of Unicode scalar values accepted in one Goal objective.
 /// 一个 Goal 目标内容允许的 Unicode 标量值最大数量。
 pub const MAX_GOAL_OBJECTIVE_CHARS: usize = 4_000;
@@ -944,7 +948,7 @@ impl MetadataDocument {
     ) -> Self {
         Self {
             contract: METADATA_CONTRACT.to_string(),
-            schema_version: 1,
+            schema_version: METADATA_SCHEMA_VERSION,
             session_id: session_id.into(),
             fork_origin: None,
             project_tag: project_tag.into(),
@@ -990,7 +994,7 @@ mod tests {
         );
         let json = serde_json::to_string(&document).unwrap();
         assert!(json.contains(r#""contract":"vulcan.session.v1""#));
-        assert!(json.contains(r#""schema_version":1"#));
+        assert_eq!(document.schema_version, METADATA_SCHEMA_VERSION);
         let decoded: MetadataDocument = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, document);
     }
