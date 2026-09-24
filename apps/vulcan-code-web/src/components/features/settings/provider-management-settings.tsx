@@ -367,7 +367,6 @@ export function ProviderManagementArea() {
           <SystemProviderTable
             busyProviderId={busyProviderId}
             connections={snapshot?.connections ?? []}
-            heading={t("settings.providers.system")}
             loading={!snapshot}
             onAddCredential={setCredentialProviderId}
             onManageModels={openModels}
@@ -381,7 +380,6 @@ export function ProviderManagementArea() {
           <SystemProviderTable
             busyProviderId={busyProviderId}
             connections={snapshot?.connections ?? []}
-            heading={t("settings.providers.functional")}
             loading={!snapshot}
             onAddCredential={setCredentialProviderId}
             onSavePriority={(providerId, priority) => void saveProviderPriority(providerId, priority)}
@@ -760,7 +758,6 @@ function CustomProviderTable(props: {
 function SystemProviderTable(props: {
   busyProviderId: string | null
   connections: PublicAiSettingsSnapshot["connections"]
-  heading: string
   loading: boolean
   onAddCredential: (providerId: string) => void
   onManageModels?: (provider: PublicAiProviderDescriptor) => void
@@ -787,14 +784,6 @@ function SystemProviderTable(props: {
   ))
   return (
     <section className="space-y-3">
-      <div className="flex items-center gap-2">
-        {props.variant === "system"
-          ? <LockKeyhole className="size-4" />
-          : <ServerCog className="size-4" />}
-        <h3 className="font-medium">{props.heading}</h3>
-        <Badge variant="secondary">{props.providers.length}</Badge>
-      </div>
-
       <Input aria-label={t("settings.modelExperience.searchProvider")} placeholder={t("settings.modelExperience.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
       {!props.loading && visibleProviders.length === 0 ? <SettingsEmptyState icon={search.trim() ? <Search /> : props.variant === "system" ? <LockKeyhole /> : <ServerCog />} title={t("settings.modelExperience.noProviders")} /> : null}
       {props.loading ? (
