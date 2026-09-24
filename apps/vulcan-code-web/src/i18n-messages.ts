@@ -1553,6 +1553,7 @@ export type TranslationKey =
   | "conversation.collaboration.cancel"
   | "conversation.collaboration.detail.question"
   | "conversation.collaboration.detail.answer"
+  | "conversation.collaboration.detail.originalTask"
   | "conversation.collaboration.detail.notification"
   | "conversation.collaboration.detail.arguments"
   | "conversation.collaboration.detail.output"

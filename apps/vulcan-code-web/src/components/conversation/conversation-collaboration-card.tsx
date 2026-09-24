@@ -376,11 +376,25 @@ function collaborationBody(afterState: CollaborationAfterState): string | null {
   }
 }
 
-/** Returns the exact answer or cancellation body for a settled question.
- * 返回已结算问题的精确回答或撤销正文。 */
+/** Returns answer details or the original task reference, respecting result disclosure.
+ * 返回回答详情或原任务引用，并遵守结果披露约束。 */
 function collaborationSecondaryBody(
   afterState: CollaborationAfterState,
 ): { label: TranslationKey; body: string } | null {
+  // Results retain their request context; revoked receipts cannot disclose either body.
+  // 结果保留原请求语境；撤权回执不得披露任何正文。
+  if (afterState.kind === "received_task_result") {
+    return afterState.acceptance.disclosure === "authorization_revoked" ? null : {
+      label: "conversation.collaboration.detail.originalTask",
+      body: afterState.acceptance.result.acceptance.message.body,
+    };
+  }
+  if (afterState.kind === "task_result") {
+    return {
+      label: "conversation.collaboration.detail.originalTask",
+      body: afterState.result.acceptance.message.body,
+    };
+  }
   if (afterState.kind !== "question") return null;
   if (afterState.question.answer) {
     return {

@@ -1522,6 +1522,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.cancel": "撤销协作问题",
     "conversation.collaboration.detail.question": "问题",
     "conversation.collaboration.detail.answer": "回答",
+    "conversation.collaboration.detail.originalTask": "原任务",
     "conversation.collaboration.detail.notification": "阶段通知",
     "conversation.collaboration.detail.arguments": "技术详情",
     "conversation.collaboration.detail.output": "工具回执",

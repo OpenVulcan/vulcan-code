@@ -331,6 +331,26 @@ fn task_result_projection_delivers_late_result_to_current_turn() {
         .unwrap()
         .into_value();
     assert_eq!(projection.turn_id, current);
+    // The reference precedes the intact chunk batch and survives canonical reconstruction.
+    // 引用位于完整分块批次之前，并可通过规范重建。
+    let reference = source.events().iter().find(|event| {
+        matches!(&event.event, EventBody::UserInput(input) if input.text.contains("kind=\"result_context\""))
+    }).expect("late task result must include its original request reference");
+    assert_eq!(reference.turn_id, Some(current));
+    assert!(
+        projection
+            .inputs
+            .iter()
+            .all(|input| reference.seq < input.input_seq)
+    );
+    let EventBody::UserInput(reference_input) = &reference.event else {
+        unreachable!()
+    };
+    assert!(
+        reference_input
+            .text
+            .contains(&acceptance.result.acceptance.message.body)
+    );
     assert_eq!(
         source.collaboration_state().received_task_results[&acceptance.result.effect.delivery_id]
             .result

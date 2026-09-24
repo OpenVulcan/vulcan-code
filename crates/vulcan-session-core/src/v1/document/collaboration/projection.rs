@@ -5,6 +5,49 @@ use super::*;
 use crate::v1::ids::{ClientActionId, PendingInputId};
 use vulcan_ai_contract::{HostMessageEnvelope, HostMessageKind};
 
+/// Adds a bounded reference before `result` only when its request belongs to an earlier turn.
+/// 仅在请求属于较早回合时，向 `result` 前追加有界引用。
+/// `original_body` is untrusted request text; the caller's staged document owns rollback.
+/// `original_body` 是不可信请求正文；调用方暂存文档负责回滚。
+/// Returns success without changing the result body or the original turn's history.
+/// 成功时不改写结果正文或原回合历史。
+pub(super) fn append_late_result_context(
+    document: &mut SessionDocument,
+    result: &HostMessageEnvelope,
+    original_turn_id: TurnId,
+    original_body: &str,
+    now_ms: i64,
+) -> Result<(), DomainError> {
+    // Reference events share the receiving turn, never reopen their original request.
+    // 引用事件归属接收回合，绝不重新打开原请求。
+    let receiving_turn_id = document.require_open_turn()?.turn_id;
+    if receiving_turn_id == original_turn_id {
+        return Ok(());
+    }
+    // Slice only at a UTF-8 boundary, independently of the complete answer's body limit.
+    // 仅按 UTF-8 边界截取，与完整答案的正文上限独立。
+    let mut end = original_body
+        .len()
+        .min(vulcan_ai_contract::HOST_MESSAGE_REFERENCE_MAX_BYTES);
+    while !original_body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut reference = result.clone();
+    reference.event_id = format!("result-context:{}", document.id_frontier().next_seq);
+    reference.kind = HostMessageKind::ResultContext;
+    reference.body = serde_json::json!({
+        "result_event_id": result.event_id,
+        "original_turn_id": original_turn_id,
+        "receiving_turn_id": receiving_turn_id,
+        "late": true,
+        "original_message": &original_body[..end],
+        "original_message_truncated": end < original_body.len(),
+    })
+    .to_string();
+    append_envelope(document, reference, now_ms)?;
+    Ok(())
+}
+
 /// Appends one authenticated envelope and returns its exact provider-input proof.
 /// 追加一条已认证信封，并返回其精确 Provider 输入凭据。
 /// The caller stages a document clone so any later proof failure leaves the live document intact.
@@ -246,6 +289,18 @@ impl SessionDocument {
             scope: String::from("question"),
             body: answer.body.clone(),
         };
+        append_late_result_context(
+            &mut staged,
+            &envelope,
+            question
+                .source
+                .turn_id
+                .ok_or(DomainError::CollaborationStateViolation {
+                    field: "collaboration.answer_projection.source_turn",
+                })?,
+            &question.body,
+            now_ms,
+        )?;
         let (projected_seq, projected_input_id, _) =
             append_envelope(&mut staged, envelope, now_ms)?;
         let receipt = staged.deliver_answer(DeliverAnswerInput {

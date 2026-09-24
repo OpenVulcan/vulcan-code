@@ -1522,6 +1522,7 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.cancel": "Cancel collaboration question",
     "conversation.collaboration.detail.question": "Question",
     "conversation.collaboration.detail.answer": "Answer",
+    "conversation.collaboration.detail.originalTask": "Original task",
     "conversation.collaboration.detail.notification": "Phase notification",
     "conversation.collaboration.detail.arguments": "Technical details",
     "conversation.collaboration.detail.output": "Tool receipt",

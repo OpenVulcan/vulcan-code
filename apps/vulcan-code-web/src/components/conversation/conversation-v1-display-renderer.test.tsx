@@ -178,6 +178,8 @@ describe("ConversationV1DisplayRenderer", () => {
       </I18nProvider>);
       expect(received).toContain('data-collaboration-card-kind="task-result"');
       expect(received).toContain("会话任务结果");
+      expect(received).toContain("原任务");
+      expect(received).toContain("Original task");
       expect(received.includes("完整最终结果")).toBe(outcome === "completed");
       expect(received).not.toMatch(/aria-label="打开来源会话"[^>]*disabled/);
       expect(received).not.toContain("打开目标会话");
@@ -243,6 +245,8 @@ describe("ConversationV1DisplayRenderer", () => {
     </I18nProvider>);
     expect(redactedMarkup).toContain("授权撤销，结果正文不可用");
     expect(redactedMarkup).not.toContain("完整最终结果");
+    expect(redactedMarkup).not.toContain("Original task");
+    expect(redactedMarkup).not.toContain("原任务");
     expect(redactedMarkup).not.toContain('class="conversation-v1-collaboration-body"');
     // An application failure remains a message-delivery card with no invented business response.
     // 应用前失败保持为消息投递卡片，不虚构业务回复。

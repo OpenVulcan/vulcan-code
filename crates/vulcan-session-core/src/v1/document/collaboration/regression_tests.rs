@@ -791,6 +791,18 @@ fn late_answer_projects_in_new_turn_without_reopening_original_task() {
     assert_eq!(question.source.turn_id, Some(original_turn));
     let answer = question.answer.as_ref().unwrap();
     let projected_seq = answer.delivery.projected_seq.unwrap();
+    // A late answer quotes its request before the answer without altering either durable body.
+    // 迟到答案先引用原问题，再追加答案，不改写任何持久正文。
+    let reference = source.events().iter().find(|event| {
+        matches!(&event.event, EventBody::UserInput(input) if input.text.contains("kind=\"result_context\""))
+    }).expect("late answer must include its original request reference");
+    assert!(reference.seq < projected_seq);
+    assert_eq!(reference.turn_id, Some(current_turn));
+    let EventBody::UserInput(reference_input) = &reference.event else {
+        unreachable!()
+    };
+    assert!(reference_input.text.contains(&question.body));
+    assert!(reference_input.text.contains("\"late\":true"));
     assert_eq!(
         source
             .events()
@@ -805,6 +817,63 @@ fn late_answer_projects_in_new_turn_without_reopening_original_task() {
         .project_answer_before_api(question_id, T0 + 7)
         .unwrap();
     assert_eq!(source, after);
+}
+
+/// Late references truncate UTF-8 request text independently while preserving maximum-sized results.
+/// 迟到引用独立截取 UTF-8 请求正文，同时保留达到上限的完整结果。
+#[test]
+fn late_reference_preserves_utf8_and_full_result_budget() {
+    use vulcan_ai_contract::{
+        HOST_MESSAGE_MAX_BODY_BYTES, HOST_MESSAGE_REFERENCE_MAX_BYTES, HostMessageEnvelope,
+        HostMessageKind,
+    };
+    let (mut source, _, identity, _, _, _, _) = create_question_fixture(
+        "reference-source",
+        "reference-question",
+        "reference-delivery",
+    );
+    let original_turn = identity.turn_id.unwrap();
+    let result = HostMessageEnvelope {
+        event_id: "bounded-reference-result".into(),
+        kind: HostMessageKind::TaskResult,
+        source: "responder".into(),
+        target: identity.session_id,
+        task_id: None,
+        question_id: None,
+        scope: "task".into(),
+        body: "x".repeat(HOST_MESSAGE_MAX_BODY_BYTES),
+    };
+    let original = "界".repeat(HOST_MESSAGE_REFERENCE_MAX_BYTES);
+    let before = source.clone();
+    projection::append_late_result_context(&mut source, &result, original_turn, &original, T0 + 2)
+        .unwrap();
+    assert_eq!(
+        source, before,
+        "same-turn results must not duplicate their request"
+    );
+    source.close_turn(TurnOutcome::Stopped, 1, T0 + 3).unwrap();
+    open_root_turn(&mut source, "reference-next-turn", "Next task");
+    projection::append_late_result_context(&mut source, &result, original_turn, &original, T0 + 4)
+        .unwrap();
+    let reference = source
+        .events()
+        .iter()
+        .find_map(|event| match &event.event {
+            EventBody::UserInput(input) if input.text.contains("kind=\"result_context\"") => {
+                Some(&input.text)
+            }
+            _ => None,
+        })
+        .expect("late request reference is required");
+    assert!(reference.contains("\"original_message_truncated\":true"));
+    assert!(reference.contains(&format!(
+        "\"original_message\":\"{}\"",
+        "界".repeat(HOST_MESSAGE_REFERENCE_MAX_BYTES / "界".len())
+    )));
+    let rendered = result.render().unwrap();
+    let (seq, _, _) = projection::append_envelope(&mut source, result, T0 + 4).unwrap();
+    assert!(source.events().iter().any(|event| event.seq == seq
+        && matches!(&event.event, EventBody::UserInput(input) if input.text == rendered)));
 }
 
 /// Builds the exact persisted native wait output from the source-owned question snapshot.
