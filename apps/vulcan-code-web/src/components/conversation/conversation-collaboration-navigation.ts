@@ -35,7 +35,7 @@ export function conversationV1SubagentNames(events: readonly ConversationEventSu
 export interface ConversationV1CollaborationNavigation {
   /** Live conversations that the host can select directly.
    * 宿主可以直接选择的实时会话。*/
-  conversations: readonly Pick<ConversationSummary, "id">[];
+  conversations: readonly (Pick<ConversationSummary, "id"> & Partial<Pick<ConversationSummary, "title">>)[];
   /** Backend-routed parent and child task snapshot for the current conversation.
    * 当前会话对应的后端父会话与子任务导航快照。*/
   navigation: SubagentNavigationSnapshot | null;
@@ -122,5 +122,10 @@ export function createConversationV1CollaborationNavigation(
   // taskId is the canonical child session id, and label is the backend's human-facing name.
   // taskId 是规范子会话身份，label 是后端提供的可读名称。
   const subagentNames = new Map((navigation.navigation?.tasks ?? []).map((task) => [task.taskId, task.label]));
+  // Cross-session messages use the same authoritative titles as the host conversation list.
+  // 跨会话消息使用与宿主会话列表一致的权威标题。
+  for (const conversation of navigation.conversations) {
+    if (conversation.title && !subagentNames.has(conversation.id)) subagentNames.set(conversation.id, conversation.title);
+  }
   return { availableSessionIds, onOpenSession, subagentNames };
 }

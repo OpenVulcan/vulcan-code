@@ -294,6 +294,9 @@ export function projectConversationTranscriptDisplay(
   }
 
   const nodes: ConversationTranscriptDisplayNode[] = [];
+  // One delivery retains its first timeline anchor while its card reads the latest state.
+  // 同一投递保留首个时间线锚点，卡片读取最新状态。
+  const taskMessageIds = new Set<string>();
   let processItems: ConversationProcessDisplayItem[] = [];
 
   /** Flushes the current process run before the next independently visible transcript node.
@@ -320,6 +323,11 @@ export function projectConversationTranscriptDisplay(
   for (const item of items) {
     if (item.kind === "collaboration") {
       if (!collaborationEventIsUserVisible(item.collaboration)) continue;
+      const deliveryId = collaborationTaskMessageId(item.collaboration.after_state);
+      if (deliveryId !== null) {
+        if (taskMessageIds.has(deliveryId)) continue;
+        taskMessageIds.add(deliveryId);
+      }
       // Agent messages remain visible, while internal run-control transitions stay in the event store.
       // 代理消息保持可见，内部运行控制转换仅保留在事件存储中。
       flushProcess();
@@ -431,6 +439,19 @@ export function collaborationEventIsUserVisible(event: CollaborationEvent): bool
     && event.event_kind !== "child_task_reserved"
     && event.event_kind !== "child_task_activated"
     && event.event_kind !== "child_task_terminal";
+}
+
+/** Returns the immutable delivery identity shared by task-message lifecycle snapshots.
+ * 返回任务消息生命周期快照共享的不可变投递身份。
+ * Other collaboration kinds return null and retain independent timeline semantics.
+ * 其他协作类型返回空值，保留独立时间线语义。 */
+export function collaborationTaskMessageId(state: CollaborationEvent["after_state"]): string | null {
+  switch (state.kind) {
+    case "outbound_task_message": return state.record.message.delivery_id;
+    case "inbound_task_message": return state.acceptance.message.delivery_id;
+    case "task_message_effect": return state.effect.delivery_id;
+    default: return null;
+  }
 }
 
 /** Selects at most one final assistant text for each logical Turn.

@@ -1576,7 +1576,6 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.target": "目标",
     "conversation.collaboration.openSource": "打开来源会话",
     "conversation.collaboration.openTarget": "打开目标会话",
-    "conversation.collaboration.technicalDetails": "技术详情",
     "conversation.collaboration.executionPurpose": "执行用途",
     "conversation.collaboration.failure": "失败原因",
     "conversation.collaboration.answerDelivery": "答案交付",

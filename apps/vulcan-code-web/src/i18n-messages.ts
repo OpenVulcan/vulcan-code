@@ -1607,7 +1607,6 @@ export type TranslationKey =
   | "conversation.collaboration.target"
   | "conversation.collaboration.openSource"
   | "conversation.collaboration.openTarget"
-  | "conversation.collaboration.technicalDetails"
   | "conversation.collaboration.executionPurpose"
   | "conversation.collaboration.failure"
   | "conversation.collaboration.answerDelivery"

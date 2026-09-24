@@ -13,12 +13,18 @@ export interface ConversationCollaborationState {
   /** Child lifecycle facts keyed by execution, never by reusable agent name.
    * 按执行身份索引的子任务生命周期事实，绝不按可复用代理名称索引。 */
   tasks: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "child_task" }>>;
+  /** Latest task-message content and acceptance, indexed by immutable delivery ID.
+   * 按不可变投递身份索引的最新任务消息正文与接纳状态。 */
+  taskMessages: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "outbound_task_message" | "inbound_task_message" }>>;
+  /** Application outcomes enrich the original message without replacing its body.
+   * 应用结果补充原消息，不替换其正文。 */
+  taskMessageEffects: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "task_message_effect" }>>;
 }
 
 /** Shares the exact mounted session's facts with both tool and message cards.
  * 向工具与消息卡片共享精确已挂载会话的事实。 */
 export const ConversationCollaborationStateContext = React.createContext<ConversationCollaborationState>({
-  questions: new Map(), deliveries: new Map(), tasks: new Map(),
+  questions: new Map(), deliveries: new Map(), tasks: new Map(), taskMessages: new Map(), taskMessageEffects: new Map(),
 });
 
 /** Folds canonical event order into latest snapshots without modifying persisted history.
@@ -31,12 +37,25 @@ export function projectConversationCollaborationState(events: readonly Conversat
   const questions = new Map<string, Extract<CollaborationAfterState, { kind: "question" }>>();
   const deliveries = new Map<string, Extract<CollaborationAfterState, { kind: "outbound_delivery" | "inbound_delivery" }>>();
   const tasks = new Map<string, Extract<CollaborationAfterState, { kind: "child_task" }>>();
+  // Content and effect snapshots remain separate so state-only receipts cannot erase the message.
+  // 正文与效果快照分开保留，避免纯状态回执擦除消息。
+  const taskMessages = new Map<string, Extract<CollaborationAfterState, { kind: "outbound_task_message" | "inbound_task_message" }>>();
+  const taskMessageEffects = new Map<string, Extract<CollaborationAfterState, { kind: "task_message_effect" }>>();
   for (const summary of events) {
     if (summary.event.kind !== "collaboration") continue;
     // The discriminant fixes ownership; no chronological-neighbor or name matching is permitted.
     // 判别字段确定归属；不按相邻时间或名称匹配。
     const state = summary.event.after_state;
     switch (state.kind) {
+      case "outbound_task_message":
+        taskMessages.set(state.record.message.delivery_id, state);
+        break;
+      case "inbound_task_message":
+        taskMessages.set(state.acceptance.message.delivery_id, state);
+        break;
+      case "task_message_effect":
+        taskMessageEffects.set(state.effect.delivery_id, state);
+        break;
       case "question":
         questions.set(state.question.question_id, state);
         deliveries.set(state.question.question_id, { kind: "outbound_delivery", delivery: state.delivery });
@@ -50,5 +69,5 @@ export function projectConversationCollaborationState(events: readonly Conversat
         break;
     }
   }
-  return { questions, deliveries, tasks };
+  return { questions, deliveries, tasks, taskMessages, taskMessageEffects };
 }

@@ -257,7 +257,7 @@ it("shows a failed answer delivery as failed after authorization revocation", as
       },
     },
   });
-  expect(host.querySelector(".conversation-v1-collaboration-status")?.textContent).toBe("Failed");
+  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toBe("Failed");
   expect(host.querySelector(".conversation-v1-collaboration-details")).toBeNull();
 });
 

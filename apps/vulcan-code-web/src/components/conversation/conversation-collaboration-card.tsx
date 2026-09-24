@@ -3,6 +3,7 @@ import { ChevronDown, MessagesSquare } from "lucide-react";
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "./conversation-measured-collapse";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ConversationCollaborationStateContext } from "./conversation-collaboration-state";
+import { collaborationTaskMessageId } from "@/service/conversation-event-display-projection";
 import { MarkdownMessage } from "./conversation-markdown";
 import type { ConversationAgentInteraction } from "@/types/conversation";
 import type {
@@ -56,11 +57,11 @@ export function ConversationAgentInteractionView({ interaction }: { interaction:
     <CollaborationToolCard id={`subagent-return:${interaction.event.child_session_id}:${interaction.seq}`} seq={interaction.seq}
       eventKind="subagent_return" cardKind="task-result" title={t("conversation.collaboration.agentCompleted")}
       name={actions.subagentNames?.get(interaction.event.child_session_id)}>
-      <MarkdownMessage content={interaction.event.content} eager />
-      <div className="subagent-orchestration-meta">
+      <div className="conversation-v1-collaboration-content"><MarkdownMessage content={interaction.event.content} eager /></div>
+      <footer className="conversation-v1-collaboration-footer">
         <CollaborationSessionButton {...actions} sessionId={interaction.event.child_session_id} label={t("conversation.collaboration.source")} title={t("conversation.collaboration.openSource")} />
         <time dateTime={new Date(interaction.created_at_ms).toISOString()}>{new Date(interaction.created_at_ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
-      </div>
+      </footer>
     </CollaborationToolCard>
   );
 }
@@ -83,9 +84,12 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   // 实时展示状态更新历史问题卡片，不改写其来源事件。
   const collaborationState = React.useContext(ConversationCollaborationStateContext);
   const event = props.event;
+  // Task delivery IDs bind status changes to the original content and stable fold identity.
+  // 任务投递身份将状态变化绑定到原正文与稳定折叠身份。
+  const taskMessageId = collaborationTaskMessageId(event.after_state);
   const afterState = event.after_state.kind === "question"
     ? collaborationState.questions.get(event.after_state.question.question_id) ?? event.after_state
-    : event.after_state;
+    : taskMessageId !== null ? collaborationState.taskMessages.get(taskMessageId) ?? event.after_state : event.after_state;
   const isNotification = afterState.kind === "outbound_notification" || afterState.kind === "inbound_notification";
   // Task-message cards describe delivery, never a child task's terminal result.
   // 任务消息卡片描述投递，绝不表示子任务终态结果。
@@ -101,62 +105,49 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   const isTaskResult = ((afterState.kind === "task_result" || afterState.kind === "received_task_result")
     && !isFailedTaskDelivery) || event.event_kind === "child_task_non_success_recorded";
   const participants = collaborationParticipants(afterState);
-  const status = collaborationStatus(afterState, t);
+  const taskMessageEffect = taskMessageId !== null ? collaborationState.taskMessageEffects.get(taskMessageId) : undefined;
+  const status = collaborationStatus(taskMessageEffect ?? afterState, t);
   const title = isFailedTaskDelivery
     ? t("conversation.collaboration.timeline.taskMessage")
     : collaborationTimelineTitle(event.event_kind, t);
   const body = event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState);
   const secondaryBody = collaborationSecondaryBody(afterState);
-  // Question content is user-facing; transport envelopes and execution internals are not.
-  // 问题正文面向用户，传输信封和执行内部信息不面向用户。
-  const isQuestion = afterState.kind === "question" || afterState.kind === "inbound_delivery"
-    || afterState.kind === "outbound_delivery" || afterState.kind === "question_execution"
-    || afterState.kind === "answer_delivery";
   return (
     <CollaborationToolCard
-      id={`collaboration:${event.operation_id}:${props.seq}`} seq={props.seq}
+      id={taskMessageId !== null ? `collaboration:task-message:${taskMessageId}` : `collaboration:${event.operation_id}:${props.seq}`} seq={props.seq}
       eventKind="collaboration" collaborationEventKind={event.event_kind}
       cardKind={isTaskResult ? "task-result" : isNotification ? "notification" : isTaskMessage ? "task-message" : "interaction"}
       title={title} status={status}
       name={[...new Set(participants.map((participant) => props.subagentNames?.get(participant.sessionId)).filter(Boolean))].join(" · ")}
     >
-      {body ? <p className="conversation-v1-collaboration-body">{body}</p> : null}
+      {body ? <div className="conversation-v1-collaboration-content"><MarkdownMessage content={body} eager /></div> : null}
       {secondaryBody ? (
-        <p className="conversation-v1-collaboration-secondary-body">
-          <strong>{t(secondaryBody.label)}</strong>
-          {secondaryBody.body}
-        </p>
+        <section className="conversation-v1-collaboration-reply">
+          <span className="conversation-v1-collaboration-caption">{t(secondaryBody.label)}</span>
+          <MarkdownMessage content={secondaryBody.body} eager />
+        </section>
       ) : null}
       {afterState.kind === "question" ? <ConversationCollaborationStatus questionId={afterState.question.question_id} /> : null}
-      {participants.length > 0 ? (
-        <div className="conversation-v1-collaboration-participants">
-          {participants.map((participant) => (
-            <CollaborationSessionButton
-              availableSessionIds={props.availableSessionIds}
-              key={`${participant.role}:${participant.sessionId}`}
-              label={participant.role === "source" ? t("conversation.collaboration.source") : t("conversation.collaboration.target")}
-              onOpenSession={props.onOpenSession}
-              sessionId={participant.sessionId}
-              title={participant.role === "source" ? t("conversation.collaboration.openSource") : t("conversation.collaboration.openTarget")}
-            />
-          ))}
-        </div>
-      ) : null}
-      {!isQuestion ? <details className="conversation-v1-collaboration-details">
-        <summary>{t("conversation.collaboration.technicalDetails")}</summary>
-        <dl>
-          <dt>event_kind</dt>
-          <dd>{event.event_kind}</dd>
-          <dt>operation_id</dt>
-          <dd>{event.operation_id}</dd>
-          <dt>after_state.kind</dt>
-          <dd>{afterState.kind}</dd>
-        </dl>
-        <pre>{JSON.stringify(afterState, null, 2)}</pre>
-      </details> : null}
-      <time dateTime={new Date(props.createdAtMs).toISOString()}>
-        {new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
-      </time>
+      <footer className="conversation-v1-collaboration-footer">
+        {participants.length > 0 ? (
+          <div className="conversation-v1-collaboration-participants">
+            {participants.map((participant) => (
+              <CollaborationSessionButton
+                availableSessionIds={props.availableSessionIds}
+                subagentNames={props.subagentNames}
+                key={`${participant.role}:${participant.sessionId}`}
+                label={participant.role === "source" ? t("conversation.collaboration.source") : t("conversation.collaboration.target")}
+                onOpenSession={props.onOpenSession}
+                sessionId={participant.sessionId}
+                title={participant.role === "source" ? t("conversation.collaboration.openSource") : t("conversation.collaboration.openTarget")}
+              />
+            ))}
+          </div>
+        ) : null}
+        <time dateTime={new Date(props.createdAtMs).toISOString()}>
+          {new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
+        </time>
+      </footer>
     </CollaborationToolCard>
   );
 }
@@ -203,8 +194,11 @@ function CollaborationToolCard(props: React.PropsWithChildren<{
       <button type="button" className="tool-presentation-summary subagent-orchestration-summary"
         aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
         <MessagesSquare size={14} className="subagent-orchestration-icon" aria-hidden="true" />
-        <span>{props.title}{props.status ? <> · <span className="conversation-v1-collaboration-status">{props.status}</span></> : null}</span>
-        <span className="tool-presentation-command" title={props.name}><span className="tool-presentation-command-text">{props.name}</span></span>
+        <span className="conversation-v1-collaboration-heading">
+          <span className="conversation-v1-collaboration-title">{props.title}</span>
+          {props.name ? <span className="conversation-v1-collaboration-name" title={props.name}>{props.name}</span> : null}
+        </span>
+        {props.status ? <span className="conversation-v1-collaboration-badge">{props.status}</span> : null}
         <ChevronDown size={14} className="tool-presentation-toggle" aria-hidden="true" />
       </button>
       <ConversationMeasuredCollapse collapseId={props.id} expanded={expanded}>
@@ -217,6 +211,9 @@ function CollaborationToolCard(props: React.PropsWithChildren<{
 /** Renders one source or target session navigation control without exposing its id in the label.
  * 渲染一条不在标签中暴露 ID 的来源或目标会话导航控件。 */
 function CollaborationSessionButton(props: {
+  // Authoritative session or agent labels; absent labels never expose internal IDs.
+  // 权威会话或代理名称；缺少名称时绝不暴露内部身份。
+  subagentNames?: ReadonlyMap<string, string>;
   label: string;
   title: string;
   sessionId: string;
@@ -225,6 +222,9 @@ function CollaborationSessionButton(props: {
 }) {
   const navigable = Boolean(props.onOpenSession)
     && (props.availableSessionIds === undefined || props.availableSessionIds.has(props.sessionId));
+  // Names come from the exact host route, rather than being inferred from message text.
+  // 名称来自精确宿主路由，不从消息正文推断。
+  const name = props.subagentNames?.get(props.sessionId);
   return (
     <button
       aria-label={props.title}
@@ -233,7 +233,8 @@ function CollaborationSessionButton(props: {
       onClick={() => props.onOpenSession?.(props.sessionId)}
       type="button"
     >
-      {props.label}
+      <span className="conversation-v1-collaboration-caption">{props.label}</span>
+      {name ? <span className="conversation-v1-collaboration-participant-name" title={name}>{name}</span> : null}
     </button>
   );
 }

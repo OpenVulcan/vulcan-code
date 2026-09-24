@@ -87,7 +87,7 @@ describe("ConversationV1DisplayRenderer", () => {
         onOpenCollaborationSession={() => undefined} events={[summary(12, event, "host_only")]} />
     </I18nProvider>);
     expect(markup).toContain('data-collaboration-card-kind="task-result"');
-    expect(markup).toContain('class="conversation-v1-collaboration-body">startup_failed: 原始启动错误');
+    expect(markup).toContain('startup_failed: 原始启动错误');
     expect(markup).toContain("打开来源会话");
     expect(markup).not.toContain("user-bubble");
     expect(markup).not.toContain("assistant-final-output");
@@ -114,7 +114,7 @@ describe("ConversationV1DisplayRenderer", () => {
       ]} />
     </I18nProvider>);
     expect(deliveredMarkup.match(/data-collaboration-card-kind="task-result"/g)).toHaveLength(1);
-    expect(deliveredMarkup.match(/class="conversation-v1-collaboration-body">startup_failed: 原始启动错误/g)).toHaveLength(1);
+    expect(deliveredMarkup.match(/startup_failed: 原始启动错误/g)).toHaveLength(1);
     expect(deliveredMarkup).not.toContain("model-only result envelope");
   });
 
@@ -257,7 +257,7 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(failedMarkup).not.toContain("完整最终结果");
     expect(failedMarkup).not.toContain("assistant-final-output");
   });
-  it("renders task intent, acceptance and effects as distinct delivery cards", () => {
+  it("updates one task message card through acceptance and application outcomes", () => {
     // These are the exact Core after-state variants, not parsed provider User envelopes.
     // 这些是精确 Core 后状态分支，不是解析供应商 User 信封所得。
     const message = {
@@ -290,7 +290,9 @@ describe("ConversationV1DisplayRenderer", () => {
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
       <ConversationV1DisplayRenderer events={events.map((event, index) => summary(index + 1, event, "host_only"))} />
     </I18nProvider>);
-    expect(markup.match(/data-collaboration-card-kind="task-message"/g)).toHaveLength(6);
+    expect(markup.match(/data-collaboration-card-kind="task-message"/g)).toHaveLength(1);
+    expect(markup).not.toContain("技术详情");
+    expect(markup).toContain('data-seq="1"');
     expect(markup).toContain("代理任务消息");
     expect(markup).toContain("任务已认领");
     expect(markup).toContain("先检查身份绑定");

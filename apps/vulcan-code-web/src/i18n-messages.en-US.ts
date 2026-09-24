@@ -1576,7 +1576,6 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.target": "Target",
     "conversation.collaboration.openSource": "Open source session",
     "conversation.collaboration.openTarget": "Open target session",
-    "conversation.collaboration.technicalDetails": "Technical details",
     "conversation.collaboration.executionPurpose": "Execution purpose",
     "conversation.collaboration.failure": "Failure",
     "conversation.collaboration.answerDelivery": "Answer delivery",

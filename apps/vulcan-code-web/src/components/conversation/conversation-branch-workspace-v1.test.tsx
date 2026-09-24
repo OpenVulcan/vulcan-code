@@ -386,6 +386,35 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(container.querySelector('[data-collaboration-card-kind]')).toBeNull();
   });
 
+  it.each(["branch", "native"] as const)("updates a task message in place without merging identical content in %s", (surface) => {
+    // Delivery identity distinguishes identical messages; receipts must not move their first anchor.
+    // 投递身份区分相同正文的消息；回执不得移动首个锚点。
+    const message = { operation_id: "send-one", delivery_id: "delivery-one", kind: "task_steer" as const,
+      source: { session_id: "source", root_session_id: "source", project_id: "p", segment_generation: 1 },
+      target: { session_id: "target", root_session_id: "target", project_id: "p", segment_generation: 1 }, body: "相同消息正文" };
+    const sent = (seq: number, deliveryId: string): ConversationEventSummary => eventSummary(seq, {
+      kind: "collaboration", version: 1, operation_id: `send-${deliveryId}`, event_kind: "task_message_sent",
+      after_state: { kind: "outbound_task_message", record: { message: { ...message, delivery_id: deliveryId }, created_at_ms: 1001, acceptance: null } },
+    }, "host_only");
+    const events = [sent(1, "delivery-one"), sent(2, "delivery-two"), eventSummary(3, {
+      kind: "collaboration", version: 1, operation_id: "ack-one", event_kind: "task_message_acknowledged",
+      after_state: { kind: "outbound_task_message", record: { message, created_at_ms: 1001,
+        acceptance: { message, operation_id: "accept-one", target_revision: 1, event_seq: 3, accepted_at_ms: 1003 } } },
+    }, "host_only")];
+    const markup = surface === "branch" ? renderWorkspace(events) : renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={events} /></I18nProvider>,
+    );
+    const container = document.createElement("div");
+    container.innerHTML = markup;
+    const cards = container.querySelectorAll('[data-collaboration-card-kind="task-message"]');
+    expect(cards).toHaveLength(2);
+    expect(container.querySelector('[data-seq="1"] .conversation-v1-collaboration-badge')?.textContent).toBe("已接纳");
+    expect(container.querySelector('[data-seq="2"] .conversation-v1-collaboration-badge')?.textContent).toBe("已记录");
+    expect(container.querySelector('[data-seq="3"]')).toBeNull();
+    expect(container.querySelectorAll("details, .conversation-v1-collaboration-details")).toHaveLength(0);
+    expect([...cards].every((card) => card.textContent?.includes("相同消息正文"))).toBe(true);
+  });
+
   it("updates historical question status after settlement without offering cancellation", () => {
     // created is the old pending snapshot retained as immutable history.
     // created 是作为不可变历史保留的旧待处理快照。
