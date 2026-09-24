@@ -9,23 +9,23 @@
   font-family: "Geist Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
   background: var(--background);
   color: var(--foreground);
-  --background: #edece9;
+  --background: #f7f7f5;
   --foreground: #1a1917;
-  --card: #f6f6f4;
+  --card: #fdfdfc;
   --card-foreground: #1a1917;
-  --popover: #fafaf8;
+  --popover: #ffffff;
   --popover-foreground: #1a1917;
   --primary: #c84709;
   --primary-foreground: #ffffff;
-  --secondary: #e3e2df;
+  --secondary: #efeeeb;
   --secondary-foreground: #31302d;
-  --muted: #e3e2df;
-  --muted-foreground: #62605d;
-  --accent: #dfdedb;
+  --muted: #efeeeb;
+  --muted-foreground: #5f5d5a;
+  --accent: #eae9e6;
   --accent-foreground: #1a1917;
   --destructive: #ca3134;
-  --border: #d9d7d4;
-  --input: #c7c5c2;
+  --border: #e3e1de;
+  --input: #d1cfcb;
   --ring: #c84709;
   --chart-1: #547cac;
   --chart-2: #368b7c;
@@ -35,13 +35,13 @@
   --diff-addition-base: #1f883d;
   --diff-deletion-base: #cf222e;
   --radius: 0.5rem;
-  --sidebar: #e6e5e2;
+  --sidebar: #f0efec;
   --sidebar-foreground: #31302d;
   --sidebar-primary: #c84709;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #dad8d5;
+  --sidebar-accent: #e5e3e0;
   --sidebar-accent-foreground: #1a1917;
-  --sidebar-border: #d7d5d2;
+  --sidebar-border: #e1dfdc;
   --sidebar-ring: #c84709;
   --app-header-height: 30px;
   --vcn-overlay: rgb(24 22 19 / 26%);
@@ -69,7 +69,7 @@
   /* Segmented tracks sink slightly; the chosen segment rises as a near-white chip. */
   /* 分段控件轨道略微下沉，选中段以近白色小块浮起。 */
   --vcn-control-track: rgb(24 22 19 / 5.5%);
-  --vcn-control-on: #fdfdfc;
+  --vcn-control-on: #ffffff;
   --vcn-shadow-control-on: 0 1px 2px rgb(24 22 19 / 9%), 0 0 0 0.5px rgb(24 22 19 / 7%);
   /* Disabled controls fall back to neutral ink instead of a faded brand colour. */
   /* 禁用控件回落为中性墨色，而不是褪色的品牌色。 */

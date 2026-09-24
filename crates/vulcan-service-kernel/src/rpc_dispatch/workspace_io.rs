@@ -21,6 +21,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_workspace_diff_search",
     "workspace.git.fileAction",
     "service_workspace_git_file_action",
+    "workspace.git.branches",
+    "workspace.git.switchBranch",
+    "workspace.git.history",
     "workspace.files.list",
     "service_workspace_files_list",
     "workspace.files.read",
@@ -111,6 +114,36 @@ pub(super) async fn dispatch(
         ),
         "workspace.git.fileAction" | "service_workspace_git_file_action" => rpc_json_result(
             service_workspace_git_file_action(
+                state,
+                rpc_optional_param(params, "workspacePath")?,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "workspace.git.branches" => rpc_json_result(
+            service_workspace_git_branches(
+                state,
+                rpc_optional_param(params, "workspacePath")?,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "workspace.git.switchBranch" => rpc_json_result(
+            service_workspace_git_switch_branch(
+                state,
+                rpc_optional_param(params, "workspacePath")?,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "workspace.git.history" => rpc_json_result(
+            service_workspace_git_history(
                 state,
                 rpc_optional_param(params, "workspacePath")?,
                 rpc_optional_param(params, "projectId")?,

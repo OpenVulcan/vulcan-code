@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// 使用 jsdom 验证真实仓库选择与操作身份。
+// 使用 jsdom 验证可折叠仓库分组与操作身份。
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,26 +44,60 @@ async function renderPanel(overrides: Partial<PanelProps> = {}) {
       onOpenSubagentPanel={async () => true} {...overrides} />
   </TooltipProvider></I18nProvider>));
 }
-describe("focused multi-repository Git panel", () => {
-  it("switches one operation area using stable keys and survives late reordered summaries", async () => {
-    // select and review observe exact action ownership without a real repository mutation.
-    // select 与 review 观察精确动作归属，不修改真实仓库。
-    const select = vi.fn(); const review = vi.fn();
-    await renderPanel({ onSelectReviewRepository: select, onOpenReviewChanges: review });
-    expect(host.querySelectorAll(".conversation-session-review-section")).toHaveLength(1);
-    await act(async () => host.querySelectorAll<HTMLButtonElement>(".session-review-repository-option")[1].click());
-    expect(select).toHaveBeenLastCalledWith("packages/repo");
-    expect(host.querySelector(".conversation-session-review-section")?.getAttribute("data-repository-key")).toBe("packages/repo");
-    await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-row")!.click());
+// section finds one repository group by its stable key rather than by its position.
+// section 按稳定键查找仓库分组，而不依赖其位置。
+// Parameters: repositoryKey is the project-relative key. Returns: the group element, if rendered.
+// 参数：repositoryKey 为项目相对键。返回值：已渲染的分组元素。
+function section(repositoryKey: string): HTMLElement | null {
+  return host.querySelector<HTMLElement>(`.conversation-session-review-section[data-repository-key="${repositoryKey}"]`);
+}
+// openManager opens the Git settings dialog, the only place where monitoring is switched.
+// openManager 打开 Git 设置弹窗，这是切换监听的唯一入口。
+// Returns: completion after the dialog renders.
+// 返回值：弹窗渲染完成后的结束信号。
+async function openManager() {
+  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-manager-trigger")!.click());
+}
+// managerCheckbox finds one repository checkbox in the Git settings dialog by its visible path.
+// managerCheckbox 按可见路径在 Git 设置弹窗中查找仓库复选框。
+// Parameters: repositoryKey is the project-relative key. Returns: the checkbox, if rendered.
+// 参数：repositoryKey 为项目相对键。返回值：已渲染的复选框。
+function managerCheckbox(repositoryKey: string): HTMLInputElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>(".conversation-session-review-manager-row")]
+    .find((row) => repositoryKey === "." ? !row.querySelector("small") : row.querySelector("small")?.textContent === repositoryKey)
+    ?.querySelector<HTMLInputElement>("input") ?? undefined;
+}
+describe("foldable multi-repository Git panel", () => {
+  it("renders every monitored repository as a group and routes actions by stable key", async () => {
+    // select, open and review observe exact action ownership without a real repository mutation.
+    // select、open 与 review 观察精确动作归属，不修改真实仓库。
+    const select = vi.fn(); const open = vi.fn(); const review = vi.fn();
+    await renderPanel({ onSelectReviewRepository: select, onCommitDialogOpenChange: open, onOpenReviewChanges: review });
+    expect(host.querySelectorAll(".conversation-session-review-section")).toHaveLength(2);
+    expect(host.textContent).not.toContain("监听中");
+    // Only the first group starts expanded; the folded one keeps its line delta on the title row.
+    // 仅首个分组默认展开；折叠分组在标题行保留行数增减。
+    expect(section(".")!.querySelector(".conversation-session-commit-trigger")).not.toBeNull();
+    expect(section("packages/repo")!.querySelector(".conversation-session-commit-trigger")).toBeNull();
+    expect(section("packages/repo")!.querySelector(".conversation-session-review-title-status")?.textContent).toBe("+3-1");
+    await act(async () => section("packages/repo")!.querySelector<HTMLButtonElement>(".conversation-session-review-group-toggle")!.click());
+    expect(section("packages/repo")!.querySelector(".conversation-session-review-title-status")?.textContent).toBe("");
+    await act(async () => section("packages/repo")!.querySelector<HTMLButtonElement>(".conversation-session-review-row")!.click());
     expect(review).toHaveBeenLastCalledWith("packages/repo");
-    await renderPanel({ reviewRepositories: [...repositories].reverse(), onSelectReviewRepository: select, onOpenReviewChanges: review });
-    expect(host.querySelector(".conversation-session-review-section")?.getAttribute("data-repository-key")).toBe("packages/repo");
-    expect(host.textContent).toContain("嵌套仓库 · packages/repo");
+    await act(async () => section("packages/repo")!.querySelector<HTMLButtonElement>(".conversation-session-commit-trigger")!.click());
+    expect(select).toHaveBeenLastCalledWith("packages/repo");
+    expect(open).toHaveBeenLastCalledWith(true);
+    // Folding the first group hides its body without affecting the other.
+    // 折叠首个分组只隐藏其正文，不影响另一分组。
+    await act(async () => section(".")!.querySelector<HTMLButtonElement>(".conversation-session-review-group-toggle")!.click());
+    expect(section(".")!.querySelector(".conversation-session-review-list")).toBeNull();
+    expect(section("packages/repo")!.querySelector(".conversation-session-review-list")).not.toBeNull();
   });
-  it("honors the controlled active repository and freezes switching while its dialog is open", async () => {
-    await renderPanel({ activeReviewRepositoryKey: "packages/repo", commitDialogOpen: true });
-    expect(host.querySelector(".conversation-session-review-section")?.getAttribute("data-repository-key")).toBe("packages/repo");
-    expect([...host.querySelectorAll<HTMLButtonElement>(".session-review-repository-option")].every((button) => button.disabled)).toBe(true);
+  it("marks only the controlled active repository while its dialog is open", async () => {
+    await renderPanel({ activeReviewRepositoryKey: ".", commitDialogOpen: true });
+    expect(section(".")!.querySelector(".conversation-session-commit-trigger")?.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => section("packages/repo")!.querySelector<HTMLButtonElement>(".conversation-session-review-group-toggle")!.click());
+    expect(section("packages/repo")!.querySelector(".conversation-session-commit-trigger")?.getAttribute("aria-expanded")).toBe("false");
   });
   it("opens a fresh read for the exact failed repository without enabling a commit", async () => {
     // review observes the recovery route; no backend write or repository mutation is performed.
@@ -86,28 +120,37 @@ describe("focused multi-repository Git panel", () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toBe("repository read failed");
     expect(host.querySelector<HTMLButtonElement>(".conversation-session-commit-trigger")!.disabled).toBe(true);
   });
-  it("keeps monitoring independent, and all-disabled repositories reachable only from Git settings", async () => {
-    // toggle records one explicit monitoring action, independent from the selected summary row.
-    // toggle 记录独立于已选摘要行的一次显式监听动作。
+  it("switches monitoring only from Git settings, and unmonitored repositories disappear from the panel", async () => {
+    // toggle records one explicit monitoring action from the settings dialog.
+    // toggle 记录来自设置弹窗的一次显式监听动作。
     const toggle = vi.fn().mockResolvedValue(undefined);
-    await renderPanel({ activeReviewRepositoryKey: "packages/repo", onToggleReviewMonitoring: toggle });
-    await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!.click());
-    expect(toggle).toHaveBeenCalledWith("packages/repo", false);
+    await renderPanel({ onToggleReviewMonitoring: toggle });
+    await openManager();
+    expect(document.querySelectorAll(".conversation-session-review-manager-row")).toHaveLength(2);
+    await act(async () => managerCheckbox("packages/repo")!.click());
+    expect(toggle).toHaveBeenLastCalledWith("packages/repo", false);
+    await renderPanel({ reviewRepositories: [repositories[0], { ...repositories[1], monitoringEnabled: false, summary: null }], onToggleReviewMonitoring: toggle });
+    expect(section("packages/repo")).toBeNull();
+    // A single remaining repository no longer folds.
+    // 仅剩一个仓库时不再折叠。
+    expect(host.querySelector(".conversation-session-review-group-toggle")).toBeNull();
     await renderPanel({ reviewRepositories: repositories.map((repository) => ({ ...repository, monitoringEnabled: false, summary: null })), onToggleReviewMonitoring: toggle });
     expect(host.querySelector(".conversation-session-review-section")).toBeNull();
-    await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-manager-trigger")!.click());
-    expect(document.querySelectorAll(".conversation-session-review-manager-row")).toHaveLength(2);
-    await act(async () => document.querySelector<HTMLInputElement>('.conversation-session-review-manager-check input')!.click());
+    await act(async () => managerCheckbox(".")!.click());
     expect(toggle).toHaveBeenLastCalledWith(".", true);
   });
   it("disables only the busy repository while another repository remains actionable", async () => {
     // busy resolves one operation by exact key, as the workspace host does.
     // busy 按精确键解析一个操作，与工作区宿主一致。
     const busy = (key: string) => key === "." ? { label: "正在提交" } : null;
-    await renderPanel({ activeReviewRepositoryKey: ".", commitBusyStateForRepository: busy });
-    expect(host.querySelector<HTMLButtonElement>(".conversation-session-commit-trigger")!.disabled).toBe(true);
-    await renderPanel({ activeReviewRepositoryKey: "packages/repo", commitBusyStateForRepository: busy, commitBusyState: { label: "另一仓库正在提交" } });
-    expect(host.querySelector<HTMLButtonElement>(".conversation-session-commit-trigger")!.disabled).toBe(false);
+    await renderPanel({ activeReviewRepositoryKey: ".", commitBusyStateForRepository: busy, commitBusyState: { label: "正在提交" } });
+    expect(section(".")!.querySelector<HTMLButtonElement>(".conversation-session-commit-trigger")!.disabled).toBe(true);
+    await act(async () => section("packages/repo")!.querySelector<HTMLButtonElement>(".conversation-session-review-group-toggle")!.click());
+    expect(section("packages/repo")!.querySelector<HTMLButtonElement>(".conversation-session-commit-trigger")!.disabled).toBe(false);
+    // A folded busy group still shows its progress on the title row.
+    // 折叠的忙碌分组仍在标题行显示进度。
+    await act(async () => section(".")!.querySelector<HTMLButtonElement>(".conversation-session-review-group-toggle")!.click());
+    expect(section(".")!.querySelector('.conversation-session-review-title-status [aria-label="正在提交"]')).not.toBeNull();
   });
   it("does not let an old workspace completion clear a new workspace monitoring request", async () => {
     // finishOld and finishNew settle two different workspace requests that intentionally share the root repo key.
@@ -116,19 +159,22 @@ describe("focused multi-repository Git panel", () => {
     const toggle = vi.fn().mockReturnValueOnce(new Promise<void>((resolve) => { finishOld = resolve; }))
       .mockReturnValueOnce(new Promise<void>((resolve) => { finishNew = resolve; }));
     await renderPanel({ reviewRepositoryOrderStorageKey: "workspace-a", onToggleReviewMonitoring: toggle });
-    await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!.click());
+    await openManager();
+    await act(async () => managerCheckbox(".")!.click());
     await renderPanel({ reviewRepositoryOrderStorageKey: "workspace-b", onToggleReviewMonitoring: toggle });
-    expect(host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!.disabled).toBe(false);
-    await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!.click());
+    expect(managerCheckbox(".")!.disabled).toBe(false);
+    await act(async () => managerCheckbox(".")!.click());
     await act(async () => finishOld());
-    expect(host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!.disabled).toBe(true);
+    expect(managerCheckbox(".")!.disabled).toBe(true);
     await act(async () => finishNew());
-    expect(host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!.disabled).toBe(false);
+    expect(managerCheckbox(".")!.disabled).toBe(false);
   });
   it("keeps a clean single repository inspectable without offering an empty commit", async () => {
     await renderPanel({ reviewRepositories: [{ ...repositories[0], summary: { ...repositories[0].summary!, changedFiles: 0,
       additions: 0, deletions: 0, unstagedChangedFiles: 0, unstagedAdditions: 0, unstagedDeletions: 0 } }] });
-    expect(host.querySelector(".session-review-repository-list")).toBeNull();
+    expect(host.querySelector(".conversation-session-review-group-toggle")).toBeNull();
+    expect(host.querySelector(".conversation-session-review-manager-trigger")).toBeNull();
+    expect(host.querySelector(".conversation-session-tool-panel-header-inline")).not.toBeNull();
     expect(host.querySelector<HTMLButtonElement>(".conversation-session-review-row")!.disabled).toBe(false);
     expect(host.querySelector<HTMLButtonElement>(".conversation-session-commit-trigger")!.disabled).toBe(true);
   });

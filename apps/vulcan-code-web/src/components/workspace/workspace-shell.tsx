@@ -10,6 +10,7 @@ import {
   ConversationSessionTodolistPanel,
   type ConversationSessionCommitBusyState,
 } from "@/components/conversation/session-todolist-panel";
+import type { ConversationSessionGitBranchActions } from "@/components/conversation/session-todolist-panel/git-branch-controls";
 import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import { terminalSessionViewModel } from "@/components/conversation/conversation-terminal-model";
 import { activeSkillHeaderSummary } from "@/components/features/skills/skill-area-header";
@@ -54,7 +55,13 @@ import type {
   WorkspaceDiffSnapshotResponse,
   WorkspaceReviewFocusRequest,
 } from "@/diff/types";
-import { loadWorkspaceGitCatalog, setWorkspaceGitMonitoring } from "@/service/workbench-snapshot-service";
+import {
+  loadWorkspaceGitBranches,
+  loadWorkspaceGitCatalog,
+  loadWorkspaceGitHistory,
+  setWorkspaceGitMonitoring,
+  switchWorkspaceGitBranch,
+} from "@/service/workbench-snapshot-service";
 import { refreshCommandSessions } from "@/service/conversation-actions-service";
 import {
   selectConversationSessionTerminalMutationTokenV1,
@@ -336,6 +343,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // selectedGitRepositoryForActions always has a deterministic repository key when a catalog exists.
   // selectedGitRepositoryForActions 在存在仓库目录时始终具有确定性仓库键。
   const selectedGitRepositoryForActions = selectedGitRepositoryState?.repositoryKey ?? null;
+  // selectedGitRepositoryForActionsRef lets a selection made in the same click reach the dialog opener before React re-renders.
+  // selectedGitRepositoryForActionsRef 让同一次点击中的仓库选择在 React 重渲染前即可被提交弹窗读取。
+  const selectedGitRepositoryForActionsRef = React.useRef(selectedGitRepositoryForActions);
+  selectedGitRepositoryForActionsRef.current = selectedGitRepositoryForActions;
   // activeGitCommitRepositoryState keeps the dialog target independent from right-panel selection changes.
   // activeGitCommitRepositoryState 让提交弹窗目标独立于右侧面板选择变化。
   const activeGitCommitRepositoryState = activeGitCommitRepositoryKey
@@ -696,6 +707,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // handleSelectReviewRepository updates the visible selection and freezes the next commit dialog target.
   // handleSelectReviewRepository 更新可见选择，并固定下一次提交弹窗目标。
   const handleSelectReviewRepository = React.useCallback((repositoryKey: string) => {
+    selectedGitRepositoryForActionsRef.current = repositoryKey;
     setSelectedGitRepositoryKey(repositoryKey);
     // Keep the open or running shared action bound to its original repository.
     // 保持已打开或正在运行的共享动作绑定原始仓库。
@@ -707,11 +719,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // handleGitCommitDialogOpenChange preserves the selected repository identity across dialog close and reopen.
   // handleGitCommitDialogOpenChange 在弹窗关闭与重开之间保留所选仓库身份。
   const handleGitCommitDialogOpenChange = React.useCallback((open: boolean) => {
-    if (open && !gitCommitDialogOpen && selectedGitRepositoryForActions) {
-      setActiveGitCommitRepositoryKey(selectedGitRepositoryForActions);
+    const repositoryKey = selectedGitRepositoryForActionsRef.current;
+    if (open && !gitCommitDialogOpen && repositoryKey) {
+      setActiveGitCommitRepositoryKey(repositoryKey);
     }
     setGitCommitDialogOpen(open);
-  }, [gitCommitDialogOpen, selectedGitRepositoryForActions]);
+  }, [gitCommitDialogOpen]);
 
   // handleOpenGitCommitDialog opens the shared dialog against the currently selected repository.
   // handleOpenGitCommitDialog 针对当前选中仓库打开共享提交弹窗。
@@ -1060,6 +1073,37 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     props.selectedConversationId,
     refreshProjectGitSummary,
     activeGitCommitRepositoryForActions,
+    selectedChatProject?.id,
+    selectedChatProject?.path,
+  ]);
+
+  // commitBranchPrefix is the configured prefix shared by commit and branch-creation recommendations.
+  // commitBranchPrefix 是提交与新建分支推荐共用的已配置前缀。
+  const commitBranchPrefix = props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/";
+
+  // sessionGitBranchActions binds branch listing, switching, and history paging to the selected project.
+  // sessionGitBranchActions 将分支列表、切换与历史分页绑定到当前选中项目。
+  const sessionGitBranchActions = React.useMemo<ConversationSessionGitBranchActions | null>(() => {
+    if (!hasSelectedChatConversation || !selectedChatProject?.path) {
+      return null;
+    }
+    const workspacePath = selectedChatProject.path;
+    const projectId = selectedChatProject.id ?? null;
+    const conversationId = props.selectedConversationId;
+    return {
+      commitBranchPrefix,
+      loadBranches: (repositoryKey) => loadWorkspaceGitBranches(workspacePath, projectId, conversationId, repositoryKey),
+      loadHistory: (repositoryKey, skip) => loadWorkspaceGitHistory(workspacePath, projectId, conversationId, repositoryKey, skip),
+      switchBranch: async (repositoryKey, branchName, create) => {
+        await switchWorkspaceGitBranch(workspacePath, projectId, conversationId, repositoryKey, branchName, create);
+        await refreshProjectGitSummary(workspacePath, projectId, conversationId, repositoryKey);
+      },
+    };
+  }, [
+    commitBranchPrefix,
+    hasSelectedChatConversation,
+    props.selectedConversationId,
+    refreshProjectGitSummary,
     selectedChatProject?.id,
     selectedChatProject?.path,
   ]);
@@ -1596,6 +1640,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           commitBusyStateForRepository={gitCommitBusyStateForRepository}
           commitDialogOpen={gitCommitDialogOpen}
           expanded={sessionToolExpanded}
+          gitBranchActions={sessionGitBranchActions}
           reviewSummary={sessionReviewSummary}
           reviewRepositoryOrderStorageKey={selectedGitCommitWorkspaceKey}
           reviewRepositories={sessionReviewRepositories.map((repository) => ({
@@ -1737,7 +1782,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       {sessionGitCommitActionVisible && activeSessionReviewSummary ? (
         <ConversationSessionCommitDialog
           busyState={activeGitCommitBusyState}
-          commitBranchPrefix={props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/"}
+          commitBranchPrefix={commitBranchPrefix}
           conversationId={props.selectedConversationId}
           open={gitCommitDialogOpen}
           repositoryKey={activeGitCommitRepositoryForActions}

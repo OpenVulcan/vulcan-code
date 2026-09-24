@@ -683,3 +683,89 @@ export interface WorkspaceDiffSnapshotResponse {
   // 可用于提交审核模式的未推送提交列表。
   recentCommits?: DiffCommitSummary[];
 }
+
+// WorkspaceGitLocalBranchList mirrors the backend local-branch listing for one repository.
+// WorkspaceGitLocalBranchList 对应后端单个仓库的本地分支列表。
+export interface WorkspaceGitLocalBranchList {
+  // Current branch, or null when HEAD is detached.
+  // 当前分支；游离 HEAD 时为 null。
+  currentBranch: string | null;
+  // Local branch names ordered by latest commit, newest first.
+  // 按最新提交时间倒序排列的本地分支名称。
+  branches: string[];
+}
+
+// WorkspaceGitSwitchBranchResult mirrors the backend branch switch result.
+// WorkspaceGitSwitchBranchResult 对应后端分支切换结果。
+export interface WorkspaceGitSwitchBranchResult {
+  // Repository root used by the Git command.
+  // Git 命令使用的仓库根目录。
+  repositoryRoot: string;
+  // Branch checked out after the switch.
+  // 切换完成后检出的分支。
+  branchName: string;
+  // Whether the branch was created from HEAD.
+  // 该分支是否基于 HEAD 新建。
+  created: boolean;
+}
+
+// WorkspaceGitHistoryRefKind names the category of one graph ref chip.
+// WorkspaceGitHistoryRefKind 表示图谱引用标签的类别。
+export type WorkspaceGitHistoryRefKind = "head" | "branch" | "remote" | "tag";
+
+// WorkspaceGitHistoryRef is one ref decoration on a graph row.
+// WorkspaceGitHistoryRef 是图谱行上的单个引用标记。
+export interface WorkspaceGitHistoryRef {
+  // Short ref name.
+  // 引用短名称。
+  name: string;
+  // Ref category.
+  // 引用类别。
+  kind: WorkspaceGitHistoryRefKind;
+  // Whether HEAD points at this ref or this is a detached HEAD marker.
+  // HEAD 是否指向该引用，或该项为游离 HEAD 标记。
+  head: boolean;
+}
+
+// WorkspaceGitHistoryCommit is one graph row returned by the backend.
+// WorkspaceGitHistoryCommit 是后端返回的单个图谱行。
+export interface WorkspaceGitHistoryCommit {
+  // Full commit hash.
+  // 完整提交哈希。
+  hash: string;
+  // Abbreviated commit hash.
+  // 缩写提交哈希。
+  shortHash: string;
+  // Full parent hashes in Git order.
+  // 按 Git 顺序排列的完整父提交哈希。
+  parents: string[];
+  // Author display name.
+  // 作者显示名称。
+  authorName: string;
+  // Author email address.
+  // 作者邮箱地址。
+  authorEmail: string;
+  // Author date in strict ISO 8601 format.
+  // 严格 ISO 8601 格式的作者日期。
+  authorDate: string;
+  // First-line commit subject.
+  // 提交信息首行标题。
+  subject: string;
+  // Commit message body without the subject line.
+  // 不含标题行的提交信息正文。
+  body: string;
+  // Refs decorating this commit.
+  // 指向该提交的引用。
+  refs: WorkspaceGitHistoryRef[];
+}
+
+// WorkspaceGitHistoryPage is one backend-sized page of graph-ordered history.
+// WorkspaceGitHistoryPage 是后端决定大小的单页图谱顺序历史。
+export interface WorkspaceGitHistoryPage {
+  // Commits in this page, children before parents.
+  // 本页提交，子提交排在父提交之前。
+  commits: WorkspaceGitHistoryCommit[];
+  // Whether older commits remain.
+  // 是否仍有更早的提交。
+  hasMore: boolean;
+}

@@ -271,23 +271,46 @@
   padding-right: 32px;
 }
 
+/* The Git settings entry rests as a quiet section label and reveals itself as a button only under the pointer. */
+/* Git 设置入口静置时是安静的分区标签，仅在指针悬停时显现为按钮。 */
 .conversation-session-review-manager-trigger {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   min-height: 22px;
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  margin-left: -3px;
+  padding: 2px 6px 2px 3px;
+  border: 0;
+  border-radius: var(--vcn-radius-sm, 6px);
   color: var(--muted-foreground);
   background: transparent;
-  font-size: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
   cursor: pointer;
+  transition:
+    color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out),
+    background-color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
 }
 
-.conversation-session-review-manager-trigger:hover {
+.conversation-session-review-manager-trigger svg {
+  opacity: 0.7;
+}
+
+.conversation-session-review-manager-trigger:hover,
+.conversation-session-review-manager-trigger:focus-visible {
   color: var(--foreground);
-  background: color-mix(in srgb, var(--muted) 70%, transparent);
+  background: var(--vcn-fill-hover, var(--muted));
+}
+
+.conversation-session-review-manager-trigger:hover svg,
+.conversation-session-review-manager-trigger:focus-visible svg {
+  opacity: 1;
+}
+
+.conversation-session-review-manager-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 
 .conversation-session-review-manager-dialog {
@@ -357,45 +380,70 @@
   height: 24px;
 }
 
-/* Repository metadata and monitoring controls keep each Git node independently readable. */
-/* 仓库元数据与监听控件保持每个 Git 节点独立且清晰可读。 */
-.conversation-session-review-repository-path {
-  display: block;
-  max-width: 220px;
-  margin-top: 2px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-  font-weight: 400;
+/* Each repository title shows its name; in multi-repository panels the name folds the group and a folded group keeps its line delta. */
+/* 每个仓库标题展示名称；多仓库时名称可折叠分组，折叠后仍保留行数增减。 */
+.conversation-session-review-group-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conversation-session-review-monitor-toggle {
-  flex: 0 0 auto;
-  min-height: 20px;
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted-foreground);
+.conversation-session-review-group-toggle {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: -3px;
+  padding: 2px 4px 2px 3px;
+  border: 0;
+  border-radius: var(--vcn-radius-sm, 6px);
+  color: inherit;
   background: transparent;
-  font-size: 10px;
-  line-height: 1.2;
+  font: inherit;
   cursor: pointer;
+  transition: color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
 }
 
-.conversation-session-review-monitor-toggle.active {
-  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
-  color: var(--primary);
+.conversation-session-review-group-toggle:hover,
+.conversation-session-review-group-toggle:focus-visible {
+  color: var(--foreground);
 }
 
-.conversation-session-review-monitor-toggle:hover {
-  background: color-mix(in srgb, var(--muted) 70%, transparent);
+.conversation-session-review-group-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 
-.conversation-session-review-monitor-toggle:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
+.conversation-session-review-group-chevron {
+  flex: 0 0 auto;
+  opacity: 0.7;
+  transition: transform var(--vcn-duration-base, 180ms) var(--vcn-ease-out, ease-out);
+}
+
+.conversation-session-review-group-toggle[aria-expanded="true"] .conversation-session-review-group-chevron {
+  transform: rotate(90deg);
+}
+
+.conversation-session-review-title-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
+
+.conversation-session-review-title-status:empty {
+  display: none;
+}
+
+.conversation-session-review-title-status .conversation-session-review-delta {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.conversation-session-review-section.is-foldable + .conversation-session-review-section.is-foldable {
+  margin-top: 2px;
 }
 
 .conversation-session-review-error {
