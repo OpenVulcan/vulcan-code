@@ -45,6 +45,7 @@ import type {
   ComposerSelectOption,
 } from "@/components/composer/composer-model";
 import { useI18n } from "@/i18n";
+import { formatTokenCount } from "@/lib/usage-format";
 import { cn } from "@/lib/utils";
 import {
   isDirectProviderToolCapability,
@@ -226,7 +227,7 @@ export function ContextUsageOrb(props: {
       >
         <div className="context-usage-card-header">
           <strong>{title}</strong>
-          <span>{formatContextUsageTotal(snapshot, locale)}</span>
+          <span>{formatContextUsageTotal(snapshot)}</span>
         </div>
         <ContextUsageProgressBar breakdown={breakdown} usageBasisPoints={usageBasisPoints} />
         {detailVisible || snapshot.cacheHitBasisPoints != null ? (
@@ -436,46 +437,16 @@ function contextUsageBreakdown(snapshot: ContextUsageSnapshot): ContextUsageBrea
 
 // formatContextUsageTotal renders the compact current-window summary.
 // formatContextUsageTotal 渲染紧凑的当前窗口摘要。
-function formatContextUsageTotal(snapshot: ContextUsageSnapshot, locale: string): string {
+function formatContextUsageTotal(snapshot: ContextUsageSnapshot): string {
   const usageBasisPoints = contextUsageBasisPoints(snapshot);
   if (typeof snapshot.usedTokens !== "number" || !Number.isFinite(snapshot.usedTokens)) {
     return formatBasisPoints(usageBasisPoints);
   }
-  const used = formatContextTokenCount(snapshot.usedTokens, locale);
+  const used = formatTokenCount(snapshot.usedTokens);
   if (typeof snapshot.maxTokens !== "number" || !Number.isFinite(snapshot.maxTokens)) {
     return `${used} Token`;
   }
-  return `${used}/${formatContextTokenCount(snapshot.maxTokens, locale)} (${formatBasisPoints(usageBasisPoints)})`;
-}
-
-// formatContextTokenCount formats large token counts with Chinese ten-thousand and hundred-million units.
-// formatContextTokenCount 使用中文万与亿单位格式化较大的 Token 数量。
-function formatContextTokenCount(value: number, locale = "zh-CN"): string {
-  if (!locale.startsWith("zh")) {
-    if (value >= 1_000_000_000) {
-      return `${formatCompactDecimal(value / 1_000_000_000)}B`;
-    }
-    if (value >= 1_000_000) {
-      return `${formatCompactDecimal(value / 1_000_000)}M`;
-    }
-    if (value >= 1_000) {
-      return `${formatCompactDecimal(value / 1_000)}K`;
-    }
-    return Math.max(0, Math.round(value)).toLocaleString("en-US");
-  }
-  if (value >= 100_000_000) {
-    return `${formatCompactDecimal(value / 100_000_000)}亿`;
-  }
-  if (value >= 10_000) {
-    return `${formatCompactDecimal(value / 10_000)}万`;
-  }
-  return Math.max(0, Math.round(value)).toLocaleString("zh-CN");
-}
-
-// formatCompactDecimal keeps one meaningful decimal without a redundant trailing zero.
-// formatCompactDecimal 保留一位有效小数并移除多余的尾随零。
-function formatCompactDecimal(value: number): string {
-  return value.toFixed(1).replace(/\.0$/u, "");
+  return `${used}/${formatTokenCount(snapshot.maxTokens)} (${formatBasisPoints(usageBasisPoints)})`;
 }
 
 // formatBasisPoints formats integer basis points as a one-decimal percentage.

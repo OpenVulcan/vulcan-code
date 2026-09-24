@@ -8,6 +8,7 @@ import {
   objectValue,
 } from "@/components/conversation/conversation-metadata";
 import { readUsageCoverage, type UsageCoverage } from "@/service/conversation-usage-coverage";
+import { formatDurationSeconds } from "@/lib/usage-format";
 import { usageCacheRatio, usageMetricDisplay } from "./conversation-usage-display";
 
 // TurnStatsUsageSnapshot contains only the accounting fields shown in the compact statistics card.
@@ -98,8 +99,8 @@ export function TurnStatsTooltipCard(props: {
       <TurnStatsUsageRows locale={props.locale} usage={aggregate}>
         {outputDurationMs !== null && outputDurationMs > 0 ? <>
           <div className="turn-stats-metric-row">
-            {firstTokenLatencyMs !== null ? <div className="turn-stats-metric"><span>{zh ? "平均首 Token" : "Average first token"}</span><strong>{(firstTokenLatencyMs / 1000).toFixed(3)} s</strong></div> : null}
-            <div className="turn-stats-metric"><span>{zh ? "累计输出时长" : "Total output time"}</span><strong>{(outputDurationMs / 1000).toFixed(3)} s</strong></div>
+            {firstTokenLatencyMs !== null ? <div className="turn-stats-metric"><span>{zh ? "平均首 Token" : "Average first token"}</span><strong>{formatDurationSeconds(firstTokenLatencyMs)}</strong></div> : null}
+            <div className="turn-stats-metric"><span>{zh ? "累计输出时长" : "Total output time"}</span><strong>{formatDurationSeconds(outputDurationMs)}</strong></div>
           </div>
         </> : null}
       </TurnStatsUsageRows>
@@ -152,16 +153,16 @@ function TurnStatsUsageRows(props: {
   const zh = props.locale === "zh-CN";
   // cached displays recorded counts and preserves absence with a dash.
   // cached 显示已记录数值，并以短横线保留缺失状态。
-  const cached = usageMetricDisplay(props.usage.cachedInputTokens, "cache_read_tokens", props.usage.coverage, props.locale);
+  const cached = usageMetricDisplay(props.usage.cachedInputTokens, "cache_read_tokens", props.usage.coverage);
   // uncached never presents the Provider total input as non-cached input.
   // uncached 绝不把 Provider 输入总量冒充无缓存输入。
-  const uncached = usageMetricDisplay(props.usage.uncachedInputTokens, "uncached_input_tokens", props.usage.coverage, props.locale);
+  const uncached = usageMetricDisplay(props.usage.uncachedInputTokens, "uncached_input_tokens", props.usage.coverage);
   // Output uses the shared numeric format without changing source usage.
   // 输出使用共享数值格式，不改变源用量。
-  const output = usageMetricDisplay(props.usage.outputTokens, "output_tokens", props.usage.coverage, props.locale);
+  const output = usageMetricDisplay(props.usage.outputTokens, "output_tokens", props.usage.coverage);
   // Total keeps the same source precedence without extra visible qualifiers.
   // 总量保持相同来源优先级，不附加可见限定说明。
-  const total = usageMetricDisplay(props.usage.totalTokens, "total_tokens", props.usage.coverage, props.locale);
+  const total = usageMetricDisplay(props.usage.totalTokens, "total_tokens", props.usage.coverage);
   return (
     <div className="turn-stats-metric-grid">
       <TurnStatsMetricRow

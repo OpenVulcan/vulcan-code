@@ -7,6 +7,7 @@ import {
 } from "@/components/conversation/conversation-metadata";
 import type { ConversationBlockKind } from "@/components/conversation/conversation-model";
 import type { TranslationKey } from "@/i18n";
+import { formatTokenCount } from "@/lib/usage-format";
 
 // SUBAGENT_HOST_KIND_VALUES lists every host kind emitted by built-in subagent orchestration tools.
 // SUBAGENT_HOST_KIND_VALUES 列出内置子智能体编排工具会产生的全部宿主类型。
@@ -142,13 +143,13 @@ export function turnStatsSummary(
     parts.push(...groupParts);
   } else if (totalTokens > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.totalTokens", {
-      count: totalTokens.toLocaleString("en-US"),
+      count: formatTokenCount(totalTokens),
     }));
   }
   const cachedTokens = numberMetadata(stats.cached_input_tokens ?? stats.cachedInputTokens);
   if (cachedTokens > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.cachedTokens", {
-      count: cachedTokens.toLocaleString("en-US"),
+      count: formatTokenCount(cachedTokens),
     }));
   }
   // Historical turn-wide rates cannot be presented as measured token generation speeds.
@@ -195,7 +196,7 @@ function turnStatsUsageGroupSummaries(
       ? "conversation.stats.totalTokens"
       : key;
     summaries.push(formatTurnStatsTranslation(translate, displayKey, {
-      count: totalTokens.toLocaleString("en-US"),
+      count: formatTokenCount(totalTokens),
     }));
   }
   return summaries;

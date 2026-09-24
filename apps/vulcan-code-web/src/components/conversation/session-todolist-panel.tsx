@@ -772,33 +772,43 @@ function ConversationSessionReviewSection(props: {
   // A folded group still surfaces refresh and Git action progress on its title row.
   // 折叠的分组仍在标题行显示刷新与 Git 动作进度。
   const titleBusy = props.loading || (!reviewSectionExpanded && Boolean(props.commitBusyState));
+  const titleStatus = (
+    <span className="conversation-session-review-title-status">
+      {titleBusy ? (
+        <LoaderCircle aria-label={props.commitBusyState?.label ?? t("gitCommitDialog.running")} className="spin" size={13} />
+      ) : null}
+      {props.error ? <span aria-label={props.error} className="conversation-session-review-error" title={props.error}>!</span> : null}
+      {!reviewSectionExpanded && props.reviewSummary !== null ? conversationSessionReviewDelta(props.reviewSummary) : null}
+    </span>
+  );
 
   return (
     <section
       className={cn("conversation-session-tool-section conversation-session-review-section", foldable && "is-foldable")}
       data-repository-key={props.repositoryKey}
     >
-      <div className="conversation-session-tool-section-title with-action">
-        {foldable ? (
-          <button
-            aria-expanded={reviewSectionExpanded}
-            className="conversation-session-review-group-toggle"
-            onClick={() => props.onExpandedChange?.(!reviewSectionExpanded)}
-            title={repositoryTitle}
-            type="button"
-          >
+      {foldable ? (
+        // The whole title row folds the group so hover and click cover the name, chevron, and delta alike.
+        // 整个标题行负责折叠分组，名称、箭头与增减数共享同一悬停与点击区域。
+        <button
+          aria-expanded={reviewSectionExpanded}
+          className="conversation-session-tool-section-title with-action conversation-session-review-group-toggle"
+          onClick={() => props.onExpandedChange?.(!reviewSectionExpanded)}
+          title={repositoryTitle}
+          type="button"
+        >
+          <span className="conversation-session-review-group-heading">
             <span className="conversation-session-review-group-name">{repositoryName}</span>
             <ChevronRight className="conversation-session-review-group-chevron" size={13} />
-          </button>
-        ) : <span className="conversation-session-review-group-name" title={repositoryTitle}>{repositoryName}</span>}
-        <span className="conversation-session-review-title-status">
-          {titleBusy ? (
-            <LoaderCircle aria-label={props.commitBusyState?.label ?? t("gitCommitDialog.running")} className="spin" size={13} />
-          ) : null}
-          {props.error ? <span aria-label={props.error} className="conversation-session-review-error" title={props.error}>!</span> : null}
-          {!reviewSectionExpanded && props.reviewSummary !== null ? conversationSessionReviewDelta(props.reviewSummary) : null}
-        </span>
-      </div>
+          </span>
+          {titleStatus}
+        </button>
+      ) : (
+        <div className="conversation-session-tool-section-title with-action">
+          <span className="conversation-session-review-group-name" title={repositoryTitle}>{repositoryName}</span>
+          {titleStatus}
+        </div>
+      )}
       {reviewSectionExpanded && props.error ? <p className="session-review-repository-diagnostic" role="alert">{props.error}</p> : null}
       {reviewSectionExpanded && props.error ? <button className="workspace-tool-panel-menu-row conversation-session-review-row"
         disabled={props.loading} onClick={props.onOpenReviewChanges} type="button">

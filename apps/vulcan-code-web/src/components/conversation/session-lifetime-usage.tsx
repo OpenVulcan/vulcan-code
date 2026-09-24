@@ -1,4 +1,5 @@
 import { useI18n } from "@/i18n";
+import { formatDurationSeconds, formatTokenCount } from "@/lib/usage-format";
 import { ChevronDown } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { SessionLifetimeUsage, SessionUsageBucket, UsageMeasurement } from "@/types/session-lifetime-usage";
@@ -11,7 +12,7 @@ import "./session-lifetime-usage.css";
 export function lifetimeTotal(value: UsageMeasurement, requests: number): string {
   if (requests === 0) return "0";
   if (value.samples === 0) return "—";
-  return `${value.samples < requests ? "≥ " : ""}${value.sum.toLocaleString()}`;
+  return `${value.samples < requests ? "≥ " : ""}${formatTokenCount(value.sum)}`;
 }
 
 /** Renders a collapsed aggregate row whose heading toggles all measured statistics.
@@ -27,7 +28,7 @@ export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsag
   if (!bucket || (bucket.requestCount === 0 && bucket.toolCallCount === 0)) return null;
   // Averages use reporting samples and never treat missing timing as zero.
   // 均值使用已上报样本，不将缺失计时视为零。
-  const first = bucket.firstTokenMs.samples > 0 && bucket.firstTokenMs.sum > 0 ? `${(bucket.firstTokenMs.sum / bucket.firstTokenMs.samples / 1000).toFixed(3)} s` : null;
+  const first = bucket.firstTokenMs.samples > 0 && bucket.firstTokenMs.sum > 0 ? formatDurationSeconds(bucket.firstTokenMs.sum / bucket.firstTokenMs.samples) : null;
   const speed = bucket.outputDurationMs.samples > 0 && bucket.outputDurationMs.sum > 0 && bucket.measuredOutputTokens > 0 ? `${(bucket.measuredOutputTokens * 1000 / bucket.outputDurationMs.sum).toFixed(1)} t/s` : null;
   // Keep partial totals explicit, but omit zero and unreported token dimensions from the visible layout.
   // 保留部分上报累计的明确标记，但不让零值及未上报维度占据界面。
@@ -54,8 +55,8 @@ export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsag
   const timingRows: Array<[string, string | null]> = [
     [zh ? "平均首 Token" : "Average first token", first],
     [zh ? "平均速度" : "Average speed", speed],
-    [zh ? "累计耗时" : "Total duration", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? `${(bucket.requestDurationMs.sum / 1000).toFixed(1)} s` : null],
-    [zh ? "平均耗时" : "Average duration", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? `${(bucket.requestDurationMs.sum / bucket.requestDurationMs.samples / 1000).toFixed(3)} s` : null],
+    [zh ? "累计耗时" : "Total duration", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? formatDurationSeconds(bucket.requestDurationMs.sum) : null],
+    [zh ? "平均耗时" : "Average duration", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? formatDurationSeconds(bucket.requestDurationMs.sum / bucket.requestDurationMs.samples) : null],
   ];
   // The persistent heading preserves unknown and partially reported totals while collapsed.
   // 常驻标题在收起时仍保留未知和部分上报累计的明确标记。

@@ -36,7 +36,7 @@ describe("session lifetime usage", () => {
 
   it("uses reporting samples for latency and paired output tokens for speed", () => {
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="en-US"><LifetimeUsageBucket title="own" bucket={bucket(160)} /></I18nProvider>);
-    expect(markup).toContain("0.600 s");
+    expect(markup).toContain("0.6 s");
     expect(markup).toContain("20.0 t/s");
     expect(markup).not.toContain("Cache hit rate");
     expect(markup).not.toContain("Samples:");

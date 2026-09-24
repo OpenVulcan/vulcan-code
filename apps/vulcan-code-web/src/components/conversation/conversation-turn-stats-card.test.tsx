@@ -79,8 +79,8 @@ describe("turn statistics hover card", () => {
     expect(markup).toContain("工具调用次数");
     expect(markup).toContain("缓存 Tokens");
     expect(markup).toContain("无缓存输入");
-    expect(markup).toContain("3,637");
-    expect(markup).not.toContain("286,261");
+    expect(markup).toContain("<strong>3.6K</strong>");
+    expect(markup).not.toContain("286.3K");
     expect(markup).toContain("输出 Tokens");
     expect(markup).toContain("合计 Tokens");
     expect(markup).toContain("98.7%");
@@ -100,9 +100,9 @@ describe("turn statistics hover card", () => {
 
     expect(markup).toContain("turn-stats-subagent-section");
     expect(markup).toContain("智能体 Tokens");
-    expect(markup).toContain("1,637");
-    expect(markup).toContain("266,461");
-    expect(markup).not.toContain("266,261");
+    expect(markup).toContain("<strong>1.6K</strong>");
+    expect(markup).toContain("<strong>266.5K</strong>");
+    expect(markup).not.toContain("266.3K");
     expect(markup).not.toContain("用量分组");
     expect(markup).not.toContain("常规");
   });

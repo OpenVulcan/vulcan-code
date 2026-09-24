@@ -390,29 +390,36 @@
 }
 
 .conversation-session-review-group-toggle {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: -3px;
-  padding: 2px 4px 2px 3px;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 6px 2px 3px;
   border: 0;
   border-radius: var(--vcn-radius-sm, 6px);
-  color: inherit;
   background: transparent;
-  font: inherit;
+  font-family: inherit;
+  text-align: left;
   cursor: pointer;
-  transition: color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
+  transition:
+    color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out),
+    background-color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
 }
 
 .conversation-session-review-group-toggle:hover,
 .conversation-session-review-group-toggle:focus-visible {
   color: var(--foreground);
+  background: color-mix(in srgb, var(--muted) 76%, transparent);
 }
 
 .conversation-session-review-group-toggle:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
+}
+
+.conversation-session-review-group-heading {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .conversation-session-review-group-chevron {
@@ -440,6 +447,13 @@
 .conversation-session-review-title-status .conversation-session-review-delta {
   font-size: 12px;
   font-weight: 400;
+}
+
+/* Repository groups follow each other without a divider; only the todo and Git areas stay separated. */
+/* 仓库分组之间不再绘制分隔线；仅保留待办区与 Git 区之间的分隔。 */
+.conversation-session-review-section + .conversation-session-review-section {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .conversation-session-review-section.is-foldable + .conversation-session-review-section.is-foldable {

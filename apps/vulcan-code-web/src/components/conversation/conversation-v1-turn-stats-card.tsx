@@ -7,6 +7,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n";
+import { formatDurationSeconds } from "@/lib/usage-format";
 import type { StatBucket } from "@/service/conversation-event-window-store";
 import type { ConversationTurnStatsTranscriptNode } from "@/service/conversation-event-display-projection";
 import type { UsageCoverage } from "@/service/conversation-usage-coverage";
@@ -52,7 +53,7 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
   // durationLabel 仅在持久化事件包含精确耗时时显示。
   const durationLabel = event.duration_ms === undefined
     ? null
-    : formatDuration(event.duration_ms, locale);
+    : formatDurationSeconds(event.duration_ms);
   // Both display surfaces use the same measured request cohort, excluding child aggregates without timing.
   // 两条显示路径使用同一已测请求样本组，不含缺少计时的子代理聚合。
   const timing = props.node.usage_coverage?.outputTiming;
@@ -94,9 +95,9 @@ export function ConversationV1TurnStatsCard(props: ConversationV1TurnStatsCardPr
             {timing !== undefined && timing.requestCount > 0 ? <>
               <TurnStatsMetricRow
                 leftLabel={zh ? "平均首 Token" : "Average first token"}
-                leftValue={formatDuration(timing.firstTokenLatencyMs / timing.requestCount, locale)}
+                leftValue={formatDurationSeconds(timing.firstTokenLatencyMs / timing.requestCount)}
                 rightLabel={zh ? "累计输出时长" : "Total output time"}
-                rightValue={formatDuration(timing.outputDurationMs, locale)}
+                rightValue={formatDurationSeconds(timing.outputDurationMs)}
               />
               {durationLabel !== null ? <div className="turn-stats-metric-row">
                 <div className="turn-stats-metric"><span>{zh ? "回合总时长" : "Turn duration"}</span><strong>{durationLabel}</strong></div>
@@ -130,16 +131,16 @@ function TurnStatsUsageRows(props: {
   const zh = props.locale === "zh-CN";
   // Metrics retain their existing sources without adding visible coverage qualifiers.
   // 指标保持既有来源，不添加可见覆盖限定说明。
-  const cached = usageMetricDisplay(props.bucket.usage.cache_read_tokens, "cache_read_tokens", props.coverage, props.locale);
+  const cached = usageMetricDisplay(props.bucket.usage.cache_read_tokens, "cache_read_tokens", props.coverage);
   // Uncached input never substitutes the complete Provider input count.
   // 无缓存输入绝不使用完整 Provider 输入数替代。
-  const uncached = usageMetricDisplay(props.bucket.usage.uncached_input_tokens, "uncached_input_tokens", props.coverage, props.locale);
+  const uncached = usageMetricDisplay(props.bucket.usage.uncached_input_tokens, "uncached_input_tokens", props.coverage);
   // Output uses the shared numeric format without changing source usage.
   // 输出使用共享数值格式，不改变源用量。
-  const output = usageMetricDisplay(props.bucket.usage.output_tokens, "output_tokens", props.coverage, props.locale);
+  const output = usageMetricDisplay(props.bucket.usage.output_tokens, "output_tokens", props.coverage);
   // Total follows the same plain numeric display policy as its component dimensions.
   // 总量与各分项使用相同的纯数值展示规则。
-  const total = usageMetricDisplay(props.bucket.usage.total_tokens, "total_tokens", props.coverage, props.locale);
+  const total = usageMetricDisplay(props.bucket.usage.total_tokens, "total_tokens", props.coverage);
   return (
     <div className="turn-stats-metric-grid">
       <TurnStatsMetricRow
@@ -262,19 +263,4 @@ function turnStatsIcon(outcome: "completed" | "abandoned" | "stopped"): string {
  *          本地化十进制文本。 */
 function formatNumber(value: number, locale: string): string {
   return new Intl.NumberFormat(locale).format(value);
-}
-
-/** Formats an exact persisted duration without deriving throughput.
- * 格式化精确持久化耗时，同时不推导吞吐速度。
- *
- * @param durationMs exact persisted duration in milliseconds.
- *                   精确持久化毫秒耗时。
- * @param locale active display locale.
- *               当前展示语言。
- * @returns compact localized duration.
- *          紧凑本地化耗时。 */
-function formatDuration(durationMs: number, locale: "zh-CN" | "en-US"): string {
-  if (durationMs < 1000) return `${Math.max(0, Math.round(durationMs))} ms`;
-  const seconds = durationMs / 1000;
-  return locale === "zh-CN" ? `${seconds.toFixed(1)} 秒` : `${seconds.toFixed(1)} s`;
 }

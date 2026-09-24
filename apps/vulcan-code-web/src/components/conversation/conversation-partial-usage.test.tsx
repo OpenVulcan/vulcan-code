@@ -48,9 +48,9 @@ describe("partial usage display from old persisted V1 events", () => {
   // An absent measurement and an explicitly reported zero have different user-visible meanings.
   // 缺失测量与明确上报零值具有不同的用户可见含义。
   it("keeps reported zero distinct from missing usage", () => {
-    expect(usageMetricDisplay(0, "cache_read_tokens", null, "zh-CN")).toBe("0");
-    expect(usageMetricDisplay(null, "cache_read_tokens", null, "zh-CN")).toBe("-");
-    expect(usageMetricDisplay(undefined, "cache_read_tokens", undefined, "en-US")).toBe("-");
+    expect(usageMetricDisplay(0, "cache_read_tokens", null)).toBe("0");
+    expect(usageMetricDisplay(null, "cache_read_tokens", null)).toBe("-");
+    expect(usageMetricDisplay(undefined, "cache_read_tokens", undefined)).toBe("-");
   });
   it("shows known counts and the paired known-request ratio in the main branch card", () => {
     const events = kimiPartialUsageEvents();
@@ -60,15 +60,15 @@ describe("partial usage display from old persisted V1 events", () => {
     }, (key) => key);
     const metadata = branch.messages.find((message) => message.recordKind === "turn-stats")!.metadata;
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
-    expect(markup).toContain("179,456");
-    expect(markup).toContain("16,090");
+    expect(markup).toContain("179.5K");
+    expect(markup).toContain("16.1K");
     expect(markup).toContain("缓存 Tokens</span>");
     expect(markup).toContain("无缓存输入</span>");
     expect(markup).toContain("缓存命中率</span>");
     expect(markup).toContain("91.8%");
     expect(markup).not.toMatch(/≥|已知|7\/8|turn-stats-coverage-note/);
     expect(markup.match(/class="turn-stats-metric-row"/g)).toHaveLength(3);
-    expect(markup).toContain("214,777");
+    expect(markup).toContain("214.8K");
     expect(markup).not.toContain("83.98");
     expect(JSON.stringify(events)).toBe(original);
   });
@@ -78,8 +78,8 @@ describe("partial usage display from old persisted V1 events", () => {
     const node = nodes.find((candidate) => candidate.kind === "turn_stats");
     if (!node || node.kind !== "turn_stats") throw new Error("expected terminal stats node");
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationV1TurnStatsCard node={node} /></I18nProvider>);
-    expect(markup).toContain("179,456");
-    expect(markup).toContain("16,090");
+    expect(markup).toContain("179.5K");
+    expect(markup).toContain("16.1K");
     expect(markup).not.toMatch(/≥|已知|7\/8|turn-stats-coverage-note/);
     expect(markup).toContain("缓存命中率</span>");
     expect(markup).toContain("91.8%");
@@ -103,7 +103,7 @@ describe("partial usage display from old persisted V1 events", () => {
     // The English surface keeps the same amounts without coverage qualifiers.
     // 英文界面保留相同数值，不附加覆盖限定说明。
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="en-US" subagentStats={false} />);
-    expect(markup).toContain("179,456");
+    expect(markup).toContain("179.5K");
     expect(markup).toContain("Cached tokens</span>");
     expect(markup).toContain("Cache hit rate</span>");
     expect(markup).not.toMatch(/≥|known|Known|7\/8|turn-stats-coverage-note/);
