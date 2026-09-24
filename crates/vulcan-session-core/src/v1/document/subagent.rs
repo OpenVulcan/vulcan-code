@@ -10,7 +10,7 @@ use crate::v1::errors::DomainError;
 use crate::v1::event::{
     ApiCallStatus, ApiPurposeKind, AssistantSemanticStatus, ConversationEvent, EventBody,
     EventVisibility, SubagentReturnEvent, SubagentReturnStatsEvent, SubagentReturnStatus,
-    TurnBoundaryPurpose, TurnOutcome, TurnStatsEvent,
+    SystemContextScope, TurnBoundaryPurpose, TurnOutcome, TurnStatsEvent,
 };
 use crate::v1::ids::{ClientActionId, JS_SAFE_INTEGER_MAX, Seq, SubagentTaskId, TurnId};
 use crate::v1::stats::{StatBucket, TurnStatBuckets};
@@ -525,13 +525,19 @@ impl SessionDocument {
         if self.events.iter().any(|event| {
             (stats.start_seq.value()..=stats.end_seq.value()).contains(&event.seq.value())
                 && event.turn_id != Some(request.final_turn_id)
-                // Collaboration control facts deliberately have no business-turn owner.
-                // 协作控制事实按设计不归属业务回合。
-                // Only that typed host event may coexist here; foreign turn content still fails.
-                // 这里只允许该强类型宿主事件共存；其他回合正文仍被拒绝。
+                // Session-wide context and host collaboration facts deliberately have no turn owner.
+                // 会话级上下文及宿主协作事实按设计没有回合归属。
+                // Keep exact visibility and scope checks; foreign turns remain forbidden.
+                // 保留精确可见性与作用域校验；仍然禁止其他回合。
                 && !(event.turn_id.is_none()
-                    && event.visibility == EventVisibility::HostOnly
-                    && matches!(&event.event, EventBody::Collaboration(_)))
+                    && match (&event.event, event.visibility) {
+                        (EventBody::Collaboration(_), EventVisibility::HostOnly) => true,
+                        (EventBody::SystemContext(context), EventVisibility::Provider) => matches!(
+                            context.scope,
+                            SystemContextScope::Global | SystemContextScope::Project | SystemContextScope::Session
+                        ),
+                        _ => false,
+                    })
         }) {
             return Err(DomainError::InvalidStatistics {
                 field: "child_source_range_turn",

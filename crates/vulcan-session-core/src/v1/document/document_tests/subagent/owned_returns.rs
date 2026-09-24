@@ -4,6 +4,102 @@
 use super::*;
 use crate::v1::collaboration::*;
 
+/// Accepts non-turn context injections without releasing foreign-turn or malformed ownership.
+/// 接纳非回合上下文注入，同时拒绝其他回合或错误归属。
+/// Returns domain errors; verifies the real child return, parent completion gate and durable replay.
+/// 返回领域错误；验证真实子回流、父完成门禁及持久重放。
+#[test]
+fn owned_return_with_dynamic_context_releases_parent_completion_gate() -> Result<(), DomainError> {
+    for scope in [
+        SystemContextScope::Global,
+        SystemContextScope::Project,
+        SystemContextScope::Session,
+    ] {
+        // Inject after the root input, matching the first real child Provider preparation.
+        // 在根输入后注入，匹配真实子代理首次 Provider 准备。
+        let mut child = SessionDocument::new("child-session", "project-1", "child", T0);
+        let turn = child.submit_root_input_fixture("child work", vec![], T0)?;
+        child.append_system_context(
+            None,
+            "dynamic.developer",
+            SystemContextOperation::Upsert,
+            scope,
+            None,
+            Some(SystemRoleHint::HiddenUserShell),
+            "child identity",
+            T0 + 1,
+        )?;
+        let api = child.start_api(
+            ApiPurposeKind::Subagent,
+            ApiRequestSnapshot::new("openai", "gpt-5"),
+            T0 + 2,
+        )?;
+        let text = child
+            .append_assistant_text(api, "yes", AssistantSemanticStatus::Completed, T0 + 3)?
+            .into_value();
+        complete_with_usage(&mut child, api, UsageSnapshot::default(), T0 + 4)?;
+        child.close_turn(TurnOutcome::Completed, 5, T0 + 5)?;
+        advance_fixture_durable(&mut child)?;
+        let request = SubagentReturnBuildRequest {
+            final_turn_id: turn,
+            child_task_id: SubagentTaskId::try_new("owned-return-task")?,
+            source_assistant_text_seq: text,
+        };
+        let input = child.build_subagent_return_input(request.clone())?;
+        let (mut parent, parent_turn, execution, _) = owned_return_fixture()?;
+        // Use the reservation's exact source identity, as the production admission path does.
+        // 使用预留的精确来源身份，与生产准入路径一致。
+        assert_eq!(input.child_root_action_id.as_str(), execution.as_str());
+        parent.complete_child_task_with_return(execution, input, T0 + 6)?;
+        assert!(
+            parent
+                .completion_obligations(parent_turn)
+                .open_child_task_ids
+                .is_empty()
+        );
+        assert!(parent.pending_subagent_return_dispatch()?.is_some());
+        let restored = SessionDocument::from_parts(
+            child.metadata.clone(),
+            child.runtime_lock.clone(),
+            child.compactions.clone(),
+            child.segment_catalog.clone(),
+            child.events.clone(),
+        )?;
+        assert!(
+            restored
+                .build_subagent_return_input(request.clone())
+                .is_ok()
+        );
+        for invalid_case in 0..3 {
+            // Mutate only source ownership; valid context content must not weaken turn isolation.
+            // 仅篡改来源归属；合法上下文正文不得削弱回合隔离。
+            let mut forged = child.clone();
+            let context = forged
+                .events
+                .iter_mut()
+                .find(|event| matches!(event.event, EventBody::SystemContext(_)))
+                .unwrap();
+            match invalid_case {
+                0 => context.turn_id = Some(TurnId::try_new(turn.value() + 100)?),
+                1 => context.visibility = EventVisibility::HostOnly,
+                _ => {
+                    if let EventBody::SystemContext(context) = &mut context.event {
+                        context.scope = SystemContextScope::Turn;
+                        context.ttl_turns = Some(1);
+                    }
+                }
+            }
+            assert!(matches!(
+                forged.build_subagent_return_input(request.clone()),
+                Err(DomainError::InvalidStatistics {
+                    field: "child_source_range_turn"
+                })
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Allows declared host-only control events while retaining strict source-turn boundaries.
 /// 允许已声明的仅宿主控制事件，同时保留严格来源回合边界。
 /// Returns domain errors; forged ownership or provider visibility must still be rejected.

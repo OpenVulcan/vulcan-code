@@ -4579,6 +4579,26 @@ mod tests {
                 2,
             )
             .unwrap();
+        // First child preparation appends non-turn context after its root; it must not block publication.
+        // 子代理首次准备在根输入后追加非回合上下文；这不能阻断结果发布。
+        child_handle
+            .mutate_durable(
+                SessionMutationAdmission::ControlPlane,
+                SessionFlushReason::MetadataChanged,
+                |document| {
+                    document.append_system_context(
+                        None,
+                        "dynamic.developer",
+                        vulcan_session_core::v1::event::SystemContextOperation::Upsert,
+                        vulcan_session_core::v1::event::SystemContextScope::Session,
+                        None,
+                        Some(vulcan_session_core::v1::event::SystemRoleHint::HiddenUserShell),
+                        "Return the final result to the parent agent.",
+                        2,
+                    )
+                },
+            )
+            .unwrap();
         let mut child_sink = ProviderV1StreamSink::new(
             Arc::clone(&child_handle),
             Arc::new(ProjectResourceCatalogRegistry::default()),
