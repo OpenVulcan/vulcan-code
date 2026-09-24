@@ -1,69 +1,190 @@
-# vulcan-code
+<div align="center">
 
-基于 Rust Core 后端、Electron 桌面壳与 React WebUI 的 AI Coding 桌面端仓库。
+<img src="apps/vulcan-code-web/public/vulcan-logo.png" alt="Vulcan Code" width="120" />
 
-## 当前结构
+# Vulcan Code
 
-- `Cargo.toml`：根工作区配置，统一管理 Core 服务、桌面壳宿主与共享运行时 crate。
-- `apps/vulcan-code-service`：Core 服务宿主（托盘或后台模式），承载 V1 会话内核、Agent 运行时桥、MCP 运行时与 WebUI RPC/流服务。
-- `apps/vulcan-code-desktop`：Electron 桌面壳，负责窗口、托盘宿主能力、启动本地 Core 与加载 WebUI。
-- `apps/vulcan-code-web`：React/Vite WebUI，承载工作台、设置、会话、Diff、技能与 VMM 管理界面。
-- `crates/vulcan-service-*`：WebUI 后端服务 API、核心服务内核与运行时适配。
-- `crates/vulcan-agent-runtime`：共享代理运行时，负责 Provider、工具、LuaSkills、MCP、VMM 与流式执行。
-- `docs/contracts/`：AGENTS.md 要求所有会话必读的契约文档；`docs/` 其余内容（计划、审计、评审与草稿）只保留在本地，不随仓库分发。
+**开源的图形界面（GUI）AI Coding 桌面工作台**
 
-WebUI 的 `src/shell/*` 是 Electron、浏览器与 Tauri 三种壳共用的抽象层；其中 Tauri 兼容分支（`tauriShell.ts`、`apps/vulcan-code-service/tauri.conf.json`）尚未决定去留，不属于当前主要桌面壳。
+Rust Core · Electron 桌面壳 · React WebUI
 
-## 运行方式
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/OpenVulcan/vulcan-code/pulls)
 
-Vite 开发服务器、Core 服务与 Electron 桌面壳相互独立启动与重启：
+</div>
+
+---
+
+## 关于项目
+
+Vulcan Code 是一款**图形界面的 AI Coding 软件**。它把项目、会话、终端、浏览器、代码审查和 Git 提交放进同一个桌面工作台，让 AI 能理解你的代码、推进任务，并交付可以检查的结果。
+
+这个项目已经在内部开发和调试了很长时间，现在以 **MIT 协议**开源。我们希望它不只是一个团队的产品，而是由社区一起打磨的工具：
+
+- 🐛 遇到问题、有想法，欢迎提 [Issue](https://github.com/OpenVulcan/vulcan-code/issues)
+- 🔧 修了 bug、做了新功能，欢迎提 [Pull Request](https://github.com/OpenVulcan/vulcan-code/pulls)
+- 🤝 无论你是用户还是开发者，都可以参与共建，一起做一个大家都喜爱的 AI Coding 软件
+
+## 特色功能
+
+### 🧭 桌面工作台
+
+- 多项目、多会话管理，文件树、审查、记忆、子代理等面板自由组合
+- 内置项目终端，支持多标签；AI 可以持有长时间运行或需要交互的命令会话
+- 流式回答，Markdown、代码块、Mermaid/SVG 图形与工具调用卡片直接渲染
+- 可以编辑历史问题重新生成，也可以从任意已完成的回合分叉出新会话
+- 中英文界面，明暗主题
+
+### 🎯 任务推进
+
+- **Goal 目标模式**：设定目标和 Token 预算，AI 按回合持续推进，可暂停、恢复、清除
+- **Plan 计划模式**：先探索、出计划，确认后再执行
+- **执行中引导**：任务运行时可以追加说明、排队后续请求
+- **子代理协作**：内置探索、计划等代理角色，另附 [agency-agents](https://github.com/msitarzewski/agency-agents) 的 260+ 个角色模板（默认关闭，按需启用）
+- **结构化提问**：AI 遇到需要你决定的问题时，用选项卡片向你提问
+
+### 🧠 理解代码与积累经验
+
+- **VCE 代码语义索引**：对项目建立向量索引，AI 先找到相关实现再动手修改；索引随代码变化自动同步
+- **项目知识库**：导入 Markdown 资料目录，支持 BM25 与向量混合检索，可以按项目授权、按会话选择
+- **MemoryMesh 长期记忆**：回合后自动提炼经验，回合前自动召回；记忆可以查看、修正、删除，并带回收站和来源追溯
+
+### 🔍 结果可检查
+
+- **Diff 审查**：统一/分栏视图、字词级差异、全文搜索，支持暂存、还原
+- **Git 提交**：AI 生成提交信息，可以提交到当前分支或新分支，并直接推送
+- **AI 浏览器**：AI 在真实 Chromium 页面里导航、点击、截图、读控制台；你可以随时接管控制权
+
+### 🧩 可扩展
+
+- **提示词技能**（`SKILL.md`）：把团队的做事方法沉淀下来，下次直接复用
+- **LuaSkills**：把常用动作封装成可配置、可安装的程序化能力包
+- **MCP**：支持本地进程与 HTTP 两种 MCP 服务器，带连接诊断和工具 Schema 查看
+- **插件系统**：插件可以提供工具，也可以挂载自己的界面。内置插件：Context7 文档检索、AI 浏览器、RTK 命令输出压缩、用量统计、CDP/DAP 调试工具
+
+### ⚙️ 模型与供应商
+
+- 支持 OpenAI、Anthropic、Gemini、Cohere 等协议族，内置 OpenAI、Anthropic、Google、DeepSeek、Kimi、MiniMax、阿里、OpenRouter 等供应商配置，也可以添加自定义供应商
+- 对话、记忆检索、代码索引、媒体生成可以各自选用不同的模型
+- 扩展能力：网页搜索与抓取，图片/视频/音频理解，图片与视频生成，语音合成与转写
+- 上下文窗口分层策略，自动或手动（`/compact`）压缩上下文
+- Token 用量、延迟、参考费用统计
+
+## 路线图
+
+目前已经可用的是 **GUI 桌面版**，接下来计划：
+
+- [ ] **TUI 版本**：在终端里使用 Vulcan Code
+- [ ] **远端手机连接**：用手机远程查看和操控桌面上运行的会话
+- [ ] **Linux / macOS 适配验证**：构建脚本已经具备，还需要在各平台完成完整验证
+
+如果你对其中某项感兴趣，或者有新的想法，欢迎在 Issue 里讨论。
+
+## 架构
+
+```
+┌──────────────────────────┐      ┌─────────────────────────────────────┐
+│  Electron 桌面壳          │      │  Rust Core（vulcan-code-service）    │
+│  窗口 / 托盘 / 宿主能力    │◀────▶│  会话内核 · Agent 运行时 · 工具执行   │
+│  ┌────────────────────┐  │ RPC  │  Provider 协议 · MCP · LuaSkills     │
+│  │ React WebUI        │  │ 事件  │  VCE 索引 · 知识库 · MemoryMesh      │
+│  └────────────────────┘  │      │  终端宿主 · 浏览器宿主 · 插件运行时   │
+└──────────────────────────┘      └─────────────────────────────────────┘
+```
+
+Core 服务可以独立在后台（托盘）运行，关闭桌面窗口不会中断正在执行的任务。
+
+| 目录 | 说明 |
+| --- | --- |
+| `apps/vulcan-code-service` | Core 服务宿主，承载会话内核、Agent 运行时和 WebUI RPC/流服务 |
+| `apps/vulcan-code-desktop` | Electron 桌面壳：窗口、托盘，负责启动本地 Core 并加载 WebUI |
+| `apps/vulcan-code-web` | React/Vite WebUI：工作台、设置、会话、Diff、技能等界面 |
+| `crates/vulcan-agent-runtime` | 共享代理运行时：Provider、工具、LuaSkills、MCP、流式执行 |
+| `crates/vulcan-service-*` | 后端服务 API、核心服务内核与运行时适配 |
+| `crates/vulcan-memorymesh-*` | MemoryMesh 长期记忆 |
+| `crates/vulcan-runtime-assets` | 系统提示词、供应商清单、子代理模板等权威资源 |
+| `plugins/` | 内置插件 |
+| `docs/contracts/` | 开发契约文档 |
+
+## 快速开始
+
+> 当前在 **Windows x86_64** 上完成了完整验证。Linux 与 macOS 有对应的 `make.sh` 脚本，但还没有完整跑通，欢迎帮忙验证。
+
+### 环境要求
+
+- `make`
+- [Rustup](https://rustup.rs/)：仓库通过 `rust-toolchain.toml` 固定工具链版本，进入目录后会自动安装
+- PowerShell 7
+- Node.js 与 pnpm
+
+### 构建与运行
 
 ```bash
-./make vite start    # 独立启动 WebUI Vite 开发服务器
-./make vite status   # 查看 Vite 开发服务器状态
-./make vite stop     # 停止 Vite 开发服务器
-./make service       # 只启动托盘或后台 Core（不打开桌面工作台）
-./make run           # 运行 Electron 桌面壳；debug 下先确保 Vite 已启动
-./make br            # 构建 Core/WebUI/Electron，并运行桌面壳；debug 下先确保 Vite 已启动
+make init-system   # 首次：安装 Rust 工具、宿主依赖与受管 Node/pnpm
+make sync          # 同步配置、系统技能、插件与浏览器运行时到 output/
+make build         # 构建 Core、WebUI 与 Electron 桌面壳
+make run           # 启动桌面端
 ```
 
-debug 模式下的 `run` 与 `br` 会先调用独立的 Vite 启动入口，已有服务器可继续复用；也可使用 `make vite start|status|stop` 单独管理。release 模式直接使用已经构建的 WebUI 资源，不依赖 Vite。仅修改 WebUI 页面时保留 Vite 与桌面壳即可热更新；仅修改 Rust Core 时使用 `make core-build` / `make core-restart`，避免重建 Electron 与 WebUI。
+也可以用 `make br` 一步完成构建和运行。发布构建使用 `make release`。
 
-AI 使用的 Core 浏览器需要单独打包与当前桌面端 `playwright-core` 版本匹配的 Chromium。首次在 Windows PowerShell 调试时，先安装该版本的完整 Chromium；关闭正在运行的 Debug GUI 和 Core 后，在**同一个 PowerShell 会话**中指定浏览器来源并构建：
+详细的环境说明见 [`docs/contracts/development-environment.md`](docs/contracts/development-environment.md)。
 
-```powershell
-node apps/vulcan-code-desktop/node_modules/playwright-core/cli.js install chromium --no-shell
-$chromiumExe = node -e "process.stdout.write(require('./apps/vulcan-code-desktop/node_modules/playwright-core').chromium.executablePath())"
-$env:VULCAN_CHROMIUM_SOURCE_ROOT = Split-Path (Split-Path $chromiumExe -Parent) -Parent
-./make build
-```
+### 日常开发
 
-以后运行 `./make br` 或 `./make build` 时，仍须在执行该命令的环境中设置 `VULCAN_CHROMIUM_SOURCE_ROOT`；没有设置时，生成的 `runtime-layout.json` 会明确省略 Chromium，`browser_open` 不可用。`./make core-restart` 只替换 Core 可执行文件，不会改变浏览器打包结果。可检查 `output/runtime-layout.json` 的 `chromiumExecutable` 与 `browser-host` 能力确认当前布局是否包含浏览器。
-
-## 资源同步
+Vite 开发服务器、Core 服务和 Electron 桌面壳彼此独立，可以分别启动和重启：
 
 ```bash
-./make sync
+make vite start      # 启动 WebUI Vite 开发服务器（也支持 status / stop）
+make service         # 只启动后台 Core，不打开桌面窗口
+make core-restart    # 只改了 Rust Core 时：增量编译并热替换 Core（Windows Debug）
+make sync            # 改了资源、配置、技能或插件后需要重新同步
 ```
 
-`./make sync` 只负责把配置、运行时资源、系统技能和插件同步到 `output`；资源未变化时，后续 `build`、`release` 与 `br` 无需重复同步。不要直接编辑 `output/`。
+- 只改 WebUI 页面时，保持 Vite 和桌面壳运行即可热更新
+- debug 模式下 `make run` / `make br` 会自动确保 Vite 已启动
+- 不要直接编辑 `output/`，权威资源在 `crates/vulcan-runtime-assets/resources/`
 
-## 构建方式
+## 参与共建
 
-```bash
-./make build
-./make release
-```
+我们欢迎任何形式的贡献：报告 bug、完善文档、改进交互、适配新平台、接入新供应商、开发插件和技能……
 
-## 前端验证
+**提 Issue**
 
-```bash
-pnpm --dir apps/vulcan-code-web run lint
-pnpm --dir apps/vulcan-code-web run test
-pnpm --dir apps/vulcan-code-web run build
-pnpm --dir apps/vulcan-code-web run check:build-budget
-```
+- Bug：请附上操作系统、复现步骤、预期与实际行为，以及相关日志或截图
+- 功能建议：说明使用场景和想解决的问题
 
-## 开发环境初始化
+**提 PR**
 
-新环境先执行 `make init-system`，统一安装 Rust 工作区工具与仓库依赖；Cargo 并发限制、workspace-hack、nextest 分组与依赖治理入口见 [`docs/contracts/development-environment.md`](docs/contracts/development-environment.md)。
+1. Fork 仓库并从 `main` 创建分支
+2. 修改前先阅读 [`AGENTS.md`](AGENTS.md)。它记录了仓库的长期约定，涉及特定领域时还要阅读对应的 [`docs/contracts/`](docs/contracts/) 文档
+3. 提交前在本地完成验证：
+
+   ```bash
+   # Rust：优先对修改的 crate 做定向检查
+   cargo check -p <crate> --all-targets
+   cargo nextest run -p <crate>
+
+   # WebUI
+   pnpm --dir apps/vulcan-code-web run lint
+   pnpm --dir apps/vulcan-code-web run test
+   pnpm --dir apps/vulcan-code-web run build
+   ```
+
+4. 在 PR 描述里说明改了什么、为什么改，以及怎么验证的
+
+几条约定：
+
+- 面向 AI 的工具名称、描述、Schema 使用英文；面向用户的界面文案可以使用中文
+- 仓库默认限制编译与测试并发为 4，请不要在验证命令中去掉这个限制
+- 一个 PR 尽量只做一件事，便于评审
+
+## 致谢
+
+- [agency-agents](https://github.com/msitarzewski/agency-agents)：子代理角色模板来源
+- 所有第三方依赖及其许可证见 [`THIRD_PARTY_NOTICES.md`](crates/vulcan-runtime-assets/resources/licenses/THIRD_PARTY_NOTICES.md)，也可以在应用内的「许可证浏览」中查看
+
+## 许可证
+
+[MIT](LICENSE) © 2026 OpenVulcan
