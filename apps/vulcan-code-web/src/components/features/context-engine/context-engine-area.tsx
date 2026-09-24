@@ -21,6 +21,7 @@ import { vceDimensionDomain } from "./vce-embedding-dimensions";
 import { vceInferenceRouteKey, vceRoutePickerOptions } from "./vce-route-picker";
 export { vceInferenceRouteKey, vceRoutePickerOptions } from "./vce-route-picker";
 import { useI18n } from "@/i18n";
+import { formatDurationSeconds } from "@/lib/usage-format";
 import {
   loadPublicAiSettings,
   savePublicAiInferenceRoute,
@@ -342,12 +343,12 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
       }
       const detail = definition.kind === "embedding"
         ? copy(
-          `${result.resultCount} 条结果 · ${result.dimensions ?? 0} 维 · ${result.durationMs} ms`,
-          `${result.resultCount} results · ${result.dimensions ?? 0} dimensions · ${result.durationMs} ms`,
+          `${result.resultCount} 条结果 · ${result.dimensions ?? 0} 维 · ${formatDurationSeconds(result.durationMs)}`,
+          `${result.resultCount} results · ${result.dimensions ?? 0} dimensions · ${formatDurationSeconds(result.durationMs)}`,
         )
         : copy(
-          `${result.resultCount} 条结果 · ${result.durationMs} ms`,
-          `${result.resultCount} results · ${result.durationMs} ms`,
+          `${result.resultCount} 条结果 · ${formatDurationSeconds(result.durationMs)}`,
+          `${result.resultCount} results · ${formatDurationSeconds(result.durationMs)}`,
         );
       toast.success(copy("测试连通性成功", "Connection test succeeded"), { description: detail });
     } catch (cause) {

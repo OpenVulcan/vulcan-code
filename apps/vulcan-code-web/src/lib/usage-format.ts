@@ -33,8 +33,8 @@ export function formatTokenCount(value: number): string {
 //
 // Parameters:
 // 参数：milliseconds 是时长毫秒数；非有限值与负数按 0 处理。
-// Returns the seconds label used by every usage statistic surface.
-// 返回所有用量统计界面共用的秒数文本。
+// Returns the seconds label shared by every measured-duration display (usage stats, request timings, timeouts).
+// 返回所有实测时长显示（用量统计、请求耗时、超时）共用的秒数文本。
 export function formatDurationSeconds(milliseconds: number): string {
   const normalized = Number.isFinite(milliseconds) ? Math.max(0, milliseconds) : 0;
   return `${(normalized / 1000).toFixed(1)} s`;

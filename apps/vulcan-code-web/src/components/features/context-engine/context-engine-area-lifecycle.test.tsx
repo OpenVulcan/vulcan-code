@@ -76,10 +76,10 @@ describe("ContextEngine observation lifetime", () => {
       llm_routes: {}, embedding: route, embedding_dimensions: 2048 } } });
     await act(async () => resolveTest({ operation: "embedding_create", providerId: "provider", serviceEntryId: "service",
       connectionId: "account", modelId: change === "identity" ? "different-model" : "embedding-model",
-      dimensions: 1024, resultCount: 1, durationMs: 23 }));
-    if (change === "unchanged") expect(toast.success).toHaveBeenCalledWith("测试连通性成功", { description: "1 条结果 · 1024 维 · 23 ms" });
+      dimensions: 1024, resultCount: 1, durationMs: 2300 }));
+    if (change === "unchanged") expect(toast.success).toHaveBeenCalledWith("测试连通性成功", { description: "1 条结果 · 1024 维 · 2.3 s" });
     else {
-      expect(host.textContent).not.toContain("1 条结果 · 1024 维 · 23 ms");
+      expect(host.textContent).not.toContain("1 条结果 · 1024 维 · 2.3 s");
       expect(toast.error).toHaveBeenCalledWith("测试连通性失败", { description: expect.stringContaining("模型配置或测试目标已变化") });
       expect(toast.success).not.toHaveBeenCalled();
     }
@@ -102,7 +102,7 @@ describe("ContextEngine observation lifetime", () => {
     // Result identity is returned by execution, not reconstructed from the currently visible picker.
     // 结果身份由执行返回，不从当前可见选择器重建。
     const result: PublicAiInferenceTestResult = { operation: "rerank_documents", providerId: "provider",
-      serviceEntryId: "service", connectionId: "account", modelId: "tested-model", resultCount: 2, durationMs: 17 };
+      serviceEntryId: "service", connectionId: "account", modelId: "tested-model", resultCount: 2, durationMs: 1700 };
     // The controlled promise keeps the real page mutation pending without any paid provider execution.
     // 受控承诺使真实页面修改保持等待，不执行付费供应商请求。
     let resolveTest!: (value: PublicAiInferenceTestResult) => void;
@@ -116,7 +116,7 @@ describe("ContextEngine observation lifetime", () => {
     expect(rpc.test).toHaveBeenCalledExactlyOnceWith({ consumerProfileId: "vce", operation: "rerank_documents" });
     if (timing === "completed") {
       await act(async () => resolveTest(result));
-      expect(toast.success).toHaveBeenCalledWith("测试连通性成功", { description: "2 条结果 · 17 ms" });
+      expect(toast.success).toHaveBeenCalledWith("测试连通性成功", { description: "2 条结果 · 1.7 s" });
     }
     rpc.settings.mockResolvedValue({ ...snapshot, inferenceProfiles: { vce: { llm_routes: {},
       rerank: { ...route, model_id: "newer-model" } } } });
@@ -125,7 +125,7 @@ describe("ContextEngine observation lifetime", () => {
     if (timing !== "refresh_race") await act(async () => root.render(<TooltipProvider><ContextEngineArea workbenchRevision={2} /></TooltipProvider>));
     if (timing !== "completed") await act(async () => resolveTest(result));
     expect(host.textContent).toContain("newer-model");
-    expect(host.textContent).not.toContain("2 条结果 · 17 ms");
+    expect(host.textContent).not.toContain("2 条结果 · 1.7 s");
     expect(toast.success).toHaveBeenCalledTimes(timing === "completed" ? 1 : 0);
     expect(rpc.test).toHaveBeenCalledTimes(1);
     expect(rpc.save).not.toHaveBeenCalled();

@@ -2,6 +2,7 @@ import { ChevronRight, CircleAlert } from "lucide-react";
 
 import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
+import { formatDurationSeconds } from "@/lib/usage-format";
 
 // SystemProviderError describes the structured failure emitted by the public provider contract.
 // SystemProviderError 描述公共 Provider 契约发出的结构化失败信息。
@@ -137,6 +138,13 @@ function scalarText(value: unknown): string | null {
 // retryAfterMilliseconds 从 Provider 契约读取归一化的 retry-after 对象。
 function retryAfterMilliseconds(value: unknown): string | null {
   return isRecord(value) ? scalarText(value.delay_milliseconds) : null;
+}
+
+// retryAfterDisplay renders the exact retry delay as seconds; non-numeric text keeps its raw millisecond form instead of becoming zero.
+// retryAfterDisplay 将精确重试等待时长渲染为秒；非数值文本保留原始毫秒形式，不会显示为零。
+function retryAfterDisplay(retryAfterMs: string): string {
+  const milliseconds = Number(retryAfterMs);
+  return Number.isFinite(milliseconds) ? formatDurationSeconds(milliseconds) : `${retryAfterMs} ms`;
 }
 
 // structuredProviderDisplayMessage derives a non-empty summary only from normalized failure facts.
@@ -383,7 +391,7 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
   if (props.error.retryAfterMs) {
     fields.push({
       label: t("conversation.systemError.retryAfter"),
-      value: `${props.error.retryAfterMs} ms`,
+      value: retryAfterDisplay(props.error.retryAfterMs),
     });
   }
   if (reconciliationPending) {

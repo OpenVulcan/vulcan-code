@@ -28,6 +28,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
+import { formatDurationSeconds } from "@/lib/usage-format"
 import { cn } from "@/lib/utils"
 import {
   loadPublicAiSettings,
@@ -270,11 +271,11 @@ export function VmmInferenceSettings({
         ? formatSkillText(t("settings.inference.testEmbeddingSuccess"), {
             count: result.resultCount,
             dimensions: result.dimensions ?? 0,
-            duration: result.durationMs,
+            duration: formatDurationSeconds(result.durationMs),
           })
         : formatSkillText(t("settings.inference.testRerankSuccess"), {
             count: result.resultCount,
-            duration: result.durationMs,
+            duration: formatDurationSeconds(result.durationMs),
           })
       setTestSummaries((current) => ({ ...current, [operation]: summary }))
     } catch (cause) {

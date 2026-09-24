@@ -3,6 +3,7 @@ import type { ConversationDetailRef } from "@/components/conversation/conversati
 import type { TranslationKey } from "@/i18n-messages";
 import type { ToolRequestProgressSnapshot } from "@/types";
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
+import { formatDurationSeconds } from "@/lib/usage-format";
 import {
   isCollaborationToolName,
   isSubagentFeedbackMetadata,
@@ -474,7 +475,7 @@ function buildSubagentWaitDetailBody(blocks: ToolExecutionConversationBlock[], t
       subagentWaitStatusText(payload, timedOut, interrupted, t),
     ),
     timeoutMs !== null && timeoutMs > 0
-      ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), `${timeoutMs} ms`)
+      ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), formatDurationSeconds(timeoutMs))
       : null,
     result ? `### ${text(t, "conversation.subagent.detail.result", "Result")}\n\n${fencedText(result)}` : null,
     ...agentSections,
@@ -622,7 +623,7 @@ function buildSubagentAgentListDetailBody(blocks: ToolExecutionConversationBlock
     `## ${title}`,
     detailLine(text(t, "conversation.subagent.detail.count", "Count"), String(agents.length)),
     completed !== null ? detailLine(text(t, "conversation.subagent.detail.completed", "Completed"), booleanText(completed, t)) : null,
-    timeoutMs !== null && timeoutMs > 0 ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), `${timeoutMs} ms`) : null,
+    timeoutMs !== null && timeoutMs > 0 ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), formatDurationSeconds(timeoutMs)) : null,
   ].filter(Boolean);
   if (!agents.length) {
     return [

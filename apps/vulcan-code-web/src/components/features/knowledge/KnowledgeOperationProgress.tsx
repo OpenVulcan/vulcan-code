@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { formatDurationSeconds } from "@/lib/usage-format";
 import { Activity, Braces, Database, Gauge, LoaderCircle, Server, Sparkles } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
@@ -175,7 +176,7 @@ function RecentRequestRow(props: { request: KnowledgeOperationRequestSummary }) 
       <span className="knowledge-operation-history-status" data-status={request.status}>{t(knowledgeRequestStatusKey(request.status))}</span>
       <span className="knowledge-operation-history-label" title={request.label}>{request.label}</span>
       <span>{request.model}</span>
-      <span>{request.durationMs == null ? "—" : `${request.durationMs} ms`}</span>
+      <span>{request.durationMs == null ? "—" : formatDurationSeconds(request.durationMs)}</span>
     </div>
   );
 }

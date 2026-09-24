@@ -119,6 +119,15 @@ describe("system provider error card", () => {
       retryAfterMs: "60000",
       message: "HTTP 502 · provider_unavailable · response_headers",
     });
+    // The retry wait renders as seconds with one decimal, never as raw milliseconds.
+    // 重试等待时长渲染为保留一位小数的秒数，而不是原始毫秒。
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <SystemErrorCard error={parseSystemProviderError(EMPTY_MESSAGE_502_BODY)!} />
+      </I18nProvider>,
+    );
+    expect(markup).toContain("60.0 s");
+    expect(markup).not.toContain("60000 ms");
   });
 
   it("projects a terminal system transcript into the notice card path", () => {
