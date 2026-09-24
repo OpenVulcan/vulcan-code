@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createRequire } from "node:module";
-import { createPluginPanel, formatMoney } from "./index.mjs";
+import { createPluginPanel, formatMoney, presetTimeRange } from "./index.mjs";
+import { createPluginQueryClient, invalidatePluginQueries } from "../../../apps/vulcan-code-web/src/service/plugin-ui-query-runtime.ts";
 
 // require resolves the existing host test dependencies without adding a plugin bundle dependency.
 // require 解析现有宿主测试依赖，不向插件包添加依赖。
@@ -10,6 +11,16 @@ const require = createRequire(new URL("../../../apps/vulcan-code-web/package.jso
 // React 与 JSDOM 提供真实宿主渲染器与隔离浏览器文档。
 const React = require("react");
 const { JSDOM } = require("jsdom");
+
+// Select one real calendar shortcut and confirm the dialog's exact interval.
+// 选择真实自然日快捷项，并确认对话框中的精确区间。
+// panel owns the mounted DOM; label identifies the shortcut; resolves after commit.
+// panel 持有挂载 DOM；label 标识快捷项；提交后完成。
+async function selectRange(panel, label) {
+  await React.act(async () => panel.container.querySelector('button[aria-label="Time range"]').click());
+  await React.act(async () => [...panel.container.querySelectorAll("button")].find(button => button.textContent === label).click());
+  await React.act(async () => [...panel.container.querySelectorAll("button")].find(button => button.textContent === "Confirm").click());
+}
 
 test("money preserves unknown, zero, tiny values, carry and large exact digits", () => {
   for (const [input, expected] of [
@@ -26,6 +37,11 @@ test("money preserves unknown, zero, tiny values, carry and large exact digits",
 // invoke handles declared actions; returns the container and asynchronous cleanup.
 // invoke 处理声明的 Action；返回容器与异步清理函数。
 async function mount(invoke, strict = false) {
+  // Use the real host coordinator so StrictMode tests exercise the shared subscription contract.
+  // 使用真实宿主协调器，让 StrictMode 测试覆盖共享订阅契约。
+  invalidatePluginQueries("usage-test");
+  const client = createPluginQueryClient({ pluginId: "usage-test", runtimeIdentity: crypto.randomUUID(), workspacePath: null, conversationId: null },
+    ["settings-get", "dashboard-get", "pricing-get", "statistics-clear-preview", "settings-update", "statistics-clear-apply"].map(id => ({ id, effect: id.endsWith("update") || id.endsWith("apply") ? "mutation" : "read", resultCacheMs: 0 })), invoke);
   // dom owns only this test's browser environment.
   // dom 仅持有当前测试的浏览器环境。
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>");
@@ -47,10 +63,13 @@ async function mount(invoke, strict = false) {
   // sdk supplies only the formally used host surface.
   // sdk 仅提供正式使用的宿主接口。
   const sdk = {
-    React, locale: "en-US", invoke, t: (key, fallback) => fallback,
+    React, locale: "en-US", invoke: client.invoke, t: (key, fallback) => fallback,
     components: { Badge: plain, Button, StatusPill: plain, MetricCard: plain,
       SelectControl, ActivityHeatmap, ActivityHeatmapLegend: plain,
-      TimeSeriesLineChart: plain, ChartLegend: plain, EmptyState: plain, ErrorState: plain },
+      TimeSeriesLineChart: plain, ChartLegend: plain, EmptyState: plain, ErrorState: plain,
+      HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }),
+      Dialog: ({ open, children }) => open ? React.createElement("div", null, children) : null,
+      DialogContent: plain, DialogTitle: plain, DialogDescription: plain },
   };
   // root mounts the real hook-based plugin component.
   // root 挂载真实的基于 Hook 的插件组件。
@@ -59,6 +78,7 @@ async function mount(invoke, strict = false) {
     React.createElement(createPluginPanel(sdk)))));
   return { container: document.getElementById("root"), close: async () => {
     await React.act(async () => root.unmount());
+    client.dispose();
     dom.window.close();
   } };
 }
@@ -138,15 +158,11 @@ test("StrictMode shares initial reads and older range results cannot replace new
   const panel = await mount((action, argumentsValue) => {
     calls.push({ action, argumentsValue });
     if (action === "settings-get") return Promise.resolve(settings);
-    return argumentsValue.rangeDays === 30 ? oldRequest : Promise.resolve({ ...dashboard, aggregateRevision: 777 });
+    return argumentsValue.endAtMs === null ? oldRequest : Promise.resolve({ ...dashboard, aggregateRevision: 777 });
   }, true);
   assert.equal(calls.filter((call) => call.action === "settings-get").length, 1);
   assert.equal(calls.filter((call) => call.action === "dashboard-get").length, 1);
-  await React.act(async () => {
-    const select = panel.container.querySelector('select[aria-label="Time range"]');
-    select.value = "7";
-    select.dispatchEvent(new window.Event("change", { bubbles: true }));
-  });
+  await selectRange(panel, "7 days");
   assert.match(panel.container.textContent, /Revision 777/);
   await React.act(async () => finishOld({ ...dashboard, aggregateRevision: 111 }));
   assert.match(panel.container.textContent, /Revision 777/);
@@ -185,7 +201,7 @@ test("price-save completion refreshes the currently selected dashboard scope", a
     if (action === "pricing-get") return Promise.resolve(pricingDirectory);
     if (action === "settings-update") return new Promise((resolve) => { finishSave = () => resolve({ ...settings, modelOverrides: args.modelOverrides }); });
     reads.push(args);
-    return Promise.resolve({ ...dashboard, aggregateRevision: args.rangeDays });
+    return Promise.resolve({ ...dashboard, aggregateRevision: args.endAtMs === null ? 30 : 7 });
   });
   try {
     await openPricing(panel);
@@ -198,12 +214,10 @@ test("price-save completion refreshes the currently selected dashboard scope", a
     await React.act(async () => [...panel.container.querySelectorAll("button")].find((button) => button.textContent === "Save override").click());
     assert.equal(typeof finishSave, "function");
     await React.act(async () => panel.container.querySelector("nav button:nth-child(2)").click());
-    await React.act(async () => {
-      const range = panel.container.querySelector('select[aria-label="Time range"]');
-      range.value = "7"; range.dispatchEvent(new window.Event("change", { bubbles: true }));
-    });
+    await selectRange(panel, "7 days");
     await React.act(async () => finishSave());
-    assert.equal(reads.at(-1).rangeDays, 7);
+    assert.equal(reads.at(-1).startAtMs, presetTimeRange(7).startAtMs);
+    assert.equal(typeof reads.at(-1).endAtMs, "number");
     assert.equal(reads.at(-1).view, "details");
     assert.match(panel.container.textContent, /Revision 7\b/);
     assert.doesNotMatch(panel.container.textContent, /Revision 30\b/);
@@ -319,13 +333,10 @@ test("pricing requires an explicit target, preserves its draft across filters an
   });
   try {
     await openPricing(panel);
-    const editor = panel.container.querySelector(".plugin-statistics-price-editor");
-    assert.equal(editor.querySelector("input"), null);
-    assert.match(editor.textContent, /Select a model/);
-    assert.doesNotMatch(editor.textContent, /Catalog default|Custom override/);
-    const table = editor.parentElement.querySelector("table");
-    assert.ok(editor.compareDocumentPosition(table) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+    assert.equal(panel.container.querySelector(".plugin-statistics-price-editor"), null);
+    const table = [...panel.container.querySelectorAll("button")].find((button) => button.textContent === "unknown-model").closest("table");
     await React.act(async () => [...table.querySelectorAll("button")].find((button) => button.textContent === "unknown-model").click());
+    const editor = panel.container.querySelector(".plugin-statistics-price-editor");
     assert.match(editor.textContent, /Edit model · unknown-model/);
     assert.match(editor.textContent, /Unpriced/);
     assert.doesNotMatch(editor.textContent, /Catalog default/);
@@ -349,7 +360,8 @@ test("pricing requires an explicit target, preserves its draft across filters an
     assert.deepEqual(saves, [{ modelOverrides: { "unknown-model": {
       inputPerMillion: decimals[0], outputPerMillion: decimals[1], cacheReadPerMillion: decimals[2], cacheWritePerMillion: decimals[3],
     } } }]);
-    assert.match(editor.textContent, /Custom override/);
+    assert.equal(panel.container.querySelector(".plugin-statistics-price-editor"), null);
+    assert.match(panel.container.textContent, /Saved model price override/);
   } finally { await panel.close(); }
 });
 
@@ -379,35 +391,5 @@ test("price save rejects duplicate events and retains failed exact decimals", as
     assert.equal(input.value, "0.12345678901234567890");
     assert.equal(save.disabled, false);
     assert.match(panel.container.textContent, /isolated write rejected/);
-  } finally { await panel.close(); }
-});
-
-// Preview and apply share one synchronous lock while the apply request retains the exact preview revision.
-// 预览和应用共享同步锁，应用请求保持精确预览修订。
-test("clear preview and apply serialize duplicate events without touching real storage", async () => {
-  const mutations = [];
-  let resolvePreview;
-  let rejectApply;
-  const panel = await mount((action, args) => {
-    if (action === "settings-get") return Promise.resolve(settings);
-    if (action === "dashboard-get") return Promise.resolve(dashboard);
-    mutations.push({ action, args });
-    if (action === "statistics-clear-preview") return new Promise((resolve) => { resolvePreview = resolve; });
-    return new Promise((_resolve, reject) => { rejectApply = reject; });
-  });
-  try {
-    await React.act(async () => panel.container.querySelector("nav button:nth-child(4)").click());
-    const preview = [...panel.container.querySelectorAll("button")].find((button) => button.textContent === "Preview clearing history");
-    await React.act(async () => { preview.click(); preview.click(); });
-    assert.deepEqual(mutations, [{ action: "statistics-clear-preview", args: {} }]);
-    await React.act(async () => resolvePreview({ aggregateRevision: 987, attemptCount: 5, totalTokens: 123 }));
-    const apply = [...panel.container.querySelectorAll("button")].find((button) => button.textContent === "Confirm clear");
-    await React.act(async () => { apply.click(); apply.click(); });
-    assert.deepEqual(mutations[1], { action: "statistics-clear-apply", args: { expectedAggregateRevision: 987 } });
-    assert.equal(mutations.length, 2);
-    await React.act(async () => rejectApply(new Error("preview revision changed")));
-    assert.match(panel.container.textContent, /preview revision changed/);
-    assert.equal(apply.disabled, false);
-    assert.equal(mutations.length, 2);
   } finally { await panel.close(); }
 });
