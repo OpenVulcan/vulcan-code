@@ -538,6 +538,34 @@
                                              ]
                    },
                    {
+                       "key":  "glm-5.3-flash",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "glm-5.3-flashx",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "google/gemini-3.1-flash-lite",
                        "aliases":  [
 
@@ -1194,6 +1222,32 @@
                                              ]
                    },
                    {
+                       "key":  "mimo-v2.6-flash",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "mimo-v2.6-pro",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "mimo-v2-omni",
                        "aliases":  [
 
@@ -1570,8 +1624,7 @@
                        "key":  "qwen/qwen3.7-flash",
                        "aliases":  [
                                        "qwen/qwen3.7-flash-20260727",
-                                       "qwen: qwen3.7 flash",
-                                       "qwen3.7-flash"
+                                       "qwen: qwen3.7 flash"
                                    ],
                        "context_window":  1000000,
                        "input_modalities":  [
@@ -1613,8 +1666,7 @@
                        "key":  "qwen/qwen3.8-27b",
                        "aliases":  [
                                        "qwen/qwen3.8-27b-20260814",
-                                       "qwen: qwen3.8 27b",
-                                       "qwen3.8-27b"
+                                       "qwen: qwen3.8 27b"
                                    ],
                        "context_window":  262144,
                        "input_modalities":  [
@@ -1742,6 +1794,20 @@
                                              ]
                    },
                    {
+                       "key":  "qwen3.7-flash",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "qwen3.7-max-2026-06-08",
                        "aliases":  [
 
@@ -1835,6 +1901,20 @@
                                                 "image",
                                                 "text",
                                                 "video"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "qwen3.8-27b",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
                                             ],
                        "output_modalities":  [
                                                  "text"
@@ -2189,7 +2269,6 @@
                    {
                        "key":  "z-ai/glm-5.3-flash",
                        "aliases":  [
-                                       "glm-5.3-flash",
                                        "z.ai: glm 5.3 flash",
                                        "z-ai/glm-5.3-flash-20260826"
                                    ],
