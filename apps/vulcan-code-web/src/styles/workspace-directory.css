@@ -190,15 +190,27 @@
   color: var(--foreground);
   font-weight: 600;
 }
-.workspace-directory-layout[data-navigation-mode="tabs"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"])::after {
-  content: "";
+/* One shared underline slides between tabs; the layout measures the active row and supplies its offset and width. */
+/* 一条共享下划线在标签间滑动；布局测量当前行并提供其偏移与宽度。 */
+.workspace-directory-layout[data-navigation-mode="tabs"] > .workspace-directory-navigation { position: relative; }
+.workspace-directory-tab-indicator {
+  --tab-indicator-inset: 12px;
   position: absolute;
-  right: 12px;
   bottom: 0;
-  left: 12px;
+  left: 0;
+  width: calc(var(--tab-indicator-width, 0px) - var(--tab-indicator-inset) * 2);
   height: 2px;
   border-radius: 2px 2px 0 0;
   background: var(--primary);
-  animation: vcn-accent-grow-x var(--vcn-duration-base, 180ms) var(--vcn-ease-out, ease-out);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(calc(var(--tab-indicator-x, 0px) + var(--tab-indicator-inset)));
+}
+.workspace-directory-tab-indicator[data-visible="true"] { opacity: 1; }
+.workspace-directory-tab-indicator[data-animate="true"] {
+  transition:
+    transform var(--vcn-duration-slow, 240ms) var(--vcn-ease-out, ease-out),
+    width var(--vcn-duration-slow, 240ms) var(--vcn-ease-out, ease-out),
+    opacity var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
 }
 .workspace-directory-layout[data-navigation-mode="tabs"] > .workspace-directory-content { padding: 20px 0 0; }
