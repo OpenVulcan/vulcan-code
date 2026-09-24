@@ -1536,6 +1536,7 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.timeline.delivery": "Collaboration delivery",
     "conversation.collaboration.timeline.notification": "Agent phase notification",
     "conversation.collaboration.timeline.task": "Child task result",
+    "conversation.collaboration.agentCompleted": "Agent work completed",
     "conversation.collaboration.timeline.taskMessage": "Agent task message",
     "conversation.collaboration.timeline.taskResult": "Agent task result",
     "conversation.collaboration.timeline.taskResultAcknowledged": "Task receipt delivered",

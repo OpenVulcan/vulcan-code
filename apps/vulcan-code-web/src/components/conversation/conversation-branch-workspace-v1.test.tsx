@@ -4,6 +4,20 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
+// Projection tests inspect expanded details; the card suite covers the actual folded default and clicks.
+// 投影测试检查展开详情；卡片测试覆盖真实默认收起状态与点击交互。
+vi.mock("./conversation-measured-collapse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./conversation-measured-collapse")>();
+  return {
+    ...actual,
+    // Seed only collaboration folds, leaving unrelated tool and process defaults untouched.
+    // 仅初始化协作折叠，不改变无关工具及过程的默认状态。
+    useConversationMeasuredExpansion: (id: string, defaultExpanded: boolean) =>
+      actual.useConversationMeasuredExpansion(id,
+        id.startsWith("collaboration:") || id.startsWith("subagent-return:") || defaultExpanded),
+  };
+});
+
 import { I18nProvider } from "@/i18n";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";

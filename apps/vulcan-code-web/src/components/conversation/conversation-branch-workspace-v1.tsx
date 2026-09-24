@@ -1,6 +1,6 @@
 import * as React from "react";
 import { ConversationAgentInteractionActionsContext } from "./conversation-collaboration-card";
-import { createConversationV1CollaborationNavigation, type ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
+import { conversationV1SubagentNames, createConversationV1CollaborationNavigation, type ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
 import { cancelCollaborationQuestion } from "@/service/collaboration-question-service";
 import { pendingCollaborationQuestionIds } from "@/service/conversation-event-display-projection";
 import { ThinkingPopupContext } from "./thinking-preview";
@@ -189,6 +189,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     cancellableQuestionIds: pendingCollaborationQuestionIds(events),
     onOpenSession: collaborationRoutes?.onOpenSession,
     availableSessionIds: collaborationRoutes?.availableSessionIds,
+    subagentNames: conversationV1SubagentNames(events, collaborationRoutes?.subagentNames),
     onCancelQuestion: async (questionId: string, sourceRootSessionId: string): Promise<void> => {
       await cancelCollaborationQuestion(questionId, sourceRootSessionId);
       await props.commands.rehydrate();

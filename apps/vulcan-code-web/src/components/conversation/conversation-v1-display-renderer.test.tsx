@@ -2,6 +2,20 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+// Projection tests inspect expanded details; the card suite covers the actual folded default and clicks.
+// 投影测试检查展开详情；卡片测试覆盖真实默认收起状态与点击交互。
+vi.mock("./conversation-measured-collapse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./conversation-measured-collapse")>();
+  return {
+    ...actual,
+    // Seed only collaboration folds, leaving unrelated tool and process defaults untouched.
+    // 仅初始化协作折叠，不改变无关工具及过程的默认状态。
+    useConversationMeasuredExpansion: (id: string, defaultExpanded: boolean) =>
+      actual.useConversationMeasuredExpansion(id,
+        id.startsWith("collaboration:") || id.startsWith("subagent-return:") || defaultExpanded),
+  };
+});
+
 import {
   collectConversationResourceIdsV1,
   ConversationV1DisplayRenderer,

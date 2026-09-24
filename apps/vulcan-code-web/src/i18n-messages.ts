@@ -1567,6 +1567,7 @@ export type TranslationKey =
   | "conversation.collaboration.timeline.delivery"
   | "conversation.collaboration.timeline.notification"
   | "conversation.collaboration.timeline.task"
+  | "conversation.collaboration.agentCompleted"
   | "conversation.collaboration.timeline.taskMessage"
   | "conversation.collaboration.timeline.taskResult"
   | "conversation.collaboration.timeline.taskResultAcknowledged"

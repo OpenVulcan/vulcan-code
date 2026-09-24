@@ -225,6 +225,7 @@ export function ConversationV1Workspace(props: ConversationV1WorkspaceProps) {
               defaultExpandedTools={false}
               events={events}
               availableCollaborationSessionIds={availableCollaborationSessionIds}
+              subagentNames={collaborationNavigation?.subagentNames}
               onCancelCollaborationQuestion={props.onCancelCollaborationQuestion}
               onCopyText={props.onCopyText}
               onOpenCollaborationSession={onOpenCollaborationSession}

@@ -1536,6 +1536,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.timeline.delivery": "协作投递",
     "conversation.collaboration.timeline.notification": "代理阶段通知",
     "conversation.collaboration.timeline.task": "子任务结果",
+    "conversation.collaboration.agentCompleted": "智能体工作完成",
     "conversation.collaboration.timeline.taskMessage": "代理任务消息",
     "conversation.collaboration.timeline.taskResult": "代理任务结果",
     "conversation.collaboration.timeline.taskResultAcknowledged": "任务回执已送达",

@@ -1,4 +1,6 @@
 import * as React from "react";
+import { ChevronDown, MessagesSquare } from "lucide-react";
+import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "./conversation-measured-collapse";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { runConversationControlAction } from "./conversation-control-feedback";
 import { MarkdownMessage } from "./conversation-markdown";
@@ -23,6 +25,9 @@ import type {
 // ConversationAgentInteractionActions defines host callbacks; event text never grants these capabilities.
 // ConversationAgentInteractionActions 定义宿主回调，事件正文绝不授予这些能力。
 export interface ConversationAgentInteractionActions {
+  // Names keyed by exact child session id from persisted tools and current host navigation.
+  // 来自持久工具记录与当前宿主导航、以精确子会话身份索引的名字。
+  subagentNames?: ReadonlyMap<string, string>;
   // Latest pending IDs in the mounted event window; missing means no state summary was supplied.
   // 已挂载事件窗口中的最新待处理身份；缺失表示未提供状态摘要。
   cancellableQuestionIds?: ReadonlySet<string>;
@@ -54,12 +59,15 @@ export function ConversationAgentInteractionView({ interaction }: { interaction:
     return <ConversationCollaborationCard key={interaction.event.operation_id} {...actions} event={interaction.event} seq={interaction.seq} createdAtMs={interaction.created_at_ms} />;
   }
   return (
-    <article className="conversation-v1-event conversation-v1-collaboration-card" data-event-kind="subagent_return" data-collaboration-card-kind="task-result" data-seq={interaction.seq}>
-      <header className="conversation-v1-collaboration-header"><strong>{t("conversation.collaboration.timeline.task")}</strong></header>
+    <CollaborationToolCard id={`subagent-return:${interaction.event.child_session_id}:${interaction.seq}`} seq={interaction.seq}
+      eventKind="subagent_return" cardKind="task-result" title={t("conversation.collaboration.agentCompleted")}
+      name={actions.subagentNames?.get(interaction.event.child_session_id)}>
       <MarkdownMessage content={interaction.event.content} eager />
-      <CollaborationSessionButton {...actions} sessionId={interaction.event.child_session_id} label={t("conversation.collaboration.source")} title={t("conversation.collaboration.openSource")} />
-      <time dateTime={new Date(interaction.created_at_ms).toISOString()}>{new Date(interaction.created_at_ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
-    </article>
+      <div className="subagent-orchestration-meta">
+        <CollaborationSessionButton {...actions} sessionId={interaction.event.child_session_id} label={t("conversation.collaboration.source")} title={t("conversation.collaboration.openSource")} />
+        <time dateTime={new Date(interaction.created_at_ms).toISOString()}>{new Date(interaction.created_at_ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
+      </div>
+    </CollaborationToolCard>
   );
 }
 
@@ -108,17 +116,13 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
     ? afterState.question
     : null;
   return (
-    <article
-      className={`conversation-v1-event conversation-v1-collaboration-card${isNotification ? " conversation-v1-collaboration-notification-card" : ""}`}
-      data-event-kind="collaboration"
-      data-collaboration-card-kind={isTaskResult ? "task-result" : isNotification ? "notification" : isTaskMessage ? "task-message" : "interaction"}
-      data-collaboration-event-kind={event.event_kind}
-      data-seq={props.seq}
+    <CollaborationToolCard
+      id={`collaboration:${event.operation_id}:${props.seq}`} seq={props.seq}
+      eventKind="collaboration" collaborationEventKind={event.event_kind}
+      cardKind={isTaskResult ? "task-result" : isNotification ? "notification" : isTaskMessage ? "task-message" : "interaction"}
+      title={title} status={status}
+      name={[...new Set(participants.map((participant) => props.subagentNames?.get(participant.sessionId)).filter(Boolean))].join(" · ")}
     >
-      <header className="conversation-v1-collaboration-header">
-        <strong>{title}</strong>
-        {status ? <span className="conversation-v1-collaboration-status">{status}</span> : null}
-      </header>
       {body ? <p className="conversation-v1-collaboration-body">{body}</p> : null}
       {secondaryBody ? (
         <p className="conversation-v1-collaboration-secondary-body">
@@ -179,6 +183,42 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
       <time dateTime={new Date(props.createdAtMs).toISOString()}>
         {new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
       </time>
+    </CollaborationToolCard>
+  );
+}
+
+/** Renders collaboration facts with the shared tool-card layout and measured folding.
+ * 使用共享工具卡布局和测量折叠渲染协作事实。
+ * Props retain exact event identity, host names and detail content; returns an initially folded card.
+ * 属性保留精确事件身份、宿主名字及详情正文；返回默认收起的卡片。 */
+function CollaborationToolCard(props: React.PropsWithChildren<{
+  // Stable fold identity and persisted event coordinates.
+  // 稳定折叠身份与持久事件坐标。
+  id: string; seq: number; eventKind: "collaboration" | "subagent_return";
+  // Distinct semantic card kind and optional collaboration subtype.
+  // 独立语义卡片类型与可选协作子类型。
+  cardKind: string; collaborationEventKind?: CollaborationEventKind;
+  // Localized heading and state, plus the authoritative participant label when available.
+  // 本地化标题和状态，以及可用时的权威参与者标签。
+  title: string; status?: string | null; name?: string;
+}>) {
+  // Expansion follows the same session-scoped memory and viewport measurement as tool calls.
+  // 展开状态遵循与工具调用一致的会话记忆与视口测量。
+  const [expanded, setExpanded] = useConversationMeasuredExpansion(props.id, false);
+  return (
+    <article className={`tool-presentation-card subagent-orchestration conversation-v1-collaboration-card${expanded ? " expanded" : ""}${props.cardKind === "notification" ? " conversation-v1-collaboration-notification-card" : ""}`}
+      data-event-kind={props.eventKind} data-collaboration-card-kind={props.cardKind}
+      data-collaboration-event-kind={props.collaborationEventKind} data-seq={props.seq}>
+      <button type="button" className="tool-presentation-summary subagent-orchestration-summary"
+        aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        <MessagesSquare size={14} className="subagent-orchestration-icon" aria-hidden="true" />
+        <span>{props.title}{props.status ? <> · <span className="conversation-v1-collaboration-status">{props.status}</span></> : null}</span>
+        <span className="tool-presentation-command" title={props.name}><span className="tool-presentation-command-text">{props.name}</span></span>
+        <ChevronDown size={14} className="tool-presentation-toggle" aria-hidden="true" />
+      </button>
+      <ConversationMeasuredCollapse collapseId={props.id} expanded={expanded}>
+        <div className="subagent-orchestration-detail">{props.children}</div>
+      </ConversationMeasuredCollapse>
     </article>
   );
 }

@@ -2,7 +2,6 @@
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type {
@@ -10,7 +9,7 @@ import type {
   ConversationEventBody,
 } from "@/service/conversation-event-window-store";
 import type { ConversationAgentInteraction } from "@/types/conversation";
-import { ConversationCollaborationCard, ConversationAgentInteractionView } from "./conversation-collaboration-card";
+import { ConversationCollaborationCard, ConversationAgentInteractionView, ConversationAgentInteractionActionsContext } from "./conversation-collaboration-card";
 
 // This file mounts the card directly; the display renderer only proves it renders somewhere.
 // 本文件直接挂载该卡片；显示渲染器只证明它被渲染，不证明其自身行为。
@@ -148,6 +147,12 @@ async function mount(
       </I18nProvider>,
     ),
   );
+  // Existing action assertions inspect the real expanded body; the initial surface must stay folded.
+  // 既有操作断言检查真实展开正文；初始界面必须保持收起。
+  const toggle = host.querySelector<HTMLButtonElement>(".tool-presentation-summary")!;
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    await act(async () => toggle.click());
+  }
 }
 
 it("renders each collaboration kind under its own card identity", async () => {
@@ -203,14 +208,26 @@ it("renders the interaction view for a collaboration envelope and the result car
   await act(async () =>
     root.render(
       <I18nProvider initialLocale="en-US">
-        <ConversationAgentInteractionView interaction={childReturn} />
+        <ConversationAgentInteractionActionsContext.Provider value={{ subagentNames: new Map([["child-session", "yes_agent"]]) }}>
+          <ConversationAgentInteractionView interaction={childReturn} />
+        </ConversationAgentInteractionActionsContext.Provider>
       </I18nProvider>,
     ),
   );
   const resultCard = host.querySelector("article")!;
   expect(resultCard.getAttribute("data-collaboration-card-kind")).toBe("task-result");
+  expect(resultCard.textContent).toContain("Agent work completed");
+  expect(resultCard.textContent).toContain("yes_agent");
+  expect(resultCard.querySelector(".lucide-messages-square")).not.toBeNull();
+  expect(resultCard.textContent).not.toContain("Child final content");
+  const toggle = resultCard.querySelector<HTMLButtonElement>(".tool-presentation-summary")!;
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => toggle.click());
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
   expect(resultCard.textContent).toContain("Child final content");
   expect(resultCard.textContent).not.toContain("Cancel question");
+  await act(async () => toggle.click());
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
 });
 
 it("offers no question control for a received notification", async () => {
@@ -316,16 +333,9 @@ it("keeps a failed cancellation retryable while it holds the click", async () =>
 it("retains the original event timestamp across a delivery update", async () => {
   // The card carries the host timestamp, not a reconstructed one; a delivery update must not shift it.
   // 卡片携带宿主时间戳而非重建时间戳；投递更新不得改变它。
-  const markup = renderToStaticMarkup(
-    <I18nProvider initialLocale="en-US">
-      <ConversationCollaborationCard
-        createdAtMs={1_700_000_000_000}
-        event={questionEvent("pending", "delivery_accepted")}
-        seq={9}
-      />
-    </I18nProvider>,
-  );
-  expect(markup).toContain(`data-seq="9"`);
+  await mount(questionEvent("pending", "delivery_accepted"));
+  const markup = host.innerHTML;
+  expect(markup).toContain(`data-seq="5"`);
   expect(markup).toContain('data-collaboration-event-kind="delivery_accepted"');
   expect(markup).toContain(new Date(1_700_000_000_000).toISOString());
 });

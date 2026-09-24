@@ -1,4 +1,34 @@
 import type { ConversationSummary, SubagentNavigationSnapshot } from "@/types";
+import type { ConversationEventSummary } from "@/service/conversation-event-window-store";
+import { resolveV1SubagentOrchestrationPresentation } from "./tool-presentations/v1-subagent-orchestration-presentation";
+
+/** Resolves names from persisted tool identities and current navigation labels, never assistant prose.
+ * 从持久工具身份与当前导航标签解析名字，绝不解析助手正文。
+ * `events` belongs to one window; current host labels override historical labels. Returns exact session-name pairs.
+ * `events` 属于同一窗口；当前宿主标签覆盖历史标签。返回精确会话名称映射。 */
+export function conversationV1SubagentNames(events: readonly ConversationEventSummary[], current?: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
+  // Closed children remain identifiable through their original typed tool resource references.
+  // 已关闭子代理仍可通过原有强类型工具资源引用识别。
+  const names = new Map<string, string>();
+  for (const summary of events) {
+    if (summary.event.kind !== "tool_call") continue;
+    // Reuse the same contract adapter as the existing create/list tool cards.
+    // 复用既有创建及列表工具卡使用的契约适配器。
+    const presentation = resolveV1SubagentOrchestrationPresentation({
+      ...summary, kind: "tool_call", tool_call: summary.event,
+      group: { turn_id: summary.turn_id, api_call_id: summary.event.api_call_id },
+    });
+    if (!presentation) continue;
+    if (presentation.operation === "create" && presentation.target) {
+      for (const reference of summary.event.external_refs ?? []) {
+        if (reference.kind === "subagent") names.set(reference.id, presentation.target);
+      }
+    }
+    for (const agent of presentation.agents) names.set(agent.id, agent.name);
+  }
+  for (const [id, name] of current ?? []) names.set(id, name);
+  return names;
+}
 
 /** Host callbacks and authoritative ids used to navigate collaboration participants.
  * 用于导航协作参与者的宿主回调与权威身份集合。*/
@@ -20,6 +50,9 @@ export interface ConversationV1CollaborationNavigation {
 /** Output of the exact collaboration navigation adapter used by the V1 renderer.
  * V1 渲染器使用的精确协作导航适配器输出。*/
 export interface ConversationV1CollaborationNavigationResult {
+  /** Authoritative agent labels indexed by their child session identity.
+   * 以子会话身份索引的权威智能体标签。 */
+  subagentNames: ReadonlyMap<string, string>;
   /** Session ids with a known direct or child route in the host snapshot.
    * 宿主快照中存在直接路由或子任务路由的会话身份。*/
   availableSessionIds: ReadonlySet<string>;
@@ -86,5 +119,8 @@ export function createConversationV1CollaborationNavigation(
       void navigation.onOpenSubagentPanel(snapshot.parentConversationId, snapshot.activeTaskId);
     }
   };
-  return { availableSessionIds, onOpenSession };
+  // taskId is the canonical child session id, and label is the backend's human-facing name.
+  // taskId 是规范子会话身份，label 是后端提供的可读名称。
+  const subagentNames = new Map((navigation.navigation?.tasks ?? []).map((task) => [task.taskId, task.label]));
+  return { availableSessionIds, onOpenSession, subagentNames };
 }

@@ -1,4 +1,5 @@
 import { ConversationAgentInteractionActionsContext, ConversationAgentInteractionView, ConversationCollaborationCard } from "./conversation-collaboration-card";
+import { conversationV1SubagentNames } from "./conversation-collaboration-navigation";
 import { ThinkingPopupContext, ThinkingPreview } from "./thinking-preview";
 import { normalizeThinkingDisplayMode } from "./thinking-display";
 import React from "react";
@@ -76,6 +77,9 @@ export type ConversationV1GenerationAction =
 /** Props for the V1 event-native conversation renderer.
  * V1 事件原生会话渲染器的属性。 */
 export interface ConversationV1DisplayRendererProps {
+  /** Host-owned child labels keyed by exact session id.
+   * 由宿主持有、按精确会话身份索引的子代理标签。 */
+  subagentNames?: ReadonlyMap<string, string>;
   /** Configured provider/model display catalog, absent in isolated hosts without configuration.
    * 已配置的供应商和模型显示目录；不带配置的隔离宿主可省略。 */
   providers?: readonly ProviderSummary[];
@@ -151,6 +155,7 @@ export function ConversationV1EventWindowView(props: ConversationV1EventWindowVi
   return (
     <ConversationV1SessionDisplayRenderer
       providers={props.providers}
+      subagentNames={props.subagentNames}
       defaultExpandedTools={props.defaultExpandedTools}
       events={snapshot.events}
       availableExternalRefKeys={props.availableExternalRefKeys}
@@ -216,6 +221,7 @@ export function ConversationV1SessionDisplayRenderer(
       onRootInputGenerationAction={props.onRootInputGenerationAction}
       reasoningDisplayMode={props.reasoningDisplayMode}
       resourceCatalog={resourceCatalog}
+      subagentNames={props.subagentNames}
       rootInputGenerationActionsDisabled={props.rootInputGenerationActionsDisabled}
       workspacePath={props.workspacePath}
     />
@@ -230,6 +236,9 @@ export function ConversationV1SessionDisplayRenderer(
  * @returns one event-native transcript whose visible order remains exact seq order.
  *          一个可见顺序始终保持精确 seq 顺序的事件原生转录。 */
 export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRendererProps) {
+  // Historical creation records keep names available after live navigation removes closed agents.
+  // 历史创建记录让实时导航移除已关闭智能体后仍能显示名字。
+  const subagentNames = React.useMemo(() => conversationV1SubagentNames(props.events, props.subagentNames), [props.events, props.subagentNames]);
   // cancellableQuestions prevents historical pending cards from exposing stale actions after settlement.
   // cancellableQuestions 防止历史待处理卡片在结算后暴露过期操作。
   const cancellableQuestions = React.useMemo(() => pendingCollaborationQuestionIds(props.events), [props.events]);
@@ -251,6 +260,7 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
         {transcriptNodes.map((node) => (
           <ConversationV1TranscriptNodeView
             cancellableQuestionIds={cancellableQuestions}
+            subagentNames={subagentNames}
             providers={props.providers}
             defaultExpandedTools={props.defaultExpandedTools}
             node={node}
@@ -276,6 +286,9 @@ export function ConversationV1DisplayRenderer(props: ConversationV1DisplayRender
 /** Props for rendering one visual transcript node derived from canonical events.
  * 渲染一个从 canonical 事件派生的视觉转录节点所需属性。 */
 interface ConversationV1TranscriptNodeViewProps {
+  /** Host-owned child labels keyed by exact session id.
+   * 由宿主持有、按精确会话身份索引的子代理标签。 */
+  subagentNames?: ReadonlyMap<string, string>;
   // Latest pending question identities from this exact event window.
   // 当前精确事件窗口中最新的待处理问题身份。
   cancellableQuestionIds: ReadonlySet<string>;
@@ -328,7 +341,7 @@ function ConversationV1TranscriptNodeView(props: ConversationV1TranscriptNodeVie
   switch (props.node.kind) {
     case "subagent_return":
       return (
-        <ConversationAgentInteractionActionsContext.Provider value={{ onOpenSession: props.onOpenCollaborationSession, availableSessionIds: props.availableCollaborationSessionIds }}>
+        <ConversationAgentInteractionActionsContext.Provider value={{ onOpenSession: props.onOpenCollaborationSession, availableSessionIds: props.availableCollaborationSessionIds, subagentNames: props.subagentNames }}>
           <ConversationAgentInteractionView interaction={{ ...props.node.item, event: props.node.item.event }} />
         </ConversationAgentInteractionActionsContext.Provider>
       );
@@ -350,6 +363,7 @@ function ConversationV1TranscriptNodeView(props: ConversationV1TranscriptNodeVie
           key={props.node.item.collaboration.operation_id}
           cancellableQuestionIds={props.cancellableQuestionIds}
           availableSessionIds={props.availableCollaborationSessionIds}
+          subagentNames={props.subagentNames}
           event={props.node.item.collaboration}
           seq={props.node.seq}
           createdAtMs={props.node.item.created_at_ms}
