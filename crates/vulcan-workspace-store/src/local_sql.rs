@@ -349,6 +349,110 @@ pub async fn query_json_async(
         .map_err(render_boundary_failure)
 }
 
+/// Queries within one caller deadline, interrupting SQLite and awaiting real connection cleanup.
+/// 在单个调用方截止时间内查询，中断 SQLite 并等待真实连接清理。
+/// `deadline` bounds queueing, busy waits and SQL execution; returns rows or the actual error.
+/// `deadline` 限制排队、繁忙等待和 SQL 执行；返回记录或实际错误。
+pub async fn query_json_until_async(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    sql: String,
+    params: Vec<SqliteValue>,
+    deadline: std::time::Instant,
+) -> Result<QueryJsonResult, String> {
+    with_connection_until_async(runtime, target, Some(deadline), move |connection| {
+        let result = sql_exec::query_json(connection, &sql, &params).map_err(render);
+        if std::time::Instant::now() >= deadline {
+            return Err(
+                "SQLite query deadline exceeded; execution and connection cleanup completed."
+                    .into(),
+            );
+        }
+        result
+    })
+    .await
+}
+
+/// Runs one operation within its original deadline and owns interruption through connection cleanup.
+/// 在原始截止时间内执行单次操作，并持有中断与连接清理过程。
+/// The optional deadline applies to queues and SQLite; committed writes retain their real result.
+/// 可选截止时间作用于排队与 SQLite；已提交写入保留实际结果。
+pub async fn with_connection_until_async<T: Send + 'static>(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    deadline: Option<std::time::Instant>,
+    body: impl FnOnce(&mut rusqlite::Connection) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let target = target.into();
+    let key = target.key(runtime.as_ref())?;
+    let shared = Arc::clone(runtime);
+    let scheduler = tokio::runtime::Handle::current();
+    runtime
+        .boundary()
+        .run_until(key, deadline, move || {
+            with_connection(shared.as_ref(), target.as_target(), |connection| {
+                let Some(deadline) = deadline else {
+                    return body(connection);
+                };
+                let remaining = deadline
+                    .checked_duration_since(std::time::Instant::now())
+                    .ok_or_else(|| "SQLite query deadline expired before execution.".to_owned())?;
+                connection.busy_timeout(remaining).map_err(render)?;
+                let interrupt = connection.get_interrupt_handle();
+                // Interrupt is connection-specific and never targets a subsequent operation's connection.
+                // 中断专属于当前连接，绝不指向后续操作的连接。
+                let _timer = SqlInterruptTimer(scheduler.spawn(async move {
+                    tokio::time::sleep_until(deadline.into()).await;
+                    interrupt.interrupt();
+                }));
+                body(connection)
+            })
+        })
+        .await
+        .map_err(render_boundary_failure)
+}
+
+/// Cancels the connection-specific interrupt task on both ordinary return and panic.
+/// 正常返回及异常展开时都取消当前连接专属的中断任务。
+struct SqlInterruptTimer(tokio::task::JoinHandle<()>);
+impl Drop for SqlInterruptTimer {
+    /// Stops only the timer; the database operation retains ownership of its connection.
+    /// 仅停止计时器；数据库操作仍拥有其连接。
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Executes one script with a caller-owned deadline and returns the actual commit outcome.
+/// 使用调用方截止时间执行脚本，并返回实际提交结果。
+pub async fn execute_script_until_async(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    sql: String,
+    params: Vec<SqliteValue>,
+    deadline: Option<std::time::Instant>,
+) -> Result<ExecuteScriptResult, String> {
+    with_connection_until_async(runtime, target, deadline, move |connection| {
+        sql_exec::execute_script(connection, &sql, &params).map_err(render)
+    })
+    .await
+}
+
+/// Executes an atomic parameter batch within the remaining caller budget.
+/// 在调用方剩余预算内执行原子参数批次。
+pub async fn execute_batch_until_async(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    sql: String,
+    params: Vec<Vec<SqliteValue>>,
+    deadline: Option<std::time::Instant>,
+) -> Result<ExecuteBatchResult, String> {
+    with_connection_until_async(runtime, target, deadline, move |connection| {
+        sql_exec::execute_batch(connection, &sql, &params).map_err(render)
+    })
+    .await
+}
+
 /// Spools one cursor-style query stream on the blocking boundary, off the Tokio core threads.
 /// 在阻塞边界上暂存一条游标式查询流，离开 Tokio 核心线程。
 ///
@@ -1165,6 +1269,25 @@ fn lance_failure_is_unavailability(
 
 #[cfg(test)]
 mod tests {
+    /// Deadline interruption completes before a subsequent query reuses the database boundary.
+    /// 截止中断完成后，后续查询才复用数据库边界。
+    #[test]
+    fn query_deadline_interrupts_sql_and_releases_the_actual_connection() {
+        let (_directory, handle) = fixture();
+        let scheduler = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        scheduler.block_on(async {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(40);
+            let error = super::query_json_until_async(&handle.local, LogicalDatabase::SystemStatistics,
+                "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) FROM n".into(), vec![], deadline).await.unwrap_err();
+            assert!(error.contains("deadline") || error.contains("interrupt"), "unexpected query failure: {error}");
+            let rows = super::query_json_until_async(&handle.local, LogicalDatabase::SystemStatistics,
+                "SELECT 7 AS value".into(), vec![], std::time::Instant::now() + std::time::Duration::from_secs(2)).await.unwrap();
+            assert_eq!(rows.row_count, 1);
+        });
+    }
     use super::*;
     use std::collections::HashMap;
 

@@ -71,6 +71,23 @@ impl VulcanPluginRuntimeManager {
         &self,
         plugin_id: &str,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
+        let manager = self.clone();
+        let plugin_id = plugin_id.to_owned();
+        tokio::spawn(async move { manager.drain_plugin_sessions_owned(&plugin_id).await })
+            .await
+            .map_err(|error| {
+                VulcanPluginRuntimeError::new(format!("Plugin drain supervisor failed: {error}"))
+            })?
+    }
+
+    /// Finishes plugin drain despite cancellation of the caller awaiting its report.
+    /// 即使等待报告的调用方取消，也继续完成插件排空。
+    /// The plugin identity selects retained resources; returns the exact cleanup report.
+    /// 插件身份选择保留资源；返回精确清理报告。
+    async fn drain_plugin_sessions_owned(
+        &self,
+        plugin_id: &str,
+    ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
         let sessions = lock_sessions(&self.state.sessions)?
             .values()
             .filter(|session| session.plugin_id == plugin_id)
@@ -104,17 +121,8 @@ impl VulcanPluginRuntimeManager {
         runtime_kind: VulcanPluginPersistentRuntimeKind,
         report: &mut VulcanPluginDrainReport,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        let _lifecycle = match runtime_kind {
-            VulcanPluginPersistentRuntimeKind::Hook => {
-                self.state.hook_runtime_initialization_gate.lock().await
-            }
-            VulcanPluginPersistentRuntimeKind::UiAction => {
-                self.state
-                    .ui_action_runtime_initialization_gate
-                    .lock()
-                    .await
-            }
-        };
+        let gate = self.persistent_runtime_gate(plugin_id, runtime_kind)?;
+        let _lifecycle = gate.lock().await;
         let runtimes = match runtime_kind {
             VulcanPluginPersistentRuntimeKind::Hook => &self.state.hook_runtimes,
             VulcanPluginPersistentRuntimeKind::UiAction => &self.state.ui_action_runtimes,
@@ -128,7 +136,8 @@ impl VulcanPluginRuntimeManager {
             .await
         {
             Ok(shutdown_diagnostic) => {
-                lock_hook_runtimes(runtimes)?.remove(plugin_id);
+                lock_hook_runtimes(runtimes)?
+                    .retain(|id, current| id != plugin_id || !Arc::ptr_eq(current, &runtime));
                 match runtime_kind {
                     VulcanPluginPersistentRuntimeKind::Hook => {
                         report.closed_hook_runtimes += 1;
@@ -142,7 +151,8 @@ impl VulcanPluginRuntimeManager {
                 }
             }
             Err(error) => {
-                runtime.closing.store(false, Ordering::Release);
+                // A failed close remains quarantined; subsequent drains may retry cleanup.
+                // 关闭失败的实例保持隔离；后续排空可以重试清理。
                 let diagnostic = format!(
                     "Plugin `{plugin_id}` persistent {} runtime cleanup failed and remains retained: {error}",
                     runtime_kind.label()

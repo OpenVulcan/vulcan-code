@@ -2,11 +2,13 @@
 //! 由 LuaSkills 租约承载的长生命周期通用 Vulcan 插件会话运行时。
 
 mod actions;
+mod action_status;
 mod authorization;
 mod bridge;
 mod configuration;
 mod drain;
 mod environment;
+mod execution;
 mod installation;
 mod lease;
 mod lifecycle;
@@ -18,6 +20,7 @@ mod sessions;
 // Preserve the existing public plugin API at its original module path.
 // 在原模块路径保留既有公开插件API。
 pub use actions::VulcanPluginActionRequest;
+pub use action_status::{VulcanPluginActionIdentity, VulcanPluginActionStatus};
 pub use authorization::{
     VulcanPluginInstallSecretRequirement, VulcanPluginMcpPermissionPreview,
     VulcanPluginPermissionPreview, plugin_permission_key,
@@ -172,7 +175,7 @@ struct ManagedVulcanPluginHookRuntime {
 
 /// Persistent runtime category used to isolate latency-sensitive hooks from plugin UI actions.
 /// 用于隔离延迟敏感 Hook 与插件界面 Action 的持久运行时类别。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum VulcanPluginPersistentRuntimeKind {
     /// Runtime dedicated to hook handlers.
     /// 专用于 Hook 处理器的运行时。
@@ -283,12 +286,15 @@ struct VulcanPluginManagerState {
     /// Raw leases retained after cleanup failures and keyed by lease identifier.
     /// 清理失败后保留并以租约标识为键的原始租约集合。
     retained_leases: Mutex<BTreeMap<String, RetainedVulcanPluginLease>>,
-    /// Global initialization gate preventing duplicate hook leases during concurrent first calls.
-    /// 防止并发首次调用创建重复 hook 租约的全局初始化门。
-    hook_runtime_initialization_gate: AsyncMutex<()>,
-    /// Global initialization gate preventing duplicate UI action leases during concurrent first calls.
-    /// 防止并发首次调用创建重复界面 Action 租约的全局初始化门。
-    ui_action_runtime_initialization_gate: AsyncMutex<()>,
+    /// Weak plugin/category gates shared by initialization and drain; inactive entries are reclaimed.
+    /// 初始化与排空共享的插件及类别弱引用同步门；回收无人持有的条目。
+    persistent_runtime_gates: Mutex<BTreeMap<(String, VulcanPluginPersistentRuntimeKind), std::sync::Weak<AsyncMutex<()>>>>,
+    /// Bounded outstanding actions shared across lifecycle generations until actual cleanup.
+    /// 跨生命周期代次共享的有界在途 Action，直至实际清理完成。
+    action_admissions: Mutex<BTreeMap<String, std::sync::Weak<tokio::sync::Semaphore>>>,
+    /// Safe invocation records retained independently from HTTP waiters.
+    /// 独立于 HTTP 等待方保留的安全调用记录。
+    action_records: Mutex<BTreeMap<String, Arc<action_status::ActionRecord>>>,
     /// Monotonic runtime generations keyed by plugin identifier.
     /// 以插件标识为键的单调运行时代次。
     plugin_generations: Mutex<BTreeMap<String, u64>>,
@@ -497,8 +503,9 @@ impl VulcanPluginRuntimeManager {
                 hook_runtimes: Mutex::new(BTreeMap::new()),
                 ui_action_runtimes: Mutex::new(BTreeMap::new()),
                 retained_leases: Mutex::new(BTreeMap::new()),
-                hook_runtime_initialization_gate: AsyncMutex::new(()),
-                ui_action_runtime_initialization_gate: AsyncMutex::new(()),
+            persistent_runtime_gates: Mutex::new(BTreeMap::new()),
+            action_admissions: Mutex::new(BTreeMap::new()),
+            action_records: Mutex::new(BTreeMap::new()),
                 plugin_generations: Mutex::new(BTreeMap::new()),
                 lifecycle_overrides: Mutex::new(BTreeMap::new()),
                 cleanup_diagnostics: Mutex::new(BTreeMap::new()),

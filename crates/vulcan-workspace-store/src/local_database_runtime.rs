@@ -590,6 +590,27 @@ impl DatabaseBlockingBoundary {
         T: Send + 'static,
         E: Send + 'static,
     {
+        self.run_until(key, None, operation).await
+    }
+
+    /// Waits within an optional caller deadline, then owns gates until blocking work actually returns.
+    /// 在可选调用方截止时间内等待，随后持有同步门直至阻塞任务实际返回。
+    /// Expiry removes queued work; running operations enforce their own interrupt contract.
+    /// 到期移除排队任务；运行中的操作遵循自身中断契约。
+    pub async fn run_until<T, E, F>(
+        &self,
+        key: DatabaseKey,
+        deadline: Option<std::time::Instant>,
+        operation: F,
+    ) -> Result<T, BlockingBoundaryError<E>>
+    where
+        F: FnOnce() -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: Send + 'static,
+    {
+        // Both queue stages share one deadline, without changing ownership after dispatch.
+        // 两个排队阶段共用一个截止时间，调度后不改变所有权。
+        let admission = async {
         let gate = self.gate_for(&key).await;
         let guard = gate.lock_owned().await;
         // Acquire the per-database gate before a global permit. Same-database waiters must not consume every
@@ -601,6 +622,12 @@ impl DatabaseBlockingBoundary {
             .map_err(|_| BlockingBoundaryError::Task {
                 detail: String::from("the boundary semaphore was closed"),
             })?;
+        Ok::<_, BlockingBoundaryError<E>>((guard, permit))
+        };
+        let (guard, permit) = if let Some(deadline) = deadline {
+            tokio::time::timeout_at(deadline.into(), admission).await
+                .map_err(|_| BlockingBoundaryError::Task { detail: "database admission deadline exceeded".into() })??
+        } else { admission.await? };
         // The permit and the gate guard move into the blocking task so both are held for exactly as long as
         // the work runs, and released even if the closure panics.
         // 许可与门守卫被移入阻塞任务，因此二者恰好在工作运行期间被持有，且即使闭包 panic 也会被释放。

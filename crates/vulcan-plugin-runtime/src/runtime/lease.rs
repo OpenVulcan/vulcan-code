@@ -146,7 +146,7 @@ impl VulcanPluginRuntimeManager {
         let generation = required_response_u64(&response, "generation")?;
         // load_request evaluates only the fixed bridge module; the real plugin is supplied as data.
         // load_request 只执行固定桥接模块；真实插件以数据形式提供。
-        let load_request = json!({
+        let mut load_request = json!({
             "lease_id": lease_id.clone(),
             "sid": sid.clone(),
             "generation": generation,
@@ -184,6 +184,13 @@ impl VulcanPluginRuntimeManager {
             "timeout_ms": VULCAN_PLUGIN_PROBE_TIMEOUT_MS,
         });
         let load_result = call_engine_blocking(engine, move |engine| {
+            // Initialization consumes the original Action budget after blocking-queue admission.
+            // 初始化在进入阻塞执行后消耗原始 Action 预算。
+            if let Some(deadline) = super::action_status::callback_deadline() {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now()).as_millis() as u64;
+                if remaining == 0 { return Err(VulcanPluginRuntimeError::new("Plugin initialization deadline exceeded.")); }
+                load_request["timeout_ms"] = json!(remaining.min(VULCAN_PLUGIN_PROBE_TIMEOUT_MS));
+            }
             let raw = engine
                 .eval_system_runtime_lease_json(&load_request.to_string())
                 .map_err(VulcanPluginRuntimeError::new)?;
@@ -200,9 +207,14 @@ impl VulcanPluginRuntimeManager {
             let cleanup_result = self.close_raw_lease(&lease_id, &sid, generation).await;
             return match cleanup_result {
                 Ok(()) => Err(error),
-                Err(cleanup_error) => Err(VulcanPluginRuntimeError::new(format!(
-                    "{error}; failed to close rejected bridge lease: {cleanup_error}"
-                ))),
+                Err(cleanup_error) => {
+                    let diagnostic = format!("{error}; failed to close rejected bridge lease: {cleanup_error}");
+                    self.retain_failed_lease(super::RetainedVulcanPluginLease {
+                        plugin_id: manifest.id.clone(), owner_session_id: None,
+                        lease_id, sid, generation, reserved_session_slot: false,
+                    }, diagnostic.clone())?;
+                    Err(VulcanPluginRuntimeError::new(diagnostic))
+                },
             };
         }
         Ok((lease_id, sid, generation))
@@ -232,8 +244,23 @@ impl VulcanPluginRuntimeManager {
         let lease_id = lease_id.to_owned();
         let sid = sid.to_owned();
         let function_name = function_name.to_owned();
+        // Include blocking-pool and engine-lock waits in the supplied remaining budget.
+        // 阻塞池及引擎锁等待包含在传入的剩余预算内。
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_millis(timeout_ms))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Plugin execution deadline is out of range.")
+            })?;
         let engine = self.runtime_engine()?;
         call_engine_blocking(engine, move |engine| {
+            let timeout_ms = deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis() as u64;
+            if timeout_ms == 0 {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Plugin execution deadline expired while waiting for the engine.",
+                ));
+            }
             let eval_request = json!({
                 "lease_id": lease_id,
                 "sid": sid,
@@ -324,11 +351,28 @@ pub(super) async fn call_engine_blocking<T>(
 where
     T: Send + 'static,
 {
+    let record = super::action_status::ACTION_RECORD
+        .try_with(Arc::clone)
+        .ok();
+    let queued = std::time::Instant::now();
     tokio::task::spawn_blocking(move || {
+        let _scope = super::action_status::BlockingActionScope::enter(record.clone());
+        if let Some(record) = &record {
+            record.observe("blocking_queue", queued.elapsed());
+        }
+        let lock_started = std::time::Instant::now();
         let engine = engine.read().map_err(|_| {
             VulcanPluginRuntimeError::new("LuaSkills engine read lock is poisoned.")
         })?;
-        operation(&engine)
+        if let Some(record) = &record {
+            record.observe("engine_lock", lock_started.elapsed());
+        }
+        let started = std::time::Instant::now();
+        let result = operation(&engine);
+        if let Some(record) = &record {
+            record.observe("engine_operation", started.elapsed());
+        }
+        result
     })
     .await
     .map_err(|error| {

@@ -65,6 +65,9 @@ impl VulcanPluginStorageOperation {
 /// 一条携带宿主控制身份的已认证插件存储请求。
 #[derive(Debug, Clone)]
 pub struct VulcanPluginStorageRequest {
+    /// Original Action deadline; absent for other supervised lease operations.
+    /// 原始 Action 截止时间；其他受监督租约操作不含此值。
+    pub deadline: Option<std::time::Instant>,
     /// Exact plugin identity injected by the fixed bridge lease.
     /// 由固定桥接租约注入的精确插件身份。
     pub plugin_id: String,
@@ -116,6 +119,9 @@ pub enum VulcanPluginVldbOperation {
 /// 一条携带宿主控制插件身份的已认证宿主 VLDB 请求。
 #[derive(Debug, Clone)]
 pub struct VulcanPluginVldbRequest {
+    /// Host-owned monotonic deadline, absent for non-action lifecycle callbacks.
+    /// 宿主持有的单调截止时间，非 Action 生命周期回调为空。
+    pub deadline: Option<std::time::Instant>,
     /// Exact plugin identity injected by the fixed bridge lease.
     /// 由固定桥接租约注入的精确插件身份。
     pub plugin_id: String,

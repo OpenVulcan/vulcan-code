@@ -23,6 +23,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_load_plugin_ui_module",
     "service_read_plugin_text_asset",
     "service_invoke_plugin_action",
+    "service_plugin_action_status",
     "service_save_luaskills_runtime_settings",
     "service_retry_luaskills_managed_runtimes",
     "service_install_luaskill",
@@ -192,9 +193,18 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "actionId")?,
                 rpc_required_param(params, "arguments")?,
                 rpc_optional_param(params, "workspacePath")?,
+                rpc_required_param(params, "runtimeIdentity")?,
+                rpc_required_param(params, "identity")?,
             )
             .await,
         ),
+        "service_plugin_action_status" => rpc_json_result(crate::plugin_services::service_plugin_action_status(
+            state,
+            rpc_required_param(params, "pluginId")?,
+            rpc_required_param(params, "runtimeIdentity")?,
+            rpc_required_param(params, "identity")?,
+            rpc_required_param(params, "cancel")?,
+        )),
         "service_save_luaskills_runtime_settings" => rpc_json_result(
             service_save_luaskills_runtime_settings(
                 app.clone(),

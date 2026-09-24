@@ -93,10 +93,9 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "value": 2
                 }
             ])
-        } else if sql.contains("AS calendarDate") {
+        } else if sql.contains("LEFT JOIN daily_timing USING") {
             json!([
                 {
-                    "calendarDate": "2026-08-15",
                     "providerId": "provider-1",
                     "serviceEntryId": "entry-1",
                     "consumerId": "webui",
@@ -120,7 +119,6 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "timedAttemptCount": 0
                 },
                 {
-                    "calendarDate": "2026-08-15",
                     "providerId": "provider-1",
                     "serviceEntryId": "entry-1",
                     "consumerId": "webui",
@@ -136,10 +134,14 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "outputTokens": 1,
                     "reasoningTokens": 0,
                     "totalTokens": 2,
-                    "aggregateRevision": 7
+                    "aggregateRevision": 7,
+                    "requestDurationMs": null,
+                    "firstTokenLatencyMs": null,
+                    "outputDurationMs": null,
+                    "outputTokensPerSecond": null,
+                    "timedAttemptCount": 0
                 },
                 {
-                    "calendarDate": "2026-08-15",
                     "providerId": "provider-1",
                     "serviceEntryId": "entry-1",
                     "consumerId": "webui",
@@ -155,7 +157,12 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "outputTokens": null,
                     "reasoningTokens": null,
                     "totalTokens": null,
-                    "aggregateRevision": 7
+                    "aggregateRevision": 7,
+                    "requestDurationMs": null,
+                    "firstTokenLatencyMs": null,
+                    "outputDurationMs": null,
+                    "outputTokensPerSecond": null,
+                    "timedAttemptCount": 0
                 }
             ])
         } else if sql.contains("AS attemptId") {
