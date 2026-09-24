@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronDown, MessagesSquare } from "lucide-react";
+import { ArrowUpRight, ChevronDown, MessagesSquare } from "lucide-react";
 import { ConversationMeasuredCollapse, useConversationMeasuredExpansion } from "./conversation-measured-collapse";
 import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -127,7 +127,8 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   // Directional sentences surround the linked name; unnamed participants retain the generic heading.
   // 方向句围绕可跳转的名称显示；尚无名称的参与者保留通用标题。
   const messageDirection = participants.some((participant) => props.subagentNames?.get(participant.sessionId))
-    ? afterState.kind === "outbound_task_message" ? "sent" : afterState.kind === "inbound_task_message" ? "received" : null
+    ? afterState.kind === "outbound_task_message" ? "sent" : afterState.kind === "inbound_task_message" ? "received"
+      : afterState.kind === "task_result" && !isFailedTaskDelivery ? "reply" : null
     : null;
   const body = event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState);
   const secondaryBody = collaborationSecondaryBody(afterState);
@@ -138,8 +139,10 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
       cardKind={isTaskResult ? "task-result" : isNotification ? "notification" : isTaskMessage ? "task-message" : "interaction"}
       title={title} status={status} incoming={incoming}
       titlePrefix={messageDirection === "sent" ? t("conversation.collaboration.message.sentPrefix")
+        : messageDirection === "reply" ? t("conversation.collaboration.message.replyPrefix")
         : messageDirection === "received" ? t("conversation.collaboration.message.receivedPrefix") : undefined}
       titleSuffix={messageDirection === "sent" ? t("conversation.collaboration.message.sentSuffix")
+        : messageDirection === "reply" ? t("conversation.collaboration.message.replySuffix")
         : messageDirection === "received" ? t("conversation.collaboration.message.receivedSuffix") : undefined}
       participant={participants.map((participant) => (
         <CollaborationSessionButton {...props} key={`${participant.role}:${participant.sessionId}`}
@@ -220,7 +223,7 @@ function CollaborationToolCard(props: React.PropsWithChildren<{
           {props.titleSuffix ? <span className="conversation-v1-collaboration-title">{props.titleSuffix}</span> : null}
         </span>
         {props.status ? <span className="conversation-v1-collaboration-badge">{props.status}</span> : null}
-        {!props.incoming ? <button type="button" className="conversation-v1-collaboration-fold" aria-label={props.title}
+        {!props.incoming ? <button type="button" className="conversation-v1-collaboration-fold conversation-v1-collaboration-row-toggle" aria-label={props.title}
           aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
           <ChevronDown size={14} aria-hidden="true" />
         </button> : null}
@@ -261,7 +264,9 @@ function CollaborationSessionButton(props: {
       onClick={() => props.onOpenSession?.(props.sessionId)}
       type="button"
     >
+      <span aria-hidden="true">[</span><ArrowUpRight size={12} aria-hidden="true" />
       <span className="conversation-v1-collaboration-participant-name" title={name}>{name}</span>
+      <span aria-hidden="true">]</span>
     </button>
   );
 }

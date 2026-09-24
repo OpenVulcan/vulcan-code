@@ -1573,6 +1573,8 @@ export type TranslationKey =
   | "conversation.collaboration.message.sentSuffix"
   | "conversation.collaboration.message.receivedPrefix"
   | "conversation.collaboration.message.receivedSuffix"
+  | "conversation.collaboration.message.replyPrefix"
+  | "conversation.collaboration.message.replySuffix"
   | "conversation.collaboration.timeline.taskResult"
   | "conversation.collaboration.timeline.taskResultAcknowledged"
   | "conversation.collaboration.timeline.taskResultProjected"

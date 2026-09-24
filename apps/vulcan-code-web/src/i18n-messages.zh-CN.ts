@@ -1542,6 +1542,8 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.message.sentSuffix": "会话发送消息",
     "conversation.collaboration.message.receivedPrefix": "收到来自",
     "conversation.collaboration.message.receivedSuffix": "的消息",
+    "conversation.collaboration.message.replyPrefix": "回复",
+    "conversation.collaboration.message.replySuffix": "结果",
     "conversation.collaboration.timeline.taskResult": "会话任务结果",
     "conversation.collaboration.timeline.taskResultAcknowledged": "任务回执已送达",
     "conversation.collaboration.timeline.taskResultProjected": "任务回执已加入上下文",

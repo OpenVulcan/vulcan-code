@@ -293,8 +293,13 @@ it("enables session navigation only for a routable participant", async () => {
   await act(async () => button("Target").click());
   expect(onOpenSession).not.toHaveBeenCalled();
   await mount(questionEvent(), { onOpenSession, availableSessionIds: new Set(["session-target"]), subagentNames: names });
+  const toggle = host.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-row-toggle")!;
+  const expandedBeforeNavigation = toggle.getAttribute("aria-expanded");
+  expect(button("Target").textContent).toBe("[Target]");
+  expect(button("Target").querySelector(".lucide-arrow-up-right")).not.toBeNull();
   await act(async () => button("Target").click());
   expect(onOpenSession).toHaveBeenCalledExactlyOnceWith("session-target");
+  expect(toggle.getAttribute("aria-expanded")).toBe(expandedBeforeNavigation);
 });
 
 it.each([false, true])("shows incoming content immediately, folding only excess lines (long: %s)", async (long) => {

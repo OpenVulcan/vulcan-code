@@ -1542,6 +1542,8 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.message.sentSuffix": "session",
     "conversation.collaboration.message.receivedPrefix": "Message received from",
     "conversation.collaboration.message.receivedSuffix": "session",
+    "conversation.collaboration.message.replyPrefix": "Result sent to",
+    "conversation.collaboration.message.replySuffix": "session",
     "conversation.collaboration.timeline.taskResult": "Session task result",
     "conversation.collaboration.timeline.taskResultAcknowledged": "Task receipt delivered",
     "conversation.collaboration.timeline.taskResultProjected": "Task receipt added to context",

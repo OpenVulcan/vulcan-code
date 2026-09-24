@@ -597,6 +597,7 @@
 /* Collaboration messages separate their heading, readable content and navigation footer.
    协作消息将标题、可读正文与导航页脚分层展示。 */
 .conversation-v1-collaboration-card .tool-presentation-summary {
+  position: relative;
   display: flex;
   gap: 8px;
   align-items: center;
@@ -608,7 +609,7 @@
   flex: 1;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 4px 10px;
+  gap: 0;
   min-width: 0;
   text-align: left;
 }
@@ -680,19 +681,22 @@
 }
 
 .conversation-v1-collaboration-session-button {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 0;
   min-width: 0;
   max-width: 100%;
-  padding: 2px 4px;
+  padding: 0;
   border-radius: 4px;
   text-align: left;
 }
 
 .conversation-v1-collaboration-session-button:not(:disabled):hover {
   color: var(--foreground);
-  background: color-mix(in srgb, var(--muted-foreground) 8%, transparent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .conversation-v1-collaboration-session-button:focus-visible {
@@ -738,6 +742,28 @@
 
 .conversation-v1-collaboration-fold[aria-expanded="true"] svg {
   transform: rotate(180deg);
+}
+
+/* Cover the header with a real button; the sibling session link remains above it and navigates independently.
+   使用真实按钮覆盖标题整行；同级会话链接位于其上，独立执行跳转。 */
+.conversation-v1-collaboration-row-toggle {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  justify-content: flex-end;
+  padding-right: 5px;
+  cursor: pointer;
+}
+
+.conversation-v1-collaboration-card:not(.conversation-v1-collaboration-incoming) > .tool-presentation-summary {
+  min-height: 24px;
+  padding-right: 29px;
+}
+
+.conversation-v1-collaboration-row-toggle:hover,
+.conversation-v1-collaboration-row-toggle:focus-visible {
+  background: transparent;
 }
 
 /* Received session messages align with user prompts while retaining collaboration semantics.

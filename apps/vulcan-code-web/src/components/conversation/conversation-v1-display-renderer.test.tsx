@@ -152,7 +152,7 @@ describe("ConversationV1DisplayRenderer", () => {
         }, "host_only")]} />
       </I18nProvider>);
       expect(markup).toContain('data-collaboration-card-kind="task-result"');
-      expect(markup).toContain("会话任务结果");
+      expect(markup.replace(/<[^>]*>/g, "")).toContain("回复[请求会话]结果");
       expect(markup).toContain(outcome === "completed" ? "已完成" : outcome === "stopped" ? "已停止" : "已放弃");
       expect(markup.includes("完整最终结果")).toBe(outcome === "completed");
       expect(markup).not.toContain("user-bubble");
