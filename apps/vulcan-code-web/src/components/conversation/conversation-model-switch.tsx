@@ -1,6 +1,4 @@
-import { Box, CircleHelp } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useI18n } from "@/i18n";
+import { CircleAlert } from "lucide-react";
 import type { ConversationEventSummary } from "@/service/conversation-event-window-store";
 import type { ProviderSummary } from "@/types";
 
@@ -28,32 +26,17 @@ export function modelSwitchRouteLabel(config: RequestConfig, providers: readonly
   return `${providerName} / ${model?.name ?? config.model ?? "—"}`;
 }
 
-// ModelSwitchNotice renders the shared one-line separator and keyboard-accessible hover explanation.
-// ModelSwitchNotice 渲染共享单行分隔提示及支持键盘访问的悬停说明。
+// ModelSwitchNotice renders model and reasoning changes as a non-interactive separator.
+// ModelSwitchNotice 将模型与思考强度变化渲染为不可交互的分隔提示。
 // Parameters: summary is the localized before/after sentence; seq optionally identifies the canonical event.
 // 参数：summary 是本地化前后切换句子；seq 可选地标识规范事件。
 // Returns: a compact notice without account IDs, expandable cards, or detail dialogs.
 // 返回值：不含账号 ID、展开卡片或详情弹窗的紧凑提示。
 export function ModelSwitchNotice(props: { summary: string; seq?: number }) {
-  // t keeps help and explanation aligned with the active interface language.
-  // t 让帮助标签与说明保持当前界面语言。
-  const { t } = useI18n();
   return (
-    <div className="conversation-model-switch" data-event-kind="request_config_changed" data-seq={props.seq}>
-      <Box size={14} aria-hidden="true" />
-      <span className="conversation-model-switch-label" title={props.summary}>{props.summary}</span>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button className="conversation-model-switch-help" type="button" aria-label={t("conversation.modelSwitch.help")}>
-              <CircleHelp size={13} aria-hidden="true" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-center">
-            {t("conversation.modelSwitch.warning")}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+    <div className="conversation-model-switch" role="note" data-event-kind="request_config_changed" data-seq={props.seq}>
+      <CircleAlert size={14} aria-hidden="true" />
+      <span className="conversation-model-switch-label">{props.summary}</span>
     </div>
   );
 }

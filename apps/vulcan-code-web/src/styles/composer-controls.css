@@ -183,6 +183,9 @@
 }
 
 .context-usage-tooltip {
+  /* Share section spacing with usage cards to keep the popover rhythm consistent. */
+  /* 分区与用量卡片共用间距，保持弹层排版节奏一致。 */
+  --context-usage-section-gap: 12px;
   width: min(320px, calc(100vw - 24px));
   max-width: none;
   max-height: min(calc(100dvh - 24px), var(--radix-popover-content-available-height, calc(100dvh - 24px)));
@@ -191,7 +194,7 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 12px;
+  gap: var(--context-usage-section-gap);
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--popover);
@@ -205,8 +208,6 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
 }
 
 .context-usage-window-title {
@@ -400,11 +401,6 @@
   height: 8px;
   flex: 0 0 8px;
   border-radius: 999px;
-}
-
-.context-usage-cache-row {
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
 }
 
 .context-usage-cache-row strong {

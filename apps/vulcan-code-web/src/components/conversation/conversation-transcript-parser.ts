@@ -268,7 +268,7 @@ function localizedRequestConfigChangeAttributes(
     // template explains the same next-request activation boundary used by route selection.
     // template 说明与路由选择相同的下一请求生效边界。
     const template = t?.("conversation.reasoningSwitch.nextProviderRequest")
-      ?? "Reasoning effort changed from {previous} to {current}; the current Provider request remains frozen, and the new effort applies to the next real Provider request.";
+      ?? "Reasoning effort changed from {previous} to {current}; applies to the next request.";
     return {
       title: t?.("conversation.reasoningSwitch.title") ?? "Reasoning effort",
       summary: template

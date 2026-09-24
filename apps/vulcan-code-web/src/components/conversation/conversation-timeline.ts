@@ -4,7 +4,7 @@ import type {
   ConversationTimelineItem,
 } from "@/components/conversation/conversation-model";
 import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
-import { metadataValue } from "@/components/conversation/conversation-metadata";
+import { metadataString, metadataValue } from "@/components/conversation/conversation-metadata";
 import { isSubagentFeedbackMetadata } from "@/components/conversation/conversation-tool-metadata";
 import type { LocaleCode } from "@/i18n";
 import { integrateProcessThinking } from "@/components/conversation/thinking-display";
@@ -214,6 +214,10 @@ function timelineCanStartImplicitProcessTurn(
     || isTurnStatsRenderItem(item)
     || isContextCompactionRenderItem(item)
     || isSubagentFeedbackDisplayRenderItem(item)
+    // Configuration notices describe user settings, never the start of agent work.
+    // 配置提示描述用户设置，绝不能作为代理工作的起点。
+    || item.blocks.some((block) => block.kind === "notice"
+      && ["model_switch", "reasoning_effort_switch"].includes(metadataString(block.rawMetadata, ["notice_kind"]) ?? ""))
     || item.blocks.some((block) => block.kind === "agent-interaction")
   ) {
     return false;

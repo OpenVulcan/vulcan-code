@@ -282,6 +282,43 @@ function renderWorkspace(...args: Parameters<typeof workspaceTree>): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  // Parameters: current selects the changed setting; returns no value after checking restored history.
+  // 参数：current 选择变化的设置；验证恢复后的历史后无返回值。
+  it.each([
+    { model: "model-b", thinking_level: "max" },
+    { model: "model-a", thinking_level: "high" },
+  ])("keeps setting changes outside work groups after a completed turn: %j", (current) => {
+    // events retains a real completed turn so the regression exercises the terminal-to-notice boundary.
+    // events 保留真实已完成回合，使回归覆盖终态到提示的边界。
+    const events = completeTurnEvents();
+    // nextSeq derives the following identity from the fixture instead of binding to an evolving position.
+    // nextSeq 从夹具派生后续身份，不绑定会演进的位置。
+    const nextSeq = Math.max(...events.map((event) => event.seq)) + 1;
+    // changes repeat the same category so no later notice can restart a phantom work group.
+    // changes 重复同类变化，确保后续提示也不会重新创建虚假的工作分组。
+    const changes: ConversationEventSummary[] = [nextSeq, nextSeq + 1].map((seq) => ({
+      ...eventSummary(seq, {
+        kind: "request_config_changed",
+        previous: { provider: "provider-a", model: "model-a", thinking_level: "max" },
+        current: { provider: "provider-a", ...current },
+      }, "ui_only"),
+      turn_id: null,
+    }));
+    // baseline and rendered isolate the extra notices while preserving genuine completed work.
+    // baseline 与 rendered 隔离新增提示，同时保留真实已完成工作。
+    const baseline = document.createElement("div");
+    baseline.innerHTML = renderWorkspace(events);
+    const rendered = document.createElement("div");
+    rendered.innerHTML = renderWorkspace([...events, ...changes]);
+    expect(rendered.querySelectorAll(".work-process-group").length).toBe(baseline.querySelectorAll(".work-process-group").length);
+    expect(rendered.querySelectorAll('[data-event-kind="request_config_changed"]')).toHaveLength(changes.length);
+    for (const notice of rendered.querySelectorAll('[data-event-kind="request_config_changed"]')) {
+      expect(notice.closest(".work-process-group")).toBeNull();
+      expect(notice.querySelector("button, [aria-expanded]")).toBeNull();
+      expect(notice.textContent).toContain(current.model === "model-b" ? "model-b" : "high");
+    }
+  });
+
   it("disables historical question actions once a later authoritative snapshot settles the question", () => {
     // created is the old pending snapshot retained as immutable history.
     // created 是作为不可变历史保留的旧待处理快照。

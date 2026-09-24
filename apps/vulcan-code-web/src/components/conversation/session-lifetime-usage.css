@@ -1,32 +1,36 @@
 /* Give context and lifetime sections one responsive scroll surface with existing theme tokens. */
 /* 使用现有主题变量，为上下文与累计分区提供同一个响应式滚动容器。 */
 .context-usage-tooltip.context-usage-popover {
+  --context-usage-section-gap: 10px;
   width: min(360px, calc(100vw - 24px));
   padding: 16px;
-  gap: 14px;
 }
 
-/* Separate accounting scopes without introducing nested cards or scrollbars. */
-/* 使用分隔线区分核算范围，不增加嵌套卡片或滚动条。 */
+/* Separate accounting scopes with compact cards and one shared spacing value. */
+/* 使用紧凑卡片区分核算范围，并共用同一间距值。 */
 .session-lifetime-usage {
   display: grid;
-  gap: 14px;
+  gap: var(--context-usage-section-gap);
 }
 
 .lifetime-usage-section {
-  display: grid;
-  gap: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
+  /* Native summary inheritance does not preserve the card radius; both surfaces use this explicit value. */
+  /* 原生 summary 的继承未保留卡片圆角；两层表面共用此显式取值。 */
+  --lifetime-usage-card-radius: 8px;
+  background: color-mix(in srgb, var(--muted) 45%, var(--popover));
+  border-radius: var(--lifetime-usage-card-radius);
   color: var(--popover-foreground);
 }
 
 .lifetime-usage-heading {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 6px 12px;
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--lifetime-usage-card-radius);
+  padding: 8px 10px;
 }
 
 .lifetime-usage-heading strong {
@@ -34,7 +38,6 @@
   font-weight: 600;
 }
 
-.lifetime-usage-heading span,
 .lifetime-usage-total span,
 .lifetime-usage-note {
   color: var(--muted-foreground);
@@ -45,24 +48,57 @@
 .lifetime-usage-total {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
+/* Reflect native disclosure state on the right-hand marker without adding a second control. */
+/* 右侧标记跟随原生折叠状态，不增加第二个操作入口。 */
+.lifetime-usage-chevron {
+  align-self: center;
+  flex-shrink: 0;
+  margin-left: 2px;
+  color: var(--muted-foreground);
+}
+
+.lifetime-usage-section[open] > .lifetime-usage-heading .lifetime-usage-chevron {
+  transform: rotate(180deg);
+}
+
+/* Share the heading font size so the total always stays aligned with its section title. */
+/* 共用标题字号，使累计数值始终与分区标题保持一致。 */
 .lifetime-usage-total strong {
-  font-size: 22px;
   line-height: 1.2;
   font-weight: 600;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
 }
 
-/* Align labels and values within each column and let long labels wrap at narrow widths. */
-/* 对齐每列内的标签与数值，窄宽度时允许长标签换行。 */
+/* Place compact category labels beside their two-column metrics without adding extra heading rows. */
+/* 分类标签置于双列指标旁，以紧凑布局避免新增标题行。 */
+.lifetime-usage-metric-group {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.lifetime-usage-group-title {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+/* Keep values aligned while allowing longer translated labels to wrap inside their columns. */
+/* 保持数值对齐，允许较长的翻译标签在列内换行。 */
 .lifetime-usage-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 18px;
+  gap: 4px 12px;
   margin: 0;
+  line-height: 16px;
 }
 
 .lifetime-usage-metrics > div {
@@ -71,7 +107,7 @@
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 3px 6px;
+  gap: 0 4px;
 }
 
 .lifetime-usage-metrics dt {
@@ -86,51 +122,26 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Keep the disclosure quiet at rest while preserving a full-width keyboard and pointer target. */
-/* 折叠控件默认保持浅淡，同时保留整行键盘及指针操作区域。 */
-.lifetime-usage-details summary {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-height: 24px;
-  cursor: pointer;
-  color: var(--muted-foreground);
-  background: transparent;
-  border-radius: 6px;
-  list-style: none;
-}
-
-.lifetime-usage-details summary::-webkit-details-marker {
+/* The title row owns the only disclosure control; all statistics expand together. */
+/* 标题行是唯一折叠入口，所有统计同步展开。 */
+.lifetime-usage-heading::-webkit-details-marker {
   display: none;
 }
 
-.lifetime-usage-details summary svg {
-  opacity: 0.45;
+.lifetime-usage-heading:hover,
+.lifetime-usage-heading:focus-visible {
+  background: color-mix(in srgb, var(--muted) 70%, var(--popover));
 }
 
-.lifetime-usage-details summary:hover,
-.lifetime-usage-details summary:focus-visible {
-  background: var(--accent);
-  color: var(--popover-foreground);
-}
-
-.lifetime-usage-details summary:hover svg,
-.lifetime-usage-details summary:focus-visible svg {
-  opacity: 1;
-}
-
-.lifetime-usage-details[open] summary svg {
-  transform: rotate(180deg);
-}
-
-.lifetime-usage-details summary:focus-visible {
+.lifetime-usage-heading:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
 
-.lifetime-usage-details[open] .lifetime-usage-metrics {
-  margin-top: 12px;
+.lifetime-usage-content {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
 }
 
 .lifetime-usage-note {

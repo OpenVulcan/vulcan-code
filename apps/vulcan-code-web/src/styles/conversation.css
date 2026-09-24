@@ -1,5 +1,5 @@
-/* Model changes share a single muted separator row; long labels stay on one line.
- * 模型切换共用单条弱化分隔行；长标签始终保持单行。 */
+/* Configuration changes share a muted separator; long labels wrap without hiding the change.
+ * 配置变化共用弱化分隔行；长标签换行显示，不隐藏变化内容。 */
 .conversation-model-switch {
   display: flex;
   align-items: center;
@@ -21,21 +21,12 @@
 
 .conversation-model-switch-label {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
-.conversation-model-switch > svg,
-.conversation-model-switch-help {
+.conversation-model-switch > svg {
   flex-shrink: 0;
-}
-
-.conversation-model-switch-help {
-  display: inline-flex;
-  padding: 2px;
-  color: inherit;
-  cursor: help;
 }
 
 .conversation-panel {

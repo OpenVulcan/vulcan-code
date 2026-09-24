@@ -728,14 +728,12 @@ function RequestConfigChangedEventView(props: { item: RequestConfigChangedDispla
   // currentLabel 仅从持久化的当前请求配置派生。
   const currentLabel = props.item.request_config_changed.current.thinking_level ?? "—";
   return (
-    <section
-      className="conversation-v1-event conversation-v1-request-config"
-      data-event-kind="request_config_changed"
-      data-seq={props.item.seq}
-    >
-      <strong>{t("conversation.reasoningSwitch.title")}</strong>
-      <span>{previousLabel} → {currentLabel}</span>
-    </section>
+    <ModelSwitchNotice
+      summary={t("conversation.reasoningSwitch.nextProviderRequest")
+        .replaceAll("{previous}", previousLabel)
+        .replaceAll("{current}", currentLabel)}
+      seq={props.item.seq}
+    />
   );
 }
 

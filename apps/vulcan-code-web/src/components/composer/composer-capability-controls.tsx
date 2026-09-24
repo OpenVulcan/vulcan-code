@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   LoaderCircle,
   LockKeyhole,
+  RotateCw,
   SlidersHorizontal,
   ChevronDown,
 } from "lucide-react";
@@ -227,7 +228,7 @@ export function ContextUsageOrb(props: {
           <span>{formatContextUsageTotal(snapshot, locale)}</span>
         </div>
         <ContextUsageProgressBar breakdown={breakdown} usageBasisPoints={usageBasisPoints} />
-        {detailVisible ? (
+        {detailVisible || snapshot.cacheHitBasisPoints != null ? (
           <div className="context-usage-breakdown">
             {breakdown.map((item) => (
               <div className="context-usage-breakdown-row" key={item.kind}>
@@ -238,17 +239,17 @@ export function ContextUsageOrb(props: {
                 <span>{formatBasisPoints(item.basisPoints)}</span>
               </div>
             ))}
+            {snapshot.cacheHitBasisPoints != null ? <div className="context-usage-cache-row">
+              <span className="context-usage-breakdown-label">
+                <RotateCw className="context-usage-dot" aria-hidden="true" />
+                {t("composer.contextUsage.cacheHitRate")}
+              </span>
+              <strong>{formatBasisPoints(snapshot.cacheHitBasisPoints)}</strong>
+            </div> : null}
           </div>
         ) : null}
-        {snapshot.cacheHitBasisPoints != null ? <div className="context-usage-cache-row">
-          <span>{t("composer.contextUsage.cacheHitRate")}</span>
-          <strong>
-            {formatBasisPoints(snapshot.cacheHitBasisPoints)}
-          </strong>
-        </div> : null}
         <SessionLifetimeUsagePanel usage={providerUsage?.lifetime} error={providerUsage?.lifetimeError} />
         <div className="context-usage-window-section">
-          <span className="context-usage-window-title">{t("composer.contextWindow.title")}</span>
           <SegmentedControl
             aria-label={t("composer.contextWindow.title")}
             className="context-usage-window-switch"

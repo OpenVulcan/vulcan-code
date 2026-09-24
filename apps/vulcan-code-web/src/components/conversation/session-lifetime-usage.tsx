@@ -14,10 +14,10 @@ export function lifetimeTotal(value: UsageMeasurement, requests: number): string
   return `${value.samples < requests ? "≥ " : ""}${value.sum.toLocaleString()}`;
 }
 
-/** Renders one own-session aggregate with averages derived from matched samples.
- * 展示一份会话自身累计，均值由匹配样本计算。
- * Props contain a title and an optional measured bucket; returns a metric section.
- * 属性包含标题与可选实测桶；返回统计区块。 */
+/** Renders a collapsed aggregate row whose heading toggles all measured statistics.
+ * 展示默认收起的累计行，点击标题行切换全部实测统计。
+ * Props contain a title and an optional measured bucket; returns a native disclosure section.
+ * 属性包含标题与可选实测桶；返回原生折叠统计区块。 */
 export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsageBucket }) {
   // Locale controls labels only; the backend owns every counter.
   // 语言仅控制文案；所有计数由后端持有。
@@ -33,56 +33,65 @@ export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsag
   // 保留部分上报累计的明确标记，但不让零值及未上报维度占据界面。
   const tokenValue = (value: UsageMeasurement): string | null => value.samples > 0 && value.sum > 0
     ? lifetimeTotal(value, bucket.requestCount) : null;
-  const primaryRows: Array<[string, string | null]> = [
+  // Group counters separately from token measurements and timing to keep related facts adjacent.
+  // 将调用次数、Token 测量和性能分别归类，让相关指标保持相邻。
+  const callRows: Array<[string, string | null]> = [
+    [zh ? "请求" : "Requests", bucket.requestCount > 0 ? bucket.requestCount.toLocaleString() : null],
+    [zh ? "工具调用" : "Tool calls", bucket.toolCallCount > 0 ? bucket.toolCallCount.toLocaleString() : null],
+  ];
+  // Token rows retain the original measurement and missing-value semantics.
+  // Token 分组保留原有测量与缺失值语义。
+  const tokenRows: Array<[string, string | null]> = [
     [zh ? "输入" : "Input", tokenValue(bucket.inputTokens)],
     [zh ? "输出" : "Output", tokenValue(bucket.outputTokens)],
-    [zh ? "平均首 Token" : "Average first token", first],
-    [zh ? "平均速度" : "Average speed", speed],
-  ];
-  // Secondary accounting stays available on demand without competing with context capacity.
-  // 次要核算信息按需展开，不与上下文容量争抢默认空间。
-  const detailRows: Array<[string, string | null]> = [
     [zh ? "未缓存输入" : "Uncached input", tokenValue(bucket.uncachedInputTokens)],
     [zh ? "缓存读取" : "Cache read", tokenValue(bucket.cacheReadTokens)],
     [zh ? "缓存写入" : "Cache write", tokenValue(bucket.cacheWriteTokens)],
     [zh ? "推理" : "Reasoning", tokenValue(bucket.reasoningTokens)],
-    [zh ? "累计请求时长" : "Summed request time", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? `${(bucket.requestDurationMs.sum / 1000).toFixed(1)} s` : null],
-    [zh ? "平均请求时长" : "Average request time", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? `${(bucket.requestDurationMs.sum / bucket.requestDurationMs.samples / 1000).toFixed(3)} s` : null],
-    [zh ? "缓存命中率" : "Cache hit rate", bucket.cacheInputTokens.samples > 0 && bucket.cacheInputTokens.sum > 0 ? `${(bucket.measuredCacheReadTokens * 100 / bucket.cacheInputTokens.sum).toFixed(1)}%` : null],
   ];
-  const total = tokenValue(bucket.totalTokens);
-  return <section className="lifetime-usage-section" aria-label={props.title}>
-    <header className="lifetime-usage-heading">
+  // Timing rows keep latency, speed and request duration in one compact group.
+  // 性能分组集中展示延迟、速度和请求耗时。
+  const timingRows: Array<[string, string | null]> = [
+    [zh ? "平均首 Token" : "Average first token", first],
+    [zh ? "平均速度" : "Average speed", speed],
+    [zh ? "累计耗时" : "Total duration", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? `${(bucket.requestDurationMs.sum / 1000).toFixed(1)} s` : null],
+    [zh ? "平均耗时" : "Average duration", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? `${(bucket.requestDurationMs.sum / bucket.requestDurationMs.samples / 1000).toFixed(3)} s` : null],
+  ];
+  // The persistent heading preserves unknown and partially reported totals while collapsed.
+  // 常驻标题在收起时仍保留未知和部分上报累计的明确标记。
+  const total = lifetimeTotal(bucket.totalTokens, bucket.requestCount);
+  return <details className="lifetime-usage-section" aria-label={props.title}>
+    <summary className="lifetime-usage-heading">
       <strong>{props.title}</strong>
-      <span>{[
-        bucket.requestCount > 0 ? (zh ? `${bucket.requestCount.toLocaleString()} 次请求` : `${bucket.requestCount.toLocaleString()} requests`) : null,
-        bucket.toolCallCount > 0 ? (zh ? `${bucket.toolCallCount.toLocaleString()} 次工具调用` : `${bucket.toolCallCount.toLocaleString()} tool calls`) : null,
-      ].filter(Boolean).join(" · ")}</span>
-    </header>
-    {total ? <div className="lifetime-usage-total"><strong>{total}</strong><span>tokens</span></div> : null}
-    <LifetimeMetricRows rows={primaryRows} />
-    {detailRows.some(([, value]) => value !== null) ? <details className="lifetime-usage-details">
-      <summary aria-label={zh ? "展开或收起更多统计" : "Toggle additional statistics"}>
-        <ChevronDown aria-hidden="true" size={16} strokeWidth={1.5} />
-      </summary>
-      <LifetimeMetricRows rows={detailRows} />
-    </details> : null}
-    {bucket.unknownUsageCount > 0 ? <p className="lifetime-usage-note">{zh ? `${bucket.unknownUsageCount} 次请求未上报用量，累计值不完整` : `${bucket.unknownUsageCount} requests did not report usage; totals are incomplete`}</p> : null}
-  </section>;
+      <span className="lifetime-usage-total">
+        <strong>{total}</strong><span>Tokens</span>
+        <ChevronDown className="lifetime-usage-chevron" aria-hidden="true" size={12} />
+      </span>
+    </summary>
+    <div className="lifetime-usage-content">
+      <LifetimeMetricRows title={zh ? "调用" : "Calls"} rows={callRows} />
+      <LifetimeMetricRows title={zh ? "用量" : "Tokens"} rows={tokenRows} />
+      <LifetimeMetricRows title={zh ? "性能" : "Timing"} rows={timingRows} />
+      {bucket.unknownUsageCount > 0 ? <p className="lifetime-usage-note">{zh ? `${bucket.unknownUsageCount} 次请求未上报用量，累计值不完整` : `${bucket.unknownUsageCount} requests did not report usage; totals are incomplete`}</p> : null}
+    </div>
+  </details>;
 }
 
 /** Renders only populated metric pairs; null values never create empty grid cells.
  * 仅渲染有内容的指标对，空值不会生成空白网格单元。
- * Rows supply translated labels and optional formatted values; returns no node when all values are absent.
- * 行数据提供翻译文案及可选格式化值，全部缺失时不返回节点。 */
-function LifetimeMetricRows(props: { rows: Array<[string, string | null]> }) {
+ * Title names the group; rows supply translated labels and optional values. Returns no node when all values are absent.
+ * title 为分组名称；rows 提供翻译文案及可选值。全部缺失时不返回节点。 */
+function LifetimeMetricRows(props: { title: string; rows: Array<[string, string | null]> }) {
   // Filter before layout so hidden dimensions cannot leave holes in the grid.
   // 在布局前过滤，避免隐藏维度留下网格空洞。
   const rows = props.rows.filter((row): row is [string, string] => row[1] !== null);
   if (rows.length === 0) return null;
-  return <dl className="lifetime-usage-metrics">{rows.map(([label, value]) => (
-    <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
-  ))}</dl>;
+  return <section className="lifetime-usage-metric-group" aria-label={props.title}>
+    <strong className="lifetime-usage-group-title">{props.title}</strong>
+    <dl className="lifetime-usage-metrics">{rows.map(([label, value]) => (
+      <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
+    ))}</dl>
+  </section>;
 }
 
 /** Shows separate main and descendant totals in the context usage popover.

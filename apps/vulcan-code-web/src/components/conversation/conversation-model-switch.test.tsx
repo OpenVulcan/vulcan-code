@@ -57,15 +57,32 @@ describe("model switch presentation", () => {
     expect(markup).not.toContain("request_config_changed");
   });
 
-  // Parameters: none. Returns: none; verifies the shared row has only one sentence and an accessible help trigger.
-  // 参数：无。返回值：无；验证共享行仅含一句说明及可访问的帮助触发器。
+  // Parameters: none. Returns: none; verifies the complete sentence has no interactive controls.
+  // 参数：无。返回值：无；验证完整提示句不包含交互控件。
   it("renders a compact separator rather than an expandable detail card", () => {
     // markup uses the same component as both conversation renderers.
     // markup 使用两个会话渲染器共用的同一个组件。
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ModelSwitchNotice summary="模型已从 供应商甲 / 甲模型 切换为 供应商乙 / 乙模型。" /></I18nProvider>);
     expect(markup).toContain("conversation-model-switch-label");
-    expect(markup).toContain('aria-label="模型切换说明"');
+    expect(markup).toContain('role="note"');
+    expect(markup).not.toContain("<button");
     expect(markup).not.toContain("special-block");
     expect(markup).not.toContain("aria-expanded");
+  });
+
+  // Parameters: none. Returns: none; verifies thinking changes use the same static row in the event renderer.
+  // 参数：无。返回值：无；验证事件渲染器中的思考变化也使用同一静态提示行。
+  it("renders thinking changes without a card or work header", () => {
+    // markup exercises the typed event path, including localized before/after values.
+    // markup 验证类型化事件路径，包括本地化的前后取值。
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={[{
+      seq: 1, turn_id: null, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
+      event: { kind: "request_config_changed", previous: { ...route, thinking_level: "max" }, current: { ...route, thinking_level: "high" } },
+    }]} /></I18nProvider>);
+    expect(markup).toContain("思考强度已从 max 调整为 high，下次请求生效。");
+    expect(markup).toContain("conversation-model-switch-label");
+    expect(markup).not.toContain("<button");
+    expect(markup).not.toContain("work-process");
+    expect(markup).not.toContain("conversation-v1-request-config");
   });
 });

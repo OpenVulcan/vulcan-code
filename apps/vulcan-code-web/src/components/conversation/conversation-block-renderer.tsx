@@ -303,7 +303,8 @@ function SpecialConversationBlock(props: {
 
   // The V1 adapter preserves before/after labels in this exact notice category.
   // V1 适配器在此精确提示类别中保留前后显示标签。
-  if (props.block.kind === "notice" && metadataString(props.block.rawMetadata, ["notice_kind"]) === "model_switch") {
+  if (props.block.kind === "notice"
+    && ["model_switch", "reasoning_effort_switch"].includes(metadataString(props.block.rawMetadata, ["notice_kind"]) ?? "")) {
     return <ModelSwitchNotice summary={props.block.summary} />;
   }
   if (props.block.kind === "notice" && metadataString(props.block.rawMetadata, ["notice_kind"]) === "goal_status") {

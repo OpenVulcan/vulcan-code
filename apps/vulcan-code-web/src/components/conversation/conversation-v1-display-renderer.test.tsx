@@ -910,8 +910,8 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup).not.toContain("回合结束");
     expect(markup).toContain("Connection restored");
     expect(markup).toContain("模型已从 openai / gpt-v1 切换为 openai / gpt-v2。");
-    expect(markup).toContain("conversation-model-switch-help");
-    expect(markup).toContain("<strong>思考强度</strong><span>high → max</span>");
+    expect(markup).not.toContain("conversation-model-switch-help");
+    expect(markup).toContain("思考强度已从 high 调整为 max，下次请求生效。");
   });
 
   it("rejects a missing HostOnly sequence instead of inventing display continuity", () => {
