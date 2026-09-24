@@ -40,7 +40,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 isolate z-50 bg-(--vcn-overlay) duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 isolate z-50 bg-(--vcn-overlay) supports-[backdrop-filter]:backdrop-blur-(--vcn-overlay-blur) duration-(--vcn-duration-base) ease-(--vcn-ease-out) data-closed:duration-(--vcn-duration-fast) data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}
@@ -114,7 +114,7 @@ function DialogContent({
         data-scroll-mode={scrollMode}
         data-size={size}
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid min-w-0 w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-popover text-sm text-popover-foreground ring-1 ring-border shadow-(--vcn-shadow-floating) duration-100 outline-none data-[layout=document]:gap-0 data-[layout=document]:p-0 data-[layout=form]:gap-4 data-[layout=form]:p-4 data-[layout=viewer]:gap-0 data-[layout=viewer]:p-0 data-[scroll-mode=body-scroll]:max-h-[calc(100dvh-2rem)] data-[scroll-mode=body-scroll]:overflow-y-auto data-[scroll-mode=content-scroll]:max-h-[calc(100dvh-2rem)] data-[scroll-mode=content-scroll]:overflow-hidden data-[scroll-mode=fixed-footer]:max-h-[calc(100dvh-2rem)] data-[scroll-mode=fixed-footer]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid min-w-0 w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-popover text-sm text-popover-foreground ring-1 ring-border shadow-(--vcn-shadow-modal) duration-(--vcn-duration-base) ease-(--vcn-ease-out) data-closed:duration-(--vcn-duration-fast) data-closed:ease-(--vcn-ease-in) outline-none data-[layout=document]:gap-0 data-[layout=document]:p-0 data-[layout=form]:gap-4 data-[layout=form]:p-4 data-[layout=viewer]:gap-0 data-[layout=viewer]:p-0 data-[scroll-mode=body-scroll]:max-h-[calc(100dvh-2rem)] data-[scroll-mode=body-scroll]:overflow-y-auto data-[scroll-mode=content-scroll]:max-h-[calc(100dvh-2rem)] data-[scroll-mode=content-scroll]:overflow-hidden data-[scroll-mode=fixed-footer]:max-h-[calc(100dvh-2rem)] data-[scroll-mode=fixed-footer]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           dialogContentSizeClassNames[size],
           "[overflow-wrap:anywhere]",
           className

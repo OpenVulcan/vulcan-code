@@ -65,8 +65,7 @@
 .collapsed-project-flyout-item.active:hover,
 .collapsed-project-flyout-item.active:focus-visible,
 .context-dynamic-tabs-menu-item.active,
-.workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]),
-.project-settings-nav-button.active {
+.workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
   border-color: transparent;
   background: var(--vcn-selected-wash), var(--vcn-selected-surface-fill);
   box-shadow: inset 0 0 0 1px var(--vcn-selected-ring), var(--vcn-selected-lift);
@@ -75,6 +74,15 @@
 .workspace-directory-layout[data-navigation-mode="column"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]),
 .project-settings-nav-button.active {
   font-weight: 600;
+}
+/* Inside a dialog the section nav is secondary chrome: a raised neutral tile plus the ember icon is enough. */
+/* 对话框内的分区导航属于次要界面：浮起的中性底块加余烬色图标即可。 */
+.project-settings-nav-button.active,
+.project-settings-nav-button.active:hover {
+  border-color: transparent;
+  background: var(--vcn-control-on);
+  box-shadow: var(--vcn-shadow-control-on);
+  color: var(--foreground);
 }
 .collapsed-project-flyout-item.active svg,
 .context-dynamic-tabs-menu-item.active svg,

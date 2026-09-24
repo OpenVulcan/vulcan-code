@@ -250,6 +250,10 @@ export function ContextUsageOrb(props: {
         ) : null}
         <SessionLifetimeUsagePanel usage={providerUsage?.lifetime} error={providerUsage?.lifetimeError} />
         <div className="context-usage-window-section">
+          <div className="context-usage-window-title">
+            {t("composer.contextWindow.title")}
+            <span>{selectedNode ? (locale === "zh-CN" ? "本会话已锁定" : "Locked for this session") : (locale === "zh-CN" ? "跟随模型" : "Follows the model")}</span>
+          </div>
           <SegmentedControl
             aria-label={t("composer.contextWindow.title")}
             className="context-usage-window-switch"

@@ -118,19 +118,19 @@ export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
 export function CredentialUsageOverviewView(props: CredentialUsageOverviewViewProps) {
   return (
     <>
-      <div className="grid grid-cols-2 gap-2 border-t pt-1.5" data-slot="credential-usage-summary">
-        <div className="min-w-0">
+      <div className="grid grid-cols-2 gap-2" data-slot="credential-usage-summary">
+        <div className="min-w-0 rounded-md bg-(--vcn-fill-subtle) px-2.5 py-2">
           <p className="text-[11px] text-muted-foreground">{props.model.planLabel}</p>
           <p className="mt-0.5 break-words text-sm font-medium">{props.model.planValue}</p>
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 rounded-md bg-(--vcn-fill-subtle) px-2.5 py-2">
           <p className="text-[11px] text-muted-foreground">{props.model.balanceLabel}</p>
-          <p className="mt-0.5 break-words text-sm font-medium">{props.model.balanceValue}</p>
+          <p className="mt-0.5 break-words text-sm font-medium tabular-nums">{props.model.balanceValue}</p>
         </div>
       </div>
       {props.showQuotaSection ? (
-        <div className="flex min-h-0 flex-1 flex-col border-t" data-slot="credential-usage">
-          <div className="flex min-h-16 flex-1 items-center justify-center" data-slot="credential-usage-content">
+        <div className="flex min-h-0 flex-1 flex-col rounded-md bg-(--vcn-fill-subtle) px-2.5 py-2" data-slot="credential-usage">
+          <div className="flex min-h-12 flex-1 items-center justify-center" data-slot="credential-usage-content">
             {props.quotaContent}
           </div>
         </div>
@@ -424,7 +424,7 @@ function TavilyUsageSummary(props: {
           aria-valuemax={100}
           aria-valuemin={0}
           aria-valuenow={Math.round(percentage)}
-          className="h-1.5 overflow-hidden rounded-full bg-muted"
+          className="h-1.5 overflow-hidden rounded-full bg-(--vcn-fill-active)"
           role="progressbar"
         >
           <div
@@ -539,7 +539,7 @@ function UsageWindowMetric(props: {
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={percentage}
-        className="h-1.5 overflow-hidden rounded-full bg-muted"
+        className="h-1.5 overflow-hidden rounded-full bg-(--vcn-fill-active)"
         role="progressbar"
       >
         <div

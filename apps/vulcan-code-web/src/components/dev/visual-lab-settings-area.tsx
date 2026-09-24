@@ -3,6 +3,7 @@ import { Palette, Sparkles } from "lucide-react"
 import { useRef, useState, type CSSProperties, type ReactNode, type MouseEvent, type KeyboardEvent } from "react"
 
 import { UsagePanel, type UsagePanelViewModel } from "@/components/product/usage"
+import { VisualLanguageShowcase } from "@/components/dev/visual-language-showcase"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -207,10 +208,11 @@ export function VisualLabSettingsArea() {
   const text = (zh: string, en: string) => visualLabText(locale, zh, en)
   // Category navigation is local to the lab and never changes product configuration.
   // 分类导航仅作用于实验室，不修改产品配置。
-  const [activeCategory, setActiveCategory] = useState("surfaces")
+  const [activeCategory, setActiveCategory] = useState("language")
   // Each existing component family owns one localized directory entry.
   // 每个现有组件分组对应一个本地化目录入口。
   const categories = [
+    { id: "language", label: text("视觉语言", "Visual language") },
     { id: "surfaces", label: text("语义表面", "Semantic surfaces") },
     { id: "actions", label: text("按钮与状态", "Actions and status") },
     { id: "forms", label: text("表单控件", "Form controls") },
@@ -326,6 +328,14 @@ export function VisualLabSettingsArea() {
       </header>
 
       <div className="visual-lab-grid">
+        <VisualLabSection
+          description={text("层级、动效、材质与圆角的统一规则。所有组件都从这些变量取值，不在页面里各自定义。", "One set of rules for elevation, motion, materials and radius. Every component reads these tokens instead of defining its own.")}
+          hidden={activeCategory !== "language"}
+          title={text("视觉语言", "Visual language")}
+        >
+          <VisualLanguageShowcase text={text} />
+        </VisualLabSection>
+
         <VisualLabSection
           description={text("页面、面板、浮层、弱背景和工具栏的基础层级。", "Base hierarchy for pages, panels, floating surfaces, subtle regions, and toolbars.")}
           hidden={activeCategory !== "surfaces"}

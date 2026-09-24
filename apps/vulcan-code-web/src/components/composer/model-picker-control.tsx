@@ -617,7 +617,7 @@ export function ModelAccountPickerControl(props: {
                       onClick={() => void refreshAccountUsage()}
                       size="icon-sm"
                       type="button"
-                      variant="outline"
+                      variant="ghost"
                     >
                       <RefreshCw className={`size-4 ${usageRefreshing ? "animate-spin" : ""}`} />
                     </Button>
@@ -628,9 +628,9 @@ export function ModelAccountPickerControl(props: {
             </div>
           </CardHeader>
           <CardContent className="mt-3 flex flex-col gap-3">
-            <div className="border-t pt-3 text-xs">
-              <p className="text-muted-foreground">{t("composer.accountCard.protocolType")}</p>
-              <p className="mt-0.5 truncate font-medium">
+            <div className="flex items-center justify-between gap-3 border-t pt-3 text-xs">
+              <p className="shrink-0 text-muted-foreground">{t("composer.accountCard.protocolType")}</p>
+              <p className="min-w-0 truncate font-medium">
                 {effectiveProtocolId ? modelAccountProtocolDisplayName(effectiveProtocolId) : "—"}
               </p>
             </div>

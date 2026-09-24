@@ -1471,7 +1471,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         </React.Suspense>
       </WorkspaceDirectoryLayout>
     ),
-    detail: agentSkillsCatalogSummary(props.workbench.agentSkills, t),
+    detail: agentSkillsCatalogSummary(props.workbench.agentSkills, locale),
     headerActions: null,
     title: t("area.agentSkills"),
   } : props.mainView === "agents" ? {

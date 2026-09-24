@@ -5,22 +5,22 @@ export type FloatingContentWidth = "trigger" | "content" | "sm" | "md" | "lg"
 // FLOATING_SURFACE_CLASS_NAME provides one visual surface for every lightweight overlay.
 // FLOATING_SURFACE_CLASS_NAME 为所有轻量浮层提供统一的视觉表面。
 export const FLOATING_SURFACE_CLASS_NAME =
-  "rounded-lg bg-popover text-popover-foreground shadow-(--vcn-shadow-floating) ring-1 ring-border max-w-[calc(100vw-1rem)] outline-hidden"
+  "rounded-lg bg-popover supports-[backdrop-filter]:bg-(--vcn-surface-glass) supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150 text-popover-foreground shadow-(--vcn-shadow-floating) ring-1 ring-border max-w-[calc(100vw-1rem)] outline-hidden"
 
 // FLOATING_MOTION_CLASS_NAME provides shared directional entry and exit motion.
 // FLOATING_MOTION_CLASS_NAME 提供统一的定向进入与退出动效。
 export const FLOATING_MOTION_CLASS_NAME =
-  "duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+  "duration-(--vcn-duration-fast) ease-(--vcn-ease-out) data-closed:duration-(--vcn-duration-instant) data-closed:ease-(--vcn-ease-in) data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
 
 // MENU_ITEM_CLASS_NAME provides one density and interaction language for ordinary menu rows.
 // MENU_ITEM_CLASS_NAME 为普通菜单行提供统一的密度与交互语言。
 export const MENU_ITEM_CLASS_NAME =
-  "relative flex min-w-0 cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-sm [overflow-wrap:anywhere] outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+  "relative flex min-w-0 cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-sm [overflow-wrap:anywhere] outline-hidden select-none focus:bg-(--vcn-fill-hover) focus:text-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 
 // MENU_CHECKABLE_ITEM_CLASS_NAME reserves trailing space for checkbox and radio indicators.
 // MENU_CHECKABLE_ITEM_CLASS_NAME 为复选与单选指示器预留尾部空间。
 export const MENU_CHECKABLE_ITEM_CLASS_NAME =
-  "relative flex min-w-0 cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm [overflow-wrap:anywhere] outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+  "relative flex min-w-0 cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 data-[state=checked]:font-medium text-sm [overflow-wrap:anywhere] outline-hidden select-none focus:bg-(--vcn-fill-hover) focus:text-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 
 // MENU_LABEL_CLASS_NAME provides one hierarchy for non-interactive menu labels.
 // MENU_LABEL_CLASS_NAME 为不可交互的菜单标签提供统一层级。

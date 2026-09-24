@@ -28,11 +28,10 @@
 /* Advanced groups stay mounted inside disclosure cards; embedded editor cards drop their own frame.
  * 高级配置组保留挂载在折叠卡片内；内嵌编辑器卡片去掉自身外框。 */
 .project-vmm-policy { border-top: 1px solid var(--border); padding-top: 16px; }
-.project-vmm-policy-group [data-slot="disclosure-content"] { display: grid; gap: 12px; }
-.project-vmm-policy-group [data-slot="disclosure-content"][data-state="closed"] { display: none; }
-.project-vmm-policy-group [data-slot="disclosure-content"] > [data-slot="card"] { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.project-vmm-policy-group [data-slot="disclosure-content"] > [data-slot="card"] > [data-slot="card-header"],
-.project-vmm-policy-group [data-slot="disclosure-content"] > [data-slot="card"] > [data-slot="card-content"] { padding-inline: 0; }
+.project-vmm-policy-group [data-slot="disclosure-body"] { display: grid; gap: 12px; }
+.project-vmm-policy-group [data-slot="disclosure-body"] > [data-slot="card"] { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.project-vmm-policy-group [data-slot="disclosure-body"] > [data-slot="card"] > [data-slot="card-header"],
+.project-vmm-policy-group [data-slot="disclosure-body"] > [data-slot="card"] > [data-slot="card-content"] { padding-inline: 0; }
 .project-vmm-policy-group [data-slot="card-title"] { display: none; }
 @media (max-width: 600px) {
   .project-vmm-section .project-vmm-form { grid-template-columns: minmax(0, 1fr); }

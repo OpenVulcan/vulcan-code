@@ -1,8 +1,8 @@
 import * as React from "react";
 import { Bot, BrainCircuit, Calendar, Database, FolderPlus, LoaderCircle, Save, Trash2 } from "lucide-react";
-import { StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls";
 import { DisclosureSection } from "@/components/ui/disclosure";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,9 +11,7 @@ import "@/styles/project-vmm.css";
 import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-project-settings-fields";
 import { canonicalProjectPath } from "@/components/features/memory/vmm-identity-project-page";
 import { VmmNativeHostProjectPolicy } from "@/components/features/memory/vmm-native-host-project-policy";
-import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/agent-skills-types";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
 import { runVmmMemoryAction } from "@/service/memory-actions-service";
 import type {
   VmmConfigDraftSummary,
@@ -488,6 +486,15 @@ export function ProjectAgentSkillsSection(props: {
   onSetProjectAgentSkill: (name: string, stateKey: ProjectAgentSkillState) => void;
 }) {
   const { t, locale } = useI18n();
+  // availableCount counts skills that will actually load for this project before any override.
+  // availableCount 统计覆盖前本项目实际会加载的技能数。
+  const availableCount = props.workbench.agentSkills.records.filter((record) => record.effective && record.enabled).length;
+  // overrideCount counts skills this project sets differently from the global default.
+  // overrideCount 统计本项目单独设置、不跟随全局的技能数。
+  const overrideCount = Object.values(props.agentOverrides).filter((value) => projectAgentSkillCurrentState(value) !== "inherit").length;
+  // issueCount surfaces unreadable skill folders only when there are any.
+  // issueCount 仅在存在无法读取的技能目录时提示。
+  const issueCount = props.workbench.agentSkills.errors?.length ?? 0;
   return (
     <div className="project-settings-section">
       <header className="project-settings-heading">
@@ -497,10 +504,11 @@ export function ProjectAgentSkillsSection(props: {
           <span>{t("projectSettings.agentDescription")}</span>
         </div>
       </header>
-      <div className="project-settings-panel compact">
-        <StatusPill status="ready" label={`${props.workbench.agentSkills.records.filter((record) => record.effective && record.enabled).length} ${t("projectSettings.agentTitle")}`} />
-        <p>{agentSkillsCatalogSummary(props.workbench.agentSkills, t)}</p>
-      </div>
+      <p className="project-settings-skill-summary">
+        <strong>{locale === "zh-CN" ? `${availableCount} 个技能可用` : `${availableCount} ${availableCount === 1 ? "skill" : "skills"} available`}</strong>
+        <span>{props.agentLoaded && overrideCount > 0 ? t("projectSettings.agentOverrideCount").replace("{count}", String(overrideCount)) : t("projectSettings.agentInheritsGlobal")}</span>
+        {issueCount > 0 ? <span className="project-settings-skill-summary-issue">{locale === "zh-CN" ? `${issueCount} 个技能目录读取失败，可在全局「技能」设置中查看。` : `${issueCount} skill ${issueCount === 1 ? "folder" : "folders"} could not be read. See global Skills settings.`}</span> : null}
+      </p>
       {props.agentError ? <div role="alert" className="space-y-2 text-sm text-destructive">
         <p>{props.agentError}</p>
         <Button type="button" variant="outline" disabled={props.agentLoading || props.agentBusySkill !== null} onClick={props.onRetry}>{locale === "zh-CN" ? "重新读取项目设置" : "Reload project settings"}</Button>
@@ -516,25 +524,25 @@ export function ProjectAgentSkillsSection(props: {
             {props.workbench.agentSkills.records.filter((skill) => skill.effective).map((skill) => {
             const projectState = projectAgentSkillCurrentState(props.agentOverrides[skill.name]);
             return (
-              <article className="project-settings-skill-row" key={skill.name}>
+              <article className="project-settings-skill-row" data-overridden={projectState === "inherit" ? undefined : "true"} key={skill.name}>
                 <span>
                   <strong>{skill.displayName || skill.name}</strong>
-                  <small>{skill.description || skill.skillFile}</small>
+                  <small title={skill.description || skill.skillFile}>{skill.description || skill.skillFile}</small>
                 </span>
-                <StatusPill status={projectState === "inherit" ? "pending" : "ready"} label={projectAgentSkillStateLabel(skill.enabled, projectState, t)} />
-                <div className="project-settings-segmented" role="group" aria-label={t("projectSettings.agent.projectStateAria").replace("{skill}", skill.displayName || skill.name)}>
+                <SegmentedControl
+                  aria-label={t("projectSettings.agent.projectStateAria").replace("{skill}", skill.displayName || skill.name)}
+                  className="project-settings-segmented"
+                  disabled={props.agentBusySkill !== null}
+                  onValueChange={(value) => props.onSetProjectAgentSkill(skill.name, value as ProjectAgentSkillState)}
+                  title={projectAgentSkillStateLabel(skill.enabled, projectState, t)}
+                  value={projectState}
+                >
                   {(["inherit", "enabled", "disabled"] as ProjectAgentSkillState[]).map((stateKey) => (
-                    <button
-                      className={cn("project-settings-segmented-button", projectState === stateKey && "active")}
-                      disabled={props.agentBusySkill !== null}
-                      key={stateKey}
-                      onClick={() => props.onSetProjectAgentSkill(skill.name, stateKey)}
-                      type="button"
-                    >
+                    <SegmentedControlItem key={stateKey} value={stateKey}>
                       {projectAgentSkillOptionLabel(stateKey, skill.enabled, t)}
-                    </button>
+                    </SegmentedControlItem>
                   ))}
-                </div>
+                </SegmentedControl>
               </article>
             );
           })}

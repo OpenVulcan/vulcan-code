@@ -417,9 +417,17 @@ align-self: center;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--card);
-  box-shadow: none;
+  box-shadow: var(--vcn-shadow-hover);
   overflow: hidden;
   pointer-events: auto;
+  transition: border-color var(--vcn-duration-base) var(--vcn-ease-out), box-shadow var(--vcn-duration-base) var(--vcn-ease-out);
+}
+
+/* The composer is the primary work surface: it floats above the transcript and warms to the brand colour while typing. */
+/* 输入框是主要工作表面：浮于对话记录之上，输入时边缘泛起品牌色。 */
+.composer-panel:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  box-shadow: var(--vcn-shadow-hover), 0 0 0 3px color-mix(in srgb, var(--primary) 9%, transparent);
 }
 
 .composer-panel.attachment-drag-over {

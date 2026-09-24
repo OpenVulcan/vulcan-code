@@ -90,7 +90,16 @@
 .model-picker-content {
   width: 520px;
   max-width: min(520px, calc(100vw - 32px));
-  padding: 10px;
+  padding: 6px;
+}
+
+/* A hairline and a small gap keep the search field visually apart from the first row, so sweeping the pointer
+   down from the field never reads as one continuous block. */
+/* 细分隔线和少量间距让搜索框与第一行明确分开，指针从搜索框向下移动时不会连成一片。 */
+.model-picker-content [data-slot="command-input-wrapper"] {
+  margin-bottom: 4px;
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--vcn-border-subtle);
 }
 
 .model-picker-filter {
@@ -113,8 +122,8 @@
 
 .model-picker-list {
   display: grid;
-  gap: 4px;
-  padding-right: 6px;
+  gap: 1px;
+  padding-right: 4px;
 }
 
 .model-picker-empty {
@@ -129,55 +138,60 @@
 .model-picker-row {
   width: 100%;
   min-width: 0;
-  height: 42px;
+  height: 36px;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 0 10px;
+  gap: 8px;
+  padding: 0 8px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 7px;
   background: transparent;
   color: var(--foreground);
   text-align: left;
   cursor: default;
 }
 
+/* Highlight (pointer or keyboard) is a neutral ink wash; the current choice is carried by the ember check alone. */
+/* 高亮（指针或键盘）使用中性墨色；当前选中项仅由余烬色对勾表达。 */
 .model-picker-row:hover,
 .model-picker-row:focus-visible,
-.model-picker-row.selected {
-  background: var(--accent);
+.model-picker-row[data-selected="true"] {
+  background: var(--vcn-fill-hover);
   outline: none;
 }
 
 .model-picker-group-row {
   width: 100%;
   min-width: 0;
-  min-height: 42px;
+  min-height: 36px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(70px, 140px);
+  grid-template-columns: minmax(0, 1fr) minmax(70px, 180px);
   align-items: center;
   gap: 8px;
-  padding-right: 8px;
-  border-radius: 10px;
+  padding: 0 8px 0 0;
+  border-radius: 7px;
+}
+
+.model-picker-group-row {
+  transition: background-color var(--vcn-duration-instant) var(--vcn-ease-out);
 }
 
 .model-picker-group-row:hover,
-.model-picker-group-row:focus-within,
-.model-picker-group-row.selected {
-  background: var(--accent);
+.model-picker-group-row[data-selected="true"] {
+  background: var(--vcn-fill-hover);
   outline: none;
 }
 
 .model-picker-group-main {
   width: 100%;
   min-width: 0;
-  height: 42px;
+  height: 36px;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, 1fr);
   justify-content: stretch;
-  gap: 10px;
-  padding: 0 10px;
+  gap: 8px;
+  padding: 0 8px;
   background: transparent;
   text-align: left;
 }
@@ -225,7 +239,7 @@
 .model-picker-row-copy {
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .model-picker-row-title {
@@ -233,7 +247,7 @@
   overflow: hidden;
   font-size: 13px;
   font-weight: 600;
-  line-height: 15px;
+  line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -254,7 +268,12 @@
   white-space: nowrap;
 }
 
+.model-picker-group-row.selected .model-picker-row-title {
+  color: var(--primary);
+}
+
 .model-picker-row-id {
+  font-family: var(--font-mono, ui-monospace, monospace);
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;

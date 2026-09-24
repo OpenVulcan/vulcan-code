@@ -16,6 +16,22 @@
   from { opacity: 0; transform: scaleX(0.3); }
   to { opacity: 1; transform: scaleX(1); }
 }
+/* Small confirmations (check marks, badges) pop in with a spring. */
+/* 小型确认元素（勾选、徽标）以回弹方式弹出。 */
+@keyframes vcn-pop-in {
+  from { opacity: 0; transform: scale(0.5); }
+  to { opacity: 1; transform: scale(1); }
+}
+/* Folded content grows to and shrinks from the height Radix measures. */
+/* 折叠内容在 Radix 实测高度与零之间伸缩。 */
+@keyframes vcn-collapsible-down {
+  from { height: 0; opacity: 0; }
+  to { height: var(--radix-collapsible-content-height); opacity: 1; }
+}
+@keyframes vcn-collapsible-up {
+  from { height: var(--radix-collapsible-content-height); opacity: 1; }
+  to { height: 0; opacity: 0; }
+}
 
 /* Sidebar rows: hover tint and the selected tile ease in instead of snapping. */
 /* 侧栏行：悬停底色与选中底块平滑出现，而不是突变。 */
@@ -25,13 +41,23 @@
 
 /* Buttons acknowledge presses with a slight sink. */
 /* 按钮按下时轻微下沉以确认操作。 */
-[data-slot="button"] { transition-property: color, background-color, border-color, box-shadow, opacity, transform; }
+[data-slot="button"] { transition-property: color, background-color, border-color, box-shadow, opacity, filter, transform; }
 [data-slot="button"]:not(:disabled):active { transform: translateY(0.5px) scale(0.985); }
 
 /* Empty states and feature pages fade in so loading swaps do not flash. */
 /* 空状态与功能页淡入，避免加载切换时闪烁。 */
 .settings-empty-state,
 .feature-content > * { animation: vcn-fade-in var(--vcn-duration-base) var(--vcn-ease-out); }
+
+/* Settings pages assemble top-down: header first, then each section a beat later, capped so long pages never feel slow. */
+/* 设置页自上而下依次出现：先标题，再逐个分区稍后进入；设置上限，长页面也不会显得拖沓。 */
+.settings-page-header,
+.settings-page-body > * { animation: vcn-page-enter var(--vcn-duration-slow) var(--vcn-ease-out) both; }
+.settings-page-body > :nth-child(1) { animation-delay: calc(var(--vcn-stagger) * 1); }
+.settings-page-body > :nth-child(2) { animation-delay: calc(var(--vcn-stagger) * 2); }
+.settings-page-body > :nth-child(3) { animation-delay: calc(var(--vcn-stagger) * 3); }
+.settings-page-body > :nth-child(4) { animation-delay: calc(var(--vcn-stagger) * 4); }
+.settings-page-body > :nth-child(n + 5) { animation-delay: calc(var(--vcn-stagger) * 5); }
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -40,6 +66,7 @@
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
+    animation-delay: 0ms !important;
   }
   [data-slot="button"]:not(:disabled):active { transform: none; }
 }

@@ -204,6 +204,14 @@
   white-space: normal;
 }
 
+/* Lifetime totals and the compaction window are separate topics, so each starts below a hairline instead of sitting in a grey card. */
+/* 累计用量与压缩窗口是独立话题，各自以细分隔线开头，而不是放在灰色卡片里。 */
+.context-usage-popover > .session-lifetime-usage,
+.context-usage-popover > .context-usage-window-section {
+  border-top: 1px solid var(--vcn-border-subtle);
+  padding-top: 10px;
+}
+
 .context-usage-window-section {
   display: flex;
   flex-direction: column;
@@ -211,10 +219,20 @@
 }
 
 .context-usage-window-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--popover-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.context-usage-window-title span {
   color: var(--muted-foreground);
   font-size: 11px;
-  font-weight: 500;
-  line-height: 1.25;
+  font-weight: 400;
 }
 
 .context-usage-window-switch {
@@ -222,7 +240,6 @@
   flex-wrap: wrap;
   gap: 2px;
   border-radius: 8px;
-  background: var(--muted);
   padding: 2px;
 }
 
@@ -241,12 +258,6 @@
 
 .context-usage-window-switch [data-slot="segmented-control-item"]:hover:not(:disabled) {
   color: var(--popover-foreground);
-}
-
-.context-usage-window-switch [data-slot="segmented-control-item"][data-state="checked"] {
-  background: var(--accent);
-  color: var(--popover-foreground);
-  box-shadow: none;
 }
 
 .context-usage-window-switch [data-slot="segmented-control-item"]:disabled {
@@ -279,10 +290,10 @@
 
 .context-usage-progress-track {
   position: relative;
-  height: 8px;
+  height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--border);
+  background: var(--vcn-fill-active);
 }
 
 .context-usage-progress-fill {
@@ -370,9 +381,12 @@
   background: color-mix(in srgb, var(--destructive) 42%, transparent);
 }
 
+/* Categories read as a two-column legend so the popover stays short. */
+/* 分类以双列图例呈现，使弹层保持紧凑。 */
 .context-usage-breakdown {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 18px;
 }
 
 .context-usage-breakdown-row,

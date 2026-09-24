@@ -4,6 +4,11 @@ import { Collapsible as CollapsiblePrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+// DISCLOSURE_MOTION_CLASS_NAME animates folded content to and from its measured height; padding lives on an inner wrapper so the height reaches zero cleanly.
+// DISCLOSURE_MOTION_CLASS_NAME 让收起内容在实测高度与零之间过渡；内边距放在内层容器，使高度能干净地收到零。
+const DISCLOSURE_MOTION_CLASS_NAME =
+  "min-w-0 overflow-hidden data-[state=open]:animate-[vcn-collapsible-down_var(--vcn-duration-slow)_var(--vcn-ease-out)] data-[state=closed]:animate-[vcn-collapsible-up_var(--vcn-duration-base)_var(--vcn-ease-in-out)]"
+
 // DisclosureSectionProps describes an optional block of settings that stays folded until the user needs it.
 // DisclosureSectionProps 描述一组在用户需要前保持收起的可选设置。
 export interface DisclosureSectionProps extends Omit<React.ComponentProps<typeof CollapsiblePrimitive.Root>, "title"> {
@@ -30,12 +35,12 @@ export interface DisclosureSectionProps extends Omit<React.ComponentProps<typeof
 export function DisclosureSection({ title, description, meta, keepMounted, className, children, ...props }: DisclosureSectionProps) {
   return (
     <CollapsiblePrimitive.Root
-      className={cn("group/disclosure min-w-0 rounded-lg border border-border bg-card", className)}
+      className={cn("group/disclosure min-w-0 rounded-lg border border-border bg-card shadow-(--vcn-shadow-raised)", className)}
       data-slot="disclosure-section"
       {...props}
     >
       <CollapsiblePrimitive.Trigger
-        className="flex w-full min-w-0 items-center gap-3 rounded-lg px-3.5 py-3 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:ring-1 focus-visible:ring-ring/35 group-data-[state=open]/disclosure:rounded-b-none"
+        className="flex w-full min-w-0 items-center gap-3 rounded-lg px-3.5 py-3 text-left outline-none transition-colors duration-(--vcn-duration-fast) ease-(--vcn-ease-out) hover:bg-muted/50 focus-visible:ring-1 focus-visible:ring-ring/35 group-data-[state=open]/disclosure:rounded-b-none"
         data-slot="disclosure-trigger"
       >
         <span className="grid min-w-0 flex-1 gap-0.5">
@@ -45,15 +50,15 @@ export function DisclosureSection({ title, description, meta, keepMounted, class
         {meta ? <span className="shrink-0 text-xs text-muted-foreground">{meta}</span> : null}
         <ChevronDown
           aria-hidden="true"
-          className="size-4 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]/disclosure:rotate-180"
+          className="size-4 shrink-0 text-muted-foreground transition-transform duration-(--vcn-duration-base) ease-(--vcn-ease-out) group-data-[state=open]/disclosure:rotate-180"
         />
       </CollapsiblePrimitive.Trigger>
       <CollapsiblePrimitive.Content
-        className="min-w-0 border-t border-border px-3.5 py-3.5 data-[state=closed]:hidden data-[state=open]:animate-[vcn-fade-in_var(--vcn-duration-base)_var(--vcn-ease-out)]"
+        className={cn(DISCLOSURE_MOTION_CLASS_NAME, keepMounted && "data-[state=closed]:hidden")}
         data-slot="disclosure-content"
         forceMount={keepMounted ? true : undefined}
       >
-        {children}
+        <div className="min-w-0 border-t border-border px-3.5 py-3.5" data-slot="disclosure-body">{children}</div>
       </CollapsiblePrimitive.Content>
     </CollapsiblePrimitive.Root>
   )
@@ -97,10 +102,10 @@ export function InlineDisclosure({ label, openLabel, keepMounted, className, chi
         data-slot="inline-disclosure-trigger"
       >
         {isOpen && openLabel ? openLabel : label}
-        <ChevronDown aria-hidden="true" className="size-3.5 transition-transform duration-200 group-data-[state=open]/inline-disclosure:rotate-180" />
+        <ChevronDown aria-hidden="true" className="size-3.5 transition-transform duration-(--vcn-duration-base) ease-(--vcn-ease-out) group-data-[state=open]/inline-disclosure:rotate-180" />
       </CollapsiblePrimitive.Trigger>
-      <CollapsiblePrimitive.Content className="min-w-0 pt-2 data-[state=closed]:hidden" data-slot="inline-disclosure-content" forceMount={keepMounted ? true : undefined}>
-        {children}
+      <CollapsiblePrimitive.Content className={cn(DISCLOSURE_MOTION_CLASS_NAME, keepMounted && "data-[state=closed]:hidden")} data-slot="inline-disclosure-content" forceMount={keepMounted ? true : undefined}>
+        <div className="min-w-0 pt-2" data-slot="inline-disclosure-body">{children}</div>
       </CollapsiblePrimitive.Content>
     </CollapsiblePrimitive.Root>
   )

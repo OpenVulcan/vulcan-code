@@ -10,15 +10,13 @@
 /* 使用紧凑卡片区分核算范围，并共用同一间距值。 */
 .session-lifetime-usage {
   display: grid;
-  gap: var(--context-usage-section-gap);
+  gap: 2px;
 }
 
 .lifetime-usage-section {
   /* Native summary inheritance does not preserve the card radius; both surfaces use this explicit value. */
   /* 原生 summary 的继承未保留卡片圆角；两层表面共用此显式取值。 */
-  --lifetime-usage-card-radius: 8px;
-  background: color-mix(in srgb, var(--muted) 45%, var(--popover));
-  border-radius: var(--lifetime-usage-card-radius);
+  --lifetime-usage-card-radius: 7px;
   color: var(--popover-foreground);
 }
 
@@ -29,8 +27,10 @@
   gap: 6px 12px;
   cursor: pointer;
   list-style: none;
+  margin: 0 -8px;
   border-radius: var(--lifetime-usage-card-radius);
-  padding: 8px 10px;
+  padding: 6px 8px;
+  transition: background-color var(--vcn-duration-fast) var(--vcn-ease-out);
 }
 
 .lifetime-usage-heading strong {
@@ -59,6 +59,7 @@
   flex-shrink: 0;
   margin-left: 2px;
   color: var(--muted-foreground);
+  transition: transform var(--vcn-duration-base) var(--vcn-ease-out);
 }
 
 .lifetime-usage-section[open] > .lifetime-usage-heading .lifetime-usage-chevron {
@@ -130,7 +131,7 @@
 
 .lifetime-usage-heading:hover,
 .lifetime-usage-heading:focus-visible {
-  background: color-mix(in srgb, var(--muted) 70%, var(--popover));
+  background: var(--vcn-fill-hover);
 }
 
 .lifetime-usage-heading:focus-visible {
@@ -138,10 +139,15 @@
   outline-offset: 3px;
 }
 
+/* Expanded details sit in a soft well under their heading, so it is clear which total they explain. */
+/* 展开的明细放在标题下方的浅色区域中，清楚表明它解释的是哪一项累计。 */
 .lifetime-usage-content {
   display: grid;
   gap: 8px;
-  padding: 0 10px 10px;
+  margin: 4px 0 6px;
+  border-radius: var(--lifetime-usage-card-radius);
+  background: var(--vcn-fill-subtle);
+  padding: 9px 10px;
 }
 
 .lifetime-usage-note {

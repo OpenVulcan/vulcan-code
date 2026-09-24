@@ -20,6 +20,19 @@
   --error-border: color-mix(in srgb, var(--destructive) 30%, var(--border));
 }
 
+/* Toasts float at the modal elevation with frosted glass where the browser supports it. */
+/* 通知浮于模态层级，浏览器支持时使用磨砂玻璃背景。 */
+[data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] {
+  box-shadow: var(--vcn-shadow-floating);
+}
+@supports (backdrop-filter: blur(1px)) {
+  [data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"][data-type="default"],
+  [data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"]:not([data-type]) {
+    background: var(--vcn-surface-glass);
+    backdrop-filter: blur(16px) saturate(1.5);
+  }
+}
+
 /* Native toast actions, descriptions and focus rings share the application's semantic colors. */
 /* 原生通知操作、说明与焦点环共用应用语义颜色。 */
 [data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] [data-description] {

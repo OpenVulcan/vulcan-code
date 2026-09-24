@@ -140,7 +140,7 @@
 }
 
 .project-settings-nav-button:hover {
-  background: var(--muted);
+  background: var(--vcn-fill-hover);
 }
 
 .project-settings-nav-button.active {
@@ -373,21 +373,66 @@
   opacity: 0.6;
 }
 
+/* One plain-language line replaces the old count card: how many skills load here and whether this project deviates. */
+/* 用一行通俗文字取代旧的计数卡片：此项目会加载多少技能、是否有单独设置。 */
+.project-settings-skill-summary {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.project-settings-skill-summary strong {
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.project-settings-skill-summary-issue {
+  color: var(--vcn-content-warning);
+}
+
+/* Skills sit in one card as a divided list; each row carries only its name, a one-line description and the control. */
+/* 技能放进一张卡片中的分隔列表；每行只保留名称、一行说明和控件。 */
 .project-settings-skill-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: var(--vcn-shadow-raised);
 }
 
 .project-settings-skill-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(300px, 360px);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
   align-items: center;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--card);
+  padding: 11px 0;
+  border-top: 1px solid var(--vcn-border-subtle);
+}
+
+.project-settings-skill-row:first-child {
+  border-top: 0;
+}
+
+/* A small ember dot marks skills this project sets differently from the global default. */
+/* 小余烬色圆点标记本项目单独设置、不跟随全局的技能。 */
+.project-settings-skill-row[data-overridden] strong::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 7px;
+  border-radius: 999px;
+  background: var(--primary);
+  vertical-align: 2px;
 }
 
 .project-settings-skill-row span,
@@ -415,40 +460,14 @@
 }
 
 .project-settings-segmented {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(118px, 1.4fr) minmax(64px, 0.8fr) minmax(64px, 0.8fr);
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--muted);
+  flex-shrink: 0;
 }
 
-.project-settings-segmented-button {
-  min-height: 32px;
-  border: 0;
-  border-right: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted-foreground);
-  padding: 0 9px;
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.project-settings-segmented-button:last-child {
-  border-right: 0;
-}
-
-.project-settings-segmented-button:hover,
-.project-settings-segmented-button.active {
-  background: var(--background);
-  color: var(--foreground);
-}
-
-.project-settings-segmented-button:disabled {
-  opacity: 0.58;
-  cursor: wait;
+@media (max-width: 720px) {
+  .project-settings-skill-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
 }
 
 .project-settings-actions {

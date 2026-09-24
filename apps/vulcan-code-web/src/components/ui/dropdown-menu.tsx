@@ -132,7 +132,7 @@ function DropdownMenuItem({
       data-inset={inset}
       data-variant={variant}
       className={cn(
-        "group/dropdown-menu-item not-data-[variant=destructive]:focus:**:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:*:[svg]:text-destructive",
+        "group/dropdown-menu-item data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:*:[svg]:text-destructive",
         MENU_ITEM_CLASS_NAME,
         className
       )}
@@ -160,14 +160,13 @@ function DropdownMenuCheckboxItem({
       data-inset={inset}
       className={cn(
         MENU_CHECKABLE_ITEM_CLASS_NAME,
-        "focus:**:text-accent-foreground",
         className
       )}
       checked={checked}
       {...props}
     >
       <span
-        className="pointer-events-none absolute right-2 flex items-center justify-center"
+        className="pointer-events-none absolute right-2 flex items-center justify-center text-primary"
         data-slot="dropdown-menu-checkbox-item-indicator"
       >
         <DropdownMenuPrimitive.ItemIndicator className="group/menu-check-indicator">
@@ -205,13 +204,12 @@ function DropdownMenuRadioItem({
       data-inset={inset}
       className={cn(
         MENU_CHECKABLE_ITEM_CLASS_NAME,
-        "focus:**:text-accent-foreground",
         className
       )}
       {...props}
     >
       <span
-        className="pointer-events-none absolute right-2 flex items-center justify-center"
+        className="pointer-events-none absolute right-2 flex items-center justify-center text-primary"
         data-slot="dropdown-menu-radio-item-indicator"
       >
         <DropdownMenuPrimitive.ItemIndicator>
@@ -266,7 +264,7 @@ function DropdownMenuShortcut({
       data-slot="dropdown-menu-shortcut"
       className={cn(
         MENU_SHORTCUT_CLASS_NAME,
-        "group-focus/dropdown-menu-item:text-accent-foreground",
+        "group-focus/dropdown-menu-item:text-foreground",
         className
       )}
       {...props}
@@ -294,7 +292,7 @@ function DropdownMenuSubTrigger({
       data-inset={inset}
       className={cn(
         MENU_ITEM_CLASS_NAME,
-        "not-data-[variant=destructive]:focus:**:text-accent-foreground data-open:bg-accent data-open:text-accent-foreground",
+        "data-open:bg-(--vcn-fill-hover) data-open:text-foreground",
         className
       )}
       {...props}

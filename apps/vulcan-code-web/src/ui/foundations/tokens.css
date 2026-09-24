@@ -35,6 +35,14 @@
   --vcn-duration-fast: 120ms;
   --vcn-duration-base: 180ms;
   --vcn-duration-slow: 240ms;
+  /* Exits are quicker and accelerate away; toggles settle with a slight overshoot; height changes use a symmetric curve. */
+  /* 退出更快并加速离开；开关以轻微回弹落定；高度变化使用对称曲线。 */
+  --vcn-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --vcn-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --vcn-ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --vcn-duration-instant: 80ms;
+  --vcn-duration-slower: 320ms;
+  --vcn-stagger: 32ms;
 }
 
 /* Keeps semantic status contrast readable on dark surfaces. */

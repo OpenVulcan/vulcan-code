@@ -229,7 +229,7 @@ export function AgentSkillsArea(props: {
           <div className="agent-catalog-toolbar-main">
             <div className="agent-catalog-toolbar-heading">
               <h2>{locale.startsWith("zh") ? "技能" : "Skills"}</h2>
-              <p>{agentSkillsCatalogSummary(props.workbench.agentSkills, t)}</p>
+              <p>{agentSkillsCatalogSummary(props.workbench.agentSkills, locale)}</p>
             </div>
             <div className="agent-catalog-toolbar-actions">
               <Button disabled={pageBusy} onClick={() => openEditor(null)}>

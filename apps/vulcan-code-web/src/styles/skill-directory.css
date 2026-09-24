@@ -1414,6 +1414,68 @@
   gap: 5px;
 }
 
+/* Tool dialog: one quiet list divided by hairlines instead of a stack of grey cards; the mode control aligns right. */
+/* 工具对话框：以细分隔线组成的安静列表取代一叠灰色卡片；模式控件右对齐。 */
+.dialog-tool-list {
+  gap: 0;
+}
+
+.dialog-tool-list > .skill-tool-row {
+  gap: 6px;
+  border: 0;
+  border-top: 1px solid var(--vcn-border-subtle);
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 2px;
+}
+
+.dialog-tool-list > .skill-tool-row:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.dialog-tool-list .skill-tool-row-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.dialog-tool-list .skill-tool-row-header > div:first-child {
+  gap: 2px;
+}
+
+.dialog-tool-list .skill-tool-row-header strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dialog-tool-list .skill-tool-row-header > div:first-child span {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.dialog-tool-list .skill-tool-control {
+  justify-items: end;
+}
+
+.dialog-tool-list .skill-tool-description p {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+@media (max-width: 640px) {
+  .dialog-tool-list .skill-tool-row-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dialog-tool-list .skill-tool-control {
+    justify-items: start;
+  }
+}
+
 .skill-sync-status {
   color: var(--muted-foreground);
   font-size: 11px;
@@ -1433,9 +1495,9 @@
 .skill-body-preview {
   max-height: 240px;
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--muted);
+  border: 1px solid var(--vcn-border-subtle);
+  border-radius: 8px;
+  background: var(--vcn-fill-subtle);
   color: var(--foreground);
   padding: 10px;
   font-family: "JetBrains Mono", "Cascadia Code", monospace;

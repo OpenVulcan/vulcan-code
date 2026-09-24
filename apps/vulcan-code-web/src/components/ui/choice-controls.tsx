@@ -77,7 +77,7 @@ export function SegmentedControl({
   return (
     <SegmentedControlContext.Provider value={{ disabled, value }}>
       <RadioGroupPrimitive.Root
-      className={cn("inline-flex w-fit items-center rounded-lg bg-muted p-0.5", className)}
+      className={cn("inline-flex w-fit items-center gap-0.5 rounded-lg bg-(--vcn-control-track) p-0.5", className)}
       data-slot="segmented-control"
       disabled={disabled}
       value={value}
@@ -121,7 +121,7 @@ export function SegmentedControlItem({
   return (
     <RadioGroupPrimitive.Item
       className={cn(
-        "inline-flex h-7 min-w-0 items-center justify-center gap-1 rounded-md px-2.5 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex h-7 min-w-0 items-center justify-center gap-1 rounded-md px-2.5 text-xs font-medium whitespace-nowrap text-muted-foreground transition-[color,background-color,box-shadow] duration-(--vcn-duration-fast) ease-(--vcn-ease-out) hover:text-foreground data-[state=off]:hover:bg-(--vcn-fill-hover) focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35 data-[state=on]:bg-(--vcn-control-on) data-[state=on]:text-foreground data-[state=on]:shadow-(--vcn-shadow-control-on) disabled:pointer-events-none disabled:opacity-50",
         className,
       )}
       data-state={selected ? "on" : "off"}
@@ -179,8 +179,8 @@ export function FilterChip({ className, selected = false, type = "button", ...pr
     <button
       aria-pressed={selected}
       className={cn(
-        "inline-flex h-7 items-center justify-center gap-1 rounded-full border border-border bg-background px-2.5 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35 disabled:pointer-events-none disabled:opacity-50",
-        selected && "border-foreground/15 bg-accent text-accent-foreground",
+        "inline-flex h-7 items-center justify-center gap-1 rounded-full border border-border bg-background px-2.5 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-(--vcn-fill-hover) hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35 disabled:pointer-events-none disabled:opacity-50",
+        selected && "border-[color-mix(in_srgb,var(--primary)_30%,transparent)] bg-(--vcn-fill-selected) text-foreground",
         className,
       )}
       data-selected={selected ? "true" : "false"}

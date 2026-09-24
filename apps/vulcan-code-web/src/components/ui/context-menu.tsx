@@ -81,7 +81,7 @@ function ContextMenuSubTrigger({
       data-slot="context-menu-sub-trigger"
       className={cn(
         MENU_ITEM_CLASS_NAME,
-        "data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+        "data-[state=open]:bg-(--vcn-fill-hover) data-[state=open]:text-foreground",
         className,
       )}
       {...props}
@@ -197,7 +197,7 @@ function ContextMenuCheckboxItem({
       checked={checked}
       {...props}
     >
-      <span className="pointer-events-none absolute right-2 flex items-center justify-center">
+      <span className="pointer-events-none absolute right-2 flex items-center justify-center text-primary">
         <ContextMenuPrimitive.ItemIndicator className="group/menu-check-indicator">
           <CheckIcon className="group-data-[state=indeterminate]/menu-check-indicator:hidden" />
           <MinusIcon className="hidden group-data-[state=indeterminate]/menu-check-indicator:block" />
@@ -228,7 +228,7 @@ function ContextMenuRadioItem({
       )}
       {...props}
     >
-      <span className="pointer-events-none absolute right-2 flex items-center justify-center">
+      <span className="pointer-events-none absolute right-2 flex items-center justify-center text-primary">
         <ContextMenuPrimitive.ItemIndicator>
           <CheckIcon />
         </ContextMenuPrimitive.ItemIndicator>

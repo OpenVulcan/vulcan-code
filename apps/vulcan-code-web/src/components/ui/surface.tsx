@@ -11,10 +11,10 @@ const surfaceVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-card ring-1 ring-border",
+        default: "bg-card shadow-(--vcn-shadow-raised) ring-1 ring-border",
         muted: "bg-muted/45",
         outlined: "border border-border bg-card",
-        interactive: "bg-card ring-1 ring-border transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35",
+        interactive: "bg-card shadow-(--vcn-shadow-raised) ring-1 ring-border transition-[background-color,box-shadow] duration-(--vcn-duration-fast) ease-(--vcn-ease-out) hover:bg-accent/40 hover:shadow-(--vcn-shadow-hover) focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/35",
         selected: "bg-accent/55 ring-1 ring-ring/45",
       },
     },

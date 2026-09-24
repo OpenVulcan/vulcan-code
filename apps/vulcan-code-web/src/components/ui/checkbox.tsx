@@ -23,7 +23,7 @@ function Checkbox({
     >
       <CheckboxPrimitive.Indicator
         data-slot="checkbox-indicator"
-        className="group/checkbox-indicator grid place-content-center text-current transition-none [&>svg]:size-3.5"
+        className="group/checkbox-indicator grid place-content-center text-current transition-none animate-[vcn-pop-in_var(--vcn-duration-base)_var(--vcn-ease-spring)] [&>svg]:size-3.5"
       >
         {/* The primitive supplies the authoritative tri-state even for uncontrolled checkboxes. */}
         {/* 底层组件即使在非受控模式下也提供权威三态。 */}
