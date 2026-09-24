@@ -7,8 +7,7 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationInboundDeliveryRecord, CollaborationInboundNotificationRecord,
     CollaborationNotificationState, CollaborationQuestionRecord,
     CollaborationTaskMessageEffectKind, FailAnswerDeliveryInput, FailDeliveryInput,
-    FailNotificationInput,
-    RecordNotificationProgressInput,
+    FailNotificationInput, RecordNotificationProgressInput,
 };
 
 /// One durable incoming fact ordered by its local acceptance sequence.
@@ -119,7 +118,13 @@ fn pending_projections(
     }
     for (delivery_id, acceptance) in &state.received_task_results {
         if state.run_control == CollaborationRunControl::Running
-            && acceptance.result.acceptance.message.source.turn_id == Some(turn.turn_id)
+            && acceptance
+                .result
+                .acceptance
+                .message
+                .source
+                .turn_id
+                .is_some_and(|source_turn| turn.turn_id >= source_turn)
             && !state.task_result_projections.contains_key(delivery_id)
         {
             pending.push((
@@ -144,6 +149,31 @@ fn pending_projections(
     }
     pending.sort_by_key(|(seq, _)| *seq);
     Ok(pending.into_iter().map(|(_, fact)| fact).collect())
+}
+
+/// Reports actionable inbox readiness through the same selector used for actual context delivery.
+/// 通过实际上下文投递使用的同一选择器报告可处理收件状态。
+/// Does not consume messages; cancellation before the next provider boundary leaves them pending.
+/// 不消费消息；下一供应商边界之前取消会保留待处理消息。
+pub(super) fn inbox_messages(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+) -> Result<Vec<Value>, String> {
+    pending_projections(document)?.into_iter().map(|pending| Ok(match pending {
+        PendingProjection::Question(inbound) => json!({"kind":"question","question_id":inbound.question_id,"session_id":inbound.source.session_id}),
+        PendingProjection::Notification(notification) => json!({"kind":"notification","notification_id":notification.notification_id,"session_id":notification.source.session_id}),
+        PendingProjection::Answer(question) => json!({"kind":"answer","question_id":question.question_id,"session_id":question.target.session_id,"outcome":question.state}),
+        PendingProjection::Steering(acceptance) => json!({"kind":"guidance","delivery_id":acceptance.message.delivery_id,"session_id":acceptance.message.source.session_id}),
+        PendingProjection::TaskResult(acceptance) => json!({"kind":"task_result","delivery_id":acceptance.result.effect.delivery_id,
+            "session_id":acceptance.result.acceptance.message.target.session_id,"outcome":match &acceptance.result.terminal {
+                Some(terminal) => json!(terminal.outcome),
+                None => match &acceptance.result.effect.outcome {
+                    CollaborationTaskMessageEffectKind::Failed { reason: CollaborationDeliveryFailureReason::TargetStopped } => json!("stopped"),
+                    CollaborationTaskMessageEffectKind::Failed { reason: CollaborationDeliveryFailureReason::TargetExecutionLost } => json!("abandoned"),
+                    _ => json!("failed"),
+                },
+            }}),
+        PendingProjection::ChildTaskResult(task) => json!({"kind":"task_result","execution_id":task.execution_id,"session_id":task.child.session_id,"outcome":task.terminal_outcome}),
+    })).collect()
 }
 
 /// Projects accepted collaboration facts immediately before physical API preparation.

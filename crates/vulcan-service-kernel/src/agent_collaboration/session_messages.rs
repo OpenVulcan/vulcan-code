@@ -45,6 +45,9 @@ pub(super) async fn send_session_message(
 ) -> Result<Value, String> {
     let target_id = Uuid::parse_str(&args.session_id)
         .map_err(|error| format!("invalid task message target identity: {error}"))?;
+    // A published source intent remains live until delivery hands off its wakeup owner.
+    // 来源意图发布后保持存活，直到投递交接唤醒所有者。
+    let _dispatch_owner = dispatch_owner::DispatchOwner::acquire(&invocation.state, target_id)?;
     let kind = match args.delivery_mode {
         SessionMessageDeliveryMode::Queue => CollaborationTaskMessageKind::TaskStart,
         SessionMessageDeliveryMode::Interrupt => CollaborationTaskMessageKind::TaskSteer,

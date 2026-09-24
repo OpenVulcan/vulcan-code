@@ -1483,6 +1483,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "conversation.subagent.detail.timeout": "超时时间",
     "conversation.subagent.detail.noAgents": "没有可见智能体。",
     "conversation.subagent.detail.noOpenAgents": "当前无未关闭的智能体。",
+    "conversation.subagent.detail.noPendingWork": "当前没有可等待的工作。",
     "conversation.subagent.enabled": "已启用",
     "conversation.subagent.disabled": "已停用",
     "conversation.subagent.detail.agent": "智能体",

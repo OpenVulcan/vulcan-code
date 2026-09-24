@@ -1483,6 +1483,7 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "conversation.subagent.detail.timeout": "Timeout",
     "conversation.subagent.detail.noAgents": "No visible agent.",
     "conversation.subagent.detail.noOpenAgents": "No open agents.",
+    "conversation.subagent.detail.noPendingWork": "No pending agent work.",
     "conversation.subagent.enabled": "Enabled",
     "conversation.subagent.disabled": "Disabled",
     "conversation.subagent.detail.agent": "Agent",

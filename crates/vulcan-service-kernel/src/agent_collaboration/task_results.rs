@@ -39,8 +39,13 @@ pub(super) async fn project_task_result(
                     }
                     Ok(document.active_turn().is_some_and(|turn| {
                         !turn.closed
-                            && Some(turn.turn_id)
-                                == acceptance.result.acceptance.message.source.turn_id
+                            && acceptance
+                                .result
+                                .acceptance
+                                .message
+                                .source
+                                .turn_id
+                                .is_some_and(|source_turn| turn.turn_id >= source_turn)
                     }) && document.collaboration_run_control()
                         == CollaborationRunControl::Running
                         && !document

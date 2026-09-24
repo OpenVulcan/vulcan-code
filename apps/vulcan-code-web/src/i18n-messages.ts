@@ -1514,6 +1514,7 @@ export type TranslationKey =
   | "conversation.subagent.detail.timeout"
   | "conversation.subagent.detail.noAgents"
   | "conversation.subagent.detail.noOpenAgents"
+  | "conversation.subagent.detail.noPendingWork"
   | "conversation.subagent.enabled"
   | "conversation.subagent.disabled"
   | "conversation.subagent.detail.agent"

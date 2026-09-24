@@ -844,7 +844,7 @@ describe("ToolPresentationCard file access icons", () => {
       </I18nProvider>,
     );
 
-    expect(markup).toContain("等待智能体消息 · 当前无未关闭的智能体。");
+    expect(markup).toContain("等待智能体消息 · 当前没有可等待的工作。");
     expect(markup).not.toContain("等待智能体消息 · 等待中");
   });
 });

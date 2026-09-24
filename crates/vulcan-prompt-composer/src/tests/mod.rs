@@ -364,7 +364,7 @@ fn child_agent_tools_receive_single_level_orchestration_help() {
         "spawn_agent",
         "agent_orchestration_info",
         "send_message",
-        "wait_agent",
+        "wait_agents_result",
         "interrupt_agent",
         "close_agent",
         "list_agents",
@@ -388,7 +388,9 @@ fn child_agent_tools_receive_single_level_orchestration_help() {
     }
     assert!(rendered_help.contains("Only the root conversation may delegate"));
     assert!(rendered_help.contains("child agents cannot create another orchestration level"));
-    assert!(rendered_help.contains("Use this whenever the parent task depends on child feedback"));
+    assert!(rendered_help.contains(
+        "Use the shared inbox to receive agent questions, answers, notifications and task results"
+    ));
     assert!(rendered_help.contains("Use this for diagnostics and status inspection"));
     assert!(rendered_help.contains("Closing is cleanup, not result collection"));
     for description_fragment in [

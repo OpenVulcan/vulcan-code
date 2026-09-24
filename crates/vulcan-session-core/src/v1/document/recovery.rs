@@ -7,6 +7,36 @@ use crate::v1::collaboration::{
 };
 
 impl SessionDocument {
+    /// Abandons the open turn after the host proves that no physical execution or preparation owns it.
+    /// 宿主证明没有物理执行或准备拥有当前开放回合后，将其结算为中断。
+    /// `now_ms` timestamps API cleanup and task results; returns the closure sequence atomically.
+    /// `now_ms` 标记 API 清理和任务结果时间；原子返回闭合序号。
+    /// Unlike a user stop, process loss must retain an abandoned outcome and never fabricate a reply.
+    /// 与用户停止不同，进程丢失必须保留中断结果，绝不伪造回复。
+    pub fn abandon_unowned_execution(&mut self, now_ms: i64) -> Result<Seq, DomainError> {
+        let start_seq = self.require_open_turn()?.start_seq;
+        let started_at_ms = self
+            .events
+            .iter()
+            .find(|event| event.seq == start_seq)
+            .ok_or_else(|| DomainError::reference("unowned_turn_start", start_seq.value()))?
+            .created_at_ms;
+        self.apply_atomic_transition(|document| {
+            if document.active_api().is_some() {
+                document.interrupt_active_api_state(
+                    now_ms,
+                    ApiEndReason::ProcessInterrupted,
+                    false,
+                )?;
+            }
+            document.close_turn(
+                TurnOutcome::Abandoned,
+                now_ms.saturating_sub(started_at_ms).max(0),
+                now_ms,
+            )
+        })
+    }
+
     /// Admits `submission` after the host proves execution is idle under exclusive admission.
     /// 宿主在独占准入下证明执行空闲后，接纳 `submission`。
     /// `now_ms` timestamps the new input; returns its receipt or leaves all old facts unchanged on error.

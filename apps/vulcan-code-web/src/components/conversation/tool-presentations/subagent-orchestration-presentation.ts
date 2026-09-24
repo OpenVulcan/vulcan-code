@@ -87,7 +87,7 @@ export function resolveSubagentOrchestrationPresentation(
     stoppedCount: operationStopsAgents ? stoppedTaskCount(payload) : 0,
     stoppedTaskIds: operationStopsAgents ? stoppedTaskIds(payload) : [],
     target: subagentTarget(args, payload),
-    timedOut: operation === "wait" ? booleanValue(payload?.timed_out ?? payload?.timedOut) : null,
+    timedOut: operation === "wait" ? waitTimedOut(payload) : null,
     noActiveAgents: operation === "wait" ? subagentWaitHasNoActiveAgents(payload) : false,
     interrupted: operation === "wait" ? booleanValue(payload?.interrupted) : null,
     terminalEventReceived: operation === "wait" ? subagentWaitTerminalEventReceived(payload) : false,
@@ -167,7 +167,7 @@ function mergeSubagentPayload(
       ? presentation.target
       : presentation.target ?? stringValue(payload.target),
     timedOut: presentation.operation === "wait"
-      ? booleanValue(payload.timed_out ?? payload.timedOut) ?? presentation.timedOut
+      ? waitTimedOut(payload) ?? presentation.timedOut
       : presentation.timedOut,
     noActiveAgents: presentation.operation === "wait"
       ? subagentWaitHasNoActiveAgents(payload) || presentation.noActiveAgents
@@ -239,7 +239,7 @@ function subagentPayloadMatchesOperation(
     return true;
   }
   if (operation === "wait") {
-    return "message" in payload || "timed_out" in payload || "timedOut" in payload || "interrupted" in payload;
+    return isUnifiedWaitPayload(payload) || "message" in payload || "timed_out" in payload || "timedOut" in payload || "interrupted" in payload;
   }
   if (operation === "agent_orchestration_info" || operation === "list_agents") {
     return Array.isArray(payload.agents);
@@ -296,6 +296,7 @@ function subagentOperation(
   payloadHint: Record<string, unknown> | null,
 ): SubagentOrchestrationPresentation["operation"] | null {
   const normalized = toolName ? normalizeToolName(toolName) : null;
+  if (normalized === "wait_agents_result") return "wait";
   if (normalized === "ask_question" || normalized === "ask_parent") return "collaboration_question";
   if (normalized === "reply_question") return "collaboration_answer";
   if (normalized === "send_session_message") return "collaboration_steer";
@@ -593,6 +594,7 @@ function subagentWaitTerminalEventReceived(
   // 宿主或正文载荷。
   payload: Record<string, unknown> | null,
 ): boolean {
+  if (isUnifiedWaitPayload(payload)) return payload?.status === "messages";
   const terminalEventCount = numberValue(payload?.terminal_event_count ?? payload?.terminalEventCount);
   if (terminalEventCount !== null && terminalEventCount > 0) {
     return true;
@@ -614,11 +616,26 @@ function subagentWaitHasNoActiveAgents(
   // 宿主或正文载荷。
   payload: Record<string, unknown> | null,
 ): boolean {
+  if (isUnifiedWaitPayload(payload)) return payload?.status === "no_pending_work";
   if (booleanValue(payload?.no_active_agents ?? payload?.noActiveAgents) === true) {
     return true;
   }
   return stringValue(payload?.activity_status ?? payload?.activityStatus)?.toLowerCase()
     === "no_active_agents";
+}
+
+// isUnifiedWaitPayload validates the single inbox contract without interpreting question revisions.
+// isUnifiedWaitPayload 校验统一收件契约，不解读问题修订号。
+function isUnifiedWaitPayload(payload: Record<string, unknown> | null): boolean {
+  return payload !== null && Array.isArray(payload.reports)
+    && typeof payload.context_messages_pending === "boolean"
+    && (payload.status === "messages" || payload.status === "timeout" || payload.status === "no_pending_work" || payload.status === "interrupted");
+}
+
+// waitTimedOut reads the declared unified result or the existing native mailbox contract.
+// waitTimedOut 读取已声明统一结果或现有原生邮箱契约。
+function waitTimedOut(payload: Record<string, unknown> | null): boolean | null {
+  return isUnifiedWaitPayload(payload) ? payload?.status === "timeout" : booleanValue(payload?.timed_out ?? payload?.timedOut);
 }
 
 // isCollaborationOperation identifies the exact native collaboration card family.

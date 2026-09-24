@@ -322,6 +322,9 @@ function formatToolRequestBytes(bytes: number): string {
 function buildSubagentToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string | null {
   const toolName = toolExecutionName(blocks);
   const hostKind = firstMetadataString(blocks, ["host_result.kind", "hostResult.kind", "kind"]);
+  if (toolName === "wait_agents_result") {
+    return buildSubagentWaitDetailBody(blocks, t);
+  }
   if (isCollaborationToolName(toolName)) {
     return buildCollaborationToolExecutionDetailBody(blocks);
   }
@@ -494,6 +497,17 @@ function subagentWaitStatusText(
   // 可选翻译辅助函数。
   t?: (key: TranslationKey) => string,
 ): string {
+  // Unified inbox outcomes are host-owned; delivery receipts are not completion signals.
+  // 统一收件结果由宿主拥有，投递回执不是完成信号。
+  if (payload?.status === "messages") {
+    return text(t, "conversation.subagent.detail.waitCompleted", "Agent message received");
+  }
+  if (payload?.status === "no_pending_work") {
+    return text(t, "conversation.subagent.detail.noPendingWork", "No pending agent work");
+  }
+  if (payload?.status === "timeout") {
+    return text(t, "conversation.subagent.detail.waitTimedOut", "Wait timed out");
+  }
   if (timedOut) {
     return text(t, "conversation.subagent.detail.waitTimedOut", "Wait timed out");
   }

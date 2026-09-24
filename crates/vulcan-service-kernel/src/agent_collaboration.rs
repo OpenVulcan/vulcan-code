@@ -5,6 +5,11 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::fmt;
 use std::sync::{Arc, Mutex, Weak};
+
+/// Rechecks physical ownership even when a stop or completion notification was lost.
+/// 即使停止或完成通知丢失，也定期重新检查物理所有权。
+const COLLABORATION_WAIT_RECHECK_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(50);
 use uuid::Uuid;
 use vulcan_agent_runtime::agent_runtime::task_runtime::collaboration_lifecycle::{
     ChildTaskActivationRequest, ChildTaskLifecycleReceipt, ChildTaskReservationRequest,
@@ -18,16 +23,15 @@ use vulcan_agent_runtime::tooling::collaboration::{
 };
 use vulcan_session_core::v1::collaboration::{
     AcceptDeliveryInput, AcknowledgeDeliverySettlementInput, ActivateChildTaskInput,
-    CancelQuestionInput, CollaborationAnswerDeliveryState,
-    CollaborationChildTaskReceipt, CollaborationChildTaskTerminalOutcome,
-    CollaborationDeliveryFailureReason, CollaborationDeliveryId, CollaborationDeliveryReceipt,
-    CollaborationDeliverySettlementReceipt, CollaborationDeliveryState, CollaborationExecutionId,
-    CollaborationExecutionPurpose, CollaborationGrantAction, CollaborationOperationId,
-    CollaborationOperationResult, CollaborationOperationSemantic, CollaborationParticipant,
-    CollaborationQuestionExecutionState, CollaborationQuestionId, CollaborationQuestionState,
-    CollaborationRunControl, CollaborationTargetSettlementState, CreateQuestionInput,
-    RecordDeliveryProgressInput, ReplyQuestionInput,
-    ReserveChildTaskInput, SettleInboundDeliveryInput, TerminalChildTaskInput,
+    CancelQuestionInput, CollaborationAnswerDeliveryState, CollaborationChildTaskReceipt,
+    CollaborationChildTaskTerminalOutcome, CollaborationDeliveryFailureReason,
+    CollaborationDeliveryId, CollaborationDeliveryReceipt, CollaborationDeliverySettlementReceipt,
+    CollaborationDeliveryState, CollaborationExecutionId, CollaborationExecutionPurpose,
+    CollaborationGrantAction, CollaborationOperationId, CollaborationOperationResult,
+    CollaborationOperationSemantic, CollaborationParticipant, CollaborationQuestionExecutionState,
+    CollaborationQuestionId, CollaborationQuestionState, CollaborationRunControl,
+    CollaborationTargetSettlementState, CreateQuestionInput, RecordDeliveryProgressInput,
+    ReplyQuestionInput, ReserveChildTaskInput, SettleInboundDeliveryInput, TerminalChildTaskInput,
 };
 use vulcan_session_core::v1::document::IdempotentMutation;
 use vulcan_session_core::v1::document::TurnOrigin;
@@ -47,8 +51,8 @@ use crate::session_runtime_registry_v1::{
 };
 use crate::state::{ServiceBridgeState, SharedServiceBridgeState};
 
-mod child_compaction;
 mod child_close;
+mod child_compaction;
 pub(crate) use child_close::{close_child_agent_for_parent, release_closed_child_handle};
 mod child_creation;
 pub(crate) mod child_execution_ownership;
@@ -57,6 +61,7 @@ mod child_profile;
 mod child_question_admission;
 mod child_question_launch;
 mod child_question_request;
+pub(crate) mod dispatch_owner;
 #[cfg(test)]
 mod execution_binding_tests;
 mod launch;
@@ -67,6 +72,7 @@ mod notifications;
 mod participants;
 mod projection;
 mod question_failures;
+mod result_wait;
 mod session_messages;
 mod session_wait;
 mod startup_recovery;
@@ -474,6 +480,9 @@ fn participant(
 /// 返回一条类型化命令所要求的稳定工具 ID。
 fn command_tool_id(command: &AgentCollaborationCommand) -> &'static str {
     match command {
+        AgentCollaborationCommand::WaitAgentsResult(_) => {
+            vulcan_agent_runtime::tooling::collaboration::WAIT_AGENTS_RESULT_TOOL_ID
+        }
         AgentCollaborationCommand::AskQuestion(_) => ASK_QUESTION_TOOL_ID,
         AgentCollaborationCommand::AskParent(_) => ASK_PARENT_TOOL_ID,
         AgentCollaborationCommand::ReplyQuestion(_) => REPLY_QUESTION_TOOL_ID,
@@ -2900,8 +2909,10 @@ async fn fail_question_before_target_acceptance(
             // A recovery invocation spans multiple questions, so rejection belongs to the original intent.
             // 恢复调用覆盖多个问题，拒收身份必须归属于原始意图。
             let operation_id = CollaborationOperationId::try_new(format!(
-                "{}:fail", question.operation_id.as_str()
-            )).map_err(|error| format!("invalid question rejection identity: {error}"))?;
+                "{}:fail",
+                question.operation_id.as_str()
+            ))
+            .map_err(|error| format!("invalid question rejection identity: {error}"))?;
             source_for_write
                 .mutate_durable_if_changed(
                     SessionMutationAdmission::ControlPlane,
@@ -2936,6 +2947,10 @@ async fn ask_question(
     target_session_id: Uuid,
     body: String,
 ) -> Result<Value, String> {
+    // Cover intent persistence through wakeup registration, including concurrent source waits.
+    // 覆盖意图持久化至唤醒登记，也保护来源侧并发等待。
+    let _dispatch_owner =
+        dispatch_owner::DispatchOwner::acquire(&invocation.state, target_session_id)?;
     let target =
         resolve_authorized_target(invocation, target_session_id, CollaborationGrantAction::Ask)
             .await?;
@@ -3099,7 +3114,7 @@ async fn ask_question(
         .map_err(|error| format!("failed to read accepted question receipt: {error}"))?;
     let question =
         question.ok_or_else(|| String::from("source question disappeared after acceptance"))?;
-    launch::schedule_question_wakeup(app, invocation, question.question_id.clone());
+    launch::schedule_question_wakeup(app, invocation, question.question_id.clone())?;
     question_value(
         &invocation.operation_id,
         &question,
@@ -3607,7 +3622,7 @@ async fn wait_question(
             );
         }
         let remaining = deadline.saturating_duration_since(now);
-        tokio::time::sleep(remaining.min(std::time::Duration::from_millis(50))).await;
+        tokio::time::sleep(remaining.min(COLLABORATION_WAIT_RECHECK_INTERVAL)).await;
     }
 }
 
@@ -3813,6 +3828,9 @@ impl NativeAgentCollaborationRuntime for SessionV1NativeAgentCollaborationRuntim
         let expected_tool_id = command_tool_id(&command);
         let invocation = self.validate_invocation(&context, expected_tool_id).await?;
         match command {
+            AgentCollaborationCommand::WaitAgentsResult(args) => {
+                result_wait::wait_agents_result(&invocation, args.timeout_ms).await
+            }
             AgentCollaborationCommand::ListSessions(args) => {
                 list_authorized_sessions(&invocation, args.limit, args.cursor).await
             }
@@ -4111,7 +4129,7 @@ impl NativeAgentCollaborationRuntime for SessionV1NativeAgentCollaborationRuntim
             if let Some(value) = incoming_question_snapshot(&invocation).await? {
                 return Ok(value);
             }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(COLLABORATION_WAIT_RECHECK_INTERVAL).await;
         }
     }
 }

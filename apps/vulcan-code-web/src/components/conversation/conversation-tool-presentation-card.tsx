@@ -2347,7 +2347,7 @@ function subagentWaitStatusText(
   t: (key: TranslationKey) => string,
 ): string {
   if (presentation.noActiveAgents) {
-    return t("conversation.subagent.detail.noOpenAgents");
+    return t("conversation.subagent.detail.noPendingWork");
   }
   if (presentation.timedOut) {
     return t("conversation.subagent.detail.waitTimedOut");

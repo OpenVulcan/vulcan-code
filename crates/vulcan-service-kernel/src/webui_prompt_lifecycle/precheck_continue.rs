@@ -1003,8 +1003,12 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
     start: SharedPromptTurnStart,
     expected_kernel_generation: u64,
     run_precheck: bool,
-) {
+) -> Result<(), String> {
     let session_id = start.session_id;
+    // Register before spawning so an accepted task never loses ownership during handoff.
+    // 在生成任务前登记，避免已接纳任务在交接期间丢失所有权。
+    let dispatch_owner =
+        crate::agent_collaboration::dispatch_owner::DispatchOwner::acquire(&state, session_id)?;
     // preparation_turn_id remains available for exact VMM failure cleanup after start moves into continuation.
     // preparation_turn_id 在 start 移入续接流程后仍用于精确的 VMM 失败清理。
     let preparation_turn_id = start.preparation_turn_id.clone();
@@ -1013,6 +1017,9 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
         format!("session={session_id} run_precheck={run_precheck}"),
     );
     spawn_service_task(async move {
+        // Cancellation and completion both release the preparation owner.
+        // 取消与完成都会释放准备所有者。
+        let _dispatch_owner = dispatch_owner;
         let preparation_started_at = current_unix_millis_value();
         webui_trace(
             "prompt_prepare_task_run_start",
@@ -1165,6 +1172,7 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
             }
         }
     });
+    Ok(())
 }
 
 /// Starts precheck dispatch or immediately continues with a skipped precheck using shared semantics.
@@ -1241,7 +1249,7 @@ pub(crate) fn start_webui_precheck_or_continue(
             start,
             expected_kernel_generation,
             false,
-        );
+        )?;
         webui_trace(
             "precheck_dispatch_skipped_profile_task_spawned",
             format!("session={session_id}"),
@@ -1280,7 +1288,7 @@ pub(crate) fn start_webui_precheck_or_continue(
         start,
         expected_kernel_generation,
         true,
-    );
+    )?;
     webui_trace(
         "precheck_dispatch_spawned_task",
         format!("session={session_id}"),

@@ -911,6 +911,10 @@ pub(super) async fn prepare_webui_pending_prompt(
     session_id: SessionId,
     exact_dispatch: ExactPendingPromptDispatch,
 ) -> Result<bool, String> {
+    // Keep preparation observable until the detached continuation or stream assumes ownership.
+    // 在分离续接或流接管所有权前，保持准备过程可被观测。
+    let _dispatch_owner =
+        crate::agent_collaboration::dispatch_owner::DispatchOwner::acquire(state, session_id)?;
     let (
         mut workspace_snapshot,
         has_active_stream_task,

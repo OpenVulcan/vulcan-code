@@ -6,6 +6,7 @@ use crate::agent_collaboration::test_support::fixture;
 
 mod cases;
 mod grants;
+mod unified_wait;
 mod wait_combinations;
 mod wake;
 

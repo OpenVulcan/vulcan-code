@@ -25,6 +25,10 @@ pub(super) async fn recover(
     records: Vec<CollaborationChildTaskRecord>,
 ) -> Result<(), String> {
     for record in records {
+        // Keep recovery preparation visible to waiters until its guarded dispatch or failure.
+        // 在受锁保护的分发或失败之前，让等待方可见恢复准备所有权。
+        let _dispatch_owner =
+            super::super::dispatch_owner::DispatchOwner::acquire(state, child.session_id())?;
         worker::require_active_owner(state, registry)?;
         // An in-process owner may already have an active API; it must not be cold-validated.
         // 进程内所有者可能已有活动 API；不能再对它执行冷恢复校验。

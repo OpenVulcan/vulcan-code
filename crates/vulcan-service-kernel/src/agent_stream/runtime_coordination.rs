@@ -45,7 +45,7 @@ pub(crate) fn update_webui_wait_agent_runtime_state(
     let Some(tool_name) = runtime_event_tool_name(event) else {
         return Ok(WaitAgentRuntimeStateCommit::Ignored);
     };
-    if tool_name != "wait_agent"
+    if tool_name != vulcan_agent_runtime::tooling::collaboration::WAIT_AGENTS_RESULT_TOOL_ID
         || !matches!(
             event.kind,
             RuntimeEventKind::ToolStarted | RuntimeEventKind::ToolFinished

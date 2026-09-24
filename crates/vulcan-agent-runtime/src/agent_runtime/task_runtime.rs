@@ -91,7 +91,7 @@ const STOPPED_TASK_RESULT_SUMMARY: &str = "The subagent was stopped at the user'
 
 /// Running inspection summary returned only when the model checks a task that is already active.
 /// 仅当模型检查一条已经运行中的任务时返回的运行中查看摘要。
-const RUNNING_TASK_RESULT_SUMMARY: &str = "This is a running-status acknowledgement, not the subagent's final result. The subagent owns the delegated work now. Do not recreate the same child agent, do not replace the unfinished subagent work with direct main-thread or non-agent tool calls, and do not produce a final answer from assumptions. If coordination requires a status check, use list_agents or wait_agent for the existing child agent.";
+const RUNNING_TASK_RESULT_SUMMARY: &str = "This is a running-status acknowledgement, not the subagent's final result. The subagent owns the delegated work now. Do not recreate the same child agent, do not replace the unfinished subagent work with direct main-thread or non-agent tool calls, and do not produce a final answer from assumptions. If coordination requires a status check, use list_agents or wait_agents_result for the existing child agent.";
 
 mod agent_control;
 mod arguments;

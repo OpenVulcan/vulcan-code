@@ -40,14 +40,21 @@ impl SessionDocument {
         {
             return Ok(IdempotentMutation::Idempotent(projection.clone()));
         }
-        let turn_id = acceptance.result.acceptance.message.source.turn_id.ok_or(
+        let source_turn_id = acceptance.result.acceptance.message.source.turn_id.ok_or(
             DomainError::CollaborationStateViolation {
                 field: "collaboration.task_result.source_turn",
             },
         )?;
-        if self
+        // Late results retain their source identity but enter the current receiving turn.
+        // 迟到结果保留原来源身份，但进入当前接收回合。
+        let turn_id = self
             .active_turn()
-            .is_none_or(|turn| turn.closed || turn.turn_id != turn_id)
+            .filter(|turn| !turn.closed)
+            .map(|turn| turn.turn_id)
+            .ok_or(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.projection_turn",
+            })?;
+        if turn_id < source_turn_id
             || self.collaboration_run_control() != CollaborationRunControl::Running
         {
             return Err(DomainError::CollaborationStateViolation {

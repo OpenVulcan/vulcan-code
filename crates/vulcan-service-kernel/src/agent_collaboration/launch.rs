@@ -20,12 +20,17 @@ pub(super) fn schedule_question_wakeup(
     app: &crate::ServiceEventEmitter,
     invocation: &ValidatedInvocation,
     question_id: CollaborationQuestionId,
-) {
+) -> Result<(), String> {
+    let question = read_question_source(&invocation.source_handle, &question_id)?.0;
+    let target_id =
+        Uuid::parse_str(&question.target.session_id).map_err(|error| error.to_string())?;
+    let owner = dispatch_owner::DispatchOwner::acquire(&invocation.state, target_id)?;
     // The accepted record survives the original API; wakeup never borrows its expired tool authority.
     // 已接纳记录独立于原 API 存续；唤醒不能借用过期工具权限。
     let app = app.clone();
     let invocation = invocation.clone();
     crate::spawn_service_task(async move {
+        let _owner = owner;
         if let Err(error) = wake_accepted_question(&app, &invocation, &question_id).await {
             eprintln!(
                 "[webui-service] question wakeup failed for {}: {error}",
@@ -39,6 +44,7 @@ pub(super) fn schedule_question_wakeup(
             }
         }
     });
+    Ok(())
 }
 
 /// Settles a revoked, accepted question under its source and target lifecycle gates.
@@ -214,6 +220,10 @@ pub(super) async fn wake_accepted_question(
     if question.state != CollaborationQuestionState::Pending {
         return Ok(QuestionExecutionLaunchDisposition::AlreadyHandled);
     }
+    let _dispatch_owner = dispatch_owner::DispatchOwner::acquire(
+        &invocation.state,
+        Uuid::parse_str(&question.target.session_id).map_err(|error| error.to_string())?,
+    )?;
     let (session_id, target) = resolve_question_target(invocation, &question).await?;
     // An idle target has no provider boundary at which revocation could otherwise be settled.
     // 空闲目标没有其他供应商边界来结算撤权。

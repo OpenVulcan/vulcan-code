@@ -31,6 +31,7 @@ const COLLABORATION_TOOL_NAMES = new Set([
   "ask_parent",
   "reply_question",
   "wait_question",
+  "wait_agents_result",
   "cancel_question",
   "send_notification",
   "list_sessions",
