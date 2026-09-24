@@ -284,14 +284,30 @@ describe("ConversationV1DisplayRenderer", () => {
     expect(markup).not.toContain("user-bubble");
     expect(markup).not.toContain("子任务结果");
   });
-  it("renders child terminal output through the shared task-result card", () => {
+  it("renders child terminal output once without the internal terminal bookkeeping card", () => {
     // markup proves the event-native path no longer drops child results or labels them as a parent final.
     // markup 证明事件原生链路不再丢弃子任务结果，也不将其标记为父助手最终回复。
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
-      <ConversationV1DisplayRenderer events={[summary(2, { kind: "subagent_return", child_session_id: "child-session", child_segment_generation: 1, child_root_action_id: "child-execution", child_task_id: "child-task", content: "子任务完成内容", source_assistant_text_seq: 3, source_from_seq: 1, source_to_seq: 5, child_turn_stats_seq: 5 })]} />
+      <ConversationV1DisplayRenderer events={[
+        summary(2, { kind: "subagent_return", child_session_id: "child-session", child_segment_generation: 1, child_root_action_id: "child-execution", child_task_id: "child-task", content: "子任务完成内容", source_assistant_text_seq: 3, source_from_seq: 1, source_to_seq: 5, child_turn_stats_seq: 5 }),
+        // Terminal bookkeeping follows the real result but must not become another visible reply.
+        // 内部终态紧随真实结果到达，但不能变成另一条可见回复。
+        summary(3, { kind: "collaboration", version: 1, operation_id: "hidden-terminal-operation",
+          event_kind: "child_task_terminal", after_state: { kind: "child_task", task: {
+            reservation_operation_id: "reserve-child", source_tool_name: "spawn_agent",
+            execution_id: "child-execution", task_id: "child-task", parent_segment_generation: 1,
+            parent_turn_id: 7, child: { project_id: "project", root_session_id: "parent-session",
+              session_id: "child-session", segment_generation: 1, task_id: "child-task" },
+            state: "terminal", reserved_at_ms: 1, active_at_ms: 2, terminal_at_ms: 3,
+            terminal_outcome: "completed", non_success_result: null, non_success_projection: null,
+          } } }, "host_only"),
+      ]} />
     </I18nProvider>);
     expect(markup).toContain('data-collaboration-card-kind="task-result"');
     expect(markup).toContain("子任务完成内容");
+    expect(markup.match(/data-collaboration-card-kind=/g)).toHaveLength(1);
+    expect(markup).not.toContain("child_task_terminal");
+    expect(markup).not.toContain("hidden-terminal-operation");
     expect(markup).not.toContain("assistant-final-output");
     expect(markup).not.toContain("user-bubble");
   });

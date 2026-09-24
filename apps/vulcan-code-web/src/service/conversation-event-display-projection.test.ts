@@ -246,7 +246,7 @@ function asTool(item: ReturnType<typeof projectConversationEventDisplay>[number]
 }
 
 describe("conversation V1 event display projection", () => {
-  it.each(["child_task_reserved", "child_task_activated"] as const)(
+  it.each(["child_task_reserved", "child_task_activated", "child_task_terminal"] as const)(
     "retains %s in event data but omits its bookkeeping card from chat",
     (eventKind) => {
       /** Real child ownership is retained for navigation and runtime state.
@@ -272,8 +272,11 @@ describe("conversation V1 event display projection", () => {
               segment_generation: 1,
               task_id: "child",
             },
-            state: eventKind === "child_task_reserved" ? "reserved" : "active",
+            state: eventKind === "child_task_reserved" ? "reserved" : eventKind === "child_task_activated" ? "active" : "terminal",
             reserved_at_ms: 1,
+            active_at_ms: eventKind === "child_task_reserved" ? undefined : 2,
+            terminal_at_ms: eventKind === "child_task_terminal" ? 3 : undefined,
+            terminal_outcome: eventKind === "child_task_terminal" ? "completed" : undefined,
             non_success_result: null,
             non_success_projection: null,
           },

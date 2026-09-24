@@ -436,11 +436,14 @@ export function projectConversationTranscriptDisplay(
 }
 
 /** Returns whether a typed collaboration fact belongs in chat; execution bookkeeping has no message body.
- * 返回强类型协作事实是否属于聊天内容；执行记账没有消息正文。 */
+ * 返回强类型协作事实是否属于聊天内容；执行记账没有消息正文。
+ * Terminal bookkeeping stays in storage; subagent_return and non-success records own actual results.
+ * 终态记账保留在存储中；真实结果由 subagent_return 与非成功报告负责展示。 */
 export function collaborationEventIsUserVisible(event: CollaborationEvent): boolean {
   return event.event_kind !== "run_control_changed"
     && event.event_kind !== "child_task_reserved"
-    && event.event_kind !== "child_task_activated";
+    && event.event_kind !== "child_task_activated"
+    && event.event_kind !== "child_task_terminal";
 }
 
 /** Selects at most one final assistant text for each logical Turn.
