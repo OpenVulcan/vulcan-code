@@ -20,6 +20,7 @@ import type {
   SubagentDefinitionSummary,
   SubagentDefinitionSaveRequest,
   WorkbenchSnapshot,
+  StartupSnapshot,
 } from "@/types";
 import {
   BROWSER_PREVIEW_USER_VULCAN_ROOT,
@@ -30,6 +31,7 @@ import {
   serviceClient,
 } from "@/service/webui-service-runtime";
 import { invalidatePersistentPluginUiModules } from "@/service/plugin-ui-module-runtime";
+import { waitForPluginStartup } from "@/service/plugin-ui-startup";
 
 // AgentSkillProjectState describes one project-level prompt skill override state.
 // AgentSkillProjectState 描述单个项目级提示词技能覆盖状态。
@@ -520,16 +522,22 @@ export async function deletePluginMcpSecret(
 //
 // Parameters: pluginId and mountId identify one enabled plugin UI contribution.
 // 参数：pluginId 与 mountId 标识一个已启用插件界面贡献。
+// signal retires this module read when its service generation is invalidated.
+// signal 在服务代次失效时退役当前模块读取。
 // Returns: authenticated module identity and untouched UTF-8 source.
 // 返回值：经过认证的模块身份与原样 UTF-8 源码。
-export async function loadPluginUiModule(pluginId: string, mountId: string): Promise<PluginUiModuleSource> {
+export async function loadPluginUiModule(pluginId: string, mountId: string, signal: AbortSignal): Promise<PluginUiModuleSource> {
   if (!hasServiceRuntime()) {
     throw new Error("Dynamic plugin UI modules require the Vulcan service runtime.");
   }
+  await waitForPluginStartup({
+    read: startupSignal => serviceClient.request<StartupSnapshot>("startup.snapshot", undefined, { signal: startupSignal }),
+    subscribe: listener => serviceClient.subscribe<StartupSnapshot>("startup", listener),
+  }, signal);
   return serviceClient.request<PluginUiModuleSource>("service_load_plugin_ui_module", {
     pluginId,
     mountId,
-  });
+  }, { signal });
 }
 
 // readPluginTextAsset reads one exact manifest-declared UTF-8 asset from an enabled plugin package.
