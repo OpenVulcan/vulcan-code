@@ -86,6 +86,7 @@ pub(crate) use remote_checkpoint::{
     compaction_state_from_projection, planning_message_id as remote_compaction_planning_message_id,
 };
 mod context_injection;
+mod host_guidance;
 #[cfg(test)]
 mod memory_acceptance;
 #[cfg(test)]
@@ -104,28 +105,17 @@ fn provider_projection_message_id(index: usize) -> String {
 /// Adds the fixed host guidance while the initial locked baseline is established.
 /// 在初始锁定基线建立时加入固定宿主指引。
 ///
-/// Existing initialized baselines are returned byte-for-byte; the guidance is a one-time
-/// baseline fact and must never be rewritten into later request history.
-/// 已初始化基线按字节原样返回；该指引是一次性基线事实，不能重写进后续请求历史。
+/// Registered initialized baselines are returned byte-for-byte; upgrades use a separate
+/// append-only context producer instead of rewriting this one-time baseline fact.
+/// 已登记的初始化基线按字节原样返回；升级使用独立追加式上下文生产者，不重写一次性基线事实。
 fn initial_locked_baseline_with_host_guidance(
     baseline: &LockedBaselineProjection,
 ) -> Result<LockedBaselineProjection, SessionRuntimeError> {
-    if let Some(source) = baseline
-        .locked_sources()
-        .iter()
-        .find(|source| source.node_id == "host-message-guidance")
+    if host_guidance::baseline_version(baseline)
+        .map_err(provider_projection_runtime_error)?
+        .is_some()
     {
-        let is_exact = source.kind == LockedSourceKind::BaselineHooks
-            && source.target == LockedPromptTarget::System
-            && source.source_label.as_deref() == Some("host_message_guidance")
-            && source.source_id.as_deref() == Some("v1:host_message_guidance")
-            && source.content == HOST_MESSAGE_GUIDANCE;
-        if is_exact {
-            return Ok(baseline.clone());
-        }
-        return Err(provider_projection_runtime_error(
-            "The locked baseline contains an invalid host-message guidance source.",
-        ));
+        return Ok(baseline.clone());
     }
     let mut segments = baseline
         .locked_sources()
@@ -2727,6 +2717,7 @@ fn persistent_change_set_from_tool_result(
 
 #[cfg(test)]
 mod tests {
+    mod host_guidance;
     mod remote_checkpoint;
     use super::*;
     use serde_json::json;

@@ -25,7 +25,7 @@ pub(super) fn synchronize_request_dynamic_context(
     }
     // The ordinary path keeps the complete producer inventory and its original durable admission.
     // 普通路径保留完整生产者清单及原有可靠准入。
-    let inputs = dynamic_context_inputs(
+    let mut inputs = dynamic_context_inputs(
         &candidate.dynamic_prompt_layers,
         candidate.controller_config.context_injection.as_ref(),
     )?;
@@ -33,6 +33,12 @@ pub(super) fn synchronize_request_dynamic_context(
         SessionMutationAdmission::ExistingTurn,
         SessionFlushReason::MetadataChanged,
         move |document| {
+            // Validate and choose the persisted baseline under the same mutation lock as context publication.
+            // 在上下文发布的同一修改锁内校验并选择持久基线。
+            inputs.push(host_guidance::upgrade_input(
+                document,
+                &candidate.locked_baseline,
+            )?);
             document
                 .synchronize_dynamic_context(inputs, facts.prepared_at_ms)
                 .map(|result| match result {
