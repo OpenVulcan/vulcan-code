@@ -1,26 +1,32 @@
-//! Tauri build script for the Vulcan Code service tray host.
-//! Vulcan Code 服务托盘宿主的 Tauri 构建脚本。
+//! Native executable resources for the independent Core service.
+//! 独立 Core 服务的原生可执行文件资源。
 
-// Build the Tauri application resources and configure platform-specific linker behavior.
-// 构建 Tauri 应用资源并配置平台专属的链接器行为。
+// Embed the executable icon and version metadata, and configure platform-specific linking.
+// 嵌入可执行文件图标和版本元数据，并配置平台专属链接行为。
 //
 // A `--no-default-features` build keeps this script inert so Linux CI can link the
 // headless service without enabling the desktop tray host or its graphics libraries.
 // `--no-default-features` 构建保持本脚本惰性，使 Linux CI 无需启用桌面托盘宿主或其图形库
 // 即可链接无头服务。
 fn main() {
-    // LuaJIT exposes compatibility symbols from its static archive, but the desktop executable is not a linkable SDK.
-    // LuaJIT 静态库会导出兼容符号，但桌面可执行文件并不是供其他程序链接的 SDK。
-    #[cfg(all(target_os = "windows", target_env = "msvc"))]
-    {
-        println!("cargo:rustc-link-arg=/NOIMPLIB");
-        println!("cargo:rustc-link-arg=/NOEXP");
+    println!("cargo:rerun-if-changed=build.rs");
+    // Inspect the target rather than the build host so cross-compilation selects the right resources.
+    // 检查编译目标而非构建宿主，使交叉编译选择正确的资源。
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("Cargo target OS");
+    if target_os == "windows" {
+        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+            println!("cargo:rustc-link-arg=/NOIMPLIB");
+            println!("cargo:rustc-link-arg=/NOEXP");
+        }
+        #[cfg(feature = "desktop-tray")]
+        {
+            println!("cargo:rerun-if-changed=icons/icon.ico");
+            winresource::WindowsResource::new()
+                .set_icon("icons/icon.ico")
+                .set("ProductName", "Vulcan Code")
+                .set("FileDescription", "Vulcan Code Service")
+                .compile()
+                .expect("compile Core executable icon and version resources");
+        }
     }
-
-    #[cfg(not(feature = "desktop-tray"))]
-    {
-        println!("cargo:rerun-if-changed=build.rs");
-    }
-    #[cfg(feature = "desktop-tray")]
-    tauri_build::build();
 }

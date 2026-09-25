@@ -12,7 +12,7 @@
 
 数据库引擎随 VulcanCode 进程内建运行，不再有独立的控制器进程、端点或配置文件。构建与运行脚本因此不再按 Debug/Release 改写任何数据库端点：`make build`、`make br`、`make run`、`make release` 及其 `release` 变体在这一点上行为一致，也不存在需要保留或迁移的 `output/config/controller.json`。原先的 VLDB 端口 `19802`（Debug）与 `19801`（Release）已随该配置一并移除。
 
-Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。VulcanCode WebUI 服务使用 Release `17891–17920`、Debug `17921–17950`；Release 不配置 Vite 端口。当前受支持的 WebUI 运行环境是浏览器访问（Vite 开发服务器或已构建资源）与 `apps/vulcan-code-desktop` Electron 桌面壳；`apps/vulcan-code-service/tauri.conf.json` 与 `apps/vulcan-code-web/src/host-shell/*` 中并存的 Tauri 兼容分支（`tauri-shell.ts`）仍未决定去留，不列入当前主要壳。内置 VMM 直接运行在 VulcanCode 进程内，不占用独立服务端口；外置 VMM 的端口完全来自用户配置。Windows 使用 PowerShell 构建与运行脚本，Linux x86_64、Linux ARM64 与 macOS 使用对应 Unix-like 脚本执行相同的构建规则。
+Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。VulcanCode WebUI 服务使用 Release `17891–17920`、Debug `17921–17950`；Release 不配置 Vite 端口。当前受支持的 WebUI 运行环境是浏览器访问（Vite 开发服务器或已构建资源）与 `apps/vulcan-code-desktop` Electron 桌面壳。Core 使用独立的 `tray-icon` 组件、Tao 原生事件循环和 `notify-rust` 故障通知，不依赖 Tauri、Wry 或 WebView2；Windows 可执行文件资源由 `winresource` 嵌入。WebUI 目录中保留的旧 Tauri 兼容适配器不是 Core 构建依赖，也不属于当前支持的宿主。内置 VMM 直接运行在 VulcanCode 进程内，不占用独立服务端口；外置 VMM 的端口完全来自用户配置。Windows 使用 PowerShell 构建与运行脚本，Linux x86_64、Linux ARM64 与 macOS 使用对应 Unix-like 脚本执行相同的构建规则。
 
 > **关于 `protoc`。** `.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向仓库随附的 `protoc`，使那些构建脚本直接调用 `protoc` 的第三方 crate（例如 `lancedb` 引入的 `lance-encoding`）无需系统级 protobuf 安装即可构建。这里刻意使用绝对路径：`[env]` 条目中的相对路径不会按配置文件位置解析。
 
@@ -43,6 +43,16 @@ make core-restart
 此入口目前只支持 Windows Debug。修改 `vulcan-terminal-host`、Electron、运行布局或 Core 与壳之间的启动协议时，使用完整 `make build`；修改权威运行资源时，先显式执行 `make sync`。`make core-restart` 不会同步资源；新 Core 退出且尚未健康就绪时，恢复原可执行文件备份。运行布局架构版本由 `scripts/desktop-runtime.mjs` 定义并校验，核心脚本不再维护独立版本数字。
 
 核心重启保留可见的 Debug 控制台，不再隐藏窗口。宣布成功必须同时满足新进程健康身份匹配、托盘事件循环就绪以及 Windows 确认托盘注册；本次进程通过启动器指定的 `VULCAN_CORE_STARTUP_REPORT` 写入独立确认文件，位于 `target/core-restart/`。该变量只用于重启确认，不替代服务发现。Windows 可以将已注册图标放在折叠区域；图标外观改变不意味着服务未启动。关闭工作台窗口仍只结束桌面客户端，后台核心退出使用托盘菜单。
+
+## Core 原生托盘边界
+
+托盘实现位于 `apps/vulcan-code-service/src/tray.rs`，仅在 `desktop-tray` 特性下编译。`tray-icon` 负责图标与菜单，Tao 仅负责主线程的操作系统事件循环，不创建工作台窗口；窗口继续由 Electron 提供。这样托盘无需引入 Tauri 应用框架、WebView 运行时、插件注册或前端 IPC。
+
+菜单项、图标及其事件分发始终留在主线程。退出菜单启动独立排空线程，排空成功后通知主线程先释放托盘，再结束事件循环；排空失败则恢复服务准入并保留托盘。服务所有者随事件循环保留，不再通过手动泄漏延长生命周期。启动确认继续检查 Windows 实际注册的托盘矩形，不以 HTTP 就绪代替托盘就绪；Debug 控制台继续使用独立的原生控制台模块。
+
+Windows 图标与版本资源由 `winresource` 嵌入。故障通知直接调用 `notify-rust`；其 Windows 后端包名 `tauri-winrt-notification` 是独立的 WinRT 通知封装，不包含 Tauri 应用框架。Linux 原生菜单仍使用 GTK3，其宏依赖 `proc-macro-error 1` 的现有停维护公告保留为 `deny.toml` 中唯一显式例外；升级 Tao 或 `tray-icon` 时必须重新检查此依赖链。
+
+依赖移除后的验证包括 Core 全目标编译、图标解码测试、服务启动参数与发现身份测试，以及 `cargo tree -p vulcan-code-service --target all --locked` 对 Tauri/Wry/WebView 的依赖排除检查。跨平台菜单外观和桌面通知必须在对应操作系统实际验收，不能用 Windows 编译结果代替。
 
 ## 新环境初始化
 

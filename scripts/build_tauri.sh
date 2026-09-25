@@ -55,7 +55,7 @@ if [ "$Release" = "1" ]; then
     pnpm --dir "$WebAppDir" run build
 
     echo "==> Building Vulcan Core release..."
-    cargo build -p vulcan-code-service -p vulcan-terminal-host --release --features custom-protocol
+    cargo build -p vulcan-code-service -p vulcan-terminal-host --release
 else
     echo "==> Building Vulcan Core debug..."
     cargo build -p vulcan-code-service -p vulcan-terminal-host

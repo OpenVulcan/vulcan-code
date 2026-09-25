@@ -15,28 +15,9 @@ no-default-features = false
 # 拒绝已知漏洞和被撤回的包；任何例外都必须显式说明原因。
 [advisories]
 ignore = [
-    # Tauri 2 still uses GTK3 on Linux and the advisory provides no safe upgrade path.
-    # Tauri 2 在 Linux 上仍使用 GTK3，且该公告没有可用的安全升级路径。
-    { id = "RUSTSEC-2024-0411", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2024-0412", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2024-0413", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2024-0414", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2024-0415", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2024-0416", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2024-0417", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2024-0418", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2024-0419", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2024-0420", reason = "Tauri 2 Linux GTK3 transitive dependency; no safe upgrade is available" },
-    # Current transitive proc-macro users have no safe upgrade path.
-    # 当前连锁依赖中的过程宏使用方没有可用的安全升级路径。
-    { id = "RUSTSEC-2024-0370", reason = "Transitive proc-macro dependency; no safe upgrade is available" },
-    # Tauri urlpattern transitively uses rust-unic and has no safe upgrade path.
-    # Tauri 的 urlpattern 连锁使用 rust-unic，当前没有可用的安全升级路径。
-    { id = "RUSTSEC-2025-0075", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2025-0080", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2025-0081", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2025-0098", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
-    { id = "RUSTSEC-2025-0100", reason = "Tauri urlpattern transitive dependency; no safe upgrade is available" },
+    # GTK3's glib-macros and gtk3-macros still require this proc macro on Linux native tray builds.
+    # Linux 原生托盘的 GTK3 所用 glib-macros 和 gtk3-macros 仍依赖此过程宏。
+    { id = "RUSTSEC-2024-0370", reason = "Linux native tray GTK3 macros still depend on proc-macro-error 1; review when upgrading tray-icon or Tao" },
 ]
 
 # Keep the allowlist intentionally conservative and extend it only after legal review.

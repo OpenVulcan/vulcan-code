@@ -20,8 +20,8 @@ mod tray;
 /// Starts the Vulcan Code service process.
 /// 启动 Vulcan Code 服务进程。
 fn main() {
-    // cryptoProvider is installed before Tauri or any background service can construct a TLS client.
-    // cryptoProvider 会在 Tauri 或任何后台服务构造 TLS 客户端之前完成安装。
+    // Install the crypto provider before the tray or background service constructs any TLS client.
+    // 在托盘或后台服务构造任何 TLS 客户端之前安装加密实现。
     vulcan_provider_adapters::install_process_rustls_crypto_provider()
         .expect("the process-wide Rustls CryptoProvider must install before service startup");
     let args: Vec<String> = std::env::args().collect();

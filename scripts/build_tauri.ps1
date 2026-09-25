@@ -79,7 +79,7 @@ if ($Release) {
 
     # CargoBuildArguments selects the release shell and terminal host from the locked registry graph.
     # CargoBuildArguments 从锁定的注册表依赖图选择 release 桌面壳与终端宿主。
-    $CargoBuildArguments = @('build', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '--release', '--features', 'custom-protocol')
+    $CargoBuildArguments = @('build', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '--release')
 }
 else {
     # CargoBuildArguments selects the debug shell and terminal host from the locked registry graph.
