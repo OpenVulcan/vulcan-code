@@ -1038,23 +1038,32 @@ pub(crate) async fn execute_shell_command_tool(
     let render_input =
         build_shell_command_text_render_input(&effective_args, &execution_report, &hook_report);
     let budget = default_shell_command_budget_snapshot();
+    let exceeds_inline_budget = shell_command_output_exceeds_inline_budget(&render_input, &budget);
     let host_payload = build_shell_command_host_payload(
         session_id,
         &effective_args,
         &execution_report,
-        shell_command_output_exceeds_inline_budget(&render_input, &budget),
+        exceeds_inline_budget,
         &hook_report,
     );
-    let model_output = render_tool_result_text(
-        &render_input,
-        None,
-        &budget,
-        &HostRenderOptions {
-            spill_root,
-            template_skill_roots: Vec::new(),
-            template_resources_root: None,
-        },
-    )
+    let render_options = HostRenderOptions {
+        spill_root,
+        template_skill_roots: Vec::new(),
+        template_resources_root: None,
+    };
+    // Only overflowing output writes a spill page; keep that filesystem work off the async worker.
+    // 只有超限输出会写入分页文件；该文件系统操作不占用异步工作线程。
+    let model_output = if exceeds_inline_budget {
+        tokio::task::spawn_blocking(move || {
+            render_tool_result_text(&render_input, None, &budget, &render_options)
+        })
+        .await
+        .map_err(|error| {
+            NativeToolError::new(format!("shell_command output rendering failed: {error}"))
+        })?
+    } else {
+        render_tool_result_text(&render_input, None, &budget, &render_options)
+    }
     .map_err(NativeToolError::new)?;
 
     Ok(

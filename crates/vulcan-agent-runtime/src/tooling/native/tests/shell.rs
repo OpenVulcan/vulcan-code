@@ -372,6 +372,59 @@ async fn shell_command_tool_executes_simple_command() {
     assert_eq!(host_result.payload["status"], "completed");
 }
 
+/// Oversized shell-command output must still spill to exactly one page file under the spill root.
+/// 超出内联预算的 shell-command 输出仍须在超限目录下写入恰好一个分页文件。
+#[cfg(unix)]
+#[tokio::test]
+async fn shell_command_tool_spills_oversized_output_to_page_file() {
+    let spill_root = tempfile::tempdir().expect("create shell spill root");
+    let tool = build_shell_command_tool(
+        HostCommandShellSupport::from_configured_default_id(None),
+        None,
+    );
+    let result = tool
+        .invoke(NativeToolExecutionRequest {
+            arguments: json!({
+                "command": "yes 0123456789abcdefghij | head -n 20000"
+            }),
+            session_id: None,
+            native_browser_runtime: None,
+            workspace_root: None,
+            host_project_id: None,
+            controller_runtime: None,
+            goal_runtime: None,
+            knowledge_access: None,
+            vce_retrieval_handler: None,
+            spill_root: Some(spill_root.path().to_path_buf()),
+            enabled_prompt_skill_names: Vec::new(),
+            prepared_prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            project_vmm: VmmConfigLayer::default(),
+            session_vmm: VmmConfigLayer::default(),
+        })
+        .await
+        .expect("oversized shell command should execute");
+
+    let model_output = result
+        .model_output
+        .as_str()
+        .expect("shell command model output should be text");
+    let spilled = std::fs::read_dir(spill_root.path())
+        .expect("spill root should be readable")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("spill entries should be readable");
+    assert_eq!(
+        spilled.len(),
+        1,
+        "oversized output must spill one page file"
+    );
+    let file_name = spilled[0].file_name().to_string_lossy().into_owned();
+    assert!(model_output.contains(&file_name));
+    assert!(
+        (model_output.len() as u64) < crate::tool_result_format::DEFAULT_INLINE_TOOL_RESULT_BYTES
+    );
+}
+
 /// Reads shell-session output through its polling cursor until the expected text arrives.
 /// 通过 shell-session 的轮询游标持续读取输出，直到收到预期文本。
 async fn read_shell_session_until_text(
