@@ -143,9 +143,11 @@ pub(super) async fn handle_parent_event(
                     && entry.status == vulcan_session_core::SubagentStatus::Archived
             });
     let mut question_return_settled = true;
-    if closed_by_runtime || terminal_mailbox.as_ref().is_some_and(|mailbox| {
-        mailbox.kind == vulcan_session_boundary::SubagentMailboxEventKind::Stopped
-    }) {
+    if closed_by_runtime
+        || terminal_mailbox.as_ref().is_some_and(|mailbox| {
+            mailbox.kind == vulcan_session_boundary::SubagentMailboxEventKind::Stopped
+        })
+    {
         // Question failure delivery is independent of the child's business result publication.
         // 问题失败回传独立于子任务业务结果发布。
         if let Err(error) =
@@ -245,10 +247,8 @@ pub(super) async fn handle_parent_event(
         };
         if cleaned_current_listener {
             if closed_by_runtime && question_return_settled {
-                if let Err(error) = crate::agent_collaboration::release_closed_child_handle(
-                    state, task_id,
-                )
-                .await
+                if let Err(error) =
+                    crate::agent_collaboration::release_closed_child_handle(state, task_id).await
                 {
                     tracing::warn!(%task_id, %error, "Closed child V1 handle remains registered");
                 }

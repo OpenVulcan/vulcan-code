@@ -717,7 +717,10 @@ mod tests {
             total_tokens: Some(251_000),
             ..usage
         };
-        assert_eq!(provider_context_tokens_from_usage(&usage_with_total, 249_000), 251_000);
+        assert_eq!(
+            provider_context_tokens_from_usage(&usage_with_total, 249_000),
+            251_000
+        );
     }
 
     /// Verifies reasoning already included in output cannot falsely trip a model-switch limit.

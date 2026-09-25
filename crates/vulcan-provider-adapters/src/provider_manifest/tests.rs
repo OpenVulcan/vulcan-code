@@ -777,16 +777,28 @@ type NestedContractCase = (&'static str, &'static [&'static str]);
 
 /// Probe cases shared by the Rust-parser and JSON-Schema closure tests.
 const NESTED_CONTRACT_CASES: &[NestedContractCase] = &[
-    ("openai.json", &["services", "protocol_routes", "responses_features"]),
-    ("openai.json", &["model_rules", "capabilities", "prompt_cache"]),
+    (
+        "openai.json",
+        &["services", "protocol_routes", "responses_features"],
+    ),
+    (
+        "openai.json",
+        &["model_rules", "capabilities", "prompt_cache"],
+    ),
     ("alibaba.json", &["usage_profiles", "payload"]),
     ("minimax.json", &["request_profiles", "payload", "steps"]),
     ("minimax.json", &["response_profiles", "payload", "steps"]),
-    ("alibaba.json", &["services", "service_origin_override_policy"]),
+    (
+        "alibaba.json",
+        &["services", "service_origin_override_policy"],
+    ),
     ("alibaba.json", &["services", "native_inference_bindings"]),
     ("alibaba.json", &["tool_targets", "output"]),
     ("alibaba.json", &["tool_targets", "execution"]),
-    ("alibaba.json", &["tool_targets", "output", "resource_decoders"]),
+    (
+        "alibaba.json",
+        &["tool_targets", "output", "resource_decoders"],
+    ),
 ];
 
 /// One resolved location step; array positions are chosen by the resolver, never by a case.

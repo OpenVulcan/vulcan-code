@@ -617,15 +617,14 @@ fn estimate_core_message_tokens(message: &CoreConversationMessage) -> usize {
         CoreConversationPayload::ToolResult { text, .. } => {
             estimate_text_tokens_from_characters(text).saturating_add(12usize)
         }
-        CoreConversationPayload::AgentMessage { .. } => match message
-            .payload
-            .agent_message_model_text(&message.id)
-        {
-            Ok(text) => estimate_text_tokens_from_characters(&text).saturating_add(16usize),
-            Err(error) => estimate_text_tokens_from_characters(&format!(
-                "Agent message rendering failed: {error}"
-            )),
-        },
+        CoreConversationPayload::AgentMessage { .. } => {
+            match message.payload.agent_message_model_text(&message.id) {
+                Ok(text) => estimate_text_tokens_from_characters(&text).saturating_add(16usize),
+                Err(error) => estimate_text_tokens_from_characters(&format!(
+                    "Agent message rendering failed: {error}"
+                )),
+            }
+        }
     }
 }
 

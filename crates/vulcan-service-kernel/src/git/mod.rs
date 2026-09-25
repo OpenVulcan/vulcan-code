@@ -22,13 +22,13 @@ pub(super) use command::run_webui_git_command;
 pub(super) use commit_action::service_run_git_commit_action;
 pub(super) use commit_summary::service_generate_git_commit_message;
 pub(super) use detail::load_webui_workspace_diff_file_detail;
-pub(super) use history::{
-    load_webui_git_history_page, load_webui_git_local_branches, switch_webui_git_branch,
-};
 #[cfg(test)]
 pub(super) use diff_text::{
     webui_diff_hunk_scoped_unified_diff, webui_unified_diff_file_summaries,
     webui_unified_diff_line_count, webui_unified_diff_stats,
+};
+pub(super) use history::{
+    load_webui_git_history_page, load_webui_git_local_branches, switch_webui_git_branch,
 };
 #[cfg(test)]
 pub(super) use model::WebuiWorkspaceDiffMode;

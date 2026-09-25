@@ -87,15 +87,26 @@ impl BrowserManager {
     pub fn runtime_status(&self) -> Result<BrowserRuntimeStatus, String> {
         // Inspect outside the maintenance lock; filesystem recovery must not block task publication.
         // 在维护锁之外检查；文件系统恢复不得阻塞任务状态发布。
-        let inspector = self.runtime_maintenance.lock().map_err(|_| "browser runtime maintenance lock poisoned")?.inspector.clone();
+        let inspector = self
+            .runtime_maintenance
+            .lock()
+            .map_err(|_| "browser runtime maintenance lock poisoned")?
+            .inspector
+            .clone();
         if let Some(inspector) = inspector {
             match inspector() {
                 Ok(config) => self.configure_host_runtime(config)?,
                 Err(error) => {
-                    self.runtime_maintenance.lock().map_err(|_| "browser runtime maintenance lock poisoned")?.diagnostic = Some(error);
+                    self.runtime_maintenance
+                        .lock()
+                        .map_err(|_| "browser runtime maintenance lock poisoned")?
+                        .diagnostic = Some(error);
                     // Invalidate stale paths when the runtime package changed or was removed.
                     // 运行包发生变化或被移除时，使旧路径失效。
-                    *self.host_config.lock().map_err(|_| "browser host configuration lock poisoned")? = None;
+                    *self
+                        .host_config
+                        .lock()
+                        .map_err(|_| "browser host configuration lock poisoned")? = None;
                 }
             }
         }

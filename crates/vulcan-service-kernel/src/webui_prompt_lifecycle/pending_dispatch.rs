@@ -5,9 +5,8 @@ use super::*;
 use crate::notify_webui_wait_agent_parent_interruption_if_waiting;
 use crate::pending_prompt_services::{
     pending_prompt_action_id, pending_prompt_attachment_workspace_path,
-    pending_prompt_queue_identity,
+    pending_prompt_queue_identity, rebuild_pending_prompt_panel_from_v1,
     reconcile_pending_prompt_attachment_leases,
-    rebuild_pending_prompt_panel_from_v1,
 };
 use crate::session_goal_lifecycle::{current_v1_goal_unix_millis, session_v1_handle_from_state};
 use vulcan_workspace_store::workspace_store::load_project_resource_catalog;

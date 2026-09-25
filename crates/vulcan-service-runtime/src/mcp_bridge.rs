@@ -90,14 +90,8 @@ pub fn mcp_runtime_catalog_from_access(access: &McpRuntimeAccess) -> TauriMcpRun
         .filter(|state| state.status == McpRuntimeServerStatus::Connected)
         .count();
     let tool_count = server_states.iter().map(|state| state.tool_count).sum();
-    let prompt_count = server_states
-        .iter()
-        .map(|state| state.prompt_count)
-        .sum();
-    let resource_count = server_states
-        .iter()
-        .map(|state| state.resource_count)
-        .sum();
+    let prompt_count = server_states.iter().map(|state| state.prompt_count).sum();
+    let resource_count = server_states.iter().map(|state| state.resource_count).sum();
     let summary_rows = server_states
         .iter()
         .map(|state| {

@@ -109,7 +109,10 @@ fn stopping_target_atomically_fails_unapplied_start_and_steer() {
                 reason: CollaborationDeliveryFailureReason::TargetStopped,
             }
         );
-        assert_eq!(reload(&target).collaboration_state().task_message_effects[&message.delivery_id], *effect);
+        assert_eq!(
+            reload(&target).collaboration_state().task_message_effects[&message.delivery_id],
+            *effect
+        );
     }
 }
 
@@ -753,7 +756,12 @@ fn task_message_steering_failure_is_explicit_and_cannot_be_reapplied() {
             )
             .unwrap()
             .into_value();
-        assert_eq!(failure.outcome, CollaborationTaskMessageEffectKind::Failed { reason: failure_reason });
+        assert_eq!(
+            failure.outcome,
+            CollaborationTaskMessageEffectKind::Failed {
+                reason: failure_reason
+            }
+        );
         let settled = target.clone();
         assert_eq!(
             target

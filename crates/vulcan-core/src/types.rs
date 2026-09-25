@@ -936,12 +936,7 @@ impl ConversationPayload {
                 payload,
                 ..
             } => Self::render_agent_message_text(
-                event_id,
-                *kind,
-                sender,
-                recipient,
-                task_id,
-                payload,
+                event_id, *kind, sender, recipient, task_id, payload,
             ),
             _ => Err(String::from(
                 "agent_message_model_text requires an AgentMessage payload",

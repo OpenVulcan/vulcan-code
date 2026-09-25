@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use vulcan_provider_adapters::{
-    registered_native_embedding_batch_capabilities, ProviderDescriptor, ProviderRegistry,
+    ProviderDescriptor, ProviderRegistry, registered_native_embedding_batch_capabilities,
 };
 
 /// Golden file location relative to this crate.
@@ -161,8 +161,7 @@ fn all_bundled_model_semantics_match_reviewed_golden() {
     let expected = std::fs::read_to_string(&path)
         .unwrap_or_else(|_| panic!("missing model semantic golden at {}", path.display()));
     assert_eq!(
-        expected,
-        actual,
+        expected, actual,
         "bundled model semantics drifted; review evidence and regenerate with {GENERATE_MODEL_SEMANTICS_ENV}=1"
     );
 }

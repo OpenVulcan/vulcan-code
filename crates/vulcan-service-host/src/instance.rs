@@ -1,7 +1,11 @@
 //! Cross-process ownership of one Core data directory.
 //! 单个 Core 数据目录的跨进程所有权。
 
-use std::{fs::{File, OpenOptions}, io, path::Path};
+use std::{
+    fs::{File, OpenOptions},
+    io,
+    path::Path,
+};
 
 /// Holds an OS lock until the owning service exits; the lock file is never unlinked.
 /// 持有操作系统锁直至服务退出；永不删除锁文件，避免产生两个锁定对象。
@@ -20,7 +24,11 @@ impl ServiceInstanceGuard {
         std::fs::create_dir_all(root)?;
         // Retaining the same inode prevents concurrent launchers from bypassing the lock.
         // 保留同一个文件对象，防止并发启动器绕过互斥锁。
-        let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false)
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
             .open(root.join("service.lock"))?;
         match fs2::FileExt::try_lock_exclusive(&lock) {
             // Windows reports lock contention as raw OS error 33 (lock violation) rather
@@ -51,9 +59,17 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let first = ServiceInstanceGuard::acquire(directory.path()).expect("first lock");
         assert!(first.is_some());
-        assert!(ServiceInstanceGuard::acquire(directory.path()).expect("second lock").is_none());
+        assert!(
+            ServiceInstanceGuard::acquire(directory.path())
+                .expect("second lock")
+                .is_none()
+        );
         drop(first);
-        assert!(ServiceInstanceGuard::acquire(directory.path()).expect("released lock").is_some());
+        assert!(
+            ServiceInstanceGuard::acquire(directory.path())
+                .expect("released lock")
+                .is_some()
+        );
         assert!(directory.path().join("service.lock").is_file());
     }
 }

@@ -397,7 +397,6 @@ async fn provider_request_goal_binding_survives_same_execution_stop() {
     );
 }
 
-
 /// Verifies the authoritative V1 UserInput body remains unchanged while usage becomes a system event.
 /// 验证权威 V1 UserInput 正文保持不变，同时用量变为系统事件。
 #[test]
@@ -434,7 +433,9 @@ fn v1_user_input_event_stays_original_while_goal_usage_is_system_context() {
 
     let (turn_id, turn_closed, user_text, usage_contexts) = handle
         .read(|document| {
-            let active_turn = document.active_turn().expect("the root turn should remain active");
+            let active_turn = document
+                .active_turn()
+                .expect("the root turn should remain active");
             let user_text = document
                 .events()
                 .iter()
@@ -472,7 +473,10 @@ fn v1_user_input_event_stays_original_while_goal_usage_is_system_context() {
         })
         .expect("authoritative V1 document should remain readable");
 
-    assert!(!turn_closed, "usage persistence requires an open active turn");
+    assert!(
+        !turn_closed,
+        "usage persistence requires an open active turn"
+    );
     assert_eq!(user_text, "真实用户正文");
     assert_eq!(usage_contexts.len(), 1);
     let usage_context = &usage_contexts[0];
@@ -516,8 +520,11 @@ fn goal_usage_system_context_is_idempotent_per_turn_and_appends_changes() {
         )
         .expect("root input should be durable before usage persistence");
 
-    crate::session_goal_lifecycle::persist_goal_turn_usage_context(handle.as_ref(), Some("usage-1"))
-        .expect("first usage snapshot should persist");
+    crate::session_goal_lifecycle::persist_goal_turn_usage_context(
+        handle.as_ref(),
+        Some("usage-1"),
+    )
+    .expect("first usage snapshot should persist");
     let first = handle
         .read(|document| {
             (
@@ -528,8 +535,11 @@ fn goal_usage_system_context_is_idempotent_per_turn_and_appends_changes() {
         })
         .expect("first usage state should be readable");
 
-    crate::session_goal_lifecycle::persist_goal_turn_usage_context(handle.as_ref(), Some("usage-1"))
-        .expect("repeated usage snapshot should be idempotent");
+    crate::session_goal_lifecycle::persist_goal_turn_usage_context(
+        handle.as_ref(),
+        Some("usage-1"),
+    )
+    .expect("repeated usage snapshot should be idempotent");
     let repeated = handle
         .read(|document| {
             (
@@ -539,10 +549,16 @@ fn goal_usage_system_context_is_idempotent_per_turn_and_appends_changes() {
             )
         })
         .expect("repeated usage state should be readable");
-    assert_eq!(repeated, first, "same-turn usage must not create a duplicate event");
+    assert_eq!(
+        repeated, first,
+        "same-turn usage must not create a duplicate event"
+    );
 
-    crate::session_goal_lifecycle::persist_goal_turn_usage_context(handle.as_ref(), Some("usage-2"))
-        .expect("changed usage snapshot should append");
+    crate::session_goal_lifecycle::persist_goal_turn_usage_context(
+        handle.as_ref(),
+        Some("usage-2"),
+    )
+    .expect("changed usage snapshot should append");
     let (user_text, turn_id, usage_contexts, revisions) = handle
         .read(|document| {
             let turn_id = document

@@ -44,9 +44,7 @@ fn needs_delivery_recovery(collaboration: &CollaborationState) -> bool {
         || collaboration
             .inbound_task_messages
             .keys()
-            .any(|delivery| {
-                !collaboration.task_message_effects.contains_key(delivery)
-            })
+            .any(|delivery| !collaboration.task_message_effects.contains_key(delivery))
         || collaboration.notifications.values().any(|notification| {
             matches!(
                 notification.state,

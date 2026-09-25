@@ -509,10 +509,17 @@ impl KnowledgeBaseRuntime {
             staged_paths.push(vec![text(&candidate.relative_path_key)]);
             let bytes = match if confirmation.is_some() {
                 super::file_selection::read_preview_bytes(&candidate.source_path)
-            } else { fs::read(&candidate.source_path) } {
+            } else {
+                fs::read(&candidate.source_path)
+            } {
                 Ok(bytes) => bytes,
                 Err(error) => {
-                    if confirmation.is_some() { return Err(format!("已确认文件 {} 无法读取：{error}，请重新扫描。", candidate.relative_path)); }
+                    if confirmation.is_some() {
+                        return Err(format!(
+                            "已确认文件 {} 无法读取：{error}，请重新扫描。",
+                            candidate.relative_path
+                        ));
+                    }
                     skipped_files += 1;
                     push_warning(
                         &mut warnings,

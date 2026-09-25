@@ -1,8 +1,8 @@
 //! Long-lived generic Vulcan Plugin session runtime backed by LuaSkills leases.
 //! 由 LuaSkills 租约承载的长生命周期通用 Vulcan 插件会话运行时。
 
-mod actions;
 mod action_status;
+mod actions;
 mod authorization;
 mod bridge;
 mod configuration;
@@ -19,8 +19,8 @@ mod sessions;
 
 // Preserve the existing public plugin API at its original module path.
 // 在原模块路径保留既有公开插件API。
-pub use actions::VulcanPluginActionRequest;
 pub use action_status::{VulcanPluginActionIdentity, VulcanPluginActionStatus};
+pub use actions::VulcanPluginActionRequest;
 pub use authorization::{
     VulcanPluginInstallSecretRequirement, VulcanPluginMcpPermissionPreview,
     VulcanPluginPermissionPreview, plugin_permission_key,
@@ -288,7 +288,9 @@ struct VulcanPluginManagerState {
     retained_leases: Mutex<BTreeMap<String, RetainedVulcanPluginLease>>,
     /// Weak plugin/category gates shared by initialization and drain; inactive entries are reclaimed.
     /// 初始化与排空共享的插件及类别弱引用同步门；回收无人持有的条目。
-    persistent_runtime_gates: Mutex<BTreeMap<(String, VulcanPluginPersistentRuntimeKind), std::sync::Weak<AsyncMutex<()>>>>,
+    persistent_runtime_gates: Mutex<
+        BTreeMap<(String, VulcanPluginPersistentRuntimeKind), std::sync::Weak<AsyncMutex<()>>>,
+    >,
     /// Bounded outstanding actions shared across lifecycle generations until actual cleanup.
     /// 跨生命周期代次共享的有界在途 Action，直至实际清理完成。
     action_admissions: Mutex<BTreeMap<String, std::sync::Weak<tokio::sync::Semaphore>>>,
@@ -503,9 +505,9 @@ impl VulcanPluginRuntimeManager {
                 hook_runtimes: Mutex::new(BTreeMap::new()),
                 ui_action_runtimes: Mutex::new(BTreeMap::new()),
                 retained_leases: Mutex::new(BTreeMap::new()),
-            persistent_runtime_gates: Mutex::new(BTreeMap::new()),
-            action_admissions: Mutex::new(BTreeMap::new()),
-            action_records: Mutex::new(BTreeMap::new()),
+                persistent_runtime_gates: Mutex::new(BTreeMap::new()),
+                action_admissions: Mutex::new(BTreeMap::new()),
+                action_records: Mutex::new(BTreeMap::new()),
                 plugin_generations: Mutex::new(BTreeMap::new()),
                 lifecycle_overrides: Mutex::new(BTreeMap::new()),
                 cleanup_diagnostics: Mutex::new(BTreeMap::new()),

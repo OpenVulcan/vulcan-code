@@ -751,9 +751,10 @@ pub(crate) async fn create_and_register_root_session_v1_with_context_window(
     document.set_collaboration_run_control(
         vulcan_session_core::v1::collaboration::SetRunControlInput {
             operation_id:
-                vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(
-                    format!("root-input-running:{session_id}:{}", client_action_id.as_str()),
-                )?,
+                vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(format!(
+                    "root-input-running:{session_id}:{}",
+                    client_action_id.as_str()
+                ))?,
             state: vulcan_session_core::v1::collaboration::CollaborationRunControl::Running,
             changed_at_ms: now_ms,
         },

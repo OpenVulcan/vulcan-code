@@ -47,8 +47,7 @@ async fn finished_child_close_preserves_listener_and_seals_cold_target() {
             |document| {
                 document.reserve_child_task(ReserveChildTaskInput {
                     source_tool_name: invocation.source_tool_id.clone(),
-                    operation_id: CollaborationOperationId::try_new("close-child-reserve")
-                        .unwrap(),
+                    operation_id: CollaborationOperationId::try_new("close-child-reserve").unwrap(),
                     execution_id: execution.clone(),
                     task_id: child.task_id.clone().unwrap(),
                     parent_turn_id: TurnId::try_new(invocation.source_turn_id).unwrap(),
@@ -74,7 +73,9 @@ async fn finished_child_close_preserves_listener_and_seals_cold_target() {
     )
     .unwrap();
     assert_ne!(
-        child_handle.read(|document| document.collaboration_run_control()).unwrap(),
+        child_handle
+            .read(|document| document.collaboration_run_control())
+            .unwrap(),
         CollaborationRunControl::Stopped
     );
     let runtime = {
@@ -93,7 +94,9 @@ async fn finished_child_close_preserves_listener_and_seals_cold_target() {
                 conversation_state: None,
             }],
         );
-        guard.detached_subagent_task_listeners.insert(child_id, execution.as_str().to_owned());
+        guard
+            .detached_subagent_task_listeners
+            .insert(child_id, execution.as_str().to_owned());
         Arc::clone(&guard.agent_runtime.as_ref().unwrap().task_runtime)
     };
     let child_locator = child_handle.storage_locator().unwrap();
@@ -107,11 +110,16 @@ async fn finished_child_close_preserves_listener_and_seals_cold_target() {
     .await
     .unwrap();
     assert_eq!(closed.model_output["closed"], true);
-    assert!(Arc::ptr_eq(&invocation.registry.get(child_id).unwrap(), &child_handle));
+    assert!(Arc::ptr_eq(
+        &invocation.registry.get(child_id).unwrap(),
+        &child_handle
+    ));
     {
         let mut guard = invocation.state.lock().unwrap();
         assert!(crate::clear_webui_detached_listener_execution_if_current(
-            &mut guard, child_id, execution.as_str(),
+            &mut guard,
+            child_id,
+            execution.as_str(),
         ));
     }
     crate::agent_collaboration::release_closed_child_handle(&invocation.state, child_id)

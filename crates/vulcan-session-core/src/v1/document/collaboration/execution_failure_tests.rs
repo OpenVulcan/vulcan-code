@@ -15,10 +15,7 @@ use crate::v1::ids::ClientActionId;
 /// 有或没有 API 的丢失执行均以中断闭合，并可通过可靠重建校验。
 #[test]
 fn abandoned_execution_closes_active_api_without_user_stop() {
-    for purpose in [
-        None,
-        Some(ApiPurposeKind::MainGeneration),
-    ] {
+    for purpose in [None, Some(ApiPurposeKind::MainGeneration)] {
         let mut document = SessionDocument::new("lost-execution", "project", "target", 1);
         document
             .submit_root_input(

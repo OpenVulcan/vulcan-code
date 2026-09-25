@@ -159,7 +159,8 @@ fn vce_settings_save_keeps_public_ai_transaction_out_of_the_workbench_refresh() 
             ServiceEventEmitter::new(Vec::new()),
             vce::vce_publication_authority(&state),
         );
-        let center = crate::workspace_watcher::WorkspaceWatcherCenter::new().expect("physical watcher");
+        let center =
+            crate::workspace_watcher::WorkspaceWatcherCenter::new().expect("physical watcher");
         let watcher = vce::VceWatcherService::new(
             &center,
             manager.clone(),
@@ -202,7 +203,10 @@ fn vce_settings_save_keeps_public_ai_transaction_out_of_the_workbench_refresh() 
         assert!(result.is_ok(), "settings save must succeed under the probe");
         stop_probe.store(true, std::sync::atomic::Ordering::Release);
         let mut samples = probe.await.expect("probe join");
-        assert!(!samples.is_empty(), "probe must observe the transaction lock");
+        assert!(
+            !samples.is_empty(),
+            "probe must observe the transaction lock"
+        );
         samples.sort_unstable();
         assert!(
             samples[samples.len() - 1] < WAIT_BOUND_US,

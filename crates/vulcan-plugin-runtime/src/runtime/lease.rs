@@ -187,8 +187,14 @@ impl VulcanPluginRuntimeManager {
             // Initialization consumes the original Action budget after blocking-queue admission.
             // 初始化在进入阻塞执行后消耗原始 Action 预算。
             if let Some(deadline) = super::action_status::callback_deadline() {
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now()).as_millis() as u64;
-                if remaining == 0 { return Err(VulcanPluginRuntimeError::new("Plugin initialization deadline exceeded.")); }
+                let remaining = deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_millis() as u64;
+                if remaining == 0 {
+                    return Err(VulcanPluginRuntimeError::new(
+                        "Plugin initialization deadline exceeded.",
+                    ));
+                }
                 load_request["timeout_ms"] = json!(remaining.min(VULCAN_PLUGIN_PROBE_TIMEOUT_MS));
             }
             let raw = engine
@@ -208,13 +214,21 @@ impl VulcanPluginRuntimeManager {
             return match cleanup_result {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => {
-                    let diagnostic = format!("{error}; failed to close rejected bridge lease: {cleanup_error}");
-                    self.retain_failed_lease(super::RetainedVulcanPluginLease {
-                        plugin_id: manifest.id.clone(), owner_session_id: None,
-                        lease_id, sid, generation, reserved_session_slot: false,
-                    }, diagnostic.clone())?;
+                    let diagnostic =
+                        format!("{error}; failed to close rejected bridge lease: {cleanup_error}");
+                    self.retain_failed_lease(
+                        super::RetainedVulcanPluginLease {
+                            plugin_id: manifest.id.clone(),
+                            owner_session_id: None,
+                            lease_id,
+                            sid,
+                            generation,
+                            reserved_session_slot: false,
+                        },
+                        diagnostic.clone(),
+                    )?;
                     Err(VulcanPluginRuntimeError::new(diagnostic))
-                },
+                }
             };
         }
         Ok((lease_id, sid, generation))

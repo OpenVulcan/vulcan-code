@@ -217,7 +217,10 @@ async fn cross_project_listing_and_reading_follow_read_grant_scope() {
     )
     .await
     .unwrap_err();
-    assert!(denied_at_admission.contains("grant"), "{denied_at_admission}");
+    assert!(
+        denied_at_admission.contains("grant"),
+        "{denied_at_admission}"
+    );
     let dispatch = dispatch.retool(READ_SESSION_TOOL_ID).await;
     let revoked = dispatch
         .invoke(AgentCollaborationCommand::ReadSession(ReadSessionArgs {

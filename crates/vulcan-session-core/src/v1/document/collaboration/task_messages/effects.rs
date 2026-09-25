@@ -48,7 +48,10 @@ impl SessionDocument {
             .filter(|(delivery_id, acceptance)| {
                 acceptance.message.kind == CollaborationTaskMessageKind::TaskSteer
                     && acceptance.message.target.turn_id == Some(turn_id)
-                    && !self.collaboration_state().task_message_effects.contains_key(*delivery_id)
+                    && !self
+                        .collaboration_state()
+                        .task_message_effects
+                        .contains_key(*delivery_id)
             })
             .map(|(delivery_id, _)| delivery_id.clone())
             .collect::<Vec<_>>();

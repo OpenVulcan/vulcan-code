@@ -344,11 +344,12 @@ fn draft_and_queued_crud_are_atomic_idempotent_and_reload_strict() -> Result<(),
         Some(second_identity.clone())
     );
     assert_eq!(doc.metadata.input_state.queued_inputs.len(), 1);
-    assert!(doc
-        .metadata
-        .input_state
-        .pending_staging_release_actions
-        .contains(&second_identity.client_action_id));
+    assert!(
+        doc.metadata
+            .input_state
+            .pending_staging_release_actions
+            .contains(&second_identity.client_action_id)
+    );
     assert_eq!(
         doc.queued_input_identity_for_action(&second_identity.client_action_id)?,
         Some(second_identity.clone())
@@ -369,17 +370,23 @@ fn draft_and_queued_crud_are_atomic_idempotent_and_reload_strict() -> Result<(),
     assert_eq!(restored.memory_revision(), revision);
     // The release intent survives a reconstructed V1 document until the asset index confirms cleanup.
     // 释放意图在 V1 文档重建后仍然保留，直到资产索引确认清理。
-    assert!(restored
-        .metadata
-        .input_state
-        .pending_staging_release_actions
-        .contains(&second_identity.client_action_id));
-    assert!(restored
-        .acknowledge_queued_staging_release(&second_identity.client_action_id, T0 + 7)?
-        .changed());
-    assert!(!restored
-        .acknowledge_queued_staging_release(&second_identity.client_action_id, T0 + 7)?
-        .changed());
+    assert!(
+        restored
+            .metadata
+            .input_state
+            .pending_staging_release_actions
+            .contains(&second_identity.client_action_id)
+    );
+    assert!(
+        restored
+            .acknowledge_queued_staging_release(&second_identity.client_action_id, T0 + 7)?
+            .changed()
+    );
+    assert!(
+        !restored
+            .acknowledge_queued_staging_release(&second_identity.client_action_id, T0 + 7)?
+            .changed()
+    );
 
     assert!(
         restored
@@ -416,11 +423,13 @@ fn draft_and_queued_crud_are_atomic_idempotent_and_reload_strict() -> Result<(),
             .remove_queued_input(first_identity.clone(), T0 + 13)?
             .changed()
     );
-    assert!(restored
-        .metadata
-        .input_state
-        .pending_staging_release_actions
-        .contains(&first_identity.client_action_id));
+    assert!(
+        restored
+            .metadata
+            .input_state
+            .pending_staging_release_actions
+            .contains(&first_identity.client_action_id)
+    );
     let persisted_metadata = serde_json::from_str(
         &serde_json::to_string(&restored.metadata).expect("metadata must serialize"),
     )
@@ -645,11 +654,13 @@ fn guided_queued_input_is_durable_idempotent_and_same_turn() -> Result<(), Domai
     let first_receipt = first.into_value();
     assert_eq!(first_receipt.turn_id, root_turn_id);
     assert!(document.metadata.input_state.queued_inputs.is_empty());
-    assert!(document
-        .metadata
-        .input_state
-        .pending_staging_release_actions
-        .contains(&identity.client_action_id));
+    assert!(
+        document
+            .metadata
+            .input_state
+            .pending_staging_release_actions
+            .contains(&identity.client_action_id)
+    );
     assert_eq!(
         document.metadata.input_state.pending_in_turn_inputs.len(),
         1
@@ -709,11 +720,13 @@ fn guided_queued_input_is_durable_idempotent_and_same_turn() -> Result<(), Domai
         document.segment_catalog().to_vec(),
         document.events().to_vec(),
     )?;
-    assert!(restored
-        .metadata
-        .input_state
-        .pending_staging_release_actions
-        .contains(&identity.client_action_id));
+    assert!(
+        restored
+            .metadata
+            .input_state
+            .pending_staging_release_actions
+            .contains(&identity.client_action_id)
+    );
     let restored_revision = restored.memory_revision();
     let restored_retry = restored.promote_queued_input_to_pending_turn(identity, T0 + 8)?;
     assert!(!restored_retry.changed());

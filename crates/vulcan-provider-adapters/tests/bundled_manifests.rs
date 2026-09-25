@@ -110,7 +110,10 @@ fn bundled_tool_schema_projection_stays_explicit_and_closed() {
         );
         let document: Value = serde_json::from_str(&text)
             .unwrap_or_else(|error| panic!("parse bundled manifest JSON `{provider_id}`: {error}"));
-        for rule in document["model_rules"].as_array().expect("model_rules array") {
+        for rule in document["model_rules"]
+            .as_array()
+            .expect("model_rules array")
+        {
             let rule_id = rule["rule_id"].as_str().unwrap_or("(anonymous)");
             let projection = rule["tool_schema_projection"].as_str();
             assert!(
@@ -136,7 +139,10 @@ fn bundled_manifest_model_defaults_are_self_contained() {
     for (owner, text) in &manifests {
         let document: Value =
             serde_json::from_str(text).unwrap_or_else(|error| panic!("parse `{owner}`: {error}"));
-        for rule in document["model_rules"].as_array().expect("model_rules array") {
+        for rule in document["model_rules"]
+            .as_array()
+            .expect("model_rules array")
+        {
             if let Some(value) = rule["matcher"]["value"].as_str() {
                 declared_elsewhere.push((owner.clone(), value.to_string()));
             }
@@ -156,8 +162,8 @@ fn bundled_manifest_model_defaults_are_self_contained() {
             .expect("bundled manifest must expose one service entry")
             .id
             .as_str();
-        let document: Value =
-            serde_json::from_str(text).unwrap_or_else(|error| panic!("parse `{provider_id}`: {error}"));
+        let document: Value = serde_json::from_str(text)
+            .unwrap_or_else(|error| panic!("parse `{provider_id}`: {error}"));
         let own_declarations: BTreeSet<&str> = document["model_rules"]
             .as_array()
             .expect("model_rules array")

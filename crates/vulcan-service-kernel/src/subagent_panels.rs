@@ -374,10 +374,7 @@ pub(super) async fn service_close_subagent_task(
         .ok_or_else(|| {
             format!("agent task `{task_session_id}` is not open under parent `{parent_session_id}`")
         })?;
-        (
-            entry.parent_session_id.as_uuid(),
-            entry.agent_id,
-        )
+        (entry.parent_session_id.as_uuid(), entry.agent_id)
     };
     webui_trace(
         "close_subagent_task_requested",

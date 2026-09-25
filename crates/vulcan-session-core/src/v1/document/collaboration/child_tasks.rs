@@ -748,11 +748,7 @@ mod tests {
                 .expect("reservation must commit");
 
             let terminal = document
-                .terminal_child_task(terminal_input(
-                    operation("terminal-fail"),
-                    task_id,
-                    outcome,
-                ))
+                .terminal_child_task(terminal_input(operation("terminal-fail"), task_id, outcome))
                 .expect("reserved failure or stop must be terminalizable")
                 .into_value();
             assert_eq!(terminal.task.state, CollaborationChildTaskState::Terminal);

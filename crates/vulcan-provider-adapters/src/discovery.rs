@@ -2627,14 +2627,12 @@ fn openrouter_capability_evidence(model: &OpenRouterModelEntry) -> ModelCapabili
     let architecture = model.architecture.as_ref();
     ModelCapabilityEvidence {
         context_limit_declared: openrouter_declared_token_limit(model.context_length).is_some()
-            || model
-                .top_provider
-                .as_ref()
-                .is_some_and(|provider| openrouter_declared_token_limit(provider.context_length).is_some()),
-        output_limit_declared: model
-            .top_provider
-            .as_ref()
-            .is_some_and(|provider| openrouter_declared_token_limit(provider.max_completion_tokens).is_some()),
+            || model.top_provider.as_ref().is_some_and(|provider| {
+                openrouter_declared_token_limit(provider.context_length).is_some()
+            }),
+        output_limit_declared: model.top_provider.as_ref().is_some_and(|provider| {
+            openrouter_declared_token_limit(provider.max_completion_tokens).is_some()
+        }),
         input_modalities_declared: architecture
             .is_some_and(|architecture| architecture.input_modalities.is_some()),
         output_modalities_declared: architecture
@@ -2663,7 +2661,10 @@ fn openrouter_effective_context_limit(model: &OpenRouterModelEntry) -> Option<u6
         .top_provider
         .as_ref()
         .and_then(|provider| openrouter_declared_token_limit(provider.context_length));
-    match (openrouter_declared_token_limit(model.context_length), provider_context_limit) {
+    match (
+        openrouter_declared_token_limit(model.context_length),
+        provider_context_limit,
+    ) {
         (Some(model_limit), Some(provider_limit)) => Some(model_limit.min(provider_limit)),
         (Some(model_limit), None) => Some(model_limit),
         (None, Some(provider_limit)) => Some(provider_limit),

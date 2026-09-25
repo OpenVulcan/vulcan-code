@@ -5,7 +5,9 @@ use std::path::Path;
 
 use vulcan_host_tools::output_decode::decode_shell_output_bytes;
 
-use super::command::{format_webui_git_error, run_webui_git_command, run_webui_git_mutating_command};
+use super::command::{
+    format_webui_git_error, run_webui_git_command, run_webui_git_mutating_command,
+};
 use super::diff::{ensure_webui_git_ref_text, load_webui_current_git_branch, webui_git_ref_exists};
 use super::model::{
     WEBUI_GIT_HISTORY_MAX_PAGE_SIZE, WEBUI_GIT_HISTORY_PAGE_SIZE, WebuiGitHistoryCommit,
@@ -173,7 +175,10 @@ fn load_webui_head_is_unborn(repository_root: &Path) -> Result<bool, String> {
 fn parse_webui_git_history_records(text: &str) -> Vec<WebuiGitHistoryCommit> {
     text.split('\x1e')
         .filter_map(|record| {
-            let fields = record.trim_start_matches('\n').splitn(9, '\x1f').collect::<Vec<_>>();
+            let fields = record
+                .trim_start_matches('\n')
+                .splitn(9, '\x1f')
+                .collect::<Vec<_>>();
             if fields.len() < 9 || fields[0].trim().is_empty() {
                 return None;
             }
@@ -196,7 +201,11 @@ fn parse_webui_git_history_records(text: &str) -> Vec<WebuiGitHistoryCommit> {
 /// 将单个完整名称的 `%D` 装饰列表解析为图谱引用标签。
 fn parse_webui_git_history_refs(decoration: &str) -> Vec<WebuiGitHistoryRef> {
     let mut refs = Vec::new();
-    for item in decoration.split(", ").map(str::trim).filter(|item| !item.is_empty()) {
+    for item in decoration
+        .split(", ")
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
         if item == "HEAD" {
             refs.push(WebuiGitHistoryRef {
                 name: String::from("HEAD"),
@@ -290,13 +299,23 @@ mod tests {
         let root = repository.path();
         let git = |args: &[&str]| {
             let output = run_webui_git_mutating_command(root, args).expect("git should run");
-            assert!(output.status.success(), "{}", format_webui_git_error("git", &output));
+            assert!(
+                output.status.success(),
+                "{}",
+                format_webui_git_error("git", &output)
+            );
         };
         git(&["init", "--quiet", "--initial-branch=main"]);
         git(&["config", "user.name", "Vulcan Test"]);
         git(&["config", "user.email", "vulcan@example.com"]);
         for index in 0..3 {
-            git(&["commit", "--quiet", "--allow-empty", "-m", &format!("commit {index}")]);
+            git(&[
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                &format!("commit {index}"),
+            ]);
         }
         let first = load_webui_git_history_page(
             root,
@@ -310,7 +329,12 @@ mod tests {
         assert_eq!(first.commits.len(), 2);
         assert!(first.has_more);
         assert_eq!(first.commits[0].subject, "commit 2");
-        assert!(first.commits[0].refs.iter().any(|item| item.head && item.name == "main"));
+        assert!(
+            first.commits[0]
+                .refs
+                .iter()
+                .any(|item| item.head && item.name == "main")
+        );
         let second = load_webui_git_history_page(
             root,
             &WebuiGitHistoryRequest {
@@ -331,7 +355,11 @@ mod tests {
         let root = repository.path();
         let git = |args: &[&str]| {
             let output = run_webui_git_mutating_command(root, args).expect("git should run");
-            assert!(output.status.success(), "{}", format_webui_git_error("git", &output));
+            assert!(
+                output.status.success(),
+                "{}",
+                format_webui_git_error("git", &output)
+            );
         };
         git(&["init", "--quiet", "--initial-branch=main"]);
         git(&["config", "user.name", "Vulcan Test"]);
@@ -351,9 +379,18 @@ mod tests {
         let branches = load_webui_git_local_branches(root).expect("branches should load");
         assert_eq!(branches.current_branch.as_deref(), Some("vulcan/topic"));
         assert!(branches.branches.iter().any(|name| name == "main"));
-        assert!(switch("vulcan/topic", true).is_err(), "duplicate branch must be rejected");
-        assert!(switch("missing", false).is_err(), "unknown branch must be rejected");
-        assert!(switch("bad..name", true).is_err(), "invalid ref format must be rejected");
+        assert!(
+            switch("vulcan/topic", true).is_err(),
+            "duplicate branch must be rejected"
+        );
+        assert!(
+            switch("missing", false).is_err(),
+            "unknown branch must be rejected"
+        );
+        assert!(
+            switch("bad..name", true).is_err(),
+            "invalid ref format must be rejected"
+        );
         switch("main", false).expect("existing branch should be checked out");
         let branches = load_webui_git_local_branches(root).expect("branches should load");
         assert_eq!(branches.current_branch.as_deref(), Some("main"));

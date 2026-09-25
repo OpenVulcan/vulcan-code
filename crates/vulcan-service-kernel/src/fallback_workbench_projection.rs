@@ -78,7 +78,11 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         mcp_tools: Vec::new(),
         reasoning_selection: reasoning_selection(&provider_configuration, None),
         thinking_display_mode: workbench_thinking_display_mode(&provider_configuration),
-        tool_collapse_default_enabled: Some(provider_configuration.tool_collapse_default_enabled.unwrap_or(true)),
+        tool_collapse_default_enabled: Some(
+            provider_configuration
+                .tool_collapse_default_enabled
+                .unwrap_or(true),
+        ),
         git_commit: git_commit_settings(&provider_configuration),
         provider_retry: provider_retry_settings(&provider_configuration),
         provider_request_trace_enabled: provider_configuration.provider_request_trace_enabled,

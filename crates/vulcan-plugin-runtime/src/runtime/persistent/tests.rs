@@ -22,33 +22,78 @@ fn initialization_retirement_rejects_old_publication_and_reopen_shares_one_lease
     fs::create_dir_all(&plugins).unwrap();
     write_hook_package(&plugins);
     let manager = test_manager(temp.path(), plugins);
-    let catalog = manager.refresh_catalog(&BTreeSet::new(), &BTreeSet::new()).unwrap();
-    let identity = crate::VulcanPluginActionIdentity { client_id: Uuid::new_v4().to_string(), invocation_id: Uuid::new_v4().to_string() };
-    let runtime_identity = format!("{}:{}", catalog.service_epoch, catalog.plugins["hook-plugin"].generation);
+    let catalog = manager
+        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+        .unwrap();
+    let identity = crate::VulcanPluginActionIdentity {
+        client_id: Uuid::new_v4().to_string(),
+        invocation_id: Uuid::new_v4().to_string(),
+    };
+    let runtime_identity = format!(
+        "{}:{}",
+        catalog.service_epoch, catalog.plugins["hook-plugin"].generation
+    );
     let engine = manager.runtime_engine().unwrap();
     let engine_guard = engine.write().unwrap();
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
     runtime.block_on(async {
         let worker = manager.clone();
         let child_identity = identity.clone();
         let child_runtime = runtime_identity.clone();
         let root = temp.path().to_owned();
-        let initializing = tokio::spawn(async move { worker.invoke_ui_action(VulcanPluginActionRequest {
-            plugin_id: "hook-plugin".into(), action_id: "ui-action".into(), arguments: json!({}),
-            caller: crate::VulcanPluginActionCaller::PluginUi, workspace_root: root, reuse_enabled_runtime: true,
-        }, &child_runtime, child_identity).await });
+        let initializing = tokio::spawn(async move {
+            worker
+                .invoke_ui_action(
+                    VulcanPluginActionRequest {
+                        plugin_id: "hook-plugin".into(),
+                        action_id: "ui-action".into(),
+                        arguments: json!({}),
+                        caller: crate::VulcanPluginActionCaller::PluginUi,
+                        workspace_root: root,
+                        reuse_enabled_runtime: true,
+                    },
+                    &child_runtime,
+                    child_identity,
+                )
+                .await
+        });
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
-                if manager.find_action_status("hook-plugin", &runtime_identity, &identity, false).unwrap().is_some_and(|status| status.phase == "initializing") { break; }
+                if manager
+                    .find_action_status("hook-plugin", &runtime_identity, &identity, false)
+                    .unwrap()
+                    .is_some_and(|status| status.phase == "initializing")
+                {
+                    break;
+                }
                 tokio::task::yield_now().await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         manager.begin_draining("hook-plugin").unwrap();
         drop(engine_guard);
         assert!(initializing.await.unwrap().is_err());
         assert!(manager.state.ui_action_runtimes.lock().unwrap().is_empty());
-        assert!(manager.drain_plugin_sessions("hook-plugin").await.unwrap().failures.is_empty());
-        let current = manager.finish_lifecycle_transition("hook-plugin", &BTreeSet::new(), &BTreeSet::new(), Vec::new()).unwrap();
+        assert!(
+            manager
+                .drain_plugin_sessions("hook-plugin")
+                .await
+                .unwrap()
+                .failures
+                .is_empty()
+        );
+        let current = manager
+            .finish_lifecycle_transition(
+                "hook-plugin",
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                Vec::new(),
+            )
+            .unwrap();
         let generation = current.plugins["hook-plugin"].generation;
         let (first, second) = tokio::join!(
             manager.ensure_enabled_plugin_runtime("hook-plugin", generation, UiAction),
@@ -70,39 +115,97 @@ fn explicit_cancellation_and_mutation_detachment_have_distinct_outcomes() {
         write_hook_package(&plugins);
         if mutation {
             let path = plugins.join("hook-plugin/plugin.yaml");
-            fs::write(&path, fs::read_to_string(&path).unwrap().replace("effect: read", "effect: mutation")).unwrap();
+            fs::write(
+                &path,
+                fs::read_to_string(&path)
+                    .unwrap()
+                    .replace("effect: read", "effect: mutation"),
+            )
+            .unwrap();
         }
         let manager = test_manager(temp.path(), plugins);
-        let catalog = manager.refresh_catalog(&BTreeSet::new(), &BTreeSet::new()).unwrap();
+        let catalog = manager
+            .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+            .unwrap();
         let generation = catalog.plugins["hook-plugin"].generation;
         let runtime_identity = format!("{}:{}", catalog.service_epoch, generation);
-        let identity = crate::VulcanPluginActionIdentity { client_id: Uuid::new_v4().to_string(), invocation_id: Uuid::new_v4().to_string() };
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let identity = crate::VulcanPluginActionIdentity {
+            client_id: Uuid::new_v4().to_string(),
+            invocation_id: Uuid::new_v4().to_string(),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
         runtime.block_on(async {
-            let lease = manager.ensure_enabled_plugin_runtime("hook-plugin", generation, UiAction).await.unwrap();
+            let lease = manager
+                .ensure_enabled_plugin_runtime("hook-plugin", generation, UiAction)
+                .await
+                .unwrap();
             let held = lease.operation_gate.lock().await;
             let worker = manager.clone();
             let child_identity = identity.clone();
             let child_runtime = runtime_identity.clone();
-            let request = VulcanPluginActionRequest { plugin_id: "hook-plugin".into(), action_id: "ui-action".into(), arguments: json!({}), caller: crate::VulcanPluginActionCaller::PluginUi, workspace_root: temp.path().to_owned(), reuse_enabled_runtime: true };
+            let request = VulcanPluginActionRequest {
+                plugin_id: "hook-plugin".into(),
+                action_id: "ui-action".into(),
+                arguments: json!({}),
+                caller: crate::VulcanPluginActionCaller::PluginUi,
+                workspace_root: temp.path().to_owned(),
+                reuse_enabled_runtime: true,
+            };
             let submitted_request = request.clone();
-            let submitted = tokio::spawn(async move { worker.invoke_ui_action(submitted_request, &child_runtime, child_identity).await });
+            let submitted = tokio::spawn(async move {
+                worker
+                    .invoke_ui_action(submitted_request, &child_runtime, child_identity)
+                    .await
+            });
             tokio::time::timeout(std::time::Duration::from_secs(2), async {
                 loop {
-                    if manager.find_action_status("hook-plugin", &runtime_identity, &identity, false).unwrap().is_some_and(|status| status.phase == "operation_wait") { break; }
+                    if manager
+                        .find_action_status("hook-plugin", &runtime_identity, &identity, false)
+                        .unwrap()
+                        .is_some_and(|status| status.phase == "operation_wait")
+                    {
+                        break;
+                    }
                     tokio::task::yield_now().await;
                 }
-            }).await.unwrap();
-            manager.action_status("hook-plugin", &runtime_identity, &identity, true).unwrap();
-            if mutation { submitted.abort(); assert!(submitted.await.unwrap_err().is_cancelled()); }
-            else { assert!(submitted.await.unwrap().is_err()); }
+            })
+            .await
+            .unwrap();
+            manager
+                .action_status("hook-plugin", &runtime_identity, &identity, true)
+                .unwrap();
+            if mutation {
+                submitted.abort();
+                assert!(submitted.await.unwrap_err().is_cancelled());
+            } else {
+                assert!(submitted.await.unwrap().is_err());
+            }
             drop(held);
             tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                while !manager.action_status("hook-plugin", &runtime_identity, &identity, false).unwrap().terminal { tokio::task::yield_now().await; }
-            }).await.unwrap();
-            let status = manager.action_status("hook-plugin", &runtime_identity, &identity, false).unwrap();
-            assert_eq!(status.phase, if mutation { "succeeded" } else { "cancelled" });
-            assert_eq!(manager.invoke_action(request).await.unwrap()["count"], if mutation { 200 } else { 100 });
+                while !manager
+                    .action_status("hook-plugin", &runtime_identity, &identity, false)
+                    .unwrap()
+                    .terminal
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let status = manager
+                .action_status("hook-plugin", &runtime_identity, &identity, false)
+                .unwrap();
+            assert_eq!(
+                status.phase,
+                if mutation { "succeeded" } else { "cancelled" }
+            );
+            assert_eq!(
+                manager.invoke_action(request).await.unwrap()["count"],
+                if mutation { 200 } else { 100 }
+            );
         });
     }
 }

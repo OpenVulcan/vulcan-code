@@ -26,8 +26,8 @@ use super::session_goal_lifecycle::{
 use super::session_runtime_registry_v1::SessionHandle;
 use super::{
     SessionId, SharedServiceBridgeState, composer_attachment_summary_from_core,
-    composer_attachment_workspace_path_from_snapshot,
-    emit_pending_prompts_changed_delta, parse_session_id, selected_session_id_from_state,
+    composer_attachment_workspace_path_from_snapshot, emit_pending_prompts_changed_delta,
+    parse_session_id, selected_session_id_from_state,
 };
 
 /// Resolves the same project attachment root used at queue admission.
@@ -53,11 +53,7 @@ pub(crate) fn pending_prompt_attachment_workspace_path(
         .workspace_snapshot
         .as_ref()
         .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-    composer_attachment_workspace_path_from_snapshot(
-        snapshot,
-        None,
-        Some(&session_id.to_string()),
-    )
+    composer_attachment_workspace_path_from_snapshot(snapshot, None, Some(&session_id.to_string()))
 }
 
 /// Retries only V1-recorded queue attachment releases after a session is loaded.
@@ -124,7 +120,6 @@ pub(crate) fn pending_prompt_queue_identity(
         .map_err(|error| format!("解析 V1 待发送消息身份失败：{error}"))?;
     identity.ok_or_else(|| format!("没有找到待发送消息 `{}`。", client_action_id.as_str()))
 }
-
 
 /// Rebuilds only the visible queue panel from authoritative V1 metadata.
 /// 仅从权威 V1 metadata 重建可见队列面板。
@@ -301,12 +296,11 @@ pub(super) async fn service_edit_pending_prompt(
         &attachments,
         created_at_ms,
     );
-    let attachment_release =
-        reconcile_pending_prompt_attachment_leases(
-            handle.as_ref(),
-            selected_session_id,
-            &attachment_workspace_path,
-        );
+    let attachment_release = reconcile_pending_prompt_attachment_leases(
+        handle.as_ref(),
+        selected_session_id,
+        &attachment_workspace_path,
+    );
     // The durable move is already committed. Projection failure must not disguise it as a pre-commit error.
     // 持久移动已经提交；投影失败不能伪装成提交前错误。
     let panel_projection = rebuild_pending_prompt_panel_from_v1(
@@ -540,11 +534,13 @@ mod tests {
         let pending_document = load_session_v1_full(&locator)
             .expect("restart from the persisted pending release")
             .document;
-        assert!(pending_document
-            .metadata
-            .input_state
-            .pending_staging_release_actions
-            .contains(&action));
+        assert!(
+            pending_document
+                .metadata
+                .input_state
+                .pending_staging_release_actions
+                .contains(&action)
+        );
         let handle = SessionHandle::new(session_id, locator.clone(), pending_document);
         let workspace = tempfile::tempdir().expect("isolated attachment workspace");
         let workspace_path = workspace.path().to_string_lossy().into_owned();
@@ -553,36 +549,44 @@ mod tests {
         let index_path = index_directory.join("assets.json");
         std::fs::write(&index_path, b"invalid json").expect("inject unreadable asset index");
 
-        assert!(reconcile_pending_prompt_attachment_leases(
-            handle.as_ref(),
-            session_id,
-            &workspace_path,
-        )
-        .is_err());
-        assert!(handle
-            .read(|document| document
-                .metadata
-                .input_state
-                .pending_staging_release_actions
-                .contains(&action))
-            .expect("read retained repair intent"));
+        assert!(
+            reconcile_pending_prompt_attachment_leases(
+                handle.as_ref(),
+                session_id,
+                &workspace_path,
+            )
+            .is_err()
+        );
+        assert!(
+            handle
+                .read(|document| document
+                    .metadata
+                    .input_state
+                    .pending_staging_release_actions
+                    .contains(&action))
+                .expect("read retained repair intent")
+        );
 
         std::fs::remove_file(&index_path).expect("restore readable asset index");
         reconcile_pending_prompt_attachment_leases(handle.as_ref(), session_id, &workspace_path)
             .expect("retry should release and acknowledge");
-        assert!(handle
-            .read(|document| document
+        assert!(
+            handle
+                .read(|document| document
+                    .metadata
+                    .input_state
+                    .pending_staging_release_actions
+                    .is_empty())
+                .expect("read acknowledged intent")
+        );
+        let reloaded = load_session_v1_full(&locator).expect("reload durable V1 session");
+        assert!(
+            reloaded
+                .document
                 .metadata
                 .input_state
                 .pending_staging_release_actions
-                .is_empty())
-            .expect("read acknowledged intent"));
-        let reloaded = load_session_v1_full(&locator).expect("reload durable V1 session");
-        assert!(reloaded
-            .document
-            .metadata
-            .input_state
-            .pending_staging_release_actions
-            .is_empty());
+                .is_empty()
+        );
     }
 }

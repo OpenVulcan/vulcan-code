@@ -231,13 +231,7 @@ pub(super) async fn require_source_acknowledgements(
             .await?;
         }
         for receipt in task_receipts {
-            require_task_target_acknowledgement(
-                controller,
-                registry,
-                *target_id,
-                &receipt,
-            )
-            .await?;
+            require_task_target_acknowledgement(controller, registry, *target_id, &receipt).await?;
         }
     }
     Ok(())
@@ -402,12 +396,7 @@ async fn require_source_acknowledgement(
     // 稳定事件证明目标回执；后续归档修订不能替换该事件。
     let event_seq = operations
         .get(&settlement.target_operation_id)
-        .ok_or_else(|| {
-            invalid(
-                target_id,
-                "Target settlement has no operation receipt.",
-            )
-        })?
+        .ok_or_else(|| invalid(target_id, "Target settlement has no operation receipt."))?
         .event_seq;
     // Both source identities already participate in the caller's global lifecycle lock order.
     // 两个来源身份均已参与调用方的全局生命周期锁顺序。
@@ -457,13 +446,7 @@ async fn require_source_acknowledgement(
                     "Settlement source metadata identity changed.",
                 ));
             }
-            verify_acknowledgement(
-                target_id,
-                &loaded.document,
-                delivery,
-                event_seq,
-                revision,
-            )?;
+            verify_acknowledgement(target_id, &loaded.document, delivery, event_seq, revision)?;
         }
         Err(error) => return Err(error.into()),
     }
@@ -568,7 +551,10 @@ async fn require_notification_source_acknowledgement(
     )
     .map_err(|error| invalid(target_id, error.to_string()))?;
     let operation = operations.get(&projection_id).ok_or_else(|| {
-        invalid(target_id, "Projected notification has no target operation receipt.")
+        invalid(
+            target_id,
+            "Projected notification has no target operation receipt.",
+        )
     })?;
     if !matches!(
         &operation.semantic,
@@ -597,7 +583,10 @@ async fn require_notification_source_acknowledgement(
         return Ok(());
     };
     if root.project_id() != notification.source.project_id {
-        return Err(invalid(target_id, "Notification source root project changed."));
+        return Err(invalid(
+            target_id,
+            "Notification source root project changed.",
+        ));
     }
     let locator = if source_id == root_id {
         root

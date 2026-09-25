@@ -457,19 +457,20 @@ impl PublicAiRuntime {
         // activeManifest 是当前冻结代际的唯一系统路由权威。
         let active_manifest = catalog_snapshot.manifests.manifest_arc(provider_id);
         let protocol_binding = match provider.kind {
-            crate::ProviderKind::System => match &active_manifest {
-                Some(manifest) => {
-                    // The activation transaction freezes the system binding together with its
-                    // model catalog. Request execution reads that immutable fact and verifies its
-                    // manifest generation instead of traversing rules again.
-                    // 激活事务把系统绑定与模型目录一同冻结。请求执行读取该不可变事实并校验其
-                    // Manifest 代际，而不是再次遍历规则。
-                    let binding = model.resolved_protocol_binding.clone().ok_or_else(|| {
+            crate::ProviderKind::System => {
+                match &active_manifest {
+                    Some(manifest) => {
+                        // The activation transaction freezes the system binding together with its
+                        // model catalog. Request execution reads that immutable fact and verifies its
+                        // manifest generation instead of traversing rules again.
+                        // 激活事务把系统绑定与模型目录一同冻结。请求执行读取该不可变事实并校验其
+                        // Manifest 代际，而不是再次遍历规则。
+                        let binding = model.resolved_protocol_binding.clone().ok_or_else(|| {
                         format!(
                             "Model `{model_id}` is not executable: no system protocol binding was frozen at the active catalog boundary."
                         )
                     })?;
-                    let source_is_current = match binding.source {
+                        let source_is_current = match binding.source {
                         crate::provider_manifest::ModelProtocolBindingSource::SystemManifest => true,
                         crate::provider_manifest::ModelProtocolBindingSource::SystemUser => {
                             configuration
@@ -482,20 +483,21 @@ impl PublicAiRuntime {
                         }
                         _ => false,
                     };
-                    if !source_is_current || binding.manifest_revision != manifest.revision {
+                        if !source_is_current || binding.manifest_revision != manifest.revision {
+                            return Err(format!(
+                                "Model `{model_id}` frozen binding does not belong to active manifest revision {}.",
+                                manifest.revision
+                            ));
+                        }
+                        binding
+                    }
+                    None => {
                         return Err(format!(
-                            "Model `{model_id}` frozen binding does not belong to active manifest revision {}.",
-                            manifest.revision
+                            "Provider `{provider_id}` has no active system manifest; model `{model_id}` execution is blocked."
                         ));
                     }
-                    binding
                 }
-                None => {
-                    return Err(format!(
-                        "Provider `{provider_id}` has no active system manifest; model `{model_id}` execution is blocked."
-                    ));
-                }
-            },
+            }
             crate::ProviderKind::Custom => {
                 // Custom bindings freeze at the catalog activation boundary; execution reads
                 // the frozen binding only. A missing binding is a blocked catalog fact and must

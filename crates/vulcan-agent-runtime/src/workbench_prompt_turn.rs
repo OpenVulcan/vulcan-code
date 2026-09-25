@@ -1047,7 +1047,12 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             runtime_state.conversation_state.continuation = Default::default();
             runtime_state.updated_at = now.clone();
         }
-        if let Some(target_message_id) = input.start.canonical_user_message_id.as_deref().filter(|_| input.start.observes_user) {
+        if let Some(target_message_id) = input
+            .start
+            .canonical_user_message_id
+            .as_deref()
+            .filter(|_| input.start.observes_user)
+        {
             // now is shared by the atomic local pre-provider VMM boundary transition.
             // now 由 Provider 调用前的原子本地 VMM 边界转换共享。
             let now = current_unix_millis_text();
@@ -1062,7 +1067,8 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             if pending_report.changed || active_turn_report.changed {
                 runtime_state.updated_at = now;
             }
-        } else if input.start.observes_user && input.start.source.runs_completed_turn_hooks()
+        } else if input.start.observes_user
+            && input.start.source.runs_completed_turn_hooks()
             && vmm_session_memory.requires_persistence()
         {
             return Err(String::from(

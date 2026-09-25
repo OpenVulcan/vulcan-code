@@ -1,10 +1,10 @@
 use super::{
-    project_tool_parameters_schema, public_tool_name_is_valid, ResolvedToolSet,
-    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolInvocationResult,
-    VulcanToolMode, VulcanToolOrigin, VulcanToolSchemaProjectionProfile, VulcanToolSourceKind,
-    VulcanToolsManager,
+    ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
+    VulcanToolInvocationResult, VulcanToolMode, VulcanToolOrigin,
+    VulcanToolSchemaProjectionProfile, VulcanToolSourceKind, VulcanToolsManager,
+    project_tool_parameters_schema, public_tool_name_is_valid,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 /// Builds one inert candidate descriptor for public-name allocation tests.
@@ -280,10 +280,12 @@ fn manager_allows_command_line_tools_in_plan_mode() {
         resolved_names(resolved.clone()),
         vec!["shell_command", "terminal_session"]
     );
-    assert!(resolved
-        .definitions
-        .iter()
-        .all(super::tool_is_allowed_in_plan));
+    assert!(
+        resolved
+            .definitions
+            .iter()
+            .all(super::tool_is_allowed_in_plan)
+    );
 }
 
 /// Verifies the Gemini projection keeps mode selectors compact while hydrating only required branch properties.

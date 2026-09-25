@@ -50,10 +50,11 @@ async fn ui_mcp_catalog_follows_the_single_agent_runtime_generation() {
     );
     // configured_access owns exactly one user partition for the fixture server.
     // configured_access 为该夹具服务器持有恰好一个用户分区。
-    let configured_access =
-        vulcan_agent_runtime::mcp::bootstrap_mcp_runtime_access(vec![unlaunchable_user_mcp_server()])
-            .await
-            .expect("fixture MCP runtime access should bootstrap");
+    let configured_access = vulcan_agent_runtime::mcp::bootstrap_mcp_runtime_access(vec![
+        unlaunchable_user_mcp_server(),
+    ])
+    .await
+    .expect("fixture MCP runtime access should bootstrap");
     bridge.extension_generation = Arc::new(ExtensionGeneration::new(
         1,
         None,
@@ -81,7 +82,8 @@ async fn ui_mcp_catalog_follows_the_single_agent_runtime_generation() {
         })
         .expect("agent runtime should be installed");
     assert_eq!(
-        projected.configured_server_count, runtime_catalog.configured_server_count
+        projected.configured_server_count,
+        runtime_catalog.configured_server_count
     );
     assert_eq!(projected.summary_rows, runtime_catalog.summary_rows);
     assert_eq!(projected.tools.len(), runtime_catalog.tools.len());
@@ -98,7 +100,10 @@ async fn ui_mcp_catalog_follows_the_single_agent_runtime_generation() {
             .as_mut()
             .expect("agent runtime should remain installed");
         let next_generation = Arc::new(ExtensionGeneration::new(
-            agent_runtime.extension_generation.revision().saturating_add(1),
+            agent_runtime
+                .extension_generation
+                .revision()
+                .saturating_add(1),
             None,
             vulcan_agent_runtime::mcp::configured_mcp_runtime_access(
                 &agent_runtime.provider_configuration,

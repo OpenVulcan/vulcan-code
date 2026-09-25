@@ -36,8 +36,8 @@ use super::{
 };
 
 mod agent_task_prepare;
-mod internal_continuation_prepare;
 mod collaboration_prepare;
+mod internal_continuation_prepare;
 pub(crate) use collaboration_prepare::maybe_prepare_webui_collaboration_continuation;
 /// Inserts one visible pending prompt and starts dispatch immediately when the session can run.
 mod pending_dispatch;

@@ -198,13 +198,15 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "service_plugin_action_status" => rpc_json_result(crate::plugin_services::service_plugin_action_status(
-            state,
-            rpc_required_param(params, "pluginId")?,
-            rpc_required_param(params, "runtimeIdentity")?,
-            rpc_required_param(params, "identity")?,
-            rpc_required_param(params, "cancel")?,
-        )),
+        "service_plugin_action_status" => {
+            rpc_json_result(crate::plugin_services::service_plugin_action_status(
+                state,
+                rpc_required_param(params, "pluginId")?,
+                rpc_required_param(params, "runtimeIdentity")?,
+                rpc_required_param(params, "identity")?,
+                rpc_required_param(params, "cancel")?,
+            ))
+        }
         "service_save_luaskills_runtime_settings" => rpc_json_result(
             service_save_luaskills_runtime_settings(
                 app.clone(),

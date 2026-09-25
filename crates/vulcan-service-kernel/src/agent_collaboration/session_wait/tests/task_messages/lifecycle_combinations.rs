@@ -13,8 +13,7 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationChildTaskTerminalOutcome, CollaborationDeliveryFailureReason,
     CollaborationExecutionId, CollaborationNotificationId, CollaborationNotificationState,
     CollaborationTargetSettlementState, CreateQuestionInput, ReserveChildTaskInput,
-    SetRunControlInput, SettleInboundDeliveryInput, TerminalChildTaskInput,
-    SendNotificationInput,
+    SendNotificationInput, SetRunControlInput, SettleInboundDeliveryInput, TerminalChildTaskInput,
 };
 use vulcan_session_core::v1::document::{
     ClientInputSubmission, EditGenerationInput, RootInputReplacement, SessionDocument, TurnOrigin,
@@ -38,10 +37,9 @@ async fn completed_task_edit_waits_for_executor_result_acknowledgement() {
     )
     .await
     .expect("task steering should be durably accepted");
-    let delivery_id = CollaborationDeliveryId::try_new(
-        sent["delivery_id"].as_str().expect("delivery identity"),
-    )
-    .unwrap();
+    let delivery_id =
+        CollaborationDeliveryId::try_new(sent["delivery_id"].as_str().expect("delivery identity"))
+            .unwrap();
     target
         .mutate_durable(
             SessionMutationAdmission::MetadataOnly,
@@ -88,25 +86,33 @@ async fn completed_task_edit_waits_for_executor_result_acknowledgement() {
         .value
         .into_value();
 
-    assert!(!source
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
-    assert!(target
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
+    assert!(
+        !source
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    assert!(
+        target
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
     let blocked = crate::session_v1_lifecycle::guards::admit_edit_generation(
         &invocation.controller_runtime,
         &invocation.registry,
         &source,
     )
     .await;
-    assert!(matches!(blocked, Err(SessionV1LifecycleError::UnsettledCollaboration(id)) if id == source.session_id()));
+    assert!(
+        matches!(blocked, Err(SessionV1LifecycleError::UnsettledCollaboration(id)) if id == source.session_id())
+    );
     let cold_registry = SessionRuntimeRegistry::default();
     let source_locator = source.storage_locator().unwrap();
     let cold_source = SessionHandle::new(
         source.session_id(),
         source_locator.clone(),
-        load_session_v1_for_runtime(&source_locator).unwrap().document,
+        load_session_v1_for_runtime(&source_locator)
+            .unwrap()
+            .document,
     );
     cold_registry.register(Arc::clone(&cold_source)).unwrap();
     let cold_blocked = crate::session_v1_lifecycle::guards::admit_edit_generation(
@@ -115,7 +121,9 @@ async fn completed_task_edit_waits_for_executor_result_acknowledgement() {
         &cold_source,
     )
     .await;
-    assert!(matches!(cold_blocked, Err(SessionV1LifecycleError::UnsettledCollaboration(id)) if id == source.session_id()));
+    assert!(
+        matches!(cold_blocked, Err(SessionV1LifecycleError::UnsettledCollaboration(id)) if id == source.session_id())
+    );
 
     target
         .mutate_durable(
@@ -130,9 +138,11 @@ async fn completed_task_edit_waits_for_executor_result_acknowledgement() {
             },
         )
         .unwrap();
-    assert!(!target
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
+    assert!(
+        !target
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
     let source_admission = crate::session_v1_lifecycle::guards::admit_edit_generation(
         &invocation.controller_runtime,
         &invocation.registry,
@@ -1196,8 +1206,8 @@ async fn cold_child_unacknowledged_settlement_blocks_parent_history_edit() {
     let (child_id, child) =
         embedded_child_of_parent(&invocation, &parent, "cold-settlement-child").await;
     let execution_id = CollaborationExecutionId::try_new("cold-settlement-child").unwrap();
-    let task_id = vulcan_session_core::v1::ids::SubagentTaskId::try_new(child_id.to_string())
-        .unwrap();
+    let task_id =
+        vulcan_session_core::v1::ids::SubagentTaskId::try_new(child_id.to_string()).unwrap();
     parent
         .mutate_durable(
             SessionMutationAdmission::ControlPlane,
@@ -1219,8 +1229,7 @@ async fn cold_child_unacknowledged_settlement_blocks_parent_history_edit() {
             |document| {
                 document.terminal_child_task(TerminalChildTaskInput {
                     execution_id,
-                    operation_id: CollaborationOperationId::try_new("cold-child-terminal")
-                        .unwrap(),
+                    operation_id: CollaborationOperationId::try_new("cold-child-terminal").unwrap(),
                     task_id: task_id.clone(),
                     outcome: CollaborationChildTaskTerminalOutcome::Completed,
                     terminal_at_ms: 7,
@@ -1335,19 +1344,25 @@ async fn cold_child_unacknowledged_settlement_blocks_parent_history_edit() {
             },
         )
         .unwrap();
-    assert!(!parent
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
-    assert!(!child
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
-    assert!(source
-        .read(|document| document
-            .collaboration_state()
-            .outbound_deliveries[&delivery_id]
-            .settlement_ack
-            .is_none())
-        .unwrap());
+    assert!(
+        !parent
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    assert!(
+        !child
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    assert!(
+        source
+            .read(
+                |document| document.collaboration_state().outbound_deliveries[&delivery_id]
+                    .settlement_ack
+                    .is_none()
+            )
+            .unwrap()
+    );
     // Register only the parent in a fresh registry, leaving the child and source cold for admission.
     // 仅在新注册表登记父会话，使子会话与来源在准入时保持冷态。
     let cold_registry = SessionRuntimeRegistry::default();
@@ -1355,10 +1370,14 @@ async fn cold_child_unacknowledged_settlement_blocks_parent_history_edit() {
     let cold_parent = SessionHandle::new(
         parent.session_id(),
         parent_locator.clone(),
-        load_session_v1_for_runtime(&parent_locator).unwrap().document,
+        load_session_v1_for_runtime(&parent_locator)
+            .unwrap()
+            .document,
     );
     cold_registry.register(Arc::clone(&cold_parent)).unwrap();
-    let generation = cold_parent.read(SessionDocument::segment_generation).unwrap();
+    let generation = cold_parent
+        .read(SessionDocument::segment_generation)
+        .unwrap();
     let rejected = crate::session_v1_lifecycle::guards::admit_edit_generation(
         &invocation.controller_runtime,
         &cold_registry,
@@ -1370,7 +1389,9 @@ async fn cold_child_unacknowledged_settlement_blocks_parent_history_edit() {
         "a cold child lost the only terminal receipt its source has not acknowledged: {rejected:?}"
     );
     assert_eq!(
-        cold_parent.read(SessionDocument::segment_generation).unwrap(),
+        cold_parent
+            .read(SessionDocument::segment_generation)
+            .unwrap(),
         generation
     );
 }
@@ -1385,12 +1406,10 @@ async fn cold_child_unacknowledged_settlement_blocks_parent_history_edit() {
 async fn history_edit_rechecks_children_created_while_waiting_for_its_gate() {
     let (_storage, invocation, parent, _) = message_fixture(false).await;
     let parent_id = parent.session_id();
-    let held = crate::session_v1_lifecycle::guards::hold_lifecycle_gate(
-        &invocation.registry,
-        parent_id,
-    )
-    .await
-    .unwrap();
+    let held =
+        crate::session_v1_lifecycle::guards::hold_lifecycle_gate(&invocation.registry, parent_id)
+            .await
+            .unwrap();
     let registry = invocation.registry.clone();
     let controller = invocation.controller_runtime.clone();
     let edit_parent: &'static Arc<SessionHandle> = Box::leak(Box::new(parent.clone()));
@@ -1403,13 +1422,15 @@ async fn history_edit_rechecks_children_created_while_waiting_for_its_gate() {
         .await
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert!(!admission.is_finished(), "the edit must wait for the parent gate");
+    assert!(
+        !admission.is_finished(),
+        "the edit must wait for the parent gate"
+    );
     // This actor owns the parent gate and commits the new child while edit admission is waiting.
     // 当前参与者持有父会话锁，在编辑准入等待期间提交新子会话。
-    let (child_id, child) =
-        embedded_child_of_parent(&invocation, &parent, "late-edit-child").await;
-    let task_id = vulcan_session_core::v1::ids::SubagentTaskId::try_new(child_id.to_string())
-        .unwrap();
+    let (child_id, child) = embedded_child_of_parent(&invocation, &parent, "late-edit-child").await;
+    let task_id =
+        vulcan_session_core::v1::ids::SubagentTaskId::try_new(child_id.to_string()).unwrap();
     parent
         .mutate_durable(
             SessionMutationAdmission::ControlPlane,
@@ -1477,8 +1498,7 @@ async fn history_edit_rechecks_children_created_while_waiting_for_its_gate() {
                         .unwrap(),
                     notification_id: CollaborationNotificationId::try_new("late-edit-note")
                         .unwrap(),
-                    delivery_id: CollaborationDeliveryId::try_new("late-edit-delivery")
-                        .unwrap(),
+                    delivery_id: CollaborationDeliveryId::try_new("late-edit-delivery").unwrap(),
                     source,
                     target,
                     body: "Child work reached a checkpoint".into(),
@@ -1487,12 +1507,16 @@ async fn history_edit_rechecks_children_created_while_waiting_for_its_gate() {
             },
         )
         .unwrap();
-    assert!(!parent
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
-    assert!(child
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
+    assert!(
+        !parent
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
+    assert!(
+        child
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
     drop(held);
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), admission)
         .await
@@ -1522,19 +1546,30 @@ async fn history_edit_preserves_unacknowledged_notification_projection() {
     .unwrap();
     assert_eq!(sent["status"], "accepted");
     let notification_id = source
-        .read(|document| document.collaboration_state().notifications.keys().next().cloned())
+        .read(|document| {
+            document
+                .collaboration_state()
+                .notifications
+                .keys()
+                .next()
+                .cloned()
+        })
         .unwrap()
         .unwrap();
     target
         .mutate_durable(
             SessionMutationAdmission::MetadataOnly,
             SessionFlushReason::MetadataChanged,
-            |document| document.project_notification_before_api(notification_id.clone(), now_ms().unwrap()),
+            |document| {
+                document.project_notification_before_api(notification_id.clone(), now_ms().unwrap())
+            },
         )
         .unwrap();
-    assert!(!target
-        .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
-        .unwrap());
+    assert!(
+        !target
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
     assert_eq!(
         source
             .read(|document| document.collaboration_state().notifications[&notification_id].state)
@@ -1556,7 +1591,9 @@ async fn history_edit_preserves_unacknowledged_notification_projection() {
     let cold_target = SessionHandle::new(
         target.session_id(),
         target_locator.clone(),
-        load_session_v1_for_runtime(&target_locator).unwrap().document,
+        load_session_v1_for_runtime(&target_locator)
+            .unwrap()
+            .document,
     );
     cold_registry.register(Arc::clone(&cold_target)).unwrap();
     let cold_rejected = crate::session_v1_lifecycle::guards::admit_edit_generation(
@@ -1588,7 +1625,10 @@ async fn history_edit_preserves_unacknowledged_notification_projection() {
         &target,
     )
     .await;
-    assert!(admitted.is_ok(), "acknowledged notification still blocked edit: {admitted:?}");
+    assert!(
+        admitted.is_ok(),
+        "acknowledged notification still blocked edit: {admitted:?}"
+    );
 }
 
 /// Starts the question-execution API on `handle` and prepares its reply ToolCall.

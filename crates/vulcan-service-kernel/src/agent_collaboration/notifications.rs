@@ -6,8 +6,8 @@ mod stopped;
 pub(super) use stopped::reconcile_stopped_notifications_for_session;
 use vulcan_session_core::v1::collaboration::{
     AcceptNotificationInput, CollaborationNotificationId, CollaborationNotificationRecord,
-    CollaborationNotificationState, CollaborationOperationSemantic, RecordNotificationProgressInput,
-    SendNotificationInput,
+    CollaborationNotificationState, CollaborationOperationSemantic,
+    RecordNotificationProgressInput, SendNotificationInput,
 };
 
 /// Records a notification before attempting delivery; returns its durable identity on uncertainty.
@@ -147,14 +147,16 @@ pub(super) async fn deliver_recorded_notification(
     let cross_project = source.project_id != target_identity.project_id;
     // Recovery handles many notifications in one invocation; each receipt belongs to its source operation.
     // 一次恢复调用会处理多条通知；每份回执必须归属于自身来源操作。
-    let accept_operation = CollaborationOperationId::try_new(format!(
-        "{}:notification-accept", operation_id.as_str()
-    )).map_err(|error| format!("invalid notification acceptance identity: {error}"))?;
+    let accept_operation =
+        CollaborationOperationId::try_new(format!("{}:notification-accept", operation_id.as_str()))
+            .map_err(|error| format!("invalid notification acceptance identity: {error}"))?;
     // The source acknowledgement shares the same original intent across live delivery and recovery.
     // 实时投递与恢复的来源确认共享同一原始意图身份。
     let progress_operation = CollaborationOperationId::try_new(format!(
-        "{}:notification-accepted", operation_id.as_str()
-    )).map_err(|error| format!("invalid notification progress identity: {error}"))?;
+        "{}:notification-accepted",
+        operation_id.as_str()
+    ))
+    .map_err(|error| format!("invalid notification progress identity: {error}"))?;
     let input = AcceptNotificationInput {
         operation_id: accept_operation,
         notification_id: notification_id.clone(),
@@ -181,12 +183,18 @@ pub(super) async fn deliver_recorded_notification(
         move || {
             // Publish any staged original intent or failure before returning or creating a remote effect.
             // 返回或产生远端效果前，先发布暂存的原始意图或失败。
-            source_for_write.flush_all().map_err(|error| error.to_string())?;
+            source_for_write
+                .flush_all()
+                .map_err(|error| error.to_string())?;
             // Re-read the source under both gates so a stale retry cannot resurrect a failed intent.
             // 在双方门内重读来源，避免旧重试复活已经失败的意图。
             let recorded = source_for_write
                 .read(|document| {
-                    document.collaboration_state().notifications.get(&input.notification_id).cloned()
+                    document
+                        .collaboration_state()
+                        .notifications
+                        .get(&input.notification_id)
+                        .cloned()
                 })
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| String::from("notification source intent is missing"))?;
@@ -205,21 +213,32 @@ pub(super) async fn deliver_recorded_notification(
             // 即使准入改变，已有目标回执仍须作为事实恢复。
             let target_rejection = target_for_write
                 .read(|document| {
-                    if document.collaboration_state().inbound_notifications.contains_key(&input.notification_id) {
+                    if document
+                        .collaboration_state()
+                        .inbound_notifications
+                        .contains_key(&input.notification_id)
+                    {
                         return None;
                     }
-                    Some(if matches!(
-                        document.collaboration_run_control(),
-                        CollaborationRunControl::Stopped | CollaborationRunControl::MainAndSubagents
-                    ) {
-                        Some(CollaborationDeliveryFailureReason::TargetStopped)
-                    } else if participants::require_document_message_admission(
-                        document, &input.source, &input.target,
-                    ).is_err() {
-                        Some(CollaborationDeliveryFailureReason::InvalidBinding)
-                    } else {
-                        None
-                    })
+                    Some(
+                        if matches!(
+                            document.collaboration_run_control(),
+                            CollaborationRunControl::Stopped
+                                | CollaborationRunControl::MainAndSubagents
+                        ) {
+                            Some(CollaborationDeliveryFailureReason::TargetStopped)
+                        } else if participants::require_document_message_admission(
+                            document,
+                            &input.source,
+                            &input.target,
+                        )
+                        .is_err()
+                        {
+                            Some(CollaborationDeliveryFailureReason::InvalidBinding)
+                        } else {
+                            None
+                        },
+                    )
                 })
                 .map_err(|error| error.to_string())?;
             // Revocation and acceptance share the source gate; an earlier grant read is insufficient.
@@ -245,16 +264,18 @@ pub(super) async fn deliver_recorded_notification(
                             SessionMutationAdmission::ControlPlane,
                             SessionFlushReason::MetadataChanged,
                             move |document| {
-                                document.record_notification_progress(RecordNotificationProgressInput {
-                                    operation_id: rejection_operation,
-                                    notification_id: input.notification_id,
-                                    delivery_id: input.delivery_id,
-                                    state: CollaborationNotificationState::Failed,
-                                    failure: Some(reason),
-                                    target_revision: None,
-                                    target_event_seq: None,
-                                    updated_at_ms: input.accepted_at_ms,
-                                }).map(session_change)
+                                document
+                                    .record_notification_progress(RecordNotificationProgressInput {
+                                        operation_id: rejection_operation,
+                                        notification_id: input.notification_id,
+                                        delivery_id: input.delivery_id,
+                                        state: CollaborationNotificationState::Failed,
+                                        failure: Some(reason),
+                                        target_revision: None,
+                                        target_event_seq: None,
+                                        updated_at_ms: input.accepted_at_ms,
+                                    })
+                                    .map(session_change)
                             },
                         )
                         .map_err(|error| error.to_string())?;
@@ -332,7 +353,9 @@ pub(super) async fn recover_existing_notification_progress(
             // Volatile state after a failed flush is not a receipt that another journal may acknowledge.
             // 刷盘失败后的易失状态不能成为另一份日志可确认的回执。
             if inbound.target_revision > document.durable_revision() {
-                return Err(String::from("notification target progress is not durably published"));
+                return Err(String::from(
+                    "notification target progress is not durably published",
+                ));
             }
             if inbound.delivery_id != record.delivery_id
                 || inbound.source_operation_id != record.operation_id
@@ -346,29 +369,27 @@ pub(super) async fn recover_existing_notification_progress(
             }
             let operation_id = match inbound.state {
                 CollaborationNotificationState::Accepted => inbound.operation_id.clone(),
-                CollaborationNotificationState::Projected => {
-                    CollaborationOperationId::try_new(format!(
-                        "{}:project",
-                        record.delivery_id.as_str()
-                    ))
-                    .map_err(|error| format!("invalid notification projection identity: {error}"))?
-                }
-                CollaborationNotificationState::Failed => {
-                    CollaborationOperationId::try_new(format!(
-                        "{}:fail",
-                        record.delivery_id.as_str()
-                    ))
-                    .map_err(|error| format!("invalid notification failure identity: {error}"))?
-                }
+                CollaborationNotificationState::Projected => CollaborationOperationId::try_new(
+                    format!("{}:project", record.delivery_id.as_str()),
+                )
+                .map_err(|error| format!("invalid notification projection identity: {error}"))?,
+                CollaborationNotificationState::Failed => CollaborationOperationId::try_new(
+                    format!("{}:fail", record.delivery_id.as_str()),
+                )
+                .map_err(|error| format!("invalid notification failure identity: {error}"))?,
                 CollaborationNotificationState::Recorded => {
-                    return Err(String::from("notification target has no valid progress receipt"));
+                    return Err(String::from(
+                        "notification target has no valid progress receipt",
+                    ));
                 }
             };
             let operation = document
                 .collaboration_state()
                 .operations
                 .get(&operation_id)
-                .ok_or_else(|| String::from("notification target has no durable progress operation"))?;
+                .ok_or_else(|| {
+                    String::from("notification target has no durable progress operation")
+                })?;
             let matching_operation = match &operation.semantic {
                 CollaborationOperationSemantic::AcceptNotification {
                     notification_id,
@@ -430,31 +451,33 @@ pub(super) async fn recover_existing_notification_progress(
     {
         // A prior source flush may have failed after publishing its in-memory progress.
         // 先前来源刷盘可能在发布内存进度后失败。
-        invocation.source_handle.flush_all().map_err(|error| error.to_string())?;
+        invocation
+            .source_handle
+            .flush_all()
+            .map_err(|error| error.to_string())?;
         return Ok(false);
     }
     // This records a fact that was already delivered, so a later grant revocation cannot erase it.
     // 此处只确认已经投递的事实，后续授权撤销不能抹去既有投递。
     let operation_id = match state {
-        CollaborationNotificationState::Accepted => format!(
-            "{}:notification-accepted",
-            record.operation_id.as_str()
-        ),
-        CollaborationNotificationState::Projected => format!(
-            "{}:source-projected",
-            record.delivery_id.as_str()
-        ),
-        CollaborationNotificationState::Failed => format!(
-            "{}:source-failed",
-            record.delivery_id.as_str()
-        ),
+        CollaborationNotificationState::Accepted => {
+            format!("{}:notification-accepted", record.operation_id.as_str())
+        }
+        CollaborationNotificationState::Projected => {
+            format!("{}:source-projected", record.delivery_id.as_str())
+        }
+        CollaborationNotificationState::Failed => {
+            format!("{}:source-failed", record.delivery_id.as_str())
+        }
         CollaborationNotificationState::Recorded => {
-            return Err(String::from("notification target progress is not recoverable"));
+            return Err(String::from(
+                "notification target progress is not recoverable",
+            ));
         }
     };
     let input = RecordNotificationProgressInput {
         operation_id: CollaborationOperationId::try_new(operation_id)
-        .map_err(|error| format!("invalid notification progress identity: {error}"))?,
+            .map_err(|error| format!("invalid notification progress identity: {error}"))?,
         notification_id: record.notification_id.clone(),
         delivery_id: record.delivery_id.clone(),
         state,

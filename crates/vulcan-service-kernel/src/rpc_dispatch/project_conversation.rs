@@ -176,9 +176,8 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "questionId")?,
                 rpc_required_param(params, "sourceRootSessionId")?,
                 rpc_required_param(params, "operationId")?,
-                rpc_optional_param(params, "reason")?.unwrap_or_else(|| {
-                    String::from("user_cancelled")
-                }),
+                rpc_optional_param(params, "reason")?
+                    .unwrap_or_else(|| String::from("user_cancelled")),
             )
             .await,
         ),

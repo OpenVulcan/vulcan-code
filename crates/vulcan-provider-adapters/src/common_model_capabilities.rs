@@ -708,10 +708,8 @@ mod tests {
             ..ModelCapabilities::default()
         };
 
-        let matched = apply_common_model_capability_defaults(
-            "qwen3.7-text-embedding",
-            &mut capabilities,
-        );
+        let matched =
+            apply_common_model_capability_defaults("qwen3.7-text-embedding", &mut capabilities);
 
         assert!(matched);
         assert!(

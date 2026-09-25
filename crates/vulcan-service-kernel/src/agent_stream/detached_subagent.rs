@@ -175,7 +175,10 @@ pub(crate) fn start_admitted_detached_subagent_listener(
         // Capture before spawning so cancellation before the first poll also releases ownership.
         // 派生前捕获，确保首次轮询前取消也会释放所有权。
         let listener_owner = listener_owner::ListenerOwner::new(
-            state.clone(), agent_runtime.clone(), task_id, execution_id.clone(),
+            state.clone(),
+            agent_runtime.clone(),
+            task_id,
+            execution_id.clone(),
         );
         spawn_service_task(async move {
             // Keep ownership through retained terminal retries, including EOF after valid evidence.

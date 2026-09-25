@@ -3045,12 +3045,22 @@ impl SessionDocument {
                     .collaboration_state()
                     .inbound_notifications
                     .values()
-                    .filter(|notification| notification.state == CollaborationNotificationState::Accepted)
-                    .map(|notification| (notification.notification_id.clone(), notification.delivery_id.clone()))
+                    .filter(|notification| {
+                        notification.state == CollaborationNotificationState::Accepted
+                    })
+                    .map(|notification| {
+                        (
+                            notification.notification_id.clone(),
+                            notification.delivery_id.clone(),
+                        )
+                    })
                     .collect::<Vec<_>>();
                 for (notification_id, delivery_id) in pending_notifications {
                     draft.fail_notification(FailNotificationInput {
-                        operation_id: CollaborationOperationId::try_new(format!("{}:fail", delivery_id.as_str()))?,
+                        operation_id: CollaborationOperationId::try_new(format!(
+                            "{}:fail",
+                            delivery_id.as_str()
+                        ))?,
                         notification_id,
                         delivery_id,
                         reason: CollaborationDeliveryFailureReason::TargetStopped,

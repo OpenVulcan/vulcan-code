@@ -651,9 +651,7 @@ fn mixed_malformed_batch_preserves_order_without_replaying_tool_calls() {
             .messages
             .iter()
             .filter_map(|message| match &message.payload {
-                ConversationPayload::ToolResult { tool_call_id, .. } => {
-                    tool_call_id.clone()
-                }
+                ConversationPayload::ToolResult { tool_call_id, .. } => tool_call_id.clone(),
                 _ => None,
             })
             .collect::<Vec<_>>();

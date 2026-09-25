@@ -58,7 +58,8 @@ impl SessionDocument {
             target_session_id: input.target_session_id.clone(),
             actions: input.actions.clone(),
         };
-        if let Some(existing) = self.existing_collaboration_operation(&input.operation_id, &semantic)?
+        if let Some(existing) =
+            self.existing_collaboration_operation(&input.operation_id, &semantic)?
         {
             let CollaborationOperationResult::Grant { grant_id } = existing.result else {
                 return Err(DomainError::CollaborationStateViolation {
@@ -104,9 +105,7 @@ impl SessionDocument {
             revoked_revision: None,
         };
         let mut state = self.collaboration_state().clone();
-        state
-            .grants
-            .insert(grant.grant_id.clone(), grant.clone());
+        state.grants.insert(grant.grant_id.clone(), grant.clone());
         let event_seq = next_event_seq(self)?;
         state.operations.insert(
             input.operation_id.clone(),
@@ -154,7 +153,8 @@ impl SessionDocument {
         let semantic = CollaborationOperationSemantic::RemoveGrant {
             grant_id: input.grant_id.clone(),
         };
-        if let Some(existing) = self.existing_collaboration_operation(&input.operation_id, &semantic)?
+        if let Some(existing) =
+            self.existing_collaboration_operation(&input.operation_id, &semantic)?
         {
             let CollaborationOperationResult::Grant { grant_id } = existing.result else {
                 return Err(DomainError::CollaborationStateViolation {
@@ -218,9 +218,7 @@ impl SessionDocument {
         grant.revoked_at_ms = Some(input.revoked_at_ms);
         grant.revoked_revision = Some(revoked_revision);
         let mut state = self.collaboration_state().clone();
-        state
-            .grants
-            .insert(grant.grant_id.clone(), grant.clone());
+        state.grants.insert(grant.grant_id.clone(), grant.clone());
         let event_seq = next_event_seq(self)?;
         state.operations.insert(
             input.operation_id.clone(),

@@ -1287,9 +1287,7 @@ fn local_context_tokens_after_latest_assistant(
         })
         .map(|index| index.saturating_add(1))
         .unwrap_or_default();
-    Ok(vulcan_context_compaction::estimate_compaction_source_tokens(
-        &source_messages[start..],
-    ))
+    Ok(vulcan_context_compaction::estimate_compaction_source_tokens(&source_messages[start..]))
 }
 
 #[cfg(test)]
@@ -1638,8 +1636,10 @@ mod tests {
             ..vulcan_context::SessionConversationState::default()
         };
 
-        assert!(local_context_tokens_after_latest_assistant(&state)
-            .expect("valid compaction source messages")
-            > 0);
+        assert!(
+            local_context_tokens_after_latest_assistant(&state)
+                .expect("valid compaction source messages")
+                > 0
+        );
     }
 }

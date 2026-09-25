@@ -16,12 +16,12 @@ use vulcan_workbench_model::{SessionId, SessionRunPhase, SessionRuntimeStateEntr
 use super::{
     AgentRuntimeBridge, ContextUsageChangedDelta, ServiceBridgeState, ServiceEvent,
     SharedServiceBridgeState, UpdateConversationRunPhaseDelta, WorkbenchDelta,
-    WorkbenchDeltaEnvelope, session_public_ai_model_capabilities,
-    active_session_summary_for_session_mut, apply_vmm_writeback_effects_to_runtime_state,
-    build_terminal_execution_report_state, context_usage_snapshot_from_runtime_state,
-    current_unix_millis_text, current_unix_millis_value, emit_service_event_with_trace,
-    owning_project_id_for_session, refresh_exact_vmm_hook_session_projection,
-    session_context_usage_facts_from_v1_registry, spawn_service_task,
+    WorkbenchDeltaEnvelope, active_session_summary_for_session_mut,
+    apply_vmm_writeback_effects_to_runtime_state, build_terminal_execution_report_state,
+    context_usage_snapshot_from_runtime_state, current_unix_millis_text, current_unix_millis_value,
+    emit_service_event_with_trace, owning_project_id_for_session,
+    refresh_exact_vmm_hook_session_projection, session_context_usage_facts_from_v1_registry,
+    session_public_ai_model_capabilities, spawn_service_task,
     sync_hydrated_session_dialogue_ready_marker, webui_trace, webui_trace_if_slow,
     webui_turn_completion_gate_from_state, workbench_surface_matches_conversation,
     workspace_session_summary_for_session, workspace_snapshot_contains_regular_session,
@@ -490,15 +490,18 @@ pub(super) fn apply_execution_report_to_memory(
     }
     // Agent-originated work retains internal ownership but cannot consume the user-memory lifecycle.
     // 代理发起工作保留内部归属，但不能消费用户记忆生命周期。
-    let observes_user = agent_runtime.conversation_hook_runtime.lock()
+    let observes_user = agent_runtime
+        .conversation_hook_runtime
+        .lock()
         .map_err(|error| format!("Failed to read business observer policy: {error}"))?
         .permits_user_observation(session_id);
     // Both immutable admission and current service readiness are required for terminal VMM work.
     // 终态 VMM 工作同时要求不可变准入事实与当前服务就绪。
-    let vmm_runtime_ready = observes_user && report
-        .preparation
-        .as_ref()
-        .is_some_and(|preparation| preparation.vmm_runtime_ready)
+    let vmm_runtime_ready = observes_user
+        && report
+            .preparation
+            .as_ref()
+            .is_some_and(|preparation| preparation.vmm_runtime_ready)
         && webui_vmm_runtime_readiness(state)?.service_ready;
     let vmm_controller = if vmm_runtime_ready {
         webui_trace(

@@ -10,10 +10,10 @@ use vulcan_session_core::v1::collaboration::{
 };
 use vulcan_session_core::v1::document::SessionDocument;
 
-mod embedded_tree;
 mod batch;
-mod notification_stop;
+mod embedded_tree;
 mod main_business;
+mod notification_stop;
 
 /// Full stop returns an unprojected accepted question as a queryable target-stopped failure.
 /// 全停将尚未投影的已接纳问题回传为可查询的目标停止失败。
@@ -1710,10 +1710,17 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
         .unwrap()
         .expect("the recorded notification must survive a refused recovery");
     assert_eq!(retained.state, CollaborationNotificationState::Failed);
-    assert_eq!(retained.failure, Some(CollaborationDeliveryFailureReason::TargetStopped));
+    assert_eq!(
+        retained.failure,
+        Some(CollaborationDeliveryFailureReason::TargetStopped)
+    );
     assert_eq!(retained.target_revision, None);
     assert_eq!(retained.target_event_seq, None);
-    assert!(!source.read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete).unwrap());
+    assert!(
+        !source
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
     assert_eq!(retained.body, body);
     // Explicit restart cannot resurrect a notification already rejected as stopped.
     // 显式恢复运行不能复活已经因停止而拒收的通知。
@@ -1754,17 +1761,36 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
     // Even an already queued retry must re-read the terminal source under the shared gates.
     // 即使旧重试已经排队，也必须在共享门内重读来源终态。
     let (_, resolved) = resolve_participant_target(&invocation, &retained.target, "notification")
-        .await.unwrap();
+        .await
+        .unwrap();
     notifications::deliver_recorded_notification(
-        &invocation, target.session_id(), &resolved, retained.delivery_id.clone(),
-        retained.notification_id.clone(), retained.operation_id.clone(), retained.source.clone(),
-        retained.target.clone(), retained.body.clone(),
-    ).await.unwrap();
-    assert!(target.read(|document| document.collaboration_state().inbound_notifications.is_empty()).unwrap());
+        &invocation,
+        target.session_id(),
+        &resolved,
+        retained.delivery_id.clone(),
+        retained.notification_id.clone(),
+        retained.operation_id.clone(),
+        retained.source.clone(),
+        retained.target.clone(),
+        retained.body.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        target
+            .read(|document| document
+                .collaboration_state()
+                .inbound_notifications
+                .is_empty())
+            .unwrap()
+    );
     // Cold loading preserves the durable rejection and its absent target coordinates.
     // 冷加载保留可靠拒收及其空目标坐标。
     let reloaded = load_session_v1_for_runtime(&source.storage_locator().unwrap()).unwrap();
-    assert_eq!(reloaded.document.collaboration_state().notifications[&notification_id], retained);
+    assert_eq!(
+        reloaded.document.collaboration_state().notifications[&notification_id],
+        retained
+    );
 }
 
 /// A cross-project notification stranded before acceptance must obey a revoked notify grant.
@@ -1862,8 +1888,15 @@ async fn revoked_cross_project_grant_blocks_stranded_notification_recovery() {
         .unwrap()
         .expect("the recorded notification must survive a refused recovery");
     assert_eq!(retained.state, CollaborationNotificationState::Failed);
-    assert_eq!(retained.failure, Some(CollaborationDeliveryFailureReason::AuthorizationRevoked));
-    assert!(!source.read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete).unwrap());
+    assert_eq!(
+        retained.failure,
+        Some(CollaborationDeliveryFailureReason::AuthorizationRevoked)
+    );
+    assert!(
+        !source
+            .read(SessionDocument::has_unsettled_collaboration_for_edit_or_delete)
+            .unwrap()
+    );
     assert_eq!(retained.body, body);
     // Re-granting leaves the earlier rejection terminal; a new send needs its own identity.
     // 重新授权不改变先前拒收终态；再次发送需要独立身份。

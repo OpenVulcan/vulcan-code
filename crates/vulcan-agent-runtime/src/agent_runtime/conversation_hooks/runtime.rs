@@ -79,10 +79,13 @@ impl ConversationHookRuntime {
                     binding.hook_turn_id.clone(),
                     binding.user_content.clone(),
                     binding.vmm_runtime_ready,
-                ).with_user_observation(binding.observes_user)
+                )
+                .with_user_observation(binding.observes_user)
             });
-        if staged.turn_id != binding.hook_turn_id || staged.user_content != binding.user_content
-            || staged.observes_user != binding.observes_user {
+        if staged.turn_id != binding.hook_turn_id
+            || staged.user_content != binding.user_content
+            || staged.observes_user != binding.observes_user
+        {
             return Err(String::from(
                 "Business Hook recovery state conflicts with the retained owner.",
             ));
@@ -239,7 +242,8 @@ impl ConversationHookRuntime {
                 binding.hook_turn_id.clone(),
                 binding.user_content.clone(),
                 binding.vmm_runtime_ready,
-            ).with_user_observation(binding.observes_user),
+            )
+            .with_user_observation(binding.observes_user),
         );
         Ok(true)
     }
@@ -942,7 +946,9 @@ impl ConversationHookRuntime {
     /// Returns the retained turn's observer policy; an unowned session keeps normal non-turn hook behavior.
     /// 返回保留回合的观察策略；无回合所有者的会话保留正常的非回合钩子行为。
     pub fn permits_user_observation(&self, session_id: SessionId) -> bool {
-        self.active_turns.get(&session_id).is_none_or(|turn| turn.observes_user)
+        self.active_turns
+            .get(&session_id)
+            .is_none_or(|turn| turn.observes_user)
     }
 }
 

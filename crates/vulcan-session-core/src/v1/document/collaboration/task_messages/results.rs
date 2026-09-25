@@ -103,7 +103,10 @@ impl SessionDocument {
                 kind: "task_message_effect",
                 identity: delivery_id.as_str().to_owned(),
             })?;
-        if !matches!(effect.outcome, CollaborationTaskMessageEffectKind::Failed { .. }) {
+        if !matches!(
+            effect.outcome,
+            CollaborationTaskMessageEffectKind::Failed { .. }
+        ) {
             return Err(DomainError::CollaborationStateViolation {
                 field: "collaboration.task_result.not_failed",
             });
@@ -111,14 +114,15 @@ impl SessionDocument {
         if let Some(previous) = self.collaboration_state().task_results.get(&delivery_id) {
             return Ok(IdempotentMutation::Idempotent(previous.clone()));
         }
-        let operation_id = CollaborationOperationId::try_new(format!(
-            "task-result:{}",
-            effect.event_seq.value()
-        ))?;
+        let operation_id =
+            CollaborationOperationId::try_new(format!("task-result:{}", effect.event_seq.value()))?;
         let semantic = CollaborationOperationSemantic::RecordTaskResult {
             delivery_id: delivery_id.clone(),
         };
-        if self.existing_collaboration_operation(&operation_id, &semantic)?.is_some() {
+        if self
+            .existing_collaboration_operation(&operation_id, &semantic)?
+            .is_some()
+        {
             return Err(DomainError::CollaborationStateViolation {
                 field: "collaboration.task_result.missing_snapshot",
             });

@@ -150,7 +150,10 @@ pub(crate) fn plugins_from_catalogs(
                 .manifest
                 .as_ref()
                 .map(|manifest| PluginExtensionSummary {
-                    runtime_identity: format!("{}:{}", plugin_catalog.service_epoch, plugin.generation),
+                    runtime_identity: format!(
+                        "{}:{}",
+                        plugin_catalog.service_epoch, plugin.generation
+                    ),
                     origin: match plugin.origin {
                         VulcanPluginPackageOrigin::Bundled => String::from("bundled"),
                         VulcanPluginPackageOrigin::UserInstalled => String::from("userInstalled"),

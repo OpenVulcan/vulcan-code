@@ -183,8 +183,10 @@ impl SessionDocument {
         if let Some(binding) = &self.metadata.business_hook.binding {
             // Restored ownership cannot promote an agent task into a user-memory lifecycle.
             // 恢复归属不能把代理任务提升为用户记忆生命周期。
-            if self.active_turn().is_some_and(|turn| turn.turn_id == binding.turn_id
-                && binding.observes_user != (turn.origin != TurnOrigin::AgentTask)) {
+            if self.active_turn().is_some_and(|turn| {
+                turn.turn_id == binding.turn_id
+                    && binding.observes_user != (turn.origin != TurnOrigin::AgentTask)
+            }) {
                 return Err(DomainError::CollaborationStateViolation {
                     field: "business_hook.observation_origin",
                 });

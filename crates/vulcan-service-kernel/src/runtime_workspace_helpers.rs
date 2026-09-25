@@ -467,16 +467,22 @@ pub(crate) fn webui_turn_completion_gate_from_state(
                         .is_empty()
                 })
                 .unwrap_or_else(|| {
-                    document.collaboration_state().child_tasks.values().any(|task| {
-                        matches!(
-                            task.state,
-                            CollaborationChildTaskState::Reserved
-                                | CollaborationChildTaskState::Active
-                        )
-                    })
+                    document
+                        .collaboration_state()
+                        .child_tasks
+                        .values()
+                        .any(|task| {
+                            matches!(
+                                task.state,
+                                CollaborationChildTaskState::Reserved
+                                    | CollaborationChildTaskState::Active
+                            )
+                        })
                 })
         })
-        .map_err(|error| format!("failed to read durable collaboration completion gate: {error}"))?;
+        .map_err(|error| {
+            format!("failed to read durable collaboration completion gate: {error}")
+        })?;
     let pending_subagent_count = usize::from(durable_has_pending_collaboration);
     let has_active_hook_turn = agent_runtime
         .conversation_hook_runtime

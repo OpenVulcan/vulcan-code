@@ -1194,15 +1194,34 @@ fn validate_manifest_identity(
             ));
         }
         if action.result_cache_ms > 0 && action.effect != crate::VulcanPluginActionEffect::Read {
-            return Err(format!("Plugin action `{}` may cache results only when explicitly declared read-only.", action.id));
+            return Err(format!(
+                "Plugin action `{}` may cache results only when explicitly declared read-only.",
+                action.id
+            ));
         }
-        if !action.snapshot_time_arguments.is_empty() && action.effect != crate::VulcanPluginActionEffect::Read {
-            return Err(format!("Plugin action `{}` may snapshot time only for read queries.", action.id));
+        if !action.snapshot_time_arguments.is_empty()
+            && action.effect != crate::VulcanPluginActionEffect::Read
+        {
+            return Err(format!(
+                "Plugin action `{}` may snapshot time only for read queries.",
+                action.id
+            ));
         }
-        if action.snapshot_time_arguments.iter().collect::<BTreeSet<_>>().len() != action.snapshot_time_arguments.len() {
-            return Err(format!("Plugin action `{}` repeats a snapshot time argument.", action.id));
+        if action
+            .snapshot_time_arguments
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != action.snapshot_time_arguments.len()
+        {
+            return Err(format!(
+                "Plugin action `{}` repeats a snapshot time argument.",
+                action.id
+            ));
         }
-        for argument in &action.snapshot_time_arguments { validate_lua_identifier(argument, "snapshot time argument")?; }
+        for argument in &action.snapshot_time_arguments {
+            validate_lua_identifier(argument, "snapshot time argument")?;
+        }
         if action.callers.is_empty() {
             return Err(format!(
                 "Plugin action `{}` must declare at least one caller.",
@@ -4073,19 +4092,20 @@ display:
         );
         assert!(!snapshot.plugins.is_empty());
         assert!(
-            snapshot
-                .plugins
-                .values()
-                .all(|plugin| {
-                    // The validated manifest is authoritative for the package's default state.
-                    // 已校验清单是插件包默认状态的权威来源。
-                    let manifest = plugin.manifest.as_ref().expect("validated bundled manifest");
-                    plugin.availability == if manifest.default_enabled {
+            snapshot.plugins.values().all(|plugin| {
+                // The validated manifest is authoritative for the package's default state.
+                // 已校验清单是插件包默认状态的权威来源。
+                let manifest = plugin
+                    .manifest
+                    .as_ref()
+                    .expect("validated bundled manifest");
+                plugin.availability
+                    == if manifest.default_enabled {
                         VulcanPluginAvailability::Enabled
                     } else {
                         VulcanPluginAvailability::Disabled
                     }
-                }),
+            }),
             "bundled plugin validation failed: {:?}",
             snapshot
                 .plugins

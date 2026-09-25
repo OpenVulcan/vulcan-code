@@ -494,7 +494,11 @@ pub(crate) fn refresh_settings_projection_locked(
     guard.workbench.mcp_servers = mcp_servers(provider_configuration);
     guard.workbench.mcp_tools = mcp_tools(&mcp_runtime_catalog_from_state(guard));
     guard.workbench.thinking_display_mode = workbench_thinking_display_mode(provider_configuration);
-    guard.workbench.tool_collapse_default_enabled = Some(provider_configuration.tool_collapse_default_enabled.unwrap_or(true));
+    guard.workbench.tool_collapse_default_enabled = Some(
+        provider_configuration
+            .tool_collapse_default_enabled
+            .unwrap_or(true),
+    );
     guard.workbench.git_commit = git_commit_settings(provider_configuration);
     guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
     guard.workbench.provider_request_trace_enabled =

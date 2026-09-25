@@ -85,7 +85,9 @@ impl ConversationCompletionRequest {
             return ConversationCompletionOutcome {
                 session_id: self.session_id,
                 turn_id: self.turn_id,
-                report: Ok(HookDispatchReport::empty(HookPayload { value: self.payload })),
+                report: Ok(HookDispatchReport::empty(HookPayload {
+                    value: self.payload,
+                })),
                 vmm_writeback_effects: Vec::new(),
             };
         }

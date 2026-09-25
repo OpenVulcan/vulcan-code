@@ -27,7 +27,8 @@ pub(crate) async fn reconcile_stopped_question_deliveries_for_session(
         .map_err(|error| error.to_string())?;
     // Notifications share stop publication but retain their independent delivery state machine.
     // 通知共享停止发布入口，但保留独立投递状态机。
-    let notification_result = notifications::reconcile_stopped_notifications_for_session(state, &target).await;
+    let notification_result =
+        notifications::reconcile_stopped_notifications_for_session(state, &target).await;
     let failures = target
         .read(|document| {
             document

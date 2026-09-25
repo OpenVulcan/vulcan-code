@@ -48,8 +48,8 @@ fn read_json_directory(directory: &Path) -> BTreeMap<String, String> {
             .and_then(|stem| stem.to_str())
             .expect("json file stem")
             .to_string();
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("read {}", path.display()));
+        let text =
+            std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display()));
         documents.insert(stem, text);
     }
     assert!(
@@ -224,7 +224,10 @@ fn every_bundled_target_resolves_its_entry_and_credentials() {
                 .unwrap_or_default();
             entry_credentials.insert(entry_id.to_string(), credentials);
         }
-        for target in document["tool_targets"].as_array().expect("tool_targets array") {
+        for target in document["tool_targets"]
+            .as_array()
+            .expect("tool_targets array")
+        {
             let target_id = target["target_id"].as_str().expect("target identifier");
             let entry_id = target["service_entry_id"]
                 .as_str()
@@ -335,7 +338,10 @@ fn every_evidence_reference_is_distributable_or_an_identifier() {
                 );
             }
         }
-        for rule in document["model_rules"].as_array().expect("model_rules array") {
+        for rule in document["model_rules"]
+            .as_array()
+            .expect("model_rules array")
+        {
             if let Some(revision) = rule["capabilities"]["evidence_revision"].as_str() {
                 assert!(
                     !revision.contains('/'),
@@ -364,7 +370,10 @@ fn every_production_target_is_covered_by_one_fixture() {
     }
     for (stem, text) in &manifests {
         let document = parse_manifest(stem, text);
-        for target in document["tool_targets"].as_array().expect("tool_targets array") {
+        for target in document["tool_targets"]
+            .as_array()
+            .expect("tool_targets array")
+        {
             let target_id = target["target_id"].as_str().expect("target identifier");
             let reference = format!("{stem}::{target_id}");
             let covered = coverage.get(&reference).copied().unwrap_or(0);
@@ -383,7 +392,10 @@ fn every_availability_gate_stays_inside_its_own_manifest() {
     for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
         let document = parse_manifest(&stem, &text);
         let mut declared = BTreeSet::new();
-        for rule in document["model_rules"].as_array().expect("model_rules array") {
+        for rule in document["model_rules"]
+            .as_array()
+            .expect("model_rules array")
+        {
             if let Some(value) = rule["matcher"]["value"].as_str() {
                 declared.insert(value.to_string());
             }
@@ -398,7 +410,10 @@ fn every_availability_gate_stays_inside_its_own_manifest() {
                 }
             }
         }
-        for target in document["tool_targets"].as_array().expect("tool_targets array") {
+        for target in document["tool_targets"]
+            .as_array()
+            .expect("tool_targets array")
+        {
             let target_id = target["target_id"].as_str().expect("target identifier");
             let Some(gates) = target["availability_model_ids_any"].as_array() else {
                 continue;
@@ -420,8 +435,7 @@ fn common_model_catalog() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join("common_model_capabilities.json");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|_| panic!("read {}", path.display()));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display()));
     serde_json::from_str(&text).expect("common model catalog must parse")
 }
 
@@ -431,7 +445,10 @@ fn configured_model_identities() -> BTreeSet<String> {
     let mut identities = BTreeSet::new();
     for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
         let document = parse_manifest(&stem, &text);
-        for rule in document["model_rules"].as_array().expect("model_rules array") {
+        for rule in document["model_rules"]
+            .as_array()
+            .expect("model_rules array")
+        {
             // Only exact matchers name a model identity; prefix matchers are family selectors.
             // 只有 exact 匹配器才指向一个模型身份；prefix 匹配器是族选择器。
             if rule["matcher"]["kind"].as_str() != Some("exact") {
@@ -587,7 +604,10 @@ fn every_bundled_reference_resolves_inside_its_manifest() {
 fn every_bundled_target_input_schema_is_an_object() {
     for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
         let document = parse_manifest(&stem, &text);
-        for target in document["tool_targets"].as_array().expect("tool_targets array") {
+        for target in document["tool_targets"]
+            .as_array()
+            .expect("tool_targets array")
+        {
             let target_id = target["target_id"].as_str().expect("target identifier");
             assert_eq!(
                 target["input_schema"]["type"].as_str(),
@@ -615,7 +635,10 @@ fn every_declared_rule_protocol_is_served_by_its_own_manifest() {
                 }
             }
         }
-        for rule in document["model_rules"].as_array().expect("model_rules array") {
+        for rule in document["model_rules"]
+            .as_array()
+            .expect("model_rules array")
+        {
             let rule_id = rule["rule_id"].as_str().unwrap_or("(anonymous)");
             for protocol in rule["supported_protocols"]
                 .as_array()
@@ -638,9 +661,15 @@ fn every_bundled_target_capability_matches_its_operation() {
     for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
         let document = parse_manifest(&stem, &text);
         let mut capabilities = BTreeMap::new();
-        for target in document["tool_targets"].as_array().expect("tool_targets array") {
+        for target in document["tool_targets"]
+            .as_array()
+            .expect("tool_targets array")
+        {
             capabilities.insert(
-                target["target_id"].as_str().expect("target identifier").to_string(),
+                target["target_id"]
+                    .as_str()
+                    .expect("target identifier")
+                    .to_string(),
                 target["capability"].as_str().map(str::to_string),
             );
         }

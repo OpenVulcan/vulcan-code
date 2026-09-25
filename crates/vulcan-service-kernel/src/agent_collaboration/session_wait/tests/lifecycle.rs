@@ -259,12 +259,10 @@ async fn question_progress_recovery_reads_sealed_target_operation() {
         unacknowledged_settlement_fixture(true).await;
     let (mut metadata, runtime_lock, compactions, events, inbound, expected_seq) = target
         .read(|document| {
-            let inbound = document.collaboration_state().inbound_deliveries
-                [&question.delivery_id]
-                .clone();
-            let expected_seq = document.collaboration_state().operations
-                [&inbound.operation_id]
-                .event_seq;
+            let inbound =
+                document.collaboration_state().inbound_deliveries[&question.delivery_id].clone();
+            let expected_seq =
+                document.collaboration_state().operations[&inbound.operation_id].event_seq;
             (
                 document.metadata.clone(),
                 document.runtime_lock.clone(),
@@ -281,7 +279,10 @@ async fn question_progress_recovery_reads_sealed_target_operation() {
         .expect("accepted event must be present in the original full document")
         + 1;
     let tail = events[sealed_count..].to_vec();
-    assert!(!tail.is_empty(), "the fixture must retain later target events");
+    assert!(
+        !tail.is_empty(),
+        "the fixture must retain later target events"
+    );
     let sealed_end = events[sealed_count - 1].seq;
     metadata.split_list = vec![
         SegmentInfo {
@@ -316,7 +317,14 @@ async fn question_progress_recovery_reads_sealed_target_operation() {
         target.storage_locator().unwrap(),
         tail_document,
     );
-    assert!(tail_target.read(|document| document.events().iter().all(|event| event.seq != expected_seq)).unwrap());
+    assert!(
+        tail_target
+            .read(|document| document
+                .events()
+                .iter()
+                .all(|event| event.seq != expected_seq))
+            .unwrap()
+    );
     assert_eq!(
         target_inbound_event_seq(&tail_target, &inbound).unwrap(),
         expected_seq,

@@ -877,7 +877,10 @@ impl fmt::Display for DomainError {
                 "terminal settlement intent targets a different session than `{session_id}`"
             ),
             Self::TerminalSettlementMissing { settlement_id } => {
-                write!(formatter, "terminal settlement `{settlement_id}` is missing")
+                write!(
+                    formatter,
+                    "terminal settlement `{settlement_id}` is missing"
+                )
             }
             Self::TerminalSettlementConflict { settlement_id } => write!(
                 formatter,

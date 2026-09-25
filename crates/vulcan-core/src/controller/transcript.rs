@@ -369,9 +369,7 @@ impl VulcanCoreController {
         if latest_user_matches {
             return Ok(false);
         }
-        Ok(trailing_agent_messages_prompt(&self.snapshot.messages)?
-            .as_deref()
-            != Some(prompt))
+        Ok(trailing_agent_messages_prompt(&self.snapshot.messages)?.as_deref() != Some(prompt))
     }
 
     /// Appends one provider assistant turn into the canonical message window and the durable record stream.

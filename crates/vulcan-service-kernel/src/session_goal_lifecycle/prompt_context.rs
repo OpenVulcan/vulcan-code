@@ -65,17 +65,20 @@ pub(crate) fn persist_goal_turn_usage_context(
                     .filter(|turn| !turn.closed)
                     .map(|turn| turn.turn_id)
                     .ok_or(DomainError::NoActiveTurn)?;
-                let previous = document.events().iter().rev().find_map(|event| {
-                    match &event.event {
-                        EventBody::SystemContext(context)
-                            if event.turn_id == Some(turn_id)
-                                && context.context_key == "goal_usage_snapshot" =>
-                        {
-                            Some(context)
-                        }
-                        _ => None,
-                    }
-                });
+                let previous =
+                    document
+                        .events()
+                        .iter()
+                        .rev()
+                        .find_map(|event| match &event.event {
+                            EventBody::SystemContext(context)
+                                if event.turn_id == Some(turn_id)
+                                    && context.context_key == "goal_usage_snapshot" =>
+                            {
+                                Some(context)
+                            }
+                            _ => None,
+                        });
                 if previous.is_some_and(|context| {
                     context.operation == SystemContextOperation::Upsert
                         && context.content == content

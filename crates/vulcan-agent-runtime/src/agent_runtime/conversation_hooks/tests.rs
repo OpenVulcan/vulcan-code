@@ -12,22 +12,48 @@ fn real_queued_user_input_remains_observable_during_agent_task() {
     // 独立于内部回合归属捕获真实外部用户事件。
     let (sender, receiver) = mpsc::channel();
     let mut runtime = ConversationHookRuntime::new();
-    runtime.dispatcher_mut().register(
-        HookRegistration::new("queued-human", HOOK_CONVERSATION_USER_EVENT, HookMode::Effect),
-        Arc::new(FnHookHandler::new(move |invocation: HookInvocation| {
-            let sender = sender.clone();
-            async move { sender.send(invocation.payload.value).unwrap(); Ok(HookResult::default()) }
-        })),
-    ).unwrap();
+    runtime
+        .dispatcher_mut()
+        .register(
+            HookRegistration::new(
+                "queued-human",
+                HOOK_CONVERSATION_USER_EVENT,
+                HookMode::Effect,
+            ),
+            Arc::new(FnHookHandler::new(move |invocation: HookInvocation| {
+                let sender = sender.clone();
+                async move {
+                    sender.send(invocation.payload.value).unwrap();
+                    Ok(HookResult::default())
+                }
+            })),
+        )
+        .unwrap();
     // Admit an agent task, then deliver the separate human queue observation.
     // 准入代理任务，再投递独立的人类排队观察。
     let session = SessionId::from_u128(0x6d10);
-    runtime.prepare_user_prompt_hook_requests(session, "agent", None, "D:/task".into(),
-        PendingSessionPromptSource::AgentTask, SystemPromptHookPhase::SubsequentSession,
-        "Agent task", &Default::default(), true);
-    runtime.record_queued_user_prompt(session, "human-queued", None, "D:/task".into(),
-        PendingSessionPromptSource::UserFollowup, "Human task");
-    let observed = receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+    runtime.prepare_user_prompt_hook_requests(
+        session,
+        "agent",
+        None,
+        "D:/task".into(),
+        PendingSessionPromptSource::AgentTask,
+        SystemPromptHookPhase::SubsequentSession,
+        "Agent task",
+        &Default::default(),
+        true,
+    );
+    runtime.record_queued_user_prompt(
+        session,
+        "human-queued",
+        None,
+        "D:/task".into(),
+        PendingSessionPromptSource::UserFollowup,
+        "Human task",
+    );
+    let observed = receiver
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
     assert_eq!(observed["user_content"], "Human task");
     assert_eq!(observed["queued"], true);
     assert!(!runtime.permits_user_observation(session));
@@ -37,40 +63,87 @@ fn real_queued_user_input_remains_observable_during_agent_task() {
 /// 代理任务观察器在可靠恢复后仍禁用，内部完成流程仍清理归属。
 #[tokio::test]
 async fn agent_task_observers_stay_disabled_across_restore_and_completion() {
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
     // Count real external invocations at every relevant user-memory boundary.
     // 统计各个相关用户记忆边界的真实外部调用。
     let calls = Arc::new(AtomicUsize::new(0));
     let mut runtime = ConversationHookRuntime::new();
-    for point in [HOOK_CONVERSATION_USER_EVENT, HOOK_CONVERSATION_PROFILE_PREPARE,
-        HOOK_CONVERSATION_TURN_COMPLETED, HOOK_CONVERSATION_TURN_TERMINATED] {
+    for point in [
+        HOOK_CONVERSATION_USER_EVENT,
+        HOOK_CONVERSATION_PROFILE_PREPARE,
+        HOOK_CONVERSATION_TURN_COMPLETED,
+        HOOK_CONVERSATION_TURN_TERMINATED,
+    ] {
         let counter = calls.clone();
-        runtime.dispatcher_mut().register(HookRegistration::new(point, point, HookMode::Effect),
-            Arc::new(FnHookHandler::new(move |_: HookInvocation| {
-                let counter = counter.clone();
-                async move { counter.fetch_add(1, Ordering::SeqCst); Ok(HookResult::default()) }
-            }))).unwrap();
+        runtime
+            .dispatcher_mut()
+            .register(
+                HookRegistration::new(point, point, HookMode::Effect),
+                Arc::new(FnHookHandler::new(move |_: HookInvocation| {
+                    let counter = counter.clone();
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        Ok(HookResult::default())
+                    }
+                })),
+            )
+            .unwrap();
     }
     let session = SessionId::from_u128(0x6d09);
-    let prepared = runtime.prepare_user_prompt_hook_requests(session, "agent-task", None, "D:/task".into(),
-        PendingSessionPromptSource::AgentTask, SystemPromptHookPhase::SubsequentSession, "Agent task", &Default::default(), true);
+    let prepared = runtime.prepare_user_prompt_hook_requests(
+        session,
+        "agent-task",
+        None,
+        "D:/task".into(),
+        PendingSessionPromptSource::AgentTask,
+        SystemPromptHookPhase::SubsequentSession,
+        "Agent task",
+        &Default::default(),
+        true,
+    );
     assert!(prepared.deferred_user_event.is_none());
     assert!(!runtime.permits_user_observation(session));
     prepared.profile.run().await.report.unwrap();
-    let binding = runtime.capture_business_hook_binding(session, 1,
-        vulcan_session_core::v1::TurnId::try_new(1).unwrap(), vulcan_session_core::v1::Seq::try_new(1).unwrap()).unwrap();
+    let binding = runtime
+        .capture_business_hook_binding(
+            session,
+            1,
+            vulcan_session_core::v1::TurnId::try_new(1).unwrap(),
+            vulcan_session_core::v1::Seq::try_new(1).unwrap(),
+        )
+        .unwrap();
     assert!(!binding.observes_user);
     // Clear only process-local ownership and restore the serialized policy as on restart.
     // 仅清除进程内归属，像重启一样恢复序列化策略。
     runtime.active_turns.clear();
     runtime.restore_business_hook_binding(&binding).unwrap();
-    let resumed = runtime.prepare_user_prompt_hook_requests(session, "resume", None, "D:/task".into(),
-        PendingSessionPromptSource::AgentContinuation, SystemPromptHookPhase::SubsequentSession, "Continue", &Default::default(), true);
+    let resumed = runtime.prepare_user_prompt_hook_requests(
+        session,
+        "resume",
+        None,
+        "D:/task".into(),
+        PendingSessionPromptSource::AgentContinuation,
+        SystemPromptHookPhase::SubsequentSession,
+        "Continue",
+        &Default::default(),
+        true,
+    );
     assert!(resumed.deferred_user_event.is_none());
     resumed.profile.run().await.report.unwrap();
-    let (_, completed) = runtime.prepare_turn_completion_dispatch_with_status(session, None, "done", 1,
-        &Default::default(), ConversationTurnCompletionStatus::Completed, 0, true);
+    let (_, completed) = runtime.prepare_turn_completion_dispatch_with_status(
+        session,
+        None,
+        "done",
+        1,
+        &Default::default(),
+        ConversationTurnCompletionStatus::Completed,
+        0,
+        true,
+    );
     completed.run().await.report.unwrap();
     assert!(!runtime.has_active_turn(session));
     runtime.restore_business_hook_binding(&binding).unwrap();
@@ -79,8 +152,17 @@ async fn agent_task_observers_stay_disabled_across_restore_and_completion() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     // Ordinary queued user work must still admit a user observation after the agent turn is gone.
     // 代理回合清理后，普通用户排队任务仍必须准入用户观察。
-    let human = runtime.prepare_user_prompt_hook_requests(session, "human", None, "D:/task".into(),
-        PendingSessionPromptSource::UserFollowup, SystemPromptHookPhase::SubsequentSession, "Human task", &Default::default(), true);
+    let human = runtime.prepare_user_prompt_hook_requests(
+        session,
+        "human",
+        None,
+        "D:/task".into(),
+        PendingSessionPromptSource::UserFollowup,
+        SystemPromptHookPhase::SubsequentSession,
+        "Human task",
+        &Default::default(),
+        true,
+    );
     assert!(human.deferred_user_event.is_some());
     human.profile.run().await.report.unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);

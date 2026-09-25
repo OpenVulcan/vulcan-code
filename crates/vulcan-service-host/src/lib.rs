@@ -28,14 +28,14 @@ use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use uuid::Uuid;
 use vulcan_service_api::{
-    ServiceEvent, ServiceEventSink, ServiceMediaResponse,
-    ServiceStaticResponse, ServiceStatusSnapshot,
-    SessionResourceContentV1Request, WebuiServiceDiscoverySnapshot, WebuiServiceRpcHttpRequest,
-    build_service_media_file_response, build_webui_static_response, service_media_error_response,
-    service_media_path_from_encoded_route_segment, webui_service_discovery_snapshot_path,
-    webui_service_http_bind_ports_from_override, webui_service_origin_text_is_allowed,
-    webui_service_request_token_values_are_valid, webui_service_required_origin_text_is_allowed,
-    webui_service_rpc_error_envelope, webui_service_rpc_success_envelope,
+    ServiceEvent, ServiceEventSink, ServiceMediaResponse, ServiceStaticResponse,
+    ServiceStatusSnapshot, SessionResourceContentV1Request, WebuiServiceDiscoverySnapshot,
+    WebuiServiceRpcHttpRequest, build_service_media_file_response, build_webui_static_response,
+    service_media_error_response, service_media_path_from_encoded_route_segment,
+    webui_service_discovery_snapshot_path, webui_service_http_bind_ports_from_override,
+    webui_service_origin_text_is_allowed, webui_service_request_token_values_are_valid,
+    webui_service_required_origin_text_is_allowed, webui_service_rpc_error_envelope,
+    webui_service_rpc_success_envelope,
 };
 
 /// Boxed asynchronous result returned by a browser-facing RPC dispatcher.
@@ -61,9 +61,8 @@ pub type WebuiSessionResourceResolver = Arc<
 
 /// Resolves one opaque browser download into an attachment response.
 /// 将一项不透明浏览器下载解析为附件响应。
-pub type WebuiBrowserDownloadResolver = Arc<
-    dyn Fn(String, String, bool) -> WebuiSessionResourceFuture + Send + Sync + 'static,
->;
+pub type WebuiBrowserDownloadResolver =
+    Arc<dyn Fn(String, String, bool) -> WebuiSessionResourceFuture + Send + Sync + 'static>;
 
 /// Cleans client-owned display subscriptions when one browser event socket disconnects.
 /// 在浏览器事件套接字断开时清理客户端持有的显示订阅。
@@ -89,7 +88,8 @@ pub type WebuiServiceBrowserFuture =
 pub struct WebuiServiceBrowserStream {
     /// Issues one single-use observation stream ticket for a session owned by the stated conversation.
     /// 为所声明会话拥有的浏览器签发一次性观察流凭据。
-    pub issue_ticket: Arc<dyn Fn(String, String) -> WebuiServiceBrowserFuture + Send + Sync + 'static>,
+    pub issue_ticket:
+        Arc<dyn Fn(String, String) -> WebuiServiceBrowserFuture + Send + Sync + 'static>,
     /// Resumes one page-specific observation stream from a ticket and optional cursor.
     /// 依据凭据与可选游标恢复一条指定页面的观察流。
     pub resume: Arc<
@@ -104,7 +104,10 @@ pub struct WebuiServiceBrowserStream {
     /// This backs the continuing stream after the one-time ticket already authorised the session.
     /// 一次性凭据已授权该会话后，由此支撑持续流。
     pub poll: Arc<
-        dyn Fn(String, String, serde_json::Value) -> WebuiServiceBrowserFuture + Send + Sync + 'static,
+        dyn Fn(String, String, serde_json::Value) -> WebuiServiceBrowserFuture
+            + Send
+            + Sync
+            + 'static,
     >,
     /// Releases the observation subscription that a finished stream owned.
     /// 释放已结束的流所拥有的观察订阅。
@@ -212,12 +215,17 @@ pub fn write_webui_service_discovery_snapshot(
     // A same-directory temporary file ensures readers observe complete JSON generations.
     // 同目录临时文件保证读取方只能观察到完整的 JSON 代际。
     let path = webui_service_discovery_snapshot_path(home_dir, temp_dir);
-    let parent = path.parent().ok_or("Service discovery path has no parent")?;
+    let parent = path
+        .parent()
+        .ok_or("Service discovery path has no parent")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let mut pending = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
     serde_json::to_writer_pretty(&mut pending, snapshot).map_err(|error| error.to_string())?;
     pending.flush().map_err(|error| error.to_string())?;
-    pending.as_file().sync_all().map_err(|error| error.to_string())?;
+    pending
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
     // Windows readers can briefly deny replacement of the old generation. PersistError
     // returns the same complete temporary file, so retry only those transient OS errors.
     // Windows 读者可能短暂阻止替换旧代际；PersistError 会归还同一完整临时文件，
@@ -227,8 +235,8 @@ pub fn write_webui_service_discovery_snapshot(
         match pending.persist(&path) {
             Ok(_) => return Ok(()),
             Err(error) => {
-                let transient_windows_reader = cfg!(windows)
-                    && matches!(error.error.raw_os_error(), Some(5 | 32));
+                let transient_windows_reader =
+                    cfg!(windows) && matches!(error.error.raw_os_error(), Some(5 | 32));
                 if !transient_windows_reader || Instant::now() >= deadline {
                     return Err(format!("Failed to publish {}: {error}", path.display()));
                 }
@@ -459,8 +467,7 @@ fn webui_service_health_origin_is_allowed(headers: &AxumHeaderMap, service_origi
         return false;
     }
     origin.to_str().is_ok_and(|origin| {
-        origin == service_origin
-            || (cfg!(debug_assertions) && origin == "http://127.0.0.1:17601")
+        origin == service_origin || (cfg!(debug_assertions) && origin == "http://127.0.0.1:17601")
     })
 }
 
@@ -534,7 +541,9 @@ async fn webui_service_browser_stream_ticket_http_handler(
             "A browser stream ticket requires an ownerSessionId.",
         );
     };
-    match (browser_stream.issue_ticket)(String::from(session_id), String::from(owner_session_id)).await {
+    match (browser_stream.issue_ticket)(String::from(session_id), String::from(owner_session_id))
+        .await
+    {
         Ok(value) => Json(value).into_response(),
         Err(message) => webui_service_browser_error_response(
             AxumStatusCode::CONFLICT,
@@ -606,7 +615,14 @@ async fn webui_service_browser_stream_ws_handler(
         None => None,
     };
     websocket.on_upgrade(move |socket| {
-        webui_service_browser_stream_socket(socket, browser_stream, ticket, page_id, subscription_id, cursor)
+        webui_service_browser_stream_socket(
+            socket,
+            browser_stream,
+            ticket,
+            page_id,
+            subscription_id,
+            cursor,
+        )
     })
 }
 
@@ -629,23 +645,24 @@ async fn webui_service_browser_stream_socket(
 ) {
     // The one-time ticket decides which session may be observed; the client cannot name one.
     // 一次性凭据决定可观察哪个会话；客户端无法指定。
-    let initial = match (browser_stream.resume)(ticket, page_id, subscription_id.clone(), cursor).await {
-        Ok(value) => value,
-        Err(message) => {
-            let _ = socket
-                .send(AxumWsMessage::Text(
-                    serde_json::json!({
-                        "kind": "error",
-                        "code": "browser_stream_refused",
-                        "message": message,
-                    })
-                    .to_string()
-                    .into(),
-                ))
-                .await;
-            return;
-        }
-    };
+    let initial =
+        match (browser_stream.resume)(ticket, page_id, subscription_id.clone(), cursor).await {
+            Ok(value) => value,
+            Err(message) => {
+                let _ = socket
+                    .send(AxumWsMessage::Text(
+                        serde_json::json!({
+                            "kind": "error",
+                            "code": "browser_stream_refused",
+                            "message": message,
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await;
+                return;
+            }
+        };
     let Some(session_id) = initial
         .get("sessionId")
         .and_then(|value| value.as_str())
@@ -670,7 +687,10 @@ async fn webui_service_browser_stream_socket(
         .unwrap_or("1")
         .to_string();
     let mut last_sequence = webui_service_browser_last_frame_sequence(&initial);
-    if webui_service_browser_stream_send(&mut socket, &initial).await.is_err() {
+    if webui_service_browser_stream_send(&mut socket, &initial)
+        .await
+        .is_err()
+    {
         webui_service_browser_stream_release(&browser_stream, &session_id, &subscription_id).await;
         return;
     }
@@ -753,7 +773,10 @@ async fn webui_service_browser_stream_deliver(
             *page_generation = String::from(answer_generation);
             *last_sequence = None;
         }
-        if webui_service_browser_stream_send(socket, &answer).await.is_err() {
+        if webui_service_browser_stream_send(socket, &answer)
+            .await
+            .is_err()
+        {
             return;
         }
         if let Some(sequence) = webui_service_browser_last_frame_sequence(&answer) {
@@ -777,7 +800,10 @@ async fn webui_service_browser_stream_send(
 
     let mut metadata = payload.clone();
     let mut images = Vec::new();
-    if let Some(frames) = metadata.get_mut("frames").and_then(|value| value.as_array_mut()) {
+    if let Some(frames) = metadata
+        .get_mut("frames")
+        .and_then(|value| value.as_array_mut())
+    {
         for frame in frames {
             let Some(object) = frame.as_object_mut() else {
                 return Err(());
@@ -880,7 +906,14 @@ async fn webui_service_browser_stream_http_handler(
         })),
         (None, _) => None,
     };
-    match (browser_stream.resume)(ticket.clone(), page_id.clone(), subscription_id.clone(), cursor).await {
+    match (browser_stream.resume)(
+        ticket.clone(),
+        page_id.clone(),
+        subscription_id.clone(),
+        cursor,
+    )
+    .await
+    {
         Ok(value) => {
             let Some(session_id) = value.get("sessionId").and_then(|value| value.as_str()) else {
                 return webui_service_browser_error_response(
@@ -892,7 +925,8 @@ async fn webui_service_browser_stream_http_handler(
             // An HTTP snapshot has no continuing socket to own this subscription. Release it
             // after materialising the answer so subsequent frame capture serves only live viewers.
             // HTTP 快照没有持续套接字持有该订阅；生成答复后立即释放，使后续画面采集只服务活动观察者。
-            webui_service_browser_stream_release(&browser_stream, session_id, subscription_id).await;
+            webui_service_browser_stream_release(&browser_stream, session_id, subscription_id)
+                .await;
             Json(value).into_response()
         }
         Err(message) => webui_service_browser_error_response(
@@ -1519,7 +1553,8 @@ async fn webui_service_browser_download_response(
     match resolve(download_id, owner_session_id.to_owned(), is_head).await {
         Ok(response) => axum_response_from_service_media_response(response),
         Err(error) => axum_response_from_service_media_response(service_media_error_response(
-            AxumStatusCode::NOT_FOUND.as_u16(), &error,
+            AxumStatusCode::NOT_FOUND.as_u16(),
+            &error,
         )),
     }
 }
@@ -1757,8 +1792,14 @@ mod tests {
                 notification_client_id: Some(owner.to_string()),
             },
         ));
-        assert!(webui_service_event_is_visible_to_client(&owned_event, owner));
-        assert!(!webui_service_event_is_visible_to_client(&owned_event, other));
+        assert!(webui_service_event_is_visible_to_client(
+            &owned_event,
+            owner
+        ));
+        assert!(!webui_service_event_is_visible_to_client(
+            &owned_event,
+            other
+        ));
 
         // unownedEvent represents legacy or non-client work and must not select an arbitrary UI.
         // unownedEvent 表示旧式或非客户端工作，不得任选一个界面投递。
@@ -1773,8 +1814,14 @@ mod tests {
                 notification_client_id: None,
             },
         ));
-        assert!(!webui_service_event_is_visible_to_client(&unowned_event, owner));
-        assert!(!webui_service_event_is_visible_to_client(&unowned_event, other));
+        assert!(!webui_service_event_is_visible_to_client(
+            &unowned_event,
+            owner
+        ));
+        assert!(!webui_service_event_is_visible_to_client(
+            &unowned_event,
+            other
+        ));
     }
 
     /// Builds a minimal test WebUI service router.
@@ -1857,7 +1904,10 @@ mod tests {
     /// 验证服务 WebUI 和原生探测仍可获取不可缓存的发现信息。
     #[tokio::test]
     async fn health_accepts_service_origin_and_native_probe() {
-        for origin in [Some(format!("http://127.0.0.1:{WEBUI_SERVICE_HTTP_PORT}")), None] {
+        for origin in [
+            Some(format!("http://127.0.0.1:{WEBUI_SERVICE_HTTP_PORT}")),
+            None,
+        ] {
             let mut request = Request::builder().uri("/health");
             if let Some(origin) = &origin {
                 request = request.header("origin", origin);
@@ -2088,7 +2138,13 @@ mod tests {
         }
         // Real browser routes and static files still reach the SPA fallback.
         // 真实浏览器路由与静态文件仍会走 SPA 回退。
-        for path in ["/", "/index.html", "/workbench", "/settings/profile", "/assets/app.js"] {
+        for path in [
+            "/",
+            "/index.html",
+            "/workbench",
+            "/settings/profile",
+            "/assets/app.js",
+        ] {
             assert!(
                 !webui_service_path_is_reserved_api(path),
                 "{path} must remain a static or SPA path"
@@ -2215,7 +2271,10 @@ mod tests {
                 move |session_id, subscription_id| {
                     let releases = Arc::clone(&releases);
                     Box::pin(async move {
-                        releases.lock().expect("release log").push((session_id, subscription_id));
+                        releases
+                            .lock()
+                            .expect("release log")
+                            .push((session_id, subscription_id));
                         Ok(json!({ "released": true }))
                     })
                 }
@@ -2229,7 +2288,8 @@ mod tests {
     #[tokio::test]
     async fn typed_browser_stream_routes_enforce_authentication() {
         let (router, releases) = test_router_with_browser_stream();
-        let body = json!({ "sessionId": "session-a", "ownerSessionId": "conversation-a" }).to_string();
+        let body =
+            json!({ "sessionId": "session-a", "ownerSessionId": "conversation-a" }).to_string();
 
         let unauthenticated = router
             .clone()
@@ -2305,7 +2365,10 @@ mod tests {
                     .uri("/v1/browser/stream-ticket")
                     .header("content-type", "application/json")
                     .header("x-vulcan-service-token", "test-token")
-                    .body(Body::from(json!({ "sessionId": "missing", "ownerSessionId": "conversation-a" }).to_string()))
+                    .body(Body::from(
+                        json!({ "sessionId": "missing", "ownerSessionId": "conversation-a" })
+                            .to_string(),
+                    ))
                     .expect("request"),
             )
             .await
@@ -2322,7 +2385,10 @@ mod tests {
                     .uri("/v1/browser/stream-ticket")
                     .header("content-type", "application/json")
                     .header("x-vulcan-service-token", "test-token")
-                    .body(Body::from(json!({ "sessionId": "session-b", "ownerSessionId": "conversation-a" }).to_string()))
+                    .body(Body::from(
+                        json!({ "sessionId": "session-b", "ownerSessionId": "conversation-a" })
+                            .to_string(),
+                    ))
                     .expect("request"),
             )
             .await
@@ -2339,7 +2405,10 @@ mod tests {
                     .uri("/v1/browser/stream-ticket")
                     .header("content-type", "application/json")
                     .header("x-vulcan-service-token", "test-token")
-                    .body(Body::from(json!({ "sessionId": "session-b", "ownerSessionId": "conversation-b" }).to_string()))
+                    .body(Body::from(
+                        json!({ "sessionId": "session-b", "ownerSessionId": "conversation-b" })
+                            .to_string(),
+                    ))
                     .expect("request"),
             )
             .await

@@ -611,23 +611,28 @@ impl DatabaseBlockingBoundary {
         // Both queue stages share one deadline, without changing ownership after dispatch.
         // 两个排队阶段共用一个截止时间，调度后不改变所有权。
         let admission = async {
-        let gate = self.gate_for(&key).await;
-        let guard = gate.lock_owned().await;
-        // Acquire the per-database gate before a global permit. Same-database waiters must not consume every
-        // global slot and starve unrelated databases while they wait for work that is intentionally serialized.
-        // 先获取每数据库门，再获取全局许可。同库等待者不得在等待刻意串行化的工作时占满全部全局槽位并饿死其他数据库。
-        let permit = Arc::clone(&self.permits)
-            .acquire_owned()
-            .await
-            .map_err(|_| BlockingBoundaryError::Task {
-                detail: String::from("the boundary semaphore was closed"),
-            })?;
-        Ok::<_, BlockingBoundaryError<E>>((guard, permit))
+            let gate = self.gate_for(&key).await;
+            let guard = gate.lock_owned().await;
+            // Acquire the per-database gate before a global permit. Same-database waiters must not consume every
+            // global slot and starve unrelated databases while they wait for work that is intentionally serialized.
+            // 先获取每数据库门，再获取全局许可。同库等待者不得在等待刻意串行化的工作时占满全部全局槽位并饿死其他数据库。
+            let permit = Arc::clone(&self.permits)
+                .acquire_owned()
+                .await
+                .map_err(|_| BlockingBoundaryError::Task {
+                    detail: String::from("the boundary semaphore was closed"),
+                })?;
+            Ok::<_, BlockingBoundaryError<E>>((guard, permit))
         };
         let (guard, permit) = if let Some(deadline) = deadline {
-            tokio::time::timeout_at(deadline.into(), admission).await
-                .map_err(|_| BlockingBoundaryError::Task { detail: "database admission deadline exceeded".into() })??
-        } else { admission.await? };
+            tokio::time::timeout_at(deadline.into(), admission)
+                .await
+                .map_err(|_| BlockingBoundaryError::Task {
+                    detail: "database admission deadline exceeded".into(),
+                })??
+        } else {
+            admission.await?
+        };
         // The permit and the gate guard move into the blocking task so both are held for exactly as long as
         // the work runs, and released even if the closure panics.
         // 许可与门守卫被移入阻塞任务，因此二者恰好在工作运行期间被持有，且即使闭包 panic 也会被释放。

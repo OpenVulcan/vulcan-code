@@ -1897,9 +1897,7 @@ fn refresh_public_ai_catalogs_at_startup(
         .map(|connection| connection.id.clone())
         .collect::<Vec<_>>();
     async_runtime
-        .block_on(
-            runtime.activate_staged_manifest_catalogs(configuration, &connection_ids),
-        )
+        .block_on(runtime.activate_staged_manifest_catalogs(configuration, &connection_ids))
         .map_err(|error| {
             ServiceBootstrapError::new(
                 "workspace",

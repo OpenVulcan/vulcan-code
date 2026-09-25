@@ -55,9 +55,7 @@ pub(crate) fn cached_luaskills_catalog_from_state(
 /// instead of querying a second runtime.
 /// 服务不持有自己的 MCP 传输，因此每个界面表面读取的都是 AI 工具循环调用的同一个扩展代次。
 /// 代理运行时存在之前，目录保持为空，而不是去查询第二套运行时。
-pub(crate) fn mcp_runtime_catalog_from_state(
-    state: &ServiceBridgeState,
-) -> TauriMcpRuntimeCatalog {
+pub(crate) fn mcp_runtime_catalog_from_state(state: &ServiceBridgeState) -> TauriMcpRuntimeCatalog {
     state
         .agent_runtime
         .as_ref()

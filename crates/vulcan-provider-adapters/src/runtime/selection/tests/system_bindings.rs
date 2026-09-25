@@ -387,10 +387,22 @@ fn unsigned_openrouter_discovery_requires_provider_manual_definition() {
     let published_catalogs = runtime
         .catalog_snapshot()
         .expect("published catalogs should remain readable");
-    assert!(published_catalogs["one"].models.iter().all(|model| model.id != "openai/gpt-4o"));
-    assert!(runtime
-        .resolve_connection_model_selection(&configuration, "one", "openrouter", "openai/gpt-4o")
-        .is_err());
+    assert!(
+        published_catalogs["one"]
+            .models
+            .iter()
+            .all(|model| model.id != "openai/gpt-4o")
+    );
+    assert!(
+        runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                "one",
+                "openrouter",
+                "openai/gpt-4o"
+            )
+            .is_err()
+    );
 }
 
 /// Verifies the DeepSeek manifest supplies exact protocol variants for its current identities.

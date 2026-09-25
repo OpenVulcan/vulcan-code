@@ -41,15 +41,14 @@ use vulcan_workspace_store::{data_plane::HostRuntimeHandle, workspace_store::Wor
 
 use super::{
     AgentRuntimeBridge, ServiceBridgeState, SharedServiceBridgeState,
-    StreamTaskLaunchFailureCommit, session_public_ai_model_capabilities,
-    active_reasoning_selection_effort, active_stream_task_matches_id,
-    append_runtime_event_projection_and_release_barrier,
+    StreamTaskLaunchFailureCommit, active_reasoning_selection_effort,
+    active_stream_task_matches_id, append_runtime_event_projection_and_release_barrier,
     append_webui_session_message_entry_to_state, apply_observed_usage_to_context_budget,
     apply_session_phase, apply_session_phase_to_state, commit_stream_task_registration_failure,
     current_unix_millis_text, current_unix_millis_value, emit_service_event_with_trace,
     finish_webui_session_kernel_turn, historical_context_budget_snapshot_from_runtime_state,
     owning_project_id_for_session, refresh_exact_vmm_hook_session_projection,
-    remove_active_stream_task_if_id, spawn_service_task,
+    remove_active_stream_task_if_id, session_public_ai_model_capabilities, spawn_service_task,
     sync_hydrated_session_dialogue_ready_marker, webui_session_kernel_generation, webui_trace,
     webui_vmm_runtime_readiness, workspace_path_for_session,
     workspace_snapshot_contains_regular_session,

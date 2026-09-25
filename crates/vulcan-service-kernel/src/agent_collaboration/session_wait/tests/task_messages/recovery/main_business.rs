@@ -12,9 +12,13 @@ fn initial_human_business_startup_does_not_dispatch_root_or_queued_inputs() {
     // Use the production worker stack to expose unintended preparation.
     // 使用生产工作线程栈暴露意外准备行为。
     let executor = crate::service_bridge_io::webui_service_runtime_builder()
-        .worker_threads(2).build().unwrap();
+        .worker_threads(2)
+        .build()
+        .unwrap();
     for queued in [false, true] {
-        executor.block_on(executor.spawn(cold_main_business_scenario(false, queued, None))).unwrap();
+        executor
+            .block_on(executor.spawn(cold_main_business_scenario(false, queued, None)))
+            .unwrap();
     }
 }
 
@@ -326,14 +330,18 @@ fn main_business_startup_does_not_resume_failed_or_interrupted_tasks() {
     // Cover absent, forbidden, retryable and physically interrupted API histories.
     // 覆盖尚无 API、禁止继续、允许继续以及物理中断的 API 历史。
     let executor = crate::service_bridge_io::webui_service_runtime_builder()
-        .worker_threads(2).build().unwrap();
+        .worker_threads(2)
+        .build()
+        .unwrap();
     for terminal in [
         None,
         Some(vulcan_session_core::v1::event::ApiEndReason::ProviderError),
         Some(vulcan_session_core::v1::event::ApiEndReason::NetworkError),
         Some(vulcan_session_core::v1::event::ApiEndReason::ProcessInterrupted),
     ] {
-        executor.block_on(executor.spawn(cold_main_business_scenario(true, false, terminal))).unwrap();
+        executor
+            .block_on(executor.spawn(cold_main_business_scenario(true, false, terminal)))
+            .unwrap();
     }
 }
 
@@ -348,8 +356,8 @@ async fn cold_main_business_scenario(
 ) {
     use vulcan_session_core::v1::document::{ApiCompletion, ContinuationRequest};
     use vulcan_session_core::v1::event::{
-        ApiCallStatus, ApiEndReason, ApiErrorCategory, ApiTimings,
-        ContinuationEligibility, RedactedApiError,
+        ApiCallStatus, ApiEndReason, ApiErrorCategory, ApiTimings, ContinuationEligibility,
+        RedactedApiError,
     };
     use vulcan_session_core::v1::stats::UsageSnapshot;
     // Isolated indexed storage and a fresh runtime model service restart without a provider.
@@ -358,15 +366,22 @@ async fn cold_main_business_scenario(
     // Retain the authentic root or promoted queue identity across restart.
     // 在重启前后保留真实根输入或已提升队列的身份。
     let submission = ClientInputSubmission::new(
-        ClientActionId::try_new("original-main").unwrap(), "Original main task", vec![],
+        ClientActionId::try_new("original-main").unwrap(),
+        "Original main task",
+        vec![],
     );
     let turn_id = if queued {
-        target.mutate_durable(
-            SessionMutationAdmission::MetadataOnly, SessionFlushReason::MetadataChanged,
-            |document| document.create_goal("Cold goal", None, "Continue", 2),
-        ).unwrap();
+        target
+            .mutate_durable(
+                SessionMutationAdmission::MetadataOnly,
+                SessionFlushReason::MetadataChanged,
+                |document| document.create_goal("Cold goal", None, "Continue", 2),
+            )
+            .unwrap();
         target.enqueue_input(submission, 3).unwrap();
-        target.read(|document| document.active_turn().unwrap().turn_id).unwrap()
+        target
+            .read(|document| document.active_turn().unwrap().turn_id)
+            .unwrap()
     } else {
         target.submit_root_input(submission, 2).unwrap().value
     };
@@ -376,49 +391,77 @@ async fn cold_main_business_scenario(
     if published {
         // Publish through the real Hook admission entry.
         // 通过真实 Hook 准入入口发布。
-        let prepared = original_runtime.conversation_hook_runtime.lock().unwrap()
+        let prepared = original_runtime
+            .conversation_hook_runtime
+            .lock()
+            .unwrap()
             .prepare_user_prompt_hook_requests(
-                target.session_id(), "original-main", None, "D:/startup-consent-test".into(),
+                target.session_id(),
+                "original-main",
+                None,
+                "D:/startup-consent-test".into(),
                 vulcan_workbench_model::PendingSessionPromptSource::UserFollowup,
                 vulcan_hooks::SystemPromptHookPhase::FirstSession,
-                "Original main task", &Default::default(), false,
+                "Original main task",
+                &Default::default(),
+                false,
             );
         crate::session_business_hook::capture_business_hook_before_dispatch(
-            &target, &original_runtime, target.session_id(), &prepared.turn_id,
-        ).unwrap();
+            &target,
+            &original_runtime,
+            target.session_id(),
+            &prepared.turn_id,
+        )
+        .unwrap();
     }
     if let Some(reason) = terminal {
         // Keep the process-interrupted API open until production cold loading reconciles it.
         // 进程中断 API 保持开放，直到生产冷加载将其结算。
         let api = start_api_with_purpose(&target, ApiPurposeKind::MainGeneration, 4);
         if reason != ApiEndReason::ProcessInterrupted {
-            target.mutate_durable(
-                SessionMutationAdmission::ExistingTurn, SessionFlushReason::ApiCompleted,
-                |document| document.complete_api_group(api, ApiCompletion {
-                    request: ApiRequestSnapshot::new("openai", "model"),
-                    usage: UsageSnapshot::default(),
-                    status: ApiCallStatus::Failed,
-                    end_reason: Some(reason),
-                    error: Some(RedactedApiError {
-                        category: if reason == ApiEndReason::ProviderError {
-                            ApiErrorCategory::Provider
-                        } else { ApiErrorCategory::Network },
-                        error_code: Some("provider_error".into()),
-                        message: "Usage update arrived after a different final observation.".into(),
-                    }),
-                    continuation_eligibility: if reason == ApiEndReason::ProviderError {
-                        ContinuationEligibility::Forbidden
-                    } else { ContinuationEligibility::Allowed },
-                    timing: ApiTimings::default(), provider_source: None, completed_at_ms: 5,
-                }),
-            ).unwrap();
+            target
+                .mutate_durable(
+                    SessionMutationAdmission::ExistingTurn,
+                    SessionFlushReason::ApiCompleted,
+                    |document| {
+                        document.complete_api_group(
+                            api,
+                            ApiCompletion {
+                                request: ApiRequestSnapshot::new("openai", "model"),
+                                usage: UsageSnapshot::default(),
+                                status: ApiCallStatus::Failed,
+                                end_reason: Some(reason),
+                                error: Some(RedactedApiError {
+                                    category: if reason == ApiEndReason::ProviderError {
+                                        ApiErrorCategory::Provider
+                                    } else {
+                                        ApiErrorCategory::Network
+                                    },
+                                    error_code: Some("provider_error".into()),
+                                    message:
+                                        "Usage update arrived after a different final observation."
+                                            .into(),
+                                }),
+                                continuation_eligibility: if reason == ApiEndReason::ProviderError {
+                                    ContinuationEligibility::Forbidden
+                                } else {
+                                    ContinuationEligibility::Allowed
+                                },
+                                timing: ApiTimings::default(),
+                                provider_source: None,
+                                completed_at_ms: 5,
+                            },
+                        )
+                    },
+                )
+                .unwrap();
         }
     }
     // Capture durable contents before startup can inspect the session.
     // 在启动扫描检查会话之前捕获可靠内容。
-    let before = target.read(|document| (
-        document.metadata.clone(), document.events().to_vec(),
-    )).unwrap();
+    let before = target
+        .read(|document| (document.metadata.clone(), document.events().to_vec()))
+        .unwrap();
     // Restart discards all process-local owners.
     // 重启丢弃所有进程内所有者。
     let registry = Arc::new(SessionRuntimeRegistry::default());
@@ -429,70 +472,127 @@ async fn cold_main_business_scenario(
         state.agent_runtime = Some(cold_runtime.clone());
     }
     startup_recovery::recover_indexed_collaboration(
-        &crate::ServiceEventEmitter::new(vec![]), &invocation.state,
+        &crate::ServiceEventEmitter::new(vec![]),
+        &invocation.state,
         [target.session_id()].into_iter().collect(),
-    ).await.unwrap();
-    assert!(registry.get(target.session_id()).is_err(),
-        "ordinary history must remain cold during collaboration startup repair");
+    )
+    .await
+    .unwrap();
+    assert!(
+        registry.get(target.session_id()).is_err(),
+        "ordinary history must remain cold during collaboration startup repair"
+    );
     // Preserve history and forbidden-failure policy exactly.
     // 精确保留历史及禁止继续的失败策略。
     let stored = vulcan_workspace_store::workspace_store::load_session_v1_full(
         &target.storage_locator().unwrap(),
-    ).unwrap().document;
+    )
+    .unwrap()
+    .document;
     assert_eq!(stored.metadata, before.0);
     assert_eq!(stored.events(), before.1.as_slice());
     // Viewing history may project interruption, but cannot dispatch an API.
     // 查看历史可以投影中断，但不能派发 API。
     let loaded = crate::session_v1_lifecycle::get_or_load_session_v1(
-        &invocation.controller_runtime, &registry, target.session_id(),
-    ).await.unwrap();
+        &invocation.controller_runtime,
+        &registry,
+        target.session_id(),
+    )
+    .await
+    .unwrap();
     assert!(!Arc::ptr_eq(&loaded, &target));
-    let after_load = loaded.read(|document| (
-        document.metadata.clone(), document.events().to_vec(),
-    )).unwrap();
-    assert_eq!(after_load.1.iter().filter(|event|
-        matches!(event.event, EventBody::ApiStarted(_))).count(), usize::from(terminal.is_some()));
-    assert!(loaded.read(|document| document.active_api().is_none()).unwrap());
+    let after_load = loaded
+        .read(|document| (document.metadata.clone(), document.events().to_vec()))
+        .unwrap();
+    assert_eq!(
+        after_load
+            .1
+            .iter()
+            .filter(|event| matches!(event.event, EventBody::ApiStarted(_)))
+            .count(),
+        usize::from(terminal.is_some())
+    );
+    assert!(
+        loaded
+            .read(|document| document.active_api().is_none())
+            .unwrap()
+    );
     // Delayed startup repair must leave an already-opened conversation idle too.
     // 延迟启动修复也必须让已经打开的会话保持空闲。
     startup_recovery::recover_indexed_collaboration(
-        &crate::ServiceEventEmitter::new(vec![]), &invocation.state,
+        &crate::ServiceEventEmitter::new(vec![]),
+        &invocation.state,
         [target.session_id()].into_iter().collect(),
-    ).await.unwrap();
-    assert_eq!(loaded.read(|document| (
-        document.metadata.clone(), document.events().to_vec(),
-    )).unwrap(), after_load);
-    assert!(!cold_runtime.conversation_hook_runtime.lock().unwrap()
-        .has_active_turn(target.session_id()));
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        loaded
+            .read(|document| (document.metadata.clone(), document.events().to_vec(),))
+            .unwrap(),
+        after_load
+    );
+    assert!(
+        !cold_runtime
+            .conversation_hook_runtime
+            .lock()
+            .unwrap()
+            .has_active_turn(target.session_id())
+    );
     {
         let state = invocation.state.lock().unwrap();
         assert!(!state.active_stream_tasks.contains_key(&target.session_id()));
-        assert!(!crate::webui_session_has_active_run(&state, target.session_id()));
-        assert!(!crate::webui_session_kernel_has_active_turn(&state, target.session_id()));
+        assert!(!crate::webui_session_has_active_run(
+            &state,
+            target.session_id()
+        ));
+        assert!(!crate::webui_session_kernel_has_active_turn(
+            &state,
+            target.session_id()
+        ));
     }
     // Only a subsequent user action may request execution, respecting the saved API policy.
     // 只有后续用户操作可请求执行，并遵守保存的 API 策略。
     if terminal.is_some() {
         let continuation = loaded.continue_turn(
             ContinuationRequest::new(
-                ClientActionId::try_new("explicit-user-continue").unwrap(), "", Vec::new(),
-            ), 10,
+                ClientActionId::try_new("explicit-user-continue").unwrap(),
+                "",
+                Vec::new(),
+            ),
+            10,
         );
         if terminal == Some(ApiEndReason::ProviderError) {
-            assert!(continuation.is_err(), "forbidden failure cannot become implicitly retryable");
+            assert!(
+                continuation.is_err(),
+                "forbidden failure cannot become implicitly retryable"
+            );
         } else {
-            assert!(continuation.is_ok(), "explicit continuation must remain available: {continuation:?}");
+            assert!(
+                continuation.is_ok(),
+                "explicit continuation must remain available: {continuation:?}"
+            );
         }
     }
     // A new task can replace an inactive turn even when its final marker was never persisted.
     // 即便最终标记从未持久化，新任务也能替换没有执行者的旧回合。
-    let _admission = crate::project_conversation_services::try_begin_pending_prompt_dispatch_exclusion(
-        &invocation.state, target.session_id(),
-    ).unwrap().unwrap();
-    let new_turn = loaded.submit_root_input_after_execution_ended(
-        ClientInputSubmission::new(
-            ClientActionId::try_new("new-user-task").unwrap(), "New task", vec![],
-        ), 11,
-    ).unwrap().value;
+    let _admission =
+        crate::project_conversation_services::try_begin_pending_prompt_dispatch_exclusion(
+            &invocation.state,
+            target.session_id(),
+        )
+        .unwrap()
+        .unwrap();
+    let new_turn = loaded
+        .submit_root_input_after_execution_ended(
+            ClientInputSubmission::new(
+                ClientActionId::try_new("new-user-task").unwrap(),
+                "New task",
+                vec![],
+            ),
+            11,
+        )
+        .unwrap()
+        .value;
     assert_ne!(new_turn, turn_id);
 }

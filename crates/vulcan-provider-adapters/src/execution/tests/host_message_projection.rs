@@ -1,14 +1,13 @@
 //! Production request regressions for model-visible User host message envelopes.
 //! 面向模型的 User 宿主消息信封生产请求回归测试。
 
-use super::super::test_support::pinned_openrouter_route;
 use super::super::ProviderExecutionClient;
+use super::super::test_support::pinned_openrouter_route;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use vulcan_ai_contract::{
-    AiExecutionRequest, AiMessage, ContentItem, HostMessageEnvelope, HostMessageKind,
-    MessageRole, ResourceKind, ResourceReference, ResourceSourceKind, ToolCall, ToolDefinition,
-    ToolResult,
+    AiExecutionRequest, AiMessage, ContentItem, HostMessageEnvelope, HostMessageKind, MessageRole,
+    ResourceKind, ResourceReference, ResourceSourceKind, ToolCall, ToolDefinition, ToolResult,
 };
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
@@ -216,9 +215,11 @@ fn assert_legal_route_output(profile: &str, body: &Value) {
         }
         OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => {
             let input = body["input"].as_array().expect("Responses input");
-            assert!(input.iter().any(|item| {
-                item["type"] == "function_call" && item["call_id"] == "call-1"
-            }));
+            assert!(
+                input
+                    .iter()
+                    .any(|item| { item["type"] == "function_call" && item["call_id"] == "call-1" })
+            );
             assert!(input.iter().any(|item| {
                 item["type"] == "function_call_output" && item["call_id"] == "call-1"
             }));
@@ -227,14 +228,16 @@ fn assert_legal_route_output(profile: &str, body: &Value) {
         | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
         | CLAUDE_CODE_MESSAGES_PROFILE_ID => {
             let messages = body["messages"].as_array().expect("Anthropic messages");
-            assert!(messages.iter().all(|message| {
-                matches!(message["role"].as_str(), Some("user" | "assistant"))
-            }));
+            assert!(
+                messages.iter().all(|message| {
+                    matches!(message["role"].as_str(), Some("user" | "assistant"))
+                })
+            );
             assert!(messages.iter().any(|message| {
                 message["content"].as_array().is_some_and(|blocks| {
-                    blocks.iter().any(|block| {
-                        block["type"] == "tool_use" && block["id"] == "call-1"
-                    })
+                    blocks
+                        .iter()
+                        .any(|block| block["type"] == "tool_use" && block["id"] == "call-1")
                 })
             }));
             assert!(messages.iter().any(|message| {
@@ -252,32 +255,38 @@ fn assert_legal_route_output(profile: &str, body: &Value) {
                 body
             };
             let contents = body["contents"].as_array().expect("Gemini contents");
-            assert!(contents
-                .iter()
-                .all(|content| matches!(content["role"].as_str(), Some("user" | "model"))));
+            assert!(
+                contents
+                    .iter()
+                    .all(|content| matches!(content["role"].as_str(), Some("user" | "model")))
+            );
             assert!(contents.iter().any(|content| {
                 content["parts"].as_array().is_some_and(|parts| {
-                    parts.iter().any(|part| {
-                        part["functionCall"]["id"] == "call-1"
-                    })
+                    parts
+                        .iter()
+                        .any(|part| part["functionCall"]["id"] == "call-1")
                 })
             }));
             assert!(contents.iter().any(|content| {
                 content["parts"].as_array().is_some_and(|parts| {
-                    parts.iter().any(|part| {
-                        part["functionResponse"]["id"] == "call-1"
-                    })
+                    parts
+                        .iter()
+                        .any(|part| part["functionResponse"]["id"] == "call-1")
                 })
             }));
         }
         GEMINI_INTERACTIONS_PROFILE_ID => {
             let input = body["input"].as_array().expect("Gemini Interactions input");
-            assert!(input
-                .iter()
-                .any(|item| item["type"] == "function_call" && item["call_id"] == "call-1"));
-            assert!(input.iter().any(|item| {
-                item["type"] == "function_result" && item["call_id"] == "call-1"
-            }));
+            assert!(
+                input
+                    .iter()
+                    .any(|item| item["type"] == "function_call" && item["call_id"] == "call-1")
+            );
+            assert!(
+                input.iter().any(|item| {
+                    item["type"] == "function_result" && item["call_id"] == "call-1"
+                })
+            );
         }
         _ => panic!("unregistered test profile {profile}"),
     }
@@ -320,18 +329,41 @@ fn production_host_user_envelopes_preserve_top_prefix_and_tool_pairs() {
         // 只有明确的稳定 System 来源可以进入固定顶部投影。
         let top = fixed_top_text(profile, body);
         assert_eq!(top, STABLE_TOP, "{profile} changed the fixed top");
-        assert!(!top.contains(DYNAMIC_A), "{profile} moved event A into the top");
-        assert!(!top.contains(DYNAMIC_B), "{profile} moved event B into the top");
-        assert!(!top.contains("vulcan_"), "{profile} put a host tag in the top");
+        assert!(
+            !top.contains(DYNAMIC_A),
+            "{profile} moved event A into the top"
+        );
+        assert!(
+            !top.contains(DYNAMIC_B),
+            "{profile} moved event B into the top"
+        );
+        assert!(
+            !top.contains("vulcan_"),
+            "{profile} put a host tag in the top"
+        );
 
         // Each logical host event is rendered exactly once; ordinary content cannot acquire a host wrapper.
         // 每个逻辑宿主事件只渲染一次；普通内容不能获得宿主包装。
-        assert_eq!(wire.matches("<vulcan_agent_message ").count(), 1, "{profile}");
-        assert_eq!(wire.matches("<vulcan_context_update ").count(), 1, "{profile}");
+        assert_eq!(
+            wire.matches("<vulcan_agent_message ").count(),
+            1,
+            "{profile}"
+        );
+        assert_eq!(
+            wire.matches("<vulcan_context_update ").count(),
+            1,
+            "{profile}"
+        );
         assert!(contains_exact_string(body, "ordinary-user"), "{profile}");
-        assert!(contains_exact_string(body, "assistant-before-tool"), "{profile}");
+        assert!(
+            contains_exact_string(body, "assistant-before-tool"),
+            "{profile}"
+        );
         assert!(contains_exact_string(body, "final-assistant"), "{profile}");
-        assert!(wire.contains("aGVsbG8="), "{profile} lost the native image data");
+        assert!(
+            wire.contains("aGVsbG8="),
+            "{profile} lost the native image data"
+        );
 
         // The serialized order is the production order after all Responses-to-target conversion.
         // 序列化顺序是完成 Responses 到目标线路转换后的真实生产顺序。
