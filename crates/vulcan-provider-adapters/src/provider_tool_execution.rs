@@ -21,6 +21,11 @@ use std::collections::BTreeMap;
 
 /// Maximum provider tool metadata response accepted before typed decoding.
 /// 强类型解码前允许接收的供应商工具元数据响应上限。
+///
+/// Applies to JSON bodies, SSE streams, and their accumulated text. Resources embedded inline in
+/// such a response are therefore bounded by this limit before [`GENERIC_RESOURCE_BYTE_LIMIT`] applies.
+/// 适用于 JSON 响应体、SSE 流及其累积文本。内嵌于此类响应中的资源因此在
+/// [`GENERIC_RESOURCE_BYTE_LIMIT`] 生效之前已受本上限约束。
 const PROVIDER_TOOL_RESPONSE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 
 /// Maximum Unicode characters retained from one provider diagnostic field.
@@ -41,6 +46,14 @@ const GENERIC_STRUCTURED_RESULT_COUNT_LIMIT: usize = 256;
 
 /// Absolute decoded-byte ceiling accepted from one declarative resource extractor.
 /// 单个声明式资源提取器允许的绝对解码字节上限。
+///
+/// This is the ceiling for manifest-declared `max_bytes`, binary follow-up downloads streamed outside
+/// the metadata response, and request-side multipart files. It is intentionally larger than
+/// [`PROVIDER_TOOL_RESPONSE_BYTE_LIMIT`]: only binary carriers can reach it, while inline resources
+/// stay bounded by the smaller response limit.
+/// 这是 Manifest 声明的 `max_bytes`、在元数据响应之外流式下载的二进制后续资源，以及请求侧
+/// multipart 文件的上限。它刻意大于 [`PROVIDER_TOOL_RESPONSE_BYTE_LIMIT`]：只有二进制载体能触及它，
+/// 内联资源仍受较小的响应上限约束。
 const GENERIC_RESOURCE_BYTE_LIMIT: u64 = 100 * 1024 * 1024;
 
 /// Formats one provider-tool transport failure without retaining request URL material.
