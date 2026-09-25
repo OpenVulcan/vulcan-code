@@ -168,9 +168,9 @@ mod tests {
         // commandSessionSource owns the pipe-backed long-lived process entrypoint.
         // commandSessionSource 持有管道后端长生命周期进程入口。
         let command_session_source = include_str!("command_session_runtime/runtime.rs");
-        // commandStopSource owns the Windows process-tree stop helper entrypoint.
-        // commandStopSource 持有 Windows 进程树停止辅助入口。
-        let command_stop_source = include_str!("command_session_runtime/pipe.rs");
+        // processTreeSource owns the Windows process-tree stop helper entrypoints.
+        // processTreeSource 持有 Windows 进程树停止辅助入口。
+        let process_tree_source = include_str!("process_tree.rs");
         // terminalHostSource owns the isolated PTY host process entrypoint.
         // terminalHostSource 持有隔离 PTY 宿主进程入口。
         let terminal_host_source = include_str!("terminal_host_client.rs");
@@ -180,7 +180,8 @@ mod tests {
             command_session_source
                 .contains("new_background_tokio_command(&request.launcher_program)")
         );
-        assert!(command_stop_source.contains("new_background_std_command(\"taskkill\")"));
+        assert!(process_tree_source.contains("new_background_tokio_command(\"taskkill\")"));
+        assert!(process_tree_source.contains("new_background_std_command(\"taskkill\")"));
         assert!(
             terminal_host_source
                 .contains("new_background_tokio_command(crate::runtime_assets::native_host_path(")
@@ -188,7 +189,8 @@ mod tests {
 
         assert!(!shell_command_source.contains("TokioCommand::new(&program)"));
         assert!(!command_session_source.contains("TokioCommand::new(&request.launcher_program)"));
-        assert!(!command_stop_source.contains("StdCommand::new(\"taskkill\")"));
+        assert!(!process_tree_source.contains("TokioCommand::new(\"taskkill\")"));
+        assert!(!process_tree_source.contains("StdCommand::new(\"taskkill\")"));
         assert!(
             !terminal_host_source.contains("Command::new(crate::runtime_assets::native_host_path(")
         );

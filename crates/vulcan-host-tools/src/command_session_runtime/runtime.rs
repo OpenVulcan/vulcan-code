@@ -75,6 +75,9 @@ impl CommandSessionRuntime {
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
         command.kill_on_drop(true);
+        // Stop requests must reach background descendants that inherited the session pipes.
+        // 停止请求必须触达继承了会话管道的后台后代进程。
+        crate::process_tree::isolate_child_process_tree(&mut command);
         // VULCAN_HOME keeps long-lived shell sessions aligned with the compiled user profile.
         // VULCAN_HOME 让长生命周期 shell 会话与当前编译用户配置保持一致。
         if std::env::var_os("VULCAN_HOME").is_none()

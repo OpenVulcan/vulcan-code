@@ -6,6 +6,10 @@ use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
 use vulcan_host_tools::process_creation::{
     apply_child_path_prefixes, new_background_tokio_command,
 };
+use vulcan_host_tools::process_tree::{
+    CHILD_OUTPUT_DRAIN_GRACE, ChildProcessTreeDropGuard, isolate_child_process_tree,
+    terminate_child_process_tree,
+};
 
 /// Builds the one-shot shell-command host-owned native tool.
 /// 构建一次性 shell 命令宿主自有原生工具。
@@ -610,6 +614,9 @@ pub(crate) async fn execute_shell_command_process(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     command.kill_on_drop(true);
+    // Timeouts and cancellation must also stop background descendants that inherited the pipes.
+    // 超时与取消也必须停止继承了输出管道的后台后代进程。
+    isolate_child_process_tree(&mut command);
     if let Err(error) = apply_shell_command_process_options(&mut command, process_options) {
         return ShellCommandExecutionReport {
             status: ShellCommandExecutionStatus::Failed,
@@ -646,6 +653,10 @@ pub(crate) async fn execute_shell_command_process(
         }
     };
 
+    // tree_guard terminates the whole tree if this tool call is cancelled before the child is reaped.
+    // tree_guard 在子进程被回收前工具调用遭取消时终止整棵进程树。
+    let mut tree_guard = ChildProcessTreeDropGuard::arm(&child);
+
     // stdin_task writes the complete stdin text while output is drained, so full pipes cannot deadlock the child.
     // stdin_task 在排空输出的同时写入完整 stdin 文本，避免管道写满导致子进程死锁。
     let stdin_task = match parsed_args.stdin.clone() {
@@ -677,26 +688,41 @@ pub(crate) async fn execute_shell_command_process(
     let (stdout_buffer, stdout_task) = spawn_shell_output_reader(child.stdout.take());
     let (stderr_buffer, stderr_task) = spawn_shell_output_reader(child.stderr.take());
 
-    let wait_result = match parsed_args.timeout_ms.filter(|value| *value > 0) {
-        Some(timeout_ms) => match timeout(Duration::from_millis(timeout_ms), child.wait()).await {
-            Ok(wait_result) => wait_result,
-            Err(_) => {
-                return ShellCommandExecutionReport {
-                    status: ShellCommandExecutionStatus::TimedOut,
-                    shell_label,
-                    cwd: effective_cwd.to_path_buf(),
-                    exit_code: None,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
-                    stdout_text: String::new(),
-                    stderr_text: String::new(),
-                    failure_reason: Some(format!(
-                        "The command exceeded the timeout limit ({} ms).",
-                        timeout_ms
-                    )),
-                };
-            }
-        },
-        None => child.wait().await,
+    let timeout_ms = parsed_args.timeout_ms.filter(|value| *value > 0);
+    let wait_outcome = match timeout_ms {
+        Some(timeout_ms) => timeout(Duration::from_millis(timeout_ms), child.wait())
+            .await
+            .ok(),
+        None => Some(child.wait().await),
+    };
+    let Some(wait_result) = wait_outcome else {
+        // The whole tree is killed so descendants release the pipes and partial output can be returned.
+        // 终止整棵进程树，使后代进程释放管道，从而返回已产生的部分输出。
+        let terminate_error = terminate_child_process_tree(&mut child).await.err();
+        if let Ok(Ok(_)) = timeout(CHILD_OUTPUT_DRAIN_GRACE, child.wait()).await {
+            tree_guard.disarm();
+        }
+        let drain_deadline = tokio::time::Instant::now() + CHILD_OUTPUT_DRAIN_GRACE;
+        let _ = join_shell_output_task(stdout_task, drain_deadline).await;
+        let _ = join_shell_output_task(stderr_task, drain_deadline).await;
+        let _ = join_shell_output_task(stdin_task, drain_deadline).await;
+        let mut failure_reason = format!(
+            "The command exceeded the timeout limit ({} ms).",
+            timeout_ms.unwrap_or_default()
+        );
+        if let Some(error) = terminate_error {
+            failure_reason.push_str(&format!(" {error}"));
+        }
+        return ShellCommandExecutionReport {
+            status: ShellCommandExecutionStatus::TimedOut,
+            shell_label,
+            cwd: effective_cwd.to_path_buf(),
+            exit_code: None,
+            duration_ms: started_at.elapsed().as_millis() as u64,
+            stdout_text: decode_shell_output_bytes(&take_shell_output_buffer(&stdout_buffer)),
+            stderr_text: decode_shell_output_bytes(&take_shell_output_buffer(&stderr_buffer)),
+            failure_reason: Some(failure_reason),
+        };
     };
     let exit_status = match wait_result {
         Ok(exit_status) => exit_status,
@@ -713,29 +739,43 @@ pub(crate) async fn execute_shell_command_process(
             };
         }
     };
+    // Background descendants left after a natural exit are intentionally not killed.
+    // 自然退出后残留的后台后代进程按设计不被终止。
+    tree_guard.disarm();
 
-    let stdout_result = join_shell_output_task(stdout_task).await;
-    let stderr_result = join_shell_output_task(stderr_task).await;
-    let stdin_result = join_shell_output_task(stdin_task).await;
-    // failure_reason reports the first host-side I/O failure while keeping all collected output.
-    // failure_reason 报告第一个宿主侧 I/O 失败，同时保留已收集的全部输出。
-    let failure_reason = match (stdout_result, stderr_result, stdin_result) {
-        (Err(error), _, _) => Some(format!("Failed while reading command stdout: {error}")),
-        (_, Err(error), _) => Some(format!("Failed while reading command stderr: {error}")),
+    let drain_deadline = tokio::time::Instant::now() + CHILD_OUTPUT_DRAIN_GRACE;
+    let stdout_result = join_shell_output_task(stdout_task, drain_deadline).await;
+    let stderr_result = join_shell_output_task(stderr_task, drain_deadline).await;
+    let stdin_result = join_shell_output_task(stdin_task, drain_deadline).await;
+    // io_failure reports the first host-side I/O failure while keeping all collected output.
+    // io_failure 报告第一个宿主侧 I/O 失败，同时保留已收集的全部输出。
+    let io_failure = match (&stdout_result, &stderr_result, &stdin_result) {
+        (Some(Err(error)), _, _) => Some(format!("Failed while reading command stdout: {error}")),
+        (_, Some(Err(error)), _) => Some(format!("Failed while reading command stderr: {error}")),
         // A child may legitimately exit or close stdin before consuming all provided input.
         // 子进程可以在消费完全部输入前合法地退出或关闭 stdin。
-        (_, _, Err(error)) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+        (_, _, Some(Err(error))) if error.kind() != std::io::ErrorKind::BrokenPipe => {
             Some(format!("Failed to write command stdin: {error}"))
         }
         _ => None,
     };
-    let stdout_text = decode_shell_output_bytes(&take_shell_output_buffer(&stdout_buffer));
-    let stderr_text = decode_shell_output_bytes(&take_shell_output_buffer(&stderr_buffer));
-    let status = if failure_reason.is_none() && exit_status.success() {
+    let status = if io_failure.is_none() && exit_status.success() {
         ShellCommandExecutionStatus::Completed
     } else {
         ShellCommandExecutionStatus::Failed
     };
+    // Pipes still open after the grace mean background processes inherited them; capture stops there.
+    // 宽限期后管道仍未关闭说明后台进程继承了它们；输出捕获到此为止。
+    let failure_reason = io_failure.or_else(|| {
+        (stdout_result.is_none() || stderr_result.is_none()).then(|| {
+            format!(
+                "Output capture stopped {} ms after the command exited because background processes still hold stdout or stderr.",
+                CHILD_OUTPUT_DRAIN_GRACE.as_millis()
+            )
+        })
+    });
+    let stdout_text = decode_shell_output_bytes(&take_shell_output_buffer(&stdout_buffer));
+    let stderr_text = decode_shell_output_bytes(&take_shell_output_buffer(&stderr_buffer));
 
     ShellCommandExecutionReport {
         status,
@@ -794,14 +834,29 @@ where
     (buffer, task)
 }
 
-/// Waits for one optional stdio transfer task and flattens task failures into I/O errors.
-/// 等待一个可选标准流传输任务，并把任务失败展开为 I/O 错误。
-async fn join_shell_output_task(task: Option<ShellStdioTask>) -> std::io::Result<()> {
-    match task {
-        Some(task) => task
-            .await
-            .unwrap_or_else(|error| Err(std::io::Error::other(error))),
-        None => Ok(()),
+/// Waits until a shared deadline for one optional stdio transfer task.
+/// 在共享截止时间前等待一个可选标准流传输任务。
+///
+/// # Returns
+/// 返回值
+/// Returns `Some` with the flattened task result, or `None` after aborting a task still running at the deadline.
+/// 返回展开后的任务结果 `Some`；截止时仍在运行的任务被中止后返回 `None`。
+async fn join_shell_output_task(
+    task: Option<ShellStdioTask>,
+    deadline: tokio::time::Instant,
+) -> Option<std::io::Result<()>> {
+    let Some(task) = task else {
+        return Some(Ok(()));
+    };
+    let abort_handle = task.abort_handle();
+    match tokio::time::timeout_at(deadline, task).await {
+        Ok(join_result) => {
+            Some(join_result.unwrap_or_else(|error| Err(std::io::Error::other(error))))
+        }
+        Err(_) => {
+            abort_handle.abort();
+            None
+        }
     }
 }
 
@@ -1091,6 +1146,68 @@ mod process_option_tests {
         .await;
         assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
         assert!(report.stdout_text.trim_end().ends_with("done"));
+    }
+
+    /// Timeouts must kill descendants holding the pipes and still return output produced so far.
+    /// 超时必须终止持有管道的后代进程，并仍返回已产生的输出。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kills_descendants_and_keeps_partial_output() {
+        let temp = tempfile::tempdir().expect("create shell timeout test directory");
+        let parsed_args = ShellCommandToolArgs {
+            command: String::from("echo partial; sleep 600 & wait"),
+            cwd: None,
+            timeout_ms: Some(500),
+            stdin: None,
+            shell: Some(String::from("sh")),
+        };
+        let report = tokio::time::timeout(
+            Duration::from_secs(30),
+            execute_shell_command_process(
+                &parsed_args,
+                temp.path(),
+                &HostCommandShellSupport::from_configured_default_id(None),
+                &ShellCommandProcessOptions::default(),
+            ),
+        )
+        .await
+        .expect("timed-out command must return once its tree is killed");
+        assert_eq!(report.status, ShellCommandExecutionStatus::TimedOut);
+        assert!(report.stdout_text.contains("partial"));
+    }
+
+    /// Background processes inheriting the pipes must not keep a naturally exited command running.
+    /// 继承管道的后台进程不得让已自然退出的命令持续挂起。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn natural_exit_stops_waiting_for_background_pipe_holders() {
+        let temp = tempfile::tempdir().expect("create shell background test directory");
+        let parsed_args = ShellCommandToolArgs {
+            command: String::from("sleep 30 & echo done"),
+            cwd: None,
+            timeout_ms: None,
+            stdin: None,
+            shell: Some(String::from("sh")),
+        };
+        let report = tokio::time::timeout(
+            Duration::from_secs(20),
+            execute_shell_command_process(
+                &parsed_args,
+                temp.path(),
+                &HostCommandShellSupport::from_configured_default_id(None),
+                &ShellCommandProcessOptions::default(),
+            ),
+        )
+        .await
+        .expect("exited command must not wait for background pipe holders");
+        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
+        assert!(report.stdout_text.trim_end().ends_with("done"));
+        assert!(
+            report
+                .failure_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("background processes"))
+        );
     }
 
     /// A host-resolved plugin binary directory should be prepended before cmd resolves a rewritten command.
