@@ -19,6 +19,14 @@ pub struct HookInvocation {
 
 /// Trait implemented by hook handlers.
 /// hook 处理器实现的 trait。
+///
+/// Handlers must yield to their executor: registration timeouts can only cancel a handler at an
+/// `.await` point. Blocking work (synchronous IO, CPU-heavy loops, blocking engine calls) belongs
+/// in `tokio::task::spawn_blocking`. A handler that blocks its thread instead keeps running past
+/// the timeout, and hosts may abandon its worker thread rather than wait for it.
+/// 处理器必须让出执行器：注册超时只能在 `.await` 点取消处理器。阻塞工作（同步 IO、CPU 密集
+/// 循环、阻塞式引擎调用）应放入 `tokio::task::spawn_blocking`。阻塞线程的处理器会越过超时继续
+/// 运行，宿主可能直接放弃其工作线程而不再等待。
 #[async_trait]
 pub trait HookHandler: Send + Sync {
     /// Runs the handler for one invocation and returns its contribution.

@@ -280,11 +280,27 @@ pub(super) fn spawn_hook_dispatch(dispatcher: HookDispatcher, request: HookDispa
     }
 }
 
+/// Awaited hook worker threads that exceeded the dispatch deadline and are still running.
+/// 已超过调度截止时间但仍在运行的等待型 Hook 工作线程数量。
+static DETACHED_HOOK_WORKERS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Worker lifecycle states shared between an awaited hook worker and its caller.
+/// 等待型 Hook 工作线程与其调用方共享的生命周期状态。
+const HOOK_WORKER_RUNNING: u8 = 0;
+const HOOK_WORKER_FINISHED: u8 = 1;
+const HOOK_WORKER_ABANDONED: u8 = 2;
+
 /// Runs one awaited hook dispatch on a dedicated worker thread with a private Tokio runtime.
 /// 在带私有 Tokio 运行时的专用工作线程上执行一次需要等待结果的 hook 调度。
 ///
 /// The worker isolates handlers that may block or run their own IO from the caller's executor.
-/// 工作线程将可能阻塞或自带 IO 的处理器与调用方执行器隔离。
+/// The deadline is enforced twice: inside the worker so cooperative handlers are cancelled, and
+/// by the caller so a handler that blocks its thread without yielding cannot stall the turn.
+/// A worker abandoned by the caller keeps running detached until its handler returns.
+/// 工作线程将可能阻塞或自带 IO 的处理器与调用方执行器隔离。截止时间执行两次：工作线程内部
+/// 用于取消可协作的处理器，调用方一侧用于防止不让出线程的阻塞处理器拖住当前回合。
+/// 被调用方放弃的工作线程会脱离等待继续运行，直到其处理器返回。
 ///
 /// # Parameters
 /// # 参数
@@ -308,18 +324,74 @@ pub(super) async fn run_hook_dispatch_on_worker_thread(
     dispatcher: HookDispatcher,
     request: HookDispatchRequest,
 ) -> Result<HookDispatchReport, String> {
-    let (sender, receiver) = oneshot::channel();
+    run_hook_dispatch_on_worker_thread_within(
+        stage,
+        thread_name,
+        dispatcher,
+        request,
+        CONVERSATION_HOOK_DISPATCH_TIMEOUT,
+    )
+    .await
+}
+
+/// Runs one awaited hook dispatch on a worker thread under an explicit deadline.
+/// 在显式截止时间下于工作线程上执行一次需要等待结果的 hook 调度。
+pub(super) async fn run_hook_dispatch_on_worker_thread_within(
+    stage: &'static str,
+    thread_name: String,
+    dispatcher: HookDispatcher,
+    request: HookDispatchRequest,
+    deadline: Duration,
+) -> Result<HookDispatchReport, String> {
+    let (sender, mut receiver) = oneshot::channel();
+    let state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(HOOK_WORKER_RUNNING));
+    let worker_state = std::sync::Arc::clone(&state);
     std::thread::Builder::new()
-        .name(thread_name)
+        .name(thread_name.clone())
         .spawn(move || {
-            let _ = sender.send(run_hook_dispatch_on_private_runtime(
-                stage, dispatcher, request,
-            ));
+            let result = run_hook_dispatch_on_private_runtime(stage, dispatcher, request, deadline);
+            let _ = sender.send(result);
+            // Exactly one side wins the transition out of `RUNNING`, so the detached gauge is
+            // incremented and decremented at most once per worker.
+            // 只有一方能从 `RUNNING` 转出，因此每个工作线程的脱离计数最多增减各一次。
+            if worker_state
+                .compare_exchange(
+                    HOOK_WORKER_RUNNING,
+                    HOOK_WORKER_FINISHED,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Acquire,
+                )
+                .is_err()
+            {
+                DETACHED_HOOK_WORKERS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+            }
         })
         .map_err(|error| format!("{stage} thread failed to start: {error}"))?;
-    receiver
-        .await
-        .unwrap_or_else(|_| Err(format!("{stage} dispatch thread disconnected")))
+    if let Ok(result) = tokio::time::timeout(deadline, &mut receiver).await {
+        return result.unwrap_or_else(|_| Err(format!("{stage} dispatch thread disconnected")));
+    }
+    if state
+        .compare_exchange(
+            HOOK_WORKER_RUNNING,
+            HOOK_WORKER_ABANDONED,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        // The worker finished right at the deadline; its result was sent before the transition.
+        // 工作线程恰在截止时刻结束；其结果在状态转换之前已经发送。
+        return receiver
+            .try_recv()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Err(format!("{stage} dispatch thread disconnected")));
+    }
+    let detached = DETACHED_HOOK_WORKERS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+    eprintln!(
+        "[conversation-hook] {stage} worker `{thread_name}` exceeded the dispatch deadline and keeps running detached; detached_workers={detached}"
+    );
+    Err(format!("{stage} dispatch timed out"))
 }
 
 /// Executes one dispatch inside a private current-thread runtime on the calling worker thread.
@@ -328,6 +400,7 @@ fn run_hook_dispatch_on_private_runtime(
     stage: &'static str,
     dispatcher: HookDispatcher,
     request: HookDispatchRequest,
+    deadline: Duration,
 ) -> Result<HookDispatchReport, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -335,13 +408,10 @@ fn run_hook_dispatch_on_private_runtime(
             .build()
             .map_err(|error| format!("{stage} runtime failed: {error}"))?;
         runtime.block_on(async move {
-            tokio::time::timeout(
-                CONVERSATION_HOOK_DISPATCH_TIMEOUT,
-                dispatcher.dispatch(request),
-            )
-            .await
-            .map_err(|_| format!("{stage} dispatch timed out"))?
-            .map_err(|error| format!("{stage} dispatch failed: {error}"))
+            tokio::time::timeout(deadline, dispatcher.dispatch(request))
+                .await
+                .map_err(|_| format!("{stage} dispatch timed out"))?
+                .map_err(|error| format!("{stage} dispatch failed: {error}"))
         })
     }))
     .unwrap_or_else(|_| Err(format!("{stage} dispatch thread panicked")))
