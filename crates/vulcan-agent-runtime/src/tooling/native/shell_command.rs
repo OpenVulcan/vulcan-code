@@ -273,27 +273,35 @@ pub(crate) fn resolve_shell_command_working_directory(
     raw_cwd: Option<&str>,
 ) -> Result<PathBuf, NativeToolError> {
     let workspace_root = workspace_root.filter(|path| !path.as_os_str().is_empty());
-    let fallback_directory =
-        crate::runtime_assets::native_host_path(&std::env::current_dir().map_err(|error| {
-            NativeToolError::new(format!(
-                "Failed to read the current working directory: {error}"
-            ))
-        })?);
-    let Some(raw_cwd) = raw_cwd.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(workspace_root
-            .map(crate::runtime_assets::native_host_path)
-            .unwrap_or(fallback_directory));
-    };
-    let requested_path = PathBuf::from(raw_cwd);
-    if requested_path.is_absolute() {
-        return Ok(crate::runtime_assets::native_host_path(&requested_path));
+    let requested_path = raw_cwd
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    if let Some(requested_path) = requested_path.as_ref()
+        && requested_path.is_absolute()
+    {
+        return Ok(crate::runtime_assets::native_host_path(requested_path));
     }
-    let base_directory = workspace_root
-        .map(crate::runtime_assets::native_host_path)
-        .unwrap_or(fallback_directory);
-    Ok(crate::runtime_assets::native_host_path(
-        &base_directory.join(requested_path),
-    ))
+    // Projectless executions intentionally fall back to the host process directory; it is read only when needed
+    // so an unreadable process directory cannot break workspace-bound or absolute-cwd commands.
+    // 无项目执行按设计回退到宿主进程目录；仅在需要时读取，避免进程目录不可读时连带破坏
+    // 绑定工作区或使用绝对 cwd 的命令。
+    let base_directory = match workspace_root {
+        Some(workspace_root) => crate::runtime_assets::native_host_path(workspace_root),
+        None => {
+            crate::runtime_assets::native_host_path(&std::env::current_dir().map_err(|error| {
+                NativeToolError::new(format!(
+                    "Failed to read the current working directory: {error}"
+                ))
+            })?)
+        }
+    };
+    Ok(match requested_path {
+        Some(requested_path) => {
+            crate::runtime_assets::native_host_path(&base_directory.join(requested_path))
+        }
+        None => base_directory,
+    })
 }
 
 /// Resolves the spill root used by one shell-command invocation when oversized output must be paged.
