@@ -135,7 +135,13 @@ pub async fn prepare_runtime_stream_launch_with_plugins_and_public_ai(
             after_precheck_unix_millis().saturating_sub(launch_started_at)
         ),
     );
-    build_runtime_stream_launch_from_prepared_input(config.clone(), prepared_launch_input).await
+    // Keep bootstrap state out of the preparation future's inline storage.
+    // 避免将引导状态内嵌在准备 Future 的存储中。
+    Box::pin(build_runtime_stream_launch_from_prepared_input(
+        config.clone(),
+        prepared_launch_input,
+    ))
+    .await
 }
 
 /// Assembles the final runtime-stream launch payload from one already prepared launch input.
@@ -154,13 +160,15 @@ async fn build_runtime_stream_launch_from_prepared_input(
     let foundation = Arc::new(foundation);
     let task_execution_context_luaskills_runtime = luaskills_runtime.clone();
     let preparation_for_failure = preparation.clone();
-    let bootstrap = match bootstrap_runtime_stream(
+    // Heap ownership reduces nested poll frames while retaining cancellation by the parent future.
+    // 堆持有缩小嵌套轮询栈帧，并保留父 Future 的取消控制。
+    let bootstrap = match Box::pin(bootstrap_runtime_stream(
         &foundation,
         luaskills_runtime,
         &request,
         preparation,
         tool_snapshot,
-    )
+    ))
     .await
     {
         Ok(bootstrap) => bootstrap,

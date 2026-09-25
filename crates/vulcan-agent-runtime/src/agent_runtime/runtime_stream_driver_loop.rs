@@ -127,7 +127,9 @@ pub(crate) fn drive_runtime_stream_provider_loop(
     launch: RuntimeStreamLaunch,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
-    stream! {
+    // Box both the state and yielded items; large event payloads otherwise inflate every yield's poll frame.
+    // 同时装箱状态与产出事件；大型事件载荷否则会放大每个 yield 的轮询栈帧。
+    Box::pin(stream! {
         let session_id = launch.session_id;
         let task_execution_context = launch.task_execution_context;
         let effective_prompt = launch.effective_prompt;
@@ -169,7 +171,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                         &mut stream_state,
                         error,
                     ) {
-                        yield event;
+                        yield Box::new(event);
                     }
                     return;
                 }
@@ -208,7 +210,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                         && tokio::time::Instant::now() >= next_delta_flush_at
                     {
                         for event in delta_coalescer.flush() {
-                            yield event;
+                            yield Box::new(event);
                         }
                         next_delta_flush_at = tokio::time::Instant::now()
                             + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
@@ -228,7 +230,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                     (was_empty || !flushed_events.is_empty()) && !delta_coalescer.is_empty();
 
                 for flushed_event in flushed_events {
-                    yield flushed_event;
+                    yield Box::new(flushed_event);
                 }
 
                 if starts_new_flush_window {
@@ -239,7 +241,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
 
             if !delta_coalescer.is_empty() && tokio::time::Instant::now() >= next_delta_flush_at {
                 for event in delta_coalescer.flush() {
-                    yield event;
+                    yield Box::new(event);
                 }
                 next_delta_flush_at =
                     tokio::time::Instant::now() + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
@@ -251,7 +253,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         }
 
         for event in delta_coalescer.flush() {
-            yield event;
+            yield Box::new(event);
         }
 
         // executionContextReleaseResult must succeed before any terminal event claims the loop is closed.
@@ -280,41 +282,41 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                 &mut stream_state,
                 terminal_error,
             ) {
-                yield event;
+                yield Box::new(event);
             }
             return;
         }
 
         if let Some((conversation_state, reason)) = stream_state.take_context_compaction_required() {
-            yield ExecutionStreamEvent::ContextCompactionRequired {
+            yield Box::new(ExecutionStreamEvent::ContextCompactionRequired {
                 session_id,
                 conversation_state,
                 reason,
-            };
+            });
             return;
         }
 
         if let Some((conversation_state, reason, provider_request_continuation)) =
             stream_state.take_context_compaction_policy_refresh_required()
         {
-            yield ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired {
+            yield Box::new(ExecutionStreamEvent::ContextCompactionPolicyRefreshRequired {
                 session_id,
                 conversation_state,
                 reason,
                 provider_request_continuation,
-            };
+            });
             return;
         }
 
         if let Some((conversation_state, reason, provider_request_continuation)) =
             stream_state.take_provider_route_switch_required()
         {
-            yield ExecutionStreamEvent::ProviderRouteSwitchRequired {
+            yield Box::new(ExecutionStreamEvent::ProviderRouteSwitchRequired {
                 session_id,
                 conversation_state,
                 reason,
                 provider_request_continuation,
-            };
+            });
             return;
         }
 
@@ -328,7 +330,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                 &mut stream_state,
                 error,
             ) {
-                yield event;
+                yield Box::new(event);
             }
             return;
         }
@@ -341,9 +343,12 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             warnings,
             &mut stream_state,
         ) {
-            yield event;
+            yield Box::new(event);
         }
-    }
+    })
+    // Restore the existing event API only after the large generator's poll frame has unwound.
+    // 大型生成器轮询栈帧退出后，才还原既有事件接口。
+    .map(|event| *event)
 }
 
 #[cfg(test)]

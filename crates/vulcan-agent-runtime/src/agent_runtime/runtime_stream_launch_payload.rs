@@ -443,6 +443,117 @@ mod tests {
         }
     }
 
+    /// Runs real lazy launch preparation on a fixed small stack in an isolated process.
+    /// 在独立进程的固定小栈上运行真实惰性启动准备。
+    /// A missing agent makes the result deterministic before any Provider request or user data access.
+    /// 使用不存在的代理，在任何供应商请求或用户数据访问前获得确定结果。
+    #[test]
+    fn runtime_stream_preparation_fits_small_stack() {
+        // Child mode isolates fatal stack overflow from the parent test harness.
+        // 子进程模式将致命栈溢出与父测试框架隔离。
+        const CHILD_MODE: &str = "VULCAN_RUNTIME_STACK_TEST_CHILD";
+        // Completion evidence prevents an empty child test selection from passing silently.
+        // 完成证据防止子进程未选中任何测试却静默通过。
+        const COMPLETED: &str = "bounded runtime preparation completed";
+        if std::env::var_os(CHILD_MODE).is_none() {
+            // Trace settings must not select a different execution or cancellation path.
+            // 追踪设置不得选择不同的执行或取消路径。
+            for trace_enabled in ["0", "1"] {
+                // Exact test selection prevents recursive execution of unrelated tests in the child.
+                // 精确测试选择避免子进程递归执行其他测试。
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "agent_runtime::runtime_stream_launch_payload::tests::runtime_stream_preparation_fits_small_stack",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_MODE, "1")
+                .env("VULCAN_WEBUI_AFTER_PRECHECK_TRACE", trace_enabled)
+                .output()
+                .unwrap();
+                assert!(
+                    output.status.success(),
+                    "launch on the bounded stack failed: trace={trace_enabled} status={}\n{}\n{}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(
+                    String::from_utf8_lossy(&output.stdout).contains(COMPLETED),
+                    "the child must execute and complete the selected stack regression test"
+                );
+            }
+            return;
+        }
+        // One MiB leaves headroom below the production worker stack for host task wrappers.
+        // 一 MiB 为生产工作线程栈上的宿主任务包装保留余量。
+        std::thread::Builder::new()
+            .name("runtime-launch-stack-test".into())
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                use futures_util::StreamExt;
+                // Runtime has no external services and uses the real first-poll execution path.
+                // runtime 不含外部服务，并使用真实首次轮询执行路径。
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                runtime.block_on(async {
+                    // Request fails inside execution preparation, at the function seen in the crash dump.
+                    // request 在崩溃转储中对应的执行准备函数内失败。
+                    let mut request = build_test_request();
+                    request.execution_agent_id = Some("stack-test-missing-agent".into());
+                    // Stream keeps the production entrypoint, without installing a network runtime.
+                    // stream 保持生产入口，不安装网络运行时。
+                    let mut stream = Box::pin(crate::agent_runtime::runtime_stream::stream_runtime_run(
+                        crate::provider_config::ProviderConfigurationFile::default(),
+                        crate::agent_profile::AgentProfileCatalog::default(),
+                        None, None,
+                        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+                        Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+                        Arc::new(crate::tooling::CommandSessionRuntime::new()),
+                        request,
+                    ));
+                    let Some(crate::agent_runtime::events::ExecutionStreamEvent::Finished(report)) = stream.next().await else {
+                        panic!("the missing agent must produce exactly one terminal preparation failure");
+                    };
+                    assert!(report.error.as_deref().unwrap().contains("stack-test-missing-agent"));
+                    assert_eq!(report.provider_request_count, 0);
+                    assert!(stream.next().await.is_none());
+                });
+                // Exercise the prepared driver too, with no installed transport or network request.
+                // 同时执行已准备的驱动，不安装传输运行时或发送网络请求。
+                runtime.block_on(async {
+                    // Launch reuses the typed in-memory fixture and normal start-event projection.
+                    // launch 复用类型化内存夹具及正常启动事件投影。
+                    let launch = build_runtime_stream_launch_payload(
+                        &build_test_request(), build_test_bootstrap(), None,
+                    ).expect("in-memory launch should assemble");
+                    // Driver must reach its original terminal error within the same bounded stack.
+                    // driver 必须在相同受限栈内到达原有终态错误。
+                    let mut driver = Box::pin(crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch(
+                        crate::provider_config::ProviderConfigurationFile::default(), launch, None,
+                    ));
+                    assert!(matches!(driver.next().await, Some(crate::agent_runtime::events::ExecutionStreamEvent::Prepared(_))));
+                    // Terminal count prevents silent truncation or duplicate final reports.
+                    // 终态计数防止静默截断或重复最终报告。
+                    let mut terminal_count = 0;
+                    while let Some(event) = driver.next().await {
+                        if let crate::agent_runtime::events::ExecutionStreamEvent::Finished(report) = event {
+                            terminal_count += 1;
+                            assert_eq!(report.error.as_deref(), Some("The service has not installed the public AI runtime."));
+                            assert_eq!(report.provider_request_count, 0);
+                            assert!(driver.next().await.is_none());
+                            break;
+                        }
+                    }
+                    assert_eq!(terminal_count, 1);
+                });
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        println!("{COMPLETED}");
+    }
+
     /// Verifies actual bootstrap exposes dynamic instructions once in User history and keeps both top projections stable.
     /// 验证真实 bootstrap 将动态指令仅投影一次到 User 历史，且两份顶部投影均保持稳定。
     #[test]

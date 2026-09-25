@@ -17,7 +17,9 @@ pub fn drive_runtime_stream_launch(
     launch: RuntimeStreamLaunch,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
-    stream! {
+    // Box at construction so callers do not reserve the driver's concrete state on their poll stack.
+    // 在构造处装箱，避免调用方在轮询栈上为驱动的具体状态预留空间。
+    Box::pin(stream! {
         let session_id = launch.session_id;
         let preparation = launch.preparation.clone();
         let discovery_events = launch.discovery_events.clone();
@@ -27,10 +29,11 @@ pub fn drive_runtime_stream_launch(
             yield event;
         }
 
-        let provider_events = drive_runtime_stream_provider_loop(config, launch, prompt_intervention);
-        futures_util::pin_mut!(provider_events);
+        // Keep the large provider loop out of the launch driver's inline state.
+        // 避免将大型供应商循环内嵌在启动驱动状态中。
+        let mut provider_events = drive_runtime_stream_provider_loop(config, launch, prompt_intervention);
         while let Some(event) = provider_events.next().await {
             yield event;
         }
-    }
+    })
 }

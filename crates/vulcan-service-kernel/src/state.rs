@@ -1288,6 +1288,11 @@ where
                 }
                 _ => {}
             }
+            // Box the owned stream before wrapping it so the start gate remains small.
+            // 包装前将持有的流任务装箱，使启动闸门保持小型状态。
+            // Awaiting it here preserves the registered handle's cancellation ownership.
+            // 在此等待它，保留登记句柄对任务的取消归属。
+            let future = Box::pin(future);
             let handle = spawn_service_task(async move {
                 if start_receiver.await.is_ok() {
                     future.await;
