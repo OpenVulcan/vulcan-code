@@ -48,8 +48,8 @@ pub(crate) struct ShellCommandToolArgs {
     /// Optional timeout budget in milliseconds applied to the command run.
     /// 应用于命令执行的可选毫秒级超时预算。
     timeout_ms: Option<u64>,
-    /// Optional stdin text written to the child process before waiting for output.
-    /// 在等待输出前写入子进程的可选标准输入文本。
+    /// Optional stdin text written once to the child process, which is then closed.
+    /// 一次性写入子进程并随后关闭的可选标准输入文本。
     stdin: Option<String>,
     /// Optional shell family selector such as `auto`, `powershell`, `cmd`, or `bash`.
     /// 可选 shell 类型选择器，例如 `auto`、`powershell`、`cmd` 或 `bash`。
@@ -237,7 +237,7 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
             },
             "stdin": {
                 "type": "string",
-                "description": "Optional stdin text written once before waiting for process output. No newline is added automatically."
+                "description": "Optional stdin text written once to the process; stdin is closed afterwards. When omitted, stdin is empty. No newline is added automatically."
             },
             "shell": {
                 "type": "string",
@@ -622,9 +622,13 @@ pub(crate) async fn execute_shell_command_process(
             failure_reason: Some(error.to_string()),
         };
     }
-    if parsed_args.stdin.is_some() {
-        command.stdin(Stdio::piped());
-    }
+    // stdin is always explicit so a one-shot command never blocks on the service's own input stream.
+    // stdin 始终显式配置，避免一次性命令阻塞在服务自身的输入流上。
+    command.stdin(if parsed_args.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
 
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -642,23 +646,11 @@ pub(crate) async fn execute_shell_command_process(
         }
     };
 
-    if let Some(stdin_text) = parsed_args.stdin.as_deref() {
-        match child.stdin.take() {
-            Some(mut child_stdin) => {
-                if let Err(error) = child_stdin.write_all(stdin_text.as_bytes()).await {
-                    return ShellCommandExecutionReport {
-                        status: ShellCommandExecutionStatus::Failed,
-                        shell_label,
-                        cwd: effective_cwd.to_path_buf(),
-                        exit_code: None,
-                        duration_ms: started_at.elapsed().as_millis() as u64,
-                        stdout_text: String::new(),
-                        stderr_text: String::new(),
-                        failure_reason: Some(format!("Failed to write command stdin: {error}")),
-                    };
-                }
-            }
-            None => {
+    // stdin_task writes the complete stdin text while output is drained, so full pipes cannot deadlock the child.
+    // stdin_task 在排空输出的同时写入完整 stdin 文本，避免管道写满导致子进程死锁。
+    let stdin_task = match parsed_args.stdin.clone() {
+        Some(stdin_text) => {
+            let Some(mut child_stdin) = child.stdin.take() else {
                 return ShellCommandExecutionReport {
                     status: ShellCommandExecutionStatus::Failed,
                     shell_label,
@@ -671,30 +663,23 @@ pub(crate) async fn execute_shell_command_process(
                         "The command did not expose a writable stdin channel.",
                     )),
                 };
-            }
+            };
+            Some(tokio::spawn(async move {
+                let write_result = child_stdin.write_all(stdin_text.as_bytes()).await;
+                // Dropping the handle closes stdin so the child observes end-of-input.
+                // 释放句柄会关闭 stdin，使子进程读到输入结束。
+                drop(child_stdin);
+                write_result
+            }))
         }
-    }
+        None => None,
+    };
+    let (stdout_buffer, stdout_task) = spawn_shell_output_reader(child.stdout.take());
+    let (stderr_buffer, stderr_task) = spawn_shell_output_reader(child.stderr.take());
 
-    let wait_future = child.wait_with_output();
-    let waited_output = match parsed_args.timeout_ms.filter(|value| *value > 0) {
-        Some(timeout_ms) => match timeout(Duration::from_millis(timeout_ms), wait_future).await {
-            Ok(output_result) => match output_result {
-                Ok(output) => Some(output),
-                Err(error) => {
-                    return ShellCommandExecutionReport {
-                        status: ShellCommandExecutionStatus::Failed,
-                        shell_label,
-                        cwd: effective_cwd.to_path_buf(),
-                        exit_code: None,
-                        duration_ms: started_at.elapsed().as_millis() as u64,
-                        stdout_text: String::new(),
-                        stderr_text: String::new(),
-                        failure_reason: Some(format!(
-                            "Failed while waiting for command output: {error}"
-                        )),
-                    };
-                }
-            },
+    let wait_result = match parsed_args.timeout_ms.filter(|value| *value > 0) {
+        Some(timeout_ms) => match timeout(Duration::from_millis(timeout_ms), child.wait()).await {
+            Ok(wait_result) => wait_result,
             Err(_) => {
                 return ShellCommandExecutionReport {
                     status: ShellCommandExecutionStatus::TimedOut,
@@ -711,30 +696,42 @@ pub(crate) async fn execute_shell_command_process(
                 };
             }
         },
-        None => match wait_future.await {
-            Ok(output) => Some(output),
-            Err(error) => {
-                return ShellCommandExecutionReport {
-                    status: ShellCommandExecutionStatus::Failed,
-                    shell_label,
-                    cwd: effective_cwd.to_path_buf(),
-                    exit_code: None,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
-                    stdout_text: String::new(),
-                    stderr_text: String::new(),
-                    failure_reason: Some(format!(
-                        "Failed while waiting for command output: {error}"
-                    )),
-                };
-            }
-        },
+        None => child.wait().await,
+    };
+    let exit_status = match wait_result {
+        Ok(exit_status) => exit_status,
+        Err(error) => {
+            return ShellCommandExecutionReport {
+                status: ShellCommandExecutionStatus::Failed,
+                shell_label,
+                cwd: effective_cwd.to_path_buf(),
+                exit_code: None,
+                duration_ms: started_at.elapsed().as_millis() as u64,
+                stdout_text: String::new(),
+                stderr_text: String::new(),
+                failure_reason: Some(format!("Failed while waiting for command output: {error}")),
+            };
+        }
     };
 
-    let output = waited_output.expect("shell command output should exist after successful wait");
-    let exit_code = output.status.code();
-    let stdout_text = decode_shell_output_bytes(&output.stdout);
-    let stderr_text = decode_shell_output_bytes(&output.stderr);
-    let status = if output.status.success() {
+    let stdout_result = join_shell_output_task(stdout_task).await;
+    let stderr_result = join_shell_output_task(stderr_task).await;
+    let stdin_result = join_shell_output_task(stdin_task).await;
+    // failure_reason reports the first host-side I/O failure while keeping all collected output.
+    // failure_reason 报告第一个宿主侧 I/O 失败，同时保留已收集的全部输出。
+    let failure_reason = match (stdout_result, stderr_result, stdin_result) {
+        (Err(error), _, _) => Some(format!("Failed while reading command stdout: {error}")),
+        (_, Err(error), _) => Some(format!("Failed while reading command stderr: {error}")),
+        // A child may legitimately exit or close stdin before consuming all provided input.
+        // 子进程可以在消费完全部输入前合法地退出或关闭 stdin。
+        (_, _, Err(error)) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+            Some(format!("Failed to write command stdin: {error}"))
+        }
+        _ => None,
+    };
+    let stdout_text = decode_shell_output_bytes(&take_shell_output_buffer(&stdout_buffer));
+    let stderr_text = decode_shell_output_bytes(&take_shell_output_buffer(&stderr_buffer));
+    let status = if failure_reason.is_none() && exit_status.success() {
         ShellCommandExecutionStatus::Completed
     } else {
         ShellCommandExecutionStatus::Failed
@@ -744,12 +741,78 @@ pub(crate) async fn execute_shell_command_process(
         status,
         shell_label,
         cwd: effective_cwd.to_path_buf(),
-        exit_code,
+        exit_code: exit_status.code(),
         duration_ms: started_at.elapsed().as_millis() as u64,
         stdout_text,
         stderr_text,
-        failure_reason: None,
+        failure_reason,
     }
+}
+
+/// Byte buffer filled incrementally by one child output reader and read by the waiter.
+/// 由单个子进程输出读取任务增量填充、并由等待方读取的字节缓冲区。
+type ShellOutputBuffer = Arc<std::sync::Mutex<Vec<u8>>>;
+
+/// Background task handle for one child stdio transfer.
+/// 单个子进程标准流传输的后台任务句柄。
+type ShellStdioTask = tokio::task::JoinHandle<std::io::Result<()>>;
+
+/// Starts draining one optional child output stream into a shared buffer.
+/// 开始把一个可选子进程输出流排空到共享缓冲区。
+///
+/// # Parameters
+/// 参数
+/// `reader` is the captured child stdout or stderr handle.
+/// `reader` 是捕获到的子进程 stdout 或 stderr 句柄。
+///
+/// # Returns
+/// 返回值
+/// Returns the shared buffer and the reader task when a stream was captured.
+/// 返回共享缓冲区；捕获到输出流时同时返回读取任务。
+fn spawn_shell_output_reader<R>(reader: Option<R>) -> (ShellOutputBuffer, Option<ShellStdioTask>)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    let buffer: ShellOutputBuffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let task = reader.map(|mut reader| {
+        let buffer = Arc::clone(&buffer);
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut chunk = vec![0_u8; 8192];
+            loop {
+                let read_bytes = reader.read(&mut chunk).await?;
+                if read_bytes == 0 {
+                    return Ok(());
+                }
+                buffer
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .extend_from_slice(&chunk[..read_bytes]);
+            }
+        })
+    });
+    (buffer, task)
+}
+
+/// Waits for one optional stdio transfer task and flattens task failures into I/O errors.
+/// 等待一个可选标准流传输任务，并把任务失败展开为 I/O 错误。
+async fn join_shell_output_task(task: Option<ShellStdioTask>) -> std::io::Result<()> {
+    match task {
+        Some(task) => task
+            .await
+            .unwrap_or_else(|error| Err(std::io::Error::other(error))),
+        None => Ok(()),
+    }
+}
+
+/// Moves all bytes collected so far out of one shared output buffer.
+/// 取出一个共享输出缓冲区中目前收集到的全部字节。
+fn take_shell_output_buffer(buffer: &ShellOutputBuffer) -> Vec<u8> {
+    std::mem::take(
+        &mut *buffer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 /// Builds the model-visible text render input for one normalized shell-command execution report.
@@ -975,6 +1038,59 @@ mod process_option_tests {
         let error = validate_shell_command_hook_environment(&environment)
             .expect_err("plugin PATH override must be rejected");
         assert!(error.message.contains("host-owned PATH"));
+    }
+
+    /// Large stdin must be written while output is drained so echoing commands cannot deadlock on full pipes.
+    /// 大体量 stdin 必须在排空输出的同时写入，避免回显命令因管道写满而死锁。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn large_stdin_is_written_while_output_is_drained() {
+        let temp = tempfile::tempdir().expect("create shell stdin test directory");
+        // stdinText exceeds typical pipe buffers in both directions.
+        // stdinText 在两个方向上都超过常见管道缓冲区容量。
+        let stdin_text = "x".repeat(4 * 1024 * 1024);
+        let parsed_args = ShellCommandToolArgs {
+            command: String::from("cat"),
+            cwd: None,
+            timeout_ms: Some(60_000),
+            stdin: Some(stdin_text.clone()),
+            shell: Some(String::from("sh")),
+        };
+        let report = execute_shell_command_process(
+            &parsed_args,
+            temp.path(),
+            &HostCommandShellSupport::from_configured_default_id(None),
+            &ShellCommandProcessOptions::default(),
+        )
+        .await;
+        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
+        // Login profiles may print banners first, so only the echoed tail is asserted.
+        // 登录配置可能先输出横幅，因此只断言回显的尾部内容。
+        assert!(report.stdout_text.ends_with(&stdin_text));
+    }
+
+    /// Omitted stdin must be empty instead of inheriting the service input stream.
+    /// 省略 stdin 时必须为空输入，而不是继承服务自身的输入流。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn omitted_stdin_reads_end_of_input() {
+        let temp = tempfile::tempdir().expect("create shell stdin test directory");
+        let parsed_args = ShellCommandToolArgs {
+            command: String::from("cat; echo done"),
+            cwd: None,
+            timeout_ms: Some(60_000),
+            stdin: None,
+            shell: Some(String::from("sh")),
+        };
+        let report = execute_shell_command_process(
+            &parsed_args,
+            temp.path(),
+            &HostCommandShellSupport::from_configured_default_id(None),
+            &ShellCommandProcessOptions::default(),
+        )
+        .await;
+        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
+        assert!(report.stdout_text.trim_end().ends_with("done"));
     }
 
     /// A host-resolved plugin binary directory should be prepended before cmd resolves a rewritten command.
