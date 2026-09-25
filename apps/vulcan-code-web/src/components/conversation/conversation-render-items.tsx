@@ -914,7 +914,7 @@ export function renderItemHiddenByThinkingDisplay(item: ConversationRenderItem, 
 
 // stripUserPromptHeading removes legacy transcript headings from visible user bubbles.
 // stripUserPromptHeading 从可见用户气泡中移除旧版转录标题。
-function stripUserPromptHeading(body: string): string {
+export function stripUserPromptHeading(body: string): string {
   return body
     .replace(/^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:用户指令|User Prompt|USER)(?:\*\*)?\s*\n+/i, "")
     .trim();
@@ -922,7 +922,7 @@ function stripUserPromptHeading(body: string): string {
 
 // finalAssistantOutputText returns the raw Markdown source for one final assistant row.
 // finalAssistantOutputText 返回单条最终 Assistant 行的 Markdown 原文。
-function finalAssistantOutputText(item: ConversationRenderItem): string {
+export function finalAssistantOutputText(item: ConversationRenderItem): string {
   const sourceBody = item.sourceMessage?.body?.trim();
   if (sourceBody) {
     return sourceBody;

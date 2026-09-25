@@ -634,6 +634,7 @@ export function ChatArea(props: ChatAreaProps) {
           onPlanArtifactExecute={handlePlanArtifactExecute}
           onPlanArtifactSuggest={handlePlanArtifactSuggest}
           onPreserveHistoryPrepend={conversationScrollController.preserveHistoryPrepend}
+          onRevealPromptAnchor={conversationScrollController.revealAnchor}
           onScrollStateChange={conversationScrollController.handleScroll}
           pendingPlanArtifact={pendingPlanArtifact}
           initialExpandedState={activeSurfaceLayoutState?.expandedState ?? null}

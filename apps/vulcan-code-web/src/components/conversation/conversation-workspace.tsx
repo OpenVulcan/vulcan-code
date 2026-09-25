@@ -52,6 +52,11 @@ import { useI18n } from "@/i18n";
 import { ConversationTextContextMenu } from "@/components/conversation/conversation-text-context-menu";
 import { isElectronRuntime } from "@/host-shell";
 import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
+import { ConversationPromptNavigator } from "@/components/conversation/conversation-prompt-navigator";
+import {
+  CONVERSATION_PROMPT_NAVIGATOR_MIN_ENTRIES,
+  projectConversationPromptNavigatorEntries,
+} from "@/components/conversation/conversation-prompt-navigator-model";
 import {
   ConversationTimelineProjectionStore,
   type ConversationTurnProjection,
@@ -111,6 +116,9 @@ export function ConversationWorkspace(props: {
   // Scroll container ref owned by the shell.
   // 由外壳持有的滚动容器引用。
   scrollRef: React.RefObject<HTMLElement | null>;
+  // Reveals one rendered turn shell through the shell scroll controller; present only where the prompt navigator is enabled.
+  // 通过外壳滚动控制器定位一个已渲染 Turn 外壳；仅在启用提示词导航的界面提供。
+  onRevealPromptAnchor?: (anchor: HTMLElement) => void;
   // Previously captured runtime expansion state for this surface.
   // 当前界面此前捕获的运行期展开状态。
   initialExpandedState: ConversationSurfaceExpandedState | null;
@@ -288,6 +296,15 @@ export function ConversationWorkspace(props: {
   const turnGroupByKey = React.useMemo(
     () => new Map(turnGroups.map((group) => [group.key, group] as const)),
     [turnGroups],
+  );
+  // promptNavigatorEnabled reports whether the owning shell supplied a reveal path for the prompt rail.
+  // promptNavigatorEnabled 表示所属外壳是否为提示词轨道提供了定位路径。
+  const promptNavigatorEnabled = Boolean(props.onRevealPromptAnchor);
+  // promptNavigatorEntries lists every rendered user prompt; surfaces without a navigator skip the projection.
+  // promptNavigatorEntries 列出全部已渲染用户提示词；未启用导航的界面跳过该投影。
+  const promptNavigatorEntries = React.useMemo(
+    () => promptNavigatorEnabled ? projectConversationPromptNavigatorEntries(turnGroups) : [],
+    [promptNavigatorEnabled, turnGroups],
   );
   // timelineProjectionLocaleRef forces complete row replacement only when localized projection content changes.
   // timelineProjectionLocaleRef 仅在本地化投影内容变化时强制完整替换行。
@@ -652,6 +669,13 @@ export function ConversationWorkspace(props: {
           ) : null}
         </section>
         </ConversationTextContextMenu>
+        {props.onRevealPromptAnchor && promptNavigatorEntries.length >= CONVERSATION_PROMPT_NAVIGATOR_MIN_ENTRIES ? (
+          <ConversationPromptNavigator
+            entries={promptNavigatorEntries}
+            onRevealAnchor={props.onRevealPromptAnchor}
+            scrollRef={props.scrollRef}
+          />
+        ) : null}
       </ConversationMeasuredCollapseProvider>
     </MarkdownImageWorkspacePathProvider>
   );
