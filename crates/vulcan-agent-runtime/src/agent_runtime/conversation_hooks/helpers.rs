@@ -280,6 +280,73 @@ pub(super) fn spawn_hook_dispatch(dispatcher: HookDispatcher, request: HookDispa
     }
 }
 
+/// Runs one awaited hook dispatch on a dedicated worker thread with a private Tokio runtime.
+/// 在带私有 Tokio 运行时的专用工作线程上执行一次需要等待结果的 hook 调度。
+///
+/// The worker isolates handlers that may block or run their own IO from the caller's executor.
+/// 工作线程将可能阻塞或自带 IO 的处理器与调用方执行器隔离。
+///
+/// # Parameters
+/// # 参数
+/// - `stage`: English diagnostic prefix such as `precheck hook`.
+/// - `stage`：英文诊断前缀，例如 `precheck hook`。
+/// - `thread_name`: OS thread name used for the worker.
+/// - `thread_name`：工作线程使用的系统线程名。
+/// - `dispatcher`: Dispatcher snapshot that owns the registered handlers.
+/// - `dispatcher`：持有已注册处理器的调度器快照。
+/// - `request`: Fully correlated dispatch request.
+/// - `request`：包含完整关联信息的调度请求。
+///
+/// # Returns
+/// # 返回值
+/// Returns the hook report, or a diagnostic naming the thread, runtime, timeout, dispatcher,
+/// or panic failure stage.
+/// 返回 Hook 报告，或指明线程、运行时、超时、调度器或 panic 失败阶段的诊断。
+pub(super) async fn run_hook_dispatch_on_worker_thread(
+    stage: &'static str,
+    thread_name: String,
+    dispatcher: HookDispatcher,
+    request: HookDispatchRequest,
+) -> Result<HookDispatchReport, String> {
+    let (sender, receiver) = oneshot::channel();
+    std::thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            let _ = sender.send(run_hook_dispatch_on_private_runtime(
+                stage, dispatcher, request,
+            ));
+        })
+        .map_err(|error| format!("{stage} thread failed to start: {error}"))?;
+    receiver
+        .await
+        .unwrap_or_else(|_| Err(format!("{stage} dispatch thread disconnected")))
+}
+
+/// Executes one dispatch inside a private current-thread runtime on the calling worker thread.
+/// 在当前工作线程内的私有单线程运行时中执行一次调度。
+fn run_hook_dispatch_on_private_runtime(
+    stage: &'static str,
+    dispatcher: HookDispatcher,
+    request: HookDispatchRequest,
+) -> Result<HookDispatchReport, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("{stage} runtime failed: {error}"))?;
+        runtime.block_on(async move {
+            tokio::time::timeout(
+                CONVERSATION_HOOK_DISPATCH_TIMEOUT,
+                dispatcher.dispatch(request),
+            )
+            .await
+            .map_err(|_| format!("{stage} dispatch timed out"))?
+            .map_err(|error| format!("{stage} dispatch failed: {error}"))
+        })
+    }))
+    .unwrap_or_else(|_| Err(format!("{stage} dispatch thread panicked")))
+}
+
 /// Returns the hook event kind for one pending prompt source.
 /// 返回单个待发送提示词来源对应的 hook 事件类型。
 pub(super) fn pending_prompt_source_event_kind(source: PendingSessionPromptSource) -> &'static str {

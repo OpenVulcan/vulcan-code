@@ -94,53 +94,19 @@ impl ConversationPrecheckRequest {
                 value: self.payload,
             },
         );
-        let (sender, receiver) = oneshot::channel();
-        let spawn_result = std::thread::Builder::new()
-            .name(format!("vulcan-precheck-{session_id}"))
-            .spawn(move || {
-                let result = run_precheck_dispatch_on_private_runtime(self.dispatcher, request);
-                let _ = sender.send(result);
-            });
-        if let Err(error) = spawn_result {
-            return ConversationPrecheckOutcome {
-                session_id,
-                turn_id,
-                report: Err(format!("precheck hook thread failed to start: {error}")),
-            };
-        }
-        let report = receiver
-            .await
-            .unwrap_or_else(|_| Err(String::from("precheck hook dispatch thread disconnected")));
+        let report = run_hook_dispatch_on_worker_thread(
+            "precheck hook",
+            format!("vulcan-precheck-{session_id}"),
+            self.dispatcher,
+            request,
+        )
+        .await;
         ConversationPrecheckOutcome {
             session_id,
             turn_id,
             report,
         }
     }
-}
-
-/// Runs one precheck dispatch inside a private Tokio runtime on the already-created worker thread.
-/// 在已创建的工作线程内使用私有 Tokio 运行时执行一次 precheck 调度。
-fn run_precheck_dispatch_on_private_runtime(
-    dispatcher: HookDispatcher,
-    request: HookDispatchRequest,
-) -> Result<HookDispatchReport, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| format!("precheck hook runtime failed: {error}"))?;
-        runtime.block_on(async move {
-            tokio::time::timeout(
-                Duration::from_millis(PRECHECK_DISPATCH_TIMEOUT_MS),
-                dispatcher.dispatch(request),
-            )
-            .await
-            .map_err(|_| String::from("precheck hook dispatch timed out"))?
-            .map_err(|error| error.to_string())
-        })
-    }))
-    .unwrap_or_else(|_| Err(String::from("precheck hook dispatch thread panicked")))
 }
 
 /// Result produced by one asynchronous conversation precheck dispatch.

@@ -137,81 +137,19 @@ impl ConversationProfileRequest {
                 value: self.payload,
             },
         );
-        // sender and receiver return the worker result without blocking the caller's async executor.
-        // sender 与 receiver 在不阻塞调用方异步执行器的情况下返回工作线程结果。
-        let (sender, receiver) = oneshot::channel();
-        // spawn_result retains thread-creation failures as explicit profile diagnostics.
-        // spawn_result 将线程创建失败保留为显式画像诊断。
-        let spawn_result = std::thread::Builder::new()
-            .name(format!("vulcan-profile-{session_id}"))
-            .spawn(move || {
-                let result = run_profile_dispatch_on_private_runtime(self.dispatcher, request);
-                let _ = sender.send(result);
-            });
-        if let Err(error) = spawn_result {
-            return ConversationProfileOutcome {
-                session_id,
-                turn_id,
-                report: Err(format!(
-                    "profile preparation hook thread failed to start: {error}"
-                )),
-            };
-        }
-        // report converts worker disconnection into the same explicit non-panicking outcome.
-        // report 将工作线程断连转换为同一种显式且不会 panic 的结果。
-        let report = receiver.await.unwrap_or_else(|_| {
-            Err(String::from(
-                "profile preparation hook dispatch thread disconnected",
-            ))
-        });
+        let report = run_hook_dispatch_on_worker_thread(
+            "profile preparation hook",
+            format!("vulcan-profile-{session_id}"),
+            self.dispatcher,
+            request,
+        )
+        .await;
         ConversationProfileOutcome {
             session_id,
             turn_id,
             report,
         }
     }
-}
-
-/// Runs one profile dispatch inside a private current-thread Tokio runtime.
-/// 在私有单线程 Tokio 运行时中执行一次画像派发。
-///
-/// # Parameters
-/// 参数
-/// `dispatcher` owns the registered profile handlers for this immutable dispatch.
-/// `dispatcher` 持有本次不可变派发使用的已注册画像处理器。
-/// `request` carries the exact profile hook context and payload.
-/// `request` 携带精确的画像 Hook 上下文与载荷。
-///
-/// # Returns
-/// 返回值
-/// The Hook report or an explicit timeout, runtime, or panic diagnostic.
-/// 返回 Hook 报告，或显式的超时、运行时及 panic 诊断。
-fn run_profile_dispatch_on_private_runtime(
-    dispatcher: HookDispatcher,
-    request: HookDispatchRequest,
-) -> Result<HookDispatchReport, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        // runtime isolates blocking profile networking from the UI executor.
-        // runtime 将可能阻塞的画像网络访问与 UI 执行器隔离。
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| format!("profile preparation hook runtime failed: {error}"))?;
-        runtime.block_on(async move {
-            tokio::time::timeout(
-                Duration::from_millis(PROFILE_DISPATCH_TIMEOUT_MS),
-                dispatcher.dispatch(request),
-            )
-            .await
-            .map_err(|_| String::from("profile preparation hook dispatch timed out"))?
-            .map_err(|error| error.to_string())
-        })
-    }))
-    .unwrap_or_else(|_| {
-        Err(String::from(
-            "profile preparation hook dispatch thread panicked",
-        ))
-    })
 }
 
 /// Result produced by one independent profile preparation dispatch.

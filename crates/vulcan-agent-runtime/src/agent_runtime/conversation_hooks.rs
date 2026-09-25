@@ -72,15 +72,9 @@ pub const HOOK_TOOL_SHELL_COMMAND_BEFORE_EXECUTE: &str = "tool.shell_command.bef
 /// Transform hook fired while assembling Git commit-summary context.
 /// 在组装 Git 提交摘要上下文时触发的 Transform Hook。
 pub const HOOK_GIT_COMMIT_SUMMARY_CONTEXT: &str = "git.commit_summary.context";
-/// Host-side safety ceiling for waiting on precheck hook results.
-/// 等待 precheck hook 结果的宿主侧安全兜底上限。
-const PRECHECK_DISPATCH_TIMEOUT_MS: u64 = 120_000;
-/// Host-side safety ceiling for waiting on profile preparation hook results.
-/// 等待画像准备 Hook 结果的宿主侧安全兜底上限。
-const PROFILE_DISPATCH_TIMEOUT_MS: u64 = 120_000;
-/// Host-side safety ceiling for completed-turn hook dispatch.
-/// 完成回合 hook 调度的宿主侧安全兜底上限。
-const COMPLETION_DISPATCH_TIMEOUT_MS: u64 = 120_000;
+/// Host-side safety ceiling shared by precheck, profile preparation, and completed-turn hook dispatch.
+/// precheck、画像准备与完成回合 hook 调度共享的宿主侧安全兜底上限。
+const CONVERSATION_HOOK_DISPATCH_TIMEOUT: Duration = Duration::from_millis(120_000);
 
 mod canonical_inputs;
 mod completion;
