@@ -237,7 +237,8 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
             },
             "timeout_ms": {
                 "type": "integer",
-                "description": "Optional hard timeout in milliseconds. Default: unlimited. When omitted, no timeout is applied and the host waits until the process exits."
+                "minimum": 1,
+                "description": "Optional hard timeout in milliseconds; must be at least 1 when provided. Default: unlimited. When omitted, no timeout is applied and the host waits until the process exits."
             },
             "stdin": {
                 "type": "string",
@@ -263,6 +264,13 @@ pub(crate) fn parse_shell_command_tool_arguments(
     if parsed.command.trim().is_empty() {
         return Err(NativeToolError::new(
             "The `command` argument for shell_command cannot be empty.",
+        ));
+    }
+    // Only omission means unlimited; an explicit zero is rejected instead of silently becoming unlimited.
+    // 只有省略表示无限等待；显式传入 0 直接拒绝，而不是静默当作无限。
+    if parsed.timeout_ms == Some(0) {
+        return Err(NativeToolError::new(
+            "The `timeout_ms` argument for shell_command must be at least 1; omit it to wait without a timeout.",
         ));
     }
     Ok(parsed)
@@ -696,7 +704,7 @@ pub(crate) async fn execute_shell_command_process(
     let (stdout_buffer, stdout_task) = spawn_shell_output_reader(child.stdout.take());
     let (stderr_buffer, stderr_task) = spawn_shell_output_reader(child.stderr.take());
 
-    let timeout_ms = parsed_args.timeout_ms.filter(|value| *value > 0);
+    let timeout_ms = parsed_args.timeout_ms;
     let wait_outcome = match timeout_ms {
         Some(timeout_ms) => timeout(Duration::from_millis(timeout_ms), child.wait())
             .await
@@ -1101,6 +1109,22 @@ mod process_option_tests {
         let error = validate_shell_command_hook_environment(&environment)
             .expect_err("plugin PATH override must be rejected");
         assert!(error.message.contains("host-owned PATH"));
+    }
+
+    /// An explicit zero timeout is rejected because only omission means unlimited.
+    /// 显式的 0 超时会被拒绝，因为只有省略才表示无限等待。
+    #[test]
+    fn zero_timeout_is_rejected_instead_of_meaning_unlimited() {
+        let error = parse_shell_command_tool_arguments(serde_json::json!({
+            "command": "echo hi",
+            "timeout_ms": 0,
+        }))
+        .expect_err("zero timeout must be rejected");
+        assert!(error.message.contains("at least 1"));
+        let parsed =
+            parse_shell_command_tool_arguments(serde_json::json!({ "command": "echo hi" }))
+                .expect("omitted timeout stays valid");
+        assert_eq!(parsed.timeout_ms, None);
     }
 
     /// Large stdin must be written while output is drained so echoing commands cannot deadlock on full pipes.
