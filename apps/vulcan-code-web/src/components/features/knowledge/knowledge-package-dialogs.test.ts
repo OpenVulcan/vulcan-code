@@ -4,9 +4,9 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { I18nProvider } from "@/i18n";
 import * as knowledgeService from "@/service/knowledge-base-service";
-import { KnowledgeBaseArea } from "./KnowledgeBaseArea";
+import { KnowledgeBaseArea } from "./knowledge-base-area";
 
-import { findKnowledgePackageNameConflict, KnowledgePackageImportDialog } from "./KnowledgePackageDialogs";
+import { findKnowledgePackageNameConflict, KnowledgePackageImportDialog } from "./knowledge-package-dialogs";
 import type { KnowledgeLibrarySummary, KnowledgePackageInspection } from "@/types";
 
 // Only synthetic React trees participate in these destructive-confirmation tests.

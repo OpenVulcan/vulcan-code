@@ -13,7 +13,7 @@
   justify-self: start;
   margin: 0;
   padding: 2px;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
 }
 
 .context-injection-tabs-list [data-slot="tabs-trigger"] {
@@ -22,8 +22,8 @@
   height: 20px;
   gap: 4px;
   padding: 0 11px;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: var(--vcn-radius-sm);
+  font-size: var(--vcn-font-size-md);
   line-height: 1;
   font-weight: 500;
 }
@@ -74,7 +74,7 @@
   align-items: center;
   gap: 7px;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .vmm-static-profile-section-title strong {
@@ -94,11 +94,11 @@
   width: fit-content;
   max-width: 100%;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--muted);
   color: var(--muted-foreground);
   padding: 2px 7px;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -110,7 +110,7 @@
 .vmm-static-profile-node {
   gap: 5px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   background: color-mix(in srgb, var(--muted) 34%, transparent);
   padding: 8px 9px;
 }
@@ -125,7 +125,7 @@
 .vmm-static-profile-node-content {
   min-width: 0;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.5;
   white-space: pre-wrap;
 }
@@ -135,7 +135,7 @@
   display: grid;
   gap: 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--vcn-radius-lg);
   padding: 10px;
   background: var(--card);
 }
@@ -150,12 +150,12 @@
   width: fit-content;
   max-width: 100%;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   padding: 2px 7px;
   background: var(--muted);
   color: var(--foreground);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -163,7 +163,7 @@
 .context-injection-card-header p {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
 }
 
@@ -177,7 +177,7 @@
   display: grid;
   gap: 6px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   background: color-mix(in srgb, var(--muted) 42%, transparent);
   padding: 8px 9px;
 }
@@ -193,7 +193,7 @@
 .context-injection-item-content {
   min-width: 0;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -220,7 +220,7 @@
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
@@ -245,7 +245,7 @@
 .context-injection-delete-notice {
   margin: 8px 2px 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .context-injection-item-footer {
@@ -254,7 +254,7 @@
   flex-wrap: wrap;
   gap: 6px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.35;
 }
 
@@ -264,11 +264,11 @@
   align-items: center;
   gap: 3px;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--background);
   color: var(--muted-foreground);
   padding: 2px 5px;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.2;
 }
 
@@ -279,15 +279,15 @@
 }
 
 .context-injection-pill.success {
-  border-color: color-mix(in srgb, #16a34a 42%, transparent);
-  background: color-mix(in srgb, #16a34a 13%, transparent);
-  color: color-mix(in srgb, #15803d 88%, var(--foreground));
+  border-color: color-mix(in srgb, var(--vcn-content-success) 42%, transparent);
+  background: color-mix(in srgb, var(--vcn-content-success) 13%, transparent);
+  color: color-mix(in srgb, var(--vcn-content-success) 88%, var(--foreground));
 }
 
 .context-injection-pill.warning {
-  border-color: color-mix(in srgb, #d97706 42%, transparent);
-  background: color-mix(in srgb, #f59e0b 15%, transparent);
-  color: color-mix(in srgb, #b45309 88%, var(--foreground));
+  border-color: color-mix(in srgb, var(--vcn-content-warning) 42%, transparent);
+  background: color-mix(in srgb, var(--vcn-content-warning) 15%, transparent);
+  color: color-mix(in srgb, var(--vcn-content-warning) 88%, var(--foreground));
 }
 
 .context-injection-item pre,
@@ -300,7 +300,7 @@
   padding: 9px;
   color: var(--foreground);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -314,7 +314,7 @@
   gap: 12px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--popover);
   color: var(--popover-foreground);
   padding: 14px;
@@ -329,13 +329,13 @@
 .context-injection-delete-dialog h3,
 .context-injection-lookup-dialog h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
 }
 
 .context-injection-dialog-preview {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -369,9 +369,9 @@
   display: grid;
   gap: 6px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   padding: 10px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
 }
 
@@ -395,11 +395,11 @@
 }
 
 .context-injection-expired-header strong {
-  color: color-mix(in srgb, #b45309 82%, var(--foreground));
-  font-size: 12px;
+  color: color-mix(in srgb, var(--vcn-content-warning) 82%, var(--foreground));
+  font-size: var(--vcn-font-size-sm);
 }
 
 .context-injection-expired-header span {
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.4;
 }

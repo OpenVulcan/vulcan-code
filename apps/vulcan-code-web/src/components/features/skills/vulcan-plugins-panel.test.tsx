@@ -6,7 +6,11 @@ import type { PluginSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel";
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
 vi.mock("@/service/core-browser-service", () => ({
   getCoreBrowserRuntimeStatus: vi.fn().mockResolvedValue({ ready: false }),
 }));

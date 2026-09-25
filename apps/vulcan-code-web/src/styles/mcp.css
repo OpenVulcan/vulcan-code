@@ -20,10 +20,10 @@
 .mcp-tool [data-slot="disclosure-body"] { display: grid; gap: .5rem; font-size: .85rem; }
 .mcp-tool [data-slot="disclosure-body"] > .mcp-schema { margin-top: 0; }
 .mcp-logs { display: grid; gap: .4rem; }
-.mcp-logs h4, .mcp-form-section h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.mcp-logs h4, .mcp-form-section h3 { margin: 0; font-size: var(--vcn-font-size-md); font-weight: 600; }
 .mcp-form-section { display: flex; flex-direction: column; gap: .8rem; min-width: 0; }
 .mcp-bulk [data-slot="inline-disclosure-body"] { display: grid; gap: .5rem; }
-.mcp-bulk p { margin: 0; color: var(--muted-foreground); font-size: 12px; }
+.mcp-bulk p { margin: 0; color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
 .mcp-schema-raw [data-slot="inline-disclosure-body"] { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .mcp-schema-raw pre { flex-basis: 100%; }
 .mcp-detail pre, .mcp-form pre { max-height: 26rem; overflow: auto; padding: .6rem; background: var(--muted); border-radius: var(--radius); font-size: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; }

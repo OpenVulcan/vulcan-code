@@ -20,23 +20,17 @@ import {
   type RenameTarget,
 } from "@/components/project/project-action-dialogs";
 import {
-  normalizeProjectIconSelection,
   type ProjectIconDialogTarget,
-  type ProjectIconSelection,
 } from "@/components/project/project-icons";
 import {
-  projectAgentSkillSaveMessage,
   projectConversationCount,
 } from "@/components/project/project-settings-utils";
 import {
-  type ProjectAgentSkillState,
   type ProjectSettingsDialogTarget,
-  type ProjectSettingsRevision,
 } from "@/components/project/project-settings-types";
 import {
   type ConversationMenuAction,
-  type ProjectMenuAction,
-} from "@/components/project/ProjectSidebar";
+} from "@/components/project/project-sidebar";
 import {
   ProjectFloatingTerminalLayer,
   type ProjectTerminalVisibilityRequest,
@@ -49,9 +43,7 @@ import { retireMaterializedDraftSubmission } from "@/components/workspace/draft-
 import { resolveEmptyWorkbenchDraftRoute } from "@/components/workspace/workbench-layout/empty-workbench-route";
 import { ComposerMediaUploadProgressContext } from "@/components/composer/composer-media-upload-context";
 import {
-  isConversationUploadFailure,
   mediaUploadProgressKey,
-  reduceMediaUploadProgress,
 } from "@/components/workspace/media-upload-progress-state";
 import { routeWorkspaceInputOwnerFromPointer } from "@/components/workspace/workspace-input-owner";
 
@@ -65,23 +57,22 @@ import { useWorkbenchConversationActions } from "@/components/workspace/workbenc
 import { useWorkbenchProjectActions } from "@/components/workspace/workbench-layout/project-actions";
 import { useWorkbenchSessionActions } from "@/components/workspace/workbench-layout/session-actions";
 import { useStopConversationRunDecision } from "@/components/workspace/workbench-layout/use-stop-conversation-run-decision";
+import { useWorkbenchRevisionGates, useWorkbenchServiceSync } from "@/components/workspace/workbench-layout/use-workbench-revision-sync";
 export type { WorkbenchDeltaSignal } from "@/components/workspace/workbench-layout/types";
 import {
   WorkspaceShell,
   type WorkspaceMainView,
 } from "@/components/workspace/workspace-shell";
 import type {
-  SkillActionProps,
   SkillSubAreaId,
-} from "@/components/features/skills/SkillsArea";
+} from "@/components/features/skills/skills-area";
 import {
   findEnabledPluginDetailMount,
   isPluginDetailSubArea,
 } from "@/components/features/skills/skill-area-types";
 import type {
   MemorySubAreaId,
-} from "@/components/features/memory/MemoryArea";
-import { cn } from "@/lib/utils";
+} from "@/components/features/memory/memory-area";
 import { useI18n, type LocaleCode, type TranslationKey } from "@/i18n";
 import { notificationCoordinator } from "@/notifications/coordinator";
 import {
@@ -91,22 +82,14 @@ import {
 import type { NotificationPresentationContext } from "@/notifications/types";
 import { useConversationLiveStreamStore } from "@/state/conversation-live-stream-context";
 import type {
-  AgentSkillsCatalogUpdate,
   ComposerSlashCommandSummary,
-  ConversationArchivedDelta,
   ConversationSummary,
   FeatureAreaSummary,
-  LuaSkillsCatalogUpdate,
   MainAreaId,
-  PendingQuestionSnapshot,
-  PendingPromptSummary,
   ProjectSummary,
   ProjectTerminalRunningCountChangedEvent,
   SettingsSubAreaId,
   StartupSnapshot,
-  SubagentCatalogUpdate,
-  VmmConfigDraftSummary,
-  WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
   MediaUploadProgressChangedDelta,
 } from "@/types";
@@ -118,25 +101,18 @@ import {
   stageComposerAttachmentBytes,
 } from "@/service/conversation-actions-service";
 import {
-  addProjectFromPath,
   archiveConversation,
   archiveProjectConversations,
   browseProjectDirectories,
   deleteArchivedConversations,
   markConversationRead,
   openExternalUrl,
-  openProjectDirectory,
   openProjectDirectoryPath,
   removeProject,
   renameConversation,
   renameProject,
-  reorderProjects,
   restoreArchivedConversations,
-  resetProjectIcon,
   selectConversation,
-  setExpandedTaskProjects,
-  setProjectIcon,
-  toggleProjectPinned,
 } from "@/service/project-actions-service";
 import {
   clearSelectedProviderApiTraceDirectory,
@@ -150,16 +126,7 @@ import {
   selectWebuiLocale,
 } from "@/service/settings-actions-service";
 import {
-  installLuaSkill,
   loadProjectAgentSkillOverrides,
-  refreshAgentSkillsCatalog,
-  refreshLuaSkillsCatalog,
-  setAgentSkillEnabled,
-  setAgentSkillProjectState,
-  setLuaSkillEnabled,
-  setLuaSkillToolRegistrationState,
-  uninstallLuaSkill,
-  updateLuaSkill,
 } from "@/service/skills-actions-service";
 import {
   executeProjectAttachmentCleanup,
@@ -179,60 +146,11 @@ import {
 } from "@/service/workbench-snapshot-service";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import {
-  applyWorkbenchDelta,
   markConversationLocallyRead,
-  mergeWorkbenchSnapshot,
-  shouldAcceptWorkbenchRevision,
   workbenchWithSelectedConversationProjection,
-  type WorkbenchMergeOptions,
 } from "@/state/workbench-state";
-import {
-  applyPreviewConversationRename,
-  applyPreviewProjectIcon,
-  applyPreviewProjectOrder,
-  applyPreviewProjectRename,
-} from "@/state/workbench-preview-actions";
 import { projectForConversation } from "@/state/workbench-selectors";
 import { toast } from "sonner";
-import * as LucideIcons from "lucide-react";
-import {
-  Boxes,
-  BrainCircuit,
-  ArrowUp,
-  ChevronLeft,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  Check,
-  Calendar,
-  Clock3,
-  Code2,
-  Copy,
-  Database,
-  FileCode2,
-  FileJson2,
-  FileText,
-  Folder,
-  FolderCog,
-  Hammer,
-  History,
-  Image as ImageIcon,
-  Minus,
-  Plus,
-  Maximize2,
-  Scan,
-  Save,
-  Pencil,
-  Play,
-  PlugZap,
-  ScrollText,
-  Settings,
-  Shield,
-  Moon,
-  Sun,
-  TerminalSquare,
-  Trash2,
-} from "lucide-react";
 
 // WorkbenchDialogs loads project and question dialogs only after one actually opens.
 // WorkbenchDialogs 仅在项目或提问对话框真正打开后加载其界面。
@@ -517,52 +435,6 @@ export function WorkbenchLayout(props: {
       setActiveWorkbenchSkillSubArea("plugins");
     }
   }, [activeWorkbenchSkillSubArea, workbenchState.plugins]);
-  // acceptedWorkbenchRevisionRef tracks the highest service revision accepted by any state entrypoint.
-  // acceptedWorkbenchRevisionRef 跟踪任意状态入口已接受的最高服务版本。
-  const acceptedWorkbenchRevisionRef = React.useRef(workbenchState.revision ?? 0);
-  // acceptedLuaSkillsRevisionRef tracks the newest full LuaSkills domain projection applied locally.
-  // acceptedLuaSkillsRevisionRef 跟踪本地已应用的最新完整 LuaSkills 领域投影版本。
-  const acceptedLuaSkillsRevisionRef = React.useRef(workbenchState.revision ?? 0);
-  // acceptedAgentSkillsRevisionRef tracks the newest full Agent Skills domain projection applied locally.
-  // acceptedAgentSkillsRevisionRef 跟踪本地已应用的最新完整 Agent Skills 领域投影版本。
-  const acceptedAgentSkillsRevisionRef = React.useRef(workbenchState.revision ?? 0);
-  // acceptedSubagentCatalogRevisionRef tracks the newest full agent-catalog domain projection applied locally.
-  // acceptedSubagentCatalogRevisionRef 跟踪本地已应用的最新完整智能体目录领域投影版本。
-  const acceptedSubagentCatalogRevisionRef = React.useRef(workbenchState.revision ?? 0);
-  // acceptedConversationLifecycleRevisionRef tracks the newest complete conversation lifecycle transition independently.
-  // acceptedConversationLifecycleRevisionRef 独立跟踪最新的完整会话生命周期转换。
-  const acceptedConversationLifecycleRevisionRef = React.useRef(workbenchState.revision ?? 0);
-  // acceptedConversationLifecycleRevisionByIdRef orders target-owned archive responses independently.
-  // acceptedConversationLifecycleRevisionByIdRef 按目标独立排序归档响应。
-  const acceptedConversationLifecycleRevisionByIdRef = React.useRef<Map<string, number>>(new Map());
-  // acceptedProjectLifecycleRevisionRef tracks the newest authoritative full-project lifecycle snapshot.
-  // acceptedProjectLifecycleRevisionRef 跟踪最新权威完整项目生命周期快照。
-  const acceptedProjectLifecycleRevisionRef = React.useRef(workbenchState.revision ?? 0);
-  // acceptedProjectLifecycleRevisionByIdRef orders target-owned project removal responses independently.
-  // acceptedProjectLifecycleRevisionByIdRef 按目标独立排序项目移除响应。
-  const acceptedProjectLifecycleRevisionByIdRef = React.useRef<Map<string, number>>(new Map());
-  // acceptedProjectSettingsRevisionByKeyRef orders settings invalidations independently by project and domain.
-  // acceptedProjectSettingsRevisionByKeyRef 按项目与领域独立排序设置失效通知。
-  const acceptedProjectSettingsRevisionByKeyRef = React.useRef<Map<string, number>>(new Map());
-  // projectSettingsRevisionInitializedRef limits initial snapshot seeding to the first render.
-  // projectSettingsRevisionInitializedRef 将初始快照播种限制在首次渲染。
-  const projectSettingsRevisionInitializedRef = React.useRef(false);
-  if (!projectSettingsRevisionInitializedRef.current) {
-    for (const [projectId, revisions] of Object.entries(workbenchState.projectSettingsRevisions.byProject)) {
-      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vmm`, revisions.vmm);
-      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vce`, revisions.vce);
-      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:agentSkills`, revisions.agentSkills);
-    }
-    projectSettingsRevisionInitializedRef.current = true;
-  }
-  // acceptedGlobalProjectSettingsRevisionByDomainRef orders global invalidations independently by domain.
-  // acceptedGlobalProjectSettingsRevisionByDomainRef 按领域独立排序全局设置失效通知。
-  const acceptedGlobalProjectSettingsRevisionByDomainRef = React.useRef<ProjectSettingsRevision>(
-    workbenchState.projectSettingsRevisions.global,
-  );
-  // acceptedServiceInstanceEpochRef identifies which local service owns all accepted revisions.
-  // acceptedServiceInstanceEpochRef 标识所有已接受版本归属的本地服务实例。
-  const acceptedServiceInstanceEpochRef = React.useRef(props.serviceInstanceEpoch);
   // workbenchStateRef exposes the latest workbench state to route-click callbacks without stale closures.
   // workbenchStateRef 向路由点击回调暴露最新工作台状态，避免闭包过期。
   const workbenchStateRef = React.useRef<WorkbenchSnapshot>(workbenchState);
@@ -572,234 +444,34 @@ export function WorkbenchLayout(props: {
     // 瞬态订阅者在 React 提交对应结构状态后观察精确批次。
     liveStreamStore.flushNotifications();
   }, [liveStreamStore, workbenchState]);
+  // revisionGates owns every service revision gate and the snapshot merges that advance them.
+  // revisionGates 持有全部服务版本闸门，以及推进这些闸门的快照合并。
+  const revisionGates = useWorkbenchRevisionGates({
+    serviceInstanceEpoch: props.serviceInstanceEpoch,
+    workbenchState,
+    setWorkbenchState,
+    workbenchStateRef,
+  });
+  const {
+    mergeWorkbenchWithLocalCaches,
+    acceptServiceWorkbenchSnapshot,
+    applyLifecycleResponseSnapshot,
+    applyLocalPreviewWithLocalCaches,
+    applyLuaSkillsCatalogUpdate,
+    applyAgentSkillsCatalogUpdate,
+    applySubagentCatalogUpdate,
+    projectSettingsRevisionById,
+    globalProjectSettingsRevision,
+  } = revisionGates;
   // conversationArchivePendingIdsRef blocks duplicate archive RPCs until failure or visible lifecycle convergence.
   // conversationArchivePendingIdsRef 在失败或可见生命周期收敛前阻止重复归档 RPC。
   const conversationArchivePendingIdsRef = React.useRef<Set<string>>(new Set());
-  acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, workbenchState.revision ?? 0);
   // expandedProjectIdsLocallyEditedRef records whether the user has touched project expansion in this session.
   // expandedProjectIdsLocallyEditedRef 记录本轮会话中用户是否已经手动修改过项目展开状态。
   const expandedProjectIdsLocallyEditedRef = React.useRef(false);
   // localeSaveSeqRef prevents older locale-save responses from overriding newer choices.
   // localeSaveSeqRef 防止较早的语言保存响应覆盖较新的选择。
   const localeSaveSeqRef = React.useRef(0);
-  // mergeWorkbenchWithLocalCaches centralizes service snapshot merges while preserving UI-local state.
-  // mergeWorkbenchWithLocalCaches 集中处理服务快照合并，同时保留界面本地状态。
-  const mergeWorkbenchWithLocalCaches = React.useCallback((
-    current: WorkbenchSnapshot,
-    incoming: WorkbenchSnapshot,
-    options?: WorkbenchMergeOptions,
-  ) => (
-    (() => {
-      const merged = mergeWorkbenchSnapshot(
-        current,
-        incoming,
-        options,
-      );
-      if (merged !== current) {
-        // mergedRevision is the authoritative full-snapshot version accepted by this merge.
-        // mergedRevision 是本次合并接受的权威全量快照版本。
-        const mergedRevision = merged.revision ?? 0;
-        acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, mergedRevision);
-        acceptedLuaSkillsRevisionRef.current = Math.max(acceptedLuaSkillsRevisionRef.current, mergedRevision);
-        acceptedAgentSkillsRevisionRef.current = Math.max(acceptedAgentSkillsRevisionRef.current, mergedRevision);
-        acceptedSubagentCatalogRevisionRef.current = Math.max(acceptedSubagentCatalogRevisionRef.current, mergedRevision);
-        acceptedConversationLifecycleRevisionRef.current = Math.max(
-          acceptedConversationLifecycleRevisionRef.current,
-          mergedRevision,
-        );
-        acceptedProjectLifecycleRevisionRef.current = Math.max(
-          acceptedProjectLifecycleRevisionRef.current,
-          mergedRevision,
-        );
-      }
-      return merged;
-    })()
-  ), []);
-  // resetAcceptedWorkbenchOrderingForServiceInstance clears ordering owned by a replaced service.
-  // resetAcceptedWorkbenchOrderingForServiceInstance 清理由已替换服务持有的版本排序。
-  const resetAcceptedWorkbenchOrderingForServiceInstance = React.useCallback((
-    serviceInstanceEpoch: number,
-  ): boolean => {
-    // serviceInstanceChanged is the only condition that permits a lower revision to become authoritative.
-    // serviceInstanceChanged 是唯一允许较低版本重新成为权威状态的条件。
-    const serviceInstanceChanged =
-      acceptedServiceInstanceEpochRef.current !== serviceInstanceEpoch;
-    if (!serviceInstanceChanged) {
-      return false;
-    }
-    acceptedServiceInstanceEpochRef.current = serviceInstanceEpoch;
-    acceptedWorkbenchRevisionRef.current = 0;
-    acceptedLuaSkillsRevisionRef.current = 0;
-    acceptedAgentSkillsRevisionRef.current = 0;
-    acceptedSubagentCatalogRevisionRef.current = 0;
-    acceptedConversationLifecycleRevisionRef.current = 0;
-    acceptedConversationLifecycleRevisionByIdRef.current.clear();
-    acceptedProjectLifecycleRevisionRef.current = 0;
-    acceptedProjectLifecycleRevisionByIdRef.current.clear();
-    acceptedProjectSettingsRevisionByKeyRef.current.clear();
-    acceptedGlobalProjectSettingsRevisionByDomainRef.current = {
-      vmm: 0,
-      vce: 0,
-      agentSkills: 0,
-    };
-    return true;
-  }, []);
-  // acceptServiceWorkbenchSnapshot reserves one service snapshot revision before applying related local state.
-  // acceptServiceWorkbenchSnapshot 在应用关联本地状态前预占一个服务快照版本。
-  const acceptServiceWorkbenchSnapshot = React.useCallback((snapshot: WorkbenchSnapshot): boolean => {
-    const incomingRevision = snapshot.revision ?? 0;
-    if (!shouldAcceptWorkbenchRevision(acceptedWorkbenchRevisionRef.current, incomingRevision)) {
-      return false;
-    }
-    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, incomingRevision);
-    acceptedLuaSkillsRevisionRef.current = Math.max(acceptedLuaSkillsRevisionRef.current, incomingRevision);
-    acceptedAgentSkillsRevisionRef.current = Math.max(acceptedAgentSkillsRevisionRef.current, incomingRevision);
-    acceptedSubagentCatalogRevisionRef.current = Math.max(acceptedSubagentCatalogRevisionRef.current, incomingRevision);
-    acceptedConversationLifecycleRevisionRef.current = Math.max(
-      acceptedConversationLifecycleRevisionRef.current,
-      incomingRevision,
-    );
-    acceptedProjectLifecycleRevisionRef.current = Math.max(
-      acceptedProjectLifecycleRevisionRef.current,
-      incomingRevision,
-    );
-    return true;
-  }, []);
-  // acceptConversationArchiveTransitions filters archive payloads through full-snapshot and per-target revisions.
-  // acceptConversationArchiveTransitions 通过完整快照与按目标版本过滤归档载荷。
-  //
-  // Parameters: transitions are exact archive payloads and generation is their committed backend revision.
-  // 参数：transitions 是精确归档载荷，generation 是其已提交后端版本。
-  // Returns: only transitions that are newer for their own conversation lifecycle target.
-  // 返回值：仅返回对各自会话生命周期目标而言较新的转换。
-  const acceptConversationArchiveTransitions = React.useCallback((
-    transitions: ConversationArchivedDelta[],
-    generation: number,
-  ): ConversationArchivedDelta[] => transitions.filter((transition) => {
-    // targetRevision combines the latest full snapshot and target-owned archive response.
-    // targetRevision 合并最新完整快照与目标自有归档响应。
-    const targetRevision = Math.max(
-      acceptedConversationLifecycleRevisionRef.current,
-      acceptedConversationLifecycleRevisionByIdRef.current.get(transition.conversationId) ?? 0,
-    );
-    if (!shouldAcceptWorkbenchRevision(targetRevision, generation)) {
-      return false;
-    }
-    acceptedConversationLifecycleRevisionByIdRef.current.set(transition.conversationId, generation);
-    return true;
-  }), []);
-  // acceptProjectRemovalTransition reserves one target-owned project removal revision.
-  // acceptProjectRemovalTransition 预占一条目标自有项目移除版本。
-  //
-  // Parameters: projectId is the removed project target and generation is the committed backend revision.
-  // 参数：projectId 是移除项目目标，generation 是已提交后端版本。
-  // Returns: true only when this removal is newer for the exact project target.
-  // 返回值：仅当此移除对精确项目目标而言较新时返回 true。
-  const acceptProjectRemovalTransition = React.useCallback((projectId: string, generation: number): boolean => {
-    // targetRevision combines the latest full snapshot and target-owned project removal response.
-    // targetRevision 合并最新完整快照与目标自有项目移除响应。
-    const targetRevision = Math.max(
-      acceptedProjectLifecycleRevisionRef.current,
-      acceptedProjectLifecycleRevisionByIdRef.current.get(projectId) ?? 0,
-    );
-    if (!shouldAcceptWorkbenchRevision(targetRevision, generation)) {
-      return false;
-    }
-    acceptedProjectLifecycleRevisionByIdRef.current.set(projectId, generation);
-    return true;
-  }, []);
-  // applyLifecycleResponseSnapshot applies only archive and project-removal fields from a rejected full RPC snapshot.
-  // applyLifecycleResponseSnapshot 仅从被拒绝的完整 RPC 快照应用归档与项目移除字段。
-  //
-  // Parameters: snapshot is the committed RPC result, conversationIds are archived targets, and removedProjectId is the optional removed project.
-  // 参数：snapshot 是已提交 RPC 结果，conversationIds 是归档目标，removedProjectId 是可选的已移除项目。
-  // Returns: true when at least one target transition was applied or the targets already converged.
-  // 返回值：至少应用一条目标转换或目标已经收敛时返回 true。
-  const applyLifecycleResponseSnapshot = React.useCallback((
-    snapshot: WorkbenchSnapshot,
-    conversationIds: string[],
-    removedProjectId?: string,
-  ): boolean => {
-    // generation is the exact backend revision committed by the lifecycle RPC.
-    // generation 是生命周期 RPC 提交的精确后端版本。
-    const generation = snapshot.revision ?? 0;
-    // archiveTransitions project only target-owned fields from the full RPC snapshot.
-    // archiveTransitions 仅从完整 RPC 快照投影目标自有字段。
-    const archiveTransitions = conversationIds.map((conversationId): ConversationArchivedDelta => ({
-      conversationId,
-      archivedConversation: (snapshot.archivedConversations ?? [])
-        .find((conversation) => conversation.id === conversationId) ?? null,
-      selectedConversationId: snapshot.selectedConversationId ?? null,
-    }));
-    // acceptedArchives contains only target transitions newer than their own lifecycle state.
-    // acceptedArchives 仅包含比各自生命周期状态更新的目标转换。
-    const acceptedArchives = acceptConversationArchiveTransitions(archiveTransitions, generation);
-    // projectAccepted records whether the optional project removal owns a newer target revision.
-    // projectAccepted 记录可选项目移除是否拥有较新的目标版本。
-    const projectAccepted = removedProjectId
-      ? acceptProjectRemovalTransition(removedProjectId, generation)
-      : false;
-    if (acceptedArchives.length === 0 && !projectAccepted) {
-      // currentWorkbench is used only to verify that a previously accepted transition already converged.
-      // currentWorkbench 仅用于验证此前接受的转换已经收敛。
-      const currentWorkbench = workbenchStateRef.current;
-      // conversationsScheduled recognizes target transitions already accepted but not yet committed by React rendering.
-      // conversationsScheduled 识别已经接受但尚未由 React 渲染提交的目标转换。
-      const conversationsScheduled = conversationIds.every((conversationId) => Math.max(
-        acceptedConversationLifecycleRevisionRef.current,
-        acceptedConversationLifecycleRevisionByIdRef.current.get(conversationId) ?? 0,
-      ) >= generation);
-      const conversationsConverged = conversationIds.every((conversationId) => (
-        !currentWorkbench.conversations.some((conversation) => conversation.id === conversationId)
-      ));
-      // projectScheduled recognizes a project removal already accepted but not yet rendered.
-      // projectScheduled 识别已经接受但尚未渲染的项目移除。
-      const projectScheduled = !removedProjectId || Math.max(
-        acceptedProjectLifecycleRevisionRef.current,
-        acceptedProjectLifecycleRevisionByIdRef.current.get(removedProjectId) ?? 0,
-      ) >= generation;
-      const projectConverged = !removedProjectId
-        || !currentWorkbench.projects.some((project) => project.id === removedProjectId);
-      return (conversationsScheduled || conversationsConverged)
-        && (projectScheduled || projectConverged);
-    }
-    // acceptedEnvelopes separates conversation and project domains when only one target class is newer.
-    // acceptedEnvelopes 在仅一类目标较新时拆分会话与项目领域。
-    const acceptedEnvelopes: WorkbenchDeltaEnvelope[] = [];
-    if (projectAccepted && removedProjectId) {
-      acceptedEnvelopes.push({
-        generation,
-        delta: {
-          kind: "projectRemoved",
-          payload: {
-            projectId: removedProjectId,
-            projects: snapshot.projects,
-            expandedProjectIds: snapshot.expandedProjectIds ?? [],
-            archivedConversations: acceptedArchives,
-          },
-        },
-      });
-    } else if (acceptedArchives.length > 0) {
-      acceptedEnvelopes.push({
-        generation,
-        delta: {
-          kind: "conversationsArchived",
-          payload: { archivedConversations: acceptedArchives },
-        },
-      });
-    }
-    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, generation);
-    setWorkbenchState((current) => acceptedEnvelopes.reduce(
-      (nextWorkbench, envelope) => applyWorkbenchDelta(nextWorkbench, envelope),
-      current,
-    ));
-    return true;
-  }, [acceptConversationArchiveTransitions, acceptProjectRemovalTransition]);
-  // applyLocalPreviewWithLocalCaches applies optimistic snapshots without service revision gating.
-  // applyLocalPreviewWithLocalCaches 应用乐观快照，不经过服务版本门禁。
-  const applyLocalPreviewWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => (
-    incoming
-  ), []);
   // handleWebuiLocaleChange applies the locale immediately and persists it through the service.
   // handleWebuiLocaleChange 立即应用语言，并通过服务持久化。
   const handleWebuiLocaleChange = React.useCallback((locale: LocaleCode) => {
@@ -838,79 +510,6 @@ export function WorkbenchLayout(props: {
     const snapshot = await action();
     setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
   }, [mergeWorkbenchWithLocalCaches]);
-  // applyLuaSkillsCatalogUpdate applies the newest complete LuaSkills domain response independently of unrelated deltas.
-  // applyLuaSkillsCatalogUpdate 独立于无关增量应用最新的完整 LuaSkills 领域响应。
-  //
-  // Parameters: update contains the committed revision, LuaSkills catalog, and derived plugin rows.
-  // 参数：update 包含已提交版本、LuaSkills 目录与派生插件行。
-  // Returns: nothing; accepted data is scheduled into workbench state without lowering its global revision.
-  // 返回值：无；已接受数据会安排到工作台状态且不会降低全局版本。
-  const applyLuaSkillsCatalogUpdate = React.useCallback((update: LuaSkillsCatalogUpdate) => {
-    if (!shouldAcceptWorkbenchRevision(acceptedLuaSkillsRevisionRef.current, update.revision)) {
-      return;
-    }
-    acceptedLuaSkillsRevisionRef.current = update.revision;
-    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, update.revision);
-    setWorkbenchState((current) => {
-      if (update.revision < acceptedLuaSkillsRevisionRef.current) {
-        return current;
-      }
-      return {
-        ...current,
-        revision: Math.max(current.revision ?? 0, update.revision),
-        luaSkills: update.luaSkills,
-        plugins: update.plugins,
-      };
-    });
-  }, []);
-  // applyAgentSkillsCatalogUpdate applies the newest complete Agent Skills domain response independently of unrelated deltas.
-  // applyAgentSkillsCatalogUpdate 独立于无关增量应用最新的完整 Agent Skills 领域响应。
-  //
-  // Parameters: update contains the committed revision and complete Agent Skills catalog.
-  // 参数：update 包含已提交版本与完整 Agent Skills 目录。
-  // Returns: nothing; accepted data is scheduled into workbench state without lowering its global revision.
-  // 返回值：无；已接受数据会安排到工作台状态且不会降低全局版本。
-  const applyAgentSkillsCatalogUpdate = React.useCallback((update: AgentSkillsCatalogUpdate) => {
-    if (!shouldAcceptWorkbenchRevision(acceptedAgentSkillsRevisionRef.current, update.revision)) {
-      return;
-    }
-    acceptedAgentSkillsRevisionRef.current = update.revision;
-    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, update.revision);
-    setWorkbenchState((current) => {
-      if (update.revision < acceptedAgentSkillsRevisionRef.current) {
-        return current;
-      }
-      return {
-        ...current,
-        revision: Math.max(current.revision ?? 0, update.revision),
-        agentSkills: update.agentSkills,
-      };
-    });
-  }, []);
-  // applySubagentCatalogUpdate applies the newest complete agent-catalog domain response independently of unrelated deltas.
-  // applySubagentCatalogUpdate 独立于无关增量应用最新的完整智能体目录领域响应。
-  //
-  // Parameters: update contains the committed revision and complete agent catalog.
-  // 参数：update 包含已提交版本与完整智能体目录。
-  // Returns: nothing; accepted data is scheduled into workbench state without lowering its global revision.
-  // 返回值：无；已接受数据会安排到工作台状态且不会降低全局版本。
-  const applySubagentCatalogUpdate = React.useCallback((update: SubagentCatalogUpdate) => {
-    if (!shouldAcceptWorkbenchRevision(acceptedSubagentCatalogRevisionRef.current, update.revision)) {
-      return;
-    }
-    acceptedSubagentCatalogRevisionRef.current = update.revision;
-    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, update.revision);
-    setWorkbenchState((current) => {
-      if (update.revision < acceptedSubagentCatalogRevisionRef.current) {
-        return current;
-      }
-      return {
-        ...current,
-        revision: Math.max(current.revision ?? 0, update.revision),
-        subagentCatalog: update.subagentCatalog,
-      };
-    });
-  }, []);
   // renameTarget stores the project or conversation currently being renamed.
   // renameTarget 保存当前正在重命名的项目或会话目标。
   const [renameTarget, setRenameTarget] = React.useState<RenameTarget | null>(null);
@@ -920,16 +519,6 @@ export function WorkbenchLayout(props: {
   // projectSettingsTarget stores the project currently shown in the settings dialog.
   // projectSettingsTarget 保存当前显示设置弹窗的项目。
   const [projectSettingsTarget, setProjectSettingsTarget] = React.useState<ProjectSettingsDialogTarget | null>(null);
-  // projectSettingsRevisionById exposes accepted domain revisions without coupling projects or drafts.
-  // projectSettingsRevisionById 暴露已接收的领域版本，同时避免项目或草稿相互耦合。
-  const [projectSettingsRevisionById, setProjectSettingsRevisionById] = React.useState<Record<string, ProjectSettingsRevision>>(
-    workbenchState.projectSettingsRevisions.byProject,
-  );
-  // globalProjectSettingsRevision exposes independently ordered global invalidations for every project dialog.
-  // globalProjectSettingsRevision 向所有项目弹窗暴露独立排序的全局失效版本。
-  const [globalProjectSettingsRevision, setGlobalProjectSettingsRevision] = React.useState<ProjectSettingsRevision>(
-    workbenchState.projectSettingsRevisions.global,
-  );
   // projectFolderPickerOpen stores whether the service-backed folder picker is open.
   // projectFolderPickerOpen 保存服务驱动的文件夹选择器是否打开。
   const [projectFolderPickerOpen, setProjectFolderPickerOpen] = React.useState(false);
@@ -1255,10 +844,10 @@ export function WorkbenchLayout(props: {
           if (snapshot) {
             const snapshotApplied = applyProjectActionSnapshot(snapshot);
             if (!snapshotApplied && !applyLifecycleResponseSnapshot(snapshot, [conversation.id])) {
-              throw new Error("归档已提交，但本地生命周期状态未能收敛，请重试刷新。");
+              throw new Error(i18n.t("workspace.lifecycle.archiveNotConverged"));
             }
           } else {
-            throw new Error("归档未返回权威工作台快照，请刷新后检查会话状态。");
+            throw new Error(i18n.t("workspace.lifecycle.archiveNoSnapshot"));
           }
           archiveCommitted = true;
           toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archived", { conversation: conversation.title }));
@@ -1487,10 +1076,10 @@ export function WorkbenchLayout(props: {
       if (snapshot) {
         const snapshotApplied = applyProjectActionSnapshot(snapshot);
         if (!snapshotApplied && !applyLifecycleResponseSnapshot(snapshot, archivedConversationIds)) {
-          throw new Error("批量归档已提交，但本地生命周期状态未能收敛，请重试刷新。");
+          throw new Error(i18n.t("workspace.lifecycle.batchArchiveNotConverged"));
         }
       } else {
-        throw new Error("批量归档未返回权威工作台快照，请刷新后检查会话状态。");
+        throw new Error(i18n.t("workspace.lifecycle.batchArchiveNoSnapshot"));
       }
       toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedCount", {
         count: String(projectConversationCount(workbenchState, archiveProjectTarget.id)),
@@ -1526,10 +1115,10 @@ export function WorkbenchLayout(props: {
           archivedConversationIds,
           removeProjectTarget.id,
         )) {
-          throw new Error("项目移除已提交，但本地生命周期状态未能收敛，请重试刷新。");
+          throw new Error(i18n.t("workspace.lifecycle.projectRemoveNotConverged"));
         }
       } else {
-        throw new Error("项目移除未返回权威工作台快照，请刷新后检查项目状态。");
+        throw new Error(i18n.t("workspace.lifecycle.projectRemoveNoSnapshot"));
       }
       clearProjectTerminalInputBuffers(removeProjectTarget.id);
       toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedAndRemovedProject", { project: removeProjectTarget.name }));
@@ -1604,330 +1193,21 @@ export function WorkbenchLayout(props: {
     }
   }, [activeProjectId, draftConversation, selectedConversationId, workbenchState.conversations, workbenchState.projects]);
 
-  React.useEffect(() => {
-    const serviceInstanceChanged = resetAcceptedWorkbenchOrderingForServiceInstance(
-      props.serviceInstanceEpoch,
-    );
-    if (!acceptServiceWorkbenchSnapshot(props.workbench)) {
-      return;
-    }
-    // acceptedGlobalSettings keeps a later delta authoritative if it arrived before this snapshot effect ran.
-    // acceptedGlobalSettings 在较新增量先于当前快照副作用到达时继续保持其权威性。
-    const acceptedGlobalSettings = {
-      vmm: Math.max(
-        acceptedGlobalProjectSettingsRevisionByDomainRef.current.vmm,
-        props.workbench.projectSettingsRevisions.global.vmm,
-      ),
-      vce: Math.max(
-        acceptedGlobalProjectSettingsRevisionByDomainRef.current.vce,
-        props.workbench.projectSettingsRevisions.global.vce,
-      ),
-      agentSkills: Math.max(
-        acceptedGlobalProjectSettingsRevisionByDomainRef.current.agentSkills,
-        props.workbench.projectSettingsRevisions.global.agentSkills,
-      ),
-    };
-    acceptedGlobalProjectSettingsRevisionByDomainRef.current = acceptedGlobalSettings;
-    setGlobalProjectSettingsRevision(acceptedGlobalSettings);
-    // acceptedProjectSettings applies every full-snapshot domain revision without lowering a newer focused delta.
-    // acceptedProjectSettings 应用全量快照中的每个领域版本，同时不降低较新的聚焦增量。
-    const acceptedProjectSettings: Record<string, ProjectSettingsRevision> = {};
-    for (const [projectId, revisions] of Object.entries(props.workbench.projectSettingsRevisions.byProject)) {
-      // acceptedRevisions merges two independently ordered domains for this exact project.
-      // acceptedRevisions 合并当前准确项目的两个独立排序领域。
-      const acceptedRevisions = {
-        vmm: Math.max(
-          acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vmm`) ?? 0,
-          revisions.vmm,
-        ),
-        vce: Math.max(
-          acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vce`) ?? 0,
-          revisions.vce,
-        ),
-        agentSkills: Math.max(
-          acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:agentSkills`) ?? 0,
-          revisions.agentSkills,
-        ),
-      };
-      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vmm`, acceptedRevisions.vmm);
-      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vce`, acceptedRevisions.vce);
-      acceptedProjectSettingsRevisionByKeyRef.current.set(
-        `${projectId}:agentSkills`,
-        acceptedRevisions.agentSkills,
-      );
-      acceptedProjectSettings[projectId] = acceptedRevisions;
-    }
-    setProjectSettingsRevisionById((current) => (
-      serviceInstanceChanged
-        ? acceptedProjectSettings
-        : { ...current, ...acceptedProjectSettings }
-    ));
-    setWorkbenchState((current) => (
-      mergeWorkbenchSnapshot(
-        current,
-        props.workbench,
-        {
-          allowServiceRevisionReset: serviceInstanceChanged,
-          selectedConversationSource: serviceInstanceChanged ? "incoming" : undefined,
-          preserveExpandedProjectIds: expandedProjectIdsLocallyEditedRef.current,
-        },
-      )
-    ));
-    const nextSelected = props.workbench.selectedConversationId ?? null;
-    setSelectedConversationId((current) => {
-      if (current && current === draftConversationIdRef.current) {
-        return current;
-      }
-      if (current && current === pendingMaterializedConversationIdRef.current) {
-        return current;
-      }
-      if (!serviceInstanceChanged && current && props.workbench.conversations.some((conversation) => conversation.id === current)) {
-        return current;
-      }
-      return nextSelected;
-    });
-  }, [
-    acceptServiceWorkbenchSnapshot,
-    props.serviceInstanceEpoch,
-    props.workbench,
-    resetAcceptedWorkbenchOrderingForServiceInstance,
-  ]);
-
-  React.useEffect(() => {
-    if (!props.workbenchDelta) {
-      return;
-    }
-    // signalSequence binds acknowledgement to the exact batch observed by this effect.
-    // signalSequence 将确认操作绑定到当前 effect 观察到的精确批次。
-    const signalSequence = props.workbenchDelta.seq;
-    const acceptedEnvelopes: WorkbenchDeltaEnvelope[] = [];
-    // acceptedProjectSettingsRevisions collects target-and-domain invalidations committed by this event batch.
-    // acceptedProjectSettingsRevisions 收集当前事件批次提交的目标与领域失效版本。
-    const acceptedProjectSettingsRevisions = new Map<string, ProjectSettingsRevision>();
-    let nextAcceptedRevision = acceptedWorkbenchRevisionRef.current;
-    for (const envelope of props.workbenchDelta.envelopes) {
-      if (envelope.delta.kind === "mediaUploadProgressChanged") {
-        // Upload progress still participates in global ordering so a terminal event cannot be overtaken by an older snapshot.
-        // 上传进度仍参与全局排序，避免旧快照覆盖上传终态。
-        if (!shouldAcceptWorkbenchRevision(nextAcceptedRevision, envelope.generation)) {
-          continue;
-        }
-        const progress = envelope.delta.payload;
-        setMediaUploadProgresses((current) => reduceMediaUploadProgress(current, progress));
-        // Accepted failed conversation uploads close the progress row but retain a visible attachment notice.
-        // 已接纳的会话上传失败会关闭进度行，同时保留可见附件通知。
-        if (isConversationUploadFailure(progress)) {
-          toast.error(i18n.t("conversation.submission.uploadFailed"), {
-            id: `media-upload-failure:${mediaUploadProgressKey(progress)}`,
-            description: `${progress.fileName}\n${i18n.t("conversation.submission.uploadFailedAttachmentKept")}${progress.error ? `\n${progress.error}` : ""}`,
-          });
-        }
-        acceptedEnvelopes.push(envelope);
-        nextAcceptedRevision = envelope.generation;
-        continue;
-      }
-      if (envelope.delta.kind === "conversationArchived") {
-        // acceptedArchives filters this single target through its own lifecycle revision.
-        // acceptedArchives 通过目标自身生命周期版本过滤此单个目标。
-        const acceptedArchives = acceptConversationArchiveTransitions(
-          [envelope.delta.payload],
-          envelope.generation,
-        );
-        if (acceptedArchives.length > 0) {
-          acceptedEnvelopes.push(envelope);
-          nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
-        }
-        continue;
-      }
-      if (envelope.delta.kind === "conversationsArchived") {
-        // acceptedArchives independently filters every child target in the shared batch generation.
-        // acceptedArchives 在共享批次 generation 中独立过滤每个子目标。
-        const acceptedArchives = acceptConversationArchiveTransitions(
-          envelope.delta.payload.archivedConversations,
-          envelope.generation,
-        );
-        if (acceptedArchives.length > 0) {
-          acceptedEnvelopes.push({
-            ...envelope,
-            delta: {
-              kind: "conversationsArchived",
-              payload: { archivedConversations: acceptedArchives },
-            },
-          });
-          nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
-        }
-        continue;
-      }
-      if (envelope.delta.kind === "projectRemoved") {
-        // acceptedArchives filters child lifecycle targets independently from the project target.
-        // acceptedArchives 独立于项目目标过滤子生命周期目标。
-        const acceptedArchives = acceptConversationArchiveTransitions(
-          envelope.delta.payload.archivedConversations,
-          envelope.generation,
-        );
-        // projectAccepted orders removal only against the exact project lifecycle target.
-        // projectAccepted 仅针对精确项目生命周期目标排序移除操作。
-        const projectAccepted = acceptProjectRemovalTransition(
-          envelope.delta.payload.projectId,
-          envelope.generation,
-        );
-        if (projectAccepted) {
-          acceptedEnvelopes.push({
-            ...envelope,
-            delta: {
-              kind: "projectRemoved",
-              payload: {
-                ...envelope.delta.payload,
-                archivedConversations: acceptedArchives,
-              },
-            },
-          });
-        } else if (acceptedArchives.length > 0) {
-          acceptedEnvelopes.push({
-            generation: envelope.generation,
-            delta: {
-              kind: "conversationsArchived",
-              payload: { archivedConversations: acceptedArchives },
-            },
-          });
-        }
-        if (projectAccepted || acceptedArchives.length > 0) {
-          nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
-        }
-        continue;
-      }
-      if (envelope.delta.kind === "pluginCatalogChanged") {
-        // One plugin catalog event owns all three revision gates so its domains are never applied partially.
-        // 单个插件目录事件同时拥有三个版本闸门，确保其领域绝不被部分应用。
-        const acceptedPluginCatalogRevision = Math.max(
-          acceptedLuaSkillsRevisionRef.current,
-          acceptedAgentSkillsRevisionRef.current,
-          acceptedSubagentCatalogRevisionRef.current,
-        );
-        if (!shouldAcceptWorkbenchRevision(acceptedPluginCatalogRevision, envelope.generation)) {
-          continue;
-        }
-        acceptedLuaSkillsRevisionRef.current = envelope.generation;
-        acceptedAgentSkillsRevisionRef.current = envelope.generation;
-        acceptedSubagentCatalogRevisionRef.current = envelope.generation;
-        acceptedEnvelopes.push(envelope);
-        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
-        continue;
-      }
-      if (envelope.delta.kind === "agentSkillsCatalogChanged") {
-        // Agent Skills uses its own revision so an unrelated newer domain cannot suppress this catalog.
-        // Agent Skills 使用独立版本，避免无关领域的较新版本压掉当前目录。
-        if (!shouldAcceptWorkbenchRevision(acceptedAgentSkillsRevisionRef.current, envelope.generation)) {
-          continue;
-        }
-        acceptedAgentSkillsRevisionRef.current = envelope.generation;
-        acceptedEnvelopes.push(envelope);
-        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
-        continue;
-      }
-      if (
-        envelope.delta.kind === "luaSkillsCatalogChanged"
-        || envelope.delta.kind === "luaSkillsManagedRuntimeProgressChanged"
-      ) {
-        // Every LuaSkills projection shares one domain gate so unrelated newer deltas cannot hide progress.
-        // 所有 LuaSkills 投影共享同一领域闸门，避免无关的较新增量隐藏进度。
-        if (!shouldAcceptWorkbenchRevision(acceptedLuaSkillsRevisionRef.current, envelope.generation)) {
-          continue;
-        }
-        acceptedLuaSkillsRevisionRef.current = envelope.generation;
-        acceptedEnvelopes.push(envelope);
-        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
-        continue;
-      }
-      if (envelope.delta.kind === "subagentCatalogChanged") {
-        // Subagent catalog uses one revision gate for broadcast events and initiating RPC responses.
-        // 智能体目录让广播事件与发起方 RPC 响应共享同一版本闸门。
-        if (!shouldAcceptWorkbenchRevision(acceptedSubagentCatalogRevisionRef.current, envelope.generation)) {
-          continue;
-        }
-        acceptedSubagentCatalogRevisionRef.current = envelope.generation;
-        acceptedEnvelopes.push(envelope);
-        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
-        continue;
-      }
-      if (envelope.delta.kind === "projectSettingsChanged") {
-        // projectId and domain own independent gates so unrelated settings never suppress each other.
-        // projectId 与 domain 持有独立闸门，避免无关设置相互压制。
-        const projectId = envelope.delta.payload.projectId;
-        const domain = envelope.delta.payload.domain;
-        if (projectId === null) {
-          const acceptedRevision = acceptedGlobalProjectSettingsRevisionByDomainRef.current[domain];
-          if (!shouldAcceptWorkbenchRevision(acceptedRevision, envelope.generation)) {
-            continue;
-          }
-          acceptedGlobalProjectSettingsRevisionByDomainRef.current = {
-            ...acceptedGlobalProjectSettingsRevisionByDomainRef.current,
-            [domain]: envelope.generation,
-          };
-          setGlobalProjectSettingsRevision((current) => ({
-            ...current,
-            [domain]: envelope.generation,
-          }));
-          acceptedEnvelopes.push(envelope);
-          nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
-          continue;
-        }
-        const settingsKey = `${projectId}:${domain}`;
-        const acceptedRevision = acceptedProjectSettingsRevisionByKeyRef.current.get(settingsKey) ?? 0;
-        if (!shouldAcceptWorkbenchRevision(acceptedRevision, envelope.generation)) {
-          continue;
-        }
-        acceptedProjectSettingsRevisionByKeyRef.current.set(settingsKey, envelope.generation);
-        const acceptedDomains = acceptedProjectSettingsRevisions.get(projectId)
-          ?? {
-            vmm: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vmm`) ?? 0,
-            vce: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vce`) ?? 0,
-            agentSkills: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:agentSkills`) ?? 0,
-          };
-        acceptedProjectSettingsRevisions.set(projectId, {
-          ...acceptedDomains,
-          [domain]: envelope.generation,
-        });
-        acceptedEnvelopes.push(envelope);
-        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
-        continue;
-      }
-      if (!shouldAcceptWorkbenchRevision(nextAcceptedRevision, envelope.generation)) {
-        continue;
-      }
-      acceptedEnvelopes.push(envelope);
-      nextAcceptedRevision = envelope.generation;
-    }
-    if (acceptedProjectSettingsRevisions.size > 0) {
-      setProjectSettingsRevisionById((current) => {
-        // next exposes every independently accepted project revision in one React commit.
-        // next 在一次 React 提交中暴露所有独立接收的项目版本。
-        const next = { ...current };
-        for (const [projectId, revisions] of acceptedProjectSettingsRevisions) {
-          next[projectId] = revisions;
-        }
-        return next;
-      });
-    }
-    if (acceptedEnvelopes.length === 0) {
-      props.onWorkbenchDeltaConsumed(signalSequence);
-      return;
-    }
-    acceptedWorkbenchRevisionRef.current = nextAcceptedRevision;
-    setWorkbenchState((current) => (
-      acceptedEnvelopes.reduce(
-        (nextWorkbench, envelope) => applyWorkbenchDelta(nextWorkbench, envelope),
-        current,
-      )
-    ));
-    props.onWorkbenchDeltaConsumed(signalSequence);
-  }, [
-    acceptConversationArchiveTransitions,
-    acceptProjectRemovalTransition,
-    props.onWorkbenchDeltaConsumed,
-    props.workbenchDelta,
-    i18n.t,
-  ]);
+  // Service snapshots and delta batches pass through the revision gates in this exact effect order.
+  // 服务快照与增量批次按此精确 effect 顺序经过版本闸门。
+  useWorkbenchServiceSync(revisionGates, {
+    serviceInstanceEpoch: props.serviceInstanceEpoch,
+    workbench: props.workbench,
+    workbenchDelta: props.workbenchDelta,
+    onWorkbenchDeltaConsumed: props.onWorkbenchDeltaConsumed,
+    setWorkbenchState,
+    setSelectedConversationId,
+    setMediaUploadProgresses,
+    draftConversationIdRef,
+    pendingMaterializedConversationIdRef,
+    expandedProjectIdsLocallyEditedRef,
+    t: i18n.t,
+  });
 
   // Release the selection guard when the row arrives; keep the optimistic prompt until canonical correlation.
   // 侧栏行到达时释放选择保护；乐观提示词保留到规范关联完成。
@@ -2175,7 +1455,7 @@ export function WorkbenchLayout(props: {
               onSavePromptOutputStyle: (styleId) => applySkillWorkbenchAction(async () => {
                 const saved = await savePromptOutputStyle(styleId);
                 if (saved) {
-                  toast.info("已保存输出风格。为避免打破上下文，风格切换只会在新会话或上下文压缩后的会话更新。", {
+                  toast.info(i18n.t("workspace.lifecycle.outputStyleSaved"), {
                     id: "output-style-safe-boundary",
                   });
                 }

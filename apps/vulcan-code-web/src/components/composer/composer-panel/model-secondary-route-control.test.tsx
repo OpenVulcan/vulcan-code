@@ -6,10 +6,11 @@ import { toast } from "sonner";
 import type { ProviderModelSecondaryRouteSummary } from "@/types";
 import { ModelSecondaryRouteControl } from "./model-secondary-route-control";
 
-// translate preserves callback identity so rerenders exercise the actual request ownership rules.
-// translate 保留回调身份，确保重渲染验证真实请求归属规则。
-const translate = (key: string) => key;
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: translate }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 // deferred exposes one controllable service response without contacting a provider.
 // deferred 暴露一个可控制的服务响应，不联系供应商。
@@ -40,7 +41,7 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 // trigger 在渲染器根节点中定位唯一真实菜单触发器。
 // No parameters; returns the semantic trigger button.
 // 无参数；返回语义触发按钮。
-function trigger() { return host.querySelector<HTMLButtonElement>('[aria-label="composer.secondaryRoute.select"]')!; }
+function trigger() { return host.querySelector<HTMLButtonElement>('[aria-label="Select secondary provider"]')!; }
 // key dispatches keyboard input and lets Radix finish its deferred roving focus update.
 // key 分派键盘输入，并等待 Radix 完成延迟的游标焦点更新。
 // element is the focused control, value is a key; returns after its effects settle.
@@ -69,12 +70,12 @@ it("ignores an old forced refresh after switching model and preserves the new lo
   const select = vi.fn();
   await act(async () => root.render(<ModelSecondaryRouteControl providerId="provider" modelId="one" selectedRoute={null} onListRoutes={list} onSelectRoute={select} />));
   await openMenu();
-  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="composer.secondaryRoute.refresh"]')!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Refresh secondary providers"]')!.click());
   await act(async () => root.render(<ModelSecondaryRouteControl providerId="provider" modelId="two" selectedRoute={null} onListRoutes={list} onSelectRoute={select} />));
   expect(item("old")).toBeUndefined();
   await act(async () => oldRefresh.resolve([route("stale")]));
   expect(item("stale")).toBeUndefined();
-  expect(document.querySelector('[role="status"]')?.textContent).toBe("composer.secondaryRoute.loading");
+  expect(document.querySelector('[role="status"]')?.textContent).toBe("Loading secondary providers...");
   expect(toast.success).not.toHaveBeenCalled();
   await act(async () => nextLoad.resolve([route("new", "two")]));
   expect(item("new")).toBeDefined();
@@ -86,7 +87,7 @@ it("invalidates forced refresh when closed and reopens with only the latest requ
   const list = vi.fn().mockResolvedValueOnce([route("old")]).mockReturnValueOnce(oldRefresh.promise).mockResolvedValueOnce([route("new")]);
   await act(async () => root.render(<ModelSecondaryRouteControl providerId="provider" modelId="one" selectedRoute={null} onListRoutes={list} onSelectRoute={vi.fn()} />));
   await openMenu();
-  const refresh = document.querySelector<HTMLButtonElement>('[aria-label="composer.secondaryRoute.refresh"]')!;
+  const refresh = document.querySelector<HTMLButtonElement>('[aria-label="Refresh secondary providers"]')!;
   await act(async () => { refresh.click(); refresh.click(); });
   expect(list).toHaveBeenCalledTimes(2);
   await key(document.querySelector('[role="menu"]')!, "Escape");
@@ -140,11 +141,11 @@ it("supports search, arrow and enter selection, tab to refresh, and distinct fai
   await openMenu();
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("discovery unavailable");
   expect(document.body.textContent).not.toContain("No secondary providers are available");
-  const search = document.querySelector<HTMLInputElement>('[aria-label="composer.secondaryRoute.search"]')!;
+  const search = document.querySelector<HTMLInputElement>('[aria-label="Search secondary providers"]')!;
   expect(document.activeElement).toBe(search);
   await act(async () => search.focus());
   await key(search, "Tab");
-  const refresh = document.querySelector<HTMLButtonElement>('[aria-label="composer.secondaryRoute.refresh"]')!;
+  const refresh = document.querySelector<HTMLButtonElement>('[aria-label="Refresh secondary providers"]')!;
   expect(document.activeElement).toBe(refresh);
   // Diagnostics must be reachable within one complete focus cycle, independent of selector-engine ordering.
   // 诊断详情必须在一轮完整焦点循环内可达，不依赖选择器引擎的枚举顺序。
@@ -175,9 +176,9 @@ it("retains known routes when a same-owner refresh fails and does not reload for
   const nextList = vi.fn().mockRejectedValue(new Error("refresh unavailable"));
   await act(async () => root.render(<ModelSecondaryRouteControl providerId="provider" modelId="one" selectedRoute={null} onListRoutes={nextList} onSelectRoute={select} />));
   expect(nextList).not.toHaveBeenCalled();
-  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="composer.secondaryRoute.refresh"]')!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Refresh secondary providers"]')!.click());
   expect(nextList).toHaveBeenCalledWith("provider", "one", true);
   expect(item("known")).toBeDefined();
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("refresh unavailable");
-  expect(document.querySelector<HTMLButtonElement>('[aria-label="composer.secondaryRoute.refresh"]')!.disabled).toBe(false);
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="Refresh secondary providers"]')!.disabled).toBe(false);
 });

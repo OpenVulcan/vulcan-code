@@ -11,7 +11,11 @@ import { VceEmbeddingSettings } from "./vce-embedding-settings";
 const rpc = vi.hoisted(() => ({ preflight: vi.fn(), save: vi.fn() }));
 vi.mock("@/service/vce-service", () => ({ preflightVceEmbeddingRoute: rpc.preflight }));
 vi.mock("@/service/settings-actions-service", () => ({ savePublicAiInferenceRoute: rpc.save }));
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN" }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key);
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) };
+});
 
 // Build exact route fixtures with identical model names but distinct providers/accounts.
 // 构建模型名相同、供应商及账号不同的精确路由夹具。

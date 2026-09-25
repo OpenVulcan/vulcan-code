@@ -20,7 +20,7 @@ import { VceHelpTooltip } from "./vce-help-tooltip";
 import { vceDimensionDomain } from "./vce-embedding-dimensions";
 import { vceInferenceRouteKey, vceRoutePickerOptions } from "./vce-route-picker";
 export { vceInferenceRouteKey, vceRoutePickerOptions } from "./vce-route-picker";
-import { useI18n } from "@/i18n";
+import { formatMessage, useI18n } from "@/i18n";
 import { formatDurationSeconds } from "@/lib/usage-format";
 import {
   loadPublicAiSettings,
@@ -36,6 +36,7 @@ import type {
   VceConfigurationCapabilityStatus,
   VceGlobalConfigurationStatus,
 } from "@/types";
+import { errorMessage } from "@/lib/display-format";
 
 /// Stable public-AI consumer profile owned by ContextEngine.
 /// ContextEngine 持有的稳定公共 AI 消费者配置档。
@@ -155,15 +156,9 @@ export function vceCandidateEligible(
 /// Returns: the complete route, readiness, reasoning-policy, storage, and test panel.
 /// 返回值：完整的路由、就绪状态、推理策略、存储与测试面板。
 export function ContextEngineArea(props: ContextEngineAreaProps) {
-  // locale selects local bilingual copy without changing the backend-owned diagnostic contract.
-  // locale 选择本地双语文案且不改变后端持有的诊断契约。
-  const { locale } = useI18n();
-  // copy returns Chinese text for the Chinese locale and English text otherwise.
-  // copy 为中文语言环境返回中文文案，否则返回英文文案。
-  const copy = React.useCallback(
-    (zh: string, en: string) => (locale === "zh-CN" ? zh : en),
-    [locale],
-  );
+  // t selects local bilingual copy without changing the backend-owned diagnostic contract.
+  // t 选择本地双语文案且不改变后端持有的诊断契约。
+  const { t } = useI18n();
   // snapshot contains current executable candidates and persisted VCE routes.
   // snapshot 包含当前可执行候选项与已持久化 VCE 路由。
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
@@ -242,30 +237,21 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
     {
       kind: "embedding",
       operation: "embedding_create",
-      label: copy("向量模型", "Embedding model"),
-      description: copy(
-        "复用宿主已验证的源码文档与查询向量能力；支持专用任务或 Provider 默认任务，维度必须可确定。",
-        "Reuses host-validated document and query vectors through dedicated or provider-default tasks, with deterministic dimensions.",
-      ),
+      label: t("contextEngine.embeddingModel"),
+      description: t("contextEngine.reusesHostValidatedDocument"),
     },
     {
       kind: "query_rewrite",
       operation: "conversation_respond",
       purposeId: VCE_QUERY_REWRITE_PURPOSE_ID,
-      label: copy("大语言模型", "Large language model"),
-      description: copy(
-        "生成严格 JSON 的代码检索查询变体；宿主固定关闭模型推理。",
-        "Generates strict-JSON code-search variants with model reasoning fixed off by the host.",
-      ),
+      label: t("contextEngine.largeLanguageModel"),
+      description: t("contextEngine.generatesStrictJsonCode"),
     },
     {
       kind: "rerank",
       operation: "rerank_documents",
-      label: copy("重排序模型", "Reranking model"),
-      description: copy(
-        "对语义候选进行二次排序；使用模型明确声明的禁用截断或 Provider 默认截断策略。",
-        "Reorders semantic candidates with an explicitly declared disabled or provider-default truncation policy.",
-      ),
+      label: t("contextEngine.rerankingModel"),
+      description: t("contextEngine.reordersSemanticCandidatesWith"),
     },
   ];
 
@@ -318,7 +304,7 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
     const testedRoute = routeForDefinition(profile, definition);
     const testedDimension = profile?.embedding_dimensions;
     try {
-      if (!testedRoute) throw new Error(copy("请先保存测试模型。", "Save the model before testing."));
+      if (!testedRoute) throw new Error(t("contextEngine.saveTheModelBefore"));
       const result = await testPublicAiInferenceRoute({
         consumerProfileId: VCE_CONSUMER_PROFILE_ID,
         operation: definition.operation,
@@ -339,25 +325,19 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
         || result.modelId !== currentRoute.model_id
         || (definition.kind === "embedding" && (currentProfile?.embedding_dimensions !== testedDimension
           || testedDimension === undefined || result.dimensions !== testedDimension))) {
-        throw new Error(copy("模型配置或测试目标已变化，请重新测试当前模型。", "Model configuration or test target changed; test the current model again."));
+        throw new Error(t("contextEngine.modelConfigurationOrTest"));
       }
       const detail = definition.kind === "embedding"
-        ? copy(
-          `${result.resultCount} 条结果 · ${result.dimensions ?? 0} 维 · ${formatDurationSeconds(result.durationMs)}`,
-          `${result.resultCount} results · ${result.dimensions ?? 0} dimensions · ${formatDurationSeconds(result.durationMs)}`,
-        )
-        : copy(
-          `${result.resultCount} 条结果 · ${formatDurationSeconds(result.durationMs)}`,
-          `${result.resultCount} results · ${formatDurationSeconds(result.durationMs)}`,
-        );
-      toast.success(copy("测试连通性成功", "Connection test succeeded"), { description: detail });
+        ? formatMessage(t("contextEngine.resultsDimensions"), { resultCount: result.resultCount, dimensions: result.dimensions ?? 0, value: formatDurationSeconds(result.durationMs) })
+        : formatMessage(t("contextEngine.results"), { resultCount: result.resultCount, value: formatDurationSeconds(result.durationMs) });
+      toast.success(t("contextEngine.connectionTestSucceeded"), { description: detail });
     } catch (cause) {
-      if (observationSequence.current === testObservation) toast.error(copy("测试连通性失败", "Connection test failed"), { description: errorMessage(cause) });
+      if (observationSequence.current === testObservation) toast.error(t("contextEngine.connectionTestFailed"), { description: errorMessage(cause) });
     } finally {
       mutationInFlightRef.current = false;
       setBusyKey(null);
     }
-  }, [copy, profile, reload]);
+  }, [profile, reload, t]);
 
   // unresolvedRouteCount summarizes the remaining configuration work without repeating every diagnostic.
   // unresolvedRouteCount 汇总剩余配置工作，避免重复展示每一条诊断。
@@ -377,42 +357,33 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
           </span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-semibold">{copy("代码语义索引", "Code semantic index")}</h2>
+              <h2 className="text-base font-semibold">{t("contextEngine.codeSemanticIndex")}</h2>
               <span className={readiness?.ready
                 ? "rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-success)] dark:text-emerald-300"
                 : "rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-warning)] dark:text-amber-300"}
               >
-                {readiness?.ready ? copy("已就绪", "Ready") : copy("已关闭", "Closed")}
+                {readiness?.ready ? t("contextEngine.ready") : t("contextEngine.closed")}
               </span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              {copy(
-                "为 AI 提供项目级代码语义检索；配置模型后，在项目设置中启用并明确创建索引。",
-                "Provides project-scoped semantic code retrieval for AI. After configuring models, enable a project and explicitly create its index in project settings.",
-              )}
+              {t("contextEngine.providesProjectScopedSemantic")}
             </p>
           </div>
         </div>
         <Button disabled={busyKey !== null} onClick={() => void recheck()} size="sm" variant="outline">
           <RefreshCw className="size-3.5" />
-          {copy("重新检查", "Recheck")}
+          {t("contextEngine.recheck")}
         </Button>
       </header>
 
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground">
         <div className="flex max-w-xl items-start gap-2">
           <BrainCircuit className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
-          <span>{copy("查询改写", "Query rewriting")}</span><VceHelpTooltip label={copy("查询改写说明", "Query rewriting notes")}>{copy(
-            "查询改写固定关闭模型思考，不提供额外思考档位。",
-            "Query rewriting keeps model reasoning disabled and exposes no additional effort setting.",
-          )}</VceHelpTooltip>
+          <span>{t("contextEngine.queryRewriting")}</span><VceHelpTooltip label={t("contextEngine.queryRewritingNotes")}>{t("contextEngine.queryRewritingKeepsModel")}</VceHelpTooltip>
         </div>
         <div className="flex max-w-xl items-start gap-2">
           <Database className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
-          <span>{copy("索引存储", "Index storage")}</span><VceHelpTooltip label={copy("索引存储说明", "Index storage notes")}>{copy(
-            "索引存储复用 VulcanCode 的 VLDB/LanceDB，无需单独配置数据库。",
-            "Index storage reuses VulcanCode's VLDB/LanceDB and needs no separate database setup.",
-          )}</VceHelpTooltip>
+          <span>{t("contextEngine.indexStorage")}</span><VceHelpTooltip label={t("contextEngine.indexStorageNotes")}>{t("contextEngine.indexStorageReusesVulcancode")}</VceHelpTooltip>
         </div>
       </div>
 
@@ -426,26 +397,23 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
       <div className="overflow-hidden rounded-xl border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
           <div>
-            <h3 className="text-sm font-medium">{copy("模型路由", "Model routes")}</h3>
+            <h3 className="text-sm font-medium">{t("contextEngine.modelRoutes")}</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {readiness?.ready
-                ? copy("三项能力均已就绪。", "All three capabilities are ready.")
-                : copy(
-                  `还需完成 ${unresolvedRouteCount} 项配置。`,
-                  `${unresolvedRouteCount} configuration ${unresolvedRouteCount === 1 ? "item" : "items"} remaining.`,
-                )}
+                ? t("contextEngine.allThreeCapabilitiesAre")
+                : formatMessage(t(unresolvedRouteCount === 1 ? "contextEngine.remainingOne" : "contextEngine.remaining"), { count: unresolvedRouteCount })}
             </p>
           </div>
           <span className="text-xs text-muted-foreground">
-            {copy("向量变更需要确认", "Embedding changes require confirmation")}
+            {t("contextEngine.embeddingChangesRequireConfirmation")}
           </span>
         </div>
         {!snapshot || !readiness ? (
-          <StreamPlaceholder className="px-2 py-3" label={copy("正在读取公共 AI 模型目录…", "Loading the public AI model catalog…")} shape="rows" count={4} />
+          <StreamPlaceholder className="px-2 py-3" label={t("contextEngine.loadingThePublicAi")} shape="rows" count={4} />
         ) : (
           <div className="divide-y">
             <div className="hidden gap-3 px-4 py-2 text-xs text-muted-foreground @xl/vce:grid @xl/vce:grid-cols-[8rem_minmax(12rem,1fr)_9.5rem]">
-              <span>{copy("用途", "Purpose")}</span><span>{copy("模型与账号", "Model and account")}</span><span className="text-right">{copy("操作", "Actions")}</span>
+              <span>{t("contextEngine.purpose")}</span><span>{t("contextEngine.modelAndAccount")}</span><span className="text-right">{t("contextEngine.actions")}</span>
             </div>
             {definitions.map((definition) => {
               const route = routeForDefinition(profile, definition);
@@ -492,12 +460,9 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
 /// Renders one required route selector and its authoritative status.
 /// 渲染一个必需路由选择器及其权威状态。
 function VceRouteField(props: VceRouteFieldProps) {
-  // locale selects bilingual control copy without duplicating route semantics.
-  // locale 选择双语控件文案且不复制路由语义。
-  const { locale } = useI18n();
-  // copy returns the control text for the active locale.
-  // copy 返回当前语言环境对应的控件文案。
-  const copy = (zh: string, en: string) => (locale === "zh-CN" ? zh : en);
+  // t selects bilingual control copy without duplicating route semantics.
+  // t 选择双语控件文案且不复制路由语义。
+  const { t } = useI18n();
   // selectedKey represents only an exact persisted route that still exists in eligible candidates.
   // selectedKey 仅表示仍存在于合格候选项中的精确持久化路由。
   const selectedKey = props.route ? vceInferenceRouteKey(props.route) : "";
@@ -525,7 +490,7 @@ function VceRouteField(props: VceRouteFieldProps) {
             : <CircleAlert className="size-4" />}
         </span>
         <div className="min-w-0">
-          <div className="flex items-center gap-1 text-xs font-medium">{props.definition.label}<VceHelpTooltip label={`${props.definition.label} ${copy("说明", "notes")}`}>{props.definition.description}</VceHelpTooltip></div>
+          <div className="flex items-center gap-1 text-xs font-medium">{props.definition.label}<VceHelpTooltip label={`${props.definition.label} ${t("contextEngine.notes")}`}>{props.definition.description}</VceHelpTooltip></div>
         </div>
       </div>
       <div className="min-w-0">
@@ -533,7 +498,7 @@ function VceRouteField(props: VceRouteFieldProps) {
           ariaLabel={props.definition.label}
           className="h-8 px-2 text-xs"
           disabled={props.disabled || props.candidates.length === 0}
-          emptyText={copy("没有匹配的兼容模型", "No compatible models match this filter")}
+          emptyText={t("contextEngine.noCompatibleModelsMatch")}
           onValueChange={(value) => {
             const candidate = candidateByKey.get(value);
             if (candidate) {
@@ -542,12 +507,9 @@ function VceRouteField(props: VceRouteFieldProps) {
           }}
           options={pickerOptions}
           placeholder={props.route?.model_id ?? (props.candidates.length > 0
-            ? copy("选择模型与账号", "Select model and account")
-            : copy("没有兼容模型", "No compatible models"))}
-          searchPlaceholder={copy(
-            "筛选模型、ID、供应商或账号…",
-            "Filter by model, ID, provider, or account…",
-          )}
+            ? t("contextEngine.selectModelAndAccount")
+            : t("contextEngine.noCompatibleModels"))}
+          searchPlaceholder={t("contextEngine.filterByModelId")}
           value={selectedValue}
         />
         {props.status?.issue ? (
@@ -556,11 +518,11 @@ function VceRouteField(props: VceRouteFieldProps) {
       </div>
       <div className="flex flex-wrap items-center gap-2 @xl/vce:justify-end">
         {props.onTest ? (
-          <VceActionButton label={copy("测试连通性", "Test connectivity")}
+          <VceActionButton label={t("contextEngine.testConnectivity")}
             disabled={props.disabled || !props.route} onClick={() => void props.onTest?.()}
             icon={props.testing ? <LoaderCircle className="size-4 animate-spin" /> : <Bug className="size-4" />} />
         ) : null}
-        <VceActionButton label={copy("清除", "Clear")} disabled={props.disabled || !props.route}
+        <VceActionButton label={t("contextEngine.clear")} disabled={props.disabled || !props.route}
           onClick={() => void props.onChange(null)} icon={<Eraser className="size-4" />} />
       </div>
     </div>
@@ -623,6 +585,3 @@ function candidateSupportsDisabledReasoning(
 
 /// Converts one unknown rejection into a stable user-visible message.
 /// 将一项未知拒绝转换为稳定的用户可见消息。
-function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
-}

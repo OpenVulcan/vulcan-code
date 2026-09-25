@@ -7,7 +7,7 @@
   min-width: 0;
   padding-block: 12px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .conversation-model-switch::before,
@@ -106,7 +106,7 @@
   min-height: 36px;
   padding: 0 16px;
   border: 1px solid color-mix(in srgb, var(--primary) 48%, var(--vcn-border-subtle));
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: color-mix(in srgb, var(--card) 94%, transparent);
   color: var(--foreground);
   box-shadow: 0 8px 24px rgb(0 0 0 / 16%);
@@ -127,7 +127,7 @@
 
 .conversation-continue-status {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -149,7 +149,7 @@
 }
 
 .conversation-continue-blocked-reason-trigger:focus-visible {
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 48%, transparent);
 }
 

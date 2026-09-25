@@ -18,7 +18,7 @@ describe("model parameters card", () => {
     // host allows independent checks of visible parameter rows and the full schema disclosure.
     // host 支持独立检查可见参数行与完整模式展开区。
     const host = document.createElement("div");
-    host.innerHTML = renderToStaticMarkup(<ConversationToolResultTabs event={event}><div>unexpected deferred body</div></ConversationToolResultTabs>);
+    host.innerHTML = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationToolResultTabs event={event}><div>unexpected deferred body</div></ConversationToolResultTabs></I18nProvider>);
     expect(toolResultMode(event)).toBe("direct");
     expect(host.textContent).toContain("Speech HD");
     expect(host.textContent).toContain("test/speech");
@@ -42,11 +42,11 @@ describe("model parameters card", () => {
     expect(markup).not.toContain('role="tab"');
   });
   it("keeps empty and invalid responses explicit", () => {
-    expect(renderToStaticMarkup(<ConversationModelParameters event={{ ...event, output: { model_output: { models: [] } } }} />)).toContain("当前没有可用模型");
-    expect(renderToStaticMarkup(<ConversationModelParameters event={{ ...event, output: { model_output: { models: [{}] } } }} />)).toContain("模型参数返回格式无效");
+    expect(renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationModelParameters event={{ ...event, output: { model_output: { models: [] } } }} /></I18nProvider>)).toContain("当前没有可用模型");
+    expect(renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationModelParameters event={{ ...event, output: { model_output: { models: [{}] } } }} /></I18nProvider>)).toContain("模型参数返回格式无效");
   });
   it("preserves an exact tool failure instead of displaying an empty result", () => {
-    const markup = renderToStaticMarkup(<ConversationModelParameters event={{ ...event, status: "failed", output: { model_output: "Model disabled", host_result: { kind: "tool_error", payload: { error: "Model disabled" } } } }} />);
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationModelParameters event={{ ...event, status: "failed", output: { model_output: "Model disabled", host_result: { kind: "tool_error", payload: { error: "Model disabled" } } } }} /></I18nProvider>);
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("Model disabled");
   });

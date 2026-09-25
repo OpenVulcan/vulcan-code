@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StartupDownloadProgress } from "./startup-download-progress";
 import { LoadingScreen } from "./startup-screen";
-import { BootErrorScreen, BootLoadingScreen } from "@/app/BootStartupScreen";
+import { BootErrorScreen, BootLoadingScreen } from "@/app/boot-startup-screen";
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("./startup-logo-mark", () => ({ StartupLogoMark: () => null }));
 describe("startup controls", () => {

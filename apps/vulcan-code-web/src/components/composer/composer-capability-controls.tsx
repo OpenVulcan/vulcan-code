@@ -80,6 +80,7 @@ import type {
   PublicAiSettingsSnapshot,
   SessionProviderUsageSummary,
 } from "@/types";
+import { errorMessage } from "@/lib/display-format";
 
 // ContextUsageOrb renders a compact context budget indicator beside the composer.
 // ContextUsageOrb 在输入区旁渲染紧凑的上下文预算指示器。
@@ -254,7 +255,7 @@ export function ContextUsageOrb(props: {
         <div className="context-usage-window-section">
           <div className="context-usage-window-title">
             {t("composer.contextWindow.title")}
-            <span>{selectedNode ? (locale === "zh-CN" ? "本会话已锁定" : "Locked for this session") : (locale === "zh-CN" ? "跟随模型" : "Follows the model")}</span>
+            <span>{selectedNode ? t("composer.capabilities.lockedForThisSession") : t("composer.capabilities.followsTheModel")}</span>
           </div>
           <SegmentedControl
             aria-label={t("composer.contextWindow.title")}
@@ -1858,11 +1859,6 @@ function providerToolCapabilityLabel(
   return key ? t(key) : capability;
 }
 
-// errorMessage converts a rejected value into a visible diagnostic.
-// errorMessage 将被拒绝的值转换为可见诊断。
-function errorMessage(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason);
-}
 
 // ComposerSelectControl renders one WebUI-aligned compact composer selector.
 // ComposerSelectControl 渲染一个对齐 WebUI 的紧凑输入区选择器。

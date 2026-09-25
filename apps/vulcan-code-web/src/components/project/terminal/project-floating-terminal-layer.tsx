@@ -16,7 +16,8 @@ import {
 import { TerminalViewport } from "@/components/terminal/terminal-viewport";
 import { Button } from "@/components/ui/button";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { useI18n, type TranslationKey } from "@/i18n";
+import { formatBytes } from "@/lib/display-format";
+import { useI18n, type TranslationKey, formatMessage, translateActive } from "@/i18n";
 import { acquireVisibleTerminalDisplayListener } from "@/components/terminal/terminal-display-listener";
 import { useTerminalDisplayConnectionState } from "@/components/terminal/use-terminal-display-connection-epoch";
 import {
@@ -1070,7 +1071,7 @@ function ProjectTerminalPane(props: {
         if (firstPendingSeq !== undefined && firstPendingSeq !== acknowledgedSeq + 1) {
           inputStopped.current = true;
           props.onError(
-            `终端输入恢复失败：宿主已确认序号 ${acknowledgedSeq}，本地首个未确认序号为 ${firstPendingSeq}。`,
+            formatMessage(translateActive("project.terminal.inputRecoveryFailed"), { acknowledgedSeq, firstPendingSeq }),
           );
           return;
         }
@@ -1169,7 +1170,7 @@ function ProjectTerminalPane(props: {
       );
       if (acknowledgedSeq !== expectedAcknowledgement) {
         throw new Error(
-          `项目终端输入确认不连续：预期 ${expectedAcknowledgement}，实际 ${acknowledgedSeq}。`,
+          formatMessage(translateActive("project.terminal.ackGap"), { expected: expectedAcknowledgement, actual: acknowledgedSeq }),
         );
       }
       while (inputBuffer.current.pending[0]?.seq <= acknowledgedSeq) {
@@ -1178,7 +1179,7 @@ function ProjectTerminalPane(props: {
       }
     } catch (inputError) {
       inputStopped.current = true;
-      props.onError(`终端输入已暂停：${terminalErrorMessage(inputError)}`);
+      props.onError(formatMessage(translateActive("project.terminal.inputPaused"), { reason: terminalErrorMessage(inputError) }));
     } finally {
       inputBuffer.current.sending = false;
       if (inputBuffer.current.batchSettled === settledPromise) {
@@ -1202,7 +1203,7 @@ function ProjectTerminalPane(props: {
     // 预检完整 xterm 事件，确保容量或序号失败绝不会排队部分粘贴内容。
     if (inputBuffer.current.pendingBytes + inputBytes > PROJECT_TERMINAL_PENDING_INPUT_MAX_BYTES) {
       inputStopped.current = true;
-      props.onError("终端输入已暂停：未确认输入超过 4 MiB 有界队列，请重新打开终端确认状态。");
+      props.onError(formatMessage(translateActive("project.terminal.inputQueueFull"), { limit: formatBytes(PROJECT_TERMINAL_PENDING_INPUT_MAX_BYTES) }));
       return;
     }
     const firstSequence = inputBuffer.current.nextClientSeq;
@@ -1210,7 +1211,7 @@ function ProjectTerminalPane(props: {
     if (!Number.isSafeInteger(firstSequence) || firstSequence <= 0
       || !Number.isSafeInteger(lastSequence)) {
       inputStopped.current = true;
-      props.onError("终端输入已暂停：浏览器输入序号超出安全范围。");
+      props.onError(translateActive("project.terminal.sequenceOverflow"));
       return;
     }
     for (const fragment of fragments) {
@@ -1376,7 +1377,7 @@ export function mergeVisibleTerminalChunks(
     appended.unshift({
       seq: droppedBeforeSeq,
       stream: "stderr",
-      text: "\r\n\x1b[33m[较早的终端输出已超出 8 MiB 显示检查点，当前从最新保留位置继续。]\x1b[0m\r\n",
+      text: `\r\n\x1b[33m${translateActive("project.terminal.outputTruncated")}\x1b[0m\r\n`,
     });
   }
   if (appended.length === 0) return current;

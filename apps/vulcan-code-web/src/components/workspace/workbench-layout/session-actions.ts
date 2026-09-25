@@ -201,11 +201,11 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
     try {
       const response = await setSessionOutputStyle(activeConversationId, styleId);
       if (!response) {
-        toast.info("当前预览运行时不支持保存会话输出风格。");
+        toast.info(t("workspace.lifecycle.outputStyleUnsupported"));
         return false;
       }
       setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
-      toast.info("已保存输出风格。为避免打破上下文，风格切换只会在新会话或上下文压缩后的会话更新。");
+      toast.info(t("workspace.lifecycle.outputStyleSaved"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));

@@ -188,12 +188,12 @@
 }
 
 .diff-plain-rendered-window pre[data-diff] [data-separator-wrapper][data-separator-multi-button] [data-expand-up] {
-  border-top-left-radius: 6px;
+  border-top-left-radius: var(--vcn-radius-sm);
   border-bottom: 1px solid var(--diffs-bg);
 }
 
 .diff-plain-rendered-window pre[data-diff] [data-separator-wrapper][data-separator-multi-button] [data-expand-down] {
-  border-bottom-left-radius: 6px;
+  border-bottom-left-radius: var(--vcn-radius-sm);
   border-top: 1px solid var(--diffs-bg);
 }
 
@@ -213,8 +213,8 @@
 .diff-plain-rendered-window pre[data-diff] [data-expand-both],
 .diff-plain-rendered-window pre[data-diff] [data-expand-up],
 .diff-plain-rendered-window pre[data-diff] [data-expand-down] {
-  border-top-left-radius: 6px;
-  border-bottom-left-radius: 6px;
+  border-top-left-radius: var(--vcn-radius-sm);
+  border-bottom-left-radius: var(--vcn-radius-sm);
 }
 
 .diff-plain-rendered-window pre[data-diff] [data-expand-button]:hover {
@@ -242,8 +242,8 @@
 }
 
 .diff-plain-rendered-window pre[data-diff] [data-separator="line-info"] [data-separator-content] {
-  border-top-right-radius: 6px;
-  border-bottom-right-radius: 6px;
+  border-top-right-radius: var(--vcn-radius-sm);
+  border-bottom-right-radius: var(--vcn-radius-sm);
 }
 
 .diff-plain-rendered-window pre[data-diff] [data-separator="line-info"][data-expand-index] [data-separator-content] {

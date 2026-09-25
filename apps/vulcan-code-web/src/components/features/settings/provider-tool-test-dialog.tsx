@@ -27,6 +27,7 @@ import type {
   PublicAiProviderToolTargetSnapshot,
   PublicAiProviderToolTestResult,
 } from "@/types";
+import { errorMessage } from "@/lib/display-format";
 
 // ProviderToolTestDialogProps defines one exact settings-row diagnostic dialog.
 // ProviderToolTestDialogProps 定义一个精确设置行诊断对话框。
@@ -936,10 +937,4 @@ function splitNonEmptyLines(value: string): string[] {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-// errorMessage converts one rejected value into a visible controlled diagnostic.
-// errorMessage 将一个拒绝值转换为可见受控诊断。
-function errorMessage(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason);
 }

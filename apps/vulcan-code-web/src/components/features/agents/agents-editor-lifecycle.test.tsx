@@ -3,12 +3,16 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { AgentsArea } from "./AgentsArea";
+import { AgentsArea } from "./agents-area";
 import type { AgentActionProps } from "./agent-area-types";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key);
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) };
+});
 
 // The component mount and action stubs own no real service or user definition files.
 // 组件挂载与动作桩不持有真实服务或用户定义文件。

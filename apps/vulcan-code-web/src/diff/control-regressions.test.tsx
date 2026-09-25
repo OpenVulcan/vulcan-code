@@ -11,7 +11,11 @@ import { DiffFileCard } from "./diff-file-card";
 import { parseUnifiedDiff } from "./parseDiff";
 import type { DiffRenderPreferences } from "./types";
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 vi.mock("./diff-highlight", () => ({ diffLanguageForFile: () => null, useHighlightLanguage: () => false, useHighlightedDiffFileRevision: () => 0, useHighlightedDiffWindowRevision: () => 0 }));
 vi.mock("./diff-render-worker-client", async () => {
@@ -46,8 +50,8 @@ it("announces clipboard rejection and permits a later retry through the actual m
   await render(<DiffPanelToolbar snapshot={snapshot} selection={{ mode: "unstaged" }} viewMode="split" renderPreferences={preferences} onViewModeChange={vi.fn()} onRenderPreferencesChange={vi.fn()} onCopyRaw={copy} />);
   // Open the real Radix menu with its pointer event contract.
   // 按真实 Radix 指针事件契约打开菜单。
-  const openMenu = async () => act(async () => document.querySelector<HTMLButtonElement>('[title="diff.moreActions"]')!.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
-  const copyItem = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent === "diff.copyRaw")!;
+  const openMenu = async () => act(async () => document.querySelector<HTMLButtonElement>('[title="More diff actions"]')!.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
+  const copyItem = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent === "Copy raw diff")!;
   await openMenu();
   expect(copyItem()).toBeTruthy();
   await act(async () => copyItem().click());
@@ -60,24 +64,24 @@ it("announces clipboard rejection and permits a later retry through the actual m
 it("restores search focus on Escape and does not route button Enter to the next match", async () => {
   const next = vi.fn();
   await render(<DiffPanelToolbar snapshot={snapshot} selection={{ mode: "unstaged" }} viewMode="split" renderPreferences={preferences} onViewModeChange={vi.fn()} onRenderPreferencesChange={vi.fn()} onSearchQueryChange={vi.fn()} onSearchSubmit={next} onSearchPrevious={vi.fn()} canSearchPrevious canSearchNext />);
-  const trigger = document.querySelector<HTMLButtonElement>('[aria-label="diff.search.open"]')!;
+  const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Open diff search"]')!;
   await act(async () => trigger.click());
-  const previous = document.querySelector<HTMLButtonElement>('[title="diff.search.previous"]')!;
+  const previous = document.querySelector<HTMLButtonElement>('[title="Previous result"]')!;
   await act(async () => previous.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
   expect(next).not.toHaveBeenCalled();
-  const input = document.querySelector<HTMLInputElement>('[aria-label="diff.search.label"]')!;
+  const input = document.querySelector<HTMLInputElement>('[aria-label="Search diff"]')!;
   await act(async () => { input.focus(); input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })); });
   expect(next).toHaveBeenCalledOnce();
   await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })));
   expect(document.activeElement).toBe(trigger);
-  expect(document.querySelector('[aria-label="diff.search.label"]')).toBeNull();
+  expect(document.querySelector('[aria-label="Search diff"]')).toBeNull();
 });
 
 it("locks floating Git actions until rejection and then permits retry", async () => {
   let reject!: (error: Error) => void;
   const action = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
   await render(<DiffReviewFloatingGitActions mode="unstaged" selectedFile={snapshot.files[0]} busy={false} onAction={action} />);
-  const stage = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "diffAction.stageAll")!;
+  const stage = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Stage all")!;
   await act(async () => { stage.click(); stage.click(); });
   expect(action).toHaveBeenCalledTimes(1);
   expect(stage.disabled).toBe(true);

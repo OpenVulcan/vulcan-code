@@ -26,16 +26,14 @@ import {
 } from "@/components/conversation/conversation-runtime";
 import type {
   ConversationBlock,
-  ConversationPlanArtifact,
 } from "@/components/conversation/conversation-model";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import { cn } from "@/lib/utils";
-import { useI18n } from "@/i18n";
+import { useI18n, type Translate } from "@/i18n";
 import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
 import { projectForConversation } from "@/state/workbench-selectors";
 import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
 import { toast } from "sonner";
-import type { ComposerAttachmentSummary, ComposerSlashCommandSummary } from "@/types";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
 import {
@@ -386,8 +384,8 @@ export function ChatArea(props: ChatAreaProps) {
   // streamingReasoningBlock is derived only from the latest canonical V1 streaming reasoning event.
   // streamingReasoningBlock 仅从最新 canonical V1 流式思考事件派生。
   const streamingReasoningBlock = React.useMemo(
-    () => latestStreamingReasoningBlock(authoritativeEvents),
-    [authoritativeEvents],
+    () => latestStreamingReasoningBlock(authoritativeEvents, t),
+    [authoritativeEvents, t],
   );
   // displayedStreamingReasoningBlock drives the popup modes without reading legacy transcript rows.
   // displayedStreamingReasoningBlock 在不读取旧转录行的情况下驱动浮层模式。
@@ -753,6 +751,7 @@ function eventWindowHasVisibleTranscript(events: readonly ConversationEventSumma
  *          一条仅用于展示的块；没有活动思考流时返回 null。 */
 function latestStreamingReasoningBlock(
   events: readonly ConversationEventSummary[],
+  t: Translate,
 ): ConversationBlock | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     // summary is inspected in reverse only to select the latest fact; no display order is changed.
@@ -764,8 +763,8 @@ function latestStreamingReasoningBlock(
     return {
       id: `v1-reasoning:${summary.seq}:${summary.event_revision}`,
       kind: "thinking",
-      title: "思考过程",
-      summary: "正在思考",
+      title: t("conversation.block.thinking"),
+      summary: t("conversation.block.thinkingActive"),
       body: summary.event.text,
       status: summary.event.status,
     };

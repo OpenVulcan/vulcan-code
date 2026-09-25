@@ -1,6 +1,6 @@
 import type { StartupSnapshot } from "@/types";
 import { activeStartupStep, startupProgressPercent } from "./startup-progress";
-import { BootErrorScreen } from "@/app/BootStartupScreen";
+import { BootErrorScreen } from "@/app/boot-startup-screen";
 import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
 import { StartupDownloadProgress } from "@/components/shell/startup-download-progress";
 import { useI18n } from "@/i18n";

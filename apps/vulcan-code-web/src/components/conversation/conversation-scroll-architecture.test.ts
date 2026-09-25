@@ -87,7 +87,7 @@ describe("conversation scroll architecture", () => {
   it("retains independent semantic and expansion memory for every subagent tab", () => {
     // contextPanel owns child-tab memory above the active content component that unmounts during tab switches.
     // contextPanel 在活动内容组件之上拥有子页签记忆，活动内容会在页签切换时卸载。
-    const contextPanel = readConversationSource("../workspace/WorkspaceContextPanel.tsx");
+    const contextPanel = readConversationSource("../workspace/workspace-context-panel.tsx");
 
     expect(contextPanel).toContain("subagentScrollSnapshots");
     expect(contextPanel).toContain("subagentExpandedStates");

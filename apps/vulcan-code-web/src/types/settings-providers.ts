@@ -1,5 +1,4 @@
 import type { MainAreaId } from "./startup";
-import type { ComposerAttachmentSummary } from "./composer-skills";
 import type { PublicAiNativeToolKind, PublicAiResourceKind } from "./public-ai";
 
 export interface FeatureAreaSummary {

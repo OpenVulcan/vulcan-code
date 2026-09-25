@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { translateActive } from "@/i18n";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VceJobSummary } from "@/types";
@@ -140,7 +141,7 @@ describe("VCE workbench observer composition", () => {
     expect(views.floating.job?.sequence).toBe(2); expect(rpc.cancel).not.toHaveBeenCalled();
     expect(retiredAction()).toBe(false); expect(actions.floating()).toBe(true);
     expect(rpc.load).toHaveBeenCalledTimes(2); expect(rpc.subscribe).toHaveBeenCalledTimes(1);
-    expect(() => views.floating.receive(receipt("project-b"))).toThrow("身份不匹配");
+    expect(() => views.floating.receive(receipt("project-b"))).toThrow(translateActive("codeContext.observer.receiptMismatch"));
   });
 
   // A handler captured from the old displayed job cannot cancel the next job in the same project.

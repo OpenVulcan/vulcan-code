@@ -13,7 +13,7 @@ export function ComposerGoalDetails({ goal }: { goal: SessionGoalSummary }) {
   const usage = goal.tokensUsed;
   // budgetText belongs exclusively to the hover card, never the compact objective strip.
   // budgetText 仅属于悬浮卡，不再占用紧凑目标条。
-  const budgetText = goal.usageKnown === false ? (locale === "zh-CN" ? "用量未知" : "Usage unknown") : goal.tokenBudget != null
+  const budgetText = goal.usageKnown === false ? t("composer.goal.usageUnknown") : goal.tokenBudget != null
     ? `${formatTokenCount(usage)} / ${formatTokenCount(goal.tokenBudget)}`
     : formatTokenCount(usage);
   // formatCount keeps request and tool counters exact; token counters use the shared compact token format.

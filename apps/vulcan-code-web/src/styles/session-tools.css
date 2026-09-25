@@ -145,7 +145,7 @@
 .conversation-session-todolist-header-actions strong {
   flex: 0 0 auto;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
 }
 
@@ -211,7 +211,7 @@
   gap: 24px;
   padding: 0 3px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   line-height: 1.2;
   user-select: none;
@@ -226,13 +226,13 @@
   display: inline-flex;
   align-items: center;
   gap: 24px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
 .conversation-session-tool-section-title strong {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
@@ -281,10 +281,10 @@
   margin-left: -3px;
   padding: 2px 6px 2px 3px;
   border: 0;
-  border-radius: var(--vcn-radius-sm, 6px);
+  border-radius: var(--vcn-radius-sm);
   color: var(--muted-foreground);
   background: transparent;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   line-height: 1.2;
   cursor: pointer;
@@ -330,7 +330,7 @@
   gap: 8px;
   padding: 7px 8px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
 }
 
 .conversation-session-review-manager-check {
@@ -361,12 +361,12 @@
 
 .conversation-session-review-manager-check strong {
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .conversation-session-review-manager-check small {
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--vcn-font-size-2xs);
 }
 
 .conversation-session-review-manager-order {
@@ -394,7 +394,7 @@
   min-height: 24px;
   padding: 2px 6px 2px 3px;
   border: 0;
-  border-radius: var(--vcn-radius-sm, 6px);
+  border-radius: var(--vcn-radius-sm);
   background: transparent;
   font-family: inherit;
   text-align: left;
@@ -445,7 +445,7 @@
 }
 
 .conversation-session-review-title-status .conversation-session-review-delta {
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
 }
 
@@ -468,7 +468,7 @@
   height: 14px;
   border-radius: 50%;
   color: var(--destructive);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 700;
 }
 
@@ -481,7 +481,7 @@
   width: 100%;
   height: 22px;
   cursor: default;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
 }
 
@@ -505,7 +505,7 @@
 
 .conversation-session-review-row strong {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   white-space: nowrap;
 }
 
@@ -549,7 +549,7 @@
   height: 26px;
   min-height: 26px;
   cursor: default;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
 }
 
@@ -578,14 +578,14 @@
 .conversation-session-terminal-summary strong {
   flex: 0 0 auto;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
 .conversation-session-terminal-summary .conversation-session-terminal-name {
   flex: 0 1 auto;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 500;
 }
 
@@ -593,7 +593,7 @@
   flex: 1 2 auto;
   color: var(--muted-foreground);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .conversation-session-terminal-action {
@@ -646,7 +646,7 @@
   margin: 0;
   color: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -664,10 +664,10 @@
   padding: 0;
   overflow: hidden;
   border: 0;
-  background: #111318;
-  color: #f4f4f5;
+  background: var(--vcn-terminal-surface);
+  color: var(--vcn-terminal-foreground);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
   white-space: pre;
 }
@@ -680,7 +680,7 @@
 
 .terminal-stop-confirm-body span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -690,11 +690,11 @@
 .terminal-stop-confirm-body code {
   background: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   color: var(--foreground);
   display: block;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.5;
   max-height: 120px;
   overflow: auto;
@@ -706,7 +706,7 @@
 .conversation-session-todolist-explanation {
   margin: 2px 3px 1px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -720,7 +720,7 @@
   height: auto;
   min-height: 22px;
   padding: 2px 9px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.2;
   cursor: default;
   font-weight: 400;
@@ -766,7 +766,7 @@
   min-height: 0;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   padding: 14px;
   overflow: auto;
 }
@@ -797,7 +797,7 @@
   height: 24px;
   min-height: 24px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
 }
 
@@ -820,7 +820,7 @@
 .conversation-session-subagent-state {
   color: var(--muted-foreground);
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 600;
 }
 

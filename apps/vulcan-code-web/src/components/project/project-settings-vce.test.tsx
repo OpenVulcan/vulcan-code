@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { readLocaleMessage } from "@/i18n";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VceJobSummary, VceProjectOverviewResponse, WorkbenchSnapshot } from "@/types";
 import { ProjectSettingsDialog } from "./project-settings-dialog";
@@ -9,7 +10,7 @@ import { VceJobObserverProvider } from "@/components/features/code-context/vce-j
 import { createVceActivityFixture } from "@/components/features/code-context/vce-activity-test-fixture";
 import {
   VCE_PROJECT_OVERVIEW_READ_DEADLINE_MS,
-  VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE,
+  VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE_KEY,
 } from "@/components/features/code-context/vce-observer-timeouts";
 
 // Mock transport and unrelated settings sections; retain the real dialog, semantic editor and observers.
@@ -32,7 +33,11 @@ vi.mock("./project-settings-sections", () => ({
   ProjectOverviewSection: () => null, ProjectVmmSection: () => null,
 }));
 vi.mock("./project-knowledge-bases-section", () => ({ ProjectKnowledgeBasesSection: () => null }));
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key);
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) };
+});
 vi.mock("sonner", () => ({ toast: { success: rpc.toastSuccess, error: rpc.toastError } }));
 
 // host owns the isolated React root; Radix mounts the actual dialog in document.body.
@@ -194,7 +199,7 @@ describe("project settings semantic integration", () => {
         await vi.advanceTimersByTimeAsync(VCE_PROJECT_OVERVIEW_READ_DEADLINE_MS);
       });
       expect(overviewSignal?.aborted).toBe(true);
-      expect(document.querySelector('[role="dialog"]')?.textContent).toContain(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE);
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain(readLocaleMessage("zh-CN", VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE_KEY));
       expect(rpc.submit).not.toHaveBeenCalled();
 
       await renderDialog(null);
@@ -205,7 +210,7 @@ describe("project settings semantic integration", () => {
         await vi.advanceTimersByTimeAsync(0);
       });
       expect(rpc.overview).toHaveBeenCalledTimes(2);
-      expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE);
+      expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain(readLocaleMessage("zh-CN", VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE_KEY));
       expect(rpc.submit).not.toHaveBeenCalled();
     } finally {
       await renderDialog(null);

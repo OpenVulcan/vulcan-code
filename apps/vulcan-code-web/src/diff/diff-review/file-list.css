@@ -58,7 +58,7 @@
   border-block: 1px solid var(--border);
   background: color-mix(in oklab, var(--muted) 58%, var(--background));
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .diff-snapshot-policy-note {
@@ -202,19 +202,19 @@
 
 .diff-file-paths strong {
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .diff-file-paths span {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .diff-file-status-dot {
   width: 6px;
   height: 6px;
   flex: 0 0 auto;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
 }
 
 .diff-file-status-dot.added {
@@ -236,7 +236,7 @@
   width: min(100%, 760px);
   padding: 7px 9px;
   border: 1px solid color-mix(in oklab, #d29922 42%, var(--border));
-  border-radius: 5px;
+  border-radius: var(--vcn-radius-sm);
   background: color-mix(in oklab, #f2cc60 12%, var(--background));
   text-align: left;
 }
@@ -251,7 +251,7 @@
 
 .diff-file-search-placeholder strong {
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
@@ -264,7 +264,7 @@
 .diff-file-search-placeholder code {
   color: var(--muted-foreground);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 17px;
 }
 
@@ -274,7 +274,7 @@
   gap: 0;
   min-width: 0;
   padding: 0;
-  border-radius: 0 0 7px 7px;
+  border-radius: 0 0 var(--vcn-radius-md) var(--vcn-radius-md);
 }
 
 .diff-hunk {
@@ -300,7 +300,7 @@
   background: color-mix(in oklab, var(--muted) 65%, var(--background));
   color: var(--muted-foreground);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 17px;
   white-space: pre;
 }
@@ -322,11 +322,11 @@
   flex: 0 0 auto;
   height: 20px;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 4px;
+  border-radius: var(--vcn-radius-xs);
   background: color-mix(in oklab, var(--background) 78%, var(--muted));
   color: var(--muted-foreground);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 18px;
   padding: 0 6px;
 }

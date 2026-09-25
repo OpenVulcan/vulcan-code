@@ -41,6 +41,7 @@ import type {
   PublicAiOperation,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import { errorMessage } from "@/lib/display-format"
 
 // VmmInferenceSettingsProps exposes required-foundation readiness to the first-run workflow.
 // VmmInferenceSettingsProps 向首次配置流程暴露必需基础能力就绪状态。
@@ -1014,10 +1015,4 @@ function candidateSupportsVmmStructuredOutput(
 ): boolean {
   return candidate.capabilities.structured_output === "json_object"
     || candidate.capabilities.structured_output === "json_schema"
-}
-
-// errorMessage converts one rejected value into a visible diagnostic.
-// errorMessage 将一个被拒绝的值转换为可见诊断。
-function errorMessage(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
 }

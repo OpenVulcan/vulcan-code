@@ -11,6 +11,7 @@ import { runVmmMemoryAction } from "@/service/memory-actions-service"
 import type { VmmMemoryActionResult, VmmMemorySnapshot, VmmNativeProjectCatalogSummary, VmmNativeSessionListPage, VmmNativeSessionListQuery } from "@/types"
 import { nativeProjectOwnerId, VmmNativeMemoryRecords } from "./vmm-native-memory-records"
 import { NativeSessionStatus, VmmNativeSessionArchive } from "./vmm-native-session-archive"
+import { formatDateTime } from "@/lib/display-format"
 
 // BrowserProps retains the native management transport and current host-project context.
 // BrowserProps 保留原生管理传输及当前宿主项目上下文。
@@ -161,7 +162,7 @@ export function VmmNativeSessionBrowser(props: BrowserProps) {
 // Loads one summary page at a time, clears hidden selections and delegates mutations to preview/confirm.
 // 每次加载一页摘要，清除不可见选择，并将修改委托给预览确认流程。
 function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = checkNativeSessionUpdates, onOpen, onScopeChange, selection, revision }: BrowserProps & { revision: number; onOpen: (selection: RecordSelection) => void; onScopeChange: () => void; selection: RecordSelection | null }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [catalog, setCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
   const [query, setQuery] = React.useState<VmmNativeSessionListQuery | null>(null)
   const [page, setPage] = React.useState<VmmNativeSessionListPage | null>(null)
@@ -366,7 +367,7 @@ function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = check
                 })}
               </div>
               <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                {session.lastActivityAtUnixMs != null ? <p>{t("memory.nativeRecords.lastActivity")} {new Date(session.lastActivityAtUnixMs).toLocaleString()}</p> : null}
+                {session.lastActivityAtUnixMs != null ? <p>{t("memory.nativeRecords.lastActivity")} {formatDateTime(session.lastActivityAtUnixMs, locale)}</p> : null}
                 <details><summary className="cursor-pointer">{t("memory.workspace.recordInfo")}</summary><p className="break-all font-mono">{session.sessionSourceId}</p></details>
               </div>
             </div>

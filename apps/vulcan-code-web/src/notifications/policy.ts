@@ -7,7 +7,7 @@ import type {
   ShellNotificationCapability,
   ShellNotificationPermission,
   ShellNotificationPresentationState,
-} from "@/shell";
+} from "@/host-shell";
 
 // LocalNotificationPolicyDecision describes a pure endpoint policy result.
 // LocalNotificationPolicyDecision 描述纯本地端点策略结果。

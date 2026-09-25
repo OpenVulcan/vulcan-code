@@ -1,6 +1,6 @@
 import { Icon as IconifyIcon, addCollection } from "@iconify/react";
 import { FileWarning } from "lucide-react";
-import { workspaceFileTreeExtensionLabel } from "@/components/workspace/WorkspaceFileTreeDrawer";
+import { workspaceFileTreeExtensionLabel } from "@/components/workspace/workspace-file-tree-drawer";
 import { FILE_ICON_COLLECTION } from "@/generated/file-icon-collection";
 
 addCollection(FILE_ICON_COLLECTION);

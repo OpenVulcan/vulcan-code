@@ -1,4 +1,5 @@
 import type { AgentSkillCategorySaveRequest, AgentSkillSaveRequest, AgentSkillsCatalogSummary } from "@/types"
+import { formatMessage, type Translate } from "@/i18n"
 
 // agentSkillsCatalogSummary builds the plain-language catalog sentence shown by Agent Skills surfaces.
 // It leads with how many skills are usable and mentions user, plugin and error counts only when they are non-zero.
@@ -6,23 +7,21 @@ import type { AgentSkillCategorySaveRequest, AgentSkillSaveRequest, AgentSkillsC
 // 先说明可用技能数，仅在非零时提及你添加的、插件提供的和读取失败的数量。
 export function agentSkillsCatalogSummary(
   catalog: AgentSkillsCatalogSummary,
-  locale: string,
+  t: Translate,
 ): string {
-  const zh = locale.startsWith("zh")
   const userCount = catalog.records.filter((record) => record.scopeKey === "user").length
   const pluginCount = catalog.records.filter((record) => record.scopeKey === "plugin").length
   const effectiveCount = catalog.records.filter((record) => record.effective).length
   const issueCount = catalog.errors.length
   const parts: string[] = []
-  if (userCount > 0) parts.push(zh ? `${userCount} 个是你添加的` : `${userCount} added by you`)
-  if (pluginCount > 0) parts.push(zh ? `${pluginCount} 个来自插件` : `${pluginCount} from plugins`)
-  let sentence = zh
-    ? `${effectiveCount} 个技能可用${parts.length ? `，其中 ${parts.join("、")}` : ""}`
-    : `${effectiveCount} ${effectiveCount === 1 ? "skill" : "skills"} available${parts.length ? ` (${parts.join(", ")})` : ""}`
+  if (userCount > 0) parts.push(formatMessage(t("agentSkills.addedByYou"), { userCount }))
+  if (pluginCount > 0) parts.push(formatMessage(t("agentSkills.fromPlugins"), { pluginCount }))
+  let sentence = formatMessage(t(effectiveCount === 1 ? "agentSkills.summary.availableOne" : "agentSkills.summary.available"), { count: effectiveCount })
+  if (parts.length) sentence += formatMessage(t("agentSkills.summary.parts"), { parts: parts.join(t("agentSkills.summary.partSeparator")) })
   if (issueCount > 0) {
-    sentence += zh ? `；${issueCount} 个技能目录读取失败` : `; ${issueCount} ${issueCount === 1 ? "folder" : "folders"} could not be read`
+    sentence += formatMessage(t(issueCount === 1 ? "agentSkills.summary.unreadableOne" : "agentSkills.summary.unreadable"), { count: issueCount })
   }
-  return zh ? `${sentence}。` : `${sentence}.`
+  return formatMessage(t("agentSkills.summary.sentence"), { sentence })
 }
 
 // AgentSkillActionProps defines the independent Agent Skills management boundary.

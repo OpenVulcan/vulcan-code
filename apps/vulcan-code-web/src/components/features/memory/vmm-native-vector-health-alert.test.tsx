@@ -9,7 +9,7 @@ import { I18nProvider } from "@/i18n"
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench"
 import type { VmmMemoryActionRequest } from "@/types"
 
-import { MemoryArea } from "./MemoryArea"
+import { MemoryArea } from "./memory-area"
 import { maintenanceReply } from "./vmm-native-maintenance.test-fixture"
 import { VmmNativeVectorHealthAlert } from "./vmm-native-vector-health-alert"
 

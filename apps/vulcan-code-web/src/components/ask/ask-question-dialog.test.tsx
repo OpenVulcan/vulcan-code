@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type { PendingQuestionSnapshot } from "@/types";
-import { AskQuestionDialog } from "./AskQuestionDialog";
+import { AskQuestionDialog } from "./ask-question-dialog";
 
 // host and root isolate the actual question surface and its focus lifecycle.
 // host 和 root 隔离真实问题面板及其焦点生命周期。

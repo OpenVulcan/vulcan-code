@@ -29,8 +29,8 @@ describe("collectStaticImportFiles", () => {
   it("includes both eager locale catalogs and excludes dynamic imports", () => {
     const manifest = {
       "index.html": { file: "assets/index.js" },
-      "src/app/WorkbenchApp.tsx": {
-        file: "assets/WorkbenchApp.js",
+      "src/app/workbench-app.tsx": {
+        file: "assets/workbench-app.js",
         imports: ["index.html", "_zh.js", "_en.js"],
         dynamicImports: ["src/optional.tsx"],
       },
@@ -38,11 +38,11 @@ describe("collectStaticImportFiles", () => {
       "_en.js": { file: "assets/i18n-messages.en-US.js" },
       "src/optional.tsx": { file: "assets/optional.js" },
     }
-    assert.deepEqual(collectStaticImportFiles(manifest, ["index.html", "src/app/WorkbenchApp.tsx"]), [
-      "assets/WorkbenchApp.js",
+    assert.deepEqual(collectStaticImportFiles(manifest, ["index.html", "src/app/workbench-app.tsx"]), [
       "assets/i18n-messages.en-US.js",
       "assets/i18n-messages.zh-CN.js",
       "assets/index.js",
+      "assets/workbench-app.js",
     ])
   })
 

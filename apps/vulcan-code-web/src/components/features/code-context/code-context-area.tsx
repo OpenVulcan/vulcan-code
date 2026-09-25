@@ -62,7 +62,7 @@ import { useVceActionScope } from "./use-vce-action-scope";
 import { VceJobProgress, vceActiveJobStatusLabel, vceSynchronizationControl } from "./vce-job-progress";
 import {
   VCE_PROJECT_OVERVIEW_READ_DEADLINE_MS,
-  VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE,
+  VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE_KEY,
 } from "./vce-observer-timeouts";
 
 // loadAuthoritativeVceOverview reads and validates the current host-owned project snapshot.
@@ -153,9 +153,9 @@ export function CodeContextArea(props: {
   // 导航到宿主持有的全局模型设置；无参数及修改结果。
   onOpenEngineSettings: () => void;
 }) {
-  // locale selects local bilingual copy without exposing VCE implementation names to users.
-  // locale 选择本地双语文案，且不向用户暴露 VCE 实现名称。
-  const { locale, t } = useI18n();
+  // t selects local bilingual copy without exposing VCE implementation names to users.
+  // t 选择本地双语文案，且不向用户暴露 VCE 实现名称。
+  const { t } = useI18n();
   // indexing follows this project's independent durable job, not the conversation state.
   // indexing 跟随本项目独立持久作业，而非会话状态。
   const indexing = useVceProjectJob(props.projectId);
@@ -165,26 +165,17 @@ export function CodeContextArea(props: {
     props.overview?.status.lifecycle === "indexing";
   // activeJobStatusLabel uses the exact acknowledged operation kind whenever its receipt is available.
   // activeJobStatusLabel 在已取得回执时使用已确认的精确操作类型。
-  const activeJobStatusLabel = vceActiveJobStatusLabel(
-    indexing.job,
-    locale === "zh-CN",
-  );
+  const activeJobStatusLabel = vceActiveJobStatusLabel(indexing.job, t);
   // Use the acknowledged project job to offer at most one subsequent manual synchronization.
   // 使用已确认项目作业提供至多一次后续手动同步。
   const synchronization = activeJobStatusLabel !== null
-    ? vceSynchronizationControl(indexing.job, locale === "zh-CN")
+    ? vceSynchronizationControl(indexing.job, t)
     : projectReportsActiveJob
     ? {
         disabled: true,
-        label: locale === "zh-CN" ? "索引任务进行中" : "Index job in progress",
+        label: t("codeContext.area.indexJobInProgress"),
       }
-    : vceSynchronizationControl(indexing.job, locale === "zh-CN");
-  // zh returns Chinese copy for the active Chinese locale and English otherwise.
-  // zh 为当前中文语言返回中文文案，否则返回英文文案。
-  const copy = React.useCallback(
-    (zh: string, en: string) => (locale === "zh-CN" ? zh : en),
-    [locale],
-  );
+    : vceSynchronizationControl(indexing.job, t);
   // replacementInProgressActivityError identifies the expected read race while a durable replacement owns the project.
   // replacementInProgressActivityError 识别持久替换作业持有项目期间预期的读取竞争。
   const replacementInProgressActivityError =
@@ -380,17 +371,14 @@ export function CodeContextArea(props: {
       }
       if (controller.signal.aborted) {
         if (timedOut && managementRequestVersion.current === requestVersion) {
-          setManagementError(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE);
+          setManagementError(t(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE_KEY));
         }
         return;
       }
       if (managementRequestVersion.current !== requestVersion) return;
       if (!overview.readIdentity)
         throw new Error(
-          copy(
-            "索引尚无可读取的已发布版本。",
-            "No published index is available for management reads.",
-          ),
+          t("codeContext.area.noPublishedIndexIs"),
         );
       const [filePage, operationPage, issuePage] = await Promise.all([
         listVceFiles(
@@ -420,7 +408,7 @@ export function CodeContextArea(props: {
     } catch (error) {
       if (controller.signal.aborted) {
         if (timedOut && managementRequestVersion.current === requestVersion) {
-          setManagementError(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE);
+          setManagementError(t(VCE_PROJECT_OVERVIEW_READ_TIMEOUT_MESSAGE_KEY));
         }
       } else if (managementRequestVersion.current === requestVersion) {
         setManagementError(
@@ -440,7 +428,6 @@ export function CodeContextArea(props: {
       }
     }
   }, [
-    copy,
     isCurrentAction,
     managementExpanded,
     props.overview?.configuration.ready,
@@ -487,7 +474,7 @@ export function CodeContextArea(props: {
       try {
         if (!managementOverview?.readIdentity)
           throw new Error(
-            copy("请先刷新索引详情。", "Refresh index details first."),
+            t("codeContext.area.refreshIndexDetailsFirst"),
           );
         const response = await loader(
           request.cursor,
@@ -508,7 +495,7 @@ export function CodeContextArea(props: {
         }
       }
     },
-    [copy, managementOverview],
+    [managementOverview],
   );
 
   // inspectBlob loads only the selected immutable Blob identity.
@@ -527,7 +514,7 @@ export function CodeContextArea(props: {
     try {
       if (!managementOverview?.readIdentity)
         throw new Error(
-          copy("请先刷新索引详情。", "Refresh index details first."),
+          t("codeContext.area.refreshIndexDetailsFirst"),
         );
       const nextBlob = await loadVceBlobDetail(
         projectId,
@@ -569,10 +556,7 @@ export function CodeContextArea(props: {
     // 活跃持久作业在进入终态前持有项目写入路径。
     if (indexing.active) {
       setManagementError(
-        copy(
-          "当前索引任务仍在运行，请先取消或等待它结束。",
-          "The current index job is still active. Cancel it or wait for it to finish first.",
-        ),
+        t("codeContext.area.theCurrentIndexJob"),
       );
       return;
     }
@@ -584,10 +568,7 @@ export function CodeContextArea(props: {
       props.overview?.status.checkpointVersion == null
     ) {
       setManagementError(
-        copy(
-          "该项目尚无已发布检查点，只能生成重建计划。",
-          "This project has no published checkpoint; only a rebuild plan is available.",
-        ),
+        t("codeContext.area.thisProjectHasNo"),
       );
       return;
     }
@@ -712,19 +693,13 @@ export function CodeContextArea(props: {
     }
     if (!overview || !maintenancePlan || maintenancePlan.actions.length === 0) {
       setManagementError(
-        copy(
-          "当前计划没有可执行操作。",
-          "The current plan has no executable actions.",
-        ),
+        t("codeContext.area.theCurrentPlanHas"),
       );
       return;
     }
     if (indexing.active) {
       setManagementError(
-        copy(
-          "当前索引任务仍在运行，请先取消或等待它结束。",
-          "The current index job is still active. Cancel it or wait for it to finish first.",
-        ),
+        t("codeContext.area.theCurrentIndexJob"),
       );
       return;
     }
@@ -763,19 +738,13 @@ export function CodeContextArea(props: {
     if (!planStillCurrent) {
       setMaintenancePlan(null);
       setManagementError(
-        copy(
-          "维护计划已失效，请重新生成计划后再确认。",
-          "The maintenance plan is stale. Generate a new plan before confirming it.",
-        ),
+        t("codeContext.area.theMaintenancePlanIs"),
       );
       return;
     }
     if (plannedCheckpoint === null && maintenancePlan.mode !== "rebuild") {
       setManagementError(
-        copy(
-          "维护操作要求一个已发布检查点。",
-          "Maintenance requires a published checkpoint.",
-        ),
+        t("codeContext.area.maintenanceRequiresAPublished"),
       );
       return;
     }
@@ -894,7 +863,7 @@ export function CodeContextArea(props: {
               {props.activityError}
             </p>
             <Button type="button" variant="outline" disabled={props.busy} onClick={() => void refreshStatus()}>
-              {copy("重新读取状态", "Reload status")}
+              {t("codeContext.area.reloadStatus")}
             </Button>
           </>
         ) : null}
@@ -904,7 +873,6 @@ export function CodeContextArea(props: {
         {indexing.job ? (
           <VceJobProgress
             presentation="settings"
-            chinese={locale === "zh-CN"}
             job={indexing.job}
             onCancel={() => void indexing.cancel()}
             cancelPending={indexing.cancelPending}
@@ -919,7 +887,7 @@ export function CodeContextArea(props: {
             {t("projectSettings.codeContext.generating")}
           </p>
         ) : (
-          <StreamPlaceholder className="w-full" label={copy("正在加载代码语义索引…", "Loading code semantic index…")} shape="fields" count={3} />
+          <StreamPlaceholder className="w-full" label={t("codeContext.area.loadingCodeSemanticIndex")} shape="fields" count={3} />
         )}
       </div>
     );
@@ -946,36 +914,33 @@ export function CodeContextArea(props: {
   // lifecycleLabels translates the declared host states without deriving health from counters.
   // lifecycleLabels 翻译宿主已声明状态，不根据计数推断健康程度。
   const lifecycleLabels: Record<VceProjectOverviewResponse["status"]["lifecycle"], string> = {
-    uninitialized: copy("尚未创建", "Not created"),
-    disabled: copy("未启用", "Disabled"),
-    starting: copy("启动中", "Starting"),
-    restoring: copy("恢复中", "Restoring"),
-    indexing: copy("更新中", "Indexing"),
-    ready: copy("可用", "Ready"),
-    degraded_optional_ai: copy("部分功能受限", "Limited features"),
-    blocked_configuration: copy("等待模型配置", "Models required"),
-    rebuild_required: copy("需要重建", "Rebuild required"),
-    failed: copy("异常", "Failed"),
-    stopping: copy("停止中", "Stopping"),
+    uninitialized: t("codeContext.area.notCreated"),
+    disabled: t("codeContext.area.disabled"),
+    starting: t("codeContext.area.starting"),
+    restoring: t("codeContext.area.restoring"),
+    indexing: t("codeContext.area.indexing"),
+    ready: t("codeContext.area.ready"),
+    degraded_optional_ai: t("codeContext.area.limitedFeatures"),
+    blocked_configuration: t("codeContext.area.modelsRequired"),
+    rebuild_required: t("codeContext.area.rebuildRequired"),
+    failed: t("codeContext.area.failed"),
+    stopping: t("codeContext.area.stopping"),
   };
   return (
     <div className="project-settings-section vce-project-settings">
       <header className="project-settings-heading project-settings-heading-with-action vce-settings-heading">
         <Database size={18} />
         <div>
-          <strong>{copy("代码语义索引", "Code semantic index")}</strong>
+          <strong>{t("codeContext.area.codeSemanticIndex")}</strong>
           <span>
-            {copy(
-              "为 AI 提供当前项目的自然语言代码检索。",
-              "Provides natural-language code retrieval for AI in this project.",
-            )}
+            {t("codeContext.area.providesNaturalLanguageCode")}
           </span>
         </div>
         <div className="project-settings-heading-actions">
           <label className="vce-settings-enabled">
-            <span>{draft.enabled ? copy("已启用", "Enabled") : copy("未启用", "Disabled")}</span>
+            <span>{draft.enabled ? t("codeContext.area.enabled") : t("codeContext.area.disabled")}</span>
             <Switch
-              aria-label={copy("启用代码语义索引", "Enable code semantic index")}
+              aria-label={t("codeContext.area.enableCodeSemanticIndex")}
               checked={draft.enabled}
               disabled={props.busy}
               onCheckedChange={(enabled) => {
@@ -986,7 +951,7 @@ export function CodeContextArea(props: {
             />
           </label>
           <Button
-            aria-label={copy("刷新状态", "Refresh status")}
+            aria-label={t("codeContext.area.refreshStatus")}
             disabled={props.busy}
             onClick={() => void refreshStatus()}
             size="icon-sm"
@@ -1012,10 +977,7 @@ export function CodeContextArea(props: {
           className="rounded-lg border border-amber-500/30 p-3 text-sm"
         >
           <p>
-            {copy(
-              "项目设置已在其他位置更新。您的未保存修改已保留；请重新载入设置后再保存，避免覆盖新设置。",
-              "Project settings changed elsewhere. Unsaved edits are preserved; reload before saving to avoid overwriting newer settings.",
-            )}
+            {t("codeContext.area.projectSettingsChangedElsewhere")}
           </p>
           <Button
             type="button"
@@ -1028,10 +990,7 @@ export function CodeContextArea(props: {
               setDraftConflict(false);
             }}
           >
-            {copy(
-              "放弃修改并载入当前设置",
-              "Discard edits and load current settings",
-            )}
+            {t("codeContext.area.discardEditsAndLoad")}
           </Button>
         </div>
       ) : null}
@@ -1039,10 +998,7 @@ export function CodeContextArea(props: {
       {!props.overview.configuration.ready ? (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
           <p>
-            {copy(
-              "引擎模型尚未就绪。您可以保存项目设置，但创建、更新索引和 AI 检索保持关闭。",
-              "Engine models are not ready. Project settings can be saved, but indexing and AI retrieval remain disabled.",
-            )}
+            {t("codeContext.area.engineModelsAreNot")}
           </p>
           <Button
             type="button"
@@ -1050,15 +1006,12 @@ export function CodeContextArea(props: {
             size="sm"
             onClick={props.onOpenEngineSettings}
           >
-            {copy("配置语义引擎模型", "Configure engine models")}
+            {t("codeContext.area.configureEngineModels")}
           </Button>
           {draft.enabled ? (
             <div className="mt-3 space-y-2 border-t pt-3">
               <p className="text-xs text-muted-foreground">
-                {copy(
-                  "已有索引的物理整理不调用模型。可读取已存索引并生成整理计划；若尚无已发布索引，计划请求会明确拒绝。",
-                  "Physical compaction of an existing index does not call a model. You can inspect the stored index and generate a compaction plan; the request is rejected explicitly when no published index exists.",
-                )}
+                {t("codeContext.area.physicalCompactionOfAn")}
               </p>
               <Button
                 disabled={managementBusy || indexing.active}
@@ -1067,16 +1020,12 @@ export function CodeContextArea(props: {
                 type="button"
                 variant="outline"
               >
-                {copy(
-                  "检查并整理物理索引",
-                  "Inspect and compact physical index",
-                )}
+                {t("codeContext.area.inspectAndCompactPhysical")}
               </Button>
               {maintenancePlan?.mode === "compact" ? (
                 <MaintenancePlanPreview
                   active={indexing.active}
                   busy={managementBusy}
-                  copy={copy}
                   error={managementError}
                   onExecute={(confirmation) =>
                     void executeMaintenance(confirmation)
@@ -1095,7 +1044,6 @@ export function CodeContextArea(props: {
         <VceJobProgress
           presentation="settings"
           job={indexing.job}
-          chinese={locale === "zh-CN"}
           onCancel={() => void indexing.cancel()}
           cancelPending={indexing.cancelPending}
           onRetry={
@@ -1108,37 +1056,37 @@ export function CodeContextArea(props: {
               : undefined
           }
         />
-      ) : indexingStatusVisible ? <StreamPlaceholder className="vce-job-rehydrating" label={copy("正在读取索引任务进度…", "Loading index task progress…")} count={2} /> : null}
+      ) : indexingStatusVisible ? <StreamPlaceholder className="vce-job-rehydrating" label={t("codeContext.area.loadingIndexTaskProgress")} count={2} /> : null}
       {indexing.error ? (
         <p role="alert" className="text-sm text-destructive">
-          {copy("索引状态暂不可用：", "Index status unavailable: ")}
+          {t("codeContext.area.indexStatusUnavailable")}
           {indexing.error}
         </p>
       ) : null}
 
-      <div className="vce-index-statistics" aria-label={copy("索引概况", "Index overview")}>
+      <div className="vce-index-statistics" aria-label={t("codeContext.area.indexOverview")}>
         <div data-lifecycle={status.lifecycle}>
-          <strong>{copy("索引状态", "Index status")}</strong>
-          <p>{indexingStatusVisible ? activeJobStatusLabel ?? copy("更新中", "Indexing") : lifecycleLabels[status.lifecycle]}</p>
+          <strong>{t("codeContext.area.indexStatus")}</strong>
+          <p>{indexingStatusVisible ? activeJobStatusLabel ?? t("codeContext.area.indexing") : lifecycleLabels[status.lifecycle]}</p>
         </div>
         <div>
-          <strong>{copy("检查点", "Checkpoint")}</strong>
+          <strong>{t("codeContext.area.checkpoint")}</strong>
           <p>{status.checkpointVersion ?? "—"}</p>
         </div>
         <div>
-          <strong>{copy("文件数", "Files")}</strong>
+          <strong>{t("codeContext.area.files")}</strong>
           <p>{counts?.searchableFiles ?? status.presentFiles}</p>
         </div>
         <div>
-          <strong>{copy("代码块", "Chunks")}</strong>
+          <strong>{t("codeContext.area.chunks")}</strong>
           <p>{counts?.chunks ?? "—"}</p>
         </div>
         <div>
-          <strong>{copy("向量", "Vectors")}</strong>
+          <strong>{t("codeContext.area.vectors")}</strong>
           <p>{counts?.vectors ?? "—"}</p>
         </div>
         <div>
-          <strong>{copy("精确符号", "Exact symbols")}</strong>
+          <strong>{t("codeContext.area.exactSymbols")}</strong>
           <p>{counts?.symbols ?? "—"}</p>
         </div>
       </div>
@@ -1149,19 +1097,13 @@ export function CodeContextArea(props: {
             <div>
               <strong>
                 {status.checkpointVersion == null
-                  ? copy("创建项目索引", "Create project index")
-                  : copy("更新项目索引", "Update project index")}
+                  ? t("codeContext.area.createProjectIndex")
+                  : t("codeContext.area.updateProjectIndex")}
               </strong>
               <p className="mt-1 text-sm text-muted-foreground">
                 {status.checkpointVersion == null
-                  ? copy(
-                      "只有点击创建，才会扫描此项目并调用向量模型。",
-                      "Files are scanned and embedded only after you choose to create this project's index.",
-                    )
-                  : copy(
-                      "手动同步立即受理，不受自动更新间隔限制。",
-                      "Manual synchronization bypasses the automatic update interval.",
-                    )}
+                  ? t("codeContext.area.filesAreScannedAnd")
+                  : t("codeContext.area.manualSynchronizationBypassesThe")}
               </p>
             </div>
             <Button
@@ -1178,7 +1120,7 @@ export function CodeContextArea(props: {
             >
               <Database size={15} />
               {status.checkpointVersion == null
-                ? copy("创建语义索引", "Create semantic index")
+                ? t("codeContext.area.createSemanticIndex")
                 : synchronization.label}
             </Button>
           </div> : null}
@@ -1192,23 +1134,14 @@ export function CodeContextArea(props: {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <strong>
-                    {copy("索引需要重建", "The index needs to be rebuilt")}
+                    {t("codeContext.area.theIndexNeedsTo")}
                   </strong>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {status.checkpointVersion == null
                       ? indexing.active
-                        ? copy(
-                            "上次索引创建没有发布可用结果。请先取消遗留任务，再生成并确认一份重建计划。",
-                            "The previous index creation did not publish a usable result. Cancel the stale job, then generate and confirm a rebuild plan.",
-                          )
-                        : copy(
-                            "上次索引创建没有发布可用结果。现在可以生成并确认重建计划，使用当前模型设置重新创建索引。",
-                            "The previous index creation did not publish a usable result. You can now generate and confirm a rebuild plan to recreate the index with the current model settings.",
-                          )
-                      : copy(
-                          "当前索引需要按新的模型契约重建。请生成并确认一份重建计划；当前运行中的任务必须先取消或等待结束。",
-                          "The current index must be rebuilt for the new model contract. Generate and confirm a rebuild plan; an active job must be cancelled or allowed to finish first.",
-                        )}
+                        ? t("codeContext.area.thePreviousIndexCreation")
+                        : t("codeContext.area.thePreviousIndexCreation2")
+                      : t("codeContext.area.theCurrentIndexMust")}
                   </p>
                 </div>
                 <Button
@@ -1225,15 +1158,14 @@ export function CodeContextArea(props: {
                 >
                   <RefreshCw size={15} />
                   {maintenancePlan?.mode === "rebuild"
-                    ? copy("重新生成重建计划", "Regenerate rebuild plan")
-                    : copy("生成重建计划", "Generate rebuild plan")}
+                    ? t("codeContext.area.regenerateRebuildPlan")
+                    : t("codeContext.area.generateRebuildPlan")}
                 </Button>
               </div>
               {maintenancePlan?.mode === "rebuild" ? (
                 <MaintenancePlanPreview
                   active={indexing.active}
                   busy={managementBusy}
-                  copy={copy}
                   error={managementError}
                   onExecute={(confirmation) =>
                     void executeMaintenance(confirmation)
@@ -1248,15 +1180,15 @@ export function CodeContextArea(props: {
           <details className="vce-settings-disclosure">
             <summary>
               <RefreshCw size={16} aria-hidden="true" />
-              <span><strong>{copy("更新策略", "Update policy")}</strong>
-                <small>{draft.updateMode === "manual" ? copy("手动更新，由您决定何时同步", "Manual updates, on your schedule") : copy("自动跟随项目文件变化", "Follow project file changes automatically")}</small>
+              <span><strong>{t("codeContext.area.updatePolicy")}</strong>
+                <small>{draft.updateMode === "manual" ? t("codeContext.area.manualUpdatesOnYour") : t("codeContext.area.followProjectFileChanges")}</small>
               </span>
               <ChevronDown size={16} aria-hidden="true" />
             </summary>
             <div className="vce-settings-disclosure-body">
               <fieldset className="space-y-2" disabled={props.busy}>
                 <legend className="text-sm font-medium">
-                  {copy("索引更新模式", "Index update mode")}
+                  {t("codeContext.area.indexUpdateMode")}
                 </legend>
                 <div className="flex flex-wrap gap-4 text-sm">
                   {(["manual", "automatic"] as const).map((mode) => (
@@ -1272,23 +1204,17 @@ export function CodeContextArea(props: {
                         }}
                       />
                       {mode === "manual"
-                        ? copy("手动更新", "Manual updates")
-                        : copy("自动更新", "Automatic updates")}
+                        ? t("codeContext.area.manualUpdates")
+                        : t("codeContext.area.automaticUpdates")}
                     </label>
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {copy(
-                    "此设置属于项目，所有会话共享。自动更新仅在首次初始化成功后跟随文件变化。",
-                    "This project setting is shared across conversations. Automatic file-change updates start only after initialization succeeds.",
-                  )}
+                  {t("codeContext.area.thisProjectSettingIs")}
                 </p>
               </fieldset>
               <label className="flex flex-wrap items-center gap-3 text-sm">
-                {copy(
-                  "自动更新最低间隔（秒）",
-                  "Minimum automatic interval (seconds)",
-                )}
+                {t("codeContext.area.minimumAutomaticIntervalSeconds")}
                 <Input
                   className="w-28"
                   type="number"
@@ -1315,7 +1241,7 @@ export function CodeContextArea(props: {
                   }
                   onClick={() => void saveDraft(draft)}
                 >
-                  {copy("保存间隔", "Save interval")}
+                  {t("codeContext.area.saveInterval")}
                 </Button>
               </label>
             </div>
@@ -1332,31 +1258,25 @@ export function CodeContextArea(props: {
       <details className="vce-settings-disclosure vce-advanced-settings">
         <summary>
           <SlidersHorizontal size={16} aria-hidden="true" />
-          <span><strong>{copy("检索与过滤设置", "Retrieval and file filters")}</strong>
-            <small>{copy("忽略规则、结果数量与高级设置", "Ignore rules, result limits and advanced settings")}</small>
+          <span><strong>{t("codeContext.area.retrievalAndFileFilters")}</strong>
+            <small>{t("codeContext.area.ignoreRulesResultLimits")}</small>
           </span>
           <ChevronDown size={16} aria-hidden="true" />
         </summary>
         <div className="vce-settings-disclosure-body">
           <details className="rounded-lg border p-3 text-sm">
             <summary className="cursor-pointer font-medium">
-              {copy("默认过滤规则", "Default filter rules")} ({props.overview.settings.defaultIgnorePatterns.length})
+              {t("codeContext.area.defaultFilterRules")} ({props.overview.settings.defaultIgnorePatterns.length})
             </summary>
             <p className="mt-2 text-xs text-muted-foreground">
-              {copy(
-                "这些规则始终生效；TOML 未列入默认排除规则。可在下方继续添加项目规则。",
-                "These rules always apply. TOML is not excluded by default. Add project rules below.",
-              )}
+              {t("codeContext.area.theseRulesAlwaysApply")}
             </p>
             <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 text-xs">
               {props.overview.settings.defaultIgnorePatterns.join("\n")}
             </pre>
           </details>
           <label className="grid gap-1 text-sm">
-            {copy(
-              "自定义忽略规则（每行一条）",
-              "Custom ignore rules (one per line)",
-            )}
+            {t("codeContext.area.customIgnoreRulesOne")}
             <Textarea
               disabled={props.busy}
               onChange={(event) =>
@@ -1371,25 +1291,25 @@ export function CodeContextArea(props: {
           <div className="grid grid-cols-2 gap-3">
             <NumericSetting
               disabled={props.busy}
-              label={copy("最大文件字节数", "Maximum file bytes")}
+              label={t("codeContext.area.maximumFileBytes")}
               value={draft.maxFileBytes}
               onChange={(value) => setDraft({ ...draft, maxFileBytes: value })}
             />
             <NumericSetting
               disabled={props.busy}
-              label={copy("最大结果数", "Maximum results")}
+              label={t("codeContext.area.maximumResults")}
               value={draft.maxResults}
               onChange={(value) => setDraft({ ...draft, maxResults: value })}
             />
             <NumericSetting
               disabled={props.busy}
-              label={copy("上下文字符预算", "Context character budget")}
+              label={t("codeContext.area.contextCharacterBudget")}
               value={draft.maxContextChars}
               onChange={(value) => setDraft({ ...draft, maxContextChars: value })}
             />
             <NumericSetting
               disabled={props.busy}
-              label={copy("向量并发", "Embedding concurrency")}
+              label={t("codeContext.area.embeddingConcurrency")}
               value={draft.embeddingMaxConcurrency}
               onChange={(value) =>
                 setDraft({ ...draft, embeddingMaxConcurrency: value })
@@ -1397,7 +1317,7 @@ export function CodeContextArea(props: {
             />
             <NumericSetting
               disabled={props.busy}
-              label={copy("查询并发", "Query concurrency")}
+              label={t("codeContext.area.queryConcurrency")}
               value={draft.queryMaxConcurrency}
               onChange={(value) =>
                 setDraft({ ...draft, queryMaxConcurrency: value })
@@ -1407,13 +1327,13 @@ export function CodeContextArea(props: {
           <ToggleSetting
             checked={draft.allowQueryRewrite}
             disabled={props.busy}
-            label={copy("允许 LLM 查询改写", "Allow LLM query rewriting")}
+            label={t("codeContext.area.allowLlmQueryRewriting")}
             onChange={(value) => setDraft({ ...draft, allowQueryRewrite: value })}
           />
           <ToggleSetting
             checked={draft.allowRerank}
             disabled={props.busy}
-            label={copy("允许候选重排", "Allow candidate reranking")}
+            label={t("codeContext.area.allowCandidateReranking")}
             onChange={(value) => setDraft({ ...draft, allowRerank: value })}
           />
           <Button
@@ -1421,7 +1341,7 @@ export function CodeContextArea(props: {
             onClick={() => void saveDraft(draft)}
             type="button"
           >
-            <Save size={15} /> {copy("保存设置", "Save settings")}
+            <Save size={15} /> {t("codeContext.area.saveSettings")}
           </Button>
         </div>
       </details>
@@ -1435,8 +1355,8 @@ export function CodeContextArea(props: {
           onClick={() => setManagementExpanded(!managementExpanded)}
         >
           {managementExpanded
-            ? copy("收起索引详情", "Hide index details")
-            : copy("查看索引详情与统计", "View index details and statistics")}
+            ? t("codeContext.area.hideIndexDetails")
+            : t("codeContext.area.viewIndexDetailsAnd")}
         </Button>
       ) : null}
       {managementExpanded &&
@@ -1445,7 +1365,7 @@ export function CodeContextArea(props: {
         <>
           <section className="project-settings-panel space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <strong>{copy("文件与 Blob", "Files and Blobs")}</strong>
+              <strong>{t("codeContext.area.filesAndBlobs")}</strong>
               <Button
                 disabled={managementBusy}
                 onClick={() => void reloadManagement()}
@@ -1454,12 +1374,12 @@ export function CodeContextArea(props: {
                 variant="outline"
               >
                 <RefreshCw size={14} />
-                {copy("刷新", "Refresh")}
+                {t("codeContext.area.refresh")}
               </Button>
             </div>
             {filePage.items.length === 0 ? (
               <p className="project-settings-muted">
-                {copy("暂无已索引文件。", "No indexed files.")}
+                {t("codeContext.area.noIndexedFiles")}
               </p>
             ) : (
               filePage.items.map((file) => (
@@ -1476,14 +1396,13 @@ export function CodeContextArea(props: {
                     <span className="break-all">{file.path}</span>
                   </span>
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {file.chunkCount} {copy("块", "chunks")}
+                    {file.chunkCount} {t("codeContext.area.chunks2")}
                   </span>
                 </button>
               ))
             )}
             <ManagementPagination
               busy={managementBusy}
-              copy={copy}
               onNext={() =>
                 void loadManagementPage(
                   nextVceManagementPageRequest(filePage),
@@ -1517,7 +1436,7 @@ export function CodeContextArea(props: {
           {blob ? (
             <section className="project-settings-panel space-y-2">
               <strong>
-                {copy("Blob 详情", "Blob detail")}: {blob.path}
+                {t("codeContext.area.blobDetail")}: {blob.path}
               </strong>
               <p className="break-all text-xs text-muted-foreground">
                 {blob.blobName}
@@ -1532,10 +1451,10 @@ export function CodeContextArea(props: {
           ) : null}
 
           <section className="project-settings-panel space-y-2">
-            <strong>{copy("作业历史", "Operation history")}</strong>
+            <strong>{t("codeContext.area.operationHistory")}</strong>
             {operationPage.items.length === 0 ? (
               <p className="project-settings-muted">
-                {copy("暂无作业记录。", "No operation history.")}
+                {t("codeContext.area.noOperationHistory")}
               </p>
             ) : (
               operationPage.items.map((operation) => (
@@ -1557,7 +1476,7 @@ export function CodeContextArea(props: {
                       type="button"
                       variant="outline"
                     >
-                      {copy("重试", "Retry")}
+                      {t("codeContext.area.retry")}
                     </Button>
                   ) : operation.phase !== "completed" ? (
                     <Button
@@ -1569,7 +1488,7 @@ export function CodeContextArea(props: {
                       type="button"
                       variant="outline"
                     >
-                      {copy("取消", "Cancel")}
+                      {t("codeContext.area.cancel")}
                     </Button>
                   ) : null}
                 </div>
@@ -1577,7 +1496,6 @@ export function CodeContextArea(props: {
             )}
             <ManagementPagination
               busy={managementBusy}
-              copy={copy}
               onNext={() =>
                 void loadManagementPage(
                   nextVceManagementPageRequest(operationPage),
@@ -1607,13 +1525,13 @@ export function CodeContextArea(props: {
           </section>
 
           <section className="project-settings-panel space-y-2">
-            <strong>{copy("完整性与维护", "Integrity and maintenance")}</strong>
+            <strong>{t("codeContext.area.integrityAndMaintenance")}</strong>
             {issuePage.items.length === 0 ? (
               <p className="project-settings-muted">
                 <SearchCheck className="mr-2 inline" size={14} />
                 {managementOverview === null
-                  ? copy("尚未取得完整性检查结果。", "Integrity results have not been loaded.")
-                  : copy("未发现完整性问题。", "No integrity issues found.")}
+                  ? t("codeContext.area.integrityResultsHaveNot")
+                  : t("codeContext.area.noIntegrityIssuesFound")}
               </p>
             ) : (
               issuePage.items.map((issue) => (
@@ -1639,7 +1557,7 @@ export function CodeContextArea(props: {
                 type="button"
                 variant="outline"
               >
-                {copy("生成修复计划", "Plan repair")}
+                {t("codeContext.area.planRepair")}
               </Button>
               <Button
                 disabled={
@@ -1652,7 +1570,7 @@ export function CodeContextArea(props: {
                 type="button"
                 variant="outline"
               >
-                {copy("生成重建计划", "Plan rebuild")}
+                {t("codeContext.area.planRebuild")}
               </Button>
               <Button
                 disabled={
@@ -1665,7 +1583,7 @@ export function CodeContextArea(props: {
                 type="button"
                 variant="outline"
               >
-                {copy("生成暂存清理计划", "Plan staging cleanup")}
+                {t("codeContext.area.planStagingCleanup")}
               </Button>
               {props.overview.configuration.ready ? (
                 <Button
@@ -1675,10 +1593,7 @@ export function CodeContextArea(props: {
                   type="button"
                   variant="outline"
                 >
-                  {copy(
-                    "检查并整理物理索引",
-                    "Inspect and compact physical index",
-                  )}
+                  {t("codeContext.area.inspectAndCompactPhysical")}
                 </Button>
               ) : null}
             </div>
@@ -1689,7 +1604,6 @@ export function CodeContextArea(props: {
               <MaintenancePlanPreview
                 active={indexing.active}
                 busy={managementBusy}
-                copy={copy}
                 error={managementError}
                 onExecute={(confirmation) =>
                   void executeMaintenance(confirmation)
@@ -1701,7 +1615,6 @@ export function CodeContextArea(props: {
             ) : null}
             <ManagementPagination
               busy={managementBusy}
-              copy={copy}
               onNext={() =>
                 void loadManagementPage(
                   nextVceManagementPageRequest(issuePage),
@@ -1735,7 +1648,7 @@ export function CodeContextArea(props: {
       ) : null}
 
       {managementBusy ? (
-        <StreamPlaceholder label={copy("正在加载管理数据…", "Loading management data…")} shape="rows" count={3} />
+        <StreamPlaceholder label={t("codeContext.area.loadingManagementData")} shape="rows" count={3} />
       ) : null}
       {managementError ? (
         <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -1758,9 +1671,6 @@ function MaintenancePlanPreview(props: {
   // Current maintenance error remains visible inside the open confirmation dialog.
   // 当前维护错误保留在打开的确认弹窗内可见。
   error: string | null;
-  // Localized copy selector owned by the settings surface.
-  // 设置界面持有的本地化文案选择器。
-  copy: (zh: string, en: string) => string;
   // Executes only the currently rendered plan after human confirmation.
   // 仅在人为确认后执行当前渲染的计划。
   onExecute: (confirmation: VceMaintenanceConfirmation) => void;
@@ -1774,6 +1684,7 @@ function MaintenancePlanPreview(props: {
   // 用于冻结确认的精确设置修订。
   settingsRevision: number;
 }) {
+  const { t } = useI18n();
   // An uninitialized rebuild scans the project even when no existing Blob is affected.
   // 未初始化重建即使没有现有 Blob 受影响，也会扫描整个项目。
   const unpublishedRebuild =
@@ -1839,18 +1750,15 @@ function MaintenancePlanPreview(props: {
   // scopeLabel describes the real work for both existing-index and first-build recovery plans.
   // scopeLabel 为已有索引及首次恢复计划描述真实工作范围。
   const scopeLabel = physicalCompaction
-    ? `${props.plan.physicalTables.filter((table) => table.compactionRequired).length} / ${props.plan.physicalTables.length} ${props.copy("张表需要整理", "tables require compaction")}`
+    ? `${props.plan.physicalTables.filter((table) => table.compactionRequired).length} / ${props.plan.physicalTables.length} ${t("codeContext.area.tablesRequireCompaction")}`
     : unpublishedRebuild
-      ? props.copy(
-          "重新扫描当前项目并创建索引（当前没有已发布的索引）",
-          "Rescan the current project and create an index (no published index exists)",
-        )
-      : `${props.plan.affectedBlobCount} ${props.copy("个 Blob", "Blobs")}`;
+      ? t("codeContext.area.rescanTheCurrentProject")
+      : `${props.plan.affectedBlobCount} ${t("codeContext.area.blobs")}`;
   return (
     <div className="space-y-2 rounded-md border bg-background/60 p-3">
       <p className="text-sm">
-        {props.copy("计划动作", "Planned actions")}: {props.plan.actions.length}{" "}
-        · {props.copy("范围", "Scope")}: {scopeLabel}
+        {t("codeContext.area.plannedActions")}: {props.plan.actions.length}{" "}
+        · {t("codeContext.area.scope")}: {scopeLabel}
       </p>
       {physicalCompaction
         ? props.plan.physicalTables.map((table) => (
@@ -1860,21 +1768,21 @@ function MaintenancePlanPreview(props: {
             >
               <strong>
                 {table.role === "content"
-                  ? props.copy("内容向量表", "Content vector table")
-                  : props.copy("路径向量表", "Path vector table")}
+                  ? t("codeContext.area.contentVectorTable")
+                  : t("codeContext.area.pathVectorTable")}
               </strong>
               <span>
-                {props.copy("记录", "Rows")}: {table.rowCount.toLocaleString()}{" "}
-                · {props.copy("片段", "Fragments")}:{" "}
+                {t("codeContext.area.rows")}: {table.rowCount.toLocaleString()}{" "}
+                · {t("codeContext.area.fragments")}:{" "}
                 {table.fragmentCount.toLocaleString()} ·{" "}
-                {props.copy("小片段", "Small fragments")}:{" "}
+                {t("codeContext.area.smallFragments")}:{" "}
                 {table.smallFragmentCount.toLocaleString()}
               </span>
               <span>
                 {table.compactionRequired
-                  ? props.copy("建议整理", "Compaction recommended")
-                  : props.copy("无需整理", "No compaction needed")}{" "}
-                · {props.copy("版本", "Version")} {table.version}
+                  ? t("codeContext.area.compactionRecommended")
+                  : t("codeContext.area.noCompactionNeeded")}{" "}
+                · {t("codeContext.area.version")} {table.version}
               </span>
             </div>
           ))
@@ -1890,8 +1798,8 @@ function MaintenancePlanPreview(props: {
         type="button"
       >
         {physicalCompaction
-          ? props.copy("确认并整理", "Confirm and compact")
-          : props.copy("确认并执行", "Confirm and execute")}
+          ? t("codeContext.area.confirmAndCompact")
+          : t("codeContext.area.confirmAndExecute")}
       </Button>
       <AlertDialog
         open={confirmation !== null && confirmationIsCurrent}
@@ -1903,52 +1811,37 @@ function MaintenancePlanPreview(props: {
           <AlertDialogHeader>
             <AlertDialogTitle>
               {physicalCompaction
-                ? props.copy(
-                    "确认整理物理索引",
-                    "Confirm physical index compaction",
-                  )
+                ? t("codeContext.area.confirmPhysicalIndexCompaction")
                 : unpublishedRebuild
-                  ? props.copy(
-                      "确认重新创建语义索引",
-                      "Confirm semantic index creation",
-                    )
-                  : props.copy("确认执行索引维护", "Confirm index maintenance")}
+                  ? t("codeContext.area.confirmSemanticIndexCreation")
+                  : t("codeContext.area.confirmIndexMaintenance")}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {physicalCompaction
-                ? props.copy(
-                    "本次操作仅合并现有向量表的物理片段，不调用模型、不重新生成向量，也不改变语义检查点。取消将在当前数据库安全步骤结束后生效。",
-                    "This only compacts physical fragments in existing vector tables. It does not call a model, regenerate vectors, or change the semantic checkpoint. Cancellation takes effect after the current database-safe step.",
-                  )
+                ? t("codeContext.area.thisOnlyCompactsPhysical")
                 : unpublishedRebuild
-                  ? props.copy(
-                      "本次操作会重新扫描当前项目并创建索引。当前没有已发布的索引，计划将按生成计划时的模型配置执行。",
-                      "This will rescan the current project and create an index. No published index exists; the plan will use the model configuration from plan generation time.",
-                    )
-                  : props.copy(
-                      "请核对计划动作与影响范围。计划将按生成计划时的模型配置执行。",
-                      "Review the planned actions and scope. The plan will use the model configuration from plan generation time.",
-                    )}
+                  ? t("codeContext.area.thisWillRescanThe")
+                  : t("codeContext.area.reviewThePlannedActions")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <dl className="grid gap-3 rounded-md border p-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-muted-foreground">
-                {props.copy("计划动作", "Planned actions")}
+                {t("codeContext.area.plannedActions")}
               </dt>
               <dd>{props.plan.actions.length}</dd>
             </div>
             <div>
               <dt className="text-muted-foreground">
                 {physicalCompaction
-                  ? props.copy("现有向量维度", "Existing vector dimension")
-                  : props.copy("目标向量维度", "Target vector dimension")}
+                  ? t("codeContext.area.existingVectorDimension")
+                  : t("codeContext.area.targetVectorDimension")}
               </dt>
               <dd>{props.plan.embeddingDimension}</dd>
             </div>
             <div className="sm:col-span-2">
               <dt className="text-muted-foreground">
-                {props.copy("影响范围", "Scope")}
+                {t("codeContext.area.scope2")}
               </dt>
               <dd>{scopeLabel}</dd>
             </div>
@@ -1958,14 +1851,8 @@ function MaintenancePlanPreview(props: {
               ? props.plan.actions.map((action) => (
                   <p className="text-sm" key={action.actionId}>
                     {action.physicalTableRole === "content"
-                      ? props.copy(
-                          "整理内容向量表",
-                          "Compact the content vector table",
-                        )
-                      : props.copy(
-                          "整理路径向量表",
-                          "Compact the path vector table",
-                        )}
+                      ? t("codeContext.area.compactTheContentVector")
+                      : t("codeContext.area.compactThePathVector")}
                   </p>
                 ))
               : props.plan.actions.map((action) => (
@@ -1981,15 +1868,15 @@ function MaintenancePlanPreview(props: {
           ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={props.busy}>
-              {props.copy("取消", "Cancel")}
+              {t("codeContext.area.cancel")}
             </AlertDialogCancel>
             <AlertDialogAction
               disabled={props.busy || props.active || !confirmationIsCurrent}
               onClick={submitConfirmation}
             >
               {physicalCompaction
-                ? props.copy("确认并整理", "Confirm and compact")
-                : props.copy("确认并执行", "Confirm and execute")}
+                ? t("codeContext.area.confirmAndCompact")
+                : t("codeContext.area.confirmAndExecute")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -2016,9 +1903,6 @@ function ManagementPagination<T>(props: {
   // Whether another management request is active.
   // 是否有其他管理请求正在执行。
   busy: boolean;
-  // Localized copy selector owned by the parent surface.
-  // 父界面持有的本地化文案选择器。
-  copy: (zh: string, en: string) => string;
   // Loads the immediately following opaque page.
   // 加载紧邻的下一不透明分页。
   onNext: () => void;
@@ -2029,14 +1913,15 @@ function ManagementPagination<T>(props: {
   // 当前分页及游标历史。
   page: VceManagementPageState<T>;
 }) {
+  const { t } = useI18n();
   const pageNumber = props.page.previousCursors.length + 1;
   return (
     <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
       <span>
-        {props.copy("第", "Page")} {pageNumber}
+        {t("codeContext.area.page")} {pageNumber}
         {props.page.total === null
           ? ""
-          : ` · ${props.copy("共", "Total")} ${props.page.total}`}
+          : ` · ${t("codeContext.area.total")} ${props.page.total}`}
       </span>
       <Button
         disabled={props.busy || props.page.previousCursors.length === 0}
@@ -2045,7 +1930,7 @@ function ManagementPagination<T>(props: {
         type="button"
         variant="outline"
       >
-        {props.copy("上一页", "Previous")}
+        {t("codeContext.area.previous")}
       </Button>
       <Button
         disabled={props.busy || props.page.nextCursor === null}
@@ -2054,7 +1939,7 @@ function ManagementPagination<T>(props: {
         type="button"
         variant="outline"
       >
-        {props.copy("下一页", "Next")}
+        {t("codeContext.area.next")}
       </Button>
     </div>
   );

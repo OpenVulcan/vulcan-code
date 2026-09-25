@@ -6,7 +6,7 @@
 
 - [`question_runtime.rs`](../../crates/vulcan-agent-runtime/src/agent_runtime/question_runtime.rs)；
 - [`tooling/bridge.rs`](../../crates/vulcan-agent-runtime/src/tooling/bridge.rs)；
-- [`AskQuestionDialog.tsx`](../../apps/vulcan-code-web/src/components/ask/AskQuestionDialog.tsx)；
+- [`ask-question-dialog.tsx`](../../apps/vulcan-code-web/src/components/ask/ask-question-dialog.tsx)；
 - [`conversation-markdown.tsx`](../../apps/vulcan-code-web/src/components/conversation/conversation-markdown.tsx)；
 - [`markdown.css`](../../apps/vulcan-code-web/src/styles/markdown.css)。
 
@@ -29,7 +29,7 @@
 - `↑/↓`：非文本输入焦点下移动选项。
 - `Space`：答题阶段切换当前单选或多选项。
 
-键盘行为必须以当前 `AskQuestionDialog.tsx` 状态机为准。修改后同步更新本节，不能继续引用早期
+键盘行为必须以当前 `ask-question-dialog.tsx` 状态机为准。修改后同步更新本节，不能继续引用早期
 “Space 在确认页提交”等已经失效的交互。
 
 ## 三、文本题、选项题与确认

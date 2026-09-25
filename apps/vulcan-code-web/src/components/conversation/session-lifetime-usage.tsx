@@ -1,4 +1,4 @@
-import { useI18n } from "@/i18n";
+import { formatMessage, useI18n } from "@/i18n";
 import { formatDurationSeconds, formatTokenCount, formatTokenSpeed, tokenUnitLabel } from "@/lib/usage-format";
 import { ChevronDown } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -22,8 +22,7 @@ export function lifetimeTotal(value: UsageMeasurement, requests: number): string
 export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsageBucket }) {
   // Locale controls labels only; the backend owns every counter.
   // 语言仅控制文案；所有计数由后端持有。
-  const { locale } = useI18n();
-  const zh = locale === "zh-CN";
+  const { locale, t } = useI18n();
   const bucket = props.bucket;
   if (!bucket || (bucket.requestCount === 0 && bucket.toolCallCount === 0)) return null;
   // Averages use reporting samples and never treat missing timing as zero.
@@ -37,26 +36,26 @@ export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsag
   // Group counters separately from token measurements and timing to keep related facts adjacent.
   // 将调用次数、Token 测量和性能分别归类，让相关指标保持相邻。
   const callRows: Array<[string, string | null]> = [
-    [zh ? "请求" : "Requests", bucket.requestCount > 0 ? bucket.requestCount.toLocaleString() : null],
-    [zh ? "工具调用" : "Tool calls", bucket.toolCallCount > 0 ? bucket.toolCallCount.toLocaleString() : null],
+    [t("conversation.usage.requests"), bucket.requestCount > 0 ? bucket.requestCount.toLocaleString() : null],
+    [t("conversation.usage.toolCalls"), bucket.toolCallCount > 0 ? bucket.toolCallCount.toLocaleString() : null],
   ];
   // Token rows retain the original measurement and missing-value semantics.
   // Token 分组保留原有测量与缺失值语义。
   const tokenRows: Array<[string, string | null]> = [
-    [zh ? "输入" : "Input", tokenValue(bucket.inputTokens)],
-    [zh ? "输出" : "Output", tokenValue(bucket.outputTokens)],
-    [zh ? "未缓存输入" : "Uncached input", tokenValue(bucket.uncachedInputTokens)],
-    [zh ? "缓存读取" : "Cache read", tokenValue(bucket.cacheReadTokens)],
-    [zh ? "缓存写入" : "Cache write", tokenValue(bucket.cacheWriteTokens)],
-    [zh ? "推理" : "Reasoning", tokenValue(bucket.reasoningTokens)],
+    [t("conversation.usage.input"), tokenValue(bucket.inputTokens)],
+    [t("conversation.usage.output"), tokenValue(bucket.outputTokens)],
+    [t("conversation.usage.uncachedInput"), tokenValue(bucket.uncachedInputTokens)],
+    [t("conversation.usage.cacheRead"), tokenValue(bucket.cacheReadTokens)],
+    [t("conversation.usage.cacheWrite"), tokenValue(bucket.cacheWriteTokens)],
+    [t("conversation.usage.reasoning"), tokenValue(bucket.reasoningTokens)],
   ];
   // Timing rows keep latency, speed and request duration in one compact group.
   // 性能分组集中展示延迟、速度和请求耗时。
   const timingRows: Array<[string, string | null]> = [
-    [zh ? "平均首 Token" : "Average first token", first],
-    [zh ? "平均速度" : "Average speed", speed],
-    [zh ? "累计耗时" : "Total duration", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? formatDurationSeconds(bucket.requestDurationMs.sum) : null],
-    [zh ? "平均耗时" : "Average duration", bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? formatDurationSeconds(bucket.requestDurationMs.sum / bucket.requestDurationMs.samples) : null],
+    [t("conversation.usage.averageFirstToken"), first],
+    [t("conversation.usage.averageSpeed"), speed],
+    [t("conversation.usage.totalDuration"), bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? formatDurationSeconds(bucket.requestDurationMs.sum) : null],
+    [t("conversation.usage.averageDuration"), bucket.requestDurationMs.samples > 0 && bucket.requestDurationMs.sum > 0 ? formatDurationSeconds(bucket.requestDurationMs.sum / bucket.requestDurationMs.samples) : null],
   ];
   // The persistent heading preserves unknown and partially reported totals while collapsed.
   // 常驻标题在收起时仍保留未知和部分上报累计的明确标记。
@@ -70,10 +69,10 @@ export function LifetimeUsageBucket(props: { title: string; bucket?: SessionUsag
       </span>
     </summary>
     <div className="lifetime-usage-content">
-      <LifetimeMetricRows title={zh ? "调用" : "Calls"} rows={callRows} />
-      <LifetimeMetricRows title={zh ? "用量" : "Tokens"} rows={tokenRows} />
-      <LifetimeMetricRows title={zh ? "性能" : "Timing"} rows={timingRows} />
-      {bucket.unknownUsageCount > 0 ? <p className="lifetime-usage-note">{zh ? `${bucket.unknownUsageCount} 次请求未上报用量，累计值不完整` : `${bucket.unknownUsageCount} requests did not report usage; totals are incomplete`}</p> : null}
+      <LifetimeMetricRows title={t("conversation.usage.calls")} rows={callRows} />
+      <LifetimeMetricRows title={t("conversation.usage.tokens")} rows={tokenRows} />
+      <LifetimeMetricRows title={t("conversation.usage.timing")} rows={timingRows} />
+      {bucket.unknownUsageCount > 0 ? <p className="lifetime-usage-note">{formatMessage(t("conversation.usage.requestsDidNotReport"), { unknownUsageCount: bucket.unknownUsageCount })}</p> : null}
     </div>
   </details>;
 }
@@ -100,8 +99,7 @@ function LifetimeMetricRows(props: { title: string; rows: Array<[string, string 
  * Props contain the resident aggregate or its availability error; returns the summary page.
  * 属性包含常驻累计或不可用原因；返回统计页面。 */
 export function SessionLifetimeUsagePanel(props: { usage?: SessionLifetimeUsage | null; error?: string | null }) {
-  const { locale } = useI18n();
-  const zh = locale === "zh-CN";
+  const { t } = useI18n();
   if (!props.usage) return null;
   // Only actual usage opens a section; a reserved child with no requests is not a zero-filled report.
   // 仅实际用量开启分区；尚无请求的预留子代理不会形成全零报告。
@@ -111,9 +109,9 @@ export function SessionLifetimeUsagePanel(props: { usage?: SessionLifetimeUsage 
   const hasChildren = childCount > 0 && (usage.childrenTotal.requestCount > 0 || usage.childrenTotal.toolCallCount > 0);
   if (!hasMain && !hasChildren) return null;
   return <div className="session-lifetime-usage">
-    {hasMain ? <LifetimeUsageBucket title={zh ? "会话累计" : "Main session usage"} bucket={usage.main} /> : null}
-    {hasChildren ? <LifetimeUsageBucket title={zh ? `子代理累计 · ${childCount} 个` : `Subagent usage · ${childCount} agents`} bucket={usage.childrenTotal} /> : null}
-    {usage.legacyIncomplete ? <p className="lifetime-usage-note">{zh ? "部分历史用量缺失，累计值不完整。" : "Some history is unavailable; totals are incomplete."}</p> : null}
+    {hasMain ? <LifetimeUsageBucket title={t("conversation.usage.mainSessionUsage")} bucket={usage.main} /> : null}
+    {hasChildren ? <LifetimeUsageBucket title={formatMessage(t("conversation.usage.subagentUsageAgents"), { childCount })} bucket={usage.childrenTotal} /> : null}
+    {usage.legacyIncomplete ? <p className="lifetime-usage-note">{t("conversation.usage.someHistoryIsUnavailable")}</p> : null}
   </div>;
 }
 
@@ -122,8 +120,8 @@ export function SessionLifetimeUsagePanel(props: { usage?: SessionLifetimeUsage 
  * Props contain this child's bucket only; returns an accessible floating control.
  * 属性仅包含当前子会话统计桶；返回可访问的浮动控件。 */
 export function ChildLifetimeUsageChip(props: { bucket?: SessionUsageBucket }) {
-  const { locale } = useI18n();
-  const label = locale === "zh-CN" ? "子会话累计用量" : "Child lifetime usage";
+  const { t } = useI18n();
+  const label = t("conversation.usage.childLifetimeUsage");
   if (!props.bucket || (props.bucket.requestCount === 0 && props.bucket.toolCallCount === 0)) return null;
   return <div className="pointer-events-none absolute right-4 top-2 z-20">
     <TooltipProvider><Tooltip><TooltipTrigger asChild>
@@ -132,7 +130,7 @@ export function ChildLifetimeUsageChip(props: { bucket?: SessionUsageBucket }) {
       </button>
     </TooltipTrigger><TooltipContent side="bottom" align="end" className="context-usage-tooltip pointer-events-auto">
       <LifetimeUsageBucket title={label} bucket={props.bucket} />
-      <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "自创建起累计，仅供参考；不同模型合并计算。" : "Lifetime reference totals across models."}</p>
+      <p className="mt-2 text-xs text-muted-foreground">{t("conversation.usage.lifetimeReferenceTotalsAcross")}</p>
     </TooltipContent></Tooltip></TooltipProvider>
   </div>;
 }

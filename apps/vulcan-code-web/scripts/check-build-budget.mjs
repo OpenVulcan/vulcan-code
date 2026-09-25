@@ -102,7 +102,7 @@ export async function collectBuildMeasurements(distDirectory = join(webRoot, "di
   // manifest records the actual Vite static graph, including both eagerly imported locale chunks.
   // manifest 记录真实的 Vite 静态导入图，包括当前两份预加载语言分块。
   const manifest = JSON.parse(await readFile(join(distDirectory, ".vite", "manifest.json"), "utf8"))
-  const workbenchAsset = findSingleAsset(assetNames, "WorkbenchApp-", ".js")
+  const workbenchAsset = findSingleAsset(assetNames, "workbench-app-", ".js")
   const workbenchKeys = Object.keys(manifest).filter((key) => manifest[key].file === `assets/${workbenchAsset}`)
   if (workbenchKeys.length !== 1 || manifest["index.html"]?.file !== `assets/${bootMatch[1]}`) {
     throw new Error("Build manifest does not identify the exact boot and workbench entries.")
@@ -133,7 +133,7 @@ export async function collectBuildMeasurements(distDirectory = join(webRoot, "di
       gzip: initialSizes.reduce((total, size) => total + size.gzip, 0),
       assetCount: initialFiles.length,
     },
-    workbenchCss: await measureFile(join(assetsDirectory, findSingleAsset(assetNames, "WorkbenchApp-", ".css"))),
+    workbenchCss: await measureFile(join(assetsDirectory, findSingleAsset(assetNames, "workbench-app-", ".css"))),
     projectIconLucideCatalog: await measureFile(join(assetsDirectory, findSingleAsset(assetNames, "project-icon-catalog-lucide-", ".js"))),
     projectIconMaterialCatalog: await measureFile(join(assetsDirectory, findSingleAsset(assetNames, "project-icon-catalog-material-", ".js"))),
     projectIconSkillCatalog: await measureFile(join(assetsDirectory, findSingleAsset(assetNames, "project-icon-catalog-skill-", ".js"))),

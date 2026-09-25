@@ -1,4 +1,4 @@
-import { readElectronServiceConnection } from "@/shell/electronBridge";
+import { readElectronServiceConnection } from "@/host-shell/electron-bridge";
 import { notificationClientInstanceId } from "@/notifications/client-identity";
 
 // BrowserServiceDiscoverySnapshot describes the service endpoint advertised by /health or dev discovery.
@@ -39,6 +39,19 @@ interface BrowserServiceEndpoint {
   // serviceToken is the optional instance token advertised by the service.
   // serviceToken 是服务公布的可选实例令牌。
   serviceToken: string | null;
+}
+
+// BrowserServiceProbeResult separates a missing service from one that answered but refused this page.
+// BrowserServiceProbeResult 区分服务不存在与服务已响应但拒绝当前页面两种情况。
+type BrowserServiceProbeResult =
+  | { kind: "reachable"; endpoint: BrowserServiceEndpoint }
+  | { kind: "rejected"; baseUrl: string; status: number }
+  | { kind: "absent" };
+
+// browserServiceRejectedMessage describes a service that is running but refuses this page, which retrying cannot fix.
+// browserServiceRejectedMessage 描述服务正在运行但拒绝当前页面的情况，该情况无法通过重试恢复。
+function browserServiceRejectedMessage(baseUrl: string, status: number): string {
+  return `The browser service at ${baseUrl} rejected this page with HTTP ${status}.`;
 }
 
 // BROWSER_SERVICE_URL_STORAGE_KEY stores the manually overridden local service URL.
@@ -241,25 +254,40 @@ export async function resolveReachableBrowserServiceBaseUrl(): Promise<string> {
     throw error;
   }
   if (plan.pinnedBaseUrl) {
-    const reachable = await probeBrowserServiceBaseUrl(plan.pinnedBaseUrl);
-    if (reachable && reachable.baseUrl === plan.pinnedBaseUrl) {
-      rememberBrowserServiceEndpoint(reachable);
+    const probe = await probeBrowserServiceBaseUrl(plan.pinnedBaseUrl);
+    if (probe.kind === "reachable" && probe.endpoint.baseUrl === plan.pinnedBaseUrl) {
+      rememberBrowserServiceEndpoint(probe.endpoint);
       emitBrowserServiceConnectionStatus("connected");
-      return reachable.baseUrl;
+      return probe.endpoint.baseUrl;
     }
     // Falling through to another instance here would silently connect the user to the wrong Core.
     // 此处若继续回退到另一个实例，会把用户静默连接到错误的 Core。
-    const message = `The selected browser service ${plan.pinnedBaseUrl} is unavailable.`;
+    const message = probe.kind === "rejected"
+      ? browserServiceRejectedMessage(probe.baseUrl, probe.status)
+      : `The selected browser service ${plan.pinnedBaseUrl} is unavailable.`;
     emitBrowserServiceConnectionStatus("disconnected", message);
     throw new Error(message);
   }
+  // firstRejection keeps scanning for an accessible instance, but a refusal must not look like an absent service.
+  // firstRejection 仍继续查找可访问实例，但拒绝访问不得被当作服务不存在。
+  let firstRejection: Extract<BrowserServiceProbeResult, { kind: "rejected" }> | null = null;
   for (const candidate of plan.candidates) {
-    const reachable = await probeBrowserServiceBaseUrl(candidate);
-    if (reachable) {
-      rememberBrowserServiceEndpoint(reachable);
+    const probe = await probeBrowserServiceBaseUrl(candidate);
+    if (probe.kind === "reachable") {
+      rememberBrowserServiceEndpoint(probe.endpoint);
       emitBrowserServiceConnectionStatus("connected");
-      return reachable.baseUrl;
+      return probe.endpoint.baseUrl;
     }
+    if (probe.kind === "rejected" && !firstRejection) {
+      firstRejection = probe;
+    }
+  }
+  if (firstRejection) {
+    // The rejection message is deliberately not retryable, so startup shows an error instead of rescanning forever.
+    // 拒绝消息刻意不可重试，使启动页显示错误而不是无休止地重新扫描。
+    const message = browserServiceRejectedMessage(firstRejection.baseUrl, firstRejection.status);
+    emitBrowserServiceConnectionStatus("disconnected", message);
+    throw new Error(message);
   }
   emitBrowserServiceConnectionStatus("disconnected", "Browser service is unavailable.");
   throw new Error("Browser service is unavailable.");
@@ -399,7 +427,9 @@ function normalizeBrowserServiceBaseUrl(value: string | null): string | null {
 
 // probeBrowserServiceBaseUrl checks whether one service endpoint responds to /health.
 // probeBrowserServiceBaseUrl 检查单个服务端点是否响应 /health。
-async function probeBrowserServiceBaseUrl(baseUrl: string): Promise<BrowserServiceEndpoint | null> {
+// Returns: reachable with the endpoint, rejected for an HTTP 401/403 answer, or absent otherwise.
+// 返回：可访问时附带端点；HTTP 401/403 时为 rejected；其余情况为 absent。
+async function probeBrowserServiceBaseUrl(baseUrl: string): Promise<BrowserServiceProbeResult> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), BROWSER_SERVICE_HEALTH_TIMEOUT_MS);
   try {
@@ -407,21 +437,21 @@ async function probeBrowserServiceBaseUrl(baseUrl: string): Promise<BrowserServi
       cache: "no-store",
       signal: controller.signal,
     });
+    if (response.status === 401 || response.status === 403) {
+      return { kind: "rejected", baseUrl, status: response.status };
+    }
     if (!response.ok) {
-      return null;
+      return { kind: "absent" };
     }
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("application/json")) {
-      return null;
+      return { kind: "absent" };
     }
     const payload = await response.json() as BrowserServiceDiscoverySnapshot;
     const endpoint = browserServiceEndpointFromDiscovery(payload, payload.baseUrl ?? baseUrl);
-    if (!endpoint) {
-      return null;
-    }
-    return endpoint;
+    return endpoint ? { kind: "reachable", endpoint } : { kind: "absent" };
   } catch {
-    return null;
+    return { kind: "absent" };
   } finally {
     window.clearTimeout(timeout);
   }

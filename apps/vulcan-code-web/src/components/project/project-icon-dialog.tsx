@@ -64,7 +64,7 @@ export function ProjectIconDialog(props: {
   // 将选中项目还原为默认文件夹图标。
   onReset: (project: ProjectSummary) => Promise<void>;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const project = props.target?.project ?? null;
   // selectedIcon stores the currently selected built-in icon.
   // selectedIcon 保存当前选中的内置图标。
@@ -261,9 +261,9 @@ export function ProjectIconDialog(props: {
                       />
                       <span>{streamedIconOptions.length} / {visibleIconOptions.length} / {activeIconOptions.length}</span>
                     </div>
-                    {catalogLoading && <StreamPlaceholder label={locale === "zh-CN" ? "正在加载图标目录…" : "Loading icon catalog…"} shape="tiles" count={6} />}
-                    {catalogError && <div role="alert"><p className="text-sm text-destructive">{catalogError}</p><Button type="button" size="sm" variant="outline" onClick={() => setCatalogRevision(value => value + 1)}>{locale === "zh-CN" ? "重试" : "Retry"}</Button></div>}
-                    {!catalogLoading && !catalogError && visibleIconOptions.length === 0 && <p>{locale === "zh-CN" ? "没有匹配的图标" : "No matching icons"}</p>}
+                    {catalogLoading && <StreamPlaceholder label={t("project.icon.loadingIconCatalog")} shape="tiles" count={6} />}
+                    {catalogError && <div role="alert"><p className="text-sm text-destructive">{catalogError}</p><Button type="button" size="sm" variant="outline" onClick={() => setCatalogRevision(value => value + 1)}>{t("project.icon.retry")}</Button></div>}
+                    {!catalogLoading && !catalogError && visibleIconOptions.length === 0 && <p>{t("project.icon.noMatchingIcons")}</p>}
                     <div className="project-icon-grid picker-icon-grid" onScroll={handleIconGridScroll}>
                       {streamedIconOptions.map((option) => (
                         <button
@@ -350,7 +350,7 @@ export function ProjectIconDialog(props: {
         <DialogFooter className="shrink-0">
           <Button disabled={busy} type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
           <Button disabled={busy} type="button" variant="outline" onClick={() => void persist(true)}>{t("projectIcon.resetDefault")}</Button>
-          <Button disabled={busy} type="button" onClick={() => void persist(false)}>{busy ? (locale === "zh-CN" ? "正在保存…" : "Saving…") : t("projectIcon.set")}</Button>
+          <Button disabled={busy} type="button" onClick={() => void persist(false)}>{busy ? t("project.icon.saving") : t("projectIcon.set")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -227,7 +227,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
           />
         </div>
         <fieldset className="space-y-2 rounded-lg border p-3">
-          <legend className="px-1 text-xs font-medium">结构化输出</legend>
+          <legend className="px-1 text-xs font-medium">{t("settings.modelDefaults.structuredOutput")}</legend>
           <Select
             onValueChange={(value) => setStructuredOutput(value as PublicAiStructuredOutputCapability)}
             value={structuredOutput}
@@ -236,7 +236,7 @@ export function CustomProviderModelDefaultsCard(props: CustomProviderModelDefaul
             <SelectContent>
               <SelectItem value="json_object">JSON Object</SelectItem>
               <SelectItem value="json_schema">JSON Schema</SelectItem>
-              <SelectItem value="unsupported">不支持</SelectItem>
+              <SelectItem value="unsupported">{t("settings.modelDefaults.unsupported")}</SelectItem>
             </SelectContent>
           </Select>
         </fieldset>

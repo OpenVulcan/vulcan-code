@@ -29,7 +29,7 @@
   gap: 8px;
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: var(--muted);
   padding: 8px 10px;
   color: var(--muted-foreground);
@@ -58,7 +58,7 @@
   gap: 4px;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   padding: 6px;
 }
 
@@ -90,7 +90,7 @@
   width: 100%;
   min-height: 34px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: transparent;
   padding: 7px 8px;
   color: var(--foreground);
@@ -121,15 +121,15 @@
 
 .project-folder-picker-row small {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .project-folder-picker-empty,
 .project-folder-picker-error,
 .project-folder-picker-notice {
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   padding: 10px;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .project-folder-picker-empty,

@@ -4,7 +4,6 @@ import type {
   ComposerSubmission,
 } from "@/components/composer/composer-model";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
-import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type {
   ComposerAttachmentSummary,

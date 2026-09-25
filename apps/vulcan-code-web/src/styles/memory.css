@@ -38,7 +38,7 @@
 .vmm-workspace-body .vmm-memory-page { overflow: visible; scrollbar-gutter: auto; }
 .vmm-workspace-body .vmm-memory-shell { min-height: 0; }
 .vmm-section-tabs { display: flex; flex-wrap: wrap; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
-.vmm-section-tabs button { padding: 8px 0 10px; border-bottom: 2px solid transparent; color: var(--muted-foreground); font-size: 13px; }
+.vmm-section-tabs button { padding: 8px 0 10px; border-bottom: 2px solid transparent; color: var(--muted-foreground); font-size: var(--vcn-font-size-md); }
 .vmm-section-tabs button[aria-pressed="true"] { border-color: var(--foreground); color: var(--foreground); font-weight: 600; }
 /* Pending groups retain their place while exposing their unavailable state.
    待加载分组保留位置，同时明确显示当前不可用状态。 */
@@ -56,7 +56,7 @@
 /* Keep the project identity readable before placing secondary actions beside it. */
 /* 优先保证项目名称可读，再为次要操作分配同行空间。 */
 .vmm-session-scope > label { flex-basis: 220px; }
-.vmm-session-filter-details { flex-basis: 100%; order: 2; font-size: 13px; }
+.vmm-session-filter-details { flex-basis: 100%; order: 2; font-size: var(--vcn-font-size-md); }
 .vmm-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 12px; padding-top: 4px; align-items: end; }
 .vmm-filter-fields > label { display: flex; min-width: 0; flex-direction: column; justify-content: flex-end; gap: 4px; }
 .vmm-session-detail [data-slot="card-content"] .grid { grid-template-columns: minmax(0, 1fr); }
@@ -68,7 +68,7 @@
 .vmm-inference-columns { padding-top: 6px; padding-bottom: 8px; }
 .vmm-inference-mobile-label { display: none; }
 .vmm-inference-account { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 4px; }
-.vmm-inference-status { display: flex; align-items: center; justify-content: center; width: 28px; height: 32px; border-radius: 5px; }
+.vmm-inference-status { display: flex; align-items: center; justify-content: center; width: 28px; height: 32px; border-radius: var(--vcn-radius-sm); }
 .vmm-inference-status:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .vmm-inference-heading { grid-column: 1; }
 .vmm-inference-controls { grid-column: 2; }
@@ -90,7 +90,7 @@
 }
 .vmm-profile-counts [data-slot="card-content"] { display: flex; flex-wrap: wrap; gap: 16px; }
 .vmm-profile-counts [data-slot="card-content"] > div { border: 0; background: transparent; padding: 0; display: flex; gap: 8px; align-items: baseline; }
-.vmm-profile-counts [data-slot="card-content"] > div > p { margin: 0; font-size: 13px; }
+.vmm-profile-counts [data-slot="card-content"] > div > p { margin: 0; font-size: var(--vcn-font-size-md); }
 .vmm-profile-list { display: flex; flex-direction: column; gap: 0; }
 .vmm-profile-list > [data-slot="card"] { border-radius: 0; border-width: 0 0 1px; }
 .vmm-profile-list [data-slot="card-content"] { padding: 18px 4px; }
@@ -112,7 +112,7 @@
 .vmm-project-directory .vmm-project-list button { display: flex; justify-content: space-between; gap: 8px; height: auto; white-space: normal; }
 .vmm-directory-filters { display: flex; flex-wrap: wrap; gap: 2px; }
 .vmm-linked-project-list { max-height: 240px; overflow-y: auto; margin-top: 8px; }
-.vmm-project-list button { text-align: left; padding: 10px 12px; border-radius: 6px; overflow-wrap: anywhere; }
+.vmm-project-list button { text-align: left; padding: 10px 12px; border-radius: var(--vcn-radius-sm); overflow-wrap: anywhere; }
 .vmm-project-list button[aria-pressed="true"] { background: var(--accent); font-weight: 600; }
 /* Keep composition identity, locale and save action compact; related noise controls share a separate row.
    组合说明、区域与保存操作紧凑排列，相关噪音控件单独成行。 */
@@ -127,7 +127,7 @@
 /* Let the editor determine the row height while the file list stretches and scrolls independently.
    由编辑器决定整行高度，文件列表等高拉伸并独立滚动。 */
 .vmm-resource-file-groups { contain: size; min-height: 0; overflow: auto; }
-.vmm-resource-files button { padding: 10px 12px; text-align: left; border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.vmm-resource-files button { padding: 10px 12px; text-align: left; border-radius: var(--vcn-radius-sm); font-size: var(--vcn-font-size-md); overflow-wrap: anywhere; }
 .vmm-resource-files button[aria-pressed="true"] { background: var(--accent); font-weight: 600; }
 .vmm-resource-editor { min-width: 0; }
 

@@ -19,7 +19,7 @@ describe("tool result presentation policy", () => {
   it.each(["todolist", "get_goal", "create_goal", "update_goal", "submit_plan", "ask", "shell_command", "shell_session", "terminal_session", "runlua", "runlua_session", "spawn_agent", "send_message", "wait_agent", "list_agents", "agent_orchestration_info", "subagent_feedback", "close_agent", "interrupt_agent", "debug_session_open", "debug_session_request", "debug_session_events", "debug_session_status", "debug_session_close", "file_edit", "apply_patch", "vulcan_file_read"])("keeps %s as a dedicated body", name => {
     // markup retains the specialized view without raw details or tabs.
     // markup 保留专属视图，不包含原始详情与标签。
-    const markup = renderToStaticMarkup(<ConversationToolResultTabs event={event(name)}><div>dedicated result</div></ConversationToolResultTabs>);
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationToolResultTabs event={event(name)}><div>dedicated result</div></ConversationToolResultTabs></I18nProvider>);
     expect(markup).toBe("<div>dedicated result</div>");
   });
   it.each(["read", "write", "create", "delete", "rename", "list"])("keeps file action %s direct", action => {
@@ -28,7 +28,7 @@ describe("tool result presentation policy", () => {
   it.each(["file", "vulcan_file_list"])("shows %s listing content directly without any tab bar", name => {
     // markup preserves the listing renderer while omitting every payload tab.
     // markup 保留列表渲染内容，同时省略全部载荷标签。
-    const markup = renderToStaticMarkup(<ConversationToolResultTabs event={event(name, { action: "list" })}><pre>[file] src/main.ts</pre></ConversationToolResultTabs>);
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationToolResultTabs event={event(name, { action: "list" })}><pre>[file] src/main.ts</pre></ConversationToolResultTabs></I18nProvider>);
     expect(markup).toBe("<pre>[file] src/main.ts</pre>");
   });
   it.each([["vulcan_codekit_ast_tree", "AST 树"], ["vulcan_codekit_rg", "搜索结果"], ["runtime_config", "配置详情"], ["unknown_tool", "返回信息"]])("names the result form for %s and always retains both raw tabs", (name, label) => {
@@ -54,7 +54,7 @@ describe("tool result presentation policy", () => {
     // todo uses the accepted host payload instead of the intentionally different pending request.
     // todo 使用已接受的宿主载荷，而非刻意不同的待提交请求。
     const todo = { ...event("todolist", { items: [] }), output: { model_output: "updated", host_result: { kind: "todolist", payload: { items: [{ step: "done", status: "completed" }, { step: "active", status: "in_progress" }, { step: "later", status: "pending" }], explanation: null } } } };
-    const markup = renderToStaticMarkup(<ConversationBranchToolDomain event={todo} id="todo" />);
+    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationBranchToolDomain event={todo} id="todo" /></I18nProvider>);
     expect(markup).toContain('role="progressbar"');
     expect(markup).toContain('aria-valuenow="1"');
     expect(markup.match(/class="tool-todo-item"/g)).toHaveLength(3);

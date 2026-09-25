@@ -1,9 +1,10 @@
+import { translateActive } from "@/i18n";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VceJobSummary } from "@/types";
 import { EMPTY_VCE_OBSERVED_JOB, VceJobObserverStore, type VceJobObserverTransport } from "./vce-job-observer-store";
 import {
   VCE_OBSERVER_READ_DEADLINE_MS,
-  VCE_OBSERVER_READ_TIMEOUT_MESSAGE,
+  VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY,
 } from "./vce-observer-timeouts";
 
 // Represent an explicitly controlled promise without timers or real service calls.
@@ -214,7 +215,7 @@ describe("workbench-owned VCE job observation", () => {
     await vi.advanceTimersByTimeAsync(VCE_OBSERVER_READ_DEADLINE_MS);
     expect(deadlineSignal?.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(0);
-    expect(store.snapshot("project-a").error).toBe(VCE_OBSERVER_READ_TIMEOUT_MESSAGE);
+    expect(store.snapshot("project-a").error).toBe(translateActive(VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY));
 
     rpc.load.mockResolvedValueOnce(null);
     await vi.advanceTimersByTimeAsync(5000);

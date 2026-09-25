@@ -105,16 +105,16 @@ it("preserves a rejected manifest reason after the status refresh and serializes
   service.manifestGet.mockResolvedValue([status]);
   service.manifestSync.mockResolvedValue({ outcome: "rejected", failure_kind: "signature_invalid", failure_message: "Synthetic rejection" });
   await render(<ProviderManifestStatusPanel />);
-  await act(async () => button("同步").click());
+  await act(async () => button("Sync").click());
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Synthetic rejection");
   expect(service.manifestGet).toHaveBeenCalledTimes(2);
   let resolve!: (value: unknown) => void;
   service.manifestGet.mockImplementation(() => new Promise((done) => { resolve = done; }));
-  await act(async () => { button("刷新").click(); button("刷新").click(); });
+  await act(async () => { button("Refresh").click(); button("Refresh").click(); });
   expect(service.manifestGet).toHaveBeenCalledTimes(3);
-  expect(button("同步").disabled).toBe(true);
+  expect(button("Sync").disabled).toBe(true);
   await act(async () => resolve([status]));
-  expect(button("同步").disabled).toBe(false);
+  expect(button("Sync").disabled).toBe(false);
 });
 
 it("allows typing unfinished custom header rows without silently persisting the old map", async () => {

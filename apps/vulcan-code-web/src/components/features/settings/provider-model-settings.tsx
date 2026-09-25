@@ -25,7 +25,6 @@ import { PublicAiModelOverridesDialog } from "@/components/features/settings/pub
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Combobox } from "@/components/ui/combobox"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -48,6 +47,7 @@ import type {
   PublicAiProviderToolTargetSnapshot,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import { errorMessage } from "@/lib/display-format";
 
 // PublicProviderModelRow binds one rendered provider model to its routes and effective enabled state.
 // PublicProviderModelRow 将一个渲染中的供应商模型绑定到其路由与有效启用状态。
@@ -852,10 +852,4 @@ function protocolDisplayName(protocolId: string): string {
     "openai-responses.v1": "OpenAI Responses",
   }
   return labels[protocolId] ?? protocolId
-}
-
-// errorMessage converts rejected service values into user-visible diagnostics.
-// errorMessage 将被拒绝的服务值转换为用户可见诊断。
-function errorMessage(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
 }

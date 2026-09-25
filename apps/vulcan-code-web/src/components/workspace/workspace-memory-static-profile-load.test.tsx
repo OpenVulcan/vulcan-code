@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type { VmmMemoryActionRequest, VmmMemoryActionResult } from "@/types";
-import { WorkspaceMemoryPanel } from "./WorkspaceMemoryPanel";
+import { WorkspaceMemoryPanel } from "./workspace-memory-panel";
 
 // Verifies opening static memory restores the selected session's durable profile without a prompt.
 // 验证打开静态记忆即可恢复选中会话的长期画像，无需提交提示词。

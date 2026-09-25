@@ -34,6 +34,7 @@ import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
 
 import { VmmContentPage } from "./vmm-content-page"
+import { formatBytes, formatDateTime } from "@/lib/display-format"
 
 // ManagementPage is one cursor-based VMM management response.
 // ManagementPage 是一页基于游标的 VMM 管理响应。
@@ -182,7 +183,7 @@ interface VmmDataPageProps {
 // VmmDataPage renders session, turn, recycle-bin, and direct-memory management in one workspace.
 // VmmDataPage 在同一工作区渲染会话、回合、回收站和直接记忆管理。
 export function VmmDataPage(props: VmmDataPageProps) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [sessions, setSessions] = React.useState<ManagementSession[]>([])
   const [sessionCursor, setSessionCursor] = React.useState("")
   const [sessionHasMore, setSessionHasMore] = React.useState(false)
@@ -505,7 +506,7 @@ export function VmmDataPage(props: VmmDataPageProps) {
           <Badge variant={capabilities ? "default" : "destructive"}>{capabilities ? t("memory.data.managementReady") : t("memory.data.managementUnavailable")}</Badge>
           {capabilities ? <Badge variant="outline">{capabilities.protocol_version} · {capabilities.storage_mode}</Badge> : null}
           {capabilities?.full_text_index_status ? <Badge variant="outline">{t("memory.data.fullTextIndex")}: {capabilities.full_text_index_status}</Badge> : null}
-          {updatedAt ? <span className="text-xs text-muted-foreground">{t("memory.data.updatedAt").replace("{time}", formatManagementTime(updatedAt))}</span> : null}
+          {updatedAt ? <span className="text-xs text-muted-foreground">{t("memory.data.updatedAt").replace("{time}", formatManagementTime(updatedAt, locale))}</span> : null}
           <Button aria-label={t("memory.data.refresh")} disabled={props.busy} onClick={() => void refreshWorkspace()} size="icon" variant="outline"><RefreshCw className="size-4" /></Button>
         </div>
       </div>
@@ -714,7 +715,7 @@ function SessionTable(props: {
   onSelectionChange: (next: Set<string>) => void
   onOpen: (session: ManagementSession) => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   if (props.sessions.length === 0) {
     return <DataEmpty description={t("memory.data.noSessions")} />
   }
@@ -741,7 +742,7 @@ function SessionTable(props: {
                   <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
                     <span>{session.user.name}</span>
                     <span>·</span>
-                    <span>{formatManagementTime(session.updated_at)}</span>
+                    <span>{formatManagementTime(session.updated_at, locale)}</span>
                     <Badge variant="outline">{managementSessionStatusLabel(t, session.status)}</Badge>
                     {session.active_runtime ? <Badge variant="destructive">{t("memory.data.activeRuntime")}</Badge> : null}
                   </div>
@@ -792,7 +793,7 @@ function SessionTable(props: {
                 <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
                   <span>{session.user.name}</span>
                   <span>·</span>
-                  <span>{formatManagementTime(session.updated_at)}</span>
+                  <span>{formatManagementTime(session.updated_at, locale)}</span>
                   <Badge variant="outline">{managementSessionStatusLabel(t, session.status)}</Badge>
                   {session.active_runtime ? <Badge variant="destructive">{t("memory.data.activeRuntime")}</Badge> : null}
                 </div>
@@ -826,7 +827,7 @@ function TurnWorkspace(props: {
   onOpenTurn: (turn: ManagementTurn) => void
   onRecycleTurn: (turn: ManagementTurn) => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
@@ -847,8 +848,8 @@ function TurnWorkspace(props: {
                 </div>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>{formatManagementTime(turn.created_at)}</span>
-                <span>{turn.content_bytes.toLocaleString()} B</span>
+                <span>{formatManagementTime(turn.created_at, locale)}</span>
+                <span>{formatBytes(turn.content_bytes)}</span>
                 <span>{t("memory.data.memoryCount")}: {turn.derived_memories}</span>
                 <span>{t("memory.data.profileCount")}: {turn.profile_references}</span>
                 <div className="ml-auto flex items-center gap-2">
@@ -873,7 +874,7 @@ function TurnList(props: {
   onOpen: (turn: ManagementTurn) => void
   onRecycle: (turn: ManagementTurn) => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   if (props.turns.length === 0) return <DataEmpty description={t("memory.data.noTurns")} />
   return (
     <div className="grid gap-2">
@@ -885,8 +886,8 @@ function TurnList(props: {
               <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
                 {turn.user ? <span>{turn.user.name}</span> : null}
                 {turn.project ? <span>{turn.project.path}</span> : null}
-                <span>{formatManagementTime(turn.created_at)}</span>
-                <span>{turn.content_bytes.toLocaleString()} B</span>
+                <span>{formatManagementTime(turn.created_at, locale)}</span>
+                <span>{formatBytes(turn.content_bytes)}</span>
                 <span>{t("memory.data.memoryCount")}: {turn.derived_memories}</span>
               </div>
             </div>
@@ -911,13 +912,13 @@ function TurnDetailDialog(props: {
   onClose: () => void
   onLoadMore: (section: "user" | "assistant") => Promise<void>
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   return (
     <Dialog open={Boolean(props.openTurn)} onOpenChange={(open) => { if (!open) props.onClose() }}>
       <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t("memory.data.turnDetails")}</DialogTitle>
-          <DialogDescription>{props.openTurn?.project?.path ?? formatManagementTime(props.openTurn?.created_at ?? "")}</DialogDescription>
+          <DialogDescription>{props.openTurn?.project?.path ?? formatManagementTime(props.openTurn?.created_at ?? "", locale)}</DialogDescription>
         </DialogHeader>
         {(["user", "assistant"] as const).map((section) => {
           const value = props.content[section]
@@ -944,7 +945,7 @@ function RecycleBin(props: {
   onRestore: (batchId: string) => void
   onPurge: (batchId: string) => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   if (props.batches.length === 0) return <DataEmpty description={t("memory.data.recycleEmpty")} />
   return (
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -961,7 +962,7 @@ function RecycleBin(props: {
               <span>{t("memory.data.turnCount")}: {batch.turn_count}</span>
               <span>{t("memory.data.memoryCount")}: {batch.memory_count}</span>
               <span>{t("memory.data.profileCount")}: {batch.profile_count}</span>
-              <span>{formatManagementTime(batch.recycled_at)}</span>
+              <span>{formatManagementTime(batch.recycled_at, locale)}</span>
             </div>
             <div className="flex justify-end gap-2">
               {batch.restorable && batch.state === "recycled" ? (
@@ -1130,7 +1131,6 @@ function managementDateBoundary(value: string, boundary: "start" | "end"): strin
 
 // formatManagementTime formats an RFC3339 management timestamp for the current locale.
 // formatManagementTime 按当前区域格式化 RFC3339 管理时间戳。
-function formatManagementTime(value: string): string {
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
+function formatManagementTime(value: string, locale: string): string {
+  return formatDateTime(new Date(value), locale) ?? value
 }

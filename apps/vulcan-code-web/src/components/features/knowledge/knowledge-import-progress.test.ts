@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { KnowledgeImportJobSummary } from "@/types";
 
-import { knowledgeImportHasCommittedContent, knowledgeImportProgressPercent } from "./KnowledgeBaseArea";
+import { knowledgeImportHasCommittedContent, knowledgeImportProgressPercent } from "./knowledge-base-area";
 
 // importJob builds one exact progress snapshot for percentage tests.
 // importJob 为百分比测试构建一份准确的进度快照。

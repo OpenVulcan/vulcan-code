@@ -1,48 +1,21 @@
 import React from "react";
 import { Icon as IconifyIcon } from "@iconify/react";
+import { DEFAULT_PROJECT_BADGE_CONFIG, type ProjectIconBadgeConfig, type ProjectIconPack } from "./project-icon-contract";
 
-// ProjectIconBadgeShape names the badge silhouette used by generated project icons.
-// ProjectIconBadgeShape 命名生成式项目图标使用的徽标轮廓。
-export type ProjectIconBadgeShape = "circle" | "square";
-
-// ProjectIconPack names every project icon source supported by the picker.
-// ProjectIconPack 命名项目图标选择器支持的每一种图标来源。
-export type ProjectIconPack = "skill-icons" | "material-icon-theme" | "lucide";
-
-// ProjectIconTab names the selectable tabs inside the project icon dialog.
-// ProjectIconTab 命名项目图标弹窗中的可选择标签页。
-export type ProjectIconTab = ProjectIconPack | "badge";
-
-// ProjectIconSelection describes one icon override persisted for a project.
-// ProjectIconSelection 描述为项目持久化的单个图标覆盖配置。
-export interface ProjectIconSelection {
-  // Icon pack identifier stored in the project row.
-  // 存储在项目行中的图标包标识。
-  pack: string;
-  // Icon key or encoded badge configuration stored in the project row.
-  // 存储在项目行中的图标键或编码后的徽标配置。
-  key: string;
-}
-
-// ProjectIconBadgeConfig stores the generated badge icon appearance.
-// ProjectIconBadgeConfig 保存生成式徽标图标的外观。
-export interface ProjectIconBadgeConfig {
-  // Badge shape used by the generated SVG.
-  // 生成 SVG 使用的徽标形状。
-  shape: ProjectIconBadgeShape;
-  // One Chinese character or up to two Latin letters.
-  // 一个中文字符或最多两个英文字母。
-  text: string;
-  // Badge background color.
-  // 徽标背景色。
-  background: string;
-  // Badge border color.
-  // 徽标边框色。
-  border: string;
-  // Badge text color.
-  // 徽标文字色。
-  foreground: string;
-}
+// The persisted badge contract lives in project-icon-contract so the sidebar can use it without the icon catalogs.
+// 持久化徽标契约位于 project-icon-contract，使侧边栏无需加载图标目录即可使用。
+export {
+  DEFAULT_PROJECT_BADGE_CONFIG,
+  decodeProjectBadgeKey,
+  encodeProjectBadgeKey,
+  normalizeProjectBadgeText,
+  normalizeProjectIconSelection,
+  type ProjectIconBadgeConfig,
+  type ProjectIconBadgeShape,
+  type ProjectIconPack,
+  type ProjectIconSelection,
+  type ProjectIconTab,
+} from "./project-icon-contract";
 
 // ProjectIconOption describes one selectable project icon.
 // ProjectIconOption 描述一个可选择的项目图标。
@@ -64,78 +37,13 @@ export interface ProjectIconOption {
   iconName?: string;
 }
 
-// DEFAULT_PROJECT_BADGE_CONFIG provides the first generated badge preview.
-// DEFAULT_PROJECT_BADGE_CONFIG 提供生成式徽标的初始预览配置。
-export const DEFAULT_PROJECT_BADGE_CONFIG: ProjectIconBadgeConfig = {
-  shape: "square",
-  text: "VC",
-  background: "#111827",
-  border: "#111827",
-  foreground: "#ffffff",
-};
-
 // PROJECT_BADGE_COLORS lists quick colors for generated project badges.
 // PROJECT_BADGE_COLORS 列出生成式项目徽标的快捷颜色。
-export const PROJECT_BADGE_COLORS = ["#111827", "#2563eb", "#0891b2", "#16a34a", "#ca8a04", "#dc2626", "#7c3aed", "#db2777"];
+export const PROJECT_BADGE_COLORS = [DEFAULT_PROJECT_BADGE_CONFIG.background, "#2563eb", "#0891b2", "#16a34a", "#ca8a04", "#dc2626", "#7c3aed", "#db2777"];
 
 // PROJECT_ICON_STREAM_BATCH_SIZE controls how many icon cells are mounted per incremental pass.
 // PROJECT_ICON_STREAM_BATCH_SIZE 控制每次增量挂载多少个图标单元。
 export const PROJECT_ICON_STREAM_BATCH_SIZE = 120;
-
-// encodeProjectBadgeKey serializes a generated badge config into the persisted icon key.
-// encodeProjectBadgeKey 将生成式徽标配置序列化为持久化图标键。
-export function encodeProjectBadgeKey(config: ProjectIconBadgeConfig): string {
-  return JSON.stringify(config);
-}
-
-// decodeProjectBadgeKey restores a generated badge config from persistence.
-// decodeProjectBadgeKey 从持久化内容还原生成式徽标配置。
-export function decodeProjectBadgeKey(value?: string | null): ProjectIconBadgeConfig | null {
-  if (!value) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(value) as Partial<ProjectIconBadgeConfig>;
-    const shape = normalizeProjectBadgeShape(parsed.shape);
-    const text = normalizeProjectBadgeText(parsed.text ?? "");
-    if (!shape || !text) {
-      return null;
-    }
-    return {
-      shape,
-      text,
-      background: normalizeCssColor(parsed.background, DEFAULT_PROJECT_BADGE_CONFIG.background),
-      border: normalizeCssColor(parsed.border, DEFAULT_PROJECT_BADGE_CONFIG.border),
-      foreground: normalizeCssColor(parsed.foreground, DEFAULT_PROJECT_BADGE_CONFIG.foreground),
-    };
-  } catch {
-    return null;
-  }
-}
-
-// normalizeProjectBadgeShape keeps new badges on the simplified circle/square model.
-// normalizeProjectBadgeShape 将新徽标限制在简化后的圆形/方形模型。
-function normalizeProjectBadgeShape(value: unknown): ProjectIconBadgeShape | null {
-  if (value === "circle") {
-    return "circle";
-  }
-  if (value === "square" || value === "rounded" || value === "sharp") {
-    return "square";
-  }
-  return null;
-}
-
-// normalizeProjectIconSelection normalizes generated badge selections before persistence.
-// normalizeProjectIconSelection 在持久化前规范化生成式徽标选择。
-export function normalizeProjectIconSelection(icon: ProjectIconSelection): ProjectIconSelection {
-  if (icon.pack !== "badge") {
-    return icon;
-  }
-  return {
-    pack: icon.pack,
-    key: encodeProjectBadgeKey(decodeProjectBadgeKey(icon.key) ?? DEFAULT_PROJECT_BADGE_CONFIG),
-  };
-}
 
 // isIconifyProjectIconPack checks whether a persisted project icon pack belongs to Iconify color sets.
 // isIconifyProjectIconPack 检查持久化的项目图标包是否属于 Iconify 彩色图标集。
@@ -218,26 +126,6 @@ export function ProjectBadgeIcon(props: { config: ProjectIconBadgeConfig; size: 
       </text>
     </svg>
   );
-}
-
-// normalizeProjectBadgeText keeps one Chinese character or two Latin letters.
-// normalizeProjectBadgeText 保留一个中文字符或两个英文字母。
-export function normalizeProjectBadgeText(value: string): string {
-  const trimmed = value.trim();
-  const chinese = Array.from(trimmed).find((char) => /\p{Script=Han}/u.test(char));
-  if (chinese) {
-    return chinese;
-  }
-  return trimmed.replace(/[^a-zA-Z]/g, "").slice(0, 2).toUpperCase();
-}
-
-// normalizeCssColor keeps a simple hex color or falls back to a known value.
-// normalizeCssColor 保留简单十六进制颜色，或回退到已知值。
-function normalizeCssColor(value: unknown, fallback: string): string {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
 // ProjectIconifyIcon renders one iconify project icon without exposing the library to callers.

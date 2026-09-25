@@ -41,6 +41,7 @@ import {
 import { setupTargetDiffDom } from "./target-diff-dom";
 import { targetDiffFileVisualRowCount } from "./target-diff-model";
 import { DiffFileLoadStateNote } from "./diff-file-card/load-state";
+import { formatBytes } from "@/lib/display-format";
 
 // DIFF_DEFAULT_CONTEXT_LINES matches Git's default unified-diff context.
 // DIFF_DEFAULT_CONTEXT_LINES 对齐 Git 默认 unified-diff 上下文行数。
@@ -276,16 +277,16 @@ function largeReasonLabel(reason: string, t: (key: TranslationKey) => string): s
     return formatDiffCardTranslation(t, "diff.large.totalChangedLines", { limit: String(DIFF_TOTAL_CHANGED_LINES_LIMIT) });
   }
   if (reason === "total_changed_bytes") {
-    return formatDiffCardTranslation(t, "diff.large.totalChangedBytes", { limit: formatDiffBytes(DIFF_TOTAL_CHANGED_BYTES_LIMIT) });
+    return formatDiffCardTranslation(t, "diff.large.totalChangedBytes", { limit: formatBytes(DIFF_TOTAL_CHANGED_BYTES_LIMIT) });
   }
   if (reason === "file_changed_lines") {
     return formatDiffCardTranslation(t, "diff.large.fileChangedLines", { limit: String(DIFF_FILE_CHANGED_LINES_LIMIT) });
   }
   if (reason === "file_changed_bytes") {
-    return formatDiffCardTranslation(t, "diff.large.fileChangedBytes", { limit: formatDiffBytes(DIFF_FILE_CHANGED_BYTES_LIMIT) });
+    return formatDiffCardTranslation(t, "diff.large.fileChangedBytes", { limit: formatBytes(DIFF_FILE_CHANGED_BYTES_LIMIT) });
   }
   if (reason === "file_max_line_bytes") {
-    return formatDiffCardTranslation(t, "diff.large.fileMaxLineBytes", { limit: formatDiffBytes(DIFF_FILE_MAX_LINE_BYTES_LIMIT) });
+    return formatDiffCardTranslation(t, "diff.large.fileMaxLineBytes", { limit: formatBytes(DIFF_FILE_MAX_LINE_BYTES_LIMIT) });
   }
   return reason;
 }
@@ -298,18 +299,6 @@ function formatDiffCardTranslation(t: (key: TranslationKey) => string, key: Tran
     text = text.replace(`{${name}}`, value);
   }
   return text;
-}
-
-// formatDiffBytes formats byte thresholds for compact localized notes.
-// formatDiffBytes 将字节阈值格式化为紧凑本地化提示。
-function formatDiffBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${Math.round(bytes / 1024 / 1024)} MiB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.round(bytes / 1024)} KiB`;
-  }
-  return `${bytes} B`;
 }
 
 // DiffFileLines switches between direct and virtualized rendering for one file.
@@ -623,7 +612,7 @@ function DiffRowsHtml(props: {
   // hunk 上下文展开控件使用的可选委托处理器。
   onExpandFileContext?: (hunkIndex: number, direction: DiffHunkExpansionDirection) => void;
 }) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   useTargetDiffDomSetup(hostRef, props.domSetupKey, props.html);
   React.useLayoutEffect(() => {
@@ -634,10 +623,10 @@ function DiffRowsHtml(props: {
   React.useLayoutEffect(() => {
     hostRef.current?.querySelectorAll<HTMLElement>("[data-expand-button]").forEach((control) => {
       control.setAttribute("aria-label", control.hasAttribute("data-expand-up")
-        ? (locale === "zh-CN" ? "展开上方上下文" : "Expand context above")
+        ? t("diff.expandContextAbove")
         : control.hasAttribute("data-expand-down")
-          ? (locale === "zh-CN" ? "展开下方上下文" : "Expand context below")
-          : (locale === "zh-CN" ? "展开上下文" : "Expand context"));
+          ? t("diff.expandContextBelow")
+          : t("diff.expandContext"));
     });
   }, [locale, props.html]);
   // Enter and Space reuse the click dispatcher so directional hunk identities cannot diverge.

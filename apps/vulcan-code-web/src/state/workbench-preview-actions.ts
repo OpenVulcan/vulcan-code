@@ -1,7 +1,7 @@
 import type {
   ConversationMenuAction,
   ProjectMenuAction,
-} from "@/components/project/ProjectSidebar";
+} from "@/components/project/project-sidebar";
 import type { ProjectIconSelection } from "@/components/project/project-icons";
 import type {
   ProjectSummary,

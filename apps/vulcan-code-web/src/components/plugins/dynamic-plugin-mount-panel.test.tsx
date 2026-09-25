@@ -7,10 +7,11 @@ import type { LoadedPluginUiModule } from "@/service/plugin-ui-module-runtime";
 import { loadPersistentPluginUiModule, invalidatePersistentPluginUiModules } from "@/service/plugin-ui-module-runtime";
 import { DynamicPluginMountPanel } from "./dynamic-plugin-mount-panel";
 
-// translate remains stable so renderer updates do not create an unrelated module reload.
-// translate 保持稳定，避免渲染器更新触发无关模块重载。
-const translate = (key: string) => key;
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: translate }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
 vi.mock("@/service/plugin-ui-module-runtime", () => ({ loadPersistentPluginUiModule: vi.fn(), invalidatePersistentPluginUiModules: vi.fn() }));
 // mount is the exact contribution identity used by this isolated loader fixture.
 // mount 是隔离加载夹具使用的精确贡献身份。

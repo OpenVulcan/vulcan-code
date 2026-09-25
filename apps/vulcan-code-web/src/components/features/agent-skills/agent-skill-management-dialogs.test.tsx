@@ -5,6 +5,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentSkillCategorySummary } from "@/types";
 import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "./agent-skill-management-dialogs";
 
+// The i18n mock resolves real English messages so the dialog renders without a provider.
+// i18n 模拟解析真实英文消息，使对话框无需提供器即可渲染。
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
+
 // category is a complete synthetic category; no real skill catalog or filesystem is accessed.
 // category 是完整合成分类；不访问真实技能目录或文件系统。
 const category: AgentSkillCategorySummary = { categoryId: "uncategorized", name: "Uncategorized",

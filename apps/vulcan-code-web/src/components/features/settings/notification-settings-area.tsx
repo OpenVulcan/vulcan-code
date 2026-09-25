@@ -8,7 +8,7 @@ import { useI18n } from "@/i18n";
 import { loadNotificationPreferences, saveNotificationPreferences } from "@/notifications/preferences";
 import type { NotificationPreferencesV1 } from "@/notifications/types";
 import { shellClient } from "@/service/webui-service-runtime";
-import type { ShellNotificationPermission } from "@/shell";
+import type { ShellNotificationPermission } from "@/host-shell";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 
 // NotificationSettingsArea separates durable user intent, native permission and delivery feedback.
@@ -16,12 +16,9 @@ import { SettingsErrorNotice } from "@/components/features/settings/settings-err
 // Parameters: none. Returns device-local settings and a user-triggered test action.
 // 参数：无。返回设备本地设置与用户触发的测试操作。
 export function NotificationSettingsArea() {
-  // t and locale select the active language.
-  // t 与 locale 选择当前语言。
-  const { t, locale } = useI18n();
-  // text provides localized copy for precise delivery states.
-  // text 为精确投递状态提供本地化文案。
-  const text = (zh: string, en: string) => locale === "zh-CN" ? zh : en;
+  // t selects the active language.
+  // t 选择当前语言。
+  const { t } = useI18n();
   // capability describes this shell without claiming permission has been granted.
   // capability 描述当前壳，不将支持能力当成已经获得权限。
   const capability = shellClient.getNotificationCapability();
@@ -181,17 +178,17 @@ export function NotificationSettingsArea() {
       setPermission(currentPermission);
       setPermissionError("");
       if (currentPermission !== "granted") {
-        toast.error(text("还没有通知权限，先点「允许通知」。", "No notification permission yet. Click Allow notifications first."));
+        toast.error(t("settings.notifications.noNotificationPermissionYet"));
         return;
       }
       await shellClient.showLocalNotification({
         id: "notification-settings-test",
         title: "Vulcan Code",
-        body: text("通知正常：对话完成后会在这里提醒你。", "Notifications work: you'll be alerted here when a conversation finishes."),
+        body: t("settings.notifications.notificationsWorkYouLl"),
       });
-      toast.success(text("已发送，看看屏幕角落有没有弹出。", "Sent. Check the corner of your screen."));
+      toast.success(t("settings.notifications.sentCheckTheCorner"));
     } catch (cause) {
-      toast.error(text("测试通知没有发出去", "The test notification didn't go through"), {
+      toast.error(t("settings.notifications.theTestNotificationDidn"), {
         description: cause instanceof Error ? cause.message : String(cause),
       });
       // A failed delivery remains inspectable in settings after the transient toast disappears.
@@ -213,14 +210,14 @@ export function NotificationSettingsArea() {
   const effective = enabled && permission === "granted";
   // The status describes the current permission fact instead of leaving failed queries in a waiting state.
   // 状态描述当前权限事实，不让失败查询停留在等待状态。
-  const permissionLabel = permissionError ? text("权限检查失败", "Permission check failed") : permission === null ? text("正在检查", "Checking") : t(`settings.notifications.permission.${permission}`);
+  const permissionLabel = permissionError ? t("settings.notifications.permissionCheckFailed") : permission === null ? t("settings.notifications.checking") : t(`settings.notifications.permission.${permission}`);
   // Keep the actionable permission failure visible even when an unrelated preference was saved successfully.
   // 即使无关偏好保存成功，也继续展示可操作的权限失败。
   const displayedError = permissionError || error;
   return <section className="settings-preferences-page settings-detail-panel notification-settings-page">
     <section className="settings-preferences-section">
       <div className="settings-preference-row">
-        <div><h2>{t("settings.notifications.localChannel")}</h2><p className="settings-muted-line">{text("对话完成或出错时弹出系统通知。只对这台设备上的这个客户端生效。", "Show a system notification when a conversation finishes or fails. Applies only to this client on this device.")}</p></div>
+        <div><h2>{t("settings.notifications.localChannel")}</h2><p className="settings-muted-line">{t("settings.notifications.showASystemNotification")}</p></div>
         <Switch aria-label={t("settings.notifications.localChannel")} checked={enabled}
           disabled={!capability.supported || busy} onCheckedChange={(checked) => void changeEnabled(checked)} />
       </div>
@@ -229,18 +226,18 @@ export function NotificationSettingsArea() {
       <div className="notification-permission-row">
         <div className="settings-card-actions">
         <StatusPill status={effective ? "ready" : enabled ? "warning" : "pending"}
-          label={effective ? text("已启用", "Enabled") : enabled ? permissionError ? text("检查失败", "Check failed") : permission === "denied" ? text("系统已阻止", "Blocked by system") : text("等待授权", "Waiting for permission") : text("已关闭", "Off")} />
+          label={effective ? t("settings.notifications.enabled") : enabled ? permissionError ? t("settings.notifications.checkFailed") : permission === "denied" ? t("settings.notifications.blockedBySystem") : t("settings.notifications.waitingForPermission") : t("settings.notifications.off")} />
         <span className="settings-muted-line">{t("settings.notifications.permission")}：{permissionLabel}</span>
         </div>
-        <Button type="button" size="sm" variant="outline" disabled={busy || !effective} onClick={() => void testNotification()}><Send size={14} />{text("发一条试试", "Send a test")}</Button>
+        <Button type="button" size="sm" variant="outline" disabled={busy || !effective} onClick={() => void testNotification()}><Send size={14} />{t("settings.notifications.sendATest")}</Button>
       </div>
       {/* One action per state: ask when never asked, otherwise recheck, since re-asking after a denial is silently ignored.
           每种状态只给一个操作：从未询问时申请，否则重新检查；被拒绝后再次申请会被系统静默忽略。 */}
       {enabled && (permission === "default" || permission === "denied" || permissionError) && capability.supported ? <div className="settings-card-actions">
         <Button type="button" variant="outline" disabled={busy} onClick={() => void (permission === "default" && !permissionError ? requestPermission() : recheckPermission())}>
-          {permission === "default" && !permissionError ? text("允许通知", "Allow notifications") : text("重新检查", "Check again")}
+          {permission === "default" && !permissionError ? t("settings.notifications.allowNotifications") : t("settings.notifications.checkAgain")}
         </Button>
-        {permission === "denied" ? <span className="settings-muted-line">{text("通知被系统或浏览器拦截了。请在系统（或浏览器）设置里允许本应用通知，然后点「重新检查」。", "Notifications are blocked. Allow them for this app in system (or browser) settings, then click Check again.")}</span> : null}
+        {permission === "denied" ? <span className="settings-muted-line">{t("settings.notifications.notificationsAreBlockedAllow")}</span> : null}
       </div> : null}
     </section>
     <section className="settings-preferences-section">
@@ -253,7 +250,7 @@ export function NotificationSettingsArea() {
           })} />
         </label>
       ))}
-      <p className="settings-muted-line">{text("你正在看的对话完成时不会再弹通知。", "No notification for the conversation you're currently looking at.")}</p>
+      <p className="settings-muted-line">{t("settings.notifications.noNotificationForThe")}</p>
     </section>
     <section className="settings-preferences-section">
       <h2>{t("settings.notifications.privacy")}</h2>
@@ -267,7 +264,7 @@ export function NotificationSettingsArea() {
         })} />
       </label>
     </section>
-    {displayedError ? <SettingsErrorNotice className="settings-save-error" detail={displayedError} message={permissionError ? text("读不到系统的通知权限，请点「重新检查」再试。", "Couldn't read the system notification permission. Use Check again to retry.") : text("操作没有完成，请再试一次。", "That didn't finish. Please try again.")} /> : null}
+    {displayedError ? <SettingsErrorNotice className="settings-save-error" detail={displayedError} message={permissionError ? t("settings.notifications.couldnTReadThe") : t("settings.notifications.thatDidnTFinish")} /> : null}
     {/* Platform limits stay visible as a regular information section, with no disclosure control.
         平台能力边界作为普通说明区常显，不使用折叠控件。 */}
     <section className="settings-preferences-section notification-capability-note">

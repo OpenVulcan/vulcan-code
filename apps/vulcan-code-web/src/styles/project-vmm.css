@@ -15,12 +15,12 @@
 .project-vmm-section .project-settings-panel { background: transparent; border: 0; border-top: 1px solid var(--border); border-radius: 0; padding: 16px 0 0; }
 .project-vmm-section .project-settings-panel > button { justify-self: end; }
 .project-vmm-linked { display: grid; gap: 6px; min-width: 0; }
-.project-vmm-linked-label { color: var(--muted-foreground); font-size: 12px; }
+.project-vmm-linked-label { color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
 /* Long project catalogs scroll inside a bounded list instead of stretching the dialog.
  * 项目较多时在限高列表内滚动，而不是撑长整个对话框。 */
-.project-vmm-linked-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 2px 12px; max-height: 188px; overflow-y: auto; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; }
-.project-vmm-linked-list > .project-settings-check-row { min-width: 0; min-height: 30px; font-size: 13px; cursor: pointer; }
-.project-vmm-catalog-error { color: var(--destructive); font-size: 12px; overflow-wrap: anywhere; }
+.project-vmm-linked-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 2px 12px; max-height: 188px; overflow-y: auto; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--vcn-radius-md); }
+.project-vmm-linked-list > .project-settings-check-row { min-width: 0; min-height: 30px; font-size: var(--vcn-font-size-md); cursor: pointer; }
+.project-vmm-catalog-error { color: var(--destructive); font-size: var(--vcn-font-size-sm); overflow-wrap: anywhere; }
 .project-vmm-advanced { grid-column: 1 / -1; min-width: 0; }
 .project-vmm-create-body { display: grid; gap: 12px; }
 .project-vmm-create-body > button { justify-self: start; }

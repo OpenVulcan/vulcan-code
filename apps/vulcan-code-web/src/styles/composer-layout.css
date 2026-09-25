@@ -28,7 +28,7 @@
   gap: 12px;
   padding: 18px 20px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--vcn-radius-xl);
   background: color-mix(in srgb, var(--card) 96%, transparent);
   box-shadow: 0 18px 52px color-mix(in srgb, var(--foreground) 10%, transparent);
 }
@@ -50,7 +50,7 @@
 .conversation-loading-bar {
   height: 6px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: color-mix(in srgb, var(--muted) 76%, var(--background));
 }
 
@@ -88,7 +88,7 @@
   padding: 5px 12px;
   transform: translateX(-50%);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: color-mix(in srgb, var(--card) 96%, transparent);
   box-shadow: 0 10px 32px color-mix(in srgb, var(--foreground) 9%, transparent);
   color: var(--muted-foreground);
@@ -102,7 +102,7 @@
   padding: 0;
   list-style: none;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   overflow-wrap: anywhere;
 }
 
@@ -126,7 +126,7 @@
   gap: 6px 12px;
 padding: 12px 14px;
 border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--vcn-radius-lg);
   background: color-mix(in srgb, var(--card) 94%, transparent);
   box-shadow: 0 14px 40px rgb(0 0 0 / 18%);
   backdrop-filter: blur(12px);
@@ -142,14 +142,14 @@ min-width: 0;
 .media-upload-progress-heading {
 display: flex;
 justify-content: space-between;
-font-size: 12px;
+font-size: var(--vcn-font-size-sm);
 font-weight: 600;
 }
 
 .media-upload-progress-file {
 overflow: hidden;
 color: var(--muted-foreground);
-font-size: 11px;
+font-size: var(--vcn-font-size-xs);
 text-overflow: ellipsis;
 white-space: nowrap;
 }
@@ -163,7 +163,7 @@ align-self: center;
 .conversation-submission-status-dot {
   width: 7px;
   height: 7px;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--primary);
   animation: conversation-submission-status-pulse 1.1s ease-in-out infinite;
 }
@@ -192,7 +192,7 @@ align-self: center;
   grid-template-rows: auto minmax(0, 1fr);
   transform: translateX(-50%);
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: var(--vcn-radius-xl);
   background: color-mix(in srgb, var(--card) 94%, transparent);
   box-shadow: 0 24px 70px color-mix(in srgb, var(--foreground) 14%, transparent);
   overflow: hidden;
@@ -229,7 +229,7 @@ align-self: center;
 }
 
 .streaming-thinking-title .shimmer {
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   font-weight: 700;
 }
 
@@ -253,7 +253,7 @@ align-self: center;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
@@ -284,7 +284,7 @@ align-self: center;
 .streaming-thinking-body .markdown-message {
   max-width: none;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .streaming-thinking-content {
@@ -316,7 +316,7 @@ align-self: center;
 
 .conversation-loading-error {
   color: var(--destructive);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   overflow-wrap: anywhere;
 }
 
@@ -324,7 +324,7 @@ align-self: center;
   width: fit-content;
   padding: 7px 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   color: var(--foreground);
   background: var(--background);
   cursor: pointer;
@@ -383,7 +383,7 @@ align-self: center;
 .scroll-to-bottom-button {
   width: 40px;
   height: 40px;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--card);
   box-shadow: 0 10px 30px color-mix(in srgb, var(--foreground) 12%, transparent);
   pointer-events: auto;
@@ -397,14 +397,14 @@ align-self: center;
   gap: 6px;
   padding: 6px 12px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: color-mix(in srgb, var(--card) 86%, transparent);
   box-shadow: 0 10px 30px color-mix(in srgb, var(--foreground) 8%, transparent);
   pointer-events: none;
 }
 
 .composer-runtime-cue .shimmer {
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
 }
 
@@ -415,7 +415,7 @@ align-self: center;
   gap: 0;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--vcn-radius-xl);
   background: var(--card);
   box-shadow: var(--vcn-shadow-hover);
   overflow: hidden;
@@ -454,7 +454,7 @@ align-self: center;
   gap: 10px;
   padding: 0 8px;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   background: transparent;
   color: var(--foreground);
   cursor: default;
@@ -469,7 +469,7 @@ align-self: center;
 
 .composer-slash-command {
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -478,7 +478,7 @@ align-self: center;
 .composer-slash-description {
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -500,12 +500,12 @@ align-self: center;
   max-width: min(100%, 560px);
   padding: 5px 12px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--card);
   color: var(--muted-foreground);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1;
   outline: none;
   overflow: hidden;
@@ -552,7 +552,7 @@ align-self: center;
   overscroll-behavior: contain;
   padding: 8px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--popover);
   color: var(--popover-foreground);
 }
@@ -575,7 +575,7 @@ align-self: center;
   gap: 7px;
   padding: 3px 5px;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.25;
 }
 

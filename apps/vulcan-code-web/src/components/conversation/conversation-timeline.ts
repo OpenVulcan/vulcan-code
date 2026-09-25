@@ -6,7 +6,7 @@ import type {
 import { isContextCompactionBlock, isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
 import { metadataString, metadataValue } from "@/components/conversation/conversation-metadata";
 import { isSubagentFeedbackMetadata } from "@/components/conversation/conversation-tool-metadata";
-import type { LocaleCode } from "@/i18n";
+import { formatMessage, readLocaleMessage, type LocaleCode } from "@/i18n";
 import { integrateProcessThinking } from "@/components/conversation/thinking-display";
 
 // ProjectedTurnState stores transient grouping data while projecting transcript rows.
@@ -379,22 +379,13 @@ export function formatWorkProcessDuration(durationMs: number | null, locale: Loc
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  if (locale !== "zh-CN") {
-    if (hours > 0) {
-      return `${hours}h ${minutes}m ${seconds}s`;
-    }
-    if (minutes > 0) {
-      return `${minutes}m ${seconds}s`;
-    }
-    return `${seconds}s`;
-  }
   if (hours > 0) {
-    return `${hours}小时${minutes}分${seconds}秒`;
+    return formatMessage(readLocaleMessage(locale, "conversation.duration.hms"), { hours, minutes, seconds });
   }
   if (minutes > 0) {
-    return `${minutes}分${seconds}秒`;
+    return formatMessage(readLocaleMessage(locale, "conversation.duration.ms"), { minutes, seconds });
   }
-  return `${seconds}秒`;
+  return formatMessage(readLocaleMessage(locale, "conversation.duration.s"), { seconds });
 }
 
 // latestThinkingBlockIdAfterLastUser returns the newest thinking block that belongs to the active user turn.

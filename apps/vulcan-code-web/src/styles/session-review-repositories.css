@@ -1,5 +1,5 @@
 /* Repository read failures and pending reads stay inside their Git group and wrap instead of widening the panel. */
 /* 仓库读取失败与读取中提示保留在各自 Git 分组内，并自动换行而不撑宽面板。 */
-.session-review-repository-diagnostic, .session-review-repository-notice { margin: 5px 8px; font-size: 11px; white-space: normal; overflow-wrap: anywhere; }
+.session-review-repository-diagnostic, .session-review-repository-notice { margin: 5px 8px; font-size: var(--vcn-font-size-xs); white-space: normal; overflow-wrap: anywhere; }
 .session-review-repository-diagnostic { color: var(--destructive); }
 .session-review-repository-notice { color: var(--muted-foreground); }

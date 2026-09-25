@@ -4,7 +4,7 @@ import type {
   ShellNotificationPermission,
   ShellNotificationPresentationState,
   ShellNotificationRequest,
-} from "@/shell";
+} from "@/host-shell";
 
 // NotificationTestShell provides one configurable ShellClient test boundary without browser or Tauri globals.
 // NotificationTestShell 提供一个不依赖浏览器或 Tauri 全局对象的可配置 ShellClient 测试边界。

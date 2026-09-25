@@ -15,7 +15,11 @@ vi.mock("@/service/settings-actions-service", () => ({
   savePublicAiInferenceRoute: () => Promise.resolve({ inferenceProfiles: {}, internalInferenceCandidates: [] }),
 }));
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
 let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
@@ -60,7 +64,7 @@ it("allows a failed save to retry while serializing writes and disabling the for
     .mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; }));
   await act(async () => root.render(<LuaSkillsSettingsPanel catalog={catalog} actions={{ onSaveLuaSkillsRuntimeSettings: save } as unknown as SkillActionProps} />));
   await editNumber(String(Number(host.querySelector<HTMLInputElement>('input[type="number"]')!.value) + 1));
-  const button = [...host.querySelectorAll("button")].find((value) => value.textContent === "skills.luaSettings.save")!;
+  const button = [...host.querySelectorAll("button")].find((value) => value.textContent === "Save LuaSkills Configuration")!;
   await act(async () => button.click());
   expect(host.textContent).toContain("storage unavailable");
   expect(button.disabled).toBe(false);

@@ -1,4 +1,5 @@
 import type { StartupStepSnapshot } from "@/types";
+import { formatBytes } from "@/lib/display-format";
 
 // StartupDownloadProgressProps contains the active startup step and localized label.
 // StartupDownloadProgressProps 包含当前启动步骤与本地化标签。
@@ -26,7 +27,7 @@ export function StartupDownloadProgress(props: StartupDownloadProgressProps) {
     <div className="startup-download-progress" aria-label={props.label}>
       <div className="startup-download-progress-heading">
         <span>{props.label}</span>
-        <span title={progress.kind === "indeterminate" ? props.step?.message ?? undefined : undefined}>{progress.kind === "determinate" ? `${formatDownloadBytes(progress.completedBytes)} / ${formatDownloadBytes(progress.totalBytes)}` : props.step?.message}</span>
+        <span title={progress.kind === "indeterminate" ? props.step?.message ?? undefined : undefined}>{progress.kind === "determinate" ? `${formatBytes(progress.completedBytes)} / ${formatBytes(progress.totalBytes)}` : props.step?.message}</span>
       </div>
       <div
         className="conversation-loading-bar startup-download-progress-bar"
@@ -91,13 +92,4 @@ function activeDownloadProgress(step: StartupStepSnapshot | null): ActiveDownloa
     totalBytes: step.totalBytes,
     percent: (completedBytes / step.totalBytes) * 100,
   };
-}
-
-// formatDownloadBytes renders stable compact binary units for startup progress.
-// formatDownloadBytes 为启动下载进度渲染稳定紧凑的二进制单位。
-function formatDownloadBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

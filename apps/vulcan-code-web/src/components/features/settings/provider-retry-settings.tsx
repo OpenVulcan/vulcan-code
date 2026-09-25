@@ -8,7 +8,7 @@ import { DisclosureSection } from "@/components/ui/disclosure"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { useI18n } from "@/i18n"
+import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type { ProviderRetrySettingsSummary } from "@/types"
 
 // DEFAULT_PROVIDER_RETRY_SETTINGS mirrors the service API compatibility default.
@@ -140,8 +140,7 @@ export function ProviderRetrySettingsArea(props: {
   // Embedded 在与其他设置组合时移除独立页面的全高尺寸约束。
   embedded?: boolean
 }) {
-  const { locale } = useI18n()
-  const text = React.useCallback((zh: string, en: string) => locale === "zh-CN" ? zh : en, [locale])
+  const { t } = useI18n()
   const settings = props.settings ?? DEFAULT_PROVIDER_RETRY_SETTINGS
   const sourceDraft = React.useMemo(() => retrySettingsDraft(settings), [settings])
   const [draft, setDraft] = React.useState<ProviderRetrySettingsDraft>(sourceDraft)
@@ -170,10 +169,10 @@ export function ProviderRetrySettingsArea(props: {
     setSaveError(null)
   }, [dirty, sourceDraft])
 
-  const validationError = validateRetrySettingsDraft(draft, text)
+  const validationError = validateRetrySettingsDraft(draft, t)
   const saveDraft = React.useCallback(async () => {
     if (savingRef.current || !dirty || sourceChanged) return
-    const error = validateRetrySettingsDraft(draft, text)
+    const error = validateRetrySettingsDraft(draft, t)
     if (error) {
       setSaveError(error)
       return
@@ -187,70 +186,70 @@ export function ProviderRetrySettingsArea(props: {
       setSaveState("saved")
     } catch (errorValue) {
       setSaveState("idle")
-      setSaveError(errorValue instanceof Error ? errorValue.message : text("没能保存，你的修改还在，可以稍后再试。", "Couldn't save. Your edits are kept; try again later."))
+      setSaveError(errorValue instanceof Error ? errorValue.message : t("settings.retry.couldnTSaveYour"))
     } finally {
       savingRef.current = false
     }
-  }, [dirty, draft, props.actions, sourceChanged, text])
+  }, [dirty, draft, props.actions, sourceChanged, t])
 
   return (
     <section className={props.embedded ? "settings-retry-section min-w-0 space-y-4" : "panel full-height settings-detail-panel"}>
-      <PanelTitle icon={<RefreshCw size={17} />} title={text("出错重试", "Retries")} />
+      <PanelTitle icon={<RefreshCw size={17} />} title={t("settings.retry.retries")} />
       <fieldset disabled={saveState === "saving"} className="settings-form-grid min-w-0">
         <article className="space-y-3">
-          <strong>{text("网络或服务器出错", "Network or server errors")}</strong>
+          <strong>{t("settings.retry.networkOrServerErrors")}</strong>
           <label className="settings-check-row settings-retry-toggle">
-            <span><span className="block">{text("自动重试", "Retry automatically")}</span>
-              <small>{text("网络中断、超时或服务器临时出错时，自动再试几次。", "Try again a few times after a dropped connection, timeout or temporary server error.")}</small></span>
+            <span><span className="block">{t("settings.retry.retryAutomatically")}</span>
+              <small>{t("settings.retry.tryAgainAFew")}</small></span>
             <Switch checked={draft.enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, enabled: checked }))} />
           </label>
           <label className="settings-check-row settings-retry-toggle">
-            <span><span className="block">{text("按服务商建议的时间等待", "Wait as long as the provider asks")}</span>
-              <small>{text("服务商说明了需要等多久时，照它说的时间再重试。", "When the provider says how long to wait, wait that long before retrying.")}</small></span>
+            <span><span className="block">{t("settings.retry.waitAsLongAs")}</span>
+              <small>{t("settings.retry.whenTheProviderSays")}</small></span>
             <Switch checked={draft.respectRetryAfter} onCheckedChange={(checked) => setDraft((current) => ({ ...current, respectRetryAfter: checked }))} />
           </label>
           <DisclosureSection
-            description={text(`最多再试 ${draft.maxRetries} 次，每次间隔 ${draft.initialDelaySeconds}–${draft.maxDelaySeconds} 秒`, `Up to ${draft.maxRetries} retries, ${draft.initialDelaySeconds}–${draft.maxDelaySeconds}s apart`)}
-            title={text("重试次数与间隔", "Retry count and spacing")}
+            description={formatMessage(t("settings.retry.upToRetriesS"), { maxRetries: draft.maxRetries, initialDelaySeconds: draft.initialDelaySeconds, maxDelaySeconds: draft.maxDelaySeconds })}
+            title={t("settings.retry.retryCountAndSpacing")}
           >
           <div className="settings-form-grid two">
-            <ProviderRetryNumberField help={text("不含第一次请求，0 到 100", "Not counting the first request; 0 to 100")} label={text("最多再试几次", "Maximum retries")} max={100} min={0} onChange={(value) => setDraft((current) => ({ ...current, maxRetries: value }))} step={1} value={draft.maxRetries} />
-            <ProviderRetryNumberField help={text("第一次重试前等多久", "Wait before the first retry")} label={text("第一次等待（秒）", "First wait (seconds)")} max={MAX_SAFE_DELAY_SECONDS} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, initialDelaySeconds: value }))} step={0.001} value={draft.initialDelaySeconds} />
-            <ProviderRetryNumberField help={text("间隔再长也不会超过它", "Waits never grow past this")} label={text("最长等待（秒）", "Longest wait (seconds)")} max={MAX_SAFE_DELAY_SECONDS} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, maxDelaySeconds: value }))} step={0.001} value={draft.maxDelaySeconds} />
-            <ProviderRetryNumberField help={text("每次间隔乘以它；1 表示间隔不变", "Each wait is multiplied by this; 1 keeps it fixed")} label={text("间隔增长倍数", "Wait growth")} max={8} min={1} onChange={(value) => setDraft((current) => ({ ...current, backoffFactor: value }))} step={0.001} value={draft.backoffFactor} />
-            <ProviderRetryNumberField help={text("让间隔略有随机，避免多个请求同时重试；0 到 80", "Adds a little randomness so requests don't retry in lockstep; 0 to 80")} label={text("随机浮动（%）", "Random variation (%)")} max={80} min={0} onChange={(value) => setDraft((current) => ({ ...current, jitterPercent: value }))} step={1} value={draft.jitterPercent} />
+            <ProviderRetryNumberField help={t("settings.retry.notCountingTheFirst")} label={t("settings.retry.maximumRetries")} max={100} min={0} onChange={(value) => setDraft((current) => ({ ...current, maxRetries: value }))} step={1} value={draft.maxRetries} />
+            <ProviderRetryNumberField help={t("settings.retry.waitBeforeTheFirst")} label={t("settings.retry.firstWaitSeconds")} max={MAX_SAFE_DELAY_SECONDS} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, initialDelaySeconds: value }))} step={0.001} value={draft.initialDelaySeconds} />
+            <ProviderRetryNumberField help={t("settings.retry.waitsNeverGrowPast")} label={t("settings.retry.longestWaitSeconds")} max={MAX_SAFE_DELAY_SECONDS} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, maxDelaySeconds: value }))} step={0.001} value={draft.maxDelaySeconds} />
+            <ProviderRetryNumberField help={t("settings.retry.eachWaitIsMultiplied")} label={t("settings.retry.waitGrowth")} max={8} min={1} onChange={(value) => setDraft((current) => ({ ...current, backoffFactor: value }))} step={0.001} value={draft.backoffFactor} />
+            <ProviderRetryNumberField help={t("settings.retry.addsALittleRandomness")} label={t("settings.retry.randomVariation")} max={80} min={0} onChange={(value) => setDraft((current) => ({ ...current, jitterPercent: value }))} step={1} value={draft.jitterPercent} />
           </div>
           </DisclosureSection>
         </article>
 
         <article className="space-y-3">
-          <strong>{text("请求太频繁（限流）", "Too many requests (rate limits)")}</strong>
+          <strong>{t("settings.retry.tooManyRequestsRate")}</strong>
           <label className="settings-check-row settings-retry-toggle">
-            <span><span className="block">{text("被限流时等待后重试", "Wait and retry when rate-limited")}</span>
-              <small>{text("服务商提示请求太频繁（429）时，等一会儿再发。每次等待都会显示在对话里。", "When the provider says there are too many requests (429), wait and send again. Each wait shows in the conversation.")}</small></span>
+            <span><span className="block">{t("settings.retry.waitAndRetryWhen")}</span>
+              <small>{t("settings.retry.whenTheProviderSays2")}</small></span>
             <Switch checked={draft.retry429} onCheckedChange={(checked) => setDraft((current) => ({ ...current, retry429: checked }))} />
           </label>
           <DisclosureSection
-            description={text(`最多再试 ${draft.rateLimitMaxRetries} 次，每次间隔 ${draft.rateLimitInitialDelaySeconds}–${draft.rateLimitMaxDelaySeconds} 秒`, `Up to ${draft.rateLimitMaxRetries} retries, ${draft.rateLimitInitialDelaySeconds}–${draft.rateLimitMaxDelaySeconds}s apart`)}
-            title={text("等待次数与间隔", "Wait count and spacing")}
+            description={formatMessage(t("settings.retry.upToRetriesS2"), { rateLimitMaxRetries: draft.rateLimitMaxRetries, rateLimitInitialDelaySeconds: draft.rateLimitInitialDelaySeconds, rateLimitMaxDelaySeconds: draft.rateLimitMaxDelaySeconds })}
+            title={t("settings.retry.waitCountAndSpacing")}
           >
           <div className="settings-form-grid two">
-            <ProviderRetryNumberField help={text("1 到 100000", "1 to 100000")} label={text("最多再试几次", "Maximum retries")} max={100000} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxRetries: value }))} step={1} value={draft.rateLimitMaxRetries} />
-            <ProviderRetryNumberField help={text("第一次重试前等多久，最多 1800 秒", "Wait before the first retry, up to 1800s")} label={text("第一次等待（秒）", "First wait (seconds)")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitInitialDelaySeconds: value }))} step={0.001} value={draft.rateLimitInitialDelaySeconds} />
-            <ProviderRetryNumberField help={text("间隔再长也不会超过它，最多 1800 秒", "Waits never grow past this, up to 1800s")} label={text("最长等待（秒）", "Longest wait (seconds)")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxDelaySeconds: value }))} step={0.001} value={draft.rateLimitMaxDelaySeconds} />
-            <ProviderRetryNumberField help={text("每次间隔乘以它；1 表示间隔不变", "Each wait is multiplied by this; 1 keeps it fixed")} label={text("间隔增长倍数", "Wait growth")} max={8} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitBackoffFactor: value }))} step={0.001} value={draft.rateLimitBackoffFactor} />
+            <ProviderRetryNumberField help={t("settings.retry.n1To100000")} label={t("settings.retry.maximumRetries")} max={100000} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxRetries: value }))} step={1} value={draft.rateLimitMaxRetries} />
+            <ProviderRetryNumberField help={t("settings.retry.waitBeforeTheFirst2")} label={t("settings.retry.firstWaitSeconds")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitInitialDelaySeconds: value }))} step={0.001} value={draft.rateLimitInitialDelaySeconds} />
+            <ProviderRetryNumberField help={t("settings.retry.waitsNeverGrowPast2")} label={t("settings.retry.longestWaitSeconds")} max={1800} min={0.001} onChange={(value) => setDraft((current) => ({ ...current, rateLimitMaxDelaySeconds: value }))} step={0.001} value={draft.rateLimitMaxDelaySeconds} />
+            <ProviderRetryNumberField help={t("settings.retry.eachWaitIsMultiplied")} label={t("settings.retry.waitGrowth")} max={8} min={1} onChange={(value) => setDraft((current) => ({ ...current, rateLimitBackoffFactor: value }))} step={0.001} value={draft.rateLimitBackoffFactor} />
           </div>
           </DisclosureSection>
         </article>
 
         {validationError || saveError ? <p className="settings-validation-error" role="alert">{validationError ?? saveError}</p> : null}
-        {sourceChanged && <div className="space-y-2" role="status"><p>{text("这些设置刚在别处被修改过。你的修改还在，重新载入后再保存即可。", "These settings were just changed elsewhere. Your edits are kept; reload, then save.")}</p>
-          <Button type="button" variant="outline" onClick={() => { setDraft(sourceDraft); setBaselineDraft(sourceDraft); setSaveState("idle"); setSaveError(null) }}>{text("重新载入", "Reload")}</Button></div>}
+        {sourceChanged && <div className="space-y-2" role="status"><p>{t("settings.retry.theseSettingsWereJust")}</p>
+          <Button type="button" variant="outline" onClick={() => { setDraft(sourceDraft); setBaselineDraft(sourceDraft); setSaveState("idle"); setSaveError(null) }}>{t("settings.retry.reload")}</Button></div>}
         <div className="settings-card-actions">
           <Button disabled={!dirty || sourceChanged || Boolean(validationError) || saveState === "saving"} onClick={() => void saveDraft()} type="button">
-            {saveState === "saving" ? text("正在保存…", "Saving…") : saveState === "saved" && !dirty ? text("已保存", "Saved") : text("保存", "Save")}
+            {saveState === "saving" ? t("settings.retry.saving") : saveState === "saved" && !dirty ? t("settings.retry.saved") : t("settings.retry.save")}
           </Button>
-          {dirty ? <span className="settings-muted-line">{text("有未保存的修改", "Unsaved changes")}</span> : null}
+          {dirty ? <span className="settings-muted-line">{t("settings.retry.unsavedChanges")}</span> : null}
         </div>
       </fieldset>
     </section>
@@ -299,7 +298,7 @@ function retrySettingsRequest(draft: ProviderRetrySettingsDraft): ProviderRetryS
 
 // validateRetrySettingsDraft mirrors backend numeric and cross-field constraints before saving.
 // validateRetrySettingsDraft 在保存前对齐后台数字范围与跨字段约束。
-function validateRetrySettingsDraft(draft: ProviderRetrySettingsDraft, text: (zh: string, en: string) => string): string | null {
+function validateRetrySettingsDraft(draft: ProviderRetrySettingsDraft, t: Translate): string | null {
   const ordinaryMaxRetries = integerValue(draft.maxRetries)
   const ordinaryInitialSeconds = finiteNumber(draft.initialDelaySeconds)
   const ordinaryMaxSeconds = finiteNumber(draft.maxDelaySeconds)
@@ -309,13 +308,13 @@ function validateRetrySettingsDraft(draft: ProviderRetrySettingsDraft, text: (zh
   const rateLimitInitialSeconds = finiteNumber(draft.rateLimitInitialDelaySeconds)
   const rateLimitMaxSeconds = finiteNumber(draft.rateLimitMaxDelaySeconds)
   const rateLimitFactor = finiteNumber(draft.rateLimitBackoffFactor)
-  if (ordinaryMaxRetries == null || ordinaryMaxRetries < 0 || ordinaryMaxRetries > 100) return text("出错重试的次数要填 0 到 100 之间的整数。", "Retry count must be a whole number from 0 to 100.")
-  if (!validDelayPair(ordinaryInitialSeconds, ordinaryMaxSeconds, MAX_SAFE_DELAY_SECONDS)) return text("出错重试的等待时间要大于 0，且最长等待不能比第一次等待短。", "Retry waits must be above 0, and the longest wait can't be shorter than the first.")
-  if (ordinaryFactor == null || ordinaryFactor < 1 || ordinaryFactor > 8) return text("出错重试的间隔增长倍数要在 1 到 8 之间。", "Retry wait growth must be between 1 and 8.")
-  if (jitterPercent == null || jitterPercent < 0 || jitterPercent > 80) return text("随机浮动要填 0 到 80 之间的整数。", "Random variation must be a whole number from 0 to 80.")
-  if (rateLimitMaxRetries == null || rateLimitMaxRetries < 1 || rateLimitMaxRetries > 100000) return text("限流重试的次数要填 1 到 100000 之间的整数。", "Rate-limit retry count must be a whole number from 1 to 100000.")
-  if (!validDelayPair(rateLimitInitialSeconds, rateLimitMaxSeconds, 1800)) return text("限流等待要大于 0、不超过 1800 秒，且最长等待不能比第一次等待短。", "Rate-limit waits must be above 0, at most 1800s, and the longest can't be shorter than the first.")
-  if (rateLimitFactor == null || rateLimitFactor < 1 || rateLimitFactor > 8) return text("限流等待的间隔增长倍数要在 1 到 8 之间。", "Rate-limit wait growth must be between 1 and 8.")
+  if (ordinaryMaxRetries == null || ordinaryMaxRetries < 0 || ordinaryMaxRetries > 100) return t("settings.retry.retryCountMustBe")
+  if (!validDelayPair(ordinaryInitialSeconds, ordinaryMaxSeconds, MAX_SAFE_DELAY_SECONDS)) return t("settings.retry.retryWaitsMustBe")
+  if (ordinaryFactor == null || ordinaryFactor < 1 || ordinaryFactor > 8) return t("settings.retry.retryWaitGrowthMust")
+  if (jitterPercent == null || jitterPercent < 0 || jitterPercent > 80) return t("settings.retry.randomVariationMustBe")
+  if (rateLimitMaxRetries == null || rateLimitMaxRetries < 1 || rateLimitMaxRetries > 100000) return t("settings.retry.rateLimitRetryCount")
+  if (!validDelayPair(rateLimitInitialSeconds, rateLimitMaxSeconds, 1800)) return t("settings.retry.rateLimitWaitsMust")
+  if (rateLimitFactor == null || rateLimitFactor < 1 || rateLimitFactor > 8) return t("settings.retry.rateLimitWaitGrowth")
   return null
 }
 

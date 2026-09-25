@@ -1,5 +1,5 @@
 import type { TranslationKey } from "@/i18n";
-import type { WorkspaceContextTabKind } from "@/components/workspace/WorkspaceContextPanel";
+import type { WorkspaceContextTabKind } from "@/components/workspace/workspace-context-panel";
 
 // workspaceContextTabDefaultTitle returns the locale-aware default title for one context tab kind.
 // workspaceContextTabDefaultTitle 返回单个上下文页签类型的本地化默认标题。

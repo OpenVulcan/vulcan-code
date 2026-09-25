@@ -34,7 +34,7 @@ describe("transient reasoning status", () => {
     // source is the authoritative right-side subagent transcript component.
     // source 是右侧子智能体转录的权威组件源码。
     const source = readFileSync(
-      new URL("../workspace/WorkspaceContextPanel.tsx", import.meta.url),
+      new URL("../workspace/workspace-context-panel.tsx", import.meta.url),
       "utf8",
     );
 

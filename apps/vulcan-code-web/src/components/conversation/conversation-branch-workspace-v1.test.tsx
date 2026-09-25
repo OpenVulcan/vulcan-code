@@ -33,7 +33,6 @@ import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-st
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
-import { ConversationV1DisplayRenderer } from "./conversation-v1-display-renderer";
 import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
@@ -333,7 +332,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     }
   });
 
-  it.each(["branch", "native"] as const)("attaches exact delivery progress to the owning tools in %s", (surface) => {
+  it("attaches exact delivery progress to the owning tools", () => {
     // Two independent questions detect accidental association by adjacent event or display name.
     // 两个独立问题用于发现按相邻事件或展示名称错误关联的情况。
     const created = questionEvent();
@@ -346,9 +345,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     const events = [tool(7, "question-1"), tool(8, "question-2"), created,
       eventSummary(10, { kind: "collaboration", version: 1, operation_id: "delivery-progress", event_kind: "delivery_projected",
         after_state: { kind: "outbound_delivery", delivery: { ...created.event.after_state.delivery, state: "projected" } } }, "host_only")];
-    const markup = surface === "branch" ? renderWorkspace(events) : renderToStaticMarkup(
-      <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={events} defaultExpandedTools /></I18nProvider>,
-    );
+    const markup = renderWorkspace(events);
     const container = document.createElement("div");
     container.innerHTML = markup;
     const cards = [...container.querySelectorAll(".tool-presentation-card:not(.conversation-v1-collaboration-card)")];
@@ -359,7 +356,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(markup).not.toContain("协作投递");
   });
 
-  it.each(["branch", "native"] as const)("attaches child completion by execution identity in %s", (surface) => {
+  it("attaches child completion by execution identity", () => {
     // Reused child names must not let an older execution update the new creation card.
     // 复用子代理名称不得让旧执行更新新创建卡片。
     const create = (seq: number, executionId: string): ConversationEventSummary => eventSummary(seq, {
@@ -377,9 +374,7 @@ describe("ConversationBranchWorkspaceV1", () => {
         state: "terminal", reserved_at_ms: 1000, terminal_outcome: "completed", terminal_at_ms: 1010,
         non_success_result: null, non_success_projection: null } },
     }, "host_only")];
-    const markup = surface === "branch" ? renderWorkspace(events) : renderToStaticMarkup(
-      <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={events} defaultExpandedTools /></I18nProvider>,
-    );
+    const markup = renderWorkspace(events);
     const container = document.createElement("div");
     container.innerHTML = markup;
     expect(container.querySelectorAll("[data-collaboration-attached-status]"), markup).toHaveLength(1);
@@ -387,7 +382,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(container.querySelector('[data-collaboration-card-kind]')).toBeNull();
   });
 
-  it.each(["branch", "native"] as const)("updates a task message in place without merging identical content in %s", (surface) => {
+  it("updates a task message in place without merging identical content", () => {
     // Delivery identity distinguishes identical messages; receipts must not move their first anchor.
     // 投递身份区分相同正文的消息；回执不得移动首个锚点。
     const message = { operation_id: "send-one", delivery_id: "delivery-one", kind: "task_steer" as const,
@@ -402,9 +397,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       after_state: { kind: "outbound_task_message", record: { message, created_at_ms: 1001,
         acceptance: { message, operation_id: "accept-one", target_revision: 1, event_seq: 3, accepted_at_ms: 1003 } } },
     }, "host_only")];
-    const markup = surface === "branch" ? renderWorkspace(events) : renderToStaticMarkup(
-      <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={events} /></I18nProvider>,
-    );
+    const markup = renderWorkspace(events);
     const container = document.createElement("div");
     container.innerHTML = markup;
     const cards = container.querySelectorAll('[data-collaboration-card-kind="task-message"]');
@@ -416,7 +409,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect([...cards].every((card) => card.textContent?.includes("相同消息正文"))).toBe(true);
   });
 
-  it.each(["branch", "native"] as const)("attaches result receipts to their exact card in %s", (surface) => {
+  it("attaches result receipts to their exact card", () => {
     // Distinct deliveries may have identical text; only the first receives progress receipts.
     // 不同投递可以正文相同；此处只有首条收到进度回执。
     const result: CollaborationTaskResult = {
@@ -449,12 +442,10 @@ describe("ConversationBranchWorkspaceV1", () => {
     const events = [resultEvent(1, "result-one"), resultEvent(2, "result-two"), acknowledged, projected,
       { ...acknowledged, seq: 5 }];
     for (const length of [2, 3, 4, 5]) {
-      // Both production surfaces must update the owner without emitting receipt-only cards.
-      // 两种生产展示链路都应更新所属卡片，不能生成纯回执卡片。
+      // The production surface must update the owner without emitting receipt-only cards.
+      // 生产展示链路应更新所属卡片，不能生成纯回执卡片。
       const history = events.slice(0, length);
-      const markup = surface === "branch" ? renderWorkspace(history) : renderToStaticMarkup(
-        <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={history} /></I18nProvider>,
-      );
+      const markup = renderWorkspace(history);
       const container = document.createElement("div");
       container.innerHTML = markup;
       expect(container.querySelectorAll(".conversation-v1-collaboration-card")).toHaveLength(2);
@@ -472,9 +463,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     const resultHistory = [{ ...stats, seq: 1, turn_id: result.terminal!.turn_id }, { ...resultEvent(2, "result-one"), turn_id: null }];
     const presentation = projectConversationBranchPresentationV1("session-branch-v1", resultHistory, emptyResourceCatalog(), (key) => key);
     expect(presentation.messages.map((message) => message.recordKind)).toEqual(["agent-interaction", "turn-stats"]);
-    const resultMarkup = surface === "branch" ? renderWorkspace(resultHistory) : renderToStaticMarkup(
-      <I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={resultHistory} /></I18nProvider>,
-    );
+    const resultMarkup = renderWorkspace(resultHistory);
     expect(resultMarkup.indexOf("相同结果正文")).toBeGreaterThanOrEqual(0);
     // Moving the display anchor never rewrites the result's durable sequence identity.
     // 移动展示锚点绝不改写结果的可靠序列身份。

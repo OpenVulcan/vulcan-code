@@ -10,6 +10,7 @@ import {
 import { readUsageCoverage, type UsageCoverage } from "@/service/conversation-usage-coverage";
 import { formatDurationSeconds, formatTokenSpeed } from "@/lib/usage-format";
 import { usageCacheRatio, usageMetricDisplay } from "./conversation-usage-display";
+import { formatMessage, readLocaleMessage, type Translate } from "@/i18n";
 
 // TurnStatsUsageSnapshot contains only the accounting fields shown in the compact statistics card.
 // TurnStatsUsageSnapshot 仅包含紧凑统计卡展示的核算字段。
@@ -61,9 +62,9 @@ export function TurnStatsTooltipCard(props: {
   if (!stats) {
     return null;
   }
-  // zh selects compact local labels without expanding the global translation contract for one private card.
-  // zh 为该私有卡片选择紧凑本地标签，避免扩展全局翻译契约。
-  const zh = props.locale === "zh-CN";
+  // t resolves the card's compact labels in the locale the caller passed.
+  // t 按调用者传入的语言解析卡片的紧凑标签。
+  const t: Translate = (key) => readLocaleMessage(props.locale, key);
   // aggregate keeps exact persisted totals separate from optional view-only coverage.
   // aggregate 将精确持久化总量与可选的纯视图覆盖信息分开保留。
   const aggregate = turnStatsUsageSnapshot(stats);
@@ -78,7 +79,7 @@ export function TurnStatsTooltipCard(props: {
   const cacheHitPercent = cacheRatio.percent;
   // Keep the original short label without exposing internal coverage metadata.
   // 保持原有简短标签，不展示内部覆盖元数据。
-  const cacheLabel = zh ? "缓存命中率" : "Cache hit rate";
+  const cacheLabel = t("conversation.turnStats.cacheHitRate");
   // Only the new paired timing contract can establish speed; historical turn-duration estimates are ignored.
   // 仅新的配对计时契约能够证明速度；忽略历史整轮耗时估算。
   const outputDurationMs = numericMetadata(stats.output_duration_ms);
@@ -93,21 +94,21 @@ export function TurnStatsTooltipCard(props: {
   return (
     <>
       <div className="context-usage-card-header turn-stats-card-header">
-        <strong>{props.subagentStats ? (zh ? "子代理统计" : "Subagent usage") : (zh ? "本轮统计" : "Turn usage")}</strong>
-        <span title={speedLabel === "-" ? (zh ? "缺少配对的首 Token 时间与输出用量" : "Paired first-token timing and output usage are unavailable") : (zh ? "同一组已测请求的输出 Token ÷ 首 Token 后累计输出时长" : "Output tokens divided by summed output duration after first token for the same measured requests")}>{zh ? `平均 ${speedLabel}` : `Average ${speedLabel}`}</span>
+        <strong>{props.subagentStats ? t("conversation.turnStats.subagentUsage") : t("conversation.turnStats.turnUsage")}</strong>
+        <span title={speedLabel === "-" ? t("conversation.turnStats.pairedFirstTokenTiming") : t("conversation.turnStats.outputTokensDividedBy")}>{formatMessage(t("conversation.turnStats.average"), { speedLabel })}</span>
       </div>
       <TurnStatsUsageRows locale={props.locale} usage={aggregate}>
         {outputDurationMs !== null && outputDurationMs > 0 ? <>
           <div className="turn-stats-metric-row">
-            {firstTokenLatencyMs !== null ? <div className="turn-stats-metric"><span>{zh ? "平均首 Token" : "Average first token"}</span><strong>{formatDurationSeconds(firstTokenLatencyMs)}</strong></div> : null}
-            <div className="turn-stats-metric"><span>{zh ? "累计输出时长" : "Total output time"}</span><strong>{formatDurationSeconds(outputDurationMs)}</strong></div>
+            {firstTokenLatencyMs !== null ? <div className="turn-stats-metric"><span>{t("conversation.turnStats.averageFirstToken")}</span><strong>{formatDurationSeconds(firstTokenLatencyMs)}</strong></div> : null}
+            <div className="turn-stats-metric"><span>{t("conversation.turnStats.totalOutputTime")}</span><strong>{formatDurationSeconds(outputDurationMs)}</strong></div>
           </div>
         </> : null}
       </TurnStatsUsageRows>
       <div className="turn-stats-cache-summary">
         <div className="turn-stats-cache-header">
           <span>{cacheLabel}</span>
-          <strong title={cacheHitPercent == null ? (zh ? "尚无完整输入用量，无法计算缓存命中率" : "Cache hit rate needs complete input usage") : undefined}>{cacheHitPercent == null ? "-" : `${cacheHitPercent.toFixed(1)}%`}</strong>
+          <strong title={cacheHitPercent == null ? t("conversation.turnStats.cacheHitRateNeeds") : undefined}>{cacheHitPercent == null ? "-" : `${cacheHitPercent.toFixed(1)}%`}</strong>
         </div>
         <div
           aria-label={cacheLabel}
@@ -122,7 +123,7 @@ export function TurnStatsTooltipCard(props: {
       </div>
       {subagent ? (
         <section className="turn-stats-subagent-section">
-          <div className="turn-stats-section-title">{zh ? "智能体 Token" : "Subagent tokens"}</div>
+          <div className="turn-stats-section-title">{t("conversation.turnStats.subagentTokens")}</div>
           <TurnStatsUsageRows locale={props.locale} usage={subagent} />
         </section>
       ) : null}
@@ -148,9 +149,9 @@ function TurnStatsUsageRows(props: {
   // 附加的已测计时行复用核算网格的间距与字体样式。
   children?: ReactNode;
 }) {
-  // zh selects the compact labels used in each paired row.
-  // zh 选择每行双列使用的紧凑标签。
-  const zh = props.locale === "zh-CN";
+  // t resolves the compact labels used in each paired row in the caller's locale.
+  // t 按调用者语言解析每行双列使用的紧凑标签。
+  const t: Translate = (key) => readLocaleMessage(props.locale, key);
   // cached displays recorded counts and preserves absence with a dash.
   // cached 显示已记录数值，并以短横线保留缺失状态。
   const cached = usageMetricDisplay(props.usage.cachedInputTokens, "cache_read_tokens", props.usage.coverage);
@@ -166,21 +167,21 @@ function TurnStatsUsageRows(props: {
   return (
     <div className="turn-stats-metric-grid">
       <TurnStatsMetricRow
-        leftLabel={zh ? "总请求次数" : "Requests"}
+        leftLabel={t("conversation.turnStats.requests")}
         leftValue={formatTurnStatsNumber(props.usage.providerCallCount, props.locale)}
-        rightLabel={zh ? "工具调用次数" : "Tool calls"}
+        rightLabel={t("conversation.turnStats.toolCalls")}
         rightValue={formatTurnStatsNumber(props.usage.toolCallCount, props.locale)}
       />
       <TurnStatsMetricRow
-        leftLabel={zh ? "缓存 Token" : "Cached tokens"}
+        leftLabel={t("conversation.turnStats.cachedTokens")}
         leftValue={cached}
-        rightLabel={zh ? "无缓存输入" : "Uncached input"}
+        rightLabel={t("conversation.turnStats.uncachedInput")}
         rightValue={uncached}
       />
       <TurnStatsMetricRow
-        leftLabel={zh ? "输出 Token" : "Output tokens"}
+        leftLabel={t("conversation.turnStats.outputTokens")}
         leftValue={output}
-        rightLabel={zh ? "合计 Token" : "Total tokens"}
+        rightLabel={t("conversation.turnStats.totalTokens")}
         rightValue={total}
       />
       {props.children}

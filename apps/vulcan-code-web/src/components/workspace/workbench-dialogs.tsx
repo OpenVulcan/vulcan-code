@@ -1,6 +1,6 @@
 import React from "react";
 import { RenderErrorBoundary } from "@/app/render-error-boundary";
-import { AskQuestionDialog } from "@/components/ask/AskQuestionDialog";
+import { AskQuestionDialog } from "@/components/ask/ask-question-dialog";
 import { Button } from "@/components/ui/button";
 import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
@@ -49,7 +49,7 @@ const LazyProjectSettingsDialog = React.lazy(() => import("@/components/project/
 function DeferredProjectFolderPicker(props: ProjectFolderPickerDialogProps) {
   // Locale remains available even when the picker module cannot be fetched.
   // 即使无法获取选择器模块，仍可使用当前语言。
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   // Each explicit retry discards the rejected lazy instance.
   // 每次明确重试都丢弃已拒绝的延迟实例。
   const [attempt, setAttempt] = React.useState(0);
@@ -61,7 +61,7 @@ function DeferredProjectFolderPicker(props: ProjectFolderPickerDialogProps) {
   const recovery = (error?: Error) => <Dialog open={props.open} onOpenChange={props.onOpenChange}>
     <DialogContent size="md">
       <DialogHeader><DialogTitle>{props.title ?? t("projectFolderPicker.title")}</DialogTitle>
-        <DialogDescription>{error ? (locale === "zh-CN" ? "目录选择器加载失败" : "Unable to load the folder picker") : <InlineStreamPlaceholder label={t("workspaceFiles.loading")} />}</DialogDescription>
+        <DialogDescription>{error ? t("workspace.dialogs.unableToLoadThe") : <InlineStreamPlaceholder label={t("workspaceFiles.loading")} />}</DialogDescription>
       </DialogHeader>
       {error ? <details><summary>{t("toolPresentation.output.errorDetails")}</summary><pre className="whitespace-pre-wrap break-words">{error.message}</pre></details> : null}
       <DialogFooter>

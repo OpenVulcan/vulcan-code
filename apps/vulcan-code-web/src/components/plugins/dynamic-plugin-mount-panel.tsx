@@ -35,9 +35,9 @@ import {
   subscribePluginUiInvalidation,
 } from "@/service/plugin-ui-events";
 import type { PluginSummary } from "@/types";
-import { detectShellHost, type ShellHostMarker } from "@/shell/runtime";
-import { BrowserArea } from "@/components/features/browser/BrowserArea";
-import { ClientBrowserArea } from "@/components/features/browser/ClientBrowserArea";
+import { detectShellHost, type ShellHostMarker } from "@/host-shell/runtime";
+import { BrowserArea } from "@/components/features/browser/browser-area";
+import { ClientBrowserArea } from "@/components/features/browser/client-browser-area";
 
 // PluginUiSdk is the stable host context exposed to one authorized dynamic plugin module.
 // PluginUiSdk 是暴露给单个已授权动态插件模块的稳定宿主上下文。
@@ -385,12 +385,12 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
 
   if (error) {
     return <div className="space-y-2 rounded-md border border-border bg-card p-4 text-sm text-foreground" role="alert">
-      <p>{locale.startsWith("zh") ? "插件页面加载失败" : "Unable to load plugin page"}</p>
+      <p>{t("plugins.mount.unableToLoadPlugin")}</p>
       <Button size="sm" variant="outline" onClick={() => {
         invalidatePersistentPluginUiModules(props.plugin.id);
         setRetryRevision((revision) => revision + 1);
-      }}>{locale.startsWith("zh") ? "重试" : "Retry"}</Button>
-      <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary>
+      }}>{t("plugins.mount.retry")}</Button>
+      <details><summary>{t("plugins.mount.errorDetails")}</summary>
         <pre className="max-w-full whitespace-pre-wrap break-words text-xs text-muted-foreground">{error}</pre>
       </details>
     </div>;

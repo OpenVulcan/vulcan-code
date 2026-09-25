@@ -7,8 +7,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { StatusPill } from "@/components/shared/status";
-import { useI18n } from "@/i18n";
-import { CoreBrowserRuntimeControls } from "@/components/features/browser/CoreBrowserRuntimeControls";
+import { formatMessage, useI18n } from "@/i18n";
+import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
 import type { PluginSummary, VulcanPluginPermissionPreview } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
@@ -514,19 +514,17 @@ export function VulcanPluginsPanel(props: {
 
   return (
     <div className="skill-page-body lua-skill-page-body">
-      <section className="vulcan-plugin-install-panel" aria-label={locale.startsWith("zh") ? "安装本地插件" : "Install local plugin"}>
+      <section className="vulcan-plugin-install-panel" aria-label={t("skills.plugins.installLocalPlugin")}>
         <div className="vulcan-plugin-install-heading">
           <ShieldCheck size={17} />
           <div>
-            <strong>{locale.startsWith("zh") ? "安装本地插件" : "Install local plugin"}</strong>
-            <p>{locale.startsWith("zh")
-              ? "先检查插件包，再明确授权其能力、Hook、界面挂载点和进程入口。"
-              : "Inspect the package before explicitly authorizing its capabilities, hooks, UI mounts, and process entries."}</p>
+            <strong>{t("skills.plugins.installLocalPlugin")}</strong>
+            <p>{t("skills.plugins.inspectThePackageBefore")}</p>
           </div>
         </div>
         <div className="vulcan-plugin-install-input-row">
           <input
-            aria-label={locale.startsWith("zh") ? "本地插件目录" : "Local plugin directory"}
+            aria-label={t("skills.plugins.localPluginDirectory")}
             disabled={mutationBusy}
             onChange={(event) => {
               setInstallSourcePath(event.target.value);
@@ -535,7 +533,7 @@ export function VulcanPluginsPanel(props: {
               setRegistryDependenciesConfirmed(false);
               setInstallSecretDrafts({});
             }}
-            placeholder={locale.startsWith("zh") ? "输入包含 plugin.yaml 的本地目录" : "Directory containing plugin.yaml"}
+            placeholder={t("skills.plugins.directoryContainingPluginYaml")}
             value={installSourcePath}
           />
           <Button
@@ -545,12 +543,12 @@ export function VulcanPluginsPanel(props: {
             type="button"
             variant="secondary"
           >
-            {locale.startsWith("zh") ? "检查" : "Inspect"}
+            {t("skills.plugins.inspect")}
           </Button>
         </div>
         {installError ? <div className="skill-empty-state warning" role="alert">
-          <p>{locale.startsWith("zh") ? "插件操作失败，请重试。" : "Plugin action failed. Try again."}</p>
-          <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
+          <p>{t("skills.plugins.pluginActionFailedTry")}</p>
+          <details><summary>{t("skills.plugins.errorDetails")}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
         </div> : null}
         {permissionPreview ? (
           <div className="vulcan-plugin-permission-preview">
@@ -559,22 +557,22 @@ export function VulcanPluginsPanel(props: {
               <Badge variant="secondary">v{permissionPreview.version}</Badge>
             </div>
             <dl>
-              <div><dt>{locale.startsWith("zh") ? "权限" : "Permissions"}</dt><dd>{permissionPreview.permissions.join("、") || "—"}</dd></div>
+              <div><dt>{t("skills.plugins.permissions")}</dt><dd>{permissionPreview.permissions.join("、") || "—"}</dd></div>
               <div><dt>Hooks</dt><dd>{permissionPreview.hookPoints.join("、") || "—"}</dd></div>
-              <div><dt>{locale.startsWith("zh") ? "界面挂载点" : "UI mounts"}</dt><dd>{permissionPreview.uiMountPoints.join("、") || "—"}</dd></div>
-              <div><dt>{locale.startsWith("zh") ? "原生进程" : "Native processes"}</dt><dd>{permissionPreview.binaryIds.join("、") || "—"}</dd></div>
+              <div><dt>{t("skills.plugins.uiMounts")}</dt><dd>{permissionPreview.uiMountPoints.join("、") || "—"}</dd></div>
+              <div><dt>{t("skills.plugins.nativeProcesses")}</dt><dd>{permissionPreview.binaryIds.join("、") || "—"}</dd></div>
               <div><dt>Node.js</dt><dd>{permissionPreview.nodeEntryIds.join("、") || "—"}</dd></div>
               <div><dt>Python</dt><dd>{permissionPreview.pythonEntryIds.join("、") || "—"}</dd></div>
-              <div><dt>{locale.startsWith("zh") ? "插件类型" : "Plugin type"}</dt><dd>{permissionPreview.hasLuaRuntime
-                ? (locale.startsWith("zh") ? "运行时插件" : "Runtime plugin")
-                : (locale.startsWith("zh") ? "内容插件" : "Content plugin")}</dd></div>
-              <div><dt>{locale.startsWith("zh") ? "技能" : "Skills"}</dt><dd>{permissionPreview.skillIds.join("、") || "—"}</dd></div>
-              <div><dt>{locale.startsWith("zh") ? "智能体" : "Agents"}</dt><dd>{permissionPreview.agentIds.join("、") || "—"}</dd></div>
+              <div><dt>{t("skills.plugins.pluginType")}</dt><dd>{permissionPreview.hasLuaRuntime
+                ? t("skills.plugins.runtimePlugin")
+                : t("skills.plugins.contentPlugin")}</dd></div>
+              <div><dt>{t("skills.plugins.skills")}</dt><dd>{permissionPreview.skillIds.join("、") || "—"}</dd></div>
+              <div><dt>{t("skills.plugins.agents")}</dt><dd>{permissionPreview.agentIds.join("、") || "—"}</dd></div>
               <div>
                 <dt>MCP</dt>
                 <dd>{permissionPreview.mcpServers.map((server) => {
                   const secretUsage = server.secretKeys.length > 0
-                    ? ` · ${locale.startsWith("zh") ? "Secret 键" : "Secret keys"}: ${server.secretKeys.join(", ")}`
+                    ? ` · ${t("skills.plugins.secretKeys")}: ${server.secretKeys.join(", ")}`
                     : "";
                   return `${server.name} (${server.serverId}, ${server.transport}${secretUsage})`;
                 }).join("；") || "—"}</dd>
@@ -582,9 +580,7 @@ export function VulcanPluginsPanel(props: {
             </dl>
             {permissionPreview.permissions.includes("system_vldb_access") ? (
               <div className="skill-empty-state warning">
-                {locale.startsWith("zh")
-                  ? "高信任权限：此插件可以直接读取、修改和删除宿主注册的系统 VLDB 数据。请只授权已审查且可信的插件包。"
-                  : "High-trust permission: this plugin can directly read, modify, and delete data in host-registered system VLDB bindings. Authorize only reviewed, trusted packages."}
+                {t("skills.plugins.highTrustPermissionThis")}
               </div>
             ) : null}
             <label className="vulcan-plugin-permission-consent">
@@ -592,9 +588,7 @@ export function VulcanPluginsPanel(props: {
                 checked={authorizationConfirmed}
                 onCheckedChange={(checked) => setAuthorizationConfirmed(checked === true)}
               />
-              <span>{locale.startsWith("zh")
-                ? "我已核对并授权以上全部能力、Hook、挂载点和进程入口。"
-                : "I reviewed and authorize every capability, hook, mount, and process entry above."}</span>
+              <span>{t("skills.plugins.iReviewedAndAuthorize")}</span>
             </label>
             {permissionPreview.permissions.includes("dependency_registry_network") ? (
               <label className="vulcan-plugin-permission-consent warning">
@@ -602,17 +596,13 @@ export function VulcanPluginsPanel(props: {
                   checked={registryDependenciesConfirmed}
                   onCheckedChange={(checked) => setRegistryDependenciesConfirmed(checked === true)}
                 />
-                <span>{locale.startsWith("zh")
-                  ? "允许 Vulcan 在安装时联网从注册表获取该插件声明的锁定依赖。"
-                  : "Allow Vulcan to access registries for this plugin's locked dependencies during installation."}</span>
+                <span>{t("skills.plugins.allowVulcanToAccess")}</span>
               </label>
             ) : null}
             {permissionPreview.installSecretRequirements.length > 0 ? (
               <div className="vulcan-plugin-component-list">
-                <strong>{locale.startsWith("zh") ? "本地 MCP 安装凭据" : "Local MCP installation credentials"}</strong>
-                <p>{locale.startsWith("zh")
-                  ? "这些值仅写入操作系统凭据库，并用于安装提交前的本地 MCP 启动验证。"
-                  : "These values are written only to the operating-system credential store and used to validate local MCP startup before installation commits."}</p>
+                <strong>{t("skills.plugins.localMcpInstallationCredentials")}</strong>
+                <p>{t("skills.plugins.theseValuesAreWritten")}</p>
                 {permissionPreview.installSecretRequirements.map((requirement) => {
                   const draftKey = `${requirement.serverId}:${requirement.secretKey}`;
                   return (
@@ -638,10 +628,10 @@ export function VulcanPluginsPanel(props: {
             {inspectedInstalledPlugin ? (
               <div className={`skill-empty-state ${inspectedInstalledPlugin.extension?.origin === "userInstalled" && inspectedInstalledPlugin.runtimeState === "disabled" ? "" : "warning"}`}>
                 {inspectedInstalledPlugin.extension?.origin !== "userInstalled"
-                  ? (locale.startsWith("zh") ? "该 ID 已由内建插件占用，不能从本地包替换。" : "This ID is owned by a bundled plugin and cannot be replaced by a local package.")
+                  ? t("skills.plugins.thisIdIsOwned")
                   : inspectedInstalledPlugin.runtimeState === "disabled"
-                    ? (locale.startsWith("zh") ? "将更新现有用户插件；旧插件包会保留到候选验证与代次发布成功。" : "This will update the existing user plugin; its previous package is retained until candidate validation and generation publication succeed.")
-                    : (locale.startsWith("zh") ? "更新前必须先停用并完全排空现有插件。" : "Disable and fully drain the existing plugin before updating it.")}
+                    ? t("skills.plugins.thisWillUpdateThe")
+                    : t("skills.plugins.disableAndFullyDrain")}
               </div>
             ) : null}
             <Button
@@ -656,8 +646,8 @@ export function VulcanPluginsPanel(props: {
               type="button"
             >
               {inspectedInstalledPlugin?.extension?.origin === "userInstalled"
-                ? (locale.startsWith("zh") ? "授权并更新" : "Authorize and update")
-                : (locale.startsWith("zh") ? "授权并安装" : "Authorize and install")}
+                ? t("skills.plugins.authorizeAndUpdate")
+                : t("skills.plugins.authorizeAndInstall")}
             </Button>
           </div>
         ) : null}
@@ -685,8 +675,8 @@ export function VulcanPluginsPanel(props: {
         </Select>
       </div>
       {secretError ? <div className="vulcan-plugin-install-error" role="alert">
-        <p>{locale.startsWith("zh") ? "凭据操作失败，请重试。" : "Credential action failed. Try again."}</p>
-        <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{secretError}</pre></details>
+        <p>{t("skills.plugins.credentialActionFailedTry")}</p>
+        <details><summary>{t("skills.plugins.errorDetails")}</summary><pre className="plugin-control-error-details">{secretError}</pre></details>
       </div> : null}
       <div className="skill-card-list agent-skill-card-list">
         {visiblePlugins.length === 0 ? (
@@ -731,15 +721,15 @@ export function VulcanPluginsPanel(props: {
                       status={!plugin.available || plugin.diagnostics.length > 0 ? "warning" : plugin.enabled ? "ready" : "pending"}
                     /> : null}
                     <Badge variant="outline">{plugin.extension?.origin === "userInstalled"
-                      ? (locale.startsWith("zh") ? "用户插件" : "User plugin")
-                      : plugin.id === "vulcan-browser" ? (locale.startsWith("zh") ? "内置组件" : "Built-in component")
+                      ? t("skills.plugins.userPlugin")
+                      : plugin.id === "vulcan-browser" ? t("skills.plugins.builtInComponent")
                       : t("skills.plugins.systemKind")}</Badge>
                     {plugin.version ? <Badge variant="secondary">v{plugin.version}</Badge> : null}
                     <Badge variant="outline">{plugin.extension?.hasLuaRuntime
-                      ? (locale.startsWith("zh") ? "运行时插件" : "Runtime plugin")
-                      : (locale.startsWith("zh") ? "内容插件" : "Content plugin")}</Badge>
-                    <Badge variant="outline">{locale.startsWith("zh") ? "技能" : "Skills"} {plugin.skillCount}</Badge>
-                    <Badge variant="outline">{locale.startsWith("zh") ? "智能体" : "Agents"} {plugin.agentCount}</Badge>
+                      ? t("skills.plugins.runtimePlugin")
+                      : t("skills.plugins.contentPlugin")}</Badge>
+                    <Badge variant="outline">{t("skills.plugins.skills")} {plugin.skillCount}</Badge>
+                    <Badge variant="outline">{t("skills.plugins.agents")} {plugin.agentCount}</Badge>
                     <Badge variant="outline">{t("skills.plugins.tools")} {plugin.toolCount}</Badge>
                     <Badge variant="outline">{t("skills.plugins.hooks")} {plugin.hookCount}</Badge>
                     <Badge variant="outline">{t("skills.plugins.sessions")} {plugin.activeSessionCount}</Badge>
@@ -749,22 +739,24 @@ export function VulcanPluginsPanel(props: {
                 <span className="agent-definition-row-path">{plugin.id}</span>
                 {plugin.id === "vulcan-browser" ? <div className="space-y-2 text-xs">
                   <div>
-                  {locale.startsWith("zh")
-                    ? `内置 Playwright MCP：${environmentReadyByPlugin[plugin.id] === true ? "已就绪" : environmentReadyByPlugin[plugin.id] === false ? "缺失或已损坏，请修复应用安装" : "检查中"}`
-                    : `Built-in Playwright MCP: ${environmentReadyByPlugin[plugin.id] === true ? "ready" : environmentReadyByPlugin[plugin.id] === false ? "missing or damaged; repair the application installation" : "checking"}`}
+                  {formatMessage(t("skills.plugins.playwrightStatus"), {
+                    status: t(environmentReadyByPlugin[plugin.id] === true
+                      ? "skills.plugins.playwrightReady"
+                      : environmentReadyByPlugin[plugin.id] === false ? "skills.plugins.playwrightMissing" : "skills.plugins.playwrightChecking"),
+                  })}
                   </div>
                   <CoreBrowserRuntimeControls />
                 </div> : null}
                 {plugin.diagnostics.length > 0 ? <details className="vulcan-plugin-component-details text-[var(--vcn-content-warning)]">
-                  <summary>{locale.startsWith("zh") ? "查看插件诊断" : "View plugin diagnostics"}</summary>
+                  <summary>{t("skills.plugins.viewPluginDiagnostics")}</summary>
                   <pre className="plugin-control-error-details">{plugin.diagnostics.join("\n")}</pre>
                 </details> : null}
                 {plugin.skillCount > 0 || plugin.agentCount > 0 ? (
                   <details className="vulcan-plugin-component-details">
-                    <summary>{locale.startsWith("zh") ? "查看只读组件" : "View read-only components"}</summary>
+                    <summary>{t("skills.plugins.viewReadOnlyComponents")}</summary>
                     {plugin.skillCount > 0 ? (
                       <div className="vulcan-plugin-component-group">
-                        <strong>{locale.startsWith("zh") ? "技能" : "Skills"}</strong>
+                        <strong>{t("skills.plugins.skills")}</strong>
                         <div>{plugin.extension?.skills.map((skillId) => (
                           <Badge key={skillId} variant="secondary">{skillId}</Badge>
                         ))}</div>
@@ -772,7 +764,7 @@ export function VulcanPluginsPanel(props: {
                     ) : null}
                     {plugin.agentCount > 0 ? (
                       <div className="vulcan-plugin-component-group">
-                        <strong>{locale.startsWith("zh") ? "智能体" : "Agents"}</strong>
+                        <strong>{t("skills.plugins.agents")}</strong>
                         <div>{plugin.extension?.agents.map((agentId) => (
                           <Badge key={agentId} variant="secondary">{agentId}</Badge>
                         ))}</div>
@@ -782,7 +774,7 @@ export function VulcanPluginsPanel(props: {
                 ) : null}
                 {(plugin.extension?.mcpServers.length ?? 0) > 0 ? (
                   <details className="vulcan-plugin-component-details">
-                    <summary>{locale.startsWith("zh") ? "MCP 服务器与凭据" : "MCP servers and credentials"}</summary>
+                    <summary>{t("skills.plugins.mcpServersAndCredentials")}</summary>
                     {plugin.extension?.mcpServers.map((server) => (
                       <div className="vulcan-plugin-component-group" key={server.id}>
                         <div className="agent-definition-row-title-line">
@@ -805,7 +797,7 @@ export function VulcanPluginsPanel(props: {
                         </span>
                         {(server.recentLogs?.length ?? 0) > 0 ? (
                           <details className="vulcan-plugin-component-details">
-                            <summary>{locale.startsWith("zh") ? "最近脱敏日志" : "Recent sanitized logs"}</summary>
+                            <summary>{t("skills.plugins.recentSanitizedLogs")}</summary>
                             <pre className="agent-definition-row-path">{server.recentLogs?.join("\n")}</pre>
                           </details>
                         ) : null}
@@ -833,14 +825,14 @@ export function VulcanPluginsPanel(props: {
                                 type="button"
                                 variant="secondary"
                               >
-                                {locale.startsWith("zh") ? "安全保存" : "Store securely"}
+                                {t("skills.plugins.storeSecurely")}
                               </Button>
                               <IconButton
-                                aria-label={locale.startsWith("zh") ? "删除 Secret" : "Delete secret"}
+                                aria-label={t("skills.plugins.deleteSecret")}
                                 disabled={mutationBusy}
                                 onClick={() => { setSecretError(""); setPendingDestructive({ kind: "secret", pluginId: plugin.id, serverId: server.id, secretKey }); }}
                                 size="sm"
-                                title={locale.startsWith("zh") ? "删除 Secret" : "Delete secret"}
+                                title={t("skills.plugins.deleteSecret")}
                                 type="button"
                                 variant="destructive"
                               >
@@ -864,22 +856,22 @@ export function VulcanPluginsPanel(props: {
                   variant="secondary"
                 >
                   {installTask?.state === "queued"
-                    ? (locale.startsWith("zh") ? "等待安装" : "Install queued")
+                    ? t("skills.plugins.installQueued")
                     : installTask?.state === "running"
-                      ? (locale.startsWith("zh") ? "正在安装" : "Installing runtime")
-                      : plugin.id === "vulcan-browser" ? (locale.startsWith("zh") ? "修复本地环境" : "Repair local environment")
-                      : (locale.startsWith("zh") ? "安装运行环境" : "Install runtime")}
+                      ? t("skills.plugins.installingRuntime")
+                      : plugin.id === "vulcan-browser" ? t("skills.plugins.repairLocalEnvironment")
+                      : t("skills.plugins.installRuntime")}
                 </Button>
               ) : null}
               {plugin.extension?.origin === "userInstalled" ? (
                 <IconButton
-                  aria-label={locale.startsWith("zh") ? "卸载用户插件" : "Uninstall user plugin"}
+                  aria-label={t("skills.plugins.uninstallUserPlugin")}
                   disabled={mutationBusy || plugin.runtimeState !== "disabled"}
                   onClick={() => { setInstallError(""); setPendingDestructive({ kind: "uninstall", plugin }); }}
                   size="sm"
                   title={plugin.runtimeState === "disabled"
-                    ? (locale.startsWith("zh") ? "卸载" : "Uninstall")
-                    : (locale.startsWith("zh") ? "请先停用插件" : "Disable the plugin first")}
+                    ? t("skills.plugins.uninstall")
+                    : t("skills.plugins.disableThePluginFirst")}
                   type="button"
                   variant="destructive"
                 >
@@ -897,10 +889,10 @@ export function VulcanPluginsPanel(props: {
               </div>
               {installTask ? <div className="text-xs" role={installTask.state === "failed" ? "alert" : "status"}>
                 {installTask.state === "failed"
-                  ? (locale.startsWith("zh") ? `运行环境安装失败：${installTask.error ?? "未知错误"}` : `Runtime installation failed: ${installTask.error ?? "Unknown error"}`)
+                  ? formatMessage(t("skills.plugins.runtimeInstallFailed"), { error: installTask.error ?? t("skills.plugins.unknownError") })
                   : installTask.state === "succeeded"
-                    ? (locale.startsWith("zh") ? "运行环境安装完成" : "Runtime installation complete")
-                    : locale.startsWith("zh") ? `安装阶段：${installTask.stage}` : `Install stage: ${installTask.stage}`}
+                    ? t("skills.plugins.runtimeInstallationComplete")
+                    : formatMessage(t("skills.plugins.installStage"), { stage: installTask.stage })}
               </div> : null}
             </article>
           );
@@ -909,19 +901,19 @@ export function VulcanPluginsPanel(props: {
       <AlertDialog open={pendingDestructive !== null} onOpenChange={(open) => { if (!open && !actionRunningRef.current) setPendingDestructive(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{pendingDestructive?.kind === "uninstall" ? (locale.startsWith("zh") ? "卸载插件" : "Uninstall plugin") : (locale.startsWith("zh") ? "删除凭据" : "Delete credential")}</AlertDialogTitle>
+            <AlertDialogTitle>{pendingDestructive?.kind === "uninstall" ? t("skills.plugins.uninstallPlugin") : t("skills.plugins.deleteCredential")}</AlertDialogTitle>
             <AlertDialogDescription>{pendingDestructive?.kind === "uninstall"
-              ? (locale.startsWith("zh") ? `卸载“${pendingDestructive.plugin.name}”会删除插件包、配置和隔离环境。` : `Uninstalling “${pendingDestructive.plugin.name}” removes its package, configuration and isolated environment.`)
-              : pendingDestructive ? (locale.startsWith("zh") ? `删除凭据“${pendingDestructive.secretKey}”？已启用服务器必须先通过就绪检查。` : `Delete credential “${pendingDestructive.secretKey}”? Enabled servers must first pass readiness checks.`) : ""}</AlertDialogDescription>
+              ? (formatMessage(t("skills.plugins.uninstallingRemovesItsPackage"), { name: pendingDestructive.plugin.name }))
+              : pendingDestructive ? (formatMessage(t("skills.plugins.deleteCredentialEnabledServers"), { secretKey: pendingDestructive.secretKey })) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
           {(pendingDestructive?.kind === "uninstall" ? installError : secretError) ? <p role="alert" className="text-sm text-destructive">{pendingDestructive?.kind === "uninstall" ? installError : secretError}</p> : null}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={mutationBusy}>{locale.startsWith("zh") ? "取消" : "Cancel"}</AlertDialogCancel>
+            <AlertDialogCancel disabled={mutationBusy}>{t("skills.plugins.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={mutationBusy} onClick={(event) => {
               event.preventDefault();
               if (pendingDestructive?.kind === "uninstall") void uninstallPlugin(pendingDestructive.plugin);
               else if (pendingDestructive) void deletePluginMcpSecret(pendingDestructive.pluginId, pendingDestructive.serverId, pendingDestructive.secretKey);
-            }}>{mutationBusy ? (locale.startsWith("zh") ? "处理中…" : "Working…") : (locale.startsWith("zh") ? "确认" : "Confirm")}</AlertDialogAction>
+            }}>{mutationBusy ? t("skills.plugins.working") : t("skills.plugins.confirm")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { KnowledgeDisplayIndexState, KnowledgeDocumentSummary } from "@/types";
-import { buildKnowledgeDocumentTree, defaultKnowledgeBrowseCorpus } from "./KnowledgeLibraryViewerDialog";
+import { buildKnowledgeDocumentTree, defaultKnowledgeBrowseCorpus } from "./knowledge-library-viewer-dialog";
 
 // knowledgeDocument creates one complete document summary for tree tests.
 // knowledgeDocument 为目录树测试创建一份完整文档摘要。

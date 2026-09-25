@@ -1,3 +1,4 @@
+import { translateActive } from "@/i18n";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import type { ServiceRequestOptions } from "@/service/protocol";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
@@ -27,7 +28,7 @@ import type {
 // route 与 dimension 为明确界面意图；返回宿主验证的候选及项目影响。
 export async function preflightVceEmbeddingRoute(route: PublicAiInferenceRoute | null,
   dimension?: number): Promise<VceEmbeddingPreflight> {
-  if (!hasServiceRuntime()) throw new Error("语义引擎模型预检需要连接宿主服务。");
+  if (!hasServiceRuntime()) throw new Error(translateActive("codeContext.service.modelPreflightNeedsService"));
   return serviceClient.request<VceEmbeddingPreflight>("service_preflight_vce_embedding_route", {
     request: { route, dimension },
   });
@@ -66,7 +67,7 @@ function browserVceOverview(projectId: string): VceProjectOverviewResponse {
       lifecycle: enabled ? "blocked_configuration" : "disabled",
       presentFiles: 0,
       checkpointBlobs: 0,
-      lastError: enabled ? "代码语义服务仅在桌面服务连接后可用。" : null,
+      lastError: enabled ? translateActive("codeContext.service.desktopOnly") : null,
     },
     ai: null,
     counts: null,
@@ -77,7 +78,7 @@ function browserVceOverview(projectId: string): VceProjectOverviewResponse {
 // browserVceConfigurationStatus returns an explicit closed state outside the desktop service.
 // browserVceConfigurationStatus 在桌面服务之外返回明确的关闭状态。
 function browserVceConfigurationStatus(): VceGlobalConfigurationStatus {
-  const issue = "代码语义模型配置只能由桌面服务验证。";
+  const issue = translateActive("codeContext.service.modelConfigDesktopOnly");
   return {
     ready: false,
     consumerProfileId: "vce",
@@ -146,7 +147,7 @@ export async function updateVceProjectSettings(
   settings: VceProjectSettingsInput,
 ): Promise<VceProjectSettingsSummary> {
   if (!hasServiceRuntime()) {
-    throw new Error("代码语义设置只能在桌面服务连接后保存。");
+    throw new Error(translateActive("codeContext.service.settingsSaveNeedsService"));
   }
   return serviceClient.request<VceProjectSettingsSummary>("service_update_vce_project_settings", {
     request: { projectId, expectedRevision, settings },
@@ -159,7 +160,7 @@ export async function updateVceProjectSettings(
 // request 包含项目、检查点保护与稳定重放键；返回持久回执。
 export async function submitVceJob(request: VceJobSubmitRequest): Promise<VceJobSummary> {
   if (!hasServiceRuntime()) {
-    throw new Error("请先连接服务，再创建或同步语义索引。");
+    throw new Error(translateActive("codeContext.service.connectBeforeIndex"));
   }
   return serviceClient.request<VceJobSummary>("service_submit_vce_job", { request });
 }
@@ -184,7 +185,7 @@ export async function loadVceJob(
 // projectId and jobId identify the receipt. Returns durable cancellation acknowledgement.
 // projectId 与 jobId 标识回执。返回持久取消确认。
 export async function cancelVceJob(projectId: string, jobId: string): Promise<VceJobSummary> {
-  if (!hasServiceRuntime()) throw new Error("请先连接服务，再取消语义索引作业。");
+  if (!hasServiceRuntime()) throw new Error(translateActive("codeContext.service.connectBeforeCancel"));
   return serviceClient.request<VceJobSummary>("service_cancel_vce_job", { request: { projectId, jobId } });
 }
 
@@ -284,7 +285,7 @@ export async function planVceMaintenance(
   mode: "repair" | "rebuild" | "cleanup_staging" | "compact",
 ): Promise<VceMaintenancePlanResponse> {
   if (!hasServiceRuntime()) {
-    throw new Error("代码语义维护计划需要连接桌面服务，不能生成未绑定模型的预览。");
+    throw new Error(translateActive("codeContext.service.maintenancePlanNeedsService"));
   }
   return serviceClient.request<VceMaintenancePlanResponse>("service_plan_vce_maintenance", {
     request: { projectId, mode },
@@ -305,12 +306,12 @@ export async function executeVceMaintenance(
   expectedEmbeddingFingerprint: string,
 ): Promise<VceMaintenanceExecutionResponse> {
   if (!hasServiceRuntime()) {
-    throw new Error("代码语义维护只能在桌面服务连接后执行。");
+    throw new Error(translateActive("codeContext.service.maintenanceNeedsService"));
   }
   // An absent checkpoint is a recovery contract reserved for rebuild admission.
   // 缺失检查点仅属于重建准入恢复契约。
   if (expectedCheckpointVersion === null && mode !== "rebuild") {
-    throw new Error("修复、物理整理或暂存清理要求一个已发布检查点。");
+    throw new Error(translateActive("codeContext.service.maintenanceNeedsCheckpoint"));
   }
   return serviceClient.request<VceMaintenanceExecutionResponse>("service_execute_vce_maintenance", {
     request: {

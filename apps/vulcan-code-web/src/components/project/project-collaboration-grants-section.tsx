@@ -108,8 +108,7 @@ export function ProjectCollaborationGrantsSection(props: {
   // 仅用于选择真实会话身份的当前工作台快照。
   workbench: WorkbenchSnapshot;
 }) {
-  const { locale, t } = useI18n();
-  const isChinese = locale === "zh-CN";
+  const { t } = useI18n();
   const sourceSessions = React.useMemo(
     () => props.workbench.conversations.filter((conversation) => conversation.projectId === props.projectId),
     [props.projectId, props.workbench.conversations],
@@ -193,7 +192,7 @@ export function ProjectCollaborationGrantsSection(props: {
     if (addBusy || !sourceSessionId || !targetSessionId || sourceSessionId === targetSessionId) return;
     const actions = GRANT_ACTIONS.filter((action) => selectedActions[action]);
     if (actions.length === 0) {
-      setMutationError(isChinese ? "至少选择一项授权能力。" : "Select at least one capability.");
+      setMutationError(t("project.grants.selectAtLeastOne"));
       return;
     }
     const request = pendingAddRef.current ?? {
@@ -211,7 +210,7 @@ export function ProjectCollaborationGrantsSection(props: {
       pendingAddRef.current = null;
       setPendingAdd(null);
       setSelectedActions(actionSet());
-      toast.success(isChinese ? "授权已保存。" : "Grant saved.");
+      toast.success(t("project.grants.grantSaved"));
       await loadGrants();
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : String(error));
@@ -237,7 +236,7 @@ export function ProjectCollaborationGrantsSection(props: {
       await removeCollaborationGrant(request.sourceSessionId, request.grantId, request.operationId);
       pendingRemovesRef.current.delete(grant.grant_id);
       setPendingRemoves(Object.fromEntries(pendingRemovesRef.current));
-      toast.success(isChinese ? "授权已撤销。" : "Grant revoked.");
+      toast.success(t("project.grants.grantRevoked"));
       await loadGrants();
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : String(error));
@@ -248,37 +247,21 @@ export function ProjectCollaborationGrantsSection(props: {
 
   const sourceSession = sourceSessions.find((session) => session.id === sourceSessionId);
   const targetOptions = allSessions.filter((session) => session.id !== sourceSessionId);
-  const labels = isChinese
-    ? {
-      title: "跨会话授权",
-      description: "授权记录只保存在来源会话。AI 不能创建或撤销授权。",
-      source: "来源会话",
-      target: "目标会话",
-      capabilities: "允许的能力",
-      save: pendingAdd ? "重试保存授权" : "保存授权",
-      loading: "正在读取授权…",
-      empty: "当前来源会话没有活动授权。",
-      retry: "重试读取",
-      revoke: "撤销",
-      noSource: "当前项目没有可授权的会话。",
-      noTarget: "没有可作为目标的会话。",
-      pending: "请求失败；再次点击将复用同一个操作 ID。",
-    }
-    : {
-      title: "Cross-session grants",
-      description: "Grants live only in the source session. AI cannot create or revoke them.",
-      source: "Source session",
-      target: "Target session",
-      capabilities: "Allowed capabilities",
-      save: pendingAdd ? "Retry grant" : "Save grant",
-      loading: "Loading grants…",
-      empty: "This source session has no active grants.",
-      retry: "Retry read",
-      revoke: "Revoke",
-      noSource: "This project has no sessions that can own a grant.",
-      noTarget: "There are no target sessions available.",
-      pending: "The request failed; clicking again reuses the same operation ID.",
-    };
+  const labels = {
+    title: t("project.grants.title"),
+    description: t("project.grants.description"),
+    source: t("project.grants.source"),
+    target: t("project.grants.target"),
+    capabilities: t("project.grants.capabilities"),
+    save: t(pendingAdd ? "project.grants.saveRetry" : "project.grants.save"),
+    loading: t("project.grants.loading"),
+    empty: t("project.grants.empty"),
+    retry: t("project.grants.retry"),
+    revoke: t("project.grants.revoke"),
+    noSource: t("project.grants.noSource"),
+    noTarget: t("project.grants.noTarget"),
+    pending: t("project.grants.pending"),
+  };
 
   return (
     <div className="project-settings-section">
@@ -364,7 +347,7 @@ export function ProjectCollaborationGrantsSection(props: {
                         ? sessionLabel(allSessions.find((session) => session.id === grant.target_session_id)!, props.workbench.projects)
                         : grant.target_session_id}
                     </strong>
-                    <span className="block text-xs text-muted-foreground">{grantActionSummary(grant, t, isChinese ? "、" : ", ")}</span>
+                    <span className="block text-xs text-muted-foreground">{grantActionSummary(grant, t, t("project.grants.listSeparator"))}</span>
                   </div>
                   <Button
                     disabled={addBusy || busyGrantId !== null}
@@ -374,7 +357,7 @@ export function ProjectCollaborationGrantsSection(props: {
                     variant="outline"
                   >
                     {busyGrantId === grant.grant_id ? <LoaderCircle className="mr-1.5 animate-spin" size={14} /> : null}
-                    {pendingRemoves[grant.grant_id] ? (isChinese ? "重试撤销" : "Retry revoke") : labels.revoke}
+                    {pendingRemoves[grant.grant_id] ? t("project.grants.retryRevoke") : labels.revoke}
                   </Button>
                 </div>
               ))}

@@ -39,6 +39,7 @@ import type {
   VmmProfileBundleActionValue,
   VmmProfileNodeActionValue,
 } from "@/types"
+import { formatDateTime } from "@/lib/display-format"
 
 // NATIVE_FIXED_USER_TARGET is a UI-only identity for the single host-owned native memory user.
 // NATIVE_FIXED_USER_TARGET 是原生记忆唯一宿主用户的纯界面身份。
@@ -171,9 +172,6 @@ function VmmProfilePage({
   // readGeneration rejects responses belonging to a previous backend or unmounted page.
   // readGeneration 拒绝先前后端或已经卸载页面的响应。
   const readGeneration = React.useRef(0)
-  // copy selects complete user-facing status text in the existing locale.
-  // copy 按现有语言选择完整用户状态文案。
-  const copy = React.useCallback((zh: string, en: string) => locale === "zh-CN" ? zh : en, [locale])
   // correctionOpen keeps correction separate from read-only profile browsing.
   // correctionOpen 将修正操作与只读画像浏览分开。
   const [correctionOpen, setCorrectionOpen] = React.useState(false)
@@ -281,10 +279,10 @@ function VmmProfilePage({
       const response = await pending.promise
       if (generation !== readGeneration.current) return
       if (isNative) {
-        if (response?.data.kind !== "native_project_catalog") throw new Error(copy("记忆项目目录加载失败，请刷新重试。", "Memory project directory could not be loaded. Refresh to retry."))
+        if (response?.data.kind !== "native_project_catalog") throw new Error(t("memory.profile.memoryProjectDirectoryCould"))
         setNativeCatalog(response.data.value)
       } else if (response?.data.kind !== "users_projects") {
-        throw new Error(copy("用户与项目目录加载失败，请刷新重试。", "User and project directory could not be loaded. Refresh to retry."))
+        throw new Error(t("memory.profile.userAndProjectDirectory"))
       }
       setReadState("idle")
     } catch (error) {
@@ -294,7 +292,7 @@ function VmmProfilePage({
     } finally {
       if (catalogRequest.current === pending) catalogRequest.current = null
     }
-  }, [copy, isNative, onRunAction, snapshot.experienceState.deployment])
+  }, [isNative, onRunAction, snapshot.experienceState.deployment, t])
 
   React.useEffect(() => {
     if (!isNative || busy || nativeCatalog || nativeCatalogLoadIssued.current) {
@@ -376,17 +374,17 @@ function VmmProfilePage({
         : { ...identityPayload, target: effectiveTarget })
       if (generation !== readGeneration.current) return
       if (isNative && nodesResult?.data.kind === "native_profile_records") {
-        setNodes(nativeProfileNodes(nodesResult.data.value.nodes))
+        setNodes(nativeProfileNodes(nodesResult.data.value.nodes, locale))
         setNativeStateCounts(nodesResult.data.value.counts)
       } else if (!isNative && nodesResult?.data.kind === "profile_nodes") {
         setNodes(projectProfileNodes(nodesResult.data.value.nodes))
         setNativeStateCounts(null)
       } else {
-        throw new Error(copy("画像读取失败，请刷新重试。", "Profile could not be loaded. Refresh to retry."))
+        throw new Error(t("memory.profile.profileCouldNotBe"))
       }
       const bundle = await onRunAction("load_profile_bundle", identityPayload)
       if (generation !== readGeneration.current) return
-      if (bundle?.data.kind !== "profile_bundle") throw new Error(copy("画像预览读取失败，请刷新重试。", "Profile preview could not be loaded. Refresh to retry."))
+      if (bundle?.data.kind !== "profile_bundle") throw new Error(t("memory.profile.profilePreviewCouldNot"))
       const preview = vmmProfileBundlePreview(bundle.data.value, effectiveTarget)
       setBundleModeError(preview === null)
       setBundlePreview(preview ?? "")
@@ -396,7 +394,7 @@ function VmmProfilePage({
       setReadError(error instanceof Error ? error.message : String(error))
       setReadState("failed")
     }
-  }, [copy, effectiveTarget, isNative, loadCatalog, onRunAction, profileCatalogReady, selectedProjectRef, selectedTargetRef, selectedUserRef, snapshot.experienceState.deployment])
+  }, [effectiveTarget, isNative, loadCatalog, locale, onRunAction, profileCatalogReady, selectedProjectRef, selectedTargetRef, selectedUserRef, snapshot.experienceState.deployment, t])
 
   React.useEffect(() => {
     if (busy || !profileCatalogReady || !selectedTargetRef) {
@@ -483,7 +481,7 @@ function VmmProfilePage({
 
       {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
       {readError ? <p role="alert" className="text-sm text-destructive">{readError}</p> : null}
-      {!profileCatalogReady && readState === "idle" ? <p role="status" className="text-sm text-muted-foreground">{copy("请先在记忆项目中建立可用项目，再查看画像。", "Create an available memory project before browsing profiles.")}</p> : null}
+      {!profileCatalogReady && readState === "idle" ? <p role="status" className="text-sm text-muted-foreground">{t("memory.profile.createAnAvailableMemory")}</p> : null}
 
       <section className="vmm-profile-target" aria-label={t("memory.profile.target")}>
           <RadioGroup
@@ -627,7 +625,7 @@ function VmmProfilePage({
                     {node.updatedAtUnixMs != null ? (
                       <p>
                         {t("memory.profile.updatedAt")}{t("global.labelSeparator")}
-                        {new Date(node.updatedAtUnixMs).toLocaleString()}
+                        {formatDateTime(node.updatedAtUnixMs, locale)}
                       </p>
                     ) : null}
                     {node.storedState && node.state && node.storedState !== node.state ? (
@@ -748,7 +746,7 @@ function nativeProfileSourceKey(sourceKind: VmmNativeProfileRecordSummary["sourc
 
 // nativeProfileNodes converts native all-state records into detailed profile cards.
 // nativeProfileNodes 将原生全状态记录转换为详细画像卡片。
-function nativeProfileNodes(nodes: VmmNativeProfileRecordSummary[]): ProfileNodeView[] {
+function nativeProfileNodes(nodes: VmmNativeProfileRecordSummary[], locale: string): ProfileNodeView[] {
   return nodes
     .filter((node) => node.content.trim().length > 0)
     .map((node) => ({
@@ -757,7 +755,7 @@ function nativeProfileNodes(nodes: VmmNativeProfileRecordSummary[]): ProfileNode
       level: node.level,
       date: node.effectiveDateAtUnixMs == null
         ? ""
-        : new Date(node.effectiveDateAtUnixMs).toLocaleString(),
+        : formatDateTime(node.effectiveDateAtUnixMs, locale) ?? "",
       state: node.effectiveState,
       storedState: node.storedState,
       activeForInjection: node.activeForInjection,

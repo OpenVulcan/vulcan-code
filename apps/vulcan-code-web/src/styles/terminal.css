@@ -21,7 +21,7 @@
   padding: 8px 10px;
   /* Match the emulator palette across padding and unused terminal space. */
   /* 内边距和未使用终端空间与模拟器色板保持一致。 */
-  background: #111318;
+  background: var(--vcn-terminal-surface);
 }
 
 .terminal-viewport .xterm-screen canvas {
@@ -76,7 +76,7 @@
   overflow: hidden;
   resize: both;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--background);
   box-shadow: var(--vcn-shadow-floating);
   pointer-events: auto;
@@ -158,13 +158,13 @@
 }
 
 .project-terminal-current-title strong {
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
 .project-terminal-current-title small {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: var(--vcn-font-size-2xs);
   font-weight: 400;
 }
 
@@ -211,7 +211,7 @@
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   color: var(--muted-foreground);
   background: transparent;
   font: 600 10px/1 var(--font-mono, monospace);
@@ -256,11 +256,11 @@
   height: 28px;
   appearance: none;
   border: 1px solid var(--input);
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   padding: 0 24px 0 8px;
   color: var(--foreground);
   background: var(--background);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   outline: none;
 }
 
@@ -281,7 +281,7 @@
   height: 28px;
   place-items: center;
   border: 1px solid var(--input);
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   color: var(--foreground);
   background: var(--background);
   cursor: pointer;
@@ -315,7 +315,7 @@
   gap: 3px;
   margin-bottom: 3px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   padding: 3px;
   color: var(--foreground);
   background: transparent;
@@ -338,7 +338,7 @@
   align-items: flex-start;
   gap: 7px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--vcn-radius-sm);
   padding: 5px 4px;
   color: inherit;
   background: transparent;
@@ -357,7 +357,7 @@
   height: 7px;
   flex: 0 0 auto;
   margin-top: 3px;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--muted-foreground);
 }
 
@@ -373,7 +373,7 @@
 .project-terminal-session-name {
   min-width: 0;
   color: inherit;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.3;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -391,7 +391,7 @@
   height: 22px;
   place-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--vcn-radius-sm);
   color: var(--muted-foreground);
   background: transparent;
   cursor: pointer;
@@ -414,11 +414,11 @@
   min-width: 0;
   min-height: 26px;
   border: 1px solid var(--ring);
-  border-radius: 5px;
+  border-radius: var(--vcn-radius-sm);
   padding: 4px 6px;
   color: var(--foreground);
   background: var(--background);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   outline: none;
   box-shadow: 0 0 0 1px var(--ring);
 }
@@ -436,7 +436,7 @@
   height: 28px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   color: var(--muted-foreground);
   background: transparent;
   cursor: pointer;
@@ -463,7 +463,7 @@
   justify-content: center;
   gap: 10px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .project-terminal-empty {
@@ -476,7 +476,7 @@
   align-items: center;
   gap: 6px;
   border: 1px solid var(--input);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   padding: 0 10px;
   color: var(--foreground);
   background: var(--accent);
@@ -491,11 +491,11 @@
   max-height: 72px;
   overflow: auto;
   border: 1px solid color-mix(in srgb, var(--destructive) 50%, var(--border));
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   padding: 7px 9px;
   color: var(--destructive);
   background: var(--background);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   pointer-events: auto;
 }
 
@@ -506,12 +506,12 @@
   z-index: 2;
   max-width: calc(100% - 24px);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   padding: 5px 8px;
   overflow: hidden;
   color: var(--muted-foreground);
   background: var(--background);
-  font-size: 10px;
+  font-size: var(--vcn-font-size-2xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

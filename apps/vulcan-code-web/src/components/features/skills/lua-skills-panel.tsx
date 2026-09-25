@@ -19,7 +19,7 @@ import {
 } from "@/components/features/skills/lua-skill-card";
 import { LuaSkillConfigDialog } from "@/components/features/skills/lua-skill-config-dialog";
 import { LuaSkillUpdateProgressDialog, type LuaSkillUpdateRequest } from "./lua-skill-update-progress-dialog";
-import { useI18n } from "@/i18n";
+import { formatMessage, useI18n } from "@/i18n";
 import type { LuaSkillSummary, LuaSkillsOperationProgressSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
@@ -68,7 +68,7 @@ export function LuaSkillsPanel(props: {
   // Lua Skill 行。
   skills: LuaSkillSummary[];
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   // operationProgress is the latest tracked install or update, or null when none is.
   // operationProgress 是最近跟踪的安装或更新；没有时为 null。
   const operationProgress = props.operationProgress ?? null;
@@ -281,24 +281,18 @@ export function LuaSkillsPanel(props: {
   return (
     <div className="skill-page-body lua-skill-page-body">
       {actionError ? <div role="alert" className="skill-empty-state warning">
-        <p>{locale.startsWith("zh") ? "技能操作失败，请重试。" : "Skill action failed. Try again."}</p>
-        <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{actionError}</pre></details>
+        <p>{t("skills.lua.skillActionFailedTry")}</p>
+        <details><summary>{t("skills.lua.errorDetails")}</summary><pre className="plugin-control-error-details">{actionError}</pre></details>
       </div> : null}
       {operationProgress && operationProgress.action !== "update" ? <div
         className={operationProgress.outcome === "failed" ? "skill-empty-state warning" : "skill-empty-state"}
         role={operationProgress.outcome === "failed" ? "alert" : "status"}
       >
-        <p>{locale.startsWith("zh")
-          ? (operationProgress.inFlight
-            ? `正在${operationProgress.action === "update" ? "更新" : "安装"}技能包…`
-            : operationProgress.outcome === "succeeded"
-              ? "技能包操作已完成。"
-              : "技能包操作失败。")
-          : (operationProgress.inFlight
-            ? `Skill package ${operationProgress.action === "update" ? "update" : "install"} in progress…`
-            : operationProgress.outcome === "succeeded"
-              ? "Skill package operation completed."
-              : "Skill package operation failed.")}</p>
+        <p>{t(operationProgress.inFlight
+          ? (operationProgress.action === "update" ? "skills.lua.operationUpdating" : "skills.lua.operationInstalling")
+          : operationProgress.outcome === "succeeded"
+            ? "skills.lua.operationCompleted"
+            : "skills.lua.operationFailed")}</p>
         <p>{[
           operationProgress.skillId ?? null,
           operationProgress.latestPhase ?? null,
@@ -315,9 +309,7 @@ export function LuaSkillsPanel(props: {
         {operationProgress.message || operationProgress.overflowed ? <p>
           {operationProgress.message ?? ""}
           {operationProgress.overflowed
-            ? `${operationProgress.message ? " " : ""}${locale.startsWith("zh")
-              ? "（部分阶段已被丢弃）"
-              : "(some phases were dropped)"}`
+            ? `${operationProgress.message ? " " : ""}${t("skills.lua.somePhasesWereDropped")}`
             : ""}
         </p> : null}
         {/* The engine write lock is held for the entire install or update, including
@@ -326,22 +318,16 @@ export function LuaSkillsPanel(props: {
             limitation instead of being hidden. */}
         {/* 引擎写锁在整次安装或更新期间持有，含下载与校验，因此无关的技能操作会在其后排队。
             并发方案要求把该排队作为明确限制显示，而不是隐藏。 */}
-        {operationProgress.inFlight ? <p>{locale.startsWith("zh")
-          ? "安装/更新期间技能引擎被独占持有（含下载与校验），其他技能操作会排队等待。"
-          : "The skill engine is held exclusively during install/update, including download and verification, so other skill operations queue behind it."}</p> : null}
+        {operationProgress.inFlight ? <p>{t("skills.lua.theSkillEngineIs")}</p> : null}
       </div> : null}
       {configWatchIssues.map((configWatchIssue) => <div
         key={`${configWatchIssue.storeScope}\0${configWatchIssue.skillId ?? ""}`}
         role="alert"
         className="skill-empty-state warning"
       >
-        <p>{locale.startsWith("zh")
-          ? (configWatchIssue.skillId
-            ? `配置监听异常（${configWatchIssue.skillId} · ${configWatchIssue.storeScope}）`
-            : `配置监听异常（影响 ${configWatchIssue.storeScope} 中的全部技能包）`)
-          : (configWatchIssue.skillId
-            ? `Configuration watch failure (${configWatchIssue.skillId} · ${configWatchIssue.storeScope})`
-            : `Configuration watch failure (affects every package in ${configWatchIssue.storeScope})`)}</p>
+        <p>{configWatchIssue.skillId
+          ? formatMessage(t("skills.lua.configWatchSkill"), { skillId: configWatchIssue.skillId, storeScope: configWatchIssue.storeScope })
+          : formatMessage(t("skills.lua.configWatchScope"), { storeScope: configWatchIssue.storeScope })}</p>
         <pre className="plugin-control-error-details">{configWatchIssue.code}: {configWatchIssue.message}</pre>
       </div>)}
       <div className="agent-catalog-filter-row skill-list-filter-row">
@@ -410,10 +396,10 @@ export function LuaSkillsPanel(props: {
       <AlertDialog open={pendingUninstall !== null} onOpenChange={(open) => { if (!open && !actionRunningRef.current) setPendingUninstall(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{locale.startsWith("zh") ? "卸载技能" : "Uninstall skill"}</AlertDialogTitle>
-            <AlertDialogDescription>{pendingUninstall ? (locale.startsWith("zh") ? `确认移除技能包“${pendingUninstall.displayName}”？` : `Remove skill package “${pendingUninstall.displayName}”?`) : ""}</AlertDialogDescription>
+            <AlertDialogTitle>{t("skills.lua.uninstallSkill")}</AlertDialogTitle>
+            <AlertDialogDescription>{pendingUninstall ? (formatMessage(t("skills.lua.removeSkillPackage"), { displayName: pendingUninstall.displayName })) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
-          {actionError ? <details role="alert" className="text-sm text-destructive"><summary>{locale.startsWith("zh") ? "卸载失败，请重试" : "Uninstall failed. Retry."}</summary><pre className="plugin-control-error-details">{actionError}</pre></details> : null}
+          {actionError ? <details role="alert" className="text-sm text-destructive"><summary>{t("skills.lua.uninstallFailedRetry")}</summary><pre className="plugin-control-error-details">{actionError}</pre></details> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busyAction !== null}>{t("skills.action.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={busyAction !== null} onClick={(event) => {
@@ -422,7 +408,7 @@ export function LuaSkillsPanel(props: {
                 await props.actions.onUninstallLuaSkill(pendingUninstall.skillId);
                 setPendingUninstall(null);
               }, pendingUninstall.skillId);
-            }}>{busyAction !== null ? (locale.startsWith("zh") ? "处理中…" : "Working…") : t("skills.action.delete")}</AlertDialogAction>
+            }}>{busyAction !== null ? t("skills.lua.working") : t("skills.action.delete")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -464,7 +450,7 @@ export function LuaSkillInstallDialog(props: {
   // 更新安装弹窗打开状态。
   onOpenChange: (open: boolean) => void;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   // installError keeps failed installation feedback in the still-open form.
   // installError 将安装失败反馈保留在仍打开的表单内。
   const [installError, setInstallError] = React.useState("");
@@ -553,8 +539,8 @@ export function LuaSkillInstallDialog(props: {
             />
           </label>
           {installError ? <div role="alert">
-            <p>{locale.startsWith("zh") ? "技能安装失败，可修改来源后重试。" : "Skill installation failed. Check the source and retry."}</p>
-            <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
+            <p>{t("skills.lua.skillInstallationFailedCheck")}</p>
+            <details><summary>{t("skills.lua.errorDetails")}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
           </div> : null}
         </form>
           <DialogFooter>

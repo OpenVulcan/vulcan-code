@@ -33,9 +33,9 @@ interface SourceOriginLinkProps {
 // SourceOriginLink renders a shared provenance link and opens its URL through the desktop host.
 // SourceOriginLink 渲染共享来源链接，并通过桌面宿主打开其地址。
 export function SourceOriginLink(props: SourceOriginLinkProps) {
-  // locale keeps shell failure feedback in the currently selected application language.
-  // locale 让宿主失败反馈使用当前选中的应用语言。
-  const { locale } = useI18n()
+  // t keeps shell failure feedback in the currently selected application language.
+  // t 让宿主失败反馈使用当前选中的应用语言。
+  const { t } = useI18n()
   // origin stores the source descriptor selected by the caller.
   // origin 保存调用方选择的来源描述符。
   const origin = props.origin
@@ -50,7 +50,7 @@ export function SourceOriginLink(props: SourceOriginLinkProps) {
   const iconKey = sourceOriginIconKey(origin)
   // label stores the compact source text shown beside the icon.
   // label 保存显示在图标旁的紧凑来源文本。
-  const label = iconKey === "github" ? "GitHub" : origin.kind?.trim() || (locale === "zh-CN" ? "来源" : "Source")
+  const label = iconKey === "github" ? "GitHub" : origin.kind?.trim() || (t("features.sourceOrigin.source"))
   // className selects the compact row style or expanded detail style.
   // className 选择紧凑行样式或展开详情样式。
   const className = props.detail ? "agent-source-origin-detail-link" : "agent-source-origin-link"
@@ -60,7 +60,7 @@ export function SourceOriginLink(props: SourceOriginLinkProps) {
     event.preventDefault()
     event.stopPropagation()
     void openExternalUrl(url).catch((error) => {
-      toast.error(`${locale === "zh-CN" ? "打开来源失败：" : "Could not open source: "}${error instanceof Error ? error.message : String(error)}`)
+      toast.error(`${t("features.sourceOrigin.couldNotOpenSource")}${error instanceof Error ? error.message : String(error)}`)
     })
   }
   return (

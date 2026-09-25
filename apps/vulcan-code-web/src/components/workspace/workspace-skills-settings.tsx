@@ -19,7 +19,7 @@ import type { WorkbenchSnapshot } from "@/types";
 
 // LazySkillsArea keeps the full LuaSkills catalog outside the console-first workbench chunk.
 // LazySkillsArea 将完整 LuaSkills 目录保留在控制台优先的工作台分块之外。
-const LazySkillsArea = React.lazy(() => import("@/components/features/skills/SkillsArea").then((module) => ({ default: module.SkillsArea })));
+const LazySkillsArea = React.lazy(() => import("@/components/features/skills/skills-area").then((module) => ({ default: module.SkillsArea })));
 // LazyLuaSkillInstallDialog keeps installation UI outside the initial workbench chunk.
 // LazyLuaSkillInstallDialog 将安装界面保留在初始工作台分块之外。
 const LazyLuaSkillInstallDialog = React.lazy(() => import("@/components/features/skills/lua-skills-panel").then((module) => ({ default: module.LuaSkillInstallDialog })));

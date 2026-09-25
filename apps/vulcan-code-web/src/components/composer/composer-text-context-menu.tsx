@@ -7,7 +7,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useI18n } from "@/i18n";
-import { readElectronDesktopBridge } from "@/shell/electronBridge";
+import { readElectronDesktopBridge } from "@/host-shell/electron-bridge";
 
 // ComposerTextContextMenuProps binds edit actions to the current controlled draft.
 // ComposerTextContextMenuProps 将编辑操作绑定到当前受控草稿。

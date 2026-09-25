@@ -17,7 +17,6 @@ import {
   FileDiff,
   GitBranch,
   GitCommitHorizontal,
-  ListChecks,
   LoaderCircle,
   Maximize2,
   Minimize2,

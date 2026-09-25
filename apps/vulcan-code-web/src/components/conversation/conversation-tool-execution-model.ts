@@ -12,6 +12,7 @@ import {
   normalizeToolDisplayState,
   subagentToolDisplayName,
 } from "./conversation-tool-metadata";
+import { formatBytes } from "@/lib/display-format";
 
 // ToolRequestProgress describes safe model-side argument construction metadata retained on one tool card.
 // ToolRequestProgress 描述保留在单张工具卡片上的安全模型侧参数构造元数据。
@@ -297,25 +298,7 @@ export function toolRequestStreamMetricsLabel(
   t?: (key: TranslationKey) => string,
 ): string {
   const characterLabel = `${progress.receivedCharacters.toLocaleString()} ${t ? t("conversation.toolRequest.characters") : "characters"}`;
-  return `${characterLabel} · ${formatToolRequestBytes(progress.receivedBytes)}`;
-}
-
-// formatToolRequestBytes formats one exact non-negative UTF-8 byte count for inline progress.
-// formatToolRequestBytes 为内联进度格式化一项精确非负 UTF-8 字节数。
-//
-// Parameters: bytes is the exact count supplied by the request-stream coordinator.
-// 参数：bytes 是请求流协调器提供的精确计数。
-//
-// Returns: a compact binary-unit label without changing the underlying count.
-// 返回值：返回不改变底层计数的紧凑二进制单位文案。
-function formatToolRequestBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes.toLocaleString()} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KiB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${characterLabel} · ${formatBytes(progress.receivedBytes)}`;
 }
 
 // buildSubagentToolExecutionDetailBody builds a human-readable detail body for built-in subagent orchestration tools.
@@ -1276,4 +1259,3 @@ function compactTextPreview(source: string): string {
   }
   return text.length > 140 ? `${text.slice(0, 140)}...` : text;
 }
-

@@ -10,7 +10,6 @@ import {
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
 import {
-  composerAttachmentAccept,
   hasBlockingComposerPopup,
   isComposerPrintableKey,
   isComposerTextEntryElement,
@@ -30,7 +29,7 @@ import { ComposerTextContextMenu } from "@/components/composer/composer-text-con
 import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n";
-import { isElectronRuntime } from "@/shell";
+import { isElectronRuntime } from "@/host-shell";
 import { cn } from "@/lib/utils";
 import { getWorkspaceInputOwner } from "@/components/workspace/workspace-input-owner";
 import type {

@@ -1,3 +1,4 @@
+import { translateActive } from "@/i18n";
 import * as React from "react";
 import type { VceJobSummary } from "@/types";
 import { useVceJobObserverStore } from "./vce-job-observer-context";
@@ -33,7 +34,7 @@ export function useVceProjectJob(projectId: string | null) {
   // receive validates receipt ownership and ignores actions from a retired UI scope; returns nothing.
   // receive 验证回执归属并忽略已退役界面作用域的操作；无返回值。
   const receive = React.useCallback((receipt: VceJobSummary): void => {
-    if (projectId === null || receipt.projectId !== projectId) throw new Error("索引回执项目身份不匹配。");
+    if (projectId === null || receipt.projectId !== projectId) throw new Error(translateActive("codeContext.observer.receiptMismatch"));
     if (mounted.current === scope) store.receive(projectId, receipt);
   }, [projectId, store, scope]);
   // cancel returns the shared exact-job command; retired views cannot initiate a later cancellation.

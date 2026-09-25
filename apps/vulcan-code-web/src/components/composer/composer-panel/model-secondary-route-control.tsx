@@ -205,13 +205,13 @@ export function ModelSecondaryRouteControl(props: {
       if (generation !== ownerGeneration.current || selectionWrite.current !== write) return;
       if (!ok) {
         setOptimisticRoutePending(false);
-        setSelectionError(locale.startsWith("zh") ? "路由选择未保存，请重试。" : "Route selection was not saved. Try again.");
+        setSelectionError(t("composer.secondaryRoute.routeSelectionWasNot"));
       }
     } catch (error) {
       if (generation !== ownerGeneration.current || selectionWrite.current !== write) return;
       setOptimisticRoutePending(false);
       setSelectionError(error instanceof Error ? error.message : String(error));
-      toast.error(locale.startsWith("zh") ? "路由选择未保存，请重试。" : "Route selection was not saved. Try again.");
+      toast.error(t("composer.secondaryRoute.routeSelectionWasNot"));
     } finally {
       if (generation === ownerGeneration.current && selectionWrite.current === write) {
         selectionWrite.current = null;
@@ -281,7 +281,7 @@ export function ModelSecondaryRouteControl(props: {
         </div>
         <ScrollArea className="model-picker-scroll min-h-0 shrink">
         {loadError || selectionError ? <details role="alert" className="px-3 py-2 text-xs text-destructive">
-          <summary>{locale.startsWith("zh") ? "路由操作失败，可重试" : "Route action failed. Retry."}</summary>
+          <summary>{t("composer.secondaryRoute.routeActionFailedRetry")}</summary>
           <pre className="whitespace-pre-wrap break-words">{loadError || selectionError}</pre>
         </details> : null}
         {loading ? <StreamPlaceholder label={t("composer.secondaryRoute.loading")} shape="rows" count={3} /> : null}
@@ -301,7 +301,7 @@ export function ModelSecondaryRouteControl(props: {
             </Button>
             </DropdownMenuItem>
             {filteredRoutes.length === 0 ? (
-              !loading && !loadError ? <div role="status" className="model-picker-empty">{filter.trim() ? t("composer.secondaryRoute.noMatches") : (locale.startsWith("zh") ? "此模型暂无二级供应商" : "No secondary providers are available for this model")}</div> : null
+              !loading && !loadError ? <div role="status" className="model-picker-empty">{filter.trim() ? t("composer.secondaryRoute.noMatches") : t("composer.secondaryRoute.noSecondaryProvidersAre")}</div> : null
             ) : (
               filteredRoutes.map((route) => {
                 // selected identifies the route currently visible to the user, including optimistic state.

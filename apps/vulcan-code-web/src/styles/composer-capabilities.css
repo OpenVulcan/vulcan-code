@@ -19,7 +19,7 @@
   padding: 5px 8px;
   background: color-mix(in srgb, var(--vcn-content-danger) 10%, transparent);
   color: var(--vcn-content-danger);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
 }
 
@@ -114,7 +114,7 @@
 .composer-capability-target-copy span {
   overflow: hidden;
   color: var(--foreground);
-  font-size: 12.5px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -125,7 +125,7 @@
 .composer-capability-detail-copy small {
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -191,7 +191,7 @@
   align-items: center;
   gap: 12px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .composer-capability-route-selectors > label > span:first-child {
@@ -215,10 +215,10 @@
   height: 18px;
   display: inline-grid;
   place-items: center;
-  border-radius: 9px;
+  border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--primary) 14%, transparent);
   color: var(--foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .composer-capability-extension-list {
@@ -248,9 +248,9 @@
   display: grid;
   place-items: center;
   border: 1px dashed var(--border);
-  border-radius: 12px;
+  border-radius: var(--vcn-radius-lg);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .composer-capability-dialog-footer {
@@ -268,7 +268,7 @@
   flex: 1 1 auto;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -286,7 +286,7 @@
 }
 
 .composer-capability-save-button.saved {
-  background: color-mix(in srgb, #16a34a 16%, var(--primary));
+  background: color-mix(in srgb, var(--vcn-content-success) 16%, var(--primary));
 }
 
 .composer-capability-save-spinner {

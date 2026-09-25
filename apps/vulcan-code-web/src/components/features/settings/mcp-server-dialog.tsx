@@ -1,4 +1,3 @@
-import { useMcpText } from "./mcp-text"
 import { Button } from "@/components/ui/button"
 import { DisclosureSection } from "@/components/ui/disclosure"
 import { createMcpDraft, validateMcpDraft } from "./mcp-form-model"
@@ -17,6 +16,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import type { McpServerSummary } from "@/types"
+import { useI18n } from "@/i18n"
 
 // McpServerSaveRequest describes one MCP server configuration save request.
 // McpServerSaveRequest 描述单次 MCP 服务器配置保存请求。
@@ -90,9 +90,9 @@ export interface McpSettingsActionProps {
 export function McpServerDialog(props: {
   actions: McpSettingsActionProps; open: boolean; onOpenChange: (open: boolean) => void; server: McpServerSummary | null
 }) {
+  const { t } = useI18n();
   // text follows the shared application locale.
   // text 遵循共享应用语言。
-  const text = useMcpText()
 
   // draft and operation state belong to this modal, not the changing workbench snapshot.
   // draft 与操作状态属于此弹窗，不随工作台快照变化。
@@ -112,7 +112,7 @@ export function McpServerDialog(props: {
   // save 在派发前校验，并阻止重复提交。
   const save = async () => {
     if (saving.current) return
-    const issue = validateMcpDraft(draft, text)
+    const issue = validateMcpDraft(draft, t)
     if (issue) { setError(issue); return }
     saving.current = true; setBusy(true); setError("")
     try { await props.actions.onSaveMcpServer(draft); props.onOpenChange(false) }
@@ -121,36 +121,36 @@ export function McpServerDialog(props: {
   }
   return <Dialog open={props.open} onOpenChange={open => { if (!saving.current) props.onOpenChange(open) }}>
     <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="xl">
-      <DialogHeader className="shrink-0"><DialogTitle>{draft.serverId ? text("编辑 MCP 服务器", "Edit MCP server") : text("添加 MCP 服务器", "Add MCP server")}</DialogTitle>
-        <DialogDescription>{text("保存后会自动尝试连接，结果可以在服务器详情里查看。", "It connects automatically after saving; check the server details for the result.")}</DialogDescription>
+      <DialogHeader className="shrink-0"><DialogTitle>{draft.serverId ? t("settings.mcp.editMcpServer") : t("settings.mcp.addMcpServer")}</DialogTitle>
+        <DialogDescription>{t("settings.mcp.itConnectsAutomaticallyAfter")}</DialogDescription>
       </DialogHeader>
       <div className="mcp-dialog-body">
       <fieldset disabled={busy} className="mcp-form">
         <div className="settings-form-grid two">
-          <label className="settings-form-field"><span>{text("名称", "Name")}</span><Input value={draft.name} onChange={e => change("name", e.target.value)} /></label>
-          <div className="settings-form-field"><span>{text("传输", "Transport")}</span><Select value={draft.transport} disabled={busy} onValueChange={value => change("transport", value)}>
-            <SelectTrigger aria-label={text("传输", "Transport")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="stdio">{text("本地进程", "stdio")}</SelectItem><SelectItem value="http">Streamable HTTP</SelectItem><SelectItem value="sse">SSE</SelectItem></SelectContent>
+          <label className="settings-form-field"><span>{t("settings.mcp.name")}</span><Input value={draft.name} onChange={e => change("name", e.target.value)} /></label>
+          <div className="settings-form-field"><span>{t("settings.mcp.transport")}</span><Select value={draft.transport} disabled={busy} onValueChange={value => change("transport", value)}>
+            <SelectTrigger aria-label={t("settings.mcp.transport")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="stdio">{t("settings.mcp.stdio")}</SelectItem><SelectItem value="http">Streamable HTTP</SelectItem><SelectItem value="sse">SSE</SelectItem></SelectContent>
           </Select></div>
-          <label className="settings-check-row inline"><Switch checked={draft.enabled} disabled={busy} onCheckedChange={value => change("enabled", value)} />{text("启用", "Enabled")}</label>
+          <label className="settings-check-row inline"><Switch checked={draft.enabled} disabled={busy} onCheckedChange={value => change("enabled", value)} />{t("settings.mcp.enabled")}</label>
         </div>
         {draft.transport === "stdio" ? <>
-          <label className="settings-form-field"><span>{text("可执行命令", "Executable")}</span><Input placeholder="node" value={draft.command} onChange={e => change("command", e.target.value)} /></label>
-          <p className="settings-muted-line">{text("这里只填程序本身（如 node、npx），参数在下方逐行填写，每行原样传入。", "Enter only the program (e.g. node, npx). Add arguments below, one per row, passed exactly as typed.")}</p>
-          <McpStringRows label={text("参数", "Arguments")} values={draft.args} onChange={value => change("args", value)} placeholder="server.js" exact />
-          <label className="settings-form-field"><span>{text("工作目录", "Working directory")}</span><Input value={draft.cwd} onChange={e => change("cwd", e.target.value)} /></label>
-          <p className="settings-muted-line">{text("留空则使用 VulcanCode 的启动目录。", "Leave empty to use VulcanCode's launch directory.")}</p>
-          <McpKeyValueRows label={text("环境变量", "Environment variables")} values={draft.env} onChange={value => change("env", value)} secret />
-          <McpStringRows label={text("从本机传入的变量", "Variables passed from this computer")} values={draft.envPassthrough} onChange={value => change("envPassthrough", value)} placeholder="API_TOKEN" />
-          <p className="settings-muted-line">{text("进程默认就能读到本机的环境变量；这里只是把需要的变量名明确列出来。与上方同名时，以上方填写的值为准。", "The process already sees this computer's environment; this list just names the ones it needs. Values entered above win when names match.")}</p>
+          <label className="settings-form-field"><span>{t("settings.mcp.executable")}</span><Input placeholder="node" value={draft.command} onChange={e => change("command", e.target.value)} /></label>
+          <p className="settings-muted-line">{t("settings.mcp.enterOnlyTheProgram")}</p>
+          <McpStringRows label={t("settings.mcp.arguments")} values={draft.args} onChange={value => change("args", value)} placeholder="server.js" exact />
+          <label className="settings-form-field"><span>{t("settings.mcp.workingDirectory")}</span><Input value={draft.cwd} onChange={e => change("cwd", e.target.value)} /></label>
+          <p className="settings-muted-line">{t("settings.mcp.leaveEmptyToUse")}</p>
+          <McpKeyValueRows label={t("settings.mcp.environmentVariables")} values={draft.env} onChange={value => change("env", value)} secret />
+          <McpStringRows label={t("settings.mcp.variablesPassedFromThis")} values={draft.envPassthrough} onChange={value => change("envPassthrough", value)} placeholder="API_TOKEN" />
+          <p className="settings-muted-line">{t("settings.mcp.theProcessAlreadySees")}</p>
         </> : <>
-          <label className="settings-form-field"><span>{text("服务器地址", "Server URL")}</span><Input placeholder="https://example.com/mcp" value={draft.url} onChange={e => change("url", e.target.value)} /></label>
-          <section className="mcp-form-section"><h3>{text("请求头与认证", "Headers and authentication")}</h3>
+          <label className="settings-form-field"><span>{t("settings.mcp.serverUrl")}</span><Input placeholder="https://example.com/mcp" value={draft.url} onChange={e => change("url", e.target.value)} /></label>
+          <section className="mcp-form-section"><h3>{t("settings.mcp.headersAndAuthentication")}</h3>
             <label className="settings-form-field"><span>Bearer Token</span><Input autoComplete="off" type="password" value={draft.bearerToken} onChange={e => change("bearerToken", e.target.value)} /></label>
-            <McpKeyValueRows headers label={text("固定请求头", "Fixed headers")} values={draft.headers} onChange={value => change("headers", value)} secret />
-            <McpKeyValueRows headers label={text("从环境变量读取的请求头", "Headers read from environment variables")} values={draft.headersFromEnv} onChange={value => change("headersFromEnv", value)} valuePlaceholder="ACCESS_TOKEN" />
-            <p className="settings-muted-line">{text("左边填请求头名称，右边填本机环境变量名，例如 Authorization → ACCESS_TOKEN。会原样使用变量的值，不会自动加 Bearer；与上方固定请求头同名时以固定值为准。", "Header name on the left, environment variable name on the right, e.g. Authorization → ACCESS_TOKEN. The value is used as-is (no Bearer prefix); fixed headers above win when names match.")}</p>
+            <McpKeyValueRows headers label={t("settings.mcp.fixedHeaders")} values={draft.headers} onChange={value => change("headers", value)} secret />
+            <McpKeyValueRows headers label={t("settings.mcp.headersReadFromEnvironment")} values={draft.headersFromEnv} onChange={value => change("headersFromEnv", value)} valuePlaceholder="ACCESS_TOKEN" />
+            <p className="settings-muted-line">{t("settings.mcp.headerNameOnThe")}</p>
           </section>
-          <DisclosureSection className="mcp-oauth" description={text("只有服务器要求 OAuth 登录时才需要填写。", "Only needed if the server requires OAuth sign-in.")} title={text("OAuth 登录", "OAuth sign-in")}>
+          <DisclosureSection className="mcp-oauth" description={t("settings.mcp.onlyNeededIfThe")} title={t("settings.mcp.oauthSignIn")}>
             <div className="mcp-form-section">
             <label className="settings-form-field"><span>Client ID</span><Input value={draft.oauthClientId} onChange={e => change("oauthClientId", e.target.value)} /></label>
             <label className="settings-form-field"><span>Client secret</span><Input autoComplete="off" type="password" value={draft.oauthClientSecret} onChange={e => change("oauthClientSecret", e.target.value)} /></label>
@@ -162,7 +162,7 @@ export function McpServerDialog(props: {
         {error && <p role="alert" className="mcp-error">{error}</p>}
       </fieldset>
       </div>
-      <DialogFooter className="shrink-0"><Button variant="outline" disabled={busy} onClick={() => props.onOpenChange(false)}>{text("取消", "Cancel")}</Button><Button disabled={busy} onClick={() => void save()}>{busy ? text("正在保存", "Saving") : text("保存", "Save")}</Button></DialogFooter>
+      <DialogFooter className="shrink-0"><Button variant="outline" disabled={busy} onClick={() => props.onOpenChange(false)}>{t("settings.mcp.cancel")}</Button><Button disabled={busy} onClick={() => void save()}>{busy ? t("settings.mcp.saving") : t("settings.mcp.save")}</Button></DialogFooter>
     </DialogContent>
   </Dialog>
 }

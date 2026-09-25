@@ -14,7 +14,11 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const rpc = vi.hoisted(() => ({ settings: vi.fn(), readiness: vi.fn(), save: vi.fn(), test: vi.fn() }));
 vi.mock("@/service/settings-actions-service", () => ({ loadPublicAiSettings: rpc.settings, savePublicAiInferenceRoute: rpc.save, testPublicAiInferenceRoute: rpc.test }));
 vi.mock("@/service/vce-service", () => ({ loadVceConfigurationStatus: rpc.readiness }));
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN" }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key);
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) };
+});
 
 // The transport fixture includes exactly the snapshot fields read by this settings page.
 // 传输夹具仅包含本设置页实际读取的快照字段。

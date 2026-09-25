@@ -14,7 +14,6 @@ import {
   fixedHostKind,
   fixedHostPayload,
   fixedToolName,
-  metadataString,
   normalizeToolName,
   objectValue,
   numberValue,

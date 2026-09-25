@@ -10,9 +10,9 @@ export function ToolCollapseSettingsSection() {
   // preferences contains the authoritative default and its service-backed save operation.
   // preferences 包含权威默认值及其服务保存操作。
   const preferences = React.useContext(ToolCollapsePreferencesContext);
-  // locale selects user-facing copy.
-  // locale 选择面向用户的文案。
-  const { locale } = useI18n();
+  // t selects user-facing copy.
+  // t 选择面向用户的文案。
+  const { t } = useI18n();
   // pending keeps the selected value visible while preventing concurrent writes.
   // pending 在阻止并发写入时保持所选值可见。
   const [pending, setPending] = React.useState<boolean | null>(null);
@@ -41,17 +41,15 @@ export function ToolCollapseSettingsSection() {
   };
   return <section className="settings-form-grid mt-6">
     <label className="flex items-center justify-between gap-4">
-      <span>{locale === "zh-CN" ? "工具调用默认折叠" : "Collapse tool calls by default"}</span>
+      <span>{t("settings.toolCollapse.collapseToolCallsBy")}</span>
       <Switch
         checked={pending ?? preferences.defaultEnabled}
         disabled={pending !== null || !preferences.saveDefault}
         onCheckedChange={(enabled) => { void save(enabled); }}
       />
     </label>
-    <p className="settings-muted-line">{locale === "zh-CN"
-      ? "开启后，AI 调用的工具只在执行时展开，完成后自动收起；关闭则一直展开。单独设置过的会话不受影响。"
-      : "When on, tool calls stay open while running and collapse when done; when off they stay expanded. Sessions with their own setting aren't affected."}</p>
-    {pending !== null ? <p role="status" className="settings-muted-line">{locale === "zh-CN" ? "正在保存…" : "Saving…"}</p> : null}
+    <p className="settings-muted-line">{t("settings.toolCollapse.whenOnToolCalls")}</p>
+    {pending !== null ? <p role="status" className="settings-muted-line">{t("settings.toolCollapse.saving")}</p> : null}
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
   </section>;
 }

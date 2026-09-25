@@ -1,8 +1,9 @@
+import { translateActive } from "@/i18n";
 import type { VceProjectActivityResponse, VceProjectChangedEvent } from "@/types";
 import type { ServiceRequestOptions } from "@/service/protocol";
 import {
   VCE_OBSERVER_READ_DEADLINE_MS,
-  VCE_OBSERVER_READ_TIMEOUT_MESSAGE,
+  VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY,
 } from "./vce-observer-timeouts";
 
 // Immutable lightweight metadata shared by the visible surfaces of one project.
@@ -180,13 +181,13 @@ export class VceActivityObserverStore {
             const activity = await this.transport.load(entry.projectId, { signal: controller.signal });
             if (controller.signal.aborted) {
               if (timedOut && this.owns(entry) && !entry.dirty) {
-                entry.readError = VCE_OBSERVER_READ_TIMEOUT_MESSAGE;
+                entry.readError = translateActive(VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY);
                 this.publish(entry);
               }
               continue;
             }
             if (!this.owns(entry)) return;
-            if (activity.status.projectId !== entry.projectId) throw new Error("语义状态返回了其他项目的数据。");
+            if (activity.status.projectId !== entry.projectId) throw new Error(translateActive("codeContext.observer.foreignProjectStatus"));
             if (!entry.dirty) {
               entry.readError = null;
               this.publish(entry, activity);
@@ -196,7 +197,7 @@ export class VceActivityObserverStore {
             // 卸载属于静默传输控制；达到期限时发布可重试诊断。
             if (controller.signal.aborted) {
               if (timedOut && this.owns(entry) && !entry.dirty) {
-                entry.readError = VCE_OBSERVER_READ_TIMEOUT_MESSAGE;
+                entry.readError = translateActive(VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY);
                 this.publish(entry);
               }
               continue;

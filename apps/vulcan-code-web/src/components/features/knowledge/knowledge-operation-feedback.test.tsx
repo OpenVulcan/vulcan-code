@@ -4,9 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type { KnowledgeImportJobSummary } from "@/types";
-import { KnowledgeOperationFeedback } from "./KnowledgeFeedback";
-import { KnowledgeOperationProgress } from "./KnowledgeOperationProgress";
-import { KnowledgeSkippedDocuments } from "./KnowledgeSkippedDocuments";
+import { KnowledgeOperationFeedback } from "./knowledge-feedback";
+import { KnowledgeOperationProgress } from "./knowledge-operation-progress";
+import { KnowledgeSkippedDocuments } from "./knowledge-skipped-documents";
 
 // failedJob reproduces partial curation and an incomplete stream snapshot with a durable failure.
 // failedJob 复现部分整理成功、预览快照未完成但持久状态已失败的情形。

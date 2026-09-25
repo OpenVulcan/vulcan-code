@@ -1,5 +1,5 @@
 import React from "react";
-import { BootErrorScreen, BootLoadingScreen } from "../../src/app/BootStartupScreen";
+import { BootErrorScreen, BootLoadingScreen } from "../../src/app/boot-startup-screen";
 import { ErrorScreen, LoadingScreen, StartupOverlay } from "../../src/components/shell/startup-screen";
 import { I18nProvider } from "../../src/i18n";
 import type { StartupSnapshot } from "../../src/types";

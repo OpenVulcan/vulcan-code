@@ -11,7 +11,7 @@ type MemorySubAreaId = string;
 
 // LazyMemoryArea keeps the full VMM editor outside the console-first workbench chunk.
 // LazyMemoryArea 将完整 VMM 编辑器保留在控制台优先的工作台分块之外。
-const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/MemoryArea").then((module) => ({ default: module.MemoryArea })));
+const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/memory-area").then((module) => ({ default: module.MemoryArea })));
 
 // WorkspaceMemorySettings renders the embedded VMM memory settings page.
 // WorkspaceMemorySettings 渲染内嵌 VMM 记忆设置页面。

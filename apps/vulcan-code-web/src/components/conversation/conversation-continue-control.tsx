@@ -1,4 +1,3 @@
-import React from "react";
 import { CircleAlert, Play } from "lucide-react";
 import {
   Tooltip,

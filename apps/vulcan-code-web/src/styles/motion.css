@@ -79,7 +79,7 @@
 .vcn-stream-placeholder-copy .vcn-shimmer:last-child { max-width: 70%; }
 .vcn-stream-placeholder-tile {
   gap: 8px;
-  border-radius: 9px;
+  border-radius: var(--vcn-radius-md);
   background: var(--vcn-fill-subtle);
   padding: 11px 12px;
 }

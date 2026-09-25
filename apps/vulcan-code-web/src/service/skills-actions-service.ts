@@ -1,3 +1,4 @@
+import { formatMessage, translateActive } from "@/i18n";
 import type {
   AgentSkillsCatalogUpdate,
   AgentSkillCategorySaveRequest,
@@ -783,10 +784,10 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
       const existingIndex = snapshot.subagentCatalog.definitions.findIndex((item) => item.agentId === originalAgentId);
       const existingDefinition = existingIndex >= 0 ? snapshot.subagentCatalog.definitions[existingIndex] : undefined;
       if (existingDefinition?.scopeKey === "system" || existingDefinition?.overrideOf) {
-        throw new Error("系统内置智能体不允许编辑；只能启用或关闭。");
+        throw new Error(translateActive("agents.service.builtinReadOnly"));
       }
       if (existingIndex < 0 && snapshot.subagentCatalog.definitions.some((item) => item.agentId === targetAgentId)) {
-        throw new Error(`目标智能体 ${targetAgentId} 已存在。`);
+        throw new Error(formatMessage(translateActive("agents.service.alreadyExists"), { targetAgentId }));
       }
       const locales = definition.locales ?? {};
       const nextDefinition: SubagentDefinitionSummary = {
@@ -917,7 +918,7 @@ export async function deleteSubagentDefinition(agentId: string): Promise<Subagen
       const index = snapshot.subagentCatalog.definitions.findIndex((item) => item.agentId === agentId);
       const definition = index >= 0 ? snapshot.subagentCatalog.definitions[index] : undefined;
       if (!definition || (definition.scopeKey !== "user" && definition.scopeKey !== "package") || definition.overrideOf) {
-        throw new Error("只有用户自定义智能体允许删除。");
+        throw new Error(translateActive("agents.service.onlyCustomDeletable"));
       }
       snapshot.subagentCatalog.definitions.splice(index, 1);
     }));

@@ -5,7 +5,11 @@ import { describe, expect, it, vi } from "vitest"
 import type { McpServerSummary } from "@/types"
 import { McpServerDialog, type McpServerSaveRequest } from "./mcp-server-dialog"
 import { createMcpDraft } from "./mcp-form-model"
-vi.mock("./mcp-text", () => ({ useMcpText: () => (zh: string) => zh }))
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>()
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key)
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) }
+})
 
 vi.mock("@/components/ui/dialog", () => ({
   Dialog: (props: { open: boolean; children: ReactNode }) => props.open ? <div>{props.children}</div> : null,

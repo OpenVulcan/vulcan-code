@@ -308,7 +308,7 @@ function GeneratedMediaPlayerContent(props: {
           <span className="generated-media-player-title">
             <MediaIcon size={18} />
             <DialogTitle title={props.attachment.fileName}>{props.attachment.fileName}</DialogTitle>
-            <DialogDescription className="sr-only">{props.locale === "zh-CN" ? "查看生成的媒体文件，或使用工具栏调整显示。" : "View generated media and adjust its display using the toolbar."}</DialogDescription>
+            <DialogDescription className="sr-only">{t("media.player.viewGeneratedMediaAnd")}</DialogDescription>
           </span>
           {isImage ? (
             <GeneratedMediaImageZoomControl
@@ -342,15 +342,15 @@ function GeneratedMediaPlayerContent(props: {
         <div className={cn("generated-media-player-body", isImage && "image")}>
           {loadFailed || !source ? (
             <div className="flex min-h-40 flex-col items-center justify-center gap-3 p-4 text-center" role="alert">
-              <p className="text-sm text-muted-foreground">{props.locale === "zh-CN" ? "无法加载此媒体文件。" : "This media file could not be loaded."}</p>
+              <p className="text-sm text-muted-foreground">{t("media.player.thisMediaFileCould")}</p>
               {source ? <Button variant="outline" onClick={() => { setLoadFailed(false); setLoadAttempt((attempt) => attempt + 1); }}>
-                {props.locale === "zh-CN" ? "重试" : "Retry"}
+                {t("media.player.retry")}
               </Button> : null}
             </div>
           ) : isImage ? (
             <div
               className={cn("generated-media-image-viewer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring", isImageDragging && "dragging")}
-              aria-label={props.locale === "zh-CN" ? "图片查看器：方向键平移，Home 自适应窗口" : "Image viewer: arrow keys pan, Home fits the image"}
+              aria-label={t("media.player.imageViewerArrowKeys")}
               tabIndex={0}
               role="region"
               onKeyDown={(event) => {

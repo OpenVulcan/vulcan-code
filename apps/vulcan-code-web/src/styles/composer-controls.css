@@ -12,7 +12,7 @@
   width: 26px;
   height: 26px;
   flex: 0 0 26px;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
 }
 
@@ -47,7 +47,7 @@
 
 .composer-thinking-mode-label small {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .composer-toolbar-left {
@@ -65,11 +65,11 @@
   gap: 5px;
   height: 28px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   padding: 0 9px;
   background: color-mix(in srgb, var(--muted) 78%, transparent);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 500;
   line-height: 1;
   cursor: pointer;
@@ -95,7 +95,7 @@
   width: 16px;
   height: 16px;
   margin-right: -3px;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
@@ -117,7 +117,7 @@
   justify-content: center;
   gap: 4px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   padding: 0;
   background: transparent;
   color: var(--muted-foreground);
@@ -146,7 +146,7 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   padding: 0;
   background: conic-gradient(
     var(--context-usage-progress-color) var(--context-usage-progress),
@@ -164,7 +164,7 @@
   align-items: center;
   gap: 2px;
   color: currentColor;
-  font-size: 10px;
+  font-size: var(--vcn-font-size-2xs);
   font-weight: 650;
   line-height: 1;
   letter-spacing: -0.01em;
@@ -196,7 +196,7 @@
   align-items: stretch;
   gap: var(--context-usage-section-gap);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--popover);
   color: var(--popover-foreground);
   padding: 13px 12px 12px;
@@ -224,14 +224,14 @@
   justify-content: space-between;
   gap: 12px;
   color: var(--popover-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   line-height: 1.25;
 }
 
 .context-usage-window-title span {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 400;
 }
 
@@ -239,7 +239,7 @@
   width: 100%;
   flex-wrap: wrap;
   gap: 2px;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   padding: 2px;
 }
 
@@ -248,9 +248,9 @@
   min-width: 0;
   height: 26px;
   padding: 0 6px;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 560;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -276,14 +276,14 @@
 
 .context-usage-card-header strong {
   color: var(--popover-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
   line-height: 1.2;
 }
 
 .context-usage-card-header span {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -292,7 +292,7 @@
   position: relative;
   height: 6px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--vcn-fill-active);
 }
 
@@ -392,7 +392,7 @@
 .context-usage-breakdown-row,
 .context-usage-cache-row {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.25;
 }
 
@@ -414,11 +414,11 @@
   width: 8px;
   height: 8px;
   flex: 0 0 8px;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
 }
 
 .context-usage-cache-row strong {
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .context-usage-provider-section {
@@ -442,7 +442,7 @@
   justify-content: space-between;
   gap: 8px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.25;
 }
 
@@ -468,14 +468,14 @@
 
 .composer-control-tooltip strong {
   color: inherit;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 650;
   line-height: 1.25;
 }
 
 .composer-control-tooltip span {
   color: color-mix(in srgb, currentColor 78%, transparent);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 500;
   line-height: 1.35;
 }
@@ -486,7 +486,7 @@
   justify-content: flex-start;
   gap: 6px;
   border-color: transparent;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
   color: var(--foreground);
   padding: 4px 6px;
