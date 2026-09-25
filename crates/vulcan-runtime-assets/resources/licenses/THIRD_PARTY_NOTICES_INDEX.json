@@ -2,7 +2,7 @@
   "schema_version": 2,
   "scope": "rust-desktop-dependencies",
   "source_file": "THIRD_PARTY_NOTICES.md",
-  "source_sha256": "c76235b56819eb62e101ae638ce8bcc05a225efbe5b71c4dd02d4fa6677a03e2",
+  "source_sha256": "7cecd7cb4ec31a7ba12d6f8748181af5ec06ef6375f66dc8712c739eb644ee74",
   "licenses": [
     {
       "id": "rust-license-1",
@@ -2152,7 +2152,7 @@
             },
             {
               "name": "chacha20",
-              "version": "0.10.1",
+              "version": "0.10.2",
               "source": "https://github.com/RustCrypto/stream-ciphers"
             },
             {
