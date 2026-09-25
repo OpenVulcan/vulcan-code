@@ -137,6 +137,9 @@ export interface ConversationBranchWorkspaceV1Props {
   // Scroll element reference owned by ChatArea.
   // 由 ChatArea 持有的滚动元素引用。
   scrollRef: React.RefObject<HTMLElement | null>;
+  // Reveals one rendered turn shell; enables the edge-pinned prompt navigator when present.
+  // 定位一个已渲染 Turn 外壳；提供时启用贴边提示词导航。
+  onRevealPromptAnchor?: (anchor: HTMLElement) => void;
   // Opens one routed child-agent transcript.
   // 打开一个已路由的子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -322,6 +325,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       resolveComposerAttachmentMedia={composerAttachmentMediaV1}
       resolveMediaSourceUrl={identityMediaSourceUrlV1}
       scrollRef={props.scrollRef}
+      onRevealPromptAnchor={props.onRevealPromptAnchor}
       sessionRunning={props.sessionRunning}
       suppressEmptyPlaceholder={!ownerReady || props.suppressEmptyPlaceholder}
       transientReasoningStatus={props.transientReasoningStatus}

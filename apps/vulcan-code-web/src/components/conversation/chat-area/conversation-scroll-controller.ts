@@ -57,7 +57,14 @@ export interface ConversationScrollController {
   // Transfers ownership to tail following and moves to the latest content.
   // 将所有权切换为尾部跟随并移动到最新内容。
   scrollToBottom: (behavior?: ScrollBehavior) => void;
+  // Releases tail following and moves one mounted transcript anchor to the top of the viewport.
+  // 释放尾部跟随，并将一个已挂载转录锚点移动到视口顶部。
+  revealAnchor: (anchor: HTMLElement, behavior?: ScrollBehavior) => void;
 }
+
+// CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX keeps a revealed anchor slightly below the scrollport top edge.
+// CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX 让被定位锚点略低于滚动视口顶部边缘。
+export const CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX = 16;
 
 // ProgrammaticScrollTarget describes one in-flight native scroll operation owned by the controller.
 // ProgrammaticScrollTarget 描述一个由控制器拥有的进行中原生滚动操作。
@@ -514,6 +521,33 @@ export function useConversationScrollController(
     writeCurrentSnapshot(element, currentOptions.surfaceId);
   }, [cancelPendingFrame, publishFollowTail, writeCurrentSnapshot, writeScrollTop]);
 
+  // revealAnchor transfers viewport ownership to the reader and moves one mounted anchor near the viewport top.
+  // revealAnchor 将视口所有权交还阅读者，并把一个已挂载锚点移动到视口顶部附近。
+  // Parameters: anchor is a descendant of the current scrollport; behavior selects immediate or smooth native movement.
+  // 参数：anchor 是当前滚动视口的后代节点；behavior 选择立即或平滑原生移动。
+  // Returns: nothing.
+  // 返回值：无。
+  const revealAnchor = React.useCallback((anchor: HTMLElement, behavior: ScrollBehavior = "smooth"): void => {
+    // currentOptions resolves the active surface at user action time.
+    // currentOptions 解析用户操作时的活动界面。
+    const currentOptions = latestOptionsRef.current;
+    // element is the exact current mutation target.
+    // element 是当前精确修改目标。
+    const element = currentOptions.scrollRef.current;
+    if (!currentOptions.active || !currentOptions.surfaceId || !element || !element.contains(anchor)) {
+      return;
+    }
+    // anchorOffset is the anchor's current distance from the scrollport's visible top edge.
+    // anchorOffset 是锚点当前距滚动视口可见顶部边缘的距离。
+    const anchorOffset = anchor.getBoundingClientRect().top - element.getBoundingClientRect().top;
+    userRevisionRef.current += 1;
+    layoutTransactionRef.current = null;
+    cancelPendingFrame();
+    publishFollowTail(false);
+    writeScrollTop(element, element.scrollTop + anchorOffset - CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX, behavior);
+    writeCurrentSnapshot(element, currentOptions.surfaceId);
+  }, [cancelPendingFrame, publishFollowTail, writeCurrentSnapshot, writeScrollTop]);
+
   // preserveHistoryPrepend holds the semantic anchor unless reader movement invalidates the async operation.
   // preserveHistoryPrepend 在阅读者位移使异步操作失效前保持语义锚点。
   // Parameters: load performs one exact older-history request and reports whether rows were prepended.
@@ -782,6 +816,7 @@ export function useConversationScrollController(
     handleScroll,
     preserveHistoryPrepend,
     remember,
+    revealAnchor,
     scheduleStoredRestore,
     scrollToBottom,
   }), [
@@ -789,6 +824,7 @@ export function useConversationScrollController(
     handleScroll,
     preserveHistoryPrepend,
     remember,
+    revealAnchor,
     scheduleStoredRestore,
     scrollToBottom,
   ]);
