@@ -38,7 +38,6 @@ interface AgentSkillEditorDraft {
   shortDescription: string
   emoji: string
   color: string
-  locales: Record<string, AgentSkillLocaleSummary>
   categoryId: string
   tags: string[]
   enabled: boolean
@@ -53,10 +52,6 @@ interface AgentSkillCategoryDraft {
   emoji: string
   color: string
   order: string
-  englishName: string
-  englishDescription: string
-  chineseName: string
-  chineseDescription: string
 }
 
 // AgentSkillEditorDialog edits a package through synchronized structured fields and source documents.
@@ -73,7 +68,7 @@ export function AgentSkillEditorDialog(props: {
   const { t } = useI18n();
   // draft is the single source of truth for the current editor session.
   // draft 是当前编辑会话的唯一事实来源。
-  const [draft, setDraft] = React.useState<AgentSkillEditorDraft>(() => createEditorDraft(props.record, props.categories, props.copy))
+  const [draft, setDraft] = React.useState<AgentSkillEditorDraft>(() => createEditorDraft(props.record, props.categories, props.copy, props.locale))
   // error exposes parsing, validation, or persistence failures.
   // error 暴露解析、校验或持久化失败。
   const [error, setError] = React.useState("")
@@ -90,32 +85,16 @@ export function AgentSkillEditorDialog(props: {
   React.useEffect(() => {
     const session = props.open ? `${props.copy}:${props.record?.baseDir ?? "new"}` : null
     if (session !== null && editorSession.current !== session) {
-      setDraft(createEditorDraft(props.record, props.categories, props.copy))
+      setDraft(createEditorDraft(props.record, props.categories, props.copy, props.locale))
       setError("")
     }
     editorSession.current = session
-  }, [props.categories, props.copy, props.open, props.record])
+  }, [props.categories, props.copy, props.locale, props.open, props.record])
 
   // updateStructuredField changes one host-managed package node.
   // updateStructuredField 修改一个由宿主管理的技能包节点。
   const updateStructuredField = React.useCallback(<Key extends keyof AgentSkillEditorDraft>(key: Key, value: AgentSkillEditorDraft[Key]) => {
     setDraft((current) => ({ ...current, [key]: value }))
-    setError("")
-  }, [])
-
-  // updateLocaleField changes one exact BCP 47 display node.
-  // updateLocaleField 修改一个精确 BCP 47 展示节点。
-  const updateLocaleField = React.useCallback((locale: string, key: keyof AgentSkillLocaleSummary, value: string) => {
-    setDraft((current) => {
-      const locales = { ...current.locales }
-      const metadata = { ...locales[locale], [key]: value || null }
-      if (!metadata.displayName && !metadata.shortDescription) {
-        delete locales[locale]
-      } else {
-        locales[locale] = metadata
-      }
-      return { ...current, locales }
-    })
     setError("")
   }, [])
 
@@ -173,8 +152,8 @@ export function AgentSkillEditorDialog(props: {
           <fieldset disabled={saving}>
             <legend>{t("agentSkills.presentationAndCategory")}</legend>
             <div className="agent-skill-form-grid">
-              <AgentSkillTextField label={t("agentSkills.defaultDisplayName")} onChange={(value) => updateStructuredField("displayName", value)} value={draft.displayName} />
-              <AgentSkillTextField label={t("agentSkills.defaultShortDescription")} onChange={(value) => updateStructuredField("shortDescription", value)} value={draft.shortDescription} />
+              <AgentSkillTextField label={t("agentSkills.displayName")} onChange={(value) => updateStructuredField("displayName", value)} value={draft.displayName} />
+              <AgentSkillTextField label={t("agentSkills.shortDescription")} onChange={(value) => updateStructuredField("shortDescription", value)} value={draft.shortDescription} />
               <AgentSkillTextField label={t("agentSkills.emoji")} onChange={(value) => updateStructuredField("emoji", value)} value={draft.emoji} />
               <label className="agent-skill-form-field">
                 <span>{t("agentSkills.colorMarker")}</span>
@@ -195,10 +174,6 @@ export function AgentSkillEditorDialog(props: {
                 <Switch disabled={saving} checked={draft.enabled} onCheckedChange={(checked) => updateStructuredField("enabled", checked)} />
                 <span>{t("agentSkills.enableThisSkill")}</span>
               </label>
-              <AgentSkillTextField label="English name" onChange={(value) => updateLocaleField("en-US", "displayName", value)} value={draft.locales["en-US"]?.displayName ?? ""} />
-              <AgentSkillTextField label="English description" onChange={(value) => updateLocaleField("en-US", "shortDescription", value)} value={draft.locales["en-US"]?.shortDescription ?? ""} />
-              <AgentSkillTextField label="中文名称" onChange={(value) => updateLocaleField("zh-CN", "displayName", value)} value={draft.locales["zh-CN"]?.displayName ?? ""} />
-              <AgentSkillTextField label="中文说明" onChange={(value) => updateLocaleField("zh-CN", "shortDescription", value)} value={draft.locales["zh-CN"]?.shortDescription ?? ""} />
             </div>
           </fieldset>
           <fieldset disabled={saving} className="agent-skill-source-fieldset">
@@ -340,18 +315,14 @@ export function AgentSkillCategoryManagementDialog(props: {
         ) : (
           <fieldset disabled={saving} className="agent-skill-form-grid min-w-0 border-0 p-0">
             <AgentSkillTextField disabled={editing !== null} label="category-id" onChange={(value) => updateCategoryField("categoryId", value)} required value={draft.categoryId} />
-            <AgentSkillTextField label={t("agentSkills.defaultName")} onChange={(value) => updateCategoryField("name", value)} required value={draft.name} />
+            <AgentSkillTextField label={t("agentSkills.categoryName")} onChange={(value) => updateCategoryField("name", value)} required value={draft.name} />
             <AgentSkillTextField label={t("agentSkills.emoji")} onChange={(value) => updateCategoryField("emoji", value)} required value={draft.emoji} />
             <label className="agent-skill-form-field">
               <span>{t("agentSkills.colorMarker")}</span>
               <AgentSkillColorPicker disabled={saving} locale={props.locale} onChange={(value) => updateCategoryField("color", value)} value={draft.color} />
             </label>
             <AgentSkillTextField label={t("agentSkills.order")} onChange={(value) => updateCategoryField("order", value)} required type="number" value={draft.order} />
-            <AgentSkillTextField label={t("agentSkills.defaultDescription")} onChange={(value) => updateCategoryField("description", value)} value={draft.description} />
-            <AgentSkillTextField label="English name" onChange={(value) => updateCategoryField("englishName", value)} required value={draft.englishName} />
-            <AgentSkillTextField label="English description" onChange={(value) => updateCategoryField("englishDescription", value)} value={draft.englishDescription} />
-            <AgentSkillTextField label="中文名称" onChange={(value) => updateCategoryField("chineseName", value)} required value={draft.chineseName} />
-            <AgentSkillTextField label="中文说明" onChange={(value) => updateCategoryField("chineseDescription", value)} value={draft.chineseDescription} />
+            <AgentSkillTextField label={t("agentSkills.categoryDescription")} onChange={(value) => updateCategoryField("description", value)} value={draft.description} />
           </fieldset>
         )}
         {error ? <p className="agent-skill-form-error" role="alert">{error}</p> : null}
@@ -468,7 +439,9 @@ function AgentSkillColorPicker(props: {
 
 // createEditorDraft builds one exact structured baseline and prompt body.
 // createEditorDraft 构建一个精确的结构化基线与提示词正文。
-function createEditorDraft(record: AgentSkillRecordSummary | null, categories: AgentSkillCategorySummary[], copy: boolean): AgentSkillEditorDraft {
+// Parameters: locale picks the shown name and description when copying a localized system skill into a single-language user skill.
+// 参数：locale 在把本地化系统技能复制为单语言用户技能时选择显示名称与说明。
+function createEditorDraft(record: AgentSkillRecordSummary | null, categories: AgentSkillCategorySummary[], copy: boolean, locale: string): AgentSkillEditorDraft {
   const defaultCategoryId = categories.find((category) => category.categoryId === "uncategorized")?.categoryId ?? categories[0]?.categoryId ?? "uncategorized"
   return {
     name: record ? (copy ? `${record.name}-copy` : record.name) : "new-skill",
@@ -477,11 +450,10 @@ function createEditorDraft(record: AgentSkillRecordSummary | null, categories: A
     compatibility: record?.standard.compatibility ?? "",
     metadata: record?.standard.metadata ?? {},
     body: record?.body ?? "# Instructions\n\nDescribe the workflow, constraints, and expected result.\n",
-    displayName: record?.displayName ?? "New Skill",
-    shortDescription: record?.description ?? "Reusable prompt skill",
+    displayName: record ? localizedRecordDisplayName(record, locale) : "New Skill",
+    shortDescription: record ? localizedRecordShortDescription(record, locale) : "Reusable prompt skill",
     emoji: record?.emoji ?? "✨",
     color: record?.color ?? AGENT_SKILL_DEFAULT_COLOR,
-    locales: record?.locales ?? {},
     categoryId: record?.categoryId ?? defaultCategoryId,
     tags: record?.tags ?? [],
     enabled: record?.enabled ?? true,
@@ -509,7 +481,6 @@ function createSkillSaveRequest(draft: AgentSkillEditorDraft, record: AgentSkill
       shortDescription: optionalText(draft.shortDescription),
       emoji: optionalText(draft.emoji),
       color: optionalText(draft.color),
-      locales: draft.locales,
     },
     categoryId: draft.categoryId,
     tags: draft.tags,
@@ -527,10 +498,6 @@ function createCategoryDraft(category: AgentSkillCategorySummary | null): AgentS
     emoji: category?.emoji ?? "📁",
     color: category?.color ?? AGENT_SKILL_DEFAULT_COLOR,
     order: String(category?.order ?? 100),
-    englishName: category?.locales["en-US"]?.name ?? "",
-    englishDescription: category?.locales["en-US"]?.description ?? "",
-    chineseName: category?.locales["zh-CN"]?.name ?? "",
-    chineseDescription: category?.locales["zh-CN"]?.description ?? "",
   }
 }
 
@@ -540,7 +507,7 @@ function createCategorySaveRequest(draft: AgentSkillCategoryDraft, t: Translate)
   if (!/^(?!-)(?!.*--)[a-z0-9-]{1,64}(?<!-)$/u.test(draft.categoryId)) throw new Error(t("agentSkills.categoryIdMustBe"))
   const order = Number(draft.order)
   if (!Number.isSafeInteger(order)) throw new Error(t("agentSkills.categoryOrderMustBe"))
-  if (!draft.name.trim() || !draft.englishName.trim() || !draft.chineseName.trim()) throw new Error(t("agentSkills.defaultNameEnglishName"))
+  if (!draft.name.trim()) throw new Error(t("agentSkills.categoryNameRequired"))
   if (!draft.emoji.trim() || !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/iu.test(draft.color.trim())) throw new Error(t("agentSkills.emojiIsRequiredAnd"))
   return {
     categoryId: draft.categoryId,
@@ -549,10 +516,6 @@ function createCategorySaveRequest(draft: AgentSkillCategoryDraft, t: Translate)
     emoji: draft.emoji.trim(),
     color: draft.color.trim(),
     order,
-    locales: {
-      "en-US": { name: draft.englishName.trim(), description: optionalText(draft.englishDescription) },
-      "zh-CN": { name: draft.chineseName.trim(), description: optionalText(draft.chineseDescription) },
-    },
   }
 }
 
@@ -561,6 +524,13 @@ function createCategorySaveRequest(draft: AgentSkillCategoryDraft, t: Translate)
 function localizedRecordDisplayName(record: AgentSkillRecordSummary, locale: string): string {
   const localized = record.locales[locale] ?? Object.entries(record.locales).find(([candidate]) => candidate.split("-")[0] === locale.split("-")[0])?.[1]
   return localized?.displayName?.trim() || record.displayName || record.name
+}
+
+// localizedRecordShortDescription resolves an Agent Skill description for the exact interface locale.
+// localizedRecordShortDescription 为精确界面语言解析 Agent Skill 说明。
+function localizedRecordShortDescription(record: AgentSkillRecordSummary, locale: string): string {
+  const localized = record.locales[locale] ?? Object.entries(record.locales).find(([candidate]) => candidate.split("-")[0] === locale.split("-")[0])?.[1]
+  return localized?.shortDescription?.trim() || record.description
 }
 
 // localizedCategoryName resolves exact then language-prefix category metadata.

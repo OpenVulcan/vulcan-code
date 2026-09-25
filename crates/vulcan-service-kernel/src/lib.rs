@@ -112,7 +112,7 @@ use vulcan_service_api::{
     SessionTodolistItemSummary, SessionTodolistSummary, SessionVmmPolicyByConversation,
     SessionVmmPolicySummary, SettingSectionSummary, StartupSnapshot, StartupStepStatus,
     SubagentCatalogIssueSummary, SubagentCatalogSummary, SubagentCatalogUpdate,
-    SubagentCategorySummary, SubagentDefinitionLocaleSummary, SubagentDefinitionSaveRequest,
+    SubagentCategorySummary, SubagentDefinitionSaveRequest,
     SubagentDefinitionSummary, SubagentNavigationChangedDelta, SubagentNavigationSnapshot,
     SubagentPanelRouteResponse, TerminalDisplayChunk, ToolCallSummary,
     TransientReasoningStatusChangedDelta, TransientReasoningStatusKind,

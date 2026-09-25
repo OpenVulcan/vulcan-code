@@ -42,21 +42,12 @@ interface AgentEditorDraft {
   // Optional user package id.
   // 可选用户包标识。
   packageId: string
-  // Human-facing display name.
-  // 面向用户的显示名称。
+  // Human-facing display name; user agents have exactly one, in the author's language.
+  // 面向用户的显示名称；用户智能体只有一个，使用作者的语言。
   name: string
-  // Optional human-facing description.
-  // 可选的人类可读说明。
+  // Optional human-facing description in the author's language.
+  // 使用作者语言的可选人类可读说明。
   description: string
-  // Currently selected metadata language.
-  // 当前选中的元数据语言。
-  metadataLocale: AgentMetadataLocale
-  // Editable localized names keyed by locale.
-  // 按语言索引的可编辑本地化名称。
-  localizedNames: Record<string, string>
-  // Editable localized descriptions keyed by locale.
-  // 按语言索引的可编辑本地化说明。
-  localizedDescriptions: Record<string, string>
   // Human-facing emoji.
   // 面向用户的图标。
   emoji: string
@@ -112,17 +103,6 @@ interface AgentEditorDraft {
   // 用于审计上下文展示的当前定义文件路径。
   definitionFile: string
 }
-
-// AgentMetadataLocale is the editable display metadata language supported by the form.
-// AgentMetadataLocale 是表单支持编辑的展示元数据语言。
-type AgentMetadataLocale = "zh-CN" | "en-US"
-
-// AGENT_METADATA_LOCALES lists selectable metadata languages in stable order.
-// AGENT_METADATA_LOCALES 按稳定顺序列出可选择的元数据语言。
-const AGENT_METADATA_LOCALES: Array<{ locale: AgentMetadataLocale; label: TranslationKey }> = [
-  { locale: "zh-CN", label: "agents.metadataLocale.zhCN" },
-  { locale: "en-US", label: "agents.metadataLocale.enUS" },
-]
 
 // AgentStatusFilter represents the top-level enabled-state filter.
 // AgentStatusFilter 表示顶部启停状态筛选。
@@ -337,7 +317,7 @@ export function AgentsArea(props: {
           <div className="agent-catalog-toolbar-heading">
             <p>{t("agents.manageUserLevelAgent")}</p>
             <div className="agent-catalog-toolbar-actions">
-              <IconButton aria-label={t("agents.newAgent")} disabled={catalogActionDisabled} onClick={() => { setActionError(null); setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale))) }} size="xs" title={t("agents.newAgent")} type="button">
+              <IconButton aria-label={t("agents.newAgent")} disabled={catalogActionDisabled} onClick={() => { setActionError(null); setEditorDraft(emptyAgentDraft()) }} size="xs" title={t("agents.newAgent")} type="button">
                 <Plus size={15} />
               </IconButton>
               <IconButton aria-label={t("agents.openUserDirectory")} disabled={catalogActionDisabled} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} size="xs" title={t("agents.openUserDirectory")} type="button">
@@ -394,7 +374,7 @@ export function AgentsArea(props: {
               categoryById={categoryById}
               definition={definition}
               key={definition.sourceKey}
-              onEdit={() => { setActionError(null); setEditorDraft(draftFromDefinition(definition, defaultAgentMetadataLocale(locale))) }}
+              onEdit={() => { setActionError(null); setEditorDraft(draftFromDefinition(definition, locale)) }}
               onOpenDetail={setDetailDefinition}
               onRequestDelete={() => { setActionError(null); setDefinitionConfirmation({ definition, operation: "delete" }) }}
               onRequestRestore={() => { setActionError(null); setDefinitionConfirmation({ definition, operation: "restore" }) }}
@@ -565,9 +545,6 @@ function AgentEditorForm(props: {
   const draft = props.draft
   const editingSystemBackedDefinition = draft?.sourceScopeKey === "system" || Boolean(draft?.overrideOf)
   const readOnlySystemMetadata = Boolean(editingSystemBackedDefinition)
-  const selectedMetadataLocale = draft?.metadataLocale ?? defaultAgentMetadataLocale(locale)
-  const selectedMetadataName = draft?.localizedNames[selectedMetadataLocale] ?? ""
-  const selectedMetadataDescription = draft?.localizedDescriptions[selectedMetadataLocale] ?? ""
   const fixedModelValue = draft?.fixedModelProviderId && draft.fixedModelId
     ? modelPickerGroupKey({ providerId: draft.fixedModelProviderId, modelId: draft.fixedModelId })
     : ""
@@ -581,21 +558,6 @@ function AgentEditorForm(props: {
       return
     }
     props.onDraftChange({ ...props.draft, [key]: value })
-  }, [props])
-  // updateDraftMetadataField updates one localized display metadata field.
-  // updateDraftMetadataField 更新单个本地化展示元数据字段。
-  const updateDraftMetadataField = React.useCallback((field: "name" | "description", value: string) => {
-    if (!props.draft) {
-      return
-    }
-    const mapKey = field === "name" ? "localizedNames" : "localizedDescriptions"
-    props.onDraftChange({
-      ...props.draft,
-      [mapKey]: {
-        ...props.draft[mapKey],
-        [props.draft.metadataLocale]: value,
-      },
-    })
   }, [props])
   // updateToolPolicyItems replaces the unified tool policy selector list.
   // updateToolPolicyItems 替换统一工具策略选择器列表。
@@ -647,21 +609,8 @@ function AgentEditorForm(props: {
                 <Input disabled={props.busy || editingSystemBackedDefinition} pattern="[A-Za-z0-9._-]*" value={draft.packageId} onChange={(event) => updateDraftField("packageId", event.target.value)} />
               </label>
               <label>
-                <span>{t("agents.metadataLanguage")}</span>
-                <Select disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataLocale} onValueChange={(value) => updateDraftField("metadataLocale", value as AgentMetadataLocale)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {AGENT_METADATA_LOCALES.map((option) => (
-                      <SelectItem key={option.locale} value={option.locale}>{t(option.label)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
-              <label>
                 <span>{t("agents.name")}</span>
-                <Input disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataName} onChange={(event) => updateDraftMetadataField("name", event.target.value)} />
+                <Input disabled={props.busy || readOnlySystemMetadata} value={draft.name} onChange={(event) => updateDraftField("name", event.target.value)} />
               </label>
               <label className="agent-editor-checkbox">
                 <Switch checked={draft.enabled} disabled={props.busy || readOnlySystemMetadata} onCheckedChange={(checked) => updateDraftField("enabled", checked)} />
@@ -669,7 +618,7 @@ function AgentEditorForm(props: {
               </label>
               <label className="wide">
                 <span>{t("agents.description")}</span>
-                <Input disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataDescription} onChange={(event) => updateDraftMetadataField("description", event.target.value)} />
+                <Input disabled={props.busy || readOnlySystemMetadata} value={draft.description} onChange={(event) => updateDraftField("description", event.target.value)} />
               </label>
               <label>
                 <span>{t("agents.emoji")}</span>
@@ -784,7 +733,7 @@ function AgentEditorForm(props: {
                 <X size={15} />
                 <span>{t("agents.cancel")}</span>
               </Button>
-              <Button disabled={props.busy || draft.agentId.trim().length === 0 || !preferredDraftMetadataField(localizedSaveLocalesFromDraft(draft), "name")} type="submit">
+              <Button disabled={props.busy || draft.agentId.trim().length === 0 || draft.name.trim().length === 0} type="submit">
                 <Save size={15} />
                 <span>{t("agents.save")}</span>
               </Button>
@@ -1273,16 +1222,13 @@ function AgentDefinitionDetailDialog(props: {
 
 // emptyAgentDraft builds the default draft for a new user agent.
 // emptyAgentDraft 构建新用户智能体的默认草稿。
-function emptyAgentDraft(metadataLocale: AgentMetadataLocale): AgentEditorDraft {
+function emptyAgentDraft(): AgentEditorDraft {
   return {
     agentId: "",
     originalAgentId: "",
     packageId: "",
     name: "",
     description: "",
-    metadataLocale,
-    localizedNames: {},
-    localizedDescriptions: {},
     emoji: "🤖",
     color: "gray",
     vibe: "",
@@ -1306,18 +1252,15 @@ function emptyAgentDraft(metadataLocale: AgentMetadataLocale): AgentEditorDraft 
 
 // draftFromDefinition converts one catalog row into editable form state.
 // draftFromDefinition 将单个目录行转换为可编辑表单状态。
-function draftFromDefinition(definition: SubagentDefinitionSummary, metadataLocale: AgentMetadataLocale): AgentEditorDraft {
-  const localizedNames = localizedFieldMapFromDefinition(definition, "name", metadataLocale)
-  const localizedDescriptions = localizedFieldMapFromDefinition(definition, "description", metadataLocale)
+// Parameters: locale selects the shown name of localized system agents, whose metadata stays read-only.
+// 参数：locale 选择本地化系统智能体的显示名称，其元数据保持只读。
+function draftFromDefinition(definition: SubagentDefinitionSummary, locale: string): AgentEditorDraft {
   return {
     agentId: definition.agentId,
     originalAgentId: definition.agentId,
     packageId: definition.packageId ?? "",
-    name: definition.name,
-    description: definition.description ?? "",
-    metadataLocale,
-    localizedNames,
-    localizedDescriptions,
+    name: localizedDefinitionName(definition, locale),
+    description: localizedDefinitionDescription(definition, locale) ?? "",
     emoji: definition.emoji || "🤖",
     color: definition.color || "gray",
     vibe: definition.vibe ?? "",
@@ -1343,16 +1286,12 @@ function draftFromDefinition(definition: SubagentDefinitionSummary, metadataLoca
 // saveRequestFromDraft 将表单状态转换为服务请求结构。
 function saveRequestFromDraft(draft: AgentEditorDraft): SubagentDefinitionSaveRequest {
   const normalizedDraft = normalizedAgentEditorDraftFileIdentity(draft)
-  const locales = localizedSaveLocalesFromDraft(draft)
-  const name = preferredDraftMetadataField(locales, "name") ?? draft.name.trim()
-  const description = preferredDraftMetadataField(locales, "description") ?? nonEmptyText(draft.description)
   return {
     agentId: normalizedDraft.agentId,
     originalAgentId: nonEmptyText(normalizedDraft.originalAgentId),
     packageId: nonEmptyText(normalizedDraft.packageId),
-    name,
-    description,
-    locales,
+    name: draft.name.trim(),
+    description: nonEmptyText(draft.description),
     emoji: nullableTextPatch(draft.emoji),
     color: nullableTextPatch(draft.color),
     vibe: nullableTextPatch(draft.vibe),
@@ -1467,125 +1406,6 @@ function legacyPolicyTools(legacyAllowed: string[] = [], legacyDisabled: string[
     return legacyAllowed.filter((item) => !disabledSet.has(item.trim().toLowerCase()))
   }
   return legacyDisabled
-}
-
-// localizedFieldMapFromDefinition builds editable locale text maps from one definition row.
-// localizedFieldMapFromDefinition 从单个定义行构建可编辑的本地化文本映射。
-function localizedFieldMapFromDefinition(definition: SubagentDefinitionSummary, field: "name" | "description", fallbackLocale: AgentMetadataLocale): Record<string, string> {
-  const values: Record<string, string> = {}
-  const valuePriorities: Record<string, number> = {}
-  Object.entries(definition.locales ?? {}).forEach(([locale, metadata]) => {
-    const value = metadata?.[field]?.trim()
-    const normalizedLocale = normalizedEditableMetadataLocale(locale) ?? locale.trim()
-    if (value && normalizedLocale) {
-      const priority = editableMetadataLocalePriority(locale, normalizedLocale)
-      if (!values[normalizedLocale] || priority > (valuePriorities[normalizedLocale] ?? 0)) {
-        values[normalizedLocale] = value
-        valuePriorities[normalizedLocale] = priority
-      }
-    }
-  })
-  const rootValue = field === "name" ? definition.name.trim() : definition.description?.trim()
-  if (Object.keys(values).length > 0) {
-    if (rootValue && !localizedFieldMapHasLanguage(values, "en")) {
-      values["en-US"] = rootValue
-    }
-    return values
-  }
-  if (rootValue) {
-    values[fallbackLocale] = rootValue
-    if (!localizedFieldMapHasLanguage(values, "en")) {
-      values["en-US"] = rootValue
-    }
-  }
-  return values
-}
-
-// localizedFieldMapHasLanguage returns whether a locale map already contains a language prefix.
-// localizedFieldMapHasLanguage 返回 locale 映射是否已包含指定语言前缀。
-function localizedFieldMapHasLanguage(values: Record<string, string>, language: string): boolean {
-  const normalizedLanguage = language.toLowerCase()
-  return Object.keys(values).some((locale) => {
-    const normalizedLocale = locale.toLowerCase()
-    return normalizedLocale === normalizedLanguage || normalizedLocale.startsWith(`${normalizedLanguage}-`)
-  })
-}
-
-// localizedSaveLocalesFromDraft converts editable locale maps into the save request payload.
-// localizedSaveLocalesFromDraft 将可编辑本地化映射转换为保存请求载荷。
-function localizedSaveLocalesFromDraft(draft: AgentEditorDraft): Record<string, { name?: string | null; description?: string | null }> {
-  const locales: Record<string, { name?: string | null; description?: string | null }> = {}
-  const localePriorities: Record<string, number> = {}
-  const localeKeys = new Set([...Object.keys(draft.localizedNames), ...Object.keys(draft.localizedDescriptions)])
-  localeKeys.forEach((locale) => {
-    const normalizedLocale = normalizedEditableMetadataLocale(locale) ?? locale.trim()
-    if (!normalizedLocale) {
-      return
-    }
-    const name = draft.localizedNames[locale]?.trim()
-    const description = draft.localizedDescriptions[locale]?.trim()
-    const priority = editableMetadataLocalePriority(locale, normalizedLocale)
-    if (name || description) {
-      if (priority < (localePriorities[normalizedLocale] ?? 0)) {
-        return
-      }
-      locales[normalizedLocale] = {
-        name: name || null,
-        description: description || null,
-      }
-      localePriorities[normalizedLocale] = priority
-    }
-  })
-  return locales
-}
-
-// normalizedEditableMetadataLocale maps compatible locale keys into the editor's canonical tabs.
-// normalizedEditableMetadataLocale 将兼容语言键映射到编辑器的规范标签页。
-function normalizedEditableMetadataLocale(locale: string): AgentMetadataLocale | null {
-  const normalizedLocale = locale.trim().toLowerCase()
-  if (normalizedLocale === "en" || normalizedLocale.startsWith("en-")) {
-    return "en-US"
-  }
-  if (normalizedLocale === "zh" || normalizedLocale.startsWith("zh-")) {
-    return "zh-CN"
-  }
-  return null
-}
-
-// editableMetadataLocalePriority prefers exact canonical metadata over compatible aliases.
-// editableMetadataLocalePriority 优先使用精确规范语言元数据而不是兼容别名。
-function editableMetadataLocalePriority(sourceLocale: string, targetLocale: string): number {
-  const normalizedSourceLocale = sourceLocale.trim().toLowerCase()
-  const normalizedTargetLocale = targetLocale.trim().toLowerCase()
-  if (normalizedSourceLocale === normalizedTargetLocale) {
-    return 3
-  }
-  const targetLanguage = normalizedTargetLocale.split("-")[0]
-  if (normalizedSourceLocale === targetLanguage) {
-    return 2
-  }
-  if (normalizedSourceLocale.startsWith(`${targetLanguage}-`)) {
-    return 1
-  }
-  return 0
-}
-
-// preferredDraftMetadataField returns English metadata first and Chinese as fallback.
-// preferredDraftMetadataField 返回英文优先、中文兜底的元数据字段。
-function preferredDraftMetadataField(
-  locales: Record<string, { name?: string | null; description?: string | null }>,
-  field: "name" | "description",
-): string | null {
-  return nonEmptyText(locales["en-US"]?.[field] ?? "")
-    ?? nonEmptyText(locales.en?.[field] ?? "")
-    ?? nonEmptyText(locales["zh-CN"]?.[field] ?? "")
-    ?? nonEmptyText(locales.zh?.[field] ?? "")
-}
-
-// defaultAgentMetadataLocale returns the form language that matches the UI locale.
-// defaultAgentMetadataLocale 返回匹配 UI 语言的表单元数据语言。
-function defaultAgentMetadataLocale(locale: string): AgentMetadataLocale {
-  return locale.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US"
 }
 
 // buildAgentToolPolicyOptions builds selectable tool rows from the live workbench snapshot and draft policies.

@@ -102,7 +102,7 @@ fn loaded_definition_with_fixed_model(
 
 /// Builds one loaded definition with a provider/model snapshot.
 /// 构建一个带供应商/模型快照的已加载定义。
-fn loaded_definition_with_provider_model(
+pub(super) fn loaded_definition_with_provider_model(
     // Saved provider identifier.
     // 已保存供应商标识。
     provider_id: Option<String>,

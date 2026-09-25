@@ -789,12 +789,11 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
       if (existingIndex < 0 && snapshot.subagentCatalog.definitions.some((item) => item.agentId === targetAgentId)) {
         throw new Error(formatMessage(translateActive("agents.service.alreadyExists"), { targetAgentId }));
       }
-      const locales = definition.locales ?? {};
       const nextDefinition: SubagentDefinitionSummary = {
         agentId: targetAgentId,
-        name: preferredBrowserPreviewLocaleField(locales, "name") ?? (definition.name.trim() || targetAgentId),
-        description: preferredBrowserPreviewLocaleField(locales, "description") ?? definition.description ?? null,
-        locales,
+        name: definition.name.trim() || targetAgentId,
+        description: definition.description?.trim() || null,
+        locales: {},
         emoji: browserPreviewDefaultedTextPatch(definition.emoji, existingDefinition?.emoji, "🤖"),
         color: browserPreviewDefaultedTextPatch(definition.color, existingDefinition?.color, "gray"),
         vibe: browserPreviewOptionalTextPatch(definition.vibe, existingDefinition?.vibe ?? null),
@@ -881,19 +880,6 @@ function browserPreviewOptionalTextPatch(value: string | null | undefined, previ
     return null;
   }
   return value.trim() || null;
-}
-
-// preferredBrowserPreviewLocaleField chooses English metadata first and Chinese as fallback.
-// preferredBrowserPreviewLocaleField 选择英文优先、中文兜底的元数据字段。
-function preferredBrowserPreviewLocaleField(
-  locales: Record<string, { name?: string | null; description?: string | null }>,
-  field: "name" | "description",
-): string | null {
-  return locales["en-US"]?.[field]?.trim()
-    || locales.en?.[field]?.trim()
-    || locales["zh-CN"]?.[field]?.trim()
-    || locales.zh?.[field]?.trim()
-    || null;
 }
 
 // setSubagentDefinitionEnabled persists one subagent definition enabled state.

@@ -1031,6 +1031,10 @@ impl<'de> Deserialize<'de> for OptionalTextPatch {
 
 /// Save request for one user-owned agent definition.
 /// 单个用户拥有的智能体保存请求。
+///
+/// User-owned definitions carry one name and description in the author's language; only
+/// bundled system definitions provide per-locale display metadata.
+/// 用户拥有的定义只携带作者所用语言的一组名称与说明；仅内置系统定义提供按语言的展示元数据。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentDefinitionSaveRequest {
@@ -1051,10 +1055,6 @@ pub struct SubagentDefinitionSaveRequest {
     /// Optional human-facing description.
     /// 可选的人类可读说明。
     pub description: Option<String>,
-    /// Localized display metadata keyed by locale tag.
-    /// 按语言标签索引的本地化展示元数据。
-    #[serde(default)]
-    pub locales: std::collections::BTreeMap<String, SubagentDefinitionLocaleSummary>,
     /// Optional human-facing emoji override.
     /// 可选的人类可读图标覆盖。
     #[serde(default, skip_serializing_if = "OptionalTextPatch::is_missing")]
@@ -1398,14 +1398,17 @@ pub struct AgentSkillSaveRequest {
 
 /// UI-facing metadata included in one Agent Skill save request.
 /// 单次 Agent Skill 保存请求包含的界面展示元数据。
+///
+/// User-authored skills carry one display name and description; only bundled system skills are localized.
+/// 用户创作的技能只携带一组显示名称与说明；仅内置系统技能提供本地化。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentSkillInterfaceSaveRequest {
-    /// Optional default display name.
-    /// 可选默认显示名称。
+    /// Optional display name.
+    /// 可选显示名称。
     pub display_name: Option<String>,
-    /// Optional default compact description.
-    /// 可选默认紧凑说明。
+    /// Optional compact description.
+    /// 可选紧凑说明。
     pub short_description: Option<String>,
     /// Optional emoji rendered by the skill marker.
     /// 由技能标记渲染的可选表情图标。
@@ -1413,24 +1416,24 @@ pub struct AgentSkillInterfaceSaveRequest {
     /// Optional hexadecimal marker color.
     /// 可选十六进制标记颜色。
     pub color: Option<String>,
-    /// Localized display metadata keyed by locale tag.
-    /// 按语言标签索引的本地化展示元数据。
-    pub locales: std::collections::BTreeMap<String, AgentSkillLocaleSummary>,
 }
 
 /// User-defined logical Agent Skills category save request.
 /// 用户定义逻辑 Agent Skills 分类保存请求。
+///
+/// User categories carry one name and description; only built-in categories are localized.
+/// 用户分类只携带一组名称与说明；仅内置分类提供本地化。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentSkillCategorySaveRequest {
     /// Stable category identifier.
     /// 稳定分类标识。
     pub category_id: String,
-    /// Default category name.
-    /// 默认分类名称。
+    /// Category name.
+    /// 分类名称。
     pub name: String,
-    /// Optional default category description.
-    /// 可选默认分类说明。
+    /// Optional category description.
+    /// 可选分类说明。
     pub description: Option<String>,
     /// Category emoji.
     /// 分类图标。
@@ -1441,9 +1444,6 @@ pub struct AgentSkillCategorySaveRequest {
     /// Stable display order.
     /// 稳定展示顺序。
     pub order: i32,
-    /// Localized category metadata keyed by locale tag.
-    /// 按语言标签索引的本地化分类元数据。
-    pub locales: std::collections::BTreeMap<String, AgentSkillCategoryLocaleSummary>,
 }
 
 /// One Agent Skill loading issue projected for diagnostics.

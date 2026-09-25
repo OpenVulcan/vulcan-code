@@ -1369,12 +1369,14 @@ export interface AgentSkillCategorySummary {
 
 // AgentSkillInterfaceSaveRequest contains complete user-authored display metadata.
 // AgentSkillInterfaceSaveRequest 包含完整用户创作展示元数据。
+// User-authored skills carry one display name and description; only bundled system skills are localized.
+// 用户创作的技能只携带一组显示名称与说明；仅内置系统技能提供本地化。
 export interface AgentSkillInterfaceSaveRequest {
-  // Optional default human-facing name independent from the model trigger name.
-  // 可选默认用户显示名称，独立于模型触发名称。
+  // Optional human-facing name independent from the model trigger name.
+  // 可选用户显示名称，独立于模型触发名称。
   displayName: string | null;
-  // Optional default compact description for management surfaces.
-  // 可选默认管理界面简短说明。
+  // Optional compact description for management surfaces.
+  // 可选管理界面简短说明。
   shortDescription: string | null;
   // Optional emoji rendered by the skill marker.
   // 由技能标记渲染的可选表情图标。
@@ -1382,9 +1384,6 @@ export interface AgentSkillInterfaceSaveRequest {
   // Optional hexadecimal marker color.
   // 可选十六进制标记颜色。
   color: string | null;
-  // Authored localized display metadata keyed by BCP 47 locale.
-  // 按 BCP 47 语言标签索引的已创作本地化展示元数据。
-  locales: Record<string, AgentSkillLocaleSummary>;
 }
 
 // AgentSkillSaveRequest is the strict complete package editor payload.
@@ -1449,9 +1448,6 @@ export interface AgentSkillCategorySaveRequest {
   // Stable integer ordering key.
   // 稳定整数排序键。
   order: number;
-  // Authored localized category metadata keyed by BCP 47 locale.
-  // 按 BCP 47 语言标签索引的已创作本地化分类元数据。
-  locales: Record<string, AgentSkillCategoryLocaleSummary>;
 }
 
 // AgentSkillCategoryLocaleSummary describes localized category metadata.
@@ -1740,9 +1736,6 @@ export interface SubagentDefinitionSaveRequest {
   // Optional human-facing description.
   // 可选的人类可读说明。
   description?: string | null;
-  // Localized display metadata keyed by locale tag.
-  // 按语言标签索引的本地化展示元数据。
-  locales?: Record<string, SubagentDefinitionLocaleSummary> | null;
   // Optional human-facing emoji override.
   // 可选的人类可读图标覆盖。
   emoji?: string | null;

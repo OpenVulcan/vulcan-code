@@ -3041,20 +3041,9 @@ pub(crate) async fn service_save_agent_skill(
             short_description: request.interface.short_description,
             emoji: request.interface.emoji,
             color: request.interface.color,
-            locales: request
-                .interface
-                .locales
-                .into_iter()
-                .map(|(locale, value)| {
-                    (
-                        locale,
-                        vulcan_prompt_skills::PromptSkillLocaleMetadata {
-                            display_name: value.display_name,
-                            short_description: value.short_description,
-                        },
-                    )
-                })
-                .collect(),
+            // User-authored skills are single-language; only bundled system skills are localized.
+            // 用户创作的技能只有单一语言；仅内置系统技能提供本地化。
+            locales: std::collections::BTreeMap::new(),
         },
         catalog: vulcan_prompt_skills::PromptSkillCatalogMetadata {
             category_id: request.category_id,
@@ -3248,19 +3237,9 @@ pub(crate) async fn service_save_agent_skill_category(
             color: request.color,
             order: request.order,
             builtin: false,
-            locales: request
-                .locales
-                .into_iter()
-                .map(|(locale, value)| {
-                    (
-                        locale,
-                        vulcan_prompt_skills::PromptSkillCategoryLocale {
-                            name: value.name,
-                            description: value.description,
-                        },
-                    )
-                })
-                .collect(),
+            // User categories are single-language; only built-in categories are localized.
+            // 用户分类只有单一语言；仅内置分类提供本地化。
+            locales: std::collections::BTreeMap::new(),
         },
     )?;
     refresh_agent_skills_local_state_and_emit(&app, &state).await
@@ -3640,18 +3619,7 @@ pub(crate) async fn service_save_subagent_definition(
     definition.id = target_agent_id.clone();
     apply_request_tool_policy(&mut definition.tool_exposure, &request);
     apply_request_prompt_skill_policy(&mut definition.prompt_skills, &request);
-    let request_locales = normalized_request_definition_locales(request.locales);
-    definition.name = preferred_definition_locale_name(&request_locales)
-        .or_else(|| non_empty_request_text(&request.name))
-        .unwrap_or_else(|| target_agent_id.clone());
-    definition.description =
-        preferred_definition_locale_description(&request_locales).or_else(|| {
-            request
-                .description
-                .as_deref()
-                .and_then(non_empty_request_text)
-        });
-    definition.locales = request_locales;
+    apply_user_definition_display_metadata(&mut definition, &request, &target_agent_id);
     apply_defaulted_text_patch(request.emoji, &mut definition.emoji, "🤖");
     apply_defaulted_text_patch(request.color, &mut definition.color, "gray");
     apply_optional_text_patch(request.vibe, &mut definition.vibe);
@@ -4218,6 +4186,32 @@ fn user_subagent_override_path(agent_id: &str) -> Result<PathBuf, String> {
         .map_err(|error| error.message)
 }
 
+/// Applies the single-language display metadata of one user-owned agent definition.
+/// 应用单个用户拥有智能体定义的单语言展示元数据。
+///
+/// # Parameters
+/// 参数
+/// `definition` is the user-owned definition being saved, `request` carries the submitted name and
+/// description, and `fallback_name` is used when the submitted name is blank.
+/// `definition` 是正在保存的用户定义，`request` 携带提交的名称与说明，`fallback_name` 在提交名称为空时使用。
+///
+/// User-owned definitions are single-language, so any per-locale metadata is cleared; only bundled
+/// system definitions are localized.
+/// 用户拥有的定义只有单一语言，因此会清除按语言的元数据；仅内置系统定义提供本地化。
+pub(crate) fn apply_user_definition_display_metadata(
+    definition: &mut vulcan_task_session::SubagentDefinition,
+    request: &SubagentDefinitionSaveRequest,
+    fallback_name: &str,
+) {
+    definition.name =
+        non_empty_request_text(&request.name).unwrap_or_else(|| fallback_name.to_string());
+    definition.description = request
+        .description
+        .as_deref()
+        .and_then(non_empty_request_text);
+    definition.locales = std::collections::BTreeMap::new();
+}
+
 /// Returns trimmed request text only when it is non-empty.
 /// 仅在请求文本非空时返回裁剪后的文本。
 fn non_empty_request_text(value: &str) -> Option<String> {
@@ -4375,85 +4369,6 @@ fn request_capability_policy(
         legacy_allowed,
         legacy_disabled,
     )
-}
-
-/// Normalizes localized definition metadata from a save request.
-/// 规范化保存请求中的智能体本地化元数据。
-fn normalized_request_definition_locales(
-    locales: std::collections::BTreeMap<String, SubagentDefinitionLocaleSummary>,
-) -> std::collections::BTreeMap<
-    String,
-    vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition,
-> {
-    locales
-        .into_iter()
-        .filter_map(|(locale, metadata)| {
-            let locale = locale.trim().to_string();
-            if locale.is_empty() {
-                return None;
-            }
-            let name = metadata.name.as_deref().and_then(non_empty_request_text);
-            let description = metadata
-                .description
-                .as_deref()
-                .and_then(non_empty_request_text);
-            if name.is_none() && description.is_none() {
-                return None;
-            }
-            Some((
-                locale,
-                vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition {
-                    name,
-                    description,
-                },
-            ))
-        })
-        .collect()
-}
-
-/// Selects the default name from localized metadata with English taking priority.
-/// 从本地化元数据中选择默认名称，并优先使用英文。
-fn preferred_definition_locale_name(
-    locales: &std::collections::BTreeMap<
-        String,
-        vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition,
-    >,
-) -> Option<String> {
-    preferred_definition_locale_field(locales, |metadata| metadata.name.as_ref())
-}
-
-/// Selects the default description from localized metadata with English taking priority.
-/// 从本地化元数据中选择默认说明，并优先使用英文。
-fn preferred_definition_locale_description(
-    locales: &std::collections::BTreeMap<
-        String,
-        vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition,
-    >,
-) -> Option<String> {
-    preferred_definition_locale_field(locales, |metadata| metadata.description.as_ref())
-}
-
-/// Selects a localized text field using English first and Chinese as fallback.
-/// 按英文优先、中文兜底的顺序选择本地化文本字段。
-fn preferred_definition_locale_field(
-    locales: &std::collections::BTreeMap<
-        String,
-        vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition,
-    >,
-    field: impl Fn(&vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition) -> Option<&String>,
-) -> Option<String> {
-    ["en-US", "en", "zh-CN", "zh"].iter().find_map(|preferred| {
-        let preferred_lower = preferred.to_ascii_lowercase();
-        locales
-            .iter()
-            .find(|(locale, metadata)| {
-                let locale_lower = locale.to_ascii_lowercase();
-                (locale_lower == preferred_lower
-                    || locale_lower.starts_with(&format!("{preferred_lower}-")))
-                    && field(metadata).is_some()
-            })
-            .and_then(|(_, metadata)| field(metadata).cloned())
-    })
 }
 
 /// Normalizes one package id for filesystem storage.
