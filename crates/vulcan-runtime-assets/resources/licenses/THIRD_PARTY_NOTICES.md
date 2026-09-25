@@ -5,7 +5,7 @@ This file is generated from Cargo dependency metadata by `cargo-about`.
 
 ## License Overview
 
-- Apache License 2.0 (544)
+- Apache License 2.0 (543)
 - MIT License (290)
 - Unicode License v3 (23)
 - BSD 3-Clause "New" or "Revised" License (13)
@@ -2031,7 +2031,6 @@ Used by:
 - windows-result 0.4.1 - https://github.com/microsoft/windows-rs
 - windows-strings 0.4.2 - https://github.com/microsoft/windows-rs
 - windows-strings 0.5.1 - https://github.com/microsoft/windows-rs
-- windows-sys 0.52.0 - https://github.com/microsoft/windows-rs
 - windows-sys 0.59.0 - https://github.com/microsoft/windows-rs
 - windows-sys 0.60.2 - https://github.com/microsoft/windows-rs
 - windows-sys 0.61.2 - https://github.com/microsoft/windows-rs
@@ -9355,7 +9354,7 @@ Used by:
 - rustc_version 0.4.1 - https://github.com/djc/rustc-version-rs
 - rustix 1.1.4 - https://github.com/bytecodealliance/rustix
 - rustls-native-certs 0.8.4 - https://github.com/rustls/rustls-native-certs
-- rustls 0.23.43 - https://github.com/rustls/rustls
+- rustls 0.23.45 - https://github.com/rustls/rustls
 - scopeguard 1.2.0 - https://github.com/bluss/scopeguard
 - secret-service 5.1.0 - https://github.com/hwchen/secret-service-rs.git
 - security-framework-sys 2.17.0 - https://github.com/kornelski/rust-security-framework
