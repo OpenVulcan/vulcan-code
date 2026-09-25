@@ -1034,11 +1034,11 @@ struct V1ReplayRouteIdentity {
     ///
     /// # Remarks
     /// 说明
-    /// The contract decides whether a mismatch is fatal: only a route that promised to replay
-    /// provider-owned reasoning must refuse to continue without it, while a route that declared no
-    /// contract keeps its previous request bytes.
-    /// 契约决定失配是否致命：只有承诺回传供应商持有推理的路由才必须拒绝在缺失它的情况下继续，
-    /// 未声明契约的路由保持其既有请求字节。
+    /// The contract selects native plaintext reasoning versus ordinary historical text after a
+    /// route change. Neither branch transfers opaque signatures; missing source evidence remains
+    /// an error on a declared replay route.
+    /// 契约决定路由变化后使用原生明文推理还是普通历史文本。两种分支都不传递不透明签名；
+    /// 在已声明回放契约的路由上，缺少来源证据仍属于错误。
     reasoning_replay_contract: Option<vulcan_ai_contract::ReasoningReplayContract>,
 }
 
@@ -1127,24 +1127,46 @@ fn resolve_projected_assistant_replay(
             )))
         }
         Some(ProviderReplayProjection::RouteMismatch) => {
-            // A mismatch must never become a silent signature-free rebuild while the turn actually
-            // carries reasoning and the target route promised to replay provider-owned reasoning.
-            // 当该回合确实携带推理、且目标路由承诺回传供应商持有推理时，
-            // 失配绝不能被变成静默的无签名本地重建。
-            if reasoning_requires_replay {
-                return Err(unreplayable_replay_runtime_error(format!(
-                    "projected item {projected_item_id} has reasoning whose durable envelope belongs to another route"
-                )));
-            }
-            // A turn with no reasoning at stake keeps the plain local text behaviour, and a route
-            // that declared no contract must keep its previous request bytes.
-            // 没有推理风险的回合保持原有纯文本行为；未声明契约的路由必须保持其既有请求字节。
+            // Route identity protects opaque replay, not portable canonical text. The target's
+            // declared encoder validates whether the retained plaintext can reach its wire format.
+            // 路由身份保护不透明回放，而非可移植的规范文本。目标声明的编码器负责校验
+            // 保留的明文是否能够抵达其线路格式。
+            // State-only projections lack a target contract and do not prepare transport bytes.
+            // 仅状态投影没有目标契约，也不准备传输字节。
+            let Some(route) = route else {
+                return Ok((content, Vec::new()));
+            };
+            let content = content
+                .into_iter()
+                .filter_map(|item| match item {
+                    // An opaque-only block has no portable text; its original envelope stays stored.
+                    // 纯不透明块没有可移植文本；原封套仍保留在存储中。
+                    ContentItem::Reasoning { text, .. } if text.trim().is_empty() => None,
+                    ContentItem::Reasoning { text, .. }
+                        if route.reasoning_replay_contract.is_some() =>
+                    {
+                        Some(ContentItem::Reasoning {
+                            text,
+                            signature: None,
+                        })
+                    }
+                    // Generic routes receive readable history, never a forged native thinking block.
+                    // 通用路由接收可读历史，绝不接收伪造的原生思考块。
+                    ContentItem::Reasoning { text, .. } => Some(ContentItem::Text {
+                        text: format!("Historical reasoning text from a previous model:\n{text}"),
+                    }),
+                    ContentItem::ToolCall { mut call } => {
+                        call.signature = None;
+                        Some(ContentItem::ToolCall { call })
+                    }
+                    item => Some(item),
+                })
+                .collect();
             Ok((content, Vec::new()))
         }
         None => {
-            // Missing evidence is distinct from a present envelope that names another route. Both
-            // remain fail-closed when the target requires provider-owned reasoning replay.
-            // 缺少证据不同于“封套存在但属于其他路由”；目标要求供应商推理回传时二者都保持失败关闭。
+            // Missing evidence is corruption, unlike a model switch with a durable source.
+            // 缺少证据属于损坏，与拥有持久化来源的模型切换不同。
             if reasoning_requires_replay {
                 return Err(unreplayable_replay_runtime_error(format!(
                     "projected item {projected_item_id} has reasoning but no durable replay envelope"
@@ -1155,8 +1177,8 @@ fn resolve_projected_assistant_replay(
     }
 }
 
-/// Reports one unreplayable reasoning history with the shared controlled user copy.
-/// 使用共享的受控用户文案报告一次不可回传的推理历史。
+/// Reports one unreplayable reasoning history with the shared English runtime diagnostic.
+/// 使用共享英文运行时诊断报告一次不可回传的推理历史。
 ///
 /// # Remarks
 /// 说明
@@ -2718,6 +2740,7 @@ fn persistent_change_set_from_tool_result(
 #[cfg(test)]
 mod tests {
     mod host_guidance;
+    mod model_selection;
     mod remote_checkpoint;
     use super::*;
     use serde_json::json;
@@ -6045,47 +6068,62 @@ mod tests {
         assert_eq!(items, envelope.provider_context_items);
     }
 
-    /// Verifies a foreign route refuses a reasoning turn instead of rebuilding it unsigned.
-    /// 验证外来路由拒绝推理回合，而不是把它重建成无签名形态。
-    ///
-    /// # Remarks
-    /// 说明
-    /// The plan forbids a mismatch from becoming a silent `signature: None` rebuild. The refusal is
-    /// deliberately scoped: a turn with no reasoning at stake keeps its plain local text, and a
-    /// route that declared no contract must keep its previous request bytes.
-    /// 计划禁止把失配变成静默的 `signature: None` 重建。拒绝被刻意限定范围：
-    /// 没有推理风险的回合保持原有纯文本，未声明契约的路由必须保持其既有请求字节。
+    /// Verifies route changes retain canonical history while excluding all opaque replay evidence.
+    /// 验证路由变化保留规范历史，同时排除所有不透明回放证据。
     #[test]
-    fn projected_assistant_replay_refuses_reasoning_on_foreign_route() {
+    fn projected_assistant_replay_preserves_plaintext_on_foreign_route() {
         let envelope = durable_reasoning_envelope();
+        // Each identity dimension independently invalidates native replay without blocking text.
+        // 每个身份维度都独立使原生回放失效，但不会阻断文本。
+        for field in ["provider", "connection", "endpoint", "protocol", "model"] {
+            let mut route = deepseek_replay_route();
+            match field {
+                "provider" => route.provider_id.push_str("-changed"),
+                "connection" => route.connection_id.push_str("-changed"),
+                "endpoint" => route.route_fingerprint.push_str("-changed"),
+                "protocol" => route.protocol_profile_id.push_str("-changed"),
+                "model" => route.model_id.push_str("-changed"),
+                _ => unreachable!(),
+            }
+            // Signed content proves neither reasoning nor tool signatures leak into the new route.
+            // signed_content 用于证明推理签名和工具签名都不会泄漏到新路由。
+            let mut signed_content = durable_canonical_content();
+            for item in &mut signed_content {
+                if let ContentItem::Reasoning { signature, .. } = item {
+                    *signature = Some(String::from("openai#old-route-secret"));
+                }
+            }
+            signed_content.push(ContentItem::ToolCall {
+                call: AiToolCall {
+                    id: String::from("call-1"),
+                    name: String::from("read_file"),
+                    arguments: json!({}),
+                    signature: Some(String::from("gemini#old-route-secret")),
+                },
+            });
+            let (content, items) = resolve_projected_assistant_replay(
+                signed_content,
+                Some(&envelope),
+                Some(&route),
+                "v1-provider-message-1",
+            )
+            .expect("route changes must preserve portable canonical history");
+            assert!(
+                items.is_empty(),
+                "foreign native items must not cross the {field} boundary"
+            );
+            assert!(content.iter().any(|item| matches!(item, ContentItem::Reasoning { text, signature: None } if text == "durable-reasoning")));
+            assert!(content.iter().any(|item| matches!(item, ContentItem::ToolCall { call } if call.id == "call-1" && call.signature.is_none())));
+            assert_eq!(
+                envelope,
+                durable_reasoning_envelope(),
+                "stored history must remain immutable"
+            );
+        }
         let foreign = V1ReplayRouteIdentity {
             connection_id: String::from("connection-2"),
             ..deepseek_replay_route()
         };
-
-        let error = resolve_projected_assistant_replay(
-            durable_canonical_content(),
-            Some(&envelope),
-            Some(&foreign),
-            "v1-provider-message-1",
-        )
-        .expect_err("a foreign route must not rebuild a reasoning turn unsigned");
-
-        let message = format!("{error}");
-        assert!(
-            message.contains(vulcan_provider_adapters::REASONING_REPLAY_UNREPLAYABLE_MESSAGE),
-            "the refusal must carry the shared controlled user copy: {message}"
-        );
-        assert!(
-            message.contains("v1-provider-message-1"),
-            "the refusal must retain the missing-evidence detail: {message}"
-        );
-        // The controlled copy must never carry reasoning text, a signature or a credential.
-        // 受控文案绝不含推理正文、签名或凭据。
-        assert!(
-            !message.contains("durable-reasoning") && !message.contains("durable-answer"),
-            "the refusal must not disclose reasoning or body text: {message}"
-        );
 
         // A turn with no reasoning at stake still falls back to its plain local text.
         // 没有推理风险的回合仍回退为原有纯文本。
@@ -6102,8 +6140,8 @@ mod tests {
         assert_eq!(content, text_only);
         assert!(items.is_empty());
 
-        // A route that declared no contract keeps its previous behaviour byte for byte.
-        // 未声明契约的路由逐字节保持其既有行为。
+        // A target with no plaintext contract receives reasoning as labeled historical text.
+        // 未声明明文契约的目标以标明来源的历史文本接收推理。
         let undeclared = V1ReplayRouteIdentity {
             connection_id: String::from("connection-2"),
             ..undeclared_replay_route()
@@ -6114,8 +6152,44 @@ mod tests {
             Some(&undeclared),
             "v1-provider-message-1",
         )
-        .expect("a route without a declared contract must keep its previous bytes");
-        assert_eq!(content, durable_canonical_content());
+        .expect("a route without a plaintext contract must still retain readable history");
+        assert!(
+            content
+                .iter()
+                .all(|item| !matches!(item, ContentItem::Reasoning { .. }))
+        );
+        assert!(content.iter().any(
+            |item| matches!(item, ContentItem::Text { text } if text.contains("durable-reasoning"))
+        ));
+        assert!(items.is_empty());
+    }
+
+    /// A cross-model target cannot consume encrypted-only reasoning but keeps the rest of the turn.
+    /// 跨模型目标无法消费纯加密推理，但保留回合其余内容。
+    #[test]
+    fn projected_assistant_replay_excludes_foreign_opaque_only_reasoning() {
+        let envelope = durable_reasoning_envelope();
+        let route = V1ReplayRouteIdentity {
+            model_id: "another-model".into(),
+            ..deepseek_replay_route()
+        };
+        let text = ContentItem::Text {
+            text: "portable answer".into(),
+        };
+        let (content, items) = resolve_projected_assistant_replay(
+            vec![
+                ContentItem::Reasoning {
+                    text: String::new(),
+                    signature: Some("openai#opaque".into()),
+                },
+                text.clone(),
+            ],
+            Some(&envelope),
+            Some(&route),
+            "foreign-encrypted",
+        )
+        .expect("opaque state must not prevent a model switch with portable history");
+        assert_eq!(content, vec![text]);
         assert!(items.is_empty());
     }
 

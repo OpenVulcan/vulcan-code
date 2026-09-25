@@ -63,18 +63,16 @@ pub(crate) fn pre_dispatch_failure(message: impl Into<String>) -> ProviderExecut
 ///
 /// # Remarks
 /// 说明
-/// This is the machine-readable reason for the one compatibility consequence the repair protocol
-/// deliberately accepts: a session persisted with only `encrypted_content` or a summary cannot be
-/// replayed as plaintext, so the turn fails before dispatch instead of silently resuming without
-/// its reasoning.
-/// 这是修复协议刻意接受的那一项兼容后果的机器可读原因：仅以 `encrypted_content` 或摘要持久化的
-/// 会话无法作为明文回放，因此该回合在派发前失败，而不是静默地在丢失推理的情况下继续。
+/// The code covers missing replay evidence, invalid same-route native items, and reasoning lost
+/// by final wire projection. A valid model switch projects portable text before this boundary;
+/// foreign opaque-only blocks are omitted from that request while their original history is kept.
+/// 本错误码覆盖缺失回放证据、无效的同路由原生项及最终线路投影丢失推理。
+/// 合法模型切换在此边界前投影可移植文本；外来纯不透明块不进入该请求，原始历史仍保留。
 pub const REASONING_REPLAY_UNREPLAYABLE_SUBCATEGORY: &str = "reasoning_replay_unreplayable";
 
-/// Fixed user-visible copy for an unreplayable reasoning history, owned by exactly one module.
-/// 推理历史无法回放时固定的用户可见文案，且只由一个模块持有。
-pub const REASONING_REPLAY_UNREPLAYABLE_MESSAGE: &str =
-    "当前路由无法安全回传此会话的历史推理。请新建会话，或切回产生该历史的原路由。";
+/// Fixed English runtime diagnostic for an unreplayable history; UI translation belongs to the display layer.
+/// 无法回放历史的固定英文运行时诊断；界面翻译由展示层负责。
+pub const REASONING_REPLAY_UNREPLAYABLE_MESSAGE: &str = "This route cannot safely replay the session's reasoning history. Start a new session or switch back to the route that produced it.";
 
 /// Creates the structured pre-dispatch failure for an unreplayable reasoning history.
 /// 为无法回放的推理历史创建结构化分派前失败。

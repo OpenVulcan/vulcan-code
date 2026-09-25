@@ -1142,6 +1142,10 @@ fn declared_routes_reject_a_tool_result_that_precedes_its_call() {
 /// 每种无法回放的形态使用同一份用户可见文案，因此精确原因由机器可读子类别承载，
 /// 而消息绝不能膨胀成诊断信息。
 fn assert_unreplayable_history(failure: &ProviderExecutionFailure) {
+    assert!(
+        failure.error.message.is_ascii(),
+        "runtime error copy must remain English"
+    );
     assert_eq!(
         failure.error.subcategory.as_deref(),
         Some(crate::execution::REASONING_REPLAY_UNREPLAYABLE_SUBCATEGORY),
@@ -1194,25 +1198,140 @@ fn signature_free_canonical_reasoning_request() -> AiExecutionRequest {
     request
 }
 
-/// Verifies the declared route refuses to dispatch a request whose reasoning was silently lost.
-/// 验证已声明路由拒绝分派推理已被静默丢失的请求。
-///
-/// # Remarks
-/// 说明
-/// This is the regression this repair exists for: without the durable provider items the canonical
-/// reasoning item is dropped by the OpenAI-family signature filter, and a declared route must fail
-/// closed instead of sending a request that silently lost history.
-/// 这正是本次修复针对的回归：缺少可持久化供应商项时，规范推理项会被 OpenAI 族签名过滤丢弃；
-/// 已声明路由必须失败关闭，而不是发送一份静默丢失历史的请求。
+/// Verifies a model switch can replay canonical reasoning on the declared plaintext route.
+/// 验证模型切换可以在声明明文契约的路由回放规范推理。
 #[test]
-fn declared_deepseek_route_rejects_lost_reasoning_before_dispatch() {
-    let error = encoding_client()
+fn declared_deepseek_route_preserves_unsigned_reasoning_before_dispatch() {
+    // Encoded is the exact final wire request after every manifest projection and validator.
+    // encoded 是经过全部清单投影与校验后的精确最终线路请求。
+    let encoded = encoding_client()
         .encode_request(
             &deepseek_route(OPENAI_RESPONSES_PROFILE_ID),
             &signature_free_canonical_reasoning_request(),
         )
-        .expect_err("a declared route must never dispatch silently lost reasoning");
+        .expect("a plaintext route must preserve canonical reasoning after a model switch");
+    // Reasoning is located by its type instead of a shifting input position.
+    // reasoning 按类型定位，而不是依赖会变化的输入位置。
+    let reasoning = encoded.body["input"]
+        .as_array()
+        .expect("input array")
+        .iter()
+        .find(|item| item["type"] == "reasoning")
+        .expect("plaintext reasoning must survive");
+    assert_eq!(
+        reasoning,
+        &json!({"type":"reasoning", "content":[{"type":"reasoning_text", "text":"durable-reasoning"}]})
+    );
+}
 
+/// Verifies plaintext replay preserves empty ranges, mixed native prefixes and complete tool order.
+/// 验证明文回放保留空区间、混合原生前缀及完整工具顺序。
+#[test]
+fn deepseek_responses_preserves_canonical_reasoning_and_tool_order() {
+    use vulcan_ai_contract::{AiMessage, MessageRole, ToolCall, ToolResult};
+    // Request includes a reasoning-only turn that produced no generic input item.
+    // request 包含未产生任何通用输入项的纯推理回合。
+    let mut request = signature_free_canonical_reasoning_request();
+    // Native prefix is preserved exactly while the same message's canonical suffix is rebuilt.
+    // native_prefix 被精确保留，而同一消息的规范后缀被重建。
+    let native_prefix = json!({"type":"message", "id":"native-prefix", "role":"assistant", "content":[{"type":"output_text", "text":"native body"}]});
+    request.messages.push(AiMessage {
+        role: MessageRole::User,
+        content: vec![ContentItem::Text {
+            text: "next task".into(),
+        }],
+        provider_context_items: vec![],
+    });
+    request.messages.push(AiMessage {
+        role: MessageRole::Assistant,
+        content: vec![
+            ContentItem::Text {
+                text: "before thinking".into(),
+            },
+            ContentItem::Reasoning {
+                text: "second reasoning".into(),
+                signature: Some("openai#opaque".into()),
+            },
+            ContentItem::Text {
+                text: "before call".into(),
+            },
+            ContentItem::ToolCall {
+                call: ToolCall {
+                    id: "call-ordered".into(),
+                    name: "read_file".into(),
+                    arguments: json!({"path":"sample.txt"}),
+                    signature: None,
+                },
+            },
+            ContentItem::Reasoning {
+                text: "third reasoning".into(),
+                signature: None,
+            },
+        ],
+        provider_context_items: vec![native_prefix.clone()],
+    });
+    request.messages.push(AiMessage {
+        role: MessageRole::Tool,
+        content: vec![ContentItem::ToolResult {
+            result: ToolResult {
+                call_id: "call-ordered".into(),
+                is_error: false,
+                content: json!("file body"),
+            },
+        }],
+        provider_context_items: vec![],
+    });
+    request.messages.push(AiMessage {
+        role: MessageRole::Assistant,
+        content: vec![ContentItem::Text {
+            text: "final answer".into(),
+        }],
+        provider_context_items: vec![],
+    });
+    // Encoded crosses both the shared internal envelope and every final route projection.
+    // encoded 同时经过共享内部封装及全部最终路由投影。
+    let encoded = encoding_client()
+        .encode_request(&deepseek_route(OPENAI_RESPONSES_PROFILE_ID), &request)
+        .expect("ordered portable history must reach the declared Responses wire");
+    // Input excludes only the initial fixture user message, keeping all tested semantic boundaries.
+    // input 仅排除初始夹具用户消息，保留全部被测语义边界。
+    let input = encoded.body["input"].as_array().expect("input array");
+    let first_reasoning = input
+        .iter()
+        .position(|item| item["type"] == "reasoning")
+        .expect("first reasoning");
+    assert_eq!(
+        &input[first_reasoning..],
+        &[
+            json!({"type":"reasoning", "content":[{"type":"reasoning_text", "text":"durable-reasoning"}]}),
+            json!({"role":"user", "content":[{"type":"input_text", "text":"next task"}]}),
+            native_prefix,
+            json!({"role":"assistant", "content":[{"type":"output_text", "text":"before thinking"}]}),
+            json!({"type":"reasoning", "content":[{"type":"reasoning_text", "text":"second reasoning"}]}),
+            json!({"role":"assistant", "content":[{"type":"output_text", "text":"before call"}]}),
+            json!({"type":"function_call", "call_id":"call-ordered", "name":"read_file", "arguments":"{\"path\":\"sample.txt\"}"}),
+            json!({"type":"reasoning", "content":[{"type":"reasoning_text", "text":"third reasoning"}]}),
+            json!({"type":"function_call_output", "call_id":"call-ordered", "output":"file body"}),
+            json!({"role":"assistant", "content":[{"type":"output_text", "text":"final answer"}]}),
+        ],
+        "plaintext replay must preserve each boundary without signatures or duplicated native items"
+    );
+}
+
+/// Ensures final validation still rejects a late projection that removes recovered reasoning.
+/// 确保最终校验仍拒绝后置投影移除已恢复推理的情况。
+#[test]
+fn deepseek_responses_rejects_plaintext_loss_after_custom_projection() {
+    // Route empties input after encoding to exercise the final replay guard on valid wire syntax.
+    // route 在编码后清空输入，以在线路语法有效时验证最终回放护栏。
+    let mut route = deepseek_route(OPENAI_RESPONSES_PROFILE_ID);
+    route.custom_model_projection = Some(CustomModelRequestProjection {
+        overrides: BTreeMap::from([(String::from("input"), json!([]))]),
+        ..Default::default()
+    });
+    let error = encoding_client()
+        .encode_request(&route, &signature_free_canonical_reasoning_request())
+        .expect_err("late projection must not drop reasoning");
     assert_unreplayable_history(&error);
 }
 

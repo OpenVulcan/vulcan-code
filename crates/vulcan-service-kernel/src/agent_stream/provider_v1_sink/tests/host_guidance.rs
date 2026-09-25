@@ -23,7 +23,7 @@ fn baseline_with_text(text: &str) -> LockedBaselineProjection {
 
 /// Builds a valid candidate for `handle` through the real physical reconstruction; dispatches nothing.
 /// 通过真实物理重建为 `handle` 构造合法候选；不发送请求。
-fn candidate_for(handle: &SessionHandle) -> ProviderRequestPreparationCandidate {
+pub(super) fn candidate_for(handle: &SessionHandle) -> ProviderRequestPreparationCandidate {
     super::super::memory_acceptance::rebuild_memory_acceptance_request(
         handle.capture_controller_projection_snapshot().unwrap(),
         Default::default(),
@@ -33,7 +33,7 @@ fn candidate_for(handle: &SessionHandle) -> ProviderRequestPreparationCandidate 
 
 /// Initializes the durable `handle` with `baseline`; fixtures preserve the same runtime lock as production.
 /// 为持久 `handle` 初始化 `baseline`；夹具保留与生产一致的运行时锁。
-fn install_baseline(handle: &SessionHandle, baseline: LockedBaselineProjection) {
+pub(super) fn install_baseline(handle: &SessionHandle, baseline: LockedBaselineProjection) {
     // Establish active request configuration through the historical physical admission, too.
     // 同时通过历史物理准入建立活动请求配置。
     let projection = handle

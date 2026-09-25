@@ -11,6 +11,67 @@ use vulcan_session_core::v1::dynamic_context::{
 };
 use vulcan_session_core::v1::event::SystemContextScope;
 
+/// Stable producer for the current model identity after a route switch.
+/// 路由切换后当前模型身份的稳定生产者。
+pub(super) const MODEL_SELECTION_CONTEXT_KEY: &str = "dynamic.model_selection";
+
+/// Builds an append-only identity notice from `document` history and the frozen `request`.
+/// 根据 `document` 历史及冻结的 `request` 构建只追加的身份通知。
+/// Returns no initial notice; once a switch is observed, the current identity remains durable and idempotent.
+/// 初次不产生通知；观察到切换后，当前身份保持持久化和幂等。
+fn model_selection_input(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+    request: &vulcan_session_core::v1::event::ApiRequestSnapshot,
+) -> DynamicContextInput {
+    use vulcan_session_core::v1::event::{ApiPurposeKind, EventBody};
+    // Only main-generation requests establish the conversational identity; summaries use separate routes.
+    // 只有主生成请求建立对话身份；摘要使用独立路由。
+    let previous = document
+        .events()
+        .iter()
+        .rev()
+        .find_map(|event| match &event.event {
+            EventBody::ApiStarted(started) if started.purpose == ApiPurposeKind::MainGeneration => {
+                Some(&started.request)
+            }
+            _ => None,
+        });
+    // Persisted identity also covers a failed preparation followed by a switch back before dispatch.
+    // 持久身份也覆盖准备失败后、派发前又切回原模型的情况。
+    let changed = previous.is_some_and(|previous| {
+        previous.provider != request.provider
+            || previous.model != request.model
+            || previous
+                .profile
+                .as_ref()
+                .zip(request.profile.as_ref())
+                .is_some_and(|(old, new)| old != new)
+    });
+    let retained = document
+        .metadata
+        .dynamic_context
+        .contains_key(MODEL_SELECTION_CONTEXT_KEY);
+    // Stable text depends only on target identity, so retries and effort changes cannot append duplicates.
+    // 稳定正文只依赖目标身份，使重试及思考强度变化不会重复追加。
+    // Protocol is optional in persisted request snapshots; report it only when frozen facts supply it.
+    // 持久请求快照中的协议是可选值；仅在冻结事实提供它时报告。
+    let protocol = request
+        .profile
+        .as_ref()
+        .map(|profile| format!(", protocol {profile:?}"))
+        .unwrap_or_default();
+    let body = (changed || retained).then(|| format!(
+        "Model selection update: this session now continues with provider {:?}, model {:?}{protocol}. Earlier assistant messages retain their original model provenance and do not establish your current identity. Provider-bound encrypted reasoning and signatures cannot be transferred between routes; available historical text is retained. Continue the existing task without acknowledging this context update.",
+        request.provider, request.model,
+    ));
+    DynamicContextInput::new(
+        MODEL_SELECTION_CONTEXT_KEY,
+        body,
+        SystemContextScope::Session,
+        None,
+    )
+}
+
 /// Publishes business producer changes; compaction has no authority to withdraw or replace them.
 /// 发布业务生产者变化；压缩没有撤下或替换这些生产者的权限。
 /// Uses the exact handle and request facts; returns only after the durable mutation succeeds.
@@ -39,6 +100,7 @@ pub(super) fn synchronize_request_dynamic_context(
                 document,
                 &candidate.locked_baseline,
             )?);
+            inputs.push(model_selection_input(document, &facts.request));
             document
                 .synchronize_dynamic_context(inputs, facts.prepared_at_ms)
                 .map(|result| match result {

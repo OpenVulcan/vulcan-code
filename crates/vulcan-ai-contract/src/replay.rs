@@ -62,6 +62,9 @@ pub struct ReplaySidecarMessage {
     /// Half-open range of internal input items this message produced, possibly empty.
     /// 本条消息产生的内部输入项的半开区间，可以为空。
     pub input_range: std::ops::Range<usize>,
+    /// Number of leading input items supplied by this message's durable provider context.
+    /// 此消息的可持久化供应商上下文提供的前导输入项数量。
+    pub provider_context_item_count: usize,
     /// Provider-visible tool call identities declared by this exact message, in message order.
     /// 本条消息按消息顺序声明的供应商可见工具调用身份。
     pub tool_call_ids: Vec<String>,
@@ -658,10 +661,11 @@ fn provider_item_tool_call(item: &Value) -> Option<ProviderToolCall<'_>> {
 ///
 /// # Returns
 /// 返回值
-/// Provider items, canonical content, a route mismatch, or a controlled unusable reason; callers
-/// must handle all four instead of falling back to a signature-free local rebuild.
-/// 返回供应商项、规范内容、路由不匹配或受控的不可用原因；调用方必须处理全部四种情形，
-/// 而不是回退为无签名的本地重建。
+/// Provider items, canonical content, a route mismatch, or a controlled unusable reason. Callers
+/// may project portable text for a route mismatch, but must not transfer native signatures or
+/// treat an unusable same-route envelope as a model switch.
+/// 返回供应商项、规范内容、路由不匹配或受控的不可用原因。调用方可为路由不匹配投影可移植文本，
+/// 但不得传递原生签名，也不得把不可用的同路由封套当作模型切换。
 pub fn project_provider_replay(
     envelope: &ProviderReplayEnvelope,
     route: &ProviderReplayRoute<'_>,
