@@ -19,7 +19,7 @@ import {
   WorkbenchLayout,
   type WorkbenchDeltaSignal,
 } from "@/components/workspace/workbench-layout";
-import { formatMessage, I18nProvider, normalizeLocaleCode, readLocaleMessage, type Translate } from "@/i18n";
+import { formatMessage, I18nProvider, readLocaleMessage, resolveAppLocale, type Translate } from "@/i18n";
 import type { LocaleCode, TranslationKey } from "@/i18n-messages";
 import { notificationCoordinator } from "@/notifications/coordinator";
 import { isDesktopShutdownDialogRuntime } from "@/host-shell/runtime";
@@ -102,7 +102,7 @@ export function WorkbenchApp(props: {
     if (notices.length === 0) return;
     // This effect runs above I18nProvider, so the toast reads the catalog for the startup locale directly.
     // 该副作用位于 I18nProvider 之上，因此提示直接按启动语言读取消息目录。
-    const toastLocale = startup.uiLocale?.toLowerCase().startsWith("en") ? "en-US" : "zh-CN";
+    const toastLocale = resolveAppLocale(startup.uiLocale);
     const t: Translate = (key) => readLocaleMessage(toastLocale, key);
     const identities = notices.map(({ providerId, modelId }) => `${providerId} / ${modelId}`).join("、");
     // toastId keeps distinct takeover batches visible until each batch is acknowledged.
@@ -889,20 +889,18 @@ export function WorkbenchApp(props: {
   );
 }
 
-// webuiAppLocale resolves a service-provided locale before the React i18n provider is available.
-// webuiAppLocale 在 React i18n provider 可用前解析服务提供的语言。
+// webuiAppLocale resolves the saved or device language before the React i18n provider is available.
+// webuiAppLocale 在 React i18n provider 可用前解析已保存语言或设备语言。
 function webuiAppLocale(value: string | null | undefined): LocaleCode {
-  const browserLanguage = typeof navigator === "undefined" ? "" : navigator.language;
-  return normalizeLocaleCode(value)
-    ?? (browserLanguage.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US");
+  return resolveAppLocale(value);
 }
 
 // webuiAppTranslation reads one localized app-shell label outside the i18n provider.
 // webuiAppTranslation 在 i18n provider 外读取单个本地化应用外壳文案。
 //
-// The catalogs are resolved synchronously from the per-language modules, so this reader observes
+// The boot gate downloads the active catalog before this module mounts, so this reader observes
 // exactly the same labels the shell shows.
-// 文案目录由各语言模块同步解析，因此该读取器看到与外壳完全一致的文案。
+// 启动门在本模块挂载前下载当前目录，因此该读取器看到与外壳完全一致的文案。
 function webuiAppTranslation(locale: LocaleCode, key: TranslationKey): string {
   return readLocaleMessage(locale, key);
 }

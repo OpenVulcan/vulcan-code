@@ -1,4 +1,6 @@
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
+import { formatMessage, normalizeLocaleCode, readLocaleMessage } from "@/i18n";
+import { DEFAULT_LOCALE } from "@/i18n-locales";
 
 // planArtifactExecuteVisiblePrompt preserves the user-visible execution text while adding optional note text naturally.
 // planArtifactExecuteVisiblePrompt 保留用户可见执行文本，并自然附加可选补充内容。
@@ -7,7 +9,10 @@ export function planArtifactExecuteVisiblePrompt(executeLabel: string, note: str
   if (!trimmedNote) {
     return executeLabel;
   }
-  return locale === "zh-CN" ? `${executeLabel}，${trimmedNote}` : `${executeLabel}: ${trimmedNote}`;
+  return formatMessage(readLocaleMessage(normalizeLocaleCode(locale) ?? DEFAULT_LOCALE, "conversation.planArtifact.executeWithNote"), {
+    action: executeLabel,
+    note: trimmedNote,
+  });
 }
 
 // planArtifactExecuteHiddenGuidance renders model-only instructions for executing a submitted Plan artifact.

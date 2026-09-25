@@ -30,7 +30,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useI18n, type TranslationKey } from "@/i18n"
+import { formatMessage, useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
 
 import { VmmContentPage } from "./vmm-content-page"
@@ -432,7 +432,9 @@ export function VmmDataPage(props: VmmDataPageProps) {
       // completed 是实际变更确认；被拒绝的并发调用返回 null。
       const completed = await props.onRunAction(impact.action === "purge" ? "management_purge" : "management_execute_removal", {
         previewToken: impact.preview_token,
-        confirmText: impact.action === "purge" ? purgePhrase : undefined,
+        // The typed phrase is a localized gesture; the service validates only its own required token.
+        // 输入短语是本地化确认手势；服务只校验它自己签发的确认令牌。
+        confirmText: impact.action === "purge" ? impact.required_confirmation : undefined,
       })
       if (!completed) return
       setImpact(null)
@@ -444,7 +446,7 @@ export function VmmDataPage(props: VmmDataPageProps) {
     } catch (requestError) {
       setError(managementErrorMessage(requestError))
     }
-  }, [impact, loadGlobalTurns, loadRecycleBatches, loadSessions, loadTurns, openSession, props.onRunAction, purgePhrase])
+  }, [impact, loadGlobalTurns, loadRecycleBatches, loadSessions, loadTurns, openSession, props.onRunAction])
 
   // restoreBatch restores one explicitly restorable batch.
   // restoreBatch 恢复一个明确可恢复的批次。
@@ -991,12 +993,16 @@ function ImpactDialog(props: {
 }) {
   const { t } = useI18n()
   const impact = props.impact
+  // confirmationPhrase is what the user types in their own language before a purge is allowed.
+  // confirmationPhrase 是允许永久删除前用户以当前语言输入的短语。
+  const confirmationPhrase = t("memory.data.purgeConfirmationPhrase")
+  const purgeDescription = formatMessage(t("memory.data.purgeDescription"), { phrase: confirmationPhrase })
   return (
     <Dialog open={Boolean(impact)} onOpenChange={(open) => { if (!open && !props.busy) props.onClose() }}>
       <DialogContent showCloseButton={!props.busy} onEscapeKeyDown={(event) => { if (props.busy) event.preventDefault() }} onPointerDownOutside={(event) => { if (props.busy) event.preventDefault() }}>
         <DialogHeader>
           <DialogTitle>{impact?.action === "purge" ? t("memory.data.purgeTitle") : t("memory.data.impactTitle")}</DialogTitle>
-          <DialogDescription>{impact?.action === "purge" ? t("memory.data.purgeDescription") : t("memory.data.impactDescription")}</DialogDescription>
+          <DialogDescription>{impact?.action === "purge" ? purgeDescription : t("memory.data.impactDescription")}</DialogDescription>
         </DialogHeader>
         {impact ? (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -1010,14 +1016,14 @@ function ImpactDialog(props: {
         ) : null}
         {impact?.action === "purge" ? (
           <div className="space-y-2">
-            <Label htmlFor="vmm-purge-confirmation">{t("memory.data.purgeDescription")}</Label>
-            <Input disabled={props.busy} id="vmm-purge-confirmation" onChange={(event) => props.onPurgePhraseChange(event.target.value)} placeholder={t("memory.data.purgePlaceholder")} value={props.purgePhrase} />
+            <Label htmlFor="vmm-purge-confirmation">{purgeDescription}</Label>
+            <Input disabled={props.busy} id="vmm-purge-confirmation" onChange={(event) => props.onPurgePhraseChange(event.target.value)} placeholder={confirmationPhrase} value={props.purgePhrase} />
           </div>
         ) : null}
         <DialogFooter>
           <Button disabled={props.busy} onClick={props.onClose} variant="outline">{t("memory.data.cancel")}</Button>
           <Button
-            disabled={props.busy || Boolean(impact?.protected_count) || (impact?.action === "purge" && props.purgePhrase !== impact.required_confirmation)}
+            disabled={props.busy || Boolean(impact?.protected_count) || (impact?.action === "purge" && (!impact.required_confirmation || props.purgePhrase !== confirmationPhrase))}
             onClick={props.onConfirm}
             variant={impact?.action === "purge" || impact?.action === "recycle" ? "destructive" : "default"}
           >

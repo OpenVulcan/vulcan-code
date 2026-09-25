@@ -24,14 +24,14 @@ describe("evaluateBuildBudget", () => {
 })
 
 describe("collectStaticImportFiles", () => {
-  // The initial graph counts eager catalogs once while excluding optional feature chunks.
-  // 首屏导入图对预加载语言目录只计一次，并排除可选功能分块。
-  it("includes both eager locale catalogs and excludes dynamic imports", () => {
+  // The initial graph counts the eager English catalog while excluding on-demand languages and features.
+  // 首屏导入图计入预加载英文目录，并排除按需加载的语言与功能分块。
+  it("includes the eager fallback catalog and excludes dynamic imports", () => {
     const manifest = {
-      "index.html": { file: "assets/index.js" },
+      "index.html": { file: "assets/index.js", dynamicImports: ["_zh.js"] },
       "src/app/workbench-app.tsx": {
         file: "assets/workbench-app.js",
-        imports: ["index.html", "_zh.js", "_en.js"],
+        imports: ["index.html", "_en.js"],
         dynamicImports: ["src/optional.tsx"],
       },
       "_zh.js": { file: "assets/i18n-messages.zh-CN.js" },
@@ -40,7 +40,6 @@ describe("collectStaticImportFiles", () => {
     }
     assert.deepEqual(collectStaticImportFiles(manifest, ["index.html", "src/app/workbench-app.tsx"]), [
       "assets/i18n-messages.en-US.js",
-      "assets/i18n-messages.zh-CN.js",
       "assets/index.js",
       "assets/workbench-app.js",
     ])

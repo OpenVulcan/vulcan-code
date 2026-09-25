@@ -1,28 +1,21 @@
 import * as React from "react"
 import { UiTextProvider } from "@/components/ui/ui-text"
-import {
-  type LocaleCode,
-  type TranslationKey,
-} from "@/i18n-messages"
+import { ensureLocaleCatalog, loadedLocaleCatalog, registerLocaleCatalog } from "@/i18n-catalogs"
+import { DEFAULT_LOCALE, normalizeLocaleCode, resolveAppLocale, type LocaleCode } from "@/i18n-locales"
+import type { TranslationKey } from "@/i18n-messages"
 import { enUSTranslations } from "@/i18n-messages.en-US"
-import { zhCNTranslations } from "@/i18n-messages.zh-CN"
 
 export type { LocaleCode, TranslationKey } from "@/i18n-messages"
+export { normalizeLocaleCode, pickBilingualText, resolveAppLocale, SUPPORTED_LOCALES } from "@/i18n-locales"
 
 // Translate resolves one stable text key in the active language; helpers outside React receive it as a parameter.
 // Translate 以当前语言解析一个稳定文本键；React 之外的辅助函数以参数形式接收它。
 export type Translate = (key: TranslationKey) => string
 
-// localeMessages resolves each supported language from its own module.
-// localeMessages 从各自模块解析每种受支持语言。
-//
-// Dedicated chunks change and cache independently, but both static imports are fetched when the
-// workbench loads; the build budget measures that complete eager graph.
-// 独立分块可分别变化和缓存，但工作台加载时两份静态导入都会被获取；构建预算测量完整预加载图。
-const localeMessages: Record<LocaleCode, Record<TranslationKey, string>> = {
-  "zh-CN": zhCNTranslations,
-  "en-US": enUSTranslations,
-}
+// The English catalog is the only statically bundled language: it fills every key another catalog lacks
+// and renders while a different language downloads. Every other language loads on demand.
+// 英文目录是唯一静态打包的语言：它补全其他目录缺少的每个键，并在其他语言下载期间渲染。其余语言按需加载。
+registerLocaleCatalog(DEFAULT_LOCALE, enUSTranslations)
 
 // I18nContextValue exposes the active language and translation helpers.
 // I18nContextValue 暴露当前语言与翻译辅助函数。
@@ -42,22 +35,6 @@ interface I18nContextValue {
 // I18nContext 保存 WebUI 本地化状态。
 const I18nContext = React.createContext<I18nContextValue | null>(null)
 
-// normalizeLocaleCode validates one persisted or service-provided locale code.
-// normalizeLocaleCode 校验单个持久化或服务提供的语言代码。
-export function normalizeLocaleCode(value: string | null | undefined): LocaleCode | null {
-  if (value === "zh-CN" || value === "en-US") {
-    return value
-  }
-  return null
-}
-
-// initialLocale returns the service-provided language or a browser-derived default.
-// initialLocale 返回服务提供的语言或从浏览器推导出的默认语言。
-function initialLocale(serviceLocale: string | null | undefined): LocaleCode {
-  return normalizeLocaleCode(serviceLocale)
-    ?? (navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US")
-}
-
 // readLocaleMessage reads one localized app-shell label outside the i18n provider.
 // readLocaleMessage 在 i18n provider 外读取单个本地化应用外壳文案。
 //
@@ -68,10 +45,10 @@ function initialLocale(serviceLocale: string | null | undefined): LocaleCode {
 //
 // # Returns
 // 返回值
-// The localized label, or its simplified Chinese fallback when the language lacks one.
-// 返回本地化文案；该语言缺失时返回其中简体中文回退。
+// The localized label; English is used while the language is still downloading or lacks the key.
+// 返回本地化文案；该语言仍在下载或缺少该键时使用英文。
 export function readLocaleMessage(locale: LocaleCode, key: TranslationKey): string {
-  return localeMessages[locale][key] ?? localeMessages["zh-CN"][key]
+  return loadedLocaleCatalog(locale)?.[key] ?? enUSTranslations[key]
 }
 
 // activeLocale mirrors the mounted provider's language for modules that run outside React.
@@ -91,7 +68,7 @@ let activeLocale: LocaleCode | null = null
 // The localized message; before any provider mounts, the browser-derived default language is used.
 // 返回本地化文案；任何 provider 挂载前使用从浏览器推导的默认语言。
 export function translateActive(key: TranslationKey): string {
-  return readLocaleMessage(activeLocale ?? initialLocale(null), key)
+  return readLocaleMessage(activeLocale ?? resolveAppLocale(null), key)
 }
 
 // formatMessage fills every {name} placeholder of one localized template.
@@ -122,21 +99,50 @@ function I18nProvider(props: {
 }) {
   // locale stores the active WebUI language.
   // locale 保存当前 WebUI 语言。
-  const [locale, setLocaleState] = React.useState<LocaleCode>(() => initialLocale(props.initialLocale))
+  const [locale, setLocaleState] = React.useState<LocaleCode>(() => resolveAppLocale(props.initialLocale))
+  // catalogRevision re-renders the tree once the active language finishes downloading.
+  // catalogRevision 在当前语言下载完成后重新渲染子树。
+  const [catalogRevision, setCatalogRevision] = React.useState(0)
+  // requestedLocaleRef lets only the newest selection apply when downloads finish out of order.
+  // requestedLocaleRef 使下载乱序完成时只有最新选择生效。
+  const requestedLocaleRef = React.useRef(locale)
+  // setLocale switches after the catalog is available, so the tree never flashes the fallback language.
+  // setLocale 在目录可用后才切换，使子树不会闪现回退语言。
+  const setLocale = React.useCallback((nextLocale: LocaleCode) => {
+    requestedLocaleRef.current = nextLocale
+    if (loadedLocaleCatalog(nextLocale)) {
+      setLocaleState(nextLocale)
+      return
+    }
+    void ensureLocaleCatalog(nextLocale).then(
+      () => { if (requestedLocaleRef.current === nextLocale) setLocaleState(nextLocale) },
+      () => { if (requestedLocaleRef.current === nextLocale) setLocaleState(nextLocale) },
+    )
+  }, [])
   React.useEffect(() => {
     const nextLocale = normalizeLocaleCode(props.initialLocale)
     if (nextLocale) {
-      setLocaleState(nextLocale)
+      setLocale(nextLocale)
     }
-  }, [props.initialLocale])
-  // setLocale applies one selected language.
-  // setLocale 应用选中的语言。
-  const setLocale = React.useCallback((nextLocale: LocaleCode) => {
-    setLocaleState(nextLocale)
-  }, [])
+  }, [props.initialLocale, setLocale])
+  React.useEffect(() => {
+    // The initial language may not be preloaded (for example after a failed download); render English until it arrives.
+    // 初始语言可能未预加载（例如下载失败后）；在其到达前以英文渲染。
+    if (loadedLocaleCatalog(locale)) {
+      return
+    }
+    let cancelled = false
+    void ensureLocaleCatalog(locale).then(() => { if (!cancelled) setCatalogRevision((revision) => revision + 1) }, () => undefined)
+    return () => { cancelled = true }
+  }, [locale])
+  React.useEffect(() => {
+    document.documentElement.lang = locale
+  }, [locale])
   // t translates one stable key using the current language.
   // t 使用当前语言翻译单个稳定键。
-  const t = React.useCallback((key: TranslationKey) => localeMessages[locale][key] ?? localeMessages["zh-CN"][key], [locale])
+  // catalogRevision is a dependency only so t is recreated once a download completes.
+  // catalogRevision 仅作为依赖，使下载完成后重新创建 t。
+  const t = React.useCallback((key: TranslationKey) => readLocaleMessage(locale, key), [locale, catalogRevision])
   // activeLocale is published during render so non-React callers see the language the tree renders with.
   // activeLocale 在渲染期间发布，使非 React 调用方看到子树正在使用的语言。
   activeLocale = locale

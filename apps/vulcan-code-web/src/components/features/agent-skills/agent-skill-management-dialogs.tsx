@@ -117,9 +117,6 @@ export function AgentSkillEditorDialog(props: {
     }
   }, [draft, props])
 
-  // chinese controls the leading user-facing copy.
-  // chinese 控制优先展示的用户文案。
-  const chinese = props.locale.startsWith("zh")
   // recordDisplayName is the localized dialog title baseline.
   // recordDisplayName 是本地化弹窗标题基线。
   const recordDisplayName = props.record ? localizedRecordDisplayName(props.record, props.locale) : ""
@@ -280,9 +277,6 @@ export function AgentSkillCategoryManagementDialog(props: {
     }
   }, [props])
 
-  // chinese controls the leading user-facing copy.
-  // chinese 控制优先展示的用户文案。
-  const chinese = props.locale.startsWith("zh")
   return (
     <Dialog onOpenChange={(open) => { if (!savingRef.current) props.onOpenChange(open) }} open={props.open}>
       <DialogContent className="agent-skill-category-management-dialog" size="lg" scrollMode="fixed-footer" showCloseButton={false}>

@@ -47,7 +47,7 @@ import {
   THINKING_DISPLAY_MODE_OPTIONS,
   type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
-import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
+import { formatMessage, pickBilingualText, useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
   ComposerAttachmentCapabilitySummary,
@@ -325,7 +325,7 @@ function OutputStyleSubMenu(props: {
     : props.draftStyleId ?? null;
   const globalEntry = props.catalog.entries.find((entry) => entry.id === props.catalog.selectedId);
   const globalLabel = globalEntry
-    ? locale === "en-US" ? globalEntry.labelEn : globalEntry.labelZh
+    ? pickBilingualText(locale, globalEntry.labelZh, globalEntry.labelEn)
     : props.catalog.selectedId;
   return (
     <DropdownMenuSub>
@@ -346,7 +346,7 @@ function OutputStyleSubMenu(props: {
         {props.catalog.entries.map((entry) => (
           <DropdownMenuRadioItem key={entry.id} value={`style:${entry.id}`} onSelect={() => props.onChange(entry.id)}>
             <span className="composer-thinking-mode-label">
-              <span>{locale === "en-US" ? entry.labelEn : entry.labelZh}</span>
+              <span>{pickBilingualText(locale, entry.labelZh, entry.labelEn)}</span>
               <small>{formatMessage(t("composer.outputStyle.promptCharacters"), { count: entry.promptCharCount.toLocaleString(locale) })}</small>
             </span>
           </DropdownMenuRadioItem>

@@ -29,6 +29,13 @@ import {
   type ServiceStartupProgress,
 } from './service-launcher.js';
 import { renderStartupDocument } from './startup-page.js';
+import {
+  DESKTOP_TEXT,
+  detectDesktopLocale,
+  formatDesktopText,
+  normalizeDesktopLocale,
+  type DesktopLocale,
+} from './desktop-text.js';
 import { canUseNativeNotifications, configureGuiNotificationIdentity } from './notification-identity.js';
 import { createWindowsToastXml } from './notification-toast.js';
 
@@ -187,8 +194,13 @@ function reportStartupProgress(window: BrowserWindow, progress: ServiceStartupPr
   );
 }
 
+/** Returns the device language; the saved WebUI language is unknown until the service is running. */
+function deviceDesktopLocale(): DesktopLocale {
+  return detectDesktopLocale(app.getPreferredSystemLanguages());
+}
+
 /** Creates the startup window that shows real stages and real errors. */
-async function createStartupWindow(): Promise<BrowserWindow> {
+async function createStartupWindow(locale: DesktopLocale): Promise<BrowserWindow> {
   const window = new BrowserWindow({
     width: 520,
     height: 320,
@@ -199,7 +211,7 @@ async function createStartupWindow(): Promise<BrowserWindow> {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   await window.loadURL(
-    `data:text/html;charset=utf-8,${encodeURIComponent(renderStartupDocument())}`,
+    `data:text/html;charset=utf-8,${encodeURIComponent(renderStartupDocument(locale))}`,
   );
   return window;
 }
@@ -334,17 +346,17 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
   // 原生模态确认始终位于内嵌 WebContentsView 之上，并默认选择取消。
   handle(LOCAL_BROWSER_CHANNELS.closeOwner, (_event, ownerSessionId: string, locale: string) =>
     localBrowser.closeOwner(ownerSessionId, async (count) => {
-      // chinese selects user-facing confirmation copy only.
-      // chinese 仅选择面向用户的确认文案。
-      const chinese = locale === 'zh-CN';
+      // text follows the WebUI language, falling back to the device language for an unknown value.
+      // text 跟随 WebUI 语言，未知值回退到设备语言。
+      const text = DESKTOP_TEXT[normalizeDesktopLocale(locale) ?? deviceDesktopLocale()];
       // result is the user's explicit decision for this owning GUI window.
       // result 是用户对当前所属 GUI 窗口作出的明确选择。
       const result = await dialog.showMessageBox(window, {
         type: 'question',
-        title: chinese ? '关闭内置浏览器' : 'Close built-in browser',
-        message: chinese ? `当前有 ${count} 个正在访问的页面，是否全部关闭？` : `${count} pages are open. Close all of them?`,
-        detail: chinese ? '全部关闭将释放这些网页占用的资源，然后关闭内置浏览器页签。' : 'This releases the resources used by these pages and then closes the browser tab.',
-        buttons: chinese ? ['取消', '全部关闭'] : ['Cancel', 'Close all'],
+        title: text.closeBrowserTitle,
+        message: formatDesktopText(text.closeBrowserMessage, { count }),
+        detail: text.closeBrowserDetail,
+        buttons: [text.cancel, text.closeAll],
         defaultId: 0,
         cancelId: 0,
         noLink: true,
@@ -455,12 +467,17 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
 /** Runs the GUI startup sequence and reports real failures to the user. */
 async function runDesktopGui(): Promise<void> {
   const options = parseDesktopGuiOptions(process.argv.slice(1));
-  const startupWindow = await createStartupWindow();
+  const locale = deviceDesktopLocale();
+  const text = DESKTOP_TEXT[locale];
+  const startupWindow = await createStartupWindow(locale);
   try {
     const executable = await resolveServiceExecutable(options.serviceExecutable);
     const description = await readServiceLaunchDescription(executable, options.forwardedArguments);
-    const instance = await ensureServiceInstance(description, options.forwardedArguments, (progress) =>
-      reportStartupProgress(startupWindow, progress),
+    const instance = await ensureServiceInstance(
+      description,
+      options.forwardedArguments,
+      (progress) => reportStartupProgress(startupWindow, progress),
+      text,
     );
     guiState.instance = instance;
     const webUiUrl = resolveWebUiUrl(description, instance, options.webUiUrl);
@@ -474,7 +491,7 @@ async function runDesktopGui(): Promise<void> {
       await window.loadURL(webUiUrl);
     } catch (error) {
       window.destroy();
-      throw new Error(`无法加载工作台 ${webUiUrl}：${String(error)}`);
+      throw new Error(formatDesktopText(text.workbenchLoadFailed, { url: webUiUrl, error: String(error) }));
     }
     window.show();
     startupWindow.destroy();

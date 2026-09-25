@@ -11,6 +11,7 @@ import { execFile, spawn } from 'node:child_process';
 import { readFile, access } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { DEFAULT_DESKTOP_LOCALE, DESKTOP_TEXT, formatDesktopText, type DesktopText } from './desktop-text.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -225,11 +226,12 @@ export async function ensureServiceInstance(
   description: ServiceLaunchDescription,
   forwardedArguments: string[],
   report: ServiceStartupReporter,
+  text: DesktopText = DESKTOP_TEXT[DEFAULT_DESKTOP_LOCALE],
 ): Promise<LiveServiceInstance> {
-  report({ stage: 'checking-instance', message: '正在检查已在运行的服务…' });
+  report({ stage: 'checking-instance', message: text.checkingInstance });
   const existing = await readLiveServiceInstance(description.discoveryPath);
   if (existing?.status === 'ready') {
-    report({ stage: 'reusing-instance', message: `已连接到运行中的服务（进程 ${existing.pid}）。` });
+    report({ stage: 'reusing-instance', message: formatDesktopText(text.reusingInstance, { pid: existing.pid }) });
     return existing;
   }
 
@@ -243,7 +245,7 @@ export async function ensureServiceInstance(
   // launchService 启动一个分离 Core，并记录其就绪前失败。
   const launchService = (): void => {
     launched = true;
-    report({ stage: 'starting-service', message: '正在启动后台服务…' });
+    report({ stage: 'starting-service', message: text.startingService });
     // The service is started detached so that closing this GUI never terminates Core.
     // 服务以分离方式启动，因此关闭本 GUI 绝不会终止 Core。
     // Debug Core owns one visible diagnostic console; Release Core stays windowless.
@@ -257,7 +259,7 @@ export async function ensureServiceInstance(
     );
     child.unref();
     child.once('error', (error) => {
-      exitDiagnostic = `无法启动后台服务：${error.message}`;
+      exitDiagnostic = formatDesktopText(text.launchFailed, { error: error.message });
     });
     child.once('exit', (code, signal) => {
       // A non-zero exit before readiness is a real failure; a zero exit means another owner won.
@@ -265,25 +267,25 @@ export async function ensureServiceInstance(
       if (code === null) {
         exitDiagnostic = `服务进程在就绪前被信号 ${signal ?? '未知'} 终止。`;
       } else if (code !== 0) {
-        exitDiagnostic = `服务进程在就绪前退出，退出码 ${code}。`;
+        exitDiagnostic = formatDesktopText(text.exitedBeforeReady, { code: String(code) });
       }
     });
   };
   if (!existing) {
     launchService();
   }
-  report({ stage: 'awaiting-ready', message: '正在等待服务完成业务就绪…' });
+  report({ stage: 'awaiting-ready', message: text.awaitingReady });
   // The deadline also bounds reuse of an owner that has not finished bootstrap.
   // 此截止时间同样限制对尚未完成初始化的既有所有者的等待。
   const deadline = Date.now() + READY_TIMEOUT_MS;
   for (;;) {
     const instance = await readLiveServiceInstance(description.discoveryPath);
     if (instance?.status === 'ready') {
-      report({ stage: 'ready', message: `服务已就绪（进程 ${instance.pid}）。` });
+      report({ stage: 'ready', message: formatDesktopText(text.serviceReady, { pid: instance.pid }) });
       return instance;
     }
     if (instance && instance.status !== 'starting') {
-      throw new Error(`后台服务尚不可用，当前状态：${instance.status}。`);
+      throw new Error(formatDesktopText(text.serviceUnavailable, { status: instance.status }));
     }
     // A starting owner that disappears before readiness no longer holds the lock, so launch once ourselves.
     // 启动中的所有者在就绪前消失后不再持有锁，因此由本 GUI 自行启动一次。
@@ -294,9 +296,10 @@ export async function ensureServiceInstance(
       throw new Error(exitDiagnostic);
     }
     if (Date.now() >= deadline) {
-      throw new Error(
-        `服务在 ${Math.round(READY_TIMEOUT_MS / 1000)} 秒内未发布就绪发现文档：${description.discoveryPath}`,
-      );
+      throw new Error(formatDesktopText(text.readyTimeout, {
+        seconds: Math.round(READY_TIMEOUT_MS / 1000),
+        path: description.discoveryPath,
+      }));
     }
     await new Promise((resolve) => setTimeout(resolve, READY_POLL_INTERVAL_MS));
   }

@@ -354,7 +354,7 @@ export function ThinkingBlock(props: {
 
 // thinkingDurationLabel reads a concrete thinking duration from transcript metadata.
 // thinkingDurationLabel 从转录元数据中读取明确记录的思考耗时。
-function thinkingDurationLabel(block: ConversationDisplayBlock, locale: "zh-CN" | "en-US", t: (key: import("@/i18n-messages").TranslationKey) => string): string | null {
+function thinkingDurationLabel(block: ConversationDisplayBlock, locale: import("@/i18n").LocaleCode, t: (key: import("@/i18n-messages").TranslationKey) => string): string | null {
   const durationMs = thinkingDurationMs(block.rawMetadata);
   if (durationMs === null) {
     return null;

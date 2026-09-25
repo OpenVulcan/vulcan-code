@@ -10,7 +10,7 @@ import {
 import { readUsageCoverage, type UsageCoverage } from "@/service/conversation-usage-coverage";
 import { formatDurationSeconds, formatTokenSpeed } from "@/lib/usage-format";
 import { usageCacheRatio, usageMetricDisplay } from "./conversation-usage-display";
-import { formatMessage, readLocaleMessage, type Translate } from "@/i18n";
+import { formatMessage, readLocaleMessage, type LocaleCode, type Translate } from "@/i18n";
 
 // TurnStatsUsageSnapshot contains only the accounting fields shown in the compact statistics card.
 // TurnStatsUsageSnapshot 仅包含紧凑统计卡展示的核算字段。
@@ -51,7 +51,7 @@ export function TurnStatsTooltipCard(props: {
   metadata: unknown;
   // Active interface locale.
   // 当前界面语言。
-  locale: "zh-CN" | "en-US";
+  locale: LocaleCode;
   // Whether this card already represents child-agent-only accounting.
   // 当前卡片是否已经仅代表子代理核算。
   subagentStats: boolean;
@@ -144,7 +144,7 @@ function TurnStatsUsageRows(props: {
   usage: TurnStatsUsageSnapshot;
   // Active interface locale.
   // 当前界面语言。
-  locale: "zh-CN" | "en-US";
+  locale: LocaleCode;
   // Additional measured timing rows share the accounting grid's spacing and typography.
   // 附加的已测计时行复用核算网格的间距与字体样式。
   children?: ReactNode;
@@ -359,7 +359,7 @@ function optionalTurnStatsCount(value: unknown): number | null {
 // 参数：value 是非负统计值，locale 是当前界面语言。
 // Returns a locale-grouped decimal string.
 // 返回按语言分组的十进制字符串。
-export function formatTurnStatsNumber(value: number, locale: "zh-CN" | "en-US"): string {
+export function formatTurnStatsNumber(value: number, locale: LocaleCode): string {
   return value.toLocaleString(locale);
 }
 

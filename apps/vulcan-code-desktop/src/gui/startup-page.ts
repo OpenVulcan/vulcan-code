@@ -5,14 +5,22 @@
 // progress and never hides a failure behind an indefinite spinner.
 // 此处展示的每个阶段与错误都是真实上报值；该文档绝不伪造进度，也不用无限转圈掩盖失败。
 
-/** Renders the startup document as one self-contained HTML string. */
-export function renderStartupDocument(): string {
+import { DESKTOP_TEXT, type DesktopLocale } from './desktop-text.js';
+
+/** Escapes text placed into the startup HTML document. */
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Renders the startup document as one self-contained HTML string in the given language. */
+export function renderStartupDocument(locale: DesktopLocale): string {
+  const text = DESKTOP_TEXT[locale];
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="${locale}">
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
-    <title>Vulcan Code 启动中</title>
+    <title>${escapeHtml(text.startupTitle)}</title>
     <style>
       body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: #101215; color: #e6e8eb; }
       main { padding: 28px 30px; }
@@ -29,8 +37,8 @@ export function renderStartupDocument(): string {
   </head>
   <body>
     <main>
-      <header><h1>Vulcan Code</h1><button aria-label="关闭窗口" onclick="window.close()">×</button></header>
-      <p class="stage" id="stage">正在准备…</p>
+      <header><h1>Vulcan Code</h1><button aria-label="${escapeHtml(text.closeWindow)}" onclick="window.close()">×</button></header>
+      <p class="stage" id="stage">${escapeHtml(text.preparing)}</p>
       <p class="failure" id="failure" hidden></p>
       <ol id="history"></ol>
     </main>
@@ -51,7 +59,7 @@ export function renderStartupDocument(): string {
         historyElement.appendChild(entry);
       };
       window.vulcanStartupFailed = function (message) {
-        stageElement.textContent = "启动失败";
+        stageElement.textContent = ${JSON.stringify(text.startupFailed).replace(/</g, '\u003c')};
         failureElement.hidden = false;
         failureElement.textContent = message;
       };

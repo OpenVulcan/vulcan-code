@@ -42,18 +42,13 @@ export default defineConfig(({ mode }) => {
       manifest: true,
       rollupOptions: {
         output: {
-          // localeCatalogChunk gives each catalog a separate cache identity; both remain static
-          // imports today and the initial-workbench graph budget counts both downloads.
-          // localeCatalogChunk 为每种文案目录提供独立缓存身份；当前两者仍是静态导入，
-          // 首次工作台导入图预算会把两份下载都计入。
+          // Each locale catalog gets its own chunk and cache identity. Only the English fallback is a
+          // static import counted by the initial-workbench budget; every other language loads on demand.
+          // 每种语言目录拥有独立分块与缓存身份。只有英文回退目录是静态导入并计入首次工作台预算；
+          // 其他语言按需加载。
           manualChunks(id) {
-            if (id.includes("i18n-messages.zh-CN")) {
-              return "i18n-messages.zh-CN";
-            }
-            if (id.includes("i18n-messages.en-US")) {
-              return "i18n-messages.en-US";
-            }
-            return undefined;
+            const localeCatalog = /i18n-messages\.([a-z]{2}-[A-Z]{2})\.ts$/u.exec(id);
+            return localeCatalog ? `i18n-messages.${localeCatalog[1]}` : undefined;
           },
         },
       },
@@ -62,6 +57,9 @@ export default defineConfig(({ mode }) => {
       // The full-workbench audit requires its isolated transport aliases and dedicated Vitest configuration.
       // 完整工作台验收依赖隔离传输别名及其专属 Vitest 配置。
       exclude: [...configDefaults.exclude, "scripts/*.test.mjs", "tests/ui-audit/**"],
+      // Every locale catalog is preloaded so tests can read any language synchronously.
+      // 预加载全部语言目录，使测试可以同步读取任意语言。
+      setupFiles: ["src/test-setup/preload-locale-catalogs.ts"],
     },
     server: isRelease
       ? undefined

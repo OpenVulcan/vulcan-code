@@ -419,13 +419,22 @@ pub(super) async fn service_select_webui_locale(
     Ok(workbench)
 }
 
+/// WebUI locale wire values the user can select.
+/// 用户可选择的 WebUI 语言传输值。
+///
+/// Mirrors `SUPPORTED_LOCALES` in `apps/vulcan-code-web/src/i18n-locales.ts`, which owns the list;
+/// a WebUI test fails when the two diverge.
+/// 与 `apps/vulcan-code-web/src/i18n-locales.ts` 中持有该列表的 `SUPPORTED_LOCALES` 保持一致；两者不一致时 WebUI 测试失败。
+const SUPPORTED_WEBUI_LOCALES: &[&str] = &[
+    "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "es-ES", "fr-FR", "de-DE", "pt-BR", "ru-RU",
+];
+
 /// Parses one WebUI locale wire value.
 /// 解析单个 WebUI 语言传输值。
 fn parse_webui_locale(value: &str) -> Option<String> {
-    match value {
-        "zh-CN" | "en-US" => Some(value.to_string()),
-        _ => None,
-    }
+    SUPPORTED_WEBUI_LOCALES
+        .contains(&value)
+        .then(|| value.to_string())
 }
 
 #[cfg(test)]
@@ -532,5 +541,21 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Verifies every selectable WebUI language is accepted and anything else is rejected.
+    /// 验证所有可选 WebUI 语言都被接受，其他值被拒绝。
+    #[test]
+    fn parse_webui_locale_accepts_exactly_the_supported_languages() {
+        for locale in super::SUPPORTED_WEBUI_LOCALES {
+            assert_eq!(super::parse_webui_locale(locale).as_deref(), Some(*locale));
+        }
+        for rejected in ["", "zh", "en", "zh-HK", "ZH-CN", "ar-SA"] {
+            assert_eq!(
+                super::parse_webui_locale(rejected),
+                None,
+                "{rejected} must be rejected"
+            );
+        }
     }
 }

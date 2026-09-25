@@ -50,12 +50,6 @@ export {
   type SettingsSubAreaGroup,
 } from "@/components/features/settings/settings-navigation";
 
-// localizedLiteral chooses a display string by the active WebUI locale.
-// localizedLiteral 根据当前 WebUI 语言选择展示文本。
-export function localizedLiteral(locale: string, zh: string, en: string): string {
-  return locale === "zh-CN" ? zh : en;
-}
-
 // SettingsFeatureContentProps describes routed settings content inputs.
 // SettingsFeatureContentProps 描述设置内容路由输入。
 export interface SettingsFeatureContentProps {

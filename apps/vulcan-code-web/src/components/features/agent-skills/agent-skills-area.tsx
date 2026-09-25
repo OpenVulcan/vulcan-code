@@ -483,9 +483,6 @@ function AgentSkillDetailDialog(props: {
 }) {
   const { t } = useI18n();
   const record = props.record
-  // chinese selects localized detail labels and resource units.
-  // chinese 选择本地化详情标签与资源单位。
-  const chinese = props.locale.startsWith("zh")
   // category resolves the selected record's exact logical category.
   // category 解析所选记录的精确逻辑分类。
   const category = record ? props.categories.find((item) => item.categoryId === record.categoryId) : undefined
@@ -557,9 +554,6 @@ function localizedAgentSkillCategory(category: AgentSkillCategorySummary | undef
 // localizedAgentSkillOrigin resolves host-known provenance kinds without rewriting third-party labels.
 // localizedAgentSkillOrigin 在不改写第三方标签的情况下解析宿主已知来源类型。
 function localizedAgentSkillOrigin(record: AgentSkillRecordSummary, locale: string, t: Translate): string {
-  // chinese stores whether known host provenance should use Chinese copy.
-  // chinese 保存宿主已知来源是否应使用中文文案。
-  const chinese = locale.startsWith("zh")
   if (record.origin.kind === "builtin") {
     return t("agentSkills.vulcanBuiltIn")
   }

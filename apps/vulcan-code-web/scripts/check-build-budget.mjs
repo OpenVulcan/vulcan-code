@@ -99,8 +99,8 @@ export async function collectBuildMeasurements(distDirectory = join(webRoot, "di
   if (!bootMatch) {
     throw new Error("Production index.html does not contain a module entry asset.")
   }
-  // manifest records the actual Vite static graph, including both eagerly imported locale chunks.
-  // manifest 记录真实的 Vite 静态导入图，包括当前两份预加载语言分块。
+  // manifest records the actual Vite static graph, including the eagerly imported English catalog chunk.
+  // manifest 记录真实的 Vite 静态导入图，包括预加载的英文目录分块。
   const manifest = JSON.parse(await readFile(join(distDirectory, ".vite", "manifest.json"), "utf8"))
   const workbenchAsset = findSingleAsset(assetNames, "workbench-app-", ".js")
   const workbenchKeys = Object.keys(manifest).filter((key) => manifest[key].file === `assets/${workbenchAsset}`)

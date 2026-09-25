@@ -13,6 +13,7 @@ import { StatusPill } from "@/components/shared/status";
 import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { areaIconMap } from "@/components/features/feature-shell";
 import { useI18n, type LocaleCode } from "@/i18n";
+import { SUPPORTED_LOCALES } from "@/i18n-locales";
 import { createShellClient } from "@/host-shell";
 import type {
   FeatureAreaSummary,
@@ -187,6 +188,9 @@ export function GlobalActions(props: {
   // t translates global action labels.
   // t 翻译全局操作标签。
   const { t } = useI18n();
+  // activeLocaleEntry labels the current language in the menu trigger.
+  // activeLocaleEntry 在菜单触发器中标注当前语言。
+  const activeLocaleEntry = SUPPORTED_LOCALES.find((entry) => entry.code === props.locale) ?? SUPPORTED_LOCALES[0];
   // openDeveloperTools is present only in a desktop host that exposes the native action.
   // openDeveloperTools 仅在桌面宿主提供原生操作时存在。
   const openDeveloperTools = shellClient.openDeveloperTools;
@@ -284,25 +288,22 @@ export function GlobalActions(props: {
         </DropdownMenuSub>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className="app-chrome-menu-row">
-            <span className="app-chrome-menu-language-mark">{props.locale === "zh-CN" ? "ZH" : "EN"}</span>
+            <span className="app-chrome-menu-language-mark">{activeLocaleEntry.mark}</span>
             <span>{t("global.language")}</span>
-            <small>{props.locale === "zh-CN" ? t("appChrome.language.zh") : "English"}</small>
+            <small>{activeLocaleEntry.nativeName}</small>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent
             className="app-chrome-menu-sub"
             onKeyDownCapture={markMenuKeyboardInteraction}
             onPointerDownCapture={markMenuPointerInteraction}
           >
-            <DropdownMenuItem onSelect={() => props.onChangeLocale("zh-CN")}>
-              <span className="app-chrome-menu-language-mark">ZH</span>
-              <span>{t("appChrome.language.zh")}</span>
-              {props.locale === "zh-CN" ? <Check className="app-chrome-menu-check" size={14} /> : null}
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => props.onChangeLocale("en-US")}>
-              <span className="app-chrome-menu-language-mark">EN</span>
-              <span>English</span>
-              {props.locale === "en-US" ? <Check className="app-chrome-menu-check" size={14} /> : null}
-            </DropdownMenuItem>
+            {SUPPORTED_LOCALES.map((entry) => (
+              <DropdownMenuItem key={entry.code} lang={entry.code} onSelect={() => props.onChangeLocale(entry.code)}>
+                <span className="app-chrome-menu-language-mark">{entry.mark}</span>
+                <span>{entry.nativeName}</span>
+                {props.locale === entry.code ? <Check className="app-chrome-menu-check" size={14} /> : null}
+              </DropdownMenuItem>
+            ))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuItem className="app-chrome-menu-row" onSelect={reloadWorkbench}>

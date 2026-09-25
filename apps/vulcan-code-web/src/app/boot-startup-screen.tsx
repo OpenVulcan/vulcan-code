@@ -2,10 +2,7 @@ import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
 import { StartupDownloadProgress } from "@/components/shell/startup-download-progress";
 import type { StartupSnapshot } from "@/types";
 import { activeStartupStep, startupProgressPercent } from "@/components/shell/startup-progress";
-
-// BootLocale is the minimal language set needed before the full i18n bundle is loaded.
-// BootLocale 是完整 i18n 包加载前所需的最小语言集合。
-type BootLocale = "zh-CN" | "en-US";
+import { resolveAppLocale, type LocaleCode } from "@/i18n-locales";
 
 // BootText stores the minimal boot-screen labels used by the startup gate.
 // BootText 保存启动门使用的最小启动屏文案。
@@ -41,7 +38,7 @@ interface BootText {
 
 // BOOT_TEXT maps startup labels without importing the full application translation catalog.
 // BOOT_TEXT 在不导入完整应用翻译表的情况下映射启动文案。
-const BOOT_TEXT: Record<BootLocale, BootText> = {
+const BOOT_TEXT: Record<LocaleCode, BootText> = {
   "zh-CN": {
     loadingWorkspace: "正在加载 Workspace",
     connectingService: "正在连接 Vulcan Core Service",
@@ -63,6 +60,94 @@ const BOOT_TEXT: Record<BootLocale, BootText> = {
     downloadProgress: "Download progress",
     completedSteps: "Completed {completed}/{total} steps",
     reloadApplication: "Reload application",
+  },
+  "zh-TW": {
+    loadingWorkspace: "正在載入 Workspace",
+    connectingService: "正在連線 Vulcan Core Service",
+    loadingProjectIndex: "正在載入專案與對話索引",
+    loadingStepPrefix: "正在載入",
+    failedPrefix: "啟動失敗：",
+    errorDetails: "檢視詳細資訊",
+    downloadProgress: "下載進度",
+    completedSteps: "已完成 {completed}/{total} 個步驟",
+    reloadApplication: "重新載入應用程式",
+  },
+  "ja-JP": {
+    loadingWorkspace: "Workspace を読み込んでいます",
+    connectingService: "Vulcan Core Service に接続しています",
+    loadingProjectIndex: "プロジェクトと会話のインデックスを読み込んでいます",
+    loadingStepPrefix: "読み込み中",
+    failedPrefix: "起動に失敗しました：",
+    errorDetails: "詳細を表示",
+    downloadProgress: "ダウンロードの進行状況",
+    completedSteps: "{completed}/{total} ステップ完了",
+    reloadApplication: "アプリを再読み込み",
+  },
+  "ko-KR": {
+    loadingWorkspace: "Workspace를 불러오는 중",
+    connectingService: "Vulcan Core Service에 연결하는 중",
+    loadingProjectIndex: "프로젝트 및 대화 인덱스를 불러오는 중",
+    loadingStepPrefix: "불러오는 중",
+    failedPrefix: "시작 실패: ",
+    errorDetails: "자세히 보기",
+    downloadProgress: "다운로드 진행률",
+    completedSteps: "{total}단계 중 {completed}단계 완료",
+    reloadApplication: "앱 다시 불러오기",
+  },
+  "es-ES": {
+    loadingWorkspace: "Cargando Workspace",
+    connectingService: "Conectando con Vulcan Core Service",
+    loadingProjectIndex: "Cargando los índices de proyectos y conversaciones",
+    loadingStepPrefix: "Cargando",
+    failedPrefix: "Error al iniciar: ",
+    errorDetails: "Ver detalles",
+    downloadProgress: "Progreso de la descarga",
+    completedSteps: "{completed}/{total} pasos completados",
+    reloadApplication: "Recargar la aplicación",
+  },
+  "fr-FR": {
+    loadingWorkspace: "Chargement du Workspace",
+    connectingService: "Connexion à Vulcan Core Service",
+    loadingProjectIndex: "Chargement des index de projets et de conversations",
+    loadingStepPrefix: "Chargement",
+    failedPrefix: "Échec du démarrage : ",
+    errorDetails: "Voir les détails",
+    downloadProgress: "Progression du téléchargement",
+    completedSteps: "{completed}/{total} étapes terminées",
+    reloadApplication: "Recharger l’application",
+  },
+  "de-DE": {
+    loadingWorkspace: "Workspace wird geladen",
+    connectingService: "Verbindung mit Vulcan Core Service wird hergestellt",
+    loadingProjectIndex: "Projekt- und Unterhaltungsindizes werden geladen",
+    loadingStepPrefix: "Wird geladen",
+    failedPrefix: "Start fehlgeschlagen: ",
+    errorDetails: "Details anzeigen",
+    downloadProgress: "Download-Fortschritt",
+    completedSteps: "{completed}/{total} Schritte abgeschlossen",
+    reloadApplication: "Anwendung neu laden",
+  },
+  "pt-BR": {
+    loadingWorkspace: "Carregando o Workspace",
+    connectingService: "Conectando ao Vulcan Core Service",
+    loadingProjectIndex: "Carregando os índices de projetos e conversas",
+    loadingStepPrefix: "Carregando",
+    failedPrefix: "Falha ao iniciar: ",
+    errorDetails: "Ver detalhes",
+    downloadProgress: "Progresso do download",
+    completedSteps: "{completed}/{total} etapas concluídas",
+    reloadApplication: "Recarregar o aplicativo",
+  },
+  "ru-RU": {
+    loadingWorkspace: "Загрузка Workspace",
+    connectingService: "Подключение к Vulcan Core Service",
+    loadingProjectIndex: "Загрузка индексов проектов и бесед",
+    loadingStepPrefix: "Загрузка",
+    failedPrefix: "Не удалось запустить: ",
+    errorDetails: "Подробнее",
+    downloadProgress: "Ход загрузки",
+    completedSteps: "Выполнено шагов: {completed} из {total}",
+    reloadApplication: "Перезагрузить приложение",
   },
 };
 
@@ -149,11 +234,8 @@ export function BootErrorScreen(props: {
   );
 }
 
-// bootLocale resolves the minimal startup locale without importing the full i18n module.
-// bootLocale 在不导入完整 i18n 模块的情况下解析最小启动语言。
-function bootLocale(value: string | null | undefined): BootLocale {
-  if (value === "zh-CN" || value === "en-US") {
-    return value;
-  }
-  return navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
+// bootLocale resolves the saved or device language without importing the full i18n module.
+// bootLocale 在不导入完整 i18n 模块的情况下解析已保存语言或设备语言。
+function bootLocale(value: string | null | undefined): LocaleCode {
+  return resolveAppLocale(value);
 }

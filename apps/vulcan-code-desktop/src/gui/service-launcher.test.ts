@@ -78,7 +78,9 @@ test('launches its own service when a starting owner disappears', async () => {
         writeFileSync(description.discoveryPath, JSON.stringify({ ...original, baseUrl: `${original.baseUrl}/gone` }));
       }
     });
-    await assert.rejects(pending, /无法启动后台服务/);
+    // Check the missing-executable failure independently of the desktop display language.
+    // 检查可执行文件不存在这一失败原因，避免断言依赖桌面显示语言。
+    await assert.rejects(pending, /spawn must-not-spawn ENOENT/);
     assert.equal(states.length, 1);
     assert(stages.includes('starting-service'));
   });

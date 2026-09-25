@@ -25,7 +25,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
-import { formatMessage, useI18n } from "@/i18n"
+import { formatMessage, pickBilingualText, useI18n } from "@/i18n"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import type {
   ConversationSummary,
@@ -286,7 +286,7 @@ export function OutputStyleSettingsSection(props: {
       <Select disabled={saving} onValueChange={selectStyle} value={outputStyleId}>
         <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
         <SelectContent>{props.outputStyleCatalog.entries.map((entry) => (
-          <SelectItem key={entry.id} value={entry.id}>{locale === "zh-CN" ? entry.labelZh : entry.labelEn}</SelectItem>
+          <SelectItem key={entry.id} value={entry.id}>{pickBilingualText(locale, entry.labelZh, entry.labelEn)}</SelectItem>
         ))}</SelectContent>
       </Select>
     </label>

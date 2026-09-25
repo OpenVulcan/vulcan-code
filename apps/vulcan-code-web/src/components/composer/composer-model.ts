@@ -1,4 +1,5 @@
 import type { LocaleCode } from "@/i18n";
+import { pickBilingualText } from "@/i18n-locales";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
@@ -180,7 +181,7 @@ export function normalizedComposerSlashCommandId(command: ComposerSlashCommandSu
 // composerSlashCommandDescription returns the locale-specific description for one command row.
 // composerSlashCommandDescription 返回单个指令行的当前语言说明。
 export function composerSlashCommandDescription(command: ComposerSlashCommandSummary, locale: LocaleCode): string {
-  return locale === "en-US" ? command.descriptionEn : command.descriptionZh;
+  return pickBilingualText(locale, command.descriptionZh, command.descriptionEn);
 }
 
 // composerSlashCommandMatchesInput mirrors the native slash-command prefix matching rule.

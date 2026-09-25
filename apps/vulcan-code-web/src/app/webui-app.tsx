@@ -7,6 +7,8 @@ import {
   serviceBootstrapErrorIsRetryable,
 } from "@/service/webui-service-runtime";
 import { loadStartupSnapshot } from "@/service/workbench-snapshot-service";
+import { ensureLocaleCatalog } from "@/i18n-catalogs";
+import { resolveAppLocale } from "@/i18n-locales";
 
 // LazyWorkbenchApp loads the full workbench only after the startup gate reports readiness.
 // LazyWorkbenchApp 仅在启动门报告就绪后加载完整工作台。
@@ -26,8 +28,16 @@ export function WebuiApp() {
   // bootResult stores the ready startup snapshot that unlocks the workbench app.
   // bootResult 保存解锁工作台应用的已就绪启动快照。
   const [bootResult, setBootResult] = React.useState<BootResult | null>(null);
+  // handleReady downloads the display language while the boot screen is still visible, so the workbench
+  // never flashes the English fallback; a failed download still mounts the workbench in English.
+  // handleReady 在启动界面仍可见时下载显示语言，使工作台不会闪现英文回退；下载失败时仍以英文挂载工作台。
+  const handleReady = React.useCallback((result: BootResult) => {
+    void ensureLocaleCatalog(resolveAppLocale(result.startup.uiLocale))
+      .catch(() => undefined)
+      .finally(() => setBootResult(result));
+  }, []);
   if (!bootResult) {
-    return <BootGate onReady={setBootResult} />;
+    return <BootGate onReady={handleReady} />;
   }
   return (
     <RenderErrorBoundary fallback={(error) => <BootErrorScreen error={error.message} uiLocale={bootResult.startup.uiLocale} onReload={() => window.location.reload()} />}>

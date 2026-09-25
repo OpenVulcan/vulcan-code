@@ -1,6 +1,6 @@
-// LocaleCode describes supported WebUI languages.
-// LocaleCode 描述 WebUI 支持的语言。
-export type LocaleCode = "zh-CN" | "en-US"
+// LocaleCode describes supported WebUI languages; the registry in `i18n-locales` owns the list.
+// LocaleCode 描述 WebUI 支持的语言；列表由 `i18n-locales` 中的注册表持有。
+export type { LocaleCode } from "@/i18n-locales"
 
 // TranslationKey describes text keys currently localized at the shell level.
 // TranslationKey 描述当前在外壳层支持本地化的文本键。
@@ -570,7 +570,6 @@ export type TranslationKey =
   | "appChrome.theme.dark"
   | "appChrome.theme.light"
   | "appChrome.themeSaveFailed"
-  | "appChrome.language.zh"
   | "appChrome.scrollFeaturesLeft"
   | "appChrome.scrollFeaturesRight"
   | "appChrome.windowActionFailed"
@@ -2493,7 +2492,7 @@ export type TranslationKey =
   | "memory.data.purge"
   | "memory.data.purgeTitle"
   | "memory.data.purgeDescription"
-  | "memory.data.purgePlaceholder"
+  | "memory.data.purgeConfirmationPhrase"
   | "memory.data.restorable"
   | "memory.data.systemBatch"
   | "memory.data.updatedAt"
@@ -5543,3 +5542,11 @@ export type TranslationKey =
   | "project.actions.removeStopsTerminals"
   | "skills.card.toolStateCouldNot"
   | "skills.thisPluginPageIs"
+  | "projectSidebar.time.justNow"
+  | "projectSidebar.time.minutes"
+  | "projectSidebar.time.hours"
+  | "projectSidebar.time.days"
+  | "projectSidebar.time.weeks"
+  | "projectSidebar.time.months"
+  | "projectSidebar.time.years"
+  | "conversation.planArtifact.executeWithNote"
