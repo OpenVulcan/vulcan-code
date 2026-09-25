@@ -5,14 +5,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import { loadWorkspaceGitCatalog } from "@/service/workbench-snapshot-service";
-import type { DiffReviewPanel } from "@/diff/DiffReviewPanel";
+import type { DiffReviewPanel } from "@/diff/diff-review-panel";
 import type { WorkspaceGitRepositoryCatalog } from "@/diff/types";
-import { WorkspaceReviewPanelHost } from "./WorkspaceReviewPanelHost";
+import { WorkspaceReviewPanelHost } from "./workspace-review-panel-host";
 
 // Capture the real host boundary while leaving all project/repository effects and action ownership active.
 // 捕获真实宿主边界，同时保留全部项目/仓库副作用及动作归属逻辑。
 let panel: React.ComponentProps<typeof DiffReviewPanel>;
-vi.mock("@/diff/DiffReviewPanel", () => ({ DiffReviewPanel: (props: React.ComponentProps<typeof DiffReviewPanel>) => { panel = props; return null; } }));
+vi.mock("@/diff/diff-review-panel", () => ({ DiffReviewPanel: (props: React.ComponentProps<typeof DiffReviewPanel>) => { panel = props; return null; } }));
 vi.mock("@/state/conversation-event-window-react", () => ({ useSelectedConversationEventWindowSnapshot: () => ({ owner: null }) }));
 vi.mock("@/service/workbench-snapshot-service", () => ({ loadWorkspaceGitCatalog: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));

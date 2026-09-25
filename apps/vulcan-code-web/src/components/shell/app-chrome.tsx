@@ -13,8 +13,7 @@ import { StatusPill } from "@/components/shared/status";
 import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { areaIconMap } from "@/components/features/feature-shell";
 import { useI18n, type LocaleCode } from "@/i18n";
-import { cn } from "@/lib/utils";
-import { createShellClient } from "@/shell";
+import { createShellClient } from "@/host-shell";
 import type {
   FeatureAreaSummary,
   MainAreaId,

@@ -32,6 +32,7 @@ import type {
   VmmPrerequisiteSummary,
   VmmSetupState,
 } from "@/types"
+import { formatDateTime } from "@/lib/display-format"
 
 // VmmOverviewPageProps defines the structured snapshot and user actions for the status overview.
 // VmmOverviewPageProps 定义状态总览使用的结构化快照与用户操作。
@@ -227,10 +228,7 @@ function formatVmmTimestamp(
   if (Number.isNaN(date.getTime())) {
     return emptyLabel
   }
-  return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en-US", {
-    dateStyle: "short",
-    timeStyle: "short",
-  }).format(date)
+  return formatDateTime(date, locale) ?? emptyLabel
 }
 
 // VmmHealthBadge renders the primary service health as a compact status badge.

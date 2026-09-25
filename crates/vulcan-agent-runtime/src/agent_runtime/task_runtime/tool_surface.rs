@@ -23,7 +23,6 @@ pub fn build_subagent_tool_candidates(
         build_spawn_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime.clone()),
         build_agent_orchestration_info_tool_candidate(Arc::clone(&task_runtime)),
         build_send_message_tool_candidate(Arc::clone(&task_runtime)),
-        build_wait_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime.clone()),
         build_interrupt_agent_tool_candidate(Arc::clone(&task_runtime)),
         build_close_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime),
         build_list_agents_tool_candidate(task_runtime),
@@ -160,52 +159,6 @@ pub(super) fn build_send_message_tool_candidate(
                     SEND_MESSAGE_TOOL,
                 )?;
                 task_runtime.invoke_send_message(session_id, args).await
-            })
-        }),
-    }
-}
-
-/// Builds the model-visible child-agent wait tool.
-/// 构建模型可见的子代理等待工具。
-pub(super) fn build_wait_agent_tool_candidate(
-    task_runtime: Arc<TaskRuntime>,
-    collaboration_runtime: Option<Arc<dyn NativeAgentCollaborationRuntime>>,
-) -> VulcanToolCandidate {
-    VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor::new(
-            WAIT_AGENT_TOOL,
-            WAIT_AGENT_TOOL,
-            String::from(
-                "Wait for child-agent mailbox activity and return claimed feedback, an interruption summary, or a timeout summary. Without explicit targets, queued feedback is claimed first; when no child is active and no feedback remains, the tool returns immediately and must not be polled again until a child is started.",
-            ),
-            None,
-            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "native", WAIT_AGENT_TOOL),
-        ),
-        parameters_schema: wait_agent_args_schema(),
-        ai_visible: true,
-        plan_policy: VulcanPlanToolPolicy::Hidden,
-        request_streaming: None,
-        invoke: Arc::new(move |args, context| {
-            let task_runtime = Arc::clone(&task_runtime);
-            let collaboration_runtime = collaboration_runtime.clone();
-            Box::pin(async move {
-                let session_id = parse_subagent_tool_session_id(
-                    Some(context.session_id.as_str()),
-                    WAIT_AGENT_TOOL,
-                )?;
-                let wait_for_child = task_runtime.invoke_wait_agent(session_id, args);
-                let Some(collaboration_runtime) = collaboration_runtime else {
-                    return wait_for_child.await;
-                };
-                let incoming_question_context = context.clone();
-                tokio::select! {
-                    result = wait_for_child => result,
-                    incoming_question = collaboration_runtime
-                        .wait_for_incoming_question(incoming_question_context) =>
-                    {
-                        incoming_question.map(VulcanToolInvocationResult::from_model_output)
-                    }
-                }
             })
         }),
     }
@@ -405,6 +358,7 @@ pub(super) fn send_message_args_schema() -> Value {
 
 /// Builds the JSON Schema advertised to the model for `wait_agent`.
 /// 为模型端 `wait_agent` 工具构建对外声明的 JSON Schema。
+#[cfg(test)]
 pub(super) fn wait_agent_args_schema() -> Value {
     json!({
         "type": "object",

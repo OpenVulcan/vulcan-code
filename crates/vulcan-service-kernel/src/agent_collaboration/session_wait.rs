@@ -128,7 +128,7 @@ pub(super) async fn wait_session(
         tokio::time::sleep(
             deadline
                 .saturating_duration_since(now)
-                .min(std::time::Duration::from_millis(50)),
+                .min(COLLABORATION_WAIT_RECHECK_INTERVAL),
         )
         .await;
         frontier = read_frontier(invocation, &locator, target_session_id).await?;

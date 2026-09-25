@@ -769,6 +769,14 @@ describe("ToolPresentationCard file access icons", () => {
         expected: "等待智能体消息 · 已收到智能体消息",
       },
       {
+        presentation: { ...WAIT_AGENT_PRESENTATION, terminalEventReceived: false, waitNeedsReply: true },
+        expected: "等待智能体消息 · 有问题需要智能体回复",
+      },
+      {
+        presentation: { ...WAIT_AGENT_PRESENTATION, terminalEventReceived: false, waitCheckFailed: true },
+        expected: "等待智能体消息 · 目标状态暂时无法确认",
+      },
+      {
         presentation: {
           ...WAIT_AGENT_PRESENTATION,
           id: "list-agent-summary",
@@ -844,7 +852,7 @@ describe("ToolPresentationCard file access icons", () => {
       </I18nProvider>,
     );
 
-    expect(markup).toContain("等待智能体消息 · 当前无未关闭的智能体。");
+    expect(markup).toContain("等待智能体消息 · 当前没有可等待的工作。");
     expect(markup).not.toContain("等待智能体消息 · 等待中");
   });
 });

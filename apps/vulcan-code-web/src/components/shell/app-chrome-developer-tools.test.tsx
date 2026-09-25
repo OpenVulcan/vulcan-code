@@ -9,7 +9,7 @@ import { GlobalActions } from "./app-chrome";
 const shell = vi.hoisted(() => ({
   openDeveloperTools: undefined as undefined | (() => Promise<void>),
 }));
-vi.mock("@/shell", () => ({ createShellClient: () => shell }));
+vi.mock("@/host-shell", () => ({ createShellClient: () => shell }));
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 
 // host and root own one real Radix menu and its portal per test.

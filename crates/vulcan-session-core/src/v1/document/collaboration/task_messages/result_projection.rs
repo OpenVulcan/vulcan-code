@@ -40,14 +40,21 @@ impl SessionDocument {
         {
             return Ok(IdempotentMutation::Idempotent(projection.clone()));
         }
-        let turn_id = acceptance.result.acceptance.message.source.turn_id.ok_or(
+        let source_turn_id = acceptance.result.acceptance.message.source.turn_id.ok_or(
             DomainError::CollaborationStateViolation {
                 field: "collaboration.task_result.source_turn",
             },
         )?;
-        if self
+        // Late results retain their source identity but enter the current receiving turn.
+        // 迟到结果保留原来源身份，但进入当前接收回合。
+        let turn_id = self
             .active_turn()
-            .is_none_or(|turn| turn.closed || turn.turn_id != turn_id)
+            .filter(|turn| !turn.closed)
+            .map(|turn| turn.turn_id)
+            .ok_or(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_result.projection_turn",
+            })?;
+        if turn_id < source_turn_id
             || self.collaboration_run_control() != CollaborationRunControl::Running
         {
             return Err(DomainError::CollaborationStateViolation {
@@ -81,10 +88,26 @@ impl SessionDocument {
         }
         let mut staged = self.begin_atomic_mutation()?;
         let mut inputs = Vec::new();
-        for envelope in acceptance
+        let envelopes = acceptance
             .result
-            .task_result_envelopes(acceptance.event_seq, disclosure)?
-        {
+            .task_result_envelopes(acceptance.event_seq, disclosure)?;
+        // Revocation hides the original request as well as the final response.
+        // 撤权同时隐藏原请求和最终回复。
+        if disclosure == CollaborationTaskResultDisclosure::Full {
+            let first = envelopes
+                .first()
+                .ok_or(DomainError::CollaborationStateViolation {
+                    field: "collaboration.task_result.empty_envelopes",
+                })?;
+            super::super::projection::append_late_result_context(
+                &mut staged,
+                first,
+                source_turn_id,
+                &acceptance.result.acceptance.message.body,
+                now_ms,
+            )?;
+        }
+        for envelope in envelopes {
             let (input_seq, input_id, projected_turn) =
                 super::super::projection::append_envelope(&mut staged, envelope, now_ms)?;
             if projected_turn != turn_id {

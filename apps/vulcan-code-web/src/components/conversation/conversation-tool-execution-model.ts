@@ -3,6 +3,7 @@ import type { ConversationDetailRef } from "@/components/conversation/conversati
 import type { TranslationKey } from "@/i18n-messages";
 import type { ToolRequestProgressSnapshot } from "@/types";
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
+import { formatDurationSeconds } from "@/lib/usage-format";
 import {
   isCollaborationToolName,
   isSubagentFeedbackMetadata,
@@ -11,6 +12,7 @@ import {
   normalizeToolDisplayState,
   subagentToolDisplayName,
 } from "./conversation-tool-metadata";
+import { formatBytes } from "@/lib/display-format";
 
 // ToolRequestProgress describes safe model-side argument construction metadata retained on one tool card.
 // ToolRequestProgress 描述保留在单张工具卡片上的安全模型侧参数构造元数据。
@@ -296,25 +298,7 @@ export function toolRequestStreamMetricsLabel(
   t?: (key: TranslationKey) => string,
 ): string {
   const characterLabel = `${progress.receivedCharacters.toLocaleString()} ${t ? t("conversation.toolRequest.characters") : "characters"}`;
-  return `${characterLabel} · ${formatToolRequestBytes(progress.receivedBytes)}`;
-}
-
-// formatToolRequestBytes formats one exact non-negative UTF-8 byte count for inline progress.
-// formatToolRequestBytes 为内联进度格式化一项精确非负 UTF-8 字节数。
-//
-// Parameters: bytes is the exact count supplied by the request-stream coordinator.
-// 参数：bytes 是请求流协调器提供的精确计数。
-//
-// Returns: a compact binary-unit label without changing the underlying count.
-// 返回值：返回不改变底层计数的紧凑二进制单位文案。
-function formatToolRequestBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes.toLocaleString()} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KiB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${characterLabel} · ${formatBytes(progress.receivedBytes)}`;
 }
 
 // buildSubagentToolExecutionDetailBody builds a human-readable detail body for built-in subagent orchestration tools.
@@ -322,6 +306,9 @@ function formatToolRequestBytes(bytes: number): string {
 function buildSubagentToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string | null {
   const toolName = toolExecutionName(blocks);
   const hostKind = firstMetadataString(blocks, ["host_result.kind", "hostResult.kind", "kind"]);
+  if (toolName === "wait_agents_result") {
+    return buildSubagentWaitDetailBody(blocks, t);
+  }
   if (isCollaborationToolName(toolName)) {
     return buildCollaborationToolExecutionDetailBody(blocks);
   }
@@ -471,7 +458,7 @@ function buildSubagentWaitDetailBody(blocks: ToolExecutionConversationBlock[], t
       subagentWaitStatusText(payload, timedOut, interrupted, t),
     ),
     timeoutMs !== null && timeoutMs > 0
-      ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), `${timeoutMs} ms`)
+      ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), formatDurationSeconds(timeoutMs))
       : null,
     result ? `### ${text(t, "conversation.subagent.detail.result", "Result")}\n\n${fencedText(result)}` : null,
     ...agentSections,
@@ -494,6 +481,23 @@ function subagentWaitStatusText(
   // 可选翻译辅助函数。
   t?: (key: TranslationKey) => string,
 ): string {
+  // Unified inbox outcomes are host-owned; delivery receipts are not completion signals.
+  // 统一收件结果由宿主拥有，投递回执不是完成信号。
+  if (payload?.status === "needs_reply") {
+    return text(t, "conversation.subagent.detail.waitNeedsReply", "Incoming question needs a reply");
+  }
+  if (payload?.status === "check_failed") {
+    return text(t, "conversation.subagent.detail.waitCheckFailed", "Target state could not be checked");
+  }
+  if (payload?.status === "messages") {
+    return text(t, "conversation.subagent.detail.waitCompleted", "Agent message received");
+  }
+  if (payload?.status === "no_pending_work") {
+    return text(t, "conversation.subagent.detail.noPendingWork", "No pending agent work");
+  }
+  if (payload?.status === "timeout") {
+    return text(t, "conversation.subagent.detail.waitTimedOut", "Wait timed out");
+  }
   if (timedOut) {
     return text(t, "conversation.subagent.detail.waitTimedOut", "Wait timed out");
   }
@@ -608,7 +612,7 @@ function buildSubagentAgentListDetailBody(blocks: ToolExecutionConversationBlock
     `## ${title}`,
     detailLine(text(t, "conversation.subagent.detail.count", "Count"), String(agents.length)),
     completed !== null ? detailLine(text(t, "conversation.subagent.detail.completed", "Completed"), booleanText(completed, t)) : null,
-    timeoutMs !== null && timeoutMs > 0 ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), `${timeoutMs} ms`) : null,
+    timeoutMs !== null && timeoutMs > 0 ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), formatDurationSeconds(timeoutMs)) : null,
   ].filter(Boolean);
   if (!agents.length) {
     return [
@@ -1255,4 +1259,3 @@ function compactTextPreview(source: string): string {
   }
   return text.length > 140 ? `${text.slice(0, 140)}...` : text;
 }
-

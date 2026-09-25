@@ -14,7 +14,7 @@ import { escapeHtml, tokenSpansToHtml } from "@/diff/diff-shiki-shared";
 import type { DiffFile, DiffLine } from "@/diff/types";
 import { Button } from "@/components/ui/button";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { workspaceFileTreeExtensionLabel } from "@/components/workspace/WorkspaceFileTreeDrawer";
+import { workspaceFileTreeExtensionLabel } from "@/components/workspace/workspace-file-tree-drawer";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/types";
 

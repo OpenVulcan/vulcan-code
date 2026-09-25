@@ -17,7 +17,6 @@ fn subagent_tool_surface_exposes_session_agent_style_tools_without_visible_task(
             "spawn_agent",
             "agent_orchestration_info",
             "send_message",
-            "wait_agent",
             "interrupt_agent",
             "close_agent",
             "list_agents"

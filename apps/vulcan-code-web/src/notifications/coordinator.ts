@@ -18,7 +18,7 @@ import type {
   NotificationTextResolver,
 } from "@/notifications/types";
 import { shellClient } from "@/service/webui-service-runtime";
-import type { ShellClient, ShellNotificationActivation } from "@/shell";
+import type { ShellClient, ShellNotificationActivation } from "@/host-shell";
 import type { ConversationRunSettledEvent } from "@/types";
 
 // CONSUMED_EVENT_LIMIT bounds reconnect deduplication memory for one client lifetime.

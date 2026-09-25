@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { WebuiApp } from "../../src/app/WebuiApp";
+import { WebuiApp } from "../../src/app/webui-app";
 import { calls } from "./runtime";
 import { AuditGitSurface } from "./git-surface";
 import { AuditMediaSurface } from "./media-surface";

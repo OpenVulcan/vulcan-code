@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { KnowledgeDisplayIndexState } from "@/types";
-import { knowledgeDisplayBuildAction } from "./KnowledgeBaseArea";
+import { knowledgeDisplayBuildAction } from "./knowledge-base-area";
 
 // displayIndex creates one durable display lifecycle fixture for button-action tests.
 // displayIndex 为按钮动作测试创建一份持久化显示库生命周期夹具。

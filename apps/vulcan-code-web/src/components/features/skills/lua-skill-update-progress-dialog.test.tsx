@@ -6,7 +6,11 @@ import type { LuaSkillSummary, LuaSkillsOperationProgressSummary } from "@/types
 import type { SkillActionProps } from "./skill-area-types";
 import { LuaSkillsPanel } from "./lua-skills-panel";
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key);
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) };
+});
 
 // host owns the panel while the shared modal mounts into its document portal.
 // host 持有面板，共享弹窗挂载到文档门户。
@@ -74,7 +78,7 @@ async function renderPanel(operationProgress: LuaSkillsOperationProgressSummary 
 function updateButton(): HTMLButtonElement {
   // button belongs to the package row, outside the progress portal.
   // button 属于技能包行，位于进度门户之外。
-  const button = host.querySelector<HTMLButtonElement>('button[aria-label="skills.action.update"]');
+  const button = host.querySelector<HTMLButtonElement>('button[aria-label="更新"]');
   if (!button) throw new Error("Missing skill update button");
   return button;
 }
@@ -109,7 +113,7 @@ it("opens on click before events, ignores previous results, blocks duplicate cli
   await renderPanel(progress({ latestPhase: "downloading_archive", percent: 42, bytesDone: 420, bytesTotal: 1000 }));
   expect(dialog().textContent).toContain("正在下载技能包");
   expect(dialog().textContent).toContain("42%");
-  expect(dialog().textContent).toContain("420 / 1,000 字节");
+  expect(dialog().textContent).toContain("420 B / 1000 B");
   expect(dialog().querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("42");
   await renderPanel(progress({ latestPhase: "extracting_archive" }));
   expect(dialog().textContent).toContain("正在解压技能包");
@@ -118,7 +122,7 @@ it("opens on click before events, ignores previous results, blocks duplicate cli
   expect(dialog().textContent).toContain("正在更新技能包");
   await act(async () => complete());
   expect(dialog().textContent).toContain("技能包更新完成");
-  expect(dialog().textContent).not.toContain("420 / 1,000 字节");
+  expect(dialog().textContent).not.toContain("420 B / 1000 B");
   expect(dialog().querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("100");
   // close dismisses only the visible completed operation.
   // close 只关闭当前可见的已完成操作。
@@ -146,7 +150,7 @@ it("keeps source resolution and downloads without totals indeterminate", async (
   expect(dialog().textContent).toContain("正在解析更新来源");
   expect(dialog().querySelector('[role="progressbar"]')?.hasAttribute("aria-valuenow")).toBe(false);
   await renderPanel(progress({ latestPhase: "downloading_archive", bytesDone: 1024, bytesTotal: null, percent: null }));
-  expect(dialog().textContent).toContain("1,024 字节");
+  expect(dialog().textContent).toContain("1 KiB");
   expect(dialog().textContent).not.toContain("%");
 });
 

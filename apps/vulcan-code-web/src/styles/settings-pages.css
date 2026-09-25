@@ -11,7 +11,7 @@
 
 .provider-protocol-fieldset {
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   padding: 10px;
 }
 
@@ -20,7 +20,7 @@
   align-items: center;
   gap: 8px;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 500;
 }
 
@@ -39,7 +39,7 @@
 
 .credential-management-menu .workspace-tool-panel-menu-row small {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .credential-management-content {
@@ -70,17 +70,40 @@
   container: credential-account / inline-size;
 }
 
+/* Identity sits on the left; plan, balance and quota share one usage panel on the right. */
+/* 身份位于左侧；套餐、余额与额度共用右侧的一个用量面板。 */
 .credential-account-body {
   display: grid;
-  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.6fr);
-  gap: 24px;
-  padding: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 20px;
+  padding: 12px 16px;
 }
 
 .credential-account-body .credential-account-identity {
-  align-content: start;
-  gap: 20px;
+  align-self: center;
   padding: 0;
+}
+
+/* The default account is marked by a star badge on the logo's top corner, matching the footer default action;
+   the bottom corner stays free for the provider icon's own relay badge. */
+/* 默认账号以 Logo 上角的星标徽记表示，与底部的设为默认操作一致；下角留给供应商图标自身的中转徽记。 */
+.credential-account-default-mark {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--card);
+  box-shadow: 0 0 0 1px var(--border);
+  color: var(--vcn-content-warning);
+  outline: none;
+}
+
+.credential-account-default-mark:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
 }
 
 .credential-account-enabled {
@@ -88,7 +111,7 @@
   align-items: center;
   gap: 10px;
   width: fit-content;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   color: var(--muted-foreground);
 }
 
@@ -96,14 +119,8 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 0 0 0 24px;
+  padding: 0 0 0 20px;
   border-left: 1px solid var(--border);
-}
-
-.credential-account-usage [data-slot="credential-usage-summary"] {
-  border-top: 0;
-  padding-top: 0;
 }
 
 /* Preserve the two-row quota layout: monthly first, purchased and free credits side by side. */
@@ -131,16 +148,32 @@
   margin: 0 16px 12px;
 }
 
+/* Narrow cards move the usage panel below the identity column. */
+/* 窄卡片将用量面板移到身份列下方。 */
 @container credential-account (max-width: 600px) {
   .credential-account-body {
     grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
+    gap: 12px;
+  }
+
+  .credential-account-body .credential-account-identity {
+    align-self: start;
   }
 
   .credential-account-body .credential-account-usage {
     border-left: 0;
     border-top: 1px solid var(--border);
     padding: 12px 0 0;
+  }
+}
+
+/* Very narrow cards stack every usage metric vertically instead of squeezing side-by-side columns. */
+/* 极窄卡片将每项用量指标纵向排列，不再挤压并排的列。 */
+@container credential-account (max-width: 380px) {
+  .credential-account-usage [data-slot="credential-credit-balances"],
+  .credential-account-usage [data-slot="credential-usage-bucket-row"] {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
   }
 }
 
@@ -166,7 +199,7 @@
   gap: 8px;
   padding: 10px 0;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .settings-provider-list,
@@ -179,7 +212,7 @@
 .settings-validation-error {
   margin: 0;
   color: var(--destructive);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 650;
 }
 
@@ -214,7 +247,7 @@
   align-items: flex-start;
   gap: 8px;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
 }
 
@@ -231,7 +264,7 @@
 
 .settings-checkbox-line small {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -253,7 +286,7 @@
 
 .settings-split-column-title {
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 700;
 }
 
@@ -328,7 +361,7 @@
   display: block;
   margin-top: 2px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .settings-model-toolbar {
@@ -367,7 +400,7 @@
 
 .settings-model-filter-summary {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .settings-model-sticky-controls {
@@ -418,7 +451,7 @@
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
 }
 
 .settings-model-route-tabs-list {
@@ -438,7 +471,7 @@
   flex: 0 0 auto;
   overflow: hidden;
   padding-inline: 6px;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1;
   text-overflow: ellipsis;
 }
@@ -479,7 +512,7 @@
   gap: 5px;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -493,7 +526,7 @@
   overflow: hidden;
   color: var(--muted-foreground);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--vcn-font-size-2xs);
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -517,7 +550,7 @@
   justify-content: space-between;
   gap: 6px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   white-space: normal;
 }
 
@@ -554,7 +587,7 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--vcn-radius-sm);
   background: var(--background);
   color: var(--foreground);
 }
@@ -622,7 +655,7 @@
   display: grid;
   gap: 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--vcn-radius-lg);
   padding: 14px;
   background: var(--background);
 }
@@ -644,7 +677,7 @@
 .settings-provider-tool-defaults-header small,
 .settings-provider-tool-defaults-grid > label > span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .settings-provider-tool-defaults-grid {
@@ -679,7 +712,7 @@
 .settings-route-index,
 .settings-route-separator {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 700;
 }
 
@@ -699,7 +732,7 @@
 
 .settings-route-main small {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .capability-target-choice {
@@ -731,7 +764,7 @@
 .settings-media-understanding-status {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .settings-media-mode-field {
@@ -742,7 +775,7 @@
 
 .settings-media-mode-field > span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .settings-media-mode-options {
@@ -777,7 +810,7 @@
 .settings-retry-toggle small {
   display: block;
   margin-top: 2px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.5;
   color: var(--muted-foreground);
 }
@@ -814,14 +847,14 @@
 .context-basics-tabs > section > section > fieldset:not(.settings-form-grid),
 .context-basics-tabs .settings-retry-section > fieldset > article {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   padding: 16px;
   background: var(--card);
 }
 
 .context-basics-tabs > section > section > fieldset > legend,
 .context-basics-tabs .settings-retry-section > fieldset > article > strong {
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   font-weight: 600;
   color: var(--foreground);
 }
@@ -840,7 +873,7 @@
   grid-template-columns: 64px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .provider-management-directory-content,
@@ -888,13 +921,13 @@
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .settings-model-route-accounts small,
 .settings-model-purpose-summary {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .settings-model-purpose-summary {
@@ -929,7 +962,7 @@
   padding-block: 10px;
   border-bottom: 1px solid var(--border);
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   text-align: center;
 }
 
@@ -944,14 +977,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   font-weight: 600;
 }
 
 .settings-model-catalog-row .settings-model-id {
   flex: 1 1 auto;
   max-width: 100%;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .settings-model-catalog-meta {
@@ -960,7 +993,7 @@
   min-width: 0;
   gap: 10px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .settings-model-catalog-meta > span:last-child { flex: 0 0 auto; white-space: nowrap; border-left: 1px solid var(--border); padding-left: 10px; }
@@ -968,11 +1001,11 @@
 .settings-model-purpose-cell { display: flex; align-items: center; justify-content: center; color: var(--muted-foreground); min-width: 0; }
 .settings-model-extension-cell { flex-direction: column; gap: 5px; }
 .settings-model-extension-toggle { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
-.settings-model-extension-toggle small { max-width: 76px; color: var(--muted-foreground); font-size: 10px; text-align: center; white-space: normal; }
-.settings-model-pagination { border-top: 1px solid var(--border); padding: 10px 16px; color: var(--muted-foreground); font-size: 12px; }
+.settings-model-extension-toggle small { max-width: 76px; color: var(--muted-foreground); font-size: var(--vcn-font-size-2xs); text-align: center; white-space: normal; }
+.settings-model-pagination { border-top: 1px solid var(--border); padding: 10px 16px; color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
 .settings-model-purpose-label { display: none; }
 .settings-model-catalog-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
-.settings-model-catalog-actions > button { padding-inline: 9px; font-size: 12px; }
+.settings-model-catalog-actions > button { padding-inline: 9px; font-size: var(--vcn-font-size-sm); }
 
 /* Keep route metadata complete in a dedicated window with one scrollable body. */
 /* 将完整路由元数据放在独立窗口中，正文仅使用一个滚动区域。 */
@@ -981,12 +1014,12 @@
 .settings-model-access-route + .settings-model-access-route { border-top: 1px solid var(--border); }
 .settings-model-access-route-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .settings-model-access-route-heading > div:first-child { display: grid; gap: 3px; flex: 1; min-width: 160px; }
-.settings-model-access-route-heading > div:first-child > span { color: var(--muted-foreground); font-size: 12px; }
+.settings-model-access-route-heading > div:first-child > span { color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
 .settings-model-access-metadata { display: grid; gap: 10px; margin: 16px 0; }
 .settings-model-access-metadata > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
 .settings-model-access-metadata dt,
-.settings-model-access-accounts > span { color: var(--muted-foreground); font-size: 12px; }
-.settings-model-access-metadata dd { margin: 0; font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.settings-model-access-accounts > span { color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
+.settings-model-access-metadata dd { margin: 0; font-family: var(--font-mono); font-size: var(--vcn-font-size-sm); overflow-wrap: anywhere; }
 .settings-model-access-accounts .settings-model-route-accounts { padding-inline: 0; }
 
 @container model-catalog (max-width: 660px) {
@@ -994,7 +1027,7 @@
   .settings-model-catalog-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 12px; }
   .settings-model-catalog-row .settings-model-row-main { grid-column: 1 / -1; }
   .settings-model-purpose-cell { flex-direction: column; gap: 9px; align-self: start; }
-  .settings-model-purpose-label { display: block; font-size: 11px; text-align: center; }
+  .settings-model-purpose-label { display: block; font-size: var(--vcn-font-size-xs); text-align: center; }
   .settings-model-catalog-actions { grid-column: 1 / -1; border-top: 1px solid var(--border); padding-top: 6px; }
 }
 
@@ -1002,7 +1035,7 @@
   border: 1px solid var(--border);
   padding: 10px;
   border-radius: var(--radius-md);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 @container (max-width: 560px) {
@@ -1021,14 +1054,14 @@
   flex-wrap: wrap;
   gap: 10px 14px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   padding: 12px;
 }
 
 .settings-modality-box legend {
   padding: 0 4px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 700;
 }
 
@@ -1047,7 +1080,7 @@
   display: grid;
   gap: 4px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--card);
   color: var(--foreground);
   padding: 10px 12px;
@@ -1066,7 +1099,7 @@
 
 .settings-picker-row span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 @media (max-width: 760px) {
@@ -1104,7 +1137,7 @@
 .settings-route-header p {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .settings-route-groups {
@@ -1141,11 +1174,11 @@
   min-height: 26px;
   padding: 3px 8px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: transparent;
   color: var(--muted-foreground);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   cursor: pointer;
 }
 
@@ -1172,7 +1205,7 @@
   min-height: 30px;
   padding: 5px 7px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   cursor: pointer;
 }
 
@@ -1188,7 +1221,7 @@
 .settings-route-option span {
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;

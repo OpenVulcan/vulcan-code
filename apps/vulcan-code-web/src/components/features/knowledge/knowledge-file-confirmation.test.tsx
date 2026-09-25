@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type { KnowledgeFileDisposition, KnowledgeFilePreview, KnowledgeFilePreviewEntry, KnowledgeIgnoredFile } from "@/types";
-import { KnowledgeFileConfirmationDialog } from "./KnowledgeFileConfirmationDialog";
+import { KnowledgeFileConfirmationDialog } from "./knowledge-file-confirmation-dialog";
 import { previewKnowledgeImport, previewKnowledgeDisplay, updateKnowledgeIgnoredFiles } from "@/service/knowledge-base-service";
 
 vi.mock("@/service/knowledge-base-service", () => ({ previewKnowledgeImport: vi.fn(), previewKnowledgeDisplay: vi.fn(), updateKnowledgeIgnoredFiles: vi.fn() }));

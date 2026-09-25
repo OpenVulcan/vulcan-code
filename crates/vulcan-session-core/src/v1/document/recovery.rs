@@ -7,6 +7,108 @@ use crate::v1::collaboration::{
 };
 
 impl SessionDocument {
+    /// Abandons the open turn after the host proves that no physical execution or preparation owns it.
+    /// 宿主证明没有物理执行或准备拥有当前开放回合后，将其结算为中断。
+    /// `now_ms` timestamps API cleanup and task results; returns the closure sequence atomically.
+    /// `now_ms` 标记 API 清理和任务结果时间；原子返回闭合序号。
+    /// Unlike a user stop, process loss must retain an abandoned outcome and never fabricate a reply.
+    /// 与用户停止不同，进程丢失必须保留中断结果，绝不伪造回复。
+    pub fn abandon_unowned_execution(&mut self, now_ms: i64) -> Result<Seq, DomainError> {
+        let start_seq = self.require_open_turn()?.start_seq;
+        let started_at_ms = self
+            .events
+            .iter()
+            .find(|event| event.seq == start_seq)
+            .ok_or_else(|| DomainError::reference("unowned_turn_start", start_seq.value()))?
+            .created_at_ms;
+        self.apply_atomic_transition(|document| {
+            if document.active_api().is_some() {
+                document.interrupt_active_api_state(
+                    now_ms,
+                    ApiEndReason::ProcessInterrupted,
+                    false,
+                )?;
+            }
+            document.close_turn(
+                TurnOutcome::Abandoned,
+                now_ms.saturating_sub(started_at_ms).max(0),
+                now_ms,
+            )
+        })
+    }
+
+    /// Admits `submission` after the host proves execution is idle under exclusive admission.
+    /// 宿主在独占准入下证明执行空闲后，接纳 `submission`。
+    /// `now_ms` timestamps the new input; returns its receipt or leaves all old facts unchanged on error.
+    /// `now_ms` 标记新输入时间；返回准入回执，失败则保留全部旧事实。
+    /// An open journal is not a live worker. Preserve retries and stop only a superseded business turn.
+    /// 开放日志不代表活跃工作器；保留重试，仅停止被新输入取代的业务回合。
+    pub fn submit_root_input_after_execution_ended(
+        &mut self,
+        submission: ClientInputSubmission,
+        now_ms: i64,
+    ) -> Result<IdempotentMutation<TurnId>, DomainError> {
+        // Stage validation, old closure and the new root together; invalid input cannot destroy Continue.
+        // 将校验、旧回合闭合和新根一起暂存；无效输入不能破坏继续能力。
+        self.apply_atomic_transition(move |document| {
+            match document.submit_root_input(submission.clone(), now_ms) {
+                Ok(receipt) => return Ok(receipt),
+                Err(DomainError::RootInputWhileTurnOpen { .. }) => {}
+                Err(error) => return Err(error),
+            }
+            // Auxiliary executions and undelivered children retain their exact settlement owners.
+            // 辅助执行和未交付子任务保留各自精确结算所有者。
+            let turn = document.require_open_turn()?.clone();
+            if matches!(
+                turn.origin,
+                TurnOrigin::QuestionExecution | TurnOrigin::ContextMaintenance
+            ) || !document
+                .completion_obligations(turn.turn_id)
+                .open_child_task_ids
+                .is_empty()
+            {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "root_input.unsettled_execution_owner",
+                });
+            }
+            // Last durable observation excludes offline time from the stopped execution's duration.
+            // 最后可靠观察时间避免将离线时间计入已停止执行时长。
+            let observed_at_ms = document
+                .events
+                .iter()
+                .filter(|event| event.turn_id == Some(turn.turn_id))
+                .map(|event| event.updated_at_ms)
+                .max()
+                .unwrap_or(document.metadata.updated_at_ms);
+            // Resolve the start by stable sequence instead of assuming a mutable event position.
+            // 按稳定序号解析开始时间，不假设可变事件位置。
+            let started_at_ms = document
+                .events
+                .iter()
+                .find(|event| event.seq == turn.start_seq)
+                .ok_or(DomainError::ReferenceViolation {
+                    kind: "turn_start_event",
+                    value: turn.start_seq.value(),
+                })?
+                .created_at_ms;
+            if document.active_api().is_some() {
+                // New user input supersedes even an undispatched Continue; cold loading alone does not.
+                // 新用户输入也取代尚未派发的继续请求；单纯冷加载则不取代它。
+                document.interrupt_active_api_state(
+                    observed_at_ms,
+                    ApiEndReason::ProcessInterrupted,
+                    false,
+                )?;
+            }
+            document.close_turn(
+                TurnOutcome::Stopped,
+                observed_at_ms.saturating_sub(started_at_ms).max(0),
+                now_ms,
+            )?;
+            document.submit_root_input(submission, now_ms)
+        })
+    }
+
     /// Restores loaded parts, correcting only paired legacy goal edits in the mutable tail.
     /// 恢复已加载部件，仅纠正可写尾段内成对的旧目标编辑事件。
     /// Inputs are the same exact parts as `from_parts`; returns a strictly validated dirty candidate.

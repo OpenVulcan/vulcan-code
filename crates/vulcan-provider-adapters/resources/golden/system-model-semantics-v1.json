@@ -10074,20 +10074,51 @@
       {
         "capabilities": {
           "context_limit": 1000000,
-          "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19",
-          "output_limit": 384000,
+          "evidence_revision": "tokenrhythm.deepseek-flash-responses.2026-09-24",
+          "input_resources": [
+            "image"
+          ],
+          "model_parameters": [],
+          "operations": [
+            "conversation_respond"
+          ],
+          "output_limit": 393216,
+          "output_resources": [],
+          "prompt_cache": {
+            "provider_default_behavior": "host-managed prompt cache injection is not available",
+            "supported_ttl_options": [],
+            "supports_managed_explicit": false
+          },
+          "provider_native_tools": [],
+          "reasoning": "native",
           "reasoning_control": "toggle",
           "reasoning_efforts": [
             "none",
-            "high"
+            "high",
+            "low",
+            "max"
           ]
         },
+        "input_resource_constraints": [
+          {
+            "accepted_mime_types": [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp"
+            ],
+            "max_bytes": 33554432,
+            "max_count": 600,
+            "reference_policy": "local_only",
+            "resource_kind": "image"
+          }
+        ],
         "matcher": {
           "kind": "exact",
-          "value": "deepseek-v4-flash"
+          "value": "deepseek-flash"
         },
         "request_profile_refs": [],
-        "rule_id": "deepseek-v4-flash",
+        "rule_id": "deepseek-flash",
         "scope": {
           "credential_profile_ids": [
             "api-key"
@@ -10096,9 +10127,9 @@
             "public-api"
           ]
         },
-        "selected_protocol": "anthropic-messages.v1",
+        "selected_protocol": "openai-responses.v1",
         "supported_protocols": [
-          "anthropic-messages.v1"
+          "openai-responses.v1"
         ]
       },
       {
@@ -10117,13 +10148,6 @@
         "matcher": {
           "kind": "exact",
           "value": "deepseek-v4-flash-0731"
-        },
-        "protocol_capabilities": {
-          "openai-responses.v1": {
-            "provider_native_tools": [
-              "web_search"
-            ]
-          }
         },
         "request_profile_refs": [],
         "rule_id": "deepseek-v4-flash-0731",
@@ -10145,36 +10169,6 @@
           "context_limit": 1000000,
           "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19",
           "output_limit": 384000,
-          "reasoning_control": "toggle",
-          "reasoning_efforts": [
-            "none",
-            "high"
-          ]
-        },
-        "matcher": {
-          "kind": "exact",
-          "value": "deepseek-v4-pro"
-        },
-        "request_profile_refs": [],
-        "rule_id": "deepseek-v4-pro",
-        "scope": {
-          "credential_profile_ids": [
-            "api-key"
-          ],
-          "service_entry_ids": [
-            "public-api"
-          ]
-        },
-        "selected_protocol": "anthropic-messages.v1",
-        "supported_protocols": [
-          "anthropic-messages.v1"
-        ]
-      },
-      {
-        "capabilities": {
-          "context_limit": 1000000,
-          "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19",
-          "output_limit": 384000,
           "reasoning_control": "effort_selection",
           "reasoning_efforts": [
             "none",
@@ -10189,33 +10183,6 @@
         },
         "request_profile_refs": [],
         "rule_id": "deepseek-v4-pro-0813",
-        "scope": {
-          "credential_profile_ids": [
-            "api-key"
-          ],
-          "service_entry_ids": [
-            "public-api"
-          ]
-        },
-        "selected_protocol": "anthropic-messages.v1",
-        "supported_protocols": [
-          "anthropic-messages.v1"
-        ]
-      },
-      {
-        "capabilities": {
-          "context_limit": 1000000,
-          "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19",
-          "output_limit": 128000,
-          "reasoning_control": "fixed_on",
-          "reasoning_efforts": []
-        },
-        "matcher": {
-          "kind": "exact",
-          "value": "glm-5"
-        },
-        "request_profile_refs": [],
-        "rule_id": "glm-5",
         "scope": {
           "credential_profile_ids": [
             "api-key"
@@ -10288,21 +10255,21 @@
       },
       {
         "capabilities": {
-          "context_limit": 262144,
-          "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19",
-          "input_resources": [
-            "image"
-          ],
-          "output_limit": 65536,
+          "context_limit": 1000000,
+          "evidence_revision": "tokenrhythm.glm-5-3.2026-09-24",
+          "output_limit": 128000,
           "reasoning_control": "fixed_on",
-          "reasoning_efforts": []
+          "reasoning_efforts": [
+            "high",
+            "max"
+          ]
         },
         "matcher": {
           "kind": "exact",
-          "value": "kimi-k2.5"
+          "value": "glm-5.3"
         },
         "request_profile_refs": [],
-        "rule_id": "kimi-k2-5",
+        "rule_id": "glm-5-3",
         "scope": {
           "credential_profile_ids": [
             "api-key"
@@ -10314,6 +10281,76 @@
         "selected_protocol": "anthropic-messages.v1",
         "supported_protocols": [
           "anthropic-messages.v1"
+        ]
+      },
+      {
+        "capabilities": {
+          "context_limit": 1000000,
+          "evidence_revision": "tokenrhythm.glm-5-3.2026-09-24",
+          "input_resources": [
+            "image"
+          ],
+          "output_limit": 128000,
+          "reasoning_control": "fixed_on",
+          "reasoning_efforts": [
+            "high",
+            "max"
+          ]
+        },
+        "matcher": {
+          "kind": "exact",
+          "value": "glm-5.3-flash"
+        },
+        "request_profile_refs": [
+          "tokenrhythm.chat.reasoning.glm52.v1"
+        ],
+        "rule_id": "glm-5-3-flash",
+        "scope": {
+          "credential_profile_ids": [
+            "api-key"
+          ],
+          "service_entry_ids": [
+            "public-api"
+          ]
+        },
+        "selected_protocol": "openai-chat-completions.v1",
+        "supported_protocols": [
+          "openai-chat-completions.v1"
+        ]
+      },
+      {
+        "capabilities": {
+          "context_limit": 1000000,
+          "evidence_revision": "tokenrhythm.glm-5-3.2026-09-24",
+          "input_resources": [
+            "image"
+          ],
+          "output_limit": 128000,
+          "reasoning_control": "fixed_on",
+          "reasoning_efforts": [
+            "high",
+            "max"
+          ]
+        },
+        "matcher": {
+          "kind": "exact",
+          "value": "glm-5.3-flashx"
+        },
+        "request_profile_refs": [
+          "tokenrhythm.chat.reasoning.glm52.v1"
+        ],
+        "rule_id": "glm-5-3-flashx",
+        "scope": {
+          "credential_profile_ids": [
+            "api-key"
+          ],
+          "service_entry_ids": [
+            "public-api"
+          ]
+        },
+        "selected_protocol": "openai-chat-completions.v1",
+        "supported_protocols": [
+          "openai-chat-completions.v1"
         ]
       },
       {
@@ -10380,6 +10417,38 @@
       },
       {
         "capabilities": {
+          "context_limit": 1000000,
+          "evidence_revision": "tokenrhythm.kimi-k3.2026-09-24",
+          "input_resources": [
+            "image"
+          ],
+          "output_limit": 131072,
+          "reasoning_control": "fixed_on",
+          "reasoning_efforts": []
+        },
+        "matcher": {
+          "kind": "exact",
+          "value": "kimi-k3"
+        },
+        "request_profile_refs": [
+          "tokenrhythm.chat.reasoning.fixed.v1"
+        ],
+        "rule_id": "kimi-k3",
+        "scope": {
+          "credential_profile_ids": [
+            "api-key"
+          ],
+          "service_entry_ids": [
+            "public-api"
+          ]
+        },
+        "selected_protocol": "openai-chat-completions.v1",
+        "supported_protocols": [
+          "openai-chat-completions.v1"
+        ]
+      },
+      {
+        "capabilities": {
           "context_limit": 262144,
           "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19",
           "output_limit": 262144,
@@ -10406,6 +10475,66 @@
         "selected_protocol": "anthropic-messages.v1",
         "supported_protocols": [
           "anthropic-messages.v1"
+        ]
+      },
+      {
+        "capabilities": {
+          "context_limit": 1000000,
+          "evidence_revision": "tokenrhythm.mimo-v2-6.2026-09-24",
+          "output_limit": 128000,
+          "reasoning_control": "toggle",
+          "reasoning_efforts": [
+            "none",
+            "high"
+          ]
+        },
+        "matcher": {
+          "kind": "exact",
+          "value": "mimo-v2.6-flash"
+        },
+        "request_profile_refs": [],
+        "rule_id": "mimo-v2-6-flash",
+        "scope": {
+          "credential_profile_ids": [
+            "api-key"
+          ],
+          "service_entry_ids": [
+            "public-api"
+          ]
+        },
+        "selected_protocol": "openai-chat-completions.v1",
+        "supported_protocols": [
+          "openai-chat-completions.v1"
+        ]
+      },
+      {
+        "capabilities": {
+          "context_limit": 1000000,
+          "evidence_revision": "tokenrhythm.mimo-v2-6.2026-09-24",
+          "output_limit": 128000,
+          "reasoning_control": "toggle",
+          "reasoning_efforts": [
+            "none",
+            "high"
+          ]
+        },
+        "matcher": {
+          "kind": "exact",
+          "value": "mimo-v2.6-pro"
+        },
+        "request_profile_refs": [],
+        "rule_id": "mimo-v2-6-pro",
+        "scope": {
+          "credential_profile_ids": [
+            "api-key"
+          ],
+          "service_entry_ids": [
+            "public-api"
+          ]
+        },
+        "selected_protocol": "openai-chat-completions.v1",
+        "supported_protocols": [
+          "openai-chat-completions.v1"
         ]
       },
       {
@@ -10511,6 +10640,39 @@
       {
         "capabilities": {
           "context_limit": 1000000,
+          "evidence_revision": "tokenrhythm.qwen-flash-27b.2026-09-24",
+          "input_resources": [
+            "image"
+          ],
+          "output_limit": 131072,
+          "reasoning_control": "toggle",
+          "reasoning_efforts": [
+            "none",
+            "high"
+          ]
+        },
+        "matcher": {
+          "kind": "exact",
+          "value": "qwen3.7-flash"
+        },
+        "request_profile_refs": [],
+        "rule_id": "qwen3-7-flash",
+        "scope": {
+          "credential_profile_ids": [
+            "api-key"
+          ],
+          "service_entry_ids": [
+            "public-api"
+          ]
+        },
+        "selected_protocol": "openai-responses.v1",
+        "supported_protocols": [
+          "openai-responses.v1"
+        ]
+      },
+      {
+        "capabilities": {
+          "context_limit": 1000000,
           "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19",
           "output_limit": 131072,
           "reasoning_control": "toggle",
@@ -10525,6 +10687,72 @@
         },
         "request_profile_refs": [],
         "rule_id": "qwen3-7-max",
+        "scope": {
+          "credential_profile_ids": [
+            "api-key"
+          ],
+          "service_entry_ids": [
+            "public-api"
+          ]
+        },
+        "selected_protocol": "openai-responses.v1",
+        "supported_protocols": [
+          "openai-responses.v1"
+        ]
+      },
+      {
+        "capabilities": {
+          "context_limit": 1000000,
+          "evidence_revision": "tokenrhythm.qwen-flash-27b.2026-09-24",
+          "input_resources": [
+            "image"
+          ],
+          "output_limit": 131072,
+          "reasoning_control": "toggle",
+          "reasoning_efforts": [
+            "none",
+            "high"
+          ]
+        },
+        "matcher": {
+          "kind": "exact",
+          "value": "qwen3.8-27b"
+        },
+        "request_profile_refs": [],
+        "rule_id": "qwen3-8-27b",
+        "scope": {
+          "credential_profile_ids": [
+            "api-key"
+          ],
+          "service_entry_ids": [
+            "public-api"
+          ]
+        },
+        "selected_protocol": "openai-responses.v1",
+        "supported_protocols": [
+          "openai-responses.v1"
+        ]
+      },
+      {
+        "capabilities": {
+          "context_limit": 1000000,
+          "evidence_revision": "tokenrhythm.qwen-flash-27b.2026-09-24",
+          "input_resources": [
+            "image"
+          ],
+          "output_limit": 131072,
+          "reasoning_control": "toggle",
+          "reasoning_efforts": [
+            "none",
+            "high"
+          ]
+        },
+        "matcher": {
+          "kind": "exact",
+          "value": "qwen3.8-flash"
+        },
+        "request_profile_refs": [],
+        "rule_id": "qwen3-8-flash",
         "scope": {
           "credential_profile_ids": [
             "api-key"

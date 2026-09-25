@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import { useI18n } from "@/i18n"
+import { useI18n, formatMessage, translateActive } from "@/i18n"
 import { savePublicAiModelOverrides } from "@/service/settings-actions-service"
 import type {
   PublicAiModel,
@@ -183,7 +183,7 @@ export function PublicAiModelOverridesDialog(props: {
             modelParameters[definition.id] = { type: "string", value: raw }
             break
           default:
-            throw new Error(`${definition.display_name} 的复杂参数编辑器尚未注册。`)
+            throw new Error(formatMessage(translateActive("settings.modelOverrides.editorMissing"), { name: definition.display_name }))
         }
       }
       // overrides omits provider-default fields so an empty record restores inheritance.

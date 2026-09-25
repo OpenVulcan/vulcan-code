@@ -8,6 +8,20 @@ import { expect, it } from "vitest";
 const load = createRequire(import.meta.url);
 const postcss = createRequire(load.resolve("vite"))("postcss");
 
+// tokens maps each foundation custom property to its declared root value.
+// tokens 将每个基础自定义属性映射到其根声明取值。
+const tokens = new Map<string, string>();
+postcss.parse(readFileSync(resolve("src/styles/foundations/tokens.css"), "utf8")).walkDecls((decl: { prop: string; value: string; parent: { selector?: string } }) => {
+  if (decl.prop.startsWith("--") && decl.parent.selector === ":root") tokens.set(decl.prop, decl.value);
+});
+
+// resolveToken replaces a whole-value var(--token) with its foundation value; other values pass through.
+// resolveToken 将整值 var(--token) 替换为基础令牌取值；其他取值原样返回。
+function resolveToken(value: string): string {
+  const match = /^var\((--[\w-]+)\)$/.exec(value.trim());
+  return match ? tokens.get(match[1]) ?? value : value;
+}
+
 // desktopRules returns actual top-level rules in source order, excluding viewport-dependent branches.
 // desktopRules 按源码顺序返回实际顶层规则，排除依赖视口的分支。
 // Parameters: name selects a real stylesheet. Returns: desktop CSS for jsdom's limited cascade engine.
@@ -40,7 +54,7 @@ it("keeps the absolute thinking trigger inside a tool row without increasing its
     // 参数选定精确源码规则与字段；返回数值，规则被移除时直接失败。
     const declaration = (selector: string, property: string): number => {
       const rule = rules.nodes.find((node: { selector: string }) => node.selector === selector);
-      return Number.parseFloat(rule.nodes.find((node: { prop: string }) => node.prop === property).value);
+      return Number.parseFloat(resolveToken(rule.nodes.find((node: { prop: string }) => node.prop === property).value));
     };
     const summaryHeight = declaration(".tool-presentation-card", "font-size") * declaration(".tool-presentation-summary", "line-height") + 2 * declaration(".tool-presentation-summary", "padding");
     const trigger = getComputedStyle(row.querySelector(".thinking-preview-trigger")!);
@@ -50,7 +64,7 @@ it("keeps the absolute thinking trigger inside a tool row without increasing its
   } finally { row.remove(); style.remove(); }
 });
 
-it.each(["known", "generic", "v1", "skill"])("keeps %s payload shells unbounded while the inner source remains the scrolling viewport", (kind) => {
+it.each(["known", "generic", "skill"])("keeps %s payload shells unbounded while the inner source remains the scrolling viewport", (kind) => {
   // style follows the production Markdown-before-tool cascade.
   // style 遵循生产环境先 Markdown、后工具的层叠顺序。
   const style = document.createElement("style");
@@ -62,10 +76,10 @@ it.each(["known", "generic", "v1", "skill"])("keeps %s payload shells unbounded 
   const tabs = kind === "skill" ? panel : `<div class="model-extension-tool-payloads">${panel}</div>`;
   const shell = document.createElement("div");
   shell.className = "tool-presentation-card";
-  shell.innerHTML = `<div class="conversation-collapsible-motion open"><div class="conversation-collapsible-motion-inner">${kind === "v1" ? `<div class="v1-tool-card-detail">${tabs}</div>` : tabs}</div></div>`;
+  shell.innerHTML = `<div class="conversation-collapsible-motion open"><div class="conversation-collapsible-motion-inner">${tabs}</div></div>`;
   document.head.appendChild(style); document.body.appendChild(shell);
   try {
-    for (const element of shell.querySelectorAll(".model-extension-tool-payloads, .model-extension-payload-body, .v1-tool-card-detail")) {
+    for (const element of shell.querySelectorAll(".model-extension-tool-payloads, .model-extension-payload-body")) {
       const computed = getComputedStyle(element);
       expect(["", "none"]).toContain(computed.maxHeight);
       expect(["", "visible"]).toContain(computed.overflow);

@@ -238,6 +238,9 @@ pub enum CollaborationDeliveryFailureReason {
     /// The target locator no longer resolves to a live document.
     /// 目标定位已无法解析到活动文档。
     TargetMissing,
+    /// The accepted target work lost its physical execution and cannot produce a result.
+    /// 已接纳目标工作丢失物理执行，无法再产出结果。
+    TargetExecutionLost,
     /// The source document could not be read or committed.
     /// 来源文档无法读取或可靠提交。
     SourceUnavailable,
@@ -4593,8 +4596,10 @@ pub fn validate_child_task_record(
                 || (record.active_at_ms.is_none()
                     && !matches!(
                         record.terminal_outcome,
-                        Some(CollaborationChildTaskTerminalOutcome::Failed
-                            | CollaborationChildTaskTerminalOutcome::Stopped)
+                        Some(
+                            CollaborationChildTaskTerminalOutcome::Failed
+                                | CollaborationChildTaskTerminalOutcome::Stopped
+                        )
                     ))
             {
                 return Err(DomainError::InvalidStatistics {

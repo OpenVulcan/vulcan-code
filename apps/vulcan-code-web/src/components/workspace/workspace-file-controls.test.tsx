@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WorkspaceFileTreeDrawer, type WorkspaceFileTreeNode } from "./WorkspaceFileTreeDrawer";
+import { WorkspaceFileTreeDrawer, type WorkspaceFileTreeNode } from "./workspace-file-tree-drawer";
 import { WorkspaceFilePreview } from "./workspace-files-preview";
 import { useWorkspaceFilesRequestOwnership, type WorkspaceFilesRequestOwnership } from "./workspace-files-panel-request-ownership";
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));

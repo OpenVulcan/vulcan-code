@@ -50,7 +50,7 @@ import type {
 } from "@/types";
 import { useI18n } from "@/i18n";
 import { ConversationTextContextMenu } from "@/components/conversation/conversation-text-context-menu";
-import { isElectronRuntime } from "@/shell";
+import { isElectronRuntime } from "@/host-shell";
 import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
 import {
   ConversationTimelineProjectionStore,

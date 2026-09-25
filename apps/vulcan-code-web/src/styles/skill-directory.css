@@ -20,7 +20,7 @@
 .skill-warning-row {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--card);
   padding: 11px;
 }
@@ -44,7 +44,7 @@
 .skill-tool-row span {
   min-width: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   overflow-wrap: anywhere;
 }
 
@@ -61,11 +61,11 @@
   min-width: 0;
   height: 36px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: var(--background);
   color: var(--foreground);
   padding: 0 12px;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .agent-catalog-search-input::placeholder {
@@ -81,7 +81,7 @@
 .agent-catalog-notice {
   min-width: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   overflow-wrap: anywhere;
 }
 
@@ -89,11 +89,11 @@
   min-width: 0;
   height: 32px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--background);
   color: var(--foreground);
   padding: 0 9px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-import-inline-form input:first-child {
@@ -129,9 +129,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   color: white;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-editor-form {
@@ -204,7 +204,7 @@
 .agent-editor-grid span,
 .agent-editor-checkbox span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-editor-color-picker {
@@ -220,7 +220,7 @@
   align-items: center;
   gap: 7px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--background);
   color: var(--foreground);
   padding: 0 9px;
@@ -298,24 +298,24 @@
 }
 
 .agent-tool-policy-toolbar strong {
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .agent-tool-policy-toolbar span,
 .agent-tool-policy-main span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-tool-policy-toolbar input {
   min-width: 0;
   height: 32px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--background);
   color: var(--foreground);
   padding: 0 9px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-tool-policy-list {
@@ -354,7 +354,7 @@
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 /* Expand technical tool descriptions on demand without filling the policy selector. */
@@ -362,7 +362,7 @@
 .agent-policy-description {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-policy-description summary {
@@ -383,7 +383,7 @@
   justify-content: flex-end;
   gap: 8px;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   white-space: nowrap;
 }
 
@@ -411,7 +411,7 @@
   gap: 8px;
   flex-wrap: wrap;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-editor-context span,
@@ -435,11 +435,11 @@
   min-width: 0;
   height: 32px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--background);
   color: var(--foreground);
   padding: 0 9px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .skill-toolbar input {
@@ -459,18 +459,18 @@
 
 .lua-skill-install-field span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .lua-skill-install-field input {
   min-width: 0;
   height: 34px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--background);
   color: var(--foreground);
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-skill-page-body > .skill-warning-list {
@@ -514,14 +514,14 @@
 }
 
 .lua-settings-toolbar h3 {
-  font-size: 16px;
+  font-size: var(--vcn-font-size-xl);
 }
 
 .lua-settings-toolbar p,
 .lua-settings-section > p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.5;
 }
 
@@ -530,11 +530,11 @@
   align-items: center;
   min-height: 28px;
   border: 1px solid color-mix(in srgb, var(--vcn-content-warning) 44%, var(--border));
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--vcn-status-warning-background);
   color: var(--vcn-content-warning);
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 650;
   white-space: nowrap;
 }
@@ -551,13 +551,13 @@
   display: grid;
   gap: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--card);
   padding: 14px;
 }
 
 .lua-settings-section h4 {
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 700;
 }
 
@@ -575,7 +575,7 @@
 
 .lua-inference-route-row > span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
@@ -594,13 +594,13 @@
 
 .lua-settings-field > span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
 .lua-settings-field small {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.45;
 }
 
@@ -610,7 +610,7 @@
   align-items: center;
   gap: 9px;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   cursor: pointer;
 }
 
@@ -661,13 +661,13 @@
 
 .lua-managed-runtime-row-name {
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 650;
 }
 
 .lua-managed-runtime-row-version {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .lua-managed-runtime-row-action {
@@ -676,7 +676,7 @@
   align-items: center;
   gap: 10px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .lua-managed-runtime-row.unavailable .lua-managed-runtime-row-action > span {
@@ -693,7 +693,7 @@
 .lua-managed-runtime-row-progress > span,
 .lua-managed-runtime-row-progress > small {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .lua-managed-runtime-row-progress > progress {
@@ -705,9 +705,9 @@
 .lua-settings-restart-note,
 .lua-settings-feedback {
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--vcn-radius-md);
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.5;
 }
 
@@ -772,7 +772,7 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--background);
   color: var(--muted-foreground);
   padding: 0;
@@ -797,7 +797,7 @@
   width: 10px;
   height: 10px;
   border: 2px solid var(--card);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   box-shadow: 0 0 0 1px var(--border);
   pointer-events: none;
 }
@@ -822,7 +822,7 @@
   max-width: min(360px, 100%);
   color: var(--foreground);
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   font-weight: 700;
   line-height: 1.25;
   text-align: left;
@@ -853,7 +853,7 @@
 
 .agent-definition-row-badges [data-slot="badge"] {
   max-width: 160px;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .agent-definition-row-main p,
@@ -862,7 +862,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -879,7 +879,7 @@
 .vulcan-plugin-component-details {
   margin-top: 6px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .vulcan-plugin-component-details > summary {
@@ -904,7 +904,7 @@
   gap: 12px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--card);
 }
 
@@ -923,7 +923,7 @@
 .vulcan-plugin-install-heading p {
   margin: 3px 0 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .vulcan-plugin-install-input-row input {
@@ -936,7 +936,7 @@
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--background);
 }
 
@@ -965,7 +965,7 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.5;
 }
 
@@ -982,11 +982,11 @@
   gap: 6px;
   margin: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--destructive) 6%, var(--background));
   padding: 10px;
   color: var(--destructive);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-catalog-issues > div {
@@ -1015,7 +1015,7 @@
 .agent-definition-prompt-preview {
   margin-top: 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   padding: 14px;
 }
 
@@ -1028,13 +1028,13 @@
 .agent-skill-editor-body fieldset {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--vcn-radius-md);
   padding: 12px;
 }
 
 .agent-skill-editor-body legend {
   padding: 0 6px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 700;
 }
 
@@ -1043,14 +1043,14 @@
   display: grid;
   gap: 5px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-skill-source-editor textarea {
   min-height: 360px;
   resize: vertical;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   tab-size: 2;
 }
 
@@ -1095,7 +1095,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9px;
+  border-radius: var(--vcn-radius-md);
   color: white;
 }
 
@@ -1108,7 +1108,7 @@
 .agent-skill-category-management-row > div:nth-child(2) span,
 .agent-skill-category-management-row > span:nth-child(3) {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .agent-skill-category-management-row > div:last-child {
@@ -1123,7 +1123,7 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: transparent;
   color: var(--muted-foreground);
 }
@@ -1142,17 +1142,17 @@
   align-items: center;
   gap: 8px;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-skill-form-error {
   margin: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--destructive) 6%, var(--background));
   color: var(--destructive);
   padding: 8px 10px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 @media (max-width: 900px) {
@@ -1195,14 +1195,14 @@
 .skill-card-header strong {
   min-width: 0;
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .skill-card-header strong span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 550;
 }
 
@@ -1216,7 +1216,7 @@
 .skill-card-badges [data-slot="badge"] {
   min-width: 0;
   max-width: 100%;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   text-overflow: ellipsis;
 }
 
@@ -1227,10 +1227,10 @@
   align-items: center;
   gap: 4px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: var(--background);
   color: var(--foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 500;
   line-height: 1;
   text-decoration: none;
@@ -1262,7 +1262,7 @@
 
 .skill-card-title-meta [data-slot="badge"] {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .skill-card-enabled-badge {
@@ -1281,7 +1281,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1300,11 +1300,11 @@
 .skill-card-metrics span {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--muted);
   color: var(--muted-foreground);
   padding: 3px 7px;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.15;
 }
 
@@ -1355,7 +1355,7 @@
   display: grid;
   gap: 5px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--card);
   padding: 10px;
 }
@@ -1366,13 +1366,13 @@
 
 .lua-skill-detail-grid span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .lua-skill-detail-grid strong {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .dialog-tool-list {
@@ -1388,7 +1388,7 @@
   display: grid;
   gap: 9px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--muted);
   padding: 9px;
 }
@@ -1444,13 +1444,13 @@
 }
 
 .dialog-tool-list .skill-tool-row-header strong {
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
 }
 
 .dialog-tool-list .skill-tool-row-header > div:first-child span {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .dialog-tool-list .skill-tool-control {
@@ -1461,7 +1461,7 @@
   display: -webkit-box;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12.5px;
+  font-size: var(--vcn-font-size-md);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
@@ -1478,7 +1478,7 @@
 
 .skill-sync-status {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   text-align: right;
 }
 
@@ -1496,12 +1496,12 @@
   max-height: 240px;
   overflow: auto;
   border: 1px solid var(--vcn-border-subtle);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: var(--vcn-fill-subtle);
   color: var(--foreground);
   padding: 10px;
   font-family: "JetBrains Mono", "Cascadia Code", monospace;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   white-space: pre-wrap;
 }
 
@@ -1530,7 +1530,7 @@
   flex: 1;
   color: var(--muted-foreground);
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .lua-skill-config-fields {
@@ -1548,7 +1548,7 @@
 .lua-skill-config-group > h3 {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 650;
 }
 
@@ -1557,7 +1557,7 @@
   display: grid;
   gap: 7px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: var(--card);
   padding: 11px;
 }
@@ -1571,7 +1571,7 @@
   min-width: 0;
   color: var(--foreground);
   overflow-wrap: anywhere;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 650;
 }
 
@@ -1588,7 +1588,7 @@
 .lua-skill-config-error {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
 }
 
@@ -1603,7 +1603,7 @@
 .lua-skill-config-field-footer > span,
 .lua-skill-config-secret-status {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .lua-skill-config-warning {
@@ -1619,7 +1619,7 @@
   display: grid;
   gap: 4px;
   border: 1px solid color-mix(in srgb, var(--destructive) 34%, var(--border));
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--destructive) 7%, transparent);
   padding: 9px;
 }
@@ -1636,7 +1636,7 @@
   gap: 7px;
   color: var(--foreground);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 650;
 }
 
@@ -1648,7 +1648,7 @@
   display: grid;
   gap: 7px;
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   padding: 10px;
 }
 

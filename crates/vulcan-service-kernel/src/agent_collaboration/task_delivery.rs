@@ -21,6 +21,9 @@ pub(super) async fn deliver_recorded_task_message(
     // 解析冻结的参与者，绝不改用目标的替代回合或代际。
     let target = participants::load_participant_handle(invocation, &message.target).await?;
     let target_id = target.session_id();
+    // Span durable acceptance through scheduling; a waiter must not settle the handoff gap.
+    // 跨越可靠接纳到调度，等待者不得结算交接间隙。
+    let _dispatch_owner = dispatch_owner::DispatchOwner::acquire(&invocation.state, target_id)?;
     let source_id = invocation.source_session_id;
     let source = invocation.source_handle.clone();
     let receiver = target.clone();
@@ -113,7 +116,7 @@ pub(super) async fn deliver_recorded_task_message(
     // Wakeup is advisory; its claim independently checks the source grant and target control again.
     // 唤醒仅是提示；认领会独立再次核验来源授权和目标控制。
     if message.kind == CollaborationTaskMessageKind::TaskStart {
-        task_launch::schedule_task_wakeup(app, invocation, target_id);
+        task_launch::schedule_task_wakeup(app, invocation, target_id)?;
     }
     // The operation derives from the original intent so live retries and restart repair converge.
     // 操作从原始意图派生，使实时重试和重启修复收敛。

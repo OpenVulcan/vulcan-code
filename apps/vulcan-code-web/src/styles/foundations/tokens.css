@@ -1,0 +1,74 @@
+/* Defines the first semantic aliases for the unified visual foundation. */
+/* 定义统一视觉基础的第一批语义别名。 */
+:root {
+  --vcn-surface-page: var(--background);
+  --vcn-surface-panel: var(--card);
+  --vcn-surface-subtle: var(--muted);
+  --vcn-surface-floating: var(--popover);
+  --vcn-surface-toolbar: color-mix(in srgb, var(--muted) 34%, var(--background));
+  --vcn-content-primary: var(--foreground);
+  --vcn-content-secondary: var(--muted-foreground);
+  --vcn-content-danger: var(--destructive);
+  --vcn-content-success: hsl(142 62% 34%);
+  --vcn-content-warning: hsl(38 72% 34%);
+  --vcn-content-info: hsl(207 90% 61%);
+  --vcn-status-success-background: hsl(142 62% 34% / 0.1);
+  --vcn-status-warning-background: hsl(38 72% 46% / 0.1);
+  --vcn-border-default: var(--border);
+  --vcn-border-subtle: color-mix(in srgb, var(--border) 62%, transparent);
+  --vcn-focus-ring: var(--ring);
+  /* Terminal surfaces stay dark in both themes; xterm's theme in terminal-viewport-runtime.tsx mirrors these. */
+  /* 终端表面在两种主题下都保持深色；terminal-viewport-runtime.tsx 的 xterm 主题与此保持一致。 */
+  --vcn-terminal-surface: #111318;
+  --vcn-terminal-foreground: #f4f4f5;
+  /* Radius scale: every rounded corner in app styles picks one step; 50% and hairline values stay literal. */
+  /* 圆角阶梯：应用样式中的每个圆角都取其中一档；50% 与细线值保持字面量。 */
+  --vcn-radius-xs: 4px;
+  --vcn-radius-sm: 6px;
+  --vcn-radius-md: 8px;
+  --vcn-radius-lg: 12px;
+  --vcn-radius-xl: 16px;
+  --vcn-radius-pill: 999px;
+  /* Type scale for body and control text; display headings keep their own sizes. */
+  /* 正文与控件文字的字号阶梯；展示型标题保留各自字号。 */
+  --vcn-font-size-glyph: 8px;
+  --vcn-font-size-2xs: 10px;
+  --vcn-font-size-xs: 11px;
+  --vcn-font-size-sm: 12px;
+  --vcn-font-size-md: 13px;
+  --vcn-font-size-lg: 14px;
+  --vcn-font-size-xl: 16px;
+  --vcn-control-height-xs: 24px;
+  --vcn-control-height-sm: 28px;
+  --vcn-control-height-md: 32px;
+  --vcn-control-height-lg: 36px;
+  --vcn-space-1: 4px;
+  --vcn-space-2: 8px;
+  --vcn-space-3: 12px;
+  --vcn-space-4: 16px;
+  --vcn-space-5: 20px;
+  --vcn-page-gutter: clamp(12px, 1.6vw, 24px);
+  /* Motion: one ease-out curve and three durations shared by every transition. */
+  /* 动效：所有过渡共用一条缓出曲线与三档时长。 */
+  --vcn-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --vcn-duration-fast: 120ms;
+  --vcn-duration-base: 180ms;
+  --vcn-duration-slow: 240ms;
+  /* Exits are quicker and accelerate away; toggles settle with a slight overshoot; height changes use a symmetric curve. */
+  /* 退出更快并加速离开；开关以轻微回弹落定；高度变化使用对称曲线。 */
+  --vcn-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --vcn-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --vcn-ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --vcn-duration-instant: 80ms;
+  --vcn-duration-slower: 320ms;
+  --vcn-stagger: 32ms;
+}
+
+/* Keeps semantic status contrast readable on dark surfaces. */
+/* 保持语义状态在深色表面上的可读对比度。 */
+.dark {
+  --vcn-content-success: hsl(142 52% 58%);
+  --vcn-content-warning: hsl(42 78% 62%);
+  --vcn-status-success-background: hsl(142 52% 58% / 0.12);
+  --vcn-status-warning-background: hsl(42 78% 62% / 0.12);
+}

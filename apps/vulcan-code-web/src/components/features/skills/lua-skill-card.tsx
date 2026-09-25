@@ -313,7 +313,7 @@ function LuaSkillToolRow(props: {
   // 将已接受写入的生命周期报告给所属弹窗。
   onWritingChange: (writing: boolean) => boolean;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   // selectedState mirrors the select value immediately before backend synchronization completes.
   // selectedState 在后端同步完成前立即镜像选择框取值。
   const [selectedState, setSelectedState] = React.useState(props.tool.registrationState);
@@ -392,7 +392,7 @@ function LuaSkillToolRow(props: {
         <p>{props.tool.description || props.tool.registrationHelp}</p>
       </div>
       {syncError ? <details role="alert" className="text-xs text-destructive">
-        <summary>{locale.startsWith("zh") ? "工具状态保存失败，请重试" : "Tool state could not be saved. Retry."}</summary>
+        <summary>{t("skills.card.toolStateCouldNot")}</summary>
         <pre className="plugin-control-error-details">{syncError}</pre>
       </details> : null}
     </article>

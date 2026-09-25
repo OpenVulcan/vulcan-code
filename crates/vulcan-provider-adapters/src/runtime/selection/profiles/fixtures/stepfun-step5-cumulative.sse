@@ -1,0 +1,4 @@
+data: {"id":"stepfun-usage-regression","object":"chat.completion.chunk","created":1790274850,"model":"step-5-preview","choices":[{"index":0,"delta":{"role":"assistant","content":""}}],"usage":{"prompt_tokens":22862,"completion_tokens":0,"total_tokens":22862,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}},"agent":""}
+
+data: {"id":"stepfun-usage-regression","object":"chat.completion.chunk","created":1790274850,"model":"step-5-preview","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":"The","reasoning_content":"The"}}],"usage":{"prompt_tokens":22862,"completion_tokens":1,"total_tokens":22863,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}},"agent":""}
+

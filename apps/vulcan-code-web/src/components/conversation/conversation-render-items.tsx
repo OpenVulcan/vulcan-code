@@ -53,9 +53,7 @@ import type {
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 
-// USER_PROMPT_COLLAPSE_LINE_LIMIT limits long user bubbles before the user expands them.
-// USER_PROMPT_COLLAPSE_LINE_LIMIT 限制用户手动展开前长用户气泡的显示行数。
-const USER_PROMPT_COLLAPSE_LINE_LIMIT = 20;
+import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 
 
 // conversationPresentationMessageIsStreaming reads the explicit V1 adapter lifecycle marker.

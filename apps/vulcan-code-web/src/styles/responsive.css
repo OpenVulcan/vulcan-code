@@ -127,7 +127,7 @@
     display: block;
     margin-bottom: 6px;
     color: var(--muted-foreground);
-    font-size: 12px;
+    font-size: var(--vcn-font-size-sm);
   }
 
   .provider-responsive-table td:last-child > div {
@@ -194,7 +194,7 @@
 
   .adaptive-tool-panel:not(.conversation-session-tool-adaptive-panel) .workspace-tool-panel-menu {
     width: 100%;
-    border-radius: 10px;
+    border-radius: var(--vcn-radius-lg);
     background: var(--card);
   }
 
@@ -315,12 +315,12 @@
   }
 
   .composer-panel textarea {
-    font-size: 16px;
+    font-size: var(--vcn-font-size-xl);
     max-height: min(240px, 30dvh);
   }
 
   .composer-select-label {
-    font-size: 12px;
+    font-size: var(--vcn-font-size-sm);
     line-height: 16px;
   }
 
@@ -330,7 +330,7 @@
   }
 
   .composer-select-subtitle {
-    font-size: 11px;
+    font-size: var(--vcn-font-size-xs);
     line-height: 14px;
   }
 
@@ -484,7 +484,7 @@
   .feature-header-actions > button:not(.feature-header-refresh) {
     padding-inline: 8px;
     gap: 4px;
-    font-size: 12px;
+    font-size: var(--vcn-font-size-sm);
   }
 
   [data-slot="tabs-list"][data-orientation="horizontal"] {
@@ -526,7 +526,7 @@
   }
 
   :is([data-slot="dialog-content"], .settings-form-field) input {
-    font-size: 16px;
+    font-size: var(--vcn-font-size-xl);
   }
 }
 

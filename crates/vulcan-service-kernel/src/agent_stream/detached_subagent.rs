@@ -13,6 +13,7 @@ use crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1;
 
 #[cfg(test)]
 mod admission_tests;
+mod listener_owner;
 
 pub(crate) mod non_success;
 pub(crate) mod retry;
@@ -171,7 +172,15 @@ pub(crate) fn start_admitted_detached_subagent_listener(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))
             .map(|guard| Arc::clone(&guard.project_resource_catalog_registry))?;
+        // Capture before spawning so cancellation before the first poll also releases ownership.
+        // 派生前捕获，确保首次轮询前取消也会释放所有权。
+        let listener_owner = listener_owner::ListenerOwner::new(
+            state.clone(), agent_runtime.clone(), task_id, execution_id.clone(),
+        );
         spawn_service_task(async move {
+            // Keep ownership through retained terminal retries, including EOF after valid evidence.
+            // 在保留终态重试期间保持所有权，包括有效凭据之后的流结束。
+            let _listener_owner = listener_owner;
             // providerV1Sink retains the exact child handle for the complete detached execution.
             // providerV1Sink 在完整分离执行期间保留精确子句柄。
             let mut provider_v1_sink = ProviderV1StreamSink::new(

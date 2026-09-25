@@ -1,3 +1,4 @@
+import { formatTokenCount } from "@/lib/usage-format";
 import type { UsageCoverage, UsageDimension } from "@/service/conversation-usage-coverage";
 
 /** Derives output throughput from paired physical-request measurements.
@@ -13,15 +14,14 @@ export function averageTurnOutputSpeed(outputTokens: number | null | undefined, 
 
 /** Formats `exact` when reported, otherwise the known contribution for `field`, without extra coverage annotations.
  * 已报告时格式化 `exact`，否则显示 `field` 的已知贡献，不附加覆盖说明。
- * `coverage` supplies view-only evidence and `locale` selects number formatting; returns plain numeric text.
- * `coverage` 提供仅供视图使用的证据，`locale` 选择数字格式；返回纯数值文本。
+ * `coverage` supplies view-only evidence; returns compact token text (exact below 1000, then K/M/B).
+ * `coverage` 提供仅供视图使用的证据；返回紧凑 Token 文本（1000 以下精确，之后为 K/M/B）。
  * Missing values use a dash, while a reported zero remains zero; persisted accounting never changes.
  * 缺失值使用短横线，已上报零值仍为零；不改变持久化核算。 */
 export function usageMetricDisplay(
   exact: number | null | undefined,
   field: UsageDimension,
   coverage: UsageCoverage | null | undefined,
-  locale: string,
 ): string {
   // Only a positive reported count proves the presence of a value, including explicit zero.
   // 只有正数上报次数才能证明数值存在，也包括明确零值。
@@ -29,7 +29,7 @@ export function usageMetricDisplay(
   // Exact totals take precedence without overwriting or persisting partial evidence.
   // 精确总量优先，不覆盖或持久化部分证据。
   const value = exact ?? (known && known.reportedApiCallCount > 0 ? known.knownTokens : null);
-  return value === null ? "-" : new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
+  return value === null ? "-" : formatTokenCount(value);
 }
 
 /** Computes a cache ratio only from exact totals or paired values of the same known requests.

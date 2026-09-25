@@ -158,7 +158,7 @@ export function ArchiveProjectDialog(props: {
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {description}
-            {props.mode === "remove" ? " 正在运行的项目终端也会停止并关闭。" : null}
+            {props.mode === "remove" ? t("project.actions.removeStopsTerminals") : null}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

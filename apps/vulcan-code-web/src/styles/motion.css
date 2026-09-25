@@ -12,10 +12,6 @@
   from { opacity: 0; transform: translateY(-50%) scaleY(0.2); }
   to { opacity: 1; transform: translateY(-50%) scaleY(1); }
 }
-@keyframes vcn-accent-grow-x {
-  from { opacity: 0; transform: scaleX(0.3); }
-  to { opacity: 1; transform: scaleX(1); }
-}
 /* Small confirmations (check marks, badges) pop in with a spring. */
 /* 小型确认元素（勾选、徽标）以回弹方式弹出。 */
 @keyframes vcn-pop-in {
@@ -83,7 +79,7 @@
 .vcn-stream-placeholder-copy .vcn-shimmer:last-child { max-width: 70%; }
 .vcn-stream-placeholder-tile {
   gap: 8px;
-  border-radius: 9px;
+  border-radius: var(--vcn-radius-md);
   background: var(--vcn-fill-subtle);
   padding: 11px 12px;
 }

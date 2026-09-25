@@ -29,7 +29,7 @@ import { useI18n, type TranslationKey } from "@/i18n";
 // LazyDiffReviewPanel loads the heavy diff review renderer only for diff detail modals.
 // LazyDiffReviewPanel 仅在 diff 详情弹窗中加载较重的 diff 审核渲染器。
 const LazyDiffReviewPanel = React.lazy(async () => {
-  const module = await import("@/diff/DiffReviewPanel");
+  const module = await import("@/diff/diff-review-panel");
   return { default: module.DiffReviewPanel };
 });
 

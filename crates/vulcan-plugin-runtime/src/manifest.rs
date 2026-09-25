@@ -275,6 +275,31 @@ pub struct VulcanPluginActionManifest {
     /// Explicit caller classes allowed to invoke this action.
     /// 允许调用当前 action 的显式调用方类别。
     pub callers: Vec<VulcanPluginActionCaller>,
+    /// Explicit semantic effect; names never determine replay or query policy.
+    /// 明确的语义效果；不得根据名称判断重放或查询策略。
+    pub effect: VulcanPluginActionEffect,
+    /// Allowed lifetime for non-secret read projections; zero permits in-flight sharing only.
+    /// 非敏感只读投影允许保留的时长；零表示仅共享在途请求。
+    #[serde(default)]
+    pub result_cache_ms: u64,
+    /// Top-level query arguments whose explicit null means freeze the current Unix millisecond time.
+    /// 明确空值表示冻结当前 Unix 毫秒时间的顶层查询参数。
+    #[serde(default)]
+    pub snapshot_time_arguments: Vec<String>,
+}
+
+/// Manifest authority for query sharing versus explicitly submitted effects.
+/// 清单对查询共享及显式提交操作的权威分类。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VulcanPluginActionEffect {
+    /// A local read that may share an identical in-flight request.
+    /// 可共享相同在途请求的本地只读操作。
+    Read,
+    /// A write or externally consuming request; never deduplicated or replayed automatically.
+    /// 写操作或消耗外部资源的请求；不自动去重或重放。
+    #[default]
+    Mutation,
 }
 
 /// Authorized caller class for one plugin action.

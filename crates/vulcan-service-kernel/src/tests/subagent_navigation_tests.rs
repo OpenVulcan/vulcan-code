@@ -245,6 +245,7 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         question_preparation_tasks: BTreeMap::new(),
+        collaboration_dispatch_owners: BTreeMap::new(),
         session_terminal_persistence_owners: BTreeMap::new(),
         child_question_execution_owners: BTreeMap::new(),
         child_maintenance_owners: BTreeMap::new(),

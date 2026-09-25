@@ -1,6 +1,3 @@
-// RTK_GAIN_STATS_CACHE_MS keeps the existing statistics snapshot for thirty minutes.
-// RTK_GAIN_STATS_CACHE_MS 将已有统计快照保留三十分钟。
-const RTK_GAIN_STATS_CACHE_MS = 30 * 60 * 1000;
 
 // RTK_REPOSITORY_URL is the upstream project address disclosed for license compliance.
 // RTK_REPOSITORY_URL 是为许可证合规披露的上游项目地址。
@@ -10,9 +7,6 @@ const RTK_REPOSITORY_URL = "https://github.com/rtk-ai/rtk";
 // RTK_LICENSE_PATH 是清单明确声明的包内许可证资源路径。
 const RTK_LICENSE_PATH = "LICENSE";
 
-// rtkGainStatsCache survives tab switches because the enabled plugin module remains mounted.
-// rtkGainStatsCache 会跨页签切换保留，因为已启用插件模块保持挂载。
-let rtkGainStatsCache = null;
 
 // DEFAULT_RTK_ROUTES mirrors the curated RTK v0.42.4 route set.
 // DEFAULT_RTK_ROUTES 对齐 RTK v0.42.4 精选路由集合。
@@ -284,10 +278,10 @@ export function createPluginPanel(sdk) {
     const [checkedRoutes, setCheckedRoutes] = React.useState(new Set(DEFAULT_RTK_ROUTES));
     // statistics stores the latest cached or freshly loaded RTK gain response.
     // statistics 保存最近缓存或新加载的 RTK gain 响应。
-    const [statistics, setStatistics] = React.useState(rtkGainStatsCache?.statistics ?? null);
-    // statisticsLoadedAtMs stores the frontend cache timestamp shown by the original RTK page.
-    // statisticsLoadedAtMs 保存原 RTK 页面展示的前端缓存时间戳。
-    const [statisticsLoadedAtMs, setStatisticsLoadedAtMs] = React.useState(rtkGainStatsCache?.loadedAtMs ?? null);
+    const [statistics, setStatistics] = React.useState(null);
+    // statisticsLoadedAtMs records when this view last received a snapshot.
+    // statisticsLoadedAtMs 记录此视图最近收到快照的时间。
+    const [statisticsLoadedAtMs, setStatisticsLoadedAtMs] = React.useState(null);
     // statisticsView selects the daily, weekly, or monthly chart series.
     // statisticsView 选择日、周或月图表序列。
     const [statisticsView, setStatisticsView] = React.useState("daily");
@@ -315,8 +309,6 @@ export function createPluginPanel(sdk) {
     const mountedRef = React.useRef(false);
     const settingsSequence = React.useRef(0);
     const statisticsSequence = React.useRef(0);
-    const settingsRequest = React.useRef(null);
-    const statisticsRequest = React.useRef(null);
     // savingRef closes the same-event gap before React publishes disabled controls.
     // savingRef 关闭 React 发布禁用控件前的同事件重入窗口。
     const savingRef = React.useRef(false);
@@ -386,13 +378,9 @@ export function createPluginPanel(sdk) {
       setSettingsLoading(true);
       setSettingsError("");
       try {
-        if (settingsRequest.current === null) settingsRequest.current = sdk.invoke("settings-get", {});
-        // pending is shared across effect replay and cleared on either settlement.
-        // pending 在 Effect 重放间共享，并在成功或失败后清理。
-        const pending = settingsRequest.current;
-        const nextSettings = await pending.finally(() => {
-          if (settingsRequest.current === pending) settingsRequest.current = null;
-        });
+        // The host shares in-flight reads across mounts and retries rejected reads.
+        // 宿主跨挂载共享在途读取，并允许重试失败的读取。
+        const nextSettings = await sdk.invoke("settings-get", {});
         if (!mountedRef.current || sequence !== settingsSequence.current) return;
         setSettings(nextSettings);
         setRouteMode(nextSettings.routeMode);
@@ -404,37 +392,27 @@ export function createPluginPanel(sdk) {
       }
     }, []);
 
-    // loadStatistics reuses the thirty-minute module cache unless the user explicitly refreshes.
-    // loadStatistics 复用三十分钟模块缓存，除非用户明确刷新。
+    // loadStatistics uses the host cache policy declared by this action's manifest.
+    // loadStatistics 使用此 Action 清单声明的宿主缓存策略。
     //
     // force bypasses only the frontend cache and does not alter RTK's own statistics store.
     // force 仅绕过前端缓存，不改变 RTK 自身统计存储。
     // Returns a promise settled after cache selection or the statistics action.
     // 返回在缓存选择或统计 Action 完成后结束的 Promise。
     const loadStatistics = React.useCallback(async (force) => {
-      // sequence prevents a stale subscriber from updating the module cache.
-      // sequence 防止过期订阅更新模块缓存。
+      // sequence prevents a stale subscriber from updating the current view.
+      // sequence 防止过期订阅更新当前视图。
       const sequence = ++statisticsSequence.current;
-      if (!force && rtkGainStatsCache && Date.now() - rtkGainStatsCache.loadedAtMs <= RTK_GAIN_STATS_CACHE_MS) {
-        setStatistics(rtkGainStatsCache.statistics);
-        setStatisticsLoadedAtMs(rtkGainStatsCache.loadedAtMs);
-        return;
-      }
       setStatisticsLoading(true);
       setStatisticsError("");
       try {
-        if (statisticsRequest.current === null) statisticsRequest.current = sdk.invoke("statistics-get", {});
-        // pending coalesces simultaneous refreshes without caching rejected promises.
-        // pending 合并同时刷新，且不缓存拒绝的 Promise。
-        const pending = statisticsRequest.current;
-        const nextStatistics = await pending.finally(() => {
-          if (statisticsRequest.current === pending) statisticsRequest.current = null;
-        });
+        // The host retains successful results even if this subscriber leaves.
+        // 即使当前订阅离开，宿主仍保留成功结果。
+        const nextStatistics = await sdk.invoke("statistics-get", {}, { refresh: force });
         if (!mountedRef.current || sequence !== statisticsSequence.current) return;
-        // loadedAtMs is shared by the cache entry and visible page metadata.
-        // loadedAtMs 由缓存条目与可见页面元数据共享。
+        // loadedAtMs describes receipt; generated_at_ms describes the actual statistics snapshot.
+        // loadedAtMs 表示接收时间；generated_at_ms 表示实际统计快照时间。
         const loadedAtMs = Date.now();
-        rtkGainStatsCache = { loadedAtMs, statistics: nextStatistics };
         setStatistics(nextStatistics);
         setStatisticsLoadedAtMs(loadedAtMs);
       } catch (reason) {
@@ -484,14 +462,19 @@ export function createPluginPanel(sdk) {
     React.useEffect(() => {
       mountedRef.current = true;
       void loadSettings();
-      void loadStatistics(false);
       return () => {
         mountedRef.current = false;
         settingsSequence.current += 1;
         statisticsSequence.current += 1;
         if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
       };
-    }, [loadSettings, loadStatistics]);
+    }, [loadSettings]);
+
+    // Only entering statistics starts gain; settings navigation never launches it.
+    // 仅进入统计区域才启动 gain；设置页面导航不会启动它。
+    React.useEffect(() => {
+      if (section === "statistics") void loadStatistics(false);
+    }, [section, loadStatistics]);
 
     // toggleRoute applies one checkbox change without mutating the current Set instance.
     // toggleRoute 在不修改当前 Set 实例的情况下应用一个复选框变更。

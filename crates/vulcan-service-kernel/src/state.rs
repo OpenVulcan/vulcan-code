@@ -466,6 +466,9 @@ pub struct ServiceBridgeState {
     /// Cancellable auxiliary preparation, separate from its eventual Provider stream.
     /// 可取消辅助准备，与其后续 Provider 流分别登记。
     pub(crate) question_preparation_tasks: BTreeMap<SessionId, crate::agent_collaboration_execution::preparation_tasks::QuestionPreparationTask>,
+    /// Scheduled collaboration wakeups not yet handed to an execution owner.
+    /// 尚未交接给执行所有者的已调度协作唤醒。
+    pub(crate) collaboration_dispatch_owners: BTreeMap<SessionId, usize>,
     /// Exact stream owners currently committing their accepted terminal state to durable storage.
     /// 当前正在把已接纳终态提交到可靠存储的精确流所有者。
     pub(crate) session_terminal_persistence_owners:
@@ -765,6 +768,11 @@ pub(crate) struct ActiveStreamTask {
 }
 
 impl ActiveStreamTask {
+    /// Returns whether the retained future is still executing; stale map entries are not live work.
+    /// 返回保留 Future 是否仍执行；过期映射条目不代表活动工作。
+    pub(crate) fn is_running(&self) -> bool {
+        !self.handle.is_finished()
+    }
     /// Creates one retained active-stream task entry.
     /// 创建一个保留的活动流任务条目。
     ///
@@ -1280,6 +1288,11 @@ where
                 }
                 _ => {}
             }
+            // Box the owned stream before wrapping it so the start gate remains small.
+            // 包装前将持有的流任务装箱，使启动闸门保持小型状态。
+            // Awaiting it here preserves the registered handle's cancellation ownership.
+            // 在此等待它，保留登记句柄对任务的取消归属。
+            let future = Box::pin(future);
             let handle = spawn_service_task(async move {
                 if start_receiver.await.is_ok() {
                     future.await;

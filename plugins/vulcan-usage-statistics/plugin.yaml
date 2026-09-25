@@ -40,6 +40,7 @@ lua_runtime:
   session_idle_timeout_sec: 300
   actions:
     - id: pricing-get
+      effect: read
       function: pricing_get
       input_schema_file: schemas/pricing-input.json
       output_schema_file: schemas/pricing-output.json
@@ -47,12 +48,14 @@ lua_runtime:
       callers:
         - plugin_ui
     - id: settings-get
+      effect: read
       function: settings_get
       output_schema_file: schemas/settings-output.json
       timeout_ms: 5000
       callers:
         - plugin_ui
     - id: settings-update
+      effect: mutation
       function: settings_update
       input_schema_file: config/schema.json
       output_schema_file: schemas/settings-output.json
@@ -60,6 +63,8 @@ lua_runtime:
       callers:
         - plugin_ui
     - id: dashboard-get
+      effect: read
+      snapshot_time_arguments: [endAtMs]
       function: dashboard_get
       input_schema_file: schemas/dashboard-input.json
       output_schema_file: schemas/dashboard-output.json
@@ -67,12 +72,14 @@ lua_runtime:
       callers:
         - plugin_ui
     - id: statistics-clear-preview
+      effect: read
       function: statistics_clear_preview
       output_schema_file: schemas/statistics-clear-preview-output.json
       timeout_ms: 8000
       callers:
         - plugin_ui
     - id: statistics-clear-apply
+      effect: mutation
       function: statistics_clear_apply
       input_schema_file: schemas/statistics-clear-apply-input.json
       output_schema_file: schemas/statistics-clear-apply-output.json

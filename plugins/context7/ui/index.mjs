@@ -222,7 +222,7 @@ export function createPluginPanel(sdk) {
       try {
         // result is the complete schema-validated page projection from one serialized plugin action.
         // result 是通过单次串行插件 Action 返回的完整且经 Schema 校验的页面投影。
-        const result = await sdk.invoke("bootstrap-get", { rangeDays });
+        const result = await sdk.invoke("bootstrap-get", { rangeDays }, { refresh: notifyFailure });
         if (requestSequence !== loadSequence.current) return;
         savedConfig.current = result.settings;
         if (!configDirty.current) setConfig(result.settings);

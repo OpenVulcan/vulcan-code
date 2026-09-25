@@ -1,6 +1,5 @@
 import type {
   WorkbenchDeltaEnvelope,
-  WorkbenchSnapshot,
 } from "@/types";
 
 // ThemeMode describes the two shadcn default theme modes.

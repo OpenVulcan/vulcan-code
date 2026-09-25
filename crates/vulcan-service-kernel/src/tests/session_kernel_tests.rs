@@ -3,6 +3,107 @@
 
 use super::*;
 
+/// Ordinary input repairs an idle stopped journal but rejects live or mismatched ownership.
+/// 普通输入修复空闲停止日志，但拒绝活跃或不匹配的所有权。
+/// Isolated service/document fixtures verify durable admission without Provider requests.
+/// 隔离的服务与文档夹具验证可靠准入，不请求供应商。
+#[tokio::test]
+async fn inactive_root_admission_requires_exact_idle_runtime_ownership() {
+    use crate::conversation_submission::idle_root_input::submit_root_input_when_idle;
+    use vulcan_session_core::v1::{ClientActionId, ClientInputSubmission};
+    for owner in ["idle", "kernel", "terminal", "wrong_reservation"] {
+        // Each fixture owns one stopped durable root and one independent physical reservation.
+        // 每个夹具拥有一个已停止可靠根及一个独立物理预留。
+        let session_id = SessionId::new_v4();
+        let mut document = SessionDocument::new(session_id.to_string(), "project-a", "Stopped", 1);
+        document
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("old").unwrap(),
+                    "old prompt",
+                    vec![],
+                ),
+                2,
+            )
+            .unwrap();
+        let mut service_state = test_service_state_with_parent_session(session_id);
+        let handle = register_test_session_v1_document(&mut service_state, session_id, document);
+        handle
+            .set_collaboration_run_control_durable(
+                vulcan_session_core::v1::collaboration::SetRunControlInput {
+                    operation_id:
+                        vulcan_session_core::v1::collaboration::CollaborationOperationId::try_new(
+                            "stop",
+                        )
+                        .unwrap(),
+                    state:
+                        vulcan_session_core::v1::collaboration::CollaborationRunControl::MainOnly,
+                    changed_at_ms: 3,
+                },
+            )
+            .unwrap();
+        if owner == "kernel" {
+            start_webui_session_kernel_user_turn(&mut service_state, session_id, "live").unwrap();
+        }
+        if owner == "terminal" {
+            register_session_terminal_persistence_owner(
+                &mut service_state,
+                session_id,
+                SessionTerminalPersistenceOwner::StreamTask(Uuid::new_v4()),
+            )
+            .unwrap();
+        }
+        let reservation_id = Uuid::new_v4();
+        service_state.session_turn_admission_reservations.insert(
+            session_id,
+            SessionTurnAdmissionReservation {
+                reservation_id,
+                kind: SessionTurnAdmissionReservationKind::PromptSubmission,
+            },
+        );
+        let state = Arc::new(Mutex::new(service_state));
+        let before = handle.read(SessionDocument::memory_revision).unwrap();
+        let result = submit_root_input_when_idle(
+            &state,
+            &handle,
+            if owner == "wrong_reservation" {
+                Uuid::new_v4()
+            } else {
+                reservation_id
+            },
+            ClientInputSubmission::new(
+                ClientActionId::try_new("new").unwrap(),
+                "new prompt",
+                vec![],
+            ),
+            4,
+        )
+        .await;
+        if owner == "idle" {
+            result.unwrap();
+            handle.read(|document| {
+                assert_eq!(document.memory_revision(), document.durable_revision());
+                assert_eq!(document.events().iter().filter(|event| matches!(&event.event,
+                    EventBody::TurnStats(stats) if stats.outcome == vulcan_session_core::v1::TurnOutcome::Stopped)).count(), 1);
+                assert_eq!(document.collaboration_run_control(), vulcan_session_core::v1::collaboration::CollaborationRunControl::Running);
+                let mut reloaded = document.clone();
+                reloaded.rebuild_derived_state().unwrap();
+                assert!(!reloaded.active_turn().unwrap().closed);
+                assert_eq!(reloaded.events().iter().filter(|event| matches!(event.event, EventBody::UserInput(_))).count(), 2);
+            }).unwrap();
+        } else {
+            assert!(
+                result.is_err(),
+                "physical owner {owner} must prevent replacement"
+            );
+            assert_eq!(
+                handle.read(SessionDocument::memory_revision).unwrap(),
+                before
+            );
+        }
+    }
+}
+
 /// A QA preparation requires the exact durable identity in addition to turn text and generation.
 /// 答疑准备除回合文本和代际外，还要求精确可靠身份。
 #[test]
@@ -2046,6 +2147,63 @@ async fn active_stream_task_start_gate_registers_before_execution() {
     assert!(observed_receiver.await.expect("task observation"));
     let mut guard = state.lock().expect("service state lock");
     assert!(remove_active_stream_task_if_id(&mut guard, session_id, task_id).is_some());
+}
+
+/// Verifies the registry's abort joins and drops the future behind the start gate.
+/// 验证注册表中止会等待并析构启动闸门背后的 Future。
+/// No inputs; completion proves boxed storage has not detached execution ownership.
+/// 无输入；完成证明堆存储未使执行归属脱离登记任务。
+#[tokio::test]
+async fn active_stream_task_abort_drops_gated_future() {
+    // Session and task IDs select the exact registry entry to cancel.
+    // 会话与任务标识选定需要取消的精确注册条目。
+    let session_id = SessionId::new_v4();
+    let task_id = Uuid::new_v4();
+    // State owns the production registration gate and abort handle.
+    // state 持有生产登记闸门与中止句柄。
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        session_id,
+    )));
+    // Handshakes distinguish a started future from its cancellation-driven destruction.
+    // 两个握手分别确认 Future 已启动和因取消而析构。
+    let (started_sender, started_receiver) = tokio::sync::oneshot::channel::<()>();
+    let (retained_sender, mut dropped_receiver) = tokio::sync::oneshot::channel::<()>();
+    spawn_registered_active_stream_task_with_mode(
+        &state,
+        session_id,
+        task_id,
+        None,
+        ActiveStreamTaskRegistrationMode::RejectIfOccupied,
+        async move {
+            started_sender
+                .send(())
+                .expect("start observer should remain alive");
+            std::future::pending::<()>().await;
+            drop(retained_sender);
+        },
+    )
+    .expect("task should register");
+    started_receiver
+        .await
+        .expect("registered task should execute");
+    // Remove only the observed owner and release the registry lock before joining cancellation.
+    // 仅取出已确认的所有者，并在等待取消前释放注册表锁。
+    let task = remove_active_stream_task_if_id(
+        &mut state.lock().expect("service state lock"),
+        session_id,
+        task_id,
+    )
+    .expect("exact registered task should remain present");
+    task.abort_and_wait()
+        .await
+        .expect("cancellation should join successfully");
+    assert!(
+        matches!(
+            dropped_receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ),
+        "aborting the gate must drop the owned future"
+    );
 }
 
 /// Verifies ordinary registration rejects a second owner without aborting the first task.

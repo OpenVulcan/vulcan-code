@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { I18nProvider } from "@/i18n";
 import { ModelSwitchNotice, modelSwitchRouteLabel } from "./conversation-model-switch";
 import { requestConfigChangeKind } from "@/service/conversation-event-display-projection";
-import { ConversationV1DisplayRenderer } from "./conversation-v1-display-renderer";
 import type { ProviderSummary } from "@/types";
 
 // providers mirrors the account-scoped workbench contract, including a disabled historical model.
@@ -44,19 +43,6 @@ describe("model switch presentation", () => {
     expect(requestConfigChangeKind({ kind: "request_config_changed", previous: route, current: { ...route, thinking_level: "high" } })).toBe("thinking");
   });
 
-  // Parameters: none. Returns: none; verifies no empty notice survives in the event-native renderer.
-  // 参数：无。返回值：无；验证事件原生渲染器不会残留首次配置的空提示。
-  it("does not render the initial route from older persisted history", () => {
-    // markup renders the old initialization fact without creating a misleading switch row.
-    // markup 渲染旧初始化事实，但不产生误导的切换行。
-    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={[{
-      seq: 1, turn_id: null, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
-      event: { kind: "request_config_changed", previous: {}, current: route },
-    }]} providers={providers} /></I18nProvider>);
-    expect(markup).not.toContain("conversation-model-switch");
-    expect(markup).not.toContain("request_config_changed");
-  });
-
   // Parameters: none. Returns: none; verifies the complete sentence has no interactive controls.
   // 参数：无。返回值：无；验证完整提示句不包含交互控件。
   it("renders a compact separator rather than an expandable detail card", () => {
@@ -70,19 +56,4 @@ describe("model switch presentation", () => {
     expect(markup).not.toContain("aria-expanded");
   });
 
-  // Parameters: none. Returns: none; verifies thinking changes use the same static row in the event renderer.
-  // 参数：无。返回值：无；验证事件渲染器中的思考变化也使用同一静态提示行。
-  it("renders thinking changes without a card or work header", () => {
-    // markup exercises the typed event path, including localized before/after values.
-    // markup 验证类型化事件路径，包括本地化的前后取值。
-    const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationV1DisplayRenderer events={[{
-      seq: 1, turn_id: null, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
-      event: { kind: "request_config_changed", previous: { ...route, thinking_level: "max" }, current: { ...route, thinking_level: "high" } },
-    }]} /></I18nProvider>);
-    expect(markup).toContain("思考强度已从 max 调整为 high，下次请求生效。");
-    expect(markup).toContain("conversation-model-switch-label");
-    expect(markup).not.toContain("<button");
-    expect(markup).not.toContain("work-process");
-    expect(markup).not.toContain("conversation-v1-request-config");
-  });
 });

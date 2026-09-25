@@ -6,7 +6,11 @@ import type { PluginSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel";
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
 vi.mock("@/service/core-browser-service", () => ({
   getCoreBrowserRuntimeStatus: vi.fn().mockResolvedValue({ ready: false }),
 }));
@@ -15,7 +19,7 @@ vi.mock("@/service/core-browser-service", () => ({
 const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", status: "disabled", runtimeState: "disabled",
   capability: "Synthetic", nameByLocale: {}, capabilityByLocale: {}, enabled: false, desiredEnabled: false,
   available: true, toolCount: 0, tools: [], hookCount: 0, skillCount: 0, agentCount: 0, activeSessionCount: 0,
-  diagnostics: [], managementKind: "vulcanPlugin", extension: { origin: "userInstalled", permissions: [], hooks: [],
+  diagnostics: [], managementKind: "vulcanPlugin", extension: { runtimeIdentity: "fixture:1", origin: "userInstalled", permissions: [], hooks: [],
     actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: false, mcpServers: [] } };
 let root: Root;
 let host: HTMLDivElement;

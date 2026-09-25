@@ -45,9 +45,11 @@ vi.mock("@/service/vce-service", () => ({
   planVceMaintenance: rpc.plan,
   executeVceMaintenance: rpc.execute,
 }));
-vi.mock("@/i18n", () => ({
-  useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }),
-}));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key);
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) };
+});
 
 // Each test owns a real DOM mount and disposes its observer timers on unmount.
 // 每项测试持有真实文档挂载，并在卸载时释放观察计时器。

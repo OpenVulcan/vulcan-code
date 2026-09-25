@@ -9,6 +9,10 @@ import { zhCNTranslations } from "@/i18n-messages.zh-CN"
 
 export type { LocaleCode, TranslationKey } from "@/i18n-messages"
 
+// Translate resolves one stable text key in the active language; helpers outside React receive it as a parameter.
+// Translate 以当前语言解析一个稳定文本键；React 之外的辅助函数以参数形式接收它。
+export type Translate = (key: TranslationKey) => string
+
 // localeMessages resolves each supported language from its own module.
 // localeMessages 从各自模块解析每种受支持语言。
 //
@@ -31,7 +35,7 @@ interface I18nContextValue {
   setLocale: (locale: LocaleCode) => void
   // Translates one stable text key.
   // 翻译单个稳定文本键。
-  t: (key: TranslationKey) => string
+  t: Translate
 }
 
 // I18nContext stores the WebUI localization state.
@@ -70,6 +74,42 @@ export function readLocaleMessage(locale: LocaleCode, key: TranslationKey): stri
   return localeMessages[locale][key] ?? localeMessages["zh-CN"][key]
 }
 
+// activeLocale mirrors the mounted provider's language for modules that run outside React.
+// activeLocale 为 React 之外运行的模块镜像当前已挂载 provider 的语言。
+let activeLocale: LocaleCode | null = null
+
+// translateActive reads one message in the mounted provider's language for service adapters and stores.
+// translateActive 按已挂载 provider 的语言为服务适配器与状态仓库读取单条文案。
+//
+// # Parameters
+// 参数
+// `key` is the stable text key.
+// `key` 是稳定文本键。
+//
+// # Returns
+// 返回值
+// The localized message; before any provider mounts, the browser-derived default language is used.
+// 返回本地化文案；任何 provider 挂载前使用从浏览器推导的默认语言。
+export function translateActive(key: TranslationKey): string {
+  return readLocaleMessage(activeLocale ?? initialLocale(null), key)
+}
+
+// formatMessage fills every {name} placeholder of one localized template.
+// formatMessage 填充单个本地化模板中的每个 {name} 占位符。
+//
+// # Parameters
+// 参数
+// `template` is a translated message and `values` maps placeholder names to their text.
+// `template` 是已翻译文案，`values` 将占位符名称映射到对应文本。
+//
+// # Returns
+// 返回值
+// The filled message; placeholders without a value stay visible so a missing binding is noticed.
+// 返回填充后的文案；没有对应值的占位符保持原样，便于发现遗漏的绑定。
+export function formatMessage(template: string, values: Readonly<Record<string, string | number>>): string {
+  return template.replace(/\{(\w+)\}/gu, (placeholder, name: string) => Object.hasOwn(values, name) ? String(values[name]) : placeholder)
+}
+
 // I18nProvider owns the WebUI language state.
 // I18nProvider 管理 WebUI 语言状态。
 function I18nProvider(props: {
@@ -97,6 +137,9 @@ function I18nProvider(props: {
   // t translates one stable key using the current language.
   // t 使用当前语言翻译单个稳定键。
   const t = React.useCallback((key: TranslationKey) => localeMessages[locale][key] ?? localeMessages["zh-CN"][key], [locale])
+  // activeLocale is published during render so non-React callers see the language the tree renders with.
+  // activeLocale 在渲染期间发布，使非 React 调用方看到子树正在使用的语言。
+  activeLocale = locale
   // value memoizes the provider payload to avoid unnecessary shell rerenders.
   // value 缓存 provider 载荷，避免外壳不必要重渲染。
   const value = React.useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t])

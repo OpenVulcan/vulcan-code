@@ -1,14 +1,13 @@
-import type { ConversationSessionCommitBusyState } from "@/components/conversation/session-todolist-panel";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type {
   ComposerSlashCommandResult,
   ComposerSubmission,
 } from "@/components/composer/composer-model";
-import type { AgentActionProps } from "@/components/features/agents/AgentsArea";
-import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/SkillsArea";
+import type { AgentActionProps } from "@/components/features/agents/agents-area";
+import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skills-area";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
-import type { MemoryActionProps, MemorySubAreaId } from "@/components/features/memory/MemoryArea";
-import type { ConversationMenuAction, ProjectMenuAction } from "@/components/project/ProjectSidebar";
+import type { MemoryActionProps, MemorySubAreaId } from "@/components/features/memory/memory-area";
+import type { ConversationMenuAction, ProjectMenuAction } from "@/components/project/project-sidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type {
   DiffReviewSelection,
@@ -39,7 +38,6 @@ import type {
 } from "@/types";
 import type { NotificationPresentationContext } from "@/notifications/types";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
-import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
 // WorkspaceMainView identifies the active main surface inside the workbench.
 // WorkspaceMainView 标识工作台内部当前激活的主内容界面。
 export type WorkspaceMainView = "chat" | "agent-skills" | "skills" | "agents" | "memory" | "knowledge";

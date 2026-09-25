@@ -51,11 +51,13 @@ describe("session tool panel header layout", () => {
     expect(markup).not.toContain("conversation-session-review-section");
   });
 
-  it("keeps the original header for a Git summary", () => {
-    // markup retains Git layout when zero changes still constitutes a present repository.
-    // markup 在零变更仍代表仓库存在时保留 Git 布局。
+  it("lets a single Git summary share its title row with the collapse control", () => {
+    // markup retains Git layout when zero changes still constitutes a present repository, without an empty top row.
+    // markup 在零变更仍代表仓库存在时保留 Git 布局，且不留空白顶部行。
     const markup = renderPanel({ reviewSummary, subagentNavigation });
-    expect(markup).not.toContain("conversation-session-tool-panel-header-inline");
+    expect(markup).toContain("conversation-session-tool-panel-header-inline");
+    expect(markup).not.toContain("conversation-session-review-manager-trigger");
+    expect(markup.match(/aria-label="折叠会话工具"/g)).toHaveLength(1);
     expect(markup).toContain("conversation-session-review-section");
     expect(markup).toContain("main");
   });

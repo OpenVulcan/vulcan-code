@@ -97,6 +97,49 @@ pub(super) async fn load_participant_handle(
     Ok(handle)
 }
 
+/// Confirms absent storage after a failed participant load, without interpreting error strings.
+/// 参与者加载失败后确认存储缺失，不解释错误字符串。
+/// `identity` supplies the exact root/child path; false preserves unreadable or mismatched data.
+/// `identity` 提供精确根或子路径；返回假会保留不可读或身份不匹配的数据。
+pub(super) async fn participant_storage_missing(
+    invocation: &ValidatedInvocation,
+    identity: &CollaborationParticipant,
+) -> Result<bool, String> {
+    // A registered root owns its locator even if its document cannot currently be read.
+    // 即使当前文档无法读取，已注册根仍拥有其定位器。
+    let root_id = Uuid::parse_str(&identity.root_session_id).map_err(|error| error.to_string())?;
+    // Only a typed absent registration permits consulting the authoritative index.
+    // 只有强类型的未注册结果允许查询权威索引。
+    let root_locator = match invocation.registry.get(root_id) {
+        Ok(root) => root.storage_locator().map_err(|error| error.to_string())?,
+        Err(SessionRuntimeError::SessionNotRegistered(_)) => {
+            match vulcan_workspace_store::workspace_store::locate_optional_session_v1_storage(
+                &invocation.controller_runtime,
+                &identity.root_session_id,
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            {
+                Some(locator) => locator,
+                None => return Ok(true),
+            }
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    // Embedded tasks have a deterministic locator, never a guessed sibling search.
+    // 嵌入任务使用确定性定位器，绝不猜测或搜索同级路径。
+    let locator = if identity.session_id == identity.root_session_id {
+        root_locator
+    } else {
+        locate_embedded_task_session_v1(&root_locator, &identity.session_id)
+            .map_err(|error| error.to_string())?
+    };
+    locator
+        .metadata_exists()
+        .map(|exists| !exists)
+        .map_err(|error| error.to_string())
+}
+
 /// Derives the participant from a canonical handle and its exact persisted root locator.
 /// 从规范句柄及其精确持久化根定位器派生参与者。
 /// The optional turn is supplied by a validated invocation or the target's current turn.

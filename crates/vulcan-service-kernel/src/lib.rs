@@ -112,7 +112,7 @@ use vulcan_service_api::{
     SessionTodolistItemSummary, SessionTodolistSummary, SessionVmmPolicyByConversation,
     SessionVmmPolicySummary, SettingSectionSummary, StartupSnapshot, StartupStepStatus,
     SubagentCatalogIssueSummary, SubagentCatalogSummary, SubagentCatalogUpdate,
-    SubagentCategorySummary, SubagentDefinitionLocaleSummary, SubagentDefinitionSaveRequest,
+    SubagentCategorySummary, SubagentDefinitionSaveRequest,
     SubagentDefinitionSummary, SubagentNavigationChangedDelta, SubagentNavigationSnapshot,
     SubagentPanelRouteResponse, TerminalDisplayChunk, ToolCallSummary,
     TransientReasoningStatusChangedDelta, TransientReasoningStatusKind,
@@ -342,8 +342,7 @@ use session_goal_lifecycle::{
 #[cfg(test)]
 use session_goal_lifecycle::{
     render_goal_budget_limited_context, render_goal_continuation_context,
-    render_goal_objective_updated_context,
-    render_session_goal_context_for_prompt,
+    render_goal_objective_updated_context, render_session_goal_context_for_prompt,
 };
 use session_goals::*;
 #[cfg(test)]
@@ -463,6 +462,7 @@ pub fn create_service_bridge_state(
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         question_preparation_tasks: BTreeMap::new(),
+        collaboration_dispatch_owners: BTreeMap::new(),
         session_terminal_persistence_owners: BTreeMap::new(),
         child_question_execution_owners: BTreeMap::new(),
         child_maintenance_owners: BTreeMap::new(),

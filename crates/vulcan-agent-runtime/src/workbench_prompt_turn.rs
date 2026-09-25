@@ -172,6 +172,9 @@ pub struct SharedPromptTurnStart {
     /// Prompt entry source shared with service queue semantics.
     /// 与服务队列语义共享的提示词来源。
     pub source: PendingSessionPromptSource,
+    /// Whether the original logical turn may register user-memory lifecycle effects.
+    /// 原始逻辑回合是否允许注册用户记忆生命周期效果。
+    pub observes_user: bool,
     /// Whether the VMM service was fully configured and running at turn admission.
     /// 回合准入时 VMM 服务是否已完成配置并处于运行状态。
     pub vmm_runtime_ready: bool,
@@ -765,6 +768,7 @@ fn begin_shared_prompt_turn_with_runtime_state_draft(
         workspace_path: input.workspace_path.to_string(),
         project_id: input.owning_project_id,
         source: input.source,
+        observes_user: conversation_hook_runtime.permits_user_observation(input.session_id),
         vmm_runtime_ready: input.vmm_runtime_ready,
         vmm_precheck_ready: input.vmm_precheck_ready,
         precheck_request: hook_requests.precheck,
@@ -1043,7 +1047,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             runtime_state.conversation_state.continuation = Default::default();
             runtime_state.updated_at = now.clone();
         }
-        if let Some(target_message_id) = input.start.canonical_user_message_id.as_deref() {
+        if let Some(target_message_id) = input.start.canonical_user_message_id.as_deref().filter(|_| input.start.observes_user) {
             // now is shared by the atomic local pre-provider VMM boundary transition.
             // now 由 Provider 调用前的原子本地 VMM 边界转换共享。
             let now = current_unix_millis_text();
@@ -1058,7 +1062,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             if pending_report.changed || active_turn_report.changed {
                 runtime_state.updated_at = now;
             }
-        } else if input.start.source.runs_completed_turn_hooks()
+        } else if input.start.observes_user && input.start.source.runs_completed_turn_hooks()
             && vmm_session_memory.requires_persistence()
         {
             return Err(String::from(

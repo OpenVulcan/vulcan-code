@@ -12,7 +12,9 @@ import {
 } from "@/components/features/settings/provider-presentation"
 import { orderCredentialDirectoryProviders } from "@/components/features/settings/provider-ordering"
 import {
-  CredentialUsageOverview,
+  CredentialUsageInlineFacts,
+  CredentialUsageQuotaPanel,
+  useCredentialUsageOverview,
   usageCapabilityRequiresManagementKey,
 } from "@/components/public-ai/credential-usage-overview"
 import { Badge } from "@/components/ui/badge"
@@ -41,7 +43,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { Combobox } from "@/components/ui/combobox"
 import { useI18n } from "@/i18n"
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import {
@@ -69,6 +70,7 @@ import type {
   PublicAiServiceEntry,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import { errorMessage } from "@/lib/display-format";
 
 // CredentialManagementArea renders credential-only account management and runtime metadata.
 // CredentialManagementArea 渲染仅凭据账号管理与运行时元数据。
@@ -92,7 +94,7 @@ export function CredentialManagementArea() {
   // 目录重试虽然只读，也不能彼此竞争或与账号修改竞争。
   const directoryLoadingRef = React.useRef(false)
   const [directoryLoading, setDirectoryLoading] = React.useState(false)
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
 
   // refresh loads the authoritative persisted graph and current process-local catalogs.
   // refresh 加载权威持久化连接图与当前进程内目录。
@@ -234,11 +236,11 @@ export function CredentialManagementArea() {
             </Button>
           </div>
         ) : null}
-        {error ? <SettingsErrorNotice className="settings-error-text" detail={error} message={locale === "zh-CN" ? "操作没有完成，请再试一次。" : "That didn't finish. Please try again."} /> : null}
+        {error ? <SettingsErrorNotice className="settings-error-text" detail={error} message={t("settings.providers.thatDidnTFinish")} /> : null}
         {!snapshot ? (
           <article className="settings-card">
-            <strong>{error ? (locale === "zh-CN" ? "凭据目录加载失败" : "Credential directory could not be loaded") : t("settings.credentials.connecting")}</strong>
-            {!error ? <p>{t("settings.credentials.connectingDescription")}</p> : <Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline">{locale === "zh-CN" ? "重新加载" : "Reload"}</Button>}
+            <strong>{error ? t("settings.providers.credentialDirectoryCouldNot") : t("settings.credentials.connecting")}</strong>
+            {!error ? <p>{t("settings.credentials.connectingDescription")}</p> : <Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline">{t("settings.providers.reload")}</Button>}
           </article>
         ) : visibleConnections.length > 0 ? (
           <div className="credential-management-list">
@@ -301,10 +303,10 @@ export function CredentialManagementArea() {
           />
         ) : (
           <SettingsEmptyState
-            action={<Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline"><RefreshCw className="size-4" />{locale === "zh-CN" ? "重新加载目录" : "Reload directory"}</Button>}
-            description={locale === "zh-CN" ? "加载供应商目录后，即可添加账号凭据。" : "Load the provider directory to add account credentials."}
+            action={<Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline"><RefreshCw className="size-4" />{t("settings.providers.reloadDirectory")}</Button>}
+            description={t("settings.providers.loadTheProviderDirectory")}
             icon={<Boxes />}
-            title={locale === "zh-CN" ? "供应商目录为空" : "The provider directory is empty"}
+            title={t("settings.providers.theProviderDirectoryIs")}
           />
         )}
         <PublicAiConnectionDialog
@@ -451,6 +453,13 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
   const serviceEntryPresentation = props.entry
     ? localizedServiceEntryPresentation(props.connection.provider_id, props.entry, t)
     : { title: providerName, tags: [] }
+  // usageOverview splits plan and balance into the identity column and quota into the usage column.
+  // usageOverview 将套餐与余额放入身份列，额度放入用量列。
+  const usageOverview = useCredentialUsageOverview({
+    connection: props.connection,
+    credentialProfile: props.credentialProfile,
+    usage: props.usage,
+  })
   return (
     <Card
       className="credential-account-card w-full gap-0 border border-border py-0 ring-0"
@@ -458,48 +467,60 @@ function CredentialAccountCard(props: CredentialAccountCardProps) {
     >
       <div className="credential-account-body">
         <CardHeader className="credential-account-identity">
-          <div className="flex min-w-0 items-start gap-3">
-            <ProviderIcon
-              category={props.provider?.category}
-              className="size-8 shrink-0"
-              providerId={props.connection.provider_id}
-              serviceEntryId={props.connection.service_entry_id}
-            />
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="relative shrink-0">
+              <ProviderIcon
+                category={props.provider?.category}
+                className="size-9"
+                providerId={props.connection.provider_id}
+                serviceEntryId={props.connection.service_entry_id}
+              />
+              {props.isDefault ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      aria-label={t("settings.credentials.currentDefault")}
+                      className="credential-account-default-mark"
+                      role="img"
+                      tabIndex={0}
+                    >
+                      <Star aria-hidden="true" className="size-2.5 fill-current" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{t("settings.credentials.currentDefault")}</TooltipContent>
+                </Tooltip>
+              ) : null}
+            </span>
             <div className="min-w-0 flex-1">
               <CardTitle className="truncate" title={props.connection.display_name}>{props.connection.display_name}</CardTitle>
-              <div className="mt-1 text-xs text-muted-foreground" title={serviceEntryPresentation.title}>
-                {serviceEntryPresentation.title}
-              </div>
-              {serviceEntryPresentation.tags.length > 0 || props.connection.pending_validation || !props.connection.enabled || props.isDefault ? (
-                <CardDescription className="mt-2 flex flex-wrap items-center gap-1.5">
-                  {serviceEntryPresentation.tags.map((tag) => (
-                    <Badge className="h-4 px-1.5 text-[10px]" key={tag} variant="outline">
-                      {tag}
-                    </Badge>
-                  ))}
-                  {props.connection.pending_validation ? (
-                    <Badge className="h-4 px-1.5 text-[10px]" variant="destructive">
-                      {t("settings.customModels.pendingValidation")}
-                    </Badge>
-                  ) : null}
-                  {!props.connection.enabled ? (
-                    <Badge className="h-4 px-1.5 text-[10px]" variant="secondary">
-                      {t("settings.credentials.disabledStatus")}
-                    </Badge>
-                  ) : null}
-                  {props.isDefault ? <Badge className="h-4 px-1.5 text-[10px]" variant="outline">{t("settings.credentials.currentDefault")}</Badge> : null}
-                </CardDescription>
-              ) : null}
+              <CardDescription className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
+                <span className="min-w-0 truncate" title={serviceEntryPresentation.title}>
+                  {serviceEntryPresentation.title}
+                </span>
+                {serviceEntryPresentation.tags.map((tag) => (
+                  <Badge className="h-4 px-1.5 text-[10px]" key={tag} variant="outline">
+                    {tag}
+                  </Badge>
+                ))}
+                {props.connection.pending_validation ? (
+                  <Badge className="h-4 px-1.5 text-[10px]" variant="destructive">
+                    {t("settings.customModels.pendingValidation")}
+                  </Badge>
+                ) : null}
+                {!props.connection.enabled ? (
+                  <Badge className="h-4 px-1.5 text-[10px]" variant="secondary">
+                    {t("settings.credentials.disabledStatus")}
+                  </Badge>
+                ) : null}
+              </CardDescription>
             </div>
           </div>
         </CardHeader>
 
         <CardContent className="credential-account-usage">
-          <CredentialUsageOverview
-            connection={props.connection}
-            credentialProfile={props.credentialProfile}
-            usage={props.usage}
-          />
+          <CredentialUsageQuotaPanel header={<CredentialUsageInlineFacts model={usageOverview.model} />}>
+            {usageOverview.quotaContent}
+          </CredentialUsageQuotaPanel>
         </CardContent>
       </div>
       {props.catalogError ? (
@@ -1375,10 +1396,4 @@ function oauthPhaseDisplayName(
     cancelled: "settings.credentials.oauth.cancelled",
   }
   return t(labels[phase])
-}
-
-// errorMessage normalizes unknown service failures for inline display.
-// errorMessage 归一化未知服务失败以供行内展示。
-function errorMessage(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
 }

@@ -26,7 +26,7 @@ use vulcan_workspace_store::local_database_runtime::{
     LanceDbDirectoryBinding, LocalDatabaseRuntime, SqliteFileBinding, SqliteHardeningOptions,
     SqliteOpenOptions, SqlitePragmaOptions,
 };
-use vulcan_workspace_store::local_sql::{self, BoundedQueryError, QueryJsonLimits};
+use vulcan_workspace_store::local_sql::{self, QueryJsonLimits};
 
 /// Maximum SQLite rows returned by one plugin query, shared by plugin-owned and host VLDB bindings.
 /// 单次插件 SQLite 查询允许返回的最大行数，插件自有库与宿主 VLDB 绑定共用。
@@ -38,7 +38,7 @@ const PLUGIN_SQLITE_MAX_QUERY_BYTES: usize = 4 * 1024 * 1024;
 
 /// Maximum wall-clock time allowed for one plugin SQLite query, shared by plugin-owned and host VLDB bindings.
 /// 单次插件 SQLite 查询允许占用的最长墙钟时间，插件自有库与宿主 VLDB 绑定共用。
-pub(crate) const PLUGIN_SQLITE_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+const PLUGIN_SQLITE_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximum LanceDB search result count exposed to one plugin request.
 /// 单次插件请求允许返回的最大 LanceDB 检索结果数。
@@ -211,7 +211,20 @@ impl PluginStorageService {
             })?;
         // serialGuard remains held through lazy initialization and the complete engine operation.
         // serialGuard 在按需初始化与完整引擎操作期间保持持有。
-        let _serial_guard = operation_lane.serial_gate.lock().await;
+        let _serial_guard = match request.deadline {
+            Some(deadline) => {
+                tokio::time::timeout_at(deadline.into(), operation_lane.serial_gate.lock())
+                    .await
+                    .map_err(|_| "Plugin storage deadline exceeded while queued.".to_owned())?
+            }
+            None => operation_lane.serial_gate.lock().await,
+        };
+        if request
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            return Err("Plugin storage deadline exceeded before execution.".into());
+        }
         if request.operation.is_sqlite() {
             self.ensure_sqlite(&request.plugin_id).await?;
         } else {
@@ -219,22 +232,24 @@ impl PluginStorageService {
         }
         match request.operation {
             VulcanPluginStorageOperation::SqliteMigrate => {
-                self.sqlite_migrate(&request.plugin_id, request.payload)
+                self.sqlite_migrate(&request.plugin_id, request.payload, request.deadline)
                     .await
             }
             VulcanPluginStorageOperation::SqliteExecute => {
-                self.sqlite_execute(&request.plugin_id, request.payload)
+                self.sqlite_execute(&request.plugin_id, request.payload, request.deadline)
                     .await
             }
             VulcanPluginStorageOperation::SqliteExecuteBatch => {
-                self.sqlite_execute_batch(&request.plugin_id, request.payload)
+                self.sqlite_execute_batch(&request.plugin_id, request.payload, request.deadline)
                     .await
             }
             VulcanPluginStorageOperation::SqliteQuery => {
-                self.sqlite_query(&request.plugin_id, request.payload).await
+                self.sqlite_query(&request.plugin_id, request.payload, request.deadline)
+                    .await
             }
             VulcanPluginStorageOperation::SqliteFlush => {
-                self.sqlite_flush(&request.plugin_id).await
+                self.sqlite_flush(&request.plugin_id, request.deadline)
+                    .await
             }
             VulcanPluginStorageOperation::LanceDbCreateTable => {
                 self.lancedb_create_table(&request.plugin_id, request.payload)
@@ -372,7 +387,12 @@ impl PluginStorageService {
 
     /// Applies one idempotent plugin schema migration.
     /// 应用一次幂等插件 Schema 迁移。
-    async fn sqlite_migrate(&self, plugin_id: &str, payload: Value) -> Result<Value, String> {
+    async fn sqlite_migrate(
+        &self,
+        plugin_id: &str,
+        payload: Value,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Value, String> {
         // migration is strictly decoded so unknown protocol fields fail explicitly.
         // migration 使用严格解码，未知协议字段会显式失败。
         let migration = serde_json::from_value::<SqliteMigrationPayload>(payload)
@@ -383,37 +403,38 @@ impl PluginStorageService {
         // migrationTableSql is host-owned metadata and cannot be replaced by plugin SQL.
         // migrationTableSql 是宿主持有的元数据，不能被插件 SQL 替换。
         let migration_table_sql = "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at_ms INTEGER NOT NULL, plugin_version TEXT NOT NULL)";
-        local_sql::execute_script_async(
+        local_sql::execute_script_until_async(
             &self.local,
             self.plugin_sqlite_binding(plugin_id),
-            migration_table_sql,
+            migration_table_sql.to_owned(),
             Vec::new(),
+            deadline,
         )
         .await
         .map_err(|error| format!("Failed to initialize plugin migration table: {error}"))?;
         // existingVersionQuery prevents reapplying an already committed migration.
         // existingVersionQuery 防止重复应用已提交迁移。
-        let existing_version_query = local_sql::query_json_async(
+        let existing_version_query = local_sql::query_json_until_async(
             &self.local,
             self.plugin_sqlite_binding(plugin_id),
-            "SELECT version FROM schema_migrations WHERE version = ?1 LIMIT 1",
+            "SELECT version FROM schema_migrations WHERE version = ?1 LIMIT 1".to_owned(),
             vec![SqliteValue::Integer(migration.version)],
+            plugin_query_deadline(deadline),
         )
         .await
         .map_err(|error| format!("Failed to inspect plugin migration version: {error}"))?;
         if existing_version_query.row_count > 0 {
             return Ok(json!({ "applied": false, "version": migration.version }));
         }
-        local_sql::execute_scripts_transaction_async(
+        local_sql::with_connection_until_async(
             &self.local,
             self.plugin_sqlite_binding(plugin_id),
-            migration.statements,
-            "INSERT INTO schema_migrations(version, applied_at_ms, plugin_version) VALUES (?1, ?2, ?3)",
-            vec![
-                SqliteValue::Integer(migration.version),
-                SqliteValue::Integer(migration.applied_at_ms),
-                SqliteValue::Text(migration.plugin_version),
-            ],
+            deadline,
+            move |connection| vulcan_sqlite_engine::sql_exec::execute_scripts_transaction(
+                connection, &migration.statements,
+                "INSERT INTO schema_migrations(version, applied_at_ms, plugin_version) VALUES (?1, ?2, ?3)",
+                &[SqliteValue::Integer(migration.version), SqliteValue::Integer(migration.applied_at_ms), SqliteValue::Text(migration.plugin_version)],
+            ).map_err(|error| error.to_string()),
         )
         .await
         .map_err(|error| format!("Failed to apply plugin SQLite migration atomically: {error}"))?;
@@ -422,7 +443,12 @@ impl PluginStorageService {
 
     /// Executes one parameterized SQLite write statement.
     /// 执行一条参数化 SQLite 写语句。
-    async fn sqlite_execute(&self, plugin_id: &str, payload: Value) -> Result<Value, String> {
+    async fn sqlite_execute(
+        &self,
+        plugin_id: &str,
+        payload: Value,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Value, String> {
         // request is strictly decoded so file or binding fields cannot be smuggled through.
         // request 使用严格解码，不能夹带文件或绑定字段。
         let request = serde_json::from_value::<SqliteExecutePayload>(payload)
@@ -433,11 +459,12 @@ impl PluginStorageService {
         let params = decode_sqlite_params(request.params)?;
         // result is projected from the typed in-process engine response.
         // result 从类型化进程内引擎响应投影。
-        let result = local_sql::execute_script_async(
+        let result = local_sql::execute_script_until_async(
             &self.local,
             self.plugin_sqlite_binding(plugin_id),
             request.sql,
             params,
+            deadline,
         )
         .await
         .map_err(|error| format!("Plugin SQLite execute failed: {error}"))?;
@@ -456,7 +483,12 @@ impl PluginStorageService {
 
     /// Executes one homogeneous parameter batch through the in-process transaction API.
     /// 通过进程内事务 API 执行一组同构参数批次。
-    async fn sqlite_execute_batch(&self, plugin_id: &str, payload: Value) -> Result<Value, String> {
+    async fn sqlite_execute_batch(
+        &self,
+        plugin_id: &str,
+        payload: Value,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Value, String> {
         // request is strictly decoded so file or binding fields cannot be smuggled through.
         // request 使用严格解码，不能夹带文件或绑定字段。
         let request = serde_json::from_value::<SqliteExecuteBatchPayload>(payload)
@@ -471,11 +503,12 @@ impl PluginStorageService {
             .collect::<Result<Vec<_>, _>>()?;
         // result is projected from the typed in-process engine response.
         // result 从类型化进程内引擎响应投影。
-        let result = local_sql::execute_batch_async(
+        let result = local_sql::execute_batch_until_async(
             &self.local,
             self.plugin_sqlite_binding(plugin_id),
             request.sql,
             items,
+            deadline,
         )
         .await
         .map_err(|error| format!("Plugin SQLite batch execute failed: {error}"))?;
@@ -492,7 +525,12 @@ impl PluginStorageService {
 
     /// Executes one bounded parameterized SQLite query.
     /// 执行一次有界参数化 SQLite 查询。
-    async fn sqlite_query(&self, plugin_id: &str, payload: Value) -> Result<Value, String> {
+    async fn sqlite_query(
+        &self,
+        plugin_id: &str,
+        payload: Value,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Value, String> {
         // request is strictly decoded so file or binding fields cannot be smuggled through.
         // request 使用严格解码，不能夹带文件或绑定字段。
         let request = serde_json::from_value::<SqliteQueryPayload>(payload)
@@ -501,9 +539,9 @@ impl PluginStorageService {
         // params uses the explicit tagged scalar protocol.
         // params 使用显式标记的标量协议。
         let params = decode_sqlite_params(request.params)?;
-        // result is bounded while reading, and a timeout interrupts the running statement.
-        // result 在读取期间即受约束，超时会中断正在运行的语句。
-        let result = local_sql::query_json_bounded_async(
+        // result is bounded while reading and interrupted at the effective deadline.
+        // result 在读取期间即受约束，并在有效截止时间被中断。
+        let result = local_sql::query_json_bounded_until_async(
             &self.local,
             self.plugin_sqlite_binding(plugin_id),
             request.sql,
@@ -512,16 +550,10 @@ impl PluginStorageService {
                 max_rows: PLUGIN_SQLITE_MAX_QUERY_ROWS,
                 max_bytes: PLUGIN_SQLITE_MAX_QUERY_BYTES,
             },
-            PLUGIN_SQLITE_QUERY_TIMEOUT,
+            plugin_query_deadline(deadline),
         )
         .await
-        .map_err(|error| match error {
-            BoundedQueryError::TimedOut => format!(
-                "Plugin SQLite query exceeded the {} second timeout.",
-                PLUGIN_SQLITE_QUERY_TIMEOUT.as_secs()
-            ),
-            BoundedQueryError::Failed(error) => format!("Plugin SQLite query failed: {error}"),
-        })?;
+        .map_err(|error| format!("Plugin SQLite query failed: {error}"))?;
         // rows is decoded once at the host boundary so Lua receives ordinary JSON-safe values.
         // rows 在宿主边界只解码一次，使 Lua 接收普通 JSON 安全值。
         let rows = serde_json::from_str::<Value>(&result.json_data)
@@ -531,14 +563,19 @@ impl PluginStorageService {
 
     /// Checkpoints the plugin WAL after all earlier serialized calls have completed.
     /// 在此前串行调用全部完成后检查点化插件 WAL。
-    async fn sqlite_flush(&self, plugin_id: &str) -> Result<Value, String> {
+    async fn sqlite_flush(
+        &self,
+        plugin_id: &str,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Value, String> {
         // result is returned for diagnostics while the plugin sees no physical path.
         // result 用于诊断，同时插件不会看到物理路径。
-        let result = local_sql::query_json_async(
+        let result = local_sql::query_json_until_async(
             &self.local,
             self.plugin_sqlite_binding(plugin_id),
-            "PRAGMA wal_checkpoint(PASSIVE)",
+            "PRAGMA wal_checkpoint(PASSIVE)".to_owned(),
             Vec::new(),
+            plugin_query_deadline(deadline),
         )
         .await
         .map_err(|error| format!("Plugin SQLite flush failed: {error}"))?;
@@ -1401,3 +1438,10 @@ mod tests {
 #[cfg(test)]
 #[path = "plugin_storage_runtime_tests.rs"]
 mod runtime_tests;
+
+/// Caps a private-store query by both its original Action deadline and the store ceiling.
+/// 使用原始 Action 截止时间与存储上限共同限制私有存储查询。
+pub(crate) fn plugin_query_deadline(action: Option<std::time::Instant>) -> std::time::Instant {
+    let ceiling = std::time::Instant::now() + PLUGIN_SQLITE_QUERY_TIMEOUT;
+    action.map_or(ceiling, |deadline| deadline.min(ceiling))
+}

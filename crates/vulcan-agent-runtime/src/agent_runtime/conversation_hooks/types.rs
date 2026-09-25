@@ -284,6 +284,9 @@ pub(super) struct ActiveConversationTurn {
     /// Whether the VMM service was fully configured and live when this turn was admitted.
     /// 当前回合准入时 VMM 服务是否已完成配置并处于运行就绪状态。
     pub(super) vmm_runtime_ready: bool,
+    /// Durable lifecycle policy; agent-originated preparation and completion skip user observers.
+    /// 可靠生命周期策略；代理发起的准备和完成跳过用户观察器。
+    pub(super) observes_user: bool,
     /// Timeline items collected before the final assistant answer.
     /// 最终助手回答前收集到的 timeline 项。
     pub(super) timeline: Vec<ConversationTimelineItem>,
@@ -323,11 +326,19 @@ impl ActiveConversationTurn {
             turn_id: turn_id.into(),
             user_content: user_content.into(),
             vmm_runtime_ready,
+            observes_user: true,
             timeline: Vec::new(),
             recorded_prompt_entry_ids: std::collections::BTreeSet::new(),
             observed_input_identities: BTreeMap::new(),
             canonical_input_receipts: BTreeMap::new(),
         }
+    }
+
+    /// Installs the original observation policy while retaining internal execution correlation.
+    /// 安装原始观察策略，同时保留内部执行关联。
+    pub(super) fn with_user_observation(mut self, observes_user: bool) -> Self {
+        self.observes_user = observes_user;
+        self
     }
 }
 

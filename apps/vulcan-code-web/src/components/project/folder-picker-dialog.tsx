@@ -65,7 +65,7 @@ export function ProjectFolderPickerDialog({
   onConfirm,
   onOpenChange,
 }: ProjectFolderPickerDialogProps) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   // listing stores the current directory listing returned by the service.
   // listing 保存服务返回的当前目录列表。
   const [listing, setListing] = React.useState<ProjectDirectoryListing | null>(null);
@@ -274,7 +274,7 @@ export function ProjectFolderPickerDialog({
             </div>
           </section>
         </div>
-        {listing && pathInput !== listing.path && <p role="status" className="text-sm text-muted-foreground">{locale === "zh-CN" ? "请先打开输入的路径，再确认目录。" : "Open the entered path before confirming the directory."}</p>}
+        {listing && pathInput !== listing.path && <p role="status" className="text-sm text-muted-foreground">{t("project.folderPicker.openTheEnteredPath")}</p>}
         {error ? <div role="alert" className="project-folder-picker-error">{error}</div> : null}
         {listing?.notice ? <div className="project-folder-picker-notice">{listing.notice}</div> : null}
         <DialogFooter>

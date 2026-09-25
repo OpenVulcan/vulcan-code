@@ -2,7 +2,12 @@
 //! git diff services 辅助逻辑。
 
 use super::*;
-use crate::git::discover_webui_git_repository_catalog;
+use crate::git::{
+    WebuiGitHistoryPage, WebuiGitHistoryRequest, WebuiGitLocalBranchList,
+    WebuiGitRepositoryTargetRequest, WebuiGitSwitchBranchRequest, WebuiGitSwitchBranchResult,
+    discover_webui_git_repository_catalog, load_webui_git_history_page,
+    load_webui_git_local_branches, switch_webui_git_branch,
+};
 use crate::git_watcher::reconcile_webui_git_repository_watches;
 use vulcan_workspace_store::workspace_store::{
     load_git_repository_monitoring_preferences, persist_git_repository_monitoring_preference,
@@ -347,6 +352,104 @@ pub(crate) async fn service_workspace_git_file_action(
     })
     .await
     .map_err(|error| format!("workspace Git file action task failed: {error}"))?
+}
+
+/// Lists local branches for one discovered repository.
+/// 列出单个已发现仓库的本地分支。
+pub(crate) async fn service_workspace_git_branches(
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    request: WebuiGitRepositoryTargetRequest,
+) -> Result<WebuiGitLocalBranchList, String> {
+    let repository_root = resolve_webui_git_request_repository_root(
+        &state,
+        workspace_path.as_deref(),
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        request.repository_key,
+    )
+    .await?;
+    spawn_service_blocking_task(move || load_webui_git_local_branches(&repository_root))
+        .await
+        .map_err(|error| format!("workspace Git branch list task failed: {error}"))?
+}
+
+/// Switches one monitored repository to a local branch, optionally creating it from HEAD.
+/// 将单个已监听仓库切换到本地分支，可选择基于 HEAD 新建。
+pub(crate) async fn service_workspace_git_switch_branch(
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    request: WebuiGitSwitchBranchRequest,
+) -> Result<WebuiGitSwitchBranchResult, String> {
+    let repository_root = resolve_webui_git_request_repository_root(
+        &state,
+        workspace_path.as_deref(),
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        request.repository_key.clone(),
+    )
+    .await?;
+    // operation_guard serializes the checkout with commits and file actions on the same repository.
+    // operation_guard 让本次检出与同一仓库上的提交和文件操作保持串行。
+    let _operation_guard = begin_webui_git_repository_operation(&repository_root).await?;
+    ensure_webui_git_repository_monitoring_enabled(
+        state,
+        workspace_path,
+        project_id,
+        conversation_id,
+        request.repository_key.as_deref(),
+    )
+    .await?;
+    spawn_service_blocking_task(move || switch_webui_git_branch(&repository_root, &request))
+        .await
+        .map_err(|error| format!("workspace Git branch switch task failed: {error}"))?
+}
+
+/// Loads one page of graph-ordered history for one discovered repository.
+/// 为单个已发现仓库加载一页按图谱顺序排列的历史。
+pub(crate) async fn service_workspace_git_history(
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    request: WebuiGitHistoryRequest,
+) -> Result<WebuiGitHistoryPage, String> {
+    let repository_root = resolve_webui_git_request_repository_root(
+        &state,
+        workspace_path.as_deref(),
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        request.repository_key.clone(),
+    )
+    .await?;
+    spawn_service_blocking_task(move || load_webui_git_history_page(&repository_root, &request))
+        .await
+        .map_err(|error| format!("workspace Git history task failed: {error}"))?
+}
+
+/// Resolves the repository root addressed by one WebUI Git request.
+/// 解析单个 WebUI Git 请求所指向的仓库根目录。
+async fn resolve_webui_git_request_repository_root(
+    state: &SharedServiceBridgeState,
+    workspace_path: Option<&str>,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+    repository_key: Option<String>,
+) -> Result<std::path::PathBuf, String> {
+    let resolved_workspace_path =
+        webui_diff_workspace_path_from_state(state, project_id, conversation_id, workspace_path)?;
+    spawn_service_blocking_task(move || {
+        resolve_webui_repository_root_from_workspace_text_with_key(
+            &resolved_workspace_path,
+            repository_key.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("workspace Git repository resolution task failed: {error}"))?
 }
 
 /// Resolves the workspace path for a WebUI diff request from backend-owned state first.

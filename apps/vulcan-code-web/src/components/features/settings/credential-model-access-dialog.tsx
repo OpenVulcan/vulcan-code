@@ -45,6 +45,7 @@ import type {
   PublicAiServiceEntry,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import { errorMessage } from "@/lib/display-format"
 
 // CredentialModelFilter selects the human-facing subset displayed in the dialog.
 // CredentialModelFilter 选择弹窗中面向用户展示的模型子集。
@@ -436,10 +437,4 @@ function directoryKindLabel(
     case "unavailable":
       return t("settings.credentialModels.directoryUnavailable")
   }
-}
-
-// errorMessage converts one rejected frontend operation into readable inline feedback.
-// errorMessage 把一个被拒绝的前端操作转换为可读的行内反馈。
-function errorMessage(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
 }

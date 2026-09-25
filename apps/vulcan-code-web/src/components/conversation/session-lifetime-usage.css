@@ -16,7 +16,7 @@
 .lifetime-usage-section {
   /* Native summary inheritance does not preserve the card radius; both surfaces use this explicit value. */
   /* 原生 summary 的继承未保留卡片圆角；两层表面共用此显式取值。 */
-  --lifetime-usage-card-radius: 7px;
+  --lifetime-usage-card-radius: var(--vcn-radius-md);
   color: var(--popover-foreground);
 }
 
@@ -34,14 +34,14 @@
 }
 
 .lifetime-usage-heading strong {
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
 .lifetime-usage-total span,
 .lifetime-usage-note {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.5;
 }
 
@@ -86,7 +86,7 @@
 
 .lifetime-usage-group-title {
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--vcn-font-size-2xs);
   font-weight: 500;
   line-height: 16px;
   overflow-wrap: anywhere;
@@ -113,12 +113,12 @@
 
 .lifetime-usage-metrics dt {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .lifetime-usage-metrics dd {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }

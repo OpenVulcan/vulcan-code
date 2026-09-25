@@ -158,7 +158,7 @@ mod tests {
         for tool_id in [
             "ask_parent",
             "reply_question",
-            "wait_question",
+            "wait_agents_result",
             "cancel_question",
             "send_notification",
         ] {

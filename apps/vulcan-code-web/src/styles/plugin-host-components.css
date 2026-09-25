@@ -33,11 +33,11 @@
   gap: 4px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--background);
   color: var(--muted-foreground);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1;
   text-decoration: none;
   white-space: nowrap;
@@ -71,11 +71,11 @@
 .plugin-statistics-range-presets, .plugin-statistics-range-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .plugin-statistics-range-actions { justify-content: flex-end; }
 .plugin-statistics-range-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.plugin-statistics-range-fields label { display: grid; gap: 8px; font-size: 12px; color: var(--muted-foreground); }
+.plugin-statistics-range-fields label { display: grid; gap: 8px; font-size: var(--vcn-font-size-sm); color: var(--muted-foreground); }
 .plugin-statistics-range-fields input { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); color: var(--foreground); font: inherit; }
 .plugin-statistics-range-fields input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .plugin-statistics-range-fields input:disabled { opacity: 0.5; }
-.plugin-statistics-range-follow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.plugin-statistics-range-follow { display: flex; align-items: center; gap: 8px; font-size: var(--vcn-font-size-sm); }
 
 /* RTK routes must not depend on the separately loaded system-settings stylesheet. */
 /* RTK 路由不能依赖单独加载的系统设置样式表。 */
@@ -87,13 +87,13 @@
 .plugin-panel-rtk .settings-route-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
 .plugin-panel-rtk .settings-route-option { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
 .plugin-panel-rtk .settings-route-option:hover { background: var(--muted); }
-.plugin-panel-rtk .settings-route-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.plugin-panel-rtk .settings-route-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--vcn-font-size-sm); }
 /* Preserve native checkbox keyboard/label behavior while replacing browser-default blue paint. */
 /* 保留原生复选框的键盘与标签交互，同时替换浏览器默认蓝色样式。 */
 .plugin-panel-rtk input[type="checkbox"], .plugin-statistics-range-follow input {
   appearance: none; display: inline-grid; place-content: center; flex: 0 0 16px;
   width: 16px; height: 16px; margin: 0; border: 1px solid var(--input);
-  border-radius: 4px; background: var(--background); cursor: pointer;
+  border-radius: var(--vcn-radius-xs); background: var(--background); cursor: pointer;
 }
 .plugin-panel-rtk input[type="checkbox"]:checked, .plugin-statistics-range-follow input:checked { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
 .plugin-panel-rtk input[type="checkbox"]:checked::after, .plugin-statistics-range-follow input:checked::after { content: ""; width: 8px; height: 5px; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-1px) rotate(-45deg); }
@@ -103,7 +103,7 @@
 /* Keep statistics details outside table flow, with readable aligned facts in the host tooltip. */
 /* 将统计详情移出表格排版，在宿主提示层内对齐展示可读事实。 */
 .plugin-help-tooltip-trigger[data-tone="error"] { color: var(--destructive); }
-.plugin-statistics-detail-tooltip { width: 280px; max-width: calc(100vw - 48px); font-size: 12px; }
+.plugin-statistics-detail-tooltip { width: 280px; max-width: calc(100vw - 48px); font-size: var(--vcn-font-size-sm); }
 .plugin-statistics-detail-tooltip > strong { display: block; margin-bottom: 10px; }
 .plugin-statistics-detail-tooltip p { margin: 10px 0 0; color: color-mix(in srgb, currentColor 80%, transparent); white-space: normal; }
 .plugin-statistics-detail-facts { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(55%); gap: 6px 16px; margin: 0; }
@@ -113,7 +113,7 @@
 .plugin-statistics-detail-facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: normal; }
 /* Align exact nonzero costs and unit prices in a compact tooltip table. */
 /* 将精确非零费用与单价对齐到紧凑的提示表格中。 */
-.plugin-statistics-cost-table { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: 11px; }
+.plugin-statistics-cost-table { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: var(--vcn-font-size-xs); }
 .plugin-statistics-cost-table :is(th, td) { padding: 5px 3px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .plugin-statistics-cost-table th { font-weight: 500; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
 .plugin-statistics-cost-table :is(th, td):first-child { text-align: left; }
@@ -130,7 +130,7 @@
 .plugin-statistics-estimate-cell > span { white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .plugin-statistics-model-identity, .plugin-statistics-time { display: grid; gap: 3px; }
 .plugin-statistics-model-identity { white-space: normal; overflow-wrap: anywhere; }
-.plugin-statistics-model-identity > small, .plugin-statistics-time > small { color: var(--muted-foreground); font-size: 11px; }
+.plugin-statistics-model-identity > small, .plugin-statistics-time > small { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
 
 .plugin-text-document-content,
 .plugin-text-document-state {
@@ -143,7 +143,7 @@
   background: var(--muted);
   color: var(--foreground);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.55;
   white-space: pre-wrap;
   user-select: text;
@@ -183,7 +183,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -222,7 +222,7 @@
 .plugin-activity-heatmap-content[data-layout="days"] .plugin-activity-month-labels { min-width: 0; }
 .plugin-activity-heatmap-content[data-layout="days"] .plugin-activity-heatmap { grid-auto-flow: row; grid-template-rows: 22px; min-width: 0; }
 .plugin-activity-heatmap-content[data-layout="days"] .plugin-activity-cell { width: 100%; height: 22px; }
-.plugin-activity-day-labels { display: grid; gap: 3px; margin-top: 3px; color: var(--muted-foreground); font-size: 10px; text-align: center; }
+.plugin-activity-day-labels { display: grid; gap: 3px; margin-top: 3px; color: var(--muted-foreground); font-size: var(--vcn-font-size-2xs); text-align: center; }
 
 .plugin-activity-month-labels {
   display: grid;
@@ -230,7 +230,7 @@
   min-width: max-content;
   height: 18px;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--vcn-font-size-2xs);
   white-space: nowrap;
 }
 
@@ -252,7 +252,7 @@
   height: 11px;
   padding: 0;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--vcn-radius-xs);
   background: color-mix(in srgb, var(--muted) 84%, var(--background));
 }
 
@@ -267,7 +267,7 @@
   align-items: center;
   gap: 5px;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--vcn-font-size-2xs);
   white-space: nowrap;
 }
 
@@ -317,7 +317,7 @@
 
 .plugin-chart-axis-label {
   fill: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .plugin-chart-legend {
@@ -335,7 +335,7 @@
   border: 0;
   background: transparent;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .plugin-chart-legend-item[data-visible="false"] {
@@ -392,7 +392,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-width: 60ch;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   color: var(--muted-foreground);
 }
 
@@ -425,7 +425,7 @@
 .plugin-statistics-privacy {
   margin: 4px 0 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .plugin-statistics-toolbar {
@@ -436,14 +436,14 @@
 
 .plugin-statistics-range-header {
   min-height: 28px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .plugin-statistics-toolbar-select {
   width: 138px;
   height: 28px;
   min-height: 28px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .plugin-statistics-summary-grid {
@@ -508,7 +508,7 @@
   border-radius: var(--radius);
   background: var(--card);
   box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   overflow-wrap: anywhere;
 }
 
@@ -523,13 +523,13 @@
 .plugin-statistics-cost-value { font-size: 26px; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .plugin-statistics-token-values { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-block: 10px; }
 .plugin-statistics-token-values > div { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; min-width: 0; }
-.plugin-statistics-token-values > div > span:first-child { grid-column: 1 / -1; color: var(--muted-foreground); font-size: 12px; }
+.plugin-statistics-token-values > div > span:first-child { grid-column: 1 / -1; color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
 .plugin-statistics-token-values strong { font-size: 20px; font-variant-numeric: tabular-nums; }
-.plugin-statistics-token-share { align-self: center; font-size: 12px; color: var(--muted-foreground); }
-.plugin-statistics-token-bar { display: flex; height: 8px; overflow: hidden; border-radius: 4px; background: var(--muted); }
+.plugin-statistics-token-share { align-self: center; font-size: var(--vcn-font-size-sm); color: var(--muted-foreground); }
+.plugin-statistics-token-bar { display: flex; height: 8px; overflow: hidden; border-radius: var(--vcn-radius-xs); background: var(--muted); }
 .plugin-statistics-token-bar > span:first-child { background: var(--chart-1); }
 .plugin-statistics-token-bar > span:last-child { background: var(--chart-2); }
-.plugin-statistics-cache-facts { font-size: 12px; }
+.plugin-statistics-cache-facts { font-size: var(--vcn-font-size-sm); }
 /* Edit prices in the host modal without a second bordered panel inside it. */
 /* 在宿主弹窗内编辑价格，避免再嵌套一层带边框的面板。 */
 .plugin-statistics-price-dialog { width: min(600px, calc(100vw - 32px)); }
@@ -542,7 +542,7 @@
 .plugin-statistics-pricing-model {
   min-width: 0;
   margin: 0;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   overflow-wrap: anywhere;
 }
 
@@ -562,7 +562,7 @@
   gap: 5px;
   min-width: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 /* Raw plugin inputs inherit the same surface and focus contract as host forms. */
@@ -599,7 +599,7 @@
 .plugin-statistics-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .plugin-statistics-table th,
@@ -641,7 +641,7 @@
 /* Keep caller and operation on separate lines within the same daily column. */
 /* 将每日用量的消费者与操作放在同列的独立两行中。 */
 .plugin-statistics-consumer-operation { display: grid; gap: 4px; }
-.plugin-statistics-consumer-operation > span:last-child { color: var(--muted-foreground); font-size: 11px; }
+.plugin-statistics-consumer-operation > span:last-child { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
 
 /* Timing labels and values stay aligned on two lines, matching the adjacent Token cell density. */
 /* 计时标签和值保持双行对齐，与相邻 Token 单元格保持一致的信息密度。 */
@@ -650,13 +650,13 @@
   gap: 4px;
   border-inline-start: 3px solid var(--chart-2);
   padding-inline-start: 8px;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
 .plugin-statistics-latency > div { display: flex; align-items: baseline; gap: 8px; }
 .plugin-statistics-latency > div > span:first-child { color: var(--muted-foreground); min-width: 42px; }
 .plugin-statistics-latency > div > span:last-child { color: var(--chart-2); }
-.plugin-statistics-latency-unknown { color: var(--muted-foreground); font-size: 11px; }
+.plugin-statistics-latency-unknown { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
 
 .plugin-chart-point {
   cursor: default;

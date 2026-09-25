@@ -1,8 +1,9 @@
+import { translateActive } from "@/i18n";
 import type { VceJobSummary } from "@/types";
 import type { ServiceRequestOptions } from "@/service/protocol";
 import {
   VCE_OBSERVER_READ_DEADLINE_MS,
-  VCE_OBSERVER_READ_TIMEOUT_MESSAGE,
+  VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY,
 } from "./vce-observer-timeouts";
 
 // Expose immutable job observations shared by all mounted views of the same project.
@@ -43,7 +44,7 @@ export const EMPTY_VCE_OBSERVED_JOB: VceObservedJob = Object.freeze({ job: null,
 // current/incoming 为已观察／持久回执。返回较新回执；空值绝不擦除已有回执。
 export function mergeVceJobReceipt(current: VceJobSummary | null, incoming: VceJobSummary | null, projectId: string): VceJobSummary | null {
   if (incoming === null) return current;
-  if (incoming.projectId !== projectId) throw new Error("语义索引作业返回了其他项目的数据。");
+  if (incoming.projectId !== projectId) throw new Error(translateActive("codeContext.observer.foreignProjectJob"));
   if (current === null || current.projectId !== projectId) return incoming;
   if (current.jobId === incoming.jobId) return incoming.sequence > current.sequence ? incoming : current;
   if (incoming.createdAtUnixMs !== current.createdAtUnixMs) {
@@ -182,7 +183,7 @@ export class VceJobObserverStore {
   // Apply an explicit command receipt for projectId; returns nothing and never resurrects a view.
   // 应用 projectId 的明确命令回执；无返回值且绝不复活视图。
   receive(projectId: string, receipt: VceJobSummary): void {
-    if (receipt.projectId !== projectId) throw new Error("索引回执项目身份不匹配。");
+    if (receipt.projectId !== projectId) throw new Error(translateActive("codeContext.observer.receiptMismatch"));
     // entry is absent after final unmount, which must discard the command's delayed UI receipt.
     // entry 在最后一次卸载后不存在，此时必须丢弃命令迟到的界面回执。
     const entry = this.projects.get(projectId);
@@ -206,7 +207,7 @@ export class VceJobObserverStore {
         // receipt must belong to the explicitly requested job, even if a new job is now visible.
         // receipt 必须属于明确请求的作业，即使此时已显示新作业。
         const receipt = await this.transport.cancel(projectId, job.jobId);
-        if (receipt.projectId !== projectId || receipt.jobId !== job.jobId) throw new Error("取消索引作业返回了不匹配的身份。");
+        if (receipt.projectId !== projectId || receipt.jobId !== job.jobId) throw new Error(translateActive("codeContext.observer.cancelMismatch"));
         if (this.owns(entry)) this.accept(entry, receipt);
       } catch (error) {
         if (this.owns(entry) && entry.snapshot.job?.jobId === job.jobId) {
@@ -260,13 +261,13 @@ export class VceJobObserverStore {
       const receipt = await this.transport.load(entry.projectId, { signal: controller.signal });
       if (controller.signal.aborted) {
         if (timedOut && this.owns(entry)) {
-          entry.readError = VCE_OBSERVER_READ_TIMEOUT_MESSAGE;
+          entry.readError = translateActive(VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY);
           this.publish(entry);
         }
         return;
       }
       if (!this.owns(entry)) return;
-      if (receipt !== null && receipt.projectId !== entry.projectId) throw new Error("语义索引作业返回了其他项目的数据。");
+      if (receipt !== null && receipt.projectId !== entry.projectId) throw new Error(translateActive("codeContext.observer.foreignProjectJob"));
       entry.readError = null;
       this.accept(entry, receipt);
     } catch (error) {
@@ -274,7 +275,7 @@ export class VceJobObserverStore {
       // 卸载属于静默传输控制；达到期限时发布可重试诊断。
       if (controller.signal.aborted) {
         if (timedOut && this.owns(entry)) {
-          entry.readError = VCE_OBSERVER_READ_TIMEOUT_MESSAGE;
+          entry.readError = translateActive(VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY);
           this.publish(entry);
         }
       } else if (this.owns(entry)) {

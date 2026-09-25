@@ -50,7 +50,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   line-height: 16px;
   text-overflow: ellipsis;
@@ -61,7 +61,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: var(--vcn-font-size-2xs);
   line-height: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -84,7 +84,7 @@
 
 .composer-select-item-copy small {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .model-picker-content {
@@ -113,7 +113,7 @@
 .model-picker-filter input {
   height: 34px;
   flex: 1 1 auto;
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
 }
 
 .model-picker-scroll {
@@ -132,7 +132,7 @@
   align-items: center;
   justify-content: center;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .model-picker-row {
@@ -145,7 +145,7 @@
   gap: 8px;
   padding: 0 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
   color: var(--foreground);
   text-align: left;
@@ -170,7 +170,7 @@
   align-items: center;
   gap: 8px;
   padding: 0 8px 0 0;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
 }
 
 .model-picker-group-row {
@@ -208,8 +208,8 @@
   width: 108px;
   max-width: 108px;
   overflow: hidden;
-  border-radius: 7px;
-  font-size: 11px;
+  border-radius: var(--vcn-radius-md);
+  font-size: var(--vcn-font-size-xs);
 }
 
 .composer-select-trigger.model-account > [data-slot="select-value"] {
@@ -245,7 +245,7 @@
 .model-picker-row-title {
   min-width: 0;
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
   line-height: 16px;
   text-overflow: ellipsis;
@@ -255,7 +255,7 @@
 .model-picker-row-meta,
 .model-picker-row-id {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 13px;
 }
 
@@ -285,8 +285,8 @@
   max-width: 120px;
   gap: 5px;
   padding: 0 8px;
-  border-radius: 999px;
-  font-size: 11px;
+  border-radius: var(--vcn-radius-pill);
+  font-size: var(--vcn-font-size-xs);
   font-weight: 500;
 }
 
@@ -313,7 +313,7 @@
 .secondary-route-title-tag {
   margin-left: 4px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 400;
 }
 
@@ -321,14 +321,14 @@
   min-height: 180px;
   max-height: min(50vh, 420px);
   resize: vertical;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   line-height: 1.55;
 }
 
 .send-button {
   width: 26px;
   height: 26px;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--foreground);
   color: var(--background);
 }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use vulcan_plugin_runtime::{
     VulcanPluginActionCaller, VulcanPluginActionRequest, VulcanPluginRuntimeState,
 };
-use vulcan_service_api::{PluginTextAssetSource, PluginUiModuleSource};
+use vulcan_service_api::{PluginTextAssetSource, PluginUiActionPolicy, PluginUiModuleSource};
 
 use crate::{SharedServiceBridgeState, service_vulcan_plugin_runtime};
 
@@ -38,6 +38,8 @@ pub(crate) async fn service_invoke_plugin_action(
     action_id: String,
     arguments: Value,
     workspace_path: Option<String>,
+    runtime_identity: String,
+    identity: vulcan_plugin_runtime::VulcanPluginActionIdentity,
 ) -> Result<Value, String> {
     let runtime = service_vulcan_plugin_runtime(&state)?;
     // reuseEnabledRuntime is authorized only for global plugin pages without a workspace-bound action context.
@@ -45,15 +47,35 @@ pub(crate) async fn service_invoke_plugin_action(
     let reuse_enabled_runtime = workspace_path.is_none();
     let workspace_root = resolve_plugin_action_workspace_root(workspace_path.as_deref())?;
     runtime
-        .invoke_action(VulcanPluginActionRequest {
-            plugin_id,
-            action_id,
-            arguments,
-            caller: VulcanPluginActionCaller::PluginUi,
-            workspace_root,
-            reuse_enabled_runtime,
-        })
+        .invoke_ui_action(
+            VulcanPluginActionRequest {
+                plugin_id,
+                action_id,
+                arguments,
+                caller: VulcanPluginActionCaller::PluginUi,
+                workspace_root,
+                reuse_enabled_runtime,
+            },
+            &runtime_identity,
+            identity,
+        )
         .await
+        .map_err(|error| error.to_string())
+}
+
+/// Reads or cancels one caller-owned invocation without exposing business payloads.
+/// 读取或取消单个调用方持有的调用，不暴露业务载荷。
+/// The authenticated renderer supplies its nonce and original runtime identity.
+/// 已认证渲染器提供自身随机标识与原始运行实例身份。
+pub(crate) fn service_plugin_action_status(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+    runtime_identity: String,
+    identity: vulcan_plugin_runtime::VulcanPluginActionIdentity,
+    cancel: bool,
+) -> Result<Option<vulcan_plugin_runtime::VulcanPluginActionStatus>, String> {
+    service_vulcan_plugin_runtime(&state)?
+        .find_action_status(&plugin_id, &runtime_identity, &identity, cancel)
         .map_err(|error| error.to_string())
 }
 
@@ -127,6 +149,7 @@ pub(crate) fn service_load_plugin_ui_module(
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is no longer installed."))?;
     if current_plugin.runtime_state != VulcanPluginRuntimeState::Enabled
         || current_plugin.content_fingerprint != content_fingerprint
+        || current_plugin.generation != plugin.generation
     {
         return Err(format!(
             "Vulcan plugin `{plugin_id}` changed while its UI module was being resolved."
@@ -156,6 +179,22 @@ pub(crate) fn service_load_plugin_ui_module(
         ));
     }
     Ok(PluginUiModuleSource {
+        runtime_identity: format!("{}:{}", snapshot.service_epoch, plugin.generation),
+        action_policies: manifest.lua_runtime.as_ref().map_or_else(Vec::new, |lua| {
+            lua.actions
+                .iter()
+                .filter(|action| action.callers.contains(&VulcanPluginActionCaller::PluginUi))
+                .map(|action| PluginUiActionPolicy {
+                    id: action.id.clone(),
+                    effect: match action.effect {
+                        vulcan_plugin_runtime::VulcanPluginActionEffect::Read => "read",
+                        vulcan_plugin_runtime::VulcanPluginActionEffect::Mutation => "mutation",
+                    }
+                    .to_owned(),
+                    result_cache_ms: action.result_cache_ms,
+                })
+                .collect()
+        }),
         plugin_id,
         mount_id,
         export_name: mount_export,

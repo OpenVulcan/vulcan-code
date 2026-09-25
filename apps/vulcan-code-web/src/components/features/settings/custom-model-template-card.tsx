@@ -5,6 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useI18n } from "@/i18n"
+import { formatTokenCount } from "@/lib/usage-format"
 import { CustomProviderMutationContext } from "./custom-provider-mutation-context"
 import {
   getPublicAiCustomModelTemplateSuggestions,
@@ -118,8 +119,8 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
         <AlertDescription className="space-y-3">
           <p>{t("settings.customModels.templateUpdateDescription")}</p>
           <div className="grid gap-2 rounded-lg border p-3 text-xs sm:grid-cols-2">
-            <p>{t("settings.customModels.templateCurrent")}: {appliedSelection.context_limit.toLocaleString()} Token · {(appliedSelection.input_resources ?? []).join(", ") || t("settings.models.modality.text")}</p>
-            <p>{t("settings.customModels.templateLatest")}: {appliedSuggestion.context_limit.toLocaleString()} Token · {appliedSuggestion.input_resources.join(", ") || t("settings.models.modality.text")}</p>
+            <p>{t("settings.customModels.templateCurrent")}: {formatTokenCount(appliedSelection.context_limit)} Token · {(appliedSelection.input_resources ?? []).join(", ") || t("settings.models.modality.text")}</p>
+            <p>{t("settings.customModels.templateLatest")}: {formatTokenCount(appliedSuggestion.context_limit)} Token · {appliedSuggestion.input_resources.join(", ") || t("settings.models.modality.text")}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button disabled={saving} onClick={() => void saveDecision(appliedDecision(appliedSuggestion))} size="sm" type="button">
@@ -137,7 +138,7 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
         <Sparkles className="size-4" />
         <AlertTitle>{t("settings.customModels.templateApplied")}</AlertTitle>
         <AlertDescription className="space-y-3">
-          <p>{props.decision.selection.template_key} · {props.decision.selection.context_limit.toLocaleString()} Token</p>
+          <p>{props.decision.selection.template_key} · {formatTokenCount(props.decision.selection.context_limit)} Token</p>
           <Button disabled={saving} onClick={() => void saveDecision(undefined)} size="sm" type="button" variant="outline">
             <RotateCcw className="mr-2 size-4" />{t("settings.customModels.templateRestore")}
           </Button>
@@ -183,7 +184,7 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
         </Badge>
       </AlertTitle>
       <AlertDescription className="space-y-3">
-        <p>{firstSuggestion.template_key} · {firstSuggestion.context_limit.toLocaleString()} Token</p>
+        <p>{firstSuggestion.template_key} · {formatTokenCount(firstSuggestion.context_limit)} Token</p>
         <div className="flex flex-wrap gap-2">
           <Button disabled={saving} onClick={() => void saveDecision(appliedDecision(firstSuggestion))} size="sm" type="button">
             <Check className="mr-2 size-4" />{t("settings.customModels.templateApply")}

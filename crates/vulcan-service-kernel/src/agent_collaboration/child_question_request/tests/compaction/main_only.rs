@@ -8,7 +8,7 @@ use crate::agent_collaboration::{
 };
 use vulcan_agent_runtime::agent_runtime::task_runtime::TaskV1ExecutionFacts;
 use vulcan_agent_runtime::tooling::collaboration::{
-    ASK_PARENT_TOOL_ID, AskParentArgs, WAIT_QUESTION_TOOL_ID, WaitQuestionArgs,
+    ASK_PARENT_TOOL_ID, AskParentArgs, WAIT_AGENTS_RESULT_TOOL_ID, WaitAgentsResultArgs,
 };
 use vulcan_session_core::v1::collaboration::{
     CollaborationQuestionExecutionState, CollaborationQuestionState, ReserveChildTaskInput,
@@ -264,25 +264,40 @@ async fn run(executor: Arc<tokio::runtime::Runtime>) {
     let question_id = asked["question_id"].as_str().unwrap().to_owned();
     let observed = port
         .invoke(
-            tool_context(&child, WAIT_QUESTION_TOOL_ID, 8),
-            AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
-                question_id: question_id.clone(),
-                after_revision: None,
+            tool_context(&child, WAIT_AGENTS_RESULT_TOOL_ID, 8),
+            AgentCollaborationCommand::WaitAgentsResult(WaitAgentsResultArgs {
                 timeout_ms: 10_000,
             }),
         )
         .await
         .unwrap();
     assert_eq!(
-        observed["question_state"],
-        "answered",
+        observed["status"],
+        "messages",
         "dispatch diagnostics: {:?}",
         invocation.state.lock().unwrap().startup.recent_logs
     );
-    assert_eq!(
-        observed["answer"]["body"],
-        "Continue the owned child work; the parent goal remains paused."
+    assert!(
+        observed["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["kind"] == "answer" && message["question_id"] == question_id)
     );
+    child
+        .read(|document| {
+            let question = document
+                .collaboration_state()
+                .questions
+                .values()
+                .find(|question| question.question_id.as_str() == question_id)
+                .unwrap();
+            assert_eq!(
+                question.answer.as_ref().unwrap().body,
+                "Continue the owned child work; the parent goal remains paused."
+            );
+        })
+        .unwrap();
     // Waiting for QA completion is bounded and checks the actual durable execution state.
     // 等待答疑完成有明确上限，并检查实际可靠执行状态。
     tokio::time::timeout(std::time::Duration::from_secs(10), async {

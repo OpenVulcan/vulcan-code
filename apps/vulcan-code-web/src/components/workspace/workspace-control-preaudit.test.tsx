@@ -5,9 +5,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import { browserFallbackSnapshot, browserFallbackStartup } from "@/service/browser-fallback-workbench";
 import { WorkspaceTitleMenu } from "./workspace-title-menu";
-import { WorkspaceContextPanel, type WorkspaceContextPanelProps } from "./WorkspaceContextPanel";
+import { WorkspaceContextPanel, type WorkspaceContextPanelProps } from "./workspace-context-panel";
 import { WorkspaceResizableBody } from "./workspace-resizable-body";
-import { WorkspaceFilesPanelHost } from "./WorkspaceFilesPanelHost";
+import { WorkspaceFilesPanelHost } from "./workspace-files-panel-host";
 import { DEFAULT_WORKSPACE_FILE_FILTERS } from "@/service/workbench-snapshot-service";
 import { toast } from "sonner";
 import { ConversationSessionTodolistPanel } from "@/components/conversation/session-todolist-panel";
@@ -73,25 +73,28 @@ it("locks monitoring synchronously and keeps a new project visit locked when an 
   const toggle = vi.fn(() => new Promise<void>(resolve => releases.push(resolve)));
   const props: React.ComponentProps<typeof ConversationSessionTodolistPanel> = {
     expanded: true, todolist: null, reviewSummary: null, terminalSessions: [], subagentNavigation: null, commitDialogOpen: false, commitBusyState: null,
-    reviewRepositories: [{ repositoryKey: "repo", repositoryName: "Audit", relativePath: "repo", isPrimary: true, summary: null, monitoringEnabled: true, loading: false, error: null }],
+    reviewRepositories: ["repo", "repo/nested"].map((repositoryKey, index) => ({ repositoryKey, repositoryName: "Audit", relativePath: repositoryKey, isPrimary: index === 0, summary: null, monitoringEnabled: true, loading: false, error: null })),
     onExpandedChange: vi.fn(), onCommitDialogOpenChange: vi.fn(), onOpenReviewChanges: vi.fn(), onStopCommandSession: async () => undefined, onOpenSubagentPanel: async () => false, onToggleReviewMonitoring: toggle,
   };
   // Render the real repository control with an explicit project identity and no service transport.
   // 使用明确项目身份渲染真实仓库控件，不接入服务传输。
   const content = (project: string) => <TooltipProvider><ConversationSessionTodolistPanel {...props} reviewRepositoryOrderStorageKey={project} /></TooltipProvider>;
+  // checkbox reads the first repository's monitoring switch from the Git settings dialog, the only monitoring control.
+  // checkbox 从 Git 设置弹窗读取首个仓库的监听开关，该弹窗是唯一的监听控件。
+  const checkbox = () => document.querySelector<HTMLInputElement>(".conversation-session-review-manager-check input")!;
   await render(content("project-a"));
-  const button = host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!;
-  expect(button).not.toBeNull();
-  await act(async () => { button.click(); button.click(); });
+  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-manager-trigger")!.click());
+  expect(checkbox()).not.toBeNull();
+  await act(async () => { checkbox().click(); checkbox().click(); });
   expect(toggle).toHaveBeenCalledTimes(1);
   await render(content("project-b"));
   await render(content("project-a"));
-  await act(async () => host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!.click());
+  await act(async () => checkbox().click());
   expect(toggle).toHaveBeenCalledTimes(2);
   await act(async () => releases[0]());
-  expect(host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!.disabled).toBe(true);
+  expect(checkbox().disabled).toBe(true);
   await act(async () => releases[1]());
-  expect(host.querySelector<HTMLButtonElement>(".conversation-session-review-monitor-toggle")!.disabled).toBe(false);
+  expect(checkbox().disabled).toBe(false);
 });
 
 it("keeps hook order stable across conversation, empty, and restored title menus", async () => {

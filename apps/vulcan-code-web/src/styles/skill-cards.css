@@ -19,11 +19,11 @@
   justify-content: center;
   gap: 7px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: var(--card);
   color: var(--foreground);
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 650;
 }
 
@@ -87,7 +87,7 @@
 
 .skill-toolbar {
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   padding: 9px;
   background: var(--muted);
 }
@@ -122,7 +122,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -157,10 +157,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: color-mix(in srgb, var(--muted) 82%, transparent);
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 650;
 }
 
@@ -315,7 +315,7 @@
   display: grid;
   gap: 6px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .plugin-panel-controls label:has(input[type="checkbox"]) {
@@ -338,14 +338,14 @@
   gap: 4px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
 }
 
 .plugin-stat-card span,
 .plugin-stat-chart small,
 .plugin-stat-period-list span {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .plugin-stat-chart {
@@ -355,7 +355,7 @@
   gap: 5px;
   padding: 12px 8px 6px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
 }
 
 .plugin-stat-chart-column {
@@ -371,7 +371,7 @@
 .plugin-stat-chart-column > span {
   width: min(100%, 20px);
   min-height: 3px;
-  border-radius: 4px 4px 1px 1px;
+  border-radius: var(--vcn-radius-xs) var(--vcn-radius-xs) 1px 1px;
   background: var(--primary);
 }
 
@@ -419,7 +419,7 @@
 
 .agent-skills-management-surface .agent-catalog-toolbar-heading h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--vcn-font-size-xl);
 }
 
 .agent-skills-management-surface .agent-catalog-filter-row {
@@ -472,7 +472,7 @@
 
 .agent-skill-category-floating-main > strong {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .agent-definition-detail-grid {
@@ -484,19 +484,19 @@
 .agent-definition-detail-grid > div {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   padding: 8px;
 }
 
 .agent-definition-detail-grid dt {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .agent-definition-detail-grid dd {
   margin: 4px 0 0;
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .agent-skill-form-grid {

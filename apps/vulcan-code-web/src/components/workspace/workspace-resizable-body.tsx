@@ -4,7 +4,7 @@ import type {
   WorkspaceContextTabItem,
   WorkspaceContextTabKind,
   WorkspaceContextPanelProps,
-} from "@/components/workspace/WorkspaceContextPanel";
+} from "@/components/workspace/workspace-context-panel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -27,7 +27,7 @@ const DynamicPluginMountPanel = React.lazy(() => import("@/components/plugins/dy
 
 // WorkspaceContextPanel loads review, files, and memory context only when the right rail is mounted.
 // WorkspaceContextPanel 仅在右侧栏挂载时加载审阅、文件与记忆上下文。
-const WorkspaceContextPanel = React.lazy(() => import("@/components/workspace/WorkspaceContextPanel")
+const WorkspaceContextPanel = React.lazy(() => import("@/components/workspace/workspace-context-panel")
   .then((module) => ({ default: module.WorkspaceContextPanel })));
 
 // ConversationRightPluginMount binds enabled plugin contributions to the selected conversation panel.

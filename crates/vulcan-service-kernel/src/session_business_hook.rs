@@ -157,6 +157,7 @@ pub(crate) fn capture_business_hook_before_dispatch(
             || original.start_seq != binding.start_seq
             || original.hook_turn_id != binding.hook_turn_id
             || original.user_content != binding.user_content
+            || original.observes_user != binding.observes_user
         {
             return Err(String::from(
                 "Business Hook admission conflicts with its original durable owner.",

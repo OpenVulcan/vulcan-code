@@ -47,7 +47,7 @@ import {
   THINKING_DISPLAY_MODE_OPTIONS,
   type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
-import { useI18n, type TranslationKey } from "@/i18n";
+import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
   ComposerAttachmentCapabilitySummary,
@@ -319,7 +319,7 @@ function OutputStyleSubMenu(props: {
   sessionOutputStyle?: SessionOutputStyleSummary | null;
   onChange: (styleId: string | null) => void;
 }) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const selectedId = props.conversationId
     ? props.sessionOutputStyle?.overrideStyleId ?? null
     : props.draftStyleId ?? null;
@@ -331,17 +331,15 @@ function OutputStyleSubMenu(props: {
     <DropdownMenuSub>
       <DropdownMenuSubTrigger>
         <Palette size={15} />
-        <span>{locale === "en-US" ? "Output style" : "输出风格"}</span>
+        <span>{t("composer.outputStyle.menuTitle")}</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="composer-thinking-menu">
         <DropdownMenuRadioGroup value={selectedId === null ? "inherit" : `style:${selectedId}`}>
         <DropdownMenuRadioItem value="inherit" onSelect={() => props.onChange(null)}>
           <span className="composer-thinking-mode-label">
-            <span>{locale === "en-US" ? "Inherit global" : "继承全局"}</span>
+            <span>{t("composer.outputStyle.inheritGlobal")}</span>
             <small>
-              {locale === "en-US"
-                ? `Use system setting: ${globalLabel}`
-                : `使用系统设置：${globalLabel}`}
+              {formatMessage(t("composer.outputStyle.useSystemSetting"), { label: globalLabel })}
             </small>
           </span>
         </DropdownMenuRadioItem>
@@ -349,13 +347,13 @@ function OutputStyleSubMenu(props: {
           <DropdownMenuRadioItem key={entry.id} value={`style:${entry.id}`} onSelect={() => props.onChange(entry.id)}>
             <span className="composer-thinking-mode-label">
               <span>{locale === "en-US" ? entry.labelEn : entry.labelZh}</span>
-              <small>{locale === "en-US" ? `${entry.promptCharCount.toLocaleString("en-US")} prompt characters` : `${entry.promptCharCount.toLocaleString("zh-CN")} 字符提示词`}</small>
+              <small>{formatMessage(t("composer.outputStyle.promptCharacters"), { count: entry.promptCharCount.toLocaleString(locale) })}</small>
             </span>
           </DropdownMenuRadioItem>
         ))}
         </DropdownMenuRadioGroup>
         {props.conversationId && props.sessionOutputStyle?.pendingActivation ? <p role="status" className="px-2 py-1.5 text-xs text-muted-foreground">
-          {locale === "en-US" ? "Saved. Applies in a new session or after context compaction." : "已保存，在新会话或上下文压缩后生效。"}
+          {t("composer.outputStyle.savedPending")}
         </p> : null}
       </DropdownMenuSubContent>
     </DropdownMenuSub>

@@ -1,8 +1,21 @@
+import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { VceJobSummary } from "@/types";
 import { isVceJobActive, mergeVceJobReceipt } from "./use-vce-project-job";
 import { VceJobProgress, vceActiveJobStatusLabel, vceSynchronizationControl } from "./vce-job-progress";
+import { I18nProvider, readLocaleMessage, type LocaleCode, type Translate } from "@/i18n";
+
+// zh and en resolve labels exactly as the mounted provider does for each locale.
+// zh 与 en 按已挂载提供器在各语言下的方式解析标签。
+const zh: Translate = (key) => readLocaleMessage("zh-CN", key);
+const en: Translate = (key) => readLocaleMessage("en-US", key);
+
+// Render one progress node inside the provider; locale defaults to Chinese.
+// 在提供器内渲染一个进度节点；语言默认中文。
+function renderJob(node: React.ReactNode, locale: LocaleCode = "zh-CN"): string {
+  return renderToStaticMarkup(<I18nProvider initialLocale={locale}>{node}</I18nProvider>);
+}
 
 // Create one complete receipt for deterministic progress and event-ordering assertions.
 // 创建完整回执用于确定性进度与事件排序断言。
@@ -27,7 +40,7 @@ describe("durable VCE job projections", () => {
       overallCompleted: 0, overallTotal: 3265, currentPath: null, providerBatchState: null,
       activity: {stage: "admitting", providerBatchId: null, nextPollAtUnixMs: null},
     }};
-    const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
+    const markup = renderJob(<VceJobProgress job={job} />);
     expect(markup).toContain("保存向量批次执行状态");
     expect(markup).toContain("923 / 1910 批次");
     expect(markup).toContain('aria-valuenow="923"');
@@ -37,16 +50,16 @@ describe("durable VCE job projections", () => {
   // 两个入口仅在同步期间提供一个后续批次；初始化绝不排入第二次建库。
   it("offers one visible coalesced synchronization and keeps its cancellation explicit", () => {
     const initial = receipt();
-    expect(vceSynchronizationControl(initial, true).disabled).toBe(true);
+    expect(vceSynchronizationControl(initial, zh).disabled).toBe(true);
     const running: VceJobSummary = { ...initial, kind: "synchronize", state: "running", sourceCheckpointVersion: 1 };
-    expect(vceSynchronizationControl(running, true)).toEqual({ disabled: false, label: "本次完成后再同步" });
+    expect(vceSynchronizationControl(running, zh)).toEqual({ disabled: false, label: "本次完成后再同步" });
     const pending = { ...running, followupRequested: true };
-    expect(vceSynchronizationControl(pending, true)).toEqual({ disabled: true, label: "已安排后续更新" });
-    const markup = renderToStaticMarkup(<VceJobProgress job={pending} chinese onCancel={() => undefined} />);
+    expect(vceSynchronizationControl(pending, zh)).toEqual({ disabled: true, label: "已安排后续更新" });
+    const markup = renderJob(<VceJobProgress job={pending} onCancel={() => undefined} />);
     expect(markup).toContain("已合并一次后续手动同步");
     expect(markup).toContain("取消更新及后续同步");
-    expect(vceSynchronizationControl({ ...running, state: "cancelling" }, false).disabled).toBe(true);
-    expect(vceSynchronizationControl({ ...running, state: "succeeded" }, true).disabled).toBe(false);
+    expect(vceSynchronizationControl({ ...running, state: "cancelling" }, en).disabled).toBe(true);
+    expect(vceSynchronizationControl({ ...running, state: "succeeded" }, zh).disabled).toBe(false);
   });
 
   // Compact work keeps its own localized identity in shared controls and compact surfaces.
@@ -54,11 +67,11 @@ describe("durable VCE job projections", () => {
   it("labels active compaction without retired controller or generic update wording", () => {
     const queued: VceJobSummary = { ...receipt(), kind: "compact" };
     const running: VceJobSummary = { ...queued, state: "running" };
-    expect(vceSynchronizationControl(queued, true)).toEqual({ disabled: true, label: "物理整理已排队" });
-    expect(vceSynchronizationControl(running, false)).toEqual({ disabled: true, label: "Physical compaction in progress" });
-    expect(vceActiveJobStatusLabel(running, true)).toBe("正在整理物理向量表");
-    expect(vceActiveJobStatusLabel({ ...running, state: "cancelling" }, false)).toBe("Cancelling physical compaction");
-    expect(vceActiveJobStatusLabel({ ...running, state: "succeeded" }, true)).toBeNull();
+    expect(vceSynchronizationControl(queued, zh)).toEqual({ disabled: true, label: "物理整理已排队" });
+    expect(vceSynchronizationControl(running, en)).toEqual({ disabled: true, label: "Physical compaction in progress" });
+    expect(vceActiveJobStatusLabel(running, zh)).toBe("正在整理物理向量表");
+    expect(vceActiveJobStatusLabel({ ...running, state: "cancelling" }, en)).toBe("Cancelling physical compaction");
+    expect(vceActiveJobStatusLabel({ ...running, state: "succeeded" }, zh)).toBeNull();
   });
 
   // A terminal persistence diagnostic keeps the recovery cancellation action enabled even after the last phase.
@@ -68,15 +81,15 @@ describe("durable VCE job projections", () => {
       ...receipt(), state: "running", error: "Persist VCE terminal job receipt failed: transport error",
       progress: { phase, operationId: "job-a", unit: "batches", completed: 1, total: 1, providerBatchState: null, currentPath: null },
     };
-    const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese={false} onCancel={() => undefined} />);
+    const markup = renderJob(<VceJobProgress job={job} onCancel={() => undefined} />, "en-US");
     expect(markup).toContain("Recover and cancel");
     expect(markup).toContain("The terminal receipt is not fully persisted");
     expect(markup).toContain("View technical diagnostics");
     expect(markup).toContain("transport error");
     expect(markup).toContain("<details");
     expect(markup).not.toContain('disabled=""');
-    expect(renderToStaticMarkup(<VceJobProgress job={{ ...job, state: "cancelling" }} chinese onCancel={() => undefined} />)).not.toContain('disabled=""');
-    expect(renderToStaticMarkup(<VceJobProgress job={{ ...job, error: null }} chinese onCancel={() => undefined} />)).toContain('disabled=""');
+    expect(renderJob(<VceJobProgress job={{ ...job, state: "cancelling" }} onCancel={() => undefined} />)).not.toContain('disabled=""');
+    expect(renderJob(<VceJobProgress job={{ ...job, error: null }} onCancel={() => undefined} />)).toContain('disabled=""');
   });
   // Slow reads and reordered events cannot roll back a terminal result or erase an observed job.
   // 缓慢读取与乱序事件不能回退终态结果或擦除已观察作业。
@@ -103,7 +116,7 @@ describe("durable VCE job projections", () => {
   // Queued jobs must not claim any scans, model calls, percentages, or initialized search tools.
   // 排队作业不得宣称已扫描、调用模型、产生百分比或初始化检索工具。
   it("renders queued initialization as genuinely indeterminate", () => {
-    const markup = renderToStaticMarkup(<VceJobProgress job={receipt()} chinese />);
+    const markup = renderJob(<VceJobProgress job={receipt()} />);
     expect(markup).toContain("已排队");
     expect(markup).toContain("尚未开始扫描或调用模型");
     expect(markup).toContain("首次索引完成后");
@@ -116,7 +129,7 @@ describe("durable VCE job projections", () => {
   it("renders measured progress and preserves ongoing conversations", () => {
     const job: VceJobSummary = { ...receipt(), kind: "synchronize", state: "running", sourceCheckpointVersion: 2,
       progress: { phase: "embedding", operationId: "job-a:document:1", unit: "batches", completed: 3, total: 7, overallCompleted: 4, overallTotal: 12, providerBatchState: "in_progress", currentPath: "src/main.rs" } };
-    const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
+    const markup = renderJob(<VceJobProgress job={job} />);
     expect(markup).toContain('aria-valuenow="3"');
     expect(markup).toContain('aria-valuemax="7"');
     expect(markup).toContain("整体进度");
@@ -126,7 +139,7 @@ describe("durable VCE job projections", () => {
     expect(markup).toContain("会话和已有索引查询仍可正常使用");
     job.progress!.total = null;
     job.progress!.overallTotal = null;
-    const unknown = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
+    const unknown = renderJob(<VceJobProgress job={job} />);
     expect(unknown).not.toContain('value="');
   });
 
@@ -145,16 +158,16 @@ describe("durable VCE job projections", () => {
         providerBatchState: null, currentPath: null,
         activity: { stage: "waiting", providerBatchId: "batch-a", nextPollAtUnixMs: now + 30_000 },
       }};
-      expect(renderToStaticMarkup(<VceJobProgress job={job} chinese />)).toContain("30 秒后查询批量任务状态");
+      expect(renderJob(<VceJobProgress job={job} />)).toContain("30 秒后查询批量任务状态");
       // The next projection counts down the same durable deadline after the provider reports unfinished work.
       // 供应商报告未完成后，下一次投影仍对同一持久截止时间倒计时。
       clock.mockReturnValue(now + 18_000);
       job.progress!.providerBatchState = "in_progress";
-      expect(renderToStaticMarkup(<VceJobProgress job={job} chinese />)).toContain("批量任务尚未完成，12 秒后继续查询");
+      expect(renderJob(<VceJobProgress job={job} />)).toContain("批量任务尚未完成，12 秒后继续查询");
       // A query in flight has its own state and must not display a stale deadline countdown.
       // 查询进行中有独立状态，不得显示旧截止时间倒计时。
       job.progress!.activity = { stage: "polling", providerBatchId: "batch-a", nextPollAtUnixMs: now + 30_000 };
-      const querying = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
+      const querying = renderJob(<VceJobProgress job={job} />);
       expect(querying).toContain("正在查询已提交的批量向量任务状态");
       expect(querying).not.toContain("秒后继续查询");
     } finally {
@@ -172,7 +185,7 @@ describe("durable VCE job projections", () => {
         overallCompleted: 0, overallTotal: 3264, providerBatchState: null, currentPath: "src/private.rs" } };
     // markup represents the actual accessible progress contract, not implementation-specific attributes.
     // markup 表示实际无障碍进度契约，而非实现特有属性。
-    const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
+    const markup = renderJob(<VceJobProgress job={job} />);
     expect(markup).toContain('aria-valuenow="120"');
     expect(markup).toContain('aria-valuemax="3264"');
     expect(markup).toContain("120 / 3264 文件");
@@ -195,7 +208,7 @@ describe("durable VCE job projections", () => {
     }};
     // visible removes collapsed detail content from the rendered settings presentation.
     // visible 从渲染后的设置界面移除已折叠详情内容。
-    const visible = renderToStaticMarkup(<VceJobProgress job={job} chinese presentation="settings" />)
+    const visible = renderJob(<VceJobProgress job={job} presentation="settings" />)
       .replace(/<details[\s\S]*?<\/details>/g, "");
     expect(visible).toContain("文件快照保存");
     expect(visible).toContain("120 / 3264 文件");
@@ -214,11 +227,11 @@ describe("durable VCE job projections", () => {
         providerBatchState: null, currentPath: null, activity: {stage: "persisting", providerBatchId: null, nextPollAtUnixMs: null} } };
     // active and failed show the same actual stopping phase with different lifecycle presentation.
     // active 与 failed 使用相同实际停止阶段，但生命周期展示不同。
-    const active = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
+    const active = renderJob(<VceJobProgress job={job} />);
     expect(active).toContain("写入本地存储");
     expect(active).toContain("总量待确定");
     expect(active).not.toContain('aria-valuenow=');
-    const failed = renderToStaticMarkup(<VceJobProgress job={{...job, state: "failed", error: "missing remote task records"}} chinese />);
+    const failed = renderJob(<VceJobProgress job={{...job, state: "failed", error: "missing remote task records"}} />);
     expect(failed).toContain("停止阶段");
     expect(failed).toMatch(/<details[^>]*open=""/);
     expect(failed).toContain("missing remote task records");
@@ -267,8 +280,8 @@ describe("durable VCE job projections", () => {
         }],
       },
     };
-    const chinese = renderToStaticMarkup(
-      <VceJobProgress job={job} chinese onCancel={() => undefined} onRetry={() => undefined} />,
+    const chinese = renderJob(
+      <VceJobProgress job={job} onCancel={() => undefined} onRetry={() => undefined} />,
     );
     expect(chinese).toContain("正在整理物理向量表");
     expect(chinese).toContain("取消整理");
@@ -281,8 +294,8 @@ describe("durable VCE job projections", () => {
     expect(chinese).toContain("<details");
     expect(chinese).not.toContain("重新执行");
 
-    const english = renderToStaticMarkup(
-      <VceJobProgress job={job} chinese={false} onCancel={() => undefined} />,
+    const english = renderJob(
+      <VceJobProgress job={job} onCancel={() => undefined} />, "en-US",
     );
     expect(english).toContain("Compacting physical vector tables");
     expect(english).toContain("Content vector table");
@@ -294,7 +307,7 @@ describe("durable VCE job projections", () => {
   // 更新失败不把先前已提交检查点变成未初始化索引。
   it("distinguishes failed jobs from first initialization", () => {
     const job: VceJobSummary = { ...receipt(), state: "failed", sourceCheckpointVersion: 0, error: "模型调用失败" };
-    const markup = renderToStaticMarkup(<VceJobProgress job={job} chinese />);
+    const markup = renderJob(<VceJobProgress job={job} />);
     expect(markup).toContain("本次索引更新失败");
     expect(markup).toContain("模型调用失败");
     expect(markup).not.toContain("<progress");

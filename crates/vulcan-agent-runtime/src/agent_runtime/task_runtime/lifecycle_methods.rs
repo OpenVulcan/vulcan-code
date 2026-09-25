@@ -278,6 +278,25 @@ impl TaskRuntime {
         self.task_has_active_or_starting_run(task_id)
     }
 
+    /// Checks whether `task_id` is owned by the exact `execution_id`, including its startup phase.
+    /// 检查 `task_id` 是否由精确 `execution_id` 拥有，包括其启动阶段。
+    /// Returns false for a replacement execution and reports registry lock failures explicitly.
+    /// 对替代执行返回假，并明确报告注册表锁错误。
+    pub fn is_task_execution_running(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<bool, String> {
+        Ok(self
+            .active_task_runs
+            .read()
+            .map_err(|_| {
+                String::from("The active task registry cannot inspect execution ownership.")
+            })?
+            .get(&task_id)
+            .is_some_and(|entry| entry.execution_id == execution_id))
+    }
+
     /// Returns whether one task owns an active abort handle.
     /// 返回某个任务是否持有活动中止句柄。
     pub(super) fn task_has_active_or_starting_run(

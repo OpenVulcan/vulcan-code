@@ -28,7 +28,7 @@
   margin: 0;
   padding: 4px 10px 10px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 500;
 }
 .vmm-nav-group + .vmm-nav-group { margin-top: 22px; }
@@ -42,11 +42,11 @@
   margin: 2px 0;
   padding: 8px 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
   color: var(--muted-foreground);
   text-align: left;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 400;
   line-height: 20px;
 }
@@ -63,7 +63,7 @@
 .workspace-directory-navigation button:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
 }
 .workspace-directory-navigation svg { width: 16px; height: 16px; flex-shrink: 0; }
 /* Provider labels share the directory width; counts stay aligned without truncating icons. */
@@ -78,7 +78,7 @@
 .workspace-directory-navigation .workspace-tool-panel-menu-row > small {
   margin-left: auto;
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
 .workspace-directory-navigation .agent-category-floating-row {
@@ -90,10 +90,10 @@
 .workspace-directory-navigation strong {
   min-width: 22px;
   height: 20px;
-  border-radius: 5px;
+  border-radius: var(--vcn-radius-sm);
   background: transparent;
   text-align: right;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
@@ -174,7 +174,7 @@
   min-height: 38px;
   margin: 0;
   padding: 8px 12px;
-  border-radius: 6px 6px 0 0;
+  border-radius: var(--vcn-radius-sm) var(--vcn-radius-sm) 0 0;
   background: transparent;
   box-shadow: none;
   white-space: nowrap;
@@ -190,15 +190,27 @@
   color: var(--foreground);
   font-weight: 600;
 }
-.workspace-directory-layout[data-navigation-mode="tabs"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"])::after {
-  content: "";
+/* One shared underline slides between tabs; the layout measures the active row and supplies its offset and width. */
+/* 一条共享下划线在标签间滑动；布局测量当前行并提供其偏移与宽度。 */
+.workspace-directory-layout[data-navigation-mode="tabs"] > .workspace-directory-navigation { position: relative; }
+.workspace-directory-tab-indicator {
+  --tab-indicator-inset: 12px;
   position: absolute;
-  right: 12px;
   bottom: 0;
-  left: 12px;
+  left: 0;
+  width: calc(var(--tab-indicator-width, 0px) - var(--tab-indicator-inset) * 2);
   height: 2px;
   border-radius: 2px 2px 0 0;
   background: var(--primary);
-  animation: vcn-accent-grow-x var(--vcn-duration-base, 180ms) var(--vcn-ease-out, ease-out);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(calc(var(--tab-indicator-x, 0px) + var(--tab-indicator-inset)));
+}
+.workspace-directory-tab-indicator[data-visible="true"] { opacity: 1; }
+.workspace-directory-tab-indicator[data-animate="true"] {
+  transition:
+    transform var(--vcn-duration-slow, 240ms) var(--vcn-ease-out, ease-out),
+    width var(--vcn-duration-slow, 240ms) var(--vcn-ease-out, ease-out),
+    opacity var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
 }
 .workspace-directory-layout[data-navigation-mode="tabs"] > .workspace-directory-content { padding: 20px 0 0; }

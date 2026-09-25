@@ -11,16 +11,16 @@ use crate::v1::collaboration::{
 /// Uses actual publication, auxiliary interruption and business transitions without modifying recovery facts.
 /// 使用真实发布、辅助中断及业务转换，不修改恢复凭据。
 #[test]
-fn initial_human_business_proves_original_unexecuted_input() {
+fn initial_business_preparation_preserves_unexecuted_owner() {
     for purpose in [
         ApiPurposeKind::Compaction,
         ApiPurposeKind::QuestionExecution,
         ApiPurposeKind::MainGeneration,
     ] {
-        // The canonical root must be published before it can grant any startup authority.
-        // 规范根必须先发布，才能授予启动权威。
+        // Canonical ownership must be published before producing a Hook preparation proof.
+        // 规范归属必须先发布，才能生成 Hook 准备凭据。
         let (mut document, binding) = fixture();
-        assert!(document.main_business_initial_human_input().is_err());
+        assert!(document.main_business_initial_preparation().is_err());
         document
             .add_pending_in_turn_input(
                 ClientInputSubmission::new(
@@ -46,7 +46,7 @@ fn initial_human_business_proves_original_unexecuted_input() {
         let before = document.clone();
         if purpose == ApiPurposeKind::MainGeneration {
             assert!(matches!(
-                document.main_business_initial_human_input(),
+                document.main_business_initial_preparation(),
                 Err(DomainError::CollaborationStateViolation {
                     field: "initial_business.prior_execution"
                 })
@@ -54,12 +54,11 @@ fn initial_human_business_proves_original_unexecuted_input() {
         } else {
             // Later direction and completed auxiliary history cannot replace the original root source.
             // 后续方向及已结束辅助历史不能替换原根来源。
-            let source = document.main_business_initial_human_input().unwrap();
-            assert_eq!(source.preparation.turn_id, binding.turn_id);
-            assert_eq!(source.preparation.start_seq, binding.start_seq);
-            assert_eq!(source.input.text, "original work");
-            assert_eq!(source.input.client_action_id.as_str(), "root");
-            assert_eq!(source.preparation.revision, revision);
+            let source = document.main_business_initial_preparation().unwrap();
+            assert_eq!(source.turn_id, binding.turn_id);
+            assert_eq!(source.start_seq, binding.start_seq);
+            assert_eq!(source.revision, revision);
+            assert_eq!(source.origin, TurnOrigin::UserRoot);
         }
         assert_eq!(document, before);
         document.capture_business_hook_binding(binding, 7).unwrap();
@@ -69,7 +68,7 @@ fn initial_human_business_proves_original_unexecuted_input() {
             .unwrap()
             .revision;
         document.advance_durable(revision).unwrap();
-        assert!(document.main_business_initial_human_input().is_err());
+        assert!(document.main_business_initial_preparation().is_err());
     }
 }
 
@@ -78,7 +77,7 @@ fn initial_human_business_proves_original_unexecuted_input() {
 /// The source proof remains exact and refuses explicitly stopped ownership.
 /// 来源凭据保持精确，并拒绝明确停止的归属。
 #[test]
-fn initial_human_business_accepts_exact_queued_successor() {
+fn initial_business_preparation_accepts_exact_queued_successor() {
     // Keep a real historical Hook to prove that initialization is scoped to the current turn.
     // 保留真实历史 Hook，证明初始化按当前回合划定范围。
     let (mut document, binding) = fixture();
@@ -112,10 +111,10 @@ fn initial_human_business_accepts_exact_queued_successor() {
         .unwrap()
         .revision;
     document.advance_durable(revision).unwrap();
-    let source = document.main_business_initial_human_input().unwrap();
-    assert_eq!(source.preparation.turn_id, scheduled_turn_id);
-    assert_eq!(source.preparation.start_seq, input_seq);
-    assert_eq!(source.input.input_source, UserInputSource::QueuedScheduled);
+    let source = document.main_business_initial_preparation().unwrap();
+    assert_eq!(source.turn_id, scheduled_turn_id);
+    assert_eq!(source.start_seq, input_seq);
+    assert_eq!(source.origin, TurnOrigin::UserRoot);
     assert_eq!(document.metadata.business_hook.binding, Some(binding));
     document
         .set_collaboration_run_control(SetRunControlInput {
@@ -130,11 +129,11 @@ fn initial_human_business_accepts_exact_queued_successor() {
         .unwrap()
         .revision;
     document.advance_durable(revision).unwrap();
-    assert!(document.main_business_initial_human_input().is_err());
+    assert!(document.main_business_initial_preparation().is_err());
 }
 
-/// Automatic main recovery preserves its original Hook and refuses uncertain external tool effects.
-/// 自动主恢复保留原 Hook，并拒绝不确定的外部工具效果。
+/// Authorized business continuation preserves its original Hook and refuses uncertain external tool effects.
+/// 已授权业务续跑保留原 Hook，并拒绝不确定的外部工具效果。
 /// Uses actual API interruption and publication; returns no value.
 /// 使用真实 API 中断及发布；无返回值。
 #[test]
@@ -562,6 +561,7 @@ fn fixture() -> (SessionDocument, BusinessHookBinding) {
         hook_turn_id: "original-hook".into(),
         user_content: "sanitized original work".into(),
         vmm_runtime_ready: false,
+        observes_user: true,
     };
     (document, binding)
 }
@@ -677,6 +677,10 @@ fn business_hook_capture_is_immutable_and_requires_durable_recovery() {
     // 冲突身份不得改变修订或部分替换已捕获种子。
     let before = document.clone();
     for changed in [
+        BusinessHookBinding {
+            observes_user: false,
+            ..binding.clone()
+        },
         BusinessHookBinding {
             hook_turn_id: "replacement".into(),
             ..binding.clone()

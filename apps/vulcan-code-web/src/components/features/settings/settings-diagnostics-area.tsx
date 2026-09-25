@@ -32,7 +32,7 @@ export function LogsArea(props: {
   // 启动状态旁展示的诊断日志。
   logs: LogEntrySummary[];
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   // Select one local diagnostic category without changing recording or retention settings.
   // 选择本地诊断分类，不改变记录或保留设置。
   const [category, setCategory] = React.useState("startup");
@@ -110,7 +110,7 @@ export function LogsArea(props: {
 
   return (
     <WorkspaceDirectoryLayout contentClassName="settings-diagnostics-page" navigationMode="tabs" navigation={
-      <WorkspaceDirectoryMenu ariaLabel={locale === "zh-CN" ? "诊断分类" : "Diagnostics categories"} heading={t("workspaceToolPanel.category")}>
+      <WorkspaceDirectoryMenu ariaLabel={t("settings.diagnostics.diagnosticsCategories")} heading={t("workspaceToolPanel.category")}>
         {([
           ["startup", t("settings.diagnostics.startupStatus")],
           ["logs", t("settings.diagnostics.logs")],
@@ -123,7 +123,7 @@ export function LogsArea(props: {
       {category === "startup" ? <StartupPanel startup={props.startup} /> : null}
       {category === "logs" ? <section>
         <PanelTitle icon={<History size={17} />} title={t("settings.diagnostics.logs")} />
-        <Input aria-label={locale === "zh-CN" ? "筛选诊断日志" : "Filter diagnostic logs"} placeholder={locale === "zh-CN" ? "搜索级别、来源或内容" : "Search level, source, or message"} value={logFilter} onChange={(event) => setLogFilter(event.target.value)} />
+        <Input aria-label={t("settings.diagnostics.filterDiagnosticLogs")} placeholder={t("settings.diagnostics.searchLevelSourceOr")} value={logFilter} onChange={(event) => setLogFilter(event.target.value)} />
         <div className="diagnostic-log-rows">
           {visibleLogs.map((log) => (
             <article className="diagnostic-log-row" key={log.id}>
@@ -133,7 +133,7 @@ export function LogsArea(props: {
             </article>
           ))}
         </div>
-        {visibleLogs.length === 0 ? <p className="settings-muted-line">{locale === "zh-CN" ? "暂无匹配的诊断日志" : "No matching diagnostic logs"}</p> : null}
+        {visibleLogs.length === 0 ? <p className="settings-muted-line">{t("settings.diagnostics.noMatchingDiagnosticLogs")}</p> : null}
       </section> : null}
       {category === "trace" ? <section>
         <div className="provider-trace-settings">
@@ -198,8 +198,8 @@ export function LogsArea(props: {
                   <AlertDialogDescription>{t("settings.diagnostics.providerRequestTrace.clearConfirm")}</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>{locale === "zh-CN" ? "取消" : "Cancel"}</AlertDialogCancel>
-                  <AlertDialogAction disabled={traceDirectoryBusy} variant="destructive" onClick={() => void handleClearTraceDirectory()}>{locale === "zh-CN" ? "确认清除" : "Confirm cleanup"}</AlertDialogAction>
+                  <AlertDialogCancel>{t("settings.diagnostics.cancel")}</AlertDialogCancel>
+                  <AlertDialogAction disabled={traceDirectoryBusy} variant="destructive" onClick={() => void handleClearTraceDirectory()}>{t("settings.diagnostics.confirmCleanup")}</AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>

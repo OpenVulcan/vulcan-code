@@ -67,9 +67,6 @@ pub struct SessionV1CollaborationRecoverySnapshot {
     /// Physical generation read together with the collaboration records.
     /// 与协作记录一起读取的物理代次。
     pub segment_generation: u64,
-    /// Open business selection hint read from the same metadata publication.
-    /// 从同一次元数据发布读取的开放业务筛选线索。
-    pub open_turn_start_seq: Option<Seq>,
     /// Typed collaboration records belonging to that same metadata publication.
     /// 属于同一次元数据发布的强类型协作记录。
     pub collaboration: vulcan_session_core::v1::collaboration::CollaborationState,
@@ -151,6 +148,14 @@ pub struct SessionV1StorageLocator {
 }
 
 impl SessionV1StorageLocator {
+    /// Checks the exact metadata file without parsing it or changing storage.
+    /// 检查精确元数据文件，不解析或修改存储。
+    /// Returns false only for a missing path; malformed file types and I/O failures remain errors.
+    /// 仅路径不存在时返回假；异常文件类型及读写失败仍返回错误。
+    pub fn metadata_exists(&self) -> Result<bool, SessionV1StoreError> {
+        exact_metadata_file_exists(self)
+    }
+
     /// Reads only the exact metadata file, validating its contract and locator identity.
     /// 仅读取精确 metadata 文件，校验契约及定位器身份。
     /// Returns metadata without reading runtime, compactions, or interaction segments.
@@ -222,7 +227,6 @@ impl SessionV1StorageLocator {
         })?;
         Ok(SessionV1CollaborationRecoverySnapshot {
             segment_generation: metadata.segment_generation,
-            open_turn_start_seq: metadata.open_turn_start_seq,
             collaboration: metadata.collaboration.state,
         })
     }
@@ -1707,7 +1711,6 @@ mod tests {
             locator.read_collaboration_recovery_snapshot().unwrap(),
             super::SessionV1CollaborationRecoverySnapshot {
                 segment_generation: metadata.segment_generation,
-                open_turn_start_seq: metadata.open_turn_start_seq,
                 collaboration: metadata.collaboration.state.clone(),
             }
         );

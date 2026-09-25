@@ -17,7 +17,11 @@ const rpc = vi.hoisted(() => ({ read: vi.fn(), jobs: vi.fn(), update: vi.fn(), s
 vi.mock("@/service/vce-service", () => ({ loadVceProjectActivity: rpc.read, loadVceJob: rpc.jobs,
   updateVceProjectSettings: rpc.update, submitVceJob: rpc.submit, cancelVceJob: rpc.cancel,
   subscribeVceProjectChanged: rpc.subscribe, subscribeVceJobChanged: rpc.subscribeJobs }));
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key);
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) };
+});
 
 // Build exact host activity for one initialized project; no Git metadata is supplied.
 // 为一个已初始化项目构建精确宿主活动；不提供 Git 元数据。
@@ -211,12 +215,12 @@ describe("shared project semantic surfaces", () => {
     await act(async () => root.render(<Harness projectId="project-a" sessionPanel />));
     // The collapsed summary is one button; the semantic row must not introduce invalid nested buttons.
     // 折叠摘要是单个按钮；语义行不得引入无效嵌套按钮。
-    const expand = host.querySelector<HTMLButtonElement>('button[aria-label="sessionTools.expand"]');
+    const expand = host.querySelector<HTMLButtonElement>('button[aria-label="展开会话工具"]');
     expect(expand).not.toBeNull();
     expect(expand!.textContent).toContain("语义索引");
     expect(host.querySelector("button button")).toBeNull();
     await act(async () => expand!.click());
-    expect(host.querySelector('aside[aria-label="sessionTools.menu"]')).not.toBeNull();
+    expect(host.querySelector('aside[aria-label="会话工具菜单"]')).not.toBeNull();
     expect(host.querySelector('section[aria-label="项目语义索引"]')).not.toBeNull();
     expect(host.textContent).toContain("上次成功更新");
     expect(rpc.submit).not.toHaveBeenCalled();

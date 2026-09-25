@@ -12,7 +12,7 @@ import "@/styles/project-vmm.css";
 import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-project-settings-fields";
 import { canonicalProjectPath } from "@/components/features/memory/vmm-identity-project-page";
 import { VmmNativeHostProjectPolicy } from "@/components/features/memory/vmm-native-host-project-policy";
-import { useI18n } from "@/i18n";
+import { formatMessage, useI18n } from "@/i18n";
 import { runVmmMemoryAction } from "@/service/memory-actions-service";
 import type {
   VmmConfigDraftSummary,
@@ -486,7 +486,7 @@ export function ProjectAgentSkillsSection(props: {
   // 持久化单个技能覆盖。
   onSetProjectAgentSkill: (name: string, stateKey: ProjectAgentSkillState) => void;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   // availableCount counts skills that will actually load for this project before any override.
   // availableCount 统计覆盖前本项目实际会加载的技能数。
   const availableCount = props.workbench.agentSkills.records.filter((record) => record.effective && record.enabled).length;
@@ -506,18 +506,18 @@ export function ProjectAgentSkillsSection(props: {
         </div>
       </header>
       <p className="project-settings-skill-summary">
-        <strong>{locale === "zh-CN" ? `${availableCount} 个技能可用` : `${availableCount} ${availableCount === 1 ? "skill" : "skills"} available`}</strong>
+        <strong>{formatMessage(t(availableCount === 1 ? "agentSkills.summary.availableOne" : "agentSkills.summary.available"), { count: availableCount })}</strong>
         <span>{props.agentLoaded && overrideCount > 0 ? t("projectSettings.agentOverrideCount").replace("{count}", String(overrideCount)) : t("projectSettings.agentInheritsGlobal")}</span>
-        {issueCount > 0 ? <span className="project-settings-skill-summary-issue">{locale === "zh-CN" ? `${issueCount} 个技能目录读取失败，可在全局「技能」设置中查看。` : `${issueCount} skill ${issueCount === 1 ? "folder" : "folders"} could not be read. See global Skills settings.`}</span> : null}
+        {issueCount > 0 ? <span className="project-settings-skill-summary-issue">{formatMessage(t(issueCount === 1 ? "projectSettings.skillFoldersUnreadableOne" : "projectSettings.skillFoldersUnreadable"), { count: issueCount })}</span> : null}
       </p>
       {props.agentError ? <div role="alert" className="space-y-2 text-sm text-destructive">
         <p>{props.agentError}</p>
-        <Button type="button" variant="outline" disabled={props.agentLoading || props.agentBusySkill !== null} onClick={props.onRetry}>{locale === "zh-CN" ? "重新读取项目设置" : "Reload project settings"}</Button>
+        <Button type="button" variant="outline" disabled={props.agentLoading || props.agentBusySkill !== null} onClick={props.onRetry}>{t("project.settings.reloadProjectSettings")}</Button>
       </div> : null}
       {props.agentLoading ? (
         <StreamPlaceholder className="project-settings-skill-list py-1.5" label={t("projectSettings.agentLoading")} shape="rows" count={4} />
         ) : !props.agentLoaded || props.agentError ? (
-        <p className="project-settings-muted">{locale === "zh-CN" ? "项目技能设置尚未读取成功。" : "Project skill settings have not been loaded successfully."}</p>
+        <p className="project-settings-muted">{t("project.settings.projectSkillSettingsHave")}</p>
         ) : props.workbench.agentSkills.records.filter((skill) => skill.effective).length === 0 ? (
         <p className="project-settings-muted">{t("projectSettings.agentEmpty")}</p>
       ) : (

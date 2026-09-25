@@ -7,21 +7,29 @@ use crate::tooling::native::{
 /// 相对 shell 命令工作目录应解析到当前工作区根目录之下。
 #[test]
 fn shell_command_working_directory_joins_relative_path_to_workspace_root() {
-    let resolved = resolve_shell_command_working_directory(
-        Some(Path::new(r"D:\workspace")),
-        Some("subdir/bin"),
-    )
-    .expect("relative cwd should resolve");
-    assert_eq!(resolved, Path::new(r"D:\workspace").join("subdir/bin"));
+    // Use a native absolute root distinct from the process directory on every platform.
+    // 在所有平台使用原生绝对路径，且让工作区根目录区别于进程目录。
+    let workspace_root = std::env::current_dir()
+        .expect("current directory should resolve")
+        .join("shell-test-workspace");
+    let resolved =
+        resolve_shell_command_working_directory(Some(&workspace_root), Some("subdir/bin"))
+            .expect("relative cwd should resolve");
+    assert_eq!(resolved, workspace_root.join("subdir").join("bin"));
 }
 
 /// Omitted shell-command working directories should default to the current workspace root instead of the host process directory.
 /// 省略 shell 命令工作目录时，应默认使用当前工作区根目录，而不是宿主进程目录。
 #[test]
 fn shell_command_working_directory_defaults_to_workspace_root() {
-    let resolved = resolve_shell_command_working_directory(Some(Path::new(r"D:\workspace")), None)
+    // A different native absolute root makes an accidental process-directory fallback observable.
+    // 使用不同的原生绝对根路径，使错误回退到进程目录能够被测试发现。
+    let workspace_root = std::env::current_dir()
+        .expect("current directory should resolve")
+        .join("shell-test-workspace");
+    let resolved = resolve_shell_command_working_directory(Some(&workspace_root), None)
         .expect("workspace-root default should resolve");
-    assert_eq!(resolved, Path::new(r"D:\workspace"));
+    assert_eq!(resolved, workspace_root);
 }
 
 /// Shell invocations without a workspace root should still fall back to the host process working directory so non-project commands remain usable.

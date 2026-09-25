@@ -15,7 +15,11 @@ vi.mock("@/service/settings-actions-service", () => ({
   loadPublicAiSettings: () => loadPublicAiSettings(),
   savePublicAiInferenceRoute: (request: unknown) => savePublicAiInferenceRoute(request),
 }));
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
 
 // route builds one exact route; the fields are the ones the identity key derives from.
 // route 构建一条精确路由；字段即身份键所推导的那些。

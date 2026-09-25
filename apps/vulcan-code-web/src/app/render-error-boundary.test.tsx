@@ -3,7 +3,7 @@ import React, { act, Suspense, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { RenderErrorBoundary } from "./render-error-boundary";
-import { BootErrorScreen } from "./BootStartupScreen";
+import { BootErrorScreen } from "./boot-startup-screen";
 
 // host and root isolate React import failures from the real application window.
 // host 与 root 将 React 导入失败与真实应用窗口隔离。

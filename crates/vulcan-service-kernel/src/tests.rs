@@ -286,6 +286,7 @@ mod rpc_diff_tests;
 mod session_kernel_tests;
 mod settings_projection_tests;
 mod stop_task_mirror_tests;
+mod subagent_display_metadata_tests;
 mod subagent_fixed_model_tests;
 mod subagent_navigation_tests;
 pub(crate) mod vce_configuration_readiness_tests;

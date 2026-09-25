@@ -1,0 +1,143 @@
+/* Shared light and dark palette, loaded before the application shell. */
+/* 在应用外壳之前加载的统一明暗色板。 */
+/* Vulcan Forge: ink neutrals, flame only as the signal color (primary, ring, active indicators). */
+/* Vulcan Forge：中性色取 ink 系，flame 只作信号色（主操作、焦点环、当前项指示）。 */
+/* Light primary is a deeper flame (#d9420f) so white text and flame text both stay near 4.5:1. */
+/* 亮色 primary 取加深火焰色（#d9420f），使白字与火焰色文字的对比度都接近 4.5:1。 */
+:root {
+  color-scheme: light;
+  font-family: "Geist Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  --background: #f7f7f5;
+  --foreground: #1a1917;
+  --card: #fdfdfc;
+  --card-foreground: #1a1917;
+  --popover: #ffffff;
+  --popover-foreground: #1a1917;
+  --primary: #c84709;
+  --primary-foreground: #ffffff;
+  --secondary: #efeeeb;
+  --secondary-foreground: #31302d;
+  --muted: #efeeeb;
+  --muted-foreground: #5f5d5a;
+  --accent: #eae9e6;
+  --accent-foreground: #1a1917;
+  --destructive: #ca3134;
+  --border: #e3e1de;
+  --input: #d1cfcb;
+  --ring: #c84709;
+  --chart-1: #547cac;
+  --chart-2: #368b7c;
+  --chart-3: #9970b8;
+  --chart-4: #bc8838;
+  --chart-5: #c56870;
+  --diff-addition-base: #1f883d;
+  --diff-deletion-base: #cf222e;
+  --radius: 0.5rem;
+  --sidebar: #f0efec;
+  --sidebar-foreground: #31302d;
+  --sidebar-primary: #c84709;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e5e3e0;
+  --sidebar-accent-foreground: #1a1917;
+  --sidebar-border: #e1dfdc;
+  --sidebar-ring: #c84709;
+  --app-header-height: 30px;
+  --vcn-overlay: rgb(24 22 19 / 26%);
+  /* Elevation ladder: resting surfaces barely lift, hover gains depth, floating and modal layers read clearly above the page. */
+  /* 层级阶梯：静置表面轻微浮起，悬停加深，浮层与模态明显高于页面。 */
+  --vcn-shadow-raised: 0 1px 2px rgb(24 22 19 / 4%), 0 1px 1px rgb(24 22 19 / 2%);
+  --vcn-shadow-hover: 0 4px 14px rgb(24 22 19 / 7%), 0 1px 3px rgb(24 22 19 / 5%);
+  --vcn-shadow-floating: 0 8px 28px rgb(24 22 19 / 12%), 0 2px 6px rgb(24 22 19 / 6%);
+  --vcn-shadow-modal: 0 24px 60px rgb(24 22 19 / 16%), 0 6px 16px rgb(24 22 19 / 6%);
+  /* A hairline top highlight makes filled controls read as material rather than flat paint. */
+  /* 顶部细高光让实心控件呈现材质感，而不是平涂色块。 */
+  --vcn-highlight-inset: inset 0 1px 0 rgb(255 255 255 / 55%);
+  --vcn-primary-gradient: linear-gradient(180deg, color-mix(in srgb, var(--primary) 86%, #ffffff) 0%, var(--primary) 100%);
+  --vcn-glow-primary: 0 4px 14px color-mix(in srgb, var(--primary) 26%, transparent), 0 1px 2px color-mix(in srgb, var(--primary) 30%, transparent);
+  --vcn-shadow-primary-hover: var(--vcn-highlight-inset), var(--vcn-glow-primary);
+  --vcn-focus-halo: 0 0 0 3px color-mix(in srgb, var(--ring) 14%, transparent);
+  --vcn-surface-glass: color-mix(in srgb, var(--popover) 90%, transparent);
+  --vcn-overlay-blur: 3px;
+  /* Interaction fills are translucent ink, so hover and pressed read the same on page, card, glass and dialog surfaces. */
+  /* 交互填充使用半透明墨色，使悬停与按下在页面、卡片、玻璃浮层和对话框上观感一致。 */
+  --vcn-fill-subtle: rgb(24 22 19 / 3.5%);
+  --vcn-fill-hover: rgb(24 22 19 / 5.5%);
+  --vcn-fill-active: rgb(24 22 19 / 8.5%);
+  --vcn-fill-selected: color-mix(in srgb, var(--primary) 9%, transparent);
+  /* Segmented tracks sink slightly; the chosen segment rises as a near-white chip. */
+  /* 分段控件轨道略微下沉，选中段以近白色小块浮起。 */
+  --vcn-control-track: rgb(24 22 19 / 5.5%);
+  --vcn-control-on: #ffffff;
+  --vcn-shadow-control-on: 0 1px 2px rgb(24 22 19 / 9%), 0 0 0 0.5px rgb(24 22 19 / 7%);
+  /* Disabled controls fall back to neutral ink instead of a faded brand colour. */
+  /* 禁用控件回落为中性墨色，而不是褪色的品牌色。 */
+  --vcn-disabled-fill: rgb(24 22 19 / 7%);
+  --vcn-disabled-foreground: rgb(24 22 19 / 36%);
+  /* Loading silhouettes: a quiet ink bar with a soft light band sweeping across it. */
+  /* 加载轮廓：安静的墨色色条，上面扫过一道柔和亮带。 */
+  --vcn-shimmer-base: rgb(24 22 19 / 7%);
+  --vcn-shimmer-highlight: rgb(255 255 255 / 62%);
+}
+
+.dark {
+  color-scheme: dark;
+  --vcn-overlay: rgb(4 6 9 / 58%);
+  /* Dark elevation leans on a faint top highlight, because shadows alone vanish on near-black pages. */
+  /* 深色层级依赖微弱顶部高光，因为在近黑页面上单靠阴影几乎看不见。 */
+  --vcn-shadow-raised: 0 1px 2px rgb(0 0 0 / 30%), inset 0 1px 0 rgb(255 255 255 / 3%);
+  --vcn-shadow-hover: 0 6px 18px rgb(0 0 0 / 36%), 0 1px 3px rgb(0 0 0 / 24%), inset 0 1px 0 rgb(255 255 255 / 4%);
+  --vcn-shadow-floating: 0 12px 36px rgb(0 0 0 / 40%), 0 2px 8px rgb(0 0 0 / 20%), inset 0 1px 0 rgb(255 255 255 / 5%);
+  --vcn-shadow-modal: 0 28px 72px rgb(0 0 0 / 55%), 0 6px 18px rgb(0 0 0 / 30%), inset 0 1px 0 rgb(255 255 255 / 6%);
+  --vcn-highlight-inset: inset 0 1px 0 rgb(255 255 255 / 16%);
+  --vcn-primary-gradient: linear-gradient(180deg, color-mix(in srgb, var(--primary) 88%, #ffffff) 0%, var(--primary) 100%);
+  --vcn-glow-primary: 0 4px 18px color-mix(in srgb, var(--primary) 30%, transparent), 0 1px 2px color-mix(in srgb, var(--primary) 36%, transparent);
+  --vcn-shadow-primary-hover: var(--vcn-highlight-inset), var(--vcn-glow-primary);
+  --vcn-focus-halo: 0 0 0 3px color-mix(in srgb, var(--ring) 20%, transparent);
+  --vcn-surface-glass: color-mix(in srgb, var(--popover) 92%, transparent);
+  --vcn-fill-subtle: rgb(255 255 255 / 3%);
+  --vcn-fill-hover: rgb(255 255 255 / 5.5%);
+  --vcn-fill-active: rgb(255 255 255 / 8.5%);
+  --vcn-fill-selected: color-mix(in srgb, var(--primary) 14%, transparent);
+  --vcn-shimmer-base: rgb(255 255 255 / 6.5%);
+  --vcn-shimmer-highlight: rgb(255 255 255 / 7%);
+  --vcn-control-track: rgb(255 255 255 / 5%);
+  --vcn-control-on: #353a41;
+  --vcn-shadow-control-on: 0 1px 2px rgb(0 0 0 / 35%), inset 0 1px 0 rgb(255 255 255 / 6%);
+  --vcn-disabled-fill: rgb(255 255 255 / 7%);
+  --vcn-disabled-foreground: rgb(255 255 255 / 34%);
+  --background: #16191d;
+  --foreground: #eef0f3;
+  --card: #1d2025;
+  --card-foreground: #eef0f3;
+  --popover: #23272c;
+  --popover-foreground: #eef0f3;
+  --primary: #f87331;
+  --primary-foreground: #111418;
+  --secondary: #262a30;
+  --secondary-foreground: #d6d9dd;
+  --muted: #262a30;
+  --muted-foreground: #a4aab1;
+  --accent: #2a2e34;
+  --accent-foreground: #eef0f3;
+  --destructive: #f17070;
+  --border: #2f3339;
+  --input: #3f444b;
+  --ring: #f87331;
+  --chart-1: #85a9db;
+  --chart-2: #6ec4af;
+  --chart-3: #be9bdf;
+  --chart-4: #e1b66b;
+  --chart-5: #ed99a1;
+  --diff-addition-base: #2ea043;
+  --diff-deletion-base: #f85149;
+  --sidebar: #111418;
+  --sidebar-foreground: #ced1d6;
+  --sidebar-primary: #f87331;
+  --sidebar-primary-foreground: #111418;
+  --sidebar-accent: #22262b;
+  --sidebar-accent-foreground: #eef0f3;
+  --sidebar-border: #202328;
+  --sidebar-ring: #f87331;
+}

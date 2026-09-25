@@ -153,6 +153,7 @@ fn request_replay_sidecar(
                 role: message.role,
                 content: message.content.clone(),
                 input_range: range.input_range.clone(),
+                provider_context_item_count: message.provider_context_items.len(),
                 tool_call_ids: message_tool_call_ids(message),
             })
         })

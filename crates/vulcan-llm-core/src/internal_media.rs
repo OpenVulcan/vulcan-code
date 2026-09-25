@@ -354,7 +354,21 @@ pub fn project_internal_request_for_provider(
     )
     .then_some(&replay_sidecar);
     let projected = match context.upstream_protocol {
-        UpstreamProtocol::OpenAiResponses => project_standard_responses(body, projector)?,
+        UpstreamProtocol::OpenAiResponses => {
+            // Only the declared plaintext target may recover unsigned canonical reasoning.
+            // 只有声明明文契约的目标才能恢复无签名的规范推理。
+            let body = if context.reasoning_replay_contract
+                == Some(vulcan_ai_contract::ReasoningReplayContract::DeepseekResponsesPlaintextV1)
+            {
+                crate::responses_plaintext_replay::project_plaintext_reasoning(
+                    body,
+                    &replay_sidecar,
+                )?
+            } else {
+                body
+            };
+            project_standard_responses(body, projector)?
+        }
         UpstreamProtocol::OpenAiChatCompletions => {
             crate::responses_to_chat::responses_to_chat_completions_with_media(
                 body,

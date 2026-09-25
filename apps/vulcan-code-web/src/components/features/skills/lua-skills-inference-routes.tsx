@@ -6,7 +6,7 @@ import {
   inferenceRoutePickerOptions,
 } from "@/components/features/inference-route-picker";
 import { loadPublicAiSettings, savePublicAiInferenceRoute } from "@/service/settings-actions-service";
-import { useI18n } from "@/i18n";
+import { formatMessage, useI18n, type Translate } from "@/i18n";
 import type {
   PublicAiInferenceProfile,
   PublicAiInferenceRoute,
@@ -78,14 +78,11 @@ function appendUnavailableOption(
   options: ComboboxOption[],
   route: PublicAiInferenceRoute | undefined,
   unavailable: boolean,
-  zh: boolean,
-): ComboboxOption[] {
+  t: Translate): ComboboxOption[] {
   return unavailable && route ? [...options, {
     value: inferenceRouteKey(route),
     label: `${route.model_id} · ${route.connection_id}`,
-    description: zh
-      ? `当前不可用 · ${route.provider_id} · ${route.service_entry_id}`
-      : `Currently unavailable · ${route.provider_id} · ${route.service_entry_id}`,
+    description: formatMessage(t("skills.routes.currentlyUnavailable"), { provider_id: route.provider_id, service_entry_id: route.service_entry_id }),
     keywords: [route.model_id, route.connection_id, route.provider_id, route.service_entry_id],
     disabled: true,
   }] : options;
@@ -117,8 +114,7 @@ export function luaskillsSelectedRouteKeys(
 // 两个选择器都由后端已验证的候选供给，并按各自配置的操作过滤，因此无法执行该操作的模型绝不
 // 会出现。选择结果是精确身份键而非模型名，保存走共享公共 AI 事务，代次验证由该事务持有。
 export function LuaSkillsInferenceRoutes() {
-  const { locale } = useI18n();
-  const zh = locale.startsWith("zh");
+  const { t } = useI18n();
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
   const [llmKey, setLlmKey] = React.useState("");
   const [embeddingKey, setEmbeddingKey] = React.useState("");
@@ -198,12 +194,12 @@ export function LuaSkillsInferenceRoutes() {
     && inferenceRouteKey(diagnostic.route) === inferenceRouteKey(persistedEmbeddingRoute)
   ));
   const displayedLlmOptions = React.useMemo(
-    () => appendUnavailableOption(llmOptions, persistedLlmRoute, llmUnavailable, zh),
-    [llmOptions, persistedLlmRoute, llmUnavailable, zh],
+    () => appendUnavailableOption(llmOptions, persistedLlmRoute, llmUnavailable, t),
+    [llmOptions, persistedLlmRoute, llmUnavailable, t],
   );
   const displayedEmbeddingOptions = React.useMemo(
-    () => appendUnavailableOption(embeddingOptions, persistedEmbeddingRoute, embeddingUnavailable, zh),
-    [embeddingOptions, persistedEmbeddingRoute, embeddingUnavailable, zh],
+    () => appendUnavailableOption(embeddingOptions, persistedEmbeddingRoute, embeddingUnavailable, t),
+    [embeddingOptions, persistedEmbeddingRoute, embeddingUnavailable, t],
   );
 
   // save commits one picker through the shared public-AI route transaction.
@@ -235,14 +231,14 @@ export function LuaSkillsInferenceRoutes() {
         });
       apply(next);
       setNotice(route
-        ? (zh ? "已保存并立即生效。" : "Saved and active immediately.")
-        : (zh ? "已清除，该能力立即停用。" : "Cleared; the capability is now disabled."));
+        ? t("skills.routes.savedAndActiveImmediately")
+        : t("skills.routes.clearedTheCapabilityIs"));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(null);
     }
-  }, [apply, zh]);
+  }, [apply, t]);
 
   // selectedRoute resolves one exact key back to its validated candidate route.
   // selectedRoute 将一个精确键解析回其已验证候选路由。
@@ -255,31 +251,29 @@ export function LuaSkillsInferenceRoutes() {
 
   return (
     <section className="lua-settings-section lua-inference-routes">
-      <h4>{zh ? "内部模型路由" : "Internal model routes"}</h4>
-      <p>{zh
-        ? "LuaSkills 的临时问答与向量能力各自绑定一条精确路由，不复用会话模型或记忆/上下文引擎的用途。"
-        : "LuaSkills binds one exact route for temporary question answering and one for embeddings; it never reuses the conversation model or the memory/context-engine purposes."}</p>
+      <h4>{t("skills.routes.internalModelRoutes")}</h4>
+      <p>{t("skills.routes.luaskillsBindsOneExact")}</p>
       {error ? <div role="alert" className="skill-empty-state warning">
         <pre className="plugin-control-error-details">{error}</pre>
       </div> : null}
       {notice ? <p role="status">{notice}</p> : null}
       {llmUnavailable ? <div role="alert" className="skill-empty-state warning">
-        <p>{zh ? "已保存的临时问答路由当前不可用，LuaSkills 不会调用它。请选择可用路由或清除当前配置。" : "The saved temporary question-answering route is unavailable and LuaSkills will not call it. Select an available route or clear the current configuration."}</p>
+        <p>{t("skills.routes.theSavedTemporaryQuestion")}</p>
         {llmDiagnostic?.reason ? <pre className="plugin-control-error-details">{llmDiagnostic.reason}</pre> : null}
       </div> : null}
       <label className="lua-inference-route-row">
-        <span>{zh ? "临时问答（temporary_llm）" : "Temporary question answering (temporary_llm)"}</span>
+        <span>{t("skills.routes.temporaryQuestionAnsweringTemporary")}</span>
         <Combobox
-          ariaLabel={zh ? "临时问答路由" : "Temporary LLM route"}
+          ariaLabel={t("skills.routes.temporaryLlmRoute")}
           disabled={busy !== null || llmCandidates.length === 0}
-          emptyText={zh ? "没有可用候选" : "No available candidate"}
+          emptyText={t("skills.routes.noAvailableCandidate")}
           onValueChange={(value) => {
             const route = selectedRoute(llmCandidates, value);
             void save("llm", route);
           }}
           options={displayedLlmOptions}
-          placeholder={zh ? "选择精确路由" : "Select an exact route"}
-          searchPlaceholder={zh ? "搜索模型或连接" : "Search model or connection"}
+          placeholder={t("skills.routes.selectAnExactRoute")}
+          searchPlaceholder={t("skills.routes.searchModelOrConnection")}
           value={llmKey}
         />
       </label>
@@ -288,24 +282,24 @@ export function LuaSkillsInferenceRoutes() {
         onClick={() => void save("llm", null)}
         type="button"
         variant="outline"
-      >{zh ? "清除问答路由" : "Clear question-answering route"}</Button>
+      >{t("skills.routes.clearQuestionAnsweringRoute")}</Button>
       {embeddingUnavailable ? <div role="alert" className="skill-empty-state warning">
-        <p>{zh ? "已保存的向量路由当前不可用，LuaSkills 不会调用它。请选择可用路由或清除当前配置。" : "The saved embedding route is unavailable and LuaSkills will not call it. Select an available route or clear the current configuration."}</p>
+        <p>{t("skills.routes.theSavedEmbeddingRoute")}</p>
         {embeddingDiagnostic?.reason ? <pre className="plugin-control-error-details">{embeddingDiagnostic.reason}</pre> : null}
       </div> : null}
       <label className="lua-inference-route-row">
-        <span>{zh ? "向量（embedding_create）" : "Embeddings (embedding_create)"}</span>
+        <span>{t("skills.routes.embeddingsEmbeddingCreate")}</span>
         <Combobox
-          ariaLabel={zh ? "向量路由" : "Embedding route"}
+          ariaLabel={t("skills.routes.embeddingRoute")}
           disabled={busy !== null || embeddingCandidates.length === 0}
-          emptyText={zh ? "没有可用候选" : "No available candidate"}
+          emptyText={t("skills.routes.noAvailableCandidate")}
           onValueChange={(value) => {
             const route = selectedRoute(embeddingCandidates, value);
             void save("embedding", route);
           }}
           options={displayedEmbeddingOptions}
-          placeholder={zh ? "选择精确路由" : "Select an exact route"}
-          searchPlaceholder={zh ? "搜索模型或连接" : "Search model or connection"}
+          placeholder={t("skills.routes.selectAnExactRoute")}
+          searchPlaceholder={t("skills.routes.searchModelOrConnection")}
           value={embeddingKey}
         />
       </label>
@@ -314,7 +308,7 @@ export function LuaSkillsInferenceRoutes() {
         onClick={() => void save("embedding", null)}
         type="button"
         variant="outline"
-      >{zh ? "清除向量路由" : "Clear embedding route"}</Button>
+      >{t("skills.routes.clearEmbeddingRoute")}</Button>
     </section>
   );
 }

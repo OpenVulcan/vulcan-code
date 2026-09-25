@@ -5,7 +5,7 @@ import { VceActionButton } from "./vce-action-button";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
-import { useI18n } from "@/i18n";
+import { formatMessage, useI18n } from "@/i18n";
 import { preflightVceEmbeddingRoute } from "@/service/vce-service";
 import { savePublicAiInferenceRoute } from "@/service/settings-actions-service";
 import type { PublicAiInferenceRoute, PublicAiInternalInferenceCandidate, PublicAiSettingsSnapshot,
@@ -63,8 +63,7 @@ function initialDimensionText(props: VceEmbeddingSettingsProps): string {
 export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
   // Locale changes presentation only; all route identities stay backend-owned.
   // 语言仅改变展示；全部路由身份仍由后端持有。
-  const { locale } = useI18n();
-  const copy = (zh: string, en: string) => locale === "zh-CN" ? zh : en;
+  const { t } = useI18n();
   // Saved identity excludes unrelated catalog refreshes, preventing accidental draft loss.
   // 已保存身份排除无关目录刷新，防止意外丢失草稿。
   const savedKey = props.route ? vceInferenceRouteKey(props.route) : "";
@@ -210,7 +209,7 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
     invalidate(); setDraftRoute(props.route ?? null); setDimensionText(initialDimensionText(props));
   };
 
-  return <section className="space-y-4 px-4 py-3" aria-label={copy("向量模型与维度", "Embedding model and dimensions")}>
+  return <section className="space-y-4 px-4 py-3" aria-label={t("contextEngine.embedding.embeddingModelAndDimensions")}>
     {/* Align purpose, model and icon actions with the other inference routes. */}
     {/* 将用途、模型和图标操作对齐到其他推理路由。 */}
     <div className="grid items-center gap-3 @xl/vce:grid-cols-[8rem_minmax(12rem,1fr)_9.5rem]">
@@ -221,30 +220,30 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
         {props.status.available ? <CheckCircle2 className="size-4" /> : <CircleAlert className="size-4" />}
       </span>
       <div className="min-w-0 flex-1">
-        <h4 className="flex items-center gap-1 text-xs font-medium">{copy("向量模型", "Embedding model")}<VceHelpTooltip label={copy("向量模型说明", "Embedding model notes")}>{copy("源码与查询使用同一向量空间。先选择模型和明确维度，再确认已有项目的兼容性。", "Source code and queries share one vector space. Select a model and explicit dimension, then review existing projects.")}</VceHelpTooltip></h4>
+        <h4 className="flex items-center gap-1 text-xs font-medium">{t("contextEngine.embedding.embeddingModel")}<VceHelpTooltip label={t("contextEngine.embedding.embeddingModelNotes")}>{t("contextEngine.embedding.sourceCodeAndQueries")}</VceHelpTooltip></h4>
       </div>
       </div>
       <div className="min-w-0 space-y-1.5">
-        <span className="text-xs text-muted-foreground @xl/vce:hidden">{copy("模型与账号", "Model and account")}</span>
-        <Combobox ariaLabel={copy("向量模型", "Embedding model")} className="h-8 px-2 text-xs" disabled={disabled || props.candidates.length === 0}
+        <span className="text-xs text-muted-foreground @xl/vce:hidden">{t("contextEngine.embedding.modelAndAccount")}</span>
+        <Combobox ariaLabel={t("contextEngine.embedding.embeddingModel")} className="h-8 px-2 text-xs" disabled={disabled || props.candidates.length === 0}
           options={vceRoutePickerOptions(props.candidates)} value={selected ? draftKey : undefined}
-          placeholder={draftRoute?.model_id ?? copy("选择模型与账号", "Select model and account")}
-          searchPlaceholder={copy("筛选模型、供应商或账号…", "Filter models, providers, or accounts…")}
-          emptyText={copy("没有符合条件的模型", "No compatible models")}
+          placeholder={draftRoute?.model_id ?? t("contextEngine.embedding.selectModelAndAccount")}
+          searchPlaceholder={t("contextEngine.embedding.filterModelsProvidersOr")}
+          emptyText={t("contextEngine.embedding.noCompatibleModels")}
           onValueChange={(value) => { const candidate = candidateByKey.get(value); if (candidate) changeRoute(candidate.route); }} />
       </div>
       <div className="flex flex-wrap items-center gap-2 @xl/vce:justify-end">
-      <VceActionButton label={copy("向量维度", "Vector dimensions")}
-        tooltip={`${copy("向量维度", "Vector dimensions")}: ${props.dimension ?? copy("未设置", "Not configured")}`}
+      <VceActionButton label={t("contextEngine.embedding.vectorDimensions")}
+        tooltip={`${t("contextEngine.embedding.vectorDimensions")}: ${props.dimension ?? t("contextEngine.embedding.notConfigured")}`}
         disabled={disabled || !draftRoute} icon={<Axis3D className="size-4" />}
         onClick={() => { setDialogMode("dimensions"); setDialogOpen(true); }} />
-      <VceActionButton label={copy("测试连通性", "Test connectivity")}
+      <VceActionButton label={t("contextEngine.embedding.testConnectivity")}
         disabled={disabled || dirty || !props.route || props.dimension === undefined}
         onClick={() => void props.onTest()} icon={props.testing ? <LoaderCircle className="size-4 animate-spin" /> : <Bug className="size-4" />} />
-      <VceActionButton label={copy("检查项目兼容性", "Check project compatibility")}
+      <VceActionButton label={t("contextEngine.embedding.checkProjectCompatibility")}
         disabled={disabled || !validDraft || (!draftRoute && !props.route)} icon={<ScanSearch className="size-4" />}
         onClick={() => { setDialogMode("compatibility"); setDialogOpen(true); void inspect(); }} />
-      <VceActionButton label={copy("清除", "Clear")} disabled={disabled || !draftRoute}
+      <VceActionButton label={t("contextEngine.embedding.clear")} disabled={disabled || !draftRoute}
         onClick={() => changeRoute(null)} icon={<Eraser className="size-4" />} />
       </div>
     </div>
@@ -252,51 +251,51 @@ export function VceEmbeddingSettings(props: VceEmbeddingSettingsProps) {
     <Dialog open={dialogOpen} onOpenChange={(open) => { if (!disabled) { if (!open) resetDraft(); setDialogOpen(open); } }}>
       <DialogContent size="md" scrollMode="body-scroll" showCloseButton={!disabled}>
         <DialogHeader>
-          <DialogTitle>{dialogMode === "compatibility" ? copy("项目兼容性检查", "Project compatibility") : draftRoute ? copy("向量维度设置", "Vector dimensions") : copy("清除向量模型", "Clear embedding model")}</DialogTitle>
-          <DialogDescription>{copy("保存前检查已有项目的兼容性；保存设置不会自动重建索引。", "Review existing project compatibility before saving. Saving settings does not rebuild indexes automatically.")}</DialogDescription>
+          <DialogTitle>{dialogMode === "compatibility" ? t("contextEngine.embedding.projectCompatibility") : draftRoute ? t("contextEngine.embedding.vectorDimensions2") : t("contextEngine.embedding.clearEmbeddingModel")}</DialogTitle>
+          <DialogDescription>{t("contextEngine.embedding.reviewExistingProjectCompatibility")}</DialogDescription>
         </DialogHeader>
         {dialogMode === "dimensions" ? <>
       <div className="min-w-0 space-y-1.5">{draftRoute ? <>
-        <label className="flex items-center gap-1 text-xs text-muted-foreground" htmlFor="vce-embedding-dimension">{copy("向量维度", "Dimensions")}<VceHelpTooltip label={copy("维度说明", "Dimension notes")}>{copy("维度必须明确；不使用供应商默认档位。", "Dimensions must be explicit; provider defaults are not used.")}</VceHelpTooltip></label>
-        {domain?.kind === "discrete" ? <Combobox ariaLabel={copy("向量维度", "Dimensions")} className="h-10" disabled={disabled}
+        <label className="flex items-center gap-1 text-xs text-muted-foreground" htmlFor="vce-embedding-dimension">{t("contextEngine.embedding.dimensions")}<VceHelpTooltip label={t("contextEngine.embedding.dimensionNotes")}>{t("contextEngine.embedding.dimensionsMustBeExplicit")}</VceHelpTooltip></label>
+        {domain?.kind === "discrete" ? <Combobox ariaLabel={t("contextEngine.embedding.dimensions")} className="h-10" disabled={disabled}
           options={domain.values.map((value) => ({ value: String(value), label: String(value) }))}
-          value={domain.values.includes(dimension) ? dimensionText : undefined} placeholder={copy("选择明确维度", "Choose dimensions")}
-          searchPlaceholder={copy("筛选维度…", "Filter dimensions…")} emptyText={copy("没有匹配维度", "No matching dimensions")}
+          value={domain.values.includes(dimension) ? dimensionText : undefined} placeholder={t("contextEngine.embedding.chooseDimensions")}
+          searchPlaceholder={t("contextEngine.embedding.filterDimensions")} emptyText={t("contextEngine.embedding.noMatchingDimensions")}
           onValueChange={(value) => { invalidate(); setDimensionText(value); }} />
           : <Input id="vce-embedding-dimension" type="number" className="h-10" value={dimensionText} disabled={disabled || !domain}
             min={domain?.kind === "range" ? domain.minimum : undefined} max={domain?.kind === "range" ? domain.maximum : undefined} step={1}
             onChange={(event) => { invalidate(); setDimensionText(event.target.value); }} />}
       </> : null}</div>
         </> : null}
-        {!validDraft && draftRoute ? <p className="text-xs text-[var(--vcn-content-warning)]">{copy("请选择模型明确支持的正整数维度。", "Choose a positive dimension explicitly supported by this model.")}</p> : null}
+        {!validDraft && draftRoute ? <p className="text-xs text-[var(--vcn-content-warning)]">{t("contextEngine.embedding.chooseAPositiveDimension")}</p> : null}
         {error ? <p role="alert" className="break-words text-xs text-destructive">{error}</p> : null}
-        {busy === "preflight" ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />{copy("正在检查项目兼容性…", "Checking project compatibility…")}</p> : null}
-        {busy === "save" ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />{copy("正在保存并更新状态…", "Saving and updating status…")}</p> : null}
-    {displayedReview ? <div className="space-y-3 rounded-lg border bg-muted/20 p-3" aria-label={copy("模型变更确认", "Confirm model changes")}>
-      <p className="text-sm font-medium">{displayedReview.candidate ? copy(`确认使用 ${displayedReview.candidate.dimension} 维向量`, `Confirm ${displayedReview.candidate.dimension}-dimension vectors`) : copy("确认清除向量模型", "Confirm embedding removal")}</p>
+        {busy === "preflight" ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />{t("contextEngine.embedding.checkingProjectCompatibility")}</p> : null}
+        {busy === "save" ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />{t("contextEngine.embedding.savingAndUpdatingStatus")}</p> : null}
+    {displayedReview ? <div className="space-y-3 rounded-lg border bg-muted/20 p-3" aria-label={t("contextEngine.embedding.confirmModelChanges")}>
+      <p className="text-sm font-medium">{displayedReview.candidate ? formatMessage(t("contextEngine.embedding.confirmDimensionVectors"), { dimension: displayedReview.candidate.dimension }) : t("contextEngine.embedding.confirmEmbeddingRemoval")}</p>
       {displayedReview.projects.filter((project) => !project.compatible).map((project) => <fieldset key={project.impact.scope.project_id} className="space-y-2 rounded-md border bg-background p-3" disabled={disabled}>
         <legend className="px-1 text-sm">{project.projectName}</legend>
         <p className="text-xs text-muted-foreground">{project.impact.hardRebuildReason
-          ? copy(`已有索引 ${project.impact.scope.dimension} 维；本次变更必须重建，保存不会自动开始。`, `Existing index: ${project.impact.scope.dimension} dimensions. Rebuild required; saving will not start it.`)
-          : copy(`包含 ${project.impact.sourceFingerprints.length} 个精确来源。名称相同也需要您确认兼容。`, `${project.impact.sourceFingerprints.length} exact origins. Matching names do not establish compatibility.`)}</p>
+          ? formatMessage(t("contextEngine.embedding.existingIndexDimensionsRebuild"), { dimension: project.impact.scope.dimension })
+          : formatMessage(t("contextEngine.embedding.exactOriginsMatchingNames"), { length: project.impact.sourceFingerprints.length })}</p>
         {!project.impact.hardRebuildReason ? <label className="flex items-start gap-2 text-xs"><input type="radio" name={`vce-compat-${project.impact.scope.project_id}`} checked={displayedDecisions[project.impact.scope.project_id] === "compatible"}
-          onChange={() => setDecisions((current) => ({ ...current, [project.impact.scope.project_id]: "compatible" }))} />{copy("确认同一向量空间，继续使用已有索引", "Same vector space; keep using the existing index")}</label> : null}
+          onChange={() => setDecisions((current) => ({ ...current, [project.impact.scope.project_id]: "compatible" }))} />{t("contextEngine.embedding.sameVectorSpaceKeep")}</label> : null}
         <label className="flex items-start gap-2 text-xs"><input type="radio" name={`vce-compat-${project.impact.scope.project_id}`} checked={displayedDecisions[project.impact.scope.project_id] === "rebuild"}
-          onChange={() => setDecisions((current) => ({ ...current, [project.impact.scope.project_id]: "rebuild" }))} />{copy("需要重建，保留旧库并等待我手动操作", "Rebuild required; retain the old index until I start rebuilding")}</label>
-        <details className="text-xs text-muted-foreground"><summary>{copy("查看精确来源", "Inspect exact origins")}</summary>
+          onChange={() => setDecisions((current) => ({ ...current, [project.impact.scope.project_id]: "rebuild" }))} />{t("contextEngine.embedding.rebuildRequiredRetainThe")}</label>
+        <details className="text-xs text-muted-foreground"><summary>{t("contextEngine.embedding.inspectExactOrigins")}</summary>
           <p className="mt-1 break-all">{project.impact.scope.project_id} · {project.impact.scope.root_hash}</p>
           {project.impact.sourceFingerprints.map((source) => <p className="mt-1 break-all" key={source}>{source}</p>)}
           {project.impact.hardRebuildReason ? <p className="mt-1">{project.impact.hardRebuildReason}</p> : null}
         </details>
       </fieldset>)}
-      {displayedReview.projects.every((project) => project.compatible) ? <p className="text-xs text-muted-foreground">{copy("没有需要重新确认的已初始化索引。", "No initialized index requires a new compatibility decision.")}</p> : null}
-      {!displayedReview.candidate ? <p className="text-xs text-muted-foreground">{copy("引擎将不可用，已有项目索引保留。", "The engine becomes unavailable; existing indexes are retained.")}</p> : null}
+      {displayedReview.projects.every((project) => project.compatible) ? <p className="text-xs text-muted-foreground">{t("contextEngine.embedding.noInitializedIndexRequires")}</p> : null}
+      {!displayedReview.candidate ? <p className="text-xs text-muted-foreground">{t("contextEngine.embedding.theEngineBecomesUnavailable")}</p> : null}
     </div> : null}
         <div className="flex justify-end gap-2">
-          <Button size="sm" variant="ghost" disabled={disabled} onClick={() => { resetDraft(); setDialogOpen(false); }}>{copy("取消", "Cancel")}</Button>
+          <Button size="sm" variant="ghost" disabled={disabled} onClick={() => { resetDraft(); setDialogOpen(false); }}>{t("contextEngine.embedding.cancel")}</Button>
           <Button size="sm" disabled={disabled || !validDraft || (review !== null && !allDecided)} onClick={() => void (review ? save() : inspect())}>
             {busy === "save" ? <LoaderCircle className="size-4 animate-spin" /> : null}
-            {busy === "save" ? copy("正在保存", "Saving") : review ? copy("确认保存", "Confirm and save") : dialogMode === "compatibility" ? copy("重新检查", "Check again") : copy("保存", "Save")}
+            {busy === "save" ? t("contextEngine.embedding.saving") : review ? t("contextEngine.embedding.confirmAndSave") : dialogMode === "compatibility" ? t("contextEngine.embedding.checkAgain") : t("contextEngine.embedding.save")}
           </Button>
         </div>
       </DialogContent>

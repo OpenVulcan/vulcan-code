@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "stepfun",
-  "revision": 3,
-  "published_at": "2026-09-20T13:05:47Z",
+  "revision": 4,
+  "published_at": "2026-09-24T18:40:23Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -571,9 +571,185 @@
         "evidence_revision": "stepfun.step-5-preview-model-docs.2026-09-20"
       },
       "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-5-preview"
+    },
+    {
+      "rule_id": "step-5-preview-step-plan-usage",
+      "display_name": "Step 5 Preview",
+      "scope": {
+        "service_entry_ids": [
+          "step-plan"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "step-5-preview"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "image",
+          "video"
+        ],
+        "output_resources": [],
+        "structured_output": "json_schema",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "context_limit": 1000000,
+        "output_limit": 64000,
+        "evidence_revision": "stepfun.step-5-preview-model-docs.2026-09-20"
+      },
+      "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-5-preview",
+      "usage_profile_refs": [
+        "stepfun.step-plan.chat.body.v1",
+        "stepfun.step-plan.chat.sse.cumulative.v1"
+      ]
     }
   ],
-  "usage_profiles": [],
+  "usage_profiles": [
+    {
+      "profile_id": "stepfun.step-plan.chat.body.v1",
+      "description": "Retain the standard final Chat JSON-body usage contract.",
+      "payload": {
+        "profile_id": "stepfun.step-plan.chat.body.v1",
+        "revision": 1,
+        "record_kind": "json_body",
+        "update_kind": "final",
+        "required_pointer": "/usage",
+        "bindings": [
+          {
+            "field": "input_tokens",
+            "pointers": [
+              "/usage/prompt_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "cache_read_tokens",
+            "pointers": [
+              "/usage/prompt_tokens_details/cached_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "output_tokens",
+            "pointers": [
+              "/usage/completion_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "reasoning_tokens",
+            "pointers": [
+              "/usage/completion_tokens_details/reasoning_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "total_tokens",
+            "pointers": [
+              "/usage/total_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "response_model",
+            "pointers": [
+              "/model"
+            ],
+            "encoding": "string"
+          },
+          {
+            "field": "response_id",
+            "pointers": [
+              "/id"
+            ],
+            "encoding": "string"
+          }
+        ],
+        "derivations": [
+          "uncached_input_from_input_minus_cache_read"
+        ]
+      }
+    },
+    {
+      "profile_id": "stepfun.step-plan.chat.sse.cumulative.v1",
+      "description": "Step Plan step-5-preview reports cumulative usage in unfinished SSE chunks; verified by the 2026-09-25 captured prefix.",
+      "payload": {
+        "profile_id": "stepfun.step-plan.chat.sse.cumulative.v1",
+        "revision": 1,
+        "record_kind": "sse_event",
+        "update_kind": "snapshot",
+        "required_pointer": "/usage",
+        "bindings": [
+          {
+            "field": "input_tokens",
+            "pointers": [
+              "/usage/prompt_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "cache_read_tokens",
+            "pointers": [
+              "/usage/prompt_tokens_details/cached_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "output_tokens",
+            "pointers": [
+              "/usage/completion_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "reasoning_tokens",
+            "pointers": [
+              "/usage/completion_tokens_details/reasoning_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "total_tokens",
+            "pointers": [
+              "/usage/total_tokens"
+            ],
+            "encoding": "unsigned_integer"
+          },
+          {
+            "field": "response_model",
+            "pointers": [
+              "/model"
+            ],
+            "encoding": "string"
+          },
+          {
+            "field": "response_id",
+            "pointers": [
+              "/id"
+            ],
+            "encoding": "string"
+          }
+        ],
+        "derivations": [
+          "uncached_input_from_input_minus_cache_read"
+        ]
+      }
+    }
+  ],
   "request_profiles": [
     {
       "profile_id": "stepfun.chat.sampling.v1",

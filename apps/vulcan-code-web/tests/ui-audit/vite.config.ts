@@ -10,7 +10,7 @@ export const auditAliases = [
   { find: "@/service/webui-service-runtime", replacement: path.resolve(__dirname, "runtime.ts") },
   { find: "@/service/browser-service-discovery", replacement: path.resolve(__dirname, "discovery.ts") },
   { find: "@/service/browserTransport", replacement: path.resolve(__dirname, "discovery.ts") },
-  { find: "@/shell/client", replacement: path.resolve(__dirname, "shell.ts") },
+  { find: "@/host-shell/client", replacement: path.resolve(__dirname, "shell.ts") },
   { find: "@", replacement: path.resolve(__dirname, "../../src") },
 ];
 // auditStyleSources explicitly scans every production source before any lazy page is opened.
@@ -20,7 +20,7 @@ export const auditAliases = [
 function auditStyleSources(): Plugin {
   // owner is the exact lazy workbench importer of the production Tailwind entry.
   // owner 是生产 Tailwind 入口的准确懒加载工作台导入者。
-  const owner = normalizePath(path.resolve(__dirname, "../../src/app/WorkbenchApp.tsx"));
+  const owner = normalizePath(path.resolve(__dirname, "../../src/app/workbench-app.tsx"));
   return { name: "ui-audit-explicit-style-sources", enforce: "pre", resolveId(source, importer) {
     if (source !== "../styles.css" || !importer || normalizePath(importer.split("?")[0]) !== owner) return null;
     return path.resolve(__dirname, "app.css");

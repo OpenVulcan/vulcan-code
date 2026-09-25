@@ -67,6 +67,7 @@ lua_runtime:
     disable: on_disable
   actions:
     - id: ui-action
+      effect: read
       function: ui_action
       timeout_ms: 1000
       callers:

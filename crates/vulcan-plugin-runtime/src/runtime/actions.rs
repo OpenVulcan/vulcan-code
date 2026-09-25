@@ -1,8 +1,10 @@
 //! Manifest-declared business actions with caller policy, schema validation, and lease cleanup.
 //! 带调用方策略、Schema校验与租约清理的清单声明业务Action。
 
+use super::action_status::{ACTION_RECORD, VulcanPluginActionIdentity};
 use super::bridge::VulcanPluginBridgeLeaseScope;
 use super::environment::plugin_execution_package_root;
+use super::execution::ActionExecution;
 use super::lease::required_lua_runtime;
 use super::{
     RetainedVulcanPluginLease, VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError,
@@ -55,6 +57,128 @@ impl VulcanPluginRuntimeManager {
         &self,
         request: VulcanPluginActionRequest,
     ) -> Result<Value, VulcanPluginRuntimeError> {
+        self.invoke_action_checked(
+            request,
+            None,
+            VulcanPluginActionIdentity {
+                client_id: self.state.manager_id.clone(),
+                invocation_id: Uuid::new_v4().to_string(),
+            },
+        )
+        .await
+    }
+
+    /// Invokes a UI action only for the exact incarnation that supplied its module.
+    /// 仅为提供界面模块的精确运行实例执行界面 Action。
+    /// Identity comes from the authenticated module projection; stale pages must reload.
+    /// 身份来自已认证模块投影；陈旧页面必须重新加载。
+    pub async fn invoke_ui_action(
+        &self,
+        request: VulcanPluginActionRequest,
+        runtime_identity: &str,
+        identity: VulcanPluginActionIdentity,
+    ) -> Result<Value, VulcanPluginRuntimeError> {
+        self.invoke_action_checked(request, Some(runtime_identity), identity)
+            .await
+    }
+
+    /// Freezes generation and deadline before spawning the cancellation-safe owner.
+    /// 启动可安全应对取消的所有者前冻结代次与截止时间。
+    /// Host calls have no UI identity; mounted UI calls must provide their exact projection identity.
+    /// 宿主调用没有界面身份；已挂载界面调用必须提供其精确投影身份。
+    async fn invoke_action_checked(
+        &self,
+        request: VulcanPluginActionRequest,
+        runtime_identity: Option<&str>,
+        identity: VulcanPluginActionIdentity,
+    ) -> Result<Value, VulcanPluginRuntimeError> {
+        let entered = tokio::time::Instant::now();
+        let snapshot = self.snapshot();
+        let plugin = snapshot
+            .plugins
+            .get(&request.plugin_id)
+            .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin action owner is unavailable."))?;
+        let plugin_generation = plugin.generation;
+        if runtime_identity.is_some_and(|identity| {
+            identity != format!("{}:{}", snapshot.service_epoch, plugin_generation)
+        }) {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin UI runtime changed; reload the plugin page before invoking actions.",
+            ));
+        }
+        let manifest = plugin.manifest.as_ref().ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Plugin action manifest is unavailable.")
+        })?;
+        let lua = required_lua_runtime(manifest)?;
+        let action = lua
+            .actions
+            .iter()
+            .find(|action| action.id == request.action_id)
+            .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin action is not declared."))?;
+        let permit = self.admit_action(&plugin.id, lua.max_active_sessions)?;
+        let deadline = entered
+            .checked_add(std::time::Duration::from_millis(action.timeout_ms))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Plugin action timeout exceeds the host clock range.")
+            })?;
+        let cancellable = action.effect == crate::VulcanPluginActionEffect::Read;
+        let record = self.register_action(
+            identity,
+            &plugin.id,
+            &action.id,
+            format!("{}:{}", snapshot.service_epoch, plugin_generation),
+            entered.into_std(),
+            deadline.into_std(),
+            cancellable,
+        )?;
+        let (waiter, cancelled) = tokio::sync::oneshot::channel();
+        let mut waiter = Some(waiter);
+        // Submitted mutations survive waiter disconnect; only the original deadline limits admission.
+        // 已提交变更在等待方断开后继续；仅原始截止时间限制入场。
+        let mutation_waiter = if cancellable { None } else { waiter.take() };
+        // The supervisor retains gates and temporary lease cleanup after an HTTP waiter is dropped.
+        // HTTP 等待方被丢弃后，监督任务仍持有同步门并完成临时租约清理。
+        let manager = self.clone();
+        let task = tokio::spawn(async move {
+            let _permit = permit;
+            let _mutation_waiter = mutation_waiter;
+            let _completion = super::action_status::ActionCompletionGuard(record.clone());
+            ACTION_RECORD
+                .scope(record.clone(), async {
+                    let result = manager
+                        .invoke_action_owned(
+                            request,
+                            plugin_generation,
+                            ActionExecution {
+                                deadline,
+                                cancelled,
+                                record: record.clone(),
+                            },
+                        )
+                        .await;
+                    record.finish(result.is_ok());
+                    result
+                })
+                .await
+        });
+        let result = tokio::time::timeout_at(deadline, task).await;
+        drop(waiter);
+        result.map_err(|_| VulcanPluginRuntimeError::new("Plugin action wait timed out; started work retains its execution permit until cleanup. Do not automatically replay mutations."))?
+            .map_err(|error| VulcanPluginRuntimeError::new(format!("Plugin action supervisor failed: {error}")))?
+    }
+
+    /// Owns the complete action lifecycle through schema validation and lease cleanup.
+    /// 持有完整 Action 生命周期，直至 Schema 校验与租约清理完成。
+    /// The authorized request returns its validated result or a retained cleanup diagnostic.
+    /// 获授权请求返回校验结果，或返回已保留的清理诊断。
+    async fn invoke_action_owned(
+        &self,
+        mut request: VulcanPluginActionRequest,
+        expected_generation: u64,
+        mut execution: ActionExecution,
+    ) -> Result<Value, VulcanPluginRuntimeError> {
+        execution.remaining_ms()?;
+        self.ensure_current_persistent_generation(&request.plugin_id, expected_generation)?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(&request.plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(
@@ -62,7 +186,9 @@ impl VulcanPluginRuntimeManager {
                 request.plugin_id
             ))
         })?;
-        if plugin.runtime_state != VulcanPluginRuntimeState::Enabled {
+        if plugin.runtime_state != VulcanPluginRuntimeState::Enabled
+            || plugin.generation != expected_generation
+        {
             return Err(VulcanPluginRuntimeError::new(format!(
                 "Vulcan plugin `{}` is not enabled.",
                 request.plugin_id
@@ -103,6 +229,19 @@ impl VulcanPluginRuntimeManager {
         // executionRoot 把 Action 代码与 Schema 固定到一个已授权插件包代次。
         let execution_root = plugin_execution_package_root(&self.state, plugin)
             .map_err(VulcanPluginRuntimeError::new)?;
+        // Only declared null time markers are replaced; explicit historical timestamps remain exact.
+        // 仅替换已声明的空时间标记；明确历史时间戳保持精确。
+        let frozen_now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| VulcanPluginRuntimeError::new(format!("Invalid host clock: {error}")))?
+            .as_millis();
+        if let Some(arguments) = request.arguments.as_object_mut() {
+            for argument in &action.snapshot_time_arguments {
+                if arguments.get(argument).is_some_and(Value::is_null) {
+                    arguments.insert(argument.clone(), json!(frozen_now));
+                }
+            }
+        }
         validate_plugin_action_value(
             &execution_root,
             action.input_schema_file.as_deref(),
@@ -114,14 +253,21 @@ impl VulcanPluginRuntimeManager {
         })?;
         if request.reuse_enabled_runtime {
             let plugin_generation = plugin.generation;
+            execution.record.phase("initialization_wait", false);
+            let initialization = self
+                .persistent_runtime_gate(&plugin.id, VulcanPluginPersistentRuntimeKind::UiAction)?;
+            let initialization = execution.wait(initialization.lock_owned()).await?;
+            execution.record.phase("initializing", false);
             let runtime = self
-                .ensure_enabled_plugin_runtime(
+                .initialize_enabled_plugin_runtime_locked(
                     &plugin.id,
                     plugin_generation,
                     VulcanPluginPersistentRuntimeKind::UiAction,
+                    initialization,
                 )
                 .await?;
-            let _operation = runtime.operation_gate.lock().await;
+            execution.record.phase("operation_wait", false);
+            let _operation = execution.wait(runtime.operation_gate.lock()).await?;
             if runtime.closing.load(Ordering::Acquire)
                 || runtime.plugin_generation != plugin_generation
             {
@@ -130,6 +276,9 @@ impl VulcanPluginRuntimeManager {
                     plugin.id
                 )));
             }
+            self.ensure_current_persistent_generation(&plugin.id, plugin_generation)?;
+            let remaining_ms = execution.remaining_ms()?;
+            execution.record.start()?;
             let result = self
                 .evaluate_bridge_function(
                     &runtime.lease_id,
@@ -137,7 +286,7 @@ impl VulcanPluginRuntimeManager {
                     runtime.generation,
                     &action.function,
                     json!({ "arguments": request.arguments }),
-                    action.timeout_ms,
+                    remaining_ms,
                 )
                 .await?;
             validate_plugin_action_value(
@@ -149,6 +298,7 @@ impl VulcanPluginRuntimeManager {
             return Ok(result);
         }
         self.reserve_session_slot(&plugin.id, lua_runtime.max_active_sessions)?;
+        execution.record.phase("initializing", false);
         let action_lease_id = format!("action-{}", Uuid::new_v4());
         let create_result = self
             .create_managed_lease(
@@ -166,16 +316,24 @@ impl VulcanPluginRuntimeManager {
                 return Err(error);
             }
         };
-        let invocation_result = self
-            .evaluate_bridge_function(
-                &lease_id,
-                &sid,
-                generation,
-                &action.function,
-                json!({ "arguments": request.arguments }),
-                action.timeout_ms,
-            )
-            .await;
+        let invocation_result = match execution.remaining_ms().and_then(|remaining| {
+            self.ensure_current_persistent_generation(&plugin.id, expected_generation)?;
+            execution.record.start().map(|()| remaining)
+        }) {
+            Err(error) => Err(error),
+            Ok(remaining_ms) => {
+                self.evaluate_bridge_function(
+                    &lease_id,
+                    &sid,
+                    generation,
+                    &action.function,
+                    json!({ "arguments": request.arguments }),
+                    remaining_ms,
+                )
+                .await
+            }
+        };
+        execution.record.phase("cleanup", false);
         let close_result = self.close_raw_lease(&lease_id, &sid, generation).await;
         match close_result {
             Ok(()) => self.release_session_slot(&plugin.id),

@@ -673,7 +673,7 @@ export function ProjectSettingsDialog(props: {
   // saveVceSettings 持久化一份完整设置文档，并重新加载权威诊断。
   const saveVceSettings = async (settings: VceProjectSettingsInput, expectedRevision: number): Promise<VceProjectSettingsSummary> => {
     if (!projectId || !vceOverview || vceBusy || vceMutationInFlightRef.current) {
-      throw new Error("请等待当前项目状态读取或设置保存完成。");
+      throw new Error(t("projectSettings.vce.waitForPending"));
     }
     const targetProjectId = projectId;
     const requestOwner = projectActionOwnerRef.current;
@@ -689,7 +689,7 @@ export function ProjectSettingsDialog(props: {
         await vceActivity.reload();
       }
       if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        toast.success("代码语义索引设置已保存。");
+        toast.success(t("projectSettings.vce.settingsSaved"));
       }
       return saved;
     } catch (error) {
@@ -711,7 +711,7 @@ export function ProjectSettingsDialog(props: {
   // 无参数；可见权威修订与检查点保护此按钮操作。
   const refreshVceIndex = async (): Promise<VceJobSummary> => {
     if (!projectId || !vceOverview || vceBusy || vceMutationInFlightRef.current) {
-      throw new Error("请等待当前项目状态读取或设置保存完成。");
+      throw new Error(t("projectSettings.vce.waitForPending"));
     }
     const targetProjectId = projectId;
     const requestOwner = projectActionOwnerRef.current;
@@ -730,7 +730,7 @@ export function ProjectSettingsDialog(props: {
         throw new Error("VCE job admission returned a mismatched project identity.");
       }
       if (projectActionOwnerRef.current === requestOwner && isCurrentVceAction()) {
-        toast.success("索引作业已提交，可关闭设置并继续会话。");
+        toast.success(t("projectSettings.vce.jobSubmitted"));
       }
       return receipt;
     } catch (error) {

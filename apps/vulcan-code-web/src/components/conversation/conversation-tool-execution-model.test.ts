@@ -89,7 +89,7 @@ describe("conversation tool request progress", () => {
       receivedBytes: 4_096,
       revision: 2,
     });
-    expect(toolRequestProgressLabel(progress!)).toBe("Requesting · 3,032 characters · 4.0 KiB");
+    expect(toolRequestProgressLabel(progress!)).toBe("Requesting · 3,032 characters · 4 KiB");
   });
 
   it("does not replace an executing card with stale request construction state", () => {

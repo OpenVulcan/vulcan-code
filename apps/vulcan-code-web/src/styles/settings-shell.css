@@ -38,7 +38,7 @@
 .settings-page-heading p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 20px;
 }
 .settings-page-actions { display: flex; flex-shrink: 0; align-items: center; gap: 8px; }
@@ -61,7 +61,7 @@
 /* 主从目录在框架内呈现为一个带边框的面板。 */
 .settings-page-body > .workspace-directory:has(> [data-navigation-mode="column"]) {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
 }
 /* Visual Lab keeps its intro copy but the frame already shows the page title. */
 /* 视觉实验室保留介绍文案，但页面标题已由框架显示。 */
@@ -74,7 +74,7 @@
 .ai-capabilities-tab-count {
   margin-left: 6px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
 .ai-capabilities-panel { padding-top: 16px; }
@@ -84,7 +84,7 @@
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   list-style: none;
 }
 .ai-capability-row {
@@ -103,16 +103,16 @@
   place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: var(--muted);
   color: var(--foreground);
 }
 .ai-capability-copy { display: grid; gap: 2px; min-width: 0; }
-.ai-capability-copy strong { font-size: 13px; font-weight: 600; line-height: 20px; }
+.ai-capability-copy strong { font-size: var(--vcn-font-size-md); font-weight: 600; line-height: 20px; }
 .ai-capability-copy small {
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -120,17 +120,17 @@
 .ai-capability-target {
   overflow: hidden;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ai-capability-target.empty { color: var(--muted-foreground); }
 .ai-capability-status {
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--muted);
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 500;
   line-height: 18px;
   white-space: nowrap;
@@ -162,10 +162,10 @@
   min-width: 0;
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border));
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--destructive) 6%, var(--card));
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 400;
 }
 .settings-error-notice-icon { flex-shrink: 0; margin-top: 2px; color: var(--destructive); }
@@ -176,11 +176,11 @@
   margin: 0 0 6px;
   padding: 8px 10px;
   overflow: auto;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: var(--muted);
   color: var(--muted-foreground);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11.5px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -195,7 +195,7 @@
   margin: 0 0 10px;
   padding: 0;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
   line-height: 20px;
 }
@@ -211,7 +211,7 @@
   padding: 2px 0;
   color: var(--muted-foreground);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 500;
   list-style: none;
 }

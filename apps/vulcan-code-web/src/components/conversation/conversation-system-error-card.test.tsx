@@ -81,6 +81,30 @@ const AGENTSPACE_RECONCILIATION_BODY = `Vulcan 公共契约流式执行失败：
 })}`;
 
 describe("system provider error card", () => {
+  // English runtime errors retain structured diagnostics with and without route context.
+  // 英文运行时错误无论是否携带路由上下文，都保留结构化诊断。
+  it("parses English runtime failures and keeps existing Chinese records readable", () => {
+    for (const original of [SYSTEM_ERROR_BODY, EMPTY_MESSAGE_502_BODY]) {
+      // English mirrors the exact new runtime wrapper and suffix separator.
+      // english 对应准确的新运行时外壳及后缀分隔符。
+      const english = original.replace("Vulcan 公共契约流式执行失败：", "Provider streaming execution failed: ")
+        .replace("。 [provider_route: ", " [provider_route: ");
+      expect(parseSystemProviderError(english)).toEqual({ ...parseSystemProviderError(original), raw: english });
+      expect(parseConversationBlocks({
+        id: "english-error", conversationId: "conversation", role: "system", recordKind: "transcript", body: english,
+      })[0]?.kind).toBe("notice");
+    }
+  });
+  // Quoted legacy markers remain payload text when the real suffix uses the English format.
+  // 当真实后缀使用英文格式时，被引用的旧标记仍属于载荷正文。
+  it("does not truncate an upstream message containing a legacy route marker", () => {
+    const detail = "An upstream message quoted 。 [provider_route: old] verbatim.";
+    const body = SYSTEM_ERROR_BODY
+      .replace("Vulcan 公共契约流式执行失败：", "Provider streaming execution failed: ")
+      .replace("upstream detail | key=value", detail)
+      + " [provider_route: provider=current, model=current-model]";
+    expect(parseSystemProviderError(body)?.upstreamMessage).toBe(detail);
+  });
   it("parses canonical provider failure fields without losing the upstream message", () => {
     const error = parseSystemProviderError(SYSTEM_ERROR_BODY);
 
@@ -119,6 +143,15 @@ describe("system provider error card", () => {
       retryAfterMs: "60000",
       message: "HTTP 502 · provider_unavailable · response_headers",
     });
+    // The retry wait renders as seconds with one decimal, never as raw milliseconds.
+    // 重试等待时长渲染为保留一位小数的秒数，而不是原始毫秒。
+    const markup = renderToStaticMarkup(
+      <I18nProvider initialLocale="zh-CN">
+        <SystemErrorCard error={parseSystemProviderError(EMPTY_MESSAGE_502_BODY)!} />
+      </I18nProvider>,
+    );
+    expect(markup).toContain("60.0 s");
+    expect(markup).not.toContain("60000 ms");
   });
 
   it("projects a terminal system transcript into the notice card path", () => {

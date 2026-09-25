@@ -18,7 +18,7 @@ pub fn built_in_tool_help_entries() -> Vec<ToolHelpEntry> {
         ),
         ToolHelpEntry::new(
             "spawn_agent",
-            "Delegate only when isolation or parallelism materially helps. Only the root conversation may delegate, and child agents cannot create another orchestration level. Give each child one bounded responsibility and enough context to work independently. Query agent_orchestration_info before choosing a profile or model, then coordinate the child and collect its result with wait_agent.",
+            "Delegate only when isolation or parallelism materially helps. Only the root conversation may delegate, and child agents cannot create another orchestration level. Give each child one bounded responsibility and enough context to work independently. Query agent_orchestration_info before choosing a profile or model, then coordinate the child and collect its result with wait_agents_result.",
         ),
         ToolHelpEntry::new(
             "agent_orchestration_info",
@@ -29,8 +29,8 @@ pub fn built_in_tool_help_entries() -> Vec<ToolHelpEntry> {
             "Continue related work with the existing child instead of spawning a replacement. Queue normal follow-ups; interrupt only when the current work is obsolete and the replacement instruction must run next. If no replacement instruction is ready, use interrupt_agent instead.",
         ),
         ToolHelpEntry::new(
-            "wait_agent",
-            "Use this whenever the parent task depends on child feedback. A timeout is not completion: continue useful independent work or wait again while the result remains required. Use list_agents only for diagnostics, not as a substitute for collecting feedback.",
+            "wait_agents_result",
+            "Use the shared inbox to receive agent questions, answers, notifications and task results without selecting a target or revision. Messages are appended through host-tagged context after the wait. A timeout ends only this wait. no_pending_work means no related live work remains; stopped or abandoned outcomes are terminal, not reasons to wait again. Use read_session or list_agents only for diagnostics, never to reconstruct a result.",
         ),
         ToolHelpEntry::new(
             "interrupt_agent",
@@ -42,7 +42,7 @@ pub fn built_in_tool_help_entries() -> Vec<ToolHelpEntry> {
         ),
         ToolHelpEntry::new(
             "list_agents",
-            "Use this for diagnostics and status inspection, not synchronization. When the parent task needs a result or message, use wait_agent. The listed agents are direct children of the root conversation; nested delegation is unavailable.",
+            "Use this for diagnostics and status inspection, not synchronization. When the parent task needs a result or message, use wait_agents_result. The listed agents are direct children of the root conversation; nested delegation is unavailable.",
         ),
         ToolHelpEntry::new(
             "task",

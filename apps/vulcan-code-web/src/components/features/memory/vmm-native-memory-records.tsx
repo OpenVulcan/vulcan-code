@@ -36,6 +36,7 @@ import type {
   VmmNativeTurnRecordSummary,
   VmmNativeTurnStatusCounts,
 } from "@/types"
+import { formatDateTime } from "@/lib/display-format"
 
 // SESSION_OVERVIEW_VALUE is the non-identity selector value used for project-level session summaries.
 // SESSION_OVERVIEW_VALUE 是用于项目级会话汇总的非身份选择器值。
@@ -176,7 +177,7 @@ export function nativeRecordCounts(
 // VmmNativeMemoryRecords renders project/session provenance, extraction status, and clickable records.
 // VmmNativeMemoryRecords 渲染项目/会话来源、提取状态与可点击记录。
 function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection }: VmmNativeMemoryRecordsProps) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [catalog, setCatalog] = React.useState<VmmNativeProjectCatalogSummary | null>(null)
   const [records, setRecords] = React.useState<VmmNativeMemoryRecordsSummary | null>(null)
   const [projectId, setProjectId] = React.useState("")
@@ -507,7 +508,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                   </div>
                   {session.lastActivityAtUnixMs != null ? (
                     <p className="mt-2 text-xs text-muted-foreground">
-                      {t("memory.nativeRecords.lastActivity")} {formatNativeTimestamp(session.lastActivityAtUnixMs)}
+                      {t("memory.nativeRecords.lastActivity")} {formatNativeTimestamp(session.lastActivityAtUnixMs, locale)}
                     </p>
                   ) : null}
                 </button>
@@ -566,7 +567,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                           </Badge>
                           <span className="font-mono text-xs text-muted-foreground">#{turn.turnId}</span>
                           <span className="text-xs text-muted-foreground">
-                            {formatNativeTimestamp(turn.createdAtUnixMs)}
+                            {formatNativeTimestamp(turn.createdAtUnixMs, locale)}
                           </span>
                         </div>
                         <span className="text-xs text-muted-foreground">
@@ -858,7 +859,7 @@ export function NativeTurnSheet({
   onOpenMemory: (memory: VmmNativeMemoryRecordSummary) => void
   onOpenProfile: (profile: VmmNativeProfileRecordSummary) => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const generatedMemories = turn
     ? memories.filter((memory) => turn.generatedMemoryIds.includes(memory.memoryId))
     : []
@@ -878,7 +879,7 @@ export function NativeTurnSheet({
         <SheetHeader>
           <SheetTitle>{t("memory.nativeRecords.turn")} #{turn?.turnId}</SheetTitle>
           <SheetDescription>
-            {turn ? `${t(nativeTurnStatusKey(turn.status))} · ${formatNativeTimestamp(turn.createdAtUnixMs)}` : ""}
+            {turn ? `${t(nativeTurnStatusKey(turn.status))} · ${formatNativeTimestamp(turn.createdAtUnixMs, locale)}` : ""}
           </SheetDescription>
         </SheetHeader>
         <div className="space-y-4 px-4 pb-4">
@@ -965,7 +966,7 @@ export function NativeTurnSheet({
               <div className="rounded-lg border p-3" key={`${item.occurredAtUnixMs}-${index}`}>
                 <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
                   <Badge variant="outline">{t(nativeTimelineRoleKey(item.role))}</Badge>
-                  <span>{formatNativeTimestamp(item.occurredAtUnixMs)}</span>
+                  <span>{formatNativeTimestamp(item.occurredAtUnixMs, locale)}</span>
                 </div>
                 <p className="whitespace-pre-wrap text-sm">{item.content}</p>
               </div>
@@ -992,7 +993,7 @@ function NativeMemorySheet({
   onOpenTurn: (turn: VmmNativeTurnRecordSummary) => void
   onClose: () => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   // Resolve the declared source identity without fabricating missing records or crossing sessions.
   // 解析声明的来源身份，不伪造缺失记录或跨会话导航。
   const sourceTurn = memory?.sourceTurnId == null ? undefined : turns.find((turn) => turn.turnId === memory.sourceTurnId && turn.sessionSourceId === memory.sessionSourceId)
@@ -1002,7 +1003,7 @@ function NativeMemorySheet({
         <SheetHeader>
           <SheetTitle>{memory?.summary}</SheetTitle>
           <SheetDescription>
-            {memory ? `#${memory.memoryId} · ${formatNativeTimestamp(memory.createdAtUnixMs)}` : ""}
+            {memory ? `#${memory.memoryId} · ${formatNativeTimestamp(memory.createdAtUnixMs, locale)}` : ""}
           </SheetDescription>
         </SheetHeader>
         <div className="space-y-4 px-4 pb-4">
@@ -1028,7 +1029,7 @@ function NativeMemorySheet({
               <dt className="text-muted-foreground">{t("memory.nativeRecords.priority")}</dt><dd>{memory.priority}</dd>
               {memory.tags.length > 0 ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.tags")}</dt><dd className="break-words">{memory.tags.join(", ")}</dd></> : null}
               {memory.statusReason ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.statusReason")}</dt><dd className="break-words">{memory.statusReason}</dd></> : null}
-              {memory.expiresAtUnixMs != null ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.expiresAt")}</dt><dd>{formatNativeTimestamp(memory.expiresAtUnixMs)}</dd></> : null}
+              {memory.expiresAtUnixMs != null ? <><dt className="text-muted-foreground">{t("memory.nativeRecords.expiresAt")}</dt><dd>{formatNativeTimestamp(memory.expiresAtUnixMs, locale)}</dd></> : null}
             </dl>
           </> : null}
         </div>
@@ -1046,7 +1047,7 @@ function NativeProfileSheet({
   profile: VmmNativeProfileRecordSummary | null
   onClose: () => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   return (
     <Sheet open={profile !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SheetContent className="overflow-y-auto" size="md">
@@ -1056,7 +1057,7 @@ function NativeProfileSheet({
             {profile ? ` #${profile.profileNodeId}` : ""}
           </SheetTitle>
           <SheetDescription>
-            {profile ? formatNativeTimestamp(profile.updatedAtUnixMs) : ""}
+            {profile ? formatNativeTimestamp(profile.updatedAtUnixMs, locale) : ""}
           </SheetDescription>
         </SheetHeader>
         <div className="space-y-4 px-4 pb-4">
@@ -1091,7 +1092,7 @@ function NativeProfileSheet({
           {profile?.expiresAtUnixMs != null ? (
             <NativeDetail
               label={t("memory.nativeRecords.expiresAt")}
-              value={formatNativeTimestamp(profile.expiresAtUnixMs)}
+              value={formatNativeTimestamp(profile.expiresAtUnixMs, locale)}
             />
           ) : null}
         </div>
@@ -1148,8 +1149,8 @@ function nativeSessionReference(
 
 // formatNativeTimestamp formats one JavaScript-safe Unix millisecond value for the current locale.
 // formatNativeTimestamp 将一个 JavaScript 安全的 Unix 毫秒值按当前区域格式化。
-function formatNativeTimestamp(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleString()
+function formatNativeTimestamp(timestampMs: number, locale: string): string {
+  return formatDateTime(timestampMs, locale) ?? String(timestampMs)
 }
 
 // nativeTurnStatusKey maps one stable turn state to localized display text.

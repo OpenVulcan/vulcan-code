@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
+import { createPluginQueryClient, invalidatePluginQueries } from "../../../apps/vulcan-code-web/src/service/plugin-ui-query-runtime.ts";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 
@@ -14,12 +15,20 @@ const settings = JSON.parse(await readFile(new URL("../config/defaults.json", im
 // moduleId keeps each test's cache isolated while allowing explicit same-generation remount tests.
 // moduleId 隔离每个测试的缓存，并允许明确的同代次重新挂载测试。
 let moduleId = 0;
+beforeEach(() => invalidatePluginQueries("rtk-test"));
 
 // mount renders the authoritative plugin against controlled actions and native interaction adapters.
 // mount 使用受控 Action 与原生交互适配器渲染权威插件。
 // invoke supplies action responses; strict replays effects; factory optionally retains the module cache. Returns the DOM and cleanup.
 // invoke 提供 Action 响应；strict 重放 Effect；factory 可保留模块缓存。返回 DOM 与清理函数。
 async function mount(invoke, strict = false, factory = null) {
+  // Exercise the production coordinator; only the backend action boundary is controlled.
+  // 使用生产协调器；仅控制后端 Action 边界。
+  const client = createPluginQueryClient({ pluginId: "rtk-test", runtimeIdentity: "fixture:1", workspacePath: null, conversationId: null }, [
+    { id: "settings-get", effect: "read", resultCacheMs: 0 },
+    { id: "statistics-get", effect: "read", resultCacheMs: 60_000 },
+    { id: "settings-update", effect: "mutation", resultCacheMs: 0 },
+  ], invoke);
   const dom = new JSDOM("<!doctype html><div id='root'></div>");
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
   // Host adapters retain accessible native controls without claiming host-layout verification.
@@ -28,12 +37,12 @@ async function mount(invoke, strict = false, factory = null) {
   const Button = ({ children, size, variant, ...props }) => React.createElement("button", props, children);
   const Metadata = ({ label, onActivate, ariaLabel }) => React.createElement("button", { onClick: onActivate, "aria-label": ariaLabel }, label);
   const createPanel = factory ?? (await import(`./index.mjs?test=${++moduleId}`)).createPluginPanel;
-  const sdk = { React, invoke, locale: "en-US", formatNumber: String, t: (_key, fallback) => fallback,
+  const sdk = { React, invoke: client.invoke, locale: "en-US", formatNumber: String, t: (_key, fallback) => fallback,
     components: { Button, Badge: plain, StatusPill: plain, HelpTooltip: plain, PluginMetadataLink: Metadata, TextDocumentDialog: plain } };
   const root = require("react-dom/client").createRoot(document.getElementById("root"));
   await React.act(async () => root.render(React.createElement(strict ? React.StrictMode : React.Fragment, null, React.createElement(createPanel(sdk)))));
   return { container: document.getElementById("root"), factory: createPanel, close: async () => {
-    await React.act(async () => root.unmount()); dom.window.close();
+    await React.act(async () => root.unmount()); client.dispose(); dom.window.close();
   } };
 }
 
@@ -55,11 +64,13 @@ test("settings retry is independent, effect replay shares reads, and search pres
   }, true);
   try {
     assert.equal(reads, 1);
-    assert.equal(calls.filter((item) => item === "statistics-get").length, 1);
+    assert.equal(calls.filter((item) => item === "statistics-get").length, 0);
     assert.equal(button(panel, "Save").disabled, true);
     await React.act(async () => button(panel, "Retry").click());
     assert.equal(reads, 2);
     assert.doesNotMatch(panel.container.textContent, /settings unavailable/);
+    await React.act(async () => button(panel, "statistics").click());
+    assert.equal(calls.filter((item) => item === "statistics-get").length, 1);
     assert.match(panel.container.textContent, /statistics unavailable/);
     await React.act(async () => button(panel, "routes").click());
     const selected = panel.container.querySelectorAll('input[type="checkbox"]:checked').length;
@@ -99,18 +110,21 @@ test("save holds a synchronous lock and preserves the route draft on rejection",
 
 // A completed request from an unmounted panel cannot overwrite the current generation's shared statistics cache.
 // 已卸载面板的请求完成结果不能覆盖当前代次的共享统计缓存。
-test("obsolete mount results cannot replace a later statistics snapshot", async () => {
+test("navigation shares a pending statistic and retains its result after every subscriber leaves", async () => {
   let finishOld;
   const old = await mount((action) => action === "settings-get" ? Promise.resolve(settings) : new Promise((resolve) => { finishOld = resolve; }));
   const factory = old.factory;
+  await React.act(async () => button(old, "statistics").click());
   await old.close();
   const fresh = { available: true, summary: { total_saved: 777 }, daily: [], byCommand: [] };
   const panel = await mount((action) => Promise.resolve(action === "settings-get" ? settings : fresh), false, factory);
-  await React.act(async () => finishOld({ ...fresh, summary: { total_saved: 111 } }));
+  await React.act(async () => button(panel, "statistics").click());
   await panel.close();
+  await React.act(async () => finishOld(fresh));
   let statisticReads = 0;
   const finalPanel = await mount((action) => { if (action === "statistics-get") statisticReads += 1; return Promise.resolve(settings); }, false, factory);
   try {
+    await React.act(async () => button(finalPanel, "statistics").click());
     assert.equal(statisticReads, 0);
     assert.match(finalPanel.container.querySelector(".rtk-gain-summary-grid").textContent, /777/);
     assert.doesNotMatch(finalPanel.container.querySelector(".rtk-gain-summary-grid").textContent, /111/);

@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import { InlineDisclosure } from "@/components/ui/disclosure"
 import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
-import { localizedLiteral } from "@/components/features/settings/provider-settings-utils"
 
 // SettingsErrorNoticeProps describes one failed settings action: a plain-language outcome plus the raw error.
 // SettingsErrorNoticeProps 描述一次失败的设置操作：通俗的结果说明加原始错误。
@@ -28,8 +27,7 @@ export interface SettingsErrorNoticeProps {
 // Returns an alert region so assistive technology announces the failure once.
 // 返回 alert 区域，使辅助技术播报一次失败信息。
 export function SettingsErrorNotice(props: SettingsErrorNoticeProps) {
-  const { locale } = useI18n()
-  const text = (zh: string, en: string) => localizedLiteral(locale, zh, en)
+  const { t } = useI18n()
   // copied shows a short confirmation after the raw error reaches the clipboard.
   // copied 在原始错误写入剪贴板后显示简短确认。
   const [copied, setCopied] = React.useState<"idle" | "copied" | "failed">("idle")
@@ -39,13 +37,13 @@ export function SettingsErrorNotice(props: SettingsErrorNoticeProps) {
       <CircleAlert aria-hidden="true" className="settings-error-notice-icon" size={16} />
       <div className="settings-error-notice-body">
         <p>{props.message}</p>
-        {detail ? <InlineDisclosure keepMounted label={text("显示错误详情", "Show error details")} openLabel={text("收起错误详情", "Hide error details")}>
+        {detail ? <InlineDisclosure keepMounted label={t("settings.errors.showErrorDetails")} openLabel={t("settings.errors.hideErrorDetails")}>
           <pre>{detail}</pre>
           <Button size="xs" type="button" variant="ghost" onClick={async () => {
             try { await navigator.clipboard.writeText(detail); setCopied("copied") }
             catch { setCopied("failed") }
           }}>
-            <Copy size={12} />{copied === "copied" ? text("已复制", "Copied") : copied === "failed" ? text("复制失败，请手动选择", "Copy failed; select manually") : text("复制错误信息", "Copy error")}
+            <Copy size={12} />{copied === "copied" ? t("settings.errors.copied") : copied === "failed" ? t("settings.errors.copyFailedSelectManually") : t("settings.errors.copyError")}
           </Button>
         </InlineDisclosure> : null}
       </div>

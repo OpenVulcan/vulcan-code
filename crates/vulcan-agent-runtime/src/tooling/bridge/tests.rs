@@ -15,7 +15,7 @@ use crate::tooling::collaboration::{
     ASK_PARENT_TOOL_ID, ASK_QUESTION_TOOL_ID, AgentCollaborationCommand, CANCEL_QUESTION_TOOL_ID,
     LIST_SESSIONS_TOOL_ID, NativeAgentCollaborationRuntime, READ_SESSION_TOOL_ID,
     REPLY_QUESTION_TOOL_ID, SEND_NOTIFICATION_TOOL_ID, SEND_SESSION_MESSAGE_TOOL_ID,
-    WAIT_QUESTION_TOOL_ID, WAIT_SESSION_TOOL_ID,
+    WAIT_AGENTS_RESULT_TOOL_ID,
 };
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::{Value, json};
@@ -704,19 +704,24 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
         ASK_QUESTION_TOOL_ID,
         ASK_PARENT_TOOL_ID,
         REPLY_QUESTION_TOOL_ID,
-        WAIT_QUESTION_TOOL_ID,
+        WAIT_AGENTS_RESULT_TOOL_ID,
         CANCEL_QUESTION_TOOL_ID,
         LIST_SESSIONS_TOOL_ID,
         READ_SESSION_TOOL_ID,
         SEND_SESSION_MESSAGE_TOOL_ID,
         SEND_NOTIFICATION_TOOL_ID,
-        WAIT_SESSION_TOOL_ID,
     ] {
         assert!(
             build_ids.iter().any(|candidate| candidate == tool_id),
             "bridge must register collaboration tool {tool_id}"
         );
     }
+    assert!(
+        build_ids
+            .iter()
+            .all(|id| !matches!(id.as_str(), "wait_agent" | "wait_question" | "wait_session")),
+        "only the unified wait may reach the model-facing bridge"
+    );
 
     let notification_definition = manager
         .resolve_for_execution_mode("Build")

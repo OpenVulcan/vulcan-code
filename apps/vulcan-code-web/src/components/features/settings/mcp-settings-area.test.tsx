@@ -18,7 +18,11 @@ const service = vi.hoisted(() => ({
 }))
 vi.mock("@/service/mcp-settings-service", () => ({ loadMcpRuntimeSnapshot: service.snapshot, loadMcpServerCapabilities: service.capabilities }))
 vi.mock("./mcp-server-dialog", () => ({ McpServerDialog: () => null }))
-vi.mock("./mcp-text", () => ({ useMcpText: () => (zh: string) => zh }))
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>()
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key)
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) }
+})
 
 describe("MCP runtime inspection boundary", () => {
   it("reads optional metadata only after opening its tab and excludes global logs", async () => {

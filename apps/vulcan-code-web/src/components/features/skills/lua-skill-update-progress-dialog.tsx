@@ -2,8 +2,9 @@ import { CheckCircle2, CircleAlert, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import type { LuaSkillsOperationProgressSummary } from "@/types";
+import { formatBytes } from "@/lib/display-format";
 
 // LuaSkillUpdateRequest retains the clicked package and RPC result before progress arrives.
 // LuaSkillUpdateRequest 在进度到达前保留已点击的技能包与 RPC 结果。
@@ -24,18 +25,18 @@ export interface LuaSkillUpdateRequest {
 
 // UPDATE_PHASE_LABELS translates phases emitted by the pinned LuaSkills 0.5.7 manager.
 // UPDATE_PHASE_LABELS 翻译已锁定的 LuaSkills 0.5.7 管理器发出的阶段。
-const UPDATE_PHASE_LABELS: Record<string, { zh: string; en: string }> = {
-  validating_request: { zh: "正在校验更新请求", en: "Validating update request" },
-  resolving_source: { zh: "正在解析更新来源", en: "Resolving update source" },
-  downloading_archive: { zh: "正在下载技能包", en: "Downloading skill package" },
-  extracting_archive: { zh: "正在解压技能包", en: "Extracting skill package" },
-  validating_skill_manifest: { zh: "正在校验技能清单", en: "Validating skill manifest" },
-  backing_up_current: { zh: "正在备份当前版本", en: "Backing up current version" },
-  staging_update: { zh: "正在应用更新", en: "Applying update" },
-  reloading_runtime: { zh: "正在重新加载技能", en: "Reloading skills" },
-  committing: { zh: "正在保存更新结果", en: "Committing update" },
-  completed: { zh: "正在完成更新", en: "Finalizing update" },
-  failed: { zh: "更新发生错误", en: "Update reported an error" },
+const UPDATE_PHASE_LABELS: Record<string, TranslationKey> = {
+  validating_request: "skills.update.phase.validatingRequest",
+  resolving_source: "skills.update.phase.resolvingSource",
+  downloading_archive: "skills.update.phase.downloadingArchive",
+  extracting_archive: "skills.update.phase.extractingArchive",
+  validating_skill_manifest: "skills.update.phase.validatingSkillManifest",
+  backing_up_current: "skills.update.phase.backingUpCurrent",
+  staging_update: "skills.update.phase.stagingUpdate",
+  reloading_runtime: "skills.update.phase.reloadingRuntime",
+  committing: "skills.update.phase.committing",
+  completed: "skills.update.phase.completed",
+  failed: "skills.update.phase.failed",
 };
 
 // LuaSkillUpdateProgressDialog renders measured update progress and retains the final result.
@@ -58,12 +59,9 @@ export function LuaSkillUpdateProgressDialog(props: {
   // onClose 关闭已结束操作的弹窗，不修改服务记录。
   onClose: () => void;
 }) {
-  // locale selects the same language as the surrounding skills page.
-  // locale 选择与外围技能页面一致的语言。
-  const { locale } = useI18n();
-  // chinese selects the localized progress copy.
-  // chinese 选择本地化进度文案。
-  const chinese = locale.startsWith("zh");
+  // t selects the same language as the surrounding skills page.
+  // t 选择与外围技能页面一致的语言。
+  const { t } = useI18n();
   // running keeps the dialog active until both the service operation and local RPC settle.
   // running 在服务操作与本地 RPC 都结束前保持弹窗运行状态。
   const running = props.progress?.inFlight === true || (props.request !== null && props.request.outcome === null);
@@ -82,19 +80,19 @@ export function LuaSkillUpdateProgressDialog(props: {
   // phaseLabel localizes known phases and preserves any newly declared machine-readable phase.
   // phaseLabel 本地化已知阶段，并保留新声明的机器可读阶段。
   const phaseLabel = phase == null
-    ? (chinese ? "正在准备更新" : "Preparing update")
+    ? t("skills.update.preparingUpdate")
     : Object.hasOwn(UPDATE_PHASE_LABELS, phase)
-      ? UPDATE_PHASE_LABELS[phase][chinese ? "zh" : "en"]
+      ? t(UPDATE_PHASE_LABELS[phase])
       : phase;
   // title describes the operation outcome independently of the current download phase.
   // title 独立于当前下载阶段描述操作结果。
   const title = running
-    ? (chinese ? "正在更新技能包…" : "Skill package update in progress…")
+    ? t("skills.update.skillPackageUpdateIn")
     : failed
-      ? (chinese ? "技能包更新失败" : "Skill package update failed")
+      ? t("skills.update.skillPackageUpdateFailed")
       : succeeded
-        ? (chinese ? "技能包更新完成" : "Skill package update completed")
-        : (chinese ? "技能包更新状态" : "Skill package update status");
+        ? t("skills.update.skillPackageUpdateCompleted")
+        : t("skills.update.skillPackageUpdateStatus");
   // skillId uses the clicked package before the optional upstream identity becomes available.
   // skillId 在可选上游标识可用前使用已点击的技能包。
   const skillId = props.request !== null ? props.request.skillId : props.progress?.skillId;
@@ -111,14 +109,14 @@ export function LuaSkillUpdateProgressDialog(props: {
                 : succeeded ? <CheckCircle2 size={18} className="text-primary" aria-hidden="true" /> : null}
             {title}
           </DialogTitle>
-          <DialogDescription>{skillId ?? (chinese ? "LuaSkills 技能包更新" : "LuaSkills package update")}</DialogDescription>
+          <DialogDescription>{skillId ?? t("skills.update.luaskillsPackageUpdate")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3" role={failed ? "alert" : "status"}>
           <div className="flex items-center justify-between gap-4">
-            <span className="text-muted-foreground">{succeeded ? (chinese ? "更新已完成" : "Update completed")
-              : failed ? (chinese ? "更新未完成" : "Update incomplete") : phaseLabel}</span>
+            <span className="text-muted-foreground">{succeeded ? t("skills.update.updateCompleted")
+              : failed ? t("skills.update.updateIncomplete") : phaseLabel}</span>
             <span className="shrink-0 font-medium tabular-nums">{percent === null
-              ? (running ? (chinese ? "等待进度" : "Waiting for progress") : "—") : `${percent}%`}</span>
+              ? (running ? t("skills.update.waitingForProgress") : "—") : `${percent}%`}</span>
           </div>
           {percent === null ? (
             <div role="progressbar" aria-label={phaseLabel} className="h-2 overflow-hidden rounded-full bg-muted">
@@ -126,23 +124,20 @@ export function LuaSkillUpdateProgressDialog(props: {
             </div>
           ) : <Progress value={percent} aria-label={succeeded ? title : phaseLabel} className="h-2" />}
           {!succeeded && props.progress?.bytesDone != null ? <p className="text-xs text-muted-foreground tabular-nums">
-            {chinese ? "已下载 " : "Downloaded "}{props.progress.bytesDone.toLocaleString(locale)}
-            {props.progress.bytesTotal != null ? ` / ${props.progress.bytesTotal.toLocaleString(locale)}` : ""}
-            {chinese ? " 字节" : " bytes"}
+            {t("skills.update.downloaded")}{formatBytes(props.progress.bytesDone)}
+            {props.progress.bytesTotal != null ? ` / ${formatBytes(props.progress.bytesTotal)}` : ""}
           </p> : null}
           {props.progress?.message ? <p className="text-sm text-muted-foreground">{props.progress.message}</p> : null}
-          {props.progress?.overflowed ? <p className="text-xs text-muted-foreground">{chinese
-            ? "部分阶段记录已被丢弃，当前显示最新进度。" : "Some phase records were dropped; the latest progress is shown."}</p> : null}
+          {props.progress?.overflowed ? <p className="text-xs text-muted-foreground">{t("skills.update.somePhaseRecordsWere")}</p> : null}
           {props.request?.error ? <details>
-            <summary>{chinese ? "错误详情" : "Error details"}</summary>
+            <summary>{t("skills.update.errorDetails")}</summary>
             <pre className="plugin-control-error-details">{props.request.error}</pre>
           </details> : null}
-          {running ? <p className="text-xs text-muted-foreground">{chinese
-            ? "更新期间，其他技能操作将排队等待。" : "Other skill operations wait while this update runs."}</p> : null}
+          {running ? <p className="text-xs text-muted-foreground">{t("skills.update.otherSkillOperationsWait")}</p> : null}
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" disabled={running} onClick={props.onClose}>{running
-            ? (chinese ? "更新中…" : "Updating…") : (chinese ? "关闭" : "Close")}</Button>
+            ? t("skills.update.updating") : t("skills.update.close")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

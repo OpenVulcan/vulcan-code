@@ -1,17 +1,15 @@
 //! Typed read/write of the V1 metadata, runtime, and compactions documents.
 //! V1 metadata、runtime、compactions 文档的类型化读写。
 //!
-//! Every document is validated against its frozen contract before use; old
-//! development formats are reported as unsupported, never migrated or spared.
-//! 每个文档在使用前都对照冻结契约校验；未发布旧格式被报告为不受支持，
-//! 绝不迁移或宽容放行。
+//! Metadata uses explicit version migrations; runtime and compaction contracts stay independent.
+//! 元数据使用明确的版本迁移；运行时和压缩契约保持独立。
 
 use std::path::Path;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use vulcan_session_core::v1::config::{METADATA_CONTRACT, MetadataDocument};
+use vulcan_session_core::v1::config::MetadataDocument;
 use vulcan_session_core::v1::context::{
     COMPACTIONS_CONTRACT, CompactionsDocument, RUNTIME_CONTRACT, RuntimeDocument,
 };
@@ -34,6 +32,21 @@ pub fn write_json_document<T: Serialize>(
             format!("serialize {artifact_kind}: {error}"),
         )
     })?;
+    // Metadata migration and all normal publishers share the same stable file lock.
+    // 元数据迁移和所有正常发布者共用同一个稳定文件锁。
+    let _metadata_guard = if path
+        .file_name()
+        .is_some_and(|name| name == super::layout::METADATA_FILE)
+    {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                SessionV1Error::io(parent, format!("create metadata parent: {error}"))
+            })?;
+        }
+        Some(super::metadata_migration::publication_lock(path)?)
+    } else {
+        None
+    };
     write_file_atomic(path, &bytes, artifact_kind)
 }
 
@@ -57,18 +70,10 @@ fn read_json_document<T: DeserializeOwned + std::fmt::Debug>(
     })
 }
 
-/// Reads the metadata document and validates its frozen contract.
-/// 读取 metadata 文档并校验其冻结契约。
+/// Reads metadata through explicit, backed-up schema migrations before returning the current type.
+/// 通过明确且有备份的模式迁移读取元数据，再返回当前类型。
 pub fn read_metadata(path: &Path) -> Result<MetadataDocument, SessionV1Error> {
-    let document: MetadataDocument =
-        read_json_document(path, "metadata", ErrorCode::MetadataCorrupt)?;
-    validate_contract(
-        &document.contract,
-        METADATA_CONTRACT,
-        path,
-        document.schema_version,
-    )?;
-    Ok(document)
+    super::metadata_migration::read_metadata(path)
 }
 
 /// Reads `path` for an explicit capability rebuild, replacing only the known capability subtree.
@@ -81,8 +86,17 @@ pub(crate) fn read_metadata_for_provider_tool_rebuild(
 ) -> Result<MetadataDocument, SessionV1Error> {
     // Decode just enough structure to replace a malformed optional addon, never the conversation.
     // 仅解码替换损坏可选附加项所需的结构，绝不替换会话本身。
-    let mut raw: serde_json::Value =
-        read_json_document(path, "metadata", ErrorCode::MetadataCorrupt)?;
+    let _guard = super::metadata_migration::publication_lock(path)?;
+    let original = std::fs::read(path)
+        .map_err(|error| SessionV1Error::io(path, format!("read rebuild metadata: {error}")))?;
+    let mut raw: serde_json::Value = serde_json::from_slice(&original).map_err(|error| {
+        SessionV1Error::corrupt(
+            ErrorCode::MetadataCorrupt,
+            path,
+            format!("parse rebuild metadata: {error}"),
+        )
+    })?;
+    let original_version = super::metadata_migration::read_schema_version(path, &original)?;
     let selections = raw
         .pointer_mut("/config/selection")
         .and_then(serde_json::Value::as_object_mut)
@@ -103,21 +117,12 @@ pub(crate) fn read_metadata_for_provider_tool_rebuild(
             )
         })?,
     );
-    // All surrounding typed fields and the frozen version contract must still pass unchanged.
-    // 周边全部类型化字段及冻结版本契约仍必须原样通过校验。
-    let document: MetadataDocument = serde_json::from_value(raw).map_err(|error| {
-        SessionV1Error::corrupt(
-            ErrorCode::MetadataCorrupt,
-            path,
-            format!("parse metadata outside capability settings: {error}"),
-        )
-    })?;
-    validate_contract(
-        &document.contract,
-        METADATA_CONTRACT,
-        path,
-        document.schema_version,
-    )?;
+    // Reuse the same detached upgrade engine; the explicit rebuild owns publication.
+    // 复用同一独立升级引擎；显式重建负责发布。
+    let document = super::metadata_migration::upgrade(path, raw)?;
+    // Upgrade has validated the exact u32 header; a rebuild must preserve the same original bytes.
+    // 升级已校验精确 u32 头部；重建必须保留同样的原始字节。
+    super::metadata_migration::preserve_original(path, &original, original_version)?;
     Ok(document)
 }
 

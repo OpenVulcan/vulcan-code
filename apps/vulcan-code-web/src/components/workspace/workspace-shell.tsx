@@ -10,6 +10,7 @@ import {
   ConversationSessionTodolistPanel,
   type ConversationSessionCommitBusyState,
 } from "@/components/conversation/session-todolist-panel";
+import type { ConversationSessionGitBranchActions } from "@/components/conversation/session-todolist-panel/git-branch-controls";
 import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import { terminalSessionViewModel } from "@/components/conversation/conversation-terminal-model";
 import { activeSkillHeaderSummary } from "@/components/features/skills/skill-area-header";
@@ -18,7 +19,7 @@ import { activeAgentsHeaderSummary } from "@/components/features/agents/agent-ar
 import { agentSkillsCatalogSummary } from "@/components/features/agent-skills/agent-skills-types";
 import {
   ProjectSidebar,
-} from "@/components/project/ProjectSidebar";
+} from "@/components/project/project-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,17 +45,23 @@ import {
   WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
 } from "@/components/workspace/workspace-resizable-body";
 import { listCoreBrowserSessions } from "@/service/core-browser-service";
-import { readElectronLocalBrowserBridge } from "@/shell/electronBridge";
+import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import {
   type WorkspaceContextTabKind,
-} from "@/components/workspace/WorkspaceContextPanel";
+} from "@/components/workspace/workspace-context-panel";
 import type {
   DiffReviewSelection,
   WorkspaceDiffSnapshotResponse,
   WorkspaceReviewFocusRequest,
 } from "@/diff/types";
-import { loadWorkspaceGitCatalog, setWorkspaceGitMonitoring } from "@/service/workbench-snapshot-service";
+import {
+  loadWorkspaceGitBranches,
+  loadWorkspaceGitCatalog,
+  loadWorkspaceGitHistory,
+  setWorkspaceGitMonitoring,
+  switchWorkspaceGitBranch,
+} from "@/service/workbench-snapshot-service";
 import { refreshCommandSessions } from "@/service/conversation-actions-service";
 import {
   selectConversationSessionTerminalMutationTokenV1,
@@ -65,7 +72,7 @@ import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtim
 import { useSelectedConversationEventWindowSnapshot } from "@/state/conversation-event-window-react";
 import type { WorkspaceGitChangedEvent } from "@/types";
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
-import { useI18n } from "@/i18n";
+import { useI18n, formatMessage } from "@/i18n";
 import {
   PanelRightClose,
   PanelRightOpen,
@@ -98,19 +105,19 @@ export type { WorkspaceMainView } from "@/components/workspace/workspace-shell/t
 
 // LazyAgentsArea keeps the independent agent editor outside the console-first chunk.
 // LazyAgentsArea 将独立智能体编辑器保留在控制台优先分块之外。
-const LazyAgentsArea = React.lazy(() => import("@/components/features/agents/AgentsArea").then((module) => ({ default: module.AgentsArea })));
+const LazyAgentsArea = React.lazy(() => import("@/components/features/agents/agents-area").then((module) => ({ default: module.AgentsArea })));
 // LazyAgentCategoryMenu defers agent directory navigation with its owning feature.
 // LazyAgentCategoryMenu 将智能体目录导航与其所属功能一同延迟。
-const LazyAgentCategoryMenu = React.lazy(() => import("@/components/features/agents/AgentsArea").then((module) => ({ default: module.AgentCategoryMenu })));
+const LazyAgentCategoryMenu = React.lazy(() => import("@/components/features/agents/agents-area").then((module) => ({ default: module.AgentCategoryMenu })));
 // LazyAgentSkillsArea keeps the prompt-skill editor outside the console-first chunk.
 // LazyAgentSkillsArea 将提示词技能编辑器保留在控制台优先分块之外。
-const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent-skills/AgentSkillsArea").then((module) => ({ default: module.AgentSkillsArea })));
+const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent-skills/agent-skills-area").then((module) => ({ default: module.AgentSkillsArea })));
 // LazyAgentSkillCategoryMenu defers prompt-skill directory navigation.
 // LazyAgentSkillCategoryMenu 延迟提示词技能目录导航。
-const LazyAgentSkillCategoryMenu = React.lazy(() => import("@/components/features/agent-skills/AgentSkillsArea").then((module) => ({ default: module.AgentSkillCategoryMenu })));
+const LazyAgentSkillCategoryMenu = React.lazy(() => import("@/components/features/agent-skills/agent-skills-area").then((module) => ({ default: module.AgentSkillCategoryMenu })));
 // LazyKnowledgeBaseArea keeps knowledge management outside the console-first chunk.
 // LazyKnowledgeBaseArea 将知识库管理保留在控制台优先分块之外。
-const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/KnowledgeBaseArea").then((module) => ({ default: module.KnowledgeBaseArea })));
+const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/knowledge-base-area").then((module) => ({ default: module.KnowledgeBaseArea })));
 // WorkspaceShell renders the shadcn dashboard-like fused sidebar and inset console area.
 // WorkspaceShell 渲染类似 shadcn dashboard 的融合侧栏与 inset 控制台区域。
 export function WorkspaceShell(props: WorkspaceShellProps) {
@@ -333,6 +340,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // selectedGitRepositoryForActions always has a deterministic repository key when a catalog exists.
   // selectedGitRepositoryForActions 在存在仓库目录时始终具有确定性仓库键。
   const selectedGitRepositoryForActions = selectedGitRepositoryState?.repositoryKey ?? null;
+  // selectedGitRepositoryForActionsRef lets a selection made in the same click reach the dialog opener before React re-renders.
+  // selectedGitRepositoryForActionsRef 让同一次点击中的仓库选择在 React 重渲染前即可被提交弹窗读取。
+  const selectedGitRepositoryForActionsRef = React.useRef(selectedGitRepositoryForActions);
+  selectedGitRepositoryForActionsRef.current = selectedGitRepositoryForActions;
   // activeGitCommitRepositoryState keeps the dialog target independent from right-panel selection changes.
   // activeGitCommitRepositoryState 让提交弹窗目标独立于右侧面板选择变化。
   const activeGitCommitRepositoryState = activeGitCommitRepositoryKey
@@ -596,7 +607,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         ? { ...current, state: openWorkspaceContextTab(current.state, "local-browser", t) } : current);
       openRightContextPanel();
     })().catch((error: unknown) => {
-      toast.error(`${locale === "zh-CN" ? "无法在内置浏览器打开链接" : "Could not open link in local browser"}: ${error instanceof Error ? error.message : String(error)}`);
+      toast.error(`${t("workspace.couldNotOpenLink")}: ${error instanceof Error ? error.message : String(error)}`);
     });
   }, [contextTabCacheKey, hasSelectedChatConversation, localBrowserAvailable, locale,
     openRightContextPanel, props.selectedConversationId, t]);
@@ -693,6 +704,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // handleSelectReviewRepository updates the visible selection and freezes the next commit dialog target.
   // handleSelectReviewRepository 更新可见选择，并固定下一次提交弹窗目标。
   const handleSelectReviewRepository = React.useCallback((repositoryKey: string) => {
+    selectedGitRepositoryForActionsRef.current = repositoryKey;
     setSelectedGitRepositoryKey(repositoryKey);
     // Keep the open or running shared action bound to its original repository.
     // 保持已打开或正在运行的共享动作绑定原始仓库。
@@ -704,11 +716,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // handleGitCommitDialogOpenChange preserves the selected repository identity across dialog close and reopen.
   // handleGitCommitDialogOpenChange 在弹窗关闭与重开之间保留所选仓库身份。
   const handleGitCommitDialogOpenChange = React.useCallback((open: boolean) => {
-    if (open && !gitCommitDialogOpen && selectedGitRepositoryForActions) {
-      setActiveGitCommitRepositoryKey(selectedGitRepositoryForActions);
+    const repositoryKey = selectedGitRepositoryForActionsRef.current;
+    if (open && !gitCommitDialogOpen && repositoryKey) {
+      setActiveGitCommitRepositoryKey(repositoryKey);
     }
     setGitCommitDialogOpen(open);
-  }, [gitCommitDialogOpen, selectedGitRepositoryForActions]);
+  }, [gitCommitDialogOpen]);
 
   // handleOpenGitCommitDialog opens the shared dialog against the currently selected repository.
   // handleOpenGitCommitDialog 针对当前选中仓库打开共享提交弹窗。
@@ -1061,6 +1074,37 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     selectedChatProject?.path,
   ]);
 
+  // commitBranchPrefix is the configured prefix shared by commit and branch-creation recommendations.
+  // commitBranchPrefix 是提交与新建分支推荐共用的已配置前缀。
+  const commitBranchPrefix = props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/";
+
+  // sessionGitBranchActions binds branch listing, switching, and history paging to the selected project.
+  // sessionGitBranchActions 将分支列表、切换与历史分页绑定到当前选中项目。
+  const sessionGitBranchActions = React.useMemo<ConversationSessionGitBranchActions | null>(() => {
+    if (!hasSelectedChatConversation || !selectedChatProject?.path) {
+      return null;
+    }
+    const workspacePath = selectedChatProject.path;
+    const projectId = selectedChatProject.id ?? null;
+    const conversationId = props.selectedConversationId;
+    return {
+      commitBranchPrefix,
+      loadBranches: (repositoryKey) => loadWorkspaceGitBranches(workspacePath, projectId, conversationId, repositoryKey),
+      loadHistory: (repositoryKey, skip) => loadWorkspaceGitHistory(workspacePath, projectId, conversationId, repositoryKey, skip),
+      switchBranch: async (repositoryKey, branchName, create) => {
+        await switchWorkspaceGitBranch(workspacePath, projectId, conversationId, repositoryKey, branchName, create);
+        await refreshProjectGitSummary(workspacePath, projectId, conversationId, repositoryKey);
+      },
+    };
+  }, [
+    commitBranchPrefix,
+    hasSelectedChatConversation,
+    props.selectedConversationId,
+    refreshProjectGitSummary,
+    selectedChatProject?.id,
+    selectedChatProject?.path,
+  ]);
+
   React.useEffect(() => {
     if (!hasSelectedChatConversation || !selectedChatProject?.path || !hasServiceRuntime()) {
       return undefined;
@@ -1290,9 +1334,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // projectTerminalLabel 描述当前活动项目的顶部栏终端切换操作。
   const projectTerminalLabel = activeTerminalProject
     ? props.projectTerminalRunningCount > 0
-      ? `展开或收起 ${activeTerminalProject.name} 项目终端，${props.projectTerminalRunningCount} 个后台终端正在运行`
-      : `展开或收起 ${activeTerminalProject.name} 项目终端`
-    : "展开或收起项目终端";
+      ? formatMessage(t("workspace.terminalToggle.withRunning"), { name: activeTerminalProject.name, count: props.projectTerminalRunningCount })
+      : formatMessage(t("workspace.terminalToggle.named"), { name: activeTerminalProject.name })
+    : t("workspace.terminalToggle.generic");
   // projectTerminalAction anchors the floating terminal immediately left of the context-panel toggle.
   // projectTerminalAction 将浮动终端入口锚定在上下文面板切换按钮左侧。
   const projectTerminalAction = activeTerminalProject ? (
@@ -1485,7 +1529,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         </React.Suspense>
       </WorkspaceDirectoryLayout>
     ),
-    detail: agentSkillsCatalogSummary(props.workbench.agentSkills, locale),
+    detail: agentSkillsCatalogSummary(props.workbench.agentSkills, t),
     headerActions: null,
     title: t("area.agentSkills"),
   } : props.mainView === "agents" ? {
@@ -1610,6 +1654,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           commitBusyStateForRepository={gitCommitBusyStateForRepository}
           commitDialogOpen={gitCommitDialogOpen}
           expanded={sessionToolExpanded}
+          gitBranchActions={sessionGitBranchActions}
           reviewSummary={sessionReviewSummary}
           reviewRepositoryOrderStorageKey={selectedGitCommitWorkspaceKey}
           reviewRepositories={sessionReviewRepositories.map((repository) => ({
@@ -1751,7 +1796,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       {sessionGitCommitActionVisible && activeSessionReviewSummary ? (
         <ConversationSessionCommitDialog
           busyState={activeGitCommitBusyState}
-          commitBranchPrefix={props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/"}
+          commitBranchPrefix={commitBranchPrefix}
           conversationId={props.selectedConversationId}
           open={gitCommitDialogOpen}
           repositoryKey={activeGitCommitRepositoryForActions}

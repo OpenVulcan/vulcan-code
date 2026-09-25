@@ -24,6 +24,28 @@ use vulcan_hooks::{HookInvocation, HookResult};
 const VULCAN_PLUGIN_HOOK_SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
 
 impl VulcanPluginRuntimeManager {
+    /// Acquires the stable lifecycle gate for one plugin/category without awaiting under the registry lock.
+    /// 获取单个插件及类别的稳定生命周期门，不在注册表锁内异步等待。
+    /// The returned shared gate remains identical while any initializer or drain holds it.
+    /// 只要初始化或排空仍持有返回的共享门，其身份就保持不变。
+    pub(super) fn persistent_runtime_gate(
+        &self,
+        plugin_id: &str,
+        runtime_kind: VulcanPluginPersistentRuntimeKind,
+    ) -> Result<Arc<AsyncMutex<()>>, VulcanPluginRuntimeError> {
+        let mut gates = self.state.persistent_runtime_gates.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Plugin lifecycle gate registry is poisoned.")
+        })?;
+        gates.retain(|_, gate| gate.strong_count() > 0);
+        let key = (plugin_id.to_owned(), runtime_kind);
+        if let Some(gate) = gates.get(&key).and_then(std::sync::Weak::upgrade) {
+            return Ok(gate);
+        }
+        let gate = Arc::new(AsyncMutex::new(()));
+        gates.insert(key, Arc::downgrade(&gate));
+        Ok(gate)
+    }
+
     /// Resolves a native binary directory requested by one successfully completed plugin hook.
     /// 解析一个成功完成插件 Hook 请求的原生二进制目录。
     ///
@@ -173,6 +195,24 @@ impl VulcanPluginRuntimeManager {
         hook: &VulcanPluginHookDescriptor,
         invocation: HookInvocation,
     ) -> Result<HookResult, VulcanPluginRuntimeError> {
+        let manager = self.clone();
+        let hook = hook.clone();
+        tokio::spawn(async move { manager.invoke_hook_owned(&hook, invocation).await })
+            .await
+            .map_err(|error| {
+                VulcanPluginRuntimeError::new(format!("Plugin hook supervisor failed: {error}"))
+            })?
+    }
+
+    /// Retains the hook operation gate until actual synchronous execution returns.
+    /// 保留 Hook 执行门，直至实际同步执行返回。
+    /// Frozen hook identity and invocation produce one typed result, even after waiter cancellation.
+    /// 冻结的 Hook 身份及调用生成一个强类型结果，即使等待方已取消。
+    async fn invoke_hook_owned(
+        &self,
+        hook: &VulcanPluginHookDescriptor,
+        invocation: HookInvocation,
+    ) -> Result<HookResult, VulcanPluginRuntimeError> {
         self.ensure_current_hook_generation(hook)?;
         let runtime = self.ensure_hook_runtime(hook).await?;
         let _operation = runtime.operation_gate.lock().await;
@@ -285,17 +325,56 @@ impl VulcanPluginRuntimeManager {
         plugin_generation: u64,
         runtime_kind: VulcanPluginPersistentRuntimeKind,
     ) -> Result<Arc<ManagedVulcanPluginHookRuntime>, VulcanPluginRuntimeError> {
-        let _initialization = match runtime_kind {
-            VulcanPluginPersistentRuntimeKind::Hook => {
-                self.state.hook_runtime_initialization_gate.lock().await
-            }
-            VulcanPluginPersistentRuntimeKind::UiAction => {
-                self.state
-                    .ui_action_runtime_initialization_gate
-                    .lock()
-                    .await
-            }
-        };
+        // A detached waiter must not orphan a lease created by an in-flight blocking engine call.
+        // 等待方离开时不能遗失仍在阻塞引擎调用中创建的租约。
+        let manager = self.clone();
+        let plugin_id = plugin_id.to_owned();
+        tokio::spawn(async move {
+            manager
+                .initialize_enabled_plugin_runtime(&plugin_id, plugin_generation, runtime_kind)
+                .await
+        })
+        .await
+        .map_err(|error| {
+            VulcanPluginRuntimeError::new(format!(
+                "Plugin initialization supervisor failed: {error}"
+            ))
+        })?
+    }
+
+    /// Owns initialization through publication or cleanup, even if the original waiter disappears.
+    /// 即使原等待方离开，也持有初始化过程直至发布或清理完成。
+    /// Identity arguments select one lifecycle; returns only a currently enabled runtime.
+    /// 身份参数选择单个生命周期；只返回当前仍启用的运行时。
+    async fn initialize_enabled_plugin_runtime(
+        &self,
+        plugin_id: &str,
+        plugin_generation: u64,
+        runtime_kind: VulcanPluginPersistentRuntimeKind,
+    ) -> Result<Arc<ManagedVulcanPluginHookRuntime>, VulcanPluginRuntimeError> {
+        let gate = self.persistent_runtime_gate(plugin_id, runtime_kind)?;
+        let initialization = gate.lock_owned().await;
+        self.initialize_enabled_plugin_runtime_locked(
+            plugin_id,
+            plugin_generation,
+            runtime_kind,
+            initialization,
+        )
+        .await
+    }
+
+    /// Creates or reuses a lease while owning the exact plugin/category lifecycle gate.
+    /// 持有精确插件及类别生命周期门时创建或复用租约。
+    /// The owned guard cannot be released before publication or rejected-result cleanup.
+    /// 在发布或拒绝结果清理前不能释放所持守卫。
+    pub(super) async fn initialize_enabled_plugin_runtime_locked(
+        &self,
+        plugin_id: &str,
+        plugin_generation: u64,
+        runtime_kind: VulcanPluginPersistentRuntimeKind,
+        _initialization: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<Arc<ManagedVulcanPluginHookRuntime>, VulcanPluginRuntimeError> {
+        self.ensure_current_persistent_generation(plugin_id, plugin_generation)?;
         let runtimes = match runtime_kind {
             VulcanPluginPersistentRuntimeKind::Hook => &self.state.hook_runtimes,
             VulcanPluginPersistentRuntimeKind::UiAction => &self.state.ui_action_runtimes,
@@ -316,7 +395,10 @@ impl VulcanPluginRuntimeManager {
             {
                 self.record_cleanup_failure(plugin_id, diagnostic)?;
             }
-            lock_hook_runtimes(runtimes)?.remove(plugin_id);
+            // Remove only the exact closed incarnation, even if publication rules change later.
+            // 仅移除刚关闭的精确实例，即使未来发布规则发生改变。
+            lock_hook_runtimes(runtimes)?
+                .retain(|id, current| id != plugin_id || !Arc::ptr_eq(current, &runtime));
         }
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
@@ -362,8 +444,67 @@ impl VulcanPluginRuntimeManager {
             operation_gate: AsyncMutex::new(()),
             closing: AtomicBool::new(false),
         });
-        lock_hook_runtimes(runtimes)?.insert(plugin_id.to_string(), Arc::clone(&runtime));
+        // Publish under the same short gate used by lifecycle generation transitions.
+        // 在生命周期代次转换使用的同一短锁内发布。
+        let publication = (|| {
+            let _registration = self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin session registration gate is poisoned.")
+            })?;
+            self.ensure_current_persistent_generation(plugin_id, plugin_generation)
+                .and_then(|()| {
+                    lock_hook_runtimes(runtimes)?
+                        .insert(plugin_id.to_string(), Arc::clone(&runtime));
+                    Ok(())
+                })
+        })();
+        if let Err(error) = publication {
+            // Keep failed cleanup discoverable by lifecycle drains instead of losing its identity.
+            // 保留清理失败的身份供生命周期排空发现，避免丢失。
+            if let Err(close_error) = self
+                .close_persistent_runtime(Arc::clone(&runtime), runtime_kind)
+                .await
+            {
+                self.retain_failed_lease(
+                    super::RetainedVulcanPluginLease {
+                        plugin_id: plugin_id.to_owned(),
+                        owner_session_id: None,
+                        lease_id: runtime.lease_id.clone(),
+                        sid: runtime.sid.clone(),
+                        generation: runtime.generation,
+                        reserved_session_slot: false,
+                    },
+                    format!("Rejected plugin initialization cleanup failed: {close_error}"),
+                )?;
+            }
+            return Err(error);
+        }
         Ok(runtime)
+    }
+
+    /// Checks the current catalog at admission and publication; no historical descriptor grants execution.
+    /// 在入场与发布时检查当前目录；历史描述不能授予执行资格。
+    /// Returns success only for the requested enabled generation.
+    /// 仅当请求代次仍启用时返回成功。
+    pub(super) fn ensure_current_persistent_generation(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        if self
+            .snapshot()
+            .plugins
+            .get(plugin_id)
+            .is_some_and(|plugin| {
+                plugin.generation == generation
+                    && plugin.runtime_state == VulcanPluginRuntimeState::Enabled
+            })
+        {
+            Ok(())
+        } else {
+            Err(VulcanPluginRuntimeError::new(format!(
+                "Plugin `{plugin_id}` lifecycle generation is stale or disabled."
+            )))
+        }
     }
 
     /// Stops one category-isolated persistent runtime and closes its System lease after optional Hook shutdown.

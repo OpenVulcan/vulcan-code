@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { decideLocalNotification } from "@/notifications/policy";
 import { defaultNotificationPreferences } from "@/notifications/preferences";
 import type { NotificationIntentV1, NotificationPresentationContext } from "@/notifications/types";
-import type { ShellNotificationPresentationState } from "@/shell";
+import type { ShellNotificationPresentationState } from "@/host-shell";
 
 // testIntent builds one complete notification intent for pure policy tests.
 // testIntent 为纯策略测试构建一个完整通知意图。

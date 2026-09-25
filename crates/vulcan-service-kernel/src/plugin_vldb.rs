@@ -2,8 +2,7 @@
 //! 向受信 Vulcan 插件暴露的宿主注册 VLDB 绑定。
 
 use crate::plugin_storage::{
-    PLUGIN_SQLITE_MAX_QUERY_ROWS, PLUGIN_SQLITE_QUERY_TIMEOUT, SqliteValuePayload,
-    decode_sqlite_params,
+    PLUGIN_SQLITE_MAX_QUERY_ROWS, SqliteValuePayload, decode_sqlite_params, plugin_query_deadline,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -14,7 +13,7 @@ use vulcan_plugin_runtime::{
 };
 use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 use vulcan_workspace_store::local_database_runtime::LogicalDatabase;
-use vulcan_workspace_store::local_sql::{self, BoundedQueryError, QueryJsonLimits};
+use vulcan_workspace_store::local_sql::{self, QueryJsonLimits};
 use vulcan_workspace_store::workspace_store::lock_provider_usage_writes;
 
 /// Stable logical binding exposed to trusted statistics plugins.
@@ -116,18 +115,31 @@ impl PluginVldbService {
     /// Executes one authenticated host VLDB operation asynchronously.
     /// 异步执行一项已认证宿主 VLDB 操作。
     async fn execute_async(&self, request: VulcanPluginVldbRequest) -> Result<Value, String> {
+        if request
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            return Err("Plugin action deadline expired before the database call.".into());
+        }
         if request.plugin_id.trim().is_empty() {
             return Err(String::from(
                 "Vulcan plugin VLDB request requires plugin identity.",
             ));
         }
         match request.operation {
-            VulcanPluginVldbOperation::SqliteQuery => self.sqlite_query(request.payload).await,
-            VulcanPluginVldbOperation::SqliteExecute => self.sqlite_execute(request.payload).await,
-            VulcanPluginVldbOperation::SqliteExecuteBatch => {
-                self.sqlite_execute_batch(request.payload).await
+            VulcanPluginVldbOperation::SqliteQuery => {
+                self.sqlite_query(request.payload, request.deadline).await
             }
-            VulcanPluginVldbOperation::SqliteFlush => self.sqlite_flush(request.payload).await,
+            VulcanPluginVldbOperation::SqliteExecute => {
+                self.sqlite_execute(request.payload, request.deadline).await
+            }
+            VulcanPluginVldbOperation::SqliteExecuteBatch => {
+                self.sqlite_execute_batch(request.payload, request.deadline)
+                    .await
+            }
+            VulcanPluginVldbOperation::SqliteFlush => {
+                self.sqlite_flush(request.payload, request.deadline).await
+            }
         }
     }
 
@@ -144,12 +156,16 @@ impl PluginVldbService {
 
     /// Queries one registered host SQLite binding.
     /// 查询一个已注册宿主 SQLite 绑定。
-    async fn sqlite_query(&self, payload: Value) -> Result<Value, String> {
+    async fn sqlite_query(
+        &self,
+        payload: Value,
+        action_deadline: Option<std::time::Instant>,
+    ) -> Result<Value, String> {
         let request = serde_json::from_value::<HostVldbSqliteQueryPayload>(payload)
             .map_err(|error| format!("Invalid Vulcan plugin VLDB query payload: {error}"))?;
         let binding = self.resolve_sqlite_binding(request.binding.as_str())?;
         let params = decode_sqlite_params(request.params)?;
-        let result = local_sql::query_json_bounded_async(
+        let result = local_sql::query_json_bounded_until_async(
             &self.host_runtime.local,
             binding.database,
             request.sql,
@@ -158,18 +174,10 @@ impl PluginVldbService {
                 max_rows: PLUGIN_SQLITE_MAX_QUERY_ROWS,
                 max_bytes: HOST_VLDB_SQLITE_MAX_QUERY_BYTES,
             },
-            PLUGIN_SQLITE_QUERY_TIMEOUT,
+            plugin_query_deadline(action_deadline),
         )
         .await
-        .map_err(|error| match error {
-            BoundedQueryError::TimedOut => format!(
-                "Vulcan plugin VLDB query exceeded the {} second timeout.",
-                PLUGIN_SQLITE_QUERY_TIMEOUT.as_secs()
-            ),
-            BoundedQueryError::Failed(error) => {
-                format!("Vulcan plugin VLDB query failed: {error}")
-            }
-        })?;
+        .map_err(|error| format!("Vulcan plugin VLDB query failed: {error}"))?;
         let rows = serde_json::from_str::<Value>(&result.json_data)
             .map_err(|error| format!("SQLite engine returned invalid VLDB rows: {error}"))?;
         Ok(json!({ "rows": rows, "row_count": result.row_count }))
@@ -177,7 +185,11 @@ impl PluginVldbService {
 
     /// Executes one parameterized write against a registered host SQLite binding.
     /// 对一个已注册宿主 SQLite 绑定执行一条参数化写入。
-    async fn sqlite_execute(&self, payload: Value) -> Result<Value, String> {
+    async fn sqlite_execute(
+        &self,
+        payload: Value,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Value, String> {
         let request = serde_json::from_value::<HostVldbSqliteExecutePayload>(payload)
             .map_err(|error| format!("Invalid Vulcan plugin VLDB execute payload: {error}"))?;
         let binding = self.resolve_sqlite_binding(request.binding.as_str())?;
@@ -186,14 +198,15 @@ impl PluginVldbService {
         // guard 防止插件直接维护操作切断内核的调用写入与聚合重建序列。
         let _guard = match binding.kind {
             RegisteredSqliteBindingKind::SystemStatistics => {
-                Some(lock_provider_usage_writes().await)
+                Some(wait_for_usage_write_gate(deadline).await?)
             }
         };
-        let result = local_sql::execute_script_async(
+        let result = local_sql::execute_script_until_async(
             &self.host_runtime.local,
             binding.database,
             request.sql,
             params,
+            deadline,
         )
         .await
         .map_err(|error| format!("Vulcan plugin VLDB execute failed: {error}"))?;
@@ -210,7 +223,11 @@ impl PluginVldbService {
 
     /// Executes one homogeneous parameter batch atomically against a registered binding.
     /// 对一个已注册绑定原子执行一组同构参数批次。
-    async fn sqlite_execute_batch(&self, payload: Value) -> Result<Value, String> {
+    async fn sqlite_execute_batch(
+        &self,
+        payload: Value,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Value, String> {
         let request = serde_json::from_value::<HostVldbSqliteExecuteBatchPayload>(payload)
             .map_err(|error| format!("Invalid Vulcan plugin VLDB batch payload: {error}"))?;
         let binding = self.resolve_sqlite_binding(request.binding.as_str())?;
@@ -223,14 +240,15 @@ impl PluginVldbService {
         // guard 为同一逻辑绑定提供共享变更边界，且不增加插件私有存储队列。
         let _guard = match binding.kind {
             RegisteredSqliteBindingKind::SystemStatistics => {
-                Some(lock_provider_usage_writes().await)
+                Some(wait_for_usage_write_gate(deadline).await?)
             }
         };
-        let result = local_sql::execute_batch_async(
+        let result = local_sql::execute_batch_until_async(
             &self.host_runtime.local,
             binding.database,
             request.sql,
             items,
+            deadline,
         )
         .await
         .map_err(|error| format!("Vulcan plugin VLDB batch execute failed: {error}"))?;
@@ -247,19 +265,37 @@ impl PluginVldbService {
 
     /// Checkpoints one registered host SQLite binding without exposing its physical path.
     /// 在不暴露物理路径的情况下检查点化一个已注册宿主 SQLite 绑定。
-    async fn sqlite_flush(&self, payload: Value) -> Result<Value, String> {
+    async fn sqlite_flush(
+        &self,
+        payload: Value,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Value, String> {
         let request = serde_json::from_value::<HostVldbSqliteFlushPayload>(payload)
             .map_err(|error| format!("Invalid Vulcan plugin VLDB flush payload: {error}"))?;
         let binding = self.resolve_sqlite_binding(request.binding.as_str())?;
-        let result = local_sql::query_json_async(
+        let result = local_sql::query_json_until_async(
             &self.host_runtime.local,
             binding.database,
-            "PRAGMA wal_checkpoint(PASSIVE)",
+            "PRAGMA wal_checkpoint(PASSIVE)".into(),
             Vec::new(),
+            plugin_query_deadline(deadline),
         )
         .await
         .map_err(|error| format!("Vulcan plugin VLDB flush failed: {error}"))?;
         Ok(json!({ "flushed": true, "row_count": result.row_count }))
+    }
+}
+
+/// Waits for statistics mutation admission using the action's original deadline.
+/// 使用 Action 原始截止时间等待统计变更准入。
+async fn wait_for_usage_write_gate(
+    deadline: Option<std::time::Instant>,
+) -> Result<tokio::sync::MutexGuard<'static, ()>, String> {
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline.into(), lock_provider_usage_writes())
+            .await
+            .map_err(|_| "Plugin database mutation deadline exceeded before admission.".into()),
+        None => Ok(lock_provider_usage_writes().await),
     }
 }
 

@@ -15,7 +15,7 @@ const desktopClipboardBridge = vi.hoisted(() => ({
     pasteClipboard?: () => Promise<void>;
   },
 }));
-vi.mock("@/shell/electronBridge", () => ({ readElectronDesktopBridge: () => desktopClipboardBridge.current }));
+vi.mock("@/host-shell/electron-bridge", () => ({ readElectronDesktopBridge: () => desktopClipboardBridge.current }));
 
 // host and root own one controlled composer field for each test.
 // host 与 root 为每项测试持有一个受控会话输入框。

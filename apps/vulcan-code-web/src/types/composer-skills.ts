@@ -1024,6 +1024,9 @@ export interface PluginSummary {
   // Optional manifest-owned extension surfaces for real Vulcan plugins.
   // 真实 Vulcan 插件可用的可选清单自有扩展面。
   extension?: {
+    // Exact service incarnation and plugin generation for module invalidation.
+    // 用于模块失效的精确服务实例及插件代次。
+    runtimeIdentity: string;
     // Stable package origin.
     // 稳定的包来源。
     origin: "bundled" | "userInstalled";
@@ -1116,6 +1119,12 @@ export interface PluginSummary {
 // PluginUiModuleSource carries one bounded uncompressed plugin ESM module.
 // PluginUiModuleSource 携带一个有大小边界的未压缩插件 ESM 模块。
 export interface PluginUiModuleSource {
+  // Exact service and plugin generation that authorized this module.
+  // 授权当前模块的精确服务及插件代次。
+  runtimeIdentity: string;
+  // Explicit query policy comes from the validated manifest.
+  // 明确查询策略来自已校验清单。
+  actionPolicies: PluginUiActionPolicy[];
   // Exact owning plugin identifier.
   // 精确的所属插件标识。
   pluginId: string;
@@ -1131,6 +1140,20 @@ export interface PluginUiModuleSource {
   // Plugin-owned UI messages grouped by locale and stable message key.
   // 按语言与稳定消息键组织的插件自有界面文案。
   messagesByLocale: Record<string, Record<string, string>>;
+}
+
+// Authenticated policy distinguishes reusable reads from explicitly submitted effects.
+// 已认证策略区分可复用只读操作及显式提交操作。
+export interface PluginUiActionPolicy {
+  // Exact declared action identifier.
+  // 精确声明的 Action 标识。
+  id: string;
+  // Semantic effect is never inferred from the identifier.
+  // 不得从标识推测语义效果。
+  effect: "read" | "mutation";
+  // Zero allows in-flight sharing without retaining a completed result.
+  // 零允许共享在途任务，但不保留已完成结果。
+  resultCacheMs: number;
 }
 
 // PluginTextAssetSource carries one bounded manifest-declared UTF-8 plugin asset.
@@ -1346,12 +1369,14 @@ export interface AgentSkillCategorySummary {
 
 // AgentSkillInterfaceSaveRequest contains complete user-authored display metadata.
 // AgentSkillInterfaceSaveRequest 包含完整用户创作展示元数据。
+// User-authored skills carry one display name and description; only bundled system skills are localized.
+// 用户创作的技能只携带一组显示名称与说明；仅内置系统技能提供本地化。
 export interface AgentSkillInterfaceSaveRequest {
-  // Optional default human-facing name independent from the model trigger name.
-  // 可选默认用户显示名称，独立于模型触发名称。
+  // Optional human-facing name independent from the model trigger name.
+  // 可选用户显示名称，独立于模型触发名称。
   displayName: string | null;
-  // Optional default compact description for management surfaces.
-  // 可选默认管理界面简短说明。
+  // Optional compact description for management surfaces.
+  // 可选管理界面简短说明。
   shortDescription: string | null;
   // Optional emoji rendered by the skill marker.
   // 由技能标记渲染的可选表情图标。
@@ -1359,9 +1384,6 @@ export interface AgentSkillInterfaceSaveRequest {
   // Optional hexadecimal marker color.
   // 可选十六进制标记颜色。
   color: string | null;
-  // Authored localized display metadata keyed by BCP 47 locale.
-  // 按 BCP 47 语言标签索引的已创作本地化展示元数据。
-  locales: Record<string, AgentSkillLocaleSummary>;
 }
 
 // AgentSkillSaveRequest is the strict complete package editor payload.
@@ -1426,9 +1448,6 @@ export interface AgentSkillCategorySaveRequest {
   // Stable integer ordering key.
   // 稳定整数排序键。
   order: number;
-  // Authored localized category metadata keyed by BCP 47 locale.
-  // 按 BCP 47 语言标签索引的已创作本地化分类元数据。
-  locales: Record<string, AgentSkillCategoryLocaleSummary>;
 }
 
 // AgentSkillCategoryLocaleSummary describes localized category metadata.
@@ -1717,9 +1736,6 @@ export interface SubagentDefinitionSaveRequest {
   // Optional human-facing description.
   // 可选的人类可读说明。
   description?: string | null;
-  // Localized display metadata keyed by locale tag.
-  // 按语言标签索引的本地化展示元数据。
-  locales?: Record<string, SubagentDefinitionLocaleSummary> | null;
   // Optional human-facing emoji override.
   // 可选的人类可读图标覆盖。
   emoji?: string | null;

@@ -8,7 +8,7 @@
 //! uuid 猜测路径，加载器也绝不扫描候选目录。
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Subdirectory of the segments tree inside one session directory.
 /// 会话目录内分片树的子目录名。
@@ -118,9 +118,7 @@ impl SessionV1Layout {
     /// Returns the absolute generation directory path.
     /// 返回绝对 generation 目录路径。
     pub fn generation_dir(&self, generation: u64) -> PathBuf {
-        self.session_dir()
-            .join(SEGMENTS_DIR)
-            .join(format!("g{:07}", generation))
+        Self::generation_dir_in_directory(&self.session_dir(), generation)
     }
 
     /// Returns the absolute segment file path in one generation.
@@ -132,7 +130,29 @@ impl SessionV1Layout {
     /// Returns the absolute path of one metadata-selected segment file.
     /// 返回 metadata 选中的一个分片文件绝对路径。
     pub fn segment_entry_path(&self, generation: u64, file_name: &str) -> PathBuf {
-        self.generation_dir(generation).join(file_name)
+        Self::segment_entry_in_directory(&self.session_dir(), generation, file_name)
+    }
+
+    /// Resolves a declared segment within an exact session directory, including embedded sessions.
+    /// 在精确会话目录中解析声明的分片，也适用于嵌入会话。
+    /// Callers validate the generation and banked filename; returns the same path as the locator.
+    /// 调用方校验代次和分片文件名；返回与定位器一致的路径。
+    pub(super) fn segment_entry_in_directory(
+        session_dir: &Path,
+        generation: u64,
+        file_name: &str,
+    ) -> PathBuf {
+        Self::generation_dir_in_directory(session_dir, generation).join(file_name)
+    }
+
+    /// Resolves the shared segment-generation directory from an exact session directory and generation.
+    /// 根据精确会话目录和代次解析共享分片代次目录。
+    /// Returns a derived path without scanning or creating storage.
+    /// 返回派生路径，不扫描或创建存储。
+    fn generation_dir_in_directory(session_dir: &Path, generation: u64) -> PathBuf {
+        session_dir
+            .join(SEGMENTS_DIR)
+            .join(format!("g{generation:07}"))
     }
 
     /// Returns the fixed candidate generation directory used by history edits

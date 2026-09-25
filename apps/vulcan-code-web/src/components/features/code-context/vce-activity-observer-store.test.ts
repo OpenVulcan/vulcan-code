@@ -1,10 +1,11 @@
+import { translateActive } from "@/i18n";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VceProjectActivityResponse, VceProjectChangedEvent } from "@/types";
 import { VceActivityObserverStore, type VceActivityObserverTransport } from "./vce-activity-observer-store";
 import { createVceActivityFixture } from "./vce-activity-test-fixture";
 import {
   VCE_OBSERVER_READ_DEADLINE_MS,
-  VCE_OBSERVER_READ_TIMEOUT_MESSAGE,
+  VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY,
 } from "./vce-observer-timeouts";
 
 // Create a manually settled promise of T; returns the promise plus exact resolve/reject controls.
@@ -235,7 +236,7 @@ describe("workbench activity observation", () => {
     expect(deadlineSignal?.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(0);
     expect(f.store.snapshot("project-a").activity).toBeNull();
-    expect(f.store.snapshot("project-a").error).toBe(VCE_OBSERVER_READ_TIMEOUT_MESSAGE);
+    expect(f.store.snapshot("project-a").error).toBe(translateActive(VCE_OBSERVER_READ_TIMEOUT_MESSAGE_KEY));
 
     f.load.mockResolvedValueOnce(createVceActivityFixture("project-a", 2));
     await f.store.refresh("project-a");

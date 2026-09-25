@@ -41,7 +41,8 @@ async function mount(invoke) {
   // sdk supplies no network, credentials or real event bus.
   // sdk 不提供网络、凭据或真实事件总线。
   const sdk = { React, locale: "en-US", invoke, t: (_key, fallback) => fallback, formatNumber: String,
-    components: { Badge: plain, Button, MetricCard: plain, SelectControl, ErrorState: plain, EmptyState: plain },
+    components: { Badge: plain, Button, MetricCard: plain, SelectControl, ErrorState: plain, EmptyState: plain,
+      HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }) },
     events: { subscribe: (_name, callback) => { eventHandler = callback; return () => { eventHandler = () => {}; }; } },
     notifications: { success: (message) => notifications.push(message), error: (message) => notifications.push(message) },
   };
@@ -65,8 +66,8 @@ test("partial usage failure keeps authentication visible and secondary explanati
     assert.ok(panel.container.querySelector('input[type="password"]'));
     assert.equal(panel.container.querySelector('input[type="password"]').disabled, false);
     assert.ok([...panel.container.querySelectorAll("button")].find((button) => button.textContent === "Retry"));
-    assert.equal([...panel.container.querySelectorAll("details")].find((element) => element.querySelector("summary")?.textContent === "What is Context7?").open, false);
-    assert.equal([...panel.container.querySelectorAll("details")].find((element) => element.querySelector("summary")?.textContent === "Request behavior").open, false);
+    assert.ok(panel.container.querySelector('[aria-label="What is Context7?"]'));
+    assert.ok(panel.container.querySelector('[aria-label="Fast mode by default"]'));
   } finally { await panel.close(); }
 });
 
@@ -90,7 +91,7 @@ test("retains settings drafts across background refresh and accepts only one con
     const checkbox = panel.container.querySelector('input[type="checkbox"]');
     const save = [...panel.container.querySelectorAll("button")].find((button) => button.textContent === "Save settings");
     assert.equal(save.disabled, true);
-    await React.act(async () => { checkbox.closest("details").open = true; checkbox.click(); });
+    await React.act(async () => checkbox.click());
     assert.equal(checkbox.checked, false);
     await React.act(async () => panel.refresh());
     assert.equal(checkbox.checked, false);

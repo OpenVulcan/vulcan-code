@@ -112,7 +112,13 @@ impl CollaborationState {
             )?;
             if projection.delivery_id != *delivery_id
                 || projection.acceptance_seq != acceptance.event_seq
-                || Some(projection.turn_id) != acceptance.result.acceptance.message.source.turn_id
+                || acceptance
+                    .result
+                    .acceptance
+                    .message
+                    .source
+                    .turn_id
+                    .is_none_or(|source_turn| projection.turn_id < source_turn)
                 || projection.receiver_revision <= acceptance.receiver_revision
                 || (acceptance.disclosure
                     == CollaborationTaskResultDisclosure::AuthorizationRevoked

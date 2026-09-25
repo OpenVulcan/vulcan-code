@@ -21,22 +21,22 @@ type MemorySubAreaId = string;
 
 // LazySettingsFeatureContent isolates settings and Visual Lab from the console-first workbench chunk.
 // LazySettingsFeatureContent 将设置与视觉实验室隔离在控制台优先的工作台分块之外。
-const LazySettingsFeatureContent = React.lazy(() => import("@/components/features/settings/SettingsFeatureContent").then((module) => ({ default: module.SettingsFeatureContent })));
+const LazySettingsFeatureContent = React.lazy(() => import("@/components/features/settings/settings-feature-content").then((module) => ({ default: module.SettingsFeatureContent })));
 // LazySkillsArea isolates LuaSkills management from the console-first workbench chunk.
 // LazySkillsArea 将 LuaSkills 管理隔离在控制台优先的工作台分块之外。
-const LazySkillsArea = React.lazy(() => import("@/components/features/skills/SkillsArea").then((module) => ({ default: module.SkillsArea })));
+const LazySkillsArea = React.lazy(() => import("@/components/features/skills/skills-area").then((module) => ({ default: module.SkillsArea })));
 // LazyAgentsArea isolates agent management from the console-first workbench chunk.
 // LazyAgentsArea 将智能体管理隔离在控制台优先的工作台分块之外。
-const LazyAgentsArea = React.lazy(() => import("@/components/features/agents/AgentsArea").then((module) => ({ default: module.AgentsArea })));
+const LazyAgentsArea = React.lazy(() => import("@/components/features/agents/agents-area").then((module) => ({ default: module.AgentsArea })));
 // LazyAgentSkillsArea isolates prompt skill management from the console-first workbench chunk.
 // LazyAgentSkillsArea 将提示词技能管理隔离在控制台优先的工作台分块之外。
-const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent-skills/AgentSkillsArea").then((module) => ({ default: module.AgentSkillsArea })));
+const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent-skills/agent-skills-area").then((module) => ({ default: module.AgentSkillsArea })));
 // LazyMemoryArea isolates VMM management from the console-first workbench chunk.
 // LazyMemoryArea 将 VMM 管理隔离在控制台优先的工作台分块之外。
-const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/MemoryArea").then((module) => ({ default: module.MemoryArea })));
+const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/memory-area").then((module) => ({ default: module.MemoryArea })));
 // LazyKnowledgeBaseArea isolates knowledge management from the console-first workbench chunk.
 // LazyKnowledgeBaseArea 将知识库管理隔离在控制台优先的工作台分块之外。
-const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/KnowledgeBaseArea").then((module) => ({ default: module.KnowledgeBaseArea })));
+const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/knowledge-base-area").then((module) => ({ default: module.KnowledgeBaseArea })));
 // FeatureLoadBoundary provides one stable non-layout-shifting fallback for deferred feature chunks.
 // FeatureLoadBoundary 为延迟功能分块提供一个稳定且不改变布局的加载回退。
 export function FeatureLoadBoundary(props: {
@@ -47,16 +47,16 @@ export function FeatureLoadBoundary(props: {
   // regionKey 清除已失败的导航，同时保留正常页面状态。
   regionKey: string;
 }) {
-  // locale keeps recovery text aligned with the current application language.
-  // locale 使恢复文案与当前应用语言一致。
-  const { locale } = useI18n();
+  // t keeps recovery text aligned with the current application language.
+  // t 使恢复文案与当前应用语言一致。
+  const { t } = useI18n();
   return (
     <RenderErrorBoundary resetKey={props.regionKey} fallback={(error) => (
       <section role="alert" className="m-4 space-y-3 rounded-lg border p-4">
-        <p className="text-sm font-medium">{locale === "zh-CN" ? "此页面暂时无法显示。" : "This page could not be displayed."}</p>
-        <p className="text-xs text-muted-foreground">{locale === "zh-CN" ? "其他页面仍可使用。重新加载应用会结束当前页面操作，请先保留未保存的内容。" : "Other pages remain available. Preserve any unsaved work before reloading the application."}</p>
-        <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{locale === "zh-CN" ? "错误详情" : "Error details"}</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{error.message}</pre></details>
-        <Button variant="outline" onClick={() => window.location.reload()}>{locale === "zh-CN" ? "重新加载应用" : "Reload application"}</Button>
+        <p className="text-sm font-medium">{t("features.shell.thisPageCouldNot")}</p>
+        <p className="text-xs text-muted-foreground">{t("features.shell.otherPagesRemainAvailable")}</p>
+        <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{t("features.shell.errorDetails")}</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{error.message}</pre></details>
+        <Button variant="outline" onClick={() => window.location.reload()}>{t("features.shell.reloadApplication")}</Button>
       </section>
     )}>
     <React.Suspense fallback={<div className="flex min-h-32 items-center justify-center"><Spinner /></div>}>

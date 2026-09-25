@@ -22,6 +22,8 @@ import type {
   AgentSkillRecordSummary,
   AgentSkillSaveRequest,
 } from "@/types"
+import { useI18n, formatMessage, type Translate } from "@/i18n"
+import { AGENT_SKILL_DEFAULT_COLOR, colorInputValue } from "@/lib/agent-color"
 
 // AgentSkillEditorDraft stores structured package fields and the directly editable prompt body.
 // AgentSkillEditorDraft 保存结构化技能包字段与可直接编辑的提示词正文。
@@ -36,7 +38,6 @@ interface AgentSkillEditorDraft {
   shortDescription: string
   emoji: string
   color: string
-  locales: Record<string, AgentSkillLocaleSummary>
   categoryId: string
   tags: string[]
   enabled: boolean
@@ -51,10 +52,6 @@ interface AgentSkillCategoryDraft {
   emoji: string
   color: string
   order: string
-  englishName: string
-  englishDescription: string
-  chineseName: string
-  chineseDescription: string
 }
 
 // AgentSkillEditorDialog edits a package through synchronized structured fields and source documents.
@@ -68,9 +65,10 @@ export function AgentSkillEditorDialog(props: {
   onOpenChange: (open: boolean) => void
   onSave: (request: AgentSkillSaveRequest) => Promise<void>
 }) {
+  const { t } = useI18n();
   // draft is the single source of truth for the current editor session.
   // draft 是当前编辑会话的唯一事实来源。
-  const [draft, setDraft] = React.useState<AgentSkillEditorDraft>(() => createEditorDraft(props.record, props.categories, props.copy))
+  const [draft, setDraft] = React.useState<AgentSkillEditorDraft>(() => createEditorDraft(props.record, props.categories, props.copy, props.locale))
   // error exposes parsing, validation, or persistence failures.
   // error 暴露解析、校验或持久化失败。
   const [error, setError] = React.useState("")
@@ -87,11 +85,11 @@ export function AgentSkillEditorDialog(props: {
   React.useEffect(() => {
     const session = props.open ? `${props.copy}:${props.record?.baseDir ?? "new"}` : null
     if (session !== null && editorSession.current !== session) {
-      setDraft(createEditorDraft(props.record, props.categories, props.copy))
+      setDraft(createEditorDraft(props.record, props.categories, props.copy, props.locale))
       setError("")
     }
     editorSession.current = session
-  }, [props.categories, props.copy, props.open, props.record])
+  }, [props.categories, props.copy, props.locale, props.open, props.record])
 
   // updateStructuredField changes one host-managed package node.
   // updateStructuredField 修改一个由宿主管理的技能包节点。
@@ -100,28 +98,12 @@ export function AgentSkillEditorDialog(props: {
     setError("")
   }, [])
 
-  // updateLocaleField changes one exact BCP 47 display node.
-  // updateLocaleField 修改一个精确 BCP 47 展示节点。
-  const updateLocaleField = React.useCallback((locale: string, key: keyof AgentSkillLocaleSummary, value: string) => {
-    setDraft((current) => {
-      const locales = { ...current.locales }
-      const metadata = { ...locales[locale], [key]: value || null }
-      if (!metadata.displayName && !metadata.shortDescription) {
-        delete locales[locale]
-      } else {
-        locales[locale] = metadata
-      }
-      return { ...current, locales }
-    })
-    setError("")
-  }, [])
-
   // submit builds the strict service payload; the host generates SKILL.md frontmatter and vulcan.yaml.
   // submit 构建严格服务载荷；SKILL.md frontmatter 与 vulcan.yaml 由宿主生成。
   const submit = React.useCallback(async () => {
     if (savingRef.current) return
     try {
-      const request = createSkillSaveRequest(draft, props.record, props.copy, props.locale.startsWith("zh"))
+      const request = createSkillSaveRequest(draft, props.record, props.copy, t)
       savingRef.current = true
       setSaving(true)
       setError("")
@@ -147,40 +129,38 @@ export function AgentSkillEditorDialog(props: {
         <DialogHeader>
           <DialogTitle>
             {props.copy && props.record
-              ? (chinese ? `复制 ${recordDisplayName}` : `Copy ${recordDisplayName}`)
+              ? (formatMessage(t("agentSkills.copy2"), { recordDisplayName }))
               : props.record
-                ? (chinese ? `编辑 ${recordDisplayName}` : `Edit ${recordDisplayName}`)
-                : (chinese ? "新建技能" : "Create Skill")}
+                ? (formatMessage(t("agentSkills.edit2"), { recordDisplayName }))
+                : t("agentSkills.createSkill2")}
           </DialogTitle>
           <DialogDescription>
-            {chinese
-              ? "技能名称等于技能目录名；可直接粘贴提示词正文，SKILL.md frontmatter 与 vulcan.yaml 由系统自动生成。"
-              : "The canonical name equals the package directory; paste prompt content directly and the system generates SKILL.md frontmatter and vulcan.yaml."}
+            {t("agentSkills.theCanonicalNameEquals")}
           </DialogDescription>
         </DialogHeader>
         <div className="agent-skill-editor-body">
           <fieldset disabled={saving}>
-            <legend>{chinese ? "技能包字段" : "Package fields"}</legend>
+            <legend>{t("agentSkills.packageFields")}</legend>
             <div className="agent-skill-form-grid">
               <AgentSkillTextField label="name" onChange={(value) => updateStructuredField("name", value)} required value={draft.name} />
-              <AgentSkillTextField label={chinese ? "协议" : "License"} onChange={(value) => updateStructuredField("license", value)} value={draft.license} />
-              <AgentSkillTextArea className="agent-skill-form-span" label={chinese ? "模型触发说明" : "Model trigger description"} onChange={(value) => updateStructuredField("description", value)} required rows={3} value={draft.description} />
-              <AgentSkillTextArea className="agent-skill-form-span" label={chinese ? "兼容环境" : "Compatibility"} onChange={(value) => updateStructuredField("compatibility", value)} rows={2} value={draft.compatibility} />
-              <AgentSkillTextField label={chinese ? "标签（逗号分隔）" : "Tags (comma separated)"} onChange={(value) => updateStructuredField("tags", uniqueCommaSeparatedValues(value))} value={draft.tags.join(", ")} />
+              <AgentSkillTextField label={t("agentSkills.license2")} onChange={(value) => updateStructuredField("license", value)} value={draft.license} />
+              <AgentSkillTextArea className="agent-skill-form-span" label={t("agentSkills.modelTriggerDescription")} onChange={(value) => updateStructuredField("description", value)} required rows={3} value={draft.description} />
+              <AgentSkillTextArea className="agent-skill-form-span" label={t("agentSkills.compatibility2")} onChange={(value) => updateStructuredField("compatibility", value)} rows={2} value={draft.compatibility} />
+              <AgentSkillTextField label={t("agentSkills.tagsCommaSeparated")} onChange={(value) => updateStructuredField("tags", uniqueCommaSeparatedValues(value))} value={draft.tags.join(", ")} />
             </div>
           </fieldset>
           <fieldset disabled={saving}>
-            <legend>{chinese ? "显示与分类" : "Presentation and category"}</legend>
+            <legend>{t("agentSkills.presentationAndCategory")}</legend>
             <div className="agent-skill-form-grid">
-              <AgentSkillTextField label={chinese ? "默认显示名称" : "Default display name"} onChange={(value) => updateStructuredField("displayName", value)} value={draft.displayName} />
-              <AgentSkillTextField label={chinese ? "默认简短说明" : "Default short description"} onChange={(value) => updateStructuredField("shortDescription", value)} value={draft.shortDescription} />
-              <AgentSkillTextField label={chinese ? "图标" : "Emoji"} onChange={(value) => updateStructuredField("emoji", value)} value={draft.emoji} />
+              <AgentSkillTextField label={t("agentSkills.displayName")} onChange={(value) => updateStructuredField("displayName", value)} value={draft.displayName} />
+              <AgentSkillTextField label={t("agentSkills.shortDescription")} onChange={(value) => updateStructuredField("shortDescription", value)} value={draft.shortDescription} />
+              <AgentSkillTextField label={t("agentSkills.emoji")} onChange={(value) => updateStructuredField("emoji", value)} value={draft.emoji} />
               <label className="agent-skill-form-field">
-                <span>{chinese ? "颜色标记" : "Color marker"}</span>
+                <span>{t("agentSkills.colorMarker")}</span>
                 <AgentSkillColorPicker disabled={saving} locale={props.locale} onChange={(value) => updateStructuredField("color", value)} value={draft.color} />
               </label>
               <label className="agent-skill-form-field">
-                <span>{chinese ? "技能分类" : "Skill category"}</span>
+                <span>{t("agentSkills.skillCategory")}</span>
                 <Select disabled={saving} onValueChange={(value) => updateStructuredField("categoryId", value)} value={draft.categoryId}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -192,23 +172,19 @@ export function AgentSkillEditorDialog(props: {
               </label>
               <label className="agent-skill-form-check">
                 <Switch disabled={saving} checked={draft.enabled} onCheckedChange={(checked) => updateStructuredField("enabled", checked)} />
-                <span>{chinese ? "启用此技能" : "Enable this skill"}</span>
+                <span>{t("agentSkills.enableThisSkill")}</span>
               </label>
-              <AgentSkillTextField label="English name" onChange={(value) => updateLocaleField("en-US", "displayName", value)} value={draft.locales["en-US"]?.displayName ?? ""} />
-              <AgentSkillTextField label="English description" onChange={(value) => updateLocaleField("en-US", "shortDescription", value)} value={draft.locales["en-US"]?.shortDescription ?? ""} />
-              <AgentSkillTextField label="中文名称" onChange={(value) => updateLocaleField("zh-CN", "displayName", value)} value={draft.locales["zh-CN"]?.displayName ?? ""} />
-              <AgentSkillTextField label="中文说明" onChange={(value) => updateLocaleField("zh-CN", "shortDescription", value)} value={draft.locales["zh-CN"]?.shortDescription ?? ""} />
             </div>
           </fieldset>
           <fieldset disabled={saving} className="agent-skill-source-fieldset">
-            <legend>{chinese ? "提示词内容" : "Prompt content"}</legend>
-            <AgentSkillTextArea className="agent-skill-source-editor" label={chinese ? "SKILL.md 提示词正文" : "SKILL.md prompt body"} onChange={(value) => updateStructuredField("body", value)} required rows={22} value={draft.body} />
+            <legend>{t("agentSkills.promptContent")}</legend>
+            <AgentSkillTextArea className="agent-skill-source-editor" label={t("agentSkills.skillMdPromptBody")} onChange={(value) => updateStructuredField("body", value)} required rows={22} value={draft.body} />
           </fieldset>
           {error ? <p className="agent-skill-form-error" role="alert">{error}</p> : null}
         </div>
         <DialogFooter>
-          <Button disabled={saving} onClick={() => props.onOpenChange(false)} variant="outline">{chinese ? "取消" : "Cancel"}</Button>
-          <Button disabled={saving} onClick={() => void submit()}>{saving ? (chinese ? "保存中…" : "Saving…") : (chinese ? "保存技能" : "Save skill")}</Button>
+          <Button disabled={saving} onClick={() => props.onOpenChange(false)} variant="outline">{t("agentSkills.cancel")}</Button>
+          <Button disabled={saving} onClick={() => void submit()}>{saving ? t("agentSkills.saving") : t("agentSkills.saveSkill")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -225,6 +201,7 @@ export function AgentSkillCategoryManagementDialog(props: {
   onSave: (request: AgentSkillCategorySaveRequest) => Promise<void>
   onDelete: (categoryId: string) => Promise<void>
 }) {
+  const { t } = useI18n();
   // editing selects the user category form; undefined shows only the category table.
   // editing 选择用户分类表单；undefined 时仅显示分类表。
   const [editing, setEditing] = React.useState<AgentSkillCategorySummary | null | undefined>(undefined)
@@ -275,7 +252,7 @@ export function AgentSkillCategoryManagementDialog(props: {
     try {
       setSaving(true)
       setError("")
-      await props.onSave(createCategorySaveRequest(draft, props.locale.startsWith("zh")))
+      await props.onSave(createCategorySaveRequest(draft, t))
       setEditing(undefined)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -310,25 +287,25 @@ export function AgentSkillCategoryManagementDialog(props: {
     <Dialog onOpenChange={(open) => { if (!savingRef.current) props.onOpenChange(open) }} open={props.open}>
       <DialogContent className="agent-skill-category-management-dialog" size="lg" scrollMode="fixed-footer" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>{chinese ? "分类管理" : "Category management"}</DialogTitle>
-          <DialogDescription>{chinese ? "系统分类不可修改或删除；附加分类与技能归属写入技能目录配置。" : "System categories are immutable; added categories and assignments are stored in the skill-root configuration."}</DialogDescription>
+          <DialogTitle>{t("agentSkills.categoryManagement")}</DialogTitle>
+          <DialogDescription>{t("agentSkills.systemCategoriesAreImmutable")}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto">
         {editing === undefined ? (
           <div className="grid gap-2">
             <div className="agent-skill-category-management-actions">
-              <Button disabled={saving} onClick={() => openForm(null)}><Plus size={15} />{chinese ? "添加分类" : "Add category"}</Button>
+              <Button disabled={saving} onClick={() => openForm(null)}><Plus size={15} />{t("agentSkills.addCategory")}</Button>
             </div>
             <div className="grid gap-2">
               {props.categories.map((category) => (
                 <div className="agent-skill-category-management-row" key={category.categoryId}>
                   <span className="agent-skill-category-management-marker" style={{ backgroundColor: category.color }}>{category.emoji}</span>
                   <div><strong>{localizedCategoryName(category, props.locale)}</strong><span>{category.categoryId}</span></div>
-                  <span>{category.builtin ? (chinese ? "系统分类" : "System") : (chinese ? "附加分类" : "Added")}</span>
+                  <span>{category.builtin ? t("agentSkills.system2") : t("agentSkills.added")}</span>
                   {!category.builtin ? (
                     <div>
-                      <Button variant="ghost" size="icon-sm" disabled={saving} aria-label={chinese ? "编辑分类" : "Edit category"} onClick={() => openForm(category)} type="button"><Pencil size={15} /></Button>
-                      <Button variant="ghost" size="icon-sm" disabled={saving} aria-label={chinese ? "删除分类" : "Delete category"} onClick={() => { setError(""); setPendingDelete(category) }} type="button"><Trash2 size={15} /></Button>
+                      <Button variant="ghost" size="icon-sm" disabled={saving} aria-label={t("agentSkills.editCategory")} onClick={() => openForm(category)} type="button"><Pencil size={15} /></Button>
+                      <Button variant="ghost" size="icon-sm" disabled={saving} aria-label={t("agentSkills.deleteCategory")} onClick={() => { setError(""); setPendingDelete(category) }} type="button"><Trash2 size={15} /></Button>
                     </div>
                   ) : null}
                 </div>
@@ -338,37 +315,33 @@ export function AgentSkillCategoryManagementDialog(props: {
         ) : (
           <fieldset disabled={saving} className="agent-skill-form-grid min-w-0 border-0 p-0">
             <AgentSkillTextField disabled={editing !== null} label="category-id" onChange={(value) => updateCategoryField("categoryId", value)} required value={draft.categoryId} />
-            <AgentSkillTextField label={chinese ? "默认名称" : "Default name"} onChange={(value) => updateCategoryField("name", value)} required value={draft.name} />
-            <AgentSkillTextField label={chinese ? "图标" : "Emoji"} onChange={(value) => updateCategoryField("emoji", value)} required value={draft.emoji} />
+            <AgentSkillTextField label={t("agentSkills.categoryName")} onChange={(value) => updateCategoryField("name", value)} required value={draft.name} />
+            <AgentSkillTextField label={t("agentSkills.emoji")} onChange={(value) => updateCategoryField("emoji", value)} required value={draft.emoji} />
             <label className="agent-skill-form-field">
-              <span>{chinese ? "颜色标记" : "Color marker"}</span>
+              <span>{t("agentSkills.colorMarker")}</span>
               <AgentSkillColorPicker disabled={saving} locale={props.locale} onChange={(value) => updateCategoryField("color", value)} value={draft.color} />
             </label>
-            <AgentSkillTextField label={chinese ? "排序" : "Order"} onChange={(value) => updateCategoryField("order", value)} required type="number" value={draft.order} />
-            <AgentSkillTextField label={chinese ? "默认说明" : "Default description"} onChange={(value) => updateCategoryField("description", value)} value={draft.description} />
-            <AgentSkillTextField label="English name" onChange={(value) => updateCategoryField("englishName", value)} required value={draft.englishName} />
-            <AgentSkillTextField label="English description" onChange={(value) => updateCategoryField("englishDescription", value)} value={draft.englishDescription} />
-            <AgentSkillTextField label="中文名称" onChange={(value) => updateCategoryField("chineseName", value)} required value={draft.chineseName} />
-            <AgentSkillTextField label="中文说明" onChange={(value) => updateCategoryField("chineseDescription", value)} value={draft.chineseDescription} />
+            <AgentSkillTextField label={t("agentSkills.order")} onChange={(value) => updateCategoryField("order", value)} required type="number" value={draft.order} />
+            <AgentSkillTextField label={t("agentSkills.categoryDescription")} onChange={(value) => updateCategoryField("description", value)} value={draft.description} />
           </fieldset>
         )}
         {error ? <p className="agent-skill-form-error" role="alert">{error}</p> : null}
         </div>
         <DialogFooter>
-          {editing !== undefined ? <Button disabled={saving} onClick={() => setEditing(undefined)} variant="outline">{chinese ? "返回" : "Back"}</Button> : null}
-          <Button disabled={saving} onClick={() => props.onOpenChange(false)} variant="outline">{chinese ? "关闭" : "Close"}</Button>
-          {editing !== undefined ? <Button disabled={saving} onClick={() => void saveCategory()}>{chinese ? "保存分类" : "Save category"}</Button> : null}
+          {editing !== undefined ? <Button disabled={saving} onClick={() => setEditing(undefined)} variant="outline">{t("agentSkills.back")}</Button> : null}
+          <Button disabled={saving} onClick={() => props.onOpenChange(false)} variant="outline">{t("agentSkills.close")}</Button>
+          {editing !== undefined ? <Button disabled={saving} onClick={() => void saveCategory()}>{t("agentSkills.saveCategory")}</Button> : null}
         </DialogFooter>
         <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => { if (!open && !savingRef.current) setPendingDelete(null) }}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>{chinese ? "删除分类" : "Delete category"}</AlertDialogTitle>
-              <AlertDialogDescription>{pendingDelete ? (chinese ? `确认删除分类“${localizedCategoryName(pendingDelete, props.locale)}”？` : `Delete category “${localizedCategoryName(pendingDelete, props.locale)}”?`) : ""}</AlertDialogDescription>
+              <AlertDialogTitle>{t("agentSkills.deleteCategory")}</AlertDialogTitle>
+              <AlertDialogDescription>{pendingDelete ? (formatMessage(t("agentSkills.deleteCategory2"), { value: localizedCategoryName(pendingDelete, props.locale) })) : ""}</AlertDialogDescription>
             </AlertDialogHeader>
             {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={saving}>{chinese ? "取消" : "Cancel"}</AlertDialogCancel>
-              <AlertDialogAction disabled={saving} onClick={(event) => { event.preventDefault(); if (pendingDelete) void deleteCategory(pendingDelete) }}>{saving ? (chinese ? "删除中…" : "Deleting…") : (chinese ? "删除" : "Delete")}</AlertDialogAction>
+              <AlertDialogCancel disabled={saving}>{t("agentSkills.cancel")}</AlertDialogCancel>
+              <AlertDialogAction disabled={saving} onClick={(event) => { event.preventDefault(); if (pendingDelete) void deleteCategory(pendingDelete) }}>{saving ? t("agentSkills.deleting") : t("agentSkills.delete")}</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -405,6 +378,7 @@ function AgentSkillColorPicker(props: {
   // 当前颜色值。
   value: string
 }) {
+  const { t } = useI18n();
   const inputRef = React.useRef<HTMLInputElement | null>(null)
   const dirtyRef = React.useRef(false)
   const onChange = props.onChange
@@ -439,7 +413,7 @@ function AgentSkillColorPicker(props: {
     onChange(inputRef.current?.value ?? draftColor)
   }, [draftColor, onChange])
 
-  const chooseColorLabel = props.locale.startsWith("zh") ? "选择颜色" : "Choose color"
+  const chooseColorLabel = t("agentSkills.chooseColor")
   return (
     <div className="agent-editor-color-picker">
       <label className={`agent-editor-color-trigger ${props.disabled ? "disabled" : ""}`}>
@@ -465,7 +439,9 @@ function AgentSkillColorPicker(props: {
 
 // createEditorDraft builds one exact structured baseline and prompt body.
 // createEditorDraft 构建一个精确的结构化基线与提示词正文。
-function createEditorDraft(record: AgentSkillRecordSummary | null, categories: AgentSkillCategorySummary[], copy: boolean): AgentSkillEditorDraft {
+// Parameters: locale picks the shown name and description when copying a localized system skill into a single-language user skill.
+// 参数：locale 在把本地化系统技能复制为单语言用户技能时选择显示名称与说明。
+function createEditorDraft(record: AgentSkillRecordSummary | null, categories: AgentSkillCategorySummary[], copy: boolean, locale: string): AgentSkillEditorDraft {
   const defaultCategoryId = categories.find((category) => category.categoryId === "uncategorized")?.categoryId ?? categories[0]?.categoryId ?? "uncategorized"
   return {
     name: record ? (copy ? `${record.name}-copy` : record.name) : "new-skill",
@@ -474,11 +450,10 @@ function createEditorDraft(record: AgentSkillRecordSummary | null, categories: A
     compatibility: record?.standard.compatibility ?? "",
     metadata: record?.standard.metadata ?? {},
     body: record?.body ?? "# Instructions\n\nDescribe the workflow, constraints, and expected result.\n",
-    displayName: record?.displayName ?? "New Skill",
-    shortDescription: record?.description ?? "Reusable prompt skill",
+    displayName: record ? localizedRecordDisplayName(record, locale) : "New Skill",
+    shortDescription: record ? localizedRecordShortDescription(record, locale) : "Reusable prompt skill",
     emoji: record?.emoji ?? "✨",
-    color: record?.color ?? "#64748B",
-    locales: record?.locales ?? {},
+    color: record?.color ?? AGENT_SKILL_DEFAULT_COLOR,
     categoryId: record?.categoryId ?? defaultCategoryId,
     tags: record?.tags ?? [],
     enabled: record?.enabled ?? true,
@@ -487,11 +462,11 @@ function createEditorDraft(record: AgentSkillRecordSummary | null, categories: A
 
 // createSkillSaveRequest validates one synchronized draft and builds the strict service payload.
 // createSkillSaveRequest 校验一个同步草稿并构建严格服务载荷。
-function createSkillSaveRequest(draft: AgentSkillEditorDraft, record: AgentSkillRecordSummary | null, copy: boolean, chinese: boolean): AgentSkillSaveRequest {
-  if (!/^(?!-)(?!.*--)[a-z0-9-]{1,64}(?<!-)$/u.test(draft.name)) throw new Error(chinese ? "name 必须为 1–64 个小写字母、数字或单连字符，且连字符不能位于首尾。" : "name must be a canonical lowercase package directory name.")
-  if (!draft.description.trim() || Array.from(draft.description).length > 1024) throw new Error(chinese ? "模型触发说明必须包含 1–1024 个字符。" : "The model trigger description must contain 1–1024 characters.")
-  if (Array.from(draft.compatibility).length > 500) throw new Error(chinese ? "兼容环境说明不能超过 500 个字符。" : "Compatibility cannot exceed 500 characters.")
-  if (draft.color && !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/iu.test(draft.color)) throw new Error(chinese ? "颜色必须为十六进制 RGB 或 RGBA。" : "Color must be hexadecimal RGB or RGBA.")
+function createSkillSaveRequest(draft: AgentSkillEditorDraft, record: AgentSkillRecordSummary | null, copy: boolean, t: Translate): AgentSkillSaveRequest {
+  if (!/^(?!-)(?!.*--)[a-z0-9-]{1,64}(?<!-)$/u.test(draft.name)) throw new Error(t("agentSkills.nameMustBeA"))
+  if (!draft.description.trim() || Array.from(draft.description).length > 1024) throw new Error(t("agentSkills.theModelTriggerDescription"))
+  if (Array.from(draft.compatibility).length > 500) throw new Error(t("agentSkills.compatibilityCannotExceed500"))
+  if (draft.color && !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/iu.test(draft.color)) throw new Error(t("agentSkills.colorMustBeHexadecimal"))
   return {
     originalName: !copy && record?.scopeKey === "user" ? record.name : null,
     sourceSkillKey: record?.skillKey ?? null,
@@ -506,7 +481,6 @@ function createSkillSaveRequest(draft: AgentSkillEditorDraft, record: AgentSkill
       shortDescription: optionalText(draft.shortDescription),
       emoji: optionalText(draft.emoji),
       color: optionalText(draft.color),
-      locales: draft.locales,
     },
     categoryId: draft.categoryId,
     tags: draft.tags,
@@ -522,23 +496,19 @@ function createCategoryDraft(category: AgentSkillCategorySummary | null): AgentS
     name: category?.name ?? "",
     description: category?.description ?? "",
     emoji: category?.emoji ?? "📁",
-    color: category?.color ?? "#64748B",
+    color: category?.color ?? AGENT_SKILL_DEFAULT_COLOR,
     order: String(category?.order ?? 100),
-    englishName: category?.locales["en-US"]?.name ?? "",
-    englishDescription: category?.locales["en-US"]?.description ?? "",
-    chineseName: category?.locales["zh-CN"]?.name ?? "",
-    chineseDescription: category?.locales["zh-CN"]?.description ?? "",
   }
 }
 
 // createCategorySaveRequest validates and builds one strict category payload.
 // createCategorySaveRequest 校验并构建一个严格分类载荷。
-function createCategorySaveRequest(draft: AgentSkillCategoryDraft, chinese: boolean): AgentSkillCategorySaveRequest {
-  if (!/^(?!-)(?!.*--)[a-z0-9-]{1,64}(?<!-)$/u.test(draft.categoryId)) throw new Error(chinese ? "category-id 必须为规范小写短标识。" : "category-id must be a canonical lowercase slug.")
+function createCategorySaveRequest(draft: AgentSkillCategoryDraft, t: Translate): AgentSkillCategorySaveRequest {
+  if (!/^(?!-)(?!.*--)[a-z0-9-]{1,64}(?<!-)$/u.test(draft.categoryId)) throw new Error(t("agentSkills.categoryIdMustBe"))
   const order = Number(draft.order)
-  if (!Number.isSafeInteger(order)) throw new Error(chinese ? "分类排序必须为安全整数。" : "Category order must be a safe integer.")
-  if (!draft.name.trim() || !draft.englishName.trim() || !draft.chineseName.trim()) throw new Error(chinese ? "默认名称、English name 与中文名称均为必填项。" : "Default name, English name, and Chinese name are required.")
-  if (!draft.emoji.trim() || !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/iu.test(draft.color.trim())) throw new Error(chinese ? "分类图标不能为空，颜色必须为十六进制 RGB 或 RGBA。" : "Emoji is required and color must be hexadecimal RGB or RGBA.")
+  if (!Number.isSafeInteger(order)) throw new Error(t("agentSkills.categoryOrderMustBe"))
+  if (!draft.name.trim()) throw new Error(t("agentSkills.categoryNameRequired"))
+  if (!draft.emoji.trim() || !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/iu.test(draft.color.trim())) throw new Error(t("agentSkills.emojiIsRequiredAnd"))
   return {
     categoryId: draft.categoryId,
     name: draft.name.trim(),
@@ -546,41 +516,7 @@ function createCategorySaveRequest(draft: AgentSkillCategoryDraft, chinese: bool
     emoji: draft.emoji.trim(),
     color: draft.color.trim(),
     order,
-    locales: {
-      "en-US": { name: draft.englishName.trim(), description: optionalText(draft.englishDescription) },
-      "zh-CN": { name: draft.chineseName.trim(), description: optionalText(draft.chineseDescription) },
-    },
   }
-}
-
-// colorInputValue converts a stored color into a native color-input value.
-// colorInputValue 将已存储颜色转换为原生颜色输入值。
-function colorInputValue(value: string): string {
-  const renderedColor = colorSwatchValue(value).trim()
-  const longHex = renderedColor.match(/^#([0-9a-f]{6})$/iu)
-  if (longHex) return `#${longHex[1].toLowerCase()}`
-  const shortHex = renderedColor.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/iu)
-  if (shortHex) return `#${shortHex[1]}${shortHex[1]}${shortHex[2]}${shortHex[2]}${shortHex[3]}${shortHex[3]}`.toLowerCase()
-  return "#6b7280"
-}
-
-// colorSwatchValue resolves supported agent color tokens into CSS colors.
-// colorSwatchValue 将支持的智能体颜色标识解析为 CSS 颜色。
-function colorSwatchValue(value: string): string {
-  const trimmed = value.trim()
-  if (trimmed.startsWith("#") || trimmed.startsWith("rgb") || trimmed.startsWith("hsl")) return trimmed
-  const palette: Record<string, string> = {
-    blue: "#3b82f6",
-    cyan: "#06b6d4",
-    gray: "#6b7280",
-    green: "#22c55e",
-    orange: "#f97316",
-    pink: "#ec4899",
-    purple: "#8b5cf6",
-    red: "#ef4444",
-    yellow: "#eab308",
-  }
-  return palette[trimmed.toLowerCase()] ?? "#6b7280"
 }
 
 // localizedRecordDisplayName resolves an Agent Skill title for the exact interface locale.
@@ -588,6 +524,13 @@ function colorSwatchValue(value: string): string {
 function localizedRecordDisplayName(record: AgentSkillRecordSummary, locale: string): string {
   const localized = record.locales[locale] ?? Object.entries(record.locales).find(([candidate]) => candidate.split("-")[0] === locale.split("-")[0])?.[1]
   return localized?.displayName?.trim() || record.displayName || record.name
+}
+
+// localizedRecordShortDescription resolves an Agent Skill description for the exact interface locale.
+// localizedRecordShortDescription 为精确界面语言解析 Agent Skill 说明。
+function localizedRecordShortDescription(record: AgentSkillRecordSummary, locale: string): string {
+  const localized = record.locales[locale] ?? Object.entries(record.locales).find(([candidate]) => candidate.split("-")[0] === locale.split("-")[0])?.[1]
+  return localized?.shortDescription?.trim() || record.description
 }
 
 // localizedCategoryName resolves exact then language-prefix category metadata.

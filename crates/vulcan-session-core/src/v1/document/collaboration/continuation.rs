@@ -94,8 +94,32 @@ impl SessionDocument {
                 });
             }
         }
+        // A result already consumed in an earlier business turn must not become pending again.
+        // 已在此前业务回合消费的结果不得再次变成待处理。
+        let last_result_request = self
+            .events
+            .iter()
+            .filter_map(|event| match &event.event {
+                EventBody::ApiStarted(started)
+                    if !matches!(
+                        started.purpose,
+                        ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution
+                    ) =>
+                {
+                    Some(event.seq)
+                }
+                _ => None,
+            })
+            .max();
         for (delivery_id, acceptance) in &state.received_task_results {
-            if acceptance.result.acceptance.message.source.turn_id != Some(turn.turn_id) {
+            if acceptance
+                .result
+                .acceptance
+                .message
+                .source
+                .turn_id
+                .is_none_or(|source_turn| source_turn > turn.turn_id)
+            {
                 continue;
             }
             let pending = match state.task_result_projections.get(delivery_id) {
@@ -103,7 +127,7 @@ impl SessionDocument {
                 Some(projection) => projection
                     .inputs
                     .iter()
-                    .any(|input| last_business_start.is_none_or(|seq| seq < input.input_seq)),
+                    .any(|input| last_result_request.is_none_or(|seq| seq < input.input_seq)),
             };
             if pending {
                 candidates.push(CollaborationContinuation {

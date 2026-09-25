@@ -25,6 +25,15 @@ function collaborationBlock(
 }
 
 describe("native collaboration orchestration presentation", () => {
+  // Unified waiting exposes meaningful inbox outcomes without raw protocol details.
+  // 统一等待展示有意义的收件结果，不显示原始协议详情。
+  it.each(["messages", "timeout", "no_pending_work", "needs_reply", "check_failed"])("recognizes unified inbox outcome %s", (status) => {
+    const presentation = resolveSubagentOrchestrationPresentation(collaborationBlock("wait_agents_result", { timeout_ms: 1000 },
+      JSON.stringify({ status, reports: [], context_messages_pending: status === "messages" })), "completed");
+    expect(presentation).toMatchObject({ operation: "wait", timedOut: status === "timeout",
+      noActiveAgents: status === "no_pending_work", terminalEventReceived: status === "messages", result: null,
+      waitNeedsReply: status === "needs_reply", waitCheckFailed: status === "check_failed" });
+  });
   it("distinguishes a question and preserves only exact arguments", () => {
     const presentation = resolveSubagentOrchestrationPresentation(
       collaborationBlock("ask_question", {

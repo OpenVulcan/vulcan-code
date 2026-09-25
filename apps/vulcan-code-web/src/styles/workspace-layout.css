@@ -78,7 +78,7 @@
 .workspace-statusbar-settings, .workspace-statusbar-trailing { display: flex; align-items: center; min-width: 0; }
 .workspace-statusbar-trailing { gap: 12px; }
 .workspace-statusbar-version { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.workspace-settings-button { height: 26px; gap: 5px; padding: 0 6px; font-size: 12px; color: var(--muted-foreground); }
+.workspace-settings-button { height: 26px; gap: 5px; padding: 0 6px; font-size: var(--vcn-font-size-sm); color: var(--muted-foreground); }
 .workspace-settings-button:hover, .workspace-settings-button[data-state="open"] { color: var(--foreground); }
 
 .workspace-resizable-body-shell .workspace-main-shell > :not(.conversation-navigation-progress) {

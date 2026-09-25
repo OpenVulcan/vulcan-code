@@ -7,10 +7,11 @@ import type { LoadedPluginUiModule } from "@/service/plugin-ui-module-runtime";
 import { loadPersistentPluginUiModule, invalidatePersistentPluginUiModules } from "@/service/plugin-ui-module-runtime";
 import { DynamicPluginMountPanel } from "./dynamic-plugin-mount-panel";
 
-// translate remains stable so renderer updates do not create an unrelated module reload.
-// translate 保持稳定，避免渲染器更新触发无关模块重载。
-const translate = (key: string) => key;
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: translate }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
 vi.mock("@/service/plugin-ui-module-runtime", () => ({ loadPersistentPluginUiModule: vi.fn(), invalidatePersistentPluginUiModules: vi.fn() }));
 // mount is the exact contribution identity used by this isolated loader fixture.
 // mount 是隔离加载夹具使用的精确贡献身份。
@@ -28,14 +29,20 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 // id selects the plugin; returns a loader result without executing an external module.
 // id 选择插件；返回加载结果且不执行外部模块。
 function loaded(id: string): LoadedPluginUiModule {
-  return { source: { pluginId: id, mountId: "control", exportName: "create", messagesByLocale: {} } as LoadedPluginUiModule["source"],
+  return { source: { pluginId: id, mountId: "control", exportName: "create", source: "", messagesByLocale: {}, runtimeIdentity: "fixture:1", actionPolicies: [] },
     namespace: { create: () => () => <div>{id} loaded</div> } };
+}
+
+// plugin supplies the authenticated extension incarnation required by the real mount boundary.
+// plugin 提供真实挂载边界要求的已认证扩展运行实例。
+function plugin(id: string): PluginSummary {
+  return { id, extension: { runtimeIdentity: "fixture:1", uiMounts: [mount] } } as PluginSummary;
 }
 
 it("clears a failed factory cache before explicitly retrying the authenticated module", async () => {
   const broken = loaded("fixture"); broken.namespace.create = () => { throw new Error("factory failed"); };
   vi.mocked(loadPersistentPluginUiModule).mockResolvedValueOnce(broken).mockResolvedValueOnce(loaded("fixture"));
-  await act(async () => root.render(<DynamicPluginMountPanel plugin={{ id: "fixture" } as PluginSummary} mount={mount} />));
+  await act(async () => root.render(<DynamicPluginMountPanel plugin={plugin("fixture")} mount={mount} />));
   await vi.waitFor(async () => { await act(async () => undefined); expect(host.querySelector('[role="alert"]')?.textContent).toContain("factory failed"); });
   await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Retry")!.click());
   expect(invalidatePersistentPluginUiModules).toHaveBeenCalledWith("fixture");
@@ -47,8 +54,8 @@ it("ignores an old plugin module that resolves after navigation", async () => {
   let complete!: (value: LoadedPluginUiModule) => void;
   vi.mocked(loadPersistentPluginUiModule).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }))
     .mockResolvedValueOnce(loaded("new"));
-  await act(async () => root.render(<DynamicPluginMountPanel plugin={{ id: "old" } as PluginSummary} mount={mount} />));
-  await act(async () => root.render(<DynamicPluginMountPanel plugin={{ id: "new" } as PluginSummary} mount={mount} />));
+  await act(async () => root.render(<DynamicPluginMountPanel plugin={plugin("old")} mount={mount} />));
+  await act(async () => root.render(<DynamicPluginMountPanel plugin={plugin("new")} mount={mount} />));
   await act(async () => complete(loaded("old")));
   await vi.waitFor(async () => { await act(async () => undefined); expect(host.textContent).toBe("new loaded"); });
 });
@@ -64,8 +71,8 @@ it("rebuilds the plugin UI with the host-selected conversation when the route ch
     () => <div>{sdk.context.conversationId}:{sdk.context.clientHost}:{typeof sdk.components.CoreBrowserArea}</div>
   );
   vi.mocked(loadPersistentPluginUiModule).mockResolvedValue(module);
-  await act(async () => root.render(<DynamicPluginMountPanel plugin={{ id: "fixture" } as PluginSummary} mount={mount} conversationId="conversation-a" />));
+  await act(async () => root.render(<DynamicPluginMountPanel plugin={plugin("fixture")} mount={mount} conversationId="conversation-a" />));
   await vi.waitFor(async () => { await act(async () => undefined); expect(host.textContent).toBe("conversation-a:browser:function"); });
-  await act(async () => root.render(<DynamicPluginMountPanel plugin={{ id: "fixture" } as PluginSummary} mount={mount} conversationId="conversation-b" />));
+  await act(async () => root.render(<DynamicPluginMountPanel plugin={plugin("fixture")} mount={mount} conversationId="conversation-b" />));
   await vi.waitFor(async () => { await act(async () => undefined); expect(host.textContent).toBe("conversation-b:browser:function"); });
 });

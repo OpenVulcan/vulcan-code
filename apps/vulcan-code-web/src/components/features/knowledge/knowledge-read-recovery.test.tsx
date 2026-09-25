@@ -3,7 +3,7 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeIndexIntegritySummary, KnowledgeLibrarySummary } from "@/types";
-import { KnowledgeBaseArea } from "./KnowledgeBaseArea";
+import { KnowledgeBaseArea } from "./knowledge-base-area";
 
 // reads isolates live storage while preserving the production component and event handlers.
 // reads 隔离真实存储，同时保留生产组件与事件处理函数。

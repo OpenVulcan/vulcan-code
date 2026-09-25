@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 mod fingerprints;
+mod metadata_migration;
 mod user_prompt;
 
 use vulcan_session_core::v1::config::{MetadataDocument, PendingRequestConfig};
@@ -2090,15 +2091,15 @@ fn context_candidate_rejects_unpublished_compaction_tail() {
     drop(root);
 }
 
-/// A non-1 schema_version is rejected as an unsupported development format.
-/// 非 1 的 schema_version 被拒绝为不受支持的开发格式。
+/// A future schema_version is rejected without attempting a downgrade.
+/// 拒绝未来模式版本，绝不尝试降级。
 #[test]
 fn wrong_schema_version_is_rejected() {
     let (root, layout) = fresh_layout("schema");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
     let mut metadata = read_metadata(&layout.metadata_path()).unwrap();
-    metadata.schema_version = 2;
+    metadata.schema_version = vulcan_session_core::v1::config::METADATA_SCHEMA_VERSION + 1;
     write_json_document(&layout.metadata_path(), &metadata, "metadata").unwrap();
     let result = load_session(&layout);
     assert!(matches!(
@@ -2453,7 +2454,10 @@ fn initial_metadata_golden_is_stable() {
     .unwrap();
     let text = std::fs::read_to_string(layout.metadata_path()).unwrap();
     assert!(text.contains(r#""contract":"vulcan.session.v1""#));
-    assert!(text.contains(r#""schema_version":1"#));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["schema_version"],
+        vulcan_session_core::v1::config::METADATA_SCHEMA_VERSION
+    );
     assert!(text.contains(r#""segment_generation":1"#));
     assert!(text.contains(r#""file_name":"s0000001-a.jsonl""#));
     assert!(text.contains(r#""event_count":0"#));

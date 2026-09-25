@@ -1,16 +1,16 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { WebuiApp } from "../../src/app/WebuiApp";
+import { WebuiApp } from "../../src/app/webui-app";
 import { calls } from "./runtime";
 
 // failure injects one declared feature render error without replacing the real workspace shell.
 // failure 注入一处明确的功能渲染错误，不替换真实工作台外壳。
 const failure = vi.hoisted(() => ({ agents: false }));
-vi.mock("@/components/features/agents/AgentsArea", async (importOriginal) => {
+vi.mock("@/components/features/agents/agents-area", async (importOriginal) => {
   // original retains all real agent controls outside this specific failure branch.
   // original 在此特定故障分支之外保留全部真实智能体控件。
-  const original = await importOriginal<typeof import("../../src/components/features/agents/AgentsArea")>();
+  const original = await importOriginal<typeof import("../../src/components/features/agents/agents-area")>();
   return { ...original, AgentCategoryMenu: (props: React.ComponentProps<typeof original.AgentCategoryMenu>) => {
     if (failure.agents) throw new Error("Synthetic embedded feature failure");
     return <original.AgentCategoryMenu {...props} />;

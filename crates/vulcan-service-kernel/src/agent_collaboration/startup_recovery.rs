@@ -2,7 +2,6 @@
 //! 基于索引的启动修复，不水合无关会话历史。
 
 use super::*;
-mod main_execution;
 pub(super) mod native_execution;
 pub(in crate::agent_collaboration) mod native_results;
 pub(super) mod tree;
@@ -231,18 +230,10 @@ async fn recover_indexed_collaboration_owned(
                     failures.push(format!("session {session_id}: {error}"));
                 }
             }
-            // Child recovery may have published results after the root's first pass.
-            // 子恢复可能在根首次扫描之后发布结果。
-            // Re-read the original indexed root after all descendants; closed unrelated histories remain cold.
-            // 在全部后代之后重读原索引根；无关已闭合历史保持冷态。
-            if nodes.first().is_some_and(|root| root.snapshot.open_turn_start_seq.is_some()) {
-                let handle = tree::load_selected(state, registry, &nodes, 0).await?;
-                if let Err(error) = Box::pin(main_execution::recover(
-                    app, state, &controller, registry, handle,
-                )).await {
-                    failures.push(format!("session {session_id} main business: {error}"));
-                }
-            }
+            // An open historical turn is not execution consent. Only the source-specific
+            // collaboration work above may wake execution; ordinary business waits for user action.
+            // 历史开放回合不构成执行许可。只有上述具有明确来源的协作待办可以唤醒执行；
+            // 普通业务必须等待用户操作。
             Ok::<(), String>(())
         }
         .await;

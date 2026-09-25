@@ -1,4 +1,4 @@
-import type { ShellClient } from "../../src/shell/protocol";
+import type { ShellClient } from "../../src/host-shell/protocol";
 
 // rejected forbids native effects while keeping every real shell control reachable for failure inspection.
 // rejected 禁止原生副作用，同时保持每个真实壳控件可进入失败检查。

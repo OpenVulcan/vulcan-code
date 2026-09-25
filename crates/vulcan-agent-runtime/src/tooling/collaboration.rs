@@ -104,6 +104,20 @@ pub const SEND_NOTIFICATION_TOOL_ID: &str = "send_notification";
 /// 等待现有会话工具的稳定公开标识。
 pub const WAIT_SESSION_TOOL_ID: &str = "wait_session";
 
+/// Single model-facing wait entry for the current agent's collaboration inbox.
+/// 当前代理协作收件箱唯一面向模型的等待入口。
+pub const WAIT_AGENTS_RESULT_TOOL_ID: &str = vulcan_subagent_core::WAIT_AGENTS_RESULT_TOOL;
+
+/// Wait budget without model-managed target selection or revision cursors.
+/// 等待预算，不要求模型管理目标选择或修订游标。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WaitAgentsResultArgs {
+    /// Maximum blocking time; no pending work returns immediately.
+    /// 最大阻塞时间；没有待处理工作时立即返回。
+    pub timeout_ms: u64,
+}
+
 /// Delivery mode for a message sent to an existing session.
 /// 发送到现有会话的消息投递模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,6 +279,10 @@ pub struct WaitSessionArgs {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "command", content = "args")]
 pub enum AgentCollaborationCommand {
+    /// Receive any actionable collaboration message for the current agent.
+    /// 接收当前代理任意可处理的协作消息。
+    #[serde(rename = "wait_agents_result")]
+    WaitAgentsResult(WaitAgentsResultArgs),
     /// Ask an explicitly selected session.
     /// 向明确选择的会话提问。
     #[serde(rename = "ask_question")]
@@ -422,11 +440,11 @@ pub fn build_agent_collaboration_tool_candidates(
         ),
         build_command_candidate(
             runtime.clone(),
-            WAIT_QUESTION_TOOL_ID,
-            "Wait for an authorized agent question revision. Timeout ends this wait only and does not cancel the question.",
-            wait_question_args_schema(),
+            WAIT_AGENTS_RESULT_TOOL_ID,
+            "Wait for any agent question, answer, notification or task result addressed to this session. Messages arrive through the host-tagged context after this tool returns; do not read another session to reconstruct them. No target or revision cursor is required. Every return includes remaining_work, pending_questions and check_errors: messages means partial inbox delivery, not that all work completed. On needs_reply, answer the incoming question with reply_question (or explicitly unable) before waiting again; this prevents circular waits. On check_failed, the target's state is unknown, not abandoned: report or investigate the error instead of tight polling. No pending work returns immediately; stopped or lost executions are reported explicitly. Timeout ends only this wait and never cancels work.",
+            wait_agents_result_args_schema(),
             VulcanPlanToolPolicy::Visible,
-            parse_wait_question,
+            parse_wait_agents_result,
         ),
         build_command_candidate(
             runtime.clone(),
@@ -468,14 +486,6 @@ pub fn build_agent_collaboration_tool_candidates(
             VulcanPlanToolPolicy::Visible,
             parse_send_notification,
         ),
-        build_command_candidate(
-            runtime,
-            WAIT_SESSION_TOOL_ID,
-            "Wait for a published revision from one authorized agent session. A changed revision is not task completion; use read_session with your event cursor to inspect new facts. An incoming question returns waited_session_id and the original after_revision so you can resume waiting. Timeout ends this wait only and does not cancel the session task.",
-            wait_session_args_schema(),
-            VulcanPlanToolPolicy::Visible,
-            parse_wait_session,
-        ),
     ]
 }
 
@@ -486,6 +496,9 @@ impl AgentCollaborationCommand {
     /// 校验此命令的身份、文本、游标、数量与超时边界。
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::WaitAgentsResult(args) => {
+                validate_timeout(args.timeout_ms, WAIT_AGENTS_RESULT_TOOL_ID)
+            }
             Self::AskQuestion(args) => {
                 validate_session_id(&args.target_session_id, ASK_QUESTION_TOOL_ID)?;
                 validate_text(&args.question, "question", ASK_QUESTION_TOOL_ID)
@@ -604,13 +617,17 @@ fn parse_reply_question(
     parse_command(arguments, tool_id, AgentCollaborationCommand::ReplyQuestion)
 }
 
-/// Parses wait_question arguments.
-/// 解析 wait_question 参数。
-fn parse_wait_question(
+/// Parses the unified inbox wait without a target or revision selector.
+/// 解析统一收件等待，不接收目标或修订选择器。
+fn parse_wait_agents_result(
     arguments: Value,
     tool_id: &'static str,
 ) -> Result<AgentCollaborationCommand, String> {
-    parse_command(arguments, tool_id, AgentCollaborationCommand::WaitQuestion)
+    parse_command(
+        arguments,
+        tool_id,
+        AgentCollaborationCommand::WaitAgentsResult,
+    )
 }
 
 /// Parses cancel_question arguments.
@@ -668,15 +685,6 @@ fn parse_send_notification(
         tool_id,
         AgentCollaborationCommand::SendNotification,
     )
-}
-
-/// Parses wait_session arguments.
-/// 解析 wait_session 参数。
-fn parse_wait_session(
-    arguments: Value,
-    tool_id: &'static str,
-) -> Result<AgentCollaborationCommand, String> {
-    parse_command(arguments, tool_id, AgentCollaborationCommand::WaitSession)
 }
 
 /// Validates a non-empty exact identifier.
@@ -785,17 +793,15 @@ fn reply_question_args_schema() -> Value {
     })
 }
 
-/// Builds the wait_question JSON Schema.
-/// 构建 wait_question JSON Schema。
-fn wait_question_args_schema() -> Value {
+/// Builds the single inbox wait schema; pending work is selected by the host.
+/// 构建唯一收件等待结构；待处理工作由宿主选择。
+fn wait_agents_result_args_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "question_id": { "type": "string", "minLength": 1 },
-            "after_revision": { "type": "integer", "minimum": 0 },
             "timeout_ms": { "type": "integer", "minimum": MIN_AGENT_COLLABORATION_TIMEOUT_MS, "maximum": MAX_AGENT_COLLABORATION_TIMEOUT_MS }
         },
-        "required": ["question_id", "timeout_ms"],
+        "required": ["timeout_ms"],
         "additionalProperties": false
     })
 }
@@ -868,21 +874,6 @@ fn send_notification_args_schema() -> Value {
             "message": { "type": "string", "minLength": 1, "maxLength": MAX_AGENT_COLLABORATION_TEXT_CHARS }
         },
         "required": ["target_session_id", "message"],
-        "additionalProperties": false
-    })
-}
-
-/// Builds the wait_session JSON Schema.
-/// 构建 wait_session JSON Schema。
-fn wait_session_args_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "session_id": { "type": "string", "minLength": 1 },
-            "after_revision": { "type": "integer", "minimum": 0 },
-            "timeout_ms": { "type": "integer", "minimum": MIN_AGENT_COLLABORATION_TIMEOUT_MS, "maximum": MAX_AGENT_COLLABORATION_TIMEOUT_MS }
-        },
-        "required": ["session_id", "timeout_ms"],
         "additionalProperties": false
     })
 }
@@ -1057,7 +1048,15 @@ mod tests {
     fn collaboration_plan_visibility_preserves_question_surface() {
         let candidates =
             build_agent_collaboration_tool_candidates(Arc::new(FakeCollaborationRuntime));
-        assert_eq!(candidates.len(), 10);
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.descriptor.id == WAIT_AGENTS_RESULT_TOOL_ID)
+        );
+        assert!(!candidates.iter().any(|candidate| matches!(
+            candidate.descriptor.id.as_str(),
+            "wait_agent" | "wait_question" | "wait_session"
+        )));
         for candidate in candidates {
             if candidate.descriptor.id == SEND_SESSION_MESSAGE_TOOL_ID {
                 assert!(matches!(

@@ -12,6 +12,7 @@ mod api;
 mod business_api_boundaries;
 mod compaction;
 mod hydration;
+mod inactive_admission;
 mod input;
 mod invariants;
 mod modes;

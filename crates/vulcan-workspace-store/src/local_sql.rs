@@ -351,95 +351,132 @@ pub async fn query_json_async(
         .map_err(render_boundary_failure)
 }
 
-/// Failure of one time- and size-bounded JSON query.
-/// 一次受时长与大小约束的 JSON 查询失败。
-#[derive(Debug)]
-pub enum BoundedQueryError {
-    /// The deadline passed; a statement that had already started was interrupted.
-    /// 截止时间已过；已开始执行的语句已被中断。
-    TimedOut,
-    /// The query itself, a crossed result limit, or the boundary failed.
-    /// 查询本身、被越过的结果上限或边界失败。
-    Failed(String),
-}
-
-/// Interrupt coordination between a bounded query's caller and its blocking task.
-/// 有界查询调用方与其阻塞任务之间的中断协调状态。
-enum BoundedQueryInterrupt {
-    /// The blocking task has not opened its connection yet.
-    /// 阻塞任务尚未打开连接。
-    Pending,
-    /// The statement may be running and can be interrupted through this handle.
-    /// 语句可能正在运行，可通过该句柄中断。
-    Running(rusqlite::InterruptHandle),
-    /// The caller gave up; a task that has not started must not start the statement.
-    /// 调用方已放弃；尚未开始的任务不得再启动语句。
-    Cancelled,
-}
-
-/// Runs one JSON query on the blocking boundary with result limits and a wall-clock timeout.
-/// 在阻塞边界上运行一次带结果上限与墙钟超时的 JSON 查询。
-///
-/// Unlike wrapping [`query_json_async`] in `tokio::time::timeout`, a timeout here interrupts the
-/// running statement, so the blocking task stops promptly and releases the database gate instead of
-/// holding it until the abandoned statement finishes.
-/// 与用 `tokio::time::timeout` 包裹 [`query_json_async`] 不同，此处超时会中断正在运行的语句，使阻塞任务
-/// 及时停止并释放数据库门，而不是在被放弃的语句完成前一直持有它。
-///
-/// # Parameters / 参数
-/// `limits` bounds rows and encoded bytes while reading; `timeout` covers gate waiting and execution.
-/// `limits` 在读取期间约束行数与编码字节；`timeout` 覆盖等待数据库门与执行的全过程。
-///
-/// # Returns / 返回值
-/// Returns the encoded rows, [`BoundedQueryError::TimedOut`], or the rendered failure.
-/// 返回编码后的行、[`BoundedQueryError::TimedOut`] 或渲染后的失败。
-pub async fn query_json_bounded_async(
+/// Queries within one caller deadline, interrupting SQLite and awaiting real connection cleanup.
+/// 在单个调用方截止时间内查询，中断 SQLite 并等待真实连接清理。
+/// `deadline` bounds queueing, busy waits and SQL execution; returns rows or the actual error.
+/// `deadline` 限制排队、繁忙等待和 SQL 执行；返回记录或实际错误。
+pub async fn query_json_until_async(
     runtime: &Arc<LocalDatabaseRuntime>,
     target: impl Into<OwnedDatabaseTarget>,
-    sql: impl Into<String>,
+    sql: String,
+    params: Vec<SqliteValue>,
+    deadline: std::time::Instant,
+) -> Result<QueryJsonResult, String> {
+    query_json_bounded_until_async(
+        runtime,
+        target,
+        sql,
+        params,
+        QueryJsonLimits::UNBOUNDED,
+        deadline,
+    )
+    .await
+}
+
+/// Queries within one caller deadline while enforcing result limits during reading.
+/// 在单个调用方截止时间内查询，并在读取期间强制执行结果上限。
+/// `limits` rejects an oversized result after at most one extra row instead of materializing it first.
+/// `limits` 最多多读一行即拒绝超限结果，而不是先完整物化。
+pub async fn query_json_bounded_until_async(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    sql: String,
     params: Vec<SqliteValue>,
     limits: QueryJsonLimits,
-    timeout: std::time::Duration,
-) -> Result<QueryJsonResult, BoundedQueryError> {
-    let target = target.into();
-    let key = target
-        .key(runtime.as_ref())
-        .map_err(BoundedQueryError::Failed)?;
-    let boundary = runtime.boundary().clone();
-    let shared = Arc::clone(runtime);
-    let sql = sql.into();
-    let interrupt = Arc::new(std::sync::Mutex::new(BoundedQueryInterrupt::Pending));
-    let task_interrupt = Arc::clone(&interrupt);
-    let operation = boundary.run(key, move || {
-        let mut connection = connect(shared.as_ref(), target.as_target())?;
-        {
-            let mut state = task_interrupt
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if matches!(*state, BoundedQueryInterrupt::Cancelled) {
-                return Err(String::from("query was cancelled before it started"));
-            }
-            *state = BoundedQueryInterrupt::Running(connection.get_interrupt_handle());
-        }
-        sql_exec::query_json_bounded(&mut connection, &sql, &params, limits).map_err(render)
-    });
-    match tokio::time::timeout(timeout, operation).await {
-        Ok(result) => {
-            result.map_err(|error| BoundedQueryError::Failed(render_boundary_failure(error)))
-        }
-        Err(_) => {
-            let previous = std::mem::replace(
-                &mut *interrupt
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                BoundedQueryInterrupt::Cancelled,
+    deadline: std::time::Instant,
+) -> Result<QueryJsonResult, String> {
+    with_connection_until_async(runtime, target, Some(deadline), move |connection| {
+        let result =
+            sql_exec::query_json_bounded(connection, &sql, &params, limits).map_err(render);
+        if std::time::Instant::now() >= deadline {
+            return Err(
+                "SQLite query deadline exceeded; execution and connection cleanup completed."
+                    .into(),
             );
-            if let BoundedQueryInterrupt::Running(handle) = previous {
-                handle.interrupt();
-            }
-            Err(BoundedQueryError::TimedOut)
         }
+        result
+    })
+    .await
+}
+
+/// Runs one operation within its original deadline and owns interruption through connection cleanup.
+/// 在原始截止时间内执行单次操作，并持有中断与连接清理过程。
+/// The optional deadline applies to queues and SQLite; committed writes retain their real result.
+/// 可选截止时间作用于排队与 SQLite；已提交写入保留实际结果。
+pub async fn with_connection_until_async<T: Send + 'static>(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    deadline: Option<std::time::Instant>,
+    body: impl FnOnce(&mut rusqlite::Connection) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let target = target.into();
+    let key = target.key(runtime.as_ref())?;
+    let shared = Arc::clone(runtime);
+    let scheduler = tokio::runtime::Handle::current();
+    runtime
+        .boundary()
+        .run_until(key, deadline, move || {
+            with_connection(shared.as_ref(), target.as_target(), |connection| {
+                let Some(deadline) = deadline else {
+                    return body(connection);
+                };
+                let remaining = deadline
+                    .checked_duration_since(std::time::Instant::now())
+                    .ok_or_else(|| "SQLite query deadline expired before execution.".to_owned())?;
+                connection.busy_timeout(remaining).map_err(render)?;
+                let interrupt = connection.get_interrupt_handle();
+                // Interrupt is connection-specific and never targets a subsequent operation's connection.
+                // 中断专属于当前连接，绝不指向后续操作的连接。
+                let _timer = SqlInterruptTimer(scheduler.spawn(async move {
+                    tokio::time::sleep_until(deadline.into()).await;
+                    interrupt.interrupt();
+                }));
+                body(connection)
+            })
+        })
+        .await
+        .map_err(render_boundary_failure)
+}
+
+/// Cancels the connection-specific interrupt task on both ordinary return and panic.
+/// 正常返回及异常展开时都取消当前连接专属的中断任务。
+struct SqlInterruptTimer(tokio::task::JoinHandle<()>);
+impl Drop for SqlInterruptTimer {
+    /// Stops only the timer; the database operation retains ownership of its connection.
+    /// 仅停止计时器；数据库操作仍拥有其连接。
+    fn drop(&mut self) {
+        self.0.abort();
     }
+}
+
+/// Executes one script with a caller-owned deadline and returns the actual commit outcome.
+/// 使用调用方截止时间执行脚本，并返回实际提交结果。
+pub async fn execute_script_until_async(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    sql: String,
+    params: Vec<SqliteValue>,
+    deadline: Option<std::time::Instant>,
+) -> Result<ExecuteScriptResult, String> {
+    with_connection_until_async(runtime, target, deadline, move |connection| {
+        sql_exec::execute_script(connection, &sql, &params).map_err(render)
+    })
+    .await
+}
+
+/// Executes an atomic parameter batch within the remaining caller budget.
+/// 在调用方剩余预算内执行原子参数批次。
+pub async fn execute_batch_until_async(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    sql: String,
+    params: Vec<Vec<SqliteValue>>,
+    deadline: Option<std::time::Instant>,
+) -> Result<ExecuteBatchResult, String> {
+    with_connection_until_async(runtime, target, deadline, move |connection| {
+        sql_exec::execute_batch(connection, &sql, &params).map_err(render)
+    })
+    .await
 }
 
 /// Spools one cursor-style query stream on the blocking boundary, off the Tokio core threads.
@@ -1259,6 +1296,25 @@ fn lance_failure_is_unavailability(
 
 #[cfg(test)]
 mod tests {
+    /// Deadline interruption completes before a subsequent query reuses the database boundary.
+    /// 截止中断完成后，后续查询才复用数据库边界。
+    #[test]
+    fn query_deadline_interrupts_sql_and_releases_the_actual_connection() {
+        let (_directory, handle) = fixture();
+        let scheduler = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        scheduler.block_on(async {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(40);
+            let error = super::query_json_until_async(&handle.local, LogicalDatabase::SystemStatistics,
+                "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) FROM n".into(), vec![], deadline).await.unwrap_err();
+            assert!(error.contains("deadline") || error.contains("interrupt"), "unexpected query failure: {error}");
+            let rows = super::query_json_until_async(&handle.local, LogicalDatabase::SystemStatistics,
+                "SELECT 7 AS value".into(), vec![], std::time::Instant::now() + std::time::Duration::from_secs(2)).await.unwrap();
+            assert_eq!(rows.row_count, 1);
+        });
+    }
     use super::*;
     use std::collections::HashMap;
 
@@ -1341,60 +1397,25 @@ mod tests {
         (directory, handle)
     }
 
-    /// Verifies a timed-out bounded query interrupts its statement and releases the database gate.
-    /// 验证超时的有界查询会中断其语句并释放数据库门。
-    #[tokio::test]
-    async fn bounded_query_timeout_interrupts_statement_and_releases_gate() {
-        let (_directory, handle) = fixture();
-        // The recursive CTE never terminates on its own, so only an interrupt can end it.
-        // 该递归 CTE 自身永不结束，因此只有中断能终止它。
-        let endless = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) \
-                       SELECT count(*) AS total FROM c";
-        let outcome = query_json_bounded_async(
-            &handle.local,
-            LogicalDatabase::SystemStatistics,
-            endless,
-            Vec::new(),
-            QueryJsonLimits::UNBOUNDED,
-            std::time::Duration::from_millis(200),
-        )
-        .await;
-        assert!(matches!(outcome, Err(BoundedQueryError::TimedOut)));
-
-        let follow_up = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            query_json_async(
-                &handle.local,
-                LogicalDatabase::SystemStatistics,
-                "SELECT 1 AS one",
-                Vec::new(),
-            ),
-        )
-        .await
-        .expect("the interrupted statement must release the database gate")
-        .expect("follow-up query");
-        assert_eq!(follow_up.row_count, 1);
-    }
-
     /// Verifies bounded queries report crossed row limits as failures.
     /// 验证有界查询将越过的行数上限报告为失败。
     #[tokio::test]
     async fn bounded_query_rejects_rows_past_the_limit() {
         let (_directory, handle) = fixture();
-        let outcome = query_json_bounded_async(
+        let outcome = query_json_bounded_until_async(
             &handle.local,
             LogicalDatabase::SystemStatistics,
-            "SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3",
+            "SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3".into(),
             Vec::new(),
             QueryJsonLimits {
                 max_rows: 2,
                 max_bytes: usize::MAX,
             },
-            std::time::Duration::from_secs(10),
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
         )
         .await;
         match outcome {
-            Err(BoundedQueryError::Failed(message)) => {
+            Err(message) => {
                 assert!(message.contains("more than 2 rows"), "{message}")
             }
             other => panic!("expected a row-limit failure, got {other:?}"),

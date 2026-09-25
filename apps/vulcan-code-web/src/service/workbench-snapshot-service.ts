@@ -14,7 +14,10 @@ import type {
   WorkspaceDiffSearchRequest,
   WorkspaceDiffSearchResponse,
   WorkspaceDiffSnapshotResponse,
+  WorkspaceGitHistoryPage,
+  WorkspaceGitLocalBranchList,
   WorkspaceGitRepositoryCatalog,
+  WorkspaceGitSwitchBranchResult,
 } from "@/diff/types";
 import {
   browserFallbackSnapshot,
@@ -121,6 +124,66 @@ export async function setWorkspaceGitMonitoring(
     projectId,
     conversationId,
     request: { repositoryKey, enabled },
+  });
+}
+
+// loadWorkspaceGitBranches lists the local branches of one repository.
+// loadWorkspaceGitBranches 列出单个仓库的本地分支。
+export async function loadWorkspaceGitBranches(
+  workspacePath: string,
+  projectId: string | null,
+  conversationId: string | null,
+  repositoryKey: string | null,
+): Promise<WorkspaceGitLocalBranchList> {
+  if (!hasServiceRuntime()) {
+    return { currentBranch: null, branches: [] };
+  }
+  return serviceClient.request<WorkspaceGitLocalBranchList>("workspace.git.branches", {
+    workspacePath,
+    projectId,
+    conversationId,
+    request: { repositoryKey },
+  });
+}
+
+// switchWorkspaceGitBranch checks out a local branch, creating it from HEAD when requested.
+// switchWorkspaceGitBranch 检出本地分支，按请求基于 HEAD 新建。
+export async function switchWorkspaceGitBranch(
+  workspacePath: string,
+  projectId: string | null,
+  conversationId: string | null,
+  repositoryKey: string | null,
+  branchName: string,
+  create: boolean,
+): Promise<WorkspaceGitSwitchBranchResult> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Browser preview mode cannot switch Git branches.");
+  }
+  return serviceClient.request<WorkspaceGitSwitchBranchResult>("workspace.git.switchBranch", {
+    workspacePath,
+    projectId,
+    conversationId,
+    request: { repositoryKey, branchName, create },
+  });
+}
+
+// loadWorkspaceGitHistory loads the backend-sized history page that follows `skip` commits.
+// loadWorkspaceGitHistory 加载跳过 `skip` 个提交之后、由后端决定大小的历史页。
+export async function loadWorkspaceGitHistory(
+  workspacePath: string,
+  projectId: string | null,
+  conversationId: string | null,
+  repositoryKey: string | null,
+  skip: number,
+): Promise<WorkspaceGitHistoryPage> {
+  if (!hasServiceRuntime()) {
+    return { commits: [], hasMore: false };
+  }
+  return serviceClient.request<WorkspaceGitHistoryPage>("workspace.git.history", {
+    workspacePath,
+    projectId,
+    conversationId,
+    request: { repositoryKey, skip },
   });
 }
 

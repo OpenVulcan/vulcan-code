@@ -68,6 +68,7 @@ fn named_parameters_keep_their_value_through_plugin_sqlite_query() {
                     json!({
                         "sql": sql, "params": [{"kind": "int64", "value": 7}],
                     }),
+                    None,
                 )
                 .await
                 .unwrap_or_else(|error| panic!("{sql}: {error}"));
@@ -315,6 +316,47 @@ fn real_plugin_empty_database_stage_measurements() {
                 "hostcall_ms": hostcall_ms, "runtime_and_dispatch_ms": elapsed_ms - hostcall_ms,
                 "response_bytes": result.to_string().len(),
                 "vldb_calls": *vldb.timings.lock().unwrap(), "storage_calls": *storage.timings.lock().unwrap() }));
+        }
+    }
+    // Scale only disposable fixture data; actual user statistics are never modified.
+    // 仅扩展可丢弃夹具数据，绝不修改用户真实统计。
+    for rows in [100_i64, 100_000] {
+        runtime.block_on(vulcan_workspace_store::local_sql::with_connection_async(
+            &host.local, vulcan_workspace_store::local_database_runtime::LogicalDatabase::SystemStatistics,
+            move |connection| {
+                connection.execute("DELETE FROM provider_usage_attempts_v3", []).map_err(|error| error.to_string())?;
+                connection.execute(r#"
+WITH RECURSIVE samples(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM samples WHERE n < ?1)
+INSERT INTO provider_usage_attempts_v3 (
+ attempt_id, logical_request_id, attempt_index, consumer_id, operation, provider_id,
+ service_entry_id, connection_id, protocol_profile_id, requested_model, mapped_model,
+ dispatched_at_ms, first_token_at_ms, terminal_at_ms, status, dispatched, semantic_output_observed,
+ usage_availability, input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_tokens,
+ output_tokens, total_tokens, calendar_date)
+SELECT 'sample-' || n, 'request-' || n, 0, 'fixture-' || (n % 3), 'conversation',
+ 'provider-' || (n % 8), 'entry', 'connection', 'profile', 'gpt-5',
+ CASE WHEN n % 3 = 0 THEN 'gpt-5' ELSE 'fixture-model-' || (n % 80) END,
+ (unixepoch('now') - (n % 28) * 86400) * 1000 - 1000,
+ (unixepoch('now') - (n % 28) * 86400) * 1000 - 500,
+ (unixepoch('now') - (n % 28) * 86400) * 1000,
+ CASE WHEN n % 10 = 0 THEN 'failed' ELSE 'succeeded' END, 1, 1,
+ 'final', 1000, 800, 200, 0, 200, 1200, date('now', '-' || (n % 28) || ' days') FROM samples
+"#, [rows]).map_err(|error| error.to_string())?;
+                Ok(())
+            },
+        )).unwrap();
+        for view in ["overview", "details"] {
+            vldb.timings.lock().unwrap().clear();
+            let started = Instant::now();
+            let result = runtime.block_on(manager.invoke_action(VulcanPluginActionRequest {
+                plugin_id: "vulcan-usage-statistics".into(), action_id: "dashboard-get".into(),
+                arguments: json!({ "rangeDays": 30, "view": view }),
+                caller: VulcanPluginActionCaller::PluginUi, workspace_root: repository.to_path_buf(), reuse_enabled_runtime: true,
+            })).unwrap();
+            if view == "overview" { assert_eq!(result["summary"]["attempts"], rows); }
+            measurements.push(json!({ "plugin": "vulcan-usage-statistics", "rows": rows, "view": view,
+                "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+                "vldb_calls": *vldb.timings.lock().unwrap(), "response_bytes": result.to_string().len() }));
         }
     }
     eprintln!(

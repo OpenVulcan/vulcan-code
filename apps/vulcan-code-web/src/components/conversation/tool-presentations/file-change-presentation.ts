@@ -5,7 +5,7 @@ import type { FileAccessAction, FileAccessItemPresentation, FileAccessLineRangeP
 import { argumentsFromMetadata, arrayValue, booleanValue, compactHash, fixedToolName, metadataString, metadataValue, normalizeToolName, numberValue, objectValue, stringValue, textValue } from "./presentation-value-readers";
 import { deleteRows, fileChangeDiffFile, insertRows, modifyRows, splitTextLines } from "./file-change-diff-presentation";
 import { fixedHostPayload, fixedV1ToolEvent } from "./presentation-value-readers";
-import { buildV1ChangeSetFilePresentation } from "./v1-tool-presentation";
+import { buildV1ChangeSetFilePresentation } from "./v1-change-set-presentation";
 import type { PersistentChangeSet } from "@/service/conversation-event-window-store";
 
 /** Adapts the authoritative persisted changeset into the established interactive diff card.

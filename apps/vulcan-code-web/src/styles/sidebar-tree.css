@@ -213,7 +213,7 @@
   max-height: min(420px, calc(100vh - 96px));
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--popover);
   box-shadow: 0 18px 45px rgb(0 0 0 / 16%);
   color: var(--popover-foreground);
@@ -224,7 +224,7 @@
   overflow: hidden;
   padding: 7px 9px 8px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -237,7 +237,7 @@
   align-items: center;
   gap: 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -303,7 +303,7 @@
   height: 28px;
   max-height: 28px;
   min-height: 28px;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: transparent;
   overflow: hidden;
   padding-left: 8px;
@@ -363,7 +363,7 @@
   overflow: hidden;
   padding: 7px 8px 7px 33px;
   color: color-mix(in srgb, var(--sidebar-foreground) 34%, transparent);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.2;
   text-overflow: ellipsis;
   user-select: none;
@@ -376,11 +376,11 @@
   display: flex;
   align-items: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
   color: color-mix(in srgb, var(--sidebar-foreground) 42%, transparent);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1;
   padding: 0 8px 0 33px;
   text-align: left;
@@ -397,7 +397,7 @@
 .conversation-tree-button .vcn-sidebar-label strong {
   display: block;
   font-weight: 400;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.2;
   -webkit-mask-image: linear-gradient(
     to right,
@@ -493,7 +493,7 @@
   align-items: center;
   justify-content: flex-end;
   color: color-mix(in srgb, var(--sidebar-foreground) 46%, transparent);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1;
   white-space: nowrap;
 }
@@ -535,7 +535,7 @@
   display: inline-block;
   width: 7px;
   height: 7px;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: oklch(0.62 0.2 255);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--conversation-tree-row-bg) 75%, transparent);
 }
@@ -576,7 +576,7 @@
   height: 18px;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
+  border-radius: var(--vcn-radius-sm);
   color: color-mix(in srgb, var(--sidebar-foreground) 56%, transparent);
   cursor: pointer;
 }
@@ -596,11 +596,11 @@
   height: 20px;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: color-mix(in srgb, oklch(0.72 0.18 24) 16%, transparent);
   color: oklch(0.62 0.2 24);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 500;
   line-height: 1;
 }
@@ -645,7 +645,7 @@
   align-items: stretch;
   margin: 0;
   border: 1px solid var(--border);
-  border-radius: 12px 0 0 12px;
+  border-radius: var(--vcn-radius-lg) 0 0 var(--vcn-radius-lg);
   background: var(--background);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--foreground) 7%, transparent);
   overflow: hidden;

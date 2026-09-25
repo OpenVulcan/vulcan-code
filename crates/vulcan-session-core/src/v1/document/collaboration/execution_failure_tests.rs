@@ -11,6 +11,45 @@ use crate::v1::event::{
 };
 use crate::v1::ids::ClientActionId;
 
+/// Lost executions with or without an API close as abandoned and survive durable reconstruction.
+/// 有或没有 API 的丢失执行均以中断闭合，并可通过可靠重建校验。
+#[test]
+fn abandoned_execution_closes_active_api_without_user_stop() {
+    for purpose in [
+        None,
+        Some(ApiPurposeKind::MainGeneration),
+    ] {
+        let mut document = SessionDocument::new("lost-execution", "project", "target", 1);
+        document
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("lost-root").unwrap(),
+                    "work",
+                    vec![],
+                ),
+                2,
+            )
+            .unwrap();
+        if let Some(purpose) = purpose {
+            document
+                .start_api(purpose, ApiRequestSnapshot::new("openai", "model"), 3)
+                .unwrap();
+        }
+        document.abandon_unowned_execution(10).unwrap();
+        assert!(document.active_api().is_none());
+        assert!(document.active_turn().unwrap().closed);
+        assert!(document.events().iter().any(|event| matches!(&event.event, EventBody::TurnBoundary(boundary) if boundary.outcome == crate::v1::event::TurnOutcome::Abandoned)));
+        SessionDocument::from_parts(
+            document.metadata.clone(),
+            document.runtime_lock.clone(),
+            document.compactions.clone(),
+            document.segment_catalog().to_vec(),
+            document.events().to_vec(),
+        )
+        .unwrap();
+    }
+}
+
 /// Creates a real accepted question execution, with an optional active QA API and tool.
 /// 创建真实已接纳问题执行，并可附带活动答疑 API 与工具。
 /// The returned intent identifies the exact target turn and execution, before persistence.

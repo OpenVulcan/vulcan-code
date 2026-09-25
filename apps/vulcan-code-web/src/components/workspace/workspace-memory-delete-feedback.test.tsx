@@ -3,7 +3,7 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { WorkspaceMemoryPanel } from "./WorkspaceMemoryPanel";
+import { WorkspaceMemoryPanel } from "./workspace-memory-panel";
 
 // Verify failed deletion remains actionable with its error inside the active confirmation.
 // 验证删除失败后仍可操作，且错误位于当前确认框内部。

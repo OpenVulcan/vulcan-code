@@ -255,8 +255,8 @@ fn task_result_projection_is_atomic_complete_and_idempotent() {
     assert_eq!(source, before);
 }
 
-/// Active physical requests, stopped control and replacement business cannot accept fresh result chunks.
-/// 活动物理请求、已停止控制以及替代业务不得接纳新的结果分块。
+/// Active physical requests, stopped control and closed turns cannot accept fresh result chunks.
+/// 活动物理请求、已停止控制以及已关闭回合不得接纳新的结果分块。
 #[test]
 fn task_result_projection_rejects_illegal_boundaries_without_writes() {
     let (base, acceptance) = accepted_long_result();
@@ -284,16 +284,6 @@ fn task_result_projection_rejects_illegal_boundaries_without_writes() {
             }
             _ => {
                 source.close_turn(TurnOutcome::Stopped, 1, 12).unwrap();
-                source
-                    .submit_root_input(
-                        ClientInputSubmission::new(
-                            ClientActionId::try_new("replacement").unwrap(),
-                            "New task",
-                            vec![],
-                        ),
-                        13,
-                    )
-                    .unwrap();
             }
         }
         let before = source.clone();
@@ -308,6 +298,80 @@ fn task_result_projection_rejects_illegal_boundaries_without_writes() {
         );
         assert_eq!(source, before);
     }
+}
+
+/// A later receiving turn consumes an unprojected result exactly once without rewriting its original sender.
+/// 后续接收回合仅消费一次未投影结果，不改写原发送方。
+#[test]
+fn task_result_projection_delivers_late_result_to_current_turn() {
+    let (mut source, acceptance) = accepted_long_result();
+    let original_source = acceptance.result.acceptance.message.source.clone();
+    source.close_turn(TurnOutcome::Stopped, 1, 12).unwrap();
+    let current = source
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new("later-wait").unwrap(),
+                "Collect pending replies",
+                vec![],
+            ),
+            13,
+        )
+        .unwrap()
+        .into_value();
+    assert_eq!(
+        source.pending_collaboration_continuation().unwrap().turn_id,
+        current
+    );
+    let projection = source
+        .project_task_result_before_api(
+            acceptance.result.effect.delivery_id.clone(),
+            CollaborationTaskResultDisclosure::Full,
+            14,
+        )
+        .unwrap()
+        .into_value();
+    assert_eq!(projection.turn_id, current);
+    // The reference precedes the intact chunk batch and survives canonical reconstruction.
+    // 引用位于完整分块批次之前，并可通过规范重建。
+    let reference = source.events().iter().find(|event| {
+        matches!(&event.event, EventBody::UserInput(input) if input.text.contains("kind=\"result_context\""))
+    }).expect("late task result must include its original request reference");
+    assert_eq!(reference.turn_id, Some(current));
+    assert!(
+        projection
+            .inputs
+            .iter()
+            .all(|input| reference.seq < input.input_seq)
+    );
+    let EventBody::UserInput(reference_input) = &reference.event else {
+        unreachable!()
+    };
+    assert!(
+        reference_input
+            .text
+            .contains(&acceptance.result.acceptance.message.body)
+    );
+    assert_eq!(
+        source.collaboration_state().received_task_results[&acceptance.result.effect.delivery_id]
+            .result
+            .acceptance
+            .message
+            .source,
+        original_source
+    );
+    assert!(
+        reload(&source)
+            .pending_collaboration_continuation()
+            .is_some()
+    );
+    source
+        .start_api(
+            ApiPurposeKind::MainGeneration,
+            ApiRequestSnapshot::new("openai", "gpt-5"),
+            15,
+        )
+        .unwrap();
+    assert!(source.pending_collaboration_continuation().is_none());
 }
 
 /// Recovery rejects edited input text, wrong turn, missing host proof and orphaned projection operations.

@@ -31,18 +31,6 @@ pub struct InitialBusinessPreparation {
     pub origin: super::document::TurnOrigin,
 }
 
-/// Original human input attached to its exact unpublished business preparation owner.
-/// 绑定精确未发布业务准备所有者的原人类输入。
-#[derive(Debug, Clone, PartialEq)]
-pub struct InitialHumanBusiness {
-    /// Common full-history admission proof, revalidated before Hook setup.
-    /// 通用完整历史准入凭据，Hook 设置前重新验证。
-    pub preparation: InitialBusinessPreparation,
-    /// Original typed input, including its resources and occurrence parameters.
-    /// 原强类型输入，包含资源及本次出现位置的参数。
-    pub input: super::event::UserInputEvent,
-}
-
 /// Required current-contract container; an unprepared session has no binding.
 /// 当前契约必需容器；尚未准备的会话没有绑定。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +123,9 @@ pub struct BusinessHookBinding {
     /// VMM readiness captured by the original Hook admission; recovery cannot upgrade it.
     /// 原 Hook 准入捕获的 VMM 就绪状态；恢复不能提升。
     pub vmm_runtime_ready: bool,
+    /// Whether this business lifecycle may notify user observers; independent agent tasks disable it.
+    /// 该业务生命周期是否可通知用户观察器；独立代理任务禁用此项。
+    pub observes_user: bool,
 }
 
 impl BusinessHookMetadata {

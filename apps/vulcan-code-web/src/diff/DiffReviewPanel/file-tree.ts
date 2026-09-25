@@ -1,4 +1,4 @@
-import type { WorkspaceFileTreeNode } from "@/components/workspace/WorkspaceFileTreeDrawer";
+import type { WorkspaceFileTreeNode } from "@/components/workspace/workspace-file-tree-drawer";
 import type { DiffFile } from "../types";
 import { diffFilePathText, diffRevealRelativePath } from "./search";
 export interface DiffFileTreeNode extends WorkspaceFileTreeNode<DiffFile> {

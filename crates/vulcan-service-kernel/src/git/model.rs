@@ -634,3 +634,170 @@ pub(crate) struct GitCommitSummaryInput {
 fn default_webui_diff_search_limit() -> usize {
     WEBUI_DIFF_SEARCH_MAX_RESULTS
 }
+
+/// Commits returned by one WebUI Git history page when the request omits a limit.
+/// WebUI Git 历史请求未指定上限时单页返回的提交数量。
+pub(crate) const WEBUI_GIT_HISTORY_PAGE_SIZE: usize = 30;
+
+/// Upper bound for one WebUI Git history page so a caller cannot request an unbounded log.
+/// WebUI Git 历史单页上限，避免调用方请求无界日志。
+pub(crate) const WEBUI_GIT_HISTORY_MAX_PAGE_SIZE: usize = 200;
+
+/// Request that targets one discovered repository without extra options.
+/// 仅定位单个已发现仓库、不带额外选项的请求。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitRepositoryTargetRequest {
+    /// Stable project-relative repository key; `.` selects the project root repository.
+    /// 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+    #[serde(default)]
+    pub(crate) repository_key: Option<String>,
+}
+
+/// Local branches of one repository, ordered by most recent commit first.
+/// 单个仓库的本地分支，按最近提交时间倒序排列。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitLocalBranchList {
+    /// Current branch name, or `None` when HEAD is detached.
+    /// 当前分支名称；游离 HEAD 时为 `None`。
+    pub(crate) current_branch: Option<String>,
+    /// Local branch short names.
+    /// 本地分支短名称。
+    pub(crate) branches: Vec<String>,
+}
+
+/// Request that switches the worktree to a local branch, optionally creating it from HEAD.
+/// 将工作区切换到本地分支的请求，可选择基于 HEAD 新建。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitSwitchBranchRequest {
+    /// Stable project-relative repository key; `.` selects the project root repository.
+    /// 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+    #[serde(default)]
+    pub(crate) repository_key: Option<String>,
+    /// Target local branch name.
+    /// 目标本地分支名称。
+    pub(crate) branch_name: String,
+    /// Whether the branch is created from the current HEAD before switching.
+    /// 是否在切换前基于当前 HEAD 新建该分支。
+    #[serde(default)]
+    pub(crate) create: bool,
+}
+
+/// Result of one WebUI branch switch.
+/// 单次 WebUI 分支切换的结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitSwitchBranchResult {
+    /// Repository root used by the Git operation.
+    /// Git 操作使用的仓库根目录。
+    pub(crate) repository_root: String,
+    /// Branch checked out after the operation.
+    /// 操作完成后检出的分支。
+    pub(crate) branch_name: String,
+    /// Whether the branch was newly created.
+    /// 该分支是否为新建。
+    pub(crate) created: bool,
+}
+
+/// Request for one page of repository history.
+/// 请求仓库历史的单页数据。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitHistoryRequest {
+    /// Stable project-relative repository key; `.` selects the project root repository.
+    /// 稳定的项目相对仓库键；`.` 表示选择项目根仓库。
+    #[serde(default)]
+    pub(crate) repository_key: Option<String>,
+    /// Number of commits already loaded by the caller.
+    /// 调用方已加载的提交数量。
+    #[serde(default)]
+    pub(crate) skip: usize,
+    /// Page size; omitted values use `WEBUI_GIT_HISTORY_PAGE_SIZE`.
+    /// 单页数量；省略时使用 `WEBUI_GIT_HISTORY_PAGE_SIZE`。
+    #[serde(default)]
+    pub(crate) limit: Option<usize>,
+}
+
+/// One page of repository history in graph order.
+/// 按图谱顺序排列的单页仓库历史。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitHistoryPage {
+    /// Commits in this page, children before parents.
+    /// 本页提交，子提交排在父提交之前。
+    pub(crate) commits: Vec<WebuiGitHistoryCommit>,
+    /// Whether older commits remain after this page.
+    /// 本页之后是否仍有更早的提交。
+    pub(crate) has_more: bool,
+}
+
+/// One commit row rendered by the WebUI Git graph.
+/// WebUI Git 图谱渲染的单行提交。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitHistoryCommit {
+    /// Full commit hash.
+    /// 完整提交哈希。
+    pub(crate) hash: String,
+    /// Abbreviated commit hash.
+    /// 缩写提交哈希。
+    pub(crate) short_hash: String,
+    /// Full parent hashes in Git order.
+    /// 按 Git 顺序排列的完整父提交哈希。
+    pub(crate) parents: Vec<String>,
+    /// Author display name.
+    /// 作者显示名称。
+    pub(crate) author_name: String,
+    /// Author email address.
+    /// 作者邮箱地址。
+    pub(crate) author_email: String,
+    /// Author date in strict ISO 8601 format.
+    /// 严格 ISO 8601 格式的作者日期。
+    pub(crate) author_date: String,
+    /// First-line commit subject.
+    /// 提交信息首行标题。
+    pub(crate) subject: String,
+    /// Commit message body without the subject line.
+    /// 不含标题行的提交信息正文。
+    pub(crate) body: String,
+    /// Refs decorating this commit.
+    /// 指向该提交的引用。
+    pub(crate) refs: Vec<WebuiGitHistoryRef>,
+}
+
+/// One ref decoration shown on a Git graph row.
+/// Git 图谱行上展示的单个引用标记。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebuiGitHistoryRef {
+    /// Short ref name.
+    /// 引用短名称。
+    pub(crate) name: String,
+    /// Ref category.
+    /// 引用类别。
+    pub(crate) kind: WebuiGitHistoryRefKind,
+    /// Whether HEAD points at this ref, or this is a detached HEAD marker.
+    /// HEAD 是否指向该引用，或该项为游离 HEAD 标记。
+    pub(crate) head: bool,
+}
+
+/// Category of one Git graph ref decoration.
+/// Git 图谱引用标记的类别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum WebuiGitHistoryRefKind {
+    /// Detached HEAD.
+    /// 游离 HEAD。
+    Head,
+    /// Local branch under `refs/heads`.
+    /// `refs/heads` 下的本地分支。
+    Branch,
+    /// Remote-tracking branch under `refs/remotes`.
+    /// `refs/remotes` 下的远端跟踪分支。
+    Remote,
+    /// Tag under `refs/tags`.
+    /// `refs/tags` 下的标签。
+    Tag,
+}

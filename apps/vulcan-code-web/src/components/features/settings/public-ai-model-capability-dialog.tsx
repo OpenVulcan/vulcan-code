@@ -199,7 +199,7 @@ const REASONING_EFFORT_LABEL_KEYS = {
 // PublicAiModelCapabilityDialog displays effective values and saves only explicitly touched fields.
 // PublicAiModelCapabilityDialog 显示有效值，并且只保存用户明确触碰过的字段。
 export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps) {
-  const { locale, t } = useI18n()
+  const { t } = useI18n()
   // A synchronous lock preserves one atomic model write and its visible draft.
   // 同步锁保持一次原子模型写入及其可见草稿。
   const savingRef = React.useRef(false)
@@ -404,15 +404,15 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
       <DialogContent className="flex min-h-0 flex-col" scrollMode="fixed-footer" size="lg">
         <DialogHeader>
           <DialogTitle>
-            {props.scope === "provider" ? (locale === "zh-CN" ? "服务商默认能力" : "Provider defaults") : t("settings.modelCapabilities.title")}
+            {props.scope === "provider" ? t("settings.modelCapabilities.providerDefaults") : t("settings.modelCapabilities.title")}
           </DialogTitle>
           <DialogDescription className="flex flex-wrap items-center gap-2">
             <span>
-              {props.providerDisplayName} · {props.scope === "provider" ? (locale === "zh-CN" ? "全部模型" : "All models") : props.model?.display_name}
+              {props.providerDisplayName} · {props.scope === "provider" ? t("settings.modelCapabilities.allModels") : props.model?.display_name}
             </span>
             <Badge variant={props.overrides ? "secondary" : "outline"}>
               {props.scope === "provider"
-                ? (props.overrides ? (locale === "zh-CN" ? "已自定义" : "Customized") : (locale === "zh-CN" ? "使用内置默认" : "Built-in defaults"))
+                ? (props.overrides ? t("settings.modelCapabilities.customized") : t("settings.modelCapabilities.builtInDefaults"))
                 : t(props.overrides
                   ? "settings.modelCapabilities.modelSource"
                   : "settings.modelCapabilities.inheritedSource")}
@@ -436,7 +436,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
           <>
             <InputResourceEditor onChange={(value) => { markField("input_resources"); setInputResources(value) }} value={inputResources} />
             <fieldset className="space-y-2 rounded-lg border p-4">
-              <legend className="px-1 text-sm font-medium">{locale === "zh-CN" ? "结构化输出" : "Structured output"}</legend>
+              <legend className="px-1 text-sm font-medium">{t("settings.modelCapabilities.structuredOutput")}</legend>
               <Select
                 disabled={saving}
                 onValueChange={(value) => {
@@ -445,14 +445,14 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
                 }}
                 value={structuredOutput}
               >
-                <SelectTrigger aria-label={locale === "zh-CN" ? "结构化输出" : "Structured output"}><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label={t("settings.modelCapabilities.structuredOutput")}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="json_object">JSON Object</SelectItem>
                   <SelectItem value="json_schema">JSON Schema</SelectItem>
-                  <SelectItem value="unsupported">{locale === "zh-CN" ? "不支持" : "Unsupported"}</SelectItem>
+                  <SelectItem value="unsupported">{t("settings.modelCapabilities.unsupported")}</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">{locale === "zh-CN" ? "没有特别说明时按 JSON Object 处理。" : "Treated as JSON Object unless specified."}</p>
+              <p className="text-xs text-muted-foreground">{t("settings.modelCapabilities.treatedAsJsonObject")}</p>
             </fieldset>
             <fieldset className="rounded-lg border p-4">
               <legend className="px-1 text-sm font-medium">{t("settings.customModels.output")}</legend>
@@ -663,7 +663,7 @@ export function ReasoningProjectionEditor(props: {
   onChange: (projection: PublicAiCustomModelRequestProjection) => void
   projection: PublicAiCustomModelRequestProjection
 }) {
-  const { locale } = useI18n()
+  const { t } = useI18n()
   const normalizedProjection = normalizeRequestProjection(props.projection)
   const updateMutation = React.useCallback((effort: string, mutation: PublicAiCustomRequestMutation) => {
     const currentProjection = normalizeRequestProjection(props.projection)
@@ -677,9 +677,9 @@ export function ReasoningProjectionEditor(props: {
   }, [props])
   return (
     <fieldset className="space-y-3 rounded-lg border p-4">
-      <legend className="px-1 text-sm font-medium">{locale === "zh-CN" ? "按思考档位改写请求（高级）" : "Rewrite requests per reasoning level (advanced)"}</legend>
+      <legend className="px-1 text-sm font-medium">{t("settings.modelCapabilities.rewriteRequestsPerReasoning")}</legend>
       <p className="text-xs text-muted-foreground">
-        {locale === "zh-CN" ? "可以为每个思考档位添加或移除发给服务商的字段，例如 thinking.type=disabled 或 reasoning_effort=low。" : "Add or remove fields sent to the provider for each reasoning level, e.g. thinking.type=disabled or reasoning_effort=low."}
+        {t("settings.modelCapabilities.addOrRemoveFields")}
       </p>
       {props.efforts.map((effort) => {
         const mutation = normalizedProjection.reasoning[effort] ?? { set: {}, delete: [] }
@@ -692,7 +692,7 @@ export function ReasoningProjectionEditor(props: {
               // 使用行索引保持输入节点稳定，避免编辑字段路径时每个字符都重建输入框并丢失焦点。
               <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]" key={`${effort}:set:${index}`}>
                 <Input
-                  aria-label={`${effort} ${locale === "zh-CN" ? "字段名" : "field name"}`}
+                  aria-label={`${effort} ${t("settings.modelCapabilities.fieldName")}`}
                   onChange={(event) => {
                     // Rebuild in the original row order so the stable index key remains stable during typing.
                     // 按原始行顺序重建对象，确保输入过程中稳定的索引 key 不会因字段名变化而改变。
@@ -702,16 +702,16 @@ export function ReasoningProjectionEditor(props: {
                     ]))
                     updateMutation(effort, { ...mutation, set: nextSet })
                   }}
-                  placeholder={locale === "zh-CN" ? "字段名，例如 thinking.type" : "Field name, e.g. thinking.type"}
+                  placeholder={t("settings.modelCapabilities.fieldNameEG")}
                   value={path}
                 />
                 <Input
-                  aria-label={`${effort} ${locale === "zh-CN" ? "字段值" : "field value"}`}
+                  aria-label={`${effort} ${t("settings.modelCapabilities.fieldValue")}`}
                   onChange={(event) => updateMutation(effort, {
                     ...mutation,
                     set: { ...mutation.set, [path]: projectionValue(event.target.value) },
                   })}
-                  placeholder={locale === "zh-CN" ? "值，例如 disabled" : "Value, e.g. disabled"}
+                  placeholder={t("settings.modelCapabilities.valueEGDisabled")}
                   value={projectionValueText(value)}
                 />
                 <Button
@@ -724,7 +724,7 @@ export function ReasoningProjectionEditor(props: {
                   type="button"
                   variant="ghost"
                 >
-                  {locale === "zh-CN" ? "删除" : "Remove"}
+                  {t("settings.modelCapabilities.remove")}
                 </Button>
               </div>
             ))}
@@ -733,13 +733,13 @@ export function ReasoningProjectionEditor(props: {
               // 编辑删除路径时保持删除行稳定，避免输入焦点随字符变化而丢失。
               <div className="grid gap-2 sm:grid-cols-[1fr_auto]" key={`${effort}:delete:${index}`}>
                 <Input
-                  aria-label={`${effort} ${locale === "zh-CN" ? "要移除的字段" : "field to remove"}`}
+                  aria-label={`${effort} ${t("settings.modelCapabilities.fieldToRemove")}`}
                   onChange={(event) => {
                     const nextDelete = [...mutation.delete]
                     nextDelete[index] = event.target.value
                     updateMutation(effort, { ...mutation, delete: nextDelete })
                   }}
-                  placeholder={locale === "zh-CN" ? "要移除的字段，例如 thinking.type" : "Field to remove, e.g. thinking.type"}
+                  placeholder={t("settings.modelCapabilities.fieldToRemoveE")}
                   value={path}
                 />
                 <Button
@@ -751,7 +751,7 @@ export function ReasoningProjectionEditor(props: {
                   type="button"
                   variant="ghost"
                 >
-                  {locale === "zh-CN" ? "删除" : "Remove"}
+                  {t("settings.modelCapabilities.remove")}
                 </Button>
               </div>
             ))}
@@ -764,7 +764,7 @@ export function ReasoningProjectionEditor(props: {
               type="button"
               variant="outline"
             >
-              {locale === "zh-CN" ? "添加字段" : "Add field"}
+              {t("settings.modelCapabilities.addField")}
             </Button>
             <Button
               onClick={() => updateMutation(effort, {
@@ -775,7 +775,7 @@ export function ReasoningProjectionEditor(props: {
               type="button"
               variant="outline"
             >
-              {locale === "zh-CN" ? "添加要移除的字段" : "Add field to remove"}
+              {t("settings.modelCapabilities.addFieldToRemove")}
             </Button>
           </div>
         )

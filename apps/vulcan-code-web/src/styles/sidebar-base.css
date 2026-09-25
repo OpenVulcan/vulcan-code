@@ -50,7 +50,7 @@
   gap: 8px;
   padding: 0 8px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   transition: height 180ms ease, opacity 180ms ease, padding 180ms ease, transform 180ms ease;
 }
@@ -125,7 +125,7 @@
   align-items: center;
   gap: 9px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
   color: inherit;
   padding: 8px;
@@ -141,7 +141,7 @@
   align-items: center;
   gap: 9px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
   color: inherit;
   padding: 8px;
@@ -185,7 +185,7 @@
 
 .workspace-sidebar-feature-label {
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -209,7 +209,7 @@
   display: flex;
   align-items: center;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   user-select: none;
 }
 
@@ -235,7 +235,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: var(--sidebar-primary);
   color: var(--sidebar-primary-foreground);
   font-size: 15px;
@@ -281,7 +281,7 @@
   justify-content: center;
   margin-left: auto;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
   background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
@@ -335,7 +335,7 @@
 
 .sidebar-user-menu-label small {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button {
@@ -460,7 +460,7 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
@@ -506,13 +506,13 @@
 
 .vcn-sidebar-label.strong,
 .vcn-sidebar-label strong {
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 700;
 }
 
 .vcn-sidebar-label small {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .vcn-sidebar-label strong,

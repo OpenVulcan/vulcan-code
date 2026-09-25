@@ -7,7 +7,11 @@ import { ArchivedRestoreSettingsArea } from "./misc-settings-areas";
 import type { SettingsActionProps } from "./settings-action-types";
 import type { ConversationSummary } from "@/types";
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key);
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) };
+});
 
 // The mount owns only synthetic archive metadata; lifecycle callbacks never reach a service.
 // 挂载仅持有合成归档元数据；生命周期回调不会访问服务。

@@ -28,7 +28,7 @@
 .vce-settings-heading .vce-settings-enabled > span {
   margin: 0;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .vce-job-card {
@@ -37,7 +37,7 @@
   gap: 10px;
   padding: 16px;
   border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   background: color-mix(in srgb, var(--primary) 3%, var(--card));
 }
 
@@ -55,7 +55,7 @@
 .vce-job-details {
   min-width: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .vce-job-details[open] {
@@ -78,9 +78,9 @@
   align-items: center;
   gap: 8px;
   padding: 16px;
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: var(--muted);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 /* Aggregate measurements share one strip instead of six competing cards. */
@@ -105,13 +105,13 @@
 
 .vce-index-statistics strong {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 400;
 }
 
 .vce-index-statistics p {
   margin: 5px 0 0;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
@@ -129,7 +129,7 @@
   justify-content: space-between;
   gap: 16px;
   padding: 16px;
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--muted);
 }
 
@@ -138,7 +138,7 @@
 .vce-settings-disclosure {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--vcn-radius-md);
   background: var(--card);
 }
 
@@ -166,13 +166,13 @@
 }
 
 .vce-settings-disclosure > summary strong {
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .vce-settings-disclosure > summary small {
   margin-top: 3px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .vce-settings-disclosure > summary > svg {

@@ -27,6 +27,7 @@ function plugin(overrides: Partial<WorkbenchSnapshot["plugins"][number]> = {}): 
     diagnostics: [],
     managementKind: "vulcanPlugin",
     extension: {
+      runtimeIdentity: "fixture:1",
       origin: "bundled",
       permissions: ["ui_host_context"],
       hooks: [],

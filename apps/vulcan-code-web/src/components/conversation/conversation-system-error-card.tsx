@@ -2,6 +2,7 @@ import { ChevronRight, CircleAlert } from "lucide-react";
 
 import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
+import { formatDurationSeconds } from "@/lib/usage-format";
 
 // SystemProviderError describes the structured failure emitted by the public provider contract.
 // SystemProviderError 描述公共 Provider 契约发出的结构化失败信息。
@@ -79,17 +80,20 @@ export interface SystemErrorCardProps {
   error: SystemProviderError;
 }
 
-// SYSTEM_PROVIDER_ERROR_PREFIX identifies the canonical public-contract failure prefix.
-// SYSTEM_PROVIDER_ERROR_PREFIX 标识公共契约失败使用的规范前缀。
-const SYSTEM_PROVIDER_ERROR_PREFIX = "Vulcan 公共契约流式执行失败：provider ";
+// Registered prefixes cover the English runtime format and already persisted Chinese records.
+// 已登记前缀覆盖英文运行时格式及已经持久化的中文记录。
+const SYSTEM_PROVIDER_ERROR_PREFIXES = [
+  "Provider streaming execution failed: provider ",
+  "Vulcan 公共契约流式执行失败：provider ",
+];
 
 // SYSTEM_PROVIDER_ERROR_FAILURE_MARKER separates the provider id from the JSON failure object.
 // SYSTEM_PROVIDER_ERROR_FAILURE_MARKER 分隔 Provider 标识与 JSON 失败对象。
 const SYSTEM_PROVIDER_ERROR_FAILURE_MARKER = " failure: ";
 
-// SYSTEM_PROVIDER_ERROR_ROUTE_MARKER starts the exact diagnostic suffix appended after the JSON failure object.
-// SYSTEM_PROVIDER_ERROR_ROUTE_MARKER 标识追加在 JSON 失败对象后的精确路由诊断后缀起点。
-const SYSTEM_PROVIDER_ERROR_ROUTE_MARKER = "。 [provider_route: ";
+// Both runtime formats append this exact route suffix; old records also include Chinese punctuation.
+// 两种运行时格式均追加此精确路由后缀；旧记录还含有中文标点。
+const SYSTEM_PROVIDER_ERROR_ROUTE_MARKER = " [provider_route: ";
 
 // AGENTSPACE_RECONCILIATION_SUBCATEGORY is assigned only by the route-aware backend boundary.
 // AGENTSPACE_RECONCILIATION_SUBCATEGORY 仅由感知路由的后端边界赋值。
@@ -139,6 +143,13 @@ function retryAfterMilliseconds(value: unknown): string | null {
   return isRecord(value) ? scalarText(value.delay_milliseconds) : null;
 }
 
+// retryAfterDisplay renders the exact retry delay as seconds; non-numeric text keeps its raw millisecond form instead of becoming zero.
+// retryAfterDisplay 将精确重试等待时长渲染为秒；非数值文本保留原始毫秒形式，不会显示为零。
+function retryAfterDisplay(retryAfterMs: string): string {
+  const milliseconds = Number(retryAfterMs);
+  return Number.isFinite(milliseconds) ? formatDurationSeconds(milliseconds) : `${retryAfterMs} ms`;
+}
+
 // structuredProviderDisplayMessage derives a non-empty summary only from normalized failure facts.
 // structuredProviderDisplayMessage 仅从规范化失败事实派生非空摘要。
 function structuredProviderDisplayMessage(
@@ -160,11 +171,17 @@ function structuredProviderDisplayMessage(
 // providerFailurePayload removes only the registered route suffix before parsing the canonical JSON object.
 // providerFailurePayload 仅在解析规范 JSON 对象前移除已登记的路由后缀。
 function providerFailurePayload(structuredBody: string): string {
-  const routeMarkerIndex = structuredBody.lastIndexOf(SYSTEM_PROVIDER_ERROR_ROUTE_MARKER);
-  if (routeMarkerIndex < 0 || !structuredBody.endsWith("]")) {
+  if (!structuredBody.endsWith("]")) {
     return structuredBody;
   }
-  return structuredBody.slice(0, routeMarkerIndex).trim();
+  // Use the last actual suffix so a marker quoted inside upstream JSON cannot truncate that JSON.
+  // 使用最后一个实际后缀，避免上游 JSON 中引用的标记截断该 JSON。
+  const routeMarkerIndex = structuredBody.lastIndexOf(SYSTEM_PROVIDER_ERROR_ROUTE_MARKER);
+  if (routeMarkerIndex < 0) return structuredBody;
+  // Legacy wrappers add this punctuation outside the JSON object, immediately before the suffix.
+  // 旧外壳将此标点添加在 JSON 对象外、路由后缀之前。
+  const payload = structuredBody.slice(0, routeMarkerIndex).trim();
+  return payload.endsWith("。") ? payload.slice(0, -1).trim() : payload;
 }
 
 // buildStructuredError creates the shared card model from the exact JSON object.
@@ -267,20 +284,23 @@ function buildLegacyStructuredError(
 // 结构化 Provider 错误；如果正文不符合该精确失败格式则返回 null。
 export function parseSystemProviderError(body: string): SystemProviderError | null {
   const normalizedBody = body.trim();
-  if (!normalizedBody.startsWith(SYSTEM_PROVIDER_ERROR_PREFIX)) {
+  // Prefix selects an explicitly supported persisted format, not a fuzzy match.
+  // prefix 选择显式支持的持久化格式，不进行模糊匹配。
+  const prefix = SYSTEM_PROVIDER_ERROR_PREFIXES.find((candidate) => normalizedBody.startsWith(candidate));
+  if (!prefix) {
     return null;
   }
 
   const failureMarkerIndex = normalizedBody.indexOf(
     SYSTEM_PROVIDER_ERROR_FAILURE_MARKER,
-    SYSTEM_PROVIDER_ERROR_PREFIX.length,
+    prefix.length,
   );
-  if (failureMarkerIndex <= SYSTEM_PROVIDER_ERROR_PREFIX.length) {
+  if (failureMarkerIndex <= prefix.length) {
     return null;
   }
 
   const provider = normalizedBody
-    .slice(SYSTEM_PROVIDER_ERROR_PREFIX.length, failureMarkerIndex)
+    .slice(prefix.length, failureMarkerIndex)
     .trim();
   if (!provider) {
     return null;
@@ -383,7 +403,7 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
   if (props.error.retryAfterMs) {
     fields.push({
       label: t("conversation.systemError.retryAfter"),
-      value: `${props.error.retryAfterMs} ms`,
+      value: retryAfterDisplay(props.error.retryAfterMs),
     });
   }
   if (reconciliationPending) {

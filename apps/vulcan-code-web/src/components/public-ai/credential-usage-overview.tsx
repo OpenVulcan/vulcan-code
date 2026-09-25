@@ -67,6 +67,26 @@ export function credentialUsageIsNonPlanAccount(
 // CredentialUsageOverview renders shared balance, plan, and quota presentation.
 // CredentialUsageOverview 渲染共享的余额、套餐与额度展示。
 export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
+  // overview holds the localized header facts and adapted quota content for the pure view.
+  // overview 持有供纯视图使用的本地化头部事实与已适配额度内容。
+  const overview = useCredentialUsageOverview(props)
+  return (
+    <CredentialUsageOverviewView
+      model={overview.model}
+      quotaContent={overview.quotaContent}
+      showQuotaSection={props.showQuotaSection !== false}
+    />
+  )
+}
+
+// useCredentialUsageOverview adapts one account into header facts and quota content so callers can place them separately.
+// useCredentialUsageOverview 将一个账号适配为头部事实与额度内容，使调用方可以分开放置二者。
+// Parameters: props supplies the account facts; returns the localized view model and the quota node.
+// 参数：props 提供账号事实；返回本地化视图模型与额度节点。
+export function useCredentialUsageOverview(props: CredentialUsageOverviewProps): {
+  model: CredentialUsageOverviewViewModel
+  quotaContent: React.ReactNode
+} {
   // t resolves all account-usage copy in the active locale.
   // t 使用当前语言解析全部账号用量文案。
   const { t } = useI18n()
@@ -102,13 +122,7 @@ export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
     />
   )
 
-  return (
-    <CredentialUsageOverviewView
-      model={model}
-      quotaContent={quotaContent}
-      showQuotaSection={props.showQuotaSection !== false}
-    />
-  )
+  return { model, quotaContent }
 }
 
 // CredentialUsageOverviewView renders only determined account view data and adapted quota content.
@@ -117,25 +131,59 @@ export function CredentialUsageOverview(props: CredentialUsageOverviewProps) {
 // 参数：props 提供已适配账号用量与定价事实；返回已知值和明确未知状态，不发起查询。
 export function CredentialUsageOverviewView(props: CredentialUsageOverviewViewProps) {
   return (
-    <>
-      <div className="grid grid-cols-2 gap-2" data-slot="credential-usage-summary">
-        <div className="min-w-0 rounded-md bg-(--vcn-fill-subtle) px-2.5 py-2">
-          <p className="text-[11px] text-muted-foreground">{props.model.planLabel}</p>
-          <p className="mt-0.5 break-words text-sm font-medium">{props.model.planValue}</p>
-        </div>
-        <div className="min-w-0 rounded-md bg-(--vcn-fill-subtle) px-2.5 py-2">
-          <p className="text-[11px] text-muted-foreground">{props.model.balanceLabel}</p>
-          <p className="mt-0.5 break-words text-sm font-medium tabular-nums">{props.model.balanceValue}</p>
-        </div>
+    <CredentialUsageQuotaPanel header={<CredentialUsageInlineFacts model={props.model} />}>
+      {props.showQuotaSection ? props.quotaContent : null}
+    </CredentialUsageQuotaPanel>
+  )
+}
+
+// CredentialUsageInlineFacts renders plan and balance as one wrapping row of label-value pairs.
+// CredentialUsageInlineFacts 将套餐与余额渲染为一行可换行的标签-值对。
+// Parameters: props.model supplies the formatted facts; returns a compact description list.
+// 参数：props.model 提供已格式化事实；返回紧凑的描述列表。
+export function CredentialUsageInlineFacts(props: { model: CredentialUsageOverviewViewModel }) {
+  return (
+    <dl className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs" data-slot="credential-usage-facts">
+      <div className="flex min-w-0 items-baseline gap-1.5">
+        <dt className="shrink-0 text-muted-foreground">{props.model.planLabel}</dt>
+        <dd className="min-w-0 break-words font-medium">{props.model.planValue}</dd>
       </div>
-      {props.showQuotaSection ? (
-        <div className="flex min-h-0 flex-1 flex-col rounded-md bg-(--vcn-fill-subtle) px-2.5 py-2" data-slot="credential-usage">
-          <div className="flex min-h-12 flex-1 items-center justify-center" data-slot="credential-usage-content">
-            {props.quotaContent}
-          </div>
+      <div className="flex min-w-0 items-baseline gap-1.5">
+        <dt className="shrink-0 text-muted-foreground">{props.model.balanceLabel}</dt>
+        <dd className="min-w-0 break-words font-medium tabular-nums">{props.model.balanceValue}</dd>
+      </div>
+    </dl>
+  )
+}
+
+// CredentialUsageQuotaPanel frames adapted quota content in the shared subtle usage surface.
+// CredentialUsageQuotaPanel 使用共享的浅色用量底板承载已适配额度内容。
+// Parameters: props.children is the quota content and props.header an optional account-facts row above it;
+// a panel without quota content shows only the header row. Returns the framed panel.
+// 参数：props.children 为额度内容，props.header 为其上方可选的账号事实行；没有额度内容时只显示头部行。返回带底板的面板。
+export function CredentialUsageQuotaPanel(props: { children?: React.ReactNode; header?: React.ReactNode }) {
+  // hasContent separates balance-only accounts, whose panel is just the facts row.
+  // hasContent 区分仅余额账号，其面板只有事实行。
+  const hasContent = props.children !== null && props.children !== undefined && props.children !== false
+  return (
+    <div className="flex min-h-0 flex-1 flex-col rounded-md bg-(--vcn-fill-subtle) px-2.5 py-2" data-slot="credential-usage">
+      {props.header ? (
+        <div
+          className={hasContent ? "mb-2 border-b border-border/60 pb-1.5" : undefined}
+          data-slot="credential-usage-header"
+        >
+          {props.header}
         </div>
       ) : null}
-    </>
+      {hasContent ? (
+        <div
+          className={`flex flex-1 items-center justify-center ${props.header ? "min-h-8" : "min-h-12"}`}
+          data-slot="credential-usage-content"
+        >
+          {props.children}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -493,6 +541,7 @@ function MiniMaxUsageSummary(props: { rows: MiniMaxUsageRow[] }) {
       {props.rows.map((row) => (
         <div
           className="grid grid-cols-[1.75rem_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-1 text-[11px]"
+          data-slot="credential-usage-bucket-row"
           key={row.name}
         >
           <span className="font-medium">{miniMaxBucketLabel(row.name, t)}</span>

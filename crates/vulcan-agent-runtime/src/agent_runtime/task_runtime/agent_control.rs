@@ -121,6 +121,32 @@ impl TaskRuntime {
         }
     }
 
+    /// Releases an unpublished gate after its exact host listener has exited.
+    /// 精确宿主监听器退出后释放尚未发布的门控。
+    /// `task_id` and `execution_id` identify the exited listener; published or replacement results survive.
+    /// `task_id` 与 `execution_id` 标识已退出监听器；已发布及替代执行的结果保持不变。
+    /// Returns whether an orphaned gate was removed, or a registry lock error.
+    /// 返回是否移除了孤立门控，或注册表锁错误。
+    pub fn release_unpublished_task_return(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<bool, String> {
+        // Only the concrete listener can attest that no future publisher remains for this gate.
+        // 只有具体监听器能够证明此门控已不存在后续发布者。
+        let mut returns = self
+            .durable_return_mailboxes
+            .write()
+            .map_err(|_| "The durable return registry is locked.")?;
+        if !matches!(returns.get(&task_id), Some((expected, None)) if expected == execution_id) {
+            return Ok(false);
+        }
+        returns.remove(&task_id);
+        drop(returns);
+        self.notify_subagent_mailbox_activity();
+        Ok(true)
+    }
+
     /// Defers successful feedback until the V1 owner publishes its exact return statistics.
     /// 将成功反馈延迟到 V1 所有者发布精确回流统计之后。
     /// `task_id` and `execution_id` identify the admitted generation; returns registration errors.

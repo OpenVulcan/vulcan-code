@@ -69,13 +69,22 @@ export function normalizeProjectIconSelection(icon: ProjectIconSelection): Proje
   }
   return {
     pack: icon.pack,
-    key: JSON.stringify(decodeProjectBadgeConfig(icon.key) ?? DEFAULT_PROJECT_BADGE_CONFIG),
+    key: encodeProjectBadgeKey(decodeProjectBadgeKey(icon.key) ?? DEFAULT_PROJECT_BADGE_CONFIG),
   }
 }
 
-// decodeProjectBadgeConfig validates one persisted badge configuration.
-// decodeProjectBadgeConfig 验证一份持久化徽标配置。
-function decodeProjectBadgeConfig(value: string): ProjectIconBadgeConfig | null {
+// encodeProjectBadgeKey serializes a generated badge config into the persisted icon key.
+// encodeProjectBadgeKey 将生成式徽标配置序列化为持久化图标键。
+export function encodeProjectBadgeKey(config: ProjectIconBadgeConfig): string {
+  return JSON.stringify(config)
+}
+
+// decodeProjectBadgeKey validates one persisted badge configuration.
+// decodeProjectBadgeKey 验证一份持久化徽标配置。
+export function decodeProjectBadgeKey(value?: string | null): ProjectIconBadgeConfig | null {
+  if (!value) {
+    return null
+  }
   try {
     // parsed is the untrusted persisted badge object.
     // parsed 是不可信的持久化徽标对象。
@@ -107,7 +116,7 @@ function decodeProjectBadgeConfig(value: string): ProjectIconBadgeConfig | null 
 
 // normalizeProjectBadgeText keeps one Chinese character or two Latin letters.
 // normalizeProjectBadgeText 保留一个中文字符或两个英文字母。
-function normalizeProjectBadgeText(value: string): string {
+export function normalizeProjectBadgeText(value: string): string {
   // trimmed removes surrounding whitespace before character selection.
   // trimmed 在选择字符前移除首尾空白。
   const trimmed = value.trim()

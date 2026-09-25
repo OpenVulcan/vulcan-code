@@ -7,7 +7,7 @@
   display: grid;
   gap: 8px;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 :root {
@@ -90,10 +90,10 @@
 .tool-presentation-route-badge {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--muted);
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--vcn-font-size-2xs);
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1;
@@ -125,7 +125,7 @@
   max-width: 100%;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--card) 86%, transparent);
 }
 
@@ -161,7 +161,7 @@
   margin: 0;
   color: var(--foreground);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -198,8 +198,7 @@
   gap: 6px;
 }
 
-.model-extension-tool-header .tool-presentation-command,
-.model-extension-tool-header .v1-tool-card-title {
+.model-extension-tool-header .tool-presentation-command {
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -279,7 +278,7 @@
   display: inline-grid;
   place-items: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: color-mix(in srgb, var(--muted) 72%, transparent);
   color: var(--muted-foreground);
   transition: background-color 120ms ease, color 120ms ease;
@@ -320,7 +319,7 @@
   min-width: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--card) 86%, transparent);
 }
 
@@ -350,7 +349,7 @@
   padding: 12px;
   color: var(--foreground);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -373,7 +372,7 @@
 
 .markdown-tool-empty {
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.45;
 }
 
@@ -388,7 +387,7 @@
 .lua-execution-icon {
   width: 16px;
   height: 16px;
-  color: #42a5f5;
+  color: var(--vcn-content-info);
   flex: none;
 }
 
@@ -415,7 +414,7 @@
 .lua-execution-section-title {
   margin-bottom: 8px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
@@ -433,10 +432,10 @@
 }
 
 .terminal-output-view.conversation-session-terminal-screen-frame {
-  background: #050505;
-  color: #f4f4f5;
+  background: var(--vcn-terminal-surface);
+  color: var(--vcn-terminal-foreground);
   height: clamp(320px, calc(100vh - 220px), 640px);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   white-space: pre;
   overflow-wrap: normal;
 }
@@ -489,17 +488,17 @@
   padding: 6px 16px 0;
   color: var(--muted-foreground);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .tool-presentation-terminal-error {
   margin: 0 12px 10px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
   color: var(--destructive);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   white-space: pre-wrap;
 }
 
@@ -513,7 +512,7 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   background: color-mix(in srgb, var(--card) 92%, transparent);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.2;
 }
 
@@ -547,7 +546,7 @@
   gap: 4px;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--muted) 24%, transparent);
 }
 
@@ -594,6 +593,217 @@
   color: var(--muted-foreground);
 }
 
+/* Collaboration messages separate their heading, readable content and navigation footer.
+   协作消息将标题、可读正文与导航页脚分层展示。 */
+.conversation-v1-collaboration-card .tool-presentation-summary {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.conversation-v1-collaboration-heading {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0;
+  min-width: 0;
+  text-align: left;
+}
+
+.conversation-v1-collaboration-title {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.conversation-v1-collaboration-participant-name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-v1-collaboration-badge {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: var(--vcn-radius-sm);
+  background: color-mix(in srgb, var(--muted-foreground) 8%, transparent);
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  line-height: 1.5;
+}
+
+.conversation-v1-collaboration-card .subagent-orchestration-detail {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: var(--vcn-radius-md);
+  background: color-mix(in srgb, var(--muted-foreground) 3%, transparent);
+  color: var(--foreground);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.conversation-v1-collaboration-content,
+.conversation-v1-collaboration-reply {
+  min-width: 0;
+}
+
+.conversation-v1-collaboration-reply {
+  display: grid;
+  gap: 4px;
+}
+
+.conversation-v1-collaboration-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+.conversation-v1-collaboration-footer time {
+  margin-left: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.conversation-v1-collaboration-session-button {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border-radius: var(--vcn-radius-xs);
+  text-align: left;
+}
+
+.conversation-v1-collaboration-session-button:not(:disabled):hover {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.conversation-v1-collaboration-session-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.conversation-v1-collaboration-caption {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  white-space: nowrap;
+}
+
+.conversation-v1-collaboration-participant-name {
+  color: var(--foreground);
+}
+
+/* Keep session navigation independent from the quiet fold control.
+   会话导航与低对比度折叠控件相互独立。 */
+.conversation-v1-collaboration-fold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--vcn-radius-sm);
+  color: var(--muted-foreground);
+  opacity: 0.45;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.conversation-v1-collaboration-fold:hover,
+.conversation-v1-collaboration-fold:focus-visible {
+  opacity: 1;
+  background: var(--muted);
+}
+
+.conversation-v1-collaboration-fold:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.conversation-v1-collaboration-fold[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+/* Cover the header with a real button; the sibling session link remains above it and navigates independently.
+   使用真实按钮覆盖标题整行；同级会话链接位于其上，独立执行跳转。 */
+.conversation-v1-collaboration-row-toggle {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  justify-content: flex-end;
+  padding-right: 5px;
+  cursor: pointer;
+}
+
+.conversation-v1-collaboration-card:not(.conversation-v1-collaboration-incoming) > .tool-presentation-summary {
+  min-height: 24px;
+  padding-right: 29px;
+}
+
+.conversation-v1-collaboration-row-toggle:hover,
+.conversation-v1-collaboration-row-toggle:focus-visible {
+  background: transparent;
+}
+
+/* Received session messages align with user prompts while retaining collaboration semantics.
+   收到的会话消息与用户提示词右对齐，同时保留协作语义。 */
+.tool-presentation-card.conversation-v1-collaboration-incoming {
+  max-width: var(--conversation-user-bubble-max-width);
+  margin-left: auto;
+  gap: 4px;
+}
+
+.conversation-v1-collaboration-incoming > .tool-presentation-summary {
+  padding: 2px 8px;
+  gap: 6px;
+  font-size: var(--vcn-font-size-sm);
+}
+
+/* Keep the bubble tail clear of the edge, with only the body participating in measured clipping.
+   为气泡尾角留出边缘空间，仅正文参与测量裁切。 */
+.conversation-v1-collaboration-incoming > .conversation-v1-collaboration-bubble {
+  max-width: none;
+  margin-right: 8px;
+}
+
+.conversation-v1-collaboration-bubble-body {
+  font-size: var(--vcn-font-size-md);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.conversation-v1-collaboration-incoming > .conversation-v1-collaboration-time {
+  max-width: none;
+  justify-self: end;
+  padding-right: 8px;
+}
+
+.conversation-v1-collaboration-overflow-toggle {
+  justify-self: center;
+  width: 100%;
+  height: 20px;
+}
+
 .subagent-orchestration-detail {
   width: 100%;
   max-width: 100%;
@@ -611,7 +821,7 @@
   align-items: baseline;
   gap: 8px;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .subagent-orchestration-meta strong {
@@ -626,7 +836,7 @@
 
 .subagent-orchestration-note {
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.45;
 }
 
@@ -638,10 +848,10 @@
   gap: 6px;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: var(--muted);
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   line-height: 1.15;
 }
@@ -661,14 +871,14 @@
 .subagent-orchestration-inline-text {
   min-width: 0;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.55;
 }
 
 .subagent-orchestration-inline-text code {
   color: var(--foreground);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -682,7 +892,7 @@
 .subagent-orchestration-block-label,
 .subagent-orchestration-agent-heading {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .subagent-orchestration-agent-heading {
@@ -697,7 +907,7 @@
   overflow: hidden;
   color: var(--foreground);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -713,11 +923,11 @@
   overflow: auto;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: 6px;
+  border-radius: var(--vcn-radius-sm);
   background: color-mix(in srgb, var(--card) 86%, transparent);
   color: var(--foreground);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -725,7 +935,7 @@
 
 .subagent-orchestration-empty {
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 .subagent-orchestration-agent-list {
@@ -769,10 +979,10 @@
   min-width: 16px;
   padding: 0 2px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 3px;
+  border-radius: var(--vcn-radius-xs);
   color: color-mix(in srgb, var(--muted-foreground) 86%, transparent);
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: var(--vcn-font-size-glyph);
   font-weight: 700;
   line-height: 13px;
   text-align: center;
@@ -813,21 +1023,21 @@
 .file-change-text-format {
   flex: 0 0 auto;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
 
 .file-change-path-range {
   flex: 0 0 auto;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
 
 .tool-request-inline-progress {
   flex: 0 0 auto;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -842,7 +1052,7 @@
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   white-space: nowrap;
 }
 
@@ -852,11 +1062,10 @@
 .file-access-target { display: inline-flex; align-items: center; min-width: 0; gap: 6px; }
 .file-access-target > .file-type-icon { flex: none; }
 
-/* Tab roots, panels and the V1 adapter shell must not wrap the content viewport in another scrollbar. */
-/* Tab 根节点、面板和 V1 适配外壳不得在内容视口之外再包一层滚动条。 */
+/* Tab roots and panels must not wrap the content viewport in another scrollbar. */
+/* Tab 根节点和面板不得在内容视口之外再包一层滚动条。 */
 .tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .model-extension-tool-payloads,
-.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .model-extension-payload-body,
-.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .v1-tool-card-detail:has(> .model-extension-tool-payloads) {
+.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > .model-extension-payload-body {
   max-height: none; overflow: visible; scrollbar-gutter: auto;
 }
 .model-extension-payload-body > .markdown-tool-block,
@@ -895,7 +1104,7 @@
   max-width: 100%;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   background: color-mix(in srgb, var(--card) 86%, transparent);
 }
 
@@ -914,7 +1123,7 @@
   max-height: 315px;
   overflow: auto;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.45;
 }
 
@@ -925,7 +1134,7 @@
   padding: 12px 14px;
   color: color-mix(in srgb, var(--destructive) 20%, var(--muted-foreground));
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 400;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -935,7 +1144,7 @@
 .file-change-empty {
   padding: 12px 14px;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { readLocaleMessage, type TranslationKey } from "@/i18n";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import type { ToolJsonValue, ToolPayload } from "@/service/conversation-event-window-store";
-import { resolveV1ToolDomainPresentation, v1ModelResult } from "./v1-tool-domain-presentation";
+import { resolveV1ToolDomainPresentation as resolveWithLocale, v1ModelResult } from "./v1-tool-domain-presentation";
+
+/** Resolves one event with Chinese copy so assertions match the default UI locale.
+ * 使用中文文案解析一个事件，使断言与默认界面语言一致。 */
+const zh = (key: TranslationKey) => readLocaleMessage("zh-CN", key);
+const resolveV1ToolDomainPresentation = (tool: ToolCallEvent) => resolveWithLocale(tool, zh);
 
 /** Builds the exact bridge envelope, including JSON serialized inside model_output.
  * 构建精确桥接信封，包括 model_output 内序列化的 JSON。

@@ -19,6 +19,8 @@ import {
 } from "@/components/plugins/plugin-host-components";
 import { useI18n } from "@/i18n";
 import { invalidatePersistentPluginUiModules, loadPersistentPluginUiModule } from "@/service/plugin-ui-module-runtime";
+import { createPluginQueryClient, type PluginQueryOptions } from "@/service/plugin-ui-query-runtime";
+import { BROWSER_SERVICE_CONNECTION_EVENT, type BrowserServiceConnectionDetail } from "@/service/browser-service-discovery";
 import {
   invokePluginAction,
   loadPluginUiModule,
@@ -33,9 +35,9 @@ import {
   subscribePluginUiInvalidation,
 } from "@/service/plugin-ui-events";
 import type { PluginSummary } from "@/types";
-import { detectShellHost, type ShellHostMarker } from "@/shell/runtime";
-import { BrowserArea } from "@/components/features/browser/BrowserArea";
-import { ClientBrowserArea } from "@/components/features/browser/ClientBrowserArea";
+import { detectShellHost, type ShellHostMarker } from "@/host-shell/runtime";
+import { BrowserArea } from "@/components/features/browser/browser-area";
+import { ClientBrowserArea } from "@/components/features/browser/client-browser-area";
 
 // PluginUiSdk is the stable host context exposed to one authorized dynamic plugin module.
 // PluginUiSdk 是暴露给单个已授权动态插件模块的稳定宿主上下文。
@@ -55,7 +57,7 @@ interface PluginUiSdk {
   };
   // Invokes one action declared by the owning plugin manifest.
   // 调用所属插件清单声明的单个 Action。
-  invoke: <Result>(actionId: string, argumentsValue: unknown) => Promise<Result>;
+  invoke: <Result>(actionId: string, argumentsValue: unknown, options?: PluginQueryOptions) => Promise<Result>;
   // Reads one exact UTF-8 text asset declared in the owning plugin manifest.
   // 读取所属插件清单中声明的一个精确 UTF-8 文本资源。
   readTextAsset: (path: string) => Promise<string>;
@@ -220,6 +222,18 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
   // retryRevision represents an explicit reload of the authenticated module after a failure.
   // retryRevision 表示失败后显式重新加载已认证模块。
   const [retryRevision, setRetryRevision] = React.useState(0);
+  // Reopen the module boundary after transport recovery, even when the selected plugin is unchanged.
+  // 传输恢复后重新打开模块边界，即使所选插件没有改变。
+  React.useEffect(() => {
+    let interrupted = false;
+    const listener = (event: Event) => {
+      const status = (event as CustomEvent<BrowserServiceConnectionDetail>).detail.status;
+      if (status !== "connected") interrupted = true;
+      else if (interrupted) { interrupted = false; setRetryRevision(revision => revision + 1); }
+    };
+    window.addEventListener(BROWSER_SERVICE_CONNECTION_EVENT, listener);
+    return () => window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, listener);
+  }, []);
   // openPluginExternalUrl keeps allowlist overrides behind a direct trusted-host toast action.
   // openPluginExternalUrl 将白名单绕过限制在可信宿主 Toast 的直接操作之后。
   //
@@ -253,15 +267,12 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
   }, [t]);
   // sdk binds every action invocation to the selected plugin identity and host context.
   // sdk 把每次 Action 调用绑定到所选插件身份与宿主上下文。
-  const sdk = React.useMemo<Omit<PluginUiSdk, "t">>(() => ({
+  const sdk = React.useMemo<Omit<PluginUiSdk, "t" | "invoke">>(() => ({
     React,
     context: {
       conversationId: props.conversationId ?? null,
       clientHost: detectShellHost(),
     },
-    invoke: <Result,>(actionId: string, argumentsValue: unknown) => (
-      invokePluginAction<Result>(props.plugin.id, actionId, argumentsValue, props.workspacePath)
-    ),
     readTextAsset: async (path: string) => {
       // asset is authenticated against the current plugin identity and manifest allowlist.
       // asset 会根据当前插件身份与清单允许列表进行认证。
@@ -307,14 +318,19 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     // cancelled prevents a stale module from replacing a newer plugin selection.
     // cancelled 防止旧模块覆盖更新后的插件选择。
     let cancelled = false;
+    // Subscription cleanup leaves shared backend work alive for later mounts.
+    // 订阅清理保留共享后端任务，供之后的挂载复用。
+    let disposeQueries: (() => void) | undefined;
     setPanel(null);
     setError("");
+    const extension = props.plugin.extension;
+    if (!extension) { setError("Plugin UI requires a manifest-owned extension."); return; }
     // Load plugin-only styles at the actual mount boundary and wait before exposing any plugin component.
     // 在实际挂载边界加载插件专用样式，并等待完成后再展示任何插件组件。
     // Each retry creates a fresh import request rather than retaining a rejected application-level promise.
     // 每次重试重新发起导入请求，不保留应用层已拒绝 Promise。
     void Promise.all([
-      loadPersistentPluginUiModule(props.plugin.id, props.mount.id, loadPluginUiModule),
+      loadPersistentPluginUiModule(props.plugin.id, props.mount.id, extension.runtimeIdentity, loadPluginUiModule),
       import("@/styles/plugin-host-components.css"),
     ]).then(([{ namespace: moduleNamespace, source: moduleSource }]) => {
         if (cancelled) {
@@ -335,6 +351,17 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
         // moduleSdk 把与已加载界面源码同一认证包代次的翻译绑定到 SDK。
         const moduleSdk: PluginUiSdk = {
           ...sdk,
+          notifications: {
+            success: message => { if (!cancelled) sdk.notifications.success(message); },
+            error: message => { if (!cancelled) sdk.notifications.error(message); },
+          },
+          invoke: (() => {
+            const client = createPluginQueryClient({ pluginId: props.plugin.id, runtimeIdentity: moduleSource.runtimeIdentity,
+              workspacePath: props.workspacePath ?? null, conversationId: props.conversationId ?? null }, moduleSource.actionPolicies,
+              (actionId, argumentsValue, cancellation) => invokePluginAction(props.plugin.id, actionId, argumentsValue, moduleSource.runtimeIdentity, props.workspacePath, cancellation));
+            disposeQueries = client.dispose;
+            return client.invoke;
+          })(),
           t: (key, fallback) => localizedPluginMessage(moduleSource.messagesByLocale, locale, key) ?? fallback,
         };
         const component = (factory as PluginUiFactory)(moduleSdk);
@@ -352,17 +379,18 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       });
     return () => {
       cancelled = true;
+      disposeQueries?.();
     };
-  }, [locale, props.mount.id, props.plugin.id, sdk, retryRevision]);
+  }, [locale, props.mount.id, props.plugin.id, props.plugin.extension?.runtimeIdentity, props.workspacePath, props.conversationId, sdk, retryRevision]);
 
   if (error) {
     return <div className="space-y-2 rounded-md border border-border bg-card p-4 text-sm text-foreground" role="alert">
-      <p>{locale.startsWith("zh") ? "插件页面加载失败" : "Unable to load plugin page"}</p>
+      <p>{t("plugins.mount.unableToLoadPlugin")}</p>
       <Button size="sm" variant="outline" onClick={() => {
         invalidatePersistentPluginUiModules(props.plugin.id);
         setRetryRevision((revision) => revision + 1);
-      }}>{locale.startsWith("zh") ? "重试" : "Retry"}</Button>
-      <details><summary>{locale.startsWith("zh") ? "错误详情" : "Error details"}</summary>
+      }}>{t("plugins.mount.retry")}</Button>
+      <details><summary>{t("plugins.mount.errorDetails")}</summary>
         <pre className="max-w-full whitespace-pre-wrap break-words text-xs text-muted-foreground">{error}</pre>
       </details>
     </div>;

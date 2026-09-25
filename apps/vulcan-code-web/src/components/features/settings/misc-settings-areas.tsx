@@ -3,8 +3,6 @@ import {
   ChevronLeft,
   ChevronRight,
   GitCommitHorizontal,
-  RefreshCw,
-  Route,
   RotateCcw,
   Save,
   Trash2,
@@ -12,8 +10,6 @@ import {
 
 import { ModelPickerControl, modelPickerGroupKey } from "@/components/composer/model-picker-control"
 import { Button } from "@/components/ui/button"
-import { PanelTitle } from "@/components/shared/status"
-import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   AlertDialog,
@@ -29,7 +25,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
-import { useI18n } from "@/i18n"
+import { formatMessage, useI18n } from "@/i18n"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import type {
   ConversationSummary,
@@ -66,10 +62,7 @@ export function GitCommitSettingsArea(props: {
 }) {
   // Localized copy follows the active interface language.
   // 本地化文案跟随当前界面语言。
-  const { locale, t } = useI18n()
-  // text selects the matching interface copy.
-  // text 选择对应界面文案。
-  const text = (zh: string, en: string) => localizedLiteral(locale, zh, en)
+  const { t } = useI18n()
   // persistedDraft records only fields accepted by the save contract.
   // persistedDraft 仅记录保存契约接受的字段。
   const persistedDraft = {
@@ -139,7 +132,7 @@ export function GitCommitSettingsArea(props: {
     <section className="settings-detail-panel settings-preferences-page git-commit-settings-page">
       <fieldset className="settings-preferences-fields" disabled={saveState === "saving"}>
         <section className="settings-preferences-section">
-          <h2><GitCommitHorizontal size={16} />{text("谁来写提交说明", "Who writes commit messages")}</h2>
+          <h2><GitCommitHorizontal size={16} />{t("settings.misc.whoWritesCommitMessages")}</h2>
           <div className="settings-form-field">
             <span>{t("settings.gitCommit.summaryModel")}</span>
             <div className="settings-card-actions">
@@ -168,7 +161,7 @@ export function GitCommitSettingsArea(props: {
           </div>
         </section>
         <section className="settings-preferences-section">
-          <h2>{text("提交说明的写法", "How commit messages are written")}</h2>
+          <h2>{t("settings.misc.howCommitMessagesAre")}</h2>
           <label className="settings-form-field">
             <span>{t("settings.gitCommit.summaryExtraPrompt")}</span>
             <Textarea rows={4} value={draft.summaryExtraPrompt}
@@ -178,23 +171,23 @@ export function GitCommitSettingsArea(props: {
           </label>
         </section>
         <section className="settings-preferences-section">
-          <h2>{text("分支命名", "Branch naming")}</h2>
+          <h2>{t("settings.misc.branchNaming")}</h2>
           <label className="settings-form-field">
-            <span>{text("新分支名称前缀", "New branch name prefix")}</span>
+            <span>{t("settings.misc.newBranchNamePrefix")}</span>
             <Input value={draft.newBranchPrefix} placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
               onChange={(event) => setDraft({ ...draft, newBranchPrefix: event.currentTarget.value })} />
-            <small className="settings-muted-line">{text("效果", "Example")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code></small>
-            <small className="settings-muted-line">{text("只影响新建的分支；已经带前缀的分支名保持不变。", "Only affects new branches; names that already have a prefix stay as they are.")}</small>
+            <small className="settings-muted-line">{t("settings.misc.example")}：<code>{normalizeGitCommitBranchPrefix(draft.newBranchPrefix)}feature-name</code></small>
+            <small className="settings-muted-line">{t("settings.misc.onlyAffectsNewBranches")}</small>
           </label>
         </section>
       </fieldset>
       <div className="settings-preferences-footer">
-        <span role="status" className="settings-muted-line">{dirty ? text("有未保存的修改", "Unsaved changes") : saveState === "saved" ? text("已保存", "Saved") : ""}</span>
+        <span role="status" className="settings-muted-line">{dirty ? t("settings.misc.unsavedChanges") : saveState === "saved" ? t("settings.misc.saved") : ""}</span>
         <Button disabled={saveState === "saving" || !dirty} onClick={() => void saveDraft()} type="button">
-          <Save size={14} />{saveState === "saving" ? text("保存中…", "Saving…") : text("保存", "Save")}
+          <Save size={14} />{saveState === "saving" ? t("settings.misc.saving") : t("settings.misc.save")}
         </Button>
       </div>
-      {saveError ? <SettingsErrorNotice className="settings-save-error" detail={saveError} message={text("没能保存，你的修改还在，可以稍后再试。", "Couldn't save. Your changes are kept, so you can try again.")} /> : null}
+      {saveError ? <SettingsErrorNotice className="settings-save-error" detail={saveError} message={t("settings.misc.couldnTSaveYour")} /> : null}
     </section>
   )
 }
@@ -237,10 +230,7 @@ export function OutputStyleSettingsSection(props: {
 }) {
   // locale selects visible copy.
   // locale 选择显示文案。
-  const { locale } = useI18n()
-  // text resolves bilingual interface strings.
-  // text 解析双语界面文案。
-  const text = (zh: string, en: string) => localizedLiteral(locale, zh, en)
+  const { locale, t } = useI18n()
   // outputStyleId is the local editable selection.
   // outputStyleId 是本地可编辑选择。
   const [outputStyleId, setOutputStyleId] = React.useState(props.outputStyleCatalog.selectedId)
@@ -292,7 +282,7 @@ export function OutputStyleSettingsSection(props: {
   }
   return <div className="settings-form-grid">
     <label className="settings-form-field">
-      <span>{text("新会话的回答风格", "Answer style for new sessions")}</span>
+      <span>{t("settings.misc.answerStyleForNew")}</span>
       <Select disabled={saving} onValueChange={selectStyle} value={outputStyleId}>
         <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
         <SelectContent>{props.outputStyleCatalog.entries.map((entry) => (
@@ -300,9 +290,9 @@ export function OutputStyleSettingsSection(props: {
         ))}</SelectContent>
       </Select>
     </label>
-    <p className="settings-muted-line">{text("选择后立即生效于新会话；正在进行的会话会在下次压缩时切换。", "Takes effect for new sessions right away; ongoing sessions switch at their next compression.")}</p>
-    {saving || saved ? <p className="settings-muted-line" role="status">{saving ? text("正在保存…", "Saving…") : text("已保存", "Saved")}</p> : null}
-    {error ? <SettingsErrorNotice detail={error} message={text("没能保存，你的选择还在，可以重新选择一次再试。", "Couldn't save. Your selection is kept; pick it again to retry.")} /> : null}
+    <p className="settings-muted-line">{t("settings.misc.takesEffectForNew")}</p>
+    {saving || saved ? <p className="settings-muted-line" role="status">{saving ? t("settings.misc.saving2") : t("settings.misc.saved")}</p> : null}
+    {error ? <SettingsErrorNotice detail={error} message={t("settings.misc.couldnTSaveYour2")} /> : null}
   </div>
 }
 
@@ -320,8 +310,7 @@ export function ArchivedRestoreSettingsArea(props: {
   // 活动项目摘要。
   projects: ProjectSummary[]
 }) {
-  const { locale } = useI18n()
-  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const { t } = useI18n()
   const archivedConversations = props.conversations
   const [selectedConversationIds, setSelectedConversationIds] = React.useState<Set<string>>(new Set())
   const [currentPage, setCurrentPage] = React.useState(1)
@@ -404,7 +393,7 @@ export function ArchivedRestoreSettingsArea(props: {
   return (
     <section className="settings-preferences-page settings-detail-panel settings-archive-page">
       <div className="settings-archive-toolbar">
-        <span className="settings-muted-line">{text(`已选择 ${selectedCount} 项`, `${selectedCount} selected`)}</span>
+        <span className="settings-muted-line">{formatMessage(t("settings.misc.selected"), { selectedCount })}</span>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             disabled={selectedCount === 0 || operation !== "idle"}
@@ -412,7 +401,7 @@ export function ArchivedRestoreSettingsArea(props: {
             type="button"
           >
             <RotateCcw size={14} />
-            <span>{operation === "restoring" ? text("恢复中", "Restoring") : text("批量恢复", "Restore selected")}</span>
+            <span>{operation === "restoring" ? t("settings.misc.restoring") : t("settings.misc.restoreSelected")}</span>
           </Button>
           <Button
             variant="destructive"
@@ -421,61 +410,58 @@ export function ArchivedRestoreSettingsArea(props: {
             type="button"
           >
             <Trash2 size={14} />
-            <span>{operation === "deleting" ? text("删除中", "Deleting") : text("批量删除", "Delete selected")}</span>
+            <span>{operation === "deleting" ? t("settings.misc.deleting") : t("settings.misc.deleteSelected")}</span>
           </Button>
         </div>
       </div>
-      {actionError ? <SettingsErrorNotice detail={actionError} message={text("操作没有完成，已选中的会话保持不变，请再试一次。", "That didn't finish. Your selected conversations are unchanged; please try again.")} /> : null}
+      {actionError ? <SettingsErrorNotice detail={actionError} message={t("settings.misc.thatDidnTFinish")} /> : null}
       <AlertDialog onOpenChange={(open) => { if (!open) setDeleteTargetIds([]) }} open={deleteTargetIds.length > 0}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{text("彻底删除归档会话", "Permanently delete archived conversations")}</AlertDialogTitle>
+            <AlertDialogTitle>{t("settings.misc.permanentlyDeleteArchivedConversations")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {text(
-                `确定彻底删除已选择的 ${deleteTargetIds.length} 个归档会话吗？删除后无法恢复。`,
-                `Permanently delete ${deleteTargetIds.length} archived conversations? This cannot be undone.`,
-              )}
+              {formatMessage(t("settings.misc.permanentlyDeleteArchivedConversations2"), { length: deleteTargetIds.length })}
             </AlertDialogDescription>
             <ul className="max-h-40 overflow-auto text-sm">{deleteTargetIds.map((id) => <li key={id}>{archivedConversations.find((conversation) => conversation.id === id)?.title}</li>)}</ul>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{text("取消", "Cancel")}</AlertDialogCancel>
+            <AlertDialogCancel>{t("settings.misc.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={operation !== "idle" || deleteTargetIds.length === 0} onClick={() => void runArchivedConversationAction("delete", deleteTargetIds)} variant="destructive">
-              {text("彻底删除", "Delete permanently")}
+              {t("settings.misc.deletePermanently")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
       <div className="settings-archive-table-scroll">
         <table className="settings-archive-table">
-          <caption className="sr-only">{text("归档会话", "Archived conversations")}</caption>
+          <caption className="sr-only">{t("settings.misc.archivedConversations")}</caption>
           <thead><tr>
             <th className="settings-archive-selection"><label className="inline-flex items-center gap-2 whitespace-nowrap">
             <Checkbox
-              aria-label={text("全选归档会话", "Select all archived conversations")}
+              aria-label={t("settings.misc.selectAllArchivedConversations")}
               checked={allConversationsSelected ? true : selectedCount > 0 ? "indeterminate" : false}
               disabled={archivedConversations.length === 0 || operation !== "idle"}
               onCheckedChange={(checked) => toggleAllConversationSelection(checked === true)}
             />
-              <span>{text("全选", "Select all")}</span></label></th>
-            <th>{text("会话名称", "Conversation")}</th>
-            <th>{text("所属项目", "Project")}</th>
-            <th>{text("最近更新", "Last updated")}</th>
-            <th className="settings-archive-actions">{text("操作", "Actions")}</th>
+              <span>{t("settings.misc.selectAll")}</span></label></th>
+            <th>{t("settings.misc.conversation")}</th>
+            <th>{t("settings.misc.project")}</th>
+            <th>{t("settings.misc.lastUpdated")}</th>
+            <th className="settings-archive-actions">{t("settings.misc.actions")}</th>
           </tr></thead>
-          <tbody>{archivedConversations.length === 0 ? <tr><td colSpan={5} className="settings-archive-empty">{text("暂无归档会话。", "No archived conversations.")}</td></tr>
+          <tbody>{archivedConversations.length === 0 ? <tr><td colSpan={5} className="settings-archive-empty">{t("settings.misc.noArchivedConversations")}</td></tr>
             : visibleConversations.map((conversation) => <tr key={conversation.id} data-selected={selectedConversationIds.has(conversation.id)}>
-              <td><Checkbox aria-label={text(`选择会话 ${conversation.title}`, `Select conversation ${conversation.title}`)}
+              <td><Checkbox aria-label={formatMessage(t("settings.misc.selectConversation"), { title: conversation.title })}
                 checked={selectedConversationIds.has(conversation.id)} disabled={operation !== "idle"}
                 onCheckedChange={(checked) => toggleConversationSelection(conversation.id, checked === true)} /></td>
               <td className="settings-archive-title">{conversation.title}</td>
-              <td>{conversation.projectId ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? text("原项目不可用", "Original project unavailable") : text("独立会话", "Standalone conversation")}</td>
+              <td>{conversation.projectId ? props.projects.find((project) => project.id === conversation.projectId)?.name ?? t("settings.misc.originalProjectUnavailable") : t("settings.misc.standaloneConversation")}</td>
               <td className="whitespace-nowrap text-muted-foreground">{conversation.lastUpdatedLabel}</td>
               <td><div className="flex justify-end gap-2">
-                <Button size="sm" variant="outline" aria-label={text(`恢复会话 ${conversation.title}`, `Restore conversation ${conversation.title}`)} disabled={operation !== "idle"}
-                  onClick={() => void runArchivedConversationAction("restore", [conversation.id])}><RotateCcw size={14} />{text("恢复", "Restore")}</Button>
-                <Button size="sm" variant="ghost" className="text-destructive" aria-label={text(`删除会话 ${conversation.title}`, `Delete conversation ${conversation.title}`)} disabled={operation !== "idle"}
-                  onClick={() => setDeleteTargetIds([conversation.id])}><Trash2 size={14} />{text("删除", "Delete")}</Button>
+                <Button size="sm" variant="outline" aria-label={formatMessage(t("settings.misc.restoreConversation"), { title: conversation.title })} disabled={operation !== "idle"}
+                  onClick={() => void runArchivedConversationAction("restore", [conversation.id])}><RotateCcw size={14} />{t("settings.misc.restore")}</Button>
+                <Button size="sm" variant="ghost" className="text-destructive" aria-label={formatMessage(t("settings.misc.deleteConversation"), { title: conversation.title })} disabled={operation !== "idle"}
+                  onClick={() => setDeleteTargetIds([conversation.id])}><Trash2 size={14} />{t("settings.misc.delete")}</Button>
               </div></td>
             </tr>)}
           </tbody>
@@ -483,11 +469,11 @@ export function ArchivedRestoreSettingsArea(props: {
       </div>
       {archivedConversations.length > 0 ? (
         <div className="settings-pagination">
-          <span className="settings-muted-line">{text(`第 ${currentPage} / ${pageCount} 页`, `Page ${currentPage} of ${pageCount}`)}</span>
+          <span className="settings-muted-line">{formatMessage(t("settings.misc.pageOf"), { currentPage, pageCount })}</span>
           <div className="settings-card-actions">
-            <span className="settings-muted-line">{currentPageSelected ? text("本页已全选", "Current page selected") : text("可跨页保留选择", "Selection is kept across pages")}</span>
+            <span className="settings-muted-line">{currentPageSelected ? t("settings.misc.currentPageSelected") : t("settings.misc.selectionIsKeptAcross")}</span>
             <Button
-              aria-label={text("上一页", "Previous page")}
+              aria-label={t("settings.misc.previousPage")}
               variant="outline"
               size="icon-sm"
               disabled={currentPage <= 1 || operation !== "idle"}
@@ -497,7 +483,7 @@ export function ArchivedRestoreSettingsArea(props: {
               <ChevronLeft size={14} />
             </Button>
             <Button
-              aria-label={text("下一页", "Next page")}
+              aria-label={t("settings.misc.nextPage")}
               variant="outline"
               size="icon-sm"
               disabled={currentPage >= pageCount || operation !== "idle"}
@@ -513,8 +499,3 @@ export function ArchivedRestoreSettingsArea(props: {
   )
 }
 
-// localizedLiteral picks the display literal that matches the active locale.
-// localizedLiteral 按当前语言选择展示文本。
-function localizedLiteral(locale: string, zh: string, en: string): string {
-  return locale === "zh-CN" ? zh : en
-}

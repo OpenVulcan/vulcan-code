@@ -18,6 +18,7 @@ pub use internal_media::project_internal_request_for_provider;
 mod media_wire_validation;
 pub use media_wire_validation::validate_target_media_projection;
 mod reasoning_bridge;
+mod responses_plaintext_replay;
 mod responses_to_anthropic;
 mod responses_to_chat;
 mod responses_to_gemini;

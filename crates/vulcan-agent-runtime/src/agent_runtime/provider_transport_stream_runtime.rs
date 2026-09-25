@@ -775,9 +775,7 @@ where
                             );
                         let _ = task_sender.send(final_delta);
                         let _ = task_sender.send(Err(format!(
-                            "{}流式执行失败：{}。",
-                            provider_label,
-                            error
+                            "Provider streaming execution failed: {error}"
                         )));
                         break;
                     }

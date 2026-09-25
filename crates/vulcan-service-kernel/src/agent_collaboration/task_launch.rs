@@ -167,10 +167,12 @@ pub(super) fn schedule_task_wakeup(
     app: &crate::ServiceEventEmitter,
     invocation: &ValidatedInvocation,
     target_id: Uuid,
-) {
+) -> Result<(), String> {
+    let owner = dispatch_owner::DispatchOwner::acquire(&invocation.state, target_id)?;
     let app = app.clone();
     let invocation = invocation.clone();
     crate::spawn_service_task(async move {
+        let _owner = owner;
         if let Err(error) = wake_session_task(&app, &invocation, target_id).await {
             tracing::warn!(%target_id, %error, "Agent task wakeup failed");
             if let Err(diagnostic_error) = crate::push_webui_service_diagnostic(
@@ -181,6 +183,7 @@ pub(super) fn schedule_task_wakeup(
             }
         }
     });
+    Ok(())
 }
 
 /// Starts the oldest accepted task when its target has no competing business owner.
@@ -192,6 +195,7 @@ async fn wake_session_task(
     invocation: &ValidatedInvocation,
     target_id: Uuid,
 ) -> Result<bool, String> {
+    let _dispatch_owner = dispatch_owner::DispatchOwner::acquire(&invocation.state, target_id)?;
     let target =
         crate::session_goal_lifecycle::session_v1_handle_from_state(&invocation.state, target_id)
             .await?;
@@ -250,7 +254,7 @@ async fn wake_session_task(
                     format!("{error}; agent task claim settlement failed: {settlement_error}")
                 })?;
             if settled {
-                schedule_task_wakeup(app, invocation, target_id);
+                schedule_task_wakeup(app, invocation, target_id)?;
             }
             // Kernel-owned preparation failure may already have closed the turn even when our cleanup did not.
             // 内核持有的准备失败可能已闭合回合，即使本次清理没有再次修改。

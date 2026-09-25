@@ -267,6 +267,9 @@ impl VulcanPluginDescriptor {
 /// 由运行时准备过程原子消费的不可变目录修订版。
 #[derive(Debug, Clone)]
 pub struct VulcanPluginCatalogSnapshot {
+    /// Service-owned runtime incarnation, attached when the manager projects this catalog.
+    /// 由管理器投影目录时附加的服务运行实例身份。
+    pub service_epoch: String,
     /// Monotonic in-process revision assigned by the manager.
     /// 由管理器分配的进程内单调修订号。
     pub revision: u64,
@@ -317,6 +320,7 @@ impl VulcanPluginCatalogSnapshot {
     /// 返回修订号为零的空目录快照。
     pub fn empty(root: PathBuf) -> Self {
         Self {
+            service_epoch: String::new(),
             revision: 0,
             root,
             user_root: None,
@@ -1189,6 +1193,16 @@ fn validate_manifest_identity(
                 action.id
             ));
         }
+        if action.result_cache_ms > 0 && action.effect != crate::VulcanPluginActionEffect::Read {
+            return Err(format!("Plugin action `{}` may cache results only when explicitly declared read-only.", action.id));
+        }
+        if !action.snapshot_time_arguments.is_empty() && action.effect != crate::VulcanPluginActionEffect::Read {
+            return Err(format!("Plugin action `{}` may snapshot time only for read queries.", action.id));
+        }
+        if action.snapshot_time_arguments.iter().collect::<BTreeSet<_>>().len() != action.snapshot_time_arguments.len() {
+            return Err(format!("Plugin action `{}` repeats a snapshot time argument.", action.id));
+        }
+        for argument in &action.snapshot_time_arguments { validate_lua_identifier(argument, "snapshot time argument")?; }
         if action.callers.is_empty() {
             return Err(format!(
                 "Plugin action `{}` must declare at least one caller.",

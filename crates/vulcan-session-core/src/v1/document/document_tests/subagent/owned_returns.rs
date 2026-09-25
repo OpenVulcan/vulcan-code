@@ -4,6 +4,73 @@
 use super::*;
 use crate::v1::collaboration::*;
 
+/// A stopped parent accepts new input after its late child return, including after cold reconstruction.
+/// 停止的父会话在迟到子回流后可接纳新输入，包括冷重建之后。
+/// Returns domain errors; pending child ownership must remain intact until the genuine result arrives.
+/// 返回领域错误；真实结果到达之前必须完整保留待定子任务归属。
+#[test]
+fn inactive_admission_preserves_late_child_result_after_manual_stop() -> Result<(), DomainError> {
+    let (mut parent, turn, execution, input) = owned_return_fixture()?;
+    let api = parent.start_api(
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0 + 3,
+    )?;
+    parent.append_assistant_text(
+        api,
+        "waiting for child",
+        AssistantSemanticStatus::Completed,
+        T0 + 4,
+    )?;
+    complete_with_usage(&mut parent, api, UsageSnapshot::default(), T0 + 5)?;
+    parent.set_collaboration_run_control(SetRunControlInput {
+        operation_id: CollaborationOperationId::try_new("manual-stop")?,
+        state: CollaborationRunControl::MainOnly,
+        changed_at_ms: T0 + 6,
+    })?;
+    let submission = ClientInputSubmission::new(
+        ClientActionId::try_new("after-stop")?,
+        "new instruction",
+        vec![],
+    );
+    let before = parent.memory_revision();
+    assert!(
+        parent
+            .submit_root_input_after_execution_ended(submission.clone(), T0 + 7)
+            .is_err()
+    );
+    assert_eq!(parent.memory_revision(), before);
+    parent.complete_child_task_with_return(execution.clone(), input.clone(), T0 + 8)?;
+    parent.rebuild_derived_state()?;
+    parent.project_persisted_interruptions()?;
+    let next = parent
+        .submit_root_input_after_execution_ended(submission, T0 + 9)?
+        .into_value();
+    assert_ne!(next, turn);
+    assert!(
+        parent
+            .completion_obligations(turn)
+            .open_child_task_ids
+            .is_empty()
+    );
+    assert_eq!(
+        parent
+            .events()
+            .iter()
+            .filter(|event| matches!(event.event, EventBody::SubagentReturn(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !parent
+            .complete_child_task_with_return(execution, input, T0 + 10)?
+            .changed()
+    );
+    parent.rebuild_derived_state()?;
+    assert_eq!(parent.active_turn().unwrap().turn_id, next);
+    Ok(())
+}
+
 /// Accepts non-turn context injections without releasing foreign-turn or malformed ownership.
 /// 接纳非回合上下文注入，同时拒绝其他回合或错误归属。
 /// Returns domain errors; verifies the real child return, parent completion gate and durable replay.

@@ -170,6 +170,20 @@ async fn native_dispatch_send_notification_records_without_reply_contract() {
         .read(|document| document.collaboration_state().questions.len())
         .unwrap();
     assert_eq!(questions, 0);
+    // Sending a notification alone must never manufacture something for the sender to wait on.
+    // 仅发送通知不得为发送方制造可等待义务。
+    let dispatch = dispatch
+        .retool(vulcan_agent_runtime::tooling::collaboration::WAIT_AGENTS_RESULT_TOOL_ID)
+        .await;
+    let waited = dispatch
+        .invoke(AgentCollaborationCommand::WaitAgentsResult(
+            vulcan_agent_runtime::tooling::collaboration::WaitAgentsResultArgs {
+                timeout_ms: 60_000,
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(waited["status"], "no_pending_work");
 }
 
 /// Cancelling the source's own pending question must settle it through the real port.
@@ -299,7 +313,10 @@ async fn native_dispatch_cancel_failed_question_needs_no_target_acknowledgement(
     )
     .await
     .unwrap();
-    assert_eq!(failure, Some(CollaborationDeliveryFailureReason::TargetStopped));
+    assert_eq!(
+        failure,
+        Some(CollaborationDeliveryFailureReason::TargetStopped)
+    );
     let waited = dispatch
         .invoke(AgentCollaborationCommand::WaitQuestion(WaitQuestionArgs {
             question_id: question_id.as_str().to_owned(),
@@ -311,10 +328,12 @@ async fn native_dispatch_cancel_failed_question_needs_no_target_acknowledgement(
     assert_eq!(waited["status"], "failed");
     let dispatch = dispatch.retool(CANCEL_QUESTION_TOOL_ID).await;
     let cancelled = dispatch
-        .invoke(AgentCollaborationCommand::CancelQuestion(CancelQuestionArgs {
-            question_id: question_id.as_str().to_owned(),
-            reason: String::from("Rejected delivery no longer needed"),
-        }))
+        .invoke(AgentCollaborationCommand::CancelQuestion(
+            CancelQuestionArgs {
+                question_id: question_id.as_str().to_owned(),
+                reason: String::from("Rejected delivery no longer needed"),
+            },
+        ))
         .await
         .unwrap();
     assert_eq!(cancelled["status"], "ok");
@@ -323,17 +342,24 @@ async fn native_dispatch_cancel_failed_question_needs_no_target_acknowledgement(
         .source()
         .read(|document| {
             (
-                document.collaboration_state().requires_edit_or_delete_settlement(),
+                document
+                    .collaboration_state()
+                    .requires_edit_or_delete_settlement(),
                 document.delivery_snapshot(&delivery_id).cloned(),
             )
         })
         .unwrap();
-    assert!(!settled.0, "failed delivery needs no nonexistent target acknowledgement");
+    assert!(
+        !settled.0,
+        "failed delivery needs no nonexistent target acknowledgement"
+    );
     assert_eq!(settled.1.unwrap().state, CollaborationDeliveryState::Failed);
-    assert!(dispatch
-        .target
-        .read(|document| document.inbound_delivery_snapshot(&delivery_id).is_none())
-        .unwrap());
+    assert!(
+        dispatch
+            .target
+            .read(|document| document.inbound_delivery_snapshot(&delivery_id).is_none())
+            .unwrap()
+    );
 }
 
 /// Waiting on the caller's own unresolved question must return a bounded pending snapshot.

@@ -1322,12 +1322,38 @@ impl SessionHandle {
         self.session_id
     }
 
-    /// Starts a root Turn and publishes it before any Provider work begins.
-    /// 启动根回合，并在任何 Provider 工作开始前发布它。
+    /// Starts a strict fixture root without service-level idle reconciliation.
+    /// 不进行服务级空闲对账，启动严格测试夹具根回合。
+    #[cfg(test)]
     pub(crate) fn submit_root_input(
         &self,
         submission: ClientInputSubmission,
         now_ms: i64,
+    ) -> Result<SessionConditionalMutationReceipt<TurnId>, SessionRuntimeError> {
+        self.submit_root_input_with_idle_authority(submission, now_ms, false)
+    }
+
+    /// Publishes a new root after the caller excludes every physical execution owner.
+    /// 调用方排除全部物理执行所有者后，发布新根输入。
+    /// `submission` and `now_ms` retain input identity; the receipt covers old closure and new admission.
+    /// `submission` 与 `now_ms` 保留输入身份；回执覆盖旧回合闭合与新准入。
+    pub(crate) fn submit_root_input_after_execution_ended(
+        &self,
+        submission: ClientInputSubmission,
+        now_ms: i64,
+    ) -> Result<SessionConditionalMutationReceipt<TurnId>, SessionRuntimeError> {
+        self.submit_root_input_with_idle_authority(submission, now_ms, true)
+    }
+
+    /// Atomically publishes input and Running control, optionally settling a proven idle predecessor.
+    /// 原子发布输入与运行控制，可选结算已证实空闲的前序回合。
+    /// `execution_ended` requires caller-held dispatch exclusion; returns one durable receipt.
+    /// `execution_ended` 要求调用方持有分发互斥；返回一次可靠回执。
+    fn submit_root_input_with_idle_authority(
+        &self,
+        submission: ClientInputSubmission,
+        now_ms: i64,
+        execution_ended: bool,
     ) -> Result<SessionConditionalMutationReceipt<TurnId>, SessionRuntimeError> {
         let running_operation_id = CollaborationOperationId::try_new(format!(
             "root-input-running:{}:{}",
@@ -1340,7 +1366,11 @@ impl SessionHandle {
             SessionFlushReason::InputAccepted,
             move |document| {
                 document.apply_atomic_transition(move |document| {
-                    let turn_mutation = document.submit_root_input(submission, now_ms)?;
+                    let turn_mutation = if execution_ended {
+                        document.submit_root_input_after_execution_ended(submission, now_ms)?
+                    } else {
+                        document.submit_root_input(submission, now_ms)?
+                    };
                     match turn_mutation {
                         IdempotentMutation::Idempotent(turn_id) => {
                             Ok(SessionMutationChange::Unchanged((turn_id, None)))

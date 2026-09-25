@@ -33,12 +33,14 @@ lua_runtime:
   session_idle_timeout_sec: 300
   actions:
     - id: settings-get
+      effect: read
       function: settings_get
       output_schema_file: config/schema.json
       timeout_ms: 5000
       callers:
         - plugin_ui
     - id: settings-update
+      effect: mutation
       function: settings_update
       input_schema_file: config/schema.json
       output_schema_file: config/schema.json

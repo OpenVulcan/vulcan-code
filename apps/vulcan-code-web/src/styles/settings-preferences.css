@@ -6,7 +6,7 @@
 /* Only rows scroll; headers, batch actions and pagination remain available. */
 /* 仅表格行滚动，标题、批量操作和分页保持可用。 */
 .settings-archive-table-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
-.settings-archive-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.settings-archive-table { width: 100%; border-collapse: collapse; text-align: left; font-size: var(--vcn-font-size-md); }
 .settings-archive-table th { position: sticky; top: 0; z-index: 1; background: var(--background); color: var(--muted-foreground); font-weight: 500; }
 .settings-archive-table :is(th, td) { padding: 12px 10px; border-bottom: 1px solid var(--border); }
 .settings-archive-table tr[data-selected="true"] { background: var(--accent); }
@@ -32,7 +32,7 @@
 }
 .notification-settings-page .settings-preference-row {
   min-height: 36px;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
 }
 .notification-settings-page .settings-muted-line {
   margin: 0;
@@ -65,7 +65,7 @@
 .git-commit-settings-page .settings-preferences-section {
   padding: 18px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--vcn-radius-lg);
   background: var(--card);
   gap: 16px;
 }
@@ -77,19 +77,19 @@
   border-bottom: 1px solid var(--border);
 }
 .git-commit-settings-page .settings-form-field {
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 400;
 }
 .git-commit-settings-page .settings-form-field > span {
   font-weight: 500;
 }
 .git-commit-settings-page .settings-muted-line {
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
   line-height: 1.7;
 }
 .git-commit-settings-page :is(input, textarea) {
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   font-weight: 400;
 }
 
@@ -113,7 +113,7 @@
 }
 .settings-preferences-section h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   font-weight: 600;
 }
 .settings-preference-row {
@@ -137,7 +137,7 @@
 .settings-save-error {
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--destructive) 35%, var(--border));
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   color: var(--foreground);
 }
 .settings-save-error > p { color: var(--destructive); }
@@ -186,14 +186,14 @@
 
 .provider-trace-header h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
   font-weight: 600;
 }
 
 .provider-trace-header p {
   margin: 6px 0 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .provider-trace-toggle {
@@ -202,7 +202,7 @@
   gap: 12px;
   flex-shrink: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .provider-trace-information {
@@ -216,7 +216,7 @@
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr);
   gap: 16px;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
   line-height: 1.7;
 }
 
@@ -233,7 +233,7 @@
 .provider-trace-information code {
   display: block;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .provider-trace-actions {
@@ -261,7 +261,7 @@
   gap: 12px;
   padding: 10px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   overflow-wrap: anywhere;
 }
 

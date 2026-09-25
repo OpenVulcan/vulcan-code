@@ -47,6 +47,7 @@ lua_runtime:
     uninstall: on_uninstall
   actions:
     - id: bootstrap-get
+      effect: read
       function: bootstrap_get
       input_schema_file: schemas/usage-input.json
       output_schema_file: schemas/bootstrap-output.json
@@ -54,12 +55,14 @@ lua_runtime:
       callers:
         - plugin_ui
     - id: settings-get
+      effect: read
       function: settings_get
       output_schema_file: config/schema.json
       timeout_ms: 5000
       callers:
         - plugin_ui
     - id: settings-update
+      effect: mutation
       function: settings_update
       input_schema_file: config/schema.json
       output_schema_file: config/schema.json
@@ -67,12 +70,14 @@ lua_runtime:
       callers:
         - plugin_ui
     - id: credential-status
+      effect: read
       function: credential_status
       output_schema_file: schemas/credential-status-output.json
       timeout_ms: 5000
       callers:
         - plugin_ui
     - id: credential-set
+      effect: mutation
       function: credential_set
       input_schema_file: schemas/credential-set-input.json
       output_schema_file: schemas/credential-status-output.json
@@ -80,18 +85,21 @@ lua_runtime:
       callers:
         - plugin_ui
     - id: credential-delete
+      effect: mutation
       function: credential_delete
       output_schema_file: schemas/credential-status-output.json
       timeout_ms: 5000
       callers:
         - plugin_ui
     - id: connection-test
+      effect: mutation
       function: connection_test
       output_schema_file: schemas/connection-test-output.json
       timeout_ms: 65000
       callers:
         - plugin_ui
     - id: usage-get
+      effect: read
       function: usage_get
       input_schema_file: schemas/usage-input.json
       output_schema_file: schemas/usage-output.json

@@ -10,7 +10,7 @@ use vulcan_session_core::v1::ids::{ClientActionId, TurnId};
 /// 把来自 `target` 的一条真实已接纳问题记入等待中的来源会话。
 /// Returns the durable question identity so callers can assert the exact wake snapshot.
 /// 返回可靠问题身份，供调用方断言精确唤醒快照。
-fn admit_incoming_question(
+pub(super) fn admit_incoming_question(
     dispatch: &NativeDispatch,
     source_turn: u64,
     target_turn: u64,

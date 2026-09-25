@@ -79,9 +79,10 @@ impl ConversationHookRuntime {
                     binding.hook_turn_id.clone(),
                     binding.user_content.clone(),
                     binding.vmm_runtime_ready,
-                )
+                ).with_user_observation(binding.observes_user)
             });
-        if staged.turn_id != binding.hook_turn_id || staged.user_content != binding.user_content {
+        if staged.turn_id != binding.hook_turn_id || staged.user_content != binding.user_content
+            || staged.observes_user != binding.observes_user {
             return Err(String::from(
                 "Business Hook recovery state conflicts with the retained owner.",
             ));
@@ -195,6 +196,7 @@ impl ConversationHookRuntime {
                 hook_turn_id: turn.turn_id.clone(),
                 user_content: turn.user_content.clone(),
                 vmm_runtime_ready: turn.vmm_runtime_ready,
+                observes_user: turn.observes_user,
             },
         )
     }
@@ -223,6 +225,7 @@ impl ConversationHookRuntime {
         if let Some(existing) = self.active_turns.get(&session_id) {
             if existing.turn_id != binding.hook_turn_id
                 || existing.user_content != binding.user_content
+                || existing.observes_user != binding.observes_user
             {
                 return Err(String::from(
                     "Business Hook restoration conflicts with the retained owner.",
@@ -236,7 +239,7 @@ impl ConversationHookRuntime {
                 binding.hook_turn_id.clone(),
                 binding.user_content.clone(),
                 binding.vmm_runtime_ready,
-            ),
+            ).with_user_observation(binding.observes_user),
         );
         Ok(true)
     }
@@ -302,6 +305,7 @@ impl ConversationHookRuntime {
                 session_id,
                 profile_payload,
                 turn_id.clone(),
+                self.permits_user_observation(session_id),
             ),
             precheck: ConversationPrecheckRequest::new(
                 self.dispatcher.clone(),
@@ -443,6 +447,10 @@ impl ConversationHookRuntime {
         // Auxiliary preparation has its own durable execution identity and never owns a business Hook turn.
         // 辅助准备使用独立的持久执行身份，绝不持有业务 Hook 回合。
         let is_question_execution = source == PendingSessionPromptSource::QuestionExecution;
+        // Continuations inherit the restored origin; a new agent task cannot become a user observation.
+        // 续跑继承恢复后的来源；新代理任务不能成为用户观察。
+        let observes_user = source != PendingSessionPromptSource::AgentTask
+            && self.permits_user_observation(session_id);
         // Host, Goal and child-return continuation prompts are dispatch instructions, never user observations.
         // 宿主、Goal 和子回流续跑提示属于分发指令，绝不是用户观察。
         let is_host_continuation = matches!(
@@ -463,7 +471,8 @@ impl ConversationHookRuntime {
             let turn_id = new_conversation_turn_id(session_id);
             self.active_turns.insert(
                 session_id,
-                ActiveConversationTurn::new(turn_id.clone(), prompt.to_string(), vmm_runtime_ready),
+                ActiveConversationTurn::new(turn_id.clone(), prompt.to_string(), vmm_runtime_ready)
+                    .with_user_observation(observes_user),
             );
             turn_id
         } else if was_recorded_while_queued || is_host_continuation || timeline_prepared {
@@ -506,6 +515,7 @@ impl ConversationHookRuntime {
         // Preparing identity must not notify external observers before the host makes that identity durable.
         // 宿主使身份可靠落盘之前，准备身份不能通知外部观察器。
         let deferred_user_event = (!is_question_execution
+            && observes_user
             && !is_host_continuation
             && !was_recorded_while_queued
             && !timeline_prepared)
@@ -536,6 +546,7 @@ impl ConversationHookRuntime {
                 session_id,
                 profile_payload,
                 turn_id.clone(),
+                observes_user,
             ),
             precheck: ConversationPrecheckRequest::new(
                 self.dispatcher.clone(),
@@ -818,6 +829,7 @@ impl ConversationHookRuntime {
                 session_id,
                 payload,
                 completed_turn_id,
+                turn.observes_user,
             ),
         )
     }
@@ -832,6 +844,9 @@ impl ConversationHookRuntime {
         provider_request_count: usize,
     ) {
         let turn = self.active_turns.remove(&session_id);
+        if turn.as_ref().is_some_and(|turn| !turn.observes_user) {
+            return;
+        }
         self.dispatch_json(
             HOOK_CONVERSATION_TURN_TERMINATED,
             session_id,
@@ -922,6 +937,12 @@ impl ConversationHookRuntime {
         // 与延迟首次提示观察共用不可变宿主上下文构建。
         let request = super::user_event::prepared_hook_dispatch(point, session_id, payload, scope);
         spawn_hook_dispatch(self.dispatcher.clone(), request);
+    }
+
+    /// Returns the retained turn's observer policy; an unowned session keeps normal non-turn hook behavior.
+    /// 返回保留回合的观察策略；无回合所有者的会话保留正常的非回合钩子行为。
+    pub fn permits_user_observation(&self, session_id: SessionId) -> bool {
+        self.active_turns.get(&session_id).is_none_or(|turn| turn.observes_user)
     }
 }
 

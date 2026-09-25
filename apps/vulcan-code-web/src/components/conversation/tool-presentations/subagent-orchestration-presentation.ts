@@ -14,7 +14,6 @@ import {
   fixedHostKind,
   fixedHostPayload,
   fixedToolName,
-  metadataString,
   normalizeToolName,
   objectValue,
   numberValue,
@@ -52,6 +51,13 @@ export function resolveSubagentOrchestrationPresentation(
   const operationClosesAgents = operation === "close";
   const operationStopsAgents = operation === "close" || operation === "interrupt";
   return {
+    // ask_question returns the new ID; reply/wait/cancel receive an existing ID in their input.
+    // ask_question 返回新身份；回复、等待及撤销工具通过输入接收已有身份。
+    questionId: operation === "collaboration_question" ? stringValue(payload?.question_id)
+      : operation === "collaboration_answer" || operation === "collaboration_question_wait" || operation === "collaboration_cancel"
+        ? stringValue(args?.question_id) : null,
+    executionId: operation === "create" ? stringValue(payload?.execution_id) : null,
+    answerText: isCollaborationOperation(operation) ? stringValue(objectValue(payload?.answer)?.body) : null,
     agents: operationHasAgents ? subagentAgents(payload, blocks) : [],
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : true,
     debugSummary: subagentDebugSummary(payload?.debug),
@@ -80,7 +86,9 @@ export function resolveSubagentOrchestrationPresentation(
     stoppedCount: operationStopsAgents ? stoppedTaskCount(payload) : 0,
     stoppedTaskIds: operationStopsAgents ? stoppedTaskIds(payload) : [],
     target: subagentTarget(args, payload),
-    timedOut: operation === "wait" ? booleanValue(payload?.timed_out ?? payload?.timedOut) : null,
+    timedOut: operation === "wait" ? waitTimedOut(payload) : null,
+    waitNeedsReply: operation === "wait" && isUnifiedWaitPayload(payload) && payload?.status === "needs_reply",
+    waitCheckFailed: operation === "wait" && isUnifiedWaitPayload(payload) && payload?.status === "check_failed",
     noActiveAgents: operation === "wait" ? subagentWaitHasNoActiveAgents(payload) : false,
     interrupted: operation === "wait" ? booleanValue(payload?.interrupted) : null,
     terminalEventReceived: operation === "wait" ? subagentWaitTerminalEventReceived(payload) : false,
@@ -127,6 +135,9 @@ function mergeSubagentPayload(
   const operationStopsAgents = presentation.operation === "close" || presentation.operation === "interrupt";
   return {
     ...presentation,
+    // Hydrated collaboration receipts carry the same typed answer body as the initial payload.
+    // 补载协作回执携带与初始载荷相同的强类型回答正文。
+    answerText: isCollaborationOperation(presentation.operation) ? stringValue(objectValue(payload.answer)?.body) : presentation.answerText,
     agents,
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : presentation.agentsKnown,
     debugSummary: isCollaborationOperation(presentation.operation)
@@ -157,8 +168,12 @@ function mergeSubagentPayload(
       ? presentation.target
       : presentation.target ?? stringValue(payload.target),
     timedOut: presentation.operation === "wait"
-      ? booleanValue(payload.timed_out ?? payload.timedOut) ?? presentation.timedOut
+      ? waitTimedOut(payload) ?? presentation.timedOut
       : presentation.timedOut,
+    waitNeedsReply: presentation.operation === "wait" && isUnifiedWaitPayload(payload)
+      ? payload.status === "needs_reply" : presentation.waitNeedsReply,
+    waitCheckFailed: presentation.operation === "wait" && isUnifiedWaitPayload(payload)
+      ? payload.status === "check_failed" : presentation.waitCheckFailed,
     noActiveAgents: presentation.operation === "wait"
       ? subagentWaitHasNoActiveAgents(payload) || presentation.noActiveAgents
       : presentation.noActiveAgents,
@@ -229,7 +244,7 @@ function subagentPayloadMatchesOperation(
     return true;
   }
   if (operation === "wait") {
-    return "message" in payload || "timed_out" in payload || "timedOut" in payload || "interrupted" in payload;
+    return isUnifiedWaitPayload(payload) || "message" in payload || "timed_out" in payload || "timedOut" in payload || "interrupted" in payload;
   }
   if (operation === "agent_orchestration_info" || operation === "list_agents") {
     return Array.isArray(payload.agents);
@@ -286,6 +301,7 @@ function subagentOperation(
   payloadHint: Record<string, unknown> | null,
 ): SubagentOrchestrationPresentation["operation"] | null {
   const normalized = toolName ? normalizeToolName(toolName) : null;
+  if (normalized === "wait_agents_result") return "wait";
   if (normalized === "ask_question" || normalized === "ask_parent") return "collaboration_question";
   if (normalized === "reply_question") return "collaboration_answer";
   if (normalized === "send_session_message") return "collaboration_steer";
@@ -583,6 +599,7 @@ function subagentWaitTerminalEventReceived(
   // 宿主或正文载荷。
   payload: Record<string, unknown> | null,
 ): boolean {
+  if (isUnifiedWaitPayload(payload)) return payload?.status === "messages";
   const terminalEventCount = numberValue(payload?.terminal_event_count ?? payload?.terminalEventCount);
   if (terminalEventCount !== null && terminalEventCount > 0) {
     return true;
@@ -604,11 +621,27 @@ function subagentWaitHasNoActiveAgents(
   // 宿主或正文载荷。
   payload: Record<string, unknown> | null,
 ): boolean {
+  if (isUnifiedWaitPayload(payload)) return payload?.status === "no_pending_work";
   if (booleanValue(payload?.no_active_agents ?? payload?.noActiveAgents) === true) {
     return true;
   }
   return stringValue(payload?.activity_status ?? payload?.activityStatus)?.toLowerCase()
     === "no_active_agents";
+}
+
+// isUnifiedWaitPayload validates the single inbox contract without interpreting question revisions.
+// isUnifiedWaitPayload 校验统一收件契约，不解读问题修订号。
+function isUnifiedWaitPayload(payload: Record<string, unknown> | null): boolean {
+  return payload !== null && Array.isArray(payload.reports)
+    && typeof payload.context_messages_pending === "boolean"
+    && (payload.status === "messages" || payload.status === "timeout" || payload.status === "no_pending_work" || payload.status === "interrupted"
+      || payload.status === "needs_reply" || payload.status === "check_failed");
+}
+
+// waitTimedOut reads the declared unified result or the existing native mailbox contract.
+// waitTimedOut 读取已声明统一结果或现有原生邮箱契约。
+function waitTimedOut(payload: Record<string, unknown> | null): boolean | null {
+  return isUnifiedWaitPayload(payload) ? payload?.status === "timeout" : booleanValue(payload?.timed_out ?? payload?.timedOut);
 }
 
 // isCollaborationOperation identifies the exact native collaboration card family.

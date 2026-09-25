@@ -492,6 +492,7 @@ impl VulcanPluginRuntimeManager {
         snapshot: &mut VulcanPluginCatalogSnapshot,
     ) -> Result<(), VulcanPluginRuntimeError> {
         let previous = self.snapshot();
+        snapshot.service_epoch = self.state.manager_id.clone();
         let active_counts = self.state.active_session_counts.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
         })?;

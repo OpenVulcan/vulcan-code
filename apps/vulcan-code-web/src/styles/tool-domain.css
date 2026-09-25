@@ -1,14 +1,14 @@
 /* Scope result hierarchy to V1 tool bodies and inherit existing light/dark semantic tokens.
  * 将结果层级限定在 V1 工具正文，继承既有明暗主题语义令牌。 */
-.v1-tool-domain { display: grid; gap: 12px; min-width: 0; padding: 8px 0; font-size: 12px; container-type: inline-size; }
+.v1-tool-domain { display: grid; gap: 12px; min-width: 0; padding: 8px 0; font-size: var(--vcn-font-size-sm); container-type: inline-size; }
 .v1-tool-domain-section { min-width: 0; }
 /* Generated files show their host-owned path without introducing another bounded scroll panel. */
 /* 生成文件展示宿主持有的路径，不引入另一层限高滚动面板。 */
-.tool-media-result { display: grid; gap: 10px; min-width: 0; padding: 8px 0; font-size: 12px; }
-.tool-media-resource { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--card) 65%, transparent); }
+.tool-media-result { display: grid; gap: 10px; min-width: 0; padding: 8px 0; font-size: var(--vcn-font-size-sm); }
+.tool-media-resource { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--vcn-radius-lg); background: color-mix(in srgb, var(--card) 65%, transparent); }
 .tool-media-resource header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
 .tool-media-resource header strong { color: var(--foreground); overflow-wrap: anywhere; }
-.tool-media-resource header span, .tool-media-local-path > span, .tool-media-reference summary { color: var(--muted-foreground); font-size: 11px; }
+.tool-media-resource header span, .tool-media-local-path > span, .tool-media-reference summary { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
 .tool-media-local-path { display: grid; gap: 5px; margin-top: 10px; }
 .tool-media-local-path code, .tool-media-reference code { display: block; user-select: text; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); line-height: 1.6; }
 .tool-media-reference { margin-top: 8px; }
@@ -16,30 +16,30 @@
 .tool-media-reference code { margin-top: 4px; }
 /* Task progress is a compact checklist rather than a repeated key/value form. */
 /* 任务进度使用紧凑清单，而不是重复的键值表单。 */
-.tool-todo-card { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--card) 65%, transparent); }
+.tool-todo-card { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--vcn-radius-lg); background: color-mix(in srgb, var(--card) 65%, transparent); }
 .tool-todo-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--foreground); font-weight: 500; }
-.tool-todo-count { color: var(--muted-foreground); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tool-todo-progress { height: 3px; overflow: hidden; border-radius: 3px; margin: 8px 0; background: var(--muted); }
+.tool-todo-count { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tool-todo-progress { height: 3px; overflow: hidden; border-radius: var(--vcn-radius-xs); margin: 8px 0; background: var(--muted); }
 .tool-todo-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
 .tool-todo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.tool-todo-item { display: flex; align-items: flex-start; gap: 8px; padding: 7px 6px; border-radius: 6px; line-height: 1.55; }
+.tool-todo-item { display: flex; align-items: flex-start; gap: 8px; padding: 7px 6px; border-radius: var(--vcn-radius-sm); line-height: 1.55; }
 .tool-todo-status { flex: none; display: flex; padding-top: 2px; color: var(--muted-foreground); }
 .tool-todo-step { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--foreground); }
 .tool-todo-item[data-status="completed"] .tool-todo-step { color: var(--muted-foreground); }
 .tool-todo-item[data-status="completed"] .tool-todo-status { color: var(--vcn-content-success); }
 .tool-todo-item[data-status="in_progress"] { background: color-mix(in srgb, var(--primary) 7%, transparent); }
 .tool-todo-item[data-status="in_progress"] .tool-todo-status { color: var(--primary); }
-.tool-todo-active-label { flex: none; font-size: 10px; color: var(--primary); padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--primary) 9%, transparent); }
+.tool-todo-active-label { flex: none; font-size: var(--vcn-font-size-2xs); color: var(--primary); padding: 1px 6px; border-radius: var(--vcn-radius-xs); background: color-mix(in srgb, var(--primary) 9%, transparent); }
 /* Model references separate identity, useful parameters and exact schema instead of nesting field grids. */
 /* 模型参考分离身份、常用参数与精确模式，不再嵌套字段网格。 */
-.tool-model-parameters-result { display: grid; gap: 10px; padding: 8px 0; min-width: 0; font-size: 12px; }
-.tool-model-card { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--card) 65%, transparent); }
+.tool-model-parameters-result { display: grid; gap: 10px; padding: 8px 0; min-width: 0; font-size: var(--vcn-font-size-sm); }
+.tool-model-card { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--vcn-radius-lg); background: color-mix(in srgb, var(--card) 65%, transparent); }
 .tool-model-heading { display: grid; gap: 4px; }
-.tool-model-heading strong { font-size: 13px; color: var(--foreground); }
+.tool-model-heading strong { font-size: var(--vcn-font-size-md); color: var(--foreground); }
 .tool-model-heading code { color: var(--muted-foreground); overflow-wrap: anywhere; }
 .tool-model-description { margin: 8px 0; color: var(--muted-foreground); line-height: 1.6; }
 .tool-model-profile { margin-top: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.tool-model-card h4 { margin: 0 0 6px; font-size: 11px; font-weight: 600; color: var(--muted-foreground); }
+.tool-model-card h4 { margin: 0 0 6px; font-size: var(--vcn-font-size-xs); font-weight: 600; color: var(--muted-foreground); }
 .tool-model-profile ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .tool-model-parameters { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
 .tool-model-parameters > ul { padding: 0; margin: 0; list-style: none; }
@@ -47,25 +47,25 @@
 .tool-model-parameter + .tool-model-parameter { border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent); }
 .tool-model-parameter-name { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .tool-model-parameter-name > code { font-weight: 500; color: var(--foreground); overflow-wrap: anywhere; }
-.tool-model-type, .tool-model-optional, .tool-model-default { color: var(--muted-foreground); font-size: 11px; }
-.tool-model-required { font-size: 10px; color: var(--primary); background: color-mix(in srgb, var(--primary) 9%, transparent); padding: 1px 5px; border-radius: 4px; }
+.tool-model-type, .tool-model-optional, .tool-model-default { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
+.tool-model-required { font-size: var(--vcn-font-size-2xs); color: var(--primary); background: color-mix(in srgb, var(--primary) 9%, transparent); padding: 1px 5px; border-radius: var(--vcn-radius-xs); }
 .tool-model-parameter p { margin: 4px 0 0; line-height: 1.6; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .tool-model-options { display: flex; gap: 4px 6px; flex-wrap: wrap; margin-top: 6px; }
-.tool-model-options > * { border-radius: 4px; background: var(--muted); padding: 2px 6px; font-size: 11px; overflow-wrap: anywhere; }
+.tool-model-options > * { border-radius: var(--vcn-radius-xs); background: var(--muted); padding: 2px 6px; font-size: var(--vcn-font-size-xs); overflow-wrap: anywhere; }
 .tool-model-default { margin-top: 5px; overflow-wrap: anywhere; }
-.tool-model-schema-note { color: var(--muted-foreground); font-size: 11px; }
+.tool-model-schema-note { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
 .tool-model-schema-details, .tool-model-instruction { margin-top: 8px; }
-.tool-model-schema-details summary, .tool-model-instruction summary { cursor: pointer; color: var(--muted-foreground); font-size: 11px; }
-.tool-model-schema { margin: 8px 0 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11px; line-height: 1.6; }
+.tool-model-schema-details summary, .tool-model-instruction summary { cursor: pointer; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
+.tool-model-schema { margin: 8px 0 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--vcn-radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--vcn-font-size-xs); line-height: 1.6; }
 .tool-model-instruction p { color: var(--muted-foreground); line-height: 1.6; overflow-wrap: anywhere; }
-.v1-tool-domain-section h4 { margin: 0 0 6px; color: var(--muted-foreground); font-size: 11px; font-weight: 600; }
+.v1-tool-domain-section h4 { margin: 0 0 6px; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); font-weight: 600; }
 /* Package summaries keep common successful queries short and reserve space for actual problems.
  * 技能包摘要压缩常见成功查询，仅为实际问题保留空间。 */
 .v1-tool-config-package { min-width: 0; }
 .v1-tool-config-package + .v1-tool-config-package { border-top: 1px solid var(--border); padding-top: 10px; }
 .v1-tool-config-heading { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .v1-tool-config-heading strong { overflow-wrap: anywhere; min-width: 0; }
-.v1-tool-config-state { margin-left: auto; color: var(--muted-foreground); font-size: 11px; }
+.v1-tool-config-state { margin-left: auto; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
 .v1-tool-config-state[data-complete="false"], .v1-tool-config-issues { color: var(--destructive); }
 .v1-tool-config-issues { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; }
 .v1-tool-domain-fields { display: grid; gap: 6px; margin: 0; }
@@ -79,9 +79,5 @@
 .v1-tool-domain-error { color: var(--destructive); white-space: pre-wrap; overflow-wrap: anywhere; }
 .v1-tool-domain a { color: var(--primary); text-decoration: underline; overflow-wrap: anywhere; }
 .v1-tool-domain-markdown { max-height: 380px; overflow: auto; }
-.v1-tool-domain-raw { padding: 4px 12px 10px; border-top: 1px solid var(--border); }
 .v1-tool-domain-raw-toggle { color: var(--muted-foreground); }
-.v1-tool-domain-raw-heading { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted-foreground); }
-.v1-tool-domain-raw-payload pre { max-height: 300px; margin: 0; overflow: auto; padding: 8px; font-size: 11px; background: var(--background); color: var(--foreground); user-select: text; }
-.v1-tool-card .v1-tool-card-failure-summary { padding: 4px 14px 8px; color: var(--destructive); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @container (max-width: 420px) { .v1-tool-domain-field { grid-template-columns: minmax(0, 1fr); gap: 2px; } }

@@ -273,9 +273,9 @@ export function LuaSkillsSettingsPanel(props: {
   // 服务端支持的 LuaSkills 页面动作。
   actions: SkillActionProps
 }) {
-  // t and locale resolve labels and external-change feedback for the current interface locale.
-  // t 与 locale 为当前界面语言解析标签及外部变更反馈。
-  const { t, locale } = useI18n()
+  // t resolves labels and external-change feedback for the current interface locale.
+  // t 为当前界面语言解析标签及外部变更反馈。
+  const { t } = useI18n()
   // draft stores the editable complete package settings document.
   // draft 保存可编辑的完整包设置文档。
   const [draft, setDraft] = React.useState<LuaSkillsRuntimeSettings>(() => (
@@ -519,9 +519,9 @@ export function LuaSkillsSettingsPanel(props: {
 
       <fieldset disabled={saving || retryingTarget !== null} className="lua-settings-content min-w-0 border-0 p-0">
         {externalUpdate ? <div className="text-sm text-[var(--vcn-content-warning)]" role="status">
-          <p>{locale.startsWith("zh") ? "设置已在其他位置更新，当前编辑已保留。保存会使用当前草稿。" : "Settings changed elsewhere. Your edits are retained; saving will use this draft."}</p>
+          <p>{t("skills.luaSettings.settingsChangedElsewhereYour")}</p>
           <Button variant="outline" size="sm" onClick={() => { setDraft(cloneLuaSkillsRuntimeSettings(committedSettings)); setExternalUpdate(false) }}>
-            {locale.startsWith("zh") ? "舍弃草稿并载入最新设置" : "Discard draft and load latest settings"}
+            {t("skills.luaSettings.discardDraftAndLoad")}
           </Button>
         </div> : null}
         <div className="lua-managed-runtime-list">

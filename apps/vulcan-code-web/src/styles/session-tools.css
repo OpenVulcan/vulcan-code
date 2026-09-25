@@ -145,7 +145,7 @@
 .conversation-session-todolist-header-actions strong {
   flex: 0 0 auto;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
 }
 
@@ -211,7 +211,7 @@
   gap: 24px;
   padding: 0 3px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
   line-height: 1.2;
   user-select: none;
@@ -226,13 +226,13 @@
   display: inline-flex;
   align-items: center;
   gap: 24px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
 .conversation-session-tool-section-title strong {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
@@ -271,23 +271,46 @@
   padding-right: 32px;
 }
 
+/* The Git settings entry rests as a quiet section label and reveals itself as a button only under the pointer. */
+/* Git 设置入口静置时是安静的分区标签，仅在指针悬停时显现为按钮。 */
 .conversation-session-review-manager-trigger {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   min-height: 22px;
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  margin-left: -3px;
+  padding: 2px 6px 2px 3px;
+  border: 0;
+  border-radius: var(--vcn-radius-sm);
   color: var(--muted-foreground);
   background: transparent;
-  font-size: 10px;
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 600;
+  line-height: 1.2;
   cursor: pointer;
+  transition:
+    color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out),
+    background-color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
 }
 
-.conversation-session-review-manager-trigger:hover {
+.conversation-session-review-manager-trigger svg {
+  opacity: 0.7;
+}
+
+.conversation-session-review-manager-trigger:hover,
+.conversation-session-review-manager-trigger:focus-visible {
   color: var(--foreground);
-  background: color-mix(in srgb, var(--muted) 70%, transparent);
+  background: var(--vcn-fill-hover, var(--muted));
+}
+
+.conversation-session-review-manager-trigger:hover svg,
+.conversation-session-review-manager-trigger:focus-visible svg {
+  opacity: 1;
+}
+
+.conversation-session-review-manager-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 
 .conversation-session-review-manager-dialog {
@@ -307,7 +330,7 @@
   gap: 8px;
   padding: 7px 8px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--vcn-radius-md);
 }
 
 .conversation-session-review-manager-check {
@@ -338,12 +361,12 @@
 
 .conversation-session-review-manager-check strong {
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .conversation-session-review-manager-check small {
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--vcn-font-size-2xs);
 }
 
 .conversation-session-review-manager-order {
@@ -357,45 +380,84 @@
   height: 24px;
 }
 
-/* Repository metadata and monitoring controls keep each Git node independently readable. */
-/* 仓库元数据与监听控件保持每个 Git 节点独立且清晰可读。 */
-.conversation-session-review-repository-path {
-  display: block;
-  max-width: 220px;
-  margin-top: 2px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-  font-weight: 400;
+/* Each repository title shows its name; in multi-repository panels the name folds the group and a folded group keeps its line delta. */
+/* 每个仓库标题展示名称；多仓库时名称可折叠分组，折叠后仍保留行数增减。 */
+.conversation-session-review-group-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conversation-session-review-monitor-toggle {
-  flex: 0 0 auto;
-  min-height: 20px;
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted-foreground);
+.conversation-session-review-group-toggle {
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 6px 2px 3px;
+  border: 0;
+  border-radius: var(--vcn-radius-sm);
   background: transparent;
-  font-size: 10px;
-  line-height: 1.2;
+  font-family: inherit;
+  text-align: left;
   cursor: pointer;
+  transition:
+    color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out),
+    background-color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
 }
 
-.conversation-session-review-monitor-toggle.active {
-  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
-  color: var(--primary);
+.conversation-session-review-group-toggle:hover,
+.conversation-session-review-group-toggle:focus-visible {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--muted) 76%, transparent);
 }
 
-.conversation-session-review-monitor-toggle:hover {
-  background: color-mix(in srgb, var(--muted) 70%, transparent);
+.conversation-session-review-group-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 
-.conversation-session-review-monitor-toggle:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
+.conversation-session-review-group-heading {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.conversation-session-review-group-chevron {
+  flex: 0 0 auto;
+  opacity: 0.7;
+  transition: transform var(--vcn-duration-base, 180ms) var(--vcn-ease-out, ease-out);
+}
+
+.conversation-session-review-group-toggle[aria-expanded="true"] .conversation-session-review-group-chevron {
+  transform: rotate(90deg);
+}
+
+.conversation-session-review-title-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
+
+.conversation-session-review-title-status:empty {
+  display: none;
+}
+
+.conversation-session-review-title-status .conversation-session-review-delta {
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 400;
+}
+
+/* Repository groups follow each other without a divider; only the todo and Git areas stay separated. */
+/* 仓库分组之间不再绘制分隔线；仅保留待办区与 Git 区之间的分隔。 */
+.conversation-session-review-section + .conversation-session-review-section {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.conversation-session-review-section.is-foldable + .conversation-session-review-section.is-foldable {
+  margin-top: 2px;
 }
 
 .conversation-session-review-error {
@@ -406,7 +468,7 @@
   height: 14px;
   border-radius: 50%;
   color: var(--destructive);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 700;
 }
 
@@ -419,7 +481,7 @@
   width: 100%;
   height: 22px;
   cursor: default;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
 }
 
@@ -443,7 +505,7 @@
 
 .conversation-session-review-row strong {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   white-space: nowrap;
 }
 
@@ -487,7 +549,7 @@
   height: 26px;
   min-height: 26px;
   cursor: default;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
 }
 
@@ -516,14 +578,14 @@
 .conversation-session-terminal-summary strong {
   flex: 0 0 auto;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 600;
 }
 
 .conversation-session-terminal-summary .conversation-session-terminal-name {
   flex: 0 1 auto;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 500;
 }
 
@@ -531,7 +593,7 @@
   flex: 1 2 auto;
   color: var(--muted-foreground);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
 }
 
 .conversation-session-terminal-action {
@@ -584,7 +646,7 @@
   margin: 0;
   color: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -602,10 +664,10 @@
   padding: 0;
   overflow: hidden;
   border: 0;
-  background: #111318;
-  color: #f4f4f5;
+  background: var(--vcn-terminal-surface);
+  color: var(--vcn-terminal-foreground);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
   white-space: pre;
 }
@@ -618,7 +680,7 @@
 
 .terminal-stop-confirm-body span {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -628,11 +690,11 @@
 .terminal-stop-confirm-body code {
   background: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   color: var(--foreground);
   display: block;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.5;
   max-height: 120px;
   overflow: auto;
@@ -644,7 +706,7 @@
 .conversation-session-todolist-explanation {
   margin: 2px 3px 1px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -658,7 +720,7 @@
   height: auto;
   min-height: 22px;
   padding: 2px 9px;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.2;
   cursor: default;
   font-weight: 400;
@@ -704,7 +766,7 @@
   min-height: 0;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vcn-radius-md);
   padding: 14px;
   overflow: auto;
 }
@@ -735,7 +797,7 @@
   height: 24px;
   min-height: 24px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 400;
 }
 
@@ -758,7 +820,7 @@
 .conversation-session-subagent-state {
   color: var(--muted-foreground);
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   font-weight: 600;
 }
 

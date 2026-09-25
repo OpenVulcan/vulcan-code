@@ -748,7 +748,7 @@ export function createPluginPanel(sdk) {
     const dashboardView = section === "details" ? "details" : "overview";
     // Apply one exact time interval to all usage queries; null end follows query time.
     // 为所有用量查询应用同一精确时间区间；空终点跟随查询时刻。
-    const [timeRange, setTimeRange] = React.useState(() => presetTimeRange(30));
+    const [timeRange, setTimeRange] = React.useState(() => ({ ...presetTimeRange(30), endAtMs: null }));
     // modelQuery and sortOrder bind explicit search and chronological ordering to the server.
     // modelQuery 与 sortOrder 将明确搜索和时间排序绑定到服务端。
     const [modelQuery, setModelQuery] = React.useState("");
@@ -785,12 +785,9 @@ export function createPluginPanel(sdk) {
     // requestSequence rejects earlier responses after range changes or unmount.
     // requestSequence 拒绝范围变更或卸载后返回的旧响应。
     const requestSequence = React.useRef(0);
-    // dashboardInFlight coalesces identical concurrent reads, including StrictMode setup replay.
-    // dashboardInFlight 合并相同并发读取，包括 StrictMode 的初始化重放。
-    const dashboardInFlight = React.useRef(null);
-    // settingsRequest shares the initial independent settings action across effect replay.
-    // settingsRequest 在 Effect 重放间共享首次独立设置 Action。
-    const settingsRequest = React.useRef(null);
+    // dashboardSubscription detaches superseded filters; the host owns shared execution.
+    // dashboardSubscription 移除过期筛选订阅；宿主持有共享执行。
+    const dashboardSubscription = React.useRef(null);
     // dashboard stores the latest schema-validated host statistics snapshot.
     // dashboard 保存最近一份通过 Schema 校验的宿主统计快照。
     const [dashboard, setDashboard] = React.useState(null);
@@ -841,6 +838,11 @@ export function createPluginPanel(sdk) {
       // sequence captures the exact filter request represented by this response.
       // sequence 捕获当前响应代表的精确筛选请求。
       const sequence = ++requestSequence.current;
+      dashboardSubscription.current?.abort();
+      // subscription owns only this view's result delivery, not the underlying action.
+      // subscription 仅持有此视图的结果投递，不持有底层 Action。
+      const subscription = new AbortController();
+      dashboardSubscription.current = subscription;
       // Track the exact tables changed relative to the last successfully displayed filters.
       // 相对最近成功展示的筛选条件，记录发生变化的精确表格。
       let changedTables = null;
@@ -849,12 +851,12 @@ export function createPluginPanel(sdk) {
         // argumentsValue 捕获声明的查询契约，以精确合并相同请求。
         const argumentsValue = {
           view: dashboardView,
-          startAtMs: timeRange.startAtMs, endAtMs: timeRange.endAtMs ?? Date.now(), consumerId: consumerFilter === ALL_CONSUMERS ? "" : consumerFilter,
+          startAtMs: timeRange.startAtMs, endAtMs: timeRange.endAtMs, consumerId: consumerFilter === ALL_CONSUMERS ? "" : consumerFilter,
           dailyOffset, recentOffset, recentModelType, modelQuery, sortOrder,
         };
         // key compares only immutable action arguments, never SQL or runtime guesses.
         // key 仅比较不可变 Action 参数，不使用 SQL 或运行时猜测。
-        const key = JSON.stringify({ ...argumentsValue, endAtMs: timeRange.endAtMs });
+        const key = JSON.stringify(argumentsValue);
         // Returning to the committed page invalidates pending navigation without reloading the dashboard.
         // 返回已提交分页时使待完成导航失效，不重新加载仪表盘。
         if (!force && dashboardKey.current === key) {
@@ -888,14 +890,10 @@ export function createPluginPanel(sdk) {
           argumentsValue.view = changedTables.daily && changedTables.recent ? "detail-pages"
             : changedTables.daily ? "daily-page" : "recent-page";
         }
-        if (force || dashboardInFlight.current?.key !== key) {
-          dashboardInFlight.current = { key, promise: sdk.invoke("dashboard-get", argumentsValue) };
-        }
-        // pending is the exact shared request claimed by this refresh.
-        // pending 是当前刷新认领的精确共享请求。
-        const pending = dashboardInFlight.current;
-        const nextDashboard = await pending.promise.finally(() => {
-          if (dashboardInFlight.current === pending) dashboardInFlight.current = null;
+        // Host identity includes the actual partial projection and freezes null end once per execution.
+        // 宿主身份包含实际局部投影，并在每次执行中只冻结一次空终点。
+        const nextDashboard = await sdk.invoke("dashboard-get", argumentsValue, {
+          refresh: force, signal: subscription.signal,
         });
         if (mountedRef.current && sequence === requestSequence.current) {
           dashboardKey.current = key;
@@ -993,32 +991,41 @@ export function createPluginPanel(sdk) {
 
     React.useEffect(() => {
       mountedRef.current = true;
+      // active excludes a superseded retry even when the same component remains mounted.
+      // active 排除过期重试，即使同一组件仍处于挂载状态。
+      let active = true;
       setSettingsError("");
       // Price configuration resolves independently of statistics reads.
       // 价格配置独立于统计读取完成加载。
-      if (settingsRequest.current === null) settingsRequest.current = sdk.invoke("settings-get", {});
-      void settingsRequest.current.then((nextSettings) => {
-        if (mountedRef.current) {
+      void sdk.invoke("settings-get", {}).then((nextSettings) => {
+        if (active) {
           setPricingSettings(nextSettings);
         }
       }).catch((reason) => {
-        if (mountedRef.current) setSettingsError(reason instanceof Error ? reason.message : String(reason));
+        if (active) setSettingsError(reason instanceof Error ? reason.message : String(reason));
       });
       return () => {
+        active = false;
         mountedRef.current = false;
       };
     }, [settingsRetry]);
 
     React.useEffect(() => {
-      void refresh();
-      return () => { requestSequence.current += 1; };
-    }, [refresh]);
+      if (section !== "pricing") void refresh();
+      return () => {
+        requestSequence.current += 1;
+        dashboardSubscription.current?.abort();
+      };
+    }, [refresh, section]);
 
     React.useEffect(() => {
       if (section !== "pricing" || !pricingSettings) return;
       // active and timer prevent stale search responses and coalesce rapid search edits.
       // active 与 timer 防止旧搜索响应，并合并快速搜索编辑。
       let active = true;
+      // subscription cancels delivery and queued dispatch for obsolete pricing filters.
+      // subscription 取消过期定价筛选的投递与尚未发送的请求。
+      const subscription = new AbortController();
       setPricingDirectoryLoading(true);
       // A different search cannot inherit rows; another page of the same search retains them.
       // 不同搜索不能继承记录；相同搜索的另一分页保留已有记录。
@@ -1030,7 +1037,7 @@ export function createPluginPanel(sdk) {
       }
       setPricingDirectoryError("");
       const timer = window.setTimeout(() => {
-        void sdk.invoke("pricing-get", { search: pricingSearch, filter: pricingFilter, offset: pricingPage * 25 })
+        void sdk.invoke("pricing-get", { search: pricingSearch, filter: pricingFilter, offset: pricingPage * 25 }, { signal: subscription.signal })
           .then((result) => { if (active) {
             pricingDirectoryScope.current = scope;
             setPricingDirectory(result);
@@ -1039,7 +1046,7 @@ export function createPluginPanel(sdk) {
           .catch((reason) => { if (active) setPricingDirectoryError(reason instanceof Error ? reason.message : String(reason)); })
           .finally(() => { if (active) setPricingDirectoryLoading(false); });
       }, 200);
-      return () => { active = false; window.clearTimeout(timer); };
+      return () => { active = false; subscription.abort(); window.clearTimeout(timer); };
     }, [section, pricingSearch, pricingFilter, pricingPage, pricingSettings, pricingRetry]);
 
     // consumerIds contains exact server-bound identities observed in either dashboard projection.
@@ -1197,7 +1204,6 @@ export function createPluginPanel(sdk) {
       settingsError ? h("div", { role: "alert" },
         h(ErrorState, { title: text("pricing.loadError", "Unable to load price settings") }),
         h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => {
-          settingsRequest.current = null;
           setSettingsRetry((revision) => revision + 1);
         } }, text("error.retry", "Retry")),
         h("details", null, h("summary", null, text("error.details", "Error details")),

@@ -2,7 +2,6 @@ import type {
   CommandSessionSummary,
   ComposerAttachmentPreparationSummary,
   ComposerAttachmentSummary,
-  PendingPromptSummary,
   PendingPromptEditOutcome,
   ContextCompactionWindowNodeId,
   SessionAddonsChangedResponse,

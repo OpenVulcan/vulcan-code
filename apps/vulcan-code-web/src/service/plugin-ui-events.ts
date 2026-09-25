@@ -1,5 +1,7 @@
 import { serviceClient } from "@/service/webui-service-runtime";
 import type { PluginUiInvalidatedEvent } from "@/types";
+import { invalidatePluginQueries } from "@/service/plugin-ui-query-runtime";
+import { BROWSER_SERVICE_CONNECTION_EVENT, type BrowserServiceConnectionDetail } from "@/service/browser-service-discovery";
 
 // PluginUiInvalidationListener receives a newer monotonic revision for one plugin-local topic.
 // PluginUiInvalidationListener 接收单个插件内主题的更高单调修订号。
@@ -12,6 +14,12 @@ const pluginUiInvalidationListeners = new Map<string, Set<PluginUiInvalidationLi
 // pluginUiLatestRevisions stores the highest observed revision for visibility recovery.
 // pluginUiLatestRevisions 保存已观测到的最高修订号以支持可见性恢复。
 const pluginUiLatestRevisions = new Map<string, number>();
+
+// A restarted service may begin revisions at zero; previous process cursors must not suppress it.
+// 重启服务可从零开始修订号，旧进程游标不能屏蔽新事件。
+if (typeof window !== "undefined") window.addEventListener(BROWSER_SERVICE_CONNECTION_EVENT, event => {
+  if ((event as CustomEvent<BrowserServiceConnectionDetail>).detail.status !== "connected") pluginUiLatestRevisions.clear();
+});
 
 // pluginUiBackendSubscription stores the singleton backend event subscription task.
 // pluginUiBackendSubscription 保存单例后端事件订阅任务。
@@ -42,6 +50,7 @@ function dispatchPluginUiInvalidation(event: PluginUiInvalidatedEvent): void {
     return;
   }
   pluginUiLatestRevisions.set(key, event.revision);
+  invalidatePluginQueries(event.pluginId);
   const listeners = pluginUiInvalidationListeners.get(key);
   if (!listeners) {
     return;

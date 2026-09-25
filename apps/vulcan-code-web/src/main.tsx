@@ -1,8 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { WebuiApp } from "@/app/WebuiApp";
-import { applyShellHostMarker } from "@/shell/runtime";
-import { readElectronLocalBrowserBridge } from "@/shell/electronBridge";
+import { WebuiApp } from "@/app/webui-app";
+import { applyShellHostMarker } from "@/host-shell/runtime";
+import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import "./boot-styles.css";
 
 // The host marker must be published before the first paint so native drag regions are correct.

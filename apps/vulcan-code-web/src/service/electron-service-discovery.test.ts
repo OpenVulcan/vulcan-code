@@ -1,10 +1,10 @@
 // Verify that desktop discovery cannot silently switch to another Core after bridge failure.
 // 验证桌面发现不会在桥失败后静默切换到另一 Core。
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readElectronServiceConnection } from "@/shell/electronBridge";
+import { readElectronServiceConnection } from "@/host-shell/electron-bridge";
 import { resolveReachableBrowserServiceBaseUrl, resolveBrowserServiceAccessToken } from "./browser-service-discovery";
 
-vi.mock("@/shell/electronBridge", () => ({ readElectronServiceConnection: vi.fn() }));
+vi.mock("@/host-shell/electron-bridge", () => ({ readElectronServiceConnection: vi.fn() }));
 
 afterEach(() => {
   vi.unstubAllGlobals();

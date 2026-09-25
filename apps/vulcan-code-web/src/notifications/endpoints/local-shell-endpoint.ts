@@ -7,7 +7,7 @@ import type {
   NotificationPresentationContext,
   NotificationTextResolver,
 } from "@/notifications/types";
-import type { ShellClient } from "@/shell";
+import type { ShellClient } from "@/host-shell";
 
 // LocalShellNotificationEndpoint delivers eligible intents through the current client shell.
 // LocalShellNotificationEndpoint 通过当前客户端壳投递符合条件的意图。

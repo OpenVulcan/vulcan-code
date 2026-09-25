@@ -45,7 +45,7 @@ export interface MediaDeliveryPolicyCardProps {
 export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPolicyCardProps) {
   // Translation follows the existing WebUI locale owner.
   // 翻译遵循既有 WebUI 语言所有者。
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   // Baseline owns the revision the user actually edited, not whichever snapshot arrives most recently.
   // 基线持有用户实际编辑的修订，不盲目采用最近到达的任意快照。
   const [baseline, setBaseline] = React.useState(settings);
@@ -147,7 +147,7 @@ export function MediaDeliveryPolicyCard({ settings, onSaved }: MediaDeliveryPoli
       </div>
       {/* Keep detailed delivery rules available without pushing the editable thresholds below a wall of text. */}
       {/* 保留完整投递规则，避免长篇说明将可编辑阈值推到首屏之外。 */}
-      <InlineDisclosure className="media-delivery-rules" keepMounted label={locale === "zh-CN" ? "它是怎么工作的" : "How it works"} openLabel={locale === "zh-CN" ? "收起说明" : "Hide explanation"}>
+      <InlineDisclosure className="media-delivery-rules" keepMounted label={t("settings.mediaDelivery.howItWorks")} openLabel={t("settings.mediaDelivery.hideExplanation")}>
         <ul className="grid list-disc gap-1.5 pl-4 text-xs leading-5 text-muted-foreground">
           <li>{t("settings.mediaDelivery.uploadRule")}</li>
           <li>{t("settings.mediaDelivery.historyRule")}</li>

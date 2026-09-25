@@ -6,7 +6,11 @@ import type { LuaSkillSummary, LuaSkillsOperationProgressSummary } from "@/types
 import type { SkillActionProps } from "./skill-area-types";
 import { LuaSkillsPanel } from "./lua-skills-panel";
 
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("en-US", key);
+  return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
+});
 
 let root: Root;
 let host: HTMLDivElement;
@@ -230,8 +234,8 @@ it("distinguishes an empty catalog from a filter that matched nothing", async ()
   // An empty catalog tells the operator to install something.
   // 空目录告诉操作者去安装。
   await act(async () => root.render(<LuaSkillsPanel actions={actions} skills={[]} />));
-  expect(document.body.textContent).toContain("skills.lua.emptyDetail");
-  expect(document.body.textContent).not.toContain("skills.filter.empty");
+  expect(document.body.textContent).toContain("Real skill packages appear after startup completes or refresh runs.");
+  expect(document.body.textContent).not.toContain("No items match the current filters.");
 
   // A filter that matched nothing must say so instead of claiming nothing is installed:
   // the two messages send the operator to different fixes, so a swap between them is a
@@ -240,10 +244,10 @@ it("distinguishes an empty catalog from a filter that matched nothing", async ()
   // 因此二者互换是误导性指引，而不是措辞偏好。
   await act(async () => root.render(<LuaSkillsPanel actions={actions} skills={[skill("pkg", true)]} />));
   const stopped = [...document.querySelectorAll("button")]
-    .find((button) => button.textContent === "skills.status.stopped");
+    .find((button) => button.textContent === "Disabled");
   if (!stopped) throw new Error("the stopped-status filter chip must exist");
   await act(async () => { stopped.click(); });
 
-  expect(document.body.textContent).toContain("skills.filter.empty");
-  expect(document.body.textContent).not.toContain("skills.lua.emptyDetail");
+  expect(document.body.textContent).toContain("No items match the current filters.");
+  expect(document.body.textContent).not.toContain("Real skill packages appear after startup completes or refresh runs.");
 });

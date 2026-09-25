@@ -25,11 +25,11 @@
 
 .diff-empty-state strong {
   color: var(--foreground);
-  font-size: 14px;
+  font-size: var(--vcn-font-size-lg);
 }
 
 .diff-empty-state span {
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1.6;
 }
 
@@ -58,7 +58,7 @@
   max-width: calc(100% - 28px);
   padding: 3px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: color-mix(in oklab, var(--background) 94%, transparent);
   transform: translateX(50%);
   -webkit-backdrop-filter: blur(12px) saturate(1.14);
@@ -74,10 +74,10 @@
   min-width: 0;
   padding: 0 11px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--vcn-radius-pill);
   background: transparent;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   line-height: 1;
   white-space: nowrap;
   transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
@@ -117,6 +117,6 @@
   align-items: center;
   gap: 8px;
   min-height: 30px;
-  font-size: 13px;
+  font-size: var(--vcn-font-size-md);
 }
 

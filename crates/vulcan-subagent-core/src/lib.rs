@@ -19,6 +19,10 @@ pub const AGENT_ORCHESTRATION_INFO_TOOL: &str = "agent_orchestration_info";
 /// 子代理等待工具的稳定公开名称。
 pub const WAIT_AGENT_TOOL: &str = "wait_agent";
 
+/// Public inbox wait shared by child agents, independent sessions and question replies.
+/// 子代理、独立会话及问题回复共享的公开收件等待。
+pub const WAIT_AGENTS_RESULT_TOOL: &str = "wait_agents_result";
+
 /// Stable public name for the child-agent listing tool.
 /// 子代理列表工具的稳定公开名称。
 pub const LIST_AGENTS_TOOL: &str = "list_agents";
@@ -57,7 +61,7 @@ pub const CORE_SUBAGENT_TOOLS: [&str; 7] = [
     SPAWN_AGENT_TOOL,
     AGENT_ORCHESTRATION_INFO_TOOL,
     SEND_MESSAGE_TOOL,
-    WAIT_AGENT_TOOL,
+    WAIT_AGENTS_RESULT_TOOL,
     INTERRUPT_AGENT_TOOL,
     CLOSE_AGENT_TOOL,
     LIST_AGENTS_TOOL,

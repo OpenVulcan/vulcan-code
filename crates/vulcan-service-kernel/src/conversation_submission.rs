@@ -69,6 +69,7 @@ use super::{
     webui_trace_if_slow, webui_vmm_runtime_readiness,
 };
 mod activation;
+pub(crate) mod idle_root_input;
 mod preflight;
 mod queue;
 mod runtime_options;
@@ -2147,6 +2148,7 @@ async fn materialize_submission_session_v1(
     hidden_model_guidance: Option<&str>,
     submission_mode: &ConversationSubmissionMode,
     existing_authority: Option<&ExistingSubmissionV1Authority>,
+    turn_admission: &SubmissionTurnAdmission,
     bound_request_config: Option<&ActiveRequestConfig>,
     new_session_context_window_node_id: Option<ContextCompactionWindowNodeId>,
     now_ms: i64,
@@ -2242,19 +2244,24 @@ async fn materialize_submission_session_v1(
             .map_err(|error| error.to_string())?;
             match submission_mode {
                 ConversationSubmissionMode::UserPrompt => {
-                    authority
-                        .handle
-                        .submit_root_input(
-                            ClientInputSubmission {
-                                parameters,
-                                bound_request_config: bound_request_config.cloned(),
-                                client_action_id,
-                                text: root_text.to_string(),
-                                resource_ids,
-                            },
-                            now_ms,
-                        )
-                        .map_err(|error| error.to_string())?;
+                    idle_root_input::submit_root_input_when_idle(
+                        state,
+                        &authority.handle,
+                        turn_admission
+                            .kernel_reservation_id(materialized_session)?
+                            .ok_or_else(|| {
+                                String::from("Existing root input requires submission ownership.")
+                            })?,
+                        ClientInputSubmission {
+                            parameters,
+                            bound_request_config: bound_request_config.cloned(),
+                            client_action_id,
+                            text: root_text.to_string(),
+                            resource_ids,
+                        },
+                        now_ms,
+                    )
+                    .await?;
                 }
                 ConversationSubmissionMode::Continuation => {
                     // Continuation keeps the same admitted preparation instead of recreating origin from the current model.
@@ -2826,6 +2833,7 @@ async fn service_start_conversation_execution(
         hidden_model_guidance.as_deref(),
         &submission_mode,
         existing_submission_v1_authority.as_ref(),
+        &turn_admission,
         existing_bound_request_config.as_ref(),
         new_session_context_window_node_id,
         i64::try_from(materialize_started_at).unwrap_or(i64::MAX),

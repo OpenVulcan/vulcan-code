@@ -2,7 +2,7 @@ import React from "react";
 import { FileText, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
-import { WorkspaceDefaultFileIcon, WorkspaceFileTreeDrawer, WorkspaceFileTreeStats } from "@/components/workspace/WorkspaceFileTreeDrawer";
+import { WorkspaceDefaultFileIcon, WorkspaceFileTreeDrawer, WorkspaceFileTreeStats } from "@/components/workspace/workspace-file-tree-drawer";
 import { useI18n } from "@/i18n";
 import { openProjectDirectoryPath } from "@/service/project-actions-service";
 import { DiffFileCard, DiffFileHeader, useDiffScrollState } from "../diff-file-card";

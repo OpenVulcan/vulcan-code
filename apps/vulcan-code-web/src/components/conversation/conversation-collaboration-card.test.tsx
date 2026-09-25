@@ -2,7 +2,6 @@
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import type {
@@ -10,14 +9,33 @@ import type {
   ConversationEventBody,
 } from "@/service/conversation-event-window-store";
 import type { ConversationAgentInteraction } from "@/types/conversation";
-import { ConversationCollaborationCard, ConversationAgentInteractionView } from "./conversation-collaboration-card";
+import { ConversationCollaborationCard, ConversationAgentInteractionView, ConversationAgentInteractionActionsContext } from "./conversation-collaboration-card";
+import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 
 // This file mounts the card directly; the display renderer only proves it renders somewhere.
 // 本文件直接挂载该卡片；显示渲染器只证明它被渲染，不证明其自身行为。
 
 let host: HTMLDivElement;
 let root: Root;
+// Controlled geometry stands in for browser line layout, which jsdom does not implement.
+// 可控几何替代 jsdom 未实现的浏览器行布局。
+let contentHeight: number;
 beforeEach(() => {
+  contentHeight = 40;
+  const computedStyle = window.getComputedStyle.bind(window);
+  vi.spyOn(window, "getComputedStyle").mockImplementation((element) => element.classList.contains("conversation-v1-collaboration-bubble-body")
+    ? { lineHeight: "20px" } as CSSStyleDeclaration : computedStyle(element));
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("conversation-v1-collaboration-bubble-body") ? contentHeight : 0;
+  });
+  vi.stubGlobal("ResizeObserver", class {
+    // Geometry is controlled by the test; no asynchronous resize notifications are needed.
+    // 几何由测试控制，不需要异步尺寸通知。
+    observe() {}
+    // Release the inert observer; returns nothing.
+    // 释放空观察器；无返回值。
+    disconnect() {}
+  });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -27,6 +45,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 // participant builds one typed participant coordinate for source or target.
@@ -130,10 +149,9 @@ function button(text: string): HTMLButtonElement {
 async function mount(
   event: Extract<ConversationEventBody, { kind: "collaboration" }>,
   actions: {
-    onCancelQuestion?: (questionId: string, sourceRootSessionId: string) => Promise<void> | void;
     onOpenSession?: (sessionId: string) => void;
-    cancellableQuestionIds?: ReadonlySet<string>;
     availableSessionIds?: ReadonlySet<string>;
+    subagentNames?: ReadonlyMap<string, string>;
   } = {},
 ) {
   await act(async () =>
@@ -148,6 +166,12 @@ async function mount(
       </I18nProvider>,
     ),
   );
+  // Existing action assertions inspect the real expanded body; the initial surface must stay folded.
+  // 既有操作断言检查真实展开正文；初始界面必须保持收起。
+  const toggle = host.querySelector<HTMLButtonElement>(".tool-presentation-summary .conversation-v1-collaboration-fold");
+  if (toggle?.getAttribute("aria-expanded") === "false") {
+    await act(async () => toggle.click());
+  }
 }
 
 it("renders each collaboration kind under its own card identity", async () => {
@@ -203,20 +227,32 @@ it("renders the interaction view for a collaboration envelope and the result car
   await act(async () =>
     root.render(
       <I18nProvider initialLocale="en-US">
-        <ConversationAgentInteractionView interaction={childReturn} />
+        <ConversationAgentInteractionActionsContext.Provider value={{ subagentNames: new Map([["child-session", "yes_agent"]]) }}>
+          <ConversationAgentInteractionView interaction={childReturn} />
+        </ConversationAgentInteractionActionsContext.Provider>
       </I18nProvider>,
     ),
   );
   const resultCard = host.querySelector("article")!;
   expect(resultCard.getAttribute("data-collaboration-card-kind")).toBe("task-result");
+  expect(resultCard.textContent).toContain("Agent work completed");
+  expect(resultCard.textContent).toContain("yes_agent");
+  expect(resultCard.querySelector(".lucide-messages-square")).not.toBeNull();
+  expect(resultCard.textContent).not.toContain("Child final content");
+  const toggle = resultCard.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-fold")!;
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => toggle.click());
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
   expect(resultCard.textContent).toContain("Child final content");
   expect(resultCard.textContent).not.toContain("Cancel question");
+  await act(async () => toggle.click());
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
 });
 
 it("offers no question control for a received notification", async () => {
   // A18 requires notifications to carry no reply obligation; a cancel control would imply one.
   // A18 要求通知不携带回复义务；撤销控件会暗示存在义务。
-  await mount(inboundNotificationEvent(), { onCancelQuestion: vi.fn() });
+  await mount(inboundNotificationEvent());
   expect(Array.from(host.querySelectorAll("button")).map((element) => element.textContent)).not.toContain(
     "Cancel question",
   );
@@ -242,90 +278,64 @@ it("shows a failed answer delivery as failed after authorization revocation", as
       },
     },
   });
-  expect(host.querySelector(".conversation-v1-collaboration-status")?.textContent).toBe("Failed");
-  expect(host.querySelector(".conversation-v1-collaboration-details")?.textContent).toContain("authorization_revoked");
+  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toBe("Failed");
+  expect(host.querySelector(".conversation-v1-collaboration-details")).toBeNull();
 });
 
 it("enables session navigation only for a routable participant", async () => {
   // A route whose target is missing must stay inert rather than navigating to a dead session.
   // 目标缺失的路由必须保持不可用，而不是导航到死会话。
   const onOpenSession = vi.fn();
-  await mount(questionEvent(), { onOpenSession, availableSessionIds: new Set(["session-source"]) });
-  expect(button("Source").disabled).toBe(false);
+  const names = new Map([["session-source", "Source"], ["session-target", "Target"]]);
+  await mount(questionEvent(), { onOpenSession, availableSessionIds: new Set(["session-source"]), subagentNames: names });
+  expect(host.querySelector('[aria-label="Open source session"]')).toBeNull();
   expect(button("Target").disabled).toBe(true);
-  await act(async () => button("Source").click());
-  expect(onOpenSession).toHaveBeenCalledTimes(1);
-  expect(onOpenSession).toHaveBeenCalledWith("session-source");
   await act(async () => button("Target").click());
-  expect(onOpenSession).toHaveBeenCalledTimes(1);
+  expect(onOpenSession).not.toHaveBeenCalled();
+  await mount(questionEvent(), { onOpenSession, availableSessionIds: new Set(["session-target"]), subagentNames: names });
+  const toggle = host.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-row-toggle")!;
+  const expandedBeforeNavigation = toggle.getAttribute("aria-expanded");
+  expect(button("Target").textContent).toBe("[Target]");
+  expect(button("Target").querySelector(".lucide-arrow-up-right")).not.toBeNull();
+  await act(async () => button("Target").click());
+  expect(onOpenSession).toHaveBeenCalledExactlyOnceWith("session-target");
+  expect(toggle.getAttribute("aria-expanded")).toBe(expandedBeforeNavigation);
 });
 
-it("keeps cancellation disabled without an exact cancellable identity or handler", async () => {
-  // Cancellation requires all three: a handler, a pending question, and that question in the window set.
-  // 撤销需要三者齐备：处理器、待处理问题，以及该问题位于窗口集合中。
-  await mount(questionEvent(), { onCancelQuestion: vi.fn() });
-  expect(button("Cancel question").disabled).toBe(false);
-  await act(async () => root.unmount());
-  root = createRoot(host);
-  await mount(questionEvent(), { onCancelQuestion: vi.fn(), cancellableQuestionIds: new Set(["other"]) });
-  expect(button("Cancel question").disabled).toBe(true);
-  await act(async () => root.unmount());
-  root = createRoot(host);
-  await mount(questionEvent(), { cancellableQuestionIds: new Set(["question-1"]) });
-  expect(button("Cancel question").disabled).toBe(true);
-  await act(async () => root.unmount());
-  root = createRoot(host);
-  // An already answered question is no longer cancellable, whatever the window set says.
-  // 已回答问题不再可撤销，无论窗口集合如何声明。
-  await mount(questionEvent("answered"), {
-    onCancelQuestion: vi.fn(),
-    cancellableQuestionIds: new Set(["question-1"]),
-  });
+it.each([false, true])("shows incoming content immediately, folding only excess lines (long: %s)", async (long) => {
+  contentHeight = long ? 20 * (USER_PROMPT_COLLAPSE_LINE_LIMIT + 1) : 40;
+  await mount(inboundNotificationEvent());
+  const bubble = host.querySelector(".user-bubble")!;
+  expect(bubble.textContent).toContain("Phase one finished.");
+  expect(bubble.querySelector("time")).toBeNull();
+  expect(host.querySelector("article > .user-message-meta > time")).not.toBeNull();
+  expect(host.querySelector(".tool-presentation-summary .conversation-v1-collaboration-fold")).toBeNull();
+  expect(host.querySelector(".user-message-copy")).toBeNull();
+  const toggle = bubble.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-overflow-toggle");
+  expect(Boolean(toggle)).toBe(long);
+  if (toggle) {
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(bubble.textContent).toContain("Phase one finished.");
+  }
+});
+
+it.each(["pending", "answered"] as const)("shows no cancellation control or technical details for a %s question", async (state) => {
+  await mount(questionEvent(state));
   expect(host.querySelector(".conversation-v1-collaboration-cancel-button")).toBeNull();
-});
-
-it("submits one cancellation with the exact question and source identity", async () => {
-  // A11 requires stable identity: the callback must receive the question and its source root verbatim.
-  // A11 要求稳定身份：回调必须逐字收到该问题及其来源根。
-  const onCancelQuestion = vi.fn(async () => {});
-  await mount(questionEvent(), { onCancelQuestion, cancellableQuestionIds: new Set(["question-1"]) });
-  await act(async () => button("Cancel question").click());
-  await act(async () => button("Cancel question").click());
-  expect(onCancelQuestion).toHaveBeenCalledTimes(1);
-  expect(onCancelQuestion).toHaveBeenCalledWith("question-1", "session-source");
-});
-
-it("keeps a failed cancellation retryable while it holds the click", async () => {
-  // A rejected request must release the single-flight guard so the user can retry the same identity.
-  // 被拒绝的请求必须释放单次提交保护，使用户能以同一身份重试。
-  const onCancelQuestion = vi
-    .fn<(questionId: string, sourceRootSessionId: string) => Promise<void>>()
-    .mockRejectedValueOnce(new Error("durable cancellation failed"))
-    .mockResolvedValueOnce(undefined);
-  await mount(questionEvent(), { onCancelQuestion, cancellableQuestionIds: new Set(["question-1"]) });
-  await act(async () => button("Cancel question").click());
-  expect(onCancelQuestion).toHaveBeenCalledTimes(1);
-  // The failed attempt must not leave the control permanently disabled.
-  // 失败的一次尝试不得让控件永久禁用。
-  expect(button("Cancel question").disabled).toBe(false);
-  await act(async () => button("Cancel question").click());
-  expect(onCancelQuestion).toHaveBeenCalledTimes(2);
-  expect(onCancelQuestion).toHaveBeenLastCalledWith("question-1", "session-source");
+  expect(host.querySelector(".conversation-v1-collaboration-details")).toBeNull();
+  expect(host.textContent).toContain("Which file owns this behavior?");
 });
 
 it("retains the original event timestamp across a delivery update", async () => {
   // The card carries the host timestamp, not a reconstructed one; a delivery update must not shift it.
   // 卡片携带宿主时间戳而非重建时间戳；投递更新不得改变它。
-  const markup = renderToStaticMarkup(
-    <I18nProvider initialLocale="en-US">
-      <ConversationCollaborationCard
-        createdAtMs={1_700_000_000_000}
-        event={questionEvent("pending", "delivery_accepted")}
-        seq={9}
-      />
-    </I18nProvider>,
-  );
-  expect(markup).toContain(`data-seq="9"`);
+  await mount(questionEvent("pending", "delivery_accepted"));
+  const markup = host.innerHTML;
+  expect(markup).toContain(`data-seq="5"`);
   expect(markup).toContain('data-collaboration-event-kind="delivery_accepted"');
   expect(markup).toContain(new Date(1_700_000_000_000).toISOString());
 });

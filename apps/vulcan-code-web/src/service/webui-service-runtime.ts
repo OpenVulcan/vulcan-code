@@ -3,7 +3,7 @@ import {
   createServiceClient,
   isBrowserServiceRuntime,
 } from "@/service";
-import { createShellClient } from "@/shell";
+import { createShellClient } from "@/host-shell";
 
 // serviceClient is the shared business service facade used by the WebUI.
 // serviceClient 是 WebUI 共享使用的业务服务门面。

@@ -1,11 +1,11 @@
 import React from "react";
-import type { AgentActionProps } from "@/components/features/agents/AgentsArea";
-import type { SkillActionProps } from "@/components/features/skills/SkillsArea";
+import type { AgentActionProps } from "@/components/features/agents/agents-area";
+import type { SkillActionProps } from "@/components/features/skills/skills-area";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type ProjectIconSelection } from "@/components/project/project-icons";
 import { type ProjectAgentSkillState, type ProjectSettingsDialogTarget } from "@/components/project/project-settings-dialog";
-import type { ProjectMenuAction } from "@/components/project/ProjectSidebar";
+import type { ProjectMenuAction } from "@/components/project/project-sidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type { AgentSkillsCatalogUpdate, LuaSkillsCatalogUpdate, ProjectSummary, SubagentCatalogUpdate, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
 import {
@@ -242,9 +242,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
           }
           toast.success(t("projectActions.listUpdated"));
         } catch (readError) {
-          toast.warning(locale === "zh-CN"
-            ? "置顶操作已提交，但状态刷新失败，请刷新项目列表。"
-            : "The pin change was submitted, but its state could not be refreshed. Refresh the project list.", {
+          toast.warning(t("workspace.projectActions.thePinChangeWas"), {
             description: readError instanceof Error ? readError.message : String(readError),
           });
         }
@@ -448,7 +446,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     try {
       const snapshot = await reorderProjects(projectIds);
       if (!snapshot) {
-        throw new Error(locale === "zh-CN" ? "排序未返回权威状态，请刷新项目列表后重试。" : "Reordering returned no authoritative state. Refresh the project list and try again.");
+        throw new Error(t("workspace.projectActions.reorderingReturnedNoAuthoritative"));
       }
       if (acceptServiceWorkbenchSnapshot(snapshot)) {
         setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
@@ -464,9 +462,9 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     expandedProjectIdsLocallyEditedRef.current = true;
     setWorkbenchState((current) => ({ ...current, expandedProjectIds: projectIds }));
     void setExpandedTaskProjects(projectIds).then((snapshot) => {
-      if (!snapshot) throw new Error(locale === "zh-CN" ? "保存未返回确认状态。" : "Saving returned no acknowledged state.");
+      if (!snapshot) throw new Error(t("workspace.projectActions.savingReturnedNoAcknowledged"));
     }).catch((nextError) => {
-      toast.warning(locale === "zh-CN" ? "当前展开视图已保留，但未能保存；重新打开时可能恢复原状态。" : "The expanded view is kept locally, but could not be saved; reopening may restore the previous state.", {
+      toast.warning(t("workspace.projectActions.theExpandedViewIs"), {
         description: nextError instanceof Error ? nextError.message : String(nextError),
       });
     });

@@ -6,7 +6,7 @@ import { I18nProvider } from "@/i18n"
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench"
 import type { VmmMemoryActionResponse, VmmMemoryActionResult } from "@/types"
 import { VmmProfilePage } from "./vmm-profile-page"
-import { MemoryArea } from "./MemoryArea"
+import { MemoryArea } from "./memory-area"
 
 // result preserves the exact read union while shared result feedback deliberately remains null.
 // result 保留准确读取联合，同时共享结果反馈刻意始终为空。

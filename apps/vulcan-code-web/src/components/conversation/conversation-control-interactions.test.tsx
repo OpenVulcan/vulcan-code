@@ -11,11 +11,10 @@ import { PlanArtifactBlock } from "./conversation-plan-artifact";
 import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import type { GenericToolMarkdownPresentation } from "./conversation-tool-presentations";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ConversationV1GeneratedResourceList } from "./conversation-v1-resource-list";
-import { resourceId } from "@/service/conversation-event-window-store";
-import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { ConversationGenerationDialogV1 } from "./conversation-generation-dialog-v1";
-import { ConversationV1Workspace } from "./conversation-v1-workspace";
+import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
+import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
+import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import { DEFAULT_THINKING_DISPLAY_MODE } from "./thinking-display";
 import { ConversationSessionTerminalSection } from "./session-todolist-panel/terminal-section";
@@ -115,7 +114,13 @@ describe("conversation control rejection paths", () => {
     // prependOlder fails once and then completes through the same owner-bound command.
     // prependOlder 首次失败，随后通过同一归属绑定命令完成。
     const prependOlder = vi.fn().mockRejectedValueOnce(new Error("history unavailable")).mockResolvedValue(true);
-    await render(<ConversationV1Workspace sessionId="audit-pagination" snapshot={snapshot} commands={{ prependOlder, rehydrate: vi.fn() }} reasoningDisplayMode={DEFAULT_THINKING_DISPLAY_MODE} sessionRunning={false} onCopyText={vi.fn()} onPreserveHistoryPrepend={(load) => load()} onScrollStateChange={vi.fn()} scrollRef={React.createRef<HTMLElement>()} />);
+    await render(<TooltipProvider><ConversationLiveStreamProvider store={new ConversationLiveStreamStore()}>
+      <ConversationBranchWorkspaceV1 sessionId="audit-pagination" conversation={{ id: "audit-pagination", title: "audit", status: "completed" }}
+        snapshot={snapshot} commands={{ prependOlder, rehydrate: vi.fn() }} commandSessions={[]} initialExpandedState={null}
+        onExpandedStateChange={vi.fn()} reasoningDisplayMode={DEFAULT_THINKING_DISPLAY_MODE} sessionRunning={false}
+        onCopyText={vi.fn()} onOpenSubagentPanel={async () => true} onPreserveHistoryPrepend={(load) => load()}
+        onScrollStateChange={vi.fn()} scrollRef={React.createRef<HTMLElement>()} />
+    </ConversationLiveStreamProvider></TooltipProvider>);
     // loadButton is the real history control, which remains usable after a rejection.
     // loadButton 是真实历史控件，在拒绝后仍可使用。
     const loadButton = container.querySelector<HTMLButtonElement>(".conversation-history-load-button")!;
@@ -144,23 +149,6 @@ describe("conversation control rejection paths", () => {
     expect(loader).toHaveBeenNthCalledWith(2, presentation.detailRef);
     expect(container.textContent).toContain("Recovered full output");
     expect(container.querySelector('[role="alert"]')).toBeNull();
-  });
-
-  it("keeps generated-resource resolver errors selectable and labels native playback", async () => {
-    // catalog is the exact resource metadata contract; no locator is inferred from display names.
-    // catalog 是精确资源元数据合同；不从显示名称推测定位地址。
-    const catalog: ConversationSessionResourceCatalogV1 = {
-      sessionId: "audit-session", status: "ready", error: null,
-      resources: new Map([
-        [resourceId(1), { availability: "available", resource_id: resourceId(1), original_name: "audio.mp3", mime: "audio/mpeg", size: 128 }],
-        [resourceId(2), { availability: "available", resource_id: resourceId(2), original_name: "preview.png", mime: "image/png", size: 32 }],
-      ]),
-      contentUrl: (id) => { if (id === resourceId(2)) throw new Error("preview token unavailable"); return "https://audit.invalid/audio"; },
-    };
-    await render(<ConversationV1GeneratedResourceList catalog={catalog} resources={[{ kind: "audio", resource_id: resourceId(1), preview_resource_id: resourceId(2) }]} />);
-    expect(container.querySelector("details pre")?.textContent).toBe("preview token unavailable");
-    expect(container.querySelector("audio")?.getAttribute("aria-label")).toBe("audio.mp3");
-    expect(container.querySelector("a")?.getAttribute("href")).toBe("https://audit.invalid/audio");
   });
 
   it.each([false, "throw"])("does not report copied after a rejected legacy clipboard result %s", async (result) => {

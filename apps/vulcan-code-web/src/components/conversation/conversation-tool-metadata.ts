@@ -7,6 +7,7 @@ import {
 } from "@/components/conversation/conversation-metadata";
 import type { ConversationBlockKind } from "@/components/conversation/conversation-model";
 import type { TranslationKey } from "@/i18n";
+import { formatTokenCount, formatTokenSpeedValue } from "@/lib/usage-format";
 
 // SUBAGENT_HOST_KIND_VALUES lists every host kind emitted by built-in subagent orchestration tools.
 // SUBAGENT_HOST_KIND_VALUES 列出内置子智能体编排工具会产生的全部宿主类型。
@@ -30,6 +31,7 @@ const COLLABORATION_TOOL_NAMES = new Set([
   "ask_parent",
   "reply_question",
   "wait_question",
+  "wait_agents_result",
   "cancel_question",
   "send_notification",
   "list_sessions",
@@ -142,13 +144,13 @@ export function turnStatsSummary(
     parts.push(...groupParts);
   } else if (totalTokens > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.totalTokens", {
-      count: totalTokens.toLocaleString("en-US"),
+      count: formatTokenCount(totalTokens),
     }));
   }
   const cachedTokens = numberMetadata(stats.cached_input_tokens ?? stats.cachedInputTokens);
   if (cachedTokens > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.cachedTokens", {
-      count: cachedTokens.toLocaleString("en-US"),
+      count: formatTokenCount(cachedTokens),
     }));
   }
   // Historical turn-wide rates cannot be presented as measured token generation speeds.
@@ -157,7 +159,7 @@ export function turnStatsSummary(
   const speed = outputDurationMs !== null && outputDurationMs > 0 ? numericMetadata(stats.output_tokens_per_second) : null;
   if (speed && Number.isFinite(speed) && speed > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.outputSpeed", {
-      speed: speed.toFixed(1),
+      speed: formatTokenSpeedValue(speed),
     }));
   }
   return parts.join(" · ");
@@ -195,7 +197,7 @@ function turnStatsUsageGroupSummaries(
       ? "conversation.stats.totalTokens"
       : key;
     summaries.push(formatTurnStatsTranslation(translate, displayKey, {
-      count: totalTokens.toLocaleString("en-US"),
+      count: formatTokenCount(totalTokens),
     }));
   }
   return summaries;
@@ -298,7 +300,7 @@ function defaultTurnStatsTranslation(key: TranslationKey): string {
     case "conversation.stats.cachedTokensCompact":
       return "Cache {count} tokens";
     case "conversation.stats.outputSpeed":
-      return "{speed}/s";
+      return "{speed} tokens/s";
     case "conversation.stats.group.regular":
       return "Regular {count} tokens";
     case "conversation.stats.group.subagent":

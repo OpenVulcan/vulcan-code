@@ -4,6 +4,20 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
+// Projection tests inspect expanded details; the card suite covers the actual folded default and clicks.
+// 投影测试检查展开详情；卡片测试覆盖真实默认收起状态与点击交互。
+vi.mock("./conversation-measured-collapse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./conversation-measured-collapse")>();
+  return {
+    ...actual,
+    // Seed only collaboration folds, leaving unrelated tool and process defaults untouched.
+    // 仅初始化协作折叠，不改变无关工具及过程的默认状态。
+    useConversationMeasuredExpansion: (id: string, defaultExpanded: boolean) =>
+      actual.useConversationMeasuredExpansion(id,
+        id.startsWith("collaboration:") || id.startsWith("subagent-return:") || defaultExpanded),
+  };
+});
+
 import { I18nProvider } from "@/i18n";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
@@ -11,6 +25,7 @@ import type { SelectedConversationEventWindowCommands } from "@/service/selected
 import {
   clientActionId,
   type ConversationEventSummary,
+  type CollaborationTaskResult,
 } from "@/service/conversation-event-window-store";
 import type { ConversationSummary } from "@/types";
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
@@ -22,9 +37,7 @@ import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
 import type { ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
-import { cancelCollaborationQuestion } from "@/service/collaboration-question-service";
 
-vi.mock("@/service/collaboration-question-service", () => ({ cancelCollaborationQuestion: vi.fn() }));
 
 // collaborationEvents builds a notification and a child result after the parent's real final answer.
 // collaborationEvents 构建父会话真实最终回复之后的通知与子任务结果。
@@ -319,7 +332,145 @@ describe("ConversationBranchWorkspaceV1", () => {
     }
   });
 
-  it("disables historical question actions once a later authoritative snapshot settles the question", () => {
+  it("attaches exact delivery progress to the owning tools", () => {
+    // Two independent questions detect accidental association by adjacent event or display name.
+    // 两个独立问题用于发现按相邻事件或展示名称错误关联的情况。
+    const created = questionEvent();
+    if (created.event.kind !== "collaboration" || created.event.after_state.kind !== "question") throw new Error("Invalid question fixture");
+    const tool = (seq: number, questionId: string): ConversationEventSummary => eventSummary(seq, {
+      kind: "tool_call", api_call_id: 1, tool_call_id: seq, tool_name: "ask_question",
+      input: { target: "same-agent", question: questionId }, request_stream_id: `ask-${seq}`, status: "completed",
+      output: { model_output: { question_id: questionId, status: "accepted" } },
+    });
+    const events = [tool(7, "question-1"), tool(8, "question-2"), created,
+      eventSummary(10, { kind: "collaboration", version: 1, operation_id: "delivery-progress", event_kind: "delivery_projected",
+        after_state: { kind: "outbound_delivery", delivery: { ...created.event.after_state.delivery, state: "projected" } } }, "host_only")];
+    const markup = renderWorkspace(events);
+    const container = document.createElement("div");
+    container.innerHTML = markup;
+    const cards = [...container.querySelectorAll(".tool-presentation-card:not(.conversation-v1-collaboration-card)")];
+    expect(cards).toHaveLength(2);
+    expect(cards.find((card) => card.querySelector("[data-collaboration-attached-status]"))?.textContent).toContain("已投影");
+    expect(cards.filter((card) => card.querySelector("[data-collaboration-attached-status]"))).toHaveLength(1);
+    expect(container.querySelector('[data-collaboration-event-kind="delivery_projected"]')).toBeNull();
+    expect(markup).not.toContain("协作投递");
+  });
+
+  it("attaches child completion by execution identity", () => {
+    // Reused child names must not let an older execution update the new creation card.
+    // 复用子代理名称不得让旧执行更新新创建卡片。
+    const create = (seq: number, executionId: string): ConversationEventSummary => eventSummary(seq, {
+      kind: "tool_call", api_call_id: 1, tool_call_id: seq, tool_name: "spawn_agent",
+      input: { task_id: "same-agent", prompt: "work" }, request_stream_id: `create-${seq}`, status: "completed",
+      output: { model_output: "created", host_result: { kind: "subagent_task", payload: {
+        task_id: "same-agent", execution_id: executionId, display_title: "same-agent", prompt: "work", execution_status: "running",
+      } } },
+    });
+    const events = [create(1, "old-execution"), create(2, "new-execution"), eventSummary(3, {
+      kind: "collaboration", version: 1, operation_id: "terminal-old", event_kind: "child_task_terminal",
+      after_state: { kind: "child_task", task: { reservation_operation_id: "reserve-old", source_tool_name: "spawn_agent",
+        execution_id: "old-execution", task_id: "same-agent", parent_segment_generation: 1, parent_turn_id: 11,
+        child: { session_id: "same-child", root_session_id: "session-branch-v1", project_id: "project-1", segment_generation: 1 },
+        state: "terminal", reserved_at_ms: 1000, terminal_outcome: "completed", terminal_at_ms: 1010,
+        non_success_result: null, non_success_projection: null } },
+    }, "host_only")];
+    const markup = renderWorkspace(events);
+    const container = document.createElement("div");
+    container.innerHTML = markup;
+    expect(container.querySelectorAll("[data-collaboration-attached-status]"), markup).toHaveLength(1);
+    expect(container.querySelector("[data-collaboration-attached-status]")?.textContent).toContain("已完成");
+    expect(container.querySelector('[data-collaboration-card-kind]')).toBeNull();
+  });
+
+  it("updates a task message in place without merging identical content", () => {
+    // Delivery identity distinguishes identical messages; receipts must not move their first anchor.
+    // 投递身份区分相同正文的消息；回执不得移动首个锚点。
+    const message = { operation_id: "send-one", delivery_id: "delivery-one", kind: "task_steer" as const,
+      source: { session_id: "source", root_session_id: "source", project_id: "p", segment_generation: 1 },
+      target: { session_id: "target", root_session_id: "target", project_id: "p", segment_generation: 1 }, body: "相同消息正文" };
+    const sent = (seq: number, deliveryId: string): ConversationEventSummary => eventSummary(seq, {
+      kind: "collaboration", version: 1, operation_id: `send-${deliveryId}`, event_kind: "task_message_sent",
+      after_state: { kind: "outbound_task_message", record: { message: { ...message, delivery_id: deliveryId }, created_at_ms: 1001, acceptance: null } },
+    }, "host_only");
+    const events = [sent(1, "delivery-one"), sent(2, "delivery-two"), eventSummary(3, {
+      kind: "collaboration", version: 1, operation_id: "ack-one", event_kind: "task_message_acknowledged",
+      after_state: { kind: "outbound_task_message", record: { message, created_at_ms: 1001,
+        acceptance: { message, operation_id: "accept-one", target_revision: 1, event_seq: 3, accepted_at_ms: 1003 } } },
+    }, "host_only")];
+    const markup = renderWorkspace(events);
+    const container = document.createElement("div");
+    container.innerHTML = markup;
+    const cards = container.querySelectorAll('[data-collaboration-card-kind="task-message"]');
+    expect(cards).toHaveLength(2);
+    expect(container.querySelector('[data-seq="1"] .conversation-v1-collaboration-badge')?.textContent).toBe("已接纳");
+    expect(container.querySelector('[data-seq="2"] .conversation-v1-collaboration-badge')?.textContent).toBe("已记录");
+    expect(container.querySelector('[data-seq="3"]')).toBeNull();
+    expect(container.querySelectorAll("details, .conversation-v1-collaboration-details")).toHaveLength(0);
+    expect([...cards].every((card) => card.textContent?.includes("相同消息正文"))).toBe(true);
+  });
+
+  it("attaches result receipts to their exact card", () => {
+    // Distinct deliveries may have identical text; only the first receives progress receipts.
+    // 不同投递可以正文相同；此处只有首条收到进度回执。
+    const result: CollaborationTaskResult = {
+      acceptance: { message: { operation_id: "send", delivery_id: "result-one", kind: "task_start", body: "任务",
+        source: { session_id: "source", root_session_id: "source", project_id: "p", segment_generation: 1 },
+        target: { session_id: "target", root_session_id: "target", project_id: "p", segment_generation: 1 } },
+        operation_id: "accept", target_revision: 2, event_seq: 2, accepted_at_ms: 2 },
+      effect: { delivery_id: "result-one", operation_id: "claim", target_revision: 3, event_seq: 3, occurred_at_ms: 3,
+        outcome: { kind: "claimed", execution_id: "execution", turn_id: 2, input_id: 2, input_seq: 4 } },
+      terminal: { turn_id: 2, turn_start_seq: 3, turn_stats_seq: 9, outcome: "completed", completed_at_ms: 9,
+        final_assistant: { api_call_id: 2, api_stats_seq: 7, source_text: { event_seq: 6, text: "相同结果正文" } } },
+      operation_id: "result", target_revision: 6, event_seq: 10, recorded_at_ms: 9,
+    };
+    // Build independent result anchors with exact producer identities.
+    // 使用精确生产者身份构造独立结果锚点。
+    const resultEvent = (seq: number, deliveryId: string): ConversationEventSummary => eventSummary(seq, {
+      kind: "collaboration", version: 1, operation_id: `result-${deliveryId}`, event_kind: "task_result_recorded",
+      after_state: { kind: "task_result", result: { ...result,
+        acceptance: { ...result.acceptance, message: { ...result.acceptance.message, delivery_id: deliveryId } },
+        effect: { ...result.effect, delivery_id: deliveryId } } },
+    }, "host_only");
+    // Receipt progression must preserve both the original result and its timeline position.
+    // 回执进度必须保留原始结果及时间线位置。
+    const acceptance = { result, disclosure: "full" as const, operation_id: "receive", event_seq: 20, receiver_revision: 8, accepted_at_ms: 10 };
+    const acknowledged = eventSummary(3, { kind: "collaboration", version: 1, operation_id: "ack", event_kind: "task_result_acknowledged",
+      after_state: { kind: "task_result_acknowledgement", acknowledgement: { acceptance, operation_id: "ack", event_seq: 3, target_revision: 9, acknowledged_at_ms: 11 } } }, "host_only");
+    const projected = eventSummary(4, { kind: "collaboration", version: 1, operation_id: "project", event_kind: "task_result_projected",
+      after_state: { kind: "task_result_projection", projection: { delivery_id: "result-one", acceptance_seq: 20, turn_id: 1,
+        disclosure: "full", inputs: [{ input_seq: 31, input_id: 4 }], operation_id: "project", event_seq: 4, receiver_revision: 10, projected_at_ms: 12 } } }, "host_only");
+    const events = [resultEvent(1, "result-one"), resultEvent(2, "result-two"), acknowledged, projected,
+      { ...acknowledged, seq: 5 }];
+    for (const length of [2, 3, 4, 5]) {
+      // The production surface must update the owner without emitting receipt-only cards.
+      // 生产展示链路应更新所属卡片，不能生成纯回执卡片。
+      const history = events.slice(0, length);
+      const markup = renderWorkspace(history);
+      const container = document.createElement("div");
+      container.innerHTML = markup;
+      expect(container.querySelectorAll(".conversation-v1-collaboration-card")).toHaveLength(2);
+      expect(container.querySelector('[data-seq="1"] .conversation-v1-collaboration-badge')?.textContent)
+        .toBe(length === 2 ? "已完成" : length === 3 ? "已完成 · 已送达" : "已完成 · 已加入上下文");
+      expect(container.querySelector('[data-seq="2"] .conversation-v1-collaboration-badge')?.textContent).toBe("已完成");
+      expect(container.querySelector('[data-seq="1"]')?.textContent).toContain("相同结果正文");
+      expect(container.querySelector('[data-seq="2"]')?.textContent).toContain("相同结果正文");
+      expect(markup).not.toContain("任务回执已");
+      expect(markup).not.toContain("已投影");
+    }
+    // Result publication follows durable statistics, but its display belongs before those exact statistics.
+    // 结果发布晚于可靠统计，但展示应位于精确归属的统计之前。
+    const stats = completeTurnEvents().find((summary) => summary.event.kind === "turn_stats")!;
+    const resultHistory = [{ ...stats, seq: 1, turn_id: result.terminal!.turn_id }, { ...resultEvent(2, "result-one"), turn_id: null }];
+    const presentation = projectConversationBranchPresentationV1("session-branch-v1", resultHistory, emptyResourceCatalog(), (key) => key);
+    expect(presentation.messages.map((message) => message.recordKind)).toEqual(["agent-interaction", "turn-stats"]);
+    const resultMarkup = renderWorkspace(resultHistory);
+    expect(resultMarkup.indexOf("相同结果正文")).toBeGreaterThanOrEqual(0);
+    // Moving the display anchor never rewrites the result's durable sequence identity.
+    // 移动展示锚点绝不改写结果的可靠序列身份。
+    expect(presentation.messages.find((message) => message.agentInteraction)?.agentInteraction?.seq).toBe(2);
+  });
+
+  it("updates historical question status after settlement without offering cancellation", () => {
     // created is the old pending snapshot retained as immutable history.
     // created 是作为不可变历史保留的旧待处理快照。
     const created = questionEvent();
@@ -331,8 +482,63 @@ describe("ConversationBranchWorkspaceV1", () => {
       question: { ...created.event.after_state.question, state: "cancelled", cancellation: { operation_id: "cancel-op", requester: created.event.after_state.question.source, reason: "user_cancelled", cancelled_at_ms: 1010 } },
     } }, "host_only");
     const markup = renderWorkspace([created, settled]);
-    expect(markup).toContain('class="conversation-v1-collaboration-cancel-button" disabled=""');
+    expect(markup).not.toContain("conversation-v1-collaboration-cancel-button");
+    expect(markup).not.toContain("等待处理");
+    expect(markup).not.toContain("技术详情");
     expect(markup).toContain("user_cancelled");
+  });
+
+  it.each([
+    { kind: "claimed", acceptedWhileBusy: false },
+    { kind: "claimed", acceptedWhileBusy: true },
+    { kind: "steered", acceptedWhileBusy: false },
+  ] as const)("groups cross-session $kind work (busy acceptance: $acceptedWhileBusy) by its canonical turn", ({ kind, acceptedWhileBusy }) => {
+    // Reuse real reasoning/tool fixtures but bind the received message through its exact effect.
+    // 复用真实思考与工具夹具，通过精确效果绑定收到的消息。
+    const previous = completeTurnEvents();
+    const turnId = kind === "claimed" ? 22 : 11;
+    const message = { operation_id: "incoming", delivery_id: "incoming-delivery", kind: kind === "claimed" ? "task_start" as const : "task_steer" as const,
+      source: { session_id: "other-session", root_session_id: "other-session", project_id: "p", segment_generation: 1 },
+      target: { session_id: "session-branch-v1", root_session_id: "session-branch-v1", project_id: "p", segment_generation: 1 }, body: "检查仓库，不是用户提示词" };
+    const incoming = eventSummary(9, { kind: "collaboration", version: 1, operation_id: "accepted", event_kind: "task_message_accepted",
+      after_state: { kind: "inbound_task_message", acceptance: { message, operation_id: "accepted", target_revision: 2, event_seq: 9, accepted_at_ms: 1009 } } }, "host_only");
+    const effect = { delivery_id: message.delivery_id, operation_id: "effect", target_revision: 3, event_seq: 10, occurred_at_ms: 1010,
+      outcome: kind === "claimed" ? { kind, execution_id: "task-execution", turn_id: turnId, input_id: 12, input_seq: 11 }
+        : { kind, turn_id: turnId, input_id: 12, input_seq: 11 } };
+    const suffix = [incoming, eventSummary(10, { kind: "collaboration", version: 1, operation_id: "effect", event_kind: "task_message_effect",
+      after_state: { kind: "task_message_effect", effect } }, "host_only"),
+      eventSummary(11, { kind: "user_input", client_action_id: clientActionId("agent-mirror"), input_id: 12, input_source: "agent_message", text: "隐藏协议镜像" }),
+      ...previous.filter((summary) => ["assistant_reasoning", "tool_call", "assistant_text", "turn_stats"].includes(summary.event.kind))
+        .map((summary, index) => ({ ...summary, seq: index + 12 })),
+    ].map((summary) => ({ ...summary, turn_id: summary.seq === 9 ? null : turnId }));
+    // A running turn has no terminal statistics yet; an idle turn keeps its completed predecessor.
+    // 运行中的回合尚无终态统计；空闲启动保留已经结束的前一回合。
+    // Accepting a queued task before prior statistics must not split its predecessor's process.
+    // 在前一回合统计前接纳排队任务，不能拆散前一回合的过程。
+    const events = (acceptedWhileBusy
+      ? [...previous.flatMap((summary) => summary.event.kind === "turn_stats" ? [suffix[0], summary] : [summary]), ...suffix.slice(1)]
+      : [...(kind === "claimed" ? previous : previous.filter((summary) => summary.event.kind === "user_input")), ...suffix])
+      .map((summary, index) => ({ ...summary, seq: index + 1 }));
+    const presentation = projectConversationBranchPresentationV1("session-branch-v1", events, emptyResourceCatalog(), (key) => key);
+    const timeline = projectConversationTimelineItems(presentation.renderItems, undefined, false);
+    const processes = timeline.filter((entry) => entry.kind === "process");
+    expect(processes).toHaveLength(kind === "claimed" ? 2 : 1);
+    const process = processes.at(-1)!;
+    if (process.kind !== "process") throw new Error("Expected task process");
+    // New tasks precede the work divider; steering remains among that same turn's process items.
+    // 新任务位于工作分隔线之前；插队仍位于同一回合的过程项中。
+    const incomingRow = presentation.renderItems.find((item) => item.sourceMessage?.agentInteraction?.event.kind === "collaboration"
+      && item.sourceMessage.agentInteraction.event.after_state.kind === "inbound_task_message")!;
+    expect(process.process.items.some((item) => item.id === incomingRow.id)).toBe(kind === "steered");
+    if (kind === "claimed") {
+      const startIndex = timeline.findIndex((entry) => entry.kind === "item" && entry.item.id === incomingRow.id);
+      expect(startIndex).toBeGreaterThanOrEqual(0);
+      expect(startIndex).toBeLessThan(timeline.indexOf(process));
+    }
+    expect(process.process.items.some((item) => item.blocks.some((block) => block.kind === "thinking"))).toBe(false);
+    expect(process.process.items.some((item) => item.leadingThinking?.length)).toBe(true);
+    expect(presentation.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(presentation.messages.some((message) => message.body === "隐藏协议镜像")).toBe(false);
   });
   it("keeps notification and child-result cards distinct from human input and parent completion", () => {
     // presentation and timeline exercise the same adapter and grouping path used by ChatArea.
@@ -360,7 +566,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(projectConversationTimelineItems(late.renderItems, undefined, true).map((entry) => entry.kind)).toEqual(["item"]);
   });
 
-  it("routes known participants and cancels one exact source-owned question only once", async () => {
+  it("routes known participants without allowing the UI to cancel agent questions", async () => {
     // container mounts production buttons so callbacks cannot pass on static markup alone.
     // container 挂载生产按钮，避免只用静态标记证明回调有效。
     const container = document.createElement("div");
@@ -368,31 +574,27 @@ describe("ConversationBranchWorkspaceV1", () => {
     const root = createRoot(container);
     const onSelectConversation = vi.fn();
     const onOpenSubagentPanel = vi.fn(async () => true);
-    // resolveCancellation controls one outstanding request to test synchronous duplicate clicks.
-    // resolveCancellation 控制一个未完成请求，验证同步重复点击。
-    let resolveCancellation!: (value: Awaited<ReturnType<typeof cancelCollaborationQuestion>>) => void;
-    vi.mocked(cancelCollaborationQuestion).mockImplementationOnce(() => new Promise((resolve) => { resolveCancellation = resolve; }));
     try {
       await React.act(async () => { root.render(workspaceTree([questionEvent()], "inline_output", [], false, {
-        conversations: [{ id: "session-source" }], navigation: null, onSelectConversation, onOpenSubagentPanel,
+        conversations: [{ id: "session-target", title: "接收会话" }], navigation: null, onSelectConversation, onOpenSubagentPanel,
       })); });
-      const sourceButton = container.querySelector<HTMLButtonElement>('[aria-label="打开来源会话"]')!;
+      expect(container.querySelector('[aria-label="打开来源会话"]')).toBeNull();
       const targetButton = container.querySelector<HTMLButtonElement>('[aria-label="打开目标会话"]')!;
-      expect(sourceButton.disabled).toBe(false);
-      expect(targetButton.disabled).toBe(true);
-      await React.act(async () => { sourceButton.click(); targetButton.click(); });
-      expect(onSelectConversation).toHaveBeenCalledExactlyOnceWith("session-source");
+      expect(targetButton.disabled).toBe(false);
+      const fold = container.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-fold")!;
+      const expanded = fold.getAttribute("aria-expanded");
+      await React.act(async () => { targetButton.click(); });
+      expect(fold.getAttribute("aria-expanded")).toBe(expanded);
+      await React.act(async () => { fold.click(); });
+      expect(fold.getAttribute("aria-expanded")).not.toBe(expanded);
+      await React.act(async () => { fold.click(); });
+      expect(fold.getAttribute("aria-expanded")).toBe(expanded);
+      expect(onSelectConversation).toHaveBeenCalledExactlyOnceWith("session-target");
       expect(onOpenSubagentPanel).not.toHaveBeenCalled();
-      const cancelButton = container.querySelector<HTMLButtonElement>(".conversation-v1-collaboration-cancel-button")!;
-      await React.act(async () => { cancelButton.click(); cancelButton.click(); });
-      expect(cancelCollaborationQuestion).toHaveBeenCalledExactlyOnceWith("question-1", "root-source");
-      expect(cancelButton.disabled).toBe(true);
-      await React.act(async () => { resolveCancellation({ status: "accepted", question_id: "question-1", question_state: "cancelled", operation_id: "cancel-operation", revision: 2 }); });
-      expect(cancelButton.disabled).toBe(true);
+      expect(container.querySelector(".conversation-v1-collaboration-cancel-button")).toBeNull();
     } finally {
       await React.act(async () => root.unmount());
       container.remove();
-      vi.mocked(cancelCollaborationQuestion).mockReset();
     }
   });
   // The same live sequence must hand reasoning to exactly one tool under either popup preference.

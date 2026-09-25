@@ -16,7 +16,11 @@ const { shell } = vi.hoisted(() => ({ shell: {
   showLocalNotification: vi.fn(),
 } }));
 vi.mock("@/service/webui-service-runtime", () => ({ shellClient: shell }));
-vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
+vi.mock("@/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/i18n")>();
+  const t = (key: import("@/i18n").TranslationKey) => actual.readLocaleMessage("zh-CN", key);
+  return { ...actual, useI18n: () => ({ locale: "zh-CN", setLocale: () => undefined, t }) };
+});
 
 // container and root own a fresh isolated client mount for every scenario.
 // container 与 root 为每个场景持有新的隔离客户端挂载。

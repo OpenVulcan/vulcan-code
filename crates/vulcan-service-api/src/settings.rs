@@ -161,6 +161,9 @@ pub struct PluginMcpServerSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginExtensionSummary {
+    /// Exact service incarnation and enabled generation used to invalidate loaded UI code.
+    /// 用于使已加载界面代码失效的精确服务实例及启用代次。
+    pub runtime_identity: String,
     /// Stable package origin such as bundled system or user installed.
     /// 稳定的包来源，例如系统内建或用户安装。
     pub origin: String,
@@ -282,6 +285,12 @@ pub struct PluginSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginUiModuleSource {
+    /// Exact service incarnation and plugin generation that owns this module and its actions.
+    /// 持有当前模块及 Action 的精确服务实例和插件代次。
+    pub runtime_identity: String,
+    /// Manifest-authorized action policies; secrets and mutation results are never cached.
+    /// 清单授权的 Action 策略；不得缓存密钥与变更结果。
+    pub action_policies: Vec<PluginUiActionPolicy>,
     /// Exact owning plugin identifier.
     /// 精确的所属插件标识。
     pub plugin_id: String,
@@ -299,6 +308,22 @@ pub struct PluginUiModuleSource {
     #[serde(default)]
     pub messages_by_locale:
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+/// Authenticated UI query policy projected from one validated manifest action.
+/// 从单个已校验清单 Action 投影的已认证界面查询策略。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginUiActionPolicy {
+    /// Exact plugin-local action identifier.
+    /// 精确的插件内 Action 标识。
+    pub id: String,
+    /// Explicit semantic class: read or mutation.
+    /// 明确语义类别：只读或变更。
+    pub effect: String,
+    /// Allowed result retention in milliseconds; zero shares in-flight work only.
+    /// 允许保留结果的毫秒数；零表示仅共享在途任务。
+    pub result_cache_ms: u64,
 }
 
 /// Returns one bounded UTF-8 text asset declared by an enabled plugin package.
