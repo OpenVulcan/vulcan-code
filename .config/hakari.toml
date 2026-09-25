@@ -24,10 +24,10 @@ platforms = [
     "aarch64-apple-darwin",
 ]
 
-# Vulcan Code Tauri owns profile-exclusive Tauri features and must stay outside Hakari traversal.
-# Vulcan Code Tauri 持有 profile 互斥的 Tauri feature，必须排除在 Hakari 遍历之外。
+# The service owns optional tray and profile-specific Tauri features; do not unify them across the workspace.
+# 服务持有可选托盘与构建模式专属的 Tauri 特性，禁止将它们统一扩散到整个工作区。
 [traversal-excludes]
-workspace-members = ["vulcan-code-tauri"]
+workspace-members = ["vulcan-code-service"]
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true
