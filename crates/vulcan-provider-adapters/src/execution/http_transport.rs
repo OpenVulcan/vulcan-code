@@ -7,7 +7,7 @@ use super::failure::{
     stream_transport_failure, transport_failure,
 };
 use super::framing::IncrementalFrameParser;
-use super::projection_profiles::project_response_record_text;
+use super::projection_profiles::{project_response_record, project_response_record_text};
 use super::request_encoding::request_with_codex_tool_input_contract;
 use super::request_encoding::request_without_nonpersistent_responses_continuation;
 use super::request_headers::execution_headers;
@@ -18,7 +18,9 @@ use super::response_metadata::{
 };
 use super::stream_state::{update_semantic_output_observation, validate_stream_event};
 use super::transport_diagnostics::{emit_provider_transport_trace, provider_transport_unix_millis};
-use super::usage::{ProfiledUsageEventGate, extract_profiled_usage_events};
+use super::usage::{
+    ProfiledUsageEventGate, extract_profiled_usage_events, extract_profiled_usage_record_events,
+};
 use super::wire_capture::{
     ProviderWireCaptureTargets, ProviderWireResponseCaptureGuard, provider_wire_request_capture,
     publish_wire_request_capture,
@@ -285,7 +287,7 @@ impl ProviderExecutionClient {
                         failure
                     })?
                 {
-                    let projected_data = project_response_record_text(
+                    let projected = project_response_record(
                         &response_profiles,
                         frame.data.as_str(),
                     )
@@ -294,10 +296,11 @@ impl ProviderExecutionClient {
                         wire_response_capture.observe_failure("response_projection", &failure);
                         failure
                     })?;
-                    let profiled_usage_events = extract_profiled_usage_events(
+                    let profiled_usage_events = extract_profiled_usage_record_events(
                         &usage_profiles,
                         UsageRecordKind::SseEvent,
-                        projected_data.as_str(),
+                        &projected.text,
+                        projected.value.as_ref(),
                         &mut usage_accumulator,
                     )
                     .map_err(|error| {
@@ -329,7 +332,7 @@ impl ProviderExecutionClient {
                         yield usage_event;
                     }
                     for mut event in decoder
-                        .push_sse(frame.event_name.as_deref(), projected_data.as_str())
+                        .push_sse(frame.event_name.as_deref(), &projected.text)
                         .map_err(|error| {
                             let failure =
                                 stream_protocol_failure(error, semantic_output_observed);
@@ -401,7 +404,7 @@ impl ProviderExecutionClient {
                     failure
                 })?
             {
-                let projected_data = project_response_record_text(
+                let projected = project_response_record(
                     &response_profiles,
                     frame.data.as_str(),
                 )
@@ -409,10 +412,11 @@ impl ProviderExecutionClient {
                 .inspect_err(|failure| {
                     wire_response_capture.observe_failure("response_projection", failure);
                 })?;
-                let profiled_usage_events = extract_profiled_usage_events(
+                let profiled_usage_events = extract_profiled_usage_record_events(
                     &usage_profiles,
                     UsageRecordKind::SseEvent,
-                    projected_data.as_str(),
+                    &projected.text,
+                    projected.value.as_ref(),
                     &mut usage_accumulator,
                 )
                 .map_err(|error| {
@@ -442,7 +446,7 @@ impl ProviderExecutionClient {
                     yield usage_event;
                 }
                 for mut event in decoder
-                    .push_sse(frame.event_name.as_deref(), projected_data.as_str())
+                    .push_sse(frame.event_name.as_deref(), &projected.text)
                     .map_err(|error| {
                         let failure = stream_protocol_failure(error, semantic_output_observed);
                         wire_response_capture.observe_failure("protocol_decoder", &failure);
