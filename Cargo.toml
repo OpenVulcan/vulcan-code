@@ -51,8 +51,14 @@ members = [
     "workspace-hack",
 ]
 exclude = [
+    "vendor/lance-bitpacking",
 ]
 resolver = "3"
+
+# Keep the Lance codec unchanged while replacing its unmaintained token-pasting macro dependency.
+# 保持 Lance 编解码器不变，仅替换其停止维护的标识符拼接宏依赖。
+[patch.crates-io]
+lance-bitpacking = { path = "vendor/lance-bitpacking" }
 
 [workspace.package]
 authors = ["OpenVulcan"]
