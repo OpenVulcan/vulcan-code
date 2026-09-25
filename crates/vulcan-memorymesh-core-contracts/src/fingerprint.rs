@@ -111,7 +111,7 @@ pub fn fingerprint_material(command: &crate::CoreCommand, config_snapshot_id: &s
 #[must_use]
 pub fn request_fingerprint(command: &crate::CoreCommand, config_snapshot_id: &str) -> String {
     let material = fingerprint_material(command, config_snapshot_id);
-    format!("fp256:{:x}", Sha256::digest(material))
+    format!("fp256:{}", hex::encode(Sha256::digest(material)))
 }
 
 /// Validates that the caller-provided fingerprint matches the recomputed semantic fingerprint.

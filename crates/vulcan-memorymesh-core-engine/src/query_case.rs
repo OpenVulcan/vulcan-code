@@ -82,7 +82,7 @@ mod tests {
             digest.update(u32::from(representative(value)).to_le_bytes());
         }
         assert_eq!(
-            format!("{:x}", digest.finalize()),
+            hex::encode(digest.finalize()),
             "9b38b54fcb7670d91fc7aac701a6ef54bba5c6afa47c85cb6e5bd2e4028405e0"
         );
     }

@@ -7,12 +7,13 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+hex.workspace = true
 bincode.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 regex.workspace = true
 serde.workspace = true
-sha2 = "=0.10.9"
+sha2.workspace = true
 vulcan-memorymesh-core-config.workspace = true
 vulcan-memorymesh-core-contracts.workspace = true
 vulcan-memorymesh-core-storage.workspace = true

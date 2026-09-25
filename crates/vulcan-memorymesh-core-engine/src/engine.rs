@@ -9493,8 +9493,8 @@ fn direct_write_dedupe_hash(
     ]
     .join("\n");
     format!(
-        "v1:{:x}",
-        <sha2::Sha256 as sha2::Digest>::digest(material.as_bytes())
+        "v1:{}",
+        hex::encode(<sha2::Sha256 as sha2::Digest>::digest(material.as_bytes()))
     )
 }
 
@@ -11531,7 +11531,7 @@ fn effect_result_summary(result: &HostEffectResult) -> Result<String, CoreError>
         ));
     }
     let digest = <sha2::Sha256 as sha2::Digest>::digest(encoded);
-    Ok(format!("{kind}:sha256:{digest:x}"))
+    Ok(format!("{kind}:sha256:{}", hex::encode(digest)))
 }
 
 /// Encodes one private continuation value with the bounded deterministic checkpoint codec.

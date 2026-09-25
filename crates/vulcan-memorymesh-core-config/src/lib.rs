@@ -910,7 +910,7 @@ fn identity_from_manifest(manifest: &ResourceManifest) -> Result<ResourceIdentit
         package_version: manifest.resource_package_version.clone(),
         file_count: manifest.files.len(),
         total_bytes,
-        digest: format!("{:x}", aggregate.finalize()),
+        digest: hex::encode(aggregate.finalize()),
     })
 }
 
@@ -1162,7 +1162,7 @@ fn snapshot_digest(
             hash_length_prefixed(&mut hasher, bytes);
         }
     }
-    ConfigSnapshotId::new(format!("sha256:{:x}", hasher.finalize())).map_err(|error| {
+    ConfigSnapshotId::new(format!("sha256:{}", hex::encode(hasher.finalize()))).map_err(|error| {
         config_error(
             ErrorCode::Internal,
             format!("snapshot identifier generation failed: {error}"),
@@ -1544,7 +1544,7 @@ fn digest_text_map(values: &BTreeMap<String, Arc<str>>) -> String {
         hash_length_prefixed(&mut hasher, name.as_bytes());
         hash_length_prefixed(&mut hasher, value.as_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Calculates a stable digest over ordered named byte resources.
@@ -1556,7 +1556,7 @@ fn digest_named_bytes(values: &[(String, Vec<u8>)]) -> String {
         hash_length_prefixed(&mut hasher, name.as_bytes());
         hash_length_prefixed(&mut hasher, value);
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Hashes one complete score producer descriptor in its declared field order.
@@ -1688,7 +1688,7 @@ fn digest_memory_policy(policy: &MemoryPolicy) -> String {
     hasher.update([u8::from(retrieval.mmr.enabled)]);
     hasher.update(retrieval.mmr.lambda.to_le_bytes());
     hasher.update(retrieval.rerank_top_n.to_le_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Writes one collection length into digest material without platform-width ambiguity.
@@ -1791,7 +1791,7 @@ fn validate_resource_layer(label: &str, layer: &ResourceLayer) -> Result<(), Cor
 /// Calculates lowercase SHA-256 for exact bytes.
 /// 为精确字节计算小写 SHA-256。
 fn hex_digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// Creates one configuration-stage error.

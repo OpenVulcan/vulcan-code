@@ -188,7 +188,9 @@ pub fn checkpoint_payload_digest(checkpoint: &CommandCheckpoint) -> Result<Strin
     unsigned.payload_digest.clear();
     let encoded = encode_checkpoint(&unsigned)?;
     let digest = Sha256::digest(encoded);
-    Ok(format!("{digest:x}"))
+    // Preserve lowercase hexadecimal bytes independently of the digest output container type.
+    // 保持小写十六进制字节编码，不依赖摘要输出容器实现格式化特性。
+    Ok(hex::encode(digest))
 }
 
 /// Deserializes one checkpoint from its deterministic binary container.

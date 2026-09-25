@@ -10074,12 +10074,13 @@ dependencies = [
 name = "vulcan-memorymesh-core-config"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "include_dir",
  "regex",
  "regex-syntax",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "toml 1.1.4+spec-1.1.0",
  "vulcan-memorymesh-core-contracts",
  "workspace-hack",
@@ -10089,9 +10090,10 @@ dependencies = [
 name = "vulcan-memorymesh-core-contracts"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "thiserror 2.0.20",
  "workspace-hack",
 ]
@@ -10103,10 +10105,11 @@ dependencies = [
  "bincode",
  "chrono",
  "chrono-tz",
+ "hex",
  "regex",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "vulcan-memorymesh-core-config",
  "vulcan-memorymesh-core-contracts",
  "vulcan-memorymesh-core-storage",

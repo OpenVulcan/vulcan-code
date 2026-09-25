@@ -16943,7 +16943,7 @@ SOFTWARE.
 ### MIT License
 
 Used by:
-- luaskills 0.5.7 - https://github.com/LuaSkills/luaskills
+- luaskills 0.5.9 - https://github.com/LuaSkills/luaskills
 
 ```text
 MIT License

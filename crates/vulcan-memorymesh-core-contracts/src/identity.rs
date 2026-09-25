@@ -198,7 +198,7 @@ fn mutation_sub_identity(namespace: &str, root: &str, role: &str) -> String {
         digest.update((field.len() as u64).to_le_bytes());
         digest.update(field.as_bytes());
     }
-    format!("vmm-{namespace}-v1:{:x}", digest.finalize())
+    format!("vmm-{namespace}-v1:{}", hex::encode(digest.finalize()))
 }
 
 /// References one entity as an exact existing record or a command-local new slot.
