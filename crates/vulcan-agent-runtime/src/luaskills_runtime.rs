@@ -5,7 +5,7 @@ use crate::model::SessionId;
 use crate::project_temp_maintenance;
 use crate::runtime_assets;
 use crate::tool_result_format::{
-    EffectiveBudgetScope, HostRenderOptions, HostTextRenderInput, HostToolOverflowMode,
+    DEFAULT_INLINE_TOOL_RESULT_BYTES, HostRenderOptions, HostTextRenderInput, HostToolOverflowMode,
     ToolResultBudgetSnapshot, render_tool_result_text,
 };
 use crate::tooling::change_set::{
@@ -873,16 +873,7 @@ fn build_default_luaskills_client_budget(tool_name: &str) -> Value {
 /// Builds one strongly typed default budget snapshot reused by host-side result rendering and Lua invocation context injection.
 /// 构建一份强类型默认预算快照，供宿主侧结果渲染与 Lua 调用上下文注入复用。
 fn build_default_luaskills_budget_snapshot(_tool_name: &str) -> ToolResultBudgetSnapshot {
-    ToolResultBudgetSnapshot {
-        tool_result: EffectiveBudgetScope {
-            bytes: 200_000,
-            lines: -1,
-        },
-        file_read: EffectiveBudgetScope {
-            bytes: 200_000,
-            lines: -1,
-        },
-    }
+    ToolResultBudgetSnapshot::uniform_bytes(DEFAULT_INLINE_TOOL_RESULT_BYTES)
 }
 
 /// Ensures the minimum runtime directory layout exists and returns the mounted skill roots.

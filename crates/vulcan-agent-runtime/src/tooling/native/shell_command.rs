@@ -179,7 +179,8 @@ impl ShellCommandExecutionStatus {
 
 /// Maximum inline byte budget used before shell tool output switches into page mode spill rendering.
 /// shell 工具输出在切换到分页落盘渲染前使用的最大内联字节预算。
-pub(crate) const SHELL_INLINE_OUTPUT_LIMIT_BYTES: u64 = 200_000;
+pub(crate) const SHELL_INLINE_OUTPUT_LIMIT_BYTES: u64 =
+    crate::tool_result_format::DEFAULT_INLINE_TOOL_RESULT_BYTES;
 
 /// One normalized shell-command execution report used by both model text and host metadata.
 /// 同时供模型文本与宿主元数据复用的一份规范化 shell 命令执行报告。
@@ -959,16 +960,7 @@ pub(crate) fn build_shell_command_text_render_input(
 /// Builds the default budget snapshot reused by host-owned shell command rendering.
 /// 构建供宿主自有 shell 命令结果渲染复用的默认预算快照。
 pub(crate) fn default_shell_command_budget_snapshot() -> ToolResultBudgetSnapshot {
-    ToolResultBudgetSnapshot {
-        tool_result: EffectiveBudgetScope {
-            bytes: SHELL_INLINE_OUTPUT_LIMIT_BYTES,
-            lines: -1,
-        },
-        file_read: EffectiveBudgetScope {
-            bytes: SHELL_INLINE_OUTPUT_LIMIT_BYTES,
-            lines: -1,
-        },
-    }
+    ToolResultBudgetSnapshot::uniform_bytes(SHELL_INLINE_OUTPUT_LIMIT_BYTES)
 }
 
 /// Decide whether the combined shell-command text already exceeds the inline tool-result budget.

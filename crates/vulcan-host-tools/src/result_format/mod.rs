@@ -58,6 +58,13 @@ const PAGE_SPILL_ROOT_REQUIRED_ERROR: &str =
 const DEFAULT_TRUNCATE_NOTICE: &str =
     "Content has been truncated because it exceeds the current VulcanCode client limit.";
 
+/// Default inline byte budget for host-rendered tool results before page-mode spill takes over.
+/// 宿主渲染工具结果在切换为分页落盘前使用的默认内联字节预算。
+///
+/// This is the single definition shared by shell tools and LuaSkills default rendering.
+/// 这是 shell 工具与 LuaSkills 默认渲染共享的唯一定义。
+pub const DEFAULT_INLINE_TOOL_RESULT_BYTES: u64 = 200_000;
+
 /// Host-owned render options that decide where page-mode spill files and overflow templates are resolved.
 /// 决定分页模式超限文件与超限模板解析位置的宿主自有渲染选项。
 #[derive(Debug, Clone, Default)]
@@ -83,6 +90,17 @@ pub struct ToolResultBudgetSnapshot {
     /// Effective file-read budget used when page mode needs to expose safe chunk ranges.
     /// 当分页模式需要暴露安全分块范围时使用的实际文件读取预算。
     pub file_read: EffectiveBudgetScope,
+}
+
+impl ToolResultBudgetSnapshot {
+    /// Builds one snapshot whose inline and file-read scopes share the same byte limit without a line limit.
+    /// 构建内联与文件读取范围共享同一字节上限且不限行数的预算快照。
+    pub fn uniform_bytes(bytes: u64) -> Self {
+        Self {
+            tool_result: EffectiveBudgetScope { bytes, lines: -1 },
+            file_read: EffectiveBudgetScope { bytes, lines: -1 },
+        }
+    }
 }
 
 /// One effective budget scope containing byte and line limits after host resolution.
