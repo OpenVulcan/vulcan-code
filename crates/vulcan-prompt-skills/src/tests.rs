@@ -1223,3 +1223,16 @@ fn successful_backup_restoration_releases_transaction() {
     assert!(original_dir.join(SKILL_FILE_NAME).is_file());
     let _ = fs::remove_dir_all(root);
 }
+
+/// Transaction tokens must carry the process-start timestamp so a reused pid cannot collide with crash orphans.
+/// 事务标记必须携带进程启动时间戳，避免复用的 pid 与崩溃遗留目录冲突。
+#[test]
+fn transaction_tokens_include_process_epoch_and_stay_unique() {
+    let first = next_prompt_skill_transaction_token();
+    let second = next_prompt_skill_transaction_token();
+    assert_ne!(first, second);
+    let parts = first.split('-').collect::<Vec<_>>();
+    assert_eq!(parts.len(), 3, "token layout may have changed: {first}");
+    assert_eq!(parts[0], std::process::id().to_string());
+    assert_eq!(parts[1], PROMPT_SKILL_TRANSACTION_EPOCH.to_string());
+}

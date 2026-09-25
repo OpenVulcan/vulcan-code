@@ -54,6 +54,30 @@ pub const VULCAN_SKILL_CATALOG_SCHEMA_VERSION: u32 = 1;
 /// 用于隔离并发文件系统事务的单调递增后缀。
 static PROMPT_SKILL_TRANSACTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// Process-start timestamp that keeps transaction names unique when a restarted process reuses a pid.
+/// 进程启动时间戳；在重启后的进程复用 pid 时保持事务名称唯一。
+static PROMPT_SKILL_TRANSACTION_EPOCH: std::sync::LazyLock<u128> = std::sync::LazyLock::new(|| {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default()
+});
+
+/// Builds one unique transaction token from the pid, process-start timestamp, and sequence.
+/// 由 pid、进程启动时间戳与序号构建一个唯一事务标记。
+///
+/// Orphans left by a crashed process are never reused or deleted automatically because they may
+/// hold the only copy of a previous package.
+/// 崩溃进程留下的孤儿目录不会被复用或自动删除，因为其中可能保存着旧技能包的唯一副本。
+fn next_prompt_skill_transaction_token() -> String {
+    format!(
+        "{}-{}-{}",
+        std::process::id(),
+        *PROMPT_SKILL_TRANSACTION_EPOCH,
+        PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// Origin scope of one prompt skill.
 /// 单个提示词技能的来源作用域。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1460,8 +1484,7 @@ fn prompt_skill_transaction_dir(user_root: &Path) -> Result<PathBuf, String> {
         &transactions_root,
         "Agent Skills transactions directory",
     )?;
-    let sequence = PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let transaction_dir = transactions_root.join(format!("{}-{sequence}", std::process::id()));
+    let transaction_dir = transactions_root.join(next_prompt_skill_transaction_token());
     if fs::symlink_metadata(&transaction_dir).is_ok() {
         return Err(format!(
             "Agent Skills transaction path already exists: {}",
@@ -1601,9 +1624,8 @@ fn write_host_prompt_skill_catalog(
     let target = directory.join(VULCAN_SKILL_CATALOG_FILE_NAME);
     let target_exists = managed_prompt_skill_file_exists(&target, "Agent Skills catalog")?;
     let temporary = directory.join(format!(
-        "catalog-{}-{}.yaml.tmp",
-        std::process::id(),
-        PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        "catalog-{}.yaml.tmp",
+        next_prompt_skill_transaction_token()
     ));
     if fs::symlink_metadata(&temporary).is_ok() {
         return Err(format!(
@@ -1625,9 +1647,8 @@ fn write_host_prompt_skill_catalog(
         .map_err(|error| format!("Failed to flush Agent Skills catalog transaction: {error}"))?;
     drop(temporary_file);
     let backup = directory.join(format!(
-        "catalog-{}-{}.yaml.backup",
-        std::process::id(),
-        PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        "catalog-{}.yaml.backup",
+        next_prompt_skill_transaction_token()
     ));
     if fs::symlink_metadata(&backup).is_ok() {
         let _ = fs::remove_file(&temporary);
