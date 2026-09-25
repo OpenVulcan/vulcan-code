@@ -408,8 +408,11 @@ impl CommandSessionRuntime {
             // Register before reading the terminal state so a fast process exit cannot be lost.
             // 在读取终态前完成注册，避免快速进程退出通知丢失。
             notified.as_mut().enable();
+            // The status already reads `Stopped` after the request, so only reaping ends the wait.
+            // 停止请求后状态已显示 `Stopped`，因此只有进程被回收才结束等待。
+            let process_reaped = record.shared_state.process_reaped().await;
             let snapshot = record.snapshot().await;
-            if snapshot.status != CommandSessionStatus::Running || wait_for_exit_ms == 0 {
+            if process_reaped || wait_for_exit_ms == 0 {
                 return Ok(snapshot);
             }
             let waited_ms = wait_started_at.elapsed().as_millis() as u64;
