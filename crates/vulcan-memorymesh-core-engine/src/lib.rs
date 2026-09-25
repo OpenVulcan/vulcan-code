@@ -2,6 +2,7 @@
 //! 确定性记忆算法与共享 Command/Effect/Resume 引擎。
 
 mod algorithms;
+mod checkpoint_codec;
 mod engine;
 mod precheck;
 #[cfg(test)]

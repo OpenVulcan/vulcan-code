@@ -153,10 +153,6 @@ fn waiting(
 /// 在重新计算精确二进制摘要后仍拒绝漂移；新实例先接受未修改的对照检查点。
 #[test]
 fn rehashed_review_source_drift_is_rejected() {
-    let codec = bincode::config::standard()
-        .with_little_endian()
-        .with_fixed_int_encoding()
-        .with_limit::<16_777_216>();
     for scenario in ["single", "batch", "analyze"] {
         let (core, handle, original_step) = waiting(scenario);
         let bytes = core.export_checkpoint(&handle).expect("export");
@@ -169,9 +165,9 @@ fn rehashed_review_source_drift_is_rejected() {
             let mut checkpoint = decode_checkpoint(&bytes).expect("decode checkpoint");
             let continuation = checkpoint.continuation.as_mut().expect("continuation");
             let original = continuation.pending_effect.as_ref().expect("effect bytes");
-            let (mut request, consumed): (EffectRequest, usize) =
-                bincode::serde::decode_from_slice(original, codec).expect("decode effect");
-            assert_eq!(consumed, original.len());
+            let (mut request, remaining): (EffectRequest, &[u8]) =
+                postcard::take_from_bytes(original).expect("decode effect");
+            assert!(remaining.is_empty());
             let HostEffect::Llm(effect) = &mut request.effect else {
                 panic!("LLM")
             };
@@ -218,7 +214,7 @@ fn rehashed_review_source_drift_is_rejected() {
                 memory_candidates[0].candidate.summary.push_str(" changed");
             }
             continuation.pending_effect =
-                Some(bincode::serde::encode_to_vec(&request, codec).expect("encode effect"));
+                Some(postcard::to_allocvec(&request).expect("encode effect"));
             checkpoint.payload_digest = checkpoint_payload_digest(&checkpoint).expect("rehash");
             let forged = encode_checkpoint(&checkpoint).expect("encode checkpoint");
             let isolated = MemoryMeshCore::new().expect("isolated Core");

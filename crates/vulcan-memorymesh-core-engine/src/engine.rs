@@ -72,9 +72,6 @@ fn checked_duration_ns(duration_millis: u64, field: &str) -> Result<i64, CoreErr
     })
 }
 
-/// Limits one private continuation or received effect summary to a recoverable binary size.
-/// 将单个私有续体或已接收 Effect 摘要限制在可恢复的二进制大小内。
-const MAX_PRIVATE_CONTINUATION_BYTES: usize = 16_777_216;
 /// Limits Host-owned job and batch identifiers that are not yet dedicated ID newtypes.
 /// 限制尚未使用专用 ID 新类型的宿主任务与批次标识。
 const MAX_HOST_IDENTIFIER_BYTES: usize = 512;
@@ -11516,20 +11513,11 @@ fn effect_result_summary(result: &HostEffectResult) -> Result<String, CoreError>
     // malformed host data as an Effect contract failure rather than a checkpoint failure.
     // 使用与检查点相同的可恢复性上限编码，但将超限或畸形宿主数据归类为 Effect 契约失败，
     // 而不是检查点失败。
-    let configuration = bincode::config::standard()
-        .with_little_endian()
-        .with_fixed_int_encoding()
-        .with_limit::<MAX_PRIVATE_CONTINUATION_BYTES>();
-    let encoded = bincode::serde::encode_to_vec(result, configuration).map_err(|error| {
+    let encoded = crate::checkpoint_codec::encode(result).map_err(|error| {
         effect_type_error(format!(
             "received effect result exceeds the recoverable binary bound: {error}"
         ))
     })?;
-    if encoded.len() > MAX_PRIVATE_CONTINUATION_BYTES {
-        return Err(effect_type_error(
-            "received effect result exceeds the recoverable binary bound",
-        ));
-    }
     let digest = <sha2::Sha256 as sha2::Digest>::digest(encoded);
     Ok(format!("{kind}:sha256:{}", hex::encode(digest)))
 }
@@ -11540,23 +11528,12 @@ fn encode_checkpoint_continuation<T: Serialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, CoreError> {
-    let configuration = bincode::config::standard()
-        .with_little_endian()
-        .with_fixed_int_encoding()
-        .with_limit::<MAX_PRIVATE_CONTINUATION_BYTES>();
-    let encoded = bincode::serde::encode_to_vec(value, configuration).map_err(|error| {
+    crate::checkpoint_codec::encode(value).map_err(|error| {
         command_error(
             ErrorCode::CheckpointIncompatible,
             format!("checkpoint {label} binary serialization failed: {error}"),
         )
-    })?;
-    if encoded.len() > MAX_PRIVATE_CONTINUATION_BYTES {
-        return Err(command_error(
-            ErrorCode::CheckpointIncompatible,
-            format!("checkpoint {label} binary payload exceeds the recoverable bound"),
-        ));
-    }
-    Ok(encoded)
+    })
 }
 
 /// Decodes one private continuation value and rejects trailing or oversized binary payloads.
@@ -11565,24 +11542,12 @@ fn decode_checkpoint_continuation<T: DeserializeOwned>(
     bytes: &[u8],
     label: &str,
 ) -> Result<T, CoreError> {
-    let configuration = bincode::config::standard()
-        .with_little_endian()
-        .with_fixed_int_encoding()
-        .with_limit::<MAX_PRIVATE_CONTINUATION_BYTES>();
-    let (value, consumed) =
-        bincode::serde::decode_from_slice(bytes, configuration).map_err(|error| {
-            command_error(
-                ErrorCode::CheckpointIncompatible,
-                format!("checkpoint {label} binary payload is invalid: {error}"),
-            )
-        })?;
-    if consumed != bytes.len() {
-        return Err(command_error(
+    crate::checkpoint_codec::decode(bytes).map_err(|error| {
+        command_error(
             ErrorCode::CheckpointIncompatible,
-            format!("checkpoint {label} binary payload contains trailing bytes"),
-        ));
-    }
-    Ok(value)
+            format!("checkpoint {label} binary payload is invalid: {error}"),
+        )
+    })
 }
 
 /// Creates one validation-stage error.
