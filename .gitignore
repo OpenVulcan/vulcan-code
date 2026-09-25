@@ -41,16 +41,18 @@ target
 # 本地任务看板状态。
 /TASK_*.md
 
-# Generated WebUI dependencies and build outputs.
-# WebUI 生成的依赖与构建产物。
-/apps/vulcan-code-web/node_modules/
+# Generated Node dependencies, including nested test caches and prepared browser payloads.
+# 生成的 Node 依赖，包括嵌套测试缓存与准备好的浏览器依赖载荷。
+**/node_modules/
+
+# Generated WebUI build outputs.
+# WebUI 生成的构建产物。
 /apps/vulcan-code-web/dist/
 /apps/vulcan-code-web/.vite/
 /apps/vulcan-code-web/tsconfig.tsbuildinfo
 
-# Generated Electron desktop dependencies and build outputs.
-# Electron 桌面端生成的依赖与构建产物。
-/apps/vulcan-code-desktop/node_modules/
+# Generated Electron desktop build outputs.
+# Electron 桌面端生成的构建产物。
 /apps/vulcan-code-desktop/dist/
 /apps/vulcan-code-desktop/tsconfig.tsbuildinfo
 
@@ -65,6 +67,3 @@ target
 # Vendored protoc provisioned by make init-system; required by lance-encoding via lancedb.
 # 由 make init-system 取得的随仓库 protoc；lancedb 经 lance-encoding 需要它。
 .cargo/protoc/
-# Browser npm payloads are prepared from the frozen lockfile during make sync.
-# 浏览器 npm 载荷在 make sync 期间根据冻结锁文件准备。
-/plugins/vulcan-browser/node/node_modules/
