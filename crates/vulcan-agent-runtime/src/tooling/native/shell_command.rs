@@ -1461,6 +1461,25 @@ mod process_option_tests {
         );
     }
 
+    /// The bundled terminal-session Skill must quote the current hard limit instead of a stale copy.
+    /// 内置 terminal-session 技能必须引用当前硬上限，而不是过期副本。
+    #[test]
+    fn terminal_skill_quotes_current_output_hard_limit() {
+        let skill_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../vulcan-prompt-skills/src/assets/system/terminal-session/SKILL.md");
+        let content = std::fs::read_to_string(&skill_file)
+            .expect("bundled terminal-session Skill should be readable");
+        let expected = format!(
+            "{} MiB ({} bytes)",
+            SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES / (1024 * 1024),
+            SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES
+        );
+        assert!(
+            content.contains(&expected),
+            "terminal-session SKILL.md must state `{expected}`; update the Skill whenever SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES changes"
+        );
+    }
+
     /// Background processes inheriting the pipes must not keep a naturally exited command running.
     /// 继承管道的后台进程不得让已自然退出的命令持续挂起。
     #[cfg(unix)]

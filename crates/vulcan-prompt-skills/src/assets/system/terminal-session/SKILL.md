@@ -20,6 +20,29 @@ Before using `terminal_session`, read this skill and follow it. Do not use `term
 - Check `backend` and `input_capabilities` on tool responses. Interactive terminal sessions use the same isolated PTY and ANSI/VT host-input contract on Windows, Linux, and macOS. On Windows, ConPTY may translate that host input into Console key events before a console-mode child reads it.
 - Prefer `read` after append-style output. For TUI or screen-like output, use `send` with `screen_stable` or `snapshot` to inspect `screen_text`.
 - Before finalizing a task, clean up temporary terminals you started for tests or diagnostics. Do not announce final completion until this cleanup is done.
+- Never dump logs or files of unknown size with `cat`, `type`, `more`, `less`, or an unbounded `Get-Content`. Read bounded slices or search instead; see Large Output And Logs.
+
+## Large Output And Logs
+
+Log files and generated output can reach many gigabytes. Dumping them floods the terminal, its retained history, and your context without helping the task. These rules apply to both `terminal_session` and `shell_command`.
+
+- Never run `cat`, `type`, `more`, `less`, or `Get-Content` without `-Tail` or `-TotalCount` on a log or on any file whose size you have not checked.
+- Check the size first: `wc -c <file>` or `ls -lh <file>` in POSIX shells, `(Get-Item <file>).Length` in PowerShell.
+- Read bounded slices: `tail -n 200 <file>`, `head -n 200 <file>`, `sed -n '1000,1200p' <file>`; in PowerShell, `Get-Content <file> -Tail 200` or `Get-Content <file> -TotalCount 200`.
+- Search instead of reading: `grep -n -m 50 'ERROR' <file>`, `rg -n -m 50 'ERROR' <file>`, or `Select-String -Path <file> -Pattern 'ERROR' | Select-Object -First 50`.
+- Follow a live log only through a bounded filter, such as `tail -n 50 -f app.log | grep --line-buffered ERROR`, and stop it with `Ctrl+C` when you are done.
+- When a command's output size is unknown, redirect it to a file first (`command > out.log 2>&1`) and inspect that file in slices.
+
+### Hard Output Limit On `shell_command`
+
+`shell_command` counts stdout and stderr together. When the combined raw output exceeds 8 MiB (8388608 bytes), the host kills the command's whole process tree immediately and returns status `output_limit_exceeded` with no output at all. Nothing is saved, so partial output cannot be recovered afterwards.
+
+- Do not rerun the same command after `output_limit_exceeded`. Narrow it with the techniques above, or redirect it to a file and read slices.
+- The limit is a safety stop, not a budget to aim for. Output above the inline budget is already paged into spill files; keep commands far below the hard limit.
+
+### Large Output In `terminal_session`
+
+`terminal_session` does not kill a process because of output volume, but it retains only bounded recent history. Older output is evicted and replaced by a gap notice, so an unbounded dump loses its beginning and still fills your context. If a foreground command starts flooding the terminal, send `Ctrl+C` and rerun it with a bounded form.
 
 ## Backend Capabilities
 

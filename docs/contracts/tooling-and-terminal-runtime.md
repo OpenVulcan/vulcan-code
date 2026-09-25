@@ -34,6 +34,9 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   立即终止整棵进程树，丢弃全部已捕获输出（不落盘、不分页、不返回给模型），返回
   `output_limit_exceeded` 状态与提示缩小输出范围的 `failure_reason`。上限按合并字节计数，
   自然退出后才发现越限的命令同样按此处理；恰好等于上限的输出仍完整返回。
+- 内置 `terminal-session` 技能（[`SKILL.md`](../../crates/vulcan-prompt-skills/src/assets/system/terminal-session/SKILL.md)）
+  向模型复述该上限并禁止用 `cat` 等方式整份读取日志；技能中的数值由
+  `terminal_skill_quotes_current_output_hard_limit` 测试与常量比对，修改上限时必须同步技能文本。
 - 未越过硬上限但内联渲染结果超过 `200000` 字节时，切换为项目内 `.vulcan/temp/` 分页文件；文件名
   形如 `tool_output_overflow_page_md_<unix_ms>.md`。
 - `auto` 使用用户已配置且当前可检测的默认 Shell；没有用户配置时按平台稳定优先级选择。

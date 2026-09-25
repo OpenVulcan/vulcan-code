@@ -71,6 +71,9 @@ fn packaged_terminal_skill_documents_current_terminal_contract() {
     assert!(content.contains("POSIX-shell example"));
     assert!(content.contains("CMD example"));
     assert!(content.contains("Never branch AI tool calls by operating system"));
+    assert!(content.contains("Never dump logs or files of unknown size with `cat`"));
+    assert!(content.contains("## Large Output And Logs"));
+    assert!(content.contains("`output_limit_exceeded`"));
     assert!(!content.contains("until_exit_code"));
     assert!(!content.contains("Windows pwsh text newlines are unreliable"));
 }
