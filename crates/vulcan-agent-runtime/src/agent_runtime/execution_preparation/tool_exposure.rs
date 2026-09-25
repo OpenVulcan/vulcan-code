@@ -11,10 +11,10 @@ use crate::tooling::native::{
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_luaskills_prompt::{LuaSkillPromptEntry, LUASKILL_HELP_TOOL_NAME};
+use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
 use vulcan_plugin_runtime::VulcanPluginToolDescriptor;
 use vulcan_session_core::{
-    normalized_tool_selector_set, tool_selector_matches, CapabilityPolicyMode, ToolExposureSnapshot,
+    CapabilityPolicyMode, ToolExposureSnapshot, normalized_tool_selector_set, tool_selector_matches,
 };
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{ResolvedToolDefinition, ResolvedToolSet, VulcanToolSourceKind};

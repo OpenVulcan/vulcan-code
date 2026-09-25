@@ -931,7 +931,9 @@ impl TaskRuntime {
         args: &Value,
     ) -> Result<Vec<SubagentRegistryEntry>, String> {
         let (_, entry) = self.resolve_close_agent_entry(current_session_id, args)?;
-        Ok(self.prepare_close_agent_archive_entries(entry.session_id)?.entries)
+        Ok(self
+            .prepare_close_agent_archive_entries(entry.session_id)?
+            .entries)
     }
 
     /// Closes one child tree after the host durably seals each selected collaboration target.
@@ -946,7 +948,8 @@ impl TaskRuntime {
         args: Value,
         before_archive: impl FnOnce(&[SubagentRegistryEntry]) -> Result<(), String>,
     ) -> Result<VulcanToolInvocationResult, String> {
-        let (normalized_target, entry) = self.resolve_close_agent_entry(current_session_id, &args)?;
+        let (normalized_target, entry) =
+            self.resolve_close_agent_entry(current_session_id, &args)?;
         let previous_status = entry.status;
         let mut prepared_archive = self.prepare_close_agent_archive_entries(entry.session_id)?;
         let transaction_locks =

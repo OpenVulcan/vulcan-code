@@ -729,14 +729,23 @@ impl McpRuntimeAccess {
 
         if let Some(existing) = self.active_owned_stdio_lease(&key) {
             if existing.ordered_calls != ordered_calls {
-                return Err(String::from("owned MCP partition call ordering cannot change while active"));
+                return Err(String::from(
+                    "owned MCP partition call ordering cannot change while active",
+                ));
             }
-            return Ok(McpRuntimeOwnedStdioPartition { access: self.clone(), key });
+            return Ok(McpRuntimeOwnedStdioPartition {
+                access: self.clone(),
+                key,
+            });
         }
 
         let runtime = bootstrap_owned_stdio_runtime(servers).await?;
 
-        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone(), ordered_calls));
+        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(
+            runtime,
+            key.clone(),
+            ordered_calls,
+        ));
         let mut replaced_lease = None;
         let installed = {
             // Keep the lifecycle gate locked while publishing the lease so a disable that
@@ -842,7 +851,11 @@ impl McpRuntimeAccess {
         validate_owned_stdio_partition(&key, &servers)?;
         self.ensure_owner_plugin_admission(plugin_id)?;
         let runtime = bootstrap_owned_stdio_runtime(servers).await?;
-        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone(), ordered_calls));
+        let new_lease = Arc::new(McpRuntimePartitionLease::new_owned(
+            runtime,
+            key.clone(),
+            ordered_calls,
+        ));
         // The gate remains held through replacement publication, so disable cannot race a
         // completed bootstrap into installing a new owner partition after revocation.
         // 替换发布期间持续持有闸门，避免停用在撤销后又竞态安装新的所有者分区。
@@ -1075,7 +1088,9 @@ impl McpRuntimeAccess {
             .as_ref()
             .is_some_and(|guard| !guard.load(Ordering::Acquire))
         {
-            return Err(String::from("owned MCP tool binding was revoked by plugin drain"));
+            return Err(String::from(
+                "owned MCP tool binding was revoked by plugin drain",
+            ));
         }
         let mut occupied_public_names = BTreeSet::new();
         let mut bindings = Vec::new();
@@ -1205,7 +1220,11 @@ impl McpRuntimeAccess {
         runtime: McpRuntimeHandle,
         ordered_calls: bool,
     ) -> McpRuntimeOwnedStdioPartition {
-        let lease = Arc::new(McpRuntimePartitionLease::new_owned(runtime, key.clone(), ordered_calls));
+        let lease = Arc::new(McpRuntimePartitionLease::new_owned(
+            runtime,
+            key.clone(),
+            ordered_calls,
+        ));
         if let Some(previous) = self
             .owned_stdio_partitions
             .lock()
@@ -1742,13 +1761,14 @@ impl McpRuntimeToolBinding {
                 .as_ref()
                 .is_some_and(|guard| !guard.load(Ordering::Acquire))
             {
-                return Err(String::from("owned MCP tool binding was revoked by plugin drain"));
+                return Err(String::from(
+                    "owned MCP tool binding was revoked by plugin drain",
+                ));
             }
             let Some(current_lease) = access.active_owned_stdio_lease(owner_key) else {
                 return Err(String::from("owned MCP stdio partition is unavailable"));
             };
-            if !Arc::ptr_eq(&current_lease, &self.runtime)
-                && self.owner_replacement_guard.is_none()
+            if !Arc::ptr_eq(&current_lease, &self.runtime) && self.owner_replacement_guard.is_none()
             {
                 return Err(String::from(
                     "owned MCP tool binding is stale after owner lease replacement",
@@ -1759,7 +1779,9 @@ impl McpRuntimeToolBinding {
                 .as_ref()
                 .is_some_and(|guard| !guard.load(Ordering::Acquire))
             {
-                return Err(String::from("owned MCP tool binding was revoked by plugin drain"));
+                return Err(String::from(
+                    "owned MCP tool binding was revoked by plugin drain",
+                ));
             }
             return current_lease
                 .call_tool_for_owner(owner_session_id, self.view.origin_tool_id(), args)

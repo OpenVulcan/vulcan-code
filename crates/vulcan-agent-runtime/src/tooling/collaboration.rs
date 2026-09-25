@@ -323,7 +323,9 @@ pub trait NativeAgentCollaborationRuntime: fmt::Debug + Send + Sync {
         _task_runtime: Arc<crate::agent_runtime::task_runtime::TaskRuntime>,
         _args: Value,
     ) -> Result<vulcan_tools_manager::VulcanToolInvocationResult, String> {
-        Err(String::from("The collaboration host does not support durable child closure."))
+        Err(String::from(
+            "The collaboration host does not support durable child closure.",
+        ))
     }
 
     /// Compacts the exact child through its durable host, returning only a committed canonical snapshot.

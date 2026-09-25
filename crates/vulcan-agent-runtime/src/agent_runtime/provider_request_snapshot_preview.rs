@@ -99,9 +99,8 @@ impl VulcanProviderAdapter for CoreRequestPreviewProviderAdapter {
             },
             prompt: self.prompt.clone(),
             prompt_in_history: self.prompt_in_history,
-            history: core_messages_to_provider_visible_history(&snapshot.messages).map_err(
-                |message| VulcanCoreError::InvalidState { message },
-            )?,
+            history: core_messages_to_provider_visible_history(&snapshot.messages)
+                .map_err(|message| VulcanCoreError::InvalidState { message })?,
             temperature: config.temperature,
             max_turns: config.max_turns,
             tool_schemas: self.tool_schemas.clone(),
