@@ -1,3 +1,6 @@
+//! Integration tests for tool-collapse preference defaults and persistence round trips.
+//! 工具折叠偏好的默认值与持久化往返集成测试。
+
 use vulcan_provider_config::config::ProviderConfigurationFile;
 
 /// Verifies absent defaults and explicit false/true preferences round-trip without startup writes.

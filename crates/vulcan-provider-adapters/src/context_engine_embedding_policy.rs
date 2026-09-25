@@ -188,8 +188,6 @@ fn is_tagged_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// Verify legacy configurations have no implicit compatibility grants or peer profile edits.
     /// 验证旧配置没有隐式兼容授权或其他消费者配置改动。
     /// No parameters; returns unit after sparse serialization and legacy-load assertions.

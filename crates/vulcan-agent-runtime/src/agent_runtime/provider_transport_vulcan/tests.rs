@@ -240,7 +240,7 @@ fn uncovered_host_event_blocks_continuation_reuse() {
 
     // covered first, host event uncovered after it: the guard must refuse the builder.
     // 先覆盖普通消息、宿主事件留在其后未被覆盖：守卫必须拒绝构建。
-    let mut uncovered = ConversationSnapshot {
+    let uncovered = ConversationSnapshot {
         messages: vec![
             text_message("covered-message"),
             text_message("later-message"),

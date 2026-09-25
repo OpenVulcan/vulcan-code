@@ -11,7 +11,7 @@ use crate::{
     ActiveAiModelSelection, ConnectionModel, ConnectionModelCatalog, ModelExecutionOverrides,
     PersistedAiConfiguration, parse_openai_model_catalog,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use vulcan_ai_contract::{AiOperation, CapabilitySupport, ModelCapabilities, ReasoningControlMode};
 use vulcan_ai_protocols::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
