@@ -627,6 +627,46 @@ pub fn query_json(
     sql: &str,
     bound_values: &[SqliteValue],
 ) -> EngineResult<QueryJsonResult> {
+    query_json_bounded(connection, sql, bound_values, QueryJsonLimits::UNBOUNDED)
+}
+
+/// Row and encoded-byte ceilings enforced while a JSON query result is being read.
+/// 读取 JSON 查询结果期间强制执行的行数与编码字节上限。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueryJsonLimits {
+    /// Maximum number of rows the result may contain.
+    /// 结果允许包含的最大行数。
+    pub max_rows: u64,
+    /// Maximum length of the encoded JSON array in bytes.
+    /// 编码后 JSON 数组的最大字节长度。
+    pub max_bytes: usize,
+}
+
+impl QueryJsonLimits {
+    /// Limits that never stop a query early.
+    /// 永不提前停止查询的上限。
+    pub const UNBOUNDED: Self = Self {
+        max_rows: u64::MAX,
+        max_bytes: usize::MAX,
+    };
+}
+
+/// Executes a query and returns a JSON array of row objects, stopping as soon as a limit is crossed.
+/// 执行查询并返回行对象的 JSON 数组；一旦越过上限立即停止。
+///
+/// Rows are encoded one at a time into the output buffer, so an oversized result is rejected after
+/// reading at most one row past the limit instead of being fully materialized first.
+/// 行被逐条编码进输出缓冲，因此超限结果最多多读一行即被拒绝，而不是先完整物化。
+///
+/// # Returns / 返回值
+/// Returns the encoded rows, or [`SqliteEngineError::ResultLimitExceeded`] naming the crossed limit.
+/// 返回编码后的行，或指明被越过上限的 [`SqliteEngineError::ResultLimitExceeded`]。
+pub fn query_json_bounded(
+    connection: &mut Connection,
+    sql: &str,
+    bound_values: &[SqliteValue],
+    limits: QueryJsonLimits,
+) -> EngineResult<QueryJsonResult> {
     if sql.trim().is_empty() {
         return Err(SqliteEngineError::invalid_argument("sql must not be empty"));
     }
@@ -648,19 +688,41 @@ pub fn query_json(
         .query(params.as_slice())
         .map_err(SqliteEngineError::sql)?;
 
-    let mut json_rows = Vec::<JsonValue>::new();
+    // json_data is the compact JSON array built row by row; its bytes equal serializing the whole row list.
+    // json_data 是逐行构建的紧凑 JSON 数组；其字节与一次性序列化整个行列表完全一致。
+    let mut json_data = vec![b'['];
+    let mut row_count = 0_u64;
     while let Some(row) = rows.next().map_err(SqliteEngineError::sql)? {
+        row_count += 1;
+        if row_count > limits.max_rows {
+            return Err(SqliteEngineError::result_limit_exceeded(format!(
+                "more than {} rows",
+                limits.max_rows
+            )));
+        }
         let mut object = JsonMap::new();
         for (index, column_name) in column_names.iter().enumerate() {
             let value = row.get_ref(index).map_err(SqliteEngineError::sql)?;
             object.insert(column_name.clone(), sqlite_value_ref_to_json(value));
         }
-        json_rows.push(JsonValue::Object(object));
+        if row_count > 1 {
+            json_data.push(b',');
+        }
+        serde_json::to_writer(&mut json_data, &JsonValue::Object(object)).map_err(|error| {
+            SqliteEngineError::serialization(format!("failed to serialize JSON result: {error}"))
+        })?;
+        // The closing bracket is counted so the check matches the final encoded length.
+        // 计入结尾方括号，使检查与最终编码长度一致。
+        if json_data.len() + 1 > limits.max_bytes {
+            return Err(SqliteEngineError::result_limit_exceeded(format!(
+                "more than {} encoded JSON bytes",
+                limits.max_bytes
+            )));
+        }
     }
-
-    let row_count = u64::try_from(json_rows.len()).unwrap_or(u64::MAX);
-    let json_data = serde_json::to_string(&json_rows).map_err(|error| {
-        SqliteEngineError::serialization(format!("failed to serialize JSON result: {error}"))
+    json_data.push(b']');
+    let json_data = String::from_utf8(json_data).map_err(|error| {
+        SqliteEngineError::serialization(format!("JSON result is not valid UTF-8: {error}"))
     })?;
 
     Ok(QueryJsonResult {
@@ -1616,9 +1678,10 @@ fn make_query_stream_spool_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChunkCollector, DEFAULT_IPC_CHUNK_BYTES, QueryStreamChunkWriter, SqliteValue,
-        count_sql_statements, execute_batch, execute_script, execute_scripts_transaction,
-        has_multiple_sql_statements, query_json, query_stream, query_stream_with_writer,
+        ChunkCollector, DEFAULT_IPC_CHUNK_BYTES, QueryJsonLimits, QueryStreamChunkWriter,
+        SqliteValue, count_sql_statements, execute_batch, execute_script,
+        execute_scripts_transaction, has_multiple_sql_statements, query_json, query_json_bounded,
+        query_stream, query_stream_with_writer,
     };
     use crate::error::SqliteEngineError;
     use arrow::array::Int64Array;
@@ -2627,6 +2690,84 @@ mod tests {
             query_json(&mut connection, "SELECT 1; SELECT 2;", &[]).is_err(),
             "multi-statement JSON queries must be refused"
         );
+    }
+
+    /// Verifies bounded queries stop at the first crossed limit and match unbounded encoding otherwise.
+    /// 验证有界查询在首次越过上限时停止，未越限时与无界编码完全一致。
+    #[test]
+    fn query_json_bounded_enforces_row_and_byte_limits_while_reading() {
+        let mut connection = open_test_connection();
+        for name in ["a", "b", "c"] {
+            execute_script(
+                &mut connection,
+                "INSERT INTO items (name) VALUES (?1)",
+                &[SqliteValue::Text(name.to_string())],
+            )
+            .expect("insert");
+        }
+        let sql = "SELECT name FROM items ORDER BY name";
+        let unbounded = query_json(&mut connection, sql, &[]).expect("unbounded query");
+        let expected = serde_json::to_string(&serde_json::json!([
+            {"name": "a"}, {"name": "b"}, {"name": "c"}
+        ]))
+        .expect("encode expected rows");
+        assert_eq!(unbounded.json_data, expected);
+        assert_eq!(unbounded.row_count, 3);
+
+        let exact = query_json_bounded(
+            &mut connection,
+            sql,
+            &[],
+            QueryJsonLimits {
+                max_rows: 3,
+                max_bytes: expected.len(),
+            },
+        )
+        .expect("limits equal to the result size must pass");
+        assert_eq!(exact.json_data, expected);
+
+        let rows_error = query_json_bounded(
+            &mut connection,
+            sql,
+            &[],
+            QueryJsonLimits {
+                max_rows: 2,
+                max_bytes: usize::MAX,
+            },
+        )
+        .expect_err("row limit must be enforced");
+        assert!(matches!(
+            rows_error,
+            SqliteEngineError::ResultLimitExceeded { .. }
+        ));
+
+        let bytes_error = query_json_bounded(
+            &mut connection,
+            sql,
+            &[],
+            QueryJsonLimits {
+                max_rows: u64::MAX,
+                max_bytes: expected.len() - 1,
+            },
+        )
+        .expect_err("byte limit must be enforced");
+        assert!(matches!(
+            bytes_error,
+            SqliteEngineError::ResultLimitExceeded { .. }
+        ));
+
+        let empty = query_json_bounded(
+            &mut connection,
+            "SELECT name FROM items WHERE name = 'missing'",
+            &[],
+            QueryJsonLimits {
+                max_rows: 0,
+                max_bytes: 2,
+            },
+        )
+        .expect("empty result fits the smallest limits");
+        assert_eq!(empty.json_data, "[]");
+        assert_eq!(empty.row_count, 0);
     }
 
     /// Verifies statement counting ignores separators inside literals and comments.

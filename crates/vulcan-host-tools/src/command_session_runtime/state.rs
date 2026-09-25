@@ -10,6 +10,9 @@ pub(super) struct CommandSessionMutableState {
     /// Optional exit code observed after the process exited.
     /// 进程退出后观测到的可选退出码。
     pub(super) exit_code: Option<i32>,
+    /// Whether the supervisor reaped the child; a host stop marks `Stopped` before this becomes true.
+    /// 监督任务是否已回收子进程；宿主停止会在其变为 true 之前先标记 `Stopped`。
+    pub(super) process_reaped: bool,
     /// Optional failure reason synthesized by the runtime.
     /// 由运行时综合生成的可选失败原因。
     pub(super) failure_reason: Option<String>,
@@ -61,6 +64,7 @@ impl Default for CommandSessionMutableState {
         Self {
             status: CommandSessionStatus::Running,
             exit_code: None,
+            process_reaped: false,
             failure_reason: None,
             stdout_bytes: 0,
             stderr_bytes: 0,
@@ -209,6 +213,12 @@ impl CommandSessionSharedState {
         self.change_notify.notify_waiters();
     }
 
+    /// Reports whether the supervisor has already reaped the session child.
+    /// 判断监督任务是否已经回收会话子进程。
+    pub(super) async fn process_reaped(&self) -> bool {
+        self.mutable_state.lock().await.process_reaped
+    }
+
     /// Finalizes the session after the child process has reached a terminal state.
     /// 在子进程到达终态后完成会话收尾。
     pub(super) async fn finalize_process_exit(
@@ -297,6 +307,7 @@ pub(super) fn finalize_process_exit_state(
     wait_error: Option<String>,
     process_succeeded: bool,
 ) {
+    state.process_reaped = true;
     state.exit_code = exit_code;
     if let Some(error) = wait_error {
         state.status = CommandSessionStatus::Failed;

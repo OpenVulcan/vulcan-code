@@ -1,4 +1,4 @@
-﻿//! Public request assembly and frozen tool/continuation projection.
+//! Public request assembly and frozen tool/continuation projection.
 //! 公共请求组装与冻结的工具及延续信息投影�?
 use super::message_projection::{core_message_text, core_message_to_public};
 use super::{VulcanPublicContractAdapter, provider_failure};
@@ -8,9 +8,8 @@ use std::collections::BTreeMap;
 use vulcan_ai_contract::{
     APPLY_PATCH_LARK_GRAMMAR, APPLY_PATCH_TOOL_NAME, AiContinuation, AiExecutionRequest, AiMessage,
     AiOperation, ContentItem, FreeformToolArgumentEncoding, FreeformToolFormat, FreeformToolSyntax,
-    MessageRole, NativeToolKind, ParallelToolCallPolicy,
-    ReasoningOutputPolicy, ResourceKind, StructuredOutputPolicy, ToolChoicePolicy, ToolDefinition,
-    ToolInputFormat,
+    MessageRole, NativeToolKind, ParallelToolCallPolicy, ReasoningOutputPolicy, ResourceKind,
+    StructuredOutputPolicy, ToolChoicePolicy, ToolDefinition, ToolInputFormat,
 };
 use vulcan_core::provider::VulcanProviderAdapter;
 use vulcan_core::types::{

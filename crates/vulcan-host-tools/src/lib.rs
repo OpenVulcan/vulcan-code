@@ -5,6 +5,7 @@ pub mod command_session_runtime;
 pub mod file_runtime;
 pub mod output_decode;
 pub mod process_creation;
+pub mod process_tree;
 pub mod project_temp_maintenance;
 pub mod project_terminal_runtime;
 pub mod public_name;

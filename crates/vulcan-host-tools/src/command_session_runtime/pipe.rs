@@ -1,5 +1,5 @@
 use super::*;
-use crate::process_creation::new_background_std_command;
+use crate::process_tree::{CHILD_OUTPUT_DRAIN_GRACE, terminate_child_process_tree};
 
 pub(super) async fn write_command_session_stdin(
     child_stdin: &mut ChildStdin,
@@ -19,24 +19,11 @@ pub(super) async fn write_command_session_stdin(
     }
 }
 
-/// Requests child-process termination, using a Windows process-tree kill when available before falling back to Tokio's child kill primitive.
-/// 请求终止子进程；在 Windows 上优先杀进程树，然后回退到 Tokio 子进程终止原语。
-pub(super) fn request_command_session_child_stop(child: &mut Child) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        if let Some(process_id) = child.id() {
-            let mut taskkill = new_background_std_command("taskkill");
-            taskkill.args(["/PID", &process_id.to_string(), "/T", "/F"]);
-            let taskkill_status = taskkill.status();
-            if let Ok(status) = taskkill_status
-                && status.success()
-            {
-                return Ok(());
-            }
-        }
-    }
-    child
-        .start_kill()
+/// Requests termination of the session child together with every descendant sharing its process tree.
+/// 请求终止会话子进程及其进程树中的全部后代进程。
+pub(super) async fn request_command_session_child_stop(child: &mut Child) -> Result<(), String> {
+    terminate_child_process_tree(child)
+        .await
         .map_err(|error| format!("Failed to stop the command-session process: {error}"))
 }
 
@@ -154,7 +141,7 @@ pub(super) async fn run_command_session_supervisor(input: CommandSessionSupervis
                             "Failed to write the initial command-session stdin: {error}"
                         ))
                         .await;
-                    let _ = request_command_session_child_stop(&mut child);
+                    let _ = request_command_session_child_stop(&mut child).await;
                     record.shared_state.mark_stop_requested().await;
                     stop_requested = true;
                 } else {
@@ -245,7 +232,7 @@ pub(super) async fn run_command_session_supervisor(input: CommandSessionSupervis
                         stop_requested = true;
                         stdin_writable = false;
                         stdin = None;
-                        let stop_result = request_command_session_child_stop(&mut child);
+                        let stop_result = request_command_session_child_stop(&mut child).await;
                         if stop_result.is_ok() {
                             record.shared_state.mark_stop_requested().await;
                         }
@@ -259,8 +246,18 @@ pub(super) async fn run_command_session_supervisor(input: CommandSessionSupervis
         }
     };
 
-    let _ = stdout_task.await;
-    let _ = stderr_task.await;
+    // Descendants may keep inherited pipes open after the session child exits, so draining is bounded.
+    // 会话子进程退出后，后代进程可能仍持有继承的管道，因此排空过程必须有上限。
+    let drain_deadline = tokio::time::Instant::now() + CHILD_OUTPUT_DRAIN_GRACE;
+    for output_task in [stdout_task, stderr_task] {
+        let abort_handle = output_task.abort_handle();
+        if tokio::time::timeout_at(drain_deadline, output_task)
+            .await
+            .is_err()
+        {
+            abort_handle.abort();
+        }
+    }
     record
         .shared_state
         .finalize_process_exit(stop_requested, exit_code, wait_error, process_succeeded)

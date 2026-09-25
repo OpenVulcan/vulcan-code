@@ -125,28 +125,13 @@ impl ConversationCompletionRequest {
                 value: self.payload,
             },
         );
-        let (sender, receiver) = oneshot::channel();
-        let spawn_result = std::thread::Builder::new()
-            .name(format!("vulcan-completion-{session_id}"))
-            .spawn(move || {
-                let result = run_completion_dispatch_on_private_runtime(self.dispatcher, request);
-                let _ = sender.send(result);
-            });
-        if let Err(error) = spawn_result {
-            return ConversationCompletionOutcome {
-                session_id,
-                turn_id,
-                report: Err(format!(
-                    "completed-turn hook thread failed to start: {error}"
-                )),
-                vmm_writeback_effects: Vec::new(),
-            };
-        }
-        let report = receiver.await.unwrap_or_else(|_| {
-            Err(String::from(
-                "completed-turn hook dispatch thread disconnected",
-            ))
-        });
+        let report = run_hook_dispatch_on_worker_thread(
+            "completed-turn hook",
+            format!("vulcan-completion-{session_id}"),
+            self.dispatcher,
+            request,
+        )
+        .await;
         let vmm_writeback_effects = report
             .as_ref()
             .map(vmm_writeback_effects_from_report)
@@ -158,43 +143,6 @@ impl ConversationCompletionRequest {
             vmm_writeback_effects,
         }
     }
-}
-
-/// Runs one completed-turn dispatch inside a private Tokio runtime on the existing worker thread.
-/// 在既有工作线程内使用私有 Tokio 运行时执行一次完成回合调度。
-///
-/// # Parameters
-/// # 参数
-/// - `dispatcher`: Dispatcher snapshot that owns the registered completed-turn handlers.
-/// - `dispatcher`：拥有已注册完成回合处理器的调度器快照。
-/// - `request`: Fully correlated completed-turn dispatch request.
-/// - `request`：包含完整关联信息的完成回合调度请求。
-///
-/// # Returns
-/// # 返回值
-/// Returns the hook report on success, or a diagnostic that identifies runtime creation,
-/// timeout, dispatcher, or panic failure stages.
-/// 成功时返回 Hook 报告；失败时返回可区分运行时创建、超时、调度器或 panic 阶段的诊断。
-fn run_completion_dispatch_on_private_runtime(
-    dispatcher: HookDispatcher,
-    request: HookDispatchRequest,
-) -> Result<HookDispatchReport, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| format!("completed-turn hook runtime failed: {error}"))?;
-        runtime.block_on(async move {
-            tokio::time::timeout(
-                Duration::from_millis(COMPLETION_DISPATCH_TIMEOUT_MS),
-                dispatcher.dispatch(request),
-            )
-            .await
-            .map_err(|_| String::from("completed-turn hook dispatch timed out"))?
-            .map_err(|error| format!("completed-turn hook dispatch failed: {error}"))
-        })
-    }))
-    .unwrap_or_else(|_| Err(String::from("completed-turn hook dispatch thread panicked")))
 }
 
 /// Result produced by one asynchronous completed-turn hook dispatch.

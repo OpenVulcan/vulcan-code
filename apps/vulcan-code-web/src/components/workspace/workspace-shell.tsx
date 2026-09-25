@@ -274,9 +274,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // workspaceGitRefreshOwner restricts success, failure and selection writes to their current project request.
   // workspaceGitRefreshOwner 将成功、失败与选择写入限制到所属项目的当前请求。
   const workspaceGitRefreshOwner = React.useRef(createWorkspaceGitRefreshOwnership());
-  // monitoringRefreshQueueRef serializes file-event refreshes for one selected project.
-  // monitoringRefreshQueueRef 串行处理同一选中项目的文件事件刷新。
-  const monitoringRefreshQueueRef = React.useRef<Promise<void>>(Promise.resolve());
   // notifyConversationLayoutWillChange lets the active chat preserve scroll before shell geometry changes.
   // notifyConversationLayoutWillChange 让当前会话在外壳几何变化前保留滚动位置。
   const notifyConversationLayoutWillChange = React.useCallback(() => {
@@ -1118,6 +1115,35 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     const projectId = selectedChatProject.id ?? null;
     const conversationId = props.selectedConversationId;
     const normalizeWorkspacePath = (value: string): string => value.replaceAll("\\", "/").replace(/\/+$/, "").toLocaleLowerCase();
+    // pendingRepositoryKeys coalesces bursts of file events so each repository refreshes at most once per drain round.
+    // pendingRepositoryKeys 合并突发文件事件，使每个仓库在一轮排空中最多刷新一次。
+    const pendingRepositoryKeys = new Set<string>();
+    let draining = false;
+    // drainPendingRefreshes serializes refreshes and reports one failure per drain instead of one per event.
+    // drainPendingRefreshes 串行执行刷新，每轮排空只报告一次失败而不是每个事件都报告。
+    const drainPendingRefreshes = async (): Promise<void> => {
+      if (draining) {
+        return;
+      }
+      draining = true;
+      let firstError: unknown = null;
+      try {
+        while (!cancelled && pendingRepositoryKeys.size > 0) {
+          const repositoryKey = pendingRepositoryKeys.values().next().value as string;
+          pendingRepositoryKeys.delete(repositoryKey);
+          try {
+            await refreshProjectGitSummary(workspacePath, projectId, conversationId, repositoryKey);
+          } catch (error: unknown) {
+            firstError ??= error;
+          }
+        }
+      } finally {
+        draining = false;
+      }
+      if (firstError !== null && !cancelled) {
+        toast.error(firstError instanceof Error ? firstError.message : String(firstError));
+      }
+    };
     const subscription = serviceClient.subscribe<WorkspaceGitChangedEvent>("workspace.git.changed", (event) => {
       if (cancelled || normalizeWorkspacePath(event.workspacePath) !== normalizeWorkspacePath(workspacePath)) {
         return;
@@ -1129,22 +1155,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       if (repositoryKeys.length === 0) {
         return;
       }
-      monitoringRefreshQueueRef.current = monitoringRefreshQueueRef.current
-        .catch(() => undefined)
-        .then(async () => {
-          if (cancelled) {
-            return;
-          }
-          for (const repositoryKey of repositoryKeys) {
-            if (cancelled) {
-              return;
-            }
-            await refreshProjectGitSummary(workspacePath, projectId, conversationId, repositoryKey);
-          }
-        })
-        .catch((error: unknown) => {
-          if (!cancelled) toast.error(error instanceof Error ? error.message : String(error));
-        });
+      for (const repositoryKey of repositoryKeys) {
+        pendingRepositoryKeys.add(repositoryKey);
+      }
+      void drainPendingRefreshes();
     });
     void subscription.then((nextUnsubscribe) => {
       if (cancelled) {
@@ -1161,7 +1175,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       cancelled = true;
       unsubscribe?.();
       unsubscribe = null;
-      monitoringRefreshQueueRef.current = Promise.resolve();
+      pendingRepositoryKeys.clear();
     };
   }, [
     hasSelectedChatConversation,

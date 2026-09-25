@@ -28,6 +28,33 @@ fn response_profile_projects_stream_record_before_decode() {
     assert!(value.get("vendor_usage").is_none());
 }
 
+/// Verifies records without profiles are borrowed untouched, while projected records carry the
+/// decoded value that matches their serialized text so usage extraction need not reparse it.
+/// 验证无 Profile 的记录原样借用，而投影后的记录携带与其序列化文本一致的解码值，
+/// 使用量提取无需再次解析。
+#[test]
+fn projected_record_is_borrowed_without_profiles_and_shares_decoded_value() {
+    let raw = r#"{"vendor_usage":{"input_tokens":3}}"#;
+    let untouched = project_response_record(&[], raw).expect("empty profiles should pass through");
+    assert!(matches!(untouched.text, Cow::Borrowed(text) if text == raw));
+    assert!(untouched.value.is_none());
+
+    let profile = crate::provider_manifest::ResponseProjectionProfile {
+        profile_id: String::from("vendor-response.v1"),
+        revision: 1,
+        steps: vec![crate::provider_manifest::MappingStep::RenameJsonPointer {
+            from: String::from("/vendor_usage"),
+            to: String::from("/usage"),
+        }],
+        transient_reasoning_status: None,
+    };
+    let projected = project_response_record(&[profile], raw).expect("profile should project");
+    let reparsed: Value =
+        serde_json::from_str(&projected.text).expect("projected JSON should parse");
+    assert_eq!(projected.value.as_ref(), Some(&reparsed));
+    assert_eq!(reparsed["usage"]["input_tokens"], 3);
+}
+
 /// Verifies an error profile normalizes vendor error JSON before protocol decoding.
 /// 验证错误 Profile 会在协议解码前规范化供应商错误 JSON。
 /// Verifies vendor error envelopes are normalized before protocol decoding.

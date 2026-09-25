@@ -1221,16 +1221,7 @@ fn render_runlua_text(content: &str, workspace_root: Option<&Path>) -> Result<St
         content_bytes: content.len(),
         content_lines: content.lines().count(),
     };
-    let budget = ToolResultBudgetSnapshot {
-        tool_result: EffectiveBudgetScope {
-            bytes: RUNLUA_INLINE_RESULT_BYTES,
-            lines: -1,
-        },
-        file_read: EffectiveBudgetScope {
-            bytes: RUNLUA_INLINE_RESULT_BYTES,
-            lines: -1,
-        },
-    };
+    let budget = ToolResultBudgetSnapshot::uniform_bytes(RUNLUA_INLINE_RESULT_BYTES);
     let spill_root = workspace_root
         .filter(|path| !path.as_os_str().is_empty())
         .map(project_temp_maintenance::resolve_project_temp_dir);

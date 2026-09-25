@@ -82,12 +82,30 @@ pub(super) fn extract_profiled_usage_events(
     data: &str,
     accumulator: &mut UsageAccumulator,
 ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+    extract_profiled_usage_record_events(profiles, record_kind, data, None, accumulator)
+}
+
+/// Extracts usage from one record, reusing its already decoded value when projection produced one.
+/// 从一条记录提取用量；若投影已产出解码值则直接复用，避免重复解析。
+///
+/// `parsed` must be the JSON decoding of `data` when present.
+/// `parsed` 存在时必须是 `data` 的 JSON 解码结果。
+pub(super) fn extract_profiled_usage_record_events(
+    profiles: &[UsageExtractionProfile],
+    record_kind: UsageRecordKind,
+    data: &str,
+    parsed: Option<&Value>,
+    accumulator: &mut UsageAccumulator,
+) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
     if !profiles
         .iter()
         .any(|profile| profile.record_kind == record_kind)
         || data.trim() == "[DONE]"
     {
         return Ok(Vec::new());
+    }
+    if let Some(value) = parsed {
+        return extract_profiled_usage_value_events(profiles, record_kind, value, accumulator);
     }
     let value: Value = serde_json::from_str(data).map_err(|error| {
         ProtocolConversionError::new(format!(

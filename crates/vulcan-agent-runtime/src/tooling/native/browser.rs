@@ -1,10 +1,10 @@
 use super::{
-    build_native_tool_definition, NativeToolDefinition, NativeToolDescriptor, NativeToolError,
-    NativeToolExecutionRequest,
+    NativeToolDefinition, NativeToolDescriptor, NativeToolError, NativeToolExecutionRequest,
+    build_native_tool_definition,
 };
 use crate::model::SessionId;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fmt;
 use std::sync::Arc;
 use vulcan_tools_manager::VulcanToolInvocationResult;
@@ -54,7 +54,7 @@ pub trait NativeBrowserRuntime: fmt::Debug + Send + Sync {
     /// Lists only browsers owned by `owner_session_id` and returns their selected state.
     /// 仅列出 `owner_session_id` 所拥有的浏览器并返回其选中状态。
     async fn list(&self, owner_session_id: SessionId)
-        -> Result<Vec<NativeBrowserSnapshot>, String>;
+    -> Result<Vec<NativeBrowserSnapshot>, String>;
 
     /// Opens one Core browser for `owner_session_id`, optionally retaining its profile.
     /// 为 `owner_session_id` 打开一个 Core 浏览器，并可选择保留其用户配置。

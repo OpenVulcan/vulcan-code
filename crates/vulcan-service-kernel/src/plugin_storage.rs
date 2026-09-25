@@ -26,18 +26,18 @@ use vulcan_workspace_store::local_database_runtime::{
     LanceDbDirectoryBinding, LocalDatabaseRuntime, SqliteFileBinding, SqliteHardeningOptions,
     SqliteOpenOptions, SqlitePragmaOptions,
 };
-use vulcan_workspace_store::local_sql;
+use vulcan_workspace_store::local_sql::{self, QueryJsonLimits};
 
-/// Maximum SQLite rows returned by one plugin query.
-/// 单次插件 SQLite 查询允许返回的最大行数。
-const PLUGIN_SQLITE_MAX_QUERY_ROWS: u64 = 5_000;
+/// Maximum SQLite rows returned by one plugin query, shared by plugin-owned and host VLDB bindings.
+/// 单次插件 SQLite 查询允许返回的最大行数，插件自有库与宿主 VLDB 绑定共用。
+pub(crate) const PLUGIN_SQLITE_MAX_QUERY_ROWS: u64 = 5_000;
 
 /// Maximum encoded JSON bytes returned by one plugin query.
 /// 单次插件查询允许返回的最大编码 JSON 字节数。
 const PLUGIN_SQLITE_MAX_QUERY_BYTES: usize = 4 * 1024 * 1024;
 
-/// Maximum wall-clock time allowed for one plugin SQLite query.
-/// 单次插件 SQLite 查询允许占用的最长墙钟时间。
+/// Maximum wall-clock time allowed for one plugin SQLite query, shared by plugin-owned and host VLDB bindings.
+/// 单次插件 SQLite 查询允许占用的最长墙钟时间，插件自有库与宿主 VLDB 绑定共用。
 const PLUGIN_SQLITE_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximum LanceDB search result count exposed to one plugin request.
@@ -539,30 +539,21 @@ impl PluginStorageService {
         // params uses the explicit tagged scalar protocol.
         // params 使用显式标记的标量协议。
         let params = decode_sqlite_params(request.params)?;
-        // result carries the engine-reported row count and encoded JSON data.
-        // result 携带引擎报告的行数与编码 JSON 数据。
-        let result = local_sql::query_json_until_async(
+        // result is bounded while reading and interrupted at the effective deadline.
+        // result 在读取期间即受约束，并在有效截止时间被中断。
+        let result = local_sql::query_json_bounded_until_async(
             &self.local,
             self.plugin_sqlite_binding(plugin_id),
             request.sql,
             params,
+            QueryJsonLimits {
+                max_rows: PLUGIN_SQLITE_MAX_QUERY_ROWS,
+                max_bytes: PLUGIN_SQLITE_MAX_QUERY_BYTES,
+            },
             plugin_query_deadline(deadline),
         )
         .await
         .map_err(|error| format!("Plugin SQLite query failed: {error}"))?;
-        if result.row_count > PLUGIN_SQLITE_MAX_QUERY_ROWS {
-            return Err(format!(
-                "Plugin SQLite query returned {} rows; maximum is {}.",
-                result.row_count, PLUGIN_SQLITE_MAX_QUERY_ROWS
-            ));
-        }
-        if result.json_data.len() > PLUGIN_SQLITE_MAX_QUERY_BYTES {
-            return Err(format!(
-                "Plugin SQLite query returned {} bytes; maximum is {}.",
-                result.json_data.len(),
-                PLUGIN_SQLITE_MAX_QUERY_BYTES
-            ));
-        }
         // rows is decoded once at the host boundary so Lua receives ordinary JSON-safe values.
         // rows 在宿主边界只解码一次，使 Lua 接收普通 JSON 安全值。
         let rows = serde_json::from_str::<Value>(&result.json_data)
@@ -1450,7 +1441,7 @@ mod runtime_tests;
 
 /// Caps a private-store query by both its original Action deadline and the store ceiling.
 /// 使用原始 Action 截止时间与存储上限共同限制私有存储查询。
-fn plugin_query_deadline(action: Option<std::time::Instant>) -> std::time::Instant {
+pub(crate) fn plugin_query_deadline(action: Option<std::time::Instant>) -> std::time::Instant {
     let ceiling = std::time::Instant::now() + PLUGIN_SQLITE_QUERY_TIMEOUT;
     action.map_or(ceiling, |deadline| deadline.min(ceiling))
 }

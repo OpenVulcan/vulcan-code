@@ -1,23 +1,23 @@
 //! host-side bridge that adapts native, LuaSkills, and MCP runtime sources into the standalone VulcanToolsManager crate.
 //! 将原生工具、LuaSkills 与 MCP 运行时来源适配到独立 VulcanToolsManager crate 的宿主侧桥接层。
 
-use crate::agent_runtime::question_runtime::{build_question_tool_candidate, QuestionRuntime};
-use crate::agent_runtime::task_runtime::{build_subagent_tool_candidates, TaskRuntime};
+use crate::agent_runtime::question_runtime::{QuestionRuntime, build_question_tool_candidate};
+use crate::agent_runtime::task_runtime::{TaskRuntime, build_subagent_tool_candidates};
 use crate::agent_runtime::vulcan_plugin_hooks::prepare_vulcan_plugin_tool_candidates;
 use crate::luaskills_runtime::{
-    build_luaskills_tool_invocation_context, build_runlua_tool_candidates,
+    LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
+    PWD_PARAMETER_NAME, build_luaskills_tool_invocation_context, build_runlua_tool_candidates,
     call_luaskills_tool_entry, luaskills_entry_args_schema,
-    render_luaskills_invocation_result_text, LuaSkillsRuntimeHandle,
-    LUASKILLS_HOST_MANAGED_SID_PREFIX, LUASKILL_SID_PARAMETER_NAME, PWD_PARAMETER_NAME,
+    render_luaskills_invocation_result_text,
 };
 use crate::mcp::McpRuntimeToolBinding;
-use crate::tooling::{
-    allocate_unique_public_tool_name, build_direct_public_tool_name,
-    build_prefixed_public_tool_name, NativeToolCatalog, NativeToolDescriptor,
-    NativeToolExecutionRequest,
-};
 use crate::tooling::collaboration::{
     NativeAgentCollaborationRuntime, build_agent_collaboration_tool_candidates,
+};
+use crate::tooling::{
+    NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest,
+    allocate_unique_public_tool_name, build_direct_public_tool_name,
+    build_prefixed_public_tool_name,
 };
 use crate::workspace_path::native_workspace_path_text_from_path;
 use luaskills::RuntimeEntryDescriptor;
@@ -27,14 +27,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_luaskills_prompt::{
-    render_luaskill_help_output, LuaSkillPromptEntry, LUASKILL_HELP_TOOL_NAME,
+    LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry, render_luaskill_help_output,
 };
 use vulcan_plugin_runtime::{
     VulcanPluginInvocationRequest, VulcanPluginRuntimeManager, VulcanPluginToolDescriptor,
 };
 use vulcan_tools_luaskills_call::{
-    call_luaskill_args_schema, parse_call_luaskill_request, resolve_call_luaskill_entry_by_name,
-    restore_call_luaskill_args_for_entry, LuaSkillCallEntryView, CALL_LUASKILL_TOOL_NAME,
+    CALL_LUASKILL_TOOL_NAME, LuaSkillCallEntryView, call_luaskill_args_schema,
+    parse_call_luaskill_request, resolve_call_luaskill_entry_by_name,
+    restore_call_luaskill_args_for_entry,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -101,10 +102,9 @@ pub fn build_vulcan_tools_manager(
         && vmm_effective.ai_tools_enabled
         && vmm_effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
 
-    for subagent_candidate in build_subagent_tool_candidates(
-        task_runtime,
-        native_agent_collaboration_runtime.clone(),
-    ) {
+    for subagent_candidate in
+        build_subagent_tool_candidates(task_runtime, native_agent_collaboration_runtime.clone())
+    {
         occupied_public_tool_ids.insert(subagent_candidate.descriptor.id.clone());
         candidates.push(subagent_candidate);
     }

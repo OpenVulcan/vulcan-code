@@ -71,6 +71,9 @@ fn packaged_terminal_skill_documents_current_terminal_contract() {
     assert!(content.contains("POSIX-shell example"));
     assert!(content.contains("CMD example"));
     assert!(content.contains("Never branch AI tool calls by operating system"));
+    assert!(content.contains("Never dump logs or files of unknown size with `cat`"));
+    assert!(content.contains("## Large Output And Logs"));
+    assert!(content.contains("`output_limit_exceeded`"));
     assert!(!content.contains("until_exit_code"));
     assert!(!content.contains("Windows pwsh text newlines are unreliable"));
 }
@@ -1165,4 +1168,74 @@ fn plugin_category_rejects_user_mutations() {
         .is_err()
     );
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a failed backup restoration keeps the previous package and reports its location.
+/// 验证备份恢复失败时保留旧技能包并报告其位置。
+#[test]
+fn failed_backup_restoration_preserves_previous_package() {
+    let root = temp_dir();
+    // backup_dir stands for the only copy of the previous package.
+    // backup_dir 代表旧技能包的唯一副本。
+    let backup_dir = root.join("transaction").join(".backup");
+    fs::create_dir_all(&backup_dir).expect("backup dir should be created");
+    fs::write(backup_dir.join(SKILL_FILE_NAME), "previous").expect("backup file should be written");
+    // occupied_dir is a non-empty restore target that makes the rename fail.
+    // occupied_dir 是非空的恢复目标，使 rename 失败。
+    let occupied_dir = root.join("occupied");
+    fs::create_dir_all(occupied_dir.join("child")).expect("occupied dir should be created");
+    fs::write(occupied_dir.join("child").join("file"), "x")
+        .expect("occupied file should be written");
+
+    let mut preserve_transaction = false;
+    let error = restore_prompt_skill_backup(
+        &backup_dir,
+        &occupied_dir,
+        String::from("commit failed"),
+        &mut preserve_transaction,
+    );
+
+    assert!(preserve_transaction);
+    assert!(
+        error.starts_with("commit failed; restoring the previous Agent Skill package also failed")
+    );
+    assert!(backup_dir.join(SKILL_FILE_NAME).is_file());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a successful backup restoration returns the original error and releases the transaction.
+/// 验证备份恢复成功时返回原始错误并释放事务目录。
+#[test]
+fn successful_backup_restoration_releases_transaction() {
+    let root = temp_dir();
+    let backup_dir = root.join("transaction").join(".backup");
+    fs::create_dir_all(&backup_dir).expect("backup dir should be created");
+    fs::write(backup_dir.join(SKILL_FILE_NAME), "previous").expect("backup file should be written");
+    let original_dir = root.join("skill");
+
+    let mut preserve_transaction = false;
+    let error = restore_prompt_skill_backup(
+        &backup_dir,
+        &original_dir,
+        String::from("commit failed"),
+        &mut preserve_transaction,
+    );
+
+    assert!(!preserve_transaction);
+    assert_eq!(error, "commit failed");
+    assert!(original_dir.join(SKILL_FILE_NAME).is_file());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Transaction tokens must carry the process-start timestamp so a reused pid cannot collide with crash orphans.
+/// 事务标记必须携带进程启动时间戳，避免复用的 pid 与崩溃遗留目录冲突。
+#[test]
+fn transaction_tokens_include_process_epoch_and_stay_unique() {
+    let first = next_prompt_skill_transaction_token();
+    let second = next_prompt_skill_transaction_token();
+    assert_ne!(first, second);
+    let parts = first.split('-').collect::<Vec<_>>();
+    assert_eq!(parts.len(), 3, "token layout may have changed: {first}");
+    assert_eq!(parts[0], std::process::id().to_string());
+    assert_eq!(parts[1], PROMPT_SKILL_TRANSACTION_EPOCH.to_string());
 }

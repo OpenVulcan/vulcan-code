@@ -236,7 +236,13 @@ export async function ensureServiceInstance(
   // A live but starting owner keeps the lock; wait for that owner instead of launching competitors.
   // 活着但启动中的所有者持有锁；等待该所有者，避免启动竞争进程。
   let exitDiagnostic = '';
-  if (!existing) {
+  // launched records that this GUI already started its one detached service process.
+  // launched 记录本 GUI 已经启动过唯一一个分离服务进程。
+  let launched = false;
+  // launchService starts one detached Core and records its pre-readiness failure.
+  // launchService 启动一个分离 Core，并记录其就绪前失败。
+  const launchService = (): void => {
+    launched = true;
     report({ stage: 'starting-service', message: '正在启动后台服务…' });
     // The service is started detached so that closing this GUI never terminates Core.
     // 服务以分离方式启动，因此关闭本 GUI 绝不会终止 Core。
@@ -253,13 +259,18 @@ export async function ensureServiceInstance(
     child.once('error', (error) => {
       exitDiagnostic = `无法启动后台服务：${error.message}`;
     });
-    child.once('exit', (code) => {
+    child.once('exit', (code, signal) => {
       // A non-zero exit before readiness is a real failure; a zero exit means another owner won.
       // 就绪前非零退出是真实失败；退出码为零表示另一个所有者胜出。
-      if (code !== 0) {
+      if (code === null) {
+        exitDiagnostic = `服务进程在就绪前被信号 ${signal ?? '未知'} 终止。`;
+      } else if (code !== 0) {
         exitDiagnostic = `服务进程在就绪前退出，退出码 ${code}。`;
       }
     });
+  };
+  if (!existing) {
+    launchService();
   }
   report({ stage: 'awaiting-ready', message: '正在等待服务完成业务就绪…' });
   // The deadline also bounds reuse of an owner that has not finished bootstrap.
@@ -273,6 +284,11 @@ export async function ensureServiceInstance(
     }
     if (instance && instance.status !== 'starting') {
       throw new Error(`后台服务尚不可用，当前状态：${instance.status}。`);
+    }
+    // A starting owner that disappears before readiness no longer holds the lock, so launch once ourselves.
+    // 启动中的所有者在就绪前消失后不再持有锁，因此由本 GUI 自行启动一次。
+    if (!instance && !launched) {
+      launchService();
     }
     if (exitDiagnostic) {
       throw new Error(exitDiagnostic);

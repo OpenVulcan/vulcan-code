@@ -75,6 +75,9 @@ impl CommandSessionRuntime {
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
         command.kill_on_drop(true);
+        // Stop requests must reach background descendants that inherited the session pipes.
+        // 停止请求必须触达继承了会话管道的后台后代进程。
+        crate::process_tree::isolate_child_process_tree(&mut command);
         // VULCAN_HOME keeps long-lived shell sessions aligned with the compiled user profile.
         // VULCAN_HOME 让长生命周期 shell 会话与当前编译用户配置保持一致。
         if std::env::var_os("VULCAN_HOME").is_none()
@@ -405,8 +408,11 @@ impl CommandSessionRuntime {
             // Register before reading the terminal state so a fast process exit cannot be lost.
             // 在读取终态前完成注册，避免快速进程退出通知丢失。
             notified.as_mut().enable();
+            // The status already reads `Stopped` after the request, so only reaping ends the wait.
+            // 停止请求后状态已显示 `Stopped`，因此只有进程被回收才结束等待。
+            let process_reaped = record.shared_state.process_reaped().await;
             let snapshot = record.snapshot().await;
-            if snapshot.status != CommandSessionStatus::Running || wait_for_exit_ms == 0 {
+            if process_reaped || wait_for_exit_ms == 0 {
                 return Ok(snapshot);
             }
             let waited_ms = wait_started_at.elapsed().as_millis() as u64;

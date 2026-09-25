@@ -4,6 +4,7 @@
 use super::json_template::render_complete_json_template;
 use super::{ProviderExecutionFailure, ProviderExecutionRoute, pre_dispatch_failure};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{AiExecutionRequest, ModelParameterValue, PromptCachePolicy};
 use vulcan_ai_protocols::ProtocolConversionError;
@@ -147,14 +148,28 @@ pub(super) fn apply_response_projection_profiles(
     Ok(())
 }
 
-/// Parses, projects, and re-serializes one stream or HTTP-error JSON record.
-/// 解析、投影并重新序列化一条流式或 HTTP 错误 JSON 记录。
-pub(crate) fn project_response_record_text(
+/// One stream or HTTP-error record after manifest response projection.
+/// 经过清单响应投影后的一条流式或 HTTP 错误记录。
+pub(crate) struct ProjectedResponseRecord<'a> {
+    /// Record text handed to the protocol decoder; borrowed unchanged when no profile applies.
+    /// 交给协议解码器的记录文本；无投影时原样借用。
+    pub(crate) text: Cow<'a, str>,
+    /// Projected JSON value, present only when projection already decoded the record.
+    /// 投影后的 JSON 值；仅当投影已解码该记录时存在，供后续用量提取复用。
+    pub(crate) value: Option<Value>,
+}
+
+/// Parses and projects one stream or HTTP-error JSON record, decoding it at most once.
+/// 解析并投影一条流式或 HTTP 错误 JSON 记录，最多解码一次。
+pub(crate) fn project_response_record<'a>(
     profiles: &[crate::provider_manifest::ResponseProjectionProfile],
-    text: &str,
-) -> Result<String, ProtocolConversionError> {
+    text: &'a str,
+) -> Result<ProjectedResponseRecord<'a>, ProtocolConversionError> {
     if profiles.is_empty() || text.trim() == "[DONE]" {
-        return Ok(text.to_string());
+        return Ok(ProjectedResponseRecord {
+            text: Cow::Borrowed(text),
+            value: None,
+        });
     }
     let mut value: Value = serde_json::from_str(text).map_err(|error| {
         ProtocolConversionError::new(format!(
@@ -162,11 +177,24 @@ pub(crate) fn project_response_record_text(
         ))
     })?;
     apply_response_projection_profiles(profiles, &mut value)?;
-    serde_json::to_string(&value).map_err(|error| {
+    let projected = serde_json::to_string(&value).map_err(|error| {
         ProtocolConversionError::new(format!(
             "Manifest response projection failed to serialize JSON: {error}"
         ))
+    })?;
+    Ok(ProjectedResponseRecord {
+        text: Cow::Owned(projected),
+        value: Some(value),
     })
+}
+
+/// Parses, projects, and re-serializes one stream or HTTP-error JSON record.
+/// 解析、投影并重新序列化一条流式或 HTTP 错误 JSON 记录。
+pub(crate) fn project_response_record_text(
+    profiles: &[crate::provider_manifest::ResponseProjectionProfile],
+    text: &str,
+) -> Result<String, ProtocolConversionError> {
+    project_response_record(profiles, text).map(|record| record.text.into_owned())
 }
 
 /// Applies one request-independent closed mapping step to a response JSON object.

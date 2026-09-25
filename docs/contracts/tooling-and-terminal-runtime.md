@@ -17,14 +17,28 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   可见性、策略过滤和实际执行链路。
 - 面向 AI 的工具名称、description、Schema 和错误使用英文；面向用户的 WebUI 文案可以使用中文。
 - 不要在工具 description 中把 `shell_command` 的返回称为 summary；它返回完整解码后的
-  `stdout`、`stderr` 和退出状态。
+  `stdout`、`stderr` 和退出状态（输出越过硬上限时除外，见第二节）。
 - 不得在启动时静默改写用户持久化的工具策略。系统默认优先保留为运行时内存默认值。
 
 ## 二、`shell_command`
 
-- `timeout_ms` 省略表示无限等待，直到进程自然退出。
-- 内联渲染结果超过 `200000` 字节时，切换为项目内 `.vulcan/temp/` 分页文件；文件名形如
-  `tool_output_overflow_page_md_<unix_ms>.md`。
+- `timeout_ms` 省略表示无限等待，直到进程自然退出；显式传入时必须 ≥ 1，传 `0` 返回参数错误。
+- 省略 `stdin` 表示空输入（立即 EOF），不继承服务进程的标准输入；提供时一次写入后关闭。
+- 子进程在独立进程树中启动（Unix 为新进程组，Windows 依赖 `taskkill /T`）。超时或工具调用被
+  取消时终止整棵进程树；超时返回 `timed_out` 状态并附带截至超时已产生的 stdout/stderr。
+- 自然退出后，输出排空最多再等待 `CHILD_OUTPUT_DRAIN_GRACE`（唯一定义在
+  [`process_tree.rs`](../../crates/vulcan-host-tools/src/process_tree.rs)）；后台进程仍持有管道时停止
+  捕获并在 `failure_reason` 中说明，状态仍按退出码判定，且不终止这些后台进程。
+- stdout 与 stderr 的原始字节合计超过 `SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES`（8 MiB，唯一定义在
+  [`shell_command.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/shell_command.rs)）时直接阻断：
+  立即终止整棵进程树，丢弃全部已捕获输出（不落盘、不分页、不返回给模型），返回
+  `output_limit_exceeded` 状态与提示缩小输出范围的 `failure_reason`。上限按合并字节计数，
+  自然退出后才发现越限的命令同样按此处理；恰好等于上限的输出仍完整返回。
+- 内置 `terminal-session` 技能（[`SKILL.md`](../../crates/vulcan-prompt-skills/src/assets/system/terminal-session/SKILL.md)）
+  向模型复述该上限并禁止用 `cat` 等方式整份读取日志；技能中的数值由
+  `terminal_skill_quotes_current_output_hard_limit` 测试与常量比对，修改上限时必须同步技能文本。
+- 未越过硬上限但内联渲染结果超过 `200000` 字节时，切换为项目内 `.vulcan/temp/` 分页文件；文件名
+  形如 `tool_output_overflow_page_md_<unix_ms>.md`。
 - `auto` 使用用户已配置且当前可检测的默认 Shell；没有用户配置时按平台稳定优先级选择。
 - Windows 当前检测优先级为 `pwsh`、`powershell`、`cmd`、`bash`、`sh`、`zsh`，但只暴露实际
   检测成功的启动器。
@@ -40,6 +54,8 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 - `start` 带 `stdin` 且未指定 `append_newline` 时，默认追加换行；不带 `stdin` 时默认不追加。
 - `write` 未指定 `append_newline` 时默认不追加换行。
 - `start` 不能把一个未以换行结束的开放输入行留给后续 `write` 隐式拼接。
+- `stop` 终止会话子进程所在的整棵进程树；子进程退出后，输出排空同样受
+  `CHILD_OUTPUT_DRAIN_GRACE` 约束，不会因后台进程持有管道而永久停留在运行态。
 
 ## 四、Windows 交互换行与 Shell
 

@@ -129,6 +129,15 @@ pub enum SqliteEngineError {
         state: String,
     },
 
+    /// A query result crossed a caller-supplied row or byte limit and was abandoned mid-read.
+    /// 查询结果越过调用方提供的行数或字节上限，已在读取途中放弃。
+    #[error("SQLite query result exceeded its limit: {detail}")]
+    ResultLimitExceeded {
+        /// Human-readable description naming the crossed limit.
+        /// 指明被越过上限的可读描述。
+        detail: String,
+    },
+
     /// A requested tokenizer mode or dictionary entry was invalid.
     /// 请求的分词模式或词典项无效。
     #[error("SQLite tokenizer request is invalid: {detail}")]
@@ -158,6 +167,14 @@ impl SqliteEngineError {
     /// 由消息构造一次序列化失败。
     pub fn serialization(detail: impl Into<String>) -> Self {
         Self::Serialization {
+            detail: detail.into(),
+        }
+    }
+
+    /// Builds one result-limit failure from a message.
+    /// 由消息构造一次结果上限失败。
+    pub fn result_limit_exceeded(detail: impl Into<String>) -> Self {
+        Self::ResultLimitExceeded {
             detail: detail.into(),
         }
     }

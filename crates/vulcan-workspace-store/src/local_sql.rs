@@ -55,7 +55,9 @@ use vulcan_sqlite_engine::fts::{
 use vulcan_sqlite_engine::sql_exec::{
     self, ChunkCollector, ExecuteBatchResult, ExecuteScriptResult, QueryJsonResult, SqliteValue,
 };
-pub use vulcan_sqlite_engine::sql_exec::{DEFAULT_IPC_CHUNK_BYTES, QueryStreamResult};
+pub use vulcan_sqlite_engine::sql_exec::{
+    DEFAULT_IPC_CHUNK_BYTES, QueryJsonLimits, QueryStreamResult,
+};
 pub use vulcan_sqlite_engine::tokenizer::TokenizerMode;
 use vulcan_sqlite_engine::tokenizer::{
     self, DictionaryMutationResult, ListCustomWordsResult, TokenizeOutput,
@@ -360,8 +362,32 @@ pub async fn query_json_until_async(
     params: Vec<SqliteValue>,
     deadline: std::time::Instant,
 ) -> Result<QueryJsonResult, String> {
+    query_json_bounded_until_async(
+        runtime,
+        target,
+        sql,
+        params,
+        QueryJsonLimits::UNBOUNDED,
+        deadline,
+    )
+    .await
+}
+
+/// Queries within one caller deadline while enforcing result limits during reading.
+/// 在单个调用方截止时间内查询，并在读取期间强制执行结果上限。
+/// `limits` rejects an oversized result after at most one extra row instead of materializing it first.
+/// `limits` 最多多读一行即拒绝超限结果，而不是先完整物化。
+pub async fn query_json_bounded_until_async(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    sql: String,
+    params: Vec<SqliteValue>,
+    limits: QueryJsonLimits,
+    deadline: std::time::Instant,
+) -> Result<QueryJsonResult, String> {
     with_connection_until_async(runtime, target, Some(deadline), move |connection| {
-        let result = sql_exec::query_json(connection, &sql, &params).map_err(render);
+        let result =
+            sql_exec::query_json_bounded(connection, &sql, &params, limits).map_err(render);
         if std::time::Instant::now() >= deadline {
             return Err(
                 "SQLite query deadline exceeded; execution and connection cleanup completed."
@@ -1245,6 +1271,7 @@ fn sqlite_failure_is_unavailability(
         | Failure::BatchItem { .. }
         | Failure::Serialization { .. }
         | Failure::QueryStreamState { .. }
+        | Failure::ResultLimitExceeded { .. }
         | Failure::Tokenizer { .. } => false,
     }
 }
@@ -1368,6 +1395,31 @@ mod tests {
         );
 
         (directory, handle)
+    }
+
+    /// Verifies bounded queries report crossed row limits as failures.
+    /// 验证有界查询将越过的行数上限报告为失败。
+    #[tokio::test]
+    async fn bounded_query_rejects_rows_past_the_limit() {
+        let (_directory, handle) = fixture();
+        let outcome = query_json_bounded_until_async(
+            &handle.local,
+            LogicalDatabase::SystemStatistics,
+            "SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3".into(),
+            Vec::new(),
+            QueryJsonLimits {
+                max_rows: 2,
+                max_bytes: usize::MAX,
+            },
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        )
+        .await;
+        match outcome {
+            Err(message) => {
+                assert!(message.contains("more than 2 rows"), "{message}")
+            }
+            other => panic!("expected a row-limit failure, got {other:?}"),
+        }
     }
 
     #[test]

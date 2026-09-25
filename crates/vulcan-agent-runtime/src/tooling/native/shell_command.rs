@@ -6,6 +6,10 @@ use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
 use vulcan_host_tools::process_creation::{
     apply_child_path_prefixes, new_background_tokio_command,
 };
+use vulcan_host_tools::process_tree::{
+    CHILD_OUTPUT_DRAIN_GRACE, ChildProcessTreeDropGuard, isolate_child_process_tree,
+    terminate_child_process_tree,
+};
 
 /// Builds the one-shot shell-command host-owned native tool.
 /// 构建一次性 shell 命令宿主自有原生工具。
@@ -48,8 +52,8 @@ pub(crate) struct ShellCommandToolArgs {
     /// Optional timeout budget in milliseconds applied to the command run.
     /// 应用于命令执行的可选毫秒级超时预算。
     timeout_ms: Option<u64>,
-    /// Optional stdin text written to the child process before waiting for output.
-    /// 在等待输出前写入子进程的可选标准输入文本。
+    /// Optional stdin text written once to the child process, which is then closed.
+    /// 一次性写入子进程并随后关闭的可选标准输入文本。
     stdin: Option<String>,
     /// Optional shell family selector such as `auto`, `powershell`, `cmd`, or `bash`.
     /// 可选 shell 类型选择器，例如 `auto`、`powershell`、`cmd` 或 `bash`。
@@ -159,6 +163,7 @@ pub(crate) enum ShellCommandExecutionStatus {
     Completed,
     Failed,
     TimedOut,
+    OutputLimitExceeded,
 }
 
 impl ShellCommandExecutionStatus {
@@ -169,13 +174,24 @@ impl ShellCommandExecutionStatus {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::TimedOut => "timed_out",
+            Self::OutputLimitExceeded => "output_limit_exceeded",
         }
     }
 }
 
 /// Maximum inline byte budget used before shell tool output switches into page mode spill rendering.
 /// shell 工具输出在切换到分页落盘渲染前使用的最大内联字节预算。
-pub(crate) const SHELL_INLINE_OUTPUT_LIMIT_BYTES: u64 = 200_000;
+pub(crate) const SHELL_INLINE_OUTPUT_LIMIT_BYTES: u64 =
+    crate::tool_result_format::DEFAULT_INLINE_TOOL_RESULT_BYTES;
+
+/// Hard cap on combined raw stdout+stderr bytes one `shell_command` run may produce.
+/// 单次 `shell_command` 运行允许产生的 stdout+stderr 原始字节总量硬上限。
+///
+/// Crossing it terminates the process tree and discards all captured output, so a runaway
+/// command such as `cat` on a multi-gigabyte log never reaches memory, disk, or the model.
+/// 越过该上限会终止进程树并丢弃全部已捕获输出，使对数 GB 日志执行 `cat` 等失控命令的输出
+/// 不会进入内存、磁盘或模型。
+pub(crate) const SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES: usize = 8 * 1024 * 1024;
 
 /// One normalized shell-command execution report used by both model text and host metadata.
 /// 同时供模型文本与宿主元数据复用的一份规范化 shell 命令执行报告。
@@ -211,7 +227,7 @@ pub(crate) struct ShellCommandExecutionReport {
 /// 构建一次性 shell 命令工具面向 AI 的英文描述。
 pub(crate) fn shell_command_tool_description() -> String {
     format!(
-        "Run a one-shot command in the host environment and return the full decoded stdout/stderr plus the exit status, not just a summary. Default `timeout_ms`: unlimited. If `timeout_ms` is omitted, no timeout is applied and the host waits until the process exits. When the inline result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using names like `tool_output_overflow_page_md_<unix_ms>.md`. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
+        "Run a one-shot command in the host environment and return the full decoded stdout/stderr plus the exit status, not just a summary. Default `timeout_ms`: unlimited. If `timeout_ms` is omitted, no timeout is applied and the host waits until the process exits. If the combined raw stdout/stderr exceeds {SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES} bytes, the host terminates the command's process tree immediately and returns status `output_limit_exceeded` with no output at all; narrow such commands with `head`, `tail`, `grep`, or line ranges, or redirect output to a file and inspect it in slices. When the inline result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using names like `tool_output_overflow_page_md_<unix_ms>.md`. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
     )
 }
 
@@ -233,11 +249,12 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
             },
             "timeout_ms": {
                 "type": "integer",
-                "description": "Optional hard timeout in milliseconds. Default: unlimited. When omitted, no timeout is applied and the host waits until the process exits."
+                "minimum": 1,
+                "description": "Optional hard timeout in milliseconds; must be at least 1 when provided. Default: unlimited. When omitted, no timeout is applied and the host waits until the process exits."
             },
             "stdin": {
                 "type": "string",
-                "description": "Optional stdin text written once before waiting for process output. No newline is added automatically."
+                "description": "Optional stdin text written once to the process; stdin is closed afterwards. When omitted, stdin is empty. No newline is added automatically."
             },
             "shell": {
                 "type": "string",
@@ -261,6 +278,13 @@ pub(crate) fn parse_shell_command_tool_arguments(
             "The `command` argument for shell_command cannot be empty.",
         ));
     }
+    // Only omission means unlimited; an explicit zero is rejected instead of silently becoming unlimited.
+    // 只有省略表示无限等待；显式传入 0 直接拒绝，而不是静默当作无限。
+    if parsed.timeout_ms == Some(0) {
+        return Err(NativeToolError::new(
+            "The `timeout_ms` argument for shell_command must be at least 1; omit it to wait without a timeout.",
+        ));
+    }
     Ok(parsed)
 }
 
@@ -269,27 +293,35 @@ pub(crate) fn resolve_shell_command_working_directory(
     raw_cwd: Option<&str>,
 ) -> Result<PathBuf, NativeToolError> {
     let workspace_root = workspace_root.filter(|path| !path.as_os_str().is_empty());
-    let fallback_directory =
-        crate::runtime_assets::native_host_path(&std::env::current_dir().map_err(|error| {
-            NativeToolError::new(format!(
-                "Failed to read the current working directory: {error}"
-            ))
-        })?);
-    let Some(raw_cwd) = raw_cwd.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(workspace_root
-            .map(crate::runtime_assets::native_host_path)
-            .unwrap_or(fallback_directory));
-    };
-    let requested_path = PathBuf::from(raw_cwd);
-    if requested_path.is_absolute() {
-        return Ok(crate::runtime_assets::native_host_path(&requested_path));
+    let requested_path = raw_cwd
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    if let Some(requested_path) = requested_path.as_ref()
+        && requested_path.is_absolute()
+    {
+        return Ok(crate::runtime_assets::native_host_path(requested_path));
     }
-    let base_directory = workspace_root
-        .map(crate::runtime_assets::native_host_path)
-        .unwrap_or(fallback_directory);
-    Ok(crate::runtime_assets::native_host_path(
-        &base_directory.join(requested_path),
-    ))
+    // Projectless executions intentionally fall back to the host process directory; it is read only when needed
+    // so an unreadable process directory cannot break workspace-bound or absolute-cwd commands.
+    // 无项目执行按设计回退到宿主进程目录；仅在需要时读取，避免进程目录不可读时连带破坏
+    // 绑定工作区或使用绝对 cwd 的命令。
+    let base_directory = match workspace_root {
+        Some(workspace_root) => crate::runtime_assets::native_host_path(workspace_root),
+        None => {
+            crate::runtime_assets::native_host_path(&std::env::current_dir().map_err(|error| {
+                NativeToolError::new(format!(
+                    "Failed to read the current working directory: {error}"
+                ))
+            })?)
+        }
+    };
+    Ok(match requested_path {
+        Some(requested_path) => {
+            crate::runtime_assets::native_host_path(&base_directory.join(requested_path))
+        }
+        None => base_directory,
+    })
 }
 
 /// Resolves the spill root used by one shell-command invocation when oversized output must be paged.
@@ -610,6 +642,9 @@ pub(crate) async fn execute_shell_command_process(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     command.kill_on_drop(true);
+    // Timeouts and cancellation must also stop background descendants that inherited the pipes.
+    // 超时与取消也必须停止继承了输出管道的后台后代进程。
+    isolate_child_process_tree(&mut command);
     if let Err(error) = apply_shell_command_process_options(&mut command, process_options) {
         return ShellCommandExecutionReport {
             status: ShellCommandExecutionStatus::Failed,
@@ -622,9 +657,13 @@ pub(crate) async fn execute_shell_command_process(
             failure_reason: Some(error.to_string()),
         };
     }
-    if parsed_args.stdin.is_some() {
-        command.stdin(Stdio::piped());
-    }
+    // stdin is always explicit so a one-shot command never blocks on the service's own input stream.
+    // stdin 始终显式配置，避免一次性命令阻塞在服务自身的输入流上。
+    command.stdin(if parsed_args.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
 
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -642,23 +681,15 @@ pub(crate) async fn execute_shell_command_process(
         }
     };
 
-    if let Some(stdin_text) = parsed_args.stdin.as_deref() {
-        match child.stdin.take() {
-            Some(mut child_stdin) => {
-                if let Err(error) = child_stdin.write_all(stdin_text.as_bytes()).await {
-                    return ShellCommandExecutionReport {
-                        status: ShellCommandExecutionStatus::Failed,
-                        shell_label,
-                        cwd: effective_cwd.to_path_buf(),
-                        exit_code: None,
-                        duration_ms: started_at.elapsed().as_millis() as u64,
-                        stdout_text: String::new(),
-                        stderr_text: String::new(),
-                        failure_reason: Some(format!("Failed to write command stdin: {error}")),
-                    };
-                }
-            }
-            None => {
+    // tree_guard terminates the whole tree if this tool call is cancelled before the child is reaped.
+    // tree_guard 在子进程被回收前工具调用遭取消时终止整棵进程树。
+    let mut tree_guard = ChildProcessTreeDropGuard::arm(&child);
+
+    // stdin_task writes the complete stdin text while output is drained, so full pipes cannot deadlock the child.
+    // stdin_task 在排空输出的同时写入完整 stdin 文本，避免管道写满导致子进程死锁。
+    let stdin_task = match parsed_args.stdin.clone() {
+        Some(stdin_text) => {
+            let Some(mut child_stdin) = child.stdin.take() else {
                 return ShellCommandExecutionReport {
                     status: ShellCommandExecutionStatus::Failed,
                     shell_label,
@@ -671,85 +702,361 @@ pub(crate) async fn execute_shell_command_process(
                         "The command did not expose a writable stdin channel.",
                     )),
                 };
-            }
+            };
+            Some(tokio::spawn(async move {
+                let write_result = child_stdin.write_all(stdin_text.as_bytes()).await;
+                // Dropping the handle closes stdin so the child observes end-of-input.
+                // 释放句柄会关闭 stdin，使子进程读到输入结束。
+                drop(child_stdin);
+                write_result
+            }))
         }
-    }
-
-    let wait_future = child.wait_with_output();
-    let waited_output = match parsed_args.timeout_ms.filter(|value| *value > 0) {
-        Some(timeout_ms) => match timeout(Duration::from_millis(timeout_ms), wait_future).await {
-            Ok(output_result) => match output_result {
-                Ok(output) => Some(output),
-                Err(error) => {
-                    return ShellCommandExecutionReport {
-                        status: ShellCommandExecutionStatus::Failed,
-                        shell_label,
-                        cwd: effective_cwd.to_path_buf(),
-                        exit_code: None,
-                        duration_ms: started_at.elapsed().as_millis() as u64,
-                        stdout_text: String::new(),
-                        stderr_text: String::new(),
-                        failure_reason: Some(format!(
-                            "Failed while waiting for command output: {error}"
-                        )),
-                    };
-                }
-            },
-            Err(_) => {
-                return ShellCommandExecutionReport {
-                    status: ShellCommandExecutionStatus::TimedOut,
-                    shell_label,
-                    cwd: effective_cwd.to_path_buf(),
-                    exit_code: None,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
-                    stdout_text: String::new(),
-                    stderr_text: String::new(),
-                    failure_reason: Some(format!(
-                        "The command exceeded the timeout limit ({} ms).",
-                        timeout_ms
-                    )),
-                };
-            }
-        },
-        None => match wait_future.await {
-            Ok(output) => Some(output),
-            Err(error) => {
-                return ShellCommandExecutionReport {
-                    status: ShellCommandExecutionStatus::Failed,
-                    shell_label,
-                    cwd: effective_cwd.to_path_buf(),
-                    exit_code: None,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
-                    stdout_text: String::new(),
-                    stderr_text: String::new(),
-                    failure_reason: Some(format!(
-                        "Failed while waiting for command output: {error}"
-                    )),
-                };
-            }
-        },
+        None => None,
     };
+    let output_limit = ShellOutputLimit::new(SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES);
+    let (stdout_buffer, stdout_task) =
+        spawn_shell_output_reader(child.stdout.take(), &output_limit);
+    let (stderr_buffer, stderr_task) =
+        spawn_shell_output_reader(child.stderr.take(), &output_limit);
 
-    let output = waited_output.expect("shell command output should exist after successful wait");
-    let exit_code = output.status.code();
-    let stdout_text = decode_shell_output_bytes(&output.stdout);
-    let stderr_text = decode_shell_output_bytes(&output.stderr);
-    let status = if output.status.success() {
+    let timeout_ms = parsed_args.timeout_ms;
+    let wait_result = tokio::select! {
+        wait_result = child.wait() => wait_result,
+        () = wait_for_shell_command_timeout(timeout_ms) => {
+            // The whole tree is killed so descendants release the pipes and partial output can be returned.
+            // 终止整棵进程树，使后代进程释放管道，从而返回已产生的部分输出。
+            let terminate_error = terminate_shell_command_process_tree(
+                &mut child,
+                &mut tree_guard,
+                [stdout_task, stderr_task, stdin_task],
+            )
+            .await;
+            if output_limit.is_exceeded() {
+                return output_limit_exceeded_report(
+                    shell_label,
+                    effective_cwd,
+                    None,
+                    started_at,
+                    terminate_error,
+                );
+            }
+            let mut failure_reason = format!(
+                "The command exceeded the timeout limit ({} ms).",
+                timeout_ms.unwrap_or_default()
+            );
+            if let Some(error) = terminate_error {
+                failure_reason.push_str(&format!(" {error}"));
+            }
+            return ShellCommandExecutionReport {
+                status: ShellCommandExecutionStatus::TimedOut,
+                shell_label,
+                cwd: effective_cwd.to_path_buf(),
+                exit_code: None,
+                duration_ms: started_at.elapsed().as_millis() as u64,
+                stdout_text: decode_shell_output_bytes(&take_shell_output_buffer(&stdout_buffer)),
+                stderr_text: decode_shell_output_bytes(&take_shell_output_buffer(&stderr_buffer)),
+                failure_reason: Some(failure_reason),
+            };
+        }
+        () = output_limit.exceeded() => {
+            // Runaway output is blocked, not collected: stop the producer at once and drop everything.
+            // 失控输出直接阻断而非继续收集：立即停止输出方并丢弃全部内容。
+            let terminate_error = terminate_shell_command_process_tree(
+                &mut child,
+                &mut tree_guard,
+                [stdout_task, stderr_task, stdin_task],
+            )
+            .await;
+            return output_limit_exceeded_report(
+                shell_label,
+                effective_cwd,
+                None,
+                started_at,
+                terminate_error,
+            );
+        }
+    };
+    let exit_status = match wait_result {
+        Ok(exit_status) => exit_status,
+        Err(error) => {
+            return ShellCommandExecutionReport {
+                status: ShellCommandExecutionStatus::Failed,
+                shell_label,
+                cwd: effective_cwd.to_path_buf(),
+                exit_code: None,
+                duration_ms: started_at.elapsed().as_millis() as u64,
+                stdout_text: String::new(),
+                stderr_text: String::new(),
+                failure_reason: Some(format!("Failed while waiting for command output: {error}")),
+            };
+        }
+    };
+    // Background descendants left after a natural exit are intentionally not killed.
+    // 自然退出后残留的后台后代进程按设计不被终止。
+    tree_guard.disarm();
+
+    let drain_deadline = tokio::time::Instant::now() + CHILD_OUTPUT_DRAIN_GRACE;
+    let stdout_result = join_shell_output_task(stdout_task, drain_deadline).await;
+    let stderr_result = join_shell_output_task(stderr_task, drain_deadline).await;
+    let stdin_result = join_shell_output_task(stdin_task, drain_deadline).await;
+    // The child may exit before the waiter observes the limit, e.g. a fast `cat` of a huge file.
+    // 子进程可能在等待方观察到上限前就已退出，例如快速 `cat` 一个超大文件。
+    if output_limit.is_exceeded() {
+        return output_limit_exceeded_report(
+            shell_label,
+            effective_cwd,
+            exit_status.code(),
+            started_at,
+            None,
+        );
+    }
+    // io_failure reports the first host-side I/O failure while keeping all collected output.
+    // io_failure 报告第一个宿主侧 I/O 失败，同时保留已收集的全部输出。
+    let io_failure = match (&stdout_result, &stderr_result, &stdin_result) {
+        (Some(Err(error)), _, _) => Some(format!("Failed while reading command stdout: {error}")),
+        (_, Some(Err(error)), _) => Some(format!("Failed while reading command stderr: {error}")),
+        // A child may legitimately exit or close stdin before consuming all provided input.
+        // 子进程可以在消费完全部输入前合法地退出或关闭 stdin。
+        (_, _, Some(Err(error))) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+            Some(format!("Failed to write command stdin: {error}"))
+        }
+        _ => None,
+    };
+    let status = if io_failure.is_none() && exit_status.success() {
         ShellCommandExecutionStatus::Completed
     } else {
         ShellCommandExecutionStatus::Failed
     };
+    // Pipes still open after the grace mean background processes inherited them; capture stops there.
+    // 宽限期后管道仍未关闭说明后台进程继承了它们；输出捕获到此为止。
+    let failure_reason = io_failure.or_else(|| {
+        (stdout_result.is_none() || stderr_result.is_none()).then(|| {
+            format!(
+                "Output capture stopped {} ms after the command exited because background processes still hold stdout or stderr.",
+                CHILD_OUTPUT_DRAIN_GRACE.as_millis()
+            )
+        })
+    });
+    let stdout_text = decode_shell_output_bytes(&take_shell_output_buffer(&stdout_buffer));
+    let stderr_text = decode_shell_output_bytes(&take_shell_output_buffer(&stderr_buffer));
 
     ShellCommandExecutionReport {
         status,
         shell_label,
         cwd: effective_cwd.to_path_buf(),
-        exit_code,
+        exit_code: exit_status.code(),
         duration_ms: started_at.elapsed().as_millis() as u64,
         stdout_text,
         stderr_text,
-        failure_reason: None,
+        failure_reason,
     }
+}
+
+/// Waits for the optional explicit timeout; an omitted timeout never elapses.
+/// 等待可选的显式超时；省略超时时永不到期。
+async fn wait_for_shell_command_timeout(timeout_ms: Option<u64>) {
+    match timeout_ms {
+        Some(timeout_ms) => tokio::time::sleep(Duration::from_millis(timeout_ms)).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Terminates the child process tree after an early stop and drains stdio within the shared grace.
+/// 提前停止后终止子进程树，并在共享宽限期内排空标准流。
+///
+/// # Returns
+/// 返回值
+/// Returns the termination error, if the tree could not be signalled.
+/// 进程树无法被终止时返回对应错误。
+async fn terminate_shell_command_process_tree(
+    child: &mut tokio::process::Child,
+    tree_guard: &mut ChildProcessTreeDropGuard,
+    stdio_tasks: [Option<ShellStdioTask>; 3],
+) -> Option<String> {
+    let terminate_error = terminate_child_process_tree(child).await.err();
+    if let Ok(Ok(_)) = timeout(CHILD_OUTPUT_DRAIN_GRACE, child.wait()).await {
+        tree_guard.disarm();
+    }
+    let drain_deadline = tokio::time::Instant::now() + CHILD_OUTPUT_DRAIN_GRACE;
+    for task in stdio_tasks {
+        let _ = join_shell_output_task(task, drain_deadline).await;
+    }
+    terminate_error
+}
+
+/// Builds the report for a run whose output crossed the hard limit; no output is returned.
+/// 为输出越过硬上限的运行构建报告；不返回任何输出内容。
+fn output_limit_exceeded_report(
+    shell_label: String,
+    effective_cwd: &Path,
+    exit_code: Option<i32>,
+    started_at: std::time::Instant,
+    terminate_error: Option<String>,
+) -> ShellCommandExecutionReport {
+    let mut failure_reason = format!(
+        "The command produced more than {SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES} bytes of combined stdout/stderr, so the host terminated it and discarded all output. Narrow the output with head, tail, grep, or a line range, or redirect it to a file and inspect that file in slices."
+    );
+    if let Some(error) = terminate_error {
+        failure_reason.push_str(&format!(" {error}"));
+    }
+    ShellCommandExecutionReport {
+        status: ShellCommandExecutionStatus::OutputLimitExceeded,
+        shell_label,
+        cwd: effective_cwd.to_path_buf(),
+        exit_code,
+        duration_ms: started_at.elapsed().as_millis() as u64,
+        stdout_text: String::new(),
+        stderr_text: String::new(),
+        failure_reason: Some(failure_reason),
+    }
+}
+
+/// Combined output budget shared by the stdout and stderr readers of one run.
+/// 单次运行中 stdout 与 stderr 读取任务共享的合并输出预算。
+struct ShellOutputLimit {
+    /// Bytes admitted or attempted so far across both streams.
+    /// 两个输出流迄今已接收或尝试接收的字节数。
+    captured_bytes: std::sync::atomic::AtomicUsize,
+    /// Maximum combined bytes admitted before the run is stopped.
+    /// 运行被停止前允许接收的最大合并字节数。
+    limit_bytes: usize,
+    /// Set once any reader crosses the limit.
+    /// 任一读取任务越过上限后置位。
+    exceeded: std::sync::atomic::AtomicBool,
+    /// Wakes the waiter when the limit is crossed.
+    /// 越过上限时唤醒等待方。
+    notify: tokio::sync::Notify,
+}
+
+impl ShellOutputLimit {
+    /// Creates one shared output budget.
+    /// 创建一份共享输出预算。
+    fn new(limit_bytes: usize) -> Arc<Self> {
+        Arc::new(Self {
+            captured_bytes: std::sync::atomic::AtomicUsize::new(0),
+            limit_bytes,
+            exceeded: std::sync::atomic::AtomicBool::new(false),
+            notify: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// Admits one chunk, or marks the budget exceeded and wakes the waiter.
+    /// 接收一个数据块；超出预算时标记越限并唤醒等待方。
+    fn admit(&self, chunk_bytes: usize) -> bool {
+        let previous = self
+            .captured_bytes
+            .fetch_add(chunk_bytes, std::sync::atomic::Ordering::AcqRel);
+        if previous.saturating_add(chunk_bytes) <= self.limit_bytes {
+            return true;
+        }
+        self.exceeded
+            .store(true, std::sync::atomic::Ordering::Release);
+        // notify_one stores a permit, so a waiter that starts listening later still wakes.
+        // notify_one 会保存许可，稍后开始监听的等待方同样会被唤醒。
+        self.notify.notify_one();
+        false
+    }
+
+    /// Returns whether any reader crossed the limit.
+    /// 返回是否有读取任务越过上限。
+    fn is_exceeded(&self) -> bool {
+        self.exceeded.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Resolves once the limit has been crossed.
+    /// 在越过上限后完成。
+    async fn exceeded(&self) {
+        if !self.is_exceeded() {
+            self.notify.notified().await;
+        }
+    }
+}
+
+/// Byte buffer filled incrementally by one child output reader and read by the waiter.
+/// 由单个子进程输出读取任务增量填充、并由等待方读取的字节缓冲区。
+type ShellOutputBuffer = Arc<std::sync::Mutex<Vec<u8>>>;
+
+/// Background task handle for one child stdio transfer.
+/// 单个子进程标准流传输的后台任务句柄。
+type ShellStdioTask = tokio::task::JoinHandle<std::io::Result<()>>;
+
+/// Starts draining one optional child output stream into a shared buffer.
+/// 开始把一个可选子进程输出流排空到共享缓冲区。
+///
+/// # Parameters
+/// 参数
+/// `reader` is the captured child stdout or stderr handle.
+/// `reader` 是捕获到的子进程 stdout 或 stderr 句柄。
+/// `output_limit` is the combined budget; the reader stops and closes its pipe once it is crossed.
+/// `output_limit` 是合并预算；越过后读取任务停止并关闭其管道。
+///
+/// # Returns
+/// 返回值
+/// Returns the shared buffer and the reader task when a stream was captured.
+/// 返回共享缓冲区；捕获到输出流时同时返回读取任务。
+fn spawn_shell_output_reader<R>(
+    reader: Option<R>,
+    output_limit: &Arc<ShellOutputLimit>,
+) -> (ShellOutputBuffer, Option<ShellStdioTask>)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    let buffer: ShellOutputBuffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let task = reader.map(|mut reader| {
+        let buffer = Arc::clone(&buffer);
+        let output_limit = Arc::clone(output_limit);
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut chunk = vec![0_u8; 8192];
+            loop {
+                let read_bytes = reader.read(&mut chunk).await?;
+                if read_bytes == 0 || !output_limit.admit(read_bytes) {
+                    return Ok(());
+                }
+                buffer
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .extend_from_slice(&chunk[..read_bytes]);
+            }
+        })
+    });
+    (buffer, task)
+}
+
+/// Waits until a shared deadline for one optional stdio transfer task.
+/// 在共享截止时间前等待一个可选标准流传输任务。
+///
+/// # Returns
+/// 返回值
+/// Returns `Some` with the flattened task result, or `None` after aborting a task still running at the deadline.
+/// 返回展开后的任务结果 `Some`；截止时仍在运行的任务被中止后返回 `None`。
+async fn join_shell_output_task(
+    task: Option<ShellStdioTask>,
+    deadline: tokio::time::Instant,
+) -> Option<std::io::Result<()>> {
+    let Some(task) = task else {
+        return Some(Ok(()));
+    };
+    let abort_handle = task.abort_handle();
+    match tokio::time::timeout_at(deadline, task).await {
+        Ok(join_result) => {
+            Some(join_result.unwrap_or_else(|error| Err(std::io::Error::other(error))))
+        }
+        Err(_) => {
+            abort_handle.abort();
+            None
+        }
+    }
+}
+
+/// Moves all bytes collected so far out of one shared output buffer.
+/// 取出一个共享输出缓冲区中目前收集到的全部字节。
+fn take_shell_output_buffer(buffer: &ShellOutputBuffer) -> Vec<u8> {
+    std::mem::take(
+        &mut *buffer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 /// Builds the model-visible text render input for one normalized shell-command execution report.
@@ -825,16 +1132,7 @@ pub(crate) fn build_shell_command_text_render_input(
 /// Builds the default budget snapshot reused by host-owned shell command rendering.
 /// 构建供宿主自有 shell 命令结果渲染复用的默认预算快照。
 pub(crate) fn default_shell_command_budget_snapshot() -> ToolResultBudgetSnapshot {
-    ToolResultBudgetSnapshot {
-        tool_result: EffectiveBudgetScope {
-            bytes: SHELL_INLINE_OUTPUT_LIMIT_BYTES,
-            lines: -1,
-        },
-        file_read: EffectiveBudgetScope {
-            bytes: SHELL_INLINE_OUTPUT_LIMIT_BYTES,
-            lines: -1,
-        },
-    }
+    ToolResultBudgetSnapshot::uniform_bytes(SHELL_INLINE_OUTPUT_LIMIT_BYTES)
 }
 
 /// Decide whether the combined shell-command text already exceeds the inline tool-result budget.
@@ -912,23 +1210,32 @@ pub(crate) async fn execute_shell_command_tool(
     let render_input =
         build_shell_command_text_render_input(&effective_args, &execution_report, &hook_report);
     let budget = default_shell_command_budget_snapshot();
+    let exceeds_inline_budget = shell_command_output_exceeds_inline_budget(&render_input, &budget);
     let host_payload = build_shell_command_host_payload(
         session_id,
         &effective_args,
         &execution_report,
-        shell_command_output_exceeds_inline_budget(&render_input, &budget),
+        exceeds_inline_budget,
         &hook_report,
     );
-    let model_output = render_tool_result_text(
-        &render_input,
-        None,
-        &budget,
-        &HostRenderOptions {
-            spill_root,
-            template_skill_roots: Vec::new(),
-            template_resources_root: None,
-        },
-    )
+    let render_options = HostRenderOptions {
+        spill_root,
+        template_skill_roots: Vec::new(),
+        template_resources_root: None,
+    };
+    // Only overflowing output writes a spill page; keep that filesystem work off the async worker.
+    // 只有超限输出会写入分页文件；该文件系统操作不占用异步工作线程。
+    let model_output = if exceeds_inline_budget {
+        tokio::task::spawn_blocking(move || {
+            render_tool_result_text(&render_input, None, &budget, &render_options)
+        })
+        .await
+        .map_err(|error| {
+            NativeToolError::new(format!("shell_command output rendering failed: {error}"))
+        })?
+    } else {
+        render_tool_result_text(&render_input, None, &budget, &render_options)
+    }
     .map_err(NativeToolError::new)?;
 
     Ok(
@@ -975,6 +1282,236 @@ mod process_option_tests {
         let error = validate_shell_command_hook_environment(&environment)
             .expect_err("plugin PATH override must be rejected");
         assert!(error.message.contains("host-owned PATH"));
+    }
+
+    /// An explicit zero timeout is rejected because only omission means unlimited.
+    /// 显式的 0 超时会被拒绝，因为只有省略才表示无限等待。
+    #[test]
+    fn zero_timeout_is_rejected_instead_of_meaning_unlimited() {
+        let error = parse_shell_command_tool_arguments(serde_json::json!({
+            "command": "echo hi",
+            "timeout_ms": 0,
+        }))
+        .expect_err("zero timeout must be rejected");
+        assert!(error.message.contains("at least 1"));
+        let parsed =
+            parse_shell_command_tool_arguments(serde_json::json!({ "command": "echo hi" }))
+                .expect("omitted timeout stays valid");
+        assert_eq!(parsed.timeout_ms, None);
+    }
+
+    /// Large stdin must be written while output is drained so echoing commands cannot deadlock on full pipes.
+    /// 大体量 stdin 必须在排空输出的同时写入，避免回显命令因管道写满而死锁。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn large_stdin_is_written_while_output_is_drained() {
+        let temp = tempfile::tempdir().expect("create shell stdin test directory");
+        // stdinText exceeds typical pipe buffers in both directions.
+        // stdinText 在两个方向上都超过常见管道缓冲区容量。
+        let stdin_text = "x".repeat(4 * 1024 * 1024);
+        let parsed_args = ShellCommandToolArgs {
+            command: String::from("cat"),
+            cwd: None,
+            timeout_ms: Some(60_000),
+            stdin: Some(stdin_text.clone()),
+            shell: Some(String::from("sh")),
+        };
+        let report = execute_shell_command_process(
+            &parsed_args,
+            temp.path(),
+            &HostCommandShellSupport::from_configured_default_id(None),
+            &ShellCommandProcessOptions::default(),
+        )
+        .await;
+        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
+        // Login profiles may print banners first, so only the echoed tail is asserted.
+        // 登录配置可能先输出横幅，因此只断言回显的尾部内容。
+        assert!(report.stdout_text.ends_with(&stdin_text));
+    }
+
+    /// Omitted stdin must be empty instead of inheriting the service input stream.
+    /// 省略 stdin 时必须为空输入，而不是继承服务自身的输入流。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn omitted_stdin_reads_end_of_input() {
+        let temp = tempfile::tempdir().expect("create shell stdin test directory");
+        let parsed_args = ShellCommandToolArgs {
+            command: String::from("cat; echo done"),
+            cwd: None,
+            timeout_ms: Some(60_000),
+            stdin: None,
+            shell: Some(String::from("sh")),
+        };
+        let report = execute_shell_command_process(
+            &parsed_args,
+            temp.path(),
+            &HostCommandShellSupport::from_configured_default_id(None),
+            &ShellCommandProcessOptions::default(),
+        )
+        .await;
+        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
+        assert!(report.stdout_text.trim_end().ends_with("done"));
+    }
+
+    /// Timeouts must kill descendants holding the pipes and still return output produced so far.
+    /// 超时必须终止持有管道的后代进程，并仍返回已产生的输出。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kills_descendants_and_keeps_partial_output() {
+        let temp = tempfile::tempdir().expect("create shell timeout test directory");
+        let parsed_args = ShellCommandToolArgs {
+            command: String::from("echo partial; sleep 600 & wait"),
+            cwd: None,
+            timeout_ms: Some(500),
+            stdin: None,
+            shell: Some(String::from("sh")),
+        };
+        let report = tokio::time::timeout(
+            Duration::from_secs(30),
+            execute_shell_command_process(
+                &parsed_args,
+                temp.path(),
+                &HostCommandShellSupport::from_configured_default_id(None),
+                &ShellCommandProcessOptions::default(),
+            ),
+        )
+        .await
+        .expect("timed-out command must return once its tree is killed");
+        assert_eq!(report.status, ShellCommandExecutionStatus::TimedOut);
+        assert!(report.stdout_text.contains("partial"));
+    }
+
+    /// Runs one `sh` command through the host runner with a safety deadline for the test itself.
+    /// 通过宿主执行器运行一条 `sh` 命令，并为测试本身设置安全截止时间。
+    #[cfg(unix)]
+    async fn run_sh_for_output_limit_test(command: String) -> ShellCommandExecutionReport {
+        let temp = tempfile::tempdir().expect("create shell output limit test directory");
+        let parsed_args = ShellCommandToolArgs {
+            command,
+            cwd: None,
+            timeout_ms: None,
+            stdin: None,
+            shell: Some(String::from("sh")),
+        };
+        tokio::time::timeout(
+            Duration::from_secs(60),
+            execute_shell_command_process(
+                &parsed_args,
+                temp.path(),
+                &HostCommandShellSupport::from_configured_default_id(None),
+                &ShellCommandProcessOptions::default(),
+            ),
+        )
+        .await
+        .expect("output-limited command must return once its tree is killed")
+    }
+
+    /// An endless producer must be killed at the hard limit and none of its output returned.
+    /// 无限输出的命令必须在硬上限处被终止，且不返回任何输出。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn endless_output_is_blocked_at_hard_limit_without_returning_output() {
+        let report = run_sh_for_output_limit_test(String::from("yes 0123456789")).await;
+        assert_eq!(
+            report.status,
+            ShellCommandExecutionStatus::OutputLimitExceeded
+        );
+        assert!(report.stdout_text.is_empty());
+        assert!(report.stderr_text.is_empty());
+        assert!(report.failure_reason.as_deref().is_some_and(|reason| {
+            reason.contains(&SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES.to_string())
+        }));
+    }
+
+    /// The hard limit counts stdout and stderr together, including commands that exit on their own.
+    /// 硬上限合并统计 stdout 与 stderr，且覆盖自行退出的命令。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn output_limit_counts_both_streams_for_naturally_exiting_commands() {
+        let half_plus_one = SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES / 2 + 1;
+        let report = run_sh_for_output_limit_test(format!(
+            "head -c {half_plus_one} /dev/zero | tr '\\0' a; head -c {half_plus_one} /dev/zero | tr '\\0' a >&2"
+        ))
+        .await;
+        assert_eq!(
+            report.status,
+            ShellCommandExecutionStatus::OutputLimitExceeded
+        );
+        assert!(report.stdout_text.is_empty());
+        assert!(report.stderr_text.is_empty());
+    }
+
+    /// Output exactly at the hard limit is still returned in full.
+    /// 恰好等于硬上限的输出仍完整返回。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn output_exactly_at_hard_limit_is_kept() {
+        // Login-shell profiles may print a preamble; it counts toward the same combined budget.
+        // 登录 Shell 的 profile 可能打印前导内容；它同样计入合并预算。
+        let baseline = run_sh_for_output_limit_test(String::from(":")).await;
+        let preamble_bytes = baseline.stdout_text.len() + baseline.stderr_text.len();
+        let payload_bytes = SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES - preamble_bytes;
+        let report =
+            run_sh_for_output_limit_test(format!("head -c {payload_bytes} /dev/zero | tr '\\0' a"))
+                .await;
+        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
+        assert_eq!(
+            report.stdout_text.len() + report.stderr_text.len(),
+            SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES
+        );
+    }
+
+    /// The bundled terminal-session Skill must quote the current hard limit instead of a stale copy.
+    /// 内置 terminal-session 技能必须引用当前硬上限，而不是过期副本。
+    #[test]
+    fn terminal_skill_quotes_current_output_hard_limit() {
+        let skill_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../vulcan-prompt-skills/src/assets/system/terminal-session/SKILL.md");
+        let content = std::fs::read_to_string(&skill_file)
+            .expect("bundled terminal-session Skill should be readable");
+        let expected = format!(
+            "{} MiB ({} bytes)",
+            SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES / (1024 * 1024),
+            SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES
+        );
+        assert!(
+            content.contains(&expected),
+            "terminal-session SKILL.md must state `{expected}`; update the Skill whenever SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES changes"
+        );
+    }
+
+    /// Background processes inheriting the pipes must not keep a naturally exited command running.
+    /// 继承管道的后台进程不得让已自然退出的命令持续挂起。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn natural_exit_stops_waiting_for_background_pipe_holders() {
+        let temp = tempfile::tempdir().expect("create shell background test directory");
+        let parsed_args = ShellCommandToolArgs {
+            command: String::from("sleep 30 & echo done"),
+            cwd: None,
+            timeout_ms: None,
+            stdin: None,
+            shell: Some(String::from("sh")),
+        };
+        let report = tokio::time::timeout(
+            Duration::from_secs(20),
+            execute_shell_command_process(
+                &parsed_args,
+                temp.path(),
+                &HostCommandShellSupport::from_configured_default_id(None),
+                &ShellCommandProcessOptions::default(),
+            ),
+        )
+        .await
+        .expect("exited command must not wait for background pipe holders");
+        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
+        assert!(report.stdout_text.trim_end().ends_with("done"));
+        assert!(
+            report
+                .failure_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("background processes"))
+        );
     }
 
     /// A host-resolved plugin binary directory should be prepended before cmd resolves a rewritten command.

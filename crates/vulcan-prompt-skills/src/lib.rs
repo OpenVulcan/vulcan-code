@@ -54,6 +54,30 @@ pub const VULCAN_SKILL_CATALOG_SCHEMA_VERSION: u32 = 1;
 /// 用于隔离并发文件系统事务的单调递增后缀。
 static PROMPT_SKILL_TRANSACTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// Process-start timestamp that keeps transaction names unique when a restarted process reuses a pid.
+/// 进程启动时间戳；在重启后的进程复用 pid 时保持事务名称唯一。
+static PROMPT_SKILL_TRANSACTION_EPOCH: std::sync::LazyLock<u128> = std::sync::LazyLock::new(|| {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default()
+});
+
+/// Builds one unique transaction token from the pid, process-start timestamp, and sequence.
+/// 由 pid、进程启动时间戳与序号构建一个唯一事务标记。
+///
+/// Orphans left by a crashed process are never reused or deleted automatically because they may
+/// hold the only copy of a previous package.
+/// 崩溃进程留下的孤儿目录不会被复用或自动删除，因为其中可能保存着旧技能包的唯一副本。
+fn next_prompt_skill_transaction_token() -> String {
+    format!(
+        "{}-{}-{}",
+        std::process::id(),
+        *PROMPT_SKILL_TRANSACTION_EPOCH,
+        PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// Origin scope of one prompt skill.
 /// 单个提示词技能的来源作用域。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1009,6 +1033,9 @@ pub fn save_user_prompt_skill_package(
     let backup_dir = transaction_dir.join(".backup");
     fs::create_dir(&transaction_dir)
         .map_err(|error| format!("Failed to create Agent Skills transaction directory: {error}"))?;
+    // preserve_transaction keeps the transaction directory when it still holds the only copy of the previous package.
+    // preserve_transaction 在事务目录仍持有旧技能包唯一副本时保留该目录。
+    let mut preserve_transaction = false;
     let transaction_result = (|| {
         if original_exists {
             copy_prompt_skill_directory(&original_dir, &staged_dir)?;
@@ -1030,17 +1057,37 @@ pub fn save_user_prompt_skill_package(
                 .map_err(|error| format!("Failed to stage existing Agent Skill backup: {error}"))?;
         }
         if let Err(error) = fs::rename(&staged_dir, &target_dir) {
+            let error = format!("Failed to commit Agent Skill `{target_name}`: {error}");
             if original_exists {
-                let _ = fs::rename(&backup_dir, &original_dir);
+                return Err(restore_prompt_skill_backup(
+                    &backup_dir,
+                    &original_dir,
+                    error,
+                    &mut preserve_transaction,
+                ));
             }
-            return Err(format!(
-                "Failed to commit Agent Skill `{target_name}`: {error}"
-            ));
+            return Err(error);
         }
         if let Err(error) = write_host_prompt_skill_catalog(user_root, &host_catalog) {
-            let _ = fs::remove_dir_all(&target_dir);
+            if let Err(remove_error) = fs::remove_dir_all(&target_dir) {
+                if original_exists {
+                    preserve_transaction = true;
+                    return Err(format!(
+                        "{error}; removing the uncommitted Agent Skill `{target_name}` also failed ({remove_error}), the previous package is preserved at {}",
+                        vulcan_runtime_assets::native_host_path_text_from_path(&backup_dir)
+                    ));
+                }
+                return Err(format!(
+                    "{error}; removing the uncommitted Agent Skill `{target_name}` also failed: {remove_error}"
+                ));
+            }
             if original_exists {
-                let _ = fs::rename(&backup_dir, &original_dir);
+                return Err(restore_prompt_skill_backup(
+                    &backup_dir,
+                    &original_dir,
+                    error,
+                    &mut preserve_transaction,
+                ));
             }
             return Err(error);
         }
@@ -1053,8 +1100,46 @@ pub fn save_user_prompt_skill_package(
         )
         .map_err(|error| error.message)
     })();
-    let _ = fs::remove_dir_all(&transaction_dir);
+    if !preserve_transaction {
+        let _ = fs::remove_dir_all(&transaction_dir);
+    }
     transaction_result
+}
+
+/// Restores one staged Agent Skill backup and keeps the transaction when restoration fails.
+/// 恢复一个已暂存的 Agent Skill 备份，恢复失败时保留事务目录。
+///
+/// # Parameters
+/// 参数
+/// `backup_dir` is the staged copy of the previous package.
+/// `backup_dir` 是旧技能包的暂存副本。
+/// `original_dir` is the package location being restored.
+/// `original_dir` 是需要恢复的技能包位置。
+/// `error` is the commit failure that triggered the rollback.
+/// `error` 是触发回滚的提交失败信息。
+/// `preserve_transaction` is set when the backup must stay on disk.
+/// `preserve_transaction` 在备份必须保留在磁盘上时被置位。
+///
+/// # Returns
+/// 返回值
+/// Returns the error reported to the caller, including the backup location when restoration fails.
+/// 返回报告给调用方的错误；恢复失败时包含备份位置。
+fn restore_prompt_skill_backup(
+    backup_dir: &Path,
+    original_dir: &Path,
+    error: String,
+    preserve_transaction: &mut bool,
+) -> String {
+    match fs::rename(backup_dir, original_dir) {
+        Ok(()) => error,
+        Err(restore_error) => {
+            *preserve_transaction = true;
+            format!(
+                "{error}; restoring the previous Agent Skill package also failed ({restore_error}), the previous package is preserved at {}",
+                vulcan_runtime_assets::native_host_path_text_from_path(backup_dir)
+            )
+        }
+    }
 }
 
 /// Deletes one exact user-owned Agent Skills package without touching system packages.
@@ -1086,8 +1171,16 @@ pub fn delete_user_prompt_skill_package(user_root: &Path, name: &str) -> Result<
     fs::rename(&target_dir, &removed_dir)
         .map_err(|error| format!("Failed to remove user Agent Skill `{name}`: {error}"))?;
     if let Err(error) = write_host_prompt_skill_catalog(user_root, &catalog) {
-        let _ = fs::rename(&removed_dir, &target_dir);
-        let _ = fs::remove_dir_all(&transaction_dir);
+        let mut preserve_transaction = false;
+        let error = restore_prompt_skill_backup(
+            &removed_dir,
+            &target_dir,
+            error,
+            &mut preserve_transaction,
+        );
+        if !preserve_transaction {
+            let _ = fs::remove_dir_all(&transaction_dir);
+        }
         return Err(error);
     }
     let _ = fs::remove_dir_all(&transaction_dir);
@@ -1391,8 +1484,7 @@ fn prompt_skill_transaction_dir(user_root: &Path) -> Result<PathBuf, String> {
         &transactions_root,
         "Agent Skills transactions directory",
     )?;
-    let sequence = PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let transaction_dir = transactions_root.join(format!("{}-{sequence}", std::process::id()));
+    let transaction_dir = transactions_root.join(next_prompt_skill_transaction_token());
     if fs::symlink_metadata(&transaction_dir).is_ok() {
         return Err(format!(
             "Agent Skills transaction path already exists: {}",
@@ -1532,9 +1624,8 @@ fn write_host_prompt_skill_catalog(
     let target = directory.join(VULCAN_SKILL_CATALOG_FILE_NAME);
     let target_exists = managed_prompt_skill_file_exists(&target, "Agent Skills catalog")?;
     let temporary = directory.join(format!(
-        "catalog-{}-{}.yaml.tmp",
-        std::process::id(),
-        PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        "catalog-{}.yaml.tmp",
+        next_prompt_skill_transaction_token()
     ));
     if fs::symlink_metadata(&temporary).is_ok() {
         return Err(format!(
@@ -1556,9 +1647,8 @@ fn write_host_prompt_skill_catalog(
         .map_err(|error| format!("Failed to flush Agent Skills catalog transaction: {error}"))?;
     drop(temporary_file);
     let backup = directory.join(format!(
-        "catalog-{}-{}.yaml.backup",
-        std::process::id(),
-        PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        "catalog-{}.yaml.backup",
+        next_prompt_skill_transaction_token()
     ));
     if fs::symlink_metadata(&backup).is_ok() {
         let _ = fs::remove_file(&temporary);

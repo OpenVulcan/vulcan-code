@@ -1134,6 +1134,81 @@ async fn precheck_hook_timeout_records_failure_without_hanging() {
     assert!(started_at.elapsed() < Duration::from_millis(TEST_HOOK_TIMEOUT_MS + 1_500));
 }
 
+/// Verifies the caller-side deadline returns even when a handler blocks its worker thread.
+/// 验证处理器阻塞工作线程且不让出时，调用方截止时间仍能按时返回。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if a non-yielding handler stalls the awaiting caller.
+/// 此测试无返回值；若不让出线程的处理器拖住等待方则失败。
+#[tokio::test]
+async fn awaited_dispatch_returns_at_deadline_when_handler_blocks_its_thread() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
+
+    const TEST_DEADLINE: Duration = Duration::from_millis(200);
+    const HANDLER_BLOCK: Duration = Duration::from_secs(3);
+
+    let mut runtime = ConversationHookRuntime::new();
+    runtime
+        .dispatcher_mut()
+        .register(
+            HookRegistration::new(
+                "blocking",
+                HOOK_CONVERSATION_TURN_PRECHECK,
+                HookMode::Transform,
+            ),
+            Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
+                // Deliberately violates the handler contract by blocking without yielding.
+                // 故意违反处理器契约：阻塞线程且不让出。
+                std::thread::sleep(HANDLER_BLOCK);
+                Ok(HookResult::default())
+            })),
+        )
+        .expect("hook registration should succeed");
+    let context = HookContext {
+        run_id: String::from("blocking-test"),
+        point: HOOK_CONVERSATION_TURN_PRECHECK.to_string(),
+        scope: HookScope::Session,
+        actor: HookActor::new("vulcan-code-runtime"),
+        workspace_id: None,
+        project_id: None,
+        session_id: None,
+        conversation_id: None,
+        user_id: None,
+        capabilities: Default::default(),
+        metadata: BTreeMap::new(),
+    };
+    let request = HookDispatchRequest::new(
+        context,
+        HookPayload {
+            value: serde_json::json!({}),
+        },
+    );
+
+    let started_at = Instant::now();
+    let result = run_hook_dispatch_on_worker_thread_within(
+        "blocking hook",
+        String::from("vulcan-blocking-hook-test"),
+        runtime.dispatcher_mut().clone(),
+        request,
+        TEST_DEADLINE,
+    )
+    .await;
+
+    assert_eq!(
+        result.expect_err("a blocked worker must be abandoned at the deadline"),
+        "blocking hook dispatch timed out"
+    );
+    assert!(started_at.elapsed() < HANDLER_BLOCK);
+}
+
 /// Verifies completed-turn effect Hooks execute successfully through the private worker runtime.
 /// 验证完成回合 effect Hook 可通过私有工作线程运行时成功执行。
 ///

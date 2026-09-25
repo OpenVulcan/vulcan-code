@@ -152,6 +152,23 @@ async fn refresh_plugin_catalog_local_state_and_emit(
     Ok(update.lua_skills_update())
 }
 
+/// Runs one blocking Agent Skills filesystem operation on the blocking pool.
+/// 在阻塞线程池上执行一次阻塞式 Agent Skills 文件系统操作。
+///
+/// Package and category writes walk and rewrite whole directories, so they must not occupy an async
+/// worker. Returns the operation result, or an error when the blocking task was cancelled or panicked.
+/// 技能包与分类写入会遍历并重写整个目录，因此不得占用异步工作线程。返回操作结果；
+/// 阻塞任务被取消或 panic 时返回错误。
+async fn run_agent_skill_file_operation<T, F>(operation: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("Agent Skills file operation did not complete: {error}"))?
+}
+
 /// Refreshes the committed Agent Skills projection and broadcasts it through the sole service publisher.
 /// 刷新已提交的 Agent Skills 投影，并通过唯一服务发布出口广播。
 ///
@@ -2977,8 +2994,12 @@ pub(crate) async fn service_open_agent_skills_user_directory(
 ) -> Result<AgentSkillsCatalogUpdate, String> {
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
     let (user_root, _) = configured_agent_skill_roots(&state)?;
-    std::fs::create_dir_all(&user_root)
-        .map_err(|error| format!("创建 Agent Skills 用户目录失败：{error}"))?;
+    let created_root = user_root.clone();
+    run_agent_skill_file_operation(move || {
+        std::fs::create_dir_all(&created_root)
+            .map_err(|error| format!("创建 Agent Skills 用户目录失败：{error}"))
+    })
+    .await?;
     let update = refresh_agent_skills_local_state(&state).await?;
     shell_host_from_state(&state)?.open_path(
         &vulcan_runtime_assets::native_host_path_text_from_path(&user_root),
@@ -3012,8 +3033,16 @@ pub(crate) async fn service_save_agent_skill(
     let source_skill_key = request.source_skill_key.as_deref();
     // catalog captures the exact existing source record used to preserve or derive provenance.
     // catalog 捕获用于保留或推导来源的精确现有来源记录。
-    let catalog =
-        vulcan_prompt_skills::load_prompt_skills_from_roots(system_root.clone(), user_root.clone());
+    let catalog = {
+        let (system_root, user_root) = (system_root.clone(), user_root.clone());
+        run_agent_skill_file_operation(move || {
+            Ok(vulcan_prompt_skills::load_prompt_skills_from_roots(
+                system_root,
+                user_root,
+            ))
+        })
+        .await?
+    };
     // origin is host-assigned and cannot be forged by the WebUI payload.
     // origin 由宿主分配，WebUI 载荷无法伪造。
     let origin = managed_agent_skill_origin(&catalog, original_name.as_deref(), &name);
@@ -3097,7 +3126,11 @@ pub(crate) async fn service_save_agent_skill(
         |_guard, _configuration| (),
     )
     .await?;
-    if let Err(file_error) = vulcan_prompt_skills::save_user_prompt_skill_package(&user_root, input)
+    let package_root = user_root.clone();
+    if let Err(file_error) = run_agent_skill_file_operation(move || {
+        vulcan_prompt_skills::save_user_prompt_skill_package(&package_root, input)
+    })
+    .await
     {
         // rollback_original_name retains the exact source key restored after a file failure.
         // rollback_original_name 保留文件失败后恢复的精确来源键。
@@ -3166,8 +3199,11 @@ pub(crate) async fn service_delete_agent_skill(
         |_guard, _configuration| (),
     )
     .await?;
-    if let Err(file_error) =
-        vulcan_prompt_skills::delete_user_prompt_skill_package(&user_root, &name)
+    let (package_root, package_name) = (user_root.clone(), name.clone());
+    if let Err(file_error) = run_agent_skill_file_operation(move || {
+        vulcan_prompt_skills::delete_user_prompt_skill_package(&package_root, &package_name)
+    })
+    .await
     {
         let rollback_name = name.clone();
         let rollback_result = mutate_provider_configuration(
@@ -3202,14 +3238,17 @@ pub(crate) async fn service_restore_agent_skill_default(
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
     let name = require_canonical_agent_skill_name(&name)?.to_string();
     let (user_root, system_root) = configured_agent_skill_roots(&state)?;
-    if !system_root
-        .join(&name)
-        .join(vulcan_prompt_skills::SKILL_FILE_NAME)
-        .is_file()
-    {
-        return Err(format!("Agent Skill `{name}` 没有可恢复的系统版本。"));
-    }
-    vulcan_prompt_skills::delete_user_prompt_skill_package(&user_root, &name)?;
+    run_agent_skill_file_operation(move || {
+        if !system_root
+            .join(&name)
+            .join(vulcan_prompt_skills::SKILL_FILE_NAME)
+            .is_file()
+        {
+            return Err(format!("Agent Skill `{name}` 没有可恢复的系统版本。"));
+        }
+        vulcan_prompt_skills::delete_user_prompt_skill_package(&user_root, &name)
+    })
+    .await?;
     refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
@@ -3227,21 +3266,22 @@ pub(crate) async fn service_save_agent_skill_category(
         ));
     }
     let (user_root, _) = configured_agent_skill_roots(&state)?;
-    vulcan_prompt_skills::save_user_prompt_skill_category(
-        &user_root,
-        vulcan_prompt_skills::PromptSkillCategory {
-            category_id: request.category_id,
-            name: request.name,
-            description: request.description,
-            emoji: request.emoji,
-            color: request.color,
-            order: request.order,
-            builtin: false,
-            // User categories are single-language; only built-in categories are localized.
-            // 用户分类只有单一语言；仅内置分类提供本地化。
-            locales: std::collections::BTreeMap::new(),
-        },
-    )?;
+    let category = vulcan_prompt_skills::PromptSkillCategory {
+        category_id: request.category_id,
+        name: request.name,
+        description: request.description,
+        emoji: request.emoji,
+        color: request.color,
+        order: request.order,
+        builtin: false,
+        // User categories are single-language; only built-in categories are localized.
+        // 用户分类只有单一语言；仅内置分类提供本地化。
+        locales: std::collections::BTreeMap::new(),
+    };
+    run_agent_skill_file_operation(move || {
+        vulcan_prompt_skills::save_user_prompt_skill_category(&user_root, category)
+    })
+    .await?;
     refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
@@ -3259,11 +3299,14 @@ pub(crate) async fn service_delete_agent_skill_category(
         ));
     }
     let (user_root, system_root) = configured_agent_skill_roots(&state)?;
-    vulcan_prompt_skills::delete_user_prompt_skill_category(
-        &system_root,
-        &user_root,
-        &category_id,
-    )?;
+    run_agent_skill_file_operation(move || {
+        vulcan_prompt_skills::delete_user_prompt_skill_category(
+            &system_root,
+            &user_root,
+            &category_id,
+        )
+    })
+    .await?;
     refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
@@ -3283,12 +3326,15 @@ pub(crate) async fn service_set_agent_skill_category(
         ));
     }
     let (user_root, system_root) = configured_agent_skill_roots(&state)?;
-    vulcan_prompt_skills::set_user_prompt_skill_category(
-        &system_root,
-        &user_root,
-        &name,
-        &category_id,
-    )?;
+    run_agent_skill_file_operation(move || {
+        vulcan_prompt_skills::set_user_prompt_skill_category(
+            &system_root,
+            &user_root,
+            &name,
+            &category_id,
+        )
+    })
+    .await?;
     refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 

@@ -589,27 +589,43 @@ async fn dispatch_tool_hook_descriptors(
 
 /// Runs one async hook chain from the synchronous candidate-construction boundary.
 /// 从同步候选构建边界运行一次异步 Hook 链。
-fn run_hook_future_from_sync<F>(future: F) -> F::Output
+///
+/// Inside a multi-thread Tokio runtime the blocking wait is wrapped in `block_in_place`, so the
+/// worker hands its other tasks to peers instead of stalling them. Runtime construction, worker
+/// spawn and worker panics are returned as errors instead of aborting the caller.
+/// 位于多线程 Tokio 运行时内时，阻塞等待包裹在 `block_in_place` 中，让当前工作线程把其他任务
+/// 移交给同伴线程而不是拖住它们；运行时构建、工作线程启动与工作线程 panic 均以错误返回，
+/// 不会中止调用方。
+fn run_hook_future_from_sync<F>(future: F) -> Result<F::Output, String>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    if tokio::runtime::Handle::try_current().is_ok() {
-        std::thread::spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tool hook runtime should build")
-                .block_on(future)
-        })
-        .join()
-        .expect("tool hook worker should complete")
-    } else {
+    fn block_on_private_runtime<F: Future>(future: F) -> Result<F::Output, String> {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("tool hook runtime should build")
-            .block_on(future)
+            .map(|runtime| runtime.block_on(future))
+            .map_err(|error| format!("tool hook runtime failed to build: {error}"))
+    }
+
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return block_on_private_runtime(future);
+    };
+    // A nested runtime cannot block on the caller's runtime thread, so a dedicated worker owns it.
+    // 嵌套运行时不能在调用方运行时线程上阻塞，因此由独立工作线程持有。
+    let worker = std::thread::Builder::new()
+        .name(String::from("vulcan-tool-hook"))
+        .spawn(move || block_on_private_runtime(future))
+        .map_err(|error| format!("tool hook worker failed to start: {error}"))?;
+    let join = move || {
+        worker
+            .join()
+            .map_err(|_| String::from("tool hook worker panicked"))?
+    };
+    match handle.runtime_flavor() {
+        tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(join),
+        _ => join(),
     }
 }
 
@@ -741,6 +757,7 @@ fn apply_registration_hooks(
             registration_hook_context(),
             payload,
         ))
+        .map_err(|error| format!("tool.registration failed: {error}"))?
         .map_err(|error| format!("tool.registration failed: {error}"))?;
         if report.decision == HookDecision::Block {
             // A declared Block is stable, while Defer and execution errors remain retryable.
@@ -1185,6 +1202,31 @@ mod tests {
     use vulcan_tools_manager::{
         VulcanPlanToolPolicy, VulcanToolDescriptor, VulcanToolOrigin, VulcanToolSourceKind,
     };
+
+    /// Verifies the sync hook bridge works without a runtime, inside both runtime flavors, and
+    /// reports a panicking hook worker as an error instead of aborting the caller.
+    /// 验证同步 Hook 桥在无运行时与两种运行时内均可工作，且 Hook 工作线程 panic 时返回错误而不是
+    /// 中止调用方。
+    #[test]
+    fn sync_hook_bridge_runs_in_every_context_and_reports_worker_panics() {
+        assert_eq!(run_hook_future_from_sync(async { 1 }), Ok(1));
+        for mut builder in [
+            tokio::runtime::Builder::new_current_thread(),
+            tokio::runtime::Builder::new_multi_thread(),
+        ] {
+            let runtime = builder
+                .enable_all()
+                .build()
+                .expect("build bridge test runtime");
+            runtime.block_on(async {
+                assert_eq!(run_hook_future_from_sync(async { 2 }), Ok(2));
+                let panicked = run_hook_future_from_sync(async {
+                    panic!("hook worker panic fixture");
+                });
+                assert_eq!(panicked, Err(String::from("tool hook worker panicked")));
+            });
+        }
+    }
 
     /// Verifies simultaneous cold misses invoke one registration transform and release its flight lock.
     /// 验证并发首次缓存未命中只执行一次注册变换，并在结束后释放飞行锁。

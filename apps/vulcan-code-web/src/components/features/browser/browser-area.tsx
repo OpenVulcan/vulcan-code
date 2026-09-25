@@ -417,9 +417,14 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     // cancelled prevents an old conversation poll from publishing an error after navigation.
     // cancelled 阻止旧会话轮询在导航后发布错误。
     let cancelled = false;
+    // inFlight skips an interval tick while the previous browser-list poll is still pending.
+    // inFlight 在上一次浏览器列表轮询仍未完成时跳过本次定时触发。
+    let inFlight = false;
     // refresh reports only failures belonging to the current conversation.
     // refresh 只报告当前会话的失败。
     const refresh = () => {
+      if (inFlight) return;
+      inFlight = true;
       // A failed older poll must not replace a newer successful browser list with a stale error.
       // 旧轮询失败不得以过时错误覆盖较新的浏览器列表成功结果。
       // requestSequence identifies this issued browser-list request for error ordering.
@@ -432,7 +437,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           failedSessionSequence.current = requestSequence;
           setPollErrors((current) => ({ ...current, sessions: String(failure) }));
         }
-      });
+      }).finally(() => { inFlight = false; });
     };
     refresh();
     // timer owns only this conversation's browser-list polling interval.
@@ -450,9 +455,14 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     // cancelled prevents a prior browser's late error from replacing the current state.
     // cancelled 阻止先前浏览器的迟到错误覆盖当前状态。
     let cancelled = false;
+    // inFlight skips an interval tick while the previous page-list poll is still pending.
+    // inFlight 在上一次页面列表轮询仍未完成时跳过本次定时触发。
+    let inFlight = false;
     // refresh reports failures only while this browser remains selected.
     // refresh 仅在此浏览器仍被选中时报告失败。
     const refresh = () => {
+      if (inFlight) return;
+      inFlight = true;
       // Ignore a previous page poll's error after a newer selection or response has won.
       // 较新的页面选择或响应生效后忽略先前轮询的错误。
       // requestSequence identifies this issued page-list request for error ordering.
@@ -466,7 +476,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           failedPageSequence.current = requestSequence;
           setPollErrors((current) => ({ ...current, pages: String(failure) }));
         }
-      });
+      }).finally(() => { inFlight = false; });
     };
     refresh();
     // timer owns the page-list interval for this exact browser selection.
@@ -494,7 +504,12 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       // failed is the newest failure published for this metadata source.
       // failed 是此元数据来源已发布的最新失败序号。
       let failed = 0;
+      // inFlight skips an interval tick while this source's previous request is still pending.
+      // inFlight 在此来源上一次请求仍未完成时跳过本次定时触发。
+      let inFlight = false;
       return () => {
+        if (inFlight) return;
+        inFlight = true;
         // sequence preserves request order even when network responses arrive out of order.
         // sequence 在网络响应乱序到达时保留请求顺序。
         const sequence = ++issued;
@@ -512,7 +527,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             failed = sequence;
             setPollErrors((current) => ({ ...current, [source]: String(failure) }));
           }
-        });
+        }).finally(() => { inFlight = false; });
       };
     };
     // Only metadata is polled; download bytes still require explicit user action.

@@ -1,7 +1,9 @@
 //! Host-registered VLDB bindings exposed to trusted Vulcan plugins.
 //! 向受信 Vulcan 插件暴露的宿主注册 VLDB 绑定。
 
-use crate::plugin_storage::{SqliteValuePayload, decode_sqlite_params};
+use crate::plugin_storage::{
+    PLUGIN_SQLITE_MAX_QUERY_ROWS, SqliteValuePayload, decode_sqlite_params, plugin_query_deadline,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -11,24 +13,19 @@ use vulcan_plugin_runtime::{
 };
 use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 use vulcan_workspace_store::local_database_runtime::LogicalDatabase;
-use vulcan_workspace_store::local_sql;
+use vulcan_workspace_store::local_sql::{self, QueryJsonLimits};
 use vulcan_workspace_store::workspace_store::lock_provider_usage_writes;
 
 /// Stable logical binding exposed to trusted statistics plugins.
 /// 向受信统计插件暴露的稳定逻辑绑定。
 pub(crate) const SYSTEM_STATISTICS_LOGICAL_BINDING: &str = "system.statistics";
 
-/// Maximum rows returned by one host VLDB query.
-/// 单次宿主 VLDB 查询返回的最大行数。
-const HOST_VLDB_SQLITE_MAX_QUERY_ROWS: u64 = 5_000;
-
 /// Maximum encoded JSON bytes returned by one host VLDB query.
 /// 单次宿主 VLDB 查询返回的最大 JSON 编码字节数。
+///
+/// Sized independently from the plugin-owned SQLite byte budget; rows and timeout are shared.
+/// 与插件自有 SQLite 字节预算独立设定；行数与超时共用同一定义。
 const HOST_VLDB_SQLITE_MAX_QUERY_BYTES: usize = 2 * 1024 * 1024;
-
-/// Maximum wall-clock duration for one host VLDB query.
-/// 单次宿主 VLDB 查询的最大墙钟时长。
-const HOST_VLDB_SQLITE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Host coordinates for one registered logical SQLite binding.
 /// 一个宿主注册逻辑 SQLite 绑定的坐标。
@@ -168,32 +165,19 @@ impl PluginVldbService {
             .map_err(|error| format!("Invalid Vulcan plugin VLDB query payload: {error}"))?;
         let binding = self.resolve_sqlite_binding(request.binding.as_str())?;
         let params = decode_sqlite_params(request.params)?;
-        // The query ceiling and action remainder share a single effective deadline.
-        // 查询上限与 Action 剩余预算共用一个有效截止时间。
-        let query_deadline = std::time::Instant::now() + HOST_VLDB_SQLITE_QUERY_TIMEOUT;
-        let deadline = action_deadline.map_or(query_deadline, |action| action.min(query_deadline));
-        let result = local_sql::query_json_until_async(
+        let result = local_sql::query_json_bounded_until_async(
             &self.host_runtime.local,
             binding.database,
             request.sql,
             params,
-            deadline,
+            QueryJsonLimits {
+                max_rows: PLUGIN_SQLITE_MAX_QUERY_ROWS,
+                max_bytes: HOST_VLDB_SQLITE_MAX_QUERY_BYTES,
+            },
+            plugin_query_deadline(action_deadline),
         )
         .await
         .map_err(|error| format!("Vulcan plugin VLDB query failed: {error}"))?;
-        if result.row_count > HOST_VLDB_SQLITE_MAX_QUERY_ROWS {
-            return Err(format!(
-                "Vulcan plugin VLDB query returned {} rows; maximum is {}.",
-                result.row_count, HOST_VLDB_SQLITE_MAX_QUERY_ROWS
-            ));
-        }
-        if result.json_data.len() > HOST_VLDB_SQLITE_MAX_QUERY_BYTES {
-            return Err(format!(
-                "Vulcan plugin VLDB query returned {} bytes; maximum is {}.",
-                result.json_data.len(),
-                HOST_VLDB_SQLITE_MAX_QUERY_BYTES
-            ));
-        }
         let rows = serde_json::from_str::<Value>(&result.json_data)
             .map_err(|error| format!("SQLite engine returned invalid VLDB rows: {error}"))?;
         Ok(json!({ "rows": rows, "row_count": result.row_count }))
@@ -289,13 +273,12 @@ impl PluginVldbService {
         let request = serde_json::from_value::<HostVldbSqliteFlushPayload>(payload)
             .map_err(|error| format!("Invalid Vulcan plugin VLDB flush payload: {error}"))?;
         let binding = self.resolve_sqlite_binding(request.binding.as_str())?;
-        let limit = std::time::Instant::now() + HOST_VLDB_SQLITE_QUERY_TIMEOUT;
         let result = local_sql::query_json_until_async(
             &self.host_runtime.local,
             binding.database,
             "PRAGMA wal_checkpoint(PASSIVE)".into(),
             Vec::new(),
-            deadline.map_or(limit, |deadline| deadline.min(limit)),
+            plugin_query_deadline(deadline),
         )
         .await
         .map_err(|error| format!("Vulcan plugin VLDB flush failed: {error}"))?;

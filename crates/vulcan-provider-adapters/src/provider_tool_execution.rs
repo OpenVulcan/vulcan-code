@@ -21,6 +21,11 @@ use std::collections::BTreeMap;
 
 /// Maximum provider tool metadata response accepted before typed decoding.
 /// 强类型解码前允许接收的供应商工具元数据响应上限。
+///
+/// Applies to JSON bodies, SSE streams, and their accumulated text. Resources embedded inline in
+/// such a response are therefore bounded by this limit before [`GENERIC_RESOURCE_BYTE_LIMIT`] applies.
+/// 适用于 JSON 响应体、SSE 流及其累积文本。内嵌于此类响应中的资源因此在
+/// [`GENERIC_RESOURCE_BYTE_LIMIT`] 生效之前已受本上限约束。
 const PROVIDER_TOOL_RESPONSE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 
 /// Maximum Unicode characters retained from one provider diagnostic field.
@@ -41,6 +46,14 @@ const GENERIC_STRUCTURED_RESULT_COUNT_LIMIT: usize = 256;
 
 /// Absolute decoded-byte ceiling accepted from one declarative resource extractor.
 /// 单个声明式资源提取器允许的绝对解码字节上限。
+///
+/// This is the ceiling for manifest-declared `max_bytes`, binary follow-up downloads streamed outside
+/// the metadata response, and request-side multipart files. It is intentionally larger than
+/// [`PROVIDER_TOOL_RESPONSE_BYTE_LIMIT`]: only binary carriers can reach it, while inline resources
+/// stay bounded by the smaller response limit.
+/// 这是 Manifest 声明的 `max_bytes`、在元数据响应之外流式下载的二进制后续资源，以及请求侧
+/// multipart 文件的上限。它刻意大于 [`PROVIDER_TOOL_RESPONSE_BYTE_LIMIT`]：只有二进制载体能触及它，
+/// 内联资源仍受较小的响应上限约束。
 const GENERIC_RESOURCE_BYTE_LIMIT: u64 = 100 * 1024 * 1024;
 
 /// Formats one provider-tool transport failure without retaining request URL material.
@@ -573,6 +586,9 @@ async fn decode_generic_structured_sse(
     })?;
     let mut stream = response.bytes_stream();
     let mut pending = Vec::new();
+    // scan_from skips the already scanned prefix of pending so each byte is searched for a boundary once.
+    // scan_from 跳过 pending 中已扫描过的前缀，使每个字节只被边界搜索一次。
+    let mut scan_from = 0usize;
     let mut terminal = None;
     let mut received_bytes = 0usize;
     while let Some(chunk) = stream.next().await {
@@ -589,15 +605,15 @@ async fn decode_generic_structured_sse(
             ));
         }
         pending.extend_from_slice(chunk.as_ref());
-        while let Some(frame_end) = find_sse_frame_end(&pending) {
-            let frame = pending.drain(..frame_end).collect::<Vec<_>>();
-            while pending
-                .first()
-                .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
-            {
-                pending.remove(0);
-            }
-            let data = sse_frame_data(frame.as_slice())?;
+        // consumed is the end of the last complete frame; the buffer is compacted once per chunk.
+        // consumed 是最后一个完整帧的结束位置；缓冲区每个分块只压缩一次。
+        let mut consumed = 0usize;
+        while let Some((frame_end, boundary_end)) =
+            find_sse_frame_boundary(&pending, consumed.max(scan_from))
+        {
+            let frame_start = consumed;
+            consumed = boundary_end;
+            let data = sse_frame_data(&pending[frame_start..frame_end])?;
             let Some(data) = data else {
                 continue;
             };
@@ -631,6 +647,10 @@ async fn decode_generic_structured_sse(
                 ));
             }
         }
+        pending.drain(..consumed);
+        // A boundary may start in the last two unscanned bytes and complete in the next chunk.
+        // 边界可能起始于最后两个字节，并在下一个分块中完成。
+        scan_from = pending.len().saturating_sub(2);
     }
     if !pending.iter().all(u8::is_ascii_whitespace) {
         return Err(String::from(
@@ -640,13 +660,26 @@ async fn decode_generic_structured_sse(
     terminal.ok_or_else(|| String::from("Provider structured SSE returned no terminal event."))
 }
 
-/// Finds the byte index immediately before one CRLF or LF separated SSE frame boundary.
-/// 查找一个由 CRLF 或 LF 分隔的 SSE 帧边界之前的字节索引。
-fn find_sse_frame_end(bytes: &[u8]) -> Option<usize> {
-    bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .or_else(|| bytes.windows(2).position(|window| window == b"\n\n"))
+/// Finds the earliest blank-line SSE frame boundary at or after `from`, accepting LF and CRLF line endings.
+/// 查找 `from` 及之后最早的空行 SSE 帧边界，同时接受 LF 与 CRLF 行结束符。
+///
+/// # Returns
+/// 返回值
+/// Returns the frame end, including its final line terminator, and the end of the blank separator line.
+/// 返回包含最后一个行结束符的帧结束位置，以及空白分隔行的结束位置。
+fn find_sse_frame_boundary(bytes: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut index = from;
+    while let Some(offset) = bytes.get(index..)?.iter().position(|byte| *byte == b'\n') {
+        let newline = index + offset;
+        match bytes.get(newline + 1) {
+            Some(b'\n') => return Some((newline + 1, newline + 2)),
+            Some(b'\r') if bytes.get(newline + 2) == Some(&b'\n') => {
+                return Some((newline + 1, newline + 3));
+            }
+            _ => index = newline + 1,
+        }
+    }
+    None
 }
 
 /// Joins all data lines from one SSE frame into one JSON payload.
@@ -4540,5 +4573,33 @@ mod tests {
                 target.target_id
             );
         }
+    }
+
+    /// Verifies mixed LF and CRLF frames split at the earliest blank line instead of merging.
+    /// 验证 LF 与 CRLF 混用时在最早空行处分帧，而不是合并帧。
+    #[test]
+    fn sse_frame_boundary_prefers_earliest_blank_line_across_line_endings() {
+        let bytes = b"data: a\n\ndata: b\r\n\r\n";
+        let (frame_end, boundary_end) =
+            find_sse_frame_boundary(bytes, 0).expect("first LF frame boundary");
+        assert_eq!(&bytes[..frame_end], b"data: a\n");
+        let (second_end, second_boundary) =
+            find_sse_frame_boundary(bytes, boundary_end).expect("second CRLF frame boundary");
+        assert_eq!(&bytes[boundary_end..second_end], b"data: b\r\n");
+        assert_eq!(second_boundary, bytes.len());
+    }
+
+    /// Verifies a CRLF boundary split across chunks is found when scanning resumes near the old tail.
+    /// 验证跨分块的 CRLF 边界在从旧尾部附近恢复扫描时仍能被找到。
+    #[test]
+    fn sse_frame_boundary_resumes_across_chunk_split() {
+        let mut bytes = b"data: a\r\n\r".to_vec();
+        assert!(find_sse_frame_boundary(&bytes, 0).is_none());
+        let resume_from = bytes.len().saturating_sub(2);
+        bytes.push(b'\n');
+        let (frame_end, boundary_end) =
+            find_sse_frame_boundary(&bytes, resume_from).expect("boundary completed by next chunk");
+        assert_eq!(&bytes[..frame_end], b"data: a\r\n");
+        assert_eq!(boundary_end, bytes.len());
     }
 }

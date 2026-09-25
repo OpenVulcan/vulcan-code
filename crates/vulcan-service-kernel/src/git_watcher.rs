@@ -2,6 +2,7 @@
 //! 基于 notify 的 Git 仓库审查文件监听器。
 
 use super::*;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -119,8 +120,10 @@ fn shared_webui_git_watcher(
     let event_targets = Arc::clone(&targets);
     let task = spawn_service_task(async move {
         let mut receiver = ThrottledLiveWatchReceiver::new(receiver, Duration::from_millis(250));
+        let mut ignore_matchers = HashMap::new();
         while let Some(event) = receiver.recv().await {
-            let grouped = group_webui_git_watch_events(&event_targets, &event.paths);
+            let grouped =
+                group_webui_git_watch_events(&event_targets, &mut ignore_matchers, &event.paths);
             for ((project_id, workspace_path), repository_keys) in grouped {
                 event_emitter.emit(ServiceEvent::WorkspaceGitChanged(Box::new(
                     WorkspaceGitChangedEvent {
@@ -191,19 +194,96 @@ impl WebuiGitWatcherManager {
     }
 }
 
+/// Git-internal directories whose churn never changes the reviewable repository state by itself.
+/// 其变化本身不会改变可审查仓库状态的 Git 内部目录。
+///
+/// Object and reflog writes always accompany an `index`, `HEAD` or `refs` update that still notifies.
+/// 对象与 reflog 写入总是伴随仍会通知的 `index`、`HEAD` 或 `refs` 更新。
+const GIT_WATCH_SILENT_DIRECTORIES: [&str; 2] = ["objects", "logs"];
+
+/// Builds the ignore matcher from one repository's root `.gitignore` and `.git/info/exclude`.
+/// 根据一个仓库根目录的 `.gitignore` 与 `.git/info/exclude` 构建忽略匹配器。
+///
+/// Unreadable files and invalid lines only narrow filtering, so affected paths keep notifying.
+/// 无法读取的文件与无效规则只会缩小过滤范围，受影响路径仍会照常通知。
+fn build_repository_ignore_matcher(repository_root: &Path) -> Gitignore {
+    let mut builder = GitignoreBuilder::new(repository_root);
+    for ignore_file in repository_ignore_files(repository_root) {
+        if ignore_file.is_file() {
+            let _ = builder.add(ignore_file);
+        }
+    }
+    builder.build().unwrap_or_else(|_| Gitignore::empty())
+}
+
+/// Lists the ignore files whose change invalidates one repository's cached matcher.
+/// 列出其变化会使一个仓库缓存匹配器失效的忽略文件。
+fn repository_ignore_files(repository_root: &Path) -> [PathBuf; 2] {
+    [
+        repository_root.join(".gitignore"),
+        repository_root.join(".git").join("info").join("exclude"),
+    ]
+}
+
+/// Reports whether one changed path can alter the Git review state of one repository.
+/// 判断一个变更路径是否可能改变某个仓库的 Git 审查状态。
+fn change_affects_repository(
+    ignore_matchers: &mut HashMap<PathBuf, Gitignore>,
+    repository_root: &Path,
+    changed_path: &Path,
+) -> bool {
+    let Ok(relative_path) = changed_path.strip_prefix(repository_root) else {
+        return false;
+    };
+    let mut components = relative_path.components();
+    if components.next() == Some(std::path::Component::Normal(".git".as_ref())) {
+        return !components.next().is_some_and(|directory| {
+            GIT_WATCH_SILENT_DIRECTORIES
+                .iter()
+                .any(|silent| directory == std::path::Component::Normal(silent.as_ref()))
+        });
+    }
+    if relative_path.as_os_str().is_empty() {
+        return true;
+    }
+    ignore_matchers
+        .entry(repository_root.to_path_buf())
+        .or_insert_with(|| build_repository_ignore_matcher(repository_root))
+        .matched_path_or_any_parents(relative_path, changed_path.is_dir())
+        .is_none()
+}
+
 /// Groups changed paths by project and repository while retaining deterministic ordering.
 /// 按项目与仓库归并变更路径，并保持确定性排序。
+///
+/// Paths ignored by a repository's root ignore rules, and Git object or reflog churn, are dropped for
+/// that repository only; `ignore_matchers` caches one matcher per watched repository root.
+/// 被某仓库根忽略规则忽略的路径以及 Git 对象、reflog 变化仅对该仓库丢弃；`ignore_matchers`
+/// 为每个监听仓库根缓存一个匹配器。
 fn group_webui_git_watch_events(
     targets: &RwLock<BTreeMap<PathBuf, BTreeSet<GitWatchTarget>>>,
+    ignore_matchers: &mut HashMap<PathBuf, Gitignore>,
     changed_paths: &[PathBuf],
 ) -> BTreeMap<(Option<String>, PathBuf), BTreeSet<String>> {
     let targets = targets
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    ignore_matchers.retain(|repository_root, _| {
+        targets.contains_key(repository_root)
+            && !changed_paths
+                .iter()
+                .any(|changed_path| repository_ignore_files(repository_root).contains(changed_path))
+    });
     let mut grouped = BTreeMap::new();
     for changed_path in changed_paths {
-        for (repository_root, repository_targets) in targets.iter() {
-            if changed_path != repository_root && !changed_path.starts_with(repository_root) {
+        // Only ancestors can own a changed path, so look them up instead of scanning every root.
+        // 只有祖先目录可能拥有变更路径，因此逐级查表而不是扫描全部仓库根。
+        for ancestor in changed_path.ancestors() {
+            let Some((repository_root, repository_targets)) = targets.get_key_value(ancestor)
+            else {
+                continue;
+            };
+            if !change_affects_repository(ignore_matchers, repository_root, changed_path) {
                 continue;
             }
             for target in repository_targets {
@@ -245,6 +325,7 @@ mod tests {
         ]));
         let grouped = group_webui_git_watch_events(
             &targets,
+            &mut HashMap::new(),
             &[PathBuf::from("/workspace/service/src/lib.rs")],
         );
         assert_eq!(
@@ -268,7 +349,47 @@ mod tests {
             }]),
         )]));
         assert!(
-            group_webui_git_watch_events(&targets, &[PathBuf::from("/other/file.txt")]).is_empty()
+            group_webui_git_watch_events(
+                &targets,
+                &mut HashMap::new(),
+                &[PathBuf::from("/other/file.txt")]
+            )
+            .is_empty()
         );
+    }
+
+    /// Verifies ignored worktree paths and Git object churn stay silent, while tracked files, refs and
+    /// a rewritten `.gitignore` still notify and refresh the cached matcher.
+    /// 验证被忽略的工作树路径与 Git 对象变化保持静默，而受跟踪文件、refs 与改写后的 `.gitignore`
+    /// 仍会通知并刷新缓存匹配器。
+    #[test]
+    fn filters_ignored_paths_and_git_object_churn() {
+        let root = tempfile::tempdir().expect("create git watch test root");
+        let root = std::fs::canonicalize(root.path()).expect("canonicalize git watch test root");
+        std::fs::create_dir_all(root.join("target/debug")).expect("create ignored directory");
+        std::fs::write(root.join(".gitignore"), "target/\n").expect("write gitignore");
+        let targets = RwLock::new(BTreeMap::from([(
+            root.clone(),
+            BTreeSet::from([GitWatchTarget {
+                project_id: None,
+                workspace_path: root.clone(),
+                repository_key: String::from("."),
+            }]),
+        )]));
+        let mut matchers = HashMap::new();
+        let mut notifies = |path: PathBuf| {
+            !group_webui_git_watch_events(&targets, &mut matchers, &[path]).is_empty()
+        };
+
+        assert!(!notifies(root.join("target/debug/app.o")));
+        assert!(!notifies(root.join(".git/objects/ab/cdef")));
+        assert!(!notifies(root.join(".git/logs/HEAD")));
+        assert!(notifies(root.join(".git/refs/heads/main")));
+        assert!(notifies(root.join(".git/index")));
+        assert!(notifies(root.join("src/lib.rs")));
+
+        std::fs::write(root.join(".gitignore"), "").expect("rewrite gitignore");
+        assert!(notifies(root.join(".gitignore")));
+        assert!(notifies(root.join("target/debug/app.o")));
     }
 }

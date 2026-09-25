@@ -6,8 +6,8 @@ use crate::agent_runtime::config::{AgentRuntimeConfig, RuntimeAgentKind, Runtime
 use crate::model::SessionId;
 use crate::project_temp_maintenance;
 use crate::tool_result_format::{
-    EffectiveBudgetScope, HostRenderOptions, HostTextRenderInput, HostToolOverflowMode,
-    ToolResultBudgetSnapshot, render_tool_result_text,
+    HostRenderOptions, HostTextRenderInput, HostToolOverflowMode, ToolResultBudgetSnapshot,
+    render_tool_result_text,
 };
 #[cfg(test)]
 use crate::tooling::command_session_runtime::DEFAULT_COMMAND_SESSION_READ_WAIT_MS;

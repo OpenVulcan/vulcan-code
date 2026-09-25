@@ -1,6 +1,7 @@
 // Exercise service readiness against a real isolated HTTP discovery endpoint.
 // 使用真实隔离 HTTP 发现端点验证服务就绪行为。
 import { strict as assert } from 'node:assert';
+import { writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, writeFile, unlink, rmdir } from 'node:fs/promises';
 import os from 'node:os';
@@ -62,6 +63,26 @@ for (const status of ['failed', 'stopping']) {
     });
   });
 }
+
+// A starting owner that vanishes before readiness must trigger this GUI's own launch instead of waiting out the deadline.
+// 启动中的所有者在就绪前消失时，必须触发本 GUI 自行启动，而不是等满截止时间。
+test('launches its own service when a starting owner disappears', async () => {
+  await withHealth(['starting'], async (description, states) => {
+    const original = JSON.parse(await readFile(description.discoveryPath, 'utf8')) as { baseUrl: string };
+    const stages: string[] = [];
+    const pending = ensureServiceInstance(description, [], (progress) => {
+      stages.push(progress.stage);
+      // The owner vanishes right after the first probe observed it starting.
+      // 首次探测观察到启动中之后，所有者立即消失。
+      if (progress.stage === 'awaiting-ready') {
+        writeFileSync(description.discoveryPath, JSON.stringify({ ...original, baseUrl: `${original.baseUrl}/gone` }));
+      }
+    });
+    await assert.rejects(pending, /无法启动后台服务/);
+    assert.equal(states.length, 1);
+    assert(stages.includes('starting-service'));
+  });
+});
 
 // Rejects a rewritten discovery origin before the GUI can load it as a privileged workbench.
 // 在 GUI 将改写的发现来源作为特权工作台加载前拒绝它。

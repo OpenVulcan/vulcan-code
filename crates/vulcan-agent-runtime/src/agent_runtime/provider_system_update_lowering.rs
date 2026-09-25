@@ -133,7 +133,8 @@ mod tests {
     #[test]
     fn trusted_update_uses_user_envelope_when_native_was_requested() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::PreferNative);
-        let lowered = lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
+        let lowered =
+            lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
 
         assert!(matches!(
             lowered,
@@ -164,12 +165,10 @@ mod tests {
     fn untrusted_update_uses_user_envelope() {
         let mut update = trusted_update(RuntimeSystemUpdateLoweringHint::PreferNative);
         update.trust = RuntimeSystemUpdateTrust::UntrustedExternal;
-        let lowered = lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
+        let lowered =
+            lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
 
-        assert!(matches!(
-            lowered,
-            ProviderSystemUpdateLowering::User { .. }
-        ));
+        assert!(matches!(lowered, ProviderSystemUpdateLowering::User { .. }));
     }
 
     /// Verifies RequireNative rejects when native chronological system support is unavailable.
@@ -180,10 +179,7 @@ mod tests {
         let lowered =
             lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
 
-        assert!(matches!(
-            lowered,
-            ProviderSystemUpdateLowering::User { .. }
-        ));
+        assert!(matches!(lowered, ProviderSystemUpdateLowering::User { .. }));
     }
 
     /// Verifies non-native system update lowering produces a runtime repair audit event.
