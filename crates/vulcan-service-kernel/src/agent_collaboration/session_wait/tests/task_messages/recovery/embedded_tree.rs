@@ -5,26 +5,24 @@ use super::*;
 use vulcan_agent_runtime::agent_runtime::task_runtime::TaskV1ExecutionFacts;
 use vulcan_session_core::v1::collaboration::{CollaborationExecutionId, ReserveChildTaskInput};
 
-/// Repairs the subtree while requiring the fixture's deliberately absent main Hook to remain unresolved.
-/// 修复子树，同时要求夹具故意缺失的主 Hook 保持明确未解决状态。
-/// `invocation` supplies the original root; exactly one main diagnostic excludes hidden descendant failures.
-/// `invocation` 提供原根；精确一条主诊断排除被掩盖的后代失败。
+/// Repairs descendant receipts without requiring a Hook for the historical main task.
+/// 修复后代回执，不要求历史主任务具有 Hook。
+/// `invocation` supplies the original root; any repair error fails instead of being ignored.
+/// `invocation` 提供原根；任何修复错误都导致失败，不能忽略。
 async fn recover_tree_with_missing_main_hook(invocation: &ValidatedInvocation) {
-    // These fixtures published child ownership directly without running main Hook admission.
-    // 这些夹具直接发布子归属，没有执行主 Hook 准入。
-    let error = startup_recovery::recover_indexed_collaboration(
+    // Child result repair does not need or synthesize a main-business Hook or dispatch owner.
+    // 子结果修复不需要、也不合成主业务 Hook 或派发所有者。
+    startup_recovery::recover_indexed_collaboration(
         &crate::ServiceEventEmitter::new(vec![]),
         &invocation.state,
         [invocation.source_session_id].into_iter().collect(),
     )
     .await
-    .unwrap_err();
-    assert_eq!(
-        error,
-        format!(
-            "Collaboration startup recovery has 1 unresolved item(s): session {} main business: collaboration state transition is invalid at initial_business.prior_execution",
-            invocation.source_session_id,
-        )
+    .unwrap();
+    assert!(
+        !invocation.state.lock().unwrap().active_stream_tasks
+            .contains_key(&invocation.source_session_id),
+        "repairing child receipts must not start the historical parent task"
     );
 }
 

@@ -67,9 +67,6 @@ pub struct SessionV1CollaborationRecoverySnapshot {
     /// Physical generation read together with the collaboration records.
     /// 与协作记录一起读取的物理代次。
     pub segment_generation: u64,
-    /// Open business selection hint read from the same metadata publication.
-    /// 从同一次元数据发布读取的开放业务筛选线索。
-    pub open_turn_start_seq: Option<Seq>,
     /// Typed collaboration records belonging to that same metadata publication.
     /// 属于同一次元数据发布的强类型协作记录。
     pub collaboration: vulcan_session_core::v1::collaboration::CollaborationState,
@@ -230,7 +227,6 @@ impl SessionV1StorageLocator {
         })?;
         Ok(SessionV1CollaborationRecoverySnapshot {
             segment_generation: metadata.segment_generation,
-            open_turn_start_seq: metadata.open_turn_start_seq,
             collaboration: metadata.collaboration.state,
         })
     }
@@ -1715,7 +1711,6 @@ mod tests {
             locator.read_collaboration_recovery_snapshot().unwrap(),
             super::SessionV1CollaborationRecoverySnapshot {
                 segment_generation: metadata.segment_generation,
-                open_turn_start_seq: metadata.open_turn_start_seq,
                 collaboration: metadata.collaboration.state.clone(),
             }
         );

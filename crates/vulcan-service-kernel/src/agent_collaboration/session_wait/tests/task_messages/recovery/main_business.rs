@@ -1,24 +1,20 @@
-//! Actual startup selection of open main business with no collaboration outbox.
-//! 没有协作出站待办时对开放主业务的实际启动筛选。
+//! Ordinary historical tasks require user consent independently of collaboration startup repair.
+//! 普通历史任务需要用户许可，不能由协作启动修复自行执行。
 
 use super::*;
 
-/// Cold root and queued sources without a published Hook execute their first preparation exactly once.
-/// 没有已发布 Hook 的冷根及队列来源各执行一次首次准备。
-/// Uses the production worker stack and local missing-provider failure, preserving canonical history.
-/// 使用生产工作线程栈和本地缺供应商失败，保留规范历史。
+/// Cold root and promoted queue sources remain idle until a new explicit user action.
+/// 冷根输入与已提升队列来源保持空闲，直到新的显式用户操作。
+/// Uses isolated storage and the production worker stack; returns no value.
+/// 使用隔离存储与生产工作线程栈；无返回值。
 #[test]
-fn initial_human_business_startup_preserves_root_and_queued_inputs() {
-    // Both cases require the real preparation future's production stack size.
-    // 两种场景都要求真实准备 Future 的生产栈大小。
+fn initial_human_business_startup_does_not_dispatch_root_or_queued_inputs() {
+    // Use the production worker stack to expose unintended preparation.
+    // 使用生产工作线程栈暴露意外准备行为。
     let executor = crate::service_bridge_io::webui_service_runtime_builder()
-        .worker_threads(2)
-        .build()
-        .unwrap();
+        .worker_threads(2).build().unwrap();
     for queued in [false, true] {
-        executor
-            .block_on(executor.spawn(cold_main_business_scenario(false, queued)))
-            .unwrap();
+        executor.block_on(executor.spawn(cold_main_business_scenario(false, queued, None))).unwrap();
     }
 }
 
@@ -321,249 +317,182 @@ async fn main_business_root_dispatch_rejects_auxiliary_acknowledgement() {
     }
 }
 
-/// Uses the production service stack for the real cold hydration and asynchronous preparation path.
-/// 使用生产服务栈执行真实冷水合及异步准备路径。
-/// No provider is configured; preparation must fail locally after restoring original ownership.
-/// 未配置供应商；准备必须在恢复原归属后于本地失败。
+/// Published ordinary work must not restart merely because its historical turn remains open.
+/// 已发布普通任务不能仅因历史回合仍开放而重新执行。
+/// Covers failed and interrupted requests, explicit continuation and new input without a provider.
+/// 覆盖失败、中断请求、显式继续与新输入，不调用供应商。
 #[test]
-fn main_business_recovery_startup_preserves_original_task() {
+fn main_business_startup_does_not_resume_failed_or_interrupted_tasks() {
+    // Cover absent, forbidden, retryable and physically interrupted API histories.
+    // 覆盖尚无 API、禁止继续、允许继续以及物理中断的 API 历史。
     let executor = crate::service_bridge_io::webui_service_runtime_builder()
-        .worker_threads(2)
-        .build()
-        .unwrap();
-    executor
-        .block_on(executor.spawn(cold_main_business_scenario(true, false)))
-        .unwrap();
+        .worker_threads(2).build().unwrap();
+    for terminal in [
+        None,
+        Some(vulcan_session_core::v1::event::ApiEndReason::ProviderError),
+        Some(vulcan_session_core::v1::event::ApiEndReason::NetworkError),
+        Some(vulcan_session_core::v1::event::ApiEndReason::ProcessInterrupted),
+    ] {
+        executor.block_on(executor.spawn(cold_main_business_scenario(true, false, terminal))).unwrap();
+    }
 }
 
-/// Recovers published ownership or first preparation; `queued` selects the authentic scheduled source.
-/// 恢复已发布归属或首次准备；`queued` 选择真实已调度来源。
+/// `published` controls Hook capture, `queued` selects user queue promotion, and `terminal` selects API history.
+/// `published` 控制 Hook 捕获，`queued` 选择用户队列提升，`terminal` 选择 API 历史。
 /// Returns nothing and keeps all writes inside the isolated host fixture.
 /// 无返回值，全部写入限制在隔离宿主夹具内。
-async fn cold_main_business_scenario(published: bool, queued: bool) {
-    let (root, invocation, target) = fixture(false).await;
-    vulcan_workspace_store::data_plane::prepare_application_schema_for_test(
-        &invocation.controller_runtime,
-    )
-    .await
-    .unwrap();
-    let project_path = root.data_root().join("main-recovery-project");
-    std::fs::create_dir_all(&project_path).unwrap();
-    let project = vulcan_workbench_model::TaskProjectSummary::new(
-        target.storage_locator().unwrap().project_id(),
-        "Main recovery project",
-        project_path.display().to_string(),
-        false,
-        0,
-        None,
-        None,
-        Vec::new(),
-    );
-    vulcan_workspace_store::workspace_store::persist_new_project(
-        invocation.controller_runtime.clone(),
-        &project,
-    )
-    .await
-    .unwrap();
-    target.initialize_root_usage(true, 1);
-    // Select only real root or queued admission; both retain their original canonical input.
-    // 只选择真实根或队列准入；两者都保留原规范输入。
+async fn cold_main_business_scenario(
+    published: bool,
+    queued: bool,
+    terminal: Option<vulcan_session_core::v1::event::ApiEndReason>,
+) {
+    use vulcan_session_core::v1::document::{ApiCompletion, ContinuationRequest};
+    use vulcan_session_core::v1::event::{
+        ApiCallStatus, ApiEndReason, ApiErrorCategory, ApiTimings,
+        ContinuationEligibility, RedactedApiError,
+    };
+    use vulcan_session_core::v1::stats::UsageSnapshot;
+    // Isolated indexed storage and a fresh runtime model service restart without a provider.
+    // 隔离索引存储与全新运行时模拟服务重启，不调用供应商。
+    let (_root, invocation, target) = fixture(false).await;
+    // Retain the authentic root or promoted queue identity across restart.
+    // 在重启前后保留真实根输入或已提升队列的身份。
     let submission = ClientInputSubmission::new(
-        ClientActionId::try_new("original-main").unwrap(),
-        "Original main task",
-        vec![],
+        ClientActionId::try_new("original-main").unwrap(), "Original main task", vec![],
     );
     let turn_id = if queued {
-        target
-            .mutate_durable(
-                SessionMutationAdmission::MetadataOnly,
-                SessionFlushReason::MetadataChanged,
-                |document| document.create_goal("Cold goal", None, "Continue", 2),
-            )
-            .unwrap();
+        target.mutate_durable(
+            SessionMutationAdmission::MetadataOnly, SessionFlushReason::MetadataChanged,
+            |document| document.create_goal("Cold goal", None, "Continue", 2),
+        ).unwrap();
         target.enqueue_input(submission, 3).unwrap();
-        target
-            .read(|document| document.active_turn().unwrap().turn_id)
-            .unwrap()
+        target.read(|document| document.active_turn().unwrap().turn_id).unwrap()
     } else {
         target.submit_root_input(submission, 2).unwrap().value
     };
-    let runtime = crate::tests::test_support::test_agent_runtime_bridge();
-    let prepared = runtime
-        .conversation_hook_runtime
-        .lock()
-        .unwrap()
-        .prepare_user_prompt_hook_requests(
-            target.session_id(),
-            "original-main",
-            None,
-            project_path.display().to_string(),
-            vulcan_workbench_model::PendingSessionPromptSource::UserFollowup,
-            vulcan_hooks::SystemPromptHookPhase::FirstSession,
-            "Original main task",
-            &Default::default(),
-            false,
-        );
+    // Published Hook ownership is history, not permission for a new dispatch.
+    // 已发布 Hook 归属属于历史，不代表新的派发许可。
+    let original_runtime = crate::tests::test_support::test_agent_runtime_bridge();
     if published {
+        // Publish through the real Hook admission entry.
+        // 通过真实 Hook 准入入口发布。
+        let prepared = original_runtime.conversation_hook_runtime.lock().unwrap()
+            .prepare_user_prompt_hook_requests(
+                target.session_id(), "original-main", None, "D:/startup-consent-test".into(),
+                vulcan_workbench_model::PendingSessionPromptSource::UserFollowup,
+                vulcan_hooks::SystemPromptHookPhase::FirstSession,
+                "Original main task", &Default::default(), false,
+            );
         crate::session_business_hook::capture_business_hook_before_dispatch(
-            &target,
-            &runtime,
-            target.session_id(),
-            &prepared.turn_id,
-        )
-        .unwrap();
+            &target, &original_runtime, target.session_id(), &prepared.turn_id,
+        ).unwrap();
     }
-    let old_events = target.read(|document| document.events().to_vec()).unwrap();
+    if let Some(reason) = terminal {
+        // Keep the process-interrupted API open until production cold loading reconciles it.
+        // 进程中断 API 保持开放，直到生产冷加载将其结算。
+        let api = start_api_with_purpose(&target, ApiPurposeKind::MainGeneration, 4);
+        if reason != ApiEndReason::ProcessInterrupted {
+            target.mutate_durable(
+                SessionMutationAdmission::ExistingTurn, SessionFlushReason::ApiCompleted,
+                |document| document.complete_api_group(api, ApiCompletion {
+                    request: ApiRequestSnapshot::new("openai", "model"),
+                    usage: UsageSnapshot::default(),
+                    status: ApiCallStatus::Failed,
+                    end_reason: Some(reason),
+                    error: Some(RedactedApiError {
+                        category: if reason == ApiEndReason::ProviderError {
+                            ApiErrorCategory::Provider
+                        } else { ApiErrorCategory::Network },
+                        error_code: Some("provider_error".into()),
+                        message: "Usage update arrived after a different final observation.".into(),
+                    }),
+                    continuation_eligibility: if reason == ApiEndReason::ProviderError {
+                        ContinuationEligibility::Forbidden
+                    } else { ContinuationEligibility::Allowed },
+                    timing: ApiTimings::default(), provider_source: None, completed_at_ms: 5,
+                }),
+            ).unwrap();
+        }
+    }
+    // Capture durable contents before startup can inspect the session.
+    // 在启动扫描检查会话之前捕获可靠内容。
+    let before = target.read(|document| (
+        document.metadata.clone(), document.events().to_vec(),
+    )).unwrap();
+    // Restart discards all process-local owners.
+    // 重启丢弃所有进程内所有者。
     let registry = Arc::new(SessionRuntimeRegistry::default());
     let cold_runtime = crate::tests::test_support::test_agent_runtime_bridge();
-    // Count actual precheck execution, not just the plan's selected source flag.
-    // 统计实际预检执行，而不只检查计划选择的来源标记。
-    let precheck_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    // The isolated observer has no external effect and remains available when VMM is disabled.
-    // 隔离观察器没有外部效果，且在 VMM 禁用时仍然可用。
-    let precheck_counter = precheck_calls.clone();
-    cold_runtime.conversation_hook_runtime.lock().unwrap().dispatcher_mut().register(
-        vulcan_hooks::HookRegistration::new(
-            "initial-human-precheck",
-            vulcan_agent_runtime::agent_runtime::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK,
-            vulcan_hooks::HookMode::Effect,
-        ),
-        Arc::new(vulcan_hooks::FnHookHandler::new(move |_invocation: vulcan_hooks::HookInvocation| {
-            let counter = precheck_counter.clone();
-            async move {
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(vulcan_hooks::HookResult::default())
-            }
-        })),
-    ).unwrap();
     {
         let mut state = invocation.state.lock().unwrap();
         state.session_runtime_registry = registry.clone();
         state.agent_runtime = Some(cold_runtime.clone());
     }
-    // A concurrent submitter must defer recovery without falsely completing the startup worker's duty.
-    // 并发提交者必须使恢复延后，不能错误完成启动任务义务。
-    let admission =
-        crate::project_conversation_services::try_begin_pending_prompt_dispatch_exclusion(
-            &invocation.state,
-            target.session_id(),
-        )
-        .unwrap()
-        .unwrap();
-    let deferred = startup_recovery::recover_indexed_collaboration(
-        &crate::ServiceEventEmitter::new(vec![]),
-        &invocation.state,
-        [target.session_id()].into_iter().collect(),
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        deferred.contains("Main business recovery remains pending behind preparation admission.")
-    );
-    assert!(
-        !cold_runtime
-            .conversation_hook_runtime
-            .lock()
-            .unwrap()
-            .has_active_turn(target.session_id())
-    );
-    drop(admission);
-    // Simulate a process-local preparation that never crossed the durable publication boundary.
-    // 模拟从未跨越可靠发布边界的进程内准备。
-    let unpublished_id = if !published {
-        Some(
-            cold_runtime
-                .conversation_hook_runtime
-                .lock()
-                .unwrap()
-                .prepare_user_prompt_hook_requests(
-                    target.session_id(),
-                    "unpublished",
-                    None,
-                    project_path.display().to_string(),
-                    vulcan_workbench_model::PendingSessionPromptSource::UserFollowup,
-                    vulcan_hooks::SystemPromptHookPhase::FirstSession,
-                    "Unpublished draft",
-                    &Default::default(),
-                    false,
-                )
-                .turn_id,
-        )
-    } else {
-        None
-    };
-
     startup_recovery::recover_indexed_collaboration(
-        &crate::ServiceEventEmitter::new(vec![]),
-        &invocation.state,
+        &crate::ServiceEventEmitter::new(vec![]), &invocation.state,
         [target.session_id()].into_iter().collect(),
-    )
-    .await
-    .unwrap();
-    let recovered = registry.get(target.session_id()).unwrap();
-    assert!(!Arc::ptr_eq(&recovered, &target));
-    // Published recovery preserves identity; first preparation publishes only the original human source.
-    // 已发布恢复保留身份；首次准备只发布原人类来源。
-    let captured = recovered
-        .read(|document| document.metadata.business_hook.binding.clone().unwrap())
-        .unwrap();
-    assert_eq!(captured.turn_id, turn_id);
-    assert_eq!(captured.user_content, "Original main task");
-    if published {
-        assert_eq!(captured.hook_turn_id, prepared.turn_id);
-    } else {
-        assert_ne!(Some(captured.hook_turn_id), unpublished_id);
+    ).await.unwrap();
+    assert!(registry.get(target.session_id()).is_err(),
+        "ordinary history must remain cold during collaboration startup repair");
+    // Preserve history and forbidden-failure policy exactly.
+    // 精确保留历史及禁止继续的失败策略。
+    let stored = vulcan_workspace_store::workspace_store::load_session_v1_full(
+        &target.storage_locator().unwrap(),
+    ).unwrap().document;
+    assert_eq!(stored.metadata, before.0);
+    assert_eq!(stored.events(), before.1.as_slice());
+    // Viewing history may project interruption, but cannot dispatch an API.
+    // 查看历史可以投影中断，但不能派发 API。
+    let loaded = crate::session_v1_lifecycle::get_or_load_session_v1(
+        &invocation.controller_runtime, &registry, target.session_id(),
+    ).await.unwrap();
+    assert!(!Arc::ptr_eq(&loaded, &target));
+    let after_load = loaded.read(|document| (
+        document.metadata.clone(), document.events().to_vec(),
+    )).unwrap();
+    assert_eq!(after_load.1.iter().filter(|event|
+        matches!(event.event, EventBody::ApiStarted(_))).count(), usize::from(terminal.is_some()));
+    assert!(loaded.read(|document| document.active_api().is_none()).unwrap());
+    // Delayed startup repair must leave an already-opened conversation idle too.
+    // 延迟启动修复也必须让已经打开的会话保持空闲。
+    startup_recovery::recover_indexed_collaboration(
+        &crate::ServiceEventEmitter::new(vec![]), &invocation.state,
+        [target.session_id()].into_iter().collect(),
+    ).await.unwrap();
+    assert_eq!(loaded.read(|document| (
+        document.metadata.clone(), document.events().to_vec(),
+    )).unwrap(), after_load);
+    assert!(!cold_runtime.conversation_hook_runtime.lock().unwrap()
+        .has_active_turn(target.session_id()));
+    {
+        let state = invocation.state.lock().unwrap();
+        assert!(!state.active_stream_tasks.contains_key(&target.session_id()));
+        assert!(!crate::webui_session_has_active_run(&state, target.session_id()));
+        assert!(!crate::webui_session_kernel_has_active_turn(&state, target.session_id()));
     }
-    // With no provider, the ordinary preparation error must settle only this original turn.
-    // 无供应商时，常规准备错误必须只结算此原回合。
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            if recovered
-                .read(|document| document.active_turn().is_none_or(|turn| turn.closed))
-                .unwrap()
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    // Only a subsequent user action may request execution, respecting the saved API policy.
+    // 只有后续用户操作可请求执行，并遵守保存的 API 策略。
+    if terminal.is_some() {
+        let continuation = loaded.continue_turn(
+            ContinuationRequest::new(
+                ClientActionId::try_new("explicit-user-continue").unwrap(), "", Vec::new(),
+            ), 10,
+        );
+        if terminal == Some(ApiEndReason::ProviderError) {
+            assert!(continuation.is_err(), "forbidden failure cannot become implicitly retryable");
+        } else {
+            assert!(continuation.is_ok(), "explicit continuation must remain available: {continuation:?}");
         }
-    })
-    .await
-    .expect("missing provider must settle original recovered preparation");
-    assert_eq!(
-        precheck_calls.load(std::sync::atomic::Ordering::SeqCst),
-        usize::from(!published)
-    );
-    // Pin the canonical writer while reading disk; a closed in-memory turn may still be publishing.
-    // 读磁盘时固定规范写入器；内存中的已闭合回合仍可能正在发布。
-    let read_handle = recovered.clone();
-    // Full durable loading belongs on the blocking executor and must propagate storage failures.
-    // 完整可靠加载归阻塞执行器处理，必须传播存储失败。
-    let stored =
-        crate::spawn_service_blocking_task(move || read_handle.read_full_durable(Clone::clone))
-            .await
-            .unwrap()
-            .unwrap();
-    assert_eq!(&stored.events()[..old_events.len()], old_events.as_slice());
-    assert_eq!(
-        stored
-            .events()
-            .iter()
-            .filter(|event| matches!(event.event, EventBody::UserInput(_)))
-            .count(),
-        1
-    );
-    assert!(
-        stored
-            .events()
-            .iter()
-            .skip(old_events.len())
-            .filter_map(|event| event.turn_id)
-            .all(|id| id == turn_id)
-    );
-    let state = invocation.state.lock().unwrap();
-    assert_eq!(
-        state.workspace_snapshot.as_ref().unwrap().selected_session,
-        invocation.source_session_id
-    );
-    assert!(!state.active_stream_tasks.contains_key(&target.session_id()));
+    }
+    // A new task can replace an inactive turn even when its final marker was never persisted.
+    // 即便最终标记从未持久化，新任务也能替换没有执行者的旧回合。
+    let _admission = crate::project_conversation_services::try_begin_pending_prompt_dispatch_exclusion(
+        &invocation.state, target.session_id(),
+    ).unwrap().unwrap();
+    let new_turn = loaded.submit_root_input_after_execution_ended(
+        ClientInputSubmission::new(
+            ClientActionId::try_new("new-user-task").unwrap(), "New task", vec![],
+        ), 11,
+    ).unwrap().value;
+    assert_ne!(new_turn, turn_id);
 }

@@ -65,51 +65,6 @@ impl SessionDocument {
         })
     }
 
-    /// Proves that the original human input still awaits its first business Hook preparation.
-    /// 证明原人类输入仍在等待首次业务 Hook 准备。
-    /// Requires full durable history; executed, auxiliary, stopped or uncertain owners fail explicitly.
-    /// 要求完整可靠历史；已执行、辅助、停止或效果不明的所有者明确失败。
-    pub fn main_business_initial_human_input(
-        &self,
-    ) -> Result<crate::v1::business_hook::InitialHumanBusiness, DomainError> {
-        // Common ownership checks precede the human-specific source lookup.
-        // 通用归属检查先于人类专用来源查找。
-        let preparation = self.main_business_initial_preparation()?;
-        if preparation.origin != TurnOrigin::UserRoot {
-            return Err(DomainError::CollaborationStateViolation {
-                field: "initial_business.owner",
-            });
-        }
-        // Resolve only the original event; later steering cannot replace the source.
-        // 只解析原始事件；后续方向引导不能替换来源。
-        let event = self
-            .events()
-            .iter()
-            .find(|event| {
-                event.seq == preparation.start_seq && event.turn_id == Some(preparation.turn_id)
-            })
-            .ok_or(DomainError::CollaborationStateViolation {
-                field: "initial_business.source_missing",
-            })?;
-        let EventBody::UserInput(input) = &event.event else {
-            return Err(DomainError::CollaborationStateViolation {
-                field: "initial_business.source_kind",
-            });
-        };
-        if !matches!(
-            input.input_source,
-            UserInputSource::Root | UserInputSource::QueuedScheduled
-        ) {
-            return Err(DomainError::CollaborationStateViolation {
-                field: "initial_business.input_kind",
-            });
-        }
-        Ok(crate::v1::business_hook::InitialHumanBusiness {
-            preparation,
-            input: input.clone(),
-        })
-    }
-
     /// Reports whether a business API started after `input_seq` in exactly `turn_id`.
     /// 返回精确 `turn_id` 内是否在 `input_seq` 之后启动过业务 API。
     /// Requires the caller's complete relevant history; this does not grant admission or prove completion.
@@ -126,8 +81,8 @@ impl SessionDocument {
         })
     }
 
-    /// Returns the original main-business Hook only when automatic inference recovery is safe.
-    /// 仅在自动推理恢复安全时返回原主业务 Hook。
+    /// Returns original Hook state for an independently authorized business continuation.
+    /// 为经过独立授权的业务续跑返回原 Hook 状态。
     /// Requires full durable history; stopped, auxiliary, archived and uncertain tool owners fail explicitly.
     /// 要求完整可靠历史；停止、辅助、归档及工具结果不明的所有者明确失败。
     pub fn main_business_recovery_state(&self) -> Result<BusinessHookMetadata, DomainError> {

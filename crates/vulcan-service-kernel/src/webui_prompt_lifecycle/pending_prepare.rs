@@ -508,32 +508,6 @@ pub(crate) fn queued_dispatch_authority_for_client_action(
 /// Exact durable authority consumed by one process-local Provider admission.
 /// 一次进程内 Provider 准入所消费的精确可靠权威。
 pub(super) enum ExactPendingPromptDispatch {
-    /// First preparation of a proven original human root or queued successor.
-    /// 对已证明原人类根或排队后继进行首次准备。
-    InitialHumanBusiness {
-        /// Full durable source and frontier, revalidated inside submission exclusion.
-        /// 完整可靠来源及前沿，在提交互斥内重验。
-        authority: vulcan_session_core::v1::business_hook::InitialHumanBusiness,
-        /// Target-only hydration without changing the selected UI session.
-        /// 不改变界面所选会话的目标水合。
-        workspace: WorkspaceSnapshot,
-        /// Normal user preparation adapter over the existing canonical input.
-        /// 基于已有规范输入的正常用户准备适配对象。
-        entry: PendingSessionPromptEntry,
-    },
-    /// Original main business recovered without a new message acceptance or human input.
-    /// 恢复原主业务，不创建新消息接纳或人类输入。
-    BusinessRecovery {
-        /// Original Hook and exact published revision.
-        /// 原 Hook 及精确已发布修订。
-        authority: super::business_recovery_prepare::MainBusinessRecoveryAuthority,
-        /// Target-owned workspace projection, independent of the selected UI session.
-        /// 目标所属工作区投影，独立于界面当前选择会话。
-        workspace: WorkspaceSnapshot,
-        /// Internal preparation adapter that never enters canonical human history.
-        /// 不进入规范人类历史的内部准备适配对象。
-        entry: PendingSessionPromptEntry,
-    },
     /// Accepted business guidance resumes its own original turn.
     /// 已接纳业务方向恢复其原回合。
     Collaboration {
@@ -615,8 +589,6 @@ impl ExactPendingPromptDispatch {
     fn entry(&self) -> &PendingSessionPromptEntry {
         match self {
             Self::Goal { entry, .. }
-            | Self::InitialHumanBusiness { entry, .. }
-            | Self::BusinessRecovery { entry, .. }
             | Self::Collaboration { entry, .. }
             | Self::AgentTask { entry, .. }
             | Self::Queued { entry, .. }
@@ -630,10 +602,8 @@ impl ExactPendingPromptDispatch {
     /// 不查询任何进程镜像，返回精确提示词来源。
     fn source(&self) -> PendingSessionPromptSource {
         match self {
-            Self::InitialHumanBusiness { .. } => PendingSessionPromptSource::UserFollowup,
             Self::Goal { .. } => PendingSessionPromptSource::GoalContinuation,
             Self::Collaboration { .. } => PendingSessionPromptSource::AgentContinuation,
-            Self::BusinessRecovery { .. } => PendingSessionPromptSource::AgentContinuation,
             Self::AgentTask { authority, .. } => authority.prompt_source(),
             Self::Queued { .. } | Self::Root { .. } | Self::PendingInTurn { .. } => {
                 PendingSessionPromptSource::UserFollowup
@@ -646,12 +616,10 @@ impl ExactPendingPromptDispatch {
     /// 返回持有新准入人类或代理业务回合的规范 V1 输入序号。
     fn canonical_user_input_seq(&self) -> Option<Seq> {
         match self {
-            Self::InitialHumanBusiness { authority, .. } => Some(authority.preparation.start_seq),
             Self::Queued { authority, .. } => Some(authority.input_seq),
             Self::AgentTask { authority, .. } => Some(authority.input_seq),
             Self::Root { authority, .. } => Some(authority.input_seq),
             Self::Goal { .. }
-            | Self::BusinessRecovery { .. }
             | Self::Collaboration { .. }
             | Self::SubagentReturn { .. }
             | Self::PendingInTurn { .. } => None,
@@ -926,9 +894,7 @@ pub(super) async fn prepare_webui_pending_prompt(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let workspace_snapshot = match &exact_dispatch {
-            ExactPendingPromptDispatch::AgentTask { workspace, .. }
-            | ExactPendingPromptDispatch::InitialHumanBusiness { workspace, .. }
-            | ExactPendingPromptDispatch::BusinessRecovery { workspace, .. } => workspace.clone(),
+            ExactPendingPromptDispatch::AgentTask { workspace, .. } => workspace.clone(),
             _ => guard
                 .workspace_snapshot
                 .clone()
@@ -978,10 +944,6 @@ pub(super) async fn prepare_webui_pending_prompt(
     };
     let pending_prompt_dispatch_authorization =
         pending_prompt_dispatch_guard.existing_submission_authorization(session_id)?;
-    if let ExactPendingPromptDispatch::InitialHumanBusiness { authority, .. } = &exact_dispatch {
-        let handle = registered_session_v1_handle_from_state(state, session_id)?;
-        super::initial_business_prepare::validate_initial_human_business(&handle, authority)?;
-    }
     if let Some(expected_goal_authority) = goal_authority {
         let handle = registered_session_v1_handle_from_state(state, session_id)?;
         let current_goal_authority =
@@ -1087,13 +1049,6 @@ pub(super) async fn prepare_webui_pending_prompt(
     // vmmReadiness is the service-owned prerequisite captured before this process-local admission.
     // vmmReadiness 是在本次进程内准入前捕获的服务级权威前提事实。
     let hook_owner_handle = registered_session_v1_handle_from_state(state, session_id)?;
-    if let ExactPendingPromptDispatch::BusinessRecovery { authority, .. } = &exact_dispatch {
-        super::business_recovery_prepare::restore_main_business_recovery_hook(
-            &hook_owner_handle,
-            &entry_agent_runtime,
-            authority,
-        )?;
-    }
     if let ExactPendingPromptDispatch::AgentTask { authority, .. } = &exact_dispatch {
         super::agent_task_prepare::prepare_agent_task_hook_owner(
             &hook_owner_handle,
@@ -1192,12 +1147,6 @@ pub(super) async fn prepare_webui_pending_prompt(
         )?;
         precheck_start
     } else {
-        if let ExactPendingPromptDispatch::BusinessRecovery { authority, .. } = &exact_dispatch {
-            super::business_recovery_prepare::validate_main_business_recovery(
-                &hook_owner_handle,
-                authority,
-            )?;
-        }
         if let ExactPendingPromptDispatch::AgentTask { authority, .. } = &exact_dispatch {
             let handle = registered_session_v1_handle_from_state(state, session_id)?;
             let current = agent_task_dispatch_authority_from_v1_handle(
@@ -1341,20 +1290,6 @@ pub(super) async fn prepare_webui_pending_prompt(
             prompt_turn_begin_input.existing_canonical_user_message_id =
                 Some(canonical_user_message_id);
         }
-        if let ExactPendingPromptDispatch::InitialHumanBusiness { authority, .. } = &exact_dispatch
-        {
-            // Only proven unpublished preparation may discard process-local remnants before first capture.
-            // 只有已证明尚未发布的准备，才能在首次捕获前丢弃进程内残留。
-            super::initial_business_prepare::validate_initial_human_business(
-                &hook_owner_handle,
-                authority,
-            )?;
-            entry_agent_runtime
-                .conversation_hook_runtime
-                .lock()
-                .map_err(|error| format!("Failed to lock initial business Hook runtime: {error}"))?
-                .discard_unpublished_business_preparation(&authority.preparation)?;
-        }
         // The retained submission reservation serializes this admission without holding outer locks over I/O.
         // 保留的提交预留串行化本次准入，无须跨 I/O 持有外层锁。
         let mut hook_runtime = entry_agent_runtime
@@ -1397,7 +1332,6 @@ pub(super) async fn prepare_webui_pending_prompt(
         if matches!(
             &exact_dispatch,
             ExactPendingPromptDispatch::SubagentReturn { .. }
-                | ExactPendingPromptDispatch::BusinessRecovery { .. }
                 | ExactPendingPromptDispatch::Collaboration { .. }
                 | ExactPendingPromptDispatch::AgentTask { .. }
         ) {
@@ -1421,8 +1355,6 @@ pub(super) async fn prepare_webui_pending_prompt(
     if matches!(
         &exact_dispatch,
         ExactPendingPromptDispatch::AgentTask { .. }
-            | ExactPendingPromptDispatch::InitialHumanBusiness { .. }
-            | ExactPendingPromptDispatch::BusinessRecovery { .. }
     ) {
         return finish_target_prompt_preparation(
             app,
