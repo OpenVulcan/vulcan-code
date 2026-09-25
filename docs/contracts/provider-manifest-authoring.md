@@ -484,6 +484,9 @@ Wire JSON；内部封装不是标准 Responses 请求。媒体载荷保存在请
 4. fixture 同时断言规范化统计与 provenance；
 5. 若供应商不同模型返回不同字段，分别用 Exact 规则引用不同 Profile。
 
+已取证的逐帧累计 Usage 必须声明为 `snapshot`，避免第一条统计提前冻结终态；不能把累计值声明为
+`delta` 后逐帧相加。入口与模型作用域示例见 [Step Plan 用量证据](providers/stepfun-usage-evidence.md)。
+
 `usage_profiles[].payload.derivations` 可选声明
 `total_from_input_components_and_output`。该派生只在供应商证据证明
 `uncached_input_tokens`、`cache_read_tokens`、`cache_write_tokens` 与 `output_tokens` 互不重叠时使用，

@@ -7,6 +7,147 @@ use super::{
 };
 use vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID;
 
+/// Replays the two captured Step Plan chunks through the selected manifest usage chain.
+/// 将 Step Plan 实际捕获的两帧按所选清单用量链重放，验证累计值不会提前冻结或重复相加。
+#[test]
+fn stepfun_plan_step5_cumulative_usage_does_not_freeze_on_first_chunk() {
+    // Compile the actual bundled declaration and resolve the exact observed entry/model.
+    // 编译真实随包声明，并解析本次实际观察到的入口与模型。
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    let manifest = manifests.get("stepfun").expect("StepFun must be bundled");
+    let profiles = resolve_usage_extraction_chain(
+        manifest,
+        "step-plan",
+        Some("plan-key"),
+        "step-5-preview",
+        OPENAI_CHAT_PROFILE_ID,
+        vulcan_llm_core::standard_usage_profiles(
+            vulcan_llm_core::UpstreamProtocol::OpenAiChatCompletions,
+        ),
+    )
+    .expect("the captured route must resolve its usage profiles");
+    let mut accumulator = vulcan_llm_core::UsageAccumulator::default();
+    let mut observations = 0;
+    // The fixture contains only the captured prefix; no synthetic final response is claimed.
+    // 夹具仅包含真实捕获前缀，不将合成终态冒充上游完整响应。
+    for line in include_str!("fixtures/stepfun-step5-cumulative.sse").lines() {
+        let Some(data) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        let frame: serde_json::Value =
+            serde_json::from_str(data).expect("captured frame must parse");
+        for profile in &profiles {
+            if let Some(observation) = profile
+                .extract(vulcan_llm_core::UsageRecordKind::SseEvent, &frame)
+                .expect("captured usage fields must parse")
+            {
+                accumulator
+                    .apply(None, observation)
+                    .expect("cumulative chunk must not conflict with an earlier final usage");
+                observations += 1;
+            }
+        }
+    }
+    assert_eq!(
+        observations, 2,
+        "each captured chunk must match exactly one usage profile"
+    );
+    for (actual, expected) in [
+        (accumulator.usage().input_tokens, 22862),
+        (accumulator.usage().output_tokens, 1),
+        (accumulator.usage().total_tokens, 22863),
+        (accumulator.usage().cache_read_tokens, 0),
+        (accumulator.usage().reasoning_tokens, 0),
+    ] {
+        assert_eq!(
+            actual,
+            vulcan_ai_contract::UsageValue::Known {
+                value: expected,
+                source: vulcan_ai_contract::UsageValueSource::Reported,
+            }
+        );
+    }
+    assert_eq!(
+        accumulator
+            .source_paths()
+            .get(&vulcan_llm_core::UsageField::TotalTokens)
+            .map(String::as_str),
+        Some("/usage/total_tokens")
+    );
+    assert!(
+        !accumulator.is_final(),
+        "an unfinished stream must remain a cumulative snapshot"
+    );
+    assert!(accumulator.validation_flags().is_empty());
+}
+
+/// Keeps the cumulative exception within the captured entry/model and preserves JSON final usage.
+/// 将累计统计特例限制在已捕获的入口与模型，并保留非流式 JSON 的最终用量语义。
+#[test]
+fn stepfun_cumulative_profile_is_limited_to_observed_route() {
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    let manifest = manifests.get("stepfun").expect("StepFun must be bundled");
+    let standard = vulcan_llm_core::standard_usage_profiles(
+        vulcan_llm_core::UpstreamProtocol::OpenAiChatCompletions,
+    );
+    let standard_body = standard
+        .iter()
+        .find(|profile| profile.record_kind == vulcan_llm_core::UsageRecordKind::JsonBody)
+        .expect("standard Chat must define JSON-body usage");
+    // Different regions/products and sibling models do not inherit unverified wire facts.
+    // 其他地区、产品及同系列模型不继承未经验证的线路事实。
+    for (entry, credential) in [
+        ("official-api", "api-key"),
+        ("step-plan", "plan-key"),
+        ("international-api", "api-key"),
+        ("international-step-plan", "plan-key"),
+    ] {
+        for model in [
+            "step-3.7-flash",
+            "step-3.5-flash-2603",
+            "step-3.5-flash",
+            "step-5-preview",
+        ] {
+            let profiles = resolve_usage_extraction_chain(
+                manifest,
+                entry,
+                Some(credential),
+                model,
+                OPENAI_CHAT_PROFILE_ID,
+                standard.clone(),
+            )
+            .expect("declared StepFun route must resolve");
+            if entry != "step-plan" || model != "step-5-preview" {
+                assert_eq!(
+                    profiles, standard,
+                    "unexpected usage override for {entry}/{model}"
+                );
+                continue;
+            }
+            let body = profiles
+                .iter()
+                .find(|profile| profile.record_kind == vulcan_llm_core::UsageRecordKind::JsonBody)
+                .expect("the captured route must retain non-streaming usage");
+            assert_eq!(body.update_kind, vulcan_ai_contract::UsageUpdateKind::Final);
+            assert_eq!(body.bindings, standard_body.bindings);
+            assert_eq!(body.derivations, standard_body.derivations);
+            let stream = profiles
+                .iter()
+                .find(|profile| profile.record_kind == vulcan_llm_core::UsageRecordKind::SseEvent)
+                .expect("the captured route must declare streaming usage");
+            assert_eq!(
+                stream.update_kind,
+                vulcan_ai_contract::UsageUpdateKind::Snapshot
+            );
+            assert_eq!(
+                profiles.len(),
+                2,
+                "the route must not also apply the standard final SSE profile"
+            );
+        }
+    }
+}
+
 /// Verifies provider-wide and model-specific resource constraints merge into frozen routes.
 /// 验证供应商通用与模型专属资源约束会合并到冻结路由。
 #[test]
