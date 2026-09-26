@@ -1,6 +1,11 @@
 //! Core service kernel used by Vulcan Code WebUI hosts.
 //! Vulcan Code WebUI 宿主使用的核心服务内核。
 
+// The real media integration fixtures exceed rustc's default type-query depth in test builds.
+// 真实媒体集成夹具在测试构建中超过 rustc 默认类型查询深度。
+// Keep this compiler-only bound test-scoped; production recursion and lint policy stay unchanged.
+// 将此编译器边界限定于测试；生产递归与 lint 策略保持不变。
+#![cfg_attr(test, recursion_limit = "256")]
 #![expect(
     clippy::too_many_arguments,
     reason = "service-kernel WebUI boundary functions still pass explicit runtime handles while the shared service context object is being designed as a separate architectural refactor"
