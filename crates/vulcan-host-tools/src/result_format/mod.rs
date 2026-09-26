@@ -376,38 +376,33 @@ fn truncate_content_at_line_boundary(
     budget: &EffectiveBudgetScope,
 ) -> Option<String> {
     let normalized = normalize_text(content);
-    let source_lines = split_lines(&normalized);
-    if source_lines.is_empty() {
+    if normalized.is_empty() {
         return Some(String::new());
     }
-
-    let mut accepted_lines = Vec::new();
+    let max_bytes = usize::try_from(budget.bytes).unwrap_or(usize::MAX);
     let max_lines = if budget.lines > 0 {
-        budget.lines as usize
+        usize::try_from(budget.lines).unwrap_or(usize::MAX)
     } else {
         usize::MAX
     };
-
-    for line in source_lines {
-        if accepted_lines.len() >= max_lines {
+    let mut accepted_lines = 0usize;
+    let mut accepted_bytes = 0usize;
+    for line in normalized.split('\n') {
+        if accepted_lines >= max_lines {
             break;
         }
-        let candidate = join_lines_with_trailing_newline(&accepted_lines, &line);
-        if candidate.len() > budget.bytes as usize {
-            return if accepted_lines.is_empty() {
-                None
-            } else {
-                Some(accepted_lines.join("\n"))
-            };
+        let next_bytes = accepted_bytes
+            .checked_add(usize::from(accepted_lines > 0))?
+            .checked_add(line.len())?;
+        if next_bytes > max_bytes {
+            break;
         }
-        accepted_lines.push(line);
+        accepted_lines += 1;
+        accepted_bytes = next_bytes;
     }
-
-    if accepted_lines.is_empty() {
-        None
-    } else {
-        Some(accepted_lines.join("\n"))
-    }
+    // The accepted prefix ends on a UTF-8 line boundary and is copied exactly once.
+    // 已接受前缀位于 UTF-8 行边界，最终只复制一次。
+    (accepted_lines > 0).then(|| normalized[..accepted_bytes].to_string())
 }
 
 /// Build a safe page-mode chunk plan and reject any source line that already exceeds the file-read budget.
@@ -554,33 +549,70 @@ fn normalize_text(content: &str) -> String {
     content.replace("\r\n", "\n")
 }
 
-/// Split text into lines while keeping empty input as an empty list.
-/// 按行拆分文本，同时把空输入保持为空列表。
-fn split_lines(content: &str) -> Vec<String> {
-    let normalized = normalize_text(content);
-    if normalized.is_empty() {
+/// Borrows already-normalized lines, preserving the existing empty-input and trailing-line rules.
+/// 借用已规范化的行，保留既有空输入与末尾空行规则。
+fn split_lines(content: &str) -> Vec<&str> {
+    if content.is_empty() {
         Vec::new()
     } else {
-        normalized
-            .split('\n')
-            .map(|line| line.to_string())
-            .collect()
-    }
-}
-
-/// Build the candidate body after appending the next line for strict line-boundary checks.
-/// 在严格的按行边界检查中，构建追加下一行后的候选正文。
-fn join_lines_with_trailing_newline(existing_lines: &[String], next_line: &str) -> String {
-    if existing_lines.is_empty() {
-        next_line.to_string()
-    } else {
-        format!("{}\n{}", existing_lines.join("\n"), next_line)
+        content.split('\n').collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Linear truncation preserves byte, line, Unicode and CRLF boundary behavior.
+    /// 线性截断保留字节、行数、Unicode 及 CRLF 边界行为。
+    #[test]
+    fn truncation_preserves_exact_boundary_semantics() {
+        for source in ["", "a", "a\n", "\n\n", "a\r\nb", "中文\ntext", "a\rb"] {
+            let normalized = source.replace("\r\n", "\n");
+            for bytes in 0..32 {
+                for lines in [-1, 0, 1, 2, 3] {
+                    let budget = EffectiveBudgetScope { bytes, lines };
+                    let expected = if normalized.is_empty() {
+                        Some(String::new())
+                    } else {
+                        let mut accepted = Vec::new();
+                        for line in normalized.split('\n') {
+                            if lines > 0 && accepted.len() >= lines as usize {
+                                break;
+                            }
+                            let mut candidate = accepted.clone();
+                            candidate.push(line);
+                            if candidate.join("\n").len() > bytes as usize {
+                                break;
+                            }
+                            accepted.push(line);
+                        }
+                        (!accepted.is_empty()).then(|| accepted.join("\n"))
+                    };
+                    assert_eq!(
+                        truncate_content_at_line_boundary(source, &budget),
+                        expected,
+                        "source={source:?}; bytes={bytes}; lines={lines}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Many short lines require only one accepted-prefix copy, not a growing join per line.
+    /// 大量短行只需复制一次已接受前缀，不逐行拼接增长中的正文。
+    #[test]
+    fn truncation_handles_many_short_lines() {
+        let content = "x\n".repeat(100_000);
+        let budget = EffectiveBudgetScope {
+            bytes: 100_001,
+            lines: -1,
+        };
+        let rendered =
+            truncate_content_at_line_boundary(&content, &budget).expect("accepted prefix");
+        assert_eq!(rendered.len(), 100_001);
+        assert!(content.starts_with(&rendered));
+    }
 
     /// Concurrent renders retain distinct, immutable output files independent of wall-clock time.
     /// 并发渲染保留互不相同且内容不变的输出文件，不依赖墙上时钟。
