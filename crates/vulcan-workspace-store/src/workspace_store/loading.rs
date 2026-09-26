@@ -4,46 +4,14 @@ const DEFAULT_WORKSPACE_PROJECT_NAME: &str = "VulcanProject";
 const DEFAULT_WORKSPACE_PROJECT_DIRECTORY: &str = "vulcan_project";
 const DEFAULT_WORKSPACE_PROJECT_ID_PREFIX: &str = "vulcanproject";
 
-/// Loads or seeds the full workspace snapshot used by runtime startup.
-/// 加载或初始化运行时启动使用的完整工作区快照。
-///
-/// # Parameters
-/// 参数
-/// `host_runtime` provides access to the host-owned runtime data paths and in-process storage services.
-/// `host_runtime` 提供宿主持有的运行时数据路径与进程内存储服务访问能力。
-///
-/// # Returns
-/// 返回值
-/// Returns the hydrated workspace snapshot, or a descriptive storage error.
-/// 返回已水合的工作区快照，或描述性的存储错误。
-pub async fn load_or_seed_workspace(
-    host_runtime: HostRuntimeHandle,
-) -> Result<WorkspaceSnapshot, String> {
-    load_workspace_snapshot(host_runtime).await
-}
-
-/// Loads the persisted workspace index without eagerly hydrating every session runtime state.
-/// 加载持久化工作区索引，但不急切水合每个会话运行态。
+/// Loads or seeds only the project/session index used during startup.
+/// 启动时仅加载或播种项目与会话索引。
+/// Session history and runtime state require an explicit session-storage load.
+/// 会话历史及运行态必须通过显式会话存储入口加载。
 pub async fn load_or_seed_workspace_index(
     host_runtime: HostRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
     load_workspace_index_snapshot(host_runtime).await
-}
-
-/// Loads the current persisted workspace snapshot from the project rows and V1 session index.
-/// 从项目记录与 V1 会话索引加载当前持久化工作台快照。
-pub async fn load_workspace_snapshot(
-    host_runtime: HostRuntimeHandle,
-) -> Result<WorkspaceSnapshot, String> {
-    load_workspace_snapshot_with_runtime_state(host_runtime, true).await
-}
-
-/// Loads the current persisted workspace index without full per-session runtime state.
-/// 加载当前持久化工作区索引，不包含每个会话的完整运行态。
-pub async fn load_workspace_index_snapshot(
-    host_runtime: HostRuntimeHandle,
-) -> Result<WorkspaceSnapshot, String> {
-    load_workspace_snapshot_with_runtime_state(host_runtime, false).await
 }
 
 /// Validated project row used by deterministic workspace loading and default-project decisions.
@@ -354,11 +322,12 @@ fn descending_session_updated_at_key(
     )
 }
 
-/// Loads the current persisted workspace snapshot with an optional runtime-state pass.
-/// 按可选运行态加载过程读取当前持久化工作区快照。
-async fn load_workspace_snapshot_with_runtime_state(
+/// Loads the persisted workspace index without hydrating session history or runtime state.
+/// 加载持久化工作区索引，不水合会话历史或运行态。
+/// Full and tail-only session loads remain explicit `session_v1_store` operations.
+/// 会话完整加载与尾段加载仍是显式 `session_v1_store` 操作。
+pub async fn load_workspace_index_snapshot(
     host_runtime: HostRuntimeHandle,
-    _load_runtime_state: bool,
 ) -> Result<WorkspaceSnapshot, String> {
     // project_rows are validated before their archive flags are allowed to trigger default seeding.
     // project_rows 在其归档标记获准触发默认播种前完成验证。
