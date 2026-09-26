@@ -699,6 +699,38 @@ fn sse_frame_data(frame: &[u8]) -> Result<Option<String>, String> {
     Ok(Some(lines.join("\n")))
 }
 
+/// Rejects encoded inputs whose padded decoded size exceeds the selected bound before allocation.
+/// 在分配前拒绝填充后解码长度超过所选限制的编码输入。
+fn validate_base64_decoded_size(encoded: &str, maximum: u64) -> Result<(), String> {
+    let length = encoded.len();
+    if length == 0 || length % 4 != 0 {
+        return Err(String::from(
+            "Provider multipart Data URL must contain non-empty padded base64.",
+        ));
+    }
+    let padding = encoded
+        .as_bytes()
+        .iter()
+        .rev()
+        .take(3)
+        .take_while(|byte| **byte == b'=')
+        .count();
+    if padding > 2 {
+        return Err(String::from(
+            "Provider multipart Data URL contains invalid base64 padding.",
+        ));
+    }
+    let decoded = (length / 4)
+        .checked_mul(3)
+        .and_then(|size| size.checked_sub(padding));
+    if decoded.is_none_or(|size| size as u64 > maximum) {
+        return Err(format!(
+            "Provider multipart file exceeds the {maximum} decoded byte limit."
+        ));
+    }
+    Ok(())
+}
+
 /// Decodes one bounded base64 Data URL for a multipart file part.
 /// 解码一个用于 Multipart 文件部分的有界 Base64 Data URL。
 fn decode_bounded_multipart_data_url(data_url: &str) -> Result<(String, Vec<u8>), String> {
@@ -716,6 +748,7 @@ fn decode_bounded_multipart_data_url(data_url: &str) -> Result<(String, Vec<u8>)
             "Provider multipart Data URL omitted its MIME type.",
         ));
     }
+    validate_base64_decoded_size(encoded, GENERIC_RESOURCE_BYTE_LIMIT)?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|error| format!("Provider multipart Data URL is invalid base64: {error}"))?;
@@ -3818,6 +3851,26 @@ fn format_structured_provider_error(label: &str, status: Option<u16>, body: &Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Length admission handles all padding widths without decoding oversized data.
+    /// 长度准入覆盖所有填充宽度，且不解码超限数据。
+    #[test]
+    fn multipart_base64_size_is_checked_before_decoding() {
+        for (encoded, bytes) in [("YQ==", 1), ("YWI=", 2), ("YWJj", 3)] {
+            assert!(validate_base64_decoded_size(encoded, bytes).is_ok());
+            assert!(validate_base64_decoded_size(encoded, bytes - 1).is_err());
+        }
+        assert!(validate_base64_decoded_size("", 1).is_err());
+        assert!(validate_base64_decoded_size("a===", 4).is_err());
+        assert!(validate_base64_decoded_size("YWJjYQ", 4).is_err());
+        assert_eq!(
+            decode_bounded_multipart_data_url("data:text/plain;base64,YQ==")
+                .expect("valid carrier")
+                .1,
+            b"a"
+        );
+        assert!(decode_bounded_multipart_data_url("data:text/plain;base64,!!!!").is_err());
+    }
 
     /// Reusing a validator must still reject both invalid inputs and invalid inserted defaults.
     /// 复用验证器仍必须拒绝非法输入以及物化后非法的默认值。
