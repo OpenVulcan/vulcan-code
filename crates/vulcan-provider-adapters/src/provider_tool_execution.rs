@@ -1885,7 +1885,7 @@ async fn execute_generic_json_async_batch_follow_up(
             ));
         }
     }
-    let mut output = String::new();
+    let mut urls = Vec::with_capacity(fingerprints.len());
     for fingerprint in fingerprints {
         let item = items_by_fingerprint.remove(fingerprint).ok_or_else(|| {
             String::from("Provider task batch follow-up returned an unknown or missing identity.")
@@ -1929,60 +1929,73 @@ async fn execute_generic_json_async_batch_follow_up(
             "Provider task batch follow-up URL",
             &exact_origin,
         )?;
-        let response = http.get(url).send().await.map_err(|error| {
-            format_provider_tool_transport_error("Provider task batch follow-up", error)
-        })?;
-        let status_code = response.status();
-        let body =
-            read_bounded_provider_response(response, "Provider task batch follow-up").await?;
-        if !status_code.is_success() {
-            return Err(format_http_error(
-                "Provider task batch follow-up",
-                status_code.as_u16(),
-                body.as_str(),
-            ));
-        }
-        let payload = parse_bounded_provider_json(body.as_str(), "Provider task batch follow-up")?;
-        let response_items = payload
-            .pointer(follow_up.response_items_pointer.as_str())
-            .and_then(Value::as_array)
-            .filter(|items| !items.is_empty() && items.len() <= 256)
-            .ok_or_else(|| {
-                format!(
-                    "Provider task batch follow-up is missing one through 256 response items at `{}`.",
-                    follow_up.response_items_pointer
-                )
-            })?;
-        let texts = response_items
-            .iter()
-            .map(|response_item| {
-                response_item
-                    .pointer(follow_up.response_text_pointer.as_str())
-                    .and_then(Value::as_str)
-                    .filter(|text| !text.is_empty())
-                    .map(str::to_string)
-                    .ok_or_else(|| {
-                        format!(
-                            "Provider task batch follow-up response item is missing text at `{}`.",
-                            follow_up.response_text_pointer
-                        )
-                    })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let mut fetched = String::new();
-        for text in texts {
-            append_bounded_provider_result(
-                &mut fetched,
-                &text,
-                follow_up.response_item_separator.as_str(),
-            )?;
-        }
-        append_bounded_provider_result(&mut output, &fetched, follow_up.result_separator.as_str())?;
+        urls.push(url);
     }
     if !items_by_fingerprint.is_empty() {
         return Err(String::from(
             "Provider task batch follow-up returned identities outside the recovery order.",
         ));
+    }
+    // Every identity, status and origin is validated before any follow-up request is dispatched.
+    // 在分派任何后续请求之前，先校验所有身份、状态与 Origin。
+    collect_ordered_provider_results(
+        urls.into_iter()
+            .map(|url| fetch_provider_batch_item(http, url, follow_up)),
+        follow_up.result_separator.as_str(),
+    )
+    .await
+}
+
+/// Bounds concurrent binary/JSON carriers independently of final output size.
+/// 独立于最终输出大小限制并发 JSON 载体数量。
+const PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY: usize = 4;
+
+/// Polls bounded owned requests and returns text joined in submission order, or the first observed error.
+/// 有界轮询自有请求，返回按提交顺序拼接的文本，或首个被观察到的错误。
+/// `requests` yields nonempty result texts; `separator` contributes to the aggregate byte budget.
+/// `requests` 产出非空结果文本；`separator` 计入累计字节预算。
+async fn collect_ordered_provider_results<I, F>(
+    requests: I,
+    separator: &str,
+) -> Result<String, String>
+where
+    I: IntoIterator<Item = F>,
+    F: std::future::Future<Output = Result<String, String>>,
+{
+    // Observe errors in completion order so stalled predecessors cannot hide failures.
+    // 按完成顺序观察错误，避免停滞的前序请求掩盖失败。
+    let results = futures_util::stream::iter(
+        requests
+            .into_iter()
+            .enumerate()
+            .map(|(index, request)| async move { request.await.map(|text| (index, text)) }),
+    )
+    .buffer_unordered(PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY);
+    futures_util::pin_mut!(results);
+    // Retain successful results by submission index under the aggregate output ceiling.
+    // 按提交序号保留成功结果，并统一限制累计输出上限。
+    let mut ordered = BTreeMap::new();
+    // Include separators before retaining results, even while earlier requests are pending.
+    // 即使前序请求尚未完成，也在保留结果之前计入分隔符。
+    let mut retained_bytes = 0usize;
+    while let Some(result) = results.next().await {
+        // fetch_provider_batch_item guarantees nonempty successful texts.
+        // fetch_provider_batch_item 保证成功结果文本非空。
+        let (index, text) = result?;
+        retained_bytes = retained_bytes
+            .checked_add(if ordered.is_empty() { 0 } else { separator.len() })
+            .and_then(|size| size.checked_add(text.len()))
+            .filter(|size| *size <= PROVIDER_TOOL_RESPONSE_BYTE_LIMIT)
+            .ok_or_else(|| format!(
+                "Provider task batch follow-up text exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
+            ))?;
+        ordered.insert(index, text);
+    }
+    // Assemble only successful batches in the caller's original identity order.
+    // 仅对全部成功的批次按调用方原始身份顺序组装正文。
+    let mut output = String::with_capacity(retained_bytes);
+    for text in ordered.into_values() {
+        append_bounded_provider_result(&mut output, &text, separator)?;
     }
     if output.is_empty() {
         return Err(String::from(
@@ -1990,6 +2003,62 @@ async fn execute_generic_json_async_batch_follow_up(
         ));
     }
     Ok(output)
+}
+
+/// Fetches and validates one admitted result within the caller-owned cancellation lifetime.
+/// 在调用方持有的取消生命周期内，读取并校验单份已准入结果。
+async fn fetch_provider_batch_item(
+    http: &reqwest::Client,
+    url: reqwest::Url,
+    follow_up: &crate::provider_manifest::GenericJsonAsyncBatchFollowUpDeclaration,
+) -> Result<String, String> {
+    let response = http.get(url).send().await.map_err(|error| {
+        format_provider_tool_transport_error("Provider task batch follow-up", error)
+    })?;
+    let status_code = response.status();
+    let body = read_bounded_provider_response(response, "Provider task batch follow-up").await?;
+    if !status_code.is_success() {
+        return Err(format_http_error(
+            "Provider task batch follow-up",
+            status_code.as_u16(),
+            body.as_str(),
+        ));
+    }
+    let payload = parse_bounded_provider_json(body.as_str(), "Provider task batch follow-up")?;
+    let response_items = payload
+        .pointer(follow_up.response_items_pointer.as_str())
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty() && items.len() <= 256)
+        .ok_or_else(|| {
+            format!(
+                "Provider task batch follow-up is missing one through 256 response items at `{}`.",
+                follow_up.response_items_pointer
+            )
+        })?;
+    let texts = response_items
+        .iter()
+        .map(|response_item| {
+            response_item
+                .pointer(follow_up.response_text_pointer.as_str())
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "Provider task batch follow-up response item is missing text at `{}`.",
+                        follow_up.response_text_pointer
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut fetched = String::new();
+    for text in texts {
+        append_bounded_provider_result(
+            &mut fetched,
+            &text,
+            follow_up.response_item_separator.as_str(),
+        )?;
+    }
+    Ok(fetched)
 }
 
 /// Cancels one adapter-free JSON task only through an explicitly declared endpoint and method.
@@ -3853,6 +3922,129 @@ fn format_structured_provider_error(label: &str, status: Option<u16>, body: &Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parallel collection is bounded while its output retains exact request order.
+    /// 并行结果收集受并发上限限制，输出仍保留精确请求顺序。
+    #[tokio::test]
+    async fn ordered_follow_up_collection_is_bounded_and_ordered() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct InFlight(Arc<AtomicUsize>);
+        impl Drop for InFlight {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(tokio::sync::Barrier::new(
+            PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY,
+        ));
+        let count = PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY * 2;
+        let requests = (0..count).map(|index| {
+            let active = active.clone();
+            let peak = peak.clone();
+            let barrier = barrier.clone();
+            async move {
+                let running = active.fetch_add(1, Ordering::SeqCst) + 1;
+                let _guard = InFlight(active);
+                peak.fetch_max(running, Ordering::SeqCst);
+                barrier.wait().await;
+                for _ in index..count {
+                    tokio::task::yield_now().await;
+                }
+                Ok(index.to_string())
+            }
+        });
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            collect_ordered_provider_results(requests, "|"),
+        )
+        .await
+        .expect("parallel collector cannot deadlock")
+        .expect("bounded results");
+        assert_eq!(
+            output,
+            (0..count)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join("|")
+        );
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY
+        );
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    /// A later request failure promptly drops stalled earlier siblings without detached network work.
+    /// 后续请求失败会立即释放此前停滞的同批请求，不留下脱离管理的网络工作。
+    #[tokio::test]
+    async fn failed_follow_up_collection_cancels_owned_siblings() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct InFlight(Arc<AtomicUsize>);
+        impl Drop for InFlight {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let active = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(tokio::sync::Barrier::new(
+            PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY,
+        ));
+        let requests = (0..PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY).map(|index| {
+            let active = active.clone();
+            let barrier = barrier.clone();
+            async move {
+                active.fetch_add(1, Ordering::SeqCst);
+                let _guard = InFlight(active);
+                barrier.wait().await;
+                if index == PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY - 1 {
+                    return Err("fixture failure".to_string());
+                }
+                std::future::pending::<()>().await;
+                Ok(index.to_string())
+            }
+        });
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            collect_ordered_provider_results(requests, "|"),
+        )
+        .await
+        .expect("failure must not wait for siblings")
+        .expect_err("fixture failure");
+        assert_eq!(error, "fixture failure");
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    /// Out-of-order results share the byte ceiling even when the first request never finishes.
+    /// 即使首个请求永不结束，乱序返回结果仍共享字节上限。
+    #[tokio::test]
+    async fn out_of_order_follow_up_results_enforce_aggregate_budget() {
+        // Later results exceed the budget including their separator before index zero completes.
+        // 后续结果连同分隔符在首项完成前就超过预算。
+        let requests = (0..3).map(|index| async move {
+            if index == 0 {
+                std::future::pending::<()>().await;
+            }
+            Ok("x".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT / 2))
+        });
+        // A deadline distinguishes prompt budget rejection from waiting for the stalled request.
+        // 截止时间用于区分及时拒绝超额预算与等待停滞请求。
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            collect_ordered_provider_results(requests, "|"),
+        )
+        .await
+        .expect("oversized retained results must not wait for earlier requests")
+        .expect_err("aggregate result exceeds byte budget");
+        assert!(error.contains("byte limit"), "{error}");
+    }
 
     /// Direct Value normalization preserves raw decoder results, Unicode and error envelopes.
     /// 直接 Value 归一化保留原解码结果、Unicode 与错误信封。
