@@ -502,29 +502,6 @@ impl ConversationEventTextAppendV1 {
         extended.updated_at_ms = self.updated_at_ms;
         Ok(extended)
     }
-
-    /// Concatenates a later append of the same seq onto this one.
-    /// 把同一 seq 的后续追加拼接到本追加之后。
-    fn then(&self, next: &Self) -> Result<Self, String> {
-        let expected_base = self.base_text_utf16_len + utf16_len(&self.appended_text);
-        if next.seq != self.seq || next.base_text_utf16_len != expected_base {
-            return Err(format!(
-                "text append for seq {} with base {} does not continue seq {} ending at {expected_base}",
-                next.seq.value(),
-                next.base_text_utf16_len,
-                self.seq.value()
-            ));
-        }
-        let mut appended_text = self.appended_text.clone();
-        appended_text.push_str(&next.appended_text);
-        Ok(Self {
-            seq: self.seq,
-            event_revision: next.event_revision,
-            updated_at_ms: next.updated_at_ms,
-            base_text_utf16_len: self.base_text_utf16_len,
-            appended_text,
-        })
-    }
 }
 
 /// Returns the text of a streaming assistant text or reasoning event.
@@ -713,72 +690,312 @@ impl ConversationEventLiveDeltaV1 {
         delta.text_appends = text_appends;
         Ok(delta)
     }
+}
 
-    /// Merges the volatile patch that directly follows this one into a single patch.
-    /// 把紧随本补丁的 volatile 补丁合并为一份补丁。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `next` must be volatile, belong to the same session, window generation and service epoch,
-    /// and start at this patch's revision.
-    /// `next` 必须是 volatile，属于相同会话、窗口代次与服务代次，并且从本补丁的修订号开始。
+/// A volatile live patch that later contiguous patches of the same owner extend in place.
+/// 一份 volatile 实时补丁，同一归属的后续相邻补丁在原地延长它。
+///
+/// Merging costs time proportional to the incoming patch only: streaming text grows by appending
+/// to the pending string, each text keeps a running UTF-16 length instead of being recounted, and
+/// the serialized size is maintained as a running total. The patch is materialized once, when it
+/// is sent.
+/// 合并耗时只与传入补丁成正比：流式正文通过追加到待发送字符串增长，每段正文维护累计 UTF-16
+/// 长度而不重新计数，序列化大小也以累计值维护。补丁只在发送时物化一次。
+#[derive(Debug, Clone)]
+pub struct ConversationEventLiveDeltaAccumulatorV1 {
+    /// Envelope of the patch; its `events` and `text_appends` are always empty.
+    /// 补丁外壳；其 `events` 与 `text_appends` 始终为空。
+    envelope: ConversationEventLiveDeltaV1,
+    /// Serialized bytes of `envelope`, which includes an empty `events` array.
+    /// `envelope` 的序列化字节数，其中包含一个空 `events` 数组。
+    envelope_bytes: usize,
+    /// Complete events by seq.
+    /// 按 seq 索引的完整事件。
+    events: BTreeMap<Seq, AccumulatedEvent>,
+    /// Sum of the serialized bytes of `events`.
+    /// `events` 序列化字节数之和。
+    event_bytes: usize,
+    /// Text appends by seq, disjoint from `events`.
+    /// 按 seq 索引的正文追加，与 `events` 不相交。
+    text_appends: BTreeMap<Seq, AccumulatedTextAppend>,
+    /// Sum of the serialized bytes of `text_appends`.
+    /// `text_appends` 序列化字节数之和。
+    text_append_bytes: usize,
+}
+
+/// One complete event with its cached measurements.
+/// 一条完整事件及其缓存度量。
+#[derive(Debug, Clone)]
+struct AccumulatedEvent {
+    /// The event.
+    /// 事件本身。
+    event: ConversationEventSummary,
+    /// UTF-16 length of its text when it is streaming text, else `None`.
+    /// 为流式正文时其正文的 UTF-16 长度，否则为 `None`。
+    streaming_text_utf16_len: Option<u64>,
+    /// Serialized bytes of `event`.
+    /// `event` 的序列化字节数。
+    serialized_bytes: usize,
+}
+
+/// One text append with its cached measurements.
+/// 一次正文追加及其缓存度量。
+#[derive(Debug, Clone)]
+struct AccumulatedTextAppend {
+    /// The append.
+    /// 追加本身。
+    append: ConversationEventTextAppendV1,
+    /// UTF-16 length of the text after the append.
+    /// 追加后正文的 UTF-16 长度。
+    end_text_utf16_len: u64,
+    /// Serialized bytes of `append`.
+    /// `append` 的序列化字节数。
+    serialized_bytes: usize,
+    /// Serialized bytes of `append.appended_text` without its quotes.
+    /// `append.appended_text` 去掉引号后的序列化字节数。
+    appended_text_bytes: usize,
+}
+
+impl ConversationEventLiveDeltaAccumulatorV1 {
+    /// Starts accumulating from one volatile patch.
+    /// 从一份 volatile 补丁开始累积。
     ///
     /// # Returns
     /// 返回值
-    /// Returns a patch spanning both edges whose application equals applying both in order, or
-    /// `None` when the two cannot be merged and must be sent separately.
-    /// 返回跨越两条边的补丁，其应用效果等于依次应用两者；无法合并、必须分别发送时返回 `None`。
-    pub fn merge_volatile(&self, next: &Self) -> Option<Self> {
-        let base_memory_revision = self.base_memory_revision?;
-        if self.durability != ConversationEventPatchDurabilityV1::Volatile
-            || next.durability != ConversationEventPatchDurabilityV1::Volatile
-            || next.base_memory_revision != Some(self.revision)
-            || next.batch.session_id != self.batch.session_id
-            || next.batch.window_generation != self.batch.window_generation
-            || next.service_epoch != self.service_epoch
+    /// Returns the accumulator, or hands `delta` back when it is not a well-formed volatile patch
+    /// (durable, a repeated seq, or a seq that is both an event and an append) and must be sent
+    /// as is.
+    /// 返回累积器；若 `delta` 不是形态完整的 volatile 补丁(durable、seq 重复，或同一 seq 既是
+    /// 事件又是追加)，原样交还，须按原样发送。
+    pub fn start(
+        delta: ConversationEventLiveDeltaV1,
+    ) -> Result<Self, Box<ConversationEventLiveDeltaV1>> {
+        if delta.durability != ConversationEventPatchDurabilityV1::Volatile
+            || delta.base_memory_revision.is_none()
         {
-            return None;
+            return Err(Box::new(delta));
         }
-        let mut events: BTreeMap<Seq, ConversationEventSummary> = self
-            .batch
-            .events
-            .iter()
-            .map(|event| (event.seq, event.clone()))
-            .collect();
-        let mut appends: BTreeMap<Seq, ConversationEventTextAppendV1> = self
-            .text_appends
-            .iter()
-            .map(|append| (append.seq, append.clone()))
-            .collect();
-        for event in &next.batch.events {
-            appends.remove(&event.seq);
-            events.insert(event.seq, event.clone());
-        }
-        for append in &next.text_appends {
-            if let Some(event) = events.get(&append.seq) {
-                let extended = append.apply(event).ok()?;
-                events.insert(append.seq, extended);
-            } else if let Some(previous) = appends.get(&append.seq) {
-                let joined = previous.then(append).ok()?;
-                appends.insert(append.seq, joined);
-            } else {
-                appends.insert(append.seq, append.clone());
+        let mut events = BTreeMap::new();
+        let mut event_bytes = 0;
+        for event in &delta.batch.events {
+            let serialized_bytes = serialized_len(event);
+            let accumulated = AccumulatedEvent {
+                streaming_text_utf16_len: streaming_text(&event.event).map(utf16_len),
+                serialized_bytes,
+                event: event.clone(),
+            };
+            if events.insert(event.seq, accumulated).is_some() {
+                return Err(Box::new(delta));
             }
+            event_bytes += serialized_bytes;
         }
-        Some(Self {
+        let mut text_appends = BTreeMap::new();
+        let mut text_append_bytes = 0;
+        for append in &delta.text_appends {
+            let Some(end_text_utf16_len) = append
+                .base_text_utf16_len
+                .checked_add(utf16_len(&append.appended_text))
+            else {
+                return Err(Box::new(delta));
+            };
+            let serialized_bytes = serialized_len(append);
+            let accumulated = AccumulatedTextAppend {
+                end_text_utf16_len,
+                serialized_bytes,
+                appended_text_bytes: serialized_text_len(&append.appended_text),
+                append: append.clone(),
+            };
+            if events.contains_key(&append.seq)
+                || text_appends.insert(append.seq, accumulated).is_some()
+            {
+                return Err(Box::new(delta));
+            }
+            text_append_bytes += serialized_bytes;
+        }
+        let envelope = ConversationEventLiveDeltaV1 {
             batch: ConversationEventWindowBatch {
-                session_id: self.batch.session_id.clone(),
-                window_generation: self.batch.window_generation,
-                events: events.into_values().collect(),
+                events: Vec::new(),
+                ..delta.batch
             },
-            service_epoch: self.service_epoch.clone(),
-            revision: next.revision,
-            base_memory_revision: Some(base_memory_revision),
-            base_durable_revision: None,
-            durability: ConversationEventPatchDurabilityV1::Volatile,
-            text_appends: appends.into_values().collect(),
+            text_appends: Vec::new(),
+            ..delta
+        };
+        Ok(Self {
+            envelope_bytes: serialized_len(&envelope),
+            envelope,
+            events,
+            event_bytes,
+            text_appends,
+            text_append_bytes,
         })
     }
+
+    /// Session that owns the patch.
+    /// 拥有该补丁的会话。
+    pub fn session_id(&self) -> &str {
+        &self.envelope.batch.session_id
+    }
+
+    /// Exact byte length of the JSON that `into_delta` serializes to.
+    /// `into_delta` 序列化得到的 JSON 的精确字节长度。
+    pub fn serialized_bytes(&self) -> usize {
+        let events = self.event_bytes + self.events.len().saturating_sub(1);
+        let text_appends = match self.text_appends.len() {
+            0 => 0,
+            count => TEXT_APPENDS_FIELD_BYTES + self.text_append_bytes + count - 1,
+        };
+        self.envelope_bytes + events + text_appends
+    }
+
+    /// Extends this patch in place by the patch that directly follows it.
+    /// 用紧随其后的补丁原地延长本补丁。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `next` must belong to the same session, window generation and service epoch, and start at
+    /// this patch's revision.
+    /// `next` 必须属于相同会话、窗口代次与服务代次，并从本补丁的修订号开始。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns `Ok` when this patch now spans both and applies like both in order. Otherwise
+    /// hands `next` back and leaves this patch unchanged, since every check precedes any change.
+    /// 成功时本补丁跨越两者，应用效果等同于依次应用两者。否则交还 `next` 且本补丁不变，因为
+    /// 所有检查都先于任何修改。
+    pub fn merge(&mut self, next: Self) -> Result<(), Box<Self>> {
+        if next.envelope.base_memory_revision != Some(self.envelope.revision)
+            || next.envelope.batch.session_id != self.envelope.batch.session_id
+            || next.envelope.batch.window_generation != self.envelope.batch.window_generation
+            || next.envelope.service_epoch != self.envelope.service_epoch
+        {
+            return Err(Box::new(next));
+        }
+        // `next` keeps its events and appends disjoint, so its events never move an append base.
+        // `next` 的事件与追加不相交，因此其事件不会移动追加基线。
+        let continues = next.text_appends.iter().all(|(seq, next)| {
+            let base = next.append.base_text_utf16_len;
+            match (self.events.get(seq), self.text_appends.get(seq)) {
+                (Some(event), _) => event.streaming_text_utf16_len == Some(base),
+                (None, Some(append)) => append.end_text_utf16_len == base,
+                (None, None) => true,
+            }
+        });
+        if !continues {
+            return Err(Box::new(next));
+        }
+
+        self.envelope_bytes = self.envelope_bytes + decimal_len(next.envelope.revision)
+            - decimal_len(self.envelope.revision);
+        self.envelope.revision = next.envelope.revision;
+        for (seq, event) in next.events {
+            if let Some(replaced) = self.text_appends.remove(&seq) {
+                self.text_append_bytes -= replaced.serialized_bytes;
+            }
+            self.event_bytes += event.serialized_bytes;
+            if let Some(replaced) = self.events.insert(seq, event) {
+                self.event_bytes -= replaced.serialized_bytes;
+            }
+        }
+        for (seq, next) in next.text_appends {
+            if let Some(event) = self.events.get_mut(&seq) {
+                let text = streaming_text_mut(&mut event.event.event)
+                    .expect("a validated append target is streaming text");
+                text.push_str(&next.append.appended_text);
+                event.streaming_text_utf16_len = Some(next.end_text_utf16_len);
+                let grown = event.serialized_bytes
+                    + next.appended_text_bytes
+                    + revision_fields_len(next.append.event_revision, next.append.updated_at_ms)
+                    - revision_fields_len(event.event.event_revision, event.event.updated_at_ms);
+                self.event_bytes = self.event_bytes + grown - event.serialized_bytes;
+                event.serialized_bytes = grown;
+                event.event.event_revision = next.append.event_revision;
+                event.event.updated_at_ms = next.append.updated_at_ms;
+            } else if let Some(pending) = self.text_appends.get_mut(&seq) {
+                pending
+                    .append
+                    .appended_text
+                    .push_str(&next.append.appended_text);
+                pending.end_text_utf16_len = next.end_text_utf16_len;
+                pending.appended_text_bytes += next.appended_text_bytes;
+                let grown = pending.serialized_bytes
+                    + next.appended_text_bytes
+                    + revision_fields_len(next.append.event_revision, next.append.updated_at_ms)
+                    - revision_fields_len(
+                        pending.append.event_revision,
+                        pending.append.updated_at_ms,
+                    );
+                self.text_append_bytes = self.text_append_bytes + grown - pending.serialized_bytes;
+                pending.serialized_bytes = grown;
+                pending.append.event_revision = next.append.event_revision;
+                pending.append.updated_at_ms = next.append.updated_at_ms;
+            } else {
+                self.text_append_bytes += next.serialized_bytes;
+                self.text_appends.insert(seq, next);
+            }
+        }
+        Ok(())
+    }
+
+    /// Materializes the accumulated patch.
+    /// 物化累积的补丁。
+    pub fn into_delta(self) -> ConversationEventLiveDeltaV1 {
+        let mut delta = self.envelope;
+        delta.batch.events = self.events.into_values().map(|event| event.event).collect();
+        delta.text_appends = self
+            .text_appends
+            .into_values()
+            .map(|append| append.append)
+            .collect();
+        delta
+    }
+}
+
+/// Serialized bytes of the `text_appends` field around its items: separator, key and brackets.
+/// `text_appends` 字段包裹其元素的序列化字节：分隔符、键与方括号。
+const TEXT_APPENDS_FIELD_BYTES: usize = r#","text_appends":[]"#.len();
+
+/// Counts the bytes `serde_json` writes for `value` without buffering them.
+/// 统计 `serde_json` 为 `value` 写出的字节数，不缓存这些字节。
+///
+/// A value that fails to serialize is measured up to the failure; sending it reports the error.
+/// 序列化失败的值计量到失败处为止；发送它时会报告该错误。
+fn serialized_len<T: Serialize + ?Sized>(value: &T) -> usize {
+    struct ByteCounter(usize);
+    impl std::io::Write for ByteCounter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = ByteCounter(0);
+    let _measured_up_to_any_failure = serde_json::to_writer(&mut counter, value);
+    counter.0
+}
+
+/// Serialized bytes of a JSON string without its quotes. Escaping is per character, so the
+/// length of a concatenation is the sum of the lengths of its parts.
+/// JSON 字符串去掉引号后的序列化字节数。转义按字符进行，因此拼接的长度等于各部分长度之和。
+fn serialized_text_len(text: &str) -> usize {
+    serialized_len(text).saturating_sub(2)
+}
+
+/// Serialized bytes of the `event_revision` and `updated_at_ms` values.
+/// `event_revision` 与 `updated_at_ms` 两个值的序列化字节数。
+fn revision_fields_len(event_revision: u64, updated_at_ms: i64) -> usize {
+    decimal_len(event_revision)
+        + usize::from(updated_at_ms < 0)
+        + decimal_len(updated_at_ms.unsigned_abs())
+}
+
+/// Number of decimal digits of `value`.
+/// `value` 的十进制位数。
+fn decimal_len(value: u64) -> usize {
+    value
+        .checked_ilog10()
+        .map_or(1, |digits| digits as usize + 1)
 }
 
 /// Why a reconnect request cannot be safely applied as an incremental recovery.
@@ -1543,6 +1760,23 @@ mod tests {
         }
     }
 
+    /// accumulate starts accumulating one volatile patch, asserting it is well formed.
+    /// accumulate 开始累积一份 volatile 补丁，并断言其形态完整。
+    fn accumulate(patch: &ConversationEventLiveDeltaV1) -> ConversationEventLiveDeltaAccumulatorV1 {
+        ConversationEventLiveDeltaAccumulatorV1::start(patch.clone()).expect("volatile patch")
+    }
+
+    /// assert_exact_size checks the tracked size against the serialized patch and returns it.
+    /// assert_exact_size 将跟踪的大小与序列化后的补丁比对，并返回该补丁。
+    fn assert_exact_size(
+        accumulator: &ConversationEventLiveDeltaAccumulatorV1,
+    ) -> ConversationEventLiveDeltaV1 {
+        let delta = accumulator.clone().into_delta();
+        let json = serde_json::to_string(&delta).expect("serialize merged patch");
+        assert_eq!(accumulator.serialized_bytes(), json.len(), "{json}");
+        delta
+    }
+
     /// A pure streaming extension becomes an append measured in UTF-16 code units.
     /// 纯流式延长成为以 UTF-16 码元计量的追加。
     #[test]
@@ -1716,14 +1950,15 @@ mod tests {
             for patch in &patches[..start] {
                 apply_patch(&mut prefix, patch);
             }
-            let merged =
-                patches[start + 1..]
-                    .iter()
-                    .fold(patches[start].clone(), |merged, next| {
-                        merged
-                            .merge_volatile(next)
-                            .expect("contiguous patches merge")
-                    });
+            let mut accumulator = accumulate(&patches[start]);
+            assert_exact_size(&accumulator);
+            for next in &patches[start + 1..] {
+                accumulator
+                    .merge(accumulate(next))
+                    .expect("contiguous patches merge");
+                assert_exact_size(&accumulator);
+            }
+            let merged = accumulator.into_delta();
             assert_eq!(merged.revision, 14);
             assert_eq!(merged.base_memory_revision, Some(10 + start as u64));
             apply_patch(&mut prefix, &merged);
@@ -1737,24 +1972,126 @@ mod tests {
     /// 只有同一归属与服务代次的相邻 volatile 补丁可以合并。
     #[test]
     fn merge_rejects_non_contiguous_or_foreign_patches() {
-        let first = ConversationEventLiveDeltaV1::volatile(live_batch(Vec::new()), "epoch", 1, 2)
-            .expect("first");
+        let streaming = AssistantSemanticStatus::Streaming;
+        let first = ConversationEventLiveDeltaV1::volatile_with_text_appends(
+            live_batch(Vec::new()),
+            vec![
+                ConversationEventTextAppendV1::between(
+                    &streaming_text_event(5, false, "a", streaming, 1),
+                    &streaming_text_event(5, false, "ab", streaming, 2),
+                )
+                .expect("append"),
+            ],
+            "epoch",
+            1,
+            2,
+        )
+        .expect("first");
+        let mut accumulator = accumulate(&first);
         let gap = ConversationEventLiveDeltaV1::volatile(live_batch(Vec::new()), "epoch", 3, 4)
             .expect("gap");
-        assert!(first.merge_volatile(&gap).is_none());
         let other_epoch =
             ConversationEventLiveDeltaV1::volatile(live_batch(Vec::new()), "other", 2, 3)
                 .expect("other epoch");
-        assert!(first.merge_volatile(&other_epoch).is_none());
         let mut other_generation = live_batch(Vec::new());
         other_generation.window_generation = 3;
         let other_generation =
             ConversationEventLiveDeltaV1::volatile(other_generation, "epoch", 2, 3)
                 .expect("other generation");
-        assert!(first.merge_volatile(&other_generation).is_none());
+        // A later append of seq 5 that does not start where the pending append ends.
+        // seq 5 的后续追加未从待发送追加的结尾开始。
+        let broken_chain = ConversationEventLiveDeltaV1::volatile_with_text_appends(
+            live_batch(vec![streaming_text_event(6, false, "x", streaming, 1)]),
+            vec![
+                ConversationEventTextAppendV1::between(
+                    &streaming_text_event(5, false, "abc", streaming, 2),
+                    &streaming_text_event(5, false, "abcd", streaming, 3),
+                )
+                .expect("append"),
+            ],
+            "epoch",
+            2,
+            3,
+        )
+        .expect("broken chain");
+        for rejected in [gap, other_epoch, other_generation, broken_chain] {
+            let returned = accumulator
+                .merge(accumulate(&rejected))
+                .expect_err("patch must not merge");
+            assert_eq!(returned.into_delta(), rejected);
+            // Every check precedes any change, so the pending patch is untouched.
+            // 所有检查先于任何修改，因此待发送补丁保持原样。
+            assert_eq!(assert_exact_size(&accumulator), first);
+        }
+
         let durable = ConversationEventLiveDeltaV1::durable_ack("session-append", 2, "epoch", 1, 2)
             .expect("durable");
-        assert!(first.merge_volatile(&durable).is_none());
-        assert!(durable.merge_volatile(&first).is_none());
+        let returned =
+            ConversationEventLiveDeltaAccumulatorV1::start(durable.clone()).expect_err("durable");
+        assert_eq!(*returned, durable);
+        let mut repeated = first.clone();
+        repeated.batch.events = vec![streaming_text_event(5, false, "ab", streaming, 2)];
+        assert!(ConversationEventLiveDeltaAccumulatorV1::start(repeated).is_err());
+    }
+
+    /// A long backlog of appends collapses into one append without recounting or copying text.
+    /// 长串积压追加折叠为一条追加，不重新计数也不复制正文。
+    #[test]
+    fn long_append_backlogs_merge_into_one_exactly_sized_append() {
+        const APPENDS: u64 = 20_000;
+        let streaming = AssistantSemanticStatus::Streaming;
+        // Each piece mixes a BMP character, a surrogate pair and a character JSON escapes.
+        // 每一段混合一个 BMP 字符、一个代理对与一个需要 JSON 转义的字符。
+        let piece = "字😀\"";
+        let patch = |step: u64| {
+            let before = piece.repeat(step as usize);
+            let after = piece.repeat(step as usize + 1);
+            ConversationEventLiveDeltaV1::volatile_with_text_appends(
+                live_batch(Vec::new()),
+                vec![
+                    ConversationEventTextAppendV1::between(
+                        &streaming_text_event(8, false, &before, streaming, step + 1),
+                        &streaming_text_event(8, false, &after, streaming, step + 2),
+                    )
+                    .expect("append"),
+                ],
+                "epoch",
+                step,
+                step + 1,
+            )
+            .expect("append patch")
+        };
+        let mut accumulator = accumulate(&patch(0));
+        for step in 1..APPENDS {
+            let next = ConversationEventLiveDeltaV1::volatile_with_text_appends(
+                live_batch(Vec::new()),
+                vec![ConversationEventTextAppendV1 {
+                    seq: Seq::try_new(8).expect("seq"),
+                    event_revision: step + 2,
+                    updated_at_ms: 100 + (step + 2) as i64,
+                    base_text_utf16_len: step * 4,
+                    appended_text: piece.to_string(),
+                }],
+                "epoch",
+                step,
+                step + 1,
+            )
+            .expect("append patch");
+            accumulator
+                .merge(accumulate(&next))
+                .expect("contiguous append merges");
+        }
+        let merged = assert_exact_size(&accumulator);
+        assert_eq!(merged.base_memory_revision, Some(0));
+        assert_eq!(merged.revision, APPENDS);
+        let [append] = merged.text_appends.as_slice() else {
+            panic!(
+                "expected one merged append, got {:?}",
+                merged.text_appends.len()
+            );
+        };
+        assert_eq!(append.base_text_utf16_len, 0);
+        assert_eq!(append.event_revision, APPENDS + 1);
+        assert_eq!(append.appended_text, piece.repeat(APPENDS as usize));
     }
 }

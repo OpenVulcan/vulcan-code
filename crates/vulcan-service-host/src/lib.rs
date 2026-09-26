@@ -30,7 +30,7 @@ use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use uuid::Uuid;
 use vulcan_service_api::{
-    ConversationEventLiveDeltaV1, ServiceEvent, ServiceEventSink, ServiceMediaResponse,
+    ConversationEventLiveDeltaAccumulatorV1, ServiceEvent, ServiceEventSink, ServiceMediaResponse,
     ServiceStaticResponse, ServiceStatusSnapshot, SessionResourceContentV1Request,
     WebuiServiceDiscoverySnapshot, WebuiServiceRpcHttpRequest, build_service_media_file_response,
     build_webui_static_response, service_media_error_response,
@@ -156,6 +156,19 @@ impl ServiceEventSink for WebuiServiceEventBusSink {
 /// so the browser reconnects and requests authoritative baselines.
 /// 落后达到该数量的套接字已无法逐条追平，会被关闭，使浏览器重连并请求权威基线。
 pub const WEBUI_SERVICE_EVENT_BUS_CAPACITY: usize = 256;
+
+/// Serialized bytes one event socket may hold pending send before it is closed for recovery.
+/// 单个事件套接字在被关闭以恢复之前可积压的待发送序列化字节数。
+///
+/// An empty outbox always admits one event, so a single large event cannot cause a reconnect loop.
+/// 空的待发送队列总会接纳一个事件，因此单个大事件不会造成重连循环。
+const WEBUI_SERVICE_EVENT_OUTBOX_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Serialized bytes a merged conversation delta may grow to; a delta that would push it past this
+/// size queues as the next pending delta instead, so no single message grows without bound.
+/// 合并后的会话增量可增长到的序列化字节数；会使其超出该大小的增量改为作为下一条待发送增量
+/// 排队，因此单条消息不会无界增长。
+const WEBUI_SERVICE_EVENT_MERGED_DELTA_MAX_BYTES: usize = 256 * 1024;
 
 /// Builds a service event sink backed by one browser WebSocket broadcast bus.
 /// 基于单个浏览器 WebSocket 广播总线构建服务事件接收器。
@@ -1235,12 +1248,54 @@ fn webui_service_request_token_is_valid(
 struct WebuiServiceEventOutbox {
     /// Pending events in delivery order.
     /// 按交付顺序排列的待发送事件。
-    events: VecDeque<ServiceEvent>,
+    entries: VecDeque<WebuiServiceEventOutboxEntry>,
+    /// Serialized bytes of `entries`, measured by payload for conversation deltas.
+    /// `entries` 的序列化字节数，会话增量按其载荷计量。
+    bytes: usize,
+}
+
+/// One pending event of an event socket.
+/// 事件套接字的一条待发送事件。
+enum WebuiServiceEventOutboxEntry {
+    /// A volatile conversation delta that later deltas of its session extend in place.
+    /// 一条 volatile 会话增量，其会话的后续增量在原地延长它。
+    ConversationDelta(ConversationEventLiveDeltaAccumulatorV1),
+    /// Any other event, serialized on arrival. `conversation_session` names the session of a
+    /// conversation delta that cannot be extended, which deltas of other sessions may pass over.
+    /// 其他任意事件，到达时即序列化。`conversation_session` 指明不可延长的会话增量所属会话，
+    /// 其他会话的增量可以越过它。
+    Serialized {
+        json: String,
+        conversation_session: Option<String>,
+    },
+}
+
+impl WebuiServiceEventOutboxEntry {
+    /// Bytes this entry counts toward the outbox bound.
+    /// 该条目计入待发送队列上限的字节数。
+    fn bytes(&self) -> usize {
+        match self {
+            Self::ConversationDelta(delta) => delta.serialized_bytes(),
+            Self::Serialized { json, .. } => json.len(),
+        }
+    }
+}
+
+/// An outbox that cannot take another event; the socket must close so the browser recovers.
+/// 无法再接纳事件的待发送队列；套接字必须关闭，使浏览器恢复。
+#[derive(Debug, PartialEq, Eq)]
+struct WebuiServiceEventOutboxFull {
+    /// Pending events when the bound was reached.
+    /// 达到上限时的待发送事件数。
+    events: usize,
+    /// Pending bytes when the bound was reached.
+    /// 达到上限时的待发送字节数。
+    bytes: usize,
 }
 
 impl WebuiServiceEventOutbox {
-    /// Queues one event, merging a volatile conversation delta into the pending one it extends.
-    /// 入队一个事件；volatile 会话增量会合并进其所延续的待发送增量。
+    /// Queues one event, extending the pending delta it continues when it is a volatile delta.
+    /// 入队一个事件；若为 volatile 增量，则延长其所延续的待发送增量。
     ///
     /// # Parameters
     /// 参数
@@ -1249,49 +1304,115 @@ impl WebuiServiceEventOutbox {
     ///
     /// # Returns
     /// 返回值
-    /// Returns `Err` with the pending count when the outbox is full and the socket must close.
-    /// 队列已满、套接字必须关闭时返回携带待发送数量的 `Err`。
-    fn push(&mut self, event: ServiceEvent) -> Result<(), usize> {
-        if let ServiceEvent::ConversationEventDeltaV1(next) = &event
-            && self.merge_conversation_delta(next)
-        {
-            return Ok(());
+    /// Returns `Err` when the event count or byte bound is reached and the socket must close.
+    /// Events that fail to serialize are logged and skipped.
+    /// 达到事件数或字节数上限、套接字必须关闭时返回 `Err`。序列化失败的事件记录日志后跳过。
+    fn push(&mut self, event: ServiceEvent) -> Result<(), WebuiServiceEventOutboxFull> {
+        let event = match event {
+            ServiceEvent::ConversationEventDeltaV1(delta) => {
+                match ConversationEventLiveDeltaAccumulatorV1::start(*delta) {
+                    Ok(delta) => return self.push_conversation_delta(delta),
+                    Err(delta) => ServiceEvent::ConversationEventDeltaV1(delta),
+                }
+            }
+            event => event,
+        };
+        let conversation_session = match &event {
+            ServiceEvent::ConversationEventDeltaV1(delta) => Some(delta.batch.session_id.clone()),
+            _ => None,
+        };
+        match serde_json::to_string(&event) {
+            Ok(json) => self.push_entry(WebuiServiceEventOutboxEntry::Serialized {
+                json,
+                conversation_session,
+            }),
+            Err(error) => {
+                eprintln!("[service-host] failed to serialize browser service event: {error}");
+                Ok(())
+            }
         }
-        if self.events.len() >= WEBUI_SERVICE_EVENT_BUS_CAPACITY {
-            return Err(self.events.len());
+    }
+
+    /// Extends the newest pending delta of the session with `next`, or queues `next` after it.
+    /// 用 `next` 延长该会话最新的待发送增量，或把 `next` 排在其后。
+    ///
+    /// Deltas of other sessions are independent and may be passed over; any other event keeps
+    /// its order relative to `next`, so the search stops there. A merge grows the pending delta
+    /// by at most the size of `next`, so the byte bound is checked against that before merging.
+    /// 其他会话的增量彼此独立，可以越过；其他任何事件都须保持与 `next` 的相对顺序，搜索在此停止。
+    /// 合并使待发送增量最多增长 `next` 的大小，因此合并前按该大小检查字节上限。
+    fn push_conversation_delta(
+        &mut self,
+        next: ConversationEventLiveDeltaAccumulatorV1,
+    ) -> Result<(), WebuiServiceEventOutboxFull> {
+        let incoming = next.serialized_bytes();
+        if !self.admits(incoming) {
+            return Err(self.full());
         }
-        self.events.push_back(event);
+        let mut target = None;
+        for entry in self.entries.iter_mut().rev() {
+            match entry {
+                WebuiServiceEventOutboxEntry::ConversationDelta(pending)
+                    if pending.session_id() == next.session_id() =>
+                {
+                    target = Some(pending);
+                    break;
+                }
+                WebuiServiceEventOutboxEntry::ConversationDelta(_) => {}
+                WebuiServiceEventOutboxEntry::Serialized {
+                    conversation_session: Some(session),
+                    ..
+                } if session != next.session_id() => {}
+                WebuiServiceEventOutboxEntry::Serialized { .. } => break,
+            }
+        }
+        let next = match target {
+            Some(pending)
+                if pending.serialized_bytes() + incoming
+                    <= WEBUI_SERVICE_EVENT_MERGED_DELTA_MAX_BYTES =>
+            {
+                let before = pending.serialized_bytes();
+                match pending.merge(next) {
+                    Ok(()) => {
+                        self.bytes = self.bytes + pending.serialized_bytes() - before;
+                        return Ok(());
+                    }
+                    Err(next) => *next,
+                }
+            }
+            _ => next,
+        };
+        self.push_entry(WebuiServiceEventOutboxEntry::ConversationDelta(next))
+    }
+
+    /// Appends one entry when both the event count and byte bounds allow it.
+    /// 在事件数与字节数上限都允许时追加一个条目。
+    fn push_entry(
+        &mut self,
+        entry: WebuiServiceEventOutboxEntry,
+    ) -> Result<(), WebuiServiceEventOutboxFull> {
+        let bytes = entry.bytes();
+        if self.entries.len() >= WEBUI_SERVICE_EVENT_BUS_CAPACITY || !self.admits(bytes) {
+            return Err(self.full());
+        }
+        self.entries.push_back(entry);
+        self.bytes += bytes;
         Ok(())
     }
 
-    /// Merges `next` into the newest pending delta of its session when they are contiguous.
-    /// 当 `next` 与其会话最新的待发送增量相邻时，将其合并进去。
-    ///
-    /// Deltas of other sessions are independent and may be passed over; any other event keeps
-    /// its order relative to `next`, so the search stops there.
-    /// 其他会话的增量彼此独立，可以越过；其他任何事件都须保持与 `next` 的相对顺序，搜索在此停止。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns whether `next` was merged and must not be queued separately.
-    /// 返回 `next` 是否已被合并、不得再单独入队。
-    fn merge_conversation_delta(&mut self, next: &ConversationEventLiveDeltaV1) -> bool {
-        for pending in self.events.iter_mut().rev() {
-            let ServiceEvent::ConversationEventDeltaV1(pending) = pending else {
-                return false;
-            };
-            if pending.batch.session_id != next.batch.session_id {
-                continue;
-            }
-            return match pending.merge_volatile(next) {
-                Some(merged) => {
-                    **pending = merged;
-                    true
-                }
-                None => false,
-            };
+    /// Reports whether `bytes` more fit, always admitting one event into an empty outbox.
+    /// 判断能否再容纳 `bytes` 字节；空的待发送队列总会接纳一个事件。
+    fn admits(&self, bytes: usize) -> bool {
+        self.entries.is_empty() || self.bytes + bytes <= WEBUI_SERVICE_EVENT_OUTBOX_MAX_BYTES
+    }
+
+    /// Describes the outbox at the moment it cannot take an event.
+    /// 描述无法接纳事件时的待发送队列。
+    fn full(&self) -> WebuiServiceEventOutboxFull {
+        WebuiServiceEventOutboxFull {
+            events: self.entries.len(),
+            bytes: self.bytes,
         }
-        false
     }
 
     /// Removes and serializes the next deliverable event.
@@ -1302,8 +1423,13 @@ impl WebuiServiceEventOutbox {
     /// Returns `None` when nothing is pending; events that fail to serialize are logged and skipped.
     /// 无待发送事件时返回 `None`；序列化失败的事件记录日志后跳过。
     fn pop_serialized(&mut self) -> Option<String> {
-        while let Some(event) = self.events.pop_front() {
-            match serde_json::to_string(&event) {
+        while let Some(entry) = self.entries.pop_front() {
+            self.bytes -= entry.bytes();
+            let delta = match entry {
+                WebuiServiceEventOutboxEntry::Serialized { json, .. } => return Some(json),
+                WebuiServiceEventOutboxEntry::ConversationDelta(delta) => delta.into_delta(),
+            };
+            match serde_json::to_string(&ServiceEvent::ConversationEventDeltaV1(Box::new(delta))) {
                 Ok(text) => return Some(text),
                 Err(error) => {
                     eprintln!("[service-host] failed to serialize browser service event: {error}");
@@ -1318,9 +1444,10 @@ impl WebuiServiceEventOutbox {
 /// 向单个浏览器 WebSocket 推送序列化后的服务事件。
 ///
 /// The bus is drained while a send is in flight, so a slow browser receives merged streaming
-/// deltas instead of lagging the bus; only an outbox full of unmergeable events closes the socket.
-/// 发送进行期间持续消费总线，因此慢速浏览器收到合并后的流式增量而不会使总线落后；只有被不可
-/// 合并事件填满的待发送队列才会关闭套接字。
+/// deltas instead of lagging the bus; only an outbox that reaches its event or byte bound closes
+/// the socket.
+/// 发送进行期间持续消费总线，因此慢速浏览器收到合并后的流式增量而不会使总线落后；只有达到事件
+/// 数或字节数上限的待发送队列才会关闭套接字。
 async fn webui_service_events_socket(
     socket: WebSocket,
     receiver: broadcast::Receiver<ServiceEvent>,
@@ -1409,11 +1536,12 @@ async fn pump_webui_service_events<Sink, Inbound>(
                 if !webui_service_event_is_visible_to_client(&event, client_id) {
                     continue;
                 }
-                if let Err(pending) = outbox.push(event) {
+                if let Err(full) = outbox.push(event) {
                     // Same recovery as a lagged bus: the browser rebuilds from authoritative baselines.
                     // 与总线落后相同的恢复方式：浏览器从权威基线重建。
                     eprintln!(
-                        "[service-host] browser event socket outbox full with {pending} events; reconnecting"
+                        "[service-host] browser event socket outbox full with {} events and {} bytes; reconnecting",
+                        full.events, full.bytes
                     );
                     break;
                 }
@@ -1967,7 +2095,7 @@ mod tests {
     /// Builds one volatile conversation delta for `session_id` covering `base..revision`.
     /// 为 `session_id` 构建一条覆盖 `base..revision` 的 volatile 会话增量。
     fn volatile_delta(session_id: &str, base: u64, revision: u64) -> ServiceEvent {
-        let delta: ConversationEventLiveDeltaV1 = serde_json::from_value(json!({
+        conversation_delta(json!({
             "session_id": session_id,
             "window_generation": 1,
             "events": [],
@@ -1976,7 +2104,34 @@ mod tests {
             "base_memory_revision": base,
             "durability": "volatile",
         }))
-        .expect("volatile delta");
+    }
+
+    /// Builds one volatile delta for session `a` whose seq 1 text grows from `text_len` by `text`.
+    /// 为会话 `a` 构建一条 volatile 增量，其 seq 1 正文从 `text_len` 处追加 `text`。
+    fn text_append_delta(base: u64, text_len: u64, text: &str) -> ServiceEvent {
+        conversation_delta(json!({
+            "session_id": "a",
+            "window_generation": 1,
+            "events": [],
+            "service_epoch": "epoch-outbox",
+            "revision": base + 1,
+            "base_memory_revision": base,
+            "durability": "volatile",
+            "text_appends": [{
+                "seq": 1,
+                "event_revision": base + 1,
+                "updated_at_ms": 1_000 + base,
+                "base_text_utf16_len": text_len,
+                "appended_text": text,
+            }],
+        }))
+    }
+
+    /// Decodes one conversation delta service event from its wire shape.
+    /// 从线上形状解码一个会话增量服务事件。
+    fn conversation_delta(value: serde_json::Value) -> ServiceEvent {
+        let delta: vulcan_service_api::ConversationEventLiveDeltaV1 =
+            serde_json::from_value(value).expect("conversation delta");
         ServiceEvent::ConversationEventDeltaV1(Box::new(delta))
     }
 
@@ -1994,18 +2149,26 @@ mod tests {
     /// 将待发送事件描述为（会话或种类、基线、修订），用于顺序断言。
     fn outbox_shape(outbox: &WebuiServiceEventOutbox) -> Vec<(String, Option<u64>, u64)> {
         outbox
-            .events
+            .entries
             .iter()
-            .map(|event| match event {
-                ServiceEvent::ConversationEventDeltaV1(delta) => (
-                    delta.batch.session_id.clone(),
-                    delta.base_memory_revision,
-                    delta.revision,
-                ),
-                ServiceEvent::PluginUiInvalidated(event) => {
-                    (String::from("plugin"), None, event.revision)
+            .map(|entry| match entry {
+                WebuiServiceEventOutboxEntry::ConversationDelta(delta) => {
+                    let delta = delta.clone().into_delta();
+                    (
+                        delta.batch.session_id,
+                        delta.base_memory_revision,
+                        delta.revision,
+                    )
                 }
-                actual => panic!("unexpected outbox event {actual:?}"),
+                WebuiServiceEventOutboxEntry::Serialized { json, .. } => {
+                    let event: serde_json::Value = serde_json::from_str(json).expect("event json");
+                    assert_eq!(event["kind"], "pluginUiInvalidated", "unexpected {json}");
+                    (
+                        String::from("plugin"),
+                        None,
+                        event["payload"]["revision"].as_u64().expect("revision"),
+                    )
+                }
             })
             .collect()
     }
@@ -2140,8 +2303,8 @@ mod tests {
         }
     }
 
-    /// Unmergeable events are bounded by the bus capacity; deltas that merge never overflow.
-    /// 不可合并事件以总线容量为上限；可合并的增量永不溢出。
+    /// Unmergeable events are bounded by the bus capacity; deltas that merge never overflow it.
+    /// 不可合并事件以总线容量为上限；可合并的增量不会使其溢出。
     #[test]
     fn outbox_bounds_unmergeable_events_by_bus_capacity() {
         let mut outbox = WebuiServiceEventOutbox::default();
@@ -2151,17 +2314,94 @@ mod tests {
                 .push(volatile_delta("a", revision, revision + 1))
                 .expect("merged delta never overflows");
         }
-        assert_eq!(outbox.events.len(), 1);
+        assert_eq!(outbox.entries.len(), 1);
         for revision in 1..WEBUI_SERVICE_EVENT_BUS_CAPACITY as u64 {
             outbox
                 .push(unmergeable_event(revision))
                 .expect("within capacity");
         }
-        assert_eq!(outbox.events.len(), WEBUI_SERVICE_EVENT_BUS_CAPACITY);
-        assert_eq!(
-            outbox.push(unmergeable_event(0)),
-            Err(WEBUI_SERVICE_EVENT_BUS_CAPACITY)
-        );
+        assert_eq!(outbox.entries.len(), WEBUI_SERVICE_EVENT_BUS_CAPACITY);
+        let full = outbox
+            .push(unmergeable_event(0))
+            .expect_err("outbox is full");
+        assert_eq!(full.events, WEBUI_SERVICE_EVENT_BUS_CAPACITY);
+        assert_eq!(full.bytes, outbox.bytes);
+    }
+
+    /// Merged deltas are split at the single-message bound and the whole backlog at the byte
+    /// bound, after which the socket must close; the queued ranges stay contiguous.
+    /// 合并增量在单条消息上限处拆分，整个积压在字节上限处截止，此后套接字必须关闭；已排队的
+    /// 区间保持相邻。
+    #[test]
+    fn outbox_bounds_merged_delta_and_pending_bytes() {
+        const CHUNK: usize = 16 * 1024;
+        let text = "x".repeat(CHUNK);
+        let mut outbox = WebuiServiceEventOutbox::default();
+        let mut queued = 0_u64;
+        let full = loop {
+            match outbox.push(text_append_delta(queued, queued * CHUNK as u64, &text)) {
+                Ok(()) => queued += 1,
+                Err(full) => break full,
+            }
+            assert!(
+                queued as usize * CHUNK <= WEBUI_SERVICE_EVENT_OUTBOX_MAX_BYTES * 2,
+                "the byte bound never stopped the backlog"
+            );
+        };
+
+        // The rejected delta, smaller than two chunks, would have crossed the byte bound.
+        // 被拒绝的增量小于两个分块，会越过字节上限；待发送队列仍在上限之内。
+        assert_eq!(full.bytes, outbox.bytes);
+        assert!(outbox.bytes <= WEBUI_SERVICE_EVENT_OUTBOX_MAX_BYTES);
+        assert!(outbox.bytes + 2 * CHUNK > WEBUI_SERVICE_EVENT_OUTBOX_MAX_BYTES);
+        assert!(outbox.entries.len() > 1, "merged deltas were never split");
+        let mut tracked = 0;
+        for entry in &outbox.entries {
+            let WebuiServiceEventOutboxEntry::ConversationDelta(delta) = entry else {
+                panic!("expected only conversation deltas");
+            };
+            assert!(delta.serialized_bytes() <= WEBUI_SERVICE_EVENT_MERGED_DELTA_MAX_BYTES);
+            tracked += delta.serialized_bytes();
+        }
+        assert_eq!(tracked, outbox.bytes);
+
+        // Delivered payloads rebuild the whole text in order, one contiguous range after another.
+        // 交付的载荷按序、逐个相邻区间重建完整正文。
+        let mut revision = 0;
+        let mut text_len = 0;
+        while let Some(json) = outbox.pop_serialized() {
+            let event: serde_json::Value = serde_json::from_str(&json).expect("event json");
+            let payload = &event["payload"];
+            assert_eq!(payload["base_memory_revision"], revision);
+            assert_eq!(payload["text_appends"][0]["base_text_utf16_len"], text_len);
+            revision = payload["revision"].as_u64().expect("revision");
+            text_len += payload["text_appends"][0]["appended_text"]
+                .as_str()
+                .expect("appended text")
+                .len() as u64;
+        }
+        assert_eq!(revision, queued);
+        assert_eq!(text_len, queued * CHUNK as u64);
+        assert_eq!(outbox.bytes, 0);
+    }
+
+    /// An empty outbox admits one event beyond the byte bound, so it cannot loop reconnecting.
+    /// 空的待发送队列会接纳一个超出字节上限的事件，因此不会陷入重连循环。
+    #[test]
+    fn outbox_admits_one_oversized_event_when_empty() {
+        let mut outbox = WebuiServiceEventOutbox::default();
+        let oversized = "x".repeat(WEBUI_SERVICE_EVENT_OUTBOX_MAX_BYTES);
+        outbox
+            .push(text_append_delta(0, 0, &oversized))
+            .expect("an empty outbox admits one event");
+        let full = outbox
+            .push(unmergeable_event(1))
+            .expect_err("nothing fits behind an oversized event");
+        assert_eq!(full.events, 1);
+        assert!(outbox.pop_serialized().is_some());
+        outbox
+            .push(unmergeable_event(1))
+            .expect("the drained outbox admits events again");
     }
 
     /// Builds a minimal test WebUI service router.
