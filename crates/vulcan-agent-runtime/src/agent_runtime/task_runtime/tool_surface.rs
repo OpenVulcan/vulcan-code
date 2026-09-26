@@ -1,6 +1,8 @@
 use super::*;
 use crate::tooling::collaboration::NativeAgentCollaborationRuntime;
 
+mod result_markdown;
+
 /// Default wait_agent timeout in milliseconds for the Vulcan core subagent tool.
 /// Vulcan 核心子代理工具的 `wait_agent` 默认等待毫秒数。
 pub(super) const WAIT_AGENT_DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -27,6 +29,9 @@ pub fn build_subagent_tool_candidates(
         build_close_agent_tool_candidate(Arc::clone(&task_runtime), collaboration_runtime),
         build_list_agents_tool_candidate(task_runtime),
     ]
+    .into_iter()
+    .map(result_markdown::conversation_candidate)
+    .collect()
 }
 
 /// Builds the model-visible non-blocking child-agent spawn tool.

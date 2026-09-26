@@ -941,8 +941,7 @@ fn managed_tool_runtime_bridge_converts_tool_failures_into_error_results() {
                 "tool_call_id": "call-error-1",
                 "tool_name": "failing_tool",
                 "status": "failed",
-                "error": "LuaSkills 工具解析失败：演示错误",
-                "arguments": { "query": "README" }
+                "error": "LuaSkills 工具解析失败：演示错误"
             }
         }))
     );
@@ -973,7 +972,13 @@ fn managed_tool_runtime_bridge_preserves_structured_tool_error_results() {
         .expect("structured tool failure should remain controller-visible");
 
     assert!(result.is_error);
-    assert!(result.model_output.contains("\"status\":\"failed\""));
+    assert!(result.model_output.starts_with("# Tool failed:"));
+    assert!(
+        result
+            .model_output
+            .contains("structured persistence failure")
+    );
+    assert!(result.model_output.contains("persist"));
     assert_eq!(
         result.host_result,
         Some(json!({
@@ -983,7 +988,6 @@ fn managed_tool_runtime_bridge_preserves_structured_tool_error_results() {
                 "tool_name": "structured_failure_tool",
                 "status": "failed",
                 "error": "structured persistence failure",
-                "arguments": {},
                 "details": {
                     "phase": "persist"
                 }

@@ -508,11 +508,48 @@ pub(crate) async fn call_rmcp_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, McpRuntimeError> {
+    call_rmcp_tool_with_audience(
+        peer,
+        error_context,
+        name,
+        args,
+        crate::McpToolResultAudience::Machine,
+    )
+    .await
+}
+
+/// Calls one MCP tool once and selects the consumer-specific result projection afterward.
+/// 仅调用 MCP 工具一次，并在完成后选择消费者对应的结果投影。
+/// Inputs retain the original request and peer; output is machine JSON or complete conversation content.
+/// 输入保留原请求及 peer；输出为机器 JSON 或完整会话内容。
+pub(crate) async fn call_rmcp_tool_with_audience(
+    peer: &Peer<RoleClient>,
+    error_context: &str,
+    name: &str,
+    args: Value,
+    audience: crate::McpToolResultAudience,
+) -> Result<Value, McpRuntimeError> {
     let params = build_rmcp_call_tool_request_params(name, args)?;
     let result = peer.call_tool(params).await.map_err(|error| {
         McpRuntimeError::transport(format!("tools/call({error_context}): {error}"))
     })?;
-    rmcp_call_tool_result_to_value(result)
+    project_rmcp_tool_result(result, audience)
+}
+
+mod conversation_result;
+
+/// Selects the existing machine contract or the explicit conversation reading contract.
+/// 选择既有机器契约或明确的会话阅读契约。
+/// Accepts a completed response and audience; returns its single final projection.
+/// 接受已完成响应与消费者；返回其唯一最终投影。
+pub(crate) fn project_rmcp_tool_result(
+    result: CallToolResult,
+    audience: crate::McpToolResultAudience,
+) -> Result<Value, McpRuntimeError> {
+    match audience {
+        crate::McpToolResultAudience::Machine => rmcp_call_tool_result_to_value(result),
+        crate::McpToolResultAudience::Conversation => conversation_result::project(result),
+    }
 }
 
 #[cfg(test)]

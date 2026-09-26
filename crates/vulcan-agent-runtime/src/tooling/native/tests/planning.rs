@@ -109,7 +109,13 @@ async fn native_goal_tools_execute_complete_v1_port_lifecycle() {
         .invoke(runtime.request(session_id, json!({})))
         .await
         .expect("empty get_goal should execute");
-    assert_eq!(empty.model_output["goal"], serde_json::Value::Null);
+    assert!(
+        empty
+            .model_output
+            .as_str()
+            .expect("Markdown")
+            .contains("No goal is set")
+    );
 
     let created = build_create_goal_tool()
         .invoke(runtime.request(
@@ -118,27 +124,55 @@ async fn native_goal_tools_execute_complete_v1_port_lifecycle() {
         ))
         .await
         .expect("create_goal should execute through V1 port");
-    assert_eq!(created.model_output["goal"]["status"], "active");
-    assert_eq!(created.model_output["goal"]["tokenBudget"], 3000);
+    assert!(
+        created
+            .model_output
+            .as_str()
+            .expect("Markdown")
+            .contains("Status: active")
+    );
+    assert!(
+        created
+            .model_output
+            .as_str()
+            .expect("Markdown")
+            .contains("Token budget: 3000")
+    );
+    assert!(created.host_result.is_none());
     let loaded = build_get_goal_tool()
         .invoke(runtime.request(session_id, json!({})))
         .await
         .expect("created get_goal should execute");
-    assert_eq!(
-        loaded.model_output["goal"]["objective"],
-        "finish native cutover"
+    assert!(
+        loaded
+            .model_output
+            .as_str()
+            .expect("Markdown")
+            .contains("finish native cutover")
     );
 
     let blocked = build_update_goal_tool()
         .invoke(runtime.request(session_id, json!({"status": "blocked"})))
         .await
         .expect("update_goal blocked should execute through V1 port");
-    assert_eq!(blocked.model_output["goal"]["status"], "blocked");
+    assert!(
+        blocked
+            .model_output
+            .as_str()
+            .expect("Markdown")
+            .contains("Status: blocked")
+    );
     let completed = build_update_goal_tool()
         .invoke(runtime.request(session_id, json!({"status": "complete"})))
         .await
         .expect("update_goal complete should execute through V1 port");
-    assert_eq!(completed.model_output["goal"]["status"], "complete");
+    assert!(
+        completed
+            .model_output
+            .as_str()
+            .expect("Markdown")
+            .contains("Status: complete")
+    );
 }
 
 /// Verifies model-owned terminal transitions reject incompatible lifecycle states.
@@ -398,15 +432,22 @@ fn completed_goal_response_reports_structured_usage_instruction() {
 
     let response = goal_response_value(Some(&goal), true);
 
-    assert_eq!(response["remainingTokens"], json!(8_766));
-    assert!(
-        response["completionBudgetReport"]
-            .as_str()
-            .is_some_and(|value| value.contains("Report final usage"))
-    );
-    assert_eq!(response["goal"]["tokensUsed"], json!(1_234));
-    assert_eq!(response["goal"]["tokenBudget"], json!(10_000));
-    assert_eq!(response["goal"]["timeUsedSeconds"], json!(56));
+    // The conversation contract is readable text; operational accounting must remain exact.
+    // 会话契约为可读文本，实际记账数值必须保持准确。
+    let body = response.as_str().expect("Markdown goal result");
+    for expected in [
+        "Remaining tokens: 8766",
+        "Report final usage",
+        "Tokens used: 1234",
+        "Token budget: 10000",
+        "Elapsed seconds: 56",
+        "Status: complete",
+    ] {
+        assert!(
+            body.contains(expected),
+            "missing goal accounting: {expected}"
+        );
+    }
 }
 
 /// Verifies AI-created goals return their stable guidance directly in the create tool result.
@@ -432,7 +473,7 @@ fn created_goal_response_includes_immediate_active_context() {
     };
 
     let response = goal_created_response_value(&goal);
-    let active_context = response["activeGoalContext"]
+    let active_context = response
         .as_str()
         .expect("create response should include active goal context");
 

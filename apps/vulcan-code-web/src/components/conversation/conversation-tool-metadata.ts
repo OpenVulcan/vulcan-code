@@ -13,6 +13,7 @@ import { formatTokenCount, formatTokenSpeedValue } from "@/lib/usage-format";
 // SUBAGENT_HOST_KIND_VALUES 列出内置子智能体编排工具会产生的全部宿主类型。
 const SUBAGENT_HOST_KIND_VALUES = [
   "subagent_task",
+  "subagent_receipt_v1",
   "subagent_message",
   "subagent_control",
   "subagent_status",

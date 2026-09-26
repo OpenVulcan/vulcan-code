@@ -3,7 +3,9 @@
 
 use super::*;
 use std::collections::BTreeSet;
-use vulcan_agent_runtime::tooling::collaboration::WAIT_AGENTS_RESULT_TOOL_ID;
+use vulcan_agent_runtime::tooling::collaboration::{
+    WAIT_AGENTS_RESULT_TOOL_ID, WAIT_RESULT_ACK_KIND,
+};
 use vulcan_session_core::v1::collaboration::{
     CollaborationChildTaskState, CollaborationState, CollaborationTaskMessageEffectKind,
 };
@@ -108,21 +110,62 @@ fn reported_work(
         {
             continue;
         }
-        let Some(text) = output.get("model_output").and_then(Value::as_str) else {
-            continue;
-        };
-        let Ok(snapshot) = serde_json::from_str::<Value>(text) else {
-            continue;
-        };
-        if let Some(reports) = snapshot.get("reports").and_then(Value::as_array) {
-            for report in reports {
-                if let Some(identity) = report_identity(report) {
-                    reported.insert(identity);
-                }
-            }
-        }
+        reported.extend(persisted_report_identities(&output));
     }
     reported
+}
+
+/// Reads versioned host acknowledgements, or the pre-Markdown historical JSON result.
+/// 读取版本化宿主确认信息，或 Markdown 迁移前的历史 JSON 结果。
+/// Takes one successful wait payload; malformed records acknowledge nothing and never inspect Markdown.
+/// 接收成功等待载荷；畸形记录不确认任何内容，绝不解析 Markdown。
+fn persisted_report_identities(output: &Value) -> BTreeSet<String> {
+    let snapshot = match output.get("host_result").filter(|host| !host.is_null()) {
+        Some(host) => {
+            if host.get("kind").and_then(Value::as_str) != Some(WAIT_RESULT_ACK_KIND) {
+                return BTreeSet::new();
+            }
+            host.get("payload").cloned()
+        }
+        None => output
+            .get("model_output")
+            .and_then(Value::as_str)
+            .and_then(|text| serde_json::from_str::<Value>(text).ok()),
+    };
+    snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.get("reports"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(report_identity)
+        .collect()
+}
+
+#[cfg(test)]
+mod acknowledgement_tests {
+    use super::*;
+
+    /// Verifies historical and new acknowledgements deduplicate identically without parsing prose.
+    /// 验证历史和新确认信息去重一致且不解析正文。
+    #[test]
+    fn persisted_wait_acknowledgements_support_markdown_and_legacy_json() {
+        let reports =
+            json!({"reports":[{"work_id":"task:a","outcome":"stopped","reason":"user_stopped"}]});
+        let old = json!({"model_output":reports.to_string(),"host_result":null});
+        let current = json!({"model_output":"# Agent wait\nStopped.","host_result":{"kind":WAIT_RESULT_ACK_KIND,"payload":reports}});
+        assert!(!persisted_report_identities(&old).is_empty());
+        assert_eq!(
+            persisted_report_identities(&old),
+            persisted_report_identities(&current)
+        );
+        let invalid = json!({"model_output":old["model_output"],"host_result":{"kind":WAIT_RESULT_ACK_KIND,"payload":{}}});
+        assert!(persisted_report_identities(&invalid).is_empty());
+        assert!(
+            persisted_report_identities(&json!({"model_output":"# Agent wait\nNo pending work."}))
+                .is_empty()
+        );
+    }
 }
 
 /// Keys one acknowledged observation by work, outcome and reason, without suppressing later changes.

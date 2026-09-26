@@ -442,7 +442,12 @@ async fn unified_wait_releases_missing_child_and_acknowledges_only_committed_rep
         .unwrap();
     dispatch.source().mutate_durable(SessionMutationAdmission::ExistingTurn, SessionFlushReason::ToolBoundary,
         |document| document.finish_tool(context.api_call_id, context.tool_call_id, ToolCompletion {
-            output: Some(ToolPayload::try_new(json!({"is_error":false,"tool_name":WAIT_AGENTS_RESULT_TOOL_ID,"model_output":first.to_string()})).unwrap()),
+            output: Some(ToolPayload::try_new(json!({"is_error":false,"tool_name":WAIT_AGENTS_RESULT_TOOL_ID,
+                "model_output":"# Agent wait\n\nMissing child abandoned.",
+                "host_result":{"kind":vulcan_agent_runtime::tooling::collaboration::WAIT_RESULT_ACK_KIND,
+                    "payload":{"format":"markdown","status":first["status"],"reports":first["reports"],
+                        "interrupted":false,"context_messages_pending":false}}
+            })).unwrap()),
             changeset: None, status: ToolCallStatus::Completed, finished_at_ms: 6, external_refs: vec![], generated_resources: vec![],
         })).unwrap();
     let dispatch = dispatch.retool(WAIT_AGENTS_RESULT_TOOL_ID).await;

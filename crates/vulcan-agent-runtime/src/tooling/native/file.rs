@@ -8,7 +8,7 @@ use super::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 use vulcan_host_tools::file_runtime::{MAX_LIST_ENTRIES, MAX_READ_LINES, execute_file};
-use vulcan_tools_manager::{VulcanToolHostResult, VulcanToolInvocationResult};
+use vulcan_tools_manager::VulcanToolInvocationResult;
 
 mod request_preview;
 
@@ -59,28 +59,7 @@ async fn execute_file_tool(
             ));
         }
     };
-    if let Some(payload) = response.change_set {
-        return Ok(VulcanToolInvocationResult {
-            model_output: response.model_output,
-            host_result: Some(VulcanToolHostResult {
-                kind: String::from("change_set"),
-                payload,
-            }),
-        });
-    }
-    // Reads already separate their sole Markdown body from content-free presentation metadata.
-    // 读取结果已将唯一 Markdown 正文与不含正文的展示元数据分离。
-    let payload = match response.read_metadata {
-        Some(metadata) => metadata,
-        None => response.model_output.clone(),
-    };
-    Ok(VulcanToolInvocationResult {
-        model_output: response.model_output,
-        host_result: Some(VulcanToolHostResult {
-            kind: String::from("file_access"),
-            payload,
-        }),
-    })
+    Ok(super::file_result::project(response))
 }
 
 /// Returns the provider-facing JSON Schema for single-path file maintenance.

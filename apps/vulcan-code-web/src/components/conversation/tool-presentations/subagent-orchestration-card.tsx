@@ -1,6 +1,7 @@
 // Subagent orchestration tool card for spawning, waiting on and messaging agents.
 // 子代理编排工具卡，覆盖创建、等待与消息往来。
 import * as React from "react";
+import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { ConversationCollaborationStatus } from "../conversation-collaboration-card";
 import { ConversationCollaborationStateContext } from "../conversation-collaboration-state";
 import { Bot, ChevronDown, ChevronRight } from "lucide-react";
@@ -184,7 +185,7 @@ function SubagentOrchestrationDetail(props: {
           <strong>{subagentWaitStatusText(presentation, t)}</strong>
         </div>
         {presentation.result ? (
-          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} />
+          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} markdown={presentation.resultFormat === "markdown"} />
         ) : null}
         {presentation.agents.length ? (
           <div className="subagent-orchestration-agent-list">
@@ -200,7 +201,7 @@ function SubagentOrchestrationDetail(props: {
     return (
       <div className="subagent-orchestration-detail">
         {presentation.result ? (
-          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} />
+          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} markdown={presentation.resultFormat === "markdown"} />
         ) : (
           <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.noResult")}</div>
         )}
@@ -212,7 +213,7 @@ function SubagentOrchestrationDetail(props: {
       <div className="subagent-orchestration-detail">
         {presentation.note ? <div className="subagent-orchestration-note">{presentation.note}</div> : null}
         {presentation.result ? (
-          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} />
+          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} markdown={presentation.resultFormat === "markdown"} />
         ) : null}
         {presentation.agents.length ? (
           <div className="subagent-orchestration-agent-list">
@@ -233,7 +234,7 @@ function SubagentOrchestrationDetail(props: {
       <div className="subagent-orchestration-detail">
         {presentation.note ? <div className="subagent-orchestration-note">{presentation.note}</div> : null}
         {presentation.result ? (
-          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} />
+          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} markdown={presentation.resultFormat === "markdown"} />
         ) : null}
         {presentation.agents.length ? (
           <div className="subagent-orchestration-agent-list">
@@ -290,7 +291,7 @@ function SubagentOrchestrationDetail(props: {
         <SubagentInlineTextLine label={t("conversation.subagent.detail.debug")} text={presentation.debugSummary} />
       ) : null}
       {resultText ? (
-        <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={resultText} />
+        <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={resultText} markdown={presentation.resultFormat === "markdown"} />
       ) : null}
       {presentation.operation === "close" || presentation.operation === "interrupt" ? (
         <>
@@ -362,8 +363,8 @@ function CollaborationToolDetail(props: {
           <strong>{presentation.deliveryMode === "queue" ? t("conversation.subagent.queue.followup") : t("conversation.subagent.queue.steering")}</strong>
         </div>
       ) : null}
-      {!isQuestion && argumentText ? <SubagentTextBlock label={t("conversation.collaboration.detail.arguments")} text={argumentText} /> : null}
-      {!isQuestion && presentation.result ? <SubagentTextBlock label={t("conversation.collaboration.detail.output")} text={presentation.result} /> : null}
+      {!isQuestion && presentation.resultFormat !== "markdown" && argumentText ? <SubagentTextBlock label={t("conversation.collaboration.detail.arguments")} text={argumentText} /> : null}
+      {!isQuestion && presentation.result ? <SubagentTextBlock label={t("conversation.collaboration.detail.output")} text={presentation.result} markdown={presentation.resultFormat === "markdown"} /> : null}
       {isQuestion && presentation.operation !== "collaboration_answer" && answerText ? <SubagentTextBlock label={t("conversation.collaboration.detail.answer")} text={answerText} /> : null}
       {!presentation.prompt && (isQuestion ? !answerText : !argumentText && !presentation.result) ? (
         <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.empty")}</div>
@@ -421,6 +422,9 @@ function SubagentInlineTextLine(props: {
 // SubagentTextBlock renders one compact prompt or result text block.
 // SubagentTextBlock 渲染一段紧凑提示词或结果文本。
 function SubagentTextBlock(props: {
+  // Uses the shared Markdown renderer only for explicitly declared readable output.
+  // 仅对显式声明的可读输出使用共享 Markdown 渲染器。
+  markdown?: boolean;
   // Block label.
   // 文本块标签。
   label: string;
@@ -431,7 +435,7 @@ function SubagentTextBlock(props: {
   return (
     <div className="subagent-orchestration-block">
       <div className="subagent-orchestration-block-label">{props.label}</div>
-      <pre className="subagent-orchestration-text">{compactSubagentText(props.text)}</pre>
+        {props.markdown ? <MarkdownMessage content={props.text} eager /> : <pre className="subagent-orchestration-text">{compactSubagentText(props.text)}</pre>}
     </div>
   );
 }
@@ -490,19 +494,19 @@ function subagentSummaryText(
     if (!presentation.agentsKnown) {
       return t("conversation.subagent.detail.templateCollection");
     }
-    if (presentation.agents.length === 0) {
+    if ((presentation.agentCount ?? presentation.agents.length) === 0) {
       return t("conversation.subagent.detail.templateCollection");
     }
-    return `${presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
+    return `${presentation.agentCount ?? presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
   }
   if (presentation.operation === "list_agents") {
     if (!presentation.agentsKnown) {
       return t("conversation.subagent.detail.statusCollection");
     }
-    if (presentation.agents.length === 0) {
+    if ((presentation.agentCount ?? presentation.agents.length) === 0) {
       return t("conversation.subagent.detail.noOpenAgents");
     }
-    return `${presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
+    return `${presentation.agentCount ?? presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
   }
   if (presentation.operation === "feedback") {
     return t("conversation.subagent.detail.openFeedback");

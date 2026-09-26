@@ -2518,7 +2518,7 @@ impl ProviderV1StreamSink {
         result: &ToolInvocationResult,
         now_ms: i64,
     ) -> Result<(), ProviderV1SinkError> {
-        let changeset = persistent_change_set_from_tool_result(result)?;
+        let (output, changeset) = persistent_tool_completion_payloads(result)?;
         let external_refs = provider_v1_external_refs_from_tool_result(result)?;
         let generated_attachments = provider_v1_generated_attachments_from_tool_result(result)?;
         let active = self
@@ -2554,9 +2554,6 @@ impl ProviderV1StreamSink {
         let tool_call_id = prepared.tool_call_id;
         let project_directory = active.project_directory.clone();
         let provider_tool_call_id = result.tool_call_id.clone();
-        let output = persistent_tool_output_from_result(result).map_err(|error| {
-            ProviderV1SinkError::Runtime(SessionRuntimeError::Domain(Box::new(error)))
-        })?;
         let durable_status = self
             .handle
             .read(|document| document.tool_status(api_call_id, tool_call_id))
@@ -2748,12 +2745,83 @@ fn persistent_change_set_from_tool_result(
     Ok(persistent_change_set_from_host_result(host_result)?)
 }
 
+/// Builds the paired durable output and changeset with exactly one authoritative diff body.
+/// 构建配对的可靠输出与变更集，仅保留一份权威差异正文。
+/// Takes the runtime result; returns validated persistence fields or an explicit contract error.
+/// 接收运行时结果，返回已校验持久化字段或明确的契约错误。
+fn persistent_tool_completion_payloads(
+    result: &ToolInvocationResult,
+) -> Result<(ToolPayload, Option<vulcan_change_set::PersistentChangeSet>), ProviderV1SinkError> {
+    // Extraction must succeed before removing the redundant host copy.
+    // 必须先成功提取，才能移除重复宿主副本。
+    let changeset = persistent_change_set_from_tool_result(result)?;
+    // Preserve every other host contract, including file-read coordinates and error facts.
+    // 保留其他所有宿主契约，包括文件读取坐标和错误事实。
+    let output = if changeset.is_some() {
+        ToolPayload::try_new(serde_json::json!({
+            "tool_call_id": result.tool_call_id,
+            "tool_name": result.tool_name,
+            "model_output": result.model_output,
+            "host_result": null,
+            "is_error": result.is_error,
+        }))
+    } else {
+        persistent_tool_output_from_result(result)
+    }
+    .map_err(|error| ProviderV1SinkError::Runtime(SessionRuntimeError::Domain(Box::new(error))))?;
+    Ok((output, changeset))
+}
+
 #[cfg(test)]
 mod tests {
     mod host_guidance;
     mod model_selection;
     mod remote_checkpoint;
     use super::*;
+
+    /// Proves the real persistence pair retains source once and leaves non-diff metadata intact.
+    /// 证明真实持久化字段对只保留一份源码，且不修改非差异元数据。
+    #[test]
+    fn tool_completion_stores_changeset_body_once() {
+        // This is the exact lifecycle shape produced by native file creation.
+        // 这是原生文件创建产出的准确生命周期结构。
+        let result = ToolInvocationResult {
+            tool_call_id: "create-file".into(),
+            tool_name: "file".into(),
+            model_output: "# File changes applied\n\ncreate: `new.txt`".into(),
+            host_result: Some(json!({"kind": "change_set", "payload": {
+                "mode": "applied", "files": [{
+                    "resource_id": "resource-new", "change": "create", "path": "new.txt",
+                    "content_mode": "full", "content": "UNIQUE_DIFF_BODY", "total_line_count": 1,
+                    "hunks": []
+                }]
+            }})),
+            is_error: false,
+        };
+        // Paired fields are precisely what finish_tool passes into the durable event.
+        // 配对字段正是 finish_tool 写入可靠事件的内容。
+        let (output, changeset) = persistent_tool_completion_payloads(&result).expect("valid pair");
+        let encoded = serde_json::to_string(&json!({"output": output, "changeset": changeset}))
+            .expect("serialize event fields");
+        assert_eq!(encoded.matches("UNIQUE_DIFF_BODY").count(), 1);
+        assert!(!encoded.contains("\"kind\":\"change_set\""));
+        // Read mapping still has a consumer and must not be removed.
+        // 读取映射仍有消费者，不得删除。
+        let read_result = ToolInvocationResult {
+            host_result: Some(json!({"kind": "file_access", "payload": {"range": {
+                "source_start_line": 5, "output_start_line": 3, "line_count": 1
+            }}})),
+            ..result
+        };
+        let (read_output, read_changeset) =
+            persistent_tool_completion_payloads(&read_result).expect("read output");
+        assert!(read_changeset.is_none());
+        assert!(
+            serde_json::to_string(&read_output)
+                .expect("read encoding")
+                .contains("source_start_line")
+        );
+    }
     use serde_json::json;
     use vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryRequest;
     use vulcan_agent_runtime::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;

@@ -216,6 +216,9 @@ export interface FileAccessItemPresentation {
 // FileAccessPresentation describes one read, list, search, or stat card without mutation semantics.
 // FileAccessPresentation 描述一张不含变更语义的读取、列表、搜索或状态卡片。
 export interface FileAccessPresentation {
+  // Shared list/stat Markdown, present only after the complete result has been loaded.
+  // 共用的列表或属性 Markdown，仅在完整结果加载后存在。
+  markdownBody?: string;
   // Independent card discriminator selected from the exact native action.
   // 根据精确原生动作选择的独立卡片判别字段。
   kind: FileAccessPresentationKind;
@@ -453,6 +456,9 @@ export interface FileChangeDiffRow {
 // AskQuestionPresentation describes one user-question tool display.
 // AskQuestionPresentation 描述一次向用户提问工具展示。
 export interface AskQuestionPresentation {
+  // Current replies share the exact model body, including redaction and post-processing.
+  // 当前回答共用精确模型正文，包括脱敏与后置处理。
+  answerMarkdown?: string;
   // Discriminator for ask/question presentation cards.
   // ask/question 展示卡片的判别字段。
   kind: "ask_question";
@@ -547,6 +553,9 @@ export type CollaborationToolArguments =
 // SubagentOrchestrationPresentation describes one inline subagent or agent-collaboration display.
 // SubagentOrchestrationPresentation 描述一条内联子代理或代理协作展示。
 export interface SubagentOrchestrationPresentation {
+  // Explicit readable-result contract; source JSON inside the body is not an envelope.
+  // 显式可读结果契约；正文中的源码 JSON 不是封套。
+  resultFormat?: "markdown";
   // Exact question identity from the ask receipt or the related tool's declared input.
   // 来自提问回执或关联工具声明输入的精确问题身份。
   questionId?: string | null;
@@ -642,6 +651,9 @@ export interface SubagentOrchestrationPresentation {
   // Whether the listed child-agent rows came from a known runtime payload.
   // 已列出的子代理状态行是否来自明确的运行时载荷。
   agentsKnown: boolean;
+  // Exact count retained when Markdown owns the complete agent list body.
+  // Markdown 持有完整智能体列表正文时保留的精确数量。
+  agentCount?: number;
   // Stopped subagent task ids from close or interrupt calls.
   // 关闭或停止调用返回的已停止任务会话标识。
   stoppedTaskIds: string[];

@@ -218,6 +218,9 @@ export function resolveV1ToolDomainPresentation(tool: ToolCallEvent, t: (key: Tr
       const artifact = hostPayload(tool.output, "plan_artifact");
       summary = textField(tool.input, "name");
       addSection(sections, t("toolDomain.plan.artifact"), object === null ? undefined : fields(object, ["name", "path", "message"]));
+      // New receipts share their Markdown while accepted plan text stays in its artifact snapshot.
+      // 新回执共享 Markdown，已接受计划正文仍由产物快照持有。
+      if (typeof result === "string") addSection(sections, t("toolDomain.plan.artifact"), result, true);
       addSection(sections, t(artifact === null ? "toolDomain.plan.pending" : "toolDomain.plan.body"), artifact === null ? tool.input.content : artifact.content, true);
       break;
     }
@@ -225,6 +228,15 @@ export function resolveV1ToolDomainPresentation(tool: ToolCallEvent, t: (key: Tr
       // question_runtime stores host kind ask, with the structured display nested under payload.display.
       // question_runtime 保存宿主类型 ask，结构化展示位于 payload.display。
       const answer = hostPayload(tool.output, "ask");
+      // Read the shared body directly, including any later credential redaction or hook transform.
+      // 直接读取共享正文，包括后续凭据脱敏或 Hook 转换。
+      if (answer?.format === "markdown") {
+        const questions = Array.isArray(tool.input.questions) ? tool.input.questions : [];
+        summary = formatMessage(t("toolDomain.ask.count"), { count: questions.length });
+        addSection(sections, t("toolDomain.ask.questions"), questions);
+        addSection(sections, t("toolDomain.ask.answered"), result, true);
+        break;
+      }
       // display owns per-question answers in the official Ask host contract.
       // display 在正式 Ask 宿主契约中持有逐题答案。
       const display = domainObject(answer?.display);

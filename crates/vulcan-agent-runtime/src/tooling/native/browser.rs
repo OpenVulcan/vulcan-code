@@ -128,9 +128,9 @@ pub(crate) fn build_browser_list_tool() -> Arc<NativeToolDefinition> {
                 let browsers = runtime.list(owner).await.map_err(|error| {
                     NativeToolError::new(format!("failed to list browsers: {error}"))
                 })?;
-                Ok(VulcanToolInvocationResult::from_model_output(json!({
-                    "browsers": browsers,
-                })))
+                Ok(VulcanToolInvocationResult::from_model_output(
+                    Value::String(browser_result_markdown(&browsers)),
+                ))
             })
         },
     )
@@ -173,9 +173,9 @@ pub(crate) fn build_browser_open_tool() -> Arc<NativeToolDefinition> {
                         .map_err(|error| {
                             NativeToolError::new(format!("failed to open browser: {error}"))
                         })?;
-                Ok(VulcanToolInvocationResult::from_model_output(json!({
-                    "browser": browser,
-                })))
+                Ok(VulcanToolInvocationResult::from_model_output(
+                    Value::String(browser_result_markdown(&[browser])),
+                ))
             })
         },
     )
@@ -245,12 +245,41 @@ where
                     .map_err(|error| {
                         NativeToolError::new(format!("browser operation failed: {error}"))
                     })?;
-                Ok(VulcanToolInvocationResult::from_model_output(json!({
-                    "browser": browser,
-                })))
+                Ok(VulcanToolInvocationResult::from_model_output(
+                    Value::String(browser_result_markdown(&[browser])),
+                ))
             })
         },
     )
+}
+
+/// Renders observed browser state with stable IDs usable by subsequent tools.
+/// 渲染已观察浏览器状态，保留后续工具可用的稳定标识。
+/// Takes authorized snapshots; returns one Markdown body without a duplicate host payload.
+/// 接收已授权快照，返回一份 Markdown 正文，不复制宿主载荷。
+fn browser_result_markdown(browsers: &[NativeBrowserSnapshot]) -> String {
+    use vulcan_tools_manager::result_markdown::inline_code;
+    // Optional URL/title values reflect observation, not inferred browser readiness.
+    // 可选地址和标题反映观察结果，不据此推断浏览器是否就绪。
+    let mut output = String::from("# Browsers\n");
+    if browsers.is_empty() {
+        output.push_str("\nNo browsers owned by this conversation.\n");
+    }
+    for browser in browsers {
+        output.push_str(&format!(
+            "\n## {}\n\nStatus: {}; selected: {}\n",
+            inline_code(&browser.browser_id),
+            inline_code(&browser.status),
+            browser.selected
+        ));
+        if let Some(title) = &browser.current_title {
+            output.push_str(&format!("\nTitle: {}\n", inline_code(title)));
+        }
+        if let Some(url) = &browser.current_url {
+            output.push_str(&format!("\nURL: {}\n", inline_code(url)));
+        }
+    }
+    output
 }
 
 /// Parses one browser argument object and turns schema violations into bounded tool errors.
@@ -429,7 +458,14 @@ mod tests {
             .invoke(request(Some(owner), json!({}), Some(runtime.clone())))
             .await
             .unwrap();
-        assert_eq!(result.model_output["browsers"][0]["browserId"], "browser-a");
+        assert!(
+            result
+                .model_output
+                .as_str()
+                .expect("Markdown")
+                .contains("browser-a")
+        );
+        assert!(result.host_result.is_none());
         open.invoke(request(
             Some(owner),
             json!({"persistentProfile": true}),

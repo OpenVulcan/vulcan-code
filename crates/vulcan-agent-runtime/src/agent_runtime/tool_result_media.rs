@@ -71,6 +71,33 @@ pub(crate) fn canonicalize_tool_model_output(value: Value) -> Result<Value, Stri
     Ok(Value::String(serialize_media_envelope(&envelope)?))
 }
 
+/// Appends a model-facing notice while preserving ordered native media and original business data.
+/// 追加面向模型的提示，同时保留有序原生媒体和原始业务数据。
+/// Accepts an upstream result and notice; returns readable text or a validated media envelope.
+/// 接收上游结果和提示，返回可读正文或已校验媒体封套。
+pub(crate) fn append_tool_result_notice(value: Value, notice: &str) -> Result<Value, String> {
+    let normalized = canonicalize_tool_model_output(value)?;
+    match normalized {
+        Value::String(text) => {
+            if let Some(mut envelope) = parse_marked_media_envelope(&text)? {
+                envelope
+                    .content
+                    .push(ToolResultMediaBlock::Text(notice.to_owned()));
+                return serialize_media_envelope(&envelope).map(Value::String);
+            }
+            Ok(Value::String(format!("{text}\n\n{notice}")))
+        }
+        business_data => {
+            let source = serde_json::to_string_pretty(&business_data)
+                .map_err(|error| format!("Could not encode the completed tool result: {error}"))?;
+            Ok(Value::String(format!(
+                "# Tool result\n\n{}\n\n{notice}",
+                vulcan_tools_manager::result_markdown::fenced_code(&source)
+            )))
+        }
+    }
+}
+
 /// Projects one durable tool-result string into provider-native tool-result content.
 /// 将一份可持久化工具结果字符串投影为 Provider 原生工具结果内容。
 ///
@@ -425,6 +452,42 @@ fn validate_image_content(data: &str, mime_type: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Proves post-processing notices preserve media order and a single copy of image bytes.
+    /// 证明后置提示保留媒体顺序和唯一一份图片字节。
+    #[test]
+    fn postprocessing_notice_preserves_native_media_and_literal_json_text() {
+        let original = mcp_media_result();
+        let marked = canonicalize_tool_model_output(original.clone()).unwrap();
+        for input in [original, marked] {
+            let result =
+                append_tool_result_notice(input, "Already completed; do not retry.").unwrap();
+            let text = result.as_str().unwrap();
+            assert_eq!(text.matches("iVBORw0KGgo=").count(), 1);
+            let projected =
+                project_tool_result_content(text, vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID)
+                    .unwrap();
+            let blocks = projected.as_array().unwrap();
+            assert!(blocks.iter().any(|block| block["type"] == "input_image"));
+            let texts: Vec<&str> = blocks
+                .iter()
+                .filter_map(|block| block["text"].as_str())
+                .collect();
+            assert_eq!(
+                texts,
+                vec![
+                    "before",
+                    "after",
+                    "Already completed; do not retry.",
+                    "{\"status\":\"ok\"}"
+                ]
+            );
+        }
+        let literal = "{\"content\":\"original-source\"}";
+        let result =
+            append_tool_result_notice(Value::String(literal.into()), "Completed.").unwrap();
+        assert_eq!(result.as_str().unwrap(), format!("{literal}\n\nCompleted."));
+    }
 
     /// Builds one small MCP result containing ordered text, image, and structured content.
     /// 构造一份包含有序文本、图片与结构化内容的小型 MCP 结果。

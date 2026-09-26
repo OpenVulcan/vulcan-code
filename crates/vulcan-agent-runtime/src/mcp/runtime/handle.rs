@@ -325,6 +325,24 @@ impl McpRuntimeHandle {
         tool_id: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        self.call_tool_by_id_for_audience(
+            tool_id,
+            args,
+            vulcan_mcp_runtime::McpToolResultAudience::Machine,
+        )
+        .await
+    }
+
+    /// Resolves the same authorized tool and selects only its final result audience.
+    /// 解析同一个授权工具，仅选择其最终结果消费者。
+    /// Inputs preserve tool identity and arguments; returns the selected projection without retries.
+    /// 输入保留工具身份与参数；返回选定投影，不重试调用。
+    pub(super) async fn call_tool_by_id_for_audience(
+        &self,
+        tool_id: &str,
+        args: serde_json::Value,
+        audience: vulcan_mcp_runtime::McpToolResultAudience,
+    ) -> Result<serde_json::Value, String> {
         let Some(descriptor) = self
             .snapshot()
             .tool_descriptors()
@@ -343,7 +361,7 @@ impl McpRuntimeHandle {
             ));
         };
         transport
-            .call_tool(descriptor.tool_name(), args)
+            .call_tool_with_audience(descriptor.tool_name(), args, audience)
             .await
             .map_err(|error| {
                 format!(

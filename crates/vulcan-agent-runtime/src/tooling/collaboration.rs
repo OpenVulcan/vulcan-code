@@ -7,6 +7,12 @@ use crate::agent_runtime::task_runtime::collaboration_lifecycle::{
 };
 use serde::{Deserialize, Serialize};
 
+mod result_markdown;
+
+/// Identifies durable wait acknowledgements independent of model-readable text.
+/// 标识独立于模型可读正文的可靠等待确认信息。
+pub const WAIT_RESULT_ACK_KIND: &str = "agent_wait_ack_v1";
+
 /// Derives the shared operation fingerprint from exact host invocation coordinates and tool name.
 /// 根据精确宿主调用坐标及工具名称派生共享操作指纹。
 /// Returns a stable identity for retries; callers must authenticate the invocation before writing.
@@ -33,8 +39,8 @@ use std::fmt;
 use std::sync::Arc;
 use vulcan_tools_manager::VulcanToolInvocationContext;
 use vulcan_tools_manager::{
-    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolInvocationResult,
-    VulcanToolOrigin, VulcanToolSourceKind,
+    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolOrigin,
+    VulcanToolSourceKind,
 };
 
 /// Maximum number of sessions or session events returned by one collaboration read.
@@ -567,7 +573,9 @@ fn build_command_candidate(
             Box::pin(async move {
                 let command = parser(arguments, tool_id)?;
                 let output = runtime.invoke(context, command).await?;
-                Ok(VulcanToolInvocationResult::from_model_output(output))
+                result_markdown::project(tool_id, output).map_err(|error| {
+                    format!("The {tool_id} operation already returned but its conversation projection failed: {error}. Do not repeat the operation automatically.")
+                })
             })
         }),
     }

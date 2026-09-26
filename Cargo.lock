@@ -9055,6 +9055,7 @@ dependencies = [
  "tokio-util",
  "vulcan-host-tools",
  "vulcan-runtime-assets",
+ "vulcan-tools-manager",
  "workspace-hack",
 ]
 

@@ -904,49 +904,38 @@ pub fn build_question_reply_markdown(
     questions: &[QuestionPrompt],
     answers: &[Vec<String>],
 ) -> String {
-    let mut lines = vec![String::from("## User Answers"), String::new()];
-
-    for (index, prompt) in questions.iter().enumerate() {
-        let rendered_answer = answers
-            .get(index)
-            .map(|answer| answer.join(", "))
-            .filter(|answer| !answer.trim().is_empty())
-            .unwrap_or_else(|| String::from("Unanswered"));
-        lines.push(format!("- {}: {}", prompt.header, rendered_answer));
-    }
-
-    lines.push(String::new());
-    lines.push(String::from("Continue with these answers."));
-    lines.join("\n")
+    build_question_reply_projection(questions, answers)
 }
 
-/// Builds a structured display payload for WebUI-only ask presentation without changing the model-facing answer text.
-/// 构建仅供WebUI展示使用的 ask 结构化载荷，同时不改变面向模型的答案文本。
-fn build_question_display_payload(questions: &[QuestionPrompt], answers: &[Vec<String>]) -> Value {
-    let display_questions = questions
-        .iter()
-        .enumerate()
-        .map(|(index, prompt)| {
-            let answer_values = answers.get(index).cloned().unwrap_or_default();
-            json!({
-                "header": prompt.header,
-                "question": prompt.question,
-                "options": prompt.options.iter().map(|option| json!({
-                    "label": option.label,
-                    "description": option.description,
-                })).collect::<Vec<_>>(),
-                "multiple": prompt.allows_multiple(),
-                "answers": answer_values,
-                "answered": !answer_values.is_empty(),
-            })
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "kind": "ask_question",
-        "title": "向用户提问",
-        "ignored_answer_text": "用户忽略回答",
-        "questions": display_questions,
-    })
+/// Produces one shared answer body from accepted prompts and ordered answers.
+/// 根据已接受题目与有序答案生成唯一共享正文。
+/// Returns Markdown consumed directly after any host redaction or post-processing.
+/// 返回经宿主脱敏或后置处理后直接消费的 Markdown。
+fn build_question_reply_projection(
+    questions: &[QuestionPrompt],
+    answers: &[Vec<String>],
+) -> String {
+    let mut body = String::from("## User Answers\n\n");
+    for (index, prompt) in questions.iter().enumerate() {
+        let prefix = format!("- {}: ", prompt.header);
+        body.push_str(&prefix);
+        if let Some(values) = answers
+            .get(index)
+            .filter(|values| values.iter().any(|value| !value.trim().is_empty()))
+        {
+            for (answer_index, answer) in values.iter().enumerate() {
+                if answer_index > 0 {
+                    body.push_str(", ");
+                }
+                body.push_str(answer);
+            }
+        } else {
+            body.push_str("Unanswered");
+        }
+        body.push('\n');
+    }
+    body.push_str("\nContinue with these answers.");
+    body
 }
 
 /// Reconstructs the exact controller-owned request facts retained by one pending Ask.
@@ -1021,19 +1010,16 @@ fn build_question_rejection_result(
 /// Builds the final tool invocation result surfaced back to the model after the user has answered every structured question.
 /// 在用户完成全部结构化问题作答后，构建回传给模型的最终工具调用结果。
 fn build_question_invocation_result(
-    tool_name: &str,
+    _tool_name: &str,
     questions: &[QuestionPrompt],
     reply: &QuestionReply,
 ) -> VulcanToolInvocationResult {
-    let output = build_question_reply_markdown(questions, &reply.answers);
+    let output = build_question_reply_projection(questions, &reply.answers);
     VulcanToolInvocationResult::from_model_output(Value::String(output)).with_host_result(
         VulcanToolHostResult {
             kind: String::from(QUESTION_TOOL_HOST_RESULT_KIND),
             payload: json!({
-                "tool_name": tool_name,
-                "headers": questions.iter().map(|question| question.header.clone()).collect::<Vec<_>>(),
-                "answers": reply.answers,
-                "display": build_question_display_payload(questions, &reply.answers),
+                "format": "markdown",
             }),
         },
     )
@@ -1043,6 +1029,65 @@ fn build_question_invocation_result(
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+
+    /// Measures the old three-copy answer envelope against the actual shared Markdown producer.
+    /// 对照旧的三份答案封套，计量实际共享 Markdown 生产者。
+    #[test]
+    fn ask_payload_cost_sample() {
+        let prompt = test_question_prompt();
+        let answer = format!("UNIQUE_ASK_BODY {}", "accepted answer ".repeat(128));
+        let reply = QuestionReply {
+            answers: vec![vec![answer.clone()]],
+        };
+        let after = build_question_invocation_result("ask", std::slice::from_ref(&prompt), &reply);
+        let before = VulcanToolInvocationResult::from_model_output(after.model_output.clone()).with_host_result(VulcanToolHostResult {
+            kind:"ask".into(), payload:json!({
+                "tool_name":"ask", "headers":[prompt.header], "answers":reply.answers,
+                "display":{"kind":"ask_question","title":"向用户提问","ignored_answer_text":"用户忽略回答",
+                    "questions":[{"header":prompt.header,"question":prompt.question,"options":[],"multiple":false,
+                        "answers":[answer],"answered":true}]}
+            })
+        });
+        crate::agent_runtime::tool_runtime_bridge::assert_result_payload_cost(
+            "ask",
+            before,
+            after,
+            "UNIQUE_ASK_BODY",
+        );
+    }
+
+    /// Verifies exact Unicode answers survive canonical serialization without storing duplicate text.
+    /// 验证精确 Unicode 答案经过规范序列化仍准确，且不保存重复正文。
+    #[test]
+    fn markdown_answers_survive_canonical_roundtrip() {
+        let prompts = vec![test_question_prompt(), test_question_prompt()];
+        let reply = QuestionReply {
+            answers: vec![
+                vec!["唯一答案🦀, one\ntwo".into(), " second ".into()],
+                vec![],
+            ],
+        };
+        let result = build_question_invocation_result("ask", &prompts, &reply);
+        let request = CoreToolInvocationRequest {
+            request_stream_id: "ask-test".into(),
+            tool_call_id: "ask-call".into(),
+            tool_name: "ask".into(),
+            arguments: test_tool_arguments(),
+            argument_parse_error: None,
+        };
+        let canonical = canonicalize_tool_invocation_result(&request, result);
+        let stored = serde_json::to_string(&canonical).expect("serialized result");
+        assert_eq!(stored.matches("唯一答案").count(), 1);
+        let restored: CoreToolInvocationResult =
+            serde_json::from_str(&stored).expect("restored result");
+        assert_eq!(
+            restored.host_result.unwrap()["payload"],
+            json!({"format":"markdown"})
+        );
+        for answer in reply.answers.iter().flatten() {
+            assert!(restored.model_output.contains(answer));
+        }
+    }
 
     /// Builds one deterministic request-stream identity for Ask runtime tests.
     /// 为 Ask 运行时测试构建一个确定性的请求流身份。

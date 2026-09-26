@@ -13,6 +13,97 @@ use vulcan_tools_manager::{
 
 use super::test_native_request_with_workspace;
 
+/// Verifies list/stat return readable results without a duplicate host file-access object.
+/// 验证列表和属性返回可读结果，不携带重复的宿主文件访问对象。
+#[tokio::test]
+async fn native_file_inspections_share_markdown_without_host_copies() {
+    // The workspace has one distinct file so all assertions locate facts rather than array positions.
+    // 工作区包含一个独特文件，使断言定位事实而非数组下标。
+    let directory = tempfile::tempdir().expect("temporary workspace");
+    std::fs::write(directory.path().join("single.txt"), "unique-body\n").expect("source");
+    for (action, path, heading) in [
+        ("list", ".", "# Files:"),
+        ("stat", "single.txt", "# File information:"),
+    ] {
+        // Each action traverses the real native adapter rather than a hand-built presentation payload.
+        // 每个操作经过真实原生适配器，而非手工构建展示载荷。
+        let result = build_file_tool()
+            .invoke(test_native_request_with_workspace(
+                json!({"action": action, "path": path}),
+                directory.path().to_path_buf(),
+            ))
+            .await
+            .expect("file inspection");
+        let body = result.model_output.as_str().expect("Markdown output");
+        assert!(body.starts_with(heading), "{body}");
+        assert!(body.contains("single.txt"), "{body}");
+        assert!(
+            result.host_result.is_none(),
+            "inspection must not retain a JSON duplicate"
+        );
+    }
+}
+
+/// Verifies mutation receipts omit source text while their host changesets still support review.
+/// 验证修改回执不包含源文本，且宿主变更集仍支持审阅。
+#[tokio::test]
+async fn native_file_mutations_keep_review_structure_and_compact_receipts() {
+    // Sequential fixtures cover exact replacement and patch output through their public adapters.
+    // 顺序夹具通过公开适配器覆盖精确替换与补丁输出。
+    let directory = tempfile::tempdir().expect("temporary workspace");
+    let cases = [
+        (
+            build_file_tool(),
+            json!({"action": "write", "path": "edit.txt", "content": "first-unique-source\n"}),
+        ),
+        (
+            build_file_edit_tool(),
+            json!({"path": "edit.txt", "old_string": "first-unique-source", "new_string": "second-unique-source"}),
+        ),
+        (
+            build_apply_patch_tool(),
+            json!({"patch": "*** Begin Patch\n*** Add File: patch.txt\n+patch-unique-source\n*** End Patch"}),
+        ),
+        (
+            build_file_tool(),
+            json!({"action": "move", "path": "patch.txt", "destination": "moved.txt"}),
+        ),
+        (
+            build_file_tool(),
+            json!({"action": "delete", "path": "moved.txt"}),
+        ),
+    ];
+    for (tool, arguments) in cases {
+        // The authoritative changeset must survive the model-only projection.
+        // 权威变更集必须在仅面向模型的投影后保留。
+        let result = tool
+            .invoke(test_native_request_with_workspace(
+                arguments,
+                directory.path().to_path_buf(),
+            ))
+            .await
+            .expect("mutation invocation");
+        let body = result.model_output.as_str().expect("Markdown receipt");
+        assert!(body.starts_with("# File changes applied"), "{body}");
+        assert!(
+            !body.contains("unique-source"),
+            "receipt must not echo written content"
+        );
+        let host = result.host_result.expect("review changeset");
+        assert_eq!(host.kind, "change_set");
+        assert!(
+            !host.payload["files"]
+                .as_array()
+                .expect("changed files")
+                .is_empty()
+        );
+        assert!(
+            !body.contains("operation_id"),
+            "internal operation records are not model output"
+        );
+    }
+}
+
 /// Verifies native read dispatch, canonicalization, and persistence retain exactly one source body.
 /// 验证原生读取调度、规范化与持久化仅保留一份源文件正文。
 #[tokio::test]

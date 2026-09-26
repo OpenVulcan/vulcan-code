@@ -702,20 +702,22 @@ async fn execute_submit_plan_tool(
         .map_err(|error| NativeToolError::new(format!("failed to write plan file: {error}")))?;
     let path_text = display_submit_plan_path(&target_path);
     let updated_at = unix_millis_now().to_string();
-    Ok(VulcanToolInvocationResult::from_model_output(json!({
-        "path": path_text,
-        "name": name,
-        "message": "Plan artifact saved."
-    }))
-    .with_host_result(VulcanToolHostResult {
-        kind: String::from("plan_artifact"),
-        payload: json!({
-            "name": name,
-            "path": path_text,
-            "content": content,
-            "updatedAt": updated_at,
+    Ok(
+        VulcanToolInvocationResult::from_model_output(Value::String(format!(
+            "# Plan saved\n\nName: {}\n\nPath: {}\n",
+            vulcan_tools_manager::result_markdown::inline_code(name),
+            vulcan_tools_manager::result_markdown::inline_code(&path_text),
+        )))
+        .with_host_result(VulcanToolHostResult {
+            kind: String::from("plan_artifact"),
+            payload: json!({
+                "name": name,
+                "path": path_text,
+                "content": content,
+                "updatedAt": updated_at,
+            }),
         }),
-    }))
+    )
 }
 
 #[cfg(test)]

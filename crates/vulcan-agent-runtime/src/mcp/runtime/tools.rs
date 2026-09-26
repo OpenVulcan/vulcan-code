@@ -426,6 +426,7 @@ impl McpRuntimePartitionLease {
         owner_session_id: SessionId,
         tool_id: &str,
         args: serde_json::Value,
+        audience: vulcan_mcp_runtime::McpToolResultAudience,
     ) -> Result<serde_json::Value, String> {
         let Some(owner_call_gate) = self.owner_call_gate.as_ref() else {
             return Err(String::from(
@@ -438,10 +439,15 @@ impl McpRuntimePartitionLease {
         let gate = owner_call_gate.lock().await;
         self.require_owner(owner_session_id)?;
         if self.ordered_calls {
-            return self.runtime.call_tool_by_id(tool_id, args).await;
+            return self
+                .runtime
+                .call_tool_by_id_for_audience(tool_id, args, audience)
+                .await;
         }
         drop(gate);
-        self.runtime.call_tool_by_id(tool_id, args).await
+        self.runtime
+            .call_tool_by_id_for_audience(tool_id, args, audience)
+            .await
     }
 }
 
@@ -903,7 +909,12 @@ impl McpRuntimeAccess {
             .active_owned_stdio_lease(&key)
             .ok_or_else(|| String::from("owned MCP stdio partition is unavailable"))?;
         lease
-            .call_tool_for_owner(owner_session_id, origin_tool_id, args)
+            .call_tool_for_owner(
+                owner_session_id,
+                origin_tool_id,
+                args,
+                vulcan_mcp_runtime::McpToolResultAudience::Machine,
+            )
             .await
     }
 
@@ -1726,14 +1737,34 @@ impl McpRuntimeToolBinding {
     /// Invokes the bound MCP tool through its stable host-facing tool identifier.
     /// 通过稳定宿主侧工具标识调用当前绑定的 MCP 工具。
     pub async fn invoke(&self, args: serde_json::Value) -> Result<serde_json::Value, String> {
+        self.invoke_for_audience(args, vulcan_mcp_runtime::McpToolResultAudience::Machine)
+            .await
+    }
+
+    /// Invokes an unowned binding with an explicit result audience and the existing owner guard.
+    /// 使用明确结果消费者调用非所有者绑定，并保留既有所有者守卫。
+    /// Returns the selected result without changing machine-facing invoke.
+    /// 返回选定结果，不改变机器侧 invoke。
+    pub(crate) async fn invoke_for_audience(
+        &self,
+        args: serde_json::Value,
+        audience: vulcan_mcp_runtime::McpToolResultAudience,
+    ) -> Result<serde_json::Value, String> {
         if self.runtime.is_owner_scoped() {
             return Err(String::from(
                 "session-owned MCP binding requires invoke_for_owner",
             ));
         }
+        if audience == vulcan_mcp_runtime::McpToolResultAudience::Machine {
+            return self
+                .runtime
+                .runtime
+                .call_tool_by_id(self.view.origin_tool_id(), args)
+                .await;
+        }
         self.runtime
             .runtime
-            .call_tool_by_id(self.view.origin_tool_id(), args)
+            .call_tool_by_id_for_audience(self.view.origin_tool_id(), args, audience)
             .await
     }
 
@@ -1746,6 +1777,24 @@ impl McpRuntimeToolBinding {
         &self,
         owner_session_id: SessionId,
         args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.invoke_for_owner_and_audience(
+            owner_session_id,
+            args,
+            vulcan_mcp_runtime::McpToolResultAudience::Machine,
+        )
+        .await
+    }
+
+    /// Preserves every owner/revocation check while selecting only the final reading projection.
+    /// 保留所有所有者及撤销检查，仅选择最终阅读投影。
+    /// Inputs add the result audience to the existing owner invocation; returns its exact result.
+    /// 输入在既有所有者调用上增加结果消费者；返回对应精确结果。
+    pub(crate) async fn invoke_for_owner_and_audience(
+        &self,
+        owner_session_id: SessionId,
+        args: serde_json::Value,
+        audience: vulcan_mcp_runtime::McpToolResultAudience,
     ) -> Result<serde_json::Value, String> {
         if let Some(owner_key) = self.owner_key.as_ref() {
             if owner_key.owner_session_id() != owner_session_id {
@@ -1784,11 +1833,11 @@ impl McpRuntimeToolBinding {
                 ));
             }
             return current_lease
-                .call_tool_for_owner(owner_session_id, self.view.origin_tool_id(), args)
+                .call_tool_for_owner(owner_session_id, self.view.origin_tool_id(), args, audience)
                 .await;
         }
         self.runtime
-            .call_tool_for_owner(owner_session_id, self.view.origin_tool_id(), args)
+            .call_tool_for_owner(owner_session_id, self.view.origin_tool_id(), args, audience)
             .await
     }
 }

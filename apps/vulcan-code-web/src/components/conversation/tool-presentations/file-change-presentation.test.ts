@@ -29,6 +29,32 @@ function toolBlock(
 }
 
 describe("native file presentation mapping", () => {
+  // Both delivery paths must show the shared Markdown without rebuilding legacy JSON rows.
+  // 两种加载路径都必须展示共享 Markdown，不重新构造旧 JSON 行。
+  it.each(["list", "stat"] as const)("renders inline and lazy %s Markdown", (action) => {
+    // The event fixture follows the persisted tool-call envelope.
+    // 事件夹具遵循持久化工具调用信封。
+    const body = "# File information\n\nPath: `src/example.ts`\n";
+    const metadata = {
+      arguments: { action, path: "src" },
+      v1_event: true,
+      v1_tool_event: {
+        kind: "tool_call", api_call_id: 1, tool_call_id: 1, tool_name: "file",
+        input: { action, path: "src" }, request_stream_id: "inspection",
+        status: "completed", output: { model_output: body, host_result: null },
+      },
+    };
+    // Inline and deferred results must converge on the same readable body.
+    // 即时与延迟结果必须得到相同可读正文。
+    const inline = resolveFileAccessPresentation(toolBlock("file", body, metadata), "completed", {});
+    const pending = resolveFileAccessPresentation(toolBlock("file", "", {
+      arguments: { action, path: "src" },
+    }), "completed", {});
+    const hydrated = hydrateFileAccessPresentation(pending!, { body, metadata: {} });
+    expect(inline).toMatchObject({ markdownBody: body, interactive: true });
+    expect(hydrated).toMatchObject({ markdownBody: body, interactive: true });
+  });
+
   it.each(["file_edit", "apply_patch"] as const)("keeps %s counts growing after preview truncation", (toolName) => {
     // Parser totals are authoritative even when the display payload has only one retained line.
     // 即使展示载荷仅保留一行，解析器总数仍是权威。

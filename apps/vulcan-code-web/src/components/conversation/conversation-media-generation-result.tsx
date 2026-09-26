@@ -60,7 +60,7 @@ export function ConversationMediaGenerationResult(props: { event: ToolCallEvent 
       </article>;
     }) : result === undefined ? <div className="v1-tool-domain-muted">{t("toolPresentation.media.pending")}</div>
       : object?.kind === "text" && typeof object.text === "string" ? <MarkdownMessage content={object.text} eager />
-      : typeof result === "string" ? <div className="v1-tool-domain-text">{result}</div> : <pre className="tool-model-schema">{JSON.stringify(result, null, 2)}</pre>}
+      : typeof result === "string" ? <MarkdownMessage content={result} eager /> : <pre className="tool-model-schema">{JSON.stringify(result, null, 2)}</pre>}
     {supplemental && Object.keys(supplemental).length > 0 ? <pre className="tool-model-schema">{JSON.stringify(supplemental, null, 2)}</pre> : null}
   </div>;
 }
