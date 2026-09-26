@@ -394,10 +394,12 @@ mod tests {
             read_consistency_interval_ms: None,
         });
 
-        let error = manager
-            .open_default()
-            .await
-            .expect_err("non-Unicode path must be refused");
+        // The success type does not implement Debug; match the Result without weakening the assertion.
+        // 成功类型没有实现 Debug；显式匹配结果，同时保留拒绝非法路径的断言。
+        let error = match manager.open_default().await {
+            Ok(_) => panic!("non-Unicode path must be refused"),
+            Err(error) => error,
+        };
         assert!(matches!(
             error,
             crate::error::LanceDbEngineError::PathNotAuthorized { .. }
