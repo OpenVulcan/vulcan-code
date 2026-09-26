@@ -1,0 +1,94 @@
+# Permanent checks apply to the main branch and every proposed merge.
+# 永久检查适用于主分支与所有拟合入变更。
+name: Quality gates
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  scripts:
+    name: Build contracts (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Download and verify locked CLI tools
+        run: node scripts/install-locked-tools.mjs bundled
+      - name: Download and verify locked protoc
+        run: node scripts/install-locked-tools.mjs protoc
+      - name: Reinstall CLI tools from verified cache without network
+        run: node scripts/install-locked-tools.mjs bundled --offline
+      - name: Reinstall protoc from verified cache without network
+        run: node scripts/install-locked-tools.mjs protoc --offline
+      - name: Validate download, publication and layout failure paths
+        run: node --test scripts/locked-download.test.mjs scripts/install-locked-tools.test.mjs scripts/directory-publication.test.mjs scripts/desktop-runtime.test.mjs
+  frontend:
+    name: Frontend gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Install declared pnpm
+        run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
+      - name: Install frozen frontend dependencies
+        run: pnpm --dir apps/vulcan-code-web install --frozen-lockfile
+      - name: Prove invalid lint and architecture fixtures are rejected
+        run: |
+          pnpm --dir apps/vulcan-code-web run test:lint
+          pnpm --dir apps/vulcan-code-web run test:architecture
+      - name: Lint, typecheck, architecture, production build and size budgets
+        run: pnpm --dir apps/vulcan-code-web run build
+  rust:
+    name: Rust gates
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Install declared pnpm
+        run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
+      - name: Initialize through the repository entry point
+        shell: pwsh
+        run: ./make.ps1 init-system
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Kernel all-target complexity gates
+        run: cargo clippy --locked --no-deps -p vulcan-service-kernel --all-targets -- -D clippy::too_many_arguments -D clippy::type_complexity
+      - name: Database boundary regression tests
+        run: cargo test --locked -p vulcan-workspace-store --lib local_sql -- --test-threads=1
+  required:
+    name: Required quality gates
+    if: always()
+    needs: [scripts, frontend, rust]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject any failed or cancelled dependency
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e 'const jobs = JSON.parse(process.env.RESULTS); if (Object.values(jobs).some(job => job.result !== "success")) { console.error(jobs); process.exit(1); }'
