@@ -1154,8 +1154,9 @@ export interface ConversationEventLivePatch extends ConversationEventWindowBatch
   /** Exact owner-generation document revision represented by this patch.
    * 此 patch 表示的精确归属代际文档修订号。 */
   revision: number;
-  /** Exact predecessor of a volatile memory edge; absent for durable acknowledgements.
-   * volatile 内存边的精确前驱；durable 确认中不存在。 */
+  /** Exact predecessor of a volatile memory range; absent for durable acknowledgements.
+   * A merged volatile patch spans `base_memory_revision..revision`.
+   * volatile 内存区间的精确前驱；durable 确认中不存在。合并后的 volatile patch 跨越该区间。 */
   base_memory_revision?: number;
   /** Exact predecessor of a durable edge; absent for volatile memory patches.
    * durable 边的精确前驱；volatile 内存 patch 中不存在。 */
@@ -1163,6 +1164,29 @@ export interface ConversationEventLivePatch extends ConversationEventWindowBatch
   /** Whether this revision is memory-visible or durably published.
    * 此修订是仅内存可见还是已经可靠发布。 */
   durability: ConversationEventPatchDurability;
+  /** Seq-ascending text appends to streaming events that are not repeated in `events`.
+   * 对流式事件的正文追加，按 seq 递增，且不与 `events` 重复。 */
+  text_appends?: ConversationEventTextAppend[];
+}
+
+/** One append to the text of a streaming `assistant_text` or `assistant_reasoning` event.
+ * 对一条流式 `assistant_text` 或 `assistant_reasoning` 事件正文的一次追加。 */
+export interface ConversationEventTextAppend {
+  /** Event whose text grows.
+   * 正文增长的事件。 */
+  seq: number;
+  /** Event revision after the append.
+   * 追加后的事件修订号。 */
+  event_revision: number;
+  /** Update time after the append.
+   * 追加后的更新时间。 */
+  updated_at_ms: number;
+  /** UTF-16 length of the text the append starts from.
+   * 追加起点正文的 UTF-16 长度。 */
+  base_text_utf16_len: number;
+  /** Text appended at that offset.
+   * 在该偏移处追加的正文。 */
+  appended_text: string;
 }
 
 /** One authoritative reconnect range that may cover multiple memory revisions.
@@ -1447,14 +1471,16 @@ export class ConversationEventWindowStore {
         throw new Error("volatile event patch must not declare base_durable_revision");
       }
       assertSafeDocumentRevision(patch.base_memory_revision);
-      if (patch.revision !== patch.base_memory_revision + 1) {
+      if (patch.revision <= patch.base_memory_revision) {
         throw new Error(
-          `volatile event patch must represent one revision edge: base ${patch.base_memory_revision}, target ${patch.revision}`,
+          `volatile event patch must advance its base: base ${patch.base_memory_revision}, target ${patch.revision}`,
         );
       }
       if (patch.revision < frontier.memory_revision) return;
       const sameRevision = patch.revision === frontier.memory_revision;
-      if (!sameRevision && patch.base_memory_revision !== frontier.memory_revision) {
+      // A merged range may start before the frontier; its events are the state at `revision`.
+      // 合并区间可能起始于前沿之前；其事件即 `revision` 处的状态。
+      if (!sameRevision && patch.base_memory_revision > frontier.memory_revision) {
         throw new ConversationEventRevisionGapError(
           "memory",
           frontier.memory_revision,
@@ -1462,7 +1488,13 @@ export class ConversationEventWindowStore {
           patch.revision,
         );
       }
-      const replacement = this.buildLiveReplacement(patch, sameRevision, patch.revision);
+      const replacement = this.buildLiveReplacement(
+        patch,
+        sameRevision,
+        patch.revision,
+        patch.text_appends ?? [],
+        patch.base_memory_revision === frontier.memory_revision,
+      );
       this.commitEventsWithFrontier(
         replacement,
         sameRevision ? frontier.memory_revision : patch.revision,
@@ -1485,6 +1517,9 @@ export class ConversationEventWindowStore {
       throw new Error(
         `durable acknowledgement must advance its base: base ${patch.base_durable_revision}, target ${patch.revision}`,
       );
+    }
+    if (patch.text_appends !== undefined && patch.text_appends.length !== 0) {
+      throw new Error("durable acknowledgement must not carry text appends");
     }
     if (patch.revision <= frontier.durable_revision) return;
     if (patch.base_durable_revision !== frontier.durable_revision) {
@@ -1553,11 +1588,15 @@ export class ConversationEventWindowStore {
   }
 
   /** Builds one validated live replacement without publishing events or frontiers.
-   * 构建一份已校验的实时替换，但不发布事件或前沿。 */
+   * `exactTextBase` states that loaded events are exactly at the base of `textAppends`.
+   * 构建一份已校验的实时替换，但不发布事件或前沿。`exactTextBase` 表示已加载事件恰好处于
+   * `textAppends` 的基线。 */
   private buildLiveReplacement(
     patch: ConversationEventWindowBatch,
     requireIdempotent: boolean,
     documentRevision: number,
+    textAppends: readonly ConversationEventTextAppend[] = [],
+    exactTextBase = false,
   ): Map<number, ConversationEventSummary> {
     let validatedLatest = this.latest;
     const pending = new Map<number, ConversationEventSummary>();
@@ -1612,6 +1651,33 @@ export class ConversationEventWindowStore {
       validatedLatest = summary.seq;
       appended = true;
       pending.set(summary.seq, summary);
+    }
+    let previousAppendSeq: number | null = null;
+    for (const append of textAppends) {
+      assertSafeSeq(append.seq);
+      if (previousAppendSeq !== null && append.seq <= previousAppendSeq) {
+        throw new Error(`text appends must be seq-ascending: ${previousAppendSeq} then ${append.seq}`);
+      }
+      previousAppendSeq = append.seq;
+      if (pending.has(append.seq)) {
+        throw new Error(`text append at seq ${append.seq} repeats a complete event`);
+      }
+      const existing = this.events.get(append.seq);
+      if (existing === undefined) {
+        // Like a complete event, an append may target history older than the loaded window.
+        // 与完整事件相同，追加可能指向早于已加载窗口的历史。
+        if (this.earliest !== null && append.seq < this.earliest) continue;
+        throw new Error(`text append targets unknown seq ${append.seq}`);
+      }
+      if (requireIdempotent && append.event_revision > existing.event_revision) {
+        throw new Error(
+          `document revision ${documentRevision} conflicts with newer event revision ${append.event_revision} at seq ${append.seq}`,
+        );
+      }
+      pending.set(
+        append.seq,
+        validateSameSeqEvolution(existing, resolveTextAppend(existing, append, exactTextBase)),
+      );
     }
     const replacement = new Map(this.events);
     for (const [seq, summary] of pending) replacement.set(seq, summary);
@@ -1839,6 +1905,53 @@ function validateSameSeqEvolution(
   }
   assertMutableEventEvolution(existing, incoming);
   return incoming;
+}
+
+/** Resolves one text append against the loaded event into the complete event it describes.
+ * With `exactBase`, the loaded text must be exactly the append's base; otherwise it may already
+ * include part or all of the append, as when a merged range starts before the loaded frontier.
+ * 将一次正文追加对照已加载事件解析为其描述的完整事件。`exactBase` 时已加载正文必须恰为追加
+ * 基线；否则它可能已包含部分或全部追加，例如合并区间起始于已加载前沿之前。 */
+function resolveTextAppend(
+  existing: ConversationEventSummary,
+  append: ConversationEventTextAppend,
+  exactBase: boolean,
+): ConversationEventSummary {
+  assertSafeEventRevision(append.event_revision);
+  const base = append.base_text_utf16_len;
+  if (!Number.isSafeInteger(base) || base < 0) {
+    throw new Error(`text append at seq ${append.seq} has invalid base length ${String(base)}`);
+  }
+  if (typeof append.appended_text !== "string" || append.appended_text.length === 0) {
+    throw new Error(`text append at seq ${append.seq} must append text`);
+  }
+  const body = existing.event;
+  if (body.kind !== "assistant_text" && body.kind !== "assistant_reasoning") {
+    throw new Error(`text append at seq ${append.seq} targets ${body.kind}`);
+  }
+  // JavaScript string lengths and offsets are UTF-16 code units, the unit of the base length.
+  // JavaScript 字符串长度与偏移以 UTF-16 码元计量，与基线长度单位一致。
+  const text = body.text.slice(0, base) + append.appended_text;
+  if (existing.event_revision >= append.event_revision) {
+    if (!body.text.startsWith(text)) {
+      throw new Error(`text append at seq ${append.seq} disagrees with newer loaded text`);
+    }
+    return existing;
+  }
+  const lengthMatches = exactBase
+    ? body.text.length === base
+    : body.text.length >= base && text.startsWith(body.text);
+  if (body.status !== "streaming" || !lengthMatches) {
+    throw new Error(
+      `text append at seq ${append.seq} expects base length ${base}, loaded ${body.status} text has ${body.text.length}`,
+    );
+  }
+  return {
+    ...existing,
+    event_revision: append.event_revision,
+    updated_at_ms: append.updated_at_ms,
+    event: { ...body, text },
+  };
 }
 
 /** Enforces the explicit state matrix for event kinds that may evolve in place.

@@ -1253,6 +1253,94 @@ describe("V1 conversation event window controller", () => {
     warn.mockRestore();
   });
 
+  it("applies pushed text appends and merged ranges to the streaming text", async () => {
+    let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
+    const controller = new ConversationEventWindowController(
+      rpcMock({
+        hydrate: async () => response(
+          [summary(1, assistantText("streaming", "ab"), 10, 1)],
+          { memory_revision: 1, durable_revision: 1 },
+        ),
+        subscribeLive: async (handler) => {
+          push = handler;
+          return () => undefined;
+        },
+      }),
+    );
+    await controller.hydrate(SESSION_ID);
+    const deliver = requireAssignedCallback(push, "text append subscriber");
+    const append = (base: number, text: string, eventRevision: number) => ({
+      seq: 1,
+      event_revision: eventRevision,
+      updated_at_ms: 10 + eventRevision,
+      base_text_utf16_len: base,
+      appended_text: text,
+    });
+
+    deliver(liveDelta([], { revision: 2, text_appends: [append(2, "cd", 2)] }));
+    // The host merged revisions 3 and 4 while the socket was busy.
+    // 套接字繁忙时宿主合并了修订 3 与 4。
+    deliver(liveDelta([], {
+      base_memory_revision: 2,
+      revision: 4,
+      text_appends: [append(4, "efgh", 4)],
+    }));
+
+    expect(controller.snapshot()).toMatchObject({ memory_revision: 4, durable_revision: 1 });
+    expect(controller.snapshot().events[0]).toMatchObject({
+      event_revision: 4,
+      updated_at_ms: 14,
+      event: { status: "streaming", text: "abcdefgh" },
+    });
+  });
+
+  it("recovers through reconnect when a pushed text append does not match the loaded text", async () => {
+    let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reconnect = vi.fn(async () => reconnectResponse(
+      [summary(1, assistantText("streaming", "abcd"), 12, 2)],
+      { base_memory_revision: 1, memory_revision: 2, durable_revision: 1 },
+    ));
+    const controller = new ConversationEventWindowController(
+      rpcMock({
+        hydrate: async () => response(
+          [summary(1, assistantText("streaming", "ab"), 10, 1)],
+          { memory_revision: 1, durable_revision: 1 },
+        ),
+        reconnect,
+        subscribeLive: async (handler) => {
+          push = handler;
+          return () => undefined;
+        },
+      }),
+    );
+    await controller.hydrate(SESSION_ID);
+
+    expect(() => requireAssignedCallback(push, "mismatched append subscriber")(
+      liveDelta([], {
+        revision: 2,
+        text_appends: [{
+          seq: 1,
+          event_revision: 2,
+          updated_at_ms: 12,
+          base_text_utf16_len: 3,
+          appended_text: "d",
+        }],
+      }),
+    )).not.toThrow();
+    await vi.waitFor(() => expect(controller.snapshot().events[0].event).toMatchObject({
+      text: "abcd",
+    }));
+
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "[conversation-event-window] pushed delta validation failed; recovering",
+      expect.objectContaining({ message: expect.stringMatching(/expects base length 3/) }),
+    );
+    expect(controller.snapshot()).toMatchObject({ memory_revision: 2 });
+    warn.mockRestore();
+  });
+
   it("keeps an open edited Turn visible until a higher generation atomically truncates the tail", async () => {
     let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
     let resolveRebase: ((value: ConversationEventHydrationV1Response) => void) | null = null;

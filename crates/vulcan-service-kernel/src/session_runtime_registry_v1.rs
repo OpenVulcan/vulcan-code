@@ -12,7 +12,9 @@ use uuid::Uuid;
 
 #[cfg(test)]
 use vulcan_service_api::ConversationEventPatchDurabilityV1;
-use vulcan_service_api::{ConversationEventLiveDeltaV1, ServiceEvent, ServiceEventEmitter};
+use vulcan_service_api::{
+    ConversationEventLiveDeltaV1, ConversationEventTextAppendV1, ServiceEvent, ServiceEventEmitter,
+};
 use vulcan_session_core::v1::collaboration::{
     CollaborationOperationId, CollaborationRunControl, CollaborationRunControlReceipt,
     SetRunControlInput,
@@ -41,7 +43,9 @@ use vulcan_session_core::v1::ids::{
 use vulcan_session_core::v1::projection::{
     ProjectedItem, SourcedProjectedItem, project_context_generation_items_with_sources,
 };
-use vulcan_session_core::v1::service_dto::ConversationEventWindowBatch;
+use vulcan_session_core::v1::service_dto::{
+    ConversationEventSummary, ConversationEventWindowBatch,
+};
 use vulcan_session_core::v1::{
     ProviderRequestBudgetEvidence, ProviderUsageBudgetAnchor, latest_provider_usage_budget_anchor,
 };
@@ -944,6 +948,23 @@ struct SessionLivePublisher {
     service_epoch: String,
 }
 
+/// Streaming text events of one window generation exactly as last published.
+/// 某一窗口代次中流式正文事件上次发布时的精确状态。
+///
+/// Volatile patches form a gap-free revision chain, so a client that accepts a patch holds the
+/// event state at its base revision, which for these seqs is exactly the state recorded here.
+/// volatile 补丁构成无缺口修订链，接受补丁的客户端持有其基线修订处的事件状态，对于这些 seq
+/// 即此处记录的状态。
+#[derive(Default)]
+struct PublishedStreamingText {
+    /// Generation the recorded events belong to.
+    /// 记录的事件所属代次。
+    window_generation: Option<u64>,
+    /// Last published summary of each event that is still streaming text.
+    /// 每条仍为流式正文的事件上次发布的摘要。
+    events: BTreeMap<Seq, ConversationEventSummary>,
+}
+
 /// Unique mutable owner and serialized physical writer for one V1 session.
 /// 单个 V1 会话的唯一可变所有者与串行物理写入器。
 pub(crate) struct SessionHandle {
@@ -962,6 +983,9 @@ pub(crate) struct SessionHandle {
     /// Same-session memory-mutation and volatile-publish ordering serializer.
     /// 同会话内存修改与 volatile 发布顺序串行器。
     mutation_publisher: Mutex<()>,
+    /// Streaming text as last published; read and written only in volatile-publish order.
+    /// 上次发布的流式正文；仅按 volatile 发布顺序读写。
+    published_streaming_text: Mutex<PublishedStreamingText>,
     /// Single-flight request preparation without holding synchronous mutation or writer guards across awaits.
     /// 请求准备单飞门，不跨异步等待持有同步修改或写入器守卫。
     physical_request_preparation: Arc<AsyncMutex<()>>,
@@ -1015,6 +1039,7 @@ impl SessionHandle {
             document: Mutex::new(document),
             writer: Mutex::new(()),
             mutation_publisher: Mutex::new(()),
+            published_streaming_text: Mutex::new(PublishedStreamingText::default()),
             physical_request_preparation: Arc::new(AsyncMutex::new(())),
             backend: Arc::new(FileSessionPersistenceBackend {
                 locator: locator.clone(),
@@ -1073,6 +1098,7 @@ impl SessionHandle {
             document: Mutex::new(document),
             writer: Mutex::new(()),
             mutation_publisher: Mutex::new(()),
+            published_streaming_text: Mutex::new(PublishedStreamingText::default()),
             physical_request_preparation: Arc::new(AsyncMutex::new(())),
             backend,
             locator: None,
@@ -3643,16 +3669,22 @@ impl SessionHandle {
         receipt: &MemoryRevisionReceipt,
         window_generation: u64,
     ) {
-        let Some(service_epoch) = self.live_service_epoch_best_effort() else {
-            return;
-        };
-        let batch = ConversationEventWindowBatch::from_events(
+        let mut batch = ConversationEventWindowBatch::from_events(
             self.session_id.to_string(),
             window_generation,
             &receipt.changed_events,
         );
-        match ConversationEventLiveDeltaV1::volatile(
+        // The published record advances even without a publisher, so it always equals the state
+        // at the latest revision and a later append never builds on a skipped one.
+        // 即使没有发布器，发布记录也会推进，使其始终等于最新修订处的状态，后续追加绝不建立在
+        // 被跳过的修订之上。
+        let text_appends = self.split_streaming_text_appends(window_generation, &mut batch.events);
+        let Some(service_epoch) = self.live_service_epoch_best_effort() else {
+            return;
+        };
+        match ConversationEventLiveDeltaV1::volatile_with_text_appends(
             batch,
+            text_appends,
             service_epoch,
             base_memory_revision,
             receipt.revision,
@@ -3663,6 +3695,58 @@ impl SessionHandle {
                 self.session_id
             ),
         }
+    }
+
+    /// Moves pure streaming-text extensions out of `events` and returns them as appends.
+    /// 把纯流式正文延长从 `events` 中移出，并以追加形式返回。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `window_generation` owns `events`, the complete changed events of one revision in seq order.
+    /// `window_generation` 拥有 `events`，即单个修订按 seq 排序的完整变更事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the appends in seq order; `events` keeps every event that must be sent complete.
+    /// 按 seq 顺序返回追加；`events` 保留所有必须完整发送的事件。
+    fn split_streaming_text_appends(
+        &self,
+        window_generation: u64,
+        events: &mut Vec<ConversationEventSummary>,
+    ) -> Vec<ConversationEventTextAppendV1> {
+        let mut published = match self.published_streaming_text.lock() {
+            Ok(published) => published,
+            Err(_) => {
+                eprintln!(
+                    "[session-v1-live] streaming text record poisoned; publishing complete events: session={}",
+                    self.session_id
+                );
+                return Vec::new();
+            }
+        };
+        if published.window_generation != Some(window_generation) {
+            published.window_generation = Some(window_generation);
+            published.events.clear();
+        }
+        let mut text_appends = Vec::new();
+        let mut complete = Vec::with_capacity(events.len());
+        for event in events.drain(..) {
+            let append = published
+                .events
+                .get(&event.seq)
+                .and_then(|previous| ConversationEventTextAppendV1::between(previous, &event));
+            if ConversationEventTextAppendV1::can_extend(&event) {
+                published.events.insert(event.seq, event.clone());
+            } else {
+                published.events.remove(&event.seq);
+            }
+            match append {
+                Some(append) => text_appends.push(append),
+                None => complete.push(event),
+            }
+        }
+        *events = complete;
+        text_appends
     }
 
     /// Emits one live delta without allowing a presentation failure to roll back domain state.
@@ -6789,6 +6873,130 @@ mod tests {
             &deltas[1].batch.events[0].event,
             EventBody::AssistantReasoning(reasoning) if reasoning.text == "first second"
         ));
+    }
+
+    /// Streaming text extensions publish appends; other changes publish complete events.
+    /// 流式正文延长发布追加；其他变化发布完整事件。
+    #[test]
+    fn streaming_text_extensions_publish_appends_that_rebuild_the_document() {
+        let (_recording, handle) = recording_handle();
+        let sink = Arc::new(RecordingEventSink::default());
+        handle
+            .install_live_event_emitter(ServiceEventEmitter::new(vec![sink.clone()]))
+            .expect("install live emitter");
+        let api_call_id = start_initialized_test_api(&handle);
+        sink.clear();
+
+        let streaming = AssistantSemanticStatus::Streaming;
+        // (text, status, expect append, published record diverges first)
+        // （正文、状态、是否期望追加、发布记录是否先偏离）
+        let steps = [
+            ("答", streaming, false, false),
+            ("答案😀", streaming, true, false),
+            ("答案😀是", streaming, true, false),
+            ("答案😀是的", streaming, false, true),
+            ("答案😀是的。", streaming, true, false),
+            (
+                "答案😀是的。",
+                AssistantSemanticStatus::Completed,
+                false,
+                false,
+            ),
+        ];
+        let mut document_states = Vec::with_capacity(steps.len());
+        for (index, (text, status, _, diverge)) in steps.iter().enumerate() {
+            if *diverge {
+                // A published base the document never had must not be extended.
+                // 不得在文档从未有过的发布基线上追加。
+                let mut published = handle
+                    .published_streaming_text
+                    .lock()
+                    .expect("published record");
+                let record = published
+                    .events
+                    .values_mut()
+                    .next()
+                    .expect("published record");
+                match &mut record.event {
+                    EventBody::AssistantText(text) => text.text = "别的".to_string(),
+                    actual => panic!("expected assistant text record, got {actual:?}"),
+                }
+            }
+            let seq = handle
+                .update_assistant_text(api_call_id, *text, *status, 10 + index as i64)
+                .expect("publish assistant text")
+                .value;
+            let event = handle
+                .read(|document| {
+                    document
+                        .events()
+                        .iter()
+                        .find(|event| event.seq == seq)
+                        .expect("document event")
+                        .clone()
+                })
+                .expect("read document");
+            document_states.push(
+                ConversationEventWindowBatch::from_events(String::new(), 0, &[event])
+                    .events
+                    .remove(0),
+            );
+        }
+        assert!(
+            handle
+                .published_streaming_text
+                .lock()
+                .expect("published record")
+                .events
+                .is_empty(),
+            "completed text leaves the streaming record"
+        );
+
+        let deltas = sink
+            .events()
+            .into_iter()
+            .map(|event| match event {
+                ServiceEvent::ConversationEventDeltaV1(delta) => delta,
+                actual => panic!("expected V1 live delta, got {actual:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(deltas.len(), steps.len());
+        let mut rebuilt: BTreeMap<Seq, ConversationEventSummary> = BTreeMap::new();
+        for ((delta, (text, _, expect_append, _)), expected) in
+            deltas.iter().zip(steps.iter()).zip(document_states.iter())
+        {
+            assert_eq!(
+                delta.durability,
+                ConversationEventPatchDurabilityV1::Volatile
+            );
+            if *expect_append {
+                assert!(
+                    delta.batch.events.is_empty(),
+                    "step {text} should be an append"
+                );
+                assert_eq!(delta.text_appends.len(), 1);
+            } else {
+                assert!(
+                    delta.text_appends.is_empty(),
+                    "step {text} should be complete"
+                );
+                assert_eq!(delta.batch.events.len(), 1);
+            }
+            for event in &delta.batch.events {
+                rebuilt.insert(event.seq, event.clone());
+            }
+            for append in &delta.text_appends {
+                let extended = append
+                    .apply(rebuilt.get(&append.seq).expect("append base was published"))
+                    .expect("append applies to the published base");
+                rebuilt.insert(append.seq, extended);
+            }
+            assert_eq!(
+                rebuilt.get(&expected.seq),
+                Some(expected),
+                "rebuilt event diverged at step {text}"
+            );
+        }
     }
 
     /// An exact assistant-text replay does not publish or flush a synthetic revision.

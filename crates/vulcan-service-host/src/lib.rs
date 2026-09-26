@@ -5,7 +5,7 @@ pub mod instance;
 mod rpc_admission;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs,
     future::Future,
     net::{Ipv4Addr, SocketAddr},
@@ -25,18 +25,19 @@ use axum::{
     response::{IntoResponse, Response as AxumResponse},
     routing::{get, post},
 };
+use futures_util::{SinkExt, StreamExt};
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use uuid::Uuid;
 use vulcan_service_api::{
-    ServiceEvent, ServiceEventSink, ServiceMediaResponse, ServiceStaticResponse,
-    ServiceStatusSnapshot, SessionResourceContentV1Request, WebuiServiceDiscoverySnapshot,
-    WebuiServiceRpcHttpRequest, build_service_media_file_response, build_webui_static_response,
-    service_media_error_response, service_media_path_from_encoded_route_segment,
-    webui_service_discovery_snapshot_path, webui_service_http_bind_ports_from_override,
-    webui_service_origin_text_is_allowed, webui_service_request_token_values_are_valid,
-    webui_service_required_origin_text_is_allowed, webui_service_rpc_error_envelope,
-    webui_service_rpc_success_envelope,
+    ConversationEventLiveDeltaV1, ServiceEvent, ServiceEventSink, ServiceMediaResponse,
+    ServiceStaticResponse, ServiceStatusSnapshot, SessionResourceContentV1Request,
+    WebuiServiceDiscoverySnapshot, WebuiServiceRpcHttpRequest, build_service_media_file_response,
+    build_webui_static_response, service_media_error_response,
+    service_media_path_from_encoded_route_segment, webui_service_discovery_snapshot_path,
+    webui_service_http_bind_ports_from_override, webui_service_origin_text_is_allowed,
+    webui_service_request_token_values_are_valid, webui_service_required_origin_text_is_allowed,
+    webui_service_rpc_error_envelope, webui_service_rpc_success_envelope,
 };
 
 /// Boxed asynchronous result returned by a browser-facing RPC dispatcher.
@@ -147,6 +148,14 @@ impl ServiceEventSink for WebuiServiceEventBusSink {
         let _ = self.sender.send(event);
     }
 }
+
+/// Capacity of the browser service event bus, and of each event socket's pending outbox.
+/// 浏览器服务事件总线的容量，同时也是每个事件套接字待发送队列的容量。
+///
+/// A socket that falls this far behind can no longer be caught up event by event and is closed
+/// so the browser reconnects and requests authoritative baselines.
+/// 落后达到该数量的套接字已无法逐条追平，会被关闭，使浏览器重连并请求权威基线。
+pub const WEBUI_SERVICE_EVENT_BUS_CAPACITY: usize = 256;
 
 /// Builds a service event sink backed by one browser WebSocket broadcast bus.
 /// 基于单个浏览器 WebSocket 广播总线构建服务事件接收器。
@@ -1220,22 +1229,169 @@ fn webui_service_request_token_is_valid(
     webui_service_request_token_values_are_valid(header_token, query, expected_token)
 }
 
+/// Browser-bound events waiting for one event socket, with streaming deltas coalesced.
+/// 等待单个事件套接字发送的浏览器事件，其中流式增量已合并。
+#[derive(Default)]
+struct WebuiServiceEventOutbox {
+    /// Pending events in delivery order.
+    /// 按交付顺序排列的待发送事件。
+    events: VecDeque<ServiceEvent>,
+}
+
+impl WebuiServiceEventOutbox {
+    /// Queues one event, merging a volatile conversation delta into the pending one it extends.
+    /// 入队一个事件；volatile 会话增量会合并进其所延续的待发送增量。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `event` is the next bus event visible to this socket.
+    /// `event` 是本套接字可见的下一个总线事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns `Err` with the pending count when the outbox is full and the socket must close.
+    /// 队列已满、套接字必须关闭时返回携带待发送数量的 `Err`。
+    fn push(&mut self, event: ServiceEvent) -> Result<(), usize> {
+        if let ServiceEvent::ConversationEventDeltaV1(next) = &event
+            && self.merge_conversation_delta(next)
+        {
+            return Ok(());
+        }
+        if self.events.len() >= WEBUI_SERVICE_EVENT_BUS_CAPACITY {
+            return Err(self.events.len());
+        }
+        self.events.push_back(event);
+        Ok(())
+    }
+
+    /// Merges `next` into the newest pending delta of its session when they are contiguous.
+    /// 当 `next` 与其会话最新的待发送增量相邻时，将其合并进去。
+    ///
+    /// Deltas of other sessions are independent and may be passed over; any other event keeps
+    /// its order relative to `next`, so the search stops there.
+    /// 其他会话的增量彼此独立，可以越过；其他任何事件都须保持与 `next` 的相对顺序，搜索在此停止。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns whether `next` was merged and must not be queued separately.
+    /// 返回 `next` 是否已被合并、不得再单独入队。
+    fn merge_conversation_delta(&mut self, next: &ConversationEventLiveDeltaV1) -> bool {
+        for pending in self.events.iter_mut().rev() {
+            let ServiceEvent::ConversationEventDeltaV1(pending) = pending else {
+                return false;
+            };
+            if pending.batch.session_id != next.batch.session_id {
+                continue;
+            }
+            return match pending.merge_volatile(next) {
+                Some(merged) => {
+                    **pending = merged;
+                    true
+                }
+                None => false,
+            };
+        }
+        false
+    }
+
+    /// Removes and serializes the next deliverable event.
+    /// 移除并序列化下一个可交付事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns `None` when nothing is pending; events that fail to serialize are logged and skipped.
+    /// 无待发送事件时返回 `None`；序列化失败的事件记录日志后跳过。
+    fn pop_serialized(&mut self) -> Option<String> {
+        while let Some(event) = self.events.pop_front() {
+            match serde_json::to_string(&event) {
+                Ok(text) => return Some(text),
+                Err(error) => {
+                    eprintln!("[service-host] failed to serialize browser service event: {error}");
+                }
+            }
+        }
+        None
+    }
+}
+
 /// Streams serialized service events to one browser WebSocket.
 /// 向单个浏览器 WebSocket 推送序列化后的服务事件。
+///
+/// The bus is drained while a send is in flight, so a slow browser receives merged streaming
+/// deltas instead of lagging the bus; only an outbox full of unmergeable events closes the socket.
+/// 发送进行期间持续消费总线，因此慢速浏览器收到合并后的流式增量而不会使总线落后；只有被不可
+/// 合并事件填满的待发送队列才会关闭套接字。
 async fn webui_service_events_socket(
-    mut socket: WebSocket,
-    mut receiver: broadcast::Receiver<ServiceEvent>,
+    socket: WebSocket,
+    receiver: broadcast::Receiver<ServiceEvent>,
     client_id: Uuid,
     connection_id: Uuid,
     client_connections: Arc<Mutex<HashMap<Uuid, Uuid>>>,
     client_disconnected: WebuiServiceClientDisconnected,
 ) {
+    let (sink, inbound) = socket.split();
+    pump_webui_service_events(sink, inbound, receiver, client_id).await;
+    if release_webui_service_client_connection(&client_connections, client_id, connection_id) {
+        client_disconnected(client_id);
+    }
+}
+
+/// Forwards bus events visible to one browser until either side closes.
+/// 向单个浏览器转发其可见的总线事件，直到任一端关闭。
+///
+/// # Parameters
+/// 参数
+/// `sink` and `inbound` are the two halves of the browser socket, `receiver` is this socket's bus
+/// subscription, and `client_id` is the browser lifetime that filters client-owned events.
+/// `sink` 与 `inbound` 是浏览器套接字的两半，`receiver` 是本套接字的总线订阅，`client_id` 是用于
+/// 过滤客户端所属事件的浏览器生命周期。
+///
+/// # Returns
+/// 返回值
+/// Returns when the browser closes, a send fails, or the bus closes or overflows this socket.
+/// 浏览器关闭、发送失败，或总线关闭或使本套接字溢出时返回。
+async fn pump_webui_service_events<Sink, Inbound>(
+    sink: Sink,
+    mut inbound: Inbound,
+    mut receiver: broadcast::Receiver<ServiceEvent>,
+    client_id: Uuid,
+) where
+    Sink: futures_util::Sink<AxumWsMessage> + Unpin + Send + 'static,
+    Sink::Error: Send,
+    Inbound: futures_util::Stream<Item = Result<AxumWsMessage, axum::Error>> + Unpin,
+{
+    // The in-flight send owns the sink and hands it back when it completes.
+    // 进行中的发送持有发送端，并在完成时交还。
+    type InFlightSend<Sink, Error> =
+        Pin<Box<dyn Future<Output = (Sink, Result<(), Error>)> + Send>>;
+    let mut idle_sink = Some(sink);
+    let mut sending: Option<InFlightSend<Sink, Sink::Error>> = None;
+    let mut outbox = WebuiServiceEventOutbox::default();
     loop {
+        if let Some(mut sink) = idle_sink.take() {
+            match outbox.pop_serialized() {
+                Some(text) => {
+                    sending = Some(Box::pin(async move {
+                        let result = sink.send(AxumWsMessage::Text(text.into())).await;
+                        (sink, result)
+                    }));
+                }
+                None => idle_sink = Some(sink),
+            }
+        }
         tokio::select! {
-            inbound = socket.recv() => match inbound {
+            inbound = inbound.next() => match inbound {
                 Some(Ok(AxumWsMessage::Close(_))) | Some(Err(_)) | None => break,
                 Some(Ok(_)) => {}
             },
+            sent = async { sending.as_mut().expect("guarded in-flight send").await }, if sending.is_some() => {
+                sending = None;
+                let (sink, result) = sent;
+                if result.is_err() {
+                    break;
+                }
+                idle_sink = Some(sink);
+            }
             event = receiver.recv() => {
                 let event = match event {
                     Ok(event) => event,
@@ -1253,21 +1409,16 @@ async fn webui_service_events_socket(
                 if !webui_service_event_is_visible_to_client(&event, client_id) {
                     continue;
                 }
-                let text = match serde_json::to_string(&event) {
-                    Ok(text) => text,
-                    Err(error) => {
-                        eprintln!("[service-host] failed to serialize browser service event: {error}");
-                        continue;
-                    }
-                };
-                if socket.send(AxumWsMessage::Text(text.into())).await.is_err() {
+                if let Err(pending) = outbox.push(event) {
+                    // Same recovery as a lagged bus: the browser rebuilds from authoritative baselines.
+                    // 与总线落后相同的恢复方式：浏览器从权威基线重建。
+                    eprintln!(
+                        "[service-host] browser event socket outbox full with {pending} events; reconnecting"
+                    );
                     break;
                 }
             }
         }
-    }
-    if release_webui_service_client_connection(&client_connections, client_id, connection_id) {
-        client_disconnected(client_id);
     }
 }
 
@@ -1811,6 +1962,206 @@ mod tests {
             &unowned_event,
             other
         ));
+    }
+
+    /// Builds one volatile conversation delta for `session_id` covering `base..revision`.
+    /// 为 `session_id` 构建一条覆盖 `base..revision` 的 volatile 会话增量。
+    fn volatile_delta(session_id: &str, base: u64, revision: u64) -> ServiceEvent {
+        let delta: ConversationEventLiveDeltaV1 = serde_json::from_value(json!({
+            "session_id": session_id,
+            "window_generation": 1,
+            "events": [],
+            "service_epoch": "epoch-outbox",
+            "revision": revision,
+            "base_memory_revision": base,
+            "durability": "volatile",
+        }))
+        .expect("volatile delta");
+        ServiceEvent::ConversationEventDeltaV1(Box::new(delta))
+    }
+
+    /// Builds one event that is not a conversation delta.
+    /// 构建一个非会话增量事件。
+    fn unmergeable_event(revision: u64) -> ServiceEvent {
+        ServiceEvent::PluginUiInvalidated(Box::new(vulcan_service_api::PluginUiInvalidatedEvent {
+            plugin_id: String::from("plugin-outbox"),
+            topic: String::from("topic"),
+            revision,
+        }))
+    }
+
+    /// Describes pending events as (session or kind, base, revision) for order assertions.
+    /// 将待发送事件描述为（会话或种类、基线、修订），用于顺序断言。
+    fn outbox_shape(outbox: &WebuiServiceEventOutbox) -> Vec<(String, Option<u64>, u64)> {
+        outbox
+            .events
+            .iter()
+            .map(|event| match event {
+                ServiceEvent::ConversationEventDeltaV1(delta) => (
+                    delta.batch.session_id.clone(),
+                    delta.base_memory_revision,
+                    delta.revision,
+                ),
+                ServiceEvent::PluginUiInvalidated(event) => {
+                    (String::from("plugin"), None, event.revision)
+                }
+                actual => panic!("unexpected outbox event {actual:?}"),
+            })
+            .collect()
+    }
+
+    /// Contiguous deltas queued behind a blocked send collapse into one revision range.
+    /// 在阻塞发送之后排队的相邻增量折叠为一个修订区间。
+    #[test]
+    fn outbox_merges_contiguous_deltas_across_other_sessions_only() {
+        let mut outbox = WebuiServiceEventOutbox::default();
+        for event in [
+            volatile_delta("a", 1, 2),
+            volatile_delta("b", 7, 8),
+            volatile_delta("a", 2, 3),
+            volatile_delta("b", 8, 9),
+            volatile_delta("a", 3, 4),
+        ] {
+            outbox.push(event).expect("queue delta");
+        }
+        assert_eq!(
+            outbox_shape(&outbox),
+            vec![
+                (String::from("a"), Some(1), 4),
+                (String::from("b"), Some(7), 9),
+            ]
+        );
+
+        // Any other event is an ordering barrier; a later delta queues after it.
+        // 其他任何事件都是顺序屏障；之后的增量排在它后面。
+        outbox.push(unmergeable_event(1)).expect("queue barrier");
+        outbox.push(volatile_delta("a", 4, 5)).expect("queue delta");
+        // A gap is never bridged by merging.
+        // 合并绝不跨越缺口。
+        outbox
+            .push(volatile_delta("a", 6, 7))
+            .expect("queue gap delta");
+        assert_eq!(
+            outbox_shape(&outbox),
+            vec![
+                (String::from("a"), Some(1), 4),
+                (String::from("b"), Some(7), 9),
+                (String::from("plugin"), None, 1),
+                (String::from("a"), Some(4), 5),
+                (String::from("a"), Some(6), 7),
+            ]
+        );
+        let first: serde_json::Value =
+            serde_json::from_str(&outbox.pop_serialized().expect("first event"))
+                .expect("event json");
+        assert_eq!(first["kind"], "conversationEventDeltaV1");
+        assert_eq!(first["payload"]["base_memory_revision"], 1);
+        assert_eq!(first["payload"]["revision"], 4);
+    }
+
+    /// Deltas published while a send is blocked reach the browser as one merged delta, in order.
+    /// 发送阻塞期间发布的增量以一条合并增量按序到达浏览器。
+    #[tokio::test]
+    async fn event_pump_merges_deltas_while_a_send_is_blocked() {
+        let (bus, receiver) = broadcast::channel(WEBUI_SERVICE_EVENT_BUS_CAPACITY);
+        // Each send waits for one permit, so the test decides when the browser drains.
+        // 每次发送等待一个许可，由测试决定浏览器何时消费。
+        let permits = Arc::new(tokio::sync::Semaphore::new(0));
+        let delivered = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let sink = futures_util::sink::unfold(
+            (permits.clone(), delivered.clone()),
+            |(permits, delivered), message: AxumWsMessage| async move {
+                permits.acquire().await.expect("gate open").forget();
+                let AxumWsMessage::Text(text) = message else {
+                    panic!("expected text frame");
+                };
+                delivered
+                    .lock()
+                    .expect("delivered log")
+                    .push(serde_json::from_str(text.as_str()).expect("event json"));
+                Ok::<_, axum::Error>((permits, delivered))
+            },
+        );
+        let pump = tokio::spawn(pump_webui_service_events(
+            Box::pin(sink),
+            futures_util::stream::pending(),
+            receiver,
+            Uuid::new_v4(),
+        ));
+
+        bus.send(volatile_delta("a", 0, 1))
+            .expect("bus has the pump subscriber");
+        wait_until_bus_drained(&bus).await;
+        for event in [
+            volatile_delta("a", 1, 2),
+            volatile_delta("a", 2, 3),
+            volatile_delta("a", 3, 4),
+            unmergeable_event(9),
+            volatile_delta("a", 4, 5),
+        ] {
+            bus.send(event).expect("bus has the pump subscriber");
+        }
+        wait_until_bus_drained(&bus).await;
+        permits.add_permits(usize::MAX >> 4);
+        while delivered.lock().expect("delivered log").len() < 4 {
+            tokio::task::yield_now().await;
+        }
+        drop(bus);
+        pump.await.expect("pump exits when the bus closes");
+
+        let delivered = delivered.lock().expect("delivered log");
+        let shape = delivered
+            .iter()
+            .map(|event| {
+                (
+                    event["kind"].as_str().expect("kind").to_string(),
+                    event["payload"]["base_memory_revision"].as_u64(),
+                    event["payload"]["revision"].as_u64().expect("revision"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let delta = String::from("conversationEventDeltaV1");
+        assert_eq!(
+            shape,
+            vec![
+                (delta.clone(), Some(0), 1),
+                (delta.clone(), Some(1), 4),
+                (String::from("pluginUiInvalidated"), None, 9),
+                (delta, Some(4), 5),
+            ]
+        );
+    }
+
+    /// Yields until the pump has taken every event off the bus.
+    /// 让出执行权，直到泵已从总线取走全部事件。
+    async fn wait_until_bus_drained(bus: &broadcast::Sender<ServiceEvent>) {
+        while !bus.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Unmergeable events are bounded by the bus capacity; deltas that merge never overflow.
+    /// 不可合并事件以总线容量为上限；可合并的增量永不溢出。
+    #[test]
+    fn outbox_bounds_unmergeable_events_by_bus_capacity() {
+        let mut outbox = WebuiServiceEventOutbox::default();
+        outbox.push(volatile_delta("a", 0, 1)).expect("queue delta");
+        for revision in 1..=(WEBUI_SERVICE_EVENT_BUS_CAPACITY as u64) * 2 {
+            outbox
+                .push(volatile_delta("a", revision, revision + 1))
+                .expect("merged delta never overflows");
+        }
+        assert_eq!(outbox.events.len(), 1);
+        for revision in 1..WEBUI_SERVICE_EVENT_BUS_CAPACITY as u64 {
+            outbox
+                .push(unmergeable_event(revision))
+                .expect("within capacity");
+        }
+        assert_eq!(outbox.events.len(), WEBUI_SERVICE_EVENT_BUS_CAPACITY);
+        assert_eq!(
+            outbox.push(unmergeable_event(0)),
+            Err(WEBUI_SERVICE_EVENT_BUS_CAPACITY)
+        );
     }
 
     /// Builds a minimal test WebUI service router.

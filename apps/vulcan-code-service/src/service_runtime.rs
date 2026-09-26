@@ -507,7 +507,8 @@ impl HeadlessService {
             // 以成功状态退出。
             return Ok(None);
         };
-        let (service_event_bus, _) = broadcast::channel(256);
+        let (service_event_bus, _) =
+            broadcast::channel(vulcan_service_host::WEBUI_SERVICE_EVENT_BUS_CAPACITY);
         let state = create_service_bridge_state(Arc::new(ServiceShellHostImpl));
         let event_emitter = ServiceEventEmitter::new(vec![webui_service_event_bus_sink(
             service_event_bus.clone(),

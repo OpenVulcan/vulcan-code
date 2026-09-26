@@ -4,7 +4,9 @@ import {
   ConversationEventBody,
   ConversationEventLivePatch,
   ConversationEventReconnectPatch,
+  ConversationEventRevisionGapError,
   ConversationEventSummary,
+  ConversationEventTextAppend,
   ConversationEventWindowBaseline,
   ConversationEventWindowStore,
   clientActionId,
@@ -1093,5 +1095,141 @@ describe("conversation-event-window-store V1 diagnostics", () => {
     second.applyLive(appended);
     expect(second.render().map((event) => event.seq)).toEqual([1, 2, 3]);
     expect(first.render().map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("conversation-event-window-store V1 text appends and merged ranges", () => {
+  /** Hydrates one streaming assistant text at an explicit memory revision.
+   * 在显式内存修订处 hydration 一条流式 assistant 正文。 */
+  function streamingStore(text: string, memoryRevision: number): ConversationEventWindowStore {
+    const store = new ConversationEventWindowStore();
+    store.hydrate({
+      ...batch([summary(1, assistantText(5, "streaming", text), 100, memoryRevision)]),
+      memory_revision: memoryRevision,
+      durable_revision: memoryRevision,
+    });
+    return store;
+  }
+
+  /** Builds one text append to seq 1.
+   * 构建一次针对 seq 1 的正文追加。 */
+  function append(baseLength: number, text: string, eventRevision: number): ConversationEventTextAppend {
+    return {
+      seq: 1,
+      event_revision: eventRevision,
+      updated_at_ms: 100 + eventRevision,
+      base_text_utf16_len: baseLength,
+      appended_text: text,
+    };
+  }
+
+  /** Builds one volatile patch spanning `base..revision` with only text appends.
+   * 构建一份跨越 `base..revision`、仅含正文追加的 volatile patch。 */
+  function appendPatch(
+    base: number,
+    revision: number,
+    appends: ConversationEventTextAppend[],
+  ): ConversationEventLivePatch {
+    return livePatch([], { base_memory_revision: base, revision, text_appends: appends });
+  }
+
+  it("applies a UTF-16 measured append exactly like the complete event", () => {
+    const appended = streamingStore("你好😀", 1);
+    appended.applyLive(appendPatch(1, 2, [append("你好😀".length, "，世界", 2)]));
+    const complete = streamingStore("你好😀", 1);
+    complete.applyLive(livePatch([summary(1, assistantText(5, "streaming", "你好😀，世界"), 102, 2)]));
+
+    expect("你好😀".length).toBe(4);
+    expect(appended.render()).toEqual(complete.render());
+    expect(appended.getFrontier()).toEqual(complete.getFrontier());
+  });
+
+  it("replays the same revision without changing the window", () => {
+    const store = streamingStore("ab", 1);
+    const patch = appendPatch(1, 2, [append(2, "cd", 2)]);
+    store.applyLive(patch);
+    const before = store.render();
+    store.applyLive(patch);
+
+    expect(store.render()).toEqual(before);
+    expect(store.render()[0].event).toMatchObject({ text: "abcd" });
+  });
+
+  it("rejects an append whose base disagrees with the loaded text", () => {
+    const store = streamingStore("ab", 1);
+
+    expect(() => store.applyLive(appendPatch(1, 2, [append(1, "cd", 2)])))
+      .toThrow(/expects base length 1/);
+    expect(store.getFrontier()?.memory_revision).toBe(1);
+    expect(store.render()[0].event).toMatchObject({ text: "ab" });
+  });
+
+  it("rejects appends to finished, foreign, unknown, or duplicated events", () => {
+    const completed = new ConversationEventWindowStore();
+    completed.hydrate(batch([summary(1, assistantText(5, "completed", "ab"), 100, 1)]));
+    expect(() => completed.applyLive(appendPatch(1, 2, [append(2, "cd", 2)])))
+      .toThrow(/loaded completed text/);
+
+    const foreign = new ConversationEventWindowStore();
+    foreign.hydrate(batch([summary(1, userInput(1), 100, 1)]));
+    expect(() => foreign.applyLive(appendPatch(1, 2, [append(0, "cd", 2)])))
+      .toThrow(/targets user_input/);
+
+    const store = streamingStore("ab", 1);
+    expect(() => store.applyLive(appendPatch(1, 2, [{ ...append(2, "cd", 2), seq: 2 }])))
+      .toThrow(/unknown seq 2/);
+    expect(() => store.applyLive(livePatch(
+      [summary(1, assistantText(5, "streaming", "abcd"), 102, 2)],
+      { base_memory_revision: 1, revision: 2, text_appends: [append(2, "cd", 2)] },
+    ))).toThrow(/repeats a complete event/);
+    expect(() => store.applyLive(appendPatch(1, 2, [append(2, "", 2)])))
+      .toThrow(/must append text/);
+    expect(() => store.applyLive(livePatch([], {
+      durability: "durable",
+      base_durable_revision: 1,
+      revision: 2,
+      text_appends: [append(2, "cd", 2)],
+    }))).toThrow(/must not carry text appends/);
+    expect(store.render()[0].event).toMatchObject({ text: "ab" });
+  });
+
+  it("applies a merged range that starts before the loaded frontier", () => {
+    // Loaded at revision 3, when seq 1 already read "abc" and seq 2 existed.
+    // 已加载到修订 3，此时 seq 1 为 "abc"，seq 2 已存在。
+    const store = new ConversationEventWindowStore();
+    store.hydrate({
+      ...batch([
+        summary(1, assistantText(5, "streaming", "abc"), 100, 3),
+        summary(2, userInput(2), 100, 1),
+      ]),
+      memory_revision: 3,
+      durable_revision: 3,
+    });
+    // Merged range 1..5: seq 1 grew from "a", seq 2 is unchanged since 1, seq 3 is new.
+    // 合并区间 1..5：seq 1 从 "a" 增长，seq 2 自修订 1 起未变，seq 3 为新事件。
+    store.applyLive(livePatch(
+      [summary(2, userInput(2), 100, 1), summary(3, userInput(3), 105, 1)],
+      { base_memory_revision: 1, revision: 5, text_appends: [append(1, "bcde", 5)] },
+    ));
+
+    expect(store.getFrontier()?.memory_revision).toBe(5);
+    expect(store.render().map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(store.render()[0]).toMatchObject({ event_revision: 5, event: { text: "abcde" } });
+
+    // A range whose loaded text disagrees with its target is rejected.
+    // 已加载正文与目标不一致的区间会被拒绝。
+    const drifted = streamingStore("abX", 3);
+    expect(() => drifted.applyLive(appendPatch(1, 5, [append(1, "bcde", 5)])))
+      .toThrow(/expects base length 1/);
+  });
+
+  it("still reports a gap for a range that starts after the frontier", () => {
+    const store = streamingStore("ab", 1);
+
+    expect(() => store.applyLive(appendPatch(2, 4, [append(3, "cd", 4)])))
+      .toThrow(ConversationEventRevisionGapError);
+    expect(() => store.applyLive(appendPatch(2, 2, [])))
+      .toThrow(/must advance its base/);
+    expect(store.getFrontier()?.memory_revision).toBe(1);
   });
 });

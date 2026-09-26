@@ -1,8 +1,11 @@
 //! Strongly typed V1 conversation-event service contracts.
 //! 强类型 V1 会话事件服务契约。
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use vulcan_session_core::v1::config::{ActiveRequestConfig, PendingRequestConfig, SessionConfig};
+use vulcan_session_core::v1::event::{AssistantSemanticStatus, EventBody};
 use vulcan_session_core::v1::ids::{Seq, TurnId};
 use vulcan_session_core::v1::service_dto::{
     ConversationEventSummary, ConversationEventWindowBatch,
@@ -359,8 +362,10 @@ pub struct ConversationEventLiveDeltaV1 {
     /// Exact in-memory revision represented or acknowledged by this delta.
     /// 该增量表示或确认的精确内存修订号。
     pub revision: u64,
-    /// Exact predecessor required only for one sparse volatile mutation patch.
-    /// 仅单次稀疏 volatile 修改补丁要求的精确前驱修订号。
+    /// Exact predecessor of a volatile patch. One mutation is an exact successor edge; a patch
+    /// merged from contiguous edges spans `base_memory_revision..revision`.
+    /// volatile 补丁的精确前驱修订号。单次修改为精确后继边；由相邻边合并的补丁跨越
+    /// `base_memory_revision..revision`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_memory_revision: Option<u64>,
     /// Exact predecessor required only for one durable acknowledgement edge.
@@ -370,6 +375,194 @@ pub struct ConversationEventLiveDeltaV1 {
     /// Whether the revision is memory-visible or durably published.
     /// 该修订是仅内存可见还是已经可靠发布。
     pub durability: ConversationEventPatchDurabilityV1,
+    /// Streaming-text appends in ascending seq order, each for a seq absent from `events`.
+    /// Only volatile patches carry them; the event at the base revision must hold exactly the
+    /// declared prefix length.
+    /// 按 seq 升序排列的流式正文追加，每条对应的 seq 不在 `events` 中。仅 volatile 补丁携带；
+    /// 基线修订处的事件必须恰好具有声明的前缀长度。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_appends: Vec<ConversationEventTextAppendV1>,
+}
+
+/// One append to the text of a streaming `assistant_text` or `assistant_reasoning` event.
+/// 对一条流式 `assistant_text` 或 `assistant_reasoning` 事件正文的一次追加。
+///
+/// Every other field of the event is unchanged by the append; a change to any of them is
+/// published as a complete event instead.
+/// 追加不改变事件的任何其他字段；其他字段的变化改为发布完整事件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationEventTextAppendV1 {
+    /// Event whose text grows.
+    /// 正文增长的事件。
+    pub seq: Seq,
+    /// Event revision after the append.
+    /// 追加后的事件修订号。
+    pub event_revision: u64,
+    /// Last-update time after the append, in Unix milliseconds.
+    /// 追加后的最近更新时间(Unix 毫秒)。
+    pub updated_at_ms: i64,
+    /// Text length before the append, in UTF-16 code units so browsers can check it directly.
+    /// 追加前的正文长度，以 UTF-16 码元计，便于浏览器直接校验。
+    pub base_text_utf16_len: u64,
+    /// Appended text.
+    /// 追加的正文。
+    pub appended_text: String,
+}
+
+impl ConversationEventTextAppendV1 {
+    /// Describes how `next` extends `previous`, when it is a pure streaming-text append.
+    /// 当 `next` 是对 `previous` 的纯流式正文追加时，描述该追加。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `previous` is the event as last published and `next` the same seq after later mutations.
+    /// `previous` 是上次发布的事件，`next` 是同一 seq 之后修改的结果。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the append when both are streaming text of the same kind, `next` text strictly
+    /// extends `previous` text, and every other field except the revision and update time is
+    /// equal; otherwise `None`, meaning `next` must be published as a complete event.
+    /// 两者为同类流式正文、`next` 正文严格延长 `previous` 正文，且除修订号与更新时间外其他字段
+    /// 均相同时返回追加；否则返回 `None`，表示 `next` 必须作为完整事件发布。
+    pub fn between(
+        previous: &ConversationEventSummary,
+        next: &ConversationEventSummary,
+    ) -> Option<Self> {
+        if previous.seq != next.seq
+            || previous.turn_id != next.turn_id
+            || previous.created_at_ms != next.created_at_ms
+            || previous.visibility != next.visibility
+        {
+            return None;
+        }
+        let previous_text = streaming_text(&previous.event)?;
+        let next_text = streaming_text(&next.event)?;
+        let appended_text = next_text.strip_prefix(previous_text)?;
+        if appended_text.is_empty() {
+            return None;
+        }
+        let mut expected = previous.event.clone();
+        *streaming_text_mut(&mut expected)? = next_text.to_owned();
+        if expected != next.event {
+            return None;
+        }
+        Some(Self {
+            seq: next.seq,
+            event_revision: next.event_revision,
+            updated_at_ms: next.updated_at_ms,
+            base_text_utf16_len: utf16_len(previous_text),
+            appended_text: appended_text.to_owned(),
+        })
+    }
+
+    /// Reports whether a later append may extend this event, i.e. it is streaming text.
+    /// 判断后续追加能否延长该事件，即它是否为流式正文。
+    pub fn can_extend(event: &ConversationEventSummary) -> bool {
+        streaming_text(&event.event).is_some()
+    }
+
+    /// Applies this append to the event it extends.
+    /// 把该追加应用到其延长的事件上。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the extended event, or an error when the event is not streaming text of the
+    /// declared base length.
+    /// 返回延长后的事件；若事件不是具有声明基线长度的流式正文则返回错误。
+    pub fn apply(
+        &self,
+        event: &ConversationEventSummary,
+    ) -> Result<ConversationEventSummary, String> {
+        if event.seq != self.seq {
+            return Err(format!(
+                "text append for seq {} cannot apply to seq {}",
+                self.seq.value(),
+                event.seq.value()
+            ));
+        }
+        let mut extended = event.clone();
+        let text = streaming_text_mut(&mut extended.event).ok_or_else(|| {
+            format!(
+                "text append for seq {} targets an event that is not streaming text",
+                self.seq.value()
+            )
+        })?;
+        let actual = utf16_len(text);
+        if actual != self.base_text_utf16_len {
+            return Err(format!(
+                "text append for seq {} expects base length {} but the event has {actual}",
+                self.seq.value(),
+                self.base_text_utf16_len
+            ));
+        }
+        text.push_str(&self.appended_text);
+        extended.event_revision = self.event_revision;
+        extended.updated_at_ms = self.updated_at_ms;
+        Ok(extended)
+    }
+
+    /// Concatenates a later append of the same seq onto this one.
+    /// 把同一 seq 的后续追加拼接到本追加之后。
+    fn then(&self, next: &Self) -> Result<Self, String> {
+        let expected_base = self.base_text_utf16_len + utf16_len(&self.appended_text);
+        if next.seq != self.seq || next.base_text_utf16_len != expected_base {
+            return Err(format!(
+                "text append for seq {} with base {} does not continue seq {} ending at {expected_base}",
+                next.seq.value(),
+                next.base_text_utf16_len,
+                self.seq.value()
+            ));
+        }
+        let mut appended_text = self.appended_text.clone();
+        appended_text.push_str(&next.appended_text);
+        Ok(Self {
+            seq: self.seq,
+            event_revision: next.event_revision,
+            updated_at_ms: next.updated_at_ms,
+            base_text_utf16_len: self.base_text_utf16_len,
+            appended_text,
+        })
+    }
+}
+
+/// Returns the text of a streaming assistant text or reasoning event.
+/// 返回流式 assistant 正文或思考事件的正文。
+fn streaming_text(body: &EventBody) -> Option<&str> {
+    match body {
+        EventBody::AssistantText(text) if text.status == AssistantSemanticStatus::Streaming => {
+            Some(&text.text)
+        }
+        EventBody::AssistantReasoning(reasoning)
+            if reasoning.status == AssistantSemanticStatus::Streaming =>
+        {
+            Some(&reasoning.text)
+        }
+        _ => None,
+    }
+}
+
+/// Returns the mutable text of a streaming assistant text or reasoning event.
+/// 返回流式 assistant 正文或思考事件的可变正文。
+fn streaming_text_mut(body: &mut EventBody) -> Option<&mut String> {
+    match body {
+        EventBody::AssistantText(text) if text.status == AssistantSemanticStatus::Streaming => {
+            Some(&mut text.text)
+        }
+        EventBody::AssistantReasoning(reasoning)
+            if reasoning.status == AssistantSemanticStatus::Streaming =>
+        {
+            Some(&mut reasoning.text)
+        }
+        _ => None,
+    }
+}
+
+/// Counts UTF-16 code units, the unit browsers use for string length.
+/// 统计 UTF-16 码元数量，即浏览器字符串长度的单位。
+fn utf16_len(text: &str) -> u64 {
+    text.encode_utf16().count() as u64
 }
 
 impl ConversationEventLiveDeltaV1 {
@@ -412,6 +605,7 @@ impl ConversationEventLiveDeltaV1 {
             base_memory_revision: Some(base_memory_revision),
             base_durable_revision: None,
             durability: ConversationEventPatchDurabilityV1::Volatile,
+            text_appends: Vec::new(),
         })
     }
 
@@ -457,6 +651,7 @@ impl ConversationEventLiveDeltaV1 {
             base_memory_revision: None,
             base_durable_revision: Some(base_durable_revision),
             durability: ConversationEventPatchDurabilityV1::Durable,
+            text_appends: Vec::new(),
         })
     }
 
@@ -469,6 +664,120 @@ impl ConversationEventLiveDeltaV1 {
     /// 返回该批次携带的精确有序摘要切片。
     pub fn events(&self) -> &[ConversationEventSummary] {
         &self.batch.events
+    }
+
+    /// Builds one volatile patch that carries streaming text as appends.
+    /// 构建一份以追加形式携带流式正文的 volatile 补丁。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `batch` holds the complete changed events and `text_appends` the appended ones; together
+    /// they are the exact change set of the successor edge `base_memory_revision -> revision`.
+    /// `batch` 持有完整的变更事件，`text_appends` 持有追加的事件；两者合起来是后继边
+    /// `base_memory_revision -> revision` 的精确变更集。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the patch, or an error when the edge is not an exact successor or the appends are
+    /// not in ascending seq order disjoint from `batch`.
+    /// 返回补丁；若不是精确后继边，或追加未按 seq 升序且与 `batch` 不相交，则返回错误。
+    pub fn volatile_with_text_appends(
+        batch: ConversationEventWindowBatch,
+        text_appends: Vec<ConversationEventTextAppendV1>,
+        service_epoch: impl Into<String>,
+        base_memory_revision: u64,
+        revision: u64,
+    ) -> Result<Self, String> {
+        let mut delta = Self::volatile(batch, service_epoch, base_memory_revision, revision)?;
+        for pair in text_appends.windows(2) {
+            if pair[0].seq >= pair[1].seq {
+                return Err(format!(
+                    "text appends must be in strictly ascending seq order: {} then {}",
+                    pair[0].seq.value(),
+                    pair[1].seq.value()
+                ));
+            }
+        }
+        if let Some(append) = text_appends.iter().find(|append| {
+            delta
+                .batch
+                .events
+                .iter()
+                .any(|event| event.seq == append.seq)
+        }) {
+            return Err(format!(
+                "seq {} cannot be both a complete event and a text append",
+                append.seq.value()
+            ));
+        }
+        delta.text_appends = text_appends;
+        Ok(delta)
+    }
+
+    /// Merges the volatile patch that directly follows this one into a single patch.
+    /// 把紧随本补丁的 volatile 补丁合并为一份补丁。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `next` must be volatile, belong to the same session, window generation and service epoch,
+    /// and start at this patch's revision.
+    /// `next` 必须是 volatile，属于相同会话、窗口代次与服务代次，并且从本补丁的修订号开始。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns a patch spanning both edges whose application equals applying both in order, or
+    /// `None` when the two cannot be merged and must be sent separately.
+    /// 返回跨越两条边的补丁，其应用效果等于依次应用两者；无法合并、必须分别发送时返回 `None`。
+    pub fn merge_volatile(&self, next: &Self) -> Option<Self> {
+        let base_memory_revision = self.base_memory_revision?;
+        if self.durability != ConversationEventPatchDurabilityV1::Volatile
+            || next.durability != ConversationEventPatchDurabilityV1::Volatile
+            || next.base_memory_revision != Some(self.revision)
+            || next.batch.session_id != self.batch.session_id
+            || next.batch.window_generation != self.batch.window_generation
+            || next.service_epoch != self.service_epoch
+        {
+            return None;
+        }
+        let mut events: BTreeMap<Seq, ConversationEventSummary> = self
+            .batch
+            .events
+            .iter()
+            .map(|event| (event.seq, event.clone()))
+            .collect();
+        let mut appends: BTreeMap<Seq, ConversationEventTextAppendV1> = self
+            .text_appends
+            .iter()
+            .map(|append| (append.seq, append.clone()))
+            .collect();
+        for event in &next.batch.events {
+            appends.remove(&event.seq);
+            events.insert(event.seq, event.clone());
+        }
+        for append in &next.text_appends {
+            if let Some(event) = events.get(&append.seq) {
+                let extended = append.apply(event).ok()?;
+                events.insert(append.seq, extended);
+            } else if let Some(previous) = appends.get(&append.seq) {
+                let joined = previous.then(append).ok()?;
+                appends.insert(append.seq, joined);
+            } else {
+                appends.insert(append.seq, append.clone());
+            }
+        }
+        Some(Self {
+            batch: ConversationEventWindowBatch {
+                session_id: self.batch.session_id.clone(),
+                window_generation: self.batch.window_generation,
+                events: events.into_values().collect(),
+            },
+            service_epoch: self.service_epoch.clone(),
+            revision: next.revision,
+            base_memory_revision: Some(base_memory_revision),
+            base_durable_revision: None,
+            durability: ConversationEventPatchDurabilityV1::Volatile,
+            text_appends: appends.into_values().collect(),
+        })
     }
 }
 
@@ -1165,5 +1474,287 @@ mod tests {
             )
         );
         assert!(rehydrate.batch.events.is_empty());
+    }
+
+    /// streaming_text_event builds one assistant text or reasoning summary for live-patch tests.
+    /// streaming_text_event 为实时补丁测试构建一条 assistant 正文或思考摘要。
+    fn streaming_text_event(
+        seq: u64,
+        reasoning: bool,
+        text: &str,
+        status: AssistantSemanticStatus,
+        event_revision: u64,
+    ) -> ConversationEventSummary {
+        use vulcan_session_core::v1::event::{
+            AssistantReasoningEvent, AssistantTextEvent, EventVisibility,
+        };
+        use vulcan_session_core::v1::ids::ApiCallId;
+        let api_call_id = ApiCallId::try_new(1).expect("api call id");
+        let event = if reasoning {
+            EventBody::AssistantReasoning(AssistantReasoningEvent {
+                api_call_id,
+                text: text.to_string(),
+                status,
+                provider_source: None,
+            })
+        } else {
+            EventBody::AssistantText(AssistantTextEvent {
+                api_call_id,
+                text: text.to_string(),
+                status,
+                provider_source: None,
+            })
+        };
+        ConversationEventSummary {
+            seq: Seq::try_new(seq).expect("seq"),
+            turn_id: None,
+            created_at_ms: 100,
+            updated_at_ms: 100 + event_revision as i64,
+            event_revision,
+            visibility: EventVisibility::Provider,
+            event,
+        }
+    }
+
+    /// live_batch wraps events in the owner used by the live-patch tests.
+    /// live_batch 用实时补丁测试使用的归属包装事件。
+    fn live_batch(events: Vec<ConversationEventSummary>) -> ConversationEventWindowBatch {
+        ConversationEventWindowBatch {
+            session_id: "session-append".to_string(),
+            window_generation: 2,
+            events,
+        }
+    }
+
+    /// apply_patch applies one volatile patch to a seq-keyed window, as the WebUI store does.
+    /// apply_patch 像 WebUI store 一样把一份 volatile 补丁应用到按 seq 索引的窗口。
+    fn apply_patch(
+        window: &mut BTreeMap<Seq, ConversationEventSummary>,
+        patch: &ConversationEventLiveDeltaV1,
+    ) {
+        for event in &patch.batch.events {
+            window.insert(event.seq, event.clone());
+        }
+        for append in &patch.text_appends {
+            let extended = append
+                .apply(window.get(&append.seq).expect("appended event is loaded"))
+                .expect("append applies to its base");
+            window.insert(append.seq, extended);
+        }
+    }
+
+    /// A pure streaming extension becomes an append measured in UTF-16 code units.
+    /// 纯流式延长成为以 UTF-16 码元计量的追加。
+    #[test]
+    fn text_append_describes_pure_streaming_extensions_only() {
+        let streaming = AssistantSemanticStatus::Streaming;
+        let before = streaming_text_event(5, false, "你好😀", streaming, 3);
+        let after = streaming_text_event(5, false, "你好😀，世界", streaming, 4);
+        let append = ConversationEventTextAppendV1::between(&before, &after).expect("pure append");
+        assert_eq!(append.base_text_utf16_len, 4);
+        assert_eq!(append.appended_text, "，世界");
+        assert_eq!(append.event_revision, 4);
+        assert_eq!(append.apply(&before).expect("apply append"), after);
+
+        let completed = streaming_text_event(
+            5,
+            false,
+            "你好😀，世界",
+            AssistantSemanticStatus::Completed,
+            4,
+        );
+        assert!(ConversationEventTextAppendV1::between(&before, &completed).is_none());
+        let rewritten = streaming_text_event(5, false, "再见", streaming, 4);
+        assert!(ConversationEventTextAppendV1::between(&before, &rewritten).is_none());
+        assert!(ConversationEventTextAppendV1::between(&before, &before).is_none());
+        let reasoning = streaming_text_event(5, true, "你好😀，世界", streaming, 4);
+        assert!(ConversationEventTextAppendV1::between(&before, &reasoning).is_none());
+
+        let shorter = streaming_text_event(5, false, "你好", streaming, 3);
+        assert!(append.apply(&shorter).is_err());
+    }
+
+    /// Appends serialize with an explicit shape and are omitted when absent.
+    /// 追加以明确形状序列化，缺省时省略。
+    #[test]
+    fn text_appends_serialize_only_when_present() {
+        let streaming = AssistantSemanticStatus::Streaming;
+        let plain = ConversationEventLiveDeltaV1::volatile(live_batch(Vec::new()), "epoch", 1, 2)
+            .expect("plain volatile patch");
+        assert!(
+            serde_json::to_value(&plain)
+                .expect("serialize plain patch")
+                .get("text_appends")
+                .is_none()
+        );
+
+        let append = ConversationEventTextAppendV1::between(
+            &streaming_text_event(7, true, "a", streaming, 1),
+            &streaming_text_event(7, true, "ab", streaming, 2),
+        )
+        .expect("append");
+        let patch = ConversationEventLiveDeltaV1::volatile_with_text_appends(
+            live_batch(Vec::new()),
+            vec![append],
+            "epoch",
+            1,
+            2,
+        )
+        .expect("append patch");
+        let value = serde_json::to_value(&patch).expect("serialize append patch");
+        assert_eq!(
+            value["text_appends"],
+            serde_json::json!([{
+                "seq": 7,
+                "event_revision": 2,
+                "updated_at_ms": 102,
+                "base_text_utf16_len": 1,
+                "appended_text": "b",
+            }])
+        );
+        let decoded: ConversationEventLiveDeltaV1 =
+            serde_json::from_value(value).expect("decode append patch");
+        assert_eq!(decoded, patch);
+    }
+
+    /// Append patches reject unordered appends and seqs that are also complete events.
+    /// 追加补丁拒绝乱序追加以及同时作为完整事件的 seq。
+    #[test]
+    fn append_patch_rejects_ambiguous_change_sets() {
+        let streaming = AssistantSemanticStatus::Streaming;
+        let append_for = |seq: u64| {
+            ConversationEventTextAppendV1::between(
+                &streaming_text_event(seq, false, "a", streaming, 1),
+                &streaming_text_event(seq, false, "ab", streaming, 2),
+            )
+            .expect("append")
+        };
+        assert!(
+            ConversationEventLiveDeltaV1::volatile_with_text_appends(
+                live_batch(Vec::new()),
+                vec![append_for(9), append_for(8)],
+                "epoch",
+                1,
+                2,
+            )
+            .is_err()
+        );
+        assert!(
+            ConversationEventLiveDeltaV1::volatile_with_text_appends(
+                live_batch(vec![streaming_text_event(8, false, "ab", streaming, 2)]),
+                vec![append_for(8)],
+                "epoch",
+                1,
+                2,
+            )
+            .is_err()
+        );
+    }
+
+    /// Merging contiguous volatile patches equals applying them one after another.
+    /// 合并相邻 volatile 补丁等价于依次应用它们。
+    #[test]
+    fn merged_volatile_patches_apply_like_their_sequence() {
+        let streaming = AssistantSemanticStatus::Streaming;
+        let completed = AssistantSemanticStatus::Completed;
+        let reasoning_1 = streaming_text_event(3, true, "想", streaming, 1);
+        let reasoning_2 = streaming_text_event(3, true, "想一想", streaming, 2);
+        let reasoning_3 = streaming_text_event(3, true, "想一想。", completed, 3);
+        let answer_1 = streaming_text_event(4, false, "答", streaming, 1);
+        let answer_2 = streaming_text_event(4, false, "答案😀", streaming, 2);
+        let answer_3 = streaming_text_event(4, false, "答案😀是", streaming, 3);
+
+        let append = |before: &ConversationEventSummary, after: &ConversationEventSummary| {
+            ConversationEventTextAppendV1::between(before, after).expect("append")
+        };
+        let patches = vec![
+            ConversationEventLiveDeltaV1::volatile_with_text_appends(
+                live_batch(Vec::new()),
+                vec![append(&reasoning_1, &reasoning_2)],
+                "epoch",
+                10,
+                11,
+            )
+            .expect("patch 11"),
+            ConversationEventLiveDeltaV1::volatile(
+                live_batch(vec![reasoning_3.clone(), answer_1.clone()]),
+                "epoch",
+                11,
+                12,
+            )
+            .expect("patch 12"),
+            ConversationEventLiveDeltaV1::volatile_with_text_appends(
+                live_batch(Vec::new()),
+                vec![append(&answer_1, &answer_2)],
+                "epoch",
+                12,
+                13,
+            )
+            .expect("patch 13"),
+            ConversationEventLiveDeltaV1::volatile_with_text_appends(
+                live_batch(Vec::new()),
+                vec![append(&answer_2, &answer_3)],
+                "epoch",
+                13,
+                14,
+            )
+            .expect("patch 14"),
+        ];
+        let base: BTreeMap<Seq, ConversationEventSummary> =
+            [(reasoning_1.seq, reasoning_1.clone())]
+                .into_iter()
+                .collect();
+
+        let mut sequential = base.clone();
+        for patch in &patches {
+            apply_patch(&mut sequential, patch);
+        }
+        // Every suffix of merges must be equivalent, including append-onto-append chains.
+        // 每一段合并后缀都必须等价，包括追加接追加的链。
+        for start in 0..patches.len() {
+            let mut prefix = base.clone();
+            for patch in &patches[..start] {
+                apply_patch(&mut prefix, patch);
+            }
+            let merged =
+                patches[start + 1..]
+                    .iter()
+                    .fold(patches[start].clone(), |merged, next| {
+                        merged
+                            .merge_volatile(next)
+                            .expect("contiguous patches merge")
+                    });
+            assert_eq!(merged.revision, 14);
+            assert_eq!(merged.base_memory_revision, Some(10 + start as u64));
+            apply_patch(&mut prefix, &merged);
+            assert_eq!(prefix, sequential, "merge from patch {start} diverged");
+        }
+        assert_eq!(sequential.get(&answer_3.seq), Some(&answer_3));
+        assert_eq!(sequential.get(&reasoning_3.seq), Some(&reasoning_3));
+    }
+
+    /// Only contiguous volatile patches of the same owner and service epoch merge.
+    /// 只有同一归属与服务代次的相邻 volatile 补丁可以合并。
+    #[test]
+    fn merge_rejects_non_contiguous_or_foreign_patches() {
+        let first = ConversationEventLiveDeltaV1::volatile(live_batch(Vec::new()), "epoch", 1, 2)
+            .expect("first");
+        let gap = ConversationEventLiveDeltaV1::volatile(live_batch(Vec::new()), "epoch", 3, 4)
+            .expect("gap");
+        assert!(first.merge_volatile(&gap).is_none());
+        let other_epoch =
+            ConversationEventLiveDeltaV1::volatile(live_batch(Vec::new()), "other", 2, 3)
+                .expect("other epoch");
+        assert!(first.merge_volatile(&other_epoch).is_none());
+        let mut other_generation = live_batch(Vec::new());
+        other_generation.window_generation = 3;
+        let other_generation =
+            ConversationEventLiveDeltaV1::volatile(other_generation, "epoch", 2, 3)
+                .expect("other generation");
+        assert!(first.merge_volatile(&other_generation).is_none());
+        let durable = ConversationEventLiveDeltaV1::durable_ack("session-append", 2, "epoch", 1, 2)
+            .expect("durable");
+        assert!(first.merge_volatile(&durable).is_none());
+        assert!(durable.merge_volatile(&first).is_none());
     }
 }
