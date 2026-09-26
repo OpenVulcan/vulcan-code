@@ -1960,17 +1960,21 @@ async fn collect_ordered_provider_results<I, F>(
 ) -> Result<String, String>
 where
     I: IntoIterator<Item = F>,
-    F: std::future::Future<Output = Result<String, String>>,
+    F: std::future::Future<Output = Result<String, String>> + Send,
 {
     // Observe errors in completion order so stalled predecessors cannot hide failures.
     // 按完成顺序观察错误，避免停滞的前序请求掩盖失败。
-    let results = futures_util::stream::iter(
-        requests
-            .into_iter()
-            .enumerate()
-            .map(|(index, request)| async move { request.await.map(|text| (index, text)) }),
-    )
-    .buffer_unordered(PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY);
+    // Materialize the admitted request list before awaiting across the host's Send boundary.
+    // 在跨越宿主 Send 边界等待之前物化已经准入的请求列表。
+    // The caller has already checked the manifest-owned max_items bound.
+    // 调用方已校验 Manifest 持有的 max_items 上限。
+    let requests = requests
+        .into_iter()
+        .enumerate()
+        .map(|(index, request)| async move { request.await.map(|text| (index, text)) })
+        .collect::<Vec<_>>();
+    let results =
+        futures_util::stream::iter(requests).buffer_unordered(PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY);
     futures_util::pin_mut!(results);
     // Retain successful results by submission index under the aggregate output ceiling.
     // 按提交序号保留成功结果，并统一限制累计输出上限。
