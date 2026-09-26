@@ -306,7 +306,9 @@ function hasExplicitTurnStartMetadata(item: ConversationRenderItem): boolean {
 
 // isAssistantMarkdownRenderItem returns whether a row is the visible assistant answer shape.
 // isAssistantMarkdownRenderItem 返回单条记录是否为可见助手回答形态。
-function isAssistantMarkdownRenderItem(item: ConversationRenderItem): boolean {
+// Parameter item is one projected row; returns true for the canonical assistant content shape.
+// 参数 item 为投影记录；规范助手正文形态返回 true。
+export function isAssistantMarkdownRenderItem(item: ConversationRenderItem): boolean {
   return item.role === "assistant" && item.blocks.length === 1 && item.blocks[0]?.kind === "markdown";
 }
 

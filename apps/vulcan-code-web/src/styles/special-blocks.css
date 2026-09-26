@@ -364,6 +364,7 @@
 .conversation-tool-sequence {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -398,7 +399,9 @@
 }
 
 .conversation-tool-sequence-body {
+  min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -409,7 +412,10 @@
     calc(var(--tool-presentation-expanded-height-unit) + var(--tool-presentation-expanded-height-unit)),
     78vh
   );
-  overflow: auto;
+  /* Tool contents own horizontal scrolling; the group scrolls vertically only. */
+  /* 工具内容自行处理横向滚动；整个工具组仅允许纵向滚动。 */
+  overflow-x: hidden;
+  overflow-y: auto;
   /* Boundary wheel deltas continue into the parent conversation viewport. */
   /* 边界处的滚轮增量继续传递给父级会话视口。 */
   overscroll-behavior: auto;

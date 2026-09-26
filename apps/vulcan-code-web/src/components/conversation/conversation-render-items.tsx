@@ -39,6 +39,7 @@ import {
   conversationMessageUnixMillis,
   formatShortConversationTimestamp,
   formatWorkProcessDuration,
+  isAssistantMarkdownRenderItem,
 } from "@/components/conversation/conversation-timeline";
 import type {
   ConversationProcessRenderItem,
@@ -88,8 +89,8 @@ type ConversationProcessBodyEntry =
     // Stable collapse identity derived from the first tool row.
     // 从首条工具记录派生的稳定折叠标识。
     collapseId: string;
-    // The live tail or a still-running earlier group stays open by default.
-    // 实时末组或仍在执行的前组默认保持展开。
+    // No assistant boundary has closed this sequence, or a tool is still running.
+    // 尚无助手正文结束此序列，或仍有工具正在执行。
     active: boolean;
     // Original consecutive tool order inside the single persistent group body.
     // 单一稳定分组正文内的原始连续工具顺序。
@@ -102,30 +103,32 @@ type ConversationProcessBodyEntry =
     runningItems: ConversationRenderItem[];
   };
 
-// groupVisibleProcessBodyEntries folds only consecutive visible tool rows.
-// groupVisibleProcessBodyEntries 仅折叠显示层面连续出现的工具记录。
+// groupVisibleProcessBodyEntries keeps reasoning inside tool runs until assistant content closes them.
+// groupVisibleProcessBodyEntries 将思考保留在工具序列内，直到助手正文结束序列。
 // Parameters: processId identifies the owning turn, items contains already display-filtered rows,
-// sessionRunning resolves tool calls without explicit results, and processRunning determines whether the tail can grow.
-// 参数：processId 标识所属回合，items 包含显示过滤后的记录，sessionRunning 判定无明确结果的调用，processRunning 决定末组是否仍可增长。
+// sessionRunning resolves unfinished calls, and finalAssistantFollows identifies the final answer extracted by the timeline.
+// 参数：processId 标识所属回合，items 包含显示过滤后的记录，sessionRunning 判定未完成调用，finalAssistantFollows 表示时间线已提取尾部最终回复。
 // Returns: ordered single rows and tool-sequence groups without moving assistant content.
 // 返回值：保持顺序的单条记录与工具序列组，且不会移动 Assistant 内容。
 export function groupVisibleProcessBodyEntries(
   processId: string,
   items: ConversationRenderItem[],
   sessionRunning: boolean,
-  // The owning process, unlike the session, may already be terminal.
-  // 所属过程与会话不同，可能已经终结。
-  processRunning = sessionRunning,
+  // Only an actual final answer outside the process closes the tail; stopping alone does not.
+  // 只有过程外真实存在的最终回复才结束末组；单纯停止不会触发折叠。
+  finalAssistantFollows = false,
 ): ConversationProcessBodyEntry[] {
   // entries stores the final display order of single rows and folded tool sequences.
   // entries 保存单条记录与折叠工具序列的最终显示顺序。
   const entries: ConversationProcessBodyEntry[] = [];
-  // pendingToolItems accumulates the current uninterrupted visible tool run.
-  // pendingToolItems 累积当前未被打断的可见工具序列。
+  // pendingToolItems retains tools and intervening reasoning in their original order.
+  // pendingToolItems 按原始顺序保留工具及其间的思考。
   let pendingToolItems: ConversationRenderItem[] = [];
   // Start with the first tool so appending another never moves a live card into a different container.
   // 从首个工具开始成组，避免追加工具时把实时卡片移到不同容器。
-  const flushPendingTools = (isTail = false) => {
+  // assistantBoundary determines whether this flush permits folding; returns no value.
+  // assistantBoundary 决定本次输出是否允许折叠；无返回值。
+  const flushPendingTools = (assistantBoundary = false) => {
     if (pendingToolItems.length > 0) {
       // firstItem provides a stable identity even while a running sequence gains more tools.
       // firstItem 在运行中序列继续增加工具时仍提供稳定标识。
@@ -140,6 +143,9 @@ export function groupVisibleProcessBodyEntries(
         // toolBlocks is the already-confirmed execution block set for the current tool row.
         // toolBlocks 是当前工具行中已经确认的执行块集合。
         const toolBlocks = item.blocks.filter(isMergeableToolBlock);
+        // Reasoning stays visible in order but never contributes to tool counts.
+        // 思考保持原位展示，但不计入工具次数。
+        if (toolBlocks.length === 0) continue;
         // displayState separates active rows from every terminal outcome.
         // displayState 仅区分活动记录与所有终态结果。
         const displayState = toolExecutionDisplayState(toolBlocks, sessionRunning);
@@ -152,7 +158,7 @@ export function groupVisibleProcessBodyEntries(
       entries.push({
         kind: "tool-sequence",
         collapseId: `tool-sequence:${processId}:${firstItem.renderKey ?? firstItem.id}`,
-        active: processRunning && (isTail || runningItems.length > 0),
+        active: !assistantBoundary || runningItems.length > 0,
         completedItems,
         items: pendingToolItems,
         runningItems,
@@ -166,10 +172,17 @@ export function groupVisibleProcessBodyEntries(
       pendingToolItems.push(item);
       continue;
     }
-    flushPendingTools();
+    // Live reasoning must not repeatedly close and reopen the preceding tools.
+    // 实时思考不能反复关闭再重新打开前面的工具组。
+    if (pendingToolItems.length > 0 && item.role === "assistant"
+      && item.blocks.every((block) => block.kind === "thinking")) {
+      pendingToolItems.push(item);
+      continue;
+    }
+    flushPendingTools(isAssistantMarkdownRenderItem(item));
     entries.push({ kind: "item", item });
   }
-  flushPendingTools(true);
+  flushPendingTools(finalAssistantFollows);
   return entries;
 }
 
@@ -181,8 +194,8 @@ export function groupVisibleProcessBodyEntries(
 // Returns one summary and one stable ordered body, without a separate retirement layer.
 // 返回一个摘要及一个稳定有序正文，不再有独立退场层。
 export function ConversationToolSequenceGroup(props: {
-  // Whether the owning live process can still append tools to this group.
-  // 所属实时过程是否仍可向此分组追加工具。
+  // Whether this sequence still awaits assistant content or a running tool.
+  // 此序列是否仍在等待助手正文或正在运行的工具。
   active: boolean;
   // Whether automatic tool folding is enabled for this conversation.
   // 当前会话是否启用工具自动折叠。
@@ -206,12 +219,12 @@ export function ConversationToolSequenceGroup(props: {
   // t resolves the count labels.
   // t 解析数量标签。
   const { t } = useI18n();
-  // Only deliberate clicks enter expansion memory; lifecycle defaults remain derived.
-  // 仅主动点击进入展开记忆；生命周期默认值始终由当前事实推导。
-  const [rememberedExpanded, setExpanded] = useConversationMeasuredExpansion(props.collapseId, props.active);
-  // Only multiple tools with folding enabled need a summary; keep their body stable as tools arrive.
-  // 仅开启折叠的多工具序列需要汇总栏；工具陆续到达时保持正文容器稳定。
-  const grouped = props.collapseEnabled && props.items.length > 1;
+  // Active sequences force visibility below; closed groups start collapsed without an effect-driven intermediate frame.
+  // 活动序列在下方强制展示；已结束分组直接默认收起，避免等待 effect 时出现中间帧。
+  const [rememberedExpanded, setExpanded] = useConversationMeasuredExpansion(props.collapseId, false);
+  // The summary and bounded viewport appear only after assistant content closes multiple tools.
+  // 只有助手正文结束多工具序列后才显示汇总栏与限高视口。
+  const grouped = props.collapseEnabled && !props.active && props.completedItems.length > 1;
   // Single tools and disabled folding override any remembered collapsed state.
   // 单工具与关闭折叠均优先于任何已记忆的收起状态。
   const expanded = !grouped || rememberedExpanded;
@@ -351,8 +364,12 @@ export function ConversationProcessGroup(props: {
   const visibleProcessBodyEntries = groupVisibleProcessBodyEntries(
     props.process.id,
     visibleProcessItems,
-    props.sessionRunning,
+    // An earlier terminal process cannot inherit a later turn's running status.
+    // 已终止的历史过程不能继承后续回合的运行状态。
     props.process.running,
+    // The timeline extracts a final assistant row exactly when this process becomes collapsible.
+    // 时间线仅在提取最终助手回复后才将此过程标记为可折叠。
+    props.process.collapsible,
   );
   const visibleCollapsedProcessUserItems = collapsed ? visibleProcessItems.filter(isTurnProcessUserRenderItem) : [];
   // streamingProcessItemIds comes only from explicit backend lifecycle metadata, never row position or run phase.
