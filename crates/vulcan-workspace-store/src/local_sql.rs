@@ -21,12 +21,12 @@
 //!
 //! Connection lifetime / 连接生命周期:
 //!
-//! Each convenience helper opens one connection and drops it when the call returns, because that
-//! matches the per-call semantics the controller had. A caller performing several operations should
-//! use [`with_connection`] instead and reuse one connection for the whole sequence.
-//!
-//! 每个便利辅助函数打开一个连接并在返回时释放，因为这与控制器原有的按调用语义一致。需要执行多次操作的
-//! 调用方应改用 [`with_connection`]，为整个序列复用一个连接。
+//! Each helper owns an isolated connection; related reads share [`with_read_snapshot_async`].
+//! 每个辅助函数持有独立连接；相关读取通过 [`with_read_snapshot_async`] 共享快照。
+//! Mixed read/write sequences use [`with_connection_async`] with an explicit transaction.
+//! 混合读写序列使用 [`with_connection_async`] 与显式事务。
+//! Connections are not pooled across callers, keeping temporary state and interrupts isolated.
+//! 连接不跨调用方复用，避免临时状态及中断互相影响。
 //!
 //! [`with_connection`] is the one entry point that must never be called from asynchronous code directly:
 //! it runs a whole sequence synchronously, so it belongs inside a blocking task started through
@@ -281,6 +281,34 @@ pub async fn with_connection_async<T: Send + 'static>(
         })
         .await
         .map_err(render_boundary_failure)
+}
+
+/// Reads a related projection using one connection and one SQLite snapshot.
+/// 使用一个连接及一个 SQLite 快照读取相关投影。
+///
+/// `body` runs on the existing physical-database blocking boundary. Its read transaction
+/// and connection are dropped before admission is released, including on error or cancellation.
+/// Connections are never pooled across callers: temporary state and deadline interrupts stay isolated.
+/// `body` 在现有物理数据库阻塞边界内运行；读取事务及连接在释放准入之前清理，包括失败和取消。
+/// 连接不跨调用方进入池，避免临时状态及截止时间中断串扰。
+///
+/// Returns the complete projection or a connection, query, or transaction failure.
+/// 返回完整投影，或连接、查询及事务失败。
+pub async fn with_read_snapshot_async<T: Send + 'static>(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    body: impl FnOnce(&rusqlite::Connection) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    with_connection_async(runtime, target, move |connection| {
+        connection
+            .pragma_update(None, "query_only", true)
+            .map_err(render)?;
+        let transaction = connection.transaction().map_err(render)?;
+        let result = body(&transaction)?;
+        transaction.commit().map_err(render)?;
+        Ok(result)
+    })
+    .await
 }
 
 /// Runs ordered scripts and one parameterized terminal statement atomically on the blocking boundary.
@@ -1529,6 +1557,213 @@ mod tests {
             .expect("decode arrow batches");
         let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
         assert_eq!(rows, 2);
+    }
+
+    /// Related queries cannot observe different database generations during one projection.
+    /// 同一投影中的相关查询不能观察到不同数据库代次。
+    #[tokio::test]
+    async fn read_snapshot_reuses_one_transaction_and_isolates_the_next_caller() {
+        let (_directory, handle) = fixture();
+        execute_script(
+            handle.local.as_ref(),
+            LogicalDatabase::SystemStatistics,
+            "CREATE TABLE snapshot_value (value INTEGER); INSERT INTO snapshot_value VALUES (1);",
+            &[],
+        )
+        .expect("seed snapshot");
+        let database =
+            database_path(handle.local.as_ref(), LogicalDatabase::SystemStatistics).expect("path");
+        let observed = super::with_read_snapshot_async(
+            &handle.local,
+            LogicalDatabase::SystemStatistics,
+            move |reader| {
+                assert!(
+                    !reader.is_autocommit(),
+                    "all projection queries must share one read transaction"
+                );
+                let first: i64 = reader
+                    .query_row("SELECT value FROM snapshot_value", [], |row| row.get(0))
+                    .map_err(|error| error.to_string())?;
+                // An independent WAL connection simulates a writer between this projection's reads.
+                // 独立 WAL 连接模拟当前投影两次读取之间的写入。
+                let writer =
+                    rusqlite::Connection::open(database).map_err(|error| error.to_string())?;
+                writer
+                    .execute("UPDATE snapshot_value SET value = 2", [])
+                    .map_err(|error| error.to_string())?;
+                let second: i64 = reader
+                    .query_row("SELECT value FROM snapshot_value", [], |row| row.get(0))
+                    .map_err(|error| error.to_string())?;
+                assert!(
+                    reader
+                        .execute("UPDATE snapshot_value SET value = 3", [])
+                        .is_err(),
+                    "projection is read-only"
+                );
+                Ok((first, second))
+            },
+        )
+        .await
+        .expect("complete snapshot");
+        assert_eq!(observed, (1, 1));
+        let next = super::with_connection_async(
+            &handle.local,
+            LogicalDatabase::SystemStatistics,
+            |connection| {
+                assert!(
+                    connection.is_autocommit(),
+                    "a prior read transaction must not leak"
+                );
+                connection
+                    .execute("UPDATE snapshot_value SET value = 3", [])
+                    .map_err(|error| error.to_string())?;
+                connection
+                    .query_row("SELECT value FROM snapshot_value", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .map_err(|error| error.to_string())
+            },
+        )
+        .await
+        .expect("next caller is writable and current");
+        assert_eq!(next, 3);
+    }
+
+    /// A failed projection drops its read transaction without poisoning future operations.
+    /// 失败投影释放读取事务，不污染后续操作。
+    #[tokio::test]
+    async fn failed_read_snapshot_releases_its_connection() {
+        let (_directory, handle) = fixture();
+        let failed = super::with_read_snapshot_async(
+            &handle.local,
+            LogicalDatabase::SystemStatistics,
+            |_| Err::<(), _>("projection failed".to_string()),
+        )
+        .await;
+        assert_eq!(failed.expect_err("explicit failure"), "projection failed");
+        super::execute_script_async(
+            &handle.local,
+            LogicalDatabase::SystemStatistics,
+            "CREATE TABLE after_failure (id INTEGER);",
+            Vec::new(),
+        )
+        .await
+        .expect("boundary remains usable");
+    }
+
+    /// Cancellation releases the waiter, but the running read retains its database gate until cleanup.
+    /// 取消会释放等待方，但正在执行的读取保留数据库闸门直至清理完成。
+    #[tokio::test]
+    async fn cancelled_read_snapshot_retains_gate_until_actual_cleanup() {
+        // Isolate the database and coordinate real blocking work without relying on scheduling order.
+        // 隔离数据库并协调真实阻塞工作，不依赖任务调度顺序。
+        let (_directory, handle) = fixture();
+        let runtime = Arc::clone(&handle.local);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let read = tokio::spawn(async move {
+            super::with_read_snapshot_async(
+                &runtime,
+                LogicalDatabase::SystemStatistics,
+                move |connection| {
+                    assert!(!connection.is_autocommit());
+                    started_tx.send(()).expect("announce active transaction");
+                    release_rx
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .map_err(|error| error.to_string())?;
+                    Ok(())
+                },
+            )
+            .await
+        });
+        started_rx.await.expect("read transaction started");
+        read.abort();
+        assert!(read.await.expect_err("waiter cancelled").is_cancelled());
+        // The second operation must remain queued while the detached blocking read still owns its gate.
+        // 脱离等待方的阻塞读取仍持有闸门时，第二次操作必须保持排队。
+        let runtime = Arc::clone(&handle.local);
+        let mut next = tokio::spawn(async move {
+            super::with_connection_async(
+                &runtime,
+                LogicalDatabase::SystemStatistics,
+                |connection| {
+                    assert!(connection.is_autocommit());
+                    connection
+                        .execute_batch("CREATE TABLE after_cancel (id INTEGER);")
+                        .map_err(render)
+                },
+            )
+            .await
+        });
+        let remained_queued = tokio::time::timeout(std::time::Duration::from_millis(50), &mut next)
+            .await
+            .is_err();
+        release_tx
+            .send(())
+            .expect("release real read before asserting");
+        assert!(
+            remained_queued,
+            "cancellation must not release an active database gate"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), next)
+            .await
+            .expect("operation completes after actual cleanup")
+            .expect("join queued caller")
+            .expect("connection is writable and isolated");
+    }
+
+    /// Real dashboard and memory projections share read scopes without leaking across hosts.
+    /// 真实用量面板与记忆投影复用读取作用域，且不会跨宿主泄漏数据。
+    #[tokio::test]
+    async fn read_snapshot_business_projections_keep_hosts_isolated() {
+        // Both fixtures own independent data roots and database bindings.
+        // 两个夹具分别持有独立的数据根目录与数据库绑定。
+        let (_first_root, first) = fixture();
+        let (_second_root, second) = fixture();
+        let dashboard = crate::workspace_store::load_provider_usage_dashboard(&first)
+            .await
+            .expect("read all dashboard panels through one transaction");
+        assert!(
+            dashboard.daily.is_empty()
+                && dashboard.recent_attempts.is_empty()
+                && dashboard.accounts.is_empty()
+        );
+        let first_vmm = crate::vmm_data_plane::bootstrap_vmm_data_plane(&first)
+            .await
+            .expect("first memory store");
+        let second_vmm = crate::vmm_data_plane::bootstrap_vmm_data_plane(&second)
+            .await
+            .expect("second memory store");
+        let project = first_vmm
+            .create_project("Snapshot fixture", "snapshot-fixture")
+            .await
+            .expect("project");
+        first_vmm
+            .bind_vulcan_project("workspace-one", project.id)
+            .await
+            .expect("binding");
+        let usage = first_vmm
+            .project_usage(project.id)
+            .await
+            .expect("consistent usage projection");
+        assert_eq!(usage.owner_vulcan_project_ids, vec!["workspace-one"]);
+        let bindings = first_vmm
+            .list_project_bindings()
+            .await
+            .expect("consistent binding projection");
+        assert!(
+            bindings
+                .iter()
+                .any(|binding| binding.vulcan_project_id == "workspace-one"
+                    && binding.owner_project_id == project.id)
+        );
+        assert!(
+            second_vmm
+                .list_project_bindings()
+                .await
+                .expect("isolated binding projection")
+                .is_empty()
+        );
     }
 
     #[test]

@@ -623,7 +623,7 @@ pub fn execute_scripts_transaction(
 ///
 /// 列顺序遵循语句的列顺序；由于行对象以名称为键，重复列名会收敛为最后一次出现。
 pub fn query_json(
-    connection: &mut Connection,
+    connection: &Connection,
     sql: &str,
     bound_values: &[SqliteValue],
 ) -> EngineResult<QueryJsonResult> {
@@ -662,7 +662,7 @@ impl QueryJsonLimits {
 /// Returns the encoded rows, or [`SqliteEngineError::ResultLimitExceeded`] naming the crossed limit.
 /// 返回编码后的行，或指明被越过上限的 [`SqliteEngineError::ResultLimitExceeded`]。
 pub fn query_json_bounded(
-    connection: &mut Connection,
+    connection: &Connection,
     sql: &str,
     bound_values: &[SqliteValue],
     limits: QueryJsonLimits,

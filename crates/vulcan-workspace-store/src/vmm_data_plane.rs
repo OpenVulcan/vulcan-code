@@ -526,21 +526,18 @@ impl VmmDataPlaneHandle {
     /// 返回校验、存储或 JSON 错误。
     pub async fn project_usage(&self, project_id: u64) -> Result<NativeVmmProjectUsage, String> {
         let project_id = project_id_i64(project_id)?;
+        local_sql::with_read_snapshot_async(&self.local, LogicalDatabase::VmmMetadata, move |connection| {
         let owner_result =
-            local_sql::query_json_async(
-                &self.local,
-                LogicalDatabase::VmmMetadata,
+            vulcan_sqlite_engine::sql_exec::query_json(connection,
                 "SELECT vulcan_project_id FROM vmm_project_bindings WHERE vmm_project_id = ? ORDER BY vulcan_project_id ASC;",
-                vec![SqliteValue::Integer(project_id)],
-            ).await
+                &[SqliteValue::Integer(project_id)],
+            )
             .map_err(|error| format!("读取原生 VMM 项目归属关联失败：{error}"))?;
         let linked_result =
-            local_sql::query_json_async(
-                &self.local,
-                LogicalDatabase::VmmMetadata,
+            vulcan_sqlite_engine::sql_exec::query_json(connection,
                 "SELECT vulcan_project_id FROM vmm_project_query_links WHERE linked_vmm_project_id = ? ORDER BY vulcan_project_id ASC;",
-                vec![SqliteValue::Integer(project_id)],
-            ).await
+                &[SqliteValue::Integer(project_id)],
+            )
             .map_err(|error| format!("读取原生 VMM 项目连带查询关联失败：{error}"))?;
         let owner_rows: Vec<VulcanProjectIdRow> = serde_json::from_str(&owner_result.json_data)
             .map_err(|error| format!("解析原生 VMM 项目归属关联失败：{error}"))?;
@@ -557,6 +554,7 @@ impl VmmDataPlaneHandle {
                 .map(|row| row.vulcan_project_id)
                 .collect(),
         })
+        }).await
     }
 
     /// Lists every native project binding with its ordered recall-only links.
@@ -568,21 +566,18 @@ impl VmmDataPlaneHandle {
     pub async fn list_project_bindings(
         &self,
     ) -> Result<Vec<NativeVmmProjectBindingAccess>, String> {
+        local_sql::with_read_snapshot_async(&self.local, LogicalDatabase::VmmMetadata, |connection| {
         let binding_result =
-            local_sql::query_json_async(
-                &self.local,
-                LogicalDatabase::VmmMetadata,
+            vulcan_sqlite_engine::sql_exec::query_json(connection,
                 "SELECT vulcan_project_id, vmm_project_id FROM vmm_project_bindings ORDER BY vulcan_project_id ASC;",
-                vec![],
-            ).await
+                &[],
+            )
             .map_err(|error| format!("读取原生 VMM 项目绑定列表失败：{error}"))?;
         let link_result =
-            local_sql::query_json_async(
-                &self.local,
-                LogicalDatabase::VmmMetadata,
+            vulcan_sqlite_engine::sql_exec::query_json(connection,
                 "SELECT vulcan_project_id, linked_vmm_project_id, position FROM vmm_project_query_links ORDER BY vulcan_project_id ASC, position ASC, linked_vmm_project_id ASC;",
-                vec![],
-            ).await
+                &[],
+            )
             .map_err(|error| format!("读取原生 VMM 连带查询列表失败：{error}"))?;
         let bindings: Vec<NativeProjectBindingRow> =
             serde_json::from_str(&binding_result.json_data)
@@ -613,6 +608,7 @@ impl VmmDataPlaneHandle {
                 })
             })
             .collect()
+        }).await
     }
 
     /// Deletes one unbound non-protected native VMM project row.

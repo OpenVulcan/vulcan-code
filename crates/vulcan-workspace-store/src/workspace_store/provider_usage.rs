@@ -661,9 +661,10 @@ pub async fn load_provider_usage_dashboard(
     host_runtime: &HostRuntimeHandle,
 ) -> Result<ProviderUsageDashboard, String> {
     ensure_provider_usage_schema(host_runtime).await?;
-    let daily_result = local_sql::query_json_async(
-        &host_runtime.local,
-        LogicalDatabase::SystemStatistics,
+    // All four panels describe one revision, using one owned connection rather than four.
+    // 四块面板描述同一修订，复用一个自有连接而不是分别打开四次。
+    local_sql::with_read_snapshot_async(&host_runtime.local, LogicalDatabase::SystemStatistics, |connection| {
+    let daily_result = vulcan_sqlite_engine::sql_exec::query_json(connection,
         r#"
 SELECT calendar_date AS calendarDate, provider_id AS providerId,
        service_entry_id AS serviceEntryId, consumer_id AS consumerId, operation,
@@ -678,14 +679,11 @@ SELECT calendar_date AS calendarDate, provider_id AS providerId,
  ORDER BY calendar_date DESC, provider_id, service_entry_id, consumer_id, operation, model_id
 LIMIT 500;
 "#,
-        vec![],
+        &[],
     )
-    .await
     .map_err(|error| format!("读取原生供应商每日用量失败：{error}"))?;
     let daily = decode_query_rows::<ProviderUsageDailySummary>(&daily_result.json_data)?;
-    let recent_attempts_result = local_sql::query_json_async(
-        &host_runtime.local,
-        LogicalDatabase::SystemStatistics,
+    let recent_attempts_result = vulcan_sqlite_engine::sql_exec::query_json(connection,
         r#"
 SELECT attempts.attempt_id, attempts.consumer_id, attempts.operation,
        attempts.dispatched_at_ms, attempts.first_token_at_ms,
@@ -703,9 +701,8 @@ SELECT attempts.attempt_id, attempts.consumer_id, attempts.operation,
 ORDER BY attempts.terminal_at_ms DESC, attempts.attempt_id DESC
 LIMIT 200;
 "#,
-        vec![],
+        &[],
     )
-    .await
     .map_err(|error| format!("读取原生供应商近期 attempt 失败：{error}"))?;
     let recent_attempt_rows =
         decode_query_rows::<ProviderUsageAttemptDashboardRow>(&recent_attempts_result.json_data)?;
@@ -713,17 +710,15 @@ LIMIT 200;
         .into_iter()
         .map(ProviderUsageAttemptDashboardRow::decode)
         .collect::<Result<Vec<_>, _>>()?;
-    let meta_result = local_sql::query_json_async(
-        &host_runtime.local,
-        LogicalDatabase::SystemStatistics,
+    let meta_result = vulcan_sqlite_engine::sql_exec::query_json(connection,
             r#"
 SELECT
     COALESCE(MAX(CASE WHEN meta_key = 'aggregate_revision' THEN CAST(meta_value AS INTEGER) END), 0) AS aggregate_revision,
     COALESCE(MAX(CASE WHEN meta_key = 'health_status' THEN meta_value END), 'unknown') AS health_status
 FROM provider_usage_meta;
 "#,
-        vec![],
-    ).await
+        &[],
+    )
         .map_err(|error| format!("读取原生供应商用量元数据失败：{error}"))?;
     let meta = decode_query_rows::<ProviderUsageDashboardMetaRow>(&meta_result.json_data)?
         .into_iter()
@@ -732,9 +727,7 @@ FROM provider_usage_meta;
             aggregate_revision: 0,
             health_status: String::from("unknown"),
         });
-    let accounts_result = local_sql::query_json_async(
-        &host_runtime.local,
-        LogicalDatabase::SystemStatistics,
+    let accounts_result = vulcan_sqlite_engine::sql_exec::query_json(connection,
         r#"
 SELECT provider_id, connection_id, snapshot_kind, endpoint_profile_revision,
        payload_json, observed_at_ms
@@ -751,9 +744,8 @@ WHERE row_number = 1
 ORDER BY provider_id, connection_id, snapshot_kind
 LIMIT 200;
 "#,
-        vec![],
+        &[],
     )
-    .await
     .map_err(|error| format!("读取原生供应商账户用量失败：{error}"))?;
     let account_rows =
         decode_query_rows::<ProviderAccountUsageDashboardRow>(&accounts_result.json_data)?;
@@ -770,6 +762,7 @@ LIMIT 200;
         recent_attempts,
         accounts,
     })
+    }).await
 }
 
 /// Decodes one recent attempt row whose provider billing partitions remain JSON in SQLite.
