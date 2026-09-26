@@ -1,5 +1,7 @@
 use super::*;
 
+mod catalog_refresh;
+
 /// Host-owned timeout for optional MCP prompt and resource discovery requests.
 /// MCP 可选 prompt 与 resource 发现请求使用的宿主持有超时。
 const MCP_OPTIONAL_CAPABILITY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1066,67 +1068,48 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
             };
             drop(startup_permit);
 
+            let mut optional_state = catalog_refresh::OptionalCapabilityState::default();
             tokio::select! {
                 _ = shutdown_rx.changed() => {
                     shutdown_server_runtime_state(&inner, &server.id).await;
                     return;
                 }
-                _ = refresh_server_optional_capabilities(&inner, &server, transport.clone()) => {}
+                _ = catalog_refresh::refresh_optional(
+                    &inner, &server, transport.as_ref(), &mut optional_state,
+                    catalog_refresh::CatalogRefreshDemand::OPTIONAL,
+                ) => {}
             }
 
-            // connectedAt distinguishes a stable connection from a short-lived crash loop.
-            // connectedAt 用于区分稳定连接与短生命周期崩溃循环。
+            // Each connection owns its observation state; reconnect starts a fresh capability generation.
+            // 每个连接持有自己的观察状态；重连开启新的能力代次。
             let connected_at = tokio::time::Instant::now();
             loop {
-                let event = tokio::select! {
+                let demand = tokio::select! {
                     _ = shutdown_rx.changed() => {
                         shutdown_server_runtime_state(&inner, &server.id).await;
                         return;
                     }
-                    result = receive_server_runtime_event(&mut event_rx, &server.name) => result,
+                    result = catalog_refresh::receive_demand(&mut event_rx, &server.name) => result,
                 };
-
-                match event {
-                    Ok(McpTransportEvent::ToolsChanged) => {
-                        let tools_result = tokio::select! {
-                            _ = shutdown_rx.changed() => {
-                                shutdown_server_runtime_state(&inner, &server.id).await;
-                                return;
-                            }
-                            result = refresh_server_tools(&inner, &server, transport.clone()) => result,
-                        };
-                        if let Err(error) = tools_result {
-                            clear_server_runtime_state(&inner, &server.id, None, Some(error)).await;
-                            break;
-                        }
-                        tokio::select! {
-                            _ = shutdown_rx.changed() => {
-                                shutdown_server_runtime_state(&inner, &server.id).await;
-                                return;
-                            }
-                            _ = refresh_server_optional_capabilities(&inner, &server, transport.clone()) => {}
-                        }
-                    }
-                    Ok(McpTransportEvent::PromptsChanged)
-                    | Ok(McpTransportEvent::ResourcesChanged) => {
-                        tokio::select! {
-                            _ = shutdown_rx.changed() => {
-                                shutdown_server_runtime_state(&inner, &server.id).await;
-                                return;
-                            }
-                            _ = refresh_server_optional_capabilities(&inner, &server, transport.clone()) => {}
-                        }
-                    }
-                    Ok(McpTransportEvent::Disconnected { reason }) => {
-                        clear_server_runtime_state(&inner, &server.id, None, Some(reason)).await;
-                        break;
-                    }
+                let demand = match demand {
+                    Ok(demand) => demand,
                     Err(error) => {
-                        // A gap invalidates this connection's catalog; bounded reconnect performs a fresh discovery.
-                        // 缺口使本连接目录失效；通过有界重连重新发现完整目录。
                         clear_server_runtime_state(&inner, &server.id, None, Some(error)).await;
                         break;
                     }
+                };
+                let result = tokio::select! {
+                    _ = shutdown_rx.changed() => {
+                        shutdown_server_runtime_state(&inner, &server.id).await;
+                        return;
+                    }
+                    result = catalog_refresh::refresh_catalog(
+                        &inner, &server, transport.clone(), &mut optional_state, demand,
+                    ) => result,
+                };
+                if let Err(error) = result {
+                    clear_server_runtime_state(&inner, &server.id, None, Some(error)).await;
+                    break;
                 }
             }
 
@@ -1274,14 +1257,26 @@ async fn receive_server_runtime_event(
     receiver: &mut tokio::sync::broadcast::Receiver<McpTransportEvent>,
     server_name: &str,
 ) -> Result<McpTransportEvent, String> {
-    receiver.recv().await.map_err(|error| match error {
+    receiver
+        .recv()
+        .await
+        .map_err(|error| event_channel_error(error, server_name))
+}
+
+/// Keeps blocking and nonblocking event reads on the same explicit gap/reconnection contract.
+/// 让阻塞与非阻塞事件读取遵循同一明确缺口及重连契约。
+fn event_channel_error(
+    error: tokio::sync::broadcast::error::RecvError,
+    server_name: &str,
+) -> String {
+    match error {
         tokio::sync::broadcast::error::RecvError::Lagged(skipped) => format!(
             "MCP server `{server_name}` event stream lagged by {skipped} events; reconnecting to restore catalog consistency."
         ),
-        tokio::sync::broadcast::error::RecvError::Closed => format!(
-            "MCP server `{server_name}` event stream closed."
-        ),
-    })
+        tokio::sync::broadcast::error::RecvError::Closed => {
+            format!("MCP server `{server_name}` event stream closed.")
+        }
+    }
 }
 
 /// Subscribes before initial discovery so notifications during the read remain observable.
@@ -1576,39 +1571,6 @@ fn build_server_optional_capability_refresh_outcome(
         resource_count,
         warning,
     }
-}
-
-/// Refreshes both optional MCP capability counts and publishes their current warning state.
-/// 刷新两项 MCP 可选能力计数并发布其当前警告状态。
-///
-/// # Parameters
-/// 参数
-/// `inner` owns the connected server snapshot being updated.
-/// `inner` 持有需要更新的已连接服务器快照。
-/// `server` supplies stable server identity and diagnostic context.
-/// `server` 提供稳定服务器身份与诊断上下文。
-/// `transport` is the active transport used for both discovery requests.
-/// `transport` 是两项发现请求使用的活动传输。
-///
-/// # Returns
-/// 返回值
-/// Returns no value; successful counts and combined refresh warnings are committed to the snapshot.
-/// 不返回值；成功计数与组合刷新警告会提交到快照。
-async fn refresh_server_optional_capabilities(
-    inner: &Arc<McpRuntimeInner>,
-    server: &McpServerConfig,
-    transport: Arc<dyn McpTransport>,
-) {
-    // promptResult and resourceResult are independent current capability observations.
-    // promptResult 与 resourceResult 是两项相互独立的当前能力观察结果。
-    let (prompt_result, resource_result) = tokio::join!(
-        load_server_prompt_count(server, transport.as_ref()),
-        load_server_resource_count(server, transport.as_ref()),
-    );
-    // outcome preserves successful counts and every failure without zero-value fallback.
-    // outcome 保留成功计数与全部失败，不使用零值兜底。
-    let outcome = build_server_optional_capability_refresh_outcome(prompt_result, resource_result);
-    apply_server_optional_capability_refresh_outcome(inner, &server.id, outcome);
 }
 
 /// Loads the current prompt count for one server or returns its exact discovery failure.
