@@ -7,9 +7,14 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod render_budget;
 mod templates;
 
-use templates::{load_template_text, render_page_default, render_template_text};
+/// A bounded preview, not an unbounded table describing an already oversized result.
+/// 对已超限结果提供有界预览，而不是生成另一个无界分块表。
+const MAX_INLINE_CHUNK_ROWS: usize = 64;
+
+use templates::{DEFAULT_PAGE_TEMPLATE, load_template_text};
 
 /// Stable host-owned overflow mode reused by native and Lua-backed tool rendering.
 /// 供原生工具与 Lua 工具共同复用的稳定宿主超限模式。
@@ -249,29 +254,16 @@ fn render_truncate_text(
 ) -> Result<String, String> {
     let tool_result_budget = &client_budget.tool_result;
     if content_fits_budget(output, tool_result_budget) {
-        return Ok(normalize_text(&output.content));
+        return Ok(normalize_text(&output.content).into_owned());
     }
 
-    let Some(truncated_content) =
-        truncate_content_at_line_boundary(&output.content, tool_result_budget)
-    else {
-        return Err(TOOL_OUTPUT_EXCEEDS_LIMIT_ERROR.to_string());
-    };
-
-    let mut context = HashMap::new();
-    context.insert("truncated_content", truncated_content);
-    context.insert("truncate_notice", DEFAULT_TRUNCATE_NOTICE.to_string());
-
-    if let Some(template_text) =
-        load_template_text(skill_name, policy.template_name.as_str(), render_options)
-    {
-        return Ok(render_template_text(&template_text, &context));
-    }
-
-    Ok(render_template_text(
-        "{{truncated_content}}\n...\n# {{truncate_notice}}",
-        &context,
-    ))
+    let template = load_template_text(skill_name, policy.template_name.as_str(), render_options)
+        .unwrap_or_else(|| "{{truncated_content}}\n...\n# {{truncate_notice}}".to_owned());
+    let mut context = HashMap::from([("truncate_notice", DEFAULT_TRUNCATE_NOTICE.to_string())]);
+    let normalized = normalize_text(&output.content);
+    let prefix = render_budget::truncate(&normalized, &template, &context, tool_result_budget)?;
+    context.insert("truncated_content", prefix);
+    render_budget::render(&template, &context, tool_result_budget)
 }
 
 /// Renders page-mode text and persists oversized content into the selected host spill directory.
@@ -303,7 +295,7 @@ fn render_page_text(
 ) -> Result<String, String> {
     let tool_result_budget = &client_budget.tool_result;
     if content_fits_budget(output, tool_result_budget) {
-        return Ok(normalize_text(&output.content));
+        return Ok(normalize_text(&output.content).into_owned());
     }
 
     let file_read_budget = &client_budget.file_read;
@@ -314,7 +306,8 @@ fn render_page_text(
         .as_deref()
         .ok_or_else(|| PAGE_SPILL_ROOT_REQUIRED_ERROR.to_string())?;
 
-    let raw_file = write_overflow_text_file(&output.content, spill_root)?;
+    let pending_file = stage_overflow_text_file(&output.content, spill_root)?;
+    let raw_file = pending_file.path();
 
     let mut context = HashMap::new();
     context.insert(
@@ -342,67 +335,54 @@ fn render_page_text(
     );
     context.insert("chunk_count", chunk_plan.chunk_count.to_string());
     context.insert(
-        "host_safe_read_chunks_section",
-        render_chunk_lines(&chunk_plan),
-    );
-    context.insert(
         "read_strategy_section",
         "## Read Strategy\n- Read the raw_file directly.\n- Read by line ranges using the chunk table below.\n- Use the chunk table offset as the 0-based line offset and limit as the line count.".to_string(),
     );
     context.insert("optional_summary_section", String::new());
     context.insert("scope_advice_section", String::new());
 
-    if let Some(template_text) =
-        load_template_text(skill_name, policy.template_name.as_str(), render_options)
-    {
-        return Ok(render_template_text(&template_text, &context));
-    }
-
-    Ok(render_page_default(&context))
+    let template = load_template_text(skill_name, policy.template_name.as_str(), render_options)
+        .unwrap_or_else(|| DEFAULT_PAGE_TEMPLATE.to_owned());
+    let mut rows = MAX_INLINE_CHUNK_ROWS.min(chunk_plan.chunks.len());
+    let rendered = loop {
+        context.insert(
+            "host_safe_read_chunks_section",
+            render_chunk_lines(&chunk_plan, rows),
+        );
+        match render_budget::render(&template, &context, tool_result_budget) {
+            Ok(rendered) => break rendered,
+            Err(_) if rows > 0 => rows /= 2,
+            Err(error) => return Err(error),
+        }
+    };
+    // A failed render drops its private staging file instead of leaving an unreachable result.
+    // 渲染失败会删除私有暂存文件，而不会留下无法访问的结果。
+    pending_file
+        .keep()
+        .map_err(|error| format!("Failed to retain the overflow file: {error}."))?;
+    Ok(rendered)
 }
 
 /// Decide whether the original content already fits inside the current budget and can bypass host overflow handling.
 /// 判断原始内容是否已经满足当前预算，从而绕过宿主超限处理。
 fn content_fits_budget(output: &HostTextRenderInput, budget: &EffectiveBudgetScope) -> bool {
-    let within_bytes = output.content_bytes <= budget.bytes as usize;
-    let within_lines = budget.lines <= 0 || output.content_lines <= budget.lines as usize;
-    within_bytes && within_lines
+    render_budget::fits(&normalize_text(&output.content), budget)
 }
 
 /// Truncate content on real line boundaries and return `None` when even the first line cannot fit.
 /// 按真实行边界截断内容；若连第一行都无法放入预算则返回 `None`。
+#[cfg(test)]
 fn truncate_content_at_line_boundary(
     content: &str,
     budget: &EffectiveBudgetScope,
 ) -> Option<String> {
-    let normalized = normalize_text(content);
-    if normalized.is_empty() {
-        return Some(String::new());
-    }
-    let max_bytes = usize::try_from(budget.bytes).unwrap_or(usize::MAX);
-    let max_lines = if budget.lines > 0 {
-        usize::try_from(budget.lines).unwrap_or(usize::MAX)
-    } else {
-        usize::MAX
-    };
-    let mut accepted_lines = 0usize;
-    let mut accepted_bytes = 0usize;
-    for line in normalized.split('\n') {
-        if accepted_lines >= max_lines {
-            break;
-        }
-        let next_bytes = accepted_bytes
-            .checked_add(usize::from(accepted_lines > 0))?
-            .checked_add(line.len())?;
-        if next_bytes > max_bytes {
-            break;
-        }
-        accepted_lines += 1;
-        accepted_bytes = next_bytes;
-    }
-    // The accepted prefix ends on a UTF-8 line boundary and is copied exactly once.
-    // 已接受前缀位于 UTF-8 行边界，最终只复制一次。
-    (accepted_lines > 0).then(|| normalized[..accepted_bytes].to_string())
+    render_budget::truncate(
+        &normalize_text(content),
+        "{{truncated_content}}",
+        &HashMap::new(),
+        budget,
+    )
+    .ok()
 }
 
 /// Build a safe page-mode chunk plan and reject any source line that already exceeds the file-read budget.
@@ -411,40 +391,46 @@ fn build_chunk_plan(
     content: &str,
     file_read_budget: &EffectiveBudgetScope,
 ) -> Result<OverflowChunkPlan, String> {
-    let normalized = normalize_text(content);
-    let lines = split_lines(&normalized);
-    let total_lines = lines.len();
-    let total_bytes = normalized.len();
-    let safe_limit_bytes = file_read_budget.bytes.max(1);
+    let total_lines = if content.is_empty() {
+        0
+    } else {
+        content.bytes().filter(|byte| *byte == b'\n').count() + 1
+    };
+    let total_bytes = content.len();
+    let safe_limit_bytes = file_read_budget.bytes;
     let safe_limit_lines = file_read_budget.lines;
 
     let mut chunks = Vec::new();
+    let mut chunk_count = 0usize;
     let mut current_start: Option<usize> = None;
     let mut current_bytes = 0usize;
     let mut current_line_count = 0usize;
 
-    let flush_chunk = |chunks: &mut Vec<OverflowChunk>,
-                       current_start: &mut Option<usize>,
-                       current_bytes: &mut usize,
-                       current_line_count: &mut usize,
-                       end_line: usize| {
+    let mut flush_chunk = |chunks: &mut Vec<OverflowChunk>,
+                           current_start: &mut Option<usize>,
+                           current_bytes: &mut usize,
+                           current_line_count: &mut usize,
+                           end_line: usize| {
         if let Some(start_line) = *current_start
             && *current_line_count > 0
         {
-            chunks.push(OverflowChunk {
-                offset: start_line - 1,
-                limit: *current_line_count,
-                start_line,
-                end_line,
-                byte_count: *current_bytes,
-            });
+            chunk_count += 1;
+            if chunks.len() <= MAX_INLINE_CHUNK_ROWS {
+                chunks.push(OverflowChunk {
+                    offset: start_line - 1,
+                    limit: *current_line_count,
+                    start_line,
+                    end_line,
+                    byte_count: *current_bytes,
+                });
+            }
         }
         *current_start = None;
         *current_bytes = 0;
         *current_line_count = 0;
     };
 
-    for (index, line) in lines.iter().enumerate() {
+    for (index, line) in content.split('\n').take(total_lines).enumerate() {
         let mut line_bytes = line.len();
         if index + 1 < total_lines {
             line_bytes += 1;
@@ -483,7 +469,7 @@ fn build_chunk_plan(
     );
 
     Ok(OverflowChunkPlan {
-        chunk_count: chunks.len(),
+        chunk_count,
         chunks,
         total_lines,
         total_bytes,
@@ -494,14 +480,11 @@ fn build_chunk_plan(
 
 /// Render the page-mode chunk plan into template-ready Markdown lines.
 /// 将分页模式分块计划渲染为模板可直接使用的 Markdown 行。
-fn render_chunk_lines(chunk_plan: &OverflowChunkPlan) -> String {
-    if chunk_plan.chunks.is_empty() {
-        return "- read_01: unavailable".to_string();
-    }
-
-    chunk_plan
+fn render_chunk_lines(chunk_plan: &OverflowChunkPlan, maximum: usize) -> String {
+    let mut rows = chunk_plan
         .chunks
         .iter()
+        .take(maximum)
         .enumerate()
         .map(|(index, chunk)| {
             format!(
@@ -514,13 +497,20 @@ fn render_chunk_lines(chunk_plan: &OverflowChunkPlan) -> String {
                 chunk.byte_count
             )
         })
-        .collect::<Vec<String>>()
-        .join("\n")
+        .collect::<Vec<_>>();
+    if maximum < chunk_plan.chunk_count {
+        let next = &chunk_plan.chunks[maximum];
+        rows.push(format!("- Further ranges omitted. Continue from line offset {} in raw_file; obey safe_read_limit_bytes and safe_read_limit_lines.", next.offset));
+    }
+    rows.join("\n")
 }
 
 /// Persist oversized content into the host-managed spill directory for later page-mode reading.
 /// 将超长内容持久化到宿主管理的超限目录，供后续分页模式读取。
-fn write_overflow_text_file(content: &str, spill_root: &Path) -> Result<PathBuf, String> {
+fn stage_overflow_text_file(
+    content: &str,
+    spill_root: &Path,
+) -> Result<tempfile::NamedTempFile, String> {
     use std::io::Write;
 
     fs::create_dir_all(spill_root)
@@ -537,25 +527,24 @@ fn write_overflow_text_file(content: &str, spill_root: &Path) -> Result<PathBuf,
         .map_err(|error| format!("Failed to write the overflow file: {error}."))?;
     // Failed writes are removed by the temporary-file guard; publish only a complete file.
     // 写入失败由临时文件守卫清理；只发布写入完整的文件。
-    let (_, path) = file
+    Ok(file)
+}
+
+#[cfg(test)]
+fn write_overflow_text_file(content: &str, spill_root: &Path) -> Result<PathBuf, String> {
+    stage_overflow_text_file(content, spill_root)?
         .keep()
-        .map_err(|error| format!("Failed to retain the overflow file: {error}."))?;
-    Ok(path)
+        .map(|(_, path)| path)
+        .map_err(|error| format!("Failed to retain the overflow file: {error}."))
 }
 
 /// Normalize line endings so CRLF does not affect host-side line counting or chunking.
 /// 统一换行风格，避免 CRLF 影响宿主侧按行统计与分块。
-fn normalize_text(content: &str) -> String {
-    content.replace("\r\n", "\n")
-}
-
-/// Borrows already-normalized lines, preserving the existing empty-input and trailing-line rules.
-/// 借用已规范化的行，保留既有空输入与末尾空行规则。
-fn split_lines(content: &str) -> Vec<&str> {
-    if content.is_empty() {
-        Vec::new()
+fn normalize_text(content: &str) -> std::borrow::Cow<'_, str> {
+    if content.contains("\r\n") {
+        content.replace("\r\n", "\n").into()
     } else {
-        content.split('\n').collect()
+        content.into()
     }
 }
 
@@ -784,15 +773,15 @@ mod tests {
                 .as_nanos()
         ));
         let output = HostTextRenderInput {
-            content: String::from("alpha\nbeta"),
+            content: "alpha\nbeta\n".repeat(1000),
             overflow_mode: Some(HostToolOverflowMode::Page),
             template_hint: None,
-            content_bytes: 10,
-            content_lines: 2,
+            content_bytes: 11_000,
+            content_lines: 2_001,
         };
         let budget = ToolResultBudgetSnapshot {
             tool_result: EffectiveBudgetScope {
-                bytes: 4,
+                bytes: 1_500,
                 lines: -1,
             },
             file_read: EffectiveBudgetScope {
@@ -825,5 +814,123 @@ mod tests {
             output.content
         );
         fs::remove_dir_all(&spill_root).expect("spill directory should be removed");
+    }
+
+    #[test]
+    fn inline_budget_uses_actual_text_even_when_size_metadata_is_stale() {
+        let output = HostTextRenderInput {
+            content: "a\nb\nc".into(),
+            content_bytes: 0,
+            content_lines: 0,
+            overflow_mode: Some(HostToolOverflowMode::Page),
+            template_hint: None,
+        };
+        let result = render_tool_result_text(
+            &output,
+            None,
+            &ToolResultBudgetSnapshot::uniform_bytes(2),
+            &HostRenderOptions::default(),
+        );
+        assert_eq!(
+            result.expect_err("actual content must trigger overflow"),
+            PAGE_SPILL_ROOT_REQUIRED_ERROR
+        );
+    }
+
+    #[test]
+    fn final_truncated_result_includes_notice_bytes_and_lines() {
+        let output = HostTextRenderInput {
+            content: "abc\n".repeat(100),
+            content_bytes: 400,
+            content_lines: 101,
+            overflow_mode: Some(HostToolOverflowMode::Truncate),
+            template_hint: None,
+        };
+        let root = tempfile::tempdir().expect("template root");
+        for bytes in [100, 120, 150] {
+            let budget = ToolResultBudgetSnapshot {
+                tool_result: EffectiveBudgetScope { bytes, lines: 5 },
+                file_read: EffectiveBudgetScope { bytes, lines: -1 },
+            };
+            let rendered = render_tool_result_text(
+                &output,
+                None,
+                &budget,
+                &HostRenderOptions {
+                    template_resources_root: Some(root.path().to_owned()),
+                    ..HostRenderOptions::default()
+                },
+            )
+            .expect("body plus footer fits");
+            assert!(render_budget::fits(&rendered, &budget.tool_result));
+            assert!(rendered.contains(DEFAULT_TRUNCATE_NOTICE));
+        }
+    }
+
+    #[test]
+    fn oversized_page_wrapper_does_not_publish_or_leak_a_spill_file() {
+        let root = tempfile::tempdir().expect("spill root");
+        let output = HostTextRenderInput {
+            content: "a\n".repeat(100),
+            content_bytes: 200,
+            content_lines: 101,
+            overflow_mode: Some(HostToolOverflowMode::Page),
+            template_hint: None,
+        };
+        let error = render_tool_result_text(
+            &output,
+            None,
+            &ToolResultBudgetSnapshot::uniform_bytes(8),
+            &HostRenderOptions {
+                spill_root: Some(root.path().to_owned()),
+                template_resources_root: Some(root.path().to_owned()),
+                ..HostRenderOptions::default()
+            },
+        )
+        .expect_err("there is not enough space for a valid pointer");
+        assert_eq!(error, TOOL_OUTPUT_EXCEEDS_LIMIT_ERROR);
+        assert_eq!(
+            fs::read_dir(root.path()).expect("read spill root").count(),
+            0
+        );
+    }
+
+    #[test]
+    fn page_read_budget_counts_persisted_crlf_and_zero_limits() {
+        let source = "a\r\nb\r\n";
+        let plan = build_chunk_plan(source, &EffectiveBudgetScope { bytes: 3, lines: 1 })
+            .expect("one CRLF row per chunk");
+        assert_eq!(plan.total_bytes, source.len());
+        assert_eq!(
+            plan.chunks
+                .iter()
+                .map(|chunk| chunk.byte_count)
+                .sum::<usize>(),
+            source.len()
+        );
+        assert!(plan.chunks.iter().all(|chunk| chunk.byte_count <= 3));
+        assert!(build_chunk_plan(source, &EffectiveBudgetScope { bytes: 2, lines: 1 }).is_err());
+        assert!(
+            build_chunk_plan(
+                "a",
+                &EffectiveBudgetScope {
+                    bytes: 0,
+                    lines: -1
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn chunk_preview_is_bounded_even_when_every_line_is_a_chunk() {
+        let content = "x\n".repeat(100_000);
+        let plan = build_chunk_plan(&content, &EffectiveBudgetScope { bytes: 2, lines: 1 })
+            .expect("bounded preview");
+        assert_eq!(plan.chunk_count, 100_001);
+        assert_eq!(plan.chunks.len(), MAX_INLINE_CHUNK_ROWS + 1);
+        let preview = render_chunk_lines(&plan, MAX_INLINE_CHUNK_ROWS);
+        assert!(preview.contains("Further ranges omitted"));
+        assert_eq!(preview.lines().count(), MAX_INLINE_CHUNK_ROWS + 1);
     }
 }

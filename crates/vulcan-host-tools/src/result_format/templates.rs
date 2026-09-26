@@ -55,34 +55,34 @@ pub(super) fn render_template_text(
     context: &HashMap<&'static str, String>,
 ) -> String {
     let mut rendered = String::with_capacity(template_text.len());
-    let mut remaining = template_text;
-    while let Some(start) = remaining.find("{{") {
-        rendered.push_str(&remaining[..start]);
-        let placeholder = &remaining[start..];
-        let Some(end) = placeholder[2..].find("}}") else {
-            rendered.push_str(placeholder);
-            return rendered;
-        };
-        let name = &placeholder[2..end + 2];
-        if let Some(value) = context.get(name) {
-            rendered.push_str(value);
-        } else {
-            rendered.push_str(&placeholder[..end + 4]);
-        }
-        remaining = &placeholder[end + 4..];
-    }
-    rendered.push_str(remaining);
+    visit_template(template_text, |key, literal| {
+        rendered.push_str(
+            key.and_then(|name| context.get(name))
+                .map(String::as_str)
+                .unwrap_or(literal),
+        );
+    });
     rendered
 }
 
-/// Render the built-in fallback page template when no external template is available.
-/// 当外部模板不可用时，渲染内建兜底分页模板。
-pub(super) fn render_page_default(context: &HashMap<&'static str, String>) -> String {
-    render_template_text(
-        "# LARGE RESULT POINTER\n\n## Raw File\n- raw_file: {{raw_file}}\n- format: {{format}}\n- total_bytes: {{total_bytes}}\n- total_lines: {{total_lines}}\n- safe_inline_limit_bytes: {{safe_inline_limit_bytes}}\n- safe_inline_limit_lines: {{safe_inline_limit_lines}}\n- safe_read_limit_bytes: {{safe_read_limit_bytes}}\n- safe_read_limit_lines: {{safe_read_limit_lines}}\n- chunk_count: {{chunk_count}}\n\n{{host_safe_read_chunks_section}}\n\n{{read_strategy_section}}",
-        context,
-    )
+/// Visits only original template tokens; replacement values never become template source.
+/// 仅访问原始模板标记；替换值绝不成为模板源码。
+pub(super) fn visit_template(template: &str, mut visit: impl FnMut(Option<&str>, &str)) {
+    let mut remaining = template;
+    while let Some(start) = remaining.find("{{") {
+        visit(None, &remaining[..start]);
+        let placeholder = &remaining[start..];
+        let Some(end) = placeholder[2..].find("}}") else {
+            visit(None, placeholder);
+            return;
+        };
+        visit(Some(&placeholder[2..end + 2]), &placeholder[..end + 4]);
+        remaining = &placeholder[end + 4..];
+    }
+    visit(None, remaining);
 }
+
+pub(super) const DEFAULT_PAGE_TEMPLATE: &str = "# LARGE RESULT POINTER\n\n## Raw File\n- raw_file: {{raw_file}}\n- format: {{format}}\n- total_bytes: {{total_bytes}}\n- total_lines: {{total_lines}}\n- safe_inline_limit_bytes: {{safe_inline_limit_bytes}}\n- safe_inline_limit_lines: {{safe_inline_limit_lines}}\n- safe_read_limit_bytes: {{safe_read_limit_bytes}}\n- safe_read_limit_lines: {{safe_read_limit_lines}}\n- chunk_count: {{chunk_count}}\n\n{{host_safe_read_chunks_section}}\n\n{{read_strategy_section}}";
 
 #[cfg(test)]
 mod tests {
@@ -116,10 +116,7 @@ mod tests {
     /// 相邻、重复及 Unicode 占位符只消费原始模板。
     #[test]
     fn repeated_and_unicode_placeholders_are_rendered_once() {
-        let context = HashMap::from([
-            ("name", "世界".to_string()),
-            ("格式", "文本".to_string()),
-        ]);
+        let context = HashMap::from([("name", "世界".to_string()), ("格式", "文本".to_string())]);
         assert_eq!(
             render_template_text("你好 {{name}}{{name}} / {{格式}}", &context),
             "你好 世界世界 / 文本"
