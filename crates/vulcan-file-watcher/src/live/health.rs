@@ -62,17 +62,11 @@ impl LiveWatchRegistration {
         // Retain the exact watcher while sampling; a similarly named registration grants no authority.
         // 采样期间保留精确监听器；相似名称的注册不授予权威。
         let watcher = self.file_watcher.upgrade()?;
-        // Match registration's existing state-before-backend lock order; no await or filesystem scan occurs.
-        // 遵守注册既有的状态先于后端锁顺序；不等待异步操作或扫描文件系统。
+        // Reconciliation owns backend before reading logical goals; observers use the same order.
+        // 核对阶段先持有后端再读取逻辑目标；观察者采用同一顺序。
+        let backend = watcher.inner.as_ref().and_then(|inner| inner.lock().ok());
         let state = watcher.state.read().ok()?;
-        // Physical coverage is checked against the backend's successful watch map, not logical refcounts alone.
-        // 物理覆盖根据后端成功监听映射检查，而非仅根据逻辑引用计数。
-        let physically_registered = watcher.inner.as_ref().is_some_and(|inner| {
-            // Keep backend coverage stable while comparing all paths owned by this registration.
-            // 比较本注册所属全部路径时保持后端覆盖稳定。
-            let Ok(backend) = inner.lock() else {
-                return false;
-            };
+        let physically_registered = backend.as_ref().is_some_and(|backend| {
             !self.watched_paths.is_empty()
                 && state
                     .subscribers

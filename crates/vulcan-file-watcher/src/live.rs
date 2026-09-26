@@ -24,11 +24,13 @@ use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tracing::warn;
 
+mod dispatch;
 /// Registration-scoped read-only observation evidence.
 /// 注册范围的只读观察证据。
 mod health;
 mod pending_paths;
 mod raw_events;
+mod routing;
 pub use health::LiveWatchObservationHealth;
 use health::{LiveWatchHealthState, LiveWatchLoopGuard};
 
@@ -70,6 +72,9 @@ struct WatchState {
     /// Active logical subscribers.
     /// 当前活跃的逻辑订阅者。
     subscribers: HashMap<SubscriberId, SubscriberState>,
+    /// Both logical and canonical namespaces point to exact registration identities.
+    /// 逻辑与规范命名空间均指向精确注册身份。
+    routing: routing::WatchRoutingIndex,
 }
 
 /// State for one logical subscriber.
@@ -97,7 +102,11 @@ struct SubscriberWatchKey {
 
 /// Mutable state for one subscriber watch.
 /// 单个订阅者监听项的可变状态。
+#[derive(Clone)]
 struct SubscriberWatchState {
+    /// A removed and recreated watch must never accept the old watch's in-flight probe.
+    /// 已删除再创建的监听绝不能接受旧监听的进行中探测。
+    identity: Arc<()>,
     /// Existing path currently passed to the OS watcher.
     /// 当前传给 OS 监听器的已存在路径。
     actual: LiveWatchPath,
@@ -122,6 +131,9 @@ struct SubscriberWatchRegistration {
     /// Existing path initially watched by the backend.
     /// 后端最初监听的已存在路径。
     actual: LiveWatchPath,
+    /// Exact existence observation captured before shared state is locked.
+    /// 获取共享状态锁之前捕获的精确存在性观察。
+    last_exists: bool,
     /// Whether registration used a missing-path fallback.
     /// 注册是否使用了缺失路径回退。
     fallback: bool,
@@ -366,10 +378,12 @@ impl LiveFileWatcherSubscriber {
             .into_iter()
             .map(|requested| {
                 let (actual, matched, fallback) = actual_watch_path(&requested);
+                let last_exists = matched.path.exists();
                 let key = SubscriberWatchKey { requested, matched };
                 SubscriberWatchRegistration {
                     key,
                     actual,
+                    last_exists,
                     fallback,
                 }
             })
@@ -509,138 +523,117 @@ impl LiveFileWatcher {
         (subscriber, rx)
     }
 
-    /// Register prepared paths for one subscriber.
-    /// 为一个订阅者注册已准备好的路径。
+    /// Registers logical ownership under the short state lock, then reconciles backend watches.
+    /// 在短状态锁下注册逻辑归属，随后核对后端监听。
     fn register_paths(
         &self,
         subscriber_id: SubscriberId,
         watched_paths: &[SubscriberWatchRegistration],
     ) {
-        let mut state = self
-            .state
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut inner_guard: Option<std::sync::MutexGuard<'_, LiveFileWatcherInner>> = None;
-
-        for registration in watched_paths {
-            let actual = {
-                let Some(subscriber) = state.subscribers.get_mut(&subscriber_id) else {
-                    return;
-                };
-                match subscriber.watched_paths.entry(registration.key.clone()) {
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        entry.get_mut().count += 1;
-                        entry.get().actual.clone()
-                    }
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(SubscriberWatchState {
-                            actual: registration.actual.clone(),
-                            count: 1,
-                            last_exists: registration.key.matched.path.exists(),
-                            fallback: registration.fallback,
-                        });
-                        registration.actual.clone()
-                    }
+        let mut affected = BTreeSet::new();
+        {
+            let mut state = self
+                .state
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !state.subscribers.contains_key(&subscriber_id) {
+                return;
+            }
+            for registration in watched_paths {
+                let subscriber = state
+                    .subscribers
+                    .get_mut(&subscriber_id)
+                    .expect("checked subscriber");
+                let (actual, inserted) =
+                    match subscriber.watched_paths.entry(registration.key.clone()) {
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            entry.get_mut().count += 1;
+                            (entry.get().actual.clone(), false)
+                        }
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(SubscriberWatchState {
+                                identity: Arc::new(()),
+                                actual: registration.actual.clone(),
+                                count: 1,
+                                last_exists: registration.last_exists,
+                                fallback: registration.fallback,
+                            });
+                            (registration.actual.clone(), true)
+                        }
+                    };
+                if inserted {
+                    state.routing.insert(subscriber_id, &registration.key);
                 }
-            };
-
-            let counts = state
-                .path_ref_counts
-                .entry(actual.path.clone())
-                .or_default();
-            let previous_mode = counts.effective_mode();
-            counts.increment(actual.recursive, 1);
-            let next_mode = counts.effective_mode();
-            if previous_mode != next_mode {
-                self.reconfigure_watch(&actual.path, next_mode, &mut inner_guard);
+                let counts = state
+                    .path_ref_counts
+                    .entry(actual.path.clone())
+                    .or_default();
+                let previous = counts.effective_mode();
+                counts.increment(actual.recursive, 1);
+                if previous != counts.effective_mode() {
+                    affected.insert(actual.path);
+                }
             }
         }
+        dispatch::reconcile_backend(&self.state, self.inner.as_ref(), &affected);
     }
 
-    /// Unregister prepared paths for one subscriber.
-    /// 为一个订阅者注销已准备好的路径。
+    /// Removes logical references before performing any potentially blocking backend operations.
+    /// 在执行任何可能阻塞的后端操作之前移除逻辑引用。
     fn unregister_paths(&self, subscriber_id: SubscriberId, watched_paths: &[SubscriberWatchKey]) {
-        let mut state = self
-            .state
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut inner_guard: Option<std::sync::MutexGuard<'_, LiveFileWatcherInner>> = None;
-
-        for subscriber_watch in watched_paths {
-            let actual = {
+        let mut affected = BTreeSet::new();
+        {
+            let mut state = self
+                .state
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for key in watched_paths {
                 let Some(subscriber) = state.subscribers.get_mut(&subscriber_id) else {
                     return;
                 };
-                let Some(subscriber_watch_state) =
-                    subscriber.watched_paths.get_mut(subscriber_watch)
-                else {
+                let Some(watch) = subscriber.watched_paths.get_mut(key) else {
                     continue;
                 };
-                let actual = subscriber_watch_state.actual.clone();
-                subscriber_watch_state.count = subscriber_watch_state.count.saturating_sub(1);
-                if subscriber_watch_state.count == 0 {
-                    subscriber.watched_paths.remove(subscriber_watch);
+                let actual = watch.actual.clone();
+                watch.count = watch.count.saturating_sub(1);
+                if watch.count == 0 {
+                    subscriber.watched_paths.remove(key);
+                    state.routing.remove(subscriber_id, key);
                 }
-                actual
-            };
-
-            let Some(counts) = state.path_ref_counts.get_mut(&actual.path) else {
-                continue;
-            };
-            let previous_mode = counts.effective_mode();
-            counts.decrement(actual.recursive, 1);
-            let next_mode = counts.effective_mode();
-            if counts.is_empty() {
-                state.path_ref_counts.remove(&actual.path);
-            }
-            if previous_mode != next_mode {
-                self.reconfigure_watch(&actual.path, next_mode, &mut inner_guard);
+                dispatch::remove_counts(&mut state.path_ref_counts, &actual, 1, &mut affected);
             }
         }
+        dispatch::reconcile_backend(&self.state, self.inner.as_ref(), &affected);
     }
 
-    /// Remove one subscriber and all paths it owns.
-    /// 移除一个订阅者及其拥有的全部路径。
+    /// Drops one subscriber's logical routes and reconciles the exact affected backend paths.
+    /// 移除单个订阅者的逻辑路由，并核对精确受影响的后端路径。
     fn remove_subscriber(&self, subscriber_id: SubscriberId) {
-        let mut state = self
-            .state
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(subscriber) = state.subscribers.remove(&subscriber_id) else {
-            return;
-        };
-
-        let mut inner_guard: Option<std::sync::MutexGuard<'_, LiveFileWatcherInner>> = None;
-        for (_subscriber_watch, subscriber_watch_state) in subscriber.watched_paths {
-            let Some(path_counts) = state
-                .path_ref_counts
-                .get_mut(&subscriber_watch_state.actual.path)
-            else {
-                continue;
+        let mut affected = BTreeSet::new();
+        {
+            let mut state = self
+                .state
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(subscriber) = state.subscribers.remove(&subscriber_id) else {
+                return;
             };
-            let previous_mode = path_counts.effective_mode();
-            path_counts.decrement(
-                subscriber_watch_state.actual.recursive,
-                subscriber_watch_state.count,
-            );
-            let next_mode = path_counts.effective_mode();
-            if path_counts.is_empty() {
-                state
-                    .path_ref_counts
-                    .remove(&subscriber_watch_state.actual.path);
-            }
-            if previous_mode != next_mode {
-                self.reconfigure_watch(
-                    &subscriber_watch_state.actual.path,
-                    next_mode,
-                    &mut inner_guard,
+            for (key, watch) in subscriber.watched_paths {
+                state.routing.remove(subscriber_id, &key);
+                dispatch::remove_counts(
+                    &mut state.path_ref_counts,
+                    &watch.actual,
+                    watch.count,
+                    &mut affected,
                 );
             }
         }
+        dispatch::reconcile_backend(&self.state, self.inner.as_ref(), &affected);
     }
 
     /// Reconfigure one actual backend watch path.
     /// 重新配置一个真实后端监听路径。
+    #[cfg(test)]
     fn reconfigure_watch<'a>(
         &'a self,
         path: &Path,
@@ -698,41 +691,6 @@ impl LiveFileWatcher {
             return;
         }
         guard.watched_paths.insert(path.to_path_buf(), next_mode);
-    }
-
-    /// Move an actual fallback watch closer to the requested path.
-    /// 将真实回退监听移动到更接近请求路径的位置。
-    fn apply_actual_watch_move<'a>(
-        path_ref_counts: &mut HashMap<PathBuf, PathWatchCounts>,
-        old_actual: LiveWatchPath,
-        new_actual: LiveWatchPath,
-        count: usize,
-        inner: Option<&'a Arc<Mutex<LiveFileWatcherInner>>>,
-        inner_guard: &mut Option<std::sync::MutexGuard<'a, LiveFileWatcherInner>>,
-    ) {
-        if old_actual == new_actual {
-            return;
-        }
-
-        if let Some(counts) = path_ref_counts.get_mut(&old_actual.path) {
-            let previous_mode = counts.effective_mode();
-            counts.decrement(old_actual.recursive, count);
-            let next_mode = counts.effective_mode();
-            if counts.is_empty() {
-                path_ref_counts.remove(&old_actual.path);
-            }
-            if previous_mode != next_mode {
-                Self::reconfigure_watch_inner(inner, &old_actual.path, next_mode, inner_guard);
-            }
-        }
-
-        let counts = path_ref_counts.entry(new_actual.path.clone()).or_default();
-        let previous_mode = counts.effective_mode();
-        counts.increment(new_actual.recursive, count);
-        let next_mode = counts.effective_mode();
-        if previous_mode != next_mode {
-            Self::reconfigure_watch_inner(inner, &new_actual.path, next_mode, inner_guard);
-        }
     }
 
     /// Bridge raw notify events into subscriber notifications.
@@ -799,71 +757,33 @@ impl LiveFileWatcher {
         }
     }
 
-    /// Notify all subscribers whose watches match any event path.
-    /// 通知所有监听项匹配任意事件路径的订阅者。
+    /// Routes and probes on the blocking boundary without retaining shared state across filesystem I/O.
+    /// 在阻塞边界进行路由与探测，文件系统 I/O 期间不保留共享状态锁。
     async fn notify_subscribers(
-        state: &RwLock<WatchState>,
+        state: &Arc<RwLock<WatchState>>,
         inner: Option<&Arc<Mutex<LiveFileWatcherInner>>>,
         event_paths: &[PathBuf],
     ) {
-        let subscribers_to_notify: Vec<(LiveWatchSender, Vec<PathBuf>, Vec<PathBuf>)> = {
-            let mut state = state
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut actual_watch_moves = Vec::new();
-            let mut subscribers_to_notify = Vec::new();
-
-            for subscriber in state.subscribers.values_mut() {
-                let mut changed_paths = Vec::new();
-                for event_path in event_paths {
-                    for (subscriber_watch, subscriber_watch_state) in &mut subscriber.watched_paths
-                    {
-                        if let Some(path) = changed_path_for_event(
-                            subscriber_watch,
-                            subscriber_watch_state,
-                            event_path,
-                        ) {
-                            changed_paths.push(path);
-                        }
-
-                        let (new_actual, _new_matched, fallback) =
-                            actual_watch_path(&subscriber_watch.requested);
-                        subscriber_watch_state.fallback |= fallback;
-                        if subscriber_watch_state.actual != new_actual {
-                            let old_actual = subscriber_watch_state.actual.clone();
-                            let count = subscriber_watch_state.count;
-                            subscriber_watch_state.actual = new_actual.clone();
-                            actual_watch_moves.push((old_actual, new_actual, count));
-                        }
-                    }
-                }
-                if !changed_paths.is_empty() {
-                    let roots = subscriber
-                        .watched_paths
-                        .keys()
-                        .map(|key| key.requested.path.clone())
-                        .collect();
-                    subscribers_to_notify.push((subscriber.tx.clone(), changed_paths, roots));
+        let state = Arc::clone(state);
+        let inner = inner.cloned();
+        let paths = event_paths.to_vec();
+        // One raw consumer awaits each batch; this is not per-subscriber task fan-out.
+        // 单个原始消费者等待每个批次完成；不按订阅者扩散派生任务。
+        let delivered = tokio::task::spawn_blocking(move || {
+            dispatch::prepare_delivery(&state, inner.as_ref(), &paths)
+        })
+        .await;
+        match delivered {
+            Ok(deliveries) => {
+                for (sender, paths, roots) in deliveries {
+                    sender.add_changed_paths(&paths, &roots).await;
                 }
             }
-
-            let mut inner_guard: Option<std::sync::MutexGuard<'_, LiveFileWatcherInner>> = None;
-            for (old_actual, new_actual, count) in actual_watch_moves {
-                Self::apply_actual_watch_move(
-                    &mut state.path_ref_counts,
-                    old_actual,
-                    new_actual,
-                    count,
-                    inner,
-                    &mut inner_guard,
-                );
+            Err(error) => {
+                // A failed worker cannot silently certify delivery; retiring the consumer records a gap.
+                // 工作线程失败不能静默证明已交付；消费者退役会记录缺口。
+                panic!("file watcher dispatch worker failed: {error}");
             }
-
-            subscribers_to_notify
-        };
-
-        for (subscriber, changed_paths, roots) in subscribers_to_notify {
-            subscriber.add_changed_paths(&changed_paths, &roots).await;
         }
     }
 
@@ -959,12 +879,15 @@ fn changed_path_for_event(
     subscriber_watch: &SubscriberWatchKey,
     subscriber_watch_state: &mut SubscriberWatchState,
     event_path: &Path,
+    matched_exists: bool,
+    requested_exists: bool,
 ) -> Option<PathBuf> {
     if let Some(path) = changed_path_for_matched_path(
         subscriber_watch,
         subscriber_watch_state,
         &subscriber_watch.matched,
         event_path,
+        matched_exists,
     ) {
         return Some(path);
     }
@@ -976,6 +899,7 @@ fn changed_path_for_event(
         subscriber_watch_state,
         &subscriber_watch.requested,
         event_path,
+        requested_exists,
     )
 }
 
@@ -986,14 +910,14 @@ fn changed_path_for_matched_path(
     subscriber_watch_state: &mut SubscriberWatchState,
     matched: &LiveWatchPath,
     event_path: &Path,
+    now_exists: bool,
 ) -> Option<PathBuf> {
     let requested = &subscriber_watch.requested;
     if event_path == matched.path {
-        subscriber_watch_state.last_exists = matched.path.exists();
+        subscriber_watch_state.last_exists = now_exists;
         return Some(requested.path.clone());
     }
     if matched.path.starts_with(event_path) {
-        let now_exists = matched.path.exists();
         if subscriber_watch_state.fallback {
             let should_notify = now_exists || subscriber_watch_state.last_exists;
             subscriber_watch_state.last_exists = now_exists;
@@ -1013,7 +937,7 @@ fn changed_path_for_matched_path(
     if !(matched.recursive || event_path.parent() == Some(matched.path.as_path())) {
         return None;
     }
-    subscriber_watch_state.last_exists = matched.path.exists();
+    subscriber_watch_state.last_exists = now_exists;
     Some(
         event_path
             .strip_prefix(&matched.path)
