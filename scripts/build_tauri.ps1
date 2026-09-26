@@ -63,11 +63,13 @@ $IsWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPl
 
 Set-Location $ProjectDir
 
+# Validate the lock even when release dependencies were installed previously.
+# 即使发布依赖以前已安装，也必须验证锁文件。
+if ($Release -or -not (Test-Path -LiteralPath (Join-Path $WebAppDir "node_modules"))) {
+    pnpm --dir $WebAppDir install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 if ($Release) {
-    if (-not (Test-Path -LiteralPath (Join-Path $WebAppDir "node_modules"))) {
-        Write-Host "==> Installing WebUI dependencies..."
-        pnpm --dir $WebAppDir install
-    }
 
     # Release builds package the static WebUI assets into the desktop shell.
     # Release 构建会把静态 WebUI 产物打包进桌面壳。
@@ -79,12 +81,12 @@ if ($Release) {
 
     # CargoBuildArguments selects the release shell and terminal host from the locked registry graph.
     # CargoBuildArguments 从锁定的注册表依赖图选择 release 桌面壳与终端宿主。
-    $CargoBuildArguments = @('build', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '--release')
+    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '--release')
 }
 else {
     # CargoBuildArguments selects the debug shell and terminal host from the locked registry graph.
     # CargoBuildArguments 从锁定的注册表依赖图选择 debug 桌面壳与终端宿主。
-    $CargoBuildArguments = @('build', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host')
+    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host')
 }
 
 # BuildProfileName names the selected artifact profile in diagnostics.
@@ -99,9 +101,9 @@ if (-not $Release) {
 
 # The packaged runtime must always consume desktop JavaScript built from the current source tree.
 # 打包运行时必须始终使用由当前源码树构建的桌面 JavaScript。
-if (-not (Test-Path -LiteralPath (Join-Path $DesktopAppDir "node_modules"))) {
+if ($Release -or -not (Test-Path -LiteralPath (Join-Path $DesktopAppDir "node_modules"))) {
     Write-Host "==> Installing desktop dependencies..."
-    pnpm --dir $DesktopAppDir install
+    pnpm --dir $DesktopAppDir install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 Write-Host "==> Building Electron desktop..."

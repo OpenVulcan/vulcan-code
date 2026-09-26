@@ -18,11 +18,10 @@ CL = { value = "/MD", force = false }
 # directly (for example `lance-encoding`, pulled in by `lancedb`) build without a system-wide
 # protobuf installation. `PROTOC_INCLUDE` is required because vanilla `prost-build` only adds the
 # include directory when it sourced protoc itself via `protoc-bin-vendored`.
-# Absolute paths are used deliberately: a config-relative path is not resolved against the
-# config file location for `[env]` entries.
 # 指向随仓库提供的 protoc，使那些直接调用 protoc 的第三方 crate 构建脚本（例如 `lancedb`
 # 引入的 `lance-encoding`）无需系统级 protobuf 安装即可构建。必须同时设置 `PROTOC_INCLUDE`，
 # 因为普通 `prost-build` 只在它自行通过 `protoc-bin-vendored` 取得 protoc 时才附带 include 目录。
-# 这里刻意使用绝对路径：`[env]` 条目中的相对路径不会按配置文件位置解析。
-PROTOC = { value = "D:\\openvulcan\\vulcan-code\\.cargo\\protoc\\bin\\protoc.exe", force = false }
-PROTOC_INCLUDE = { value = "D:\\openvulcan\\vulcan-code\\.cargo\\protoc\\include", force = false }
+# Cargo resolves relative=true from the repository root; Windows Command adds .exe when needed.
+# Cargo 将 relative=true 路径基于仓库根目录解析；Windows Command 按需补充 .exe。
+PROTOC = { value = ".cargo/protoc/bin/protoc", relative = true, force = false }
+PROTOC_INCLUDE = { value = ".cargo/protoc/include", relative = true, force = false }

@@ -14,7 +14,7 @@
 
 Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。VulcanCode WebUI 服务使用 Release `17891–17920`、Debug `17921–17950`；Release 不配置 Vite 端口。当前受支持的 WebUI 运行环境是浏览器访问（Vite 开发服务器或已构建资源）与 `apps/vulcan-code-desktop` Electron 桌面壳。Core 使用独立的 `tray-icon` 组件、Tao 原生事件循环和 `notify-rust` 故障通知，不依赖 Tauri、Wry 或 WebView2；Windows 可执行文件资源由 `winresource` 嵌入。WebUI 目录中保留的旧 Tauri 兼容适配器不是 Core 构建依赖，也不属于当前支持的宿主。内置 VMM 直接运行在 VulcanCode 进程内，不占用独立服务端口；外置 VMM 的端口完全来自用户配置。Windows 使用 PowerShell 构建与运行脚本，Linux x86_64、Linux ARM64 与 macOS 使用对应 Unix-like 脚本执行相同的构建规则。
 
-> **关于 `protoc`。** `.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向仓库随附的 `protoc`，使那些构建脚本直接调用 `protoc` 的第三方 crate（例如 `lancedb` 引入的 `lance-encoding`）无需系统级 protobuf 安装即可构建。这里刻意使用绝对路径：`[env]` 条目中的相对路径不会按配置文件位置解析。
+> **关于 `protoc`。** `.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向仓库随附的 `protoc`，使那些构建脚本直接调用 `protoc` 的第三方 crate（例如 `lancedb` 引入的 `lance-encoding`）无需系统级 protobuf 安装即可构建。通过 Cargo 的 `relative = true` 从仓库根解析路径，因此检出目录可以移动；Windows 启动命令时自动补充 `.exe`。显式设置的环境变量仍优先。
 
 ## Windows Debug 下只更新 Core
 
@@ -67,7 +67,7 @@ make init-system
 1. 以 Cargo 并发度 2 安装缺失的 `cargo-hakari`、`cargo-nextest`、`cargo-deny` 与 `cargo-about`，并将低于仓库最低要求的工具更新到兼容版本。
 2. 安装宿主依赖与内建工具。
 3. 安装 LuaSkills 运行时依赖；原生 VMM 与原生代码语义索引都在 VulcanCode 进程内运行，不需要独立运行时安装。
-4. 取得 LanceDB 依赖闭包构建所需的随仓库 `protoc`（`protoc 31.1`）。`lancedb` 引入的 `lance-encoding` 会在其构建脚本中直接调用 `protoc`，因此没有它工作区无法编译；`.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向 `.cargo/protoc/` 下的该副本，开发机无需系统级 protobuf 安装。已存在且版本与摘要匹配的安装会被保留，脚本不会删除可用安装；下载产物与钉定的版本和 SHA256 不符时会直接报错，不会静默接受。该目录属于构建输入，已被 git 忽略，因此不随仓库提交。
+4. 取得 LanceDB 依赖闭包构建所需的随仓库 `protoc`（`protoc 31.1`）。`lancedb` 引入的 `lance-encoding` 会在其构建脚本中直接调用 `protoc`，因此没有它工作区无法编译；`.cargo/config.toml` 把 `PROTOC` 与 `PROTOC_INCLUDE` 指向 `.cargo/protoc/` 下的该副本，开发机无需系统级 protobuf 安装。安装器先按锁定归档摘要验证，再解压并核验版本及头文件，准备完成后才替换安装；准备失败保留现有安装。下载产物不符时直接报错，不静默接受。该目录属于构建输入，已被 git 忽略，因此不随仓库提交。
 
 已满足版本要求的工具会被保留，不会重复安装。
 
@@ -123,3 +123,14 @@ cargo test --doc
 ```
 
 如果确实需要临时提高并发度，应在任务记录中说明原因，并确认不会影响开发机响应性或共享资源测试的稳定性。
+
+
+## 锁定命令行构建输入
+
+scripts/build-inputs.lock.json 是内建 sg、rg 和 protoc 的版本、各平台归档摘要及许可证摘要的唯一来源。安装入口共用 install-locked-tools.mjs，不查询最新发行版；升级必须评审清单差异并验证对应平台。此清单不替代 Cargo、pnpm 及已有受管 Node 的锁定机制。
+
+已验证归档和许可证按摘要缓存在 target/build-input-cache/。联网初始化填充缓存后，可以运行 pwsh -File scripts/install_bundled_tools.ps1 -Offline 和 pwsh -File scripts/install_protoc.ps1 -Offline 重建对应安装。缺失缓存或摘要损坏直接失败，不联网、不换版本。离线能力只覆盖这些输入；完整项目离线构建还需预先准备 Cargo、pnpm 等各自的依赖缓存。
+
+安装使用独立暂存目录，先验证工具、许可证和 protoc 头文件，再替换目标。并发安装同一目标会明确拒绝；异常退出遗留的 .installing 目录需要确认旧安装进程已退出后清理，.previous 保存待恢复的旧安装，不可直接删除。常规替换失败会恢复旧目录。
+
+发布构建每次执行前端与桌面的 pnpm install --frozen-lockfile，Rust 构建使用 --locked。依赖声明与锁文件不一致必须失败，不能在发行过程中更新锁文件。

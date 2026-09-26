@@ -45,25 +45,30 @@ esac
 
 cd "$ProjectDir"
 
+# Validate release dependency locks even when node_modules already exists.
+# 即使 node_modules 已存在，也要验证发布依赖锁。
+if [ "$Release" = "1" ] || [ ! -d "$WebAppDir/node_modules" ]; then
+    pnpm --dir "$WebAppDir" install --frozen-lockfile
+fi
+if [ "$Release" = "1" ] || [ ! -d "$ProjectDir/apps/vulcan-code-desktop/node_modules" ]; then
+    pnpm --dir "$ProjectDir/apps/vulcan-code-desktop" install --frozen-lockfile
+fi
+
 if [ "$Release" = "1" ]; then
-    if [ ! -d "$WebAppDir/node_modules" ]; then
-        echo "==> Installing WebUI dependencies..."
-        pnpm --dir "$WebAppDir" install
-    fi
 
     echo "==> Building WebUI for release..."
     pnpm --dir "$WebAppDir" run build
 
     echo "==> Building Vulcan Core release..."
-    cargo build -p vulcan-code-service -p vulcan-terminal-host --release
+    cargo build --locked -p vulcan-code-service -p vulcan-terminal-host --release
 else
     echo "==> Building Vulcan Core debug..."
-    cargo build -p vulcan-code-service -p vulcan-terminal-host
+    cargo build --locked -p vulcan-code-service -p vulcan-terminal-host
 fi
 
 # CargoTargetDir stores Cargo's effective artifact root, including environment and config overrides.
 # CargoTargetDir 保存 Cargo 实际使用的制品根目录，包括环境变量和配置覆盖。
-CargoTargetDir=$(cargo metadata --format-version 1 --no-deps | node -e "const fs=require('fs'); const metadata=JSON.parse(fs.readFileSync(0, 'utf8')); process.stdout.write(metadata.target_directory || '');")
+CargoTargetDir=$(cargo metadata --locked --format-version 1 --no-deps | node -e "const fs=require('fs'); const metadata=JSON.parse(fs.readFileSync(0, 'utf8')); process.stdout.write(metadata.target_directory || '');")
 if [ -z "$CargoTargetDir" ]; then
     echo "Cargo metadata did not return target_directory." >&2
     exit 1
