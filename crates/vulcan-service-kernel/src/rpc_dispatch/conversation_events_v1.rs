@@ -38,7 +38,7 @@ pub(super) async fn dispatch(
     state: SharedServiceBridgeState,
     method: &str,
     params: &Value,
-) -> Result<ServiceRpcDispatch, String> {
+) -> Result<ServiceRpcDispatch, WebuiServiceRpcError> {
     let result = match method {
         "service_session_event_hydration_v1" => rpc_json_result(
             service_session_event_hydration_v1(
@@ -87,7 +87,8 @@ pub(super) async fn dispatch(
 fn parse_request<T: serde::de::DeserializeOwned>(
     params: &Value,
     method: &str,
-) -> Result<T, String> {
-    serde_json::from_value(params.clone())
-        .map_err(|error| format!("invalid params for {method}: {error}"))
+) -> Result<T, WebuiServiceRpcError> {
+    serde_json::from_value(params.clone()).map_err(|error| {
+        WebuiServiceRpcError::InvalidParams(format!("invalid params for {method}: {error}"))
+    })
 }

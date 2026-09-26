@@ -24,29 +24,44 @@ pub(super) async fn dispatch(
     state: SharedServiceBridgeState,
     method: &str,
     params: &Value,
-) -> Result<ServiceRpcDispatch, String> {
+) -> Result<ServiceRpcDispatch, WebuiServiceRpcError> {
     let result = match method {
         "service_session_resource_list_v1" => rpc_json_result(
             service_session_resource_list_v1(
                 state,
-                serde_json::from_value::<SessionResourceListV1Request>(params.clone())
-                    .map_err(|error| format!("invalid params for {method}: {error}"))?,
+                serde_json::from_value::<SessionResourceListV1Request>(params.clone()).map_err(
+                    |error| {
+                        WebuiServiceRpcError::InvalidParams(format!(
+                            "invalid params for {method}: {error}"
+                        ))
+                    },
+                )?,
             )
             .await,
         ),
         "service_session_draft_v1" => rpc_json_result(
             service_session_draft_v1(
                 state,
-                serde_json::from_value::<SessionDraftReadV1Request>(params.clone())
-                    .map_err(|error| format!("invalid params for {method}: {error}"))?,
+                serde_json::from_value::<SessionDraftReadV1Request>(params.clone()).map_err(
+                    |error| {
+                        WebuiServiceRpcError::InvalidParams(format!(
+                            "invalid params for {method}: {error}"
+                        ))
+                    },
+                )?,
             )
             .await,
         ),
         "service_set_session_draft_v1" => rpc_json_result(
             service_set_session_draft_v1(
                 state,
-                serde_json::from_value::<SessionDraftWriteV1Request>(params.clone())
-                    .map_err(|error| format!("invalid params for {method}: {error}"))?,
+                serde_json::from_value::<SessionDraftWriteV1Request>(params.clone()).map_err(
+                    |error| {
+                        WebuiServiceRpcError::InvalidParams(format!(
+                            "invalid params for {method}: {error}"
+                        ))
+                    },
+                )?,
             )
             .await,
         ),

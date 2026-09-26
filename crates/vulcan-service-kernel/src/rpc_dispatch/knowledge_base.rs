@@ -52,7 +52,7 @@ pub(super) async fn dispatch(
     state: SharedServiceBridgeState,
     method: &str,
     params: &Value,
-) -> Result<ServiceRpcDispatch, String> {
+) -> Result<ServiceRpcDispatch, WebuiServiceRpcError> {
     let result = match method {
         "service_list_knowledge_libraries" => {
             let project_id = params
@@ -237,5 +237,7 @@ pub(super) async fn dispatch(
         }
         _ => return Ok(ServiceRpcDispatch::Unknown),
     };
-    Ok(ServiceRpcDispatch::Handled(result))
+    Ok(ServiceRpcDispatch::Handled(
+        result.map_err(WebuiServiceRpcError::Service),
+    ))
 }

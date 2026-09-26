@@ -58,6 +58,22 @@ interface BrowserServiceRpcResponse<T = unknown> {
   };
 }
 
+// BrowserServiceRpcError preserves the server code for control flow and the message for display.
+// BrowserServiceRpcError 保留服务端错误码用于控制流程，保留文案用于展示。
+export class BrowserServiceRpcError extends Error {
+  // code comes directly from the RPC envelope, independently of its message language.
+  // code 直接来自 RPC 信封，不依赖消息语言。
+  readonly code: string;
+
+  // Constructs an error from the declared wire code and display message; returns the error instance.
+  // 根据声明的线协议错误码和展示消息构造错误；返回错误实例。
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "BrowserServiceRpcError";
+    this.code = code;
+  }
+}
+
 // BrowserServiceEvent describes service events received through WebSocket.
 // BrowserServiceEvent 描述通过 WebSocket 收到的服务事件。
 type BrowserServiceEvent =
@@ -227,7 +243,10 @@ export class BrowserServiceTransport implements ServiceTransport {
     }
     const payload = await response.json() as BrowserServiceRpcResponse<T>;
     if (!payload.ok) {
-      throw new Error(payload.error?.message || "Browser service RPC failed.");
+      if (!payload.error) {
+        throw new BrowserServiceRpcError("invalid_rpc_response", "Browser service RPC failure is missing its error envelope.");
+      }
+      throw new BrowserServiceRpcError(payload.error.code, payload.error.message);
     }
     emitBrowserServiceConnectionStatus("connected");
     return payload.result as T;

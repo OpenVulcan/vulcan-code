@@ -56,30 +56,28 @@ pub(super) async fn dispatch(
     state: SharedServiceBridgeState,
     method: &str,
     params: &Value,
-) -> Result<ServiceRpcDispatch, String> {
+) -> Result<ServiceRpcDispatch, WebuiServiceRpcError> {
     if !RPC_METHODS.contains(&method) {
         return Ok(ServiceRpcDispatch::Unknown);
     }
     if matches!(method, "browser.runtime.status" | "browser.runtime.install") {
         if params.as_object().is_none_or(|fields| !fields.is_empty()) {
-            return Err(String::from(
+            return Err(WebuiServiceRpcError::InvalidParams(String::from(
                 "invalid params for browser runtime operation: empty object required",
-            ));
+            )));
         }
         // runtime is a Core-wide package capability; no conversation browser identity exists yet.
         // runtime 是 Core 全局安装组件能力；此时尚不存在会话浏览器身份。
-        let manager = crate::browser::service_browser_manager(&state)?;
+        let manager = crate::browser::service_browser_manager(&state)
+            .map_err(WebuiServiceRpcError::Service)?;
         if method == "browser.runtime.install" {
-            return Ok(ServiceRpcDispatch::Handled(
-                manager
-                    .start_runtime_installation()
-                    .and_then(|task| serde_json::to_value(task).map_err(|error| error.to_string())),
-            ));
+            return Ok(ServiceRpcDispatch::Handled(rpc_json_result(
+                manager.start_runtime_installation(),
+            )));
         }
-        return Ok(ServiceRpcDispatch::Handled(Ok(serde_json::to_value(
-            manager.runtime_status()?,
-        )
-        .map_err(|error| error.to_string())?)));
+        return Ok(ServiceRpcDispatch::Handled(rpc_json_result(
+            manager.runtime_status(),
+        )));
     }
     // owner_session_id is the selected VulcanCode conversation, separate from the Core browser id.
     // owner_session_id 是选中的 VulcanCode 会话，与 Core 浏览器标识分离。
@@ -87,14 +85,17 @@ pub(super) async fn dispatch(
         .get("ownerSessionId")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && *value == value.trim())
-        .ok_or_else(|| format!("invalid params for {method}: ownerSessionId is required"))?
+        .ok_or_else(|| {
+            WebuiServiceRpcError::InvalidParams(format!(
+                "invalid params for {method}: ownerSessionId is required"
+            ))
+        })?
         .to_owned();
     // browser_params removes the routing identity before the strict typed request is decoded.
     // browser_params 在严格类型化请求解码前移除路由身份。
-    let mut browser_params = params
-        .as_object()
-        .cloned()
-        .ok_or_else(|| format!("invalid params for {method}: object required"))?;
+    let mut browser_params = params.as_object().cloned().ok_or_else(|| {
+        WebuiServiceRpcError::InvalidParams(format!("invalid params for {method}: object required"))
+    })?;
     browser_params.remove("ownerSessionId");
     // Every non-list operation is confined to the browser owned by this conversation.
     // 除列表外的每个操作都限制在该会话所拥有的浏览器内。
@@ -104,9 +105,15 @@ pub(super) async fn dispatch(
         let session_id = browser_params
             .get("sessionId")
             .and_then(Value::as_str)
-            .ok_or_else(|| format!("invalid params for {method}: sessionId is required"))?;
-        crate::browser::service_browser_manager(&state)?
-            .require_owner(session_id, &owner_session_id)?;
+            .ok_or_else(|| {
+                WebuiServiceRpcError::InvalidParams(format!(
+                    "invalid params for {method}: sessionId is required"
+                ))
+            })?;
+        crate::browser::service_browser_manager(&state)
+            .map_err(WebuiServiceRpcError::Service)?
+            .require_owner(session_id, &owner_session_id)
+            .map_err(WebuiServiceRpcError::Service)?;
     }
     // params now contains only the original typed method arguments.
     // params 现在只包含原有的类型化方法参数。
@@ -238,9 +245,13 @@ pub(super) async fn dispatch(
 
 /// Deserializes one complete strict browser request object.
 /// 反序列化一个完整严格浏览器请求对象。
-fn parse_param<T: serde::de::DeserializeOwned>(params: &Value, method: &str) -> Result<T, String> {
-    serde_json::from_value(params.clone())
-        .map_err(|error| format!("invalid params for {method}: {error}"))
+fn parse_param<T: serde::de::DeserializeOwned>(
+    params: &Value,
+    method: &str,
+) -> Result<T, WebuiServiceRpcError> {
+    serde_json::from_value(params.clone()).map_err(|error| {
+        WebuiServiceRpcError::InvalidParams(format!("invalid params for {method}: {error}"))
+    })
 }
 
 #[cfg(test)]
@@ -274,6 +285,6 @@ mod tests {
             &serde_json::json!({ "ownerSessionId": "conversation-a" }),
         )
         .await;
-        assert!(invalid.unwrap_err().contains("empty object required"));
+        assert_eq!(invalid.unwrap_err().code(), "invalid_params");
     }
 }

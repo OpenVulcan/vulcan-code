@@ -45,7 +45,7 @@ pub(super) async fn dispatch(
     state: SharedServiceBridgeState,
     method: &str,
     params: &Value,
-) -> Result<ServiceRpcDispatch, String> {
+) -> Result<ServiceRpcDispatch, WebuiServiceRpcError> {
     let result = match method {
         "service_get_vce_configuration_status" => {
             rpc_json_result(service_get_vce_configuration_status(state))

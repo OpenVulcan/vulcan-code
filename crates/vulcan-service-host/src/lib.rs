@@ -41,8 +41,13 @@ use vulcan_service_api::{
 
 /// Boxed asynchronous result returned by a browser-facing RPC dispatcher.
 /// 浏览器侧 RPC 分发器返回的装箱异步结果。
-pub type WebuiServiceRpcFuture =
-    Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send + 'static>>;
+pub type WebuiServiceRpcFuture = Pin<
+    Box<
+        dyn Future<Output = Result<serde_json::Value, vulcan_service_api::WebuiServiceRpcError>>
+            + Send
+            + 'static,
+    >,
+>;
 
 /// Transport-independent browser-facing RPC dispatcher.
 /// 传输无关的浏览器侧 RPC 分发器。
@@ -1030,7 +1035,7 @@ async fn webui_service_rpc_http_handler(
     let result = (server_state.rpc_dispatcher)(request.method, request.params).await;
     Json(match result {
         Ok(result) => webui_service_rpc_success_envelope(result),
-        Err(message) => webui_service_rpc_error_envelope("service_rpc_error", message),
+        Err(error) => webui_service_rpc_error_envelope(error.code(), error.to_string()),
     })
     .into_response()
 }
@@ -1811,7 +1816,6 @@ mod tests {
     /// Builds a minimal test WebUI service router.
     /// 构建最小化测试 WebUI 服务路由。
     fn test_router() -> Router {
-        let (event_bus, _) = broadcast::channel(8);
         let dispatcher: WebuiServiceRpcDispatcher = Arc::new(|method, params| {
             Box::pin(async move {
                 Ok(json!({
@@ -1820,6 +1824,13 @@ mod tests {
                 }))
             })
         });
+        test_router_with_dispatcher(dispatcher)
+    }
+
+    /// Builds an isolated router with the supplied dispatcher; returns the real HTTP router.
+    /// 使用提供的分发器构造隔离路由；返回真实 HTTP 路由。
+    fn test_router_with_dispatcher(dispatcher: WebuiServiceRpcDispatcher) -> Router {
+        let (event_bus, _) = broadcast::channel(8);
         build_webui_service_router(WebuiServiceHttpConfig {
             discovery: Arc::new(Mutex::new(webui_service_ready_discovery_snapshot(
                 WEBUI_SERVICE_HTTP_PORT,
@@ -1996,6 +2007,54 @@ mod tests {
             .await
             .expect("parser response");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Verifies HTTP preserves every dispatch category independently of diagnostic wording.
+    /// 验证 HTTP 保留每个分发类别，不依赖诊断文案。
+    #[tokio::test]
+    async fn browser_rpc_preserves_typed_failure_codes() {
+        use vulcan_service_api::WebuiServiceRpcError;
+        for (error, code) in [
+            (
+                WebuiServiceRpcError::InvalidParams("unknown method".into()),
+                "invalid_params",
+            ),
+            (
+                WebuiServiceRpcError::UnknownMethod("any".into()),
+                "method_not_found",
+            ),
+            (
+                WebuiServiceRpcError::Service("invalid params".into()),
+                "service_rpc_error",
+            ),
+            (
+                WebuiServiceRpcError::Serialization("任意文案".into()),
+                "response_serialization_failed",
+            ),
+        ] {
+            let expected_message = error.to_string();
+            let dispatcher: WebuiServiceRpcDispatcher = Arc::new(move |_, _| {
+                let error = error.clone();
+                Box::pin(async move { Err(error) })
+            });
+            let response = test_router_with_dispatcher(dispatcher)
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/rpc")
+                        .header("content-type", "application/json")
+                        .header("x-vulcan-service-token", "test-token")
+                        .body(Body::from(r#"{"method":"fixture","params":{}}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), 4096).await.unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(envelope["error"]["code"], code);
+            assert_eq!(envelope["error"]["message"], expected_message);
+        }
     }
 
     /// Verifies browser RPC rejects requests without the service token.

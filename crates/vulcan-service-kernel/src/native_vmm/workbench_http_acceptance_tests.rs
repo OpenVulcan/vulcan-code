@@ -212,12 +212,24 @@ pub(in crate::native_vmm) async fn verify(
                         serde_json::from_value(
                             params
                                 .as_ref()
-                                .ok_or_else(|| "Missing workbench RPC parameters".to_owned())?
+                                .ok_or_else(|| {
+                                    vulcan_service_api::WebuiServiceRpcError::InvalidParams(
+                                        "Missing workbench RPC parameters".to_owned(),
+                                    )
+                                })?
                                 .get("request")
                                 .cloned()
-                                .ok_or_else(|| "Missing workbench action request".to_owned())?,
+                                .ok_or_else(|| {
+                                    vulcan_service_api::WebuiServiceRpcError::InvalidParams(
+                                        "Missing workbench action request".to_owned(),
+                                    )
+                                })?,
                         )
-                        .map_err(|error| error.to_string())?;
+                        .map_err(|error| {
+                            vulcan_service_api::WebuiServiceRpcError::InvalidParams(
+                                error.to_string(),
+                            )
+                        })?;
                     Some(request.action)
                 } else {
                     None
@@ -257,9 +269,9 @@ pub(in crate::native_vmm) async fn verify(
                     crate::rpc_dispatch::dispatch_service_rpc(app, state, method.clone(), params)
                         .await
                 } else {
-                    Err(format!(
+                    Err(vulcan_service_api::WebuiServiceRpcError::Service(format!(
                         "Private browser acceptance denied out-of-scope method: {method}"
-                    ))
+                    )))
                 };
                 writeln!(ledger.lock().expect("workbench RPC ledger"), "{}", serde_json::json!({"method": method, "action": action, "allowed": allowed, "ok": result.is_ok()})).expect("write private RPC evidence");
                 result

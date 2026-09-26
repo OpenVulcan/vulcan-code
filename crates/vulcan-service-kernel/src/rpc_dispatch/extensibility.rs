@@ -79,7 +79,7 @@ pub(super) async fn dispatch(
     state: SharedServiceBridgeState,
     method: &str,
     params: &Value,
-) -> Result<ServiceRpcDispatch, String> {
+) -> Result<ServiceRpcDispatch, WebuiServiceRpcError> {
     // result preserves service failures inside Handled so the top-level return trace still runs.
     // result 把服务失败保留在 Handled 内，使顶层返回追踪仍会执行。
     let result = match method {

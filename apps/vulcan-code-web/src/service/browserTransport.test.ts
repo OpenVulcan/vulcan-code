@@ -6,7 +6,28 @@ import {
   closeWebSocketWhenReady,
   waitForWebSocketOpen,
   BrowserServiceTransport,
+  BrowserServiceRpcError,
 } from "@/service/browserTransport";
+
+it.each(["invalid_params", "method_not_found", "service_rpc_error", "response_serialization_failed"])(
+  "preserves RPC code %s without deriving it from diagnostic text",
+  async (code) => {
+    // A misleading diagnostic proves category propagation is independent of text matching.
+    // 误导性诊断证明类别传递不依赖文本匹配。
+    const message = "unknown method, deadline exceeded, 任意文案";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      ok: false, error: { code, message },
+    }), { status: 200 })));
+    try {
+      const transport = new BrowserServiceTransport("http://127.0.0.1:17921");
+      const error = await transport.request("fixture").catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(BrowserServiceRpcError);
+      expect(error).toMatchObject({ code, message });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 // BrowserSocketFixture models the WebSocket states required by close lifecycle tests.
 // BrowserSocketFixture 模拟关闭生命周期测试所需的 WebSocket 状态。

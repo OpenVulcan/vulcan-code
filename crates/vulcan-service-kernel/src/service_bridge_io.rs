@@ -7,7 +7,7 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use reqwest::Url;
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use vulcan_service_api::WebuiServiceDiscoverySnapshot;
+use vulcan_service_api::{WebuiServiceDiscoverySnapshot, WebuiServiceRpcError};
 
 /// Stable service result returned after an external URL is opened.
 /// 外部链接成功打开后返回的稳定服务结果。
@@ -128,32 +128,40 @@ pub(crate) fn shell_host_from_state(
 
 /// Dispatches one normalized service RPC request to the concrete local service implementation.
 /// 将单个标准化服务 RPC 请求分发到具体本地服务实现。
-pub(crate) fn rpc_json_result<T>(result: Result<T, String>) -> Result<Value, String>
+pub(crate) fn rpc_json_result<T>(result: Result<T, String>) -> Result<Value, WebuiServiceRpcError>
 where
     T: Serialize,
 {
-    result.and_then(|value| {
-        serde_json::to_value(value)
-            .map_err(|error| format!("failed to serialize service RPC response: {error}"))
-    })
+    result
+        .map_err(WebuiServiceRpcError::Service)
+        .and_then(|value| {
+            serde_json::to_value(value).map_err(|error| {
+                WebuiServiceRpcError::Serialization(format!(
+                    "failed to serialize service RPC response: {error}"
+                ))
+            })
+        })
 }
 
 /// Reads a required typed value from one RPC parameter object.
 /// 从单个 RPC 参数对象读取必填类型值。
-pub(crate) fn rpc_required_param<T>(params: &Value, key: &str) -> Result<T, String>
+pub(crate) fn rpc_required_param<T>(params: &Value, key: &str) -> Result<T, WebuiServiceRpcError>
 where
     T: DeserializeOwned,
 {
     let object = rpc_params_object(params)?;
-    let value = object
-        .get(key)
-        .ok_or_else(|| format!("missing service RPC parameter: {key}"))?;
+    let value = object.get(key).ok_or_else(|| {
+        WebuiServiceRpcError::InvalidParams(format!("missing service RPC parameter: {key}"))
+    })?;
     deserialize_rpc_param(key, value)
 }
 
 /// Reads an optional typed value from one RPC parameter object.
 /// 从单个 RPC 参数对象读取可选类型值。
-pub(crate) fn rpc_optional_param<T>(params: &Value, key: &str) -> Result<Option<T>, String>
+pub(crate) fn rpc_optional_param<T>(
+    params: &Value,
+    key: &str,
+) -> Result<Option<T>, WebuiServiceRpcError>
 where
     T: DeserializeOwned,
 {
@@ -181,10 +189,12 @@ where
 /// 返回借用的参数对象，或标准非对象参数错误。
 fn rpc_params_object(
     params: &Value,
-) -> Result<&serde_json::Map<String, serde_json::Value>, String> {
-    params
-        .as_object()
-        .ok_or_else(|| String::from("service RPC params must be a JSON object"))
+) -> Result<&serde_json::Map<String, serde_json::Value>, WebuiServiceRpcError> {
+    params.as_object().ok_or_else(|| {
+        WebuiServiceRpcError::InvalidParams(String::from(
+            "service RPC params must be a JSON object",
+        ))
+    })
 }
 
 /// Deserializes one typed service RPC parameter with the canonical error text.
@@ -201,12 +211,15 @@ fn rpc_params_object(
 /// 返回值
 /// The typed parameter value, or the canonical invalid-parameter error.
 /// 返回类型化参数值，或标准无效参数错误。
-fn deserialize_rpc_param<T>(key: &str, value: &Value) -> Result<T, String>
+fn deserialize_rpc_param<T>(key: &str, value: &Value) -> Result<T, WebuiServiceRpcError>
 where
     T: DeserializeOwned,
 {
-    serde_json::from_value(value.clone())
-        .map_err(|error| format!("invalid service RPC parameter `{key}`: {error}"))
+    serde_json::from_value(value.clone()).map_err(|error| {
+        WebuiServiceRpcError::InvalidParams(format!(
+            "invalid service RPC parameter `{key}`: {error}"
+        ))
+    })
 }
 
 /// Spawns the browser-facing local service bridge on the first available loopback port.
@@ -1180,7 +1193,11 @@ mod tests {
         let error = rpc_required_param::<String>(&json!({}), "projectId")
             .expect_err("missing required RPC parameter should return a diagnostic");
 
-        assert_eq!("missing service RPC parameter: projectId", error);
+        assert_eq!(error.code(), "invalid_params");
+        assert_eq!(
+            "missing service RPC parameter: projectId",
+            error.to_string()
+        );
     }
 
     /// Verifies optional RPC params treat missing and null values as absent.
@@ -1208,7 +1225,12 @@ mod tests {
         let optional_error = rpc_optional_param::<u64>(&json!({ "limit": "many" }), "limit")
             .expect_err("invalid optional RPC parameter should return a diagnostic");
 
-        assert!(required_error.starts_with("invalid service RPC parameter `limit`:"));
+        assert_eq!(required_error.code(), "invalid_params");
+        assert!(
+            required_error
+                .to_string()
+                .starts_with("invalid service RPC parameter `limit`:")
+        );
         assert_eq!(required_error, optional_error);
     }
 
@@ -1221,8 +1243,25 @@ mod tests {
         let optional_error = rpc_optional_param::<String>(&json!(true), "projectId")
             .expect_err("non-object optional RPC params should return a diagnostic");
 
-        assert_eq!("service RPC params must be a JSON object", required_error);
+        assert_eq!(required_error.code(), "invalid_params");
+        assert_eq!(
+            "service RPC params must be a JSON object",
+            required_error.to_string()
+        );
         assert_eq!(required_error, optional_error);
+    }
+
+    /// Distinguishes business diagnostics from serialization failures without text matching.
+    /// 区分业务诊断与序列化失败，不做文本匹配。
+    #[test]
+    fn rpc_result_preserves_service_and_serialization_categories() {
+        let service =
+            rpc_json_result::<Value>(Err("invalid params, unknown method".into())).unwrap_err();
+        assert_eq!(service.code(), "service_rpc_error");
+        // Array keys cannot be represented as JSON object keys.
+        // 数组键无法表示为 JSON 对象键。
+        let serialization = rpc_json_result(Ok(BTreeMap::from([(vec![1_u8], 1_u8)]))).unwrap_err();
+        assert_eq!(serialization.code(), "response_serialization_failed");
     }
 
     /// Verifies discovery status replacement preserves stable service identity fields.

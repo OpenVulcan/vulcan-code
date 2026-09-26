@@ -2,6 +2,7 @@
 //! WebUI RPC 方法分发.
 
 use super::*;
+use vulcan_service_api::WebuiServiceRpcError;
 
 mod browser;
 mod configuration;
@@ -20,7 +21,7 @@ mod workspace_io;
 pub(super) enum ServiceRpcDispatch {
     /// The domain owns the method and produced its serialized service result.
     /// 该领域持有此方法并产生了序列化服务结果。
-    Handled(Result<Value, String>),
+    Handled(Result<Value, WebuiServiceRpcError>),
     /// The method belongs to another domain or is unknown.
     /// 此方法属于其他领域或未知。
     Unknown,
@@ -55,7 +56,7 @@ async fn dispatch_known_service_rpc(
     state: SharedServiceBridgeState,
     method: &str,
     params: &Value,
-) -> Result<ServiceRpcDispatch, String> {
+) -> Result<ServiceRpcDispatch, WebuiServiceRpcError> {
     // outcome is reused because each router either claims exact ownership or leaves it untouched.
     // outcome 被复用，因为每个路由要么声明精确所有权，要么保持未处理。
     let outcome = workspace_io::dispatch(app.clone(), state.clone(), method, params).await?;
@@ -115,7 +116,7 @@ pub(super) async fn dispatch_service_rpc(
     state: SharedServiceBridgeState,
     method: String,
     params: Option<Value>,
-) -> Result<Value, String> {
+) -> Result<Value, WebuiServiceRpcError> {
     // params normalizes an omitted payload to the established empty object contract.
     // params 把缺失载荷归一化为既有空对象契约。
     let params = params.unwrap_or_else(|| json!({}));
@@ -193,8 +194,8 @@ pub(super) async fn dispatch_service_rpc(
 /// 返回值
 /// Returns the stable unknown-method diagnostic used by the HTTP bridge.
 /// 返回 HTTP 桥使用的稳定未知方法诊断。
-fn unknown_service_rpc_error(method: &str) -> String {
-    format!("unknown service RPC method: {method}")
+fn unknown_service_rpc_error(method: &str) -> WebuiServiceRpcError {
+    WebuiServiceRpcError::UnknownMethod(method.to_owned())
 }
 
 /// Returns the complete unique RPC wire contract owned by all domain routers.
@@ -286,8 +287,12 @@ mod tests {
     #[test]
     fn unknown_rpc_method_error_remains_stable() {
         assert_eq!(
-            unknown_service_rpc_error("service_missing_method"),
+            unknown_service_rpc_error("service_missing_method").to_string(),
             "unknown service RPC method: service_missing_method"
+        );
+        assert_eq!(
+            unknown_service_rpc_error("any diagnostic").code(),
+            "method_not_found"
         );
     }
 }

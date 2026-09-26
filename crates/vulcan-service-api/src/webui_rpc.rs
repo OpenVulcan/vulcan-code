@@ -194,6 +194,54 @@ pub struct WebuiServiceRpcHttpError {
     pub message: String,
 }
 
+/// Dispatch failures retain their category until the HTTP envelope is built.
+/// 分发失败保留其类别，直到构造 HTTP 信封。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebuiServiceRpcError {
+    /// Invalid or missing request parameters.
+    /// 无效或缺失的请求参数。
+    InvalidParams(String),
+    /// No router owns the requested method.
+    /// 没有路由持有所请求的方法。
+    UnknownMethod(String),
+    /// An existing service returned its diagnostic text.
+    /// 现有服务返回诊断文本。
+    Service(String),
+    /// A service result could not be serialized.
+    /// 服务结果无法序列化。
+    Serialization(String),
+}
+
+impl WebuiServiceRpcError {
+    /// Returns the stable wire code for this category without inspecting diagnostic text.
+    /// 返回此类别的稳定线协议错误码，不检查诊断文本。
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidParams(_) => "invalid_params",
+            Self::UnknownMethod(_) => "method_not_found",
+            Self::Service(_) => "service_rpc_error",
+            Self::Serialization(_) => "response_serialization_failed",
+        }
+    }
+}
+
+impl std::fmt::Display for WebuiServiceRpcError {
+    /// Writes the retained diagnostic into formatter; returns the formatting result.
+    /// 将保留的诊断写入格式器；返回格式化结果。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidParams(message)
+            | Self::Service(message)
+            | Self::Serialization(message) => formatter.write_str(message),
+            Self::UnknownMethod(method) => {
+                write!(formatter, "unknown service RPC method: {method}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for WebuiServiceRpcError {}
+
 /// Builds one successful browser-facing RPC envelope and redacts secrets in place.
 /// 构建单个成功的浏览器侧 RPC 信封，并原地脱敏敏感信息。
 ///
