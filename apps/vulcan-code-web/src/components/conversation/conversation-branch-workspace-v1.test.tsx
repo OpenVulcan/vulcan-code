@@ -27,11 +27,11 @@ import {
   type ConversationEventSummary,
   type CollaborationTaskResult,
 } from "@/service/conversation-event-window-store";
-import type { ConversationSummary } from "@/types";
+import type { ConversationSummary, ToolRequestProgressSnapshot } from "@/types";
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
 import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
-import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
+import { appendToolRequestDraftMessages, projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
 import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
@@ -230,6 +230,9 @@ function workspaceTree(
   // Optional host routes exercise real card buttons through the production surface.
   // 可选宿主路由通过生产界面验证真实卡片按钮。
   collaborationNavigation?: ConversationV1CollaborationNavigation,
+  // Inject a stable transport store for live construction tests.
+  // 为实时构造测试注入稳定传输存储。
+  liveStore = new ConversationLiveStreamStore(),
 ): React.ReactElement {
   const conversation: ConversationSummary = {
     id: "session-branch-v1",
@@ -250,7 +253,7 @@ function workspaceTree(
   return (
     <I18nProvider initialLocale="zh-CN">
       <TooltipProvider>
-        <ConversationLiveStreamProvider store={new ConversationLiveStreamStore()}>
+        <ConversationLiveStreamProvider store={liveStore}>
           <ConversationBranchWorkspaceV1
             collaborationNavigation={collaborationNavigation}
             commandSessions={[]}
@@ -295,6 +298,88 @@ function renderWorkspace(...args: Parameters<typeof workspaceTree>): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  it("binds drafts to their exact API and removes them on durable handoff or failure", () => {
+    // A draft cannot invent an API or use another API's Turn.
+    // 草稿不能伪造 API 或使用其他 API 的回合。
+    const draft: ToolRequestProgressSnapshot = { apiCallId: 7, requestStreamId: "handoff",
+      toolCallId: "provider-call", toolName: "file_edit", state: "receiving",
+      receivedBytes: 0, receivedCharacters: 0, requestRevision: 1 };
+    const started = eventSummary(2, { kind: "api_started", api_call_id: 7,
+      purpose: "main_generation", request: { provider: "test", model: "test" } });
+    const messages = appendToolRequestDraftMessages("session", [], [started], [draft]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.metadata).toMatchObject({ v1_turn_id: started.turn_id, api_call_id: 7 });
+    expect(appendToolRequestDraftMessages("session", [], [], [draft])).toEqual([]);
+    expect(appendToolRequestDraftMessages("session", [], [started], [{ ...draft, apiCallId: 8 }])).toEqual([]);
+    const tool = eventSummary(3, { kind: "tool_call", api_call_id: 7, tool_call_id: 1,
+      request_stream_id: "handoff", tool_name: "file_edit", status: "running", input: {} });
+    expect(appendToolRequestDraftMessages("session", [], [started, tool], [draft])).toEqual([]);
+    const terminal = completeTurnEvents().find((entry) => entry.event.kind === "api_stats")!;
+    if (terminal.event.kind !== "api_stats") throw new Error("expected API terminal fixture");
+    const failed = { ...terminal, event: { ...terminal.event, api_call_id: 7, status: "failed" as const } };
+    expect(appendToolRequestDraftMessages("session", [], [started, failed], [draft])).toEqual([]);
+  });
+  it.each(["apply_patch", "file_edit", "file"])("shows %s on name discovery and streams counts before any durable ToolCall", async (toolName) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    // Canonical API ownership exists, but no complete arguments or tool event exists yet.
+    // 规范 API 所有权已存在，但完整参数和工具事件尚不存在。
+    const rootInput = completeTurnEvents().find((entry) => entry.event.kind === "user_input")!;
+    const events = [rootInput, eventSummary(rootInput.seq + 1, {
+      kind: "api_started", api_call_id: 7, purpose: "main_generation",
+      request: { provider: "test", model: "test" },
+    })];
+    const store = new ConversationLiveStreamStore();
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    // Emit only the safe parser contract; partial raw JSON never enters the browser.
+    // 仅发送安全解析器契约；不完整原始 JSON 绝不进入浏览器。
+    const publish = async (progress: ToolRequestProgressSnapshot | null) => {
+      await React.act(async () => {
+        store.applyEnvelope({ generation: progress?.requestRevision ?? 99,
+          delta: { kind: "toolRequestProgressChanged", payload: {
+            conversationId: "session-branch-v1", requestStreamId: "draft-patch", progress,
+          } } });
+        store.flushNotifications();
+      });
+    };
+    const seed: ToolRequestProgressSnapshot = { apiCallId: 7, requestStreamId: "draft-patch",
+      toolCallId: "provider-call", toolName, state: "receiving",
+      receivedBytes: 0, receivedCharacters: 0, requestRevision: 1 };
+    try {
+      await React.act(async () => root.render(workspaceTree(events, "inline_output", [], true, undefined, store)));
+      await publish(seed);
+      expect(host.querySelector(".tool-presentation-summary")).not.toBeNull();
+      expect(host.textContent).toContain(toolName);
+      await publish({ ...seed, requestRevision: 2, receivedBytes: 100, receivedCharacters: 100,
+        preview: toolName === "file" ? { kind: "file_write", revision: 1,
+          title_fields: { path: "src/example.ts" }, progress_fields: { new_line_count: 1 } }
+          : { kind: toolName, revision: 1, affected_resources: ["src/example.ts"],
+          body_preview: "*** Begin Patch\n*** Update File: src/example.ts\n-old\n+new",
+          structured_lines: [
+            { operation_index: 0, resource_index: 0, side: "old", line_index: 0, content: "old" },
+            { operation_index: 0, resource_index: 0, side: "new", line_index: 0, content: "new" },
+          ] } });
+      expect(host.textContent).toContain("example.ts");
+      expect(host.textContent).toContain("+1");
+      if (toolName !== "file") expect(host.textContent).toContain("-1");
+      await publish({ ...seed, requestRevision: 3, receivedBytes: 110, receivedCharacters: 110,
+        preview: toolName === "file" ? { kind: "file_write", revision: 2,
+          title_fields: { path: "src/example.ts" }, progress_fields: { new_line_count: 2 } }
+          : { kind: toolName, revision: 2, affected_resources: ["src/example.ts"],
+          body_preview: "*** Begin Patch\n*** Update File: src/example.ts\n-old\n+new\n+next",
+          structured_lines: [
+            { operation_index: 0, resource_index: 0, side: "old", line_index: 0, content: "old" },
+            { operation_index: 0, resource_index: 0, side: "new", line_index: 0, content: "new" },
+            { operation_index: 0, resource_index: 0, side: "new", line_index: 1, content: "next" },
+          ] } });
+      expect(host.textContent).toContain("+2");
+      if (toolName !== "file") expect(host.textContent).toContain("-1");
+      await publish(null);
+      expect(host.querySelector(".tool-presentation-summary")).toBeNull();
+    } finally {
+      await React.act(async () => root.unmount());
+    }
+  });
   // Parameters: current selects the changed setting; returns no value after checking restored history.
   // 参数：current 选择变化的设置；验证恢复后的历史后无返回值。
   it.each([

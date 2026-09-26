@@ -2,6 +2,7 @@ import React from "react";
 import {
   ConversationLiveStreamStore,
   toolRequestProgressKey,
+  toolRequestMembershipKey,
   transientReasoningStatusKey,
 } from "./conversation-live-stream-store";
 import type { ToolRequestProgressSnapshot, TransientReasoningStatus } from "@/types";
@@ -106,6 +107,28 @@ export function useConversationToolRequestProgress(
       ? store.getToolRequestProgress(conversationId, requestStreamId)
       : null),
     [conversationId, requestStreamId, store],
+  );
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+// Subscribes to draft membership for one conversation; returns stable seeds, not token updates.
+// 订阅单个会话的草稿成员；返回稳定种子，不订阅 Token 更新。
+export function useConversationToolRequestMembership(
+  conversationId: string,
+): readonly ToolRequestProgressSnapshot[] {
+  // The mounted store owns both membership and leaf progress.
+  // 已挂载存储同时持有成员和叶子进度。
+  const store = useConversationLiveStreamStore();
+  // Membership changes only when a request starts or leaves formation.
+  // 成员仅在请求开始或离开构造阶段时变化。
+  const subscribe = React.useCallback(
+    (listener: () => void) => store.subscribe(toolRequestMembershipKey(conversationId), listener),
+    [conversationId, store],
+  );
+  // Stable seeds keep high-frequency arguments outside branch projection.
+  // 稳定种子让高频参数留在分支投影之外。
+  const getSnapshot = React.useCallback(
+    () => store.getToolRequestMembership(conversationId), [conversationId, store],
   );
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

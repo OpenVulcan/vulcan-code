@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useConversationToolRequestMembership } from "@/state/conversation-live-stream-context";
 import { ConversationAgentInteractionActionsContext } from "./conversation-collaboration-card";
 import { conversationV1SubagentNames, createConversationV1CollaborationNavigation, type ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
 import { ConversationCollaborationStateContext, projectConversationCollaborationState } from "./conversation-collaboration-state";
@@ -167,6 +168,9 @@ export interface ConversationBranchWorkspaceV1Props {
 // ConversationBranchWorkspaceV1 仅从规范 V1 事件渲染完整分支界面。
 export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspaceV1Props) {
   const { t } = useI18n();
+  // Membership creates cards once; individual cards subscribe to argument revisions.
+  // 成员创建一次卡片；各卡片分别订阅参数修订。
+  const requestDrafts = useConversationToolRequestMembership(props.sessionId);
   // historyLoading is process-local; the canonical cursor remains owned by the controller.
   // historyLoading 属于进程内状态；规范游标仍由控制器持有。
   const [historyLoading, setHistoryLoading] = React.useState(false);
@@ -204,8 +208,9 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   // canonicalPresentation is a pure display projection and never becomes storage or RPC authority.
   // canonicalPresentation 是纯展示投影，绝不成为存储或 RPC 权威。
   const canonicalPresentation = React.useMemo(
-    () => projectConversationBranchPresentationV1(props.sessionId, events, resources, t, props.providers),
-    [events, props.sessionId, props.providers, resources, t],
+    () => projectConversationBranchPresentationV1(props.sessionId, events, resources, t, props.providers,
+      props.sessionRunning ? requestDrafts : []),
+    [events, props.sessionId, props.providers, props.sessionRunning, requestDrafts, resources, t],
   );
   // messages appends only the process-local optimistic bubble after canonical V1 facts.
   // messages 仅在规范 V1 事实之后追加进程内乐观气泡。

@@ -8,6 +8,16 @@ import type {
 // ConversationLiveStreamListener 接收一条细粒度瞬态状态通知。
 export type ConversationLiveStreamListener = () => void;
 
+// Shared empty membership avoids unstable useSyncExternalStore snapshots.
+// 共享空成员集合避免 useSyncExternalStore 快照不稳定。
+const emptyToolRequests: readonly ToolRequestProgressSnapshot[] = [];
+
+// Returns the membership subscription key for a conversation; token updates use the leaf key.
+// 返回会话成员订阅键；Token 更新使用叶子键。
+export function toolRequestMembershipKey(conversationId: string): string {
+  return `tool-request-membership:${conversationId}`;
+}
+
 // transientReasoningStatusKey builds the subscription identity for one conversation status line.
 // transientReasoningStatusKey 构建单个会话状态行的订阅身份。
 // Parameters: conversationId is the exact owning conversation identity.
@@ -42,6 +52,10 @@ export class ConversationLiveStreamStore {
   // toolRequestProgressSnapshots 在持久化事件之外保存高频参数构造状态。
   readonly #toolRequestProgressSnapshots = new Map<string, ToolRequestProgressSnapshot>();
 
+  // Initial snapshots create rows once; subsequent tokens notify only their card.
+  // 初始快照仅创建一次行；后续 Token 仅通知对应卡片。
+  readonly #toolRequestMembership = new Map<string, readonly ToolRequestProgressSnapshot[]>();
+
   // settledToolRequestProgressKeys prevents delayed progress from reviving a terminal draft card.
   // settledToolRequestProgressKeys 防止延迟进度复活已终止的草稿卡片。
   readonly #settledToolRequestProgressKeys = new Set<string>();
@@ -67,10 +81,12 @@ export class ConversationLiveStreamStore {
       const existing = this.#toolRequestProgressSnapshots.get(key);
       if (!progress) {
         this.#settledToolRequestProgressKeys.add(key);
-        return this.#deleteToolRequestProgress(key);
+        return this.#deleteToolRequestProgress(key, conversationId);
       }
       if (
         progress.requestStreamId !== requestStreamId
+        || !Number.isSafeInteger(progress.apiCallId)
+        || progress.apiCallId < 1
         || !Number.isSafeInteger(progress.requestRevision)
         || progress.requestRevision < 1
         || this.#settledToolRequestProgressKeys.has(key)
@@ -81,6 +97,7 @@ export class ConversationLiveStreamStore {
         existing
         && (
           progress.toolCallId !== existing.toolCallId
+          || progress.apiCallId !== existing.apiCallId
           || progress.toolName !== existing.toolName
           || progress.requestRevision <= existing.requestRevision
         )
@@ -91,6 +108,12 @@ export class ConversationLiveStreamStore {
         ...progress,
         preview: progress.preview ? { ...progress.preview } : progress.preview,
       });
+      if (!existing) {
+        this.#toolRequestMembership.set(conversationId, [
+          ...this.getToolRequestMembership(conversationId), progress,
+        ]);
+        this.#dirtyKeys.add(toolRequestMembershipKey(conversationId));
+      }
       this.#dirtyKeys.add(key);
       return true;
     }
@@ -121,10 +144,13 @@ export class ConversationLiveStreamStore {
     }
     this.#transientReasoningStatuses.clear();
     for (const key of this.#toolRequestProgressSnapshots.keys()) {
-      this.#settledToolRequestProgressKeys.add(key);
       this.#dirtyKeys.add(key);
     }
     this.#toolRequestProgressSnapshots.clear();
+    for (const conversationId of this.#toolRequestMembership.keys()) {
+      this.#dirtyKeys.add(toolRequestMembershipKey(conversationId));
+    }
+    this.#toolRequestMembership.clear();
   }
 
   // getTransientReasoningStatus returns the stable request-local reasoning status.
@@ -152,6 +178,12 @@ export class ConversationLiveStreamStore {
     ) ?? null;
   }
 
+  // Returns stable initial snapshots for the given conversation, updated only on insertion/removal.
+  // 返回指定会话的稳定初始快照，仅在插入或移除时更新。
+  getToolRequestMembership(conversationId: string): readonly ToolRequestProgressSnapshot[] {
+    return this.#toolRequestMembership.get(conversationId) ?? emptyToolRequests;
+  }
+
   // settleToolRequestProgress permanently retires one request-local draft after a durable V1 tool event takes ownership.
   // settleToolRequestProgress 在持久化 V1 工具事件接管后永久淘汰一条请求局部草稿。
   // Parameters: conversationId and requestStreamId form the exact durable handoff identity.
@@ -161,7 +193,19 @@ export class ConversationLiveStreamStore {
   settleToolRequestProgress(conversationId: string, requestStreamId: string): boolean {
     const key = toolRequestProgressKey(conversationId, requestStreamId);
     this.#settledToolRequestProgressKeys.add(key);
-    return this.#deleteToolRequestProgress(key);
+    return this.#deleteToolRequestProgress(key, conversationId);
+  }
+
+  // Retires all drafts owned by the completed API; returns whether any draft existed.
+  // 淘汰已结束 API 持有的所有草稿；返回是否存在草稿。
+  settleToolRequestApi(conversationId: string, apiCallId: number): boolean {
+    let removed = false;
+    for (const draft of this.getToolRequestMembership(conversationId)) {
+      if (draft.apiCallId === apiCallId) {
+        removed = this.settleToolRequestProgress(conversationId, draft.requestStreamId) || removed;
+      }
+    }
+    return removed;
   }
 
   // subscribe registers one fine-grained listener for an exact ephemeral identity.
@@ -207,10 +251,15 @@ export class ConversationLiveStreamStore {
   // 参数：key 是精确请求进度身份。
   // Returns: true only when a value existed.
   // 返回值：仅在原值存在时返回 true。
-  #deleteToolRequestProgress(key: string): boolean {
+  #deleteToolRequestProgress(key: string, conversationId: string): boolean {
     const removed = this.#toolRequestProgressSnapshots.delete(key);
     if (removed) {
       this.#dirtyKeys.add(key);
+      this.#toolRequestMembership.set(conversationId,
+        this.getToolRequestMembership(conversationId).filter(
+          (draft) => toolRequestProgressKey(conversationId, draft.requestStreamId) !== key,
+        ));
+      this.#dirtyKeys.add(toolRequestMembershipKey(conversationId));
     }
     return removed;
   }

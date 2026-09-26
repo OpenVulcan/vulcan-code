@@ -111,7 +111,9 @@ export function FileChangePresentationCard(props: {
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
         <span className="file-change-path multi">
           <span className="file-change-path-text">{
-            noEffectiveEdit
+            props.requestProgress && displayPresentation.files.length === 0
+              ? props.requestProgress.toolName
+              : noEffectiveEdit
               ? t("toolPresentation.file.notEdited")
               : formatTranslation(t, "toolPresentation.file.count", { count: String(displayPresentation.files.length) })
           }</span>

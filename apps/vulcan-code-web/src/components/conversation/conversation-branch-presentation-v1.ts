@@ -4,6 +4,7 @@ import type {
   ComposerAttachmentSummary,
   ConversationMessage,
   ProviderSummary,
+  ToolRequestProgressSnapshot,
 } from "@/types";
 import type {
   ConversationRenderItem,
@@ -75,6 +76,9 @@ export function projectConversationBranchPresentationV1(
   // Configured display catalog; isolated hosts may have no provider configuration.
   // 已配置的显示目录；隔离宿主可以不带供应商配置。
   providers: readonly ProviderSummary[] = [],
+  // Transient seeds never become canonical events or executable inputs.
+  // 瞬态种子绝不成为规范事件或可执行输入。
+  requestDrafts: readonly ToolRequestProgressSnapshot[] = [],
 ): ConversationBranchPresentationV1 {
   // usageCoverageBySeq retains known API contributions separately from strict persisted totals.
   // usageCoverageBySeq 将已知 API 贡献与严格持久化总量分开保留。
@@ -128,10 +132,62 @@ export function projectConversationBranchPresentationV1(
     ));
   }
 
+  // Bind drafts to the exact unfinished API and reject already handed-off or terminal identities.
+  // 将草稿绑定到精确未结束 API，排除已交接或终态身份。
+  const projectedMessages = appendToolRequestDraftMessages(sessionId, messages, events, requestDrafts);
   return {
-    messages,
-    renderItems: projectConversationRenderItems(messages, t),
+    messages: projectedMessages,
+    renderItems: projectConversationRenderItems(projectedMessages, t),
   };
+}
+
+// Adds safe formation rows to their exact active API; returns display copies without inventing ledger seqs.
+// 为精确活动 API 添加安全构造行；返回展示副本，不伪造账本序号。
+// Inputs are canonical messages/events and membership seeds; full arguments remain host-owned.
+// 输入为规范消息、事件和成员种子；完整参数仍归宿主持有。
+export function appendToolRequestDraftMessages(
+  sessionId: string,
+  messages: ConversationMessage[],
+  events: readonly ConversationEventSummary[],
+  drafts: readonly ToolRequestProgressSnapshot[],
+): ConversationMessage[] {
+  // Start events supply exact Turn/time ownership; terminal and prepared facts retire draft rows.
+  // 开始事件提供精确回合及时间归属；终态和准备完成事实淘汰草稿行。
+  const activeApis = new Map<number, ConversationEventSummary>();
+  const prepared = new Set<string>();
+  for (const summary of events) {
+    if (summary.event.kind === "api_started") activeApis.set(summary.event.api_call_id, summary);
+    if (summary.event.kind === "api_stats") activeApis.delete(summary.event.api_call_id);
+    if (summary.event.kind === "tool_call") prepared.add(summary.event.request_stream_id);
+  }
+  // Only the current unfinished API can own formation; unknown owners wait for event hydration.
+  // 仅当前未结束 API 可以持有构造；未知所有者等待事件水合。
+  const pending = drafts.flatMap((draft): ConversationMessage[] => {
+    const owner = activeApis.get(draft.apiCallId);
+    if (!owner || prepared.has(draft.requestStreamId)) return [];
+    return [{
+      id: `tool-request:${draft.requestStreamId}:call`,
+      conversationId: sessionId,
+      createdAt: String(owner.created_at_ms),
+      role: "assistant",
+      recordKind: "tool-call-output",
+      title: draft.toolName,
+      body: "",
+      metadata: {
+        v1_turn_id: owner.turn_id,
+        api_call_id: draft.apiCallId,
+        tool_name: draft.toolName,
+        tool_call_id: draft.toolCallId,
+        request_stream_id: draft.requestStreamId,
+        tool_display_state: draft.state,
+        received_bytes: draft.receivedBytes,
+        received_characters: draft.receivedCharacters,
+        request_revision: draft.requestRevision,
+        preview: draft.preview,
+      },
+    }];
+  });
+  return pending.length ? [...messages, ...pending] : messages;
 }
 
 // conversationMessagesForV1Event maps one event without consulting legacy messages or records.
@@ -381,7 +437,7 @@ function toolMessages(
   const metadata = toolMetadata(summary, event, rootInput, resources);
   const call: ConversationMessage = {
     ...base,
-    id: `${base.id}:call`,
+    id: `tool-request:${event.request_stream_id}:call`,
     role: "assistant",
     recordKind: "tool-call-output",
     title: event.tool_name,

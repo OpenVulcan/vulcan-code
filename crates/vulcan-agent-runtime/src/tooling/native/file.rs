@@ -3,12 +3,14 @@
 
 use super::{
     NativeToolDefinition, NativeToolDescriptor, NativeToolError, NativeToolExecutionRequest,
-    build_native_tool_definition,
+    build_native_tool_definition_with_request_streaming,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
 use vulcan_host_tools::file_runtime::{MAX_LIST_ENTRIES, MAX_READ_LINES, execute_file};
 use vulcan_tools_manager::{VulcanToolHostResult, VulcanToolInvocationResult};
+
+mod request_preview;
 
 /// Stable public identifier for the native file maintenance tool.
 /// 原生文件维护工具的稳定公开标识。
@@ -29,9 +31,12 @@ pub(crate) fn build_file_tool() -> Arc<NativeToolDefinition> {
         ai_visible: true,
         available_in_plan: true,
     };
-    build_native_tool_definition(descriptor, file_args_schema(), |request| {
-        Box::pin(async move { execute_file_tool(request).await })
-    })
+    build_native_tool_definition_with_request_streaming(
+        descriptor,
+        file_args_schema(),
+        Some(request_preview::capability()),
+        |request| Box::pin(async move { execute_file_tool(request).await }),
+    )
 }
 
 /// Executes one native file request and converts the shared host response.

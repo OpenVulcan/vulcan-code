@@ -198,7 +198,8 @@ fn tool_request_progress_change_from_event(
 ) -> Result<Option<(String, Option<ToolRequestProgressSnapshot>)>, String> {
     if !matches!(
         event.kind,
-        RuntimeEventKind::ToolRequestProgress
+        RuntimeEventKind::ToolRequestStarted
+            | RuntimeEventKind::ToolRequestProgress
             | RuntimeEventKind::ToolRequestPreviewUpdated
             | RuntimeEventKind::ToolRequestReady
             | RuntimeEventKind::ToolRequestInvalid
@@ -237,6 +238,7 @@ fn tool_request_progress_change_from_event(
     // progress preserves only coordinator-owned safe fields and the parser-sanitized preview.
     // progress 仅保留协调器持有的安全字段与解析器净化预览。
     let progress = ToolRequestProgressSnapshot {
+        api_call_id: tool_request_metadata_u64(metadata, "api_call_id")?,
         request_stream_id: request_stream_id.clone(),
         tool_call_id: tool_request_metadata_string(metadata, "tool_call_id")?,
         tool_name: tool_request_metadata_string(metadata, "tool_name")?,
@@ -1343,6 +1345,7 @@ mod tests {
             String::new(),
         )
         .with_metadata(Some(serde_json::json!({
+            "api_call_id": 1,
             "request_stream_id": "request-1",
             "tool_call_id": "call-1",
             "tool_name": "terminal_session",
@@ -1358,6 +1361,7 @@ mod tests {
         assert_eq!(request_stream_id, "request-1");
         let snapshot = snapshot.expect("progress event should carry one snapshot");
         assert_eq!(snapshot.request_stream_id, "request-1");
+        assert_eq!(snapshot.api_call_id, 1);
         assert_eq!(snapshot.tool_call_id, "call-1");
         assert_eq!(snapshot.tool_name, "terminal_session");
         assert_eq!(snapshot.state, ToolRequestProgressState::Receiving);
@@ -1368,6 +1372,20 @@ mod tests {
             snapshot.preview,
             Some(serde_json::json!({ "kind": "command" }))
         );
+        // Name discovery alone must create a visible draft before arguments or previews arrive.
+        // 仅名称发现就必须创建可见草稿，无需等待参数或预览到达。
+        let mut started = progress.clone();
+        started.kind = RuntimeEventKind::ToolRequestStarted;
+        started.metadata.as_mut().unwrap()["received_bytes"] = serde_json::json!(0);
+        started.metadata.as_mut().unwrap()["received_characters"] = serde_json::json!(0);
+        started.metadata.as_mut().unwrap()["request_revision"] = serde_json::json!(1);
+        started.metadata.as_mut().unwrap()["preview"] = serde_json::Value::Null;
+        let (_, started_snapshot) = tool_request_progress_change_from_event(&started)
+            .expect("started metadata must satisfy the contract")
+            .expect("name discovery must emit a draft");
+        let started_snapshot = started_snapshot.expect("started must carry a snapshot");
+        assert_eq!(started_snapshot.received_bytes, 0);
+        assert_eq!(started_snapshot.preview, None);
 
         // assembled closes only the receiving presentation while the Provider response may remain open.
         // assembled 仅关闭接收展示状态，Provider 响应仍可保持打开。
@@ -1377,6 +1395,7 @@ mod tests {
             String::new(),
         )
         .with_metadata(Some(serde_json::json!({
+            "api_call_id": 1,
             "request_stream_id": "request-1",
             "tool_call_id": "call-1",
             "tool_name": "terminal_session",
@@ -1403,6 +1422,7 @@ mod tests {
             String::new(),
         )
         .with_metadata(Some(serde_json::json!({
+            "api_call_id": 1,
             "request_stream_id": "request-1",
             "tool_call_id": "call-1",
             "tool_name": "terminal_session",

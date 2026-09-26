@@ -21,6 +21,7 @@ fn native_file_tools_expose_contracts() {
     assert_eq!(file.descriptor.id, FILE_TOOL_ID);
     assert!(file.descriptor.ai_visible);
     assert!(file.descriptor.available_in_plan);
+    assert!(file.request_streaming.is_some());
     assert_eq!(file.args_schema["additionalProperties"], json!(false));
     assert_eq!(
         file.args_schema["properties"]["action"]["enum"],
@@ -613,6 +614,70 @@ fn apply_patch_stream_preview_is_bounded_and_marks_truncation() {
             .redaction_flags
             .iter()
             .any(|flag| flag == "structured_preview_truncated")
+    );
+}
+
+/// Tests approved write counters before the content string closes; returns nothing.
+/// 验证正文字符串闭合前的获准写入计数；不返回值。
+#[test]
+fn file_write_request_preview_counts_partial_content_and_field_order() {
+    // Registered capability must be reachable through the actual native tool definition.
+    // 注册能力必须能通过实际原生工具定义访问。
+    let tool = build_file_tool();
+    let factory = tool
+        .request_streaming
+        .as_ref()
+        .unwrap()
+        .parser_factory
+        .as_ref()
+        .unwrap();
+    let mut parser = factory.create(ToolRequestParserContext {
+        request_stream_id: "write-preview".into(),
+        tool_name: FILE_TOOL_ID.into(),
+    });
+    push_string(&mut *parser, "action", "write");
+    push_string(&mut *parser, "path", "example.html");
+    // Mixed logical endings are deliberately split across decoded fragments.
+    // 混合逻辑换行被刻意拆到不同解码碎片。
+    let path = vec![IncrementalJsonPathSegment::Key("content".into())];
+    parser
+        .push_json_event(&IncrementalJsonEvent::StringStarted { path: path.clone() })
+        .unwrap();
+    for (content, lines) in [("one\r", 1), ("\ntwo\n", 2), ("\rthree", 3)] {
+        parser
+            .push_json_event(&IncrementalJsonEvent::StringContent {
+                path: path.clone(),
+                content: content.into(),
+            })
+            .unwrap();
+        let preview = parser.snapshot().unwrap();
+        assert_eq!(preview.progress_fields["new_line_count"], json!(lines));
+        assert_eq!(preview.title_fields["path"], json!("example.html"));
+        assert!(preview.body_preview.is_none());
+        assert!(preview.structured_lines.is_empty());
+    }
+    parser.abort();
+    assert!(parser.snapshot().is_none());
+    // Content may precede action/path, but must never appear as a read preview.
+    // 正文可以早于动作及路径，但绝不能作为读取预览出现。
+    push_string_fragments(&mut *parser, "content", "a\r\nb\n\rc");
+    push_string(&mut *parser, "path", "other.txt");
+    assert!(parser.snapshot().is_none());
+    push_string(&mut *parser, "action", "write");
+    assert_eq!(
+        parser.snapshot().unwrap().progress_fields["new_line_count"],
+        json!(3)
+    );
+    let final_preview = parser
+        .finish(&json!({"action":"write","path":"other.txt","content":"done\n"}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(final_preview.progress_fields["new_line_count"], json!(1));
+    assert!(
+        parser
+            .finish(&json!({"action":"read","path":"other.txt"}))
+            .unwrap()
+            .is_none()
     );
 }
 

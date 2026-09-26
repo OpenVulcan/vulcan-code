@@ -121,6 +121,23 @@ function resolveFileChangeContent(
   }
   const nativeToolId = exactNativeToolId(blocks);
   if (nativeToolId === "file") {
+    // Whole-file writes expose counts without copying incomplete JSON into execution arguments.
+    // 整文件写入暴露计数，不把不完整 JSON 复制为执行参数。
+    if (displayState === "running" && options.requestPreview?.kind === "file_write") {
+      const path = metadataString(options.requestPreview, ["title_fields.path"]);
+      const lines = numberValue(metadataValue(options.requestPreview, ["progress_fields.new_line_count"]));
+      if (path && lines !== null && Number.isSafeInteger(lines) && lines >= 0) {
+        const file = buildFilePresentation({
+          blocks, options, path, added: lines, removed: null, index: 0,
+          operation: "modify", rows: [], expandable: false, resourceId: null,
+          stableId: path, idOperation: "file", operationIds: [], previousPath: null, readOnly: false,
+        });
+        return {
+          ...buildNoEffectiveChangePresentation(blocks, displayState, "native_file_mutation", options, detailRef),
+          files: [file], totalAdded: lines, totalRemoved: null, mode: "preview",
+        };
+      }
+    }
     // Read-only actions belong exclusively to FileAccessPresentation and must never fall through to "Not edited".
     // 只读动作仅属于 FileAccessPresentation，绝不能继续落入“未编辑”兜底。
     if (nativeFileAccessAction(blocks)) {
@@ -282,9 +299,18 @@ function buildNativeEditPreviewPresentation(
   source: "native_file_edit" | "native_apply_patch" = "native_file_edit",
   detailRef?: ConversationDetailRef,
 ): FileChangePresentation | null {
+  // Parser totals remain exact when the bounded body/rows are truncated; argument-only previews lack them.
+  // 正文及行预览截断后解析器总数仍精确；仅基于已完成参数的预览不带这些总数。
+  const expectedKind = source === "native_apply_patch" ? "apply_patch" : "file_edit";
+  const counts = options.requestPreview?.kind === expectedKind
+    ? objectValue(options.requestPreview.progress_fields) : null;
+  const totalNew = numberValue(counts?.new_line_count);
+  const totalOld = numberValue(counts?.old_line_count);
   const files = preview.map((item, index) => {
-    const added = item.rows.filter((row) => row.kind === "insert").length;
-    const removed = item.rows.filter((row) => row.kind === "delete").length;
+    const added = preview.length === 1 && totalNew !== null
+      ? totalNew : item.rows.filter((row) => row.kind === "insert").length;
+    const removed = preview.length === 1 && totalOld !== null
+      ? totalOld : item.rows.filter((row) => row.kind === "delete").length;
     return buildFilePresentation({
       added,
       blocks,
@@ -322,8 +348,8 @@ function buildNativeEditPreviewPresentation(
     operation: summarizeOperation(files),
     source,
     state: displayState,
-    totalAdded: sumKnown(files.map((file) => file.added)),
-    totalRemoved: sumKnown(files.map((file) => file.removed)),
+    totalAdded: totalNew ?? sumKnown(files.map((file) => file.added)),
+    totalRemoved: totalOld ?? sumKnown(files.map((file) => file.removed)),
   };
 }
 

@@ -22,6 +22,9 @@ export interface ConversationToolRequestProgressSettlementSink {
   /** Settles one exact request-stream draft after its V1 ToolCall enters the event window.
    * 在对应 V1 ToolCall 进入事件窗口后封口一条精确请求流草稿。 */
   settleToolRequestProgress(conversationId: string, requestStreamId: string): boolean;
+  /** Settles drafts owned by a terminal API, including failures without a tool event.
+   * 封口终态 API 的草稿，包括没有工具事件的失败。 */
+  settleToolRequestApi(conversationId: string, apiCallId: number): boolean;
 }
 
 /** Listener notified after one complete controller snapshot is atomically published.
@@ -879,6 +882,9 @@ export class ConversationEventWindowController {
   ): void {
     if (this.toolRequestProgressSettlement === null) return;
     for (const summary of events) {
+      if (summary.event.kind === "api_stats") {
+        this.toolRequestProgressSettlement.settleToolRequestApi(sessionId, summary.event.api_call_id);
+      }
       if (summary.event.kind !== "tool_call") continue;
       const requestStreamId = summary.event.request_stream_id?.trim() ?? "";
       if (!requestStreamId) continue;

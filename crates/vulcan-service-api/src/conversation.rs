@@ -245,6 +245,9 @@ pub enum ToolRequestProgressState {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolRequestProgressSnapshot {
+    /// Exact durable API owning this transient draft.
+    /// 持有当前瞬态草稿的精确持久 API。
+    pub api_call_id: u64,
     /// Stable host-side request-stream identity.
     /// 稳定的宿主侧请求流标识。
     pub request_stream_id: String,
@@ -1119,6 +1122,7 @@ mod tests {
                 conversation_id: String::from("conversation"),
                 request_stream_id: String::from("request-1"),
                 progress: Some(ToolRequestProgressSnapshot {
+                    api_call_id: 1,
                     request_stream_id: String::from("request-1"),
                     tool_call_id: String::from("call-1"),
                     tool_name: String::from("terminal_session"),
@@ -1141,6 +1145,7 @@ mod tests {
                         "conversationId": "conversation",
                         "requestStreamId": "request-1",
                         "progress": {
+                            "apiCallId": 1,
                             "requestStreamId": "request-1",
                             "toolCallId": "call-1",
                             "toolName": "terminal_session",

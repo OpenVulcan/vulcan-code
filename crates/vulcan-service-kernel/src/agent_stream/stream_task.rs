@@ -1305,7 +1305,31 @@ fn spawn_agent_stream_task_with_restart_state(
                         "Provider V1 session ownership is unavailable for an assistant delta.",
                     ));
                 }
-                ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+                ExecutionStreamEvent::RuntimeEvent {
+                    session_id,
+                    mut event,
+                } => {
+                    // Bind formation to its real V1 API before any projection or durable handoff.
+                    // 在任何投影或持久交接前，将构造阶段绑定到真实 V1 API。
+                    if matches!(event.kind,
+                        vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolRequestStarted
+                        | vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolRequestProgress
+                        | vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolRequestPreviewUpdated
+                        | vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolRequestReady
+                    ) {
+                        if let Some(sink) = provider_v1_sink.as_ref() {
+                            match sink.request_preview_api_id() {
+                                Ok(api_call_id) => {
+                                    if let Some(serde_json::Value::Object(metadata)) = event.metadata.as_mut() {
+                                        metadata.insert("api_call_id".into(), serde_json::json!(api_call_id));
+                                    }
+                                }
+                                Err(error) => {
+                                    eprintln!("[webui-service] tool request preview ownership failed: {error}");
+                                }
+                            }
+                        }
+                    }
                     if let Some(boundary_error) = prepared_retry_checkpoint_error.as_deref()
                         && !runtime_event_settles_started_tool(&event)
                     {

@@ -29,6 +29,21 @@ function toolBlock(
 }
 
 describe("native file presentation mapping", () => {
+  it.each(["file_edit", "apply_patch"] as const)("keeps %s counts growing after preview truncation", (toolName) => {
+    // Parser totals are authoritative even when the display payload has only one retained line.
+    // 即使展示载荷仅保留一行，解析器总数仍是权威。
+    const presentation = resolveFileChangePresentation(toolBlock(toolName, "", {}), "running", {
+      requestPreview: { kind: toolName, revision: 9, affected_resources: ["large.txt"],
+        progress_fields: { old_line_count: 3000, new_line_count: 6000 },
+        structured_lines: [],
+        body_preview: toolName === "apply_patch"
+          ? "*** Update File: large.txt\n+preview" : "large.txt (replace)\n+ preview",
+        redaction_flags: ["structured_preview_truncated", "body_preview_truncated"],
+      },
+    });
+    expect(presentation).toMatchObject({ totalAdded: 6000, totalRemoved: 3000,
+      files: [{ added: 6000, removed: 3000 }] });
+  });
   // V1 no longer needs a duplicated host-result envelope to restore mutation rows and counts.
   // V1 不再需要重复的宿主结果信封即可恢复变更行与统计。
   it.each([

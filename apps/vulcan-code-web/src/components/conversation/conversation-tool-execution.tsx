@@ -163,6 +163,7 @@ export function ToolExecutionBlock(props: {
   // requestCardProgress keeps request formation distinct from actual tool execution while reusing the resolved card.
   // requestCardProgress 在复用既有卡片的同时，保持请求构造与真实工具执行语义分离。
   const requestCardProgress = requestProgress ? {
+    toolName: primaryBlock.toolName ?? primaryBlock.title,
     receiving: true,
     statusLabel: toolRequestProgressLabel(requestProgress, t),
   } : null;

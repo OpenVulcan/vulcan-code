@@ -145,6 +145,7 @@ describe("conversation tool request progress", () => {
       state: "receiving",
       receivedBytes: 1_024,
       receivedCharacters: 1_000,
+      apiCallId: 1,
       requestRevision: 4,
       preview: { kind: "command" },
     })).toEqual({

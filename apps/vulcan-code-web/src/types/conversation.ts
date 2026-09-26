@@ -707,6 +707,9 @@ export interface MediaUploadProgressChangedDelta {
 // ToolRequestProgressSnapshot describes one safe replace-in-place argument-formation snapshot.
 // ToolRequestProgressSnapshot 描述一条安全的原地替换式参数构造快照。
 export interface ToolRequestProgressSnapshot {
+  // Exact durable API owning this transient draft.
+  // 持有当前瞬态草稿的精确持久 API。
+  apiCallId: number;
   // Stable host-side request stream identity.
   // 稳定的宿主侧请求流标识。
   requestStreamId: string;

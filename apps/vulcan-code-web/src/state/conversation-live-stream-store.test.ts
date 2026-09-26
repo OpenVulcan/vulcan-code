@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ConversationLiveStreamStore,
   toolRequestProgressKey,
+  toolRequestMembershipKey,
   transientReasoningStatusKey,
 } from "./conversation-live-stream-store";
 import type { WorkbenchDeltaEnvelope } from "@/types";
@@ -58,6 +59,7 @@ describe("ConversationLiveStreamStore", () => {
       state: "receiving" as const,
       receivedBytes: 4,
       receivedCharacters: 4,
+      apiCallId: 1,
       requestRevision: 1,
     };
 
@@ -70,7 +72,7 @@ describe("ConversationLiveStreamStore", () => {
       },
     }))).toBe(true);
     expect(store.getToolRequestProgress("session-1", "request-1")).toEqual(progress);
-    expect(store.flushNotifications()).toBe(1);
+    expect(store.flushNotifications()).toBe(2);
 
     expect(store.applyEnvelope(envelope(2, {
       kind: "toolRequestProgressChanged",
@@ -81,7 +83,7 @@ describe("ConversationLiveStreamStore", () => {
       },
     }))).toBe(true);
     expect(store.getToolRequestProgress("session-1", "request-1")).toBeNull();
-    expect(store.flushNotifications()).toBe(1);
+    expect(store.flushNotifications()).toBe(2);
     expect(listener).toHaveBeenCalledTimes(2);
 
     expect(store.applyEnvelope(envelope(3, {
@@ -93,5 +95,41 @@ describe("ConversationLiveStreamStore", () => {
       },
     }))).toBe(false);
     expect(store.flushNotifications()).toBe(0);
+  });
+
+  it("notifies branch membership only on insertion/removal and retires failed API drafts", () => {
+    // Independent listeners verify that tokens never fan out to branch subscribers.
+    // 独立监听器验证 Token 绝不扩散到分支订阅者。
+    const store = new ConversationLiveStreamStore();
+    const membership = vi.fn();
+    const leaf = vi.fn();
+    store.subscribe(toolRequestMembershipKey("session"), membership);
+    store.subscribe(toolRequestProgressKey("session", "request"), leaf);
+    // Safe progress has no raw arguments and remains bound to one API.
+    // 安全进度不含原始参数，且保持绑定单个 API。
+    const progress = { apiCallId: 7, requestStreamId: "request", toolCallId: "call",
+      toolName: "apply_patch", state: "receiving" as const,
+      receivedBytes: 0, receivedCharacters: 0, requestRevision: 1 };
+    store.applyEnvelope(envelope(1, { kind: "toolRequestProgressChanged",
+      payload: { conversationId: "session", requestStreamId: "request", progress } }));
+    store.flushNotifications();
+    const seed = store.getToolRequestMembership("session");
+    for (let revision = 2; revision <= 10; revision++) {
+      store.applyEnvelope(envelope(revision, { kind: "toolRequestProgressChanged",
+        payload: { conversationId: "session", requestStreamId: "request",
+          progress: { ...progress, requestRevision: revision, receivedCharacters: revision } } }));
+      store.flushNotifications();
+    }
+    expect(store.getToolRequestMembership("session")).toBe(seed);
+    expect(membership).toHaveBeenCalledTimes(1);
+    expect(leaf).toHaveBeenCalledTimes(10);
+    expect(store.settleToolRequestApi("session", 8)).toBe(false);
+    expect(store.settleToolRequestApi("session", 7)).toBe(true);
+    store.flushNotifications();
+    expect(store.getToolRequestMembership("session")).toEqual([]);
+    expect(membership).toHaveBeenCalledTimes(2);
+    expect(store.applyEnvelope(envelope(11, { kind: "toolRequestProgressChanged",
+      payload: { conversationId: "session", requestStreamId: "request",
+        progress: { ...progress, requestRevision: 11 } } }))).toBe(false);
   });
 });

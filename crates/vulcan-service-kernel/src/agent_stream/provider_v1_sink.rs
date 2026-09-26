@@ -1651,6 +1651,17 @@ fn provider_projection_runtime_error(error: impl fmt::Display) -> SessionRuntime
 }
 
 impl ProviderV1StreamSink {
+    /// Returns the exact active API for a transient request preview; never allocates an identity.
+    /// 返回瞬态请求预览所属的精确活动 API；绝不分配身份。
+    /// No parameters; returns the active API or an explicit inactive-request error.
+    /// 无参数；返回活动 API，或明确的请求未活动错误。
+    pub(crate) fn request_preview_api_id(&self) -> Result<u64, ProviderV1SinkError> {
+        self.active
+            .as_ref()
+            .map(|active| active.api_call_id.value())
+            .ok_or(ProviderV1SinkError::RequestNotActive)
+    }
+
     /// Publishes queued steering before the next request projection without touching active work.
     /// 在下一次请求投影前发布插队消息，不触碰当前执行。
     /// `runtime` owns message delivery; returns the number durably consumed or the exact failure.

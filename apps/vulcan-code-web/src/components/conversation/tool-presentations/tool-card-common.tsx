@@ -25,6 +25,9 @@ export function ToolResultBody(props: { children: React.ReactNode }) {
 // ToolRequestCardProgress carries request-state text without replacing the resolved presentation model.
 // ToolRequestCardProgress 在不替换已解析展示模型的前提下携带请求状态文案。
 export interface ToolRequestCardProgress {
+  // Exact tool identity already discovered before arguments are available.
+  // 参数可用前已经发现的精确工具身份。
+  toolName: string;
   // Whether the card is still in the request phase and may use a stable activity treatment.
   // 卡片是否仍处于请求阶段并可使用稳定的活动态样式。
   receiving: boolean;

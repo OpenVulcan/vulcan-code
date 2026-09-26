@@ -314,7 +314,7 @@ describe("ToolPresentationCard file access icons", () => {
           expanded
           expandedToolPresentationIds={new Set()}
           presentation={{ ...MODEL_EXTENSION_PRESENTATION, markdown: "", state: "running" }}
-          requestProgress={{ receiving: true, statusLabel: "正在构造工具请求" }}
+          requestProgress={{ toolName: "get_model_extension_parameters", receiving: true, statusLabel: "正在构造工具请求" }}
           onExpandedChange={() => undefined}
           onLoadToolDetail={async () => null}
         />
