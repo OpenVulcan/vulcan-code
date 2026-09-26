@@ -11,11 +11,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { formatMessage, useI18n } from "@/i18n";
 import {
   requestCoreBrowser,
-  listCoreBrowserPages,
-  listCoreBrowserDownloads,
-  listCoreBrowserDialogs,
-  listCoreBrowserFileChoosers,
-  listCoreBrowserSessions,
   fetchCoreBrowserDownload,
   openCoreBrowserStream,
   type CoreBrowserDownload,
@@ -26,6 +21,12 @@ import {
   type CoreBrowserPage,
   type CoreBrowserSession,
 } from "@/service/core-browser-service";
+
+import {
+  observeCoreBrowserSessions, observeCoreBrowserPages, observeCoreBrowserDownloads,
+  observeCoreBrowserDialogs, observeCoreBrowserFileChoosers,
+  refreshCoreBrowserSessions, refreshCoreBrowserPages,
+} from "@/service/core-browser-metadata";
 
 // BrowserInputResult describes the Core-confirmed outcome of one input action.
 // BrowserInputResult 描述一条输入操作经 Core 确认的结果。
@@ -222,24 +223,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // componentMounted rejects late browser operations after this panel is removed.
   // componentMounted 在面板卸载后拒绝迟到的浏览器操作。
   const componentMounted = React.useRef(true);
-  // sessionRequestSequence orders overlapping browser-list responses.
-  // sessionRequestSequence 为重叠的浏览器列表响应排序。
-  const sessionRequestSequence = React.useRef(0);
-  // appliedSessionSequence records the newest browser-list response already shown.
-  // appliedSessionSequence 记录已经展示的最新浏览器列表响应。
-  const appliedSessionSequence = React.useRef(0);
-  // failedSessionSequence prevents an older failure from replacing a newer failure.
-  // failedSessionSequence 防止较旧失败覆盖较新的失败。
-  const failedSessionSequence = React.useRef(0);
-  // pageRequestSequence orders overlapping page-list responses.
-  // pageRequestSequence 为重叠的页面列表响应排序。
-  const pageRequestSequence = React.useRef(0);
-  // appliedPageSequence records the newest page-list response already shown.
-  // appliedPageSequence 记录已经展示的最新页面列表响应。
-  const appliedPageSequence = React.useRef(0);
-  // failedPageSequence prevents an older page-list failure from replacing a newer one.
-  // failedPageSequence 防止较旧的页面列表失败覆盖较新的失败。
-  const failedPageSequence = React.useRef(0);
+
   // selectionIntentSequence prevents a slower tab click from undoing a later tab choice.
   // selectionIntentSequence 防止较慢的页签点击撤销之后的选择。
   const selectionIntentSequence = React.useRef(0);
@@ -368,199 +352,65 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     }
   }, [lease, selectedSession]);
 
-  // refreshSessions adopts Core's session list without selecting an unrelated browser.
-  // refreshSessions 采用 Core 会话列表，但不会选择无关浏览器。
+  // Explicit refreshes share the same ordered read stream as every mounted observer.
+  // 显式刷新与所有已挂载观察者共用相同的有序读取流。
   const refreshSessions = React.useCallback(async () => {
-    const requestSequence = ++sessionRequestSequence.current;
-    const next = await listCoreBrowserSessions(props.ownerSessionId);
-    if (next.some((session) => session.ownerSessionId !== props.ownerSessionId)) {
-      throw new Error("Core browser list contains a different conversation owner.");
-    }
-    if (ownerSessionRef.current !== props.ownerSessionId
-      || requestSequence <= appliedSessionSequence.current
-      || requestSequence <= failedSessionSequence.current) return;
-    appliedSessionSequence.current = requestSequence;
-    setSessions(next);
-    setPollErrors((current) => current.sessions === null ? current : { ...current, sessions: null });
-    // Preserve the selected crashed browser so its failure cannot disappear with the live frame.
-    // 保留选中的崩溃浏览器，避免其故障随实时画面一起消失。
-    // A sole browser has no tab strip, so connect it directly without acquiring control.
-    // 唯一浏览器不显示标签栏，因此直接连接观察，但不获取控制权。
-    const available = next.filter((session) => session.status === "running" || session.status === "crashed");
-    setSelectedSessionId((current) => current && available.some((session) => session.sessionId === current)
-      ? current : available.length === 1 ? available[0].sessionId : null);
+    await refreshCoreBrowserSessions(props.ownerSessionId);
   }, [props.ownerSessionId]);
-
-  // refreshPages updates one selected session's page identity list.
-  // refreshPages 更新一个选定会话的页面身份列表。
   const refreshPages = React.useCallback(async (sessionId: string) => {
-    const requestSequence = ++pageRequestSequence.current;
-    const next = await listCoreBrowserPages(props.ownerSessionId, sessionId);
-    if (ownerSessionRef.current !== props.ownerSessionId || selectedSessionRef.current !== sessionId
-      || requestSequence <= appliedPageSequence.current
-      || requestSequence <= failedPageSequence.current) return;
-    appliedPageSequence.current = requestSequence;
-    setPages(next);
-    setPollErrors((current) => current.pages === null ? current : { ...current, pages: null });
-    setSelectedPageId((current) => {
-      // Restore only an identity still present in this exact browser's authoritative page list.
-      // 仅恢复仍存在于此精确浏览器权威页面列表中的身份。
-      const remembered = viewedPages.current.get(sessionId);
-      if (current && next.some((page) => page.pageId === current)) return current;
-      if (remembered && next.some((page) => page.pageId === remembered.pageId)) return remembered.pageId;
-      return next[0]?.pageId ?? null;
-    });
+    await refreshCoreBrowserPages(props.ownerSessionId, sessionId);
   }, [props.ownerSessionId]);
 
   React.useEffect(() => {
-    // timer periodically discovers popups, page closure, and control handoff from Core.
-    // timer 定期从 Core 发现弹出页、页面关闭与控制权交接。
-    // cancelled prevents an old conversation poll from publishing an error after navigation.
-    // cancelled 阻止旧会话轮询在导航后发布错误。
     let cancelled = false;
-    // inFlight skips an interval tick while the previous browser-list poll is still pending.
-    // inFlight 在上一次浏览器列表轮询仍未完成时跳过本次定时触发。
-    let inFlight = false;
-    // refresh reports only failures belonging to the current conversation.
-    // refresh 只报告当前会话的失败。
-    const refresh = () => {
-      if (inFlight) return;
-      inFlight = true;
-      // A failed older poll must not replace a newer successful browser list with a stale error.
-      // 旧轮询失败不得以过时错误覆盖较新的浏览器列表成功结果。
-      // requestSequence identifies this issued browser-list request for error ordering.
-      // requestSequence 标识本次已发出的浏览器列表请求，用于错误排序。
-      const requestSequence = sessionRequestSequence.current + 1;
-      void refreshSessions().catch((failure: unknown) => {
-        if (!cancelled && ownerSessionRef.current === props.ownerSessionId
-          && requestSequence > appliedSessionSequence.current
-          && requestSequence > failedSessionSequence.current) {
-          failedSessionSequence.current = requestSequence;
-          setPollErrors((current) => ({ ...current, sessions: String(failure) }));
+    const stop = observeCoreBrowserSessions(props.ownerSessionId, {
+      next(next) {
+        if (cancelled || ownerSessionRef.current !== props.ownerSessionId) return;
+        setSessions(next);
+        setPollErrors(current => current.sessions === null ? current : { ...current, sessions: null });
+        const available = next.filter(session => session.status === "running" || session.status === "crashed");
+        setSelectedSessionId(current => current && available.some(session => session.sessionId === current)
+          ? current : available.length === 1 ? available[0].sessionId : null);
+      },
+      error(failure) {
+        if (!cancelled && ownerSessionRef.current === props.ownerSessionId) {
+          setPollErrors(current => ({ ...current, sessions: String(failure) }));
         }
-      }).finally(() => { inFlight = false; });
-    };
-    refresh();
-    // timer owns only this conversation's browser-list polling interval.
-    // timer 只拥有此会话浏览器列表的轮询间隔。
-    const timer = window.setInterval(refresh, 1500);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [props.ownerSessionId, refreshSessions]);
-
-  React.useEffect(() => {
-    if (!selectedSessionId) {
-      return;
-    }
-    // timer keeps this client's page list aligned with Core-owned popups.
-    // timer 使本客户端的页面列表与 Core 拥有的弹出页保持一致。
-    // cancelled prevents a prior browser's late error from replacing the current state.
-    // cancelled 阻止先前浏览器的迟到错误覆盖当前状态。
-    let cancelled = false;
-    // inFlight skips an interval tick while the previous page-list poll is still pending.
-    // inFlight 在上一次页面列表轮询仍未完成时跳过本次定时触发。
-    let inFlight = false;
-    // refresh reports failures only while this browser remains selected.
-    // refresh 仅在此浏览器仍被选中时报告失败。
-    const refresh = () => {
-      if (inFlight) return;
-      inFlight = true;
-      // Ignore a previous page poll's error after a newer selection or response has won.
-      // 较新的页面选择或响应生效后忽略先前轮询的错误。
-      // requestSequence identifies this issued page-list request for error ordering.
-      // requestSequence 标识本次已发出的页面列表请求，用于错误排序。
-      const requestSequence = pageRequestSequence.current + 1;
-      void refreshPages(selectedSessionId).catch((failure: unknown) => {
-        if (!cancelled && ownerSessionRef.current === props.ownerSessionId
-          && selectedSessionRef.current === selectedSessionId
-          && requestSequence > appliedPageSequence.current
-          && requestSequence > failedPageSequence.current) {
-          failedPageSequence.current = requestSequence;
-          setPollErrors((current) => ({ ...current, pages: String(failure) }));
-        }
-      }).finally(() => { inFlight = false; });
-    };
-    refresh();
-    // timer owns the page-list interval for this exact browser selection.
-    // timer 拥有此精确浏览器选择的页面列表轮询间隔。
-    const timer = window.setInterval(refresh, 1500);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [props.ownerSessionId, refreshPages, selectedSessionId]);
+      },
+    });
+    return () => { cancelled = true; stop(); };
+  }, [props.ownerSessionId]);
 
   React.useEffect(() => {
     if (!selectedSessionId) return;
-    // cancelled and the owner/selection checks reject responses from a previous panel lifetime.
-    // cancelled 与归属、选择检查共同拒绝上一次面板生命周期的迟到响应。
     let cancelled = false;
-    // makeRefresh orders one metadata source without blocking its polling interval.
-    // makeRefresh 对单个元数据来源排序，同时不阻塞其轮询间隔。
-    // load reads one Core list; apply publishes only the newest response; returns a poll callback.
-    // load 读取一份 Core 列表；apply 仅发布最新响应；返回轮询回调。
-    const makeRefresh = <T,>(source: BrowserPollSource, load: () => Promise<T[]>, apply: React.Dispatch<React.SetStateAction<T[]>>) => {
-      // issued is the latest started request for this metadata source.
-      // issued 是此元数据来源最新发出的请求序号。
-      let issued = 0;
-      // applied is the latest response already published for this metadata source.
-      // applied 是此元数据来源已经发布的最新响应序号。
-      let applied = 0;
-      // failed is the newest failure published for this metadata source.
-      // failed 是此元数据来源已发布的最新失败序号。
-      let failed = 0;
-      // inFlight skips an interval tick while this source's previous request is still pending.
-      // inFlight 在此来源上一次请求仍未完成时跳过本次定时触发。
-      let inFlight = false;
-      return () => {
-        if (inFlight) return;
-        inFlight = true;
-        // sequence preserves request order even when network responses arrive out of order.
-        // sequence 在网络响应乱序到达时保留请求顺序。
-        const sequence = ++issued;
-        void load().then((next) => {
-          if (cancelled || ownerSessionRef.current !== props.ownerSessionId
-            || selectedSessionRef.current !== selectedSessionId
-            || sequence <= applied || sequence <= failed) return;
-          applied = sequence;
-          apply(next);
-          setPollErrors((current) => current[source] === null ? current : { ...current, [source]: null });
-        }).catch((failure: unknown) => {
-          if (!cancelled && ownerSessionRef.current === props.ownerSessionId
-            && selectedSessionRef.current === selectedSessionId
-            && sequence > applied && sequence > failed) {
-            failed = sequence;
-            setPollErrors((current) => ({ ...current, [source]: String(failure) }));
-          }
-        }).finally(() => { inFlight = false; });
-      };
-    };
-    // Only metadata is polled; download bytes still require explicit user action.
-    // 轮询仅读取元数据；下载文件内容仍须用户明确操作。
-    const refreshDownloads = makeRefresh(
-      "downloads",
-      () => listCoreBrowserDownloads(props.ownerSessionId, selectedSessionId), setDownloads,
-    );
-    // File choosers and dialogs refresh more often because they block page interaction.
-    // 文件选择器与弹窗会阻塞页面交互，因此采用更短的刷新间隔。
-    const refreshFileChoosers = makeRefresh(
-      "fileChoosers",
-      () => listCoreBrowserFileChoosers(props.ownerSessionId, selectedSessionId), setFileChoosers,
-    );
-    const refreshDialogs = makeRefresh(
-      "dialogs",
-      () => listCoreBrowserDialogs(props.ownerSessionId, selectedSessionId), setDialogs,
-    );
-    refreshDownloads();
-    refreshFileChoosers();
-    refreshDialogs();
-    // downloadTimer, chooserTimer and dialogTimer belong to this exact browser selection.
-    // downloadTimer、chooserTimer 和 dialogTimer 仅属于此浏览器选择。
-    const downloadTimer = window.setInterval(refreshDownloads, 1500);
-    const chooserTimer = window.setInterval(refreshFileChoosers, 500);
-    const dialogTimer = window.setInterval(refreshDialogs, 500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(downloadTimer);
-      window.clearInterval(chooserTimer);
-      window.clearInterval(dialogTimer);
-    };
+    const live = () => !cancelled && ownerSessionRef.current === props.ownerSessionId
+      && selectedSessionRef.current === selectedSessionId;
+    const observer = <T,>(source: BrowserPollSource, apply: (value: T[]) => void) => ({
+      next(value: T[]) {
+        if (!live()) return;
+        apply(value);
+        setPollErrors(current => current[source] === null ? current : { ...current, [source]: null });
+      },
+      error(failure: unknown) {
+        if (live()) setPollErrors(current => ({ ...current, [source]: String(failure) }));
+      },
+    });
+    const stops = [
+      observeCoreBrowserPages(props.ownerSessionId, selectedSessionId, observer("pages", (next: CoreBrowserPage[]) => {
+        setPages(next);
+        setSelectedPageId(current => {
+          const remembered = viewedPages.current.get(selectedSessionId);
+          if (current && next.some(page => page.pageId === current)) return current;
+          if (remembered && next.some(page => page.pageId === remembered.pageId)) return remembered.pageId;
+          return next[0]?.pageId ?? null;
+        });
+      })),
+      observeCoreBrowserDownloads(props.ownerSessionId, selectedSessionId, observer("downloads", setDownloads)),
+      observeCoreBrowserFileChoosers(props.ownerSessionId, selectedSessionId, observer("fileChoosers", setFileChoosers)),
+      observeCoreBrowserDialogs(props.ownerSessionId, selectedSessionId, observer("dialogs", setDialogs)),
+    ];
+    return () => { cancelled = true; stops.forEach(stop => stop()); };
   }, [props.ownerSessionId, selectedSessionId]);
 
   React.useEffect(() => {
@@ -1266,17 +1116,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0" aria-label={t("browser.resizeViewport")} title={t("browser.resizeViewport")} aria-pressed={showViewport} onClick={() => setShowViewport((shown) => !shown)}><MonitorSmartphone size={14} /></Button>
           </form> : null}</div>
         <Button type="button" size="icon" variant="ghost" className="h-6 w-6 shrink-0" aria-label={t("browser.refreshBrowserList")} title={t("browser.refreshBrowserList")} onClick={() => {
-          // requestSequence keeps an old manual refresh failure from replacing a newer list.
-          // requestSequence 防止旧的手动刷新失败覆盖更新的列表。
-          const requestSequence = sessionRequestSequence.current + 1;
-          void refreshSessions().catch((failure: unknown) => {
-            if (ownerSessionRef.current === props.ownerSessionId
-              && requestSequence > appliedSessionSequence.current
-              && requestSequence > failedSessionSequence.current) {
-              failedSessionSequence.current = requestSequence;
-              setPollErrors((current) => ({ ...current, sessions: String(failure) }));
-            }
-          });
+          // The shared observer reports errors only to the current owner/lifetime.
+          // 共享观察者仅向当前归属与生命周期报告错误。
+          void refreshSessions().catch(() => {});
         }}>
           <RefreshCw size={13} />
         </Button>

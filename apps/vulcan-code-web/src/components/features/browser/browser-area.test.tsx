@@ -711,3 +711,25 @@ it("sends a held key's release to the previous page when the user changes page t
     URL.revokeObjectURL = previousRevoke;
   }
 });
+
+// The shell and panel observe the same owner without duplicate transport reads.
+// 外壳与面板观察相同归属时，不重复读取传输层。
+it("shares session discovery with a shell observer without sharing different owners", async () => {
+  const { observeCoreBrowserSessions } = await import("@/service/core-browser-metadata");
+  vi.mocked(listCoreBrowserSessions).mockResolvedValue([]);
+  const shell = { next: vi.fn(), error: vi.fn() };
+  const other = { next: vi.fn(), error: vi.fn() };
+  const stopShell = observeCoreBrowserSessions("conversation-a", shell);
+  const stopOther = observeCoreBrowserSessions("conversation-b", other);
+  try {
+    await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
+    await vi.waitFor(() => expect(shell.next).toHaveBeenCalledOnce());
+    expect(other.next).toHaveBeenCalledOnce();
+    expect(vi.mocked(listCoreBrowserSessions).mock.calls.filter(([owner]) => owner === "conversation-a")).toHaveLength(1);
+    expect(vi.mocked(listCoreBrowserSessions).mock.calls.filter(([owner]) => owner === "conversation-b")).toHaveLength(1);
+    await act(async () => root.render(null));
+    expect(shell.next).toHaveBeenCalledOnce();
+  } finally {
+    stopShell(); stopOther();
+  }
+});

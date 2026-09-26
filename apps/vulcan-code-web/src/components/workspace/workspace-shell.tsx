@@ -44,7 +44,7 @@ import {
   WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH,
   WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
 } from "@/components/workspace/workspace-resizable-body";
-import { listCoreBrowserSessions } from "@/service/core-browser-service";
+import { observeCoreBrowserSessions } from "@/service/core-browser-metadata";
 import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import {
@@ -620,20 +620,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     // owner 与 cancelled 将每次异步结果绑定到精确的当前可见会话。
     const owner = props.selectedConversationId;
     let cancelled = false;
-    let polling = false;
     // failureLogged keeps normal Core restarts from flooding the GUI console every poll.
     // failureLogged 防止正常重启 Core 时每轮轮询都刷满 GUI 控制台。
     let failureLogged = false;
-    const refresh = async (): Promise<void> => {
-      if (polling) return;
-      polling = true;
-      try {
-        const sessions = await listCoreBrowserSessions(owner);
+    const stop = observeCoreBrowserSessions(owner, {
+      next(sessions) {
         if (cancelled) return;
         failureLogged = false;
-        if (sessions.some((session) => session.ownerSessionId !== owner)) {
-          throw new Error("Core browser list contains a different conversation owner.");
-        }
         // Keep crashed browsers discoverable; only an explicit close removes the diagnostic panel.
         // 保留崩溃浏览器的可见入口；只有显式关闭才移除诊断面板。
         const ids = sessions.filter((session) => session.status === "running" || session.status === "crashed").map((session) => session.sessionId);
@@ -651,18 +644,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
             ? { ...current, state: openWorkspaceContextTab(current.state, "browser", t) } : current);
           openRightContextPanel();
         }
-      } catch (error) {
+      },
+      error(error) {
         if (!cancelled && !failureLogged) {
           failureLogged = true;
           console.warn("Failed to refresh conversation browser list", error);
         }
-      } finally {
-        polling = false;
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 1500);
-    return () => { cancelled = true; window.clearInterval(timer); };
+      },
+    });
+    return () => { cancelled = true; stop(); };
   }, [aiBrowserPluginEnabled, contextTabCacheKey, hasSelectedChatConversation, openRightContextPanel, props.selectedConversationId, t]);
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
