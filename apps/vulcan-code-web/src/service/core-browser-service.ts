@@ -168,6 +168,9 @@ export interface CoreBrowserStreamCallbacks {
   onFrame: (frame: CoreBrowserFrame) => void;
   onState: (status: string) => void;
   onError: (message: string) => void;
+  // Typed host refusals control retry policy without matching localized error messages.
+  // 强类型宿主拒绝用于控制重试策略，不匹配本地化错误文案。
+  onFailure?: (failure: { code: string; retryable: boolean }) => void;
 }
 
 // listCoreBrowserSessions reads browser sessions owned by the selected conversation.
@@ -283,9 +286,12 @@ export async function openCoreBrowserStream(
       if (typeof event.data === "string") {
         // update contains snapshot/resume state and any stream refusal.
         // update 包含快照或恢复状态以及任何流拒绝。
-        const update = JSON.parse(event.data) as { kind?: string; mode?: string; message?: string };
+        const update = JSON.parse(event.data) as { kind?: string; mode?: string; message?: string; code?: string };
         if (update.kind === "error") {
           callbacks.onError(update.message ?? "Browser stream failed.");
+          if (update.code === "browser_stream_refused" || update.code === "browser_stream_unbound") {
+            callbacks.onFailure?.({ code: update.code, retryable: false });
+          }
         } else {
           // Snapshot/resume are delivery modes on an already connected socket, not connection states.
           // snapshot/resume 是已连接套接字上的传送模式，不是连接状态。
@@ -299,7 +305,12 @@ export async function openCoreBrowserStream(
     }
   });
   socket.addEventListener("error", () => callbacks.onError("Browser stream connection failed."));
-  socket.addEventListener("close", () => callbacks.onState("disconnected"));
+  socket.addEventListener("close", (event) => {
+    if ([1002, 1003, 1007, 1008, 1009].includes(event.code)) {
+      callbacks.onFailure?.({ code: `websocket_${event.code}`, retryable: false });
+    }
+    callbacks.onState("disconnected");
+  });
   return () => {
     if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
       socket.close();

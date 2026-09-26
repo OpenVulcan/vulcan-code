@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import { CoreBrowserRuntimeControls } from "./core-browser-runtime-controls";
 import { useBrowserFrameRate } from "./use-browser-frame-rate";
+import { maintainCoreBrowserStream } from "@/service/browser-stream-reconnect";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatMessage, useI18n } from "@/i18n";
@@ -581,17 +582,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     // cancelled prevents a late ticket response from reopening an abandoned page stream.
     // cancelled 防止迟到的凭据应答重新打开已放弃的页面流。
     let cancelled = false;
-    // close owns the exact socket created for this selection.
-    // close 拥有为本次选择创建的精确套接字。
-    let close: (() => void) | null = null;
-    // reconnectTimer is cleared when this page selection changes.
-    // reconnectTimer 在页面选择改变时被清除。
-    let reconnectTimer: number | null = null;
-    // connect establishes a fresh one-use stream ticket after each disconnect.
-    // connect 在每次断连后以新的一次性凭据建立流。
-    const connect = async () => {
-      try {
-        close = await openCoreBrowserStream(props.ownerSessionId, selectedSessionId, selectedPageId, {
+    const stopStream = maintainCoreBrowserStream(
+      callbacks => openCoreBrowserStream(props.ownerSessionId, selectedSessionId, selectedPageId, callbacks),
+      {
           onFrame: (nextFrame) => {
             if (cancelled || ownerSessionRef.current !== props.ownerSessionId
               || selectedSessionRef.current !== selectedSessionId
@@ -624,12 +617,6 @@ export function BrowserArea(props: { ownerSessionId: string }) {
               return;
             }
             setStreamStatus(status);
-            if (status === "disconnected" && reconnectTimer === null) {
-              reconnectTimer = window.setTimeout(() => {
-                reconnectTimer = null;
-                void connect();
-              }, 1000);
-            }
           },
           onError: (message) => {
             if (!cancelled && ownerSessionRef.current === props.ownerSessionId
@@ -638,32 +625,11 @@ export function BrowserArea(props: { ownerSessionId: string }) {
               setError(message);
             }
           },
-        });
-        if (cancelled || ownerSessionRef.current !== props.ownerSessionId
-          || selectedSessionRef.current !== selectedSessionId
-          || selectedPageRef.current !== selectedPageId) {
-          close();
-        }
-      } catch (failure) {
-        if (!cancelled && ownerSessionRef.current === props.ownerSessionId
-          && selectedSessionRef.current === selectedSessionId
-          && selectedPageRef.current === selectedPageId) {
-          setError(String(failure));
-          reconnectTimer = window.setTimeout(() => {
-            reconnectTimer = null;
-            void connect();
-          }, 1000);
-        }
-      }
-    };
-    setStreamStatus("connecting");
-    void connect();
+      },
+    );
     return () => {
       cancelled = true;
-      close?.();
-      if (reconnectTimer !== null) {
-        window.clearTimeout(reconnectTimer);
-      }
+      stopStream();
       if (imageUrlRef.current) {
         URL.revokeObjectURL(imageUrlRef.current);
         imageUrlRef.current = null;
