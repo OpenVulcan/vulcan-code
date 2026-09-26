@@ -39,6 +39,18 @@ const runtimeLayoutSchemaVersion = 2;
 // 服务描述自身编译模式，不启动用户服务或修改配置。
 const execFileAsync = promisify(execFile);
 
+// validateRuntimeLayoutIdentity checks the authoritative schema and host/profile identity without launching a process.
+// validateRuntimeLayoutIdentity 检查权威架构版本及宿主、模式身份，不启动进程。
+// layout is the parsed manifest and requestedProfile is debug or release; invalid identities throw.
+// layout 是已解析清单，requestedProfile 是 debug 或 release；身份无效时抛出异常。
+export function validateRuntimeLayoutIdentity(layout, requestedProfile) {
+  if (!['debug', 'release'].includes(requestedProfile)
+    || layout.schemaVersion !== runtimeLayoutSchemaVersion || layout.profile !== requestedProfile
+    || layout.platform !== process.platform || layout.architecture !== process.arch) {
+    throw new Error('The built distribution does not match the requested profile, platform, or architecture. Rebuild first.');
+  }
+}
+
 // Reject an existing link in the isolated root path before any sync/build script can clean it.
 // 在同步或构建脚本清理独立发行根之前，拒绝路径中已有的目录链接。
 async function verifyIsolatedDistributionBoundary() {
@@ -502,10 +514,7 @@ async function main() {
   // 进程和静态资源只由生成的布局清单确定。
   const manifestPath = path.join(output, 'runtime-layout.json');
   const layout = JSON.parse(await readFile(manifestPath, 'utf8'));
-  if (layout.schemaVersion !== runtimeLayoutSchemaVersion || layout.profile !== profile
-    || layout.platform !== process.platform || layout.architecture !== process.arch) {
-    throw new Error('The built distribution does not match the requested profile, platform, or architecture. Rebuild first.');
-  }
+  validateRuntimeLayoutIdentity(layout, profile);
   // Core-only replacement needs the authoritative layout identity, without launching or repackaging other components.
   // 仅替换核心需要权威布局身份，无须启动或重新打包其他组件。
   if (command === 'layout') {

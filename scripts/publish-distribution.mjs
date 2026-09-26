@@ -4,7 +4,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, lstat, realpath, writeFile } from 'no
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verifyPackagedLayout } from './desktop-runtime.mjs';
+import { validateRuntimeLayoutIdentity, verifyPackagedLayout } from './desktop-runtime.mjs';
 import { publishPreparedDirectory, recoverPublication } from './directory-publication.mjs';
 
 // acquirePublicationGuard serializes publishers; a dead process can be reclaimed under a separate recovery lock.
@@ -50,6 +50,7 @@ async function validateDistribution(root) {
   // layout is written by the existing packager after profile and executable validation.
   // layout 由既有打包器在验证模式和可执行文件后写入。
   const layout = JSON.parse(await readFile(path.join(root, 'runtime-layout.json'), 'utf8'));
+  validateRuntimeLayoutIdentity(layout, layout.profile);
   await verifyPackagedLayout(layout, root);
 }
 

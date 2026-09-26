@@ -7,7 +7,22 @@ import test from 'node:test';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { packageRelativePath, verifyPackagedLayout } from './desktop-runtime.mjs';
+import { packageRelativePath, validateRuntimeLayoutIdentity, verifyPackagedLayout } from './desktop-runtime.mjs';
+
+// Recovery must reject invalid identity even when all declared files still exist.
+// 即使全部声明文件仍存在，恢复流程也必须拒绝无效身份。
+test('recovery identity validation rejects unknown profiles and foreign schemas or hosts', () => {
+  // layout mirrors the current fixture contract; each mutation changes one identity dimension.
+  // layout 复现当前夹具契约；每次变更只改变一个身份维度。
+  const layout = { schemaVersion: 2, profile: 'debug', platform: process.platform, architecture: process.arch };
+  assert.doesNotThrow(() => validateRuntimeLayoutIdentity(layout, layout.profile));
+  for (const changed of [{ schemaVersion: 0 }, { profile: 'invalid' }, { platform: 'invalid' }, { architecture: 'invalid' }]) {
+    // candidate is evaluated using its own profile, as recovery of an earlier generation requires.
+    // candidate 使用自身模式验证，符合恢复先前一代的要求。
+    const candidate = { ...layout, ...changed };
+    assert.throws(() => validateRuntimeLayoutIdentity(candidate, candidate.profile), /does not match/);
+  }
+});
 
 // Exercise the actual read-only layout CLI used by Core restart, including incompatible identities.
 // 验证核心重启使用的真实只读布局命令，包含不匹配的布局身份。
