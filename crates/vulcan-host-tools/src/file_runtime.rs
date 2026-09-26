@@ -580,12 +580,24 @@ fn native_read_model_output(
     // Record the first body line before appending content instead of hard-coding a header offset.
     // 追加正文前记录首行位置，避免硬编码标题偏移。
     let output_start_line = markdown.lines().count() + 1;
-    for line in selected {
-        markdown.push_str(&line.content);
-        markdown.push('\n');
+    // Number every logical line so models can cite exact source positions without counting.
+    // 为每个逻辑行标号，使模型无需计数即可引用精确源位置。
+    for (index, line) in selected.iter().enumerate() {
+        markdown.push_str(&format!(
+            "L{}: {}\n",
+            returned_start_line + index,
+            line.content
+        ));
     }
     markdown.push_str(&fence);
     markdown.push('\n');
+    // Empty files and out-of-range requests are distinct successful reads, never missing paths.
+    // 空文件与越界请求是两种不同的成功读取，不能混同路径不存在。
+    if snapshot.document.lines.is_empty() {
+        markdown.push_str("\n[empty_file] The file exists but contains no text. There are no source lines to read.\n");
+    } else if selected.is_empty() {
+        markdown.push_str("\n[empty_range] The file exists, but the requested range is beyond its last line. Choose start_line within the reported total line count.\n");
+    }
     if truncated {
         markdown.push_str(&format!(
             "\nTruncated. Continue with start_line={}.\n",
@@ -595,7 +607,7 @@ fn native_read_model_output(
     // Host metadata contains only coordinates and file-format facts, never source content.
     // 宿主元数据仅含定位信息和文件格式事实，绝不保存源文件正文。
     let metadata = json!({
-        "schema": "vulcan.file_read.v1",
+        "schema": "vulcan.file_read.v2",
         "action": "read",
         "path": display_path(path),
         "resource_id": "resource-1",
@@ -5822,8 +5834,8 @@ mod tests {
         assert_eq!(oversized_edit.code, "output_limit_exceeded");
     }
 
-    /// Verifies the public read contract returns an actual range and code content without Lxx text.
-    /// 验证公开读取契约返回真实范围以及不含 Lxx 文本的代码正文。
+    /// Verifies numbered Markdown retains the actual range and a single copy of source content.
+    /// 验证带行号的 Markdown 保留真实范围与唯一一份源文件正文。
     #[tokio::test]
     async fn native_read_returns_code_content_and_real_range() {
         // Cover normalized separators, blank lines, fences, Unicode, and an unterminated final line.
@@ -5863,11 +5875,11 @@ mod tests {
                 .skip(offset)
                 .take(count)
                 .collect::<Vec<_>>(),
-            vec!["two", "", "```", "你好"]
+            vec!["L2: two", "L3: ", "L4: ```", "L5: 你好"]
         );
         assert!(markdown.contains("\n````rust\n"));
         assert!(markdown.ends_with("\n````\n"));
-        assert!(!markdown.contains("L2"));
+        assert_eq!(metadata["schema"], json!("vulcan.file_read.v2"));
         assert_eq!(markdown.matches("你好").count(), 1);
         assert!(!metadata.to_string().contains("你好"));
         for removed in ["content", "lines", "segments"] {
@@ -5891,6 +5903,20 @@ mod tests {
         assert_eq!(empty_metadata["range"]["source_start_line"], json!(6));
         assert_eq!(empty_metadata["range"]["line_count"], json!(0));
         assert_eq!(empty_metadata["next_start_line"], Value::Null);
+        assert!(
+            beyond_end
+                .model_output
+                .as_str()
+                .unwrap()
+                .contains("[empty_range]")
+        );
+        assert!(
+            !beyond_end
+                .model_output
+                .as_str()
+                .unwrap()
+                .contains("[empty_file]")
+        );
     }
 
     /// Verifies empty and mixed-ending documents project exactly their logical source lines.
@@ -5924,9 +5950,14 @@ mod tests {
                     .take(count)
                     .collect::<Vec<_>>(),
                 expected
+                    .iter()
+                    .enumerate()
+                    .map(|(index, line)| format!("L{}: {line}", index + 1))
+                    .collect::<Vec<_>>()
             );
             assert_eq!(count, expected.len());
             assert_eq!(metadata["truncated"], json!(false));
+            assert_eq!(body.contains("[empty_file]"), source.is_empty());
         }
     }
 

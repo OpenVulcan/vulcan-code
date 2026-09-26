@@ -34,7 +34,7 @@ const RESULT_LABELS: Readonly<Record<string, TranslationKey>> = {
  * 参数 event 持有判别字段与可选变更集；返回直接、技能源码或标签页展示模式。 */
 export function toolResultMode(event: ToolCallEvent): "direct" | "skill" | "tabs" {
   if (event.changeset || DIRECT_TOOL_IDS.has(event.tool_name) || event.tool_name === "vulcan_file_read") return "direct";
-  if (event.tool_name === "file" && event.input.action !== "stat" && event.input.action !== "search") return "direct";
+  if (event.tool_name === "file" || event.tool_name === "vulcan_codekit_repo_map") return "direct";
   if (event.tool_name === "skill") return "skill";
   return "tabs";
 }

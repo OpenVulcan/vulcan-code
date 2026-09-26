@@ -112,18 +112,21 @@ describe("native file presentation mapping", () => {
     expect(fileChangeStatusLabel(failedPresentation!, "modify")).toBe("Failed · Not edited");
   });
 
-  it("renders and hydrates a single Markdown read body using metadata coordinates", () => {
+  it.each(["vulcan.file_read.v1", "vulcan.file_read.v2"])("renders and hydrates %s using metadata coordinates", (schema) => {
     // Include a blank source line and a literal fence to prove headers are never reparsed as source.
     // 包含源文件空行与字面围栏，证明标题不会被重新解析为源文件正文。
-    const body = "# File: src/a.ts\n\nShowing selected source\n\n````typescript\nalpha\n\n```\n你好\n````\n";
-    const sourceLines = ["alpha", "", "```", "你好"];
-    const firstSourceIndex = body.split("\n").indexOf(sourceLines[0]);
+    const sourceLines = ["alpha", "", "```", "你好", "L14: original prefix"];
+    // v2 adds exactly one positional prefix; literal prefixes inside source must survive.
+    // v2 仅增加一个位置前缀；源文件自身的字面前缀必须保留。
+    const renderedLines = sourceLines.map((line, index) => schema === "vulcan.file_read.v2" ? `L${10 + index}: ${line}` : line);
+    const body = "# File: src/a.ts\n\nShowing selected source\n\n````typescript\n" + renderedLines.join("\n") + "\n````\n";
+    const firstSourceIndex = body.split("\n").indexOf(renderedLines[0]);
     const metadata = {
       arguments: { action: "read", path: "src/a.ts", start_line: 10, end_line: 13 },
       host_result: {
         kind: "file_access",
         payload: {
-          schema: "vulcan.file_read.v1",
+          schema,
           action: "read",
           path: "D:/repo/src/a.ts",
           range: { source_start_line: 10, output_start_line: firstSourceIndex + 1, line_count: sourceLines.length },
@@ -137,7 +140,7 @@ describe("native file presentation mapping", () => {
     expect(pending?.items[0].rows).toEqual([]);
     expect(inline?.items[0].rows).toEqual(expectedRows);
     expect(hydrated.items[0].rows).toEqual(expectedRows);
-    expect(hydrated.items[0].lineRanges).toEqual([{ startLine: 10, endLine: 13 }]);
+    expect(hydrated.items[0].lineRanges).toEqual([{ startLine: 10, endLine: 10 + sourceLines.length - 1 }]);
     expect(JSON.stringify(metadata)).not.toContain("alpha");
   });
 
@@ -789,7 +792,7 @@ describe("native file presentation mapping", () => {
     expect(completed?.files.map((file) => file.id)).toEqual(preview?.files.map((file) => file.id));
   });
 
-  it("keeps a hunkless completed Apply Patch closed instead of rebuilding request rows", () => {
+  it("allows opening the file list of hunkless Apply Patch without inventing diff rows", () => {
     const presentation = resolveFileChangePresentation(
       toolBlock("apply_patch", "", {
         arguments: {
@@ -823,7 +826,7 @@ describe("native file presentation mapping", () => {
     );
 
     expect(presentation).toMatchObject({
-      interactive: false,
+      interactive: true,
       source: "native_apply_patch",
       totalAdded: 2,
       totalRemoved: 2,

@@ -2111,6 +2111,8 @@ export type TranslationKey =
   | "toolPresentation.fileSearch.title"
   | "toolPresentation.fileStat.title"
   | "toolPresentation.codekit.astTree.title"
+  | "toolPresentation.codekit.repoMap.title"
+  | "toolPresentation.fileRead.emptyFile"
   | "toolPresentation.codekit.astDetail.title"
   | "toolPresentation.codekit.rg.title"
   | "toolPresentation.codekit.nodeSource.title"

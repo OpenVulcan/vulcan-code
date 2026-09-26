@@ -49,6 +49,13 @@ interface MarkdownOutputToolConfig {
 // MARKDOWN_OUTPUT_TOOL_CONFIGS is keyed by concrete tool id, never by display text.
 // MARKDOWN_OUTPUT_TOOL_CONFIGS 只按明确工具标识索引，绝不按展示文本匹配。
 const MARKDOWN_OUTPUT_TOOL_CONFIGS = new Map<string, MarkdownOutputToolConfig>([
+  ["vulcan_codekit_repo_map", {
+    contentKind: "markdown",
+    icon: "folder_tree",
+    idPrefix: "codekit-repo-map",
+    summaryKind: "none",
+    titleKey: "toolPresentation.codekit.repoMap.title",
+  }],
   ["vulcan_file_list", {
     contentKind: "markdown",
     icon: "folder_tree",

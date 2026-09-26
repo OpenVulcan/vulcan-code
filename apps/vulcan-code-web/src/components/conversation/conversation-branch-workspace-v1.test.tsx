@@ -298,6 +298,30 @@ function renderWorkspace(...args: Parameters<typeof workspaceTree>): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  // The real branch surface must show one card from API start through terminal replay, without leaking summary prose.
+  // 真实分支界面必须从 API 开始到终态重放都显示一张卡，不能把摘要正文泄漏为普通回复。
+  it.each(["completed", "failed", "interrupted"] as const)("renders %s compaction as one lifecycle card", (status) => {
+    // Events preserve exact API identity across reasoning, summary and terminal facts.
+    // 事件在思考、摘要与终态事实之间保留精确 API 身份。
+    const events = [completeTurnEvents()[0], eventSummary(2, {
+      kind: "api_started", api_call_id: 9, purpose: "compaction", request: { provider: "test", model: "test" },
+    })];
+    expect(renderWorkspace(events, "inline_output", [], true)).toContain("上下文正在压缩");
+    events.push(eventSummary(3, { kind: "assistant_reasoning", api_call_id: 9, text: "压缩专用思考", status: "completed" }));
+    events.push(eventSummary(4, { kind: "assistant_text", api_call_id: 9, text: "压缩摘要正文", status: "completed" }));
+    expect(renderWorkspace(events, "inline_output", [], true)).toContain("压缩摘要正文");
+    events.push(eventSummary(5, { kind: "api_stats", api_call_id: 9, purpose: "compaction",
+      provider: "test", model: "test", usage: { input_tokens: 250_000, output_tokens: 1_000 }, status,
+      continuation_eligibility: "forbidden", timing: { completed_at_ms: 1_005 } }));
+    events.push(eventSummary(6, { kind: "assistant_text", api_call_id: 10, text: "压缩之后的正常回答", status: "completed" }));
+    // Markup goes through the production transcript grouping and collapsed card component.
+    // markup 经过生产转录分组与默认折叠卡组件。
+    const markup = renderWorkspace(events);
+    expect(markup.match(/class="context-compaction-block /g)).toHaveLength(1);
+    expect(markup).toContain(status === "completed" ? "上下文已压缩" : "上下文压缩失败");
+    expect(markup).not.toContain("压缩摘要正文");
+    expect(markup).toContain("压缩之后的正常回答");
+  });
   it("binds drafts to their exact API and removes them on durable handoff or failure", () => {
     // A draft cannot invent an API or use another API's Turn.
     // 草稿不能伪造 API 或使用其他 API 的回合。
@@ -374,6 +398,9 @@ describe("ConversationBranchWorkspaceV1", () => {
           ] } });
       expect(host.textContent).toContain("+2");
       if (toolName !== "file") expect(host.textContent).toContain("-1");
+      expect(host.querySelectorAll(".tool-presentation-summary")).toHaveLength(1);
+      expect(host.querySelector(".tool-presentation-state")).toBeNull();
+      expect(host.textContent).not.toContain("110B");
       await publish(null);
       expect(host.querySelector(".tool-presentation-summary")).toBeNull();
     } finally {

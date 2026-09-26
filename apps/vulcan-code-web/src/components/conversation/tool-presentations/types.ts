@@ -216,6 +216,9 @@ export interface FileAccessItemPresentation {
 // FileAccessPresentation describes one read, list, search, or stat card without mutation semantics.
 // FileAccessPresentation 描述一张不含变更语义的读取、列表、搜索或状态卡片。
 export interface FileAccessPresentation {
+  // True only when authoritative read metadata reports no source lines.
+  // 仅当权威读取元数据报告没有源文件行时为真。
+  emptyFile?: boolean;
   // Shared list/stat Markdown, present only after the complete result has been loaded.
   // 共用的列表或属性 Markdown，仅在完整结果加载后存在。
   markdownBody?: string;

@@ -58,7 +58,7 @@ function buildPersistentChangeSetPresentation(blocks: ToolExecutionConversationB
   });
   return { kind: "file_change", source, state, mode: changeset.mode, detailRef, files,
     id: fileChangePresentationId(blocks, files, prefix), operation: summarizeOperation(files),
-    interactive: files.some(file => file.expandable), hasEffectiveChanges: files.length > 0,
+    interactive: files.length > 1 || files.some(file => file.expandable), hasEffectiveChanges: files.length > 0,
     totalAdded: sumKnown(files.map(file => file.added)), totalRemoved: sumKnown(files.map(file => file.removed)),
     errorDetail: state === "failed" ? errorDetailFromBlocks(blocks) : null };
 }
@@ -394,7 +394,7 @@ function buildHostChangeSetPresentation(
             ? "native-file-mutation"
             : "change-set",
     ),
-    interactive: displayState !== "running" && files.some((file) => file.expandable),
+    interactive: displayState !== "running" && (files.length > 1 || files.some((file) => file.expandable)),
     hasEffectiveChanges: true,
     kind: "file_change",
     mode,
@@ -491,11 +491,11 @@ function buildNativeFileAccessPresentation(
 ): FileAccessPresentation | null {
   const targets = nativeFileAccessTargets(blocks);
   const output = nativeFileAccessOutput(blocks);
-  // V1 list/stat results share their sole model body instead of persisting a second host object.
-  // V1 列表和属性结果共用唯一模型正文，不再持久化第二个宿主对象。
+  // V1 file inspections share their sole model body instead of persisting a second host object.
+  // V1 文件检查共用唯一模型正文，不再持久化第二个宿主对象。
   const modelResult = v1ModelResult(fixedV1ToolEvent(blocks)?.output);
-  const markdownBody = accessAction !== "read" && displayState !== "running" && typeof modelResult === "string"
-    ? modelResult : undefined;
+  const markdownBody = displayState !== "running" && typeof modelResult === "string"
+    ? modelResult : output?.metadata.schema === "vulcan.file_read.v2" && output.body ? output.body : undefined;
   if (!targets.length) {
     return null;
   }
@@ -529,6 +529,7 @@ function buildNativeFileAccessPresentation(
   return {
     action: accessAction,
     markdownBody,
+    emptyFile: accessAction === "read" && output?.metadata.total_line_count === 0,
     errorDetail: displayState === "failed" ? errorDetailFromBlocks(blocks) : null,
     detailRef,
     id: fileChangePresentationId(blocks, items, `native-file-${accessAction}`),
@@ -1288,8 +1289,8 @@ function nativeMarkdownReadRange(result: Record<string, unknown>): {
   outputStart: number;
   lineCount: number;
 } | null {
-  // All three fields are mandatory in vulcan.file_read.v1 and have one authoritative owner.
-  // vulcan.file_read.v1 强制要求三个字段，且每个字段只有一个权威来源。
+  // Both versioned read formats require these three coordinates from the same result.
+  // 两种版本的读取格式都要求这三个坐标来自同一结果。
   const range = objectValue(result.range);
   const sourceStart = numberValue(range?.source_start_line);
   const outputStart = numberValue(range?.output_start_line);
@@ -1321,11 +1322,20 @@ function nativeMarkdownReadRows(result: Record<string, unknown>, body: string): 
     return [{ content: "Invalid file read line mapping.", kind: "error", lineNumber: null }];
   }
   return lines.slice(range.outputStart - 1, range.outputStart - 1 + range.lineCount)
-    .slice(0, FILE_ACCESS_PREVIEW_ROW_LIMIT).map((content, index) => ({
-      content,
-      kind: "context",
-      lineNumber: range.sourceStart + index,
-    }));
+    .slice(0, FILE_ACCESS_PREVIEW_ROW_LIMIT).map((content, index) => {
+      // v2 owns an exact positional prefix; v1 source text must remain untouched.
+      // v2 定义精确的位置前缀；v1 源文件正文必须保持原样。
+      const lineNumber = range.sourceStart + index;
+      const prefix = `L${lineNumber}: `;
+      if (result.schema === "vulcan.file_read.v2" && !content.startsWith(prefix)) {
+        return { content: "Invalid file read line prefix.", kind: "error", lineNumber: null };
+      }
+      return {
+        content: result.schema === "vulcan.file_read.v2" ? content.slice(prefix.length) : content,
+        kind: "context",
+        lineNumber,
+      };
+    });
 }
 
 /** Returns visible rows for one result; output pairs the body and metadata of that result.
@@ -1351,7 +1361,7 @@ function nativeFileResultRowsFromOutput(
     }];
   }
   if (action === "read") {
-    if (result.schema === "vulcan.file_read.v1") {
+    if (result.schema === "vulcan.file_read.v1" || result.schema === "vulcan.file_read.v2") {
       return nativeMarkdownReadRows(result, output.body);
     }
     const legacyLines = arrayValue(result.lines);
@@ -1471,6 +1481,15 @@ interface NativeFileAccessOutput {
 function nativeFileAccessOutput(
   blocks: ToolExecutionConversationBlock[],
 ): NativeFileAccessOutput | null {
+  // Canonical events own both the model body and host metadata; legacy copies are not authoritative.
+  // 规范事件同时持有模型正文与宿主元数据；旧式副本不是权威来源。
+  const event = fixedV1ToolEvent(blocks);
+  if (event) {
+    const host = objectValue(event.output?.host_result);
+    const metadata = host?.kind === "file_access" ? objectValue(host.payload) : null;
+    const body = v1ModelResult(event.output);
+    return metadata ? { metadata, body: typeof body === "string" ? body : "" } : null;
+  }
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index];
     const hostResult = objectValue(metadataValue(block?.rawMetadata, ["host_result", "hostResult"]));
@@ -1513,7 +1532,7 @@ export function hydrateFileAccessPresentation(
     // A zero-line versioned read is authoritative and must clear an earlier requested range.
     // 带版本的零行读取是权威结果，必须清除先前的请求范围。
     const result = nativeFileAccessResult(output.metadata, index);
-    if (!rows.length && result?.schema !== "vulcan.file_read.v1") {
+    if (!rows.length && result?.schema !== "vulcan.file_read.v1" && result?.schema !== "vulcan.file_read.v2") {
       return item;
     }
     const diffFile = presentation.action === "read"
@@ -1542,6 +1561,12 @@ export function hydrateFileAccessPresentation(
     ...presentation,
     interactive: presentation.state !== "running" && items.some((item) => item.expandable),
     items,
+    // Versioned numbered reads retain their original Markdown, including empty-range explanations.
+    // 带编号的版本化读取保留原始 Markdown，也包括空范围说明。
+    ...(output.metadata.schema === "vulcan.file_read.v2" ? {
+      markdownBody: output.body, interactive: presentation.state !== "running",
+      emptyFile: output.metadata.total_line_count === 0,
+    } : {}),
   };
 }
 
@@ -1576,7 +1601,7 @@ function nativeFileAccessResultLineRanges(
   if (!result) {
     return requestRanges;
   }
-  if (result.schema === "vulcan.file_read.v1") {
+  if (result.schema === "vulcan.file_read.v1" || result.schema === "vulcan.file_read.v2") {
     // The versioned mapping owns the returned range, including an explicitly empty read.
     // 带版本的映射拥有返回范围，也包含明确的空读取。
     const range = nativeMarkdownReadRange(result);
@@ -1856,7 +1881,7 @@ function displayPathForFile(path: string, workspacePath?: string | null): { path
   }
   if (normalizedWorkspace && pathInsideWorkspace(normalizedPath, normalizedWorkspace)) {
     const relative = slashPath.slice(slashWorkspace.length).replace(/^\/+/, "");
-    return { kind: "project", path: compactMiddlePath(relative || basenameFromPath(path)) };
+    return { kind: "project", path: relative ? compactMiddlePath(relative) : "." };
   }
   return { kind: isAbsolutePath(path) ? "external" : "unknown", path: compactMiddlePath(path) };
 }

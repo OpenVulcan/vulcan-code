@@ -160,13 +160,6 @@ export function ToolExecutionBlock(props: {
     resolvedRequestProgress,
     displayState,
   );
-  // requestCardProgress keeps request formation distinct from actual tool execution while reusing the resolved card.
-  // requestCardProgress 在复用既有卡片的同时，保持请求构造与真实工具执行语义分离。
-  const requestCardProgress = requestProgress ? {
-    toolName: primaryBlock.toolName ?? primaryBlock.title,
-    receiving: true,
-    statusLabel: toolRequestProgressLabel(requestProgress, t),
-  } : null;
   const detailRefFields = toolExecutionDetailRef(props.blocks);
   // v1BackedPresentation identifies cards whose complete persisted payload already came from the V1 ledger.
   // v1BackedPresentation 标识完整持久化载荷已来自 V1 账本的卡片。
@@ -220,6 +213,14 @@ export function ToolExecutionBlock(props: {
       props.workspacePath,
     ],
   );
+  // Dedicated cards show semantic previews; only the generic card needs byte progress.
+  // 专用卡显示语义预览；仅通用卡需要字节进度。
+  const requestCardProgress = requestProgress ? {
+    toolName: primaryBlock.toolName ?? primaryBlock.title,
+    receiving: true,
+    statusLabel: presentation.kind === "generic_tool_markdown" && !presentation.titleKey
+      ? toolRequestProgressLabel(requestProgress, t) : "",
+  } : null;
   // localToolPresentationExpansionOverrides keeps clicks inside this leaf card subtree.
   // localToolPresentationExpansionOverrides 将点击更新限制在当前叶子卡片子树内。
   const [localToolPresentationExpansionOverrides, setLocalToolPresentationExpansionOverrides] = React.useState<ReadonlyMap<string, boolean>>(

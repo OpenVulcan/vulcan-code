@@ -588,9 +588,9 @@ describe("ToolPresentationCard file access icons", () => {
     expect(markup).not.toContain("file-change-counts");
   });
 
-  // Completed edits expose actual files and line counts without expansion or generic terminal status text.
-  // 已完成编辑无需展开即可展示实际文件与行数，且不显示通用终态状态文案。
-  it("shows actual edit files and line counts directly", () => {
+  // Multi-file edits retain one aggregate summary until the user expands the card.
+  // 多文件编辑在用户展开前仅保留一条汇总摘要。
+  it("shows one aggregate edit row with actual line counts", () => {
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
         <ToolPresentationCard
@@ -607,7 +607,9 @@ describe("ToolPresentationCard file access icons", () => {
 
     expect(markup).toContain("src/a.ts");
     expect(markup).toContain("src/b.ts");
-    expect(markup).toContain("+2");
+    expect(markup).toContain("+3");
+    expect(markup.match(/<button/g)).toHaveLength(1);
+    expect(markup).not.toContain("file-change-tree");
     expect(markup).toContain("-1");
     expect(markup).not.toContain("执行成功");
     expect(markup).not.toContain("已编辑");
@@ -648,7 +650,8 @@ describe("ToolPresentationCard file access icons", () => {
     expect(markup).toContain("编辑");
     expect(markup).toContain(`>${label}</span>`);
     expect(markup).toContain("Read the current file and retry.");
-    expect(markup).toContain("file-change-error-text");
+    expect(markup).not.toContain("file-change-error-text");
+    expect(markup).toContain('aria-expanded="false"');
     expect(markup).not.toContain(">ERR<");
     expect(markup).not.toContain("file-change-added");
     expect(markup).not.toContain("file-change-removed");

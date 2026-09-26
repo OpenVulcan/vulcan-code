@@ -42,15 +42,9 @@ export function FileChangePresentationCard(props: {
   // displayPresentation is the authoritative visible host ChangeSet; hidden detail never replaces edit truth.
   // displayPresentation 是权威可见宿主 ChangeSet；隐藏详情绝不替换编辑事实。
   const displayPresentation = presentation;
-  const [errorExpanded, setErrorExpanded] = React.useState(() => presentation.interactive && presentation.state === "failed" && Boolean(presentation.errorDetail));
-  React.useEffect(() => {
-    setErrorExpanded(presentation.interactive && presentation.state === "failed" && Boolean(presentation.errorDetail));
-  }, [presentation.errorDetail, presentation.id, presentation.interactive, presentation.state]);
-  const effectiveExpanded = !displayPresentation.interactive
-    ? false
-    : displayPresentation.state === "failed" && displayPresentation.errorDetail
-      ? errorExpanded
-      : expanded;
+  // Failures use the same user-controlled expansion state as every other result.
+  // 失败结果与其他结果共用用户控制的展开状态。
+  const effectiveExpanded = displayPresentation.interactive && expanded;
   const singleFile = displayPresentation.files.length === 1 ? displayPresentation.files[0] : null;
   // noEffectiveEdit identifies a terminal edit that produced no authoritative file changes.
   // noEffectiveEdit 标识未产生权威文件变更的终态编辑。
@@ -67,10 +61,6 @@ export function FileChangePresentationCard(props: {
       return;
     }
     dispatchConversationManualViewportInteraction();
-    if (displayPresentation.state === "failed" && displayPresentation.errorDetail) {
-      setErrorExpanded((value) => !value);
-      return;
-    }
     onExpandedChange(displayPresentation.id, !expanded);
   }, [displayPresentation, expanded, onExpandedChange]);
 
@@ -121,7 +111,7 @@ export function FileChangePresentationCard(props: {
         </span>
         {displayPresentation.interactive ? (effectiveExpanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}
       </button>
-      {displayPresentation.files.length > 0 ? (
+      {effectiveExpanded && displayPresentation.files.length > 0 ? (
         <div className="file-change-tree">
           {displayPresentation.files.map((file) => {
             const fileExpanded = expandedToolPresentationIds.has(fileExpansionId(displayPresentation, file));

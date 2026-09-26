@@ -6,7 +6,7 @@ import type { ToolDetailPayload } from "@/components/conversation/conversation-d
 import { ChevronDown, ChevronRight, Code2, FileText, FolderTree, FolderSearch, GitBranch, Search } from "lucide-react";
 import { ChangeSetDiffPreview } from "@/components/conversation/conversation-change-set-diff-preview";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
-import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { ToolPayloadSourceBlock } from "../conversation-tool-result-tabs";
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { hydrateMarkdownToolPresentation, type MarkdownToolPresentation, type MarkdownToolPresentationIcon, type MarkdownToolSummaryTarget } from "@/components/conversation/conversation-tool-presentations";
@@ -94,9 +94,8 @@ export function MarkdownToolPresentationCard(props: {
     };
   }, [detailCacheKey, detailRef, expanded, onLoadToolDetail]);
   const markdown = hydratedPresentation.markdown.trim();
-  // markdownBlock is a fallback for Markdown tools and unparseable source envelopes.
-  // markdownBlock 是 Markdown 工具及无法解析源码封套时的兜底内容。
-  const markdownBlock = markdown ? markdownToolCodeBlock(markdown) : "";
+  // title resolves the dedicated tool name for this Markdown result.
+  // title 解析此 Markdown 结果对应的独立工具名称。
   const title = t(hydratedPresentation.titleKey);
   // targetLabel keeps exact paths and line ranges visible while the card is collapsed.
   // targetLabel 在卡片折叠时持续展示精确路径与行范围。
@@ -153,8 +152,8 @@ export function MarkdownToolPresentationCard(props: {
                     </section>
                   ))}
                 </div>
-              ) : markdownBlock ? (
-                <MarkdownMessage content={markdownBlock} eager />
+              ) : markdown ? (
+                <ToolPayloadSourceBlock language="markdown" content={markdown} />
               ) : (
                 <div className="markdown-tool-empty">{
                   hydratedPresentation.state === "running"
@@ -168,12 +167,6 @@ export function MarkdownToolPresentationCard(props: {
       </ConversationMeasuredCollapse>
     </div>
   );
-}
-
-// markdownToolCodeBlock wraps raw tool output in a Markdown code fence.
-// markdownToolCodeBlock 将原始工具输出包裹为 Markdown 代码块。
-function markdownToolCodeBlock(markdown: string): string {
-  return `\`\`\`markdown\n${markdown}\n\`\`\``;
 }
 
 // MarkdownToolIcon renders the icon selected by the exact tool-id adapter.
@@ -229,5 +222,6 @@ function markdownToolTargetLabel(
 ): string {
   return targets
     .map((target) => fileTargetLabel(target.path, target.lineRanges, t))
+    .filter(Boolean)
     .join(", ");
 }

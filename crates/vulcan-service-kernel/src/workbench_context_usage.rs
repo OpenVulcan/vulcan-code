@@ -152,17 +152,30 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
     // providerUsage gates the surface on a completed usable Provider observation, not on a draft or optimistic user message.
     // providerUsage 依据已完成且可用的 Provider 观测控制界面，而不是草稿或乐观用户消息。
     let v1_usage_facts = v1_usage_facts?;
-    let historical_context_budget;
+    // The UI reports the latest completed API, so preparation estimates must be calibrated on every projection.
+    // 界面展示最近完成的 API，因此每次投影都必须使用实测用量校准准备阶段估算。
+    let mut display_context_budget;
     let context_budget = if let Some(context_budget) = live_context_budgets.get(&session_id) {
-        Some(context_budget)
+        display_context_budget = Some(context_budget.clone());
+        if let Some(budget) = display_context_budget.as_mut()
+            && let Some(usage) = v1_usage_to_core(&v1_usage_facts.latest_anchor.usage)
+        {
+            apply_observed_usage_to_context_budget(budget, &usage);
+            budget.accounting_source =
+                vulcan_context::ContextBudgetAccountingSource::ProviderReported;
+            budget.accounting_warning_code = None;
+            budget.provider_anchor_call_id =
+                Some(v1_usage_facts.latest_anchor.api_call_id.value().to_string());
+        }
+        display_context_budget.as_ref()
     } else {
-        historical_context_budget = historical_context_budget_snapshot_from_runtime_state(
+        display_context_budget = historical_context_budget_snapshot_from_runtime_state(
             runtime_state,
             v1_usage_facts,
             model_capabilities,
             compression_window_limit,
         );
-        historical_context_budget.as_ref()
+        display_context_budget.as_ref()
     };
     let mut tooltip_rows = Vec::new();
     if let Some(context_budget) = context_budget {
@@ -812,6 +825,83 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// Verifies terminal Provider facts replace stale live estimates after growth and compaction, including reload parity.
+    /// 验证终态 Provider 事实在增长和压缩后替换过期实时估算，并保持刷新前后一致。
+    #[test]
+    fn context_usage_recalibrates_cached_budget_after_compaction() {
+        // session_id and runtime_state bind both live and restored projections to the same configured route.
+        // session_id 与 runtime_state 将实时和恢复投影绑定到同一配置路由。
+        let session_id = SessionId::new_v4();
+        let runtime_state = SessionRuntimeStateEntry {
+            active_provider_id: Some("provider".into()),
+            active_model_id: Some("model".into()),
+            ..Default::default()
+        };
+        // cached_budget reproduces a pre-compaction estimate that formerly shadowed every later API result.
+        // cached_budget 复现此前会覆盖所有后续 API 结果的压缩前估算。
+        let cached_budget = ContextBudgetSnapshot {
+            active_context_tokens: 682_800,
+            effective_context_window: Some(243_200),
+            auto_compact_limit: Some(230_400),
+            ..test_context_budget_snapshot()
+        };
+        let live_budgets = BTreeMap::from([(session_id, cached_budget)]);
+        for input_tokens in [700_000, 32_709] {
+            // evidence and facts contain only canonical API measurement and terminal usage, never cumulative cost.
+            // evidence 与 facts 仅包含规范 API 测量和终态用量，绝不使用累计消耗。
+            let evidence =
+                crate::session_runtime_registry_v1::test_provider_request_budget_evidence();
+            let facts = SessionContextUsageFacts {
+                latest_request_measurement: evidence.request_text_measurement.clone(),
+                latest_anchor: ProviderUsageBudgetAnchor {
+                    api_call_id: vulcan_session_core::v1::ApiCallId::try_new(1)
+                        .expect("valid API id"),
+                    projection: vulcan_session_core::v1::event::ProviderProjectionProof {
+                        segment_generation: 1,
+                        document_revision: 1,
+                        retained_from_seq: vulcan_session_core::v1::Seq::try_new(1)
+                            .expect("valid seq"),
+                        through_seq: vulcan_session_core::v1::Seq::try_new(1).expect("valid seq"),
+                        fingerprint_sha256: "test-projection".into(),
+                    },
+                    evidence,
+                    usage: UsageSnapshot {
+                        input_tokens: Some(input_tokens),
+                        output_tokens: Some(294),
+                        ..Default::default()
+                    },
+                },
+                cumulative_usage: AggregatedUsage::aggregate(std::iter::empty::<&UsageSnapshot>()),
+                has_compaction: true,
+            };
+            // project uses identical canonical facts with and without the process-local cache.
+            // project 分别使用存在和不存在进程内缓存的相同规范事实。
+            let project = |budgets| {
+                context_usage_snapshot_from_runtime_state(
+                    session_id,
+                    Some(&runtime_state),
+                    Some(&facts),
+                    budgets,
+                    None,
+                    Some(256_000),
+                )
+                .expect("terminal usage is visible")
+            };
+            let live = project(&live_budgets);
+            let restored = project(&BTreeMap::new());
+            assert_eq!(live.used_tokens, input_tokens as usize + 294);
+            assert_eq!(live.used_tokens, restored.used_tokens);
+            assert_eq!(live.max_tokens, restored.max_tokens);
+            assert_eq!(live.usage_basis_points, restored.usage_basis_points);
+            assert!(
+                live.tooltip_rows
+                    .iter()
+                    .all(|row| !row.contains("不是精确"))
+            );
+        }
+        assert_eq!(live_budgets[&session_id].active_context_tokens, 682_800);
     }
 
     /// Verifies detailed rows preserve the Provider-calibrated token and percentage totals.

@@ -22,8 +22,11 @@ describe("tool result presentation policy", () => {
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationToolResultTabs event={event(name)}><div>dedicated result</div></ConversationToolResultTabs></I18nProvider>);
     expect(markup).toBe("<div>dedicated result</div>");
   });
-  it.each(["read", "write", "create", "delete", "rename", "list"])("keeps file action %s direct", action => {
+  it.each(["read", "write", "create", "delete", "rename", "list", "stat", "search"])("keeps file action %s direct", action => {
     expect(toolResultMode(event("file", { action }))).toBe("direct");
+  });
+  it("keeps the repository overview direct", () => {
+    expect(toolResultMode(event("vulcan_codekit_repo_map"))).toBe("direct");
   });
   it.each(["file", "vulcan_file_list"])("shows %s listing content directly without any tab bar", name => {
     // markup preserves the listing renderer while omitting every payload tab.

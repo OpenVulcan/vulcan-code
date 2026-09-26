@@ -39,8 +39,10 @@
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  display: grid;
-  grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+  /* Optional status and badges must never create implicit second grid rows. */
+  /* 可选状态与徽标不得产生隐式第二行网格。 */
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
   padding: 2px 0;
@@ -58,7 +60,19 @@
 }
 
 .tool-presentation-state {
+  flex: 0 0 auto;
   white-space: nowrap;
+}
+
+/* Only primary labels shrink; icons and toggles stay on the same summary row. */
+/* 仅主标签收缩；图标和展开按钮保持在同一摘要行。 */
+.tool-presentation-summary > .tool-presentation-command,
+.tool-presentation-summary > .file-change-path {
+  flex: 0 1 auto;
+}
+
+.tool-presentation-summary > svg {
+  flex-shrink: 0;
 }
 
 .tool-presentation-command {
