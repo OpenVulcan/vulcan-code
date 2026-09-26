@@ -1,6 +1,0 @@
-a1x
-delta
-delta
-before-eps
-epsilon
-fin

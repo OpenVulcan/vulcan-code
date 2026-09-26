@@ -28,6 +28,7 @@ target
 /.qwen
 /.vulcan/
 /output
+/temp
 
 # Documentation stays local by default: plans, audits, reviews, and drafts are not shipped.
 # 文档默认仅保留在本地：计划、审计、评审与草稿都不随仓库分发。
