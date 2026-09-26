@@ -215,24 +215,6 @@ impl OpenAiChatStreamDecoder {
     ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
         let mut events = Vec::new();
         let delta = choice.get("delta").unwrap_or(&Value::Null);
-        if let Some(text) = delta.get("content").and_then(Value::as_str) {
-            let item_id = format!("openai:{}:text", self.execution_id);
-            if !self.text_open {
-                self.text_open = true;
-                events.push(AiStreamEvent::ResponseItemStarted {
-                    item_id: item_id.clone(),
-                    item: ContentItem::Text {
-                        text: String::new(),
-                    },
-                });
-            }
-            if !text.is_empty() {
-                events.push(AiStreamEvent::ResponseTextDelta {
-                    item_id,
-                    delta: text.to_string(),
-                });
-            }
-        }
         // detailReasoning and summaries keep durable thinking separate from typed summary nodes.
         // detailReasoning 与 summaries 将持久化思考和类型化摘要节点分离。
         let OpenAiReasoningDetailsDelta {
@@ -275,6 +257,30 @@ impl OpenAiChatStreamDecoder {
         }
         for (item_id, text) in summaries {
             events.push(AiStreamEvent::ReasoningSummaryUpdated { item_id, text });
+        }
+        // One wire chunk may contain both the last reasoning token and the first answer token.
+        // 一个线上分片可能同时包含最后一个思考 token 和第一个回答 token。
+        // Emit reasoning first: the host seals it when answer streaming begins.
+        // 必须先发出思考：宿主在回答流开始时会封口思考。
+        if let Some(text) = delta.get("content").and_then(Value::as_str) {
+            // item_id preserves the physical response's stable text identity.
+            // item_id 保留真实响应的稳定正文身份。
+            let item_id = format!("openai:{}:text", self.execution_id);
+            if !self.text_open {
+                self.text_open = true;
+                events.push(AiStreamEvent::ResponseItemStarted {
+                    item_id: item_id.clone(),
+                    item: ContentItem::Text {
+                        text: String::new(),
+                    },
+                });
+            }
+            if !text.is_empty() {
+                events.push(AiStreamEvent::ResponseTextDelta {
+                    item_id,
+                    delta: text.to_string(),
+                });
+            }
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for tool_delta in tool_calls {
@@ -2351,6 +2357,67 @@ mod tests {
                 argument_encoding,
             },
             strict: false,
+        }
+    }
+
+    /// Verifies co-packed reasoning and answer fragments preserve semantic order through completion.
+    /// 验证同片思考与回答片段直到完成均保持语义顺序。
+    /// No inputs or return value; covers explicit, mirrored and cumulative reasoning contracts.
+    /// 无参数或返回值；覆盖显式、镜像与累计思考契约。
+    #[test]
+    fn chat_mixed_reasoning_and_text_chunk_emits_reasoning_before_answer() {
+        for reasoning_field in [
+            json!({"reasoning_content":".", "reasoning":"."}),
+            json!({"reasoning":"."}),
+            json!({"reasoning_details":[{"type":"reasoning.text","text":"."}]}),
+        ] {
+            // decoder represents a fresh physical request, independently of its provider name.
+            // decoder 表示一个与供应商名称无关的全新物理请求。
+            let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+                String::from("mixed-chunk"),
+                BTreeSet::new(),
+            );
+            // delta recreates the observed boundary: one final reasoning token and first answer token.
+            // delta 重现观测到的边界：一个最终思考 token 与首个回答 token。
+            let mut delta = reasoning_field;
+            delta["content"] = json!("t");
+            // events must not depend on JSON object key order.
+            // events 不得依赖 JSON 对象键顺序。
+            let events = decoder
+                .push_sse(None, &json!({"choices":[{"delta":delta}]}).to_string())
+                .expect("mixed semantic chunk must decode");
+            // semantics retains only visible deltas, so lifecycle additions cannot shift test indexes.
+            // semantics 仅保留可见增量，生命周期新增不会改变测试索引。
+            let semantics = events
+                .iter()
+                .filter_map(|event| match event {
+                    AiStreamEvent::ReasoningDelta { delta, .. } => {
+                        Some(("reasoning", delta.as_str()))
+                    }
+                    AiStreamEvent::ResponseTextDelta { delta, .. } => {
+                        Some(("text", delta.as_str()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                semantics,
+                [("reasoning", "."), ("text", "t")],
+                "co-packed reasoning must precede text and mirrored fields must not duplicate it"
+            );
+            decoder
+                .push_sse(
+                    None,
+                    r#"{"choices":[{"delta":{"content":"est"},"finish_reason":"stop"}]}"#,
+                )
+                .expect("answer continuation must decode");
+            assert!(
+                decoder
+                    .push_sse(None, "[DONE]")
+                    .expect("terminal must decode")
+                    .iter()
+                    .any(|event| matches!(event, AiStreamEvent::ResponseCompleted))
+            );
         }
     }
 
