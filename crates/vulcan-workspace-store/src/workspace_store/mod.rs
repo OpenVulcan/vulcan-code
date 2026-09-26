@@ -345,6 +345,7 @@ fn replace_exact_provider_request_trace_slot(
     write_file_atomic(path, encoded, artifact_kind).map_err(|error| error.to_string())
 }
 
+mod index_read;
 mod load_report;
 mod loading;
 pub use load_report::{WorkspaceIndexLoadIssue, WorkspaceIndexLoadReport, WorkspaceIndexLoadStage};

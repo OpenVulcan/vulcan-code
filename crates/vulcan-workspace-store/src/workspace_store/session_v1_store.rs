@@ -48,7 +48,9 @@ use super::session_v1::writer::{
     create_session, flush_candidate, verify_existing_session_creation,
 };
 
+mod index_probe;
 mod lifecycle_tree;
+pub(super) use index_probe::inspect as inspect_workspace_session_rows;
 
 /// Fixed parent-owned directory containing every embedded task-session V1 tree.
 /// 保存全部内嵌任务会话 V1 目录树的固定父级目录。

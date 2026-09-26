@@ -287,6 +287,7 @@ fn workspace_requires_default_project(project_rows: &[ValidatedProjectRow]) -> b
 /// 返回值
 /// Returns the retained owner, or `None` when project removal intentionally tombstoned the owner row.
 /// 返回保留的所属项目；项目移除已按协议删除所属行时返回 `None`。
+#[cfg(test)]
 fn retained_project_row_for_session<'a>(
     project_rows: &'a [ValidatedProjectRow],
     project_id: &str,
@@ -367,34 +368,64 @@ pub async fn load_workspace_index_report(
             false
         }
     };
-    let mut indexed_sessions = Vec::new();
+    let project_by_id = project_rows
+        .iter()
+        .map(|row| (row.stored.id.as_str(), row))
+        .collect::<BTreeMap<_, _>>();
+    let mut valid_rows = Vec::new();
+    let mut seen_sessions = BTreeSet::new();
     if session_index_available {
-        for validated_project in &project_rows {
-            let project_id = validated_project.stored.id.as_str();
-            match list_active_sessions_v1(&host_runtime, project_id).await {
-                Ok(sessions) => {
-                    indexed_sessions.extend(sessions.into_iter().map(|session| (session, false)))
+        match super::index_read::list_workspace_rows(&host_runtime).await {
+            Ok(report) => {
+                // Preserve usable startup rows while retaining every decode issue for strict refreshes.
+                // 保留可用的启动记录，同时保存全部解码问题供严格刷新判定。
+                issues.extend(report.issues);
+                for row in report.rows {
+                    if row.storage_partition == "code/sessions" {
+                        continue;
+                    }
+                    let Some(project) = project_by_id.get(row.project_id.as_str()) else {
+                        continue;
+                    };
+                    let session_id = match row.session_id.parse::<SessionId>() {
+                        Ok(id) if seen_sessions.insert(id) => id,
+                        result => {
+                            issues.push(WorkspaceIndexLoadIssue {
+                                stage: WorkspaceIndexLoadStage::SessionIdentity,
+                                project_id: Some(row.project_id),
+                                session_id: Some(row.session_id),
+                                detail: format!(
+                                    "invalid or duplicate normalized session identity: {result:?}"
+                                ),
+                            });
+                            continue;
+                        }
+                    };
+                    if row.archived_at_ms.is_none() && project.archived {
+                        issues.push(WorkspaceIndexLoadIssue {
+                            stage: WorkspaceIndexLoadStage::SessionIdentity,
+                            project_id: Some(row.project_id),
+                            session_id: Some(row.session_id),
+                            detail: "active session belongs to an archived project".to_string(),
+                        });
+                        continue;
+                    }
+                    valid_rows.push((session_id, row));
                 }
-                Err(error) => issues.push(WorkspaceIndexLoadIssue {
-                    stage: WorkspaceIndexLoadStage::ActiveList,
-                    project_id: Some(project_id.to_string()),
-                    session_id: None,
-                    detail: error.to_string(),
-                }),
             }
-            match list_archived_sessions_v1(&host_runtime, project_id).await {
-                Ok(sessions) => {
-                    indexed_sessions.extend(sessions.into_iter().map(|session| (session, true)))
-                }
-                Err(error) => issues.push(WorkspaceIndexLoadIssue {
-                    stage: WorkspaceIndexLoadStage::ArchivedList,
-                    project_id: Some(project_id.to_string()),
-                    session_id: None,
-                    detail: error.to_string(),
-                }),
-            }
+            Err(error) => issues.push(WorkspaceIndexLoadIssue {
+                stage: WorkspaceIndexLoadStage::Index,
+                project_id: None,
+                session_id: None,
+                detail: error,
+            }),
         }
     }
+    let inspected_rows = super::session_v1_store::inspect_workspace_session_rows(
+        host_runtime.data_root.clone(),
+        valid_rows,
+    )
+    .await?;
 
     let mut task_projects = Vec::new();
     let mut archived_task_projects = Vec::new();
@@ -429,73 +460,45 @@ pub async fn load_workspace_index_report(
     let mut visible_sessions = Vec::new();
     let mut archived_sessions = Vec::new();
     let mut session_updated_at = BTreeMap::new();
-    for (row, archived) in indexed_sessions {
-        // session_id is the strictly parsed V1 identity shared by project ownership and runtime maps.
-        // session_id 是项目归属与运行态映射共享的严格 V1 身份。
-        let session_id = match row.session_id.parse::<SessionId>() {
-            Ok(session_id) => session_id,
-            Err(error) => {
-                issues.push(WorkspaceIndexLoadIssue {
-                    stage: WorkspaceIndexLoadStage::SessionIdentity,
-                    project_id: Some(row.project_id.clone()),
-                    session_id: Some(row.session_id.clone()),
-                    detail: error.to_string(),
-                });
+    let mut active_positions = task_projects
+        .iter()
+        .enumerate()
+        .map(|(index, project)| (project.id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut archived_positions = archived_task_projects
+        .iter()
+        .enumerate()
+        .map(|(index, project)| (project.id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut missing_rows = Vec::new();
+    for inspected in inspected_rows {
+        let row = inspected.row;
+        let session_id = inspected.session_id;
+        match inspected.metadata_exists {
+            Ok(true) => {}
+            Ok(false) => {
+                missing_rows.push(row);
                 continue;
             }
-        };
-        let project_id = row.project_id.as_str();
-        // project_row proves the V1 locator does not reference a missing project record.
-        // project_row 证明 V1 定位信息没有引用缺失的项目记录。
-        let Some(project_row) = retained_project_row_for_session(&project_rows, project_id) else {
-            continue;
-        };
-        if !archived && project_row.archived {
-            issues.push(WorkspaceIndexLoadIssue {
-                stage: WorkspaceIndexLoadStage::SessionIdentity,
-                project_id: Some(project_id.to_string()),
-                session_id: Some(row.session_id.clone()),
-                detail: "active session belongs to an archived project".to_string(),
-            });
-            continue;
-        }
-        // Validate every indexed metadata path before exposing sidebar or archive membership.
-        // 暴露侧栏或归档成员前，检查每个索引声明的元数据路径。
-        // Only confirmed absence deletes the stale row; unreadable paths are ignored without deletion.
-        // 仅确认缺失才删除陈旧记录；不可读路径忽略且不删除。
-        // This checks exact file existence and never hydrates history or scans sibling directories.
-        // 这里只检查精确文件是否存在，绝不水合历史或扫描同级目录。
-        match preflight_session_v1_storage(&host_runtime, &row.session_id).await {
-            Ok(SessionV1StoragePreflightOutcome::Ready { .. }) => {}
-            Ok(SessionV1StoragePreflightOutcome::MissingStorageIndexRemoved { .. }) => continue,
             Err(error) => {
                 issues.push(WorkspaceIndexLoadIssue {
                     stage: WorkspaceIndexLoadStage::Metadata,
-                    project_id: Some(project_id.to_string()),
-                    session_id: Some(row.session_id.clone()),
+                    project_id: Some(row.project_id),
+                    session_id: Some(row.session_id),
                     detail: error.to_string(),
                 });
                 continue;
             }
         }
-        // project_name is the authoritative persisted display name of the existing project row.
-        // project_name 是现有项目行的权威持久化展示名称。
-        let project_name = project_row.stored.name.as_str();
-        if archived {
-            ensure_project_summary_for_session(
-                &mut archived_task_projects,
-                project_id,
-                project_name,
-                session_id,
-            );
+        let archived = row.archived_at_ms.is_some();
+        let project_id = row.project_id.as_str();
+        let project_name = project_by_id[project_id].stored.name.as_str();
+        let (projects, positions) = if archived {
+            (&mut archived_task_projects, &mut archived_positions)
         } else {
-            ensure_project_summary_for_session(
-                &mut task_projects,
-                project_id,
-                project_name,
-                session_id,
-            );
-        }
+            (&mut task_projects, &mut active_positions)
+        };
+        append_indexed_session(projects, positions, project_id, project_name, session_id);
         let session_summary = SessionSummary::new(
             session_id,
             Some(project_id.to_string()),
@@ -516,6 +519,17 @@ pub async fn load_workspace_index_report(
         } else {
             visible_sessions.push(session_summary);
         }
+    }
+
+    if let Err(error) =
+        super::index_read::prune_observed_missing_rows(&host_runtime, missing_rows).await
+    {
+        issues.push(WorkspaceIndexLoadIssue {
+            stage: WorkspaceIndexLoadStage::Index,
+            project_id: None,
+            session_id: None,
+            detail: error,
+        });
     }
 
     for project in &mut task_projects {
@@ -788,30 +802,30 @@ fn normalize_workspace_project_path_text(path: &str) -> String {
     vulcan_runtime_assets::native_host_path_text(path)
 }
 
-/// Ensures a project summary exists and owns the provided session id exactly once.
-/// 确保项目摘要存在，并且只拥有一次给定会话标识。
-pub(super) fn ensure_project_summary_for_session(
+/// Append an already unique session through indexed project positions, without rescanning growing lists.
+/// 通过索引项目位置追加已确认唯一的会话，避免反复扫描不断增长的列表。
+fn append_indexed_session(
     projects: &mut Vec<TaskProjectSummary>,
+    positions: &mut BTreeMap<String, usize>,
     project_id: &str,
     project_name: &str,
     session_id: SessionId,
 ) {
-    if let Some(project) = projects.iter_mut().find(|project| project.id == project_id) {
-        if !project.session_ids.contains(&session_id) {
-            project.session_ids.push(session_id);
-        }
-        return;
-    }
-    projects.push(TaskProjectSummary::new(
-        project_id.to_string(),
-        project_name.to_string(),
-        String::new(),
-        false,
-        projects.len(),
-        None,
-        None,
-        vec![session_id],
-    ));
+    let index = *positions.entry(project_id.to_string()).or_insert_with(|| {
+        let index = projects.len();
+        projects.push(TaskProjectSummary::new(
+            project_id.to_string(),
+            project_name.to_string(),
+            String::new(),
+            false,
+            index,
+            None,
+            None,
+            Vec::new(),
+        ));
+        index
+    });
+    projects[index].session_ids.push(session_id);
 }
 
 #[cfg(test)]

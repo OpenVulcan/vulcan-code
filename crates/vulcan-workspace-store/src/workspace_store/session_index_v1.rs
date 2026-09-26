@@ -292,15 +292,9 @@ pub fn compose_relative_path(
     Ok(relative_path)
 }
 
-/// Creates the `session_index_v1` table when missing.
-/// 在缺失时创建 `session_index_v1` 表。
-pub async fn ensure_session_index_v1_schema(
-    host_runtime: &HostRuntimeHandle,
-) -> Result<(), SessionIndexV1Error> {
-    let result = local_sql::execute_script_async(
-        &host_runtime.local,
-        LogicalDatabase::AppState,
-        r#"
+/// Authoritative V1 locator schema, shared by initialization and isolated query tests.
+/// V1 定位器权威结构，由初始化与隔离查询测试共用。
+pub(super) const SESSION_INDEX_V1_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS session_index_v1 (
     session_id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -313,7 +307,17 @@ CREATE TABLE IF NOT EXISTS session_index_v1 (
     archived_at_ms INTEGER,
     unread INTEGER NOT NULL DEFAULT 0
 );
-"#,
+"#;
+
+/// Creates the `session_index_v1` table when missing.
+/// 在缺失时创建 `session_index_v1` 表。
+pub async fn ensure_session_index_v1_schema(
+    host_runtime: &HostRuntimeHandle,
+) -> Result<(), SessionIndexV1Error> {
+    let result = local_sql::execute_script_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        SESSION_INDEX_V1_SCHEMA_SQL,
         vec![],
     )
     .await

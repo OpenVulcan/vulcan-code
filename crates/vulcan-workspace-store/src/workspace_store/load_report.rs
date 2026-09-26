@@ -10,6 +10,9 @@ pub enum WorkspaceIndexLoadStage {
     /// Session locator schema could not be prepared.
     /// 无法准备会话定位索引结构。
     Schema,
+    /// Combined active and archived index read or revision-checked cleanup failed.
+    /// 活动与归档索引合并读取或修订校验清理失败。
+    Index,
     /// Active session locators could not be listed.
     /// 无法列出活动会话定位器。
     ActiveList,
