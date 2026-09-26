@@ -279,7 +279,6 @@ function ConversationSessionCreateBranchDialog(props: {
     }
     // The recommendation is captured once per opening so typing is never overwritten.
     // 推荐名称在每次打开时只取一次，避免覆盖用户输入。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // submit creates the branch and closes the dialog, or keeps it open with the Git diagnostic.

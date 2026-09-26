@@ -1250,13 +1250,13 @@ function ProjectTerminalPane(props: {
       resizeActive.current = false;
       if (!resizeDisposed.current && pendingResize.current) {
         void flushResize();
-        return;
+      } else {
+        // Settle only the drained series, without overriding an exception from the error callback.
+        // 仅结算已经排空的序列，避免覆盖错误回调抛出的异常。
+        const completedSettlement = resizeSettlement.current;
+        resizeSettlement.current = null;
+        completedSettlement?.resolve();
       }
-      // completedSettlement releases input only after the whole observed resize series has drained.
-      // completedSettlement 仅在已观察尺寸序列全部排空后释放输入。
-      const completedSettlement = resizeSettlement.current;
-      resizeSettlement.current = null;
-      completedSettlement?.resolve();
     }
   }, [props.onError, props.projectId, props.terminal.id]);
 

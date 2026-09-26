@@ -1,6 +1,8 @@
-@import "tailwindcss";
+@import "tailwindcss" source(".");
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* Production utilities come from this source tree, independent of repository scripts and fixtures. */
+/* 生产工具类来自当前源码树，不受仓库脚本及外部夹具影响。 */
 @import "@fontsource-variable/geist";
 @import "./styles/shell.css";
 @import "./styles/sidebar-base.css";
