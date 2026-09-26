@@ -7,7 +7,7 @@ mod session_list;
 use crate::{
     commit_and_emit_project_settings_changed_delta,
     emit_context_injection_changed_delta_for_session, emit_workbench_event,
-    mutate_project_configuration,
+    mutate_project_configuration, workspace_project_paths_from_state,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -1988,8 +1988,8 @@ async fn disable_deleted_native_project_owners(
     state: &SharedServiceBridgeState,
     owner_project_ids: &[String],
 ) -> Vec<String> {
-    let workspace = match state.lock() {
-        Ok(guard) => guard.workspace_snapshot.clone(),
+    let project_paths = match workspace_project_paths_from_state(state, owner_project_ids) {
+        Ok(paths) => paths,
         Err(error) => {
             eprintln!(
                 "[webui-service] failed to lock workspace after native VMM deletion: {error}"
@@ -1997,20 +1997,11 @@ async fn disable_deleted_native_project_owners(
             return owner_project_ids.to_vec();
         }
     };
-    let Some(workspace) = workspace else {
+    let Some(project_paths) = project_paths else {
         return owner_project_ids.to_vec();
     };
     let mut failures = Vec::new();
-    for owner_project_id in owner_project_ids {
-        let project = workspace
-            .task_projects
-            .iter()
-            .chain(workspace.archived_task_projects.iter())
-            .find(|project| project.id == *owner_project_id);
-        let Some(project) = project else {
-            continue;
-        };
-        let project_path = project.path.clone();
+    for (owner_project_id, project_path) in project_paths {
         let commit_state = Arc::clone(state);
         let result = mutate_project_configuration(
             &std::path::PathBuf::from(&project_path),

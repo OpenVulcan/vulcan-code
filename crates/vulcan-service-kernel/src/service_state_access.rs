@@ -198,6 +198,36 @@ pub(crate) fn current_workspace_snapshot_from_shared_state(
     current_workspace_snapshot_from_state(state)
 }
 
+/// Reads only requested project identities and paths under one state lock.
+/// 在一次状态锁内仅读取所需项目身份和路径。
+/// state owns one workspace generation; project_ids retains caller order and may include archived projects.
+/// state 持有一个工作区代际；project_ids 保留调用方顺序，可包含归档项目。
+/// Returns None before workspace hydration, otherwise matching id/path pairs; missing projects are omitted.
+/// 工作区加载前返回 None，否则返回匹配的标识／路径对；缺失项目被省略。
+pub(crate) fn workspace_project_paths_from_state(
+    state: &SharedServiceBridgeState,
+    project_ids: &[String],
+) -> Result<Option<Vec<(String, String)>>, String> {
+    // Keep selection and copying within one generation, without copying transcripts or runtime maps.
+    // 选择和复制保持在同一代际内，不复制转录或运行时映射。
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    Ok(guard.workspace_snapshot.as_ref().map(|workspace| {
+        project_ids
+            .iter()
+            .filter_map(|id| {
+                workspace
+                    .task_projects
+                    .iter()
+                    .chain(&workspace.archived_task_projects)
+                    .find(|project| project.id == *id)
+                    .map(|project| (id.clone(), project.path.clone()))
+            })
+            .collect()
+    }))
+}
+
 /// Applies one icon mutation to retained project snapshots.
 /// 将单个图标变更应用到保留的项目快照。
 pub(crate) fn update_project_icon_local_state(
@@ -1088,6 +1118,100 @@ mod tests {
         assert_eq!(
             direct_snapshot.task_projects[0].id,
             shared_snapshot.task_projects[0].id
+        );
+    }
+
+    /// Checks archived lookup, missing identities and consistent generations during concurrent writes.
+    /// 检查归档查找、缺失身份及并发写入时的代际一致性。
+    #[test]
+    fn project_path_snapshot_preserves_one_generation() {
+        // The two requested projects change together under the production state mutex.
+        // 两个所需项目在生产状态互斥锁内同时改变。
+        let state = service_state_with_retained_project();
+        {
+            let mut guard = state.lock().unwrap();
+            let workspace = guard.workspace_snapshot.as_mut().unwrap();
+            let mut archived = workspace
+                .task_projects
+                .iter()
+                .find(|project| project.id == "project-a")
+                .unwrap()
+                .clone();
+            archived.id = "project-b".into();
+            workspace.archived_task_projects.push(archived);
+        }
+        let writer_state = Arc::clone(&state);
+        let writer = std::thread::spawn(move || {
+            for generation in 0..1000 {
+                let mut guard = writer_state.lock().unwrap();
+                let workspace = guard.workspace_snapshot.as_mut().unwrap();
+                for project in workspace
+                    .task_projects
+                    .iter_mut()
+                    .chain(&mut workspace.archived_task_projects)
+                {
+                    project.path = format!("generation-{generation}");
+                }
+            }
+        });
+        let ids = vec!["project-b".into(), "missing".into(), "project-a".into()];
+        for _ in 0..1000 {
+            let paths = workspace_project_paths_from_state(&state, &ids)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                paths.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+                ["project-b", "project-a"]
+            );
+            assert_eq!(paths.first().unwrap().1, paths.last().unwrap().1);
+        }
+        writer.join().unwrap();
+        state.lock().unwrap().workspace_snapshot = None;
+        assert!(
+            workspace_project_paths_from_state(&state, &ids)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Measures selective reads against the previous whole-workspace clone using the same populated mutex.
+    /// 使用同一个填充后的互斥状态，测量选择读取与此前完整工作区复制的差异。
+    #[test]
+    fn project_path_snapshot_copy_measurement() {
+        let state = service_state_with_retained_project();
+        {
+            let mut guard = state.lock().unwrap();
+            let workspace = guard.workspace_snapshot.as_mut().unwrap();
+            for index in 0..1000 {
+                workspace.task_projects.push(TaskProjectSummary::new(
+                    format!("unrelated-{index}"),
+                    "x".repeat(8192),
+                    format!("project-{index}"),
+                    false,
+                    0,
+                    None,
+                    None,
+                    Vec::new(),
+                ));
+            }
+        }
+        let ids = vec!["project-a".into()];
+        let started = std::time::Instant::now();
+        for _ in 0..50 {
+            std::hint::black_box(current_workspace_snapshot_from_state(&state).unwrap());
+        }
+        let full_elapsed = started.elapsed();
+        let started = std::time::Instant::now();
+        for _ in 0..50 {
+            let paths = workspace_project_paths_from_state(&state, &ids)
+                .unwrap()
+                .unwrap();
+            assert_eq!(paths.len(), 1);
+            std::hint::black_box(paths);
+        }
+        eprintln!(
+            "project path reads (50 iterations, 1001 projects, 8 MiB unrelated labels): full={full_elapsed:?}, selective={:?}",
+            started.elapsed()
         );
     }
 
