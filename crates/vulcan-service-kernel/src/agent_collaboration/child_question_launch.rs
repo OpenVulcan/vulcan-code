@@ -217,7 +217,7 @@ pub(super) async fn wake_embedded_question(
                     )
                     .await
                     {
-                        eprintln!(
+                        tracing::warn!(
                             "[webui-service] child question cleanup failed: {cleanup_error}; original error: {error}"
                         );
                     }
@@ -225,7 +225,7 @@ pub(super) async fn wake_embedded_question(
                         &invocation.state,
                         format!("子代理答疑请求准备失败：{error}"),
                     ) {
-                        eprintln!(
+                        tracing::warn!(
                             "[webui-service] child question diagnostic failed: {diagnostic_error}"
                         );
                     }

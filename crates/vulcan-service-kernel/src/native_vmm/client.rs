@@ -361,7 +361,7 @@ impl NativeVmmClient {
                 Ok(true) => continue,
                 Ok(false) => {}
                 Err(error) => {
-                    eprintln!("native VMM pending analysis drain failed: {error}");
+                    tracing::warn!("native VMM pending analysis drain failed: {error}");
                 }
             }
             tokio::select! {
@@ -449,24 +449,28 @@ impl NativeVmmClient {
                         );
                         self.reschedule_pending_analysis_job(&job, &combined)
                             .await?;
-                        eprintln!(
+                        tracing::warn!(
                             "native VMM post-action failure terminalization failed for operation {}: {}",
-                            job.operation_id, combined
+                            job.operation_id,
+                            combined
                         );
                         continue;
                     }
                 };
-                eprintln!(
+                tracing::warn!(
                     "native VMM post-action analysis reached {:?} for operation {}: {}",
-                    finalized, job.operation_id, diagnostic
+                    finalized,
+                    job.operation_id,
+                    diagnostic
                 );
                 continue;
             }
             self.reschedule_pending_analysis_job(&job, &diagnostic)
                 .await?;
-            eprintln!(
+            tracing::warn!(
                 "native VMM post-action analysis failed for operation {}: {}",
-                job.operation_id, diagnostic
+                job.operation_id,
+                diagnostic
             );
         }
         Ok(attempted_any)
@@ -1105,9 +1109,11 @@ impl VmmClient for NativeVmmClient {
     ) -> Result<PreCheckResponse, VmmClientError> {
         // The native endpoint trace distinguishes absent dispatch from local recall with no model call.
         // 原生端点诊断区分未派发与无需模型调用的本地召回。
-        eprintln!(
+        tracing::info!(
             "[native-vmm][precheck] stage=received session={} project={} operation={}",
-            request.session_id, request.host_project_id, request.operation_id,
+            request.session_id,
+            request.host_project_id,
+            request.operation_id,
         );
         let now = now_ns()?;
         let subject_id = subject_id(request.user_id)?;
@@ -1124,7 +1130,7 @@ impl VmmClient for NativeVmmClient {
                 None,
             )
             .await?;
-        eprintln!(
+        tracing::info!(
             "[native-vmm][precheck] stage=session_admitted session={}",
             request.session_id,
         );
@@ -1136,9 +1142,10 @@ impl VmmClient for NativeVmmClient {
         let session_status =
             self.memory_session_status(&subject_id, &access.write_scope, &session_source_id)?;
         if !session_status.allows_runtime_memory() {
-            eprintln!(
+            tracing::info!(
                 "[native-vmm][precheck] stage=session_paused session={} status={:?}",
-                request.session_id, session_status,
+                request.session_id,
+                session_status,
             );
             return Ok(PreCheckResponse {
                 read_source,
@@ -1200,7 +1207,7 @@ impl VmmClient for NativeVmmClient {
         let vulcan_memorymesh_core::CommandResult::PreCheck(result) = result else {
             return Err(unexpected_result("PreCheck"));
         };
-        eprintln!(
+        tracing::info!(
             "[native-vmm][precheck] stage=core_result session={} context_items={} should_inject={} degraded={}",
             request.session_id,
             result.context_items.len(),
@@ -1253,27 +1260,33 @@ impl VmmClient for NativeVmmClient {
     ) -> Result<PostActionResponse, VmmClientError> {
         // The endpoint trace identifies the exact accepted request without exposing its dialogue.
         // 端点诊断标识准确请求，但不暴露对话内容。
-        eprintln!(
+        tracing::info!(
             "[native-vmm][postaction] stage=received session={} project={} operation={}",
-            request.session_id, request.host_project_id, request.operation_id,
+            request.session_id,
+            request.host_project_id,
+            request.operation_id,
         );
         if let Err(error) = permit.validate_request(&request) {
-            eprintln!(
+            tracing::warn!(
                 "[native-vmm][postaction] stage=permit session={} result=error kind={}",
-                request.session_id, error.kind,
+                request.session_id,
+                error.kind,
             );
             return Err(error);
         }
         let session_id = request.session_id.clone();
         let response = self.post_action_admitted(request, Some(permit)).await;
         match &response {
-            Ok(result) => eprintln!(
+            Ok(result) => tracing::info!(
                 "[native-vmm][postaction] stage=returned session={} accepted={} status={:?}",
-                session_id, result.accepted, result.session_memory_status,
+                session_id,
+                result.accepted,
+                result.session_memory_status,
             ),
-            Err(error) => eprintln!(
+            Err(error) => tracing::warn!(
                 "[native-vmm][postaction] stage=returned session={} result=error kind={}",
-                session_id, error.kind,
+                session_id,
+                error.kind,
             ),
         }
         response

@@ -35,7 +35,7 @@ fn mcp_tool_screenshot_projects_as_native_openai_responses_image() {
         "openai",
         "connection",
         "https://provider.invalid/v1/responses",
-        vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID,
+        vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
         "gpt-codex",
     )
     .expect("OpenAI Responses tool result should project");
@@ -82,7 +82,7 @@ fn mcp_tool_screenshot_rejects_openai_chat_projection() {
         "openai",
         "connection",
         "https://provider.invalid/v1/chat/completions",
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+        vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
         "gpt-chat",
     )
     .expect_err("OpenAI Chat must reject an image tool result");

@@ -214,6 +214,27 @@ struct ToolRequestDraft {
 }
 
 impl ToolRequestDraft {
+    /// Checks whether accumulated progress may publish at `now`; returns false during the minimum interval.
+    /// 检查累计进度能否在 `now` 发布；最小间隔内返回 false。
+    /// The first nonempty fragment is immediate; later byte thresholds cannot bypass the rate bound.
+    /// 首个非空片段立即发布；后续字节阈值不能绕过频率上限。
+    fn progress_is_due(&self, now: Instant) -> bool {
+        // Counts and elapsed time refer to the last published snapshot, not the last received fragment.
+        // 计数与经过时间均相对于最近发布快照，而不是最近收到的片段。
+        let received_bytes = self.arguments_len();
+        let elapsed = now.duration_since(self.last_emitted_at);
+        let minimum_byte_growth =
+            if received_bytes >= self.progress_policy.large_input_threshold_bytes {
+                self.progress_policy.large_input_minimum_byte_growth
+            } else {
+                self.progress_policy.minimum_byte_growth
+            };
+        (self.last_emitted_bytes == 0 && received_bytes > 0)
+            || (elapsed >= Duration::from_millis(self.progress_policy.minimum_interval_ms)
+                && (received_bytes.saturating_sub(self.last_emitted_bytes) >= minimum_byte_growth
+                    || elapsed >= Duration::from_millis(self.progress_policy.maximum_interval_ms)))
+    }
+
     /// Returns the exact cumulative argument byte count from the active storage route.
     /// 从当前存储路径返回精确累计参数字节数。
     fn arguments_len(&self) -> usize {
@@ -579,25 +600,10 @@ impl ToolRequestStreamCoordinator {
             // receivedBytes is the authoritative UTF-8 byte count after the append.
             // receivedBytes 是追加后的权威 UTF-8 字节数。
             let received_bytes = draft.arguments_len();
-            // byteGrowth is the unprojected byte growth since the latest visible event.
-            // byteGrowth 是自最近一次可见事件以来尚未投影的字节增量。
-            let byte_growth = received_bytes.saturating_sub(draft.last_emitted_bytes);
-            // minimumByteGrowth increases for large inputs to bound token and persistence work.
-            // minimumByteGrowth 会针对大输入提高，以限制 Token 与持久化工作。
-            let minimum_byte_growth =
-                if received_bytes >= draft.progress_policy.large_input_threshold_bytes {
-                    draft.progress_policy.large_input_minimum_byte_growth
-                } else {
-                    draft.progress_policy.minimum_byte_growth
-                };
-            // firstNonEmptyGrowth guarantees a zero-byte start cannot remain the only visible receiving snapshot.
-            // firstNonEmptyGrowth 确保零字节启动快照不会成为唯一可见的接收进度。
-            let first_non_empty_growth = draft.last_emitted_bytes == 0 && received_bytes > 0;
-            let should_emit_progress = first_non_empty_growth
-                || new_preview_diagnostic.is_some()
-                || byte_growth >= minimum_byte_growth
-                || now.duration_since(draft.last_emitted_at)
-                    >= Duration::from_millis(draft.progress_policy.maximum_interval_ms);
+            // Safe preview snapshots and counters share one publication clock.
+            // 安全预览快照与计数共用一个发布时钟。
+            let should_emit_progress =
+                draft.progress_is_due(now) || new_preview_diagnostic.is_some() || preview.is_some();
             if should_emit_progress {
                 draft.last_emitted_bytes = received_bytes;
                 draft.last_emitted_at = now;
@@ -630,8 +636,8 @@ impl ToolRequestStreamCoordinator {
             preview_diagnostic,
             preview_degraded,
         ) = mutation;
-        // events contains at most one throttled progress and one semantic preview update.
-        // events 最多包含一条节流进度与一条语义预览更新。
+        // One snapshot carries both counters and semantic content; never publish duplicate workbench generations.
+        // 同一快照携带计数与语义内容；绝不为此发布重复的工作台代际。
         let mut events = Vec::new();
         if should_emit_progress || newly_assembled {
             if let Some(draft) = self.drafts.get_mut(request_stream_id) {
@@ -639,7 +645,11 @@ impl ToolRequestStreamCoordinator {
             }
             if let Some(progress_draft) = self.drafts.get(request_stream_id) {
                 events.push(self.runtime_event_for_draft(
-                    RuntimeEventKind::ToolRequestProgress,
+                    if !preview_degraded && preview.is_some() {
+                        RuntimeEventKind::ToolRequestPreviewUpdated
+                    } else {
+                        RuntimeEventKind::ToolRequestProgress
+                    },
                     request_stream_id,
                     progress_draft,
                     if arguments_assembled {
@@ -648,28 +658,8 @@ impl ToolRequestStreamCoordinator {
                         "receiving"
                     },
                     None,
-                    None,
+                    preview.as_ref().filter(|_| !preview_degraded),
                     preview_diagnostic.as_deref(),
-                ));
-            }
-        }
-        if !preview_degraded && let Some(preview) = preview {
-            if let Some(draft) = self.drafts.get_mut(request_stream_id) {
-                draft.revision = draft.revision.saturating_add(1);
-            }
-            if let Some(preview_draft) = self.drafts.get(request_stream_id) {
-                events.push(self.runtime_event_for_draft(
-                    RuntimeEventKind::ToolRequestPreviewUpdated,
-                    request_stream_id,
-                    preview_draft,
-                    if arguments_assembled {
-                        "arguments_assembled"
-                    } else {
-                        "receiving"
-                    },
-                    None,
-                    Some(&preview),
-                    None,
                 ));
             }
         }
@@ -975,6 +965,17 @@ fn deliver_json_events_to_parser(
             );
             return None;
         }
+    }
+    // Parsers retain the latest semantic state; sample only when due, except first preview and closed roots.
+    // 解析器保留最新语义状态；仅在到期时采样，但首次预览和根值封闭除外。
+    // This prevents repeated preview allocation and serialization for every incoming token.
+    // 这避免为每个传入 Token 重复分配并序列化预览。
+    if draft.last_preview_revision != 0
+        && !draft.json_lexer.is_root_complete()
+        && !draft.progress_is_due(Instant::now())
+    {
+        draft.parser = Some(parser);
+        return None;
     }
     // preview is constrained again at the coordinator boundary so parser defects cannot widen disclosure.
     // preview 会在协调器边界再次受限，确保解析器缺陷无法扩大信息披露范围。
@@ -1447,6 +1448,174 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("receiving")
         );
+    }
+
+    /// Default byte thresholds never bypass the clock bound, while sparse progress meets its deadline.
+    /// 默认字节阈值不会绕过时间边界，稀疏进度仍满足发布期限。
+    #[test]
+    fn progress_byte_growth_respects_minimum_publication_interval() {
+        // Compare explicit instants instead of sleeping so timing boundaries are deterministic.
+        // 比较显式时间点而不是等待，使时间边界保持确定性。
+        let mut draft = preview_policy_draft();
+        let now = Instant::now();
+        draft.last_emitted_at = now;
+        draft.last_emitted_bytes = 1;
+        draft.arguments_json = "x".repeat(draft.progress_policy.minimum_byte_growth + 1);
+        let minimum = Duration::from_millis(draft.progress_policy.minimum_interval_ms);
+        let maximum = Duration::from_millis(draft.progress_policy.maximum_interval_ms);
+        assert!(!draft.progress_is_due(now + minimum - Duration::from_nanos(1)));
+        assert!(draft.progress_is_due(now + minimum));
+        draft.arguments_json.truncate(draft.last_emitted_bytes + 1);
+        assert!(!draft.progress_is_due(now + minimum));
+        assert!(draft.progress_is_due(now + maximum));
+    }
+
+    /// Real write/edit/patch parsers coalesce a burst without losing immediate cards or final counts.
+    /// 真实写入、编辑与补丁解析器合并突发片段，同时保留即时卡片与最终计数。
+    #[test]
+    fn native_edit_preview_bursts_share_the_progress_rate_limit() {
+        use crate::tooling::native::{
+            build_apply_patch_tool, build_file_edit_tool, build_file_tool,
+        };
+        // All fixtures use production parser capabilities and never execute a filesystem operation.
+        // 全部夹具使用生产解析能力，绝不执行文件系统操作。
+        for (tool, prefix, fragment, suffix) in [
+            // The observed Provider sends the entire body before the path; counts must stream meanwhile.
+            // 实测供应商在路径之前发送整个正文；期间必须持续发布计数。
+            (
+                build_file_tool(),
+                r#"{"action":"write","content":""#,
+                r#"line\n"#,
+                r#"","path":"fixture.txt"}"#,
+            ),
+            (
+                build_file_tool(),
+                r#"{"action":"write","path":"fixture.txt","content":""#,
+                r#"line\n"#,
+                r#""}"#,
+            ),
+            (
+                build_file_edit_tool(),
+                r#"{"path":"fixture.txt","old_string":"old","new_string":""#,
+                r#"line\n"#,
+                r#""}"#,
+            ),
+            (
+                build_apply_patch_tool(),
+                r#"{"patch":"*** Begin Patch\n*** Add File: fixture.txt\n"#,
+                r#"+line\n"#,
+                r#"*** End Patch\n"}"#,
+            ),
+        ] {
+            // Six interleaved requests reproduce a multi-tool editing response.
+            // 六条交错请求复现多工具编辑响应。
+            let mut coordinator = ToolRequestStreamCoordinator::default();
+            coordinator
+                .tool_capabilities
+                .insert(tool.descriptor.id.clone(), tool.request_streaming.clone());
+            for index in 0..6 {
+                let stream_id = format!("burst-{index}");
+                let initial = coordinator.apply(ToolRequestFragment::Detected {
+                    request_stream_id: stream_id.clone(),
+                    tool_call_id: stream_id.clone(),
+                    tool_name: tool.descriptor.id.clone(),
+                    initial_arguments: prefix.into(),
+                    argument_assembler: None,
+                });
+                assert!(
+                    initial
+                        .iter()
+                        .any(|event| event.kind == RuntimeEventKind::ToolRequestStarted)
+                );
+                assert!(
+                    initial
+                        .iter()
+                        .any(|event| event.kind == RuntimeEventKind::ToolRequestPreviewUpdated),
+                    "{} must show its semantic card immediately",
+                    tool.descriptor.id
+                );
+                // Hold the test clock window open without wall-clock sleeps on slow CI machines.
+                // 无需墙钟等待，在慢速 CI 机器上保持测试时间窗口开放。
+                let draft = coordinator
+                    .drafts
+                    .get_mut(&stream_id)
+                    .expect("active stream");
+                draft.progress_policy.minimum_interval_ms = 60_000;
+                draft.progress_policy.maximum_interval_ms =
+                    draft.progress_policy.minimum_interval_ms;
+            }
+            for _ in 0..600 {
+                for index in 0..6 {
+                    let events = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+                        request_stream_id: format!("burst-{index}"),
+                        delta: fragment.into(),
+                    });
+                    assert!(
+                        events.is_empty(),
+                        "{} emitted per-fragment progress inside the rate bound",
+                        tool.descriptor.id
+                    );
+                }
+            }
+            for index in 0..6 {
+                let stream_id = format!("burst-{index}");
+                // Advancing the publication clock emits exactly one combined preview with current counters.
+                // 推进发布时钟后恰好发出一条包含最新计数的合并预览。
+                let draft = coordinator
+                    .drafts
+                    .get_mut(&stream_id)
+                    .expect("active stream");
+                draft.last_emitted_at = Instant::now()
+                    - Duration::from_millis(draft.progress_policy.maximum_interval_ms);
+                let update = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+                    request_stream_id: stream_id.clone(),
+                    delta: fragment.into(),
+                });
+                assert_eq!(
+                    update.len(),
+                    1,
+                    "{} must combine counter and semantic updates",
+                    tool.descriptor.id
+                );
+                let metadata = update[0].metadata.as_ref().expect("progress metadata");
+                assert_eq!(
+                    metadata["preview"]["progress_fields"]["new_line_count"],
+                    601
+                );
+                // Closing the JSON root bypasses the rate bound and preserves the final line count.
+                // JSON 根值封闭绕过频率限制，并保留最终行数。
+                let assembled = coordinator.apply(ToolRequestFragment::ArgumentsDelta {
+                    request_stream_id: stream_id.clone(),
+                    delta: suffix.into(),
+                });
+                assert_eq!(assembled.len(), 1);
+                assert_eq!(
+                    assembled[0].metadata.as_ref().expect("assembled metadata")["tool_display_state"],
+                    "arguments_assembled"
+                );
+                let completed = coordinator.apply(ToolRequestFragment::Completed {
+                    request_stream_id: stream_id,
+                    canonical_tool_call_id: None,
+                    final_arguments: None,
+                });
+                assert!(
+                    completed
+                        .iter()
+                        .any(|event| event.kind == RuntimeEventKind::ToolRequestReady)
+                );
+                let final_preview = completed
+                    .iter()
+                    .find(|event| event.kind == RuntimeEventKind::ToolRequestPreviewUpdated)
+                    .expect("final semantic preview");
+                assert_eq!(
+                    final_preview
+                        .metadata
+                        .as_ref()
+                        .expect("final preview metadata")["preview"]["progress_fields"]["new_line_count"],
+                    601
+                );
+            }
+        }
     }
 
     /// Verifies interleaved tool streams close and advance independently before the Provider response ends.

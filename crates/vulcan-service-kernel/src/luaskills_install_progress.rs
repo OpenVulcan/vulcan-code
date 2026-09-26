@@ -813,7 +813,7 @@ pub(crate) fn install_global_with_projection(
                     Some(update.progress),
                 )
             {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] LuaSkills operation progress projection failed: {error}"
                 );
             }

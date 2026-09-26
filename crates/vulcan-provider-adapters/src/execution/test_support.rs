@@ -10,8 +10,8 @@ use tokio::net::TcpStream;
 use vulcan_ai_contract::{
     AiExecutionRequest, AiMessage, AiOperation, ContentItem, MessageRole, PromptCachePolicy,
 };
-use vulcan_ai_protocols::ProtocolRegistry;
 use vulcan_llm_core::LlmProtocolRuntime;
+use vulcan_llm_core::ProtocolRegistry;
 
 /// Builds one exact execution route from a bundled manifest provider.
 /// 从内置清单供应商构建一条精确执行路由。

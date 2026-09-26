@@ -444,7 +444,7 @@ pub(super) async fn service_save_session_goal(
         )
         .await
     {
-        eprintln!("[webui-service] created goal continuation failed: {error}");
+        tracing::warn!("[webui-service] created goal continuation failed: {error}");
     }
     Ok(response)
 }
@@ -496,7 +496,7 @@ pub(super) async fn service_resume_session_goal(
     )
     .await
     {
-        eprintln!("[webui-service] resumed goal continuation failed: {error}");
+        tracing::warn!("[webui-service] resumed goal continuation failed: {error}");
     }
     Ok(response)
 }
@@ -591,7 +591,7 @@ pub(super) async fn service_update_session_goal_status(
         )
         .await
     {
-        eprintln!("[webui-service] active goal continuation start failed: {error}");
+        tracing::warn!("[webui-service] active goal continuation start failed: {error}");
     }
     Ok(response)
 }

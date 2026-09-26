@@ -44,8 +44,8 @@ impl ToolRequestParserFactory for WritePreviewFactory {
 /// 仅跟踪获准的头部字符串及恒定空间的已解码行计数。
 #[derive(Default)]
 struct WritePreview {
-    /// Completed action and path; path overflow suppresses the preview rather than changing execution.
-    /// 已完成动作及路径；路径超限仅抑制预览，不改变执行。
+    /// Completed action and path; missing or oversized paths omit only the preview title.
+    /// 已完成动作及路径；缺失或超限路径仅省略预览标题。
     action: String,
     path: String,
     /// Current bounded header string and whether it exceeded the display bound.
@@ -144,14 +144,19 @@ impl ToolRequestParserSession for WritePreview {
     /// Returns approved path and exact decoded line count after a semantic change; otherwise none.
     /// 语义变化后返回获准路径及精确已解码行数；否则返回空。
     fn snapshot(&self) -> Option<ToolRequestPreview> {
-        if !self.dirty.replace(false) || self.action != "write" || self.path.is_empty() {
+        if !self.dirty.replace(false) || self.action != "write" {
             return None;
         }
         self.revision.set(self.revision.get().saturating_add(1));
         Some(ToolRequestPreview {
             kind: "file_write".into(),
             revision: self.revision.get(),
-            title_fields: [("path".into(), json!(self.path))].into_iter().collect(),
+            // JSON members are unordered: content counters must not wait for a trailing path.
+            // JSON 成员无序：正文计数不能等待末尾才到达的路径。
+            title_fields: (!self.path.is_empty())
+                .then(|| ("path".into(), json!(self.path)))
+                .into_iter()
+                .collect(),
             progress_fields: [(
                 "new_line_count".into(),
                 json!(self.lines + u64::from(self.tail)),

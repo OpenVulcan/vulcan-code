@@ -12,6 +12,7 @@ import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import type { GenericToolMarkdownPresentation } from "./conversation-tool-presentations";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ConversationGenerationDialogV1 } from "./conversation-generation-dialog-v1";
+import { ConversationDetailModal } from "./conversation-detail";
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
 import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
@@ -58,6 +59,22 @@ async function click(label: string): Promise<void> {
 }
 
 describe("conversation control rejection paths", () => {
+  // Detail dialogs must expose a real description even when no metadata subtitle exists.
+  // 详情弹窗即使没有元数据副标题，也必须提供真实描述。
+  it.each(["thinking", "tool-raw"] as const)("provides an accessible description for %s details", async (kind) => {
+    // Capture the original warning surface instead of suppressing Radix validation globally.
+    // 捕获原始警告入口，不在全局关闭 Radix 校验。
+    const warning = vi.spyOn(console, "warn");
+    await render(<ConversationDetailModal detail={{ kind, title: "详情", body: "正文" }}
+      onClose={vi.fn()} onOpenMedia={vi.fn()} onLoadToolDetail={vi.fn(async () => null)} onCopyText={vi.fn()} />);
+    // The description ID must reference actual content in the mounted dialog portal.
+    // 描述 ID 必须引用已挂载弹窗门户中的真实内容。
+    const descriptionId = document.querySelector('[role="dialog"]')?.getAttribute("aria-describedby");
+    expect(descriptionId).toBeTruthy();
+    expect(document.getElementById(descriptionId!)?.textContent).toBeTruthy();
+    expect(warning.mock.calls.some((args) => String(args[0]).includes("Missing `Description`"))).toBe(false);
+  });
+
   it("retains a rejected terminal stop confirmation and prevents duplicate requests", async () => {
     // rejectStop controls the request without starting or stopping a real command session.
     // rejectStop 控制请求，不启动或停止任何真实命令会话。

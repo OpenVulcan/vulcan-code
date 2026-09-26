@@ -120,7 +120,9 @@ pub(crate) fn handle_stream_task_exit(
     let mut guard = match task_state.lock() {
         Ok(guard) => guard,
         Err(error) => {
-            eprintln!("[webui-service] early stream termination ownership check failed: {error}");
+            tracing::warn!(
+                "[webui-service] early stream termination ownership check failed: {error}"
+            );
             webui_trace(
                 "stream_task_exit_ownership_unavailable",
                 format!("session={session_id} reason={early_termination_label}"),
@@ -142,7 +144,7 @@ pub(crate) fn handle_stream_task_exit(
         session_id,
         terminal_persistence_owner.clone(),
     ) {
-        eprintln!(
+        tracing::warn!(
             "[webui-service] early stream termination terminal-persistence registration failed: session={session_id} reason={early_termination_label} error={error}"
         );
         return StreamTaskExitOutcome::StateUnavailable;
@@ -156,7 +158,7 @@ pub(crate) fn handle_stream_task_exit(
     ) {
         Ok(event) => Some(event),
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] early stream termination phase projection failed: session={session_id} reason={early_termination_label} error={error}"
             );
             None
@@ -172,7 +174,7 @@ pub(crate) fn handle_stream_task_exit(
             session_id,
             &terminal_persistence_owner,
         );
-        eprintln!(
+        tracing::warn!(
             "[webui-service] early stream termination exact owner disappeared inside terminal transaction: session={session_id} task={active_stream_task_id}"
         );
         return StreamTaskExitOutcome::StateUnavailable;

@@ -443,7 +443,7 @@ fn emit_manifest_isolated_event(provider_id: &str, generation: u64, failure_kind
 /// `event` 仅包含权威、有界、非秘密身份。
 fn emit_manifest_operational_event(event: ProviderOperationalTelemetryEvent) {
     if let Err(error) = record_provider_operational_telemetry(event) {
-        eprintln!("[provider-manifest-sync] structured telemetry was rejected: {error}");
+        tracing::warn!("[provider-manifest-sync] structured telemetry was rejected: {error}");
     }
 }
 
@@ -503,13 +503,15 @@ pub(crate) fn start_provider_manifest_sync_monitor(
                         .map(|report| report.provider_id.as_str())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    eprintln!(
+                    tracing::warn!(
                         "[provider-manifest-sync] periodic synchronization rejected providers: {rejected}"
                     );
                 }
                 Err(error) => {
                     consecutive_failures = consecutive_failures.saturating_add(1);
-                    eprintln!("[provider-manifest-sync] periodic synchronization failed: {error}");
+                    tracing::warn!(
+                        "[provider-manifest-sync] periodic synchronization failed: {error}"
+                    );
                 }
             }
             let delay = periodic_sync_delay(
@@ -3024,7 +3026,7 @@ impl ProviderManifestSyncService {
             .filter(|report| report.outcome == "activated")
         {
             let Some(manifest) = runtime.system_manifest(report.provider_id.as_str()) else {
-                eprintln!(
+                tracing::warn!(
                     "[provider-manifest-sync] committed telemetry skipped missing runtime provider `{}`",
                     report.provider_id
                 );
@@ -3614,7 +3616,7 @@ impl ProviderManifestSyncService {
                 "explicit_rollback",
             );
         } else {
-            eprintln!(
+            tracing::warn!(
                 "[provider-manifest-sync] explicit rollback telemetry skipped missing runtime provider `{provider_id}`"
             );
         }
@@ -7553,7 +7555,7 @@ mod tests {
                 .route
                 .protocol_route
                 .protocol_profile_id,
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID
         );
         // first_available_target is the deterministic instance expanded from the reviewed template.
         // first_available_target 是从已审核模板确定性展开的实例。
@@ -8351,7 +8353,7 @@ mod tests {
             resolved_protocol_binding: None,
         };
         ready_model.protocol_variants.insert(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string(),
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID.to_string(),
             vulcan_provider_adapters::ProtocolModelVariant {
                 capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
                 capability_evidence: Default::default(),
@@ -8370,7 +8372,7 @@ mod tests {
             resolved_protocol_binding: None,
         };
         missing_model.protocol_variants.insert(
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.to_string(),
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID.to_string(),
             vulcan_provider_adapters::ProtocolModelVariant {
                 capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
                 capability_evidence: Default::default(),
@@ -8408,11 +8410,11 @@ mod tests {
         assert_eq!(ready.model_source, ManifestModelSourceStatus::Discovery);
         assert_eq!(
             ready.available_protocols,
-            vec![vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID.to_string()]
+            vec![vulcan_llm_core::OPENAI_CHAT_PROFILE_ID.to_string()]
         );
         assert_eq!(
             ready.effective_protocol.as_deref(),
-            Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID)
+            Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID)
         );
         assert!(ready.catalog_observed && ready.catalog_enabled && ready.executable);
         assert!(
@@ -8431,7 +8433,7 @@ mod tests {
         assert_eq!(missing.model_source, ManifestModelSourceStatus::Discovery);
         assert_eq!(
             missing.available_protocols,
-            vec![vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.to_string()]
+            vec![vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID.to_string()]
         );
         assert!(
             !missing.executable,

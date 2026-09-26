@@ -1226,14 +1226,15 @@ mod tests {
         let directory = tempfile::tempdir().expect("create skill database directory");
         let runtime =
             Arc::new(LocalDatabaseRuntime::open(HashMap::new()).expect("open in-process runtime"));
-        // `enable_all` matters here and not in the channel's own tests: the LanceDB engine reaches
-        // DataFusion, which needs a time and IO driver, and a bare current-thread runtime has neither.
-        // `enable_all` 在此重要而在通道自身的测试中不重要：LanceDB 引擎会触达 DataFusion，它需要时间与 IO
-        // 驱动器，而裸的单线程运行时二者皆无。
-        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+        // LanceDB spawns asynchronous work while the synchronous host channel waits for completion.
+        // LanceDB 会派生异步任务，同时同步宿主通道等待结果。
+        // Independent scheduler workers keep that work progressing without another block_on caller.
+        // 独立调度线程保证任务持续推进，无需其他调用方再次执行 block_on。
+        let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .build()
-            .expect("build current-thread runtime");
+            .expect("build database test runtime");
         let channel = Arc::new(HostExecutionChannel::start(
             tokio_runtime.handle().clone(),
             runtime,
@@ -1621,21 +1622,7 @@ mod tests {
 
     /// Verifies a real create, upsert and search round trip against the in-process LanceDB engine.
     /// 验证针对进程内 LanceDB 引擎的真实建表、写入与检索往返。
-    ///
-    /// Ignored because this crate cannot build the runtime the LanceDB engine needs. `lance-datafusion`
-    /// requires a multi-threaded scheduler, while this crate's `tokio` features are
-    /// `rt,sync,time,net,io-util,fs` and its manifest belongs to another session. A current-thread runtime
-    /// driven only through the channel's `Handle::block_on` stalls the engine's spawned work until the call
-    /// timeout fires, and the worker then reports DataFusion's own `JoinError::Cancelled`. The test is kept
-    /// rather than deleted because the wiring stage will run it against the application's real multi-threaded
-    /// runtime, which is where this path is actually exercised.
-    /// 之所以忽略，是因为本 crate 无法构建 LanceDB 引擎所需的运行时。`lance-datafusion` 需要多线程调度器，而本
-    /// crate 的 `tokio` 特性是 `rt,sync,time,net,io-util,fs`，且其清单属另一会话。仅通过通道的
-    /// `Handle::block_on` 驱动的单线程运行时会让引擎派生的工作停滞直至调用超时，随后工作线程报告 DataFusion
-    /// 自身的 `JoinError::Cancelled`。保留而非删除该测试，是因为接线阶段会在应用真实的多线程运行时上运行它，
-    /// 而该路径正是在那里被真正使用。
     #[test]
-    #[ignore = "requires a multi-threaded runtime, which this crate's tokio features exclude"]
     fn creates_upserts_and_searches_through_the_host_channel() {
         let harness = provider();
         let provider = Arc::new(SkillLanceDbProvider::new(Arc::clone(&harness.channel)));

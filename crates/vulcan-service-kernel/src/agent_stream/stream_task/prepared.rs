@@ -75,7 +75,7 @@ pub(crate) fn commit_prepared_stream_failure(
                 session_id,
                 terminal_persistence_owner.clone(),
             ) {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] {failure_context} terminal-persistence registration failed: session={session_id} task={active_stream_task_id} error={error}"
                 );
                 return PreparedStreamFailureCommit::StateUnavailable;
@@ -89,7 +89,7 @@ pub(crate) fn commit_prepared_stream_failure(
             ) {
                 Ok(event) => Some(event),
                 Err(error) => {
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] {failure_context} terminal phase state unavailable: session={session_id} task={active_stream_task_id} error={error}"
                     );
                     None
@@ -105,7 +105,7 @@ pub(crate) fn commit_prepared_stream_failure(
                     session_id,
                     &terminal_persistence_owner,
                 );
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] {failure_context} exact stream owner disappeared inside terminal transaction: session={session_id} task={active_stream_task_id}"
                 );
                 return PreparedStreamFailureCommit::StateUnavailable;
@@ -114,7 +114,7 @@ pub(crate) fn commit_prepared_stream_failure(
             phase_event
         }
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] {failure_context} terminal commit failed to lock service state: {error}"
             );
             return PreparedStreamFailureCommit::StateUnavailable;
@@ -205,7 +205,7 @@ pub(super) async fn handle_prepared_stream_event(
     if let Err(error) =
         apply_execution_preparation(app, task_state, active_stream_task_id, &preparation)
     {
-        eprintln!("[webui-service] apply preparation failed: {error}");
+        tracing::warn!("[webui-service] apply preparation failed: {error}");
         // failure_commit records whether this exact stream owned the terminal kernel transition.
         // failure_commit 记录当前精确流是否拥有终止 kernel 转换。
         let failure_commit = commit_prepared_stream_failure(
@@ -292,7 +292,7 @@ pub(super) async fn handle_prepared_stream_event(
         }
         Ok(None) => PreparedStreamEventAction::Continue,
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] automatic context compaction failed before provider request: {error}"
             );
             // failure_commit records whether this exact stream owned the terminal kernel transition.

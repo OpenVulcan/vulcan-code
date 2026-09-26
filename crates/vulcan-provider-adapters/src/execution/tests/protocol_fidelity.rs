@@ -12,13 +12,13 @@ use vulcan_ai_contract::{
     AiContinuation, AiMessage, AiStreamEvent, ContentItem, DispatchOutcome, MessageRole,
     ReasoningEffort,
 };
-use vulcan_ai_protocols::{
+use vulcan_llm_core::UpstreamProtocol;
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
     CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
     GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
     OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry,
 };
-use vulcan_llm_core::UpstreamProtocol;
 
 /// Verifies one declared Lite model projects only at the native Codex egress boundary.
 /// 验证一项已声明 Lite 模型只在原生 Codex 出站边界投影。
@@ -509,7 +509,7 @@ fn protocol_roles_reject_missing_conversion_before_dispatch() {
     // route 是隔离夹具；仅注册协议不能推断规范转换器存在。
     let mut route = pinned_openrouter_route(OPENAI_CHAT_PROFILE_ID);
     for profile in [
-        vulcan_ai_protocols::COHERE_CHAT_PROFILE_ID,
+        vulcan_llm_core::COHERE_CHAT_PROFILE_ID,
         "unregistered.protocol",
     ] {
         route.protocol_route.protocol_profile_id = profile.to_string();

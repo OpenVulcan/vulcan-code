@@ -116,7 +116,7 @@ pub(super) fn custom_provider_system_baseline_for_protocol(
     protocol_profile_id: Option<&str>,
 ) -> crate::CustomProviderModelDefaults {
     let mut baseline = crate::CustomProviderModelDefaults::default();
-    if protocol_profile_id == Some(vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID) {
+    if protocol_profile_id == Some(vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID) {
         baseline.reasoning = CapabilitySupport::Unknown;
         baseline.reasoning_control = ReasoningControlMode::Unknown;
         baseline.reasoning_efforts.clear();

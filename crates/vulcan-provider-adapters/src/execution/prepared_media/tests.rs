@@ -4,7 +4,7 @@
 use super::super::test_support::bundled_manifest_route;
 use super::*;
 use std::sync::Arc;
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
@@ -256,7 +256,7 @@ async fn prepared_media_flight_has_one_owner_and_shared_terminal_result() {
     // client 持有全部执行副本共享的进程内注册表。
     let client = ProviderExecutionClient::new(
         reqwest::Client::new(),
-        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().expect("protocol registry")),
     );
     let route = bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
     let identity = PreparedMediaSourceIdentity {
@@ -318,7 +318,7 @@ async fn prepared_media_flight_has_one_owner_and_shared_terminal_result() {
 async fn prepared_media_flight_owner_drop_releases_retry() {
     let client = ProviderExecutionClient::new(
         reqwest::Client::new(),
-        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().expect("protocol registry")),
     );
     let route = bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
     let identity = PreparedMediaSourceIdentity {
@@ -368,7 +368,7 @@ async fn prepared_media_flight_owner_drop_releases_retry() {
 async fn prepared_media_flight_follower_cancellation_is_local() {
     let client = ProviderExecutionClient::new(
         reqwest::Client::new(),
-        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().expect("protocol registry")),
     );
     let route = bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
     let identity = PreparedMediaSourceIdentity {
@@ -421,7 +421,7 @@ async fn prepared_media_flight_follower_cancellation_is_local() {
 fn prepared_media_flight_isolates_exact_credential_connections() {
     let client = ProviderExecutionClient::new(
         reqwest::Client::new(),
-        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().expect("protocol registry")),
     );
     let route = bundled_manifest_route("kimi", "coding-plan", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
     let mut other_connection = route.clone();
@@ -669,9 +669,7 @@ async fn prepared_local_media_obeys_planned_video_action_without_upload_fallback
     let route = bundled_manifest_route("openrouter", "public-api", OPENAI_CHAT_PROFILE_ID);
     let client = ProviderExecutionClient::new(
         reqwest::Client::new(),
-        Arc::new(
-            vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("registered profiles"),
-        ),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().expect("registered profiles")),
     );
     let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("offline-test-secret"))
         .expect("test credential")
@@ -769,7 +767,7 @@ async fn admitted_source_identity_keeps_policy_size_and_cancellation() {
     // 普通执行客户端用于检验公开生产身份入口。
     let client = ProviderExecutionClient::new(
         reqwest::Client::new(),
-        Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().expect("protocol registry")),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().expect("protocol registry")),
     );
     let identity = client
         .read_admitted_media_source_identity(&path, 3, None)

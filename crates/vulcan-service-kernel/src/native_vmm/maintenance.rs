@@ -1988,12 +1988,12 @@ impl NativeVmmMaintenance {
                         match outcome {
                             Ok(result) => {
                                 if let Some(error) = retention_project_failure_message(&result) {
-                                    eprintln!(
+                                    tracing::warn!(
                                         "[webui-service] native VMM periodic cleanup project failures: {error}"
                                     );
                                 }
                             }
-                            Err(error) => eprintln!(
+                            Err(error) => tracing::warn!(
                                 "[webui-service] native VMM periodic cleanup failed: {error}"
                             ),
                         }
@@ -2014,7 +2014,9 @@ impl NativeVmmMaintenance {
                     } else {
                         status.last_error = Some(error.clone());
                     }
-                    eprintln!("[webui-service] native VMM cleanup configuration failed: {error}");
+                    tracing::warn!(
+                        "[webui-service] native VMM cleanup configuration failed: {error}"
+                    );
                 }
             }
             tokio::select! {

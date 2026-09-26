@@ -1943,7 +1943,7 @@ mod standalone_compaction_tests {
                 runtime_label: String::from("OpenAI"),
                 model_id: String::from("gpt-test"),
                 model_name: String::from("GPT Test"),
-                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                protocol_profile_id: String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
                 manifest_revision: 0,
                 frozen_selection: None,
                 route_revision: String::from("sha256:test-route"),
@@ -2362,7 +2362,7 @@ mod standalone_compaction_tests {
     async fn standalone_remote_compaction_confirms_excluded_non_session_terminal() {
         let mut preparation = compaction_preparation();
         preparation.model_blueprint.protocol_profile_id =
-            String::from(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID);
+            String::from(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID);
         let session_id = preparation.session_id;
         let snapshot = request_snapshot();
         let mut tracker = compaction_tracker(&preparation, true);
@@ -2558,7 +2558,7 @@ mod standalone_compaction_tests {
         // 初始遥测上下文完全按生产启动装配器的方式派生。
         let stream_state = RuntimeStreamDeltaState::new(
             controller,
-            String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         )
         .with_tool_request_stream(&[])
         .with_provider_request_telemetry_context(

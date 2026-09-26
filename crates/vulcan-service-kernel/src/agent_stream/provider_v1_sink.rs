@@ -2094,7 +2094,7 @@ impl ProviderV1StreamSink {
             Ok(increment) => self
                 .handle
                 .record_lifetime_usage(&increment, terminal.completed_at_ms),
-            Err(error) => eprintln!("[session-usage] terminal: {error}"),
+            Err(error) => tracing::warn!("[session-usage] terminal: {error}"),
         }
         crate::session_plan_runtime::emit_lifetime_usage_changed(app, state, &self.handle);
         Ok(())

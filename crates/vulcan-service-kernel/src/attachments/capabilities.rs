@@ -82,7 +82,7 @@ mod tests {
         };
 
         let summaries = composer_attachment_capabilities(
-            Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
             Some(&capabilities),
             &BTreeSet::new(),
         );
@@ -122,7 +122,7 @@ mod tests {
             vulcan_ai_contract::ResourceKind::Audio,
         ]);
         let summaries = composer_attachment_capabilities(
-            Some(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+            Some(vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID),
             Some(&capabilities),
             &bridged_media_kinds,
         );
@@ -159,7 +159,7 @@ mod tests {
         let bridged_media_kinds = BTreeSet::from([vulcan_ai_contract::ResourceKind::Video]);
 
         let summaries = composer_attachment_capabilities(
-            Some(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+            Some(vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID),
             Some(&capabilities),
             &bridged_media_kinds,
         );

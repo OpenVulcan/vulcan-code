@@ -1008,7 +1008,7 @@ mod submission_model_selection_tests {
                     r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Previous","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}},{"id":"openai/gpt-5.6-sol","name":"Submitted","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
                 )
                 .expect("catalog should parse"),
-                &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+                &[vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID],
             ))
             .expect("source catalog should stage");
         runtime
@@ -1251,7 +1251,7 @@ mod submission_model_selection_tests {
                 r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Stale account model","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
             )
             .expect("stale account catalog should parse"),
-            &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+            &[vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID],
         );
         runtime
             .stage_source_catalog_for_testing(stale_catalog)
@@ -1376,7 +1376,7 @@ mod submission_model_selection_tests {
                 r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Replacement","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
             )
             .expect("replacement catalog should parse"),
-            &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+            &[vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID],
         );
         runtime
             .stage_source_catalog_for_testing(replacement_catalog)
@@ -1589,7 +1589,7 @@ mod submission_model_selection_tests {
                 r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Previous","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}},{"id":"openai/gpt-5.6-sol","name":"Submitted","context_length":16384,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
             )
             .expect("revised catalog should parse"),
-            &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+            &[vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID],
         );
         runtime
             .stage_source_catalog_for_testing(revised_catalog)
@@ -3474,10 +3474,10 @@ async fn service_start_conversation_execution(
             "post_ack_preparation",
             preparation_elapsed_ms,
         ) {
-            eprintln!("[webui-service] failed to retain slow submission diagnostic: {error}");
+            tracing::warn!("[webui-service] failed to retain slow submission diagnostic: {error}");
         }
         if let Err(error) = &preparation_result {
-            eprintln!("[webui-service] accepted submission preparation failed: {error}");
+            tracing::warn!("[webui-service] accepted submission preparation failed: {error}");
             if let Err(cleanup_error) = mark_webui_prompt_preparation_failed(
                 &app_for_preparation,
                 &state_for_preparation,
@@ -3488,7 +3488,7 @@ async fn service_start_conversation_execution(
             )
             .await
             {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] accepted submission preparation cleanup failed: {cleanup_error}"
                 );
             }
@@ -3499,7 +3499,7 @@ async fn service_start_conversation_execution(
                 .wait_until_continuation_dispatch_settled(&action_id)
                 .await
         {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] Continue dispatch settled before transport observation: {error}"
             );
         }

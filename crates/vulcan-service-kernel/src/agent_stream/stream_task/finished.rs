@@ -148,7 +148,7 @@ pub(super) async fn handle_finished_stream_event(
                 finished_session_id,
                 terminal_persistence_owner_id.clone(),
             ) {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] finish stream terminal-persistence registration failed: session={finished_session_id} task_id={active_stream_task_id} error={error}"
                 );
                 return FinishedStreamEventOutcome::OwnershipUnavailable;
@@ -176,7 +176,7 @@ pub(super) async fn handle_finished_stream_event(
             removed_entry
         }
         Err(error) => {
-            eprintln!("[webui-service] finish stream ownership check failed: {error}");
+            tracing::warn!("[webui-service] finish stream ownership check failed: {error}");
             webui_trace(
                 "stream_finished_skipped_stale_owner",
                 format!("session={finished_session_id} task_id={active_stream_task_id}"),
@@ -194,7 +194,7 @@ pub(super) async fn handle_finished_stream_event(
     // Retain the producer-safe error in the console as well, even if terminal persistence subsequently fails.
     // 控制台也保留生产端安全处理后的错误，即使随后终态持久化失败仍可定位原始原因。
     if let Some(error) = terminal_error.as_deref() {
-        eprintln!(
+        tracing::warn!(
             "[webui-service] execution failed: session={finished_session_id} provider_requests={} error={error}",
             report.provider_request_count
         );
@@ -208,7 +208,7 @@ pub(super) async fn handle_finished_stream_event(
     ) {
         Ok(owner) => owner,
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] finish stream terminal-persistence adoption failed: session={finished_session_id} task_id={active_stream_task_id} error={error}"
             );
             return FinishedStreamEventOutcome::OwnershipUnavailable;
@@ -243,7 +243,7 @@ pub(super) async fn handle_finished_stream_event(
             )
             .await
             {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] question successor dispatch failed: session={finished_session_id} error={error}"
                 );
             }
@@ -282,14 +282,14 @@ pub(super) async fn handle_finished_stream_event(
     )
     .await
     {
-        eprintln!("[webui-service] session goal accounting failed: {error}");
+        tracing::warn!("[webui-service] session goal accounting failed: {error}");
     }
     // Every settled stream changes Provider usage, including ordinary sessions with no active goal.
     // 每条结束的流都会改变 Provider 用量，包括没有活动目标的普通会话。
     // Reuse the authoritative V1 projection after durable API completion; never synthesize totals from the report.
     // 在可靠 API 完成后复用权威 V1 投影，绝不从执行报告拼装累计量。
     if let Err(error) = emit_session_addons_changed_delta(app, task_state, finished_session_id) {
-        eprintln!("[webui-service] terminal session addons delta emit failed: {error}");
+        tracing::warn!("[webui-service] terminal session addons delta emit failed: {error}");
     }
     webui_trace(
         "stream_goal_accounting_finished",
@@ -313,7 +313,7 @@ pub(super) async fn handle_finished_stream_event(
     ) {
         Ok(apply) => Some(apply),
         Err(error) => {
-            eprintln!("[webui-service] apply final report failed: {error}");
+            tracing::warn!("[webui-service] apply final report failed: {error}");
             // A terminal report projection error must never leave the visible conversation running after ownership is released.
             // 终态报告投影错误绝不能在所有权释放后仍让可见会话保持运行中。
             if let Err(projection_error) = apply_session_phase(
@@ -322,7 +322,7 @@ pub(super) async fn handle_finished_stream_event(
                 finished_session_id,
                 SessionRunPhase::Failed,
             ) {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] apply final report fallback phase failed: {projection_error}"
                 );
             }
@@ -367,12 +367,12 @@ pub(super) async fn handle_finished_stream_event(
                     .retire_ai_connection_after_turn(finished_session_id)
                     .await
                 {
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] browser AI turn retirement failed: session={finished_session_id} error={error}"
                     );
                 }
             }
-            Err(error) => eprintln!(
+            Err(error) => tracing::warn!(
                 "[webui-service] browser AI turn retirement state unavailable: session={finished_session_id} error={error}"
             ),
         }
@@ -432,7 +432,7 @@ pub(super) async fn handle_finished_stream_event(
         ) {
             Ok(receipt) => receipt,
             Err(error) => {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] read terminal subagent return failed: session={finished_session_id} error={error}"
                 );
                 None
@@ -454,7 +454,7 @@ pub(super) async fn handle_finished_stream_event(
         {
             Ok(started) => started,
             Err(error) => {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] dispatch exact V1 subagent return failed: session={finished_session_id} error={error}"
                 );
                 false
@@ -483,7 +483,7 @@ pub(super) async fn handle_finished_stream_event(
         {
             Ok(started) => started,
             Err(error) => {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] dispatch exact V1 in-turn continuation failed: session={finished_session_id} error={error}"
                 );
                 false
@@ -527,7 +527,7 @@ pub(super) async fn handle_finished_stream_event(
     // 仅当终态内存投影打开完成回合 Hook 时才存在完成请求。
     // Record the terminal gate by default so a missing hook dispatch has a visible cause.
     // 默认记录终态闸门，使未派发 Hook 的原因可见。
-    eprintln!(
+    tracing::info!(
         "[webui-service][vmm-writeback] stage=completion_gate session={} terminal_settled={} turn_completed={} successor_started={} request_present={}",
         finished_session_id,
         terminal_authority_settled,

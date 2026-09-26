@@ -3,7 +3,7 @@
 
 use super::*;
 use std::collections::BTreeMap;
-use vulcan_ai_protocols::{ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID};
+use vulcan_llm_core::{ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID};
 
 /// Verifies synthetic manual discovery signatures remain stable across catalog generations.
 /// 验证合成手工发现签名跨目录代次保持稳定。

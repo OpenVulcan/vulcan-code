@@ -258,7 +258,7 @@ mod tests {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: "test-provider",
                 model_id: "test-model",
-                protocol_profile_id: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+                protocol_profile_id: vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
                 capabilities: &capabilities,
                 reasoning: &reasoning,
                 request_snapshot: &request_snapshot,
@@ -282,7 +282,7 @@ mod tests {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: "test-provider",
                 model_id: "test-model",
-                protocol_profile_id: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+                protocol_profile_id: vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
                 capabilities: &capabilities,
                 reasoning: &reasoning,
                 request_snapshot: &request_snapshot,
@@ -315,7 +315,7 @@ mod tests {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: "test-provider",
                 model_id: "test-model",
-                protocol_profile_id: vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+                protocol_profile_id: vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
                 capabilities: &capabilities,
                 reasoning: &reasoning,
                 request_snapshot: &request_snapshot,
@@ -349,7 +349,7 @@ mod tests {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: "test-provider",
                 model_id: "test-model",
-                protocol_profile_id: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+                protocol_profile_id: vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
                 capabilities: &capabilities,
                 reasoning: &reasoning,
                 request_snapshot: &request_snapshot,
@@ -370,7 +370,7 @@ mod tests {
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: "test-provider",
                 model_id: "test-model",
-                protocol_profile_id: vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+                protocol_profile_id: vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
                 capabilities: &capabilities,
                 reasoning: &reasoning,
                 request_snapshot: &request_snapshot,

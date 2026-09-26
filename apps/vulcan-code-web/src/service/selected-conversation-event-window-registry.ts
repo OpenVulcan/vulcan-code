@@ -205,6 +205,9 @@ export class SelectedConversationEventWindowRegistry {
   /** Whether a real post-baseline disconnect still requires one recovery.
    * 是否存在一次真实基线后断链仍需恢复。 */
   private recoveryRequired = false;
+  /** Shared authoritative recovery so workbench retries cannot skip a still-running transcript read.
+   * 共享权威恢复任务，防止工作台重试跳过仍在进行的正文读取。 */
+  private connectionRecoveryPromise: Promise<void> | null = null;
   /** Whether the WorkbenchApp owner permanently released this registry.
    * WorkbenchApp 归属方是否已经永久释放该 registry。 */
   private disposed = false;
@@ -348,11 +351,30 @@ export class SelectedConversationEventWindowRegistry {
       this.hasConnectedBaseline = true;
       return;
     }
+    if (this.connectionRecoveryPromise !== null) {
+      await this.connectionRecoveryPromise;
+      // A second disconnect during the read requires another recovery after it settles.
+      // 读取期间发生第二次断线时，必须在读取收敛后再次恢复。
+      return this.observeConnectionStatus(status);
+    }
     if (!this.recoveryRequired) return;
     this.recoveryRequired = false;
     const entry = this.activeEntry;
     if (entry === null || !entry.hydrated) return;
-    await entry.controller.recoverConnection(false);
+    // Retain the exact promise until both successful and failed readers observe its result.
+    // 保留精确 Promise，直至成功与失败的读取方均能观察其结果。
+    const recovery = entry.controller.recoverConnection(false);
+    this.connectionRecoveryPromise = recovery;
+    try {
+      await recovery;
+    } catch (error) {
+      // A failed authoritative read must remain pending for the owner's bounded retry loop.
+      // 权威读取失败后必须保留待恢复状态，供归属方的有界退避循环重试。
+      if (!this.disposed && this.activeEntry === entry) this.recoveryRequired = true;
+      throw error;
+    } finally {
+      if (this.connectionRecoveryPromise === recovery) this.connectionRecoveryPromise = null;
+    }
   }
 
   /** Permanently releases the selected controller and every registry listener.

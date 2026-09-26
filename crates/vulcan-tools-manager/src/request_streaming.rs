@@ -42,6 +42,9 @@ pub enum ToolRequestStagingStatus {
 /// 应用于通用 Token 与解析器预览投影的节流策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolRequestProgressPolicy {
+    /// Minimum interval between regular snapshots, even when byte growth is large.
+    /// 常规快照的最小间隔，即使字节增长很大也不能绕过。
+    pub minimum_interval_ms: u64,
     /// Minimum received-byte growth before another regular projection is eligible.
     /// 常规投影再次具备资格前所需的最小接收字节增长量。
     pub minimum_byte_growth: usize,
@@ -66,6 +69,7 @@ impl Default for ToolRequestProgressPolicy {
     /// 返回工具未覆盖进度节奏时使用的默认策略。
     fn default() -> Self {
         Self {
+            minimum_interval_ms: 50,
             minimum_byte_growth: 256,
             maximum_interval_ms: 100,
             large_input_minimum_byte_growth: 16 * 1024,

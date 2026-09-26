@@ -200,7 +200,7 @@ fn custom_model_route_status_exposes_model_specific_protocol_block() {
         capabilities: ModelCapabilities::default(),
         capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
         protocol_variants: BTreeMap::from([(
-            String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+            String::from(vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID),
             vulcan_provider_adapters::ProtocolModelVariant {
                 capabilities: ModelCapabilities::default(),
                 capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
@@ -234,9 +234,7 @@ fn custom_model_route_status_exposes_model_specific_protocol_block() {
     assert!(record.binding_source.is_none());
     assert_eq!(
         record.available_protocols,
-        vec![String::from(
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-        )]
+        vec![String::from(vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID)]
     );
     assert!(
         record
@@ -297,7 +295,7 @@ fn codex_code_mode_route_reports_missing_runtime_primitive() {
         tool_mode: vulcan_provider_adapters::CodexToolMode::CodeModeOnly,
         ..Default::default()
     };
-    let protocol_id = String::from(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID);
+    let protocol_id = String::from(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID);
     let model = vulcan_provider_adapters::ConnectionModel {
         id: String::from("gpt-6-astra"),
         display_name: String::from("GPT-6 Astra"),

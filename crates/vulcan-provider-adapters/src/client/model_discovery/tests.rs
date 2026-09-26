@@ -14,7 +14,7 @@ use tokio::{
     sync::oneshot,
     task::JoinHandle,
 };
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
@@ -1023,7 +1023,7 @@ fn manifest_variant_authorization_is_model_and_policy_scoped() {
         openrouter,
         "public-api",
         "api-key",
-        vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+        vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
         "vendor/unmapped-model",
     ));
     assert!(!manifest_protocol_authorizes_model_variant(

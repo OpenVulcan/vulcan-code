@@ -477,7 +477,7 @@ mod tests {
     use vulcan_ai_contract::{
         CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort,
     };
-    use vulcan_ai_protocols::{
+    use vulcan_llm_core::{
         ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
     };
     use vulcan_provider_adapters::{

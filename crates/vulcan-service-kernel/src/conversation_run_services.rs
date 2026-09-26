@@ -497,7 +497,9 @@ async fn service_stop_conversation_run_owned(
     }
     if let Some(task) = preparation_task {
         if let Err(error) = task.task.abort_and_wait().await {
-            eprintln!("[webui-service] stopped question preparation teardown warning: {error}");
+            tracing::warn!(
+                "[webui-service] stopped question preparation teardown warning: {error}"
+            );
         }
     }
     let active_task_join_error = if let Some(active_task) = active_task {
@@ -750,7 +752,7 @@ async fn service_stop_conversation_run_owned(
             subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
         })?;
     if let Some(error) = active_task_join_error {
-        eprintln!("[webui-service] stopped conversation task teardown warning: {error}");
+        tracing::warn!("[webui-service] stopped conversation task teardown warning: {error}");
     }
     Ok(StopConversationRunResponse::Stopped {
         workbench: Box::new(workbench),

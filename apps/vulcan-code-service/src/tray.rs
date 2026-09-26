@@ -83,7 +83,9 @@ pub fn run_with_tray() {
             return;
         }
         Err(error) => {
-            eprintln!("[vulcan-code-service] tray service startup failed: {error}");
+            crate::logging::startup_error(&format!(
+                "[vulcan-code-service] tray service startup failed: {error}"
+            ));
             std::process::exit(1);
         }
     };
@@ -119,7 +121,7 @@ pub fn run_with_tray() {
             Event::NewEvents(StartCause::Init) => match create_service_tray(&handles) {
                 Ok(tray) => native_tray = Some(tray),
                 Err(error) => {
-                    eprintln!("[vulcan-code-service] native tray startup failed: {error}");
+                    tracing::error!("[vulcan-code-service] native tray startup failed: {error}");
                     *control_flow = ControlFlow::ExitWithCode(1);
                 }
             },
@@ -260,11 +262,11 @@ fn acknowledge_tray_ready(tray: &TrayIcon) -> bool {
     if let Some(path) = std::env::var_os("VULCAN_CORE_STARTUP_REPORT") {
         let report = serde_json::json!({ "pid": std::process::id(), "trayRegistered": true });
         if let Err(error) = std::fs::write(path, report.to_string()) {
-            eprintln!("[vulcan-code-service] startup acknowledgement failed: {error}");
+            tracing::error!("[vulcan-code-service] startup acknowledgement failed: {error}");
             return false;
         }
     }
-    eprintln!(
+    tracing::error!(
         "[vulcan-code-service] tray ready (pid {})",
         std::process::id()
     );
@@ -369,9 +371,9 @@ fn open_log_location() {
             return;
         }
     };
-    if let Err(error) =
-        crate::desktop_integration::open_path_in_system_file_manager(&data_root.to_string_lossy())
-    {
+    if let Err(error) = crate::desktop_integration::open_path_in_system_file_manager(
+        &crate::logging::directory(&data_root).to_string_lossy(),
+    ) {
         report_tray_failure(&format!("Opening the log location failed: {error}"));
     }
 }
@@ -379,9 +381,9 @@ fn open_log_location() {
 /// Reports one tray failure to the user without exposing credentials.
 /// 在不暴露凭据的前提下向用户报告一次托盘失败。
 fn report_tray_failure(message: &str) {
-    eprintln!("[vulcan-code-service] {message}");
+    tracing::error!("[vulcan-code-service] {message}");
     if let Err(error) = crate::desktop_notifications::show_service_failure(message) {
-        eprintln!("[vulcan-code-service] reporting the failure failed: {error}");
+        tracing::error!("[vulcan-code-service] reporting the failure failed: {error}");
     }
 }
 
@@ -491,7 +493,7 @@ fn open_url_in_system_browser(url: &str) {
         &mut command,
     );
     if let Err(error) = command.spawn() {
-        eprintln!("[vulcan-code-service] failed to open WebUI: {error}");
+        tracing::error!("[vulcan-code-service] failed to open WebUI: {error}");
     }
 }
 
@@ -501,20 +503,20 @@ fn quit_service(state: &TrayServiceHandles, proxy: &EventLoopProxy<TrayEvent>) {
     if state.shutdown_in_progress.swap(true, Ordering::AcqRel) {
         return;
     }
-    eprintln!("[vulcan-code-service] tray quit requested");
+    tracing::info!("[vulcan-code-service] tray quit requested");
     let worker_state = Arc::clone(&state.state);
     let worker_flag = Arc::clone(&state.shutdown_in_progress);
     let proxy = proxy.clone();
     let spawned = std::thread::Builder::new()
         .name(String::from("vulcan-tray-shutdown"))
         .spawn(move || {
-            eprintln!("[vulcan-code-service] tray drain started");
+            tracing::info!("[vulcan-code-service] tray drain started");
             match vulcan_service_kernel::service_prepare_for_app_shutdown(&worker_state) {
                 Ok(_) => {
                     if let Err(error) =
                         vulcan_service_kernel::remove_owned_webui_service_discovery(&worker_state)
                     {
-                        eprintln!("[vulcan-code-service] discovery cleanup failed: {error}");
+                        tracing::error!("[vulcan-code-service] discovery cleanup failed: {error}");
                     }
                     let _ = proxy.send_event(TrayEvent::ShutdownComplete);
                 }

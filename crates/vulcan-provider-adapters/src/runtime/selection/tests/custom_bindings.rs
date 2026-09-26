@@ -9,7 +9,7 @@ use crate::runtime::test_support::{
 use crate::{ModelCapabilityEvidence, PersistedAiConfiguration, parse_openai_model_catalog};
 use std::sync::Arc;
 use vulcan_ai_contract::{CapabilitySupport, ModelCapabilities};
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
     OPENAI_RESPONSES_PROFILE_ID,
 };

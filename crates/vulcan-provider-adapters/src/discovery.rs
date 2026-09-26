@@ -20,8 +20,8 @@ use vulcan_ai_contract::{
     RerankTruncation, ResourceKind, StructuredOutputCapability,
 };
 #[cfg(test)]
-use vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID;
-use vulcan_ai_protocols::{
+use vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID;
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 

@@ -645,9 +645,10 @@ impl Drop for SessionTerminalPersistenceOwnerGuard {
     /// 保留未释放标记，使 panic、取消与提前错误保持失败关闭。
     fn drop(&mut self) {
         if !self.released {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] retaining unreleased terminal-persistence owner: session={} owner={:?}",
-                self.session_id, self.owner
+                self.session_id,
+                self.owner
             );
         }
     }
@@ -728,7 +729,7 @@ pub(crate) fn lock_service_state_for_admission_cleanup<'state>(
     match state.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] recovering poisoned service state for {owner_label} admission reservation cleanup"
             );
             poisoned.into_inner()

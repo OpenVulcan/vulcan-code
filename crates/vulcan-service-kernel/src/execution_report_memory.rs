@@ -720,7 +720,7 @@ pub(super) fn apply_execution_report_to_memory(
                     workspace,
                     session_id,
                 ) {
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] failed to refresh VMM hook runtime after terminal workspace commit for session {session_id}: {snapshot_refresh_error}"
                     );
                 }
@@ -970,7 +970,7 @@ pub(super) fn spawn_conversation_completion_hook_task(
         let ready = match webui_vmm_runtime_readiness(&state) {
             Ok(readiness) => readiness.service_ready,
             Err(error) => {
-                eprintln!("[webui-service] VMM completion readiness check failed: {error}");
+                tracing::warn!("[webui-service] VMM completion readiness check failed: {error}");
                 false
             }
         };
@@ -980,7 +980,7 @@ pub(super) fn spawn_conversation_completion_hook_task(
         // Record hook dispatch by default without logging conversation content.
         // 默认记录 Hook 派发结果，不输出对话正文。
         match outcome.report.as_ref() {
-            Ok(report) => eprintln!(
+            Ok(report) => tracing::info!(
                 "[webui-service][vmm-writeback] stage=hook_result session={} turn={} service_ready={} payload_ready={:?} postaction_completed={} failures={} effects={}",
                 session_id,
                 outcome.turn_id,
@@ -997,23 +997,28 @@ pub(super) fn spawn_conversation_completion_hook_task(
                 report.failures.len(),
                 outcome.vmm_writeback_effects.len(),
             ),
-            Err(error) => eprintln!(
+            Err(error) => tracing::warn!(
                 "[webui-service][vmm-writeback] stage=hook_result session={} turn={} service_ready={} dispatch_error={}",
-                session_id, outcome.turn_id, ready, error,
+                session_id,
+                outcome.turn_id,
+                ready,
+                error,
             ),
         }
         // Continue-policy hook failures are carried in a successful dispatch report, not its Result error.
         // Continue 策略的 Hook 失败存于成功调度报告内，而非 Result 错误中。
         if let Ok(report) = outcome.report.as_ref() {
             for failure in &report.failures {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] completed-turn hook handler failed for {}: hook={} error={}",
-                    outcome.turn_id, failure.hook_id, failure.message
+                    outcome.turn_id,
+                    failure.hook_id,
+                    failure.message
                 );
             }
         }
         if let Err(error) = outcome.report.as_ref() {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] completed-turn hook failed for {}: {error}",
                 outcome.turn_id
             );
@@ -1025,7 +1030,7 @@ pub(super) fn spawn_conversation_completion_hook_task(
             Ok(readiness) if readiness.service_ready => {}
             Ok(_) => return,
             Err(error) => {
-                eprintln!("[webui-service] VMM writeback readiness check failed: {error}");
+                tracing::warn!("[webui-service] VMM writeback readiness check failed: {error}");
                 return;
             }
         }
@@ -1040,7 +1045,7 @@ pub(super) fn spawn_conversation_completion_hook_task(
             match open_registered_session_vmm_controller(&state, session_id, &now) {
                 Ok(controller) => Some(controller),
                 Err(error) => {
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] failed to open VMM session controller after PostAction for {session_id}: {error}"
                     );
                     return;
@@ -1052,7 +1057,7 @@ pub(super) fn spawn_conversation_completion_hook_task(
         let mut guard = match state.lock() {
             Ok(guard) => guard,
             Err(error) => {
-                eprintln!("failed to lock service state: {error}");
+                tracing::warn!("failed to lock service state: {error}");
                 return;
             }
         };
@@ -1112,7 +1117,7 @@ pub(super) fn spawn_conversation_completion_hook_task(
             )
             .and_then(|result| result);
         if let Err(error) = result {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] failed to publish VMM writeback effects for {session_id}: {error}"
             );
             return;
@@ -1126,7 +1131,7 @@ pub(super) fn spawn_conversation_completion_hook_task(
                 session_id,
             )
         {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] failed to refresh VMM hook runtime after completed-turn effects for session {session_id}: {error}"
             );
         }

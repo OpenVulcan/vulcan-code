@@ -5,8 +5,8 @@ This file is generated from Cargo dependency metadata by `cargo-about`.
 
 ## License Overview
 
-- Apache License 2.0 (484)
-- MIT License (253)
+- Apache License 2.0 (485)
+- MIT License (260)
 - Unicode License v3 (23)
 - BSD 3-Clause "New" or "Revised" License (13)
 - ISC License (9)
@@ -8570,6 +8570,7 @@ Used by:
 - tar 0.4.46 - https://github.com/composefs/tar-rs
 - tempfile 3.27.0 - https://github.com/Stebalien/tempfile
 - thread-tree 0.3.3 - https://github.com/bluss/thread-tree
+- thread_local 1.1.10 - https://github.com/Amanieu/thread_local-rs
 - toml_datetime 0.6.3 - https://github.com/toml-rs/toml
 - tray-icon 0.24.2 - https://github.com/tauri-apps/tray-icon
 - tungstenite 0.29.0 - https://github.com/snapview/tungstenite-rs
@@ -13723,8 +13724,67 @@ DEALINGS IN THE SOFTWARE.
 ### MIT License
 
 Used by:
+- sharded-slab 0.1.7 - https://github.com/hawkw/sharded-slab
+
+```text
+Copyright (c) 2019 Eliza Weisman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+```
+
+### MIT License
+
+Used by:
+- matchers 0.2.0 - https://github.com/hawkw/matchers
+
+```text
+Copyright (c) 2019 Eliza Weisman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+### MIT License
+
+Used by:
 - tracing-attributes 0.1.31 - https://github.com/tokio-rs/tracing
 - tracing-core 0.1.36 - https://github.com/tokio-rs/tracing
+- tracing-log 0.2.0 - https://github.com/tokio-rs/tracing
+- tracing-serde 0.2.0 - https://github.com/tokio-rs/tracing
+- tracing-subscriber 0.3.23 - https://github.com/tokio-rs/tracing
 - tracing 0.1.44 - https://github.com/tokio-rs/tracing
 
 ```text
@@ -15017,6 +15077,7 @@ Used by:
 - vulcan-context-compaction 0.1.0 - https://crates.io/crates/vulcan-context-compaction
 - vulcan-context-injection 0.1.0 - https://crates.io/crates/vulcan-context-injection
 - vulcan-core 0.1.0 - https://crates.io/crates/vulcan-core
+- vulcan-file-ownership 0.1.0 - https://crates.io/crates/vulcan-file-ownership
 - vulcan-file-watcher 0.1.0 - https://crates.io/crates/vulcan-file-watcher
 - vulcan-hooks 0.1.0 - https://crates.io/crates/vulcan-hooks
 - vulcan-host-tools 0.1.0 - https://crates.io/crates/vulcan-host-tools
@@ -15923,6 +15984,37 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
+
+### MIT License
+
+Used by:
+- nu-ansi-term 0.50.3 - https://github.com/nushell/nu-ansi-term
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2014 Benjamin Sago
+Copyright (c) 2021-2022 The Nushell Project Developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ```
 

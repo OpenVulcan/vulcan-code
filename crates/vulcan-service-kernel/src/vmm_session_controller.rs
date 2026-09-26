@@ -407,7 +407,7 @@ impl Drop for SessionVmmLifecycleFence {
             .registry
             .release_lifecycle_fences(self.session_ids.as_slice())
         {
-            eprintln!("[webui-service] failed to release Core VMM lifecycle fences: {error}");
+            tracing::warn!("[webui-service] failed to release Core VMM lifecycle fences: {error}");
         }
     }
 }

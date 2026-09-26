@@ -5,7 +5,7 @@ use super::{
     resolve_input_resource_constraints, resolve_request_projection_chain,
     resolve_response_projection_chain, resolve_usage_extraction_chain,
 };
-use vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID;
+use vulcan_llm_core::OPENAI_CHAT_PROFILE_ID;
 
 /// Replays the two captured Step Plan chunks through the selected manifest usage chain.
 /// 将 Step Plan 实际捕获的两帧按所选清单用量链重放，验证累计值不会提前冻结或重复相加。
@@ -249,7 +249,7 @@ fn model_scoped_profiles_freeze_into_the_execution_route() {
         "official-api",
         Some("api-key"),
         "deepseek-flash",
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+        vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
         Vec::new(),
     )
     .expect("matched usage profile must resolve");
@@ -258,7 +258,7 @@ fn model_scoped_profiles_freeze_into_the_execution_route() {
         "official-api",
         Some("api-key"),
         "deepseek-future-model",
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+        vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
         Vec::new(),
     )
     .expect("default usage profile must resolve");
@@ -378,7 +378,7 @@ fn explicit_empty_model_profiles_clear_route_special_cases() {
         "official-api",
         Some("api-key"),
         "deepseek-flash",
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+        vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
         route_usage_default,
     )
     .expect("explicit usage clear must restore the standard baseline");

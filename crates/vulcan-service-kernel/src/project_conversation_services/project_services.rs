@@ -490,7 +490,7 @@ pub(crate) async fn service_archive_project_conversations(
     let plugin_cleanup_failures =
         drain_vulcan_plugin_sessions_for_owners(&state, &archived_session_ids).await;
     if !plugin_cleanup_failures.is_empty() {
-        eprintln!(
+        tracing::warn!(
             "[vulcan-plugin] archived project cleanup warnings: {}",
             plugin_cleanup_failures.join("; ")
         );
@@ -593,7 +593,7 @@ pub(crate) async fn service_remove_project(
     let plugin_cleanup_failures =
         drain_vulcan_plugin_sessions_for_owners(&state, &archived_session_ids).await;
     if !plugin_cleanup_failures.is_empty() {
-        eprintln!(
+        tracing::warn!(
             "[vulcan-plugin] removed project cleanup warnings: {}",
             plugin_cleanup_failures.join("; ")
         );

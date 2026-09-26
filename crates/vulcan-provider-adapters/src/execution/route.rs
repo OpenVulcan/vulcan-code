@@ -7,13 +7,13 @@ use crate::{
     RequestProjectorKind, SecondaryRouteSelection, ServiceEntry,
 };
 use std::collections::BTreeSet;
-use vulcan_ai_protocols::{
+use vulcan_llm_core::UpstreamProtocol;
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
     CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
     GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
     OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
-use vulcan_llm_core::UpstreamProtocol;
 
 /// Immutable route selected before an execution starts.
 /// 在执行开始前选择的不可变路由。

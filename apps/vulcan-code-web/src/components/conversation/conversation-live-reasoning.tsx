@@ -1,10 +1,6 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
-import {
-  BrainCircuit,
-  Columns2,
-  PanelRightOpen,
-} from "lucide-react";
+import { Columns2, PanelRightOpen } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -131,7 +127,6 @@ export function StreamingThinkingOverlay(props: {
     >
       <header className="streaming-thinking-header">
         <span className="streaming-thinking-title">
-          <BrainCircuit size={16} />
           <span className="shimmer">{t("runtime.thinking")}</span>
         </span>
         <Tooltip>

@@ -1,10 +1,6 @@
 //! Strongly typed provider adapters and executable connection graphs.
 //! 强类型供应商适配器与可执行连接图。
 
-// Keep the source-level compatibility name while all protocol symbols are re-exported by the LLM core.
-// 在所有协议符号由 LLM 核心重新导出期间保留源码兼容名称。
-extern crate vulcan_llm_core as vulcan_ai_protocols;
-
 pub mod client;
 mod common_model_capabilities;
 pub mod configuration;

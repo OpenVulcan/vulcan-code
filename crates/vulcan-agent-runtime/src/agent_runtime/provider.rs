@@ -87,12 +87,10 @@ impl ProviderRuntimeBlueprint {
     /// 返回供诊断界面使用的人类可读接口族标签。
     pub fn protocol_profile_label(&self) -> &'static str {
         match self.protocol_profile_id.as_str() {
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID => "Anthropic Messages",
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
-                "Anthropic Messages + Video"
-            }
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID => "OpenAI Chat Completions",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID => "OpenAI Responses",
+            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID => "Anthropic Messages",
+            vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => "Anthropic Messages + Video",
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID => "OpenAI Chat Completions",
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID => "OpenAI Responses",
             _ => "Unregistered protocol profile",
         }
     }

@@ -42,7 +42,7 @@ use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionRequest, DispatchOutcome, RetryAfterHint,
     canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
 };
-use vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID;
+use vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID;
 use vulcan_llm_core::encode_codex_responses_request;
 
 /// Official Codex multiplier from stream idle timeout to the complete unary compact timeout.

@@ -103,7 +103,9 @@ where
                     }
                 }
                 Err(error) => {
-                    eprintln!("[webui-service] question preparation cleanup lock failed: {error}")
+                    tracing::warn!(
+                        "[webui-service] question preparation cleanup lock failed: {error}"
+                    )
                 }
             }
         });

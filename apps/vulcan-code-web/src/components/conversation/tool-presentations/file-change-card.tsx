@@ -101,7 +101,9 @@ export function FileChangePresentationCard(props: {
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
         <span className="file-change-path multi">
           <span className="file-change-path-text">{
-            props.requestProgress && displayPresentation.files.length === 0
+            displayPresentation.mode === "preview" && displayPresentation.files.length === 0
+              ? t(`toolPresentation.file.action.${displayPresentation.operation}`)
+              : props.requestProgress && displayPresentation.files.length === 0
               ? props.requestProgress.toolName
               : noEffectiveEdit
               ? t("toolPresentation.file.notEdited")

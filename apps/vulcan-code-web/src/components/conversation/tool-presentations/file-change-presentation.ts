@@ -132,15 +132,17 @@ function resolveFileChangeContent(
     if (displayState === "running" && options.requestPreview?.kind === "file_write") {
       const path = metadataString(options.requestPreview, ["title_fields.path"]);
       const lines = numberValue(metadataValue(options.requestPreview, ["progress_fields.new_line_count"]));
-      if (path && lines !== null && Number.isSafeInteger(lines) && lines >= 0) {
-        const file = buildFilePresentation({
+      if (lines !== null && Number.isSafeInteger(lines) && lines >= 0) {
+        // A trailing path enriches the existing preview; counts never require an invented filename.
+        // 末尾到达的路径补充已有预览；计数绝不依赖虚构文件名。
+        const files = path ? [buildFilePresentation({
           blocks, options, path, added: lines, removed: null, index: 0,
           operation: "modify", rows: [], expandable: false, resourceId: null,
           stableId: path, idOperation: "file", operationIds: [], previousPath: null, readOnly: false,
-        });
+        })] : [];
         return {
           ...buildNoEffectiveChangePresentation(blocks, displayState, "native_file_mutation", options, detailRef),
-          files: [file], totalAdded: lines, totalRemoved: null, mode: "preview",
+          files, totalAdded: lines, totalRemoved: null, mode: "preview",
         };
       }
     }

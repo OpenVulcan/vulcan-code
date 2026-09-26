@@ -729,8 +729,10 @@ export interface ToolRequestProgressSnapshot {
   // Monotonic request-local revision.
   // 请求局部的单调修订号。
   requestRevision: number;
-  // Optional parser-sanitized preview owned by the request-stream contract.
-  // 请求流契约持有的可选解析器净化预览。
+  // Optional sanitized preview update; absent/null leaves the current request preview unchanged.
+  // 可选的净化预览更新；缺席或 null 保留当前请求预览。
+  // The whole progress being null, durable handoff or snapshot reset clears retained previews.
+  // 整条 progress 为 null、持久化交接或快照重置会清理保留的预览。
   preview?: Record<string, unknown> | null;
 }
 

@@ -344,7 +344,7 @@ impl EnginePrimitiveRegistry {
     /// A registry seeded with every protocol profile identifier implemented by the engine.
     /// 返回预置引擎实现的全部协议 Profile 标识的注册表。
     pub fn current_protocol_baseline() -> Self {
-        use vulcan_ai_protocols::{
+        use vulcan_llm_core::{
             ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
             CLAUDE_CODE_MESSAGES_PROFILE_ID, COHERE_CHAT_PROFILE_ID,
             GEMINI_GENERATE_CONTENT_PROFILE_ID, GEMINI_INTERACTIONS_PROFILE_ID,

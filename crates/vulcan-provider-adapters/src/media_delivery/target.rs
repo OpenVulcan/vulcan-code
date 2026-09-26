@@ -60,7 +60,7 @@ impl MediaDeliveryTarget<'_> {
             None => MediaUploadAvailability::Absent,
             Some(contract)
                 if contract.max_count.is_some_and(|limit| limit < 1)
-                    || !vulcan_ai_protocols::protocol_profile_supports_media_source(
+                    || !vulcan_llm_core::protocol_profile_supports_media_source(
                         self.profile_id,
                         kind,
                         mime,
@@ -79,7 +79,7 @@ impl MediaDeliveryTarget<'_> {
             source_available: raw_bytes != 0,
             target_supported,
             target_max_bytes: self.constraint.and_then(|constraint| constraint.max_bytes),
-            inline_supported: vulcan_ai_protocols::protocol_profile_supports_media_source(
+            inline_supported: vulcan_llm_core::protocol_profile_supports_media_source(
                 self.profile_id,
                 kind,
                 mime,

@@ -248,7 +248,6 @@ export class BrowserServiceTransport implements ServiceTransport {
       }
       throw new BrowserServiceRpcError(payload.error.code, payload.error.message);
     }
-    emitBrowserServiceConnectionStatus("connected");
     return payload.result as T;
   }
 
@@ -327,6 +326,9 @@ export class BrowserServiceTransport implements ServiceTransport {
     try {
       baseUrl = await this.resolveBaseUrl();
     } catch (error) {
+      // Only the event-channel owner reports a failed connection attempt, including discovery failures.
+      // 只有事件通道归属方报告连接尝试失败，包括发现失败。
+      emitBrowserServiceConnectionStatus("disconnected", error instanceof Error ? error.message : String(error));
       this.scheduleReconnect();
       throw error;
     }
@@ -344,6 +346,8 @@ export class BrowserServiceTransport implements ServiceTransport {
     socket.addEventListener("open", () => {
       if (this.socket !== socket) return;
       this.reconnectDelayMs = 500;
+      // Only an open event socket closes the delivery gap; HTTP success cannot prove this.
+      // 只有事件套接字打开才能闭合推送缺口；HTTP 成功无法证明这一点。
       emitBrowserServiceConnectionStatus("connected");
     });
     socket.addEventListener("close", () => {
@@ -419,15 +423,10 @@ export class BrowserServiceTransport implements ServiceTransport {
     }
     try {
       this.baseUrl = await this.baseUrlPromise;
-      emitBrowserServiceConnectionStatus("connected");
       return this.baseUrl;
     } catch (error) {
       this.baseUrl = null;
       this.baseUrlPromise = null;
-      emitBrowserServiceConnectionStatus(
-        "disconnected",
-        error instanceof Error ? error.message : String(error),
-      );
       throw error;
     } finally {
       if (this.baseUrl) {

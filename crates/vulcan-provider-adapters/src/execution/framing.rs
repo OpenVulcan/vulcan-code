@@ -2,8 +2,8 @@
 //! 已注册供应商传输方言的有界增量分帧。
 
 use serde_json::Value;
-use vulcan_ai_protocols::{ProtocolConversionError, ProtocolStreamFraming};
 use vulcan_llm_core::ProtocolTransportProfile;
+use vulcan_llm_core::{ProtocolConversionError, ProtocolStreamFraming};
 
 /// One parsed transport frame and its optional SSE event name.
 /// 一条解析后的传输帧及其可选 SSE 事件名称。

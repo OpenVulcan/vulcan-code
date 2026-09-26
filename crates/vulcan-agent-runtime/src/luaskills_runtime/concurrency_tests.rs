@@ -409,8 +409,8 @@ fn queued_writer_is_not_starved_by_new_short_readers() {
     );
 }
 
-/// Verify skill calls overlap each isolated runtime while their cwd-sensitive paths remain ordered.
-/// 验证技能调用能分别与隔离运行时重叠，而需要切换工作目录的两条路径保持有序。
+/// Verify Skill, file-backed runLua and logical-cwd System calls overlap through the real host boundary.
+/// 验证 Skill、文件型 runLua 和逻辑目录 System 调用能通过真实宿主边界重叠执行。
 ///
 /// This test owns LuaSkills' process-wide host callback and must run as one isolated test process.
 /// 本测试占用 LuaSkills 的进程级宿主回调，必须在隔离的测试进程中单独运行。
@@ -550,8 +550,8 @@ fn real_skill_runlua_and_system_calls_overlap_inside_host_callbacks() {
         })
     };
 
-    // System and runLua both use upstream's process-cwd lock, so each is paired with Skill separately.
-    // System 与 runLua 都使用上游的进程工作目录锁，因此分别与 Skill 配对验证。
+    // Check each independent runtime against Skill before checking System and runLua together.
+    // 先分别验证每种独立运行时与 Skill 的重叠，再验证 System 与 runLua 的重叠。
     let system_eval_request_for_cwd = system_eval_request.clone();
     let system_handle = handle.clone();
     let system_call = std::thread::spawn(move || {
@@ -620,8 +620,11 @@ fn real_skill_runlua_and_system_calls_overlap_inside_host_callbacks() {
             .contains("ready")
     );
 
-    // File-backed runLua and System lease both switch process cwd under one upstream lock.
-    // 文件型 runLua 与 System 租约都在同一把上游锁下切换进程工作目录。
+    // LuaSkills 0.5.9 binds System paths through engine/logical_cwd.rs; only file-backed runLua
+    // takes the process cwd guard. Its system_runtime_lease_ignores_process_cwd_guard regression
+    // owns this upstream contract; dependency upgrades must recheck that source and test.
+    // LuaSkills 0.5.9 通过 engine/logical_cwd.rs 绑定 System 路径，仅文件型 runLua 使用进程目录锁。
+    // 上游 system_runtime_lease_ignores_process_cwd_guard 测试拥有此契约，依赖升级时必须回读该实现与测试。
     *lock.lock().expect("reset callback release for cwd pair") = false;
     let (cwd_ready_sender, cwd_ready_receiver) = mpsc::channel::<()>();
     let system_handle = handle.clone();
@@ -650,17 +653,14 @@ fn real_skill_runlua_and_system_calls_overlap_inside_host_callbacks() {
     let cwd_first = entered_receiver
         .recv_timeout(OBSERVATION_TIMEOUT)
         .expect("one cwd-sensitive callback must enter");
-    assert!(
-        entered_receiver
-            .recv_timeout(WRITER_EXCLUSION_WINDOW)
-            .is_err(),
-        "two cwd-sensitive callbacks must not run together under the upstream cwd guard"
-    );
+    // Observe the second entry before releasing either callback, proving actual overlap.
+    // 在释放任何回调之前观察第二个入口，证明实际重叠。
+    let cwd_second = entered_receiver.recv_timeout(OBSERVATION_TIMEOUT);
     *lock.lock().expect("release cwd pair") = true;
     wake.notify_all();
-    let cwd_second = entered_receiver
-        .recv_timeout(OBSERVATION_TIMEOUT)
-        .expect("the waiting cwd-sensitive callback must enter after release");
+    let cwd_second = cwd_second.expect(
+        "logical-cwd System must enter while file-backed runLua holds the process cwd guard",
+    );
     assert_ne!(cwd_first, cwd_second);
     assert!([cwd_first.as_str(), cwd_second.as_str()].contains(&"system"));
     assert!([cwd_first.as_str(), cwd_second.as_str()].contains(&"runlua"));

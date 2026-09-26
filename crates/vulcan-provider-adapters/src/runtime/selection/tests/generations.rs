@@ -8,7 +8,7 @@ use crate::runtime::test_support::{
 };
 use crate::{PersistedAiConfiguration, parse_openai_model_catalog};
 use std::sync::Arc;
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 

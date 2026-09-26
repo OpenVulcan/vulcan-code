@@ -491,7 +491,7 @@ mod tests {
         .expect("catalog should parse");
         for model in &mut catalog.models {
             model.protocol_variants.insert(
-                vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.to_string(),
+                vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID.to_string(),
                 ProtocolModelVariant {
                     capabilities: model.capabilities.clone(),
                     capability_evidence: Default::default(),

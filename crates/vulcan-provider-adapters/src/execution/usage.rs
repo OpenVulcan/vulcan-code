@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 use vulcan_ai_contract::AiStreamEvent;
-use vulcan_ai_protocols::ProtocolConversionError;
+use vulcan_llm_core::ProtocolConversionError;
 use vulcan_llm_core::{UsageAccumulator, UsageExtractionProfile, UsageRecordKind};
 
 /// Maximum profiled usage events retained before the normalized response starts.

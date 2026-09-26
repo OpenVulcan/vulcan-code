@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use vulcan_ai_contract::{AiOperation, ResourceKind};
-use vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID;
+use vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID;
 
 use super::{
     EnginePrimitiveRegistry, FORBIDDEN_MANIFEST_HEADERS, MANIFEST_SCHEMA_VERSION,
@@ -1715,7 +1715,7 @@ fn validate_protocol_route(
     );
     if entry.kind == ManifestEntryKind::Conversation
         && route.responses_features.is_some()
-        && route.protocol_profile_id != vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+        && route.protocol_profile_id != vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
     {
         errors.push(ManifestValidationError::new(
             "responses_features_on_non_codex_route",
@@ -4637,8 +4637,8 @@ fn usage_record_kind_matches_protocol(
     match record_kind {
         vulcan_llm_core::UsageRecordKind::WebSocketFrame => matches!(
             protocol_profile_id,
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
-                | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
+                | vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
         ),
         vulcan_llm_core::UsageRecordKind::JsonBody
         | vulcan_llm_core::UsageRecordKind::ErrorJsonBody
@@ -7490,7 +7490,7 @@ mod tests {
     #[test]
     fn inline_responses_compaction_v2_fails_closed_without_runtime_primitive() {
         let mut manifest = minimal_manifest();
-        let profile_id = String::from(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID);
+        let profile_id = String::from(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID);
         manifest.engine_contract.required_protocol_profiles = vec![profile_id.clone()];
         manifest.model_defaults.supported_protocols = vec![profile_id.clone()];
         manifest.model_defaults.selected_protocol = Some(profile_id.clone());
@@ -9117,7 +9117,7 @@ mod tests {
             }),
         }];
         manifest.services[0].protocol_routes[0].protocol_profile_id =
-            String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID);
+            String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID);
         manifest.services[0].protocol_routes[0].usage_profile_refs =
             vec![String::from("test.usage.websocket.v1")];
 

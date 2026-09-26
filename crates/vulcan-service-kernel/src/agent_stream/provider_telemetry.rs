@@ -67,7 +67,9 @@ impl ProviderTelemetryHookGuard {
                     && let Err(error) =
                         persist_native_provider_usage_attempt(storage_runtime, &event).await
                 {
-                    eprintln!("[webui-service] native provider usage persistence failed: {error}");
+                    tracing::warn!(
+                        "[webui-service] native provider usage persistence failed: {error}"
+                    );
                 }
                 dispatch_provider_request_telemetry_hook(&state, event).await;
             }
@@ -93,7 +95,7 @@ impl ProviderTelemetryHookGuard {
                     &vulcan_session_core::v1::UsageSnapshot::default(), &terminal.timing,
                 ) {
                     Ok(increment) => handle.record_lifetime_usage(&increment, terminal.completed_at_ms),
-                    Err(error) => eprintln!("[session-usage] cancellation: {error}"),
+                    Err(error) => tracing::warn!("[session-usage] cancellation: {error}"),
                 }
             }
         }
@@ -141,7 +143,7 @@ impl ProviderTelemetryHookGuard {
     /// 不返回值，因为 Effect Hook 调度保持非阻塞。
     pub(crate) fn forward(&mut self, event: ProviderRequestTelemetryEvent) {
         if self.sender.try_send(event).is_err() {
-            eprintln!("[webui-service] provider telemetry Hook queue is saturated or closed");
+            tracing::warn!("[webui-service] provider telemetry Hook queue is saturated or closed");
         }
     }
 }
@@ -153,7 +155,7 @@ impl Drop for ProviderTelemetryHookGuard {
         if let Some(event) = self.take_cancelled_event()
             && self.sender.try_send(event).is_err()
         {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] provider cancellation telemetry could not enter the Hook queue"
             );
         }
@@ -195,7 +197,7 @@ async fn dispatch_provider_request_telemetry_hook(
     // payloadObject is guaranteed by the strongly typed telemetry serializer.
     // payloadObject 由强类型遥测序列化器保证为对象。
     let Some(payload_object) = event.payload.as_object_mut() else {
-        eprintln!("[webui-service] provider telemetry payload is not an object");
+        tracing::warn!("[webui-service] provider telemetry payload is not an object");
         return;
     };
     payload_object.insert(
@@ -210,7 +212,7 @@ async fn dispatch_provider_request_telemetry_hook(
         .and_then(Value::as_str)
         .map(str::to_string)
     else {
-        eprintln!("[webui-service] provider telemetry payload is missing request_id");
+        tracing::warn!("[webui-service] provider telemetry payload is missing request_id");
         return;
     };
     // context binds dispatch to the exact session and registered point.
@@ -230,7 +232,7 @@ async fn dispatch_provider_request_telemetry_hook(
         )
         .await
     {
-        eprintln!("[webui-service] provider telemetry hook dispatch failed: {error}");
+        tracing::warn!("[webui-service] provider telemetry hook dispatch failed: {error}");
     }
 }
 

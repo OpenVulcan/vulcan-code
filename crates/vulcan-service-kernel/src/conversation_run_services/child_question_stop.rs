@@ -110,14 +110,14 @@ pub(crate) async fn stop_owned_child_question_execution(
     }
     if let Some(task) = preparation_task {
         if let Err(error) = task.task.abort_and_wait().await {
-            eprintln!("[webui-service] child question preparation aborted task join: {error}");
+            tracing::warn!("[webui-service] child question preparation aborted task join: {error}");
         }
     }
     if let Some(active_task) = active_task {
         // An aborted task may report cancellation; its completed join is the quiescence evidence.
         // 被中止任务可能报告取消；完成等待本身就是静止证据。
         if let Err(error) = active_task.abort_and_wait().await {
-            eprintln!("[webui-service] child question aborted task join: {error}");
+            tracing::warn!("[webui-service] child question aborted task join: {error}");
         }
     }
     // Drain any admitted result publication before freezing the exact API stop boundary.

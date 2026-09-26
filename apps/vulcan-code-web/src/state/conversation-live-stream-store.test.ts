@@ -6,7 +6,7 @@ import {
   toolRequestMembershipKey,
   transientReasoningStatusKey,
 } from "./conversation-live-stream-store";
-import type { WorkbenchDeltaEnvelope } from "@/types";
+import type { ToolRequestProgressSnapshot, WorkbenchDeltaEnvelope } from "@/types";
 
 // envelope wraps one exact Workbench delta for Store tests.
 // envelope 为存储测试封装一条精确 Workbench 增量。
@@ -22,6 +22,62 @@ function envelope(
 }
 
 describe("ConversationLiveStreamStore", () => {
+  // Exercise the common protocol rather than assuming any particular tool renderer.
+  // 验证公共协议，不依赖任何特定工具渲染器。
+  it("retains semantic previews across progress-only updates without crossing request identities", () => {
+    // Store lifetime bounds all previews to active requests in the current workbench.
+    // 存储生命周期将全部预览限定在当前工作台的活动请求内。
+    const store = new ConversationLiveStreamStore();
+    // This minimal sanitized projection is opaque to the common stream store.
+    // 该最小净化投影对公共流存储而言是不透明数据。
+    const preview = { kind: "file_write", revision: 1,
+      title_fields: { path: "first.ts" }, progress_fields: { new_line_count: 150 } };
+    // The source identity is checked before retaining any previous preview.
+    // 源身份会在保留任何历史预览之前接受校验。
+    const seed: ToolRequestProgressSnapshot = { apiCallId: 1, requestStreamId: "request",
+      toolCallId: "call", toolName: "file", state: "receiving",
+      receivedBytes: 100, receivedCharacters: 100, requestRevision: 1, preview };
+    // Publish a typed request update into an explicit conversation; return whether it was accepted.
+    // 将带类型的请求更新发布到明确的会话；返回是否接受该更新。
+    const publish = (progress: ToolRequestProgressSnapshot, conversationId = "session") => store.applyEnvelope(
+      envelope(progress.requestRevision, { kind: "toolRequestProgressChanged", payload: {
+        conversationId, requestStreamId: progress.requestStreamId, progress,
+      } }),
+    );
+    expect(publish(seed)).toBe(true);
+    // Keep object identity stable on counter-only traffic, avoiding unnecessary semantic projection work.
+    // 纯计数流量保持对象身份稳定，避免不必要的语义投影工作。
+    const retained = store.getToolRequestProgress("session", "request")?.preview;
+    expect(retained).toEqual(preview);
+    for (const [index, state] of (["receiving", "arguments_assembled", "ready"] as const).entries()) {
+      expect(publish({ ...seed, state, requestRevision: index + 2,
+        receivedBytes: 200 + index, preview: index === 0 ? undefined : null })).toBe(true);
+      expect(store.getToolRequestProgress("session", "request")).toMatchObject({ state, receivedBytes: 200 + index });
+      expect(store.getToolRequestProgress("session", "request")?.preview).toBe(retained);
+    }
+    // A later preview may correct counts downward; authoritative replacements must not be max-merged.
+    // 后续预览可向下校正行数；权威替换不能使用最大值合并。
+    const corrected = { ...preview, revision: 2, progress_fields: { new_line_count: 149 } };
+    expect(publish({ ...seed, requestRevision: 5, preview: corrected })).toBe(true);
+    expect(store.getToolRequestProgress("session", "request")?.preview).toEqual(corrected);
+    expect(publish(seed)).toBe(false);
+    expect(publish({ ...seed, toolCallId: "other", requestRevision: 6 })).toBe(false);
+    expect(publish({ ...seed, apiCallId: 2, requestRevision: 6 })).toBe(false);
+    expect(store.getToolRequestProgress("session", "request")?.preview).toEqual(corrected);
+    expect(publish({ ...seed, requestStreamId: "other-request", preview: null })).toBe(true);
+    expect(publish({ ...seed, preview: null }, "other-session")).toBe(true);
+    expect(store.getToolRequestProgress("session", "other-request")?.preview).toBeNull();
+    expect(store.getToolRequestProgress("other-session", "request")?.preview).toBeNull();
+    expect(store.settleToolRequestProgress("session", "request")).toBe(true);
+    expect(publish({ ...seed, requestRevision: 6 })).toBe(false);
+    expect(store.getToolRequestProgress("session", "request")).toBeNull();
+    expect(publish({ ...seed, requestStreamId: "reset-request" })).toBe(true);
+    store.resetForWorkbenchSnapshot();
+    expect(store.getToolRequestProgress("session", "reset-request")).toBeNull();
+    expect(publish({ ...seed, requestStreamId: "reset-request", preview: null })).toBe(true);
+    expect(store.getToolRequestProgress("session", "reset-request")?.preview).toBeNull();
+  });
+
   it("replaces transient reasoning and clears it at the explicit boundary", () => {
     const store = new ConversationLiveStreamStore();
     const listener = vi.fn();

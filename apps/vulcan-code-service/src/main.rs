@@ -12,6 +12,7 @@ mod desktop_integration;
 #[cfg(feature = "desktop-tray")]
 mod desktop_notifications;
 mod launch;
+mod logging;
 mod runtime_layout;
 mod service_runtime;
 #[cfg(feature = "desktop-tray")]

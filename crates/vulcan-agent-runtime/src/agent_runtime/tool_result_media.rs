@@ -121,15 +121,13 @@ pub(crate) fn project_tool_result_content(
     };
 
     match protocol_profile_id {
-        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
-        | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID => {
+        vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
+        | vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID => {
             project_openai_responses_content(&envelope)
         }
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-        | vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-        | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID => {
-            project_anthropic_content(&envelope)
-        }
+        vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
+        | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+        | vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID => project_anthropic_content(&envelope),
         _ => Err(format!(
             "Tool result image blocks are unsupported by protocol profile `{protocol_profile_id}`; use an OpenAI Responses or Anthropic Messages route."
         )),
@@ -465,7 +463,7 @@ mod tests {
             let text = result.as_str().unwrap();
             assert_eq!(text.matches("iVBORw0KGgo=").count(), 1);
             let projected =
-                project_tool_result_content(text, vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID)
+                project_tool_result_content(text, vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID)
                     .unwrap();
             let blocks = projected.as_array().unwrap();
             assert!(blocks.iter().any(|block| block["type"] == "input_image"));
@@ -510,11 +508,9 @@ mod tests {
             .expect("valid MCP media should canonicalize");
         let text = output.as_str().expect("media output should be a string");
         assert!(text.contains(TOOL_RESULT_MEDIA_MARKER));
-        let projected = project_tool_result_content(
-            text,
-            vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID,
-        )
-        .expect("OpenAI Responses media should project");
+        let projected =
+            project_tool_result_content(text, vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID)
+                .expect("OpenAI Responses media should project");
         assert_eq!(projected[0], json!({"type":"input_text","text":"before"}));
         assert_eq!(projected[1]["type"], "input_image");
         assert_eq!(
@@ -533,7 +529,7 @@ mod tests {
             .expect("valid MCP media should canonicalize");
         let projected = project_tool_result_content(
             output.as_str().expect("media output should be a string"),
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
         )
         .expect("Anthropic media should project");
         assert_eq!(projected[1]["type"], "image");
@@ -550,7 +546,7 @@ mod tests {
             .expect("valid MCP media should canonicalize");
         let error = project_tool_result_content(
             output.as_str().expect("media output should be a string"),
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
         )
         .expect_err("OpenAI Chat has no registered tool-result image projector");
         assert!(error.contains("unsupported by protocol profile"));
@@ -597,7 +593,7 @@ mod tests {
         assert!(
             project_tool_result_content(
                 envelope.to_string().as_str(),
-                vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID,
+                vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
             )
             .is_ok(),
             "the unmodified canonical envelope must project"
@@ -606,7 +602,7 @@ mod tests {
             Value::from(u64::from(TOOL_RESULT_MEDIA_ENVELOPE_VERSION) + 1);
         let error = project_tool_result_content(
             envelope.to_string().as_str(),
-            vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
         )
         .expect_err("an unknown envelope version must be refused");
         assert!(

@@ -295,7 +295,7 @@ impl VceWatcherService {
                         };
                         active_projects.remove(&project_id);
                         if let Err(error) = result {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] VCE watcher refresh failed for `{project_id}`: {error}"
                             );
                             requeue_vce_watch_batch(

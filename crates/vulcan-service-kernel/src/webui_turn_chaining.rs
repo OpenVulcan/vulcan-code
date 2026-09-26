@@ -169,7 +169,7 @@ pub(super) async fn maybe_start_webui_turn_chain_after_finished(
     let started = match started {
         Ok(started) => started,
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] dispatch exact V1 Turn successor failed: session={finished_session_id} revision={receipt_revision} error={error}"
             );
             false

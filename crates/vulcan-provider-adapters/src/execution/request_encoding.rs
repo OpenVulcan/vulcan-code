@@ -19,7 +19,7 @@ use vulcan_ai_contract::{
     FreeformToolArgumentEncoding, FreeformToolFormat, FreeformToolSyntax, ModelParameterValue,
     ReasoningEffort, StructuredOutputPolicy, ToolInputFormat,
 };
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
     CLAUDE_CODE_MESSAGES_PROFILE_ID, COHERE_CHAT_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
     GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
@@ -1794,9 +1794,7 @@ pub(super) fn project_credential_request(
     secret: &CredentialExecutionSecret,
     mut encoded: EncodedWireRequest,
 ) -> Result<EncodedWireRequest, ProviderExecutionFailure> {
-    if route.protocol_route.protocol_profile_id
-        != vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID
-    {
+    if route.protocol_route.protocol_profile_id != vulcan_llm_core::GOOGLE_CODE_ASSIST_PROFILE_ID {
         return Ok(encoded);
     }
     let project_id = secret.project_id().ok_or_else(|| {

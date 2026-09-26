@@ -2,6 +2,7 @@
 // 客户端持有的临时页面同时与 Core 浏览器及工作台预加载桥隔离。
 import { randomUUID } from 'node:crypto';
 import { BrowserWindow, WebContentsView, session, shell } from 'electron';
+import { isAllowedLocalBrowserUrl, normalizeLocalBrowserUrl } from './local-browser-url.js';
 
 // Bounds native views created by user actions and untrusted page popups in one GUI window.
 // 限制单个 GUI 窗口由用户操作或不受信任页面弹窗创建的原生视图数量。
@@ -218,8 +219,8 @@ export class LocalBrowserManager {
       try {
         this.openForOwner(ownerSessionId, popupUrl);
       } catch {
-        // Non-HTTP and internal workbench popups have no temporary-browser destination.
-        // 非 HTTP 或内部工作台弹窗在临时浏览器中没有可用目标。
+        // Unsupported schemes and internal workbench popups have no temporary-browser destination.
+        // 不支持的协议或内部工作台弹窗在临时浏览器中没有可用目标。
       }
       return { action: 'deny' };
     });
@@ -262,8 +263,8 @@ export class LocalBrowserManager {
 
   // navigate loads one exact existing tab without changing any Core browser page.
   // navigate 加载一个精确的现有标签，不改变任何 Core 浏览器页面。
-  // id selects a GUI-local tab; url is the new HTTP destination.
-  // id 选择 GUI 本地标签；url 是新的 HTTP 目标。
+  // id selects a GUI-local tab; url is the new web address or absolute local file path.
+  // id 选择 GUI 本地标签；url 是新的网页地址或本地文件绝对路径。
   navigate(id: string, url: string): void {
     const entry = this.requireCurrentTab(id);
     const destination = this.normalizeUrl(url);
@@ -461,23 +462,12 @@ export class LocalBrowserManager {
     return entry;
   }
 
-  // normalizeUrl accepts only HTTP(S) or the inert initial blank page outside internal origins.
-  // normalizeUrl 仅接受 HTTP(S) 或内部来源之外的惰性初始空白页面。
+  // normalizeUrl accepts web addresses, local files and the inert blank page outside internal origins.
+  // normalizeUrl 接受网页地址、本地文件和惰性空白页，并排除内部来源。
   // input is the requested address; returns its canonical navigable URL.
   // input 是请求地址；返回其规范化的可导航 URL。
   private normalizeUrl(input: string): string {
-    const value = input.trim();
-    // loopback keeps local development servers reachable without an explicit HTTP scheme.
-    // loopback 让未输入 HTTP 协议的本机开发服务仍可访问。
-    const loopback = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::|\/|$)/i.test(value);
-    // complete preserves explicit destinations before the existing origin policy checks them.
-    // complete 保留显式目标地址，再交给原有来源策略校验。
-    const complete = value === 'about:blank' || /^https?:\/\//i.test(value)
-      || /^[a-z][a-z\d+.-]*:\/\//i.test(value)
-      ? value : `${loopback ? 'http' : 'https'}://${value}`;
-    const parsed = new URL(complete);
-    if (!this.isAllowedUrl(parsed.href)) throw new Error('This address is unavailable in the local browser.');
-    return parsed.href;
+    return normalizeLocalBrowserUrl(input, this.blockedOrigins);
   }
 
   // isAllowedUrl prevents untrusted pages from reaching the privileged workbench or Core origin.
@@ -485,13 +475,7 @@ export class LocalBrowserManager {
   // target is a top-level URL; returns whether native navigation may continue.
   // target 是顶层 URL；返回原生导航是否可以继续。
   private isAllowedUrl(target: string): boolean {
-    try {
-      const parsed = new URL(target);
-      return parsed.href === 'about:blank'
-        || (['http:', 'https:'].includes(parsed.protocol) && !this.blockedOrigins.has(parsed.origin));
-    } catch {
-      return false;
-    }
+    return isAllowedLocalBrowserUrl(target, this.blockedOrigins);
   }
 
   // update publishes changed page metadata only while its tab still exists.

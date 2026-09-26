@@ -16,7 +16,7 @@ use tokio_tungstenite::{
         protocol::{CloseFrame, frame::coding::CloseCode},
     },
 };
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     OPENAI_CHAT_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
     ProtocolRegistry,
 };

@@ -916,7 +916,7 @@ mod tests {
             projection,
             evidence: build_provider_request_budget_evidence(
                 request,
-                vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+                vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
                 "sha256:test-route",
             )
             .expect("valid request evidence"),
@@ -940,7 +940,7 @@ mod tests {
         let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
             ModelCapabilities {
                 context_limit: Some(10_000),
@@ -978,7 +978,7 @@ mod tests {
         let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
             ModelCapabilities {
                 context_limit: Some(10_000),
@@ -1012,7 +1012,7 @@ mod tests {
         let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
             ModelCapabilities {
                 context_limit: Some(1_000),
@@ -1059,7 +1059,7 @@ mod tests {
         let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
             ModelCapabilities {
                 context_limit: Some(100),
@@ -1102,7 +1102,7 @@ mod tests {
         let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
             ModelCapabilities::default(),
             ProviderRuntimeReasoningResolution::default(),
@@ -1153,14 +1153,14 @@ mod tests {
         request.prompt_in_history = true;
         let embedded_evidence = build_provider_request_budget_evidence(
             &request,
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
         )
         .expect("embedded request evidence should build");
         let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
             ModelCapabilities {
                 context_limit: Some(10_000),
@@ -1179,7 +1179,7 @@ mod tests {
         distinct_request.prompt_in_history = false;
         let distinct_evidence = build_provider_request_budget_evidence(
             &distinct_request,
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
         )
         .expect("distinct request evidence should build");
@@ -1214,7 +1214,7 @@ mod tests {
         let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
             ModelCapabilities {
                 context_limit: Some(10_000),
@@ -1259,7 +1259,7 @@ mod tests {
         let guard = ProviderRequestBudgetGuard::new_v1(
             "test-provider",
             "test-model",
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
             ModelCapabilities {
                 context_limit: Some(10_000),

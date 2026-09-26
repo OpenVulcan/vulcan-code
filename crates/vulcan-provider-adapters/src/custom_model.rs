@@ -788,7 +788,7 @@ pub fn validate_system_manual_model_definition(
         ]
         .into_iter()
         .any(|source| {
-            vulcan_ai_protocols::protocol_profile_supports_media_source(
+            vulcan_llm_core::protocol_profile_supports_media_source(
                 binding.protocol_profile_id.as_str(),
                 *resource,
                 mime,

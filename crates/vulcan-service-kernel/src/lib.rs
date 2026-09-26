@@ -6,10 +6,9 @@
 // Keep this compiler-only bound test-scoped; production recursion and lint policy stay unchanged.
 // 将此编译器边界限定于测试；生产递归与 lint 策略保持不变。
 #![cfg_attr(test, recursion_limit = "256")]
-
-// Re-export the extracted protocol core under the historical source name during namespace migration.
-// 在命名空间迁移期间以历史源码名称引用已提取的协议核心。
-extern crate vulcan_llm_core as vulcan_ai_protocols;
+// Operational diagnostics must use the host subscriber; tests may still print fixture results.
+// 运行诊断必须使用宿主接收器，测试仍可输出夹具结果。
+#![cfg_attr(not(test), deny(clippy::print_stderr, clippy::print_stdout))]
 
 use std::{
     collections::{BTreeMap, BTreeSet},

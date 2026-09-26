@@ -583,10 +583,10 @@ fn multi_protocol_migration_preserves_exact_internal_route_binding() {
     let target = CustomProviderActivationTarget {
         service_entry_id: String::from("custom-entry-v2"),
         credential_profile_id: String::from("api-key"),
-        default_protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+        default_protocol_profile_id: String::from(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID),
         protocol_profile_ids: BTreeSet::from([
-            String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
-            String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            String::from(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID),
+            String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         ]),
     };
     // route represents a model explicitly bound to Chat before the provider edit.
@@ -597,7 +597,7 @@ fn multi_protocol_migration_preserves_exact_internal_route_binding() {
         connection_id: String::from("custom-account"),
         model_id: String::from("chat-only-model"),
         binding: InferenceRouteBinding::Protocol {
-            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            protocol_profile_id: String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         },
         operation: AiOperation::ConversationRespond,
         usage_scope: InferenceUsageScope::ExternalService,
@@ -618,7 +618,7 @@ fn multi_protocol_migration_preserves_exact_internal_route_binding() {
     assert_eq!(
         route.binding,
         InferenceRouteBinding::Protocol {
-            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,),
+            protocol_profile_id: String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,),
         },
         "the provider default must not replace an exact model route"
     );

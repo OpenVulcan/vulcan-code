@@ -434,7 +434,7 @@ pub(crate) fn stop_webui_session_kernel_generation(
                 session_id,
                 "stop_generation",
             ) {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] failed to notify wait_agent parent interruption for session {session_id} reason=stop_generation: {notification_error}"
                 );
             }
@@ -451,7 +451,7 @@ pub(crate) fn stop_webui_session_kernel_generation(
                 session_id,
                 "stop_generation_idle",
             ) {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] failed to notify wait_agent parent interruption for session {session_id} reason=stop_generation_idle: {notification_error}"
                 );
             }

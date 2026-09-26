@@ -21,7 +21,7 @@ use crate::runtime::test_support::{account_usage, connection, with_protocol_vari
 use crate::{PersistedAiConfiguration, parse_openai_model_catalog};
 use std::collections::BTreeSet;
 use vulcan_ai_contract::AccountUsageSnapshot;
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
     OPENAI_RESPONSES_PROFILE_ID,
 };

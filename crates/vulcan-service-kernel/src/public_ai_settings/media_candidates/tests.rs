@@ -24,7 +24,7 @@ fn media_candidate_capabilities_intersect_model_and_protocol_support() {
     // responses 仅保留已注册图片编码器，并保持无关文件元数据。
     let responses = protocol_projected_media_capabilities(
         &capabilities,
-        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+        vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
     );
     assert_eq!(
         responses.input_resources,
@@ -34,7 +34,7 @@ fn media_candidate_capabilities_intersect_model_and_protocol_support() {
     // chat 公开模型代替所需的三种媒体编码器。
     let chat = protocol_projected_media_capabilities(
         &capabilities,
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+        vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
     );
     assert_eq!(chat.input_resources, capabilities.input_resources);
 }
@@ -58,7 +58,7 @@ fn anthropic_video_candidate_excludes_unregistered_audio_input() {
 
     let projected = protocol_projected_media_capabilities(
         &capabilities,
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
+        vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
     );
     assert_eq!(
         projected.input_resources,
@@ -88,7 +88,7 @@ fn anthropic_candidate_can_use_host_wrapped_plain_text() {
 
     let projected = protocol_projected_media_capabilities(
         &capabilities,
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+        vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
     );
     assert_eq!(
         projected.structured_output,

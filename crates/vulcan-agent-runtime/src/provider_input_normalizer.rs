@@ -186,17 +186,17 @@ pub fn protocol_profile_supports_attachment_kind(
     kind: ConversationAttachmentKind,
 ) -> bool {
     match protocol_profile_id {
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
-        | vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
-        | vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID
-        | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID => true,
-        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
-        | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
-        | vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-        | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID => {
+        vulcan_llm_core::OPENAI_CHAT_PROFILE_ID
+        | vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID
+        | vulcan_llm_core::GEMINI_INTERACTIONS_PROFILE_ID
+        | vulcan_llm_core::GOOGLE_CODE_ASSIST_PROFILE_ID => true,
+        vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
+        | vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
+        | vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
+        | vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID => {
             matches!(kind, ConversationAttachmentKind::Image)
         }
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
+        vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
             matches!(
                 kind,
                 ConversationAttachmentKind::Image | ConversationAttachmentKind::Video
@@ -229,7 +229,7 @@ pub fn protocol_profile_supports_attachment(
     // formatSupported preserves the existing generic-file projector while media uses exact MIME admission.
     // formatSupported 保留既有通用文件投影器，媒体则使用精确 MIME 准入。
     let format_supported = resource_kind == ResourceKind::File
-        || vulcan_ai_protocols::protocol_profile_supports_local_media_type(
+        || vulcan_llm_core::protocol_profile_supports_local_media_type(
             protocol_profile_id,
             resource_kind,
             attachment.mime_type.as_str(),
@@ -261,16 +261,16 @@ pub fn protocol_profile_supports_structured_output(
     // registeredProfile 防止未知未来协议继承未经验证的 JSON 契约。
     let registered_profile = matches!(
         protocol_profile_id,
-        vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
-            | vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
-            | vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
-            | vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-            | vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-            | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID
-            | vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID
-            | vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID
-            | vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID
-            | vulcan_ai_protocols::COHERE_CHAT_PROFILE_ID
+        vulcan_llm_core::OPENAI_CHAT_PROFILE_ID
+            | vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
+            | vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
+            | vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
+            | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+            | vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID
+            | vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID
+            | vulcan_llm_core::GEMINI_INTERACTIONS_PROFILE_ID
+            | vulcan_llm_core::GOOGLE_CODE_ASSIST_PROFILE_ID
+            | vulcan_llm_core::COHERE_CHAT_PROFILE_ID
     );
     if !registered_profile {
         return false;
@@ -279,9 +279,9 @@ pub fn protocol_profile_supports_structured_output(
     // Anthropic 系编码器要求显式 JSON Schema，并拒绝无 Schema 的 JSON Object 模式。
     if matches!(
         protocol_profile_id,
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
-            | vulcan_ai_protocols::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-            | vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID
+        vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
+            | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+            | vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID
     ) {
         return capability == StructuredOutputCapability::JsonSchema;
     }
@@ -351,7 +351,7 @@ mod tests {
             test_attachment(ConversationAttachmentKind::Pdf, "a.pdf", "application/pdf"),
         ];
         let normalized = normalize_provider_user_input(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             "inspect",
             &attachments,
         );
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn responses_rejects_non_image_resources() {
         let normalized = normalize_provider_user_input(
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "inspect",
             &[
                 test_attachment(ConversationAttachmentKind::Image, "a.png", "image/png"),
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn codex_responses_keeps_images_and_rejects_non_image_resources() {
         let normalized = normalize_provider_user_input(
-            vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
             "inspect",
             &[
                 test_attachment(ConversationAttachmentKind::Image, "a.png", "image/png"),
@@ -408,7 +408,7 @@ mod tests {
     #[test]
     fn anthropic_rejects_non_image_resources() {
         let normalized = normalize_provider_user_input(
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
             "inspect",
             &[test_attachment(
                 ConversationAttachmentKind::Pdf,
@@ -430,7 +430,7 @@ mod tests {
             ..ModelCapabilities::default()
         };
         let normalized = normalize_provider_user_input_for_model(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             Some(&capabilities),
             "inspect",
             &[test_attachment(
@@ -451,7 +451,7 @@ mod tests {
         let capabilities = ModelCapabilities::default();
         let bridge_tool_ids = vec![String::from("image_understand")];
         let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             Some(&capabilities),
             "inspect",
             &[test_attachment(
@@ -479,7 +479,7 @@ mod tests {
             String::from("audio_understand"),
         ];
         let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
             Some(&capabilities),
             "inspect",
             &[
@@ -520,11 +520,11 @@ mod tests {
         let bridge_tool_ids = vec![String::from("audio_understand")];
 
         assert!(!protocol_profile_supports_attachment(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             &attachment,
         ));
         let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             Some(&capabilities),
             "inspect",
             &[attachment],
@@ -545,7 +545,7 @@ mod tests {
         // capabilities 有意不含媒体输入，因此只有显式匹配的桥接才能处理附件。
         let capabilities = ModelCapabilities::default();
         let normalized = normalize_provider_user_input_for_model_with_tool_bridges(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             Some(&capabilities),
             "inspect",
             &[test_attachment(
@@ -568,19 +568,19 @@ mod tests {
     #[test]
     fn structured_output_support_is_protocol_exact() {
         assert!(!protocol_profile_supports_structured_output(
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
             StructuredOutputCapability::JsonObject,
         ));
         assert!(protocol_profile_supports_structured_output(
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
             StructuredOutputCapability::JsonSchema,
         ));
         assert!(protocol_profile_supports_structured_output(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             StructuredOutputCapability::JsonObject,
         ));
         assert!(protocol_profile_supports_structured_output(
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             StructuredOutputCapability::JsonSchema,
         ));
     }
@@ -590,9 +590,9 @@ mod tests {
     #[test]
     fn attachment_support_includes_registered_gemini_and_claude_code_encoders() {
         for protocol_profile_id in [
-            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
-            vulcan_ai_protocols::GEMINI_INTERACTIONS_PROFILE_ID,
-            vulcan_ai_protocols::GOOGLE_CODE_ASSIST_PROFILE_ID,
+            vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            vulcan_llm_core::GEMINI_INTERACTIONS_PROFILE_ID,
+            vulcan_llm_core::GOOGLE_CODE_ASSIST_PROFILE_ID,
         ] {
             for kind in [
                 ConversationAttachmentKind::Image,
@@ -606,11 +606,11 @@ mod tests {
             }
         }
         assert!(protocol_profile_supports_attachment_kind(
-            vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID,
+            vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID,
             ConversationAttachmentKind::Image,
         ));
         assert!(!protocol_profile_supports_attachment_kind(
-            vulcan_ai_protocols::CLAUDE_CODE_MESSAGES_PROFILE_ID,
+            vulcan_llm_core::CLAUDE_CODE_MESSAGES_PROFILE_ID,
             ConversationAttachmentKind::Video,
         ));
     }

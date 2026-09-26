@@ -898,7 +898,7 @@ pub(in crate::agent_runtime) fn test_runtime_foundation(
                 r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"Model","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
             )
             .expect("test public AI model catalog should parse"),
-            &[vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID],
+            &[vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID],
         ))
         .expect("test public AI source catalog should stage");
     runtime

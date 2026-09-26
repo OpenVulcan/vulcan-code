@@ -3690,7 +3690,7 @@ impl SessionHandle {
             receipt.revision,
         ) {
             Ok(delta) => self.publish_live_event_delta_best_effort(delta),
-            Err(error) => eprintln!(
+            Err(error) => tracing::warn!(
                 "[session-v1-live] rejected invalid volatile revision edge: session={} error={error}",
                 self.session_id
             ),
@@ -3717,7 +3717,7 @@ impl SessionHandle {
         let mut published = match self.published_streaming_text.lock() {
             Ok(published) => published,
             Err(_) => {
-                eprintln!(
+                tracing::warn!(
                     "[session-v1-live] streaming text record poisoned; publishing complete events: session={}",
                     self.session_id
                 );
@@ -3755,7 +3755,7 @@ impl SessionHandle {
         let publisher = match self.live_event_publisher.lock() {
             Ok(publisher) => publisher.clone(),
             Err(_) => {
-                eprintln!(
+                tracing::warn!(
                     "[session-v1-live] publisher lock poisoned after domain mutation: session={}",
                     self.session_id
                 );
@@ -3766,9 +3766,11 @@ impl SessionHandle {
             return;
         };
         if delta.service_epoch != publisher.service_epoch {
-            eprintln!(
+            tracing::warn!(
                 "[session-v1-live] rejected stale service epoch: session={} expected={} actual={}",
-                self.session_id, publisher.service_epoch, delta.service_epoch
+                self.session_id,
+                publisher.service_epoch,
+                delta.service_epoch
             );
             return;
         }
@@ -3785,7 +3787,7 @@ impl SessionHandle {
                 .as_ref()
                 .map(|publisher| publisher.service_epoch.clone()),
             Err(_) => {
-                eprintln!(
+                tracing::warn!(
                     "[session-v1-live] publisher lock poisoned while reading service epoch: session={}",
                     self.session_id
                 );
@@ -3820,9 +3822,10 @@ impl SessionHandle {
         );
         match delta {
             Ok(delta) => self.publish_live_event_delta_best_effort(delta),
-            Err(error) => eprintln!(
+            Err(error) => tracing::warn!(
                 "[session-v1-live] rejected generation rebase edge: session={} generation={} error={error}",
-                self.session_id, window_generation
+                self.session_id,
+                window_generation
             ),
         }
     }
@@ -3860,7 +3863,7 @@ impl SessionHandle {
         );
         match delta {
             Ok(delta) => self.publish_live_event_delta_best_effort(delta),
-            Err(error) => eprintln!(
+            Err(error) => tracing::warn!(
                 "[session-v1-live] rejected invalid durable revision edge: session={} error={error}",
                 self.session_id
             ),

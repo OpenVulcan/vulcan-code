@@ -1130,7 +1130,7 @@ fn append_runtime_event_projection_with_authority(
     if refreshes_command_sessions
         && let Err(error) = emit_live_command_sessions_changed_delta(app, state)
     {
-        eprintln!(
+        tracing::warn!(
             "[webui-service] runtime terminal event command-session delta emit failed: {error}"
         );
     }
@@ -1138,7 +1138,7 @@ fn append_runtime_event_projection_with_authority(
         && let Err(error) =
             emit_webui_subagent_navigation_changed_delta_for_parent(app, state, session_id)
     {
-        eprintln!("[webui-service] runtime event navigation delta emit failed: {error}");
+        tracing::warn!("[webui-service] runtime event navigation delta emit failed: {error}");
     }
 
     // Terminal request events clear only the request-local progress cache after the V1 mutation is durable.

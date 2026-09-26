@@ -177,7 +177,7 @@ pub(super) async fn handle_parent_event(
         ) {
             Ok(consumed) => consumed,
             Err(error) => {
-                eprintln!("[webui-service] ingest subagent parent event failed: {error}");
+                tracing::warn!("[webui-service] ingest subagent parent event failed: {error}");
                 false
             }
         }

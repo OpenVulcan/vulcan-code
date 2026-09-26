@@ -32,7 +32,7 @@ pub(super) fn schedule_question_wakeup(
     crate::spawn_service_task(async move {
         let _owner = owner;
         if let Err(error) = wake_accepted_question(&app, &invocation, &question_id).await {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] question wakeup failed for {}: {error}",
                 question_id.as_str()
             );
@@ -40,7 +40,9 @@ pub(super) fn schedule_question_wakeup(
                 &invocation.state,
                 format!("代理问题 {} 启动失败：{error}", question_id.as_str()),
             ) {
-                eprintln!("[webui-service] question wakeup diagnostic failed: {diagnostic_error}");
+                tracing::warn!(
+                    "[webui-service] question wakeup diagnostic failed: {diagnostic_error}"
+                );
             }
         }
     });

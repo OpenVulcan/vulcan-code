@@ -9,7 +9,7 @@ use vulcan_ai_contract::{
     AiExecutionRequest, AiMessage, ContentItem, HostMessageEnvelope, HostMessageKind, MessageRole,
     ResourceKind, ResourceReference, ResourceSourceKind, ToolCall, ToolDefinition, ToolResult,
 };
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
     CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
     GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,

@@ -35,7 +35,7 @@ pub(crate) async fn handle_question_finished_report(
     // The captured scope cannot be inferred from report preparation, which may be absent on failure.
     // 不能从报告准备信息推断捕获范围，因为失败时准备信息可能为空。
     let TerminalSettlementScope::QuestionExecution { execution_id, .. } = &scope else {
-        eprintln!("[webui-service] auxiliary finish rejected a business scope");
+        tracing::warn!("[webui-service] auxiliary finish rejected a business scope");
         return false;
     };
     // Use the actual report session for every state and persistence operation.
@@ -83,7 +83,7 @@ pub(crate) async fn handle_question_finished_report(
     // Retire only an auxiliary turn's browser grant; an in-turn answer retains its business owner's grant.
     // 只退休辅助回合的浏览器授权；回合内回答保留业务所有者授权。
     if let Err(error) = retire_auxiliary_browser_connection(state, session_id, execution_id).await {
-        eprintln!(
+        tracing::warn!(
             "[webui-service] auxiliary browser retirement failed: session={session_id} error={error}"
         );
     }
@@ -99,12 +99,12 @@ pub(crate) async fn handle_question_finished_report(
     match phase {
         Ok(phase) => {
             if let Err(error) = apply_session_phase(app, state, session_id, phase) {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] auxiliary phase restoration failed: session={session_id} error={error}"
                 );
             }
         }
-        Err(error) => eprintln!(
+        Err(error) => tracing::warn!(
             "[webui-service] auxiliary run control unavailable: session={session_id} error={error}"
         ),
     }
@@ -124,7 +124,7 @@ pub(crate) async fn handle_question_finished_report(
         return false;
     }
     if let Err(error) = emit_session_addons_changed_delta(app, state, session_id) {
-        eprintln!(
+        tracing::warn!(
             "[webui-service] auxiliary usage projection failed: session={session_id} error={error}"
         );
     }

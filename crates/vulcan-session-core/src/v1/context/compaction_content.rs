@@ -70,8 +70,8 @@ impl RemoteResponsesCheckpoint {
                 return Err(invalid_checkpoint(field));
             }
         }
-        // This persisted identity matches vulcan-ai-protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID.
-        // 此持久身份与 vulcan-ai-protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID 一致。
+        // This persisted identity matches vulcan-llm-core::OPENAI_CODEX_RESPONSES_PROFILE_ID.
+        // 此持久身份与 vulcan-llm-core::OPENAI_CODEX_RESPONSES_PROFILE_ID 一致。
         if self.protocol_profile_id != "openai-codex-responses.v1" {
             return Err(invalid_checkpoint("protocol_profile_id"));
         }

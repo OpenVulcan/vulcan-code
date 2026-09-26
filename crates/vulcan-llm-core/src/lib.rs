@@ -3,10 +3,8 @@
 
 use std::collections::BTreeMap;
 
-// Keep the audited wire implementation private to the Responses-first core while the old
-// workspace package is removed from all runtime dependency graphs.
-// 将已审计的 Wire 实现私有收口到 Responses 核心，避免旧 workspace 包继续出现在运行时依赖图中。
-#[path = "../../vulcan-ai-protocols/src/lib.rs"]
+// Own the wire implementation inside this crate; public re-exports keep the existing API.
+// 在线路核心 crate 内持有协议实现，通过公开再导出保持现有 API。
 mod protocol_implementation;
 
 pub use protocol_implementation::shared;

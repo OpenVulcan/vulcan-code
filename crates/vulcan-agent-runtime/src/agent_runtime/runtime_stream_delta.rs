@@ -979,7 +979,7 @@ mod tests {
                 ConversationSnapshot::default(),
             )
             .expect("valid core conversation snapshot"),
-            String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         )
     }
 
@@ -1056,7 +1056,7 @@ mod tests {
                 provider_family,
                 snapshot,
                 ..
-            } if provider_family == vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID
+            } if provider_family == vulcan_llm_core::OPENAI_CHAT_PROFILE_ID
                 && snapshot.provider_id == "mock-provider"
         )));
     }

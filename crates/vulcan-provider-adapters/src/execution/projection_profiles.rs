@@ -7,8 +7,8 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{AiExecutionRequest, ModelParameterValue, PromptCachePolicy};
-use vulcan_ai_protocols::ProtocolConversionError;
 use vulcan_llm_core::EncodedWireRequest;
+use vulcan_llm_core::ProtocolConversionError;
 
 /// Applies the ordered closed request-projection profile chain to one encoded wire request.
 /// 把有序封闭请求投影 Profile 链应用到一个编码 Wire 请求。

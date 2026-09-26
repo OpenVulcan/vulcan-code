@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { DiffPanelSnapshot } from "@/diff/types";
@@ -237,7 +238,9 @@ export function ConversationDetailModal(props: {
             <div className="detail-title-copy">
               <span>{detailType}</span>
               <DialogTitle>{props.detail.title}</DialogTitle>
-              {detailSubtitle ? <p>{detailSubtitle}</p> : null}
+              <DialogDescription className={detailSubtitle ? undefined : "sr-only"}>
+                {detailSubtitle || detailType}
+              </DialogDescription>
             </div>
           </div>
           <div className="detail-modal-actions">

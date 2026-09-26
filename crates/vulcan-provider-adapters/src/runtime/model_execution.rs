@@ -55,7 +55,7 @@ fn validate_responses_compact_execution_route(
     execution: &ResolvedPublicAiExecution,
 ) -> Result<(), ProviderExecutionFailure> {
     if execution.route.protocol_route.protocol_profile_id
-        != vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+        != vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
     {
         return Err(crate::execution::pre_dispatch_failure(
             "Remote Responses compaction requires the Codex Responses protocol.",

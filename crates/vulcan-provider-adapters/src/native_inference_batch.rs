@@ -2179,13 +2179,13 @@ mod tests {
         let route = crate::execution::test_support::bundled_manifest_route(
             "alibaba",
             "model-studio-singapore",
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
         );
         let binding = test_binding(InferenceBatchTransport::JsonlFile, 10, 1_048_576, None);
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
         let client = ProviderExecutionClient::new(
             http.clone(),
-            std::sync::Arc::new(vulcan_ai_protocols::ProtocolRegistry::first_batch().unwrap()),
+            std::sync::Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().unwrap()),
         );
         for multipart in [true, false] {
             // Bind an ephemeral loopback endpoint and retain its exact address for this request only.

@@ -29,17 +29,19 @@ impl NativeVmmClient {
                 permit,
             )
             .await?;
-        eprintln!(
+        tracing::info!(
             "[native-vmm][postaction] stage=session_admitted session={} operation={}",
-            request.session_id, request.operation_id,
+            request.session_id,
+            request.operation_id,
         );
         // A paused session reports its state without queueing or recording another turn.
         // 暂停会话只报告状态，不入队或记录新回合。
         let session_status = self.memory_session_status(&subject, &access.write_scope, &session)?;
         if !session_status.allows_runtime_memory() {
-            eprintln!(
+            tracing::info!(
                 "[native-vmm][postaction] stage=session_paused session={} status={:?}",
-                request.session_id, session_status,
+                request.session_id,
+                session_status,
             );
             return Ok(native_post_action_response(session_status));
         }
@@ -139,9 +141,11 @@ impl NativeVmmClient {
             })
             .await
             .map_err(|error| VmmClientError::new("native_analysis_queue", error))?;
-        eprintln!(
+        tracing::info!(
             "[native-vmm][postaction] stage=durable_queue session={} operation={} state={}",
-            request.session_id, caller_operation, queued.state,
+            request.session_id,
+            caller_operation,
+            queued.state,
         );
         if pending_analysis_job_is_accepted(&queued) {
             if queued.state == VMM_PENDING_ANALYSIS_READY {
@@ -200,7 +204,7 @@ impl NativeVmmClient {
         let vulcan_memorymesh_core::CommandResult::PostActionAccepted(result) = result else {
             return Err(unexpected_result("PostActionAccepted"));
         };
-        eprintln!(
+        tracing::info!(
             "[native-vmm][postaction] stage=core_intake session={} operation={} turn_created={}",
             request.session_id,
             caller_operation,

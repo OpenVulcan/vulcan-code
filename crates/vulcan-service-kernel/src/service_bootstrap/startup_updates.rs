@@ -136,7 +136,7 @@ pub(crate) fn update_service_failure(
             normalized_workspace_path_text_from_path(&workspace_root())
         ),
     ];
-    eprintln!("{}", logs[0]);
+    tracing::error!("{}", logs[0]);
     let failure = error.service_status_failure();
     let mut startup = startup_snapshot_with_phase(
         "failed",

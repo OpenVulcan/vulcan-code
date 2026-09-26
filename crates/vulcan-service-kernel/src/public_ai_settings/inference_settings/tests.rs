@@ -41,7 +41,7 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
         capabilities: capabilities.clone(),
         capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
         protocol_variants: BTreeMap::from([(
-            String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+            String::from(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID),
             vulcan_provider_adapters::ProtocolModelVariant {
                 capabilities,
                 capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
@@ -50,7 +50,7 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
             },
         )]),
         resolved_protocol_binding: Some(vulcan_provider_adapters::ModelProtocolBinding {
-            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+            protocol_profile_id: String::from(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID),
             source: vulcan_provider_adapters::ModelProtocolBindingSource::SystemManifest,
             manifest_revision: 2,
             rule_id: String::from("responses-bound-model-rule"),
@@ -72,7 +72,7 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
         capabilities: media_capabilities.clone(),
         capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
         protocol_variants: BTreeMap::from([(
-            String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+            String::from(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID),
             vulcan_provider_adapters::ProtocolModelVariant {
                 capabilities: media_capabilities,
                 capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),
@@ -81,7 +81,7 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
             },
         )]),
         resolved_protocol_binding: Some(vulcan_provider_adapters::ModelProtocolBinding {
-            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+            protocol_profile_id: String::from(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID),
             source: vulcan_provider_adapters::ModelProtocolBindingSource::SystemManifest,
             manifest_revision: 2,
             rule_id: String::from("responses-media-model-rule"),
@@ -149,7 +149,7 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
     assert_eq!(
         candidate.route.binding,
         InferenceRouteBinding::Protocol {
-            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,),
+            protocol_profile_id: String::from(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,),
         }
     );
     assert!(
@@ -193,15 +193,11 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
     let route_record = &route_records[0];
     assert_eq!(
         route_record.protocol_id,
-        Some(String::from(
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
-        ))
+        Some(String::from(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID))
     );
     assert_eq!(
         route_record.available_protocols,
-        vec![String::from(
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
-        )]
+        vec![String::from(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID)]
     );
     assert_eq!(
         route_record.binding_source.as_deref(),

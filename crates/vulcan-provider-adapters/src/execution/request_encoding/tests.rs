@@ -6,7 +6,7 @@ use super::super::test_support::{
 };
 use super::*;
 use std::sync::Arc;
-use vulcan_ai_protocols::ProtocolRegistry;
+use vulcan_llm_core::ProtocolRegistry;
 
 /// Verifies every schema-capable protocol retains one exact structured-output schema.
 /// 验证每个支持 Schema 的协议都会保留同一份精确结构化输出 Schema。

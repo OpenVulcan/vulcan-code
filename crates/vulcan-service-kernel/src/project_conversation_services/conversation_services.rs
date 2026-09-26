@@ -148,7 +148,7 @@ pub(crate) async fn service_archive_conversation(
     let plugin_cleanup_failures =
         drain_vulcan_plugin_sessions_for_owners(&state, &[session_id]).await;
     if !plugin_cleanup_failures.is_empty() {
-        eprintln!(
+        tracing::warn!(
             "[vulcan-plugin] archived conversation cleanup warnings: {}",
             plugin_cleanup_failures.join("; ")
         );

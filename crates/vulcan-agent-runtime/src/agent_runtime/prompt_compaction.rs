@@ -40,7 +40,6 @@ use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionRequest, AiMessage, AiOperation, ContentItem, MessageRole,
     NativeToolKind, ReasoningOutputPolicy, ToolDefinition,
 };
-use vulcan_ai_protocols::normalize_openai_usage;
 use vulcan_context::{ContextCompactionPolicy, SessionConversationState};
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
@@ -48,6 +47,7 @@ use vulcan_context_compaction::{
     build_compaction_request_prompt_for_mode, extract_compaction_model_summary,
 };
 use vulcan_core::types::ProviderUsageSnapshot;
+use vulcan_llm_core::normalize_openai_usage;
 use vulcan_prompt_composer::PromptOutputStyleSnapshot;
 use vulcan_session_core::{CapabilityPolicySnapshot, ExecutionRuntimePolicy, ToolExposureSnapshot};
 use vulcan_workbench_model::SessionProviderToolTargetSelection;
@@ -321,7 +321,7 @@ pub fn resolve_prompt_compaction_model_target(
     // remoteCompactionEnabled avoids credential resolution when the selected route opted out.
     // remoteCompactionEnabled 在所选路由未启用时避免解析凭据。
     let remote_compaction_enabled = selection.route.protocol_route.protocol_profile_id
-        == vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+        == vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
         && selection.route.protocol_route.remote_compaction_enabled();
     // providerRouteLeaseIdentity persists only the non-secret identity needed for restart validation.
     // providerRouteLeaseIdentity 仅持久化重启校验所需的非秘密身份。

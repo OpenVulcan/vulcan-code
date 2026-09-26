@@ -37,13 +37,13 @@ use vulcan_ai_contract::{
     ResponsesExecutionRequest, ResponsesExecutionResult, StructuredOutputCapability,
     StructuredOutputPolicy, ToolCall, ToolChoicePolicy, UsageValue,
 };
-use vulcan_ai_protocols::{
+use vulcan_hooks::{HookContext, HookScope};
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
     CLAUDE_CODE_MESSAGES_PROFILE_ID, COHERE_CHAT_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
     GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
     OPENAI_CODEX_RESPONSES_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
-use vulcan_hooks::{HookContext, HookScope};
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
 use vulcan_provider_adapters::{
     EmbeddingBatchArtifactKind, EmbeddingBatchArtifactSink, InferenceRouteConfiguration,
@@ -1622,7 +1622,7 @@ impl ConfiguredInferenceService {
     /// 完整替换策略后本方法不返回值。
     pub fn update_retry_configuration(&self, configuration: &PersistedProviderRetryConfiguration) {
         let mut policy = self.provider_retry_policy.write().unwrap_or_else(|poisoned| {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] recovering poisoned configured-inference retry policy during full replacement"
             );
             poisoned.into_inner()
@@ -2005,13 +2005,13 @@ impl ConfiguredInferenceService {
                         if let Err(error) =
                             persist_native_provider_usage_attempt(&storage, &event).await
                         {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] native configured-inference usage persistence failed: {error}"
                             );
                         }
                     });
                 }
-                Err(error) => eprintln!(
+                Err(error) => tracing::warn!(
                     "[webui-service] native configured-inference usage event rejected: {error}"
                 ),
             }
@@ -2252,7 +2252,7 @@ impl ConfiguredInferenceService {
                 .provider_retry_policy
                 .read()
                 .unwrap_or_else(|poisoned| {
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] recovering poisoned configured-inference retry policy for read"
                     );
                     poisoned.into_inner()
@@ -2322,7 +2322,7 @@ impl ConfiguredInferenceService {
             .provider_retry_policy
             .read()
             .unwrap_or_else(|poisoned| {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] recovering poisoned configured-inference retry policy for read"
                 );
                 poisoned.into_inner()
@@ -3883,19 +3883,23 @@ impl ConfiguredInferenceService {
             })
             .await;
             match persisted {
-                Ok(Ok(path)) => eprintln!(
+                Ok(Ok(path)) => tracing::info!(
                     "[configured-inference-provider-request-trace] execution={} attempt={} path={}",
                     execution_id,
                     attempt_index,
                     path.display()
                 ),
-                Ok(Err(error)) => eprintln!(
+                Ok(Err(error)) => tracing::warn!(
                     "[configured-inference-provider-request-trace] execution={} attempt={} persist_failed={}",
-                    execution_id, attempt_index, error
+                    execution_id,
+                    attempt_index,
+                    error
                 ),
-                Err(error) => eprintln!(
+                Err(error) => tracing::warn!(
                     "[configured-inference-provider-request-trace] execution={} attempt={} writer_failed={}",
-                    execution_id, attempt_index, error
+                    execution_id,
+                    attempt_index,
+                    error
                 ),
             }
         });
@@ -3953,18 +3957,20 @@ impl ConfiguredInferenceService {
             })
             .await;
             match persisted {
-                Ok(Ok(path)) => eprintln!(
+                Ok(Ok(path)) => tracing::info!(
                     "[vce-embedding-provider-request-trace] sequence={} path={}",
                     sequence,
                     path.display()
                 ),
-                Ok(Err(error)) => eprintln!(
+                Ok(Err(error)) => tracing::warn!(
                     "[vce-embedding-provider-request-trace] sequence={} persist_failed={}",
-                    sequence, error
+                    sequence,
+                    error
                 ),
-                Err(error) => eprintln!(
+                Err(error) => tracing::warn!(
                     "[vce-embedding-provider-request-trace] sequence={} writer_failed={}",
-                    sequence, error
+                    sequence,
+                    error
                 ),
             }
         });
@@ -7003,7 +7009,7 @@ fn dispatch_internal_inference_hook(
             )
             .await
         {
-            eprintln!("[inference-service] internal inference telemetry failed: {error}");
+            tracing::warn!("[inference-service] internal inference telemetry failed: {error}");
         }
     });
 }
@@ -8837,24 +8843,18 @@ mod tests {
             policy
         );
         assert_eq!(
+            structured_output_policy_for_protocol(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID, &policy),
+            StructuredOutputPolicy::JsonObject
+        );
+        assert_eq!(
             structured_output_policy_for_protocol(
-                vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+                vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
                 &policy
             ),
             StructuredOutputPolicy::JsonObject
         );
         assert_eq!(
-            structured_output_policy_for_protocol(
-                vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
-                &policy
-            ),
-            StructuredOutputPolicy::JsonObject
-        );
-        assert_eq!(
-            structured_output_policy_for_protocol(
-                vulcan_ai_protocols::COHERE_CHAT_PROFILE_ID,
-                &policy
-            ),
+            structured_output_policy_for_protocol(vulcan_llm_core::COHERE_CHAT_PROFILE_ID, &policy),
             StructuredOutputPolicy::JsonObject
         );
         assert_eq!(

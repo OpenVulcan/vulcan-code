@@ -98,7 +98,7 @@ fn vmm_llm_route_enforces_structured_output_before_save() {
         connection_id: String::from("connection"),
         model_id: String::from("model"),
         binding: InferenceRouteBinding::Protocol {
-            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            protocol_profile_id: String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         },
         operation: AiOperation::ConversationRespond,
         usage_scope: vulcan_ai_contract::InferenceUsageScope::InternalBackground,
@@ -118,7 +118,7 @@ fn vmm_llm_route_enforces_structured_output_before_save() {
     );
 
     route.binding = InferenceRouteBinding::Protocol {
-        protocol_profile_id: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+        protocol_profile_id: String::from(vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID),
     };
     assert!(
         validate_vmm_llm_structured_output_policy(

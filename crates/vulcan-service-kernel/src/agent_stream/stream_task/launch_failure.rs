@@ -243,7 +243,7 @@ fn finalize_owned_stream_task_launch_failure(
             ) {
                 Ok(event) => Some(event),
                 Err(error) => {
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] execution stream launch failure phase projection failed: session={session_id} generation={expected_kernel_generation} error={error}"
                     );
                     None

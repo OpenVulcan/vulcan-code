@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-use vulcan_ai_protocols::ProtocolRegistry;
+use vulcan_llm_core::ProtocolRegistry;
 
 /// Returns one synthetic OAuth secret so both attempts represent the same frozen account.
 /// 返回一份合成 OAuth 秘密，使两次尝试代表同一冻结账号。

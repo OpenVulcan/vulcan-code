@@ -26,7 +26,7 @@ pub(crate) fn emit_lifetime_usage_changed(
         .lifetime_usage_root_id()
         .and_then(|root| emit_session_addons_changed_delta(app, state, root).map(|_| ()));
     if let Err(error) = result {
-        eprintln!("[session-usage] publish: {error}");
+        tracing::warn!("[session-usage] publish: {error}");
     }
 }
 /// Persists one Plan-mode choice through the failure-atomic V1 domain transition.

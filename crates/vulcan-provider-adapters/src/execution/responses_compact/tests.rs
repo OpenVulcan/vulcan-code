@@ -17,7 +17,7 @@ async fn verify_compact_attempt_boundary(status: u16) {
     use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
-    use vulcan_ai_protocols::ProtocolRegistry;
+    use vulcan_llm_core::ProtocolRegistry;
 
     // listener is the only reachable transport endpoint in this test.
     // listener 是本测试唯一可达的传输端点。

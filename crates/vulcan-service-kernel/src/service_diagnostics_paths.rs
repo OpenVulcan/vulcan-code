@@ -79,7 +79,7 @@ pub(crate) fn retain_slow_submission_diagnostic(
     let message = format!(
         "client_submission_id={client_submission_id} target={target} stage={stage} elapsed_ms={elapsed_ms}"
     );
-    eprintln!("[webui-service][submit-slow] {message}");
+    tracing::warn!("[webui-service][submit-slow] {message}");
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;

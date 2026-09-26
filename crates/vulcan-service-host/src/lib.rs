@@ -1527,7 +1527,7 @@ async fn pump_webui_service_events<Sink, Inbound>(
                         // closing it forces the browser to reconnect and request authoritative baselines.
                         // 丢失事件的套接字无法保持终端或工作台有序状态；关闭它会强制浏览器重连并请求权威基线。
                         eprintln!(
-                            "[service-host] browser event socket lagged by {skipped} events; reconnecting"
+                            "[service-host] browser event socket client={client_id} lagged by {skipped} events; reconnecting"
                         );
                         break;
                     }
@@ -1540,7 +1540,7 @@ async fn pump_webui_service_events<Sink, Inbound>(
                     // Same recovery as a lagged bus: the browser rebuilds from authoritative baselines.
                     // 与总线落后相同的恢复方式：浏览器从权威基线重建。
                     eprintln!(
-                        "[service-host] browser event socket outbox full with {} events and {} bytes; reconnecting",
+                        "[service-host] browser event socket client={client_id} outbox full with {} events and {} bytes; reconnecting",
                         full.events, full.bytes
                     );
                     break;
@@ -2292,6 +2292,74 @@ mod tests {
                 (String::from("pluginUiInvalidated"), None, 9),
                 (delta, Some(4), 5),
             ]
+        );
+    }
+
+    /// A blocked browser overflowing its private outbox cannot terminate another browser's stream.
+    /// 阻塞浏览器的私有队列溢出不能终止另一个浏览器的推送。
+    #[tokio::test]
+    async fn overflowing_browser_does_not_interrupt_another_browser() {
+        // Both sockets observe the same bus, as desktop and web do even on different sessions.
+        // 两条连接观察同一总线，对应桌面端与网页端即使选中不同会话的行为。
+        let (bus, slow_receiver) = broadcast::channel(WEBUI_SERVICE_EVENT_BUS_CAPACITY);
+        let fast_receiver = bus.subscribe();
+        // The slow socket never completes its first send; dropping its pump must release its receiver.
+        // 慢连接永远无法完成首次发送；丢弃发送泵必须释放其订阅。
+        let slow_sink = futures_util::sink::unfold((), |(), _: AxumWsMessage| {
+            futures_util::future::pending::<Result<(), axum::Error>>()
+        });
+        let slow = tokio::spawn(pump_webui_service_events(
+            Box::pin(slow_sink),
+            futures_util::stream::pending(),
+            slow_receiver,
+            Uuid::new_v4(),
+        ));
+        // The healthy socket records every revision without artificial backpressure.
+        // 健康连接记录每个修订，不施加人为背压。
+        let delivered = Arc::new(Mutex::new(Vec::<u64>::new()));
+        let fast_sink =
+            futures_util::sink::unfold(delivered.clone(), |delivered, message| async move {
+                let AxumWsMessage::Text(text) = message else {
+                    panic!("expected event text");
+                };
+                let event: serde_json::Value =
+                    serde_json::from_str(text.as_str()).expect("event json");
+                delivered
+                    .lock()
+                    .expect("delivery log")
+                    .push(event["payload"]["revision"].as_u64().expect("revision"));
+                Ok::<_, axum::Error>(delivered)
+            });
+        let fast = tokio::spawn(pump_webui_service_events(
+            Box::pin(fast_sink),
+            futures_util::stream::pending(),
+            fast_receiver,
+            Uuid::new_v4(),
+        ));
+        // One in-flight send plus a full queue plus one overflow deterministically closes only the slow pump.
+        // 一条在途发送、一个满队列及一条溢出事件确定性地仅关闭慢发送泵。
+        let event_count = WEBUI_SERVICE_EVENT_BUS_CAPACITY as u64 + 2;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            for revision in 1..=event_count {
+                bus.send(unmergeable_event(revision))
+                    .expect("active browsers");
+                wait_until_bus_drained(&bus).await;
+            }
+            slow.await.expect("overflow releases slow browser");
+            assert_eq!(bus.receiver_count(), 1);
+            bus.send(unmergeable_event(event_count + 1))
+                .expect("healthy browser survives");
+            while delivered.lock().expect("delivery log").len() < (event_count + 1) as usize {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("overflow and independent delivery complete within deadline");
+        drop(bus);
+        fast.await.expect("healthy pump exits on bus close");
+        assert_eq!(
+            *delivered.lock().expect("delivery log"),
+            (1..=event_count + 1).collect::<Vec<_>>()
         );
     }
 

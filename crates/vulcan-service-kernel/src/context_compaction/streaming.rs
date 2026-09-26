@@ -151,7 +151,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                     trigger,
                     &progress,
                 ) {
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] context compaction progress projection failed: {error}"
                     );
                 }
@@ -197,7 +197,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
         if let Err(error) =
             crate::session_plan_runtime::emit_session_addons_changed_delta(app, state, session_id)
         {
-            eprintln!("[session-usage] cancellation projection: {error}");
+            tracing::warn!("[session-usage] cancellation projection: {error}");
         }
     }
     if let Some(error) = projection_error {
@@ -394,7 +394,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
                 // snapshot 包含成功检查点或被拒绝尝试记录。
                 let snapshot = outcome.into_workspace_snapshot();
                 if let Some(error) = rejection_error.as_ref() {
-                    eprintln!("[webui-service] context compaction rejected: {error}");
+                    tracing::warn!("[webui-service] context compaction rejected: {error}");
                 }
                 if let Err(error) = persist_context_compaction_snapshot(
                     task_state,
@@ -410,11 +410,13 @@ pub(crate) fn spawn_webui_context_compaction_task(
                 )
                 .await
                 {
-                    eprintln!("[webui-service] context compaction persistence failed: {error}");
+                    tracing::warn!(
+                        "[webui-service] context compaction persistence failed: {error}"
+                    );
                 }
             }
             Err(error) => {
-                eprintln!("[webui-service] context compaction finish failed: {error}");
+                tracing::warn!("[webui-service] context compaction finish failed: {error}");
             }
         }
     };
@@ -426,7 +428,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
         ActiveStreamTaskRegistrationMode::RejectIfOccupied,
         task_future,
     ) {
-        eprintln!("[webui-service] register context compaction stream task failed: {error}");
+        tracing::warn!("[webui-service] register context compaction stream task failed: {error}");
         // registration_error_text is committed into the durable failed compaction boundary.
         // registration_error_text 被提交到可持久化的压缩失败边界。
         let registration_error_text = error.to_string();
@@ -493,7 +495,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
                 "context_compaction_registration_failure_handled",
                 format!("session={session_id} outcome={outcome:?}"),
             ),
-            Err(cleanup_error) => eprintln!(
+            Err(cleanup_error) => tracing::warn!(
                 "[webui-service] context compaction registration failure projection failed: {cleanup_error}"
             ),
         }

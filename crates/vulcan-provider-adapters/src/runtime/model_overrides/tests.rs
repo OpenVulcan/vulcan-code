@@ -7,7 +7,7 @@ use crate::{
     MINIMAX_REASONING_SPLIT_PARAMETER_ID, ModelExecutionOverrides,
     parse_minimax_openai_model_catalog,
 };
-use vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID;
+use vulcan_llm_core::OPENAI_CHAT_PROFILE_ID;
 
 /// Verifies an undeclared provider limit may be supplied explicitly by the user.
 /// 验证供应商未声明上限时允许用户显式提供覆盖值。

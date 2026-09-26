@@ -227,7 +227,7 @@ fn custom_gemini_system_baseline_preserves_protocol_reasoning_evidence() {
     // baseline consumes the exact variant protocol and no connection-level compatibility field.
     // baseline 消费精确变体协议，不读取任何连接级兼容字段。
     let baseline = custom_provider_system_baseline_for_protocol(Some(
-        vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+        vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
     ));
 
     assert_eq!(baseline.reasoning, CapabilitySupport::Unknown);

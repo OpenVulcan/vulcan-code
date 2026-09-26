@@ -1,0 +1,31 @@
+# 服务诊断日志
+
+## 归属与生命周期
+
+Core 在取得数据根的服务实例锁后、启动服务线程前安装唯一 `tracing` 接收器。重复启动而未取得锁的进程不会打开或轮转日志。
+
+日志位于**当前运行配置的权威数据根**下的 `logs/service.jsonl`。托盘的“打开日志”打开此目录。Debug、Release 和测试根仍遵循既有数据根规则，不在日志模块猜测用户目录。
+
+每条记录是独立 JSON，包含时间、级别、模块目标和消息；调用方显式提供的字段也会保留。同步写入不依赖退出时排空异步队列，适用于既有 `process::exit` 路径；这不等于每条记录都执行磁盘 `fsync`，不承诺断电持久性。
+
+## 留存与失败
+
+单段上限为 8 MiB，保留活动段和 4 个归档段，日志总量上限约 40 MiB。上限的唯一源码定义位于 `apps/vulcan-code-service/src/logging.rs`。单条超大记录替换成明确的省略说明，避免破坏 JSON 或无限扩张。
+
+安装接收器、打开目录或解析过滤器失败时，服务启动明确失败。运行期写入或轮转失败交给接收器的写入错误报告，不递归向同一日志写入。日志文件应视为诊断资料，可能含路径、会话标识与原始错误，不应直接公开上传。
+
+接收器同时保留 stderr 输出。正式桌面壳即使丢弃 stderr，也有文件诊断。初始化前的命令行错误和实例锁竞争仍使用 stderr；`--describe` 保持原有 stdout JSON 协议，且不会为描述查询创建日志目录。
+
+## 级别与调试
+
+`vulcan_code_service`、`vulcan_service_kernel`、`vulcan_agent_runtime` 和 `vulcan_service_runtime` 默认记录 `info` 以上，其他目标默认 `warn` 以上；`RUST_LOG` 可显式指定过滤器。非法过滤器会拒绝启动，不静默替换配置。原有请求跟踪等显式诊断开关保持有效，安装接收器本身不会开启请求正文转储。
+
+服务内核的生产代码禁止 `println!` / `eprintln!`（Clippy 门禁），使用 `tracing`；测试可输出测量结果。常规阶段信息使用 `info`，失败与异常使用 `warn` / `error`。其他 crate 的独立命令行与测试输出不属于此禁令。
+
+## 验证
+
+```powershell
+cargo test --locked -p vulcan-code-service logging::tests -- --test-threads=1
+```
+
+覆盖轮转与重新打开、JSON 完整性、超大记录，以及真实子进程丢弃 stderr 后仍保留启动错误和 panic、直接退出后日志仍可读。测试仅使用临时目录，不启动用户服务。

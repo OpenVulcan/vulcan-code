@@ -703,7 +703,7 @@ impl KnowledgeOperationReporter {
             .update_operation_observability(&self.job_id, &snapshot)
             .await
         {
-            eprintln!("[knowledge-base] update operation observability failed: {error}");
+            tracing::warn!("[knowledge-base] update operation observability failed: {error}");
         }
     }
 }
@@ -1426,7 +1426,7 @@ async fn execute_knowledge_display_attempt(
     if let Err(error) = observation {
         // Preview delivery is observational; wait_response owns validated output and execution failure.
         // 预览投递仅用于观测；wait_response 唯一负责已校验输出及执行失败。
-        eprintln!("[knowledge-base] preview interrupted for {label}: {error}");
+        tracing::warn!("[knowledge-base] preview interrupted for {label}: {error}");
     }
     match response {
         Ok(response) => {
@@ -1663,7 +1663,7 @@ pub(super) async fn service_build_knowledge_display_index(
                     .finish_external_operation(&job_id, processed)
                     .await
                 {
-                    eprintln!("[knowledge-base] finish display worker failed: {error}");
+                    tracing::warn!("[knowledge-base] finish display worker failed: {error}");
                 }
             }
             Err(error) => {
@@ -1687,7 +1687,7 @@ pub(super) async fn service_build_knowledge_display_index(
                         .fail_external_operation(&job_id, &error)
                         .await;
                 }
-                eprintln!("[knowledge-base] display worker failed: {error}");
+                tracing::warn!("[knowledge-base] display worker failed: {error}");
             }
         }
     });
@@ -2217,7 +2217,7 @@ pub(super) async fn service_build_knowledge_vector_index(
                     .finish_external_operation(&job_id, processed)
                     .await
                 {
-                    eprintln!("[knowledge-base] finish vector worker failed: {error}");
+                    tracing::warn!("[knowledge-base] finish vector worker failed: {error}");
                 }
             }
             Err(error) => {
@@ -2241,7 +2241,7 @@ pub(super) async fn service_build_knowledge_vector_index(
                         .fail_external_operation(&job_id, &error)
                         .await;
                 }
-                eprintln!("[knowledge-base] vector worker failed: {error}");
+                tracing::warn!("[knowledge-base] vector worker failed: {error}");
             }
         }
     });

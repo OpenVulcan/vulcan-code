@@ -590,6 +590,9 @@ export function WorkbenchApp(props: {
         const [nextStartup, nextWorkbench] = await Promise.all([
           loadStartupSnapshot(),
           loadWorkbenchSnapshot(),
+          // Transcript recovery belongs to the same retry boundary as the workbench baseline.
+          // 会话正文恢复与工作台基线使用同一重试边界。
+          conversationEventWindowRegistry.observeConnectionStatus("connected"),
         ]);
         if (cancelled || epoch !== reconnectEpoch) {
           return;
@@ -629,16 +632,12 @@ export function WorkbenchApp(props: {
       if (!detail) {
         return;
       }
-      // The V1 registry never infers service replacement from WorkbenchApp's local epoch.
-      // V1 registry 绝不从 WorkbenchApp 本地 epoch 推断服务是否替换。
-      void conversationEventWindowRegistry
-        .observeConnectionStatus(detail.status)
-        .catch((recoveryError) => {
-          console.error("Failed to recover the selected V1 conversation event window.", recoveryError);
-        });
       if (detail.status === "connected") {
         serviceHasConnectedRef.current = true;
         if (!serviceWasDisconnectedRef.current) {
+          // Initial readiness establishes the registry baseline without requesting recovery.
+          // 首次就绪仅建立 registry 基线，不请求恢复。
+          void conversationEventWindowRegistry.observeConnectionStatus(detail.status);
           return;
         }
         serviceWasDisconnectedRef.current = false;
@@ -654,6 +653,9 @@ export function WorkbenchApp(props: {
         void reloadSnapshotsAfterReconnect(epoch, snapshotSequence, 0);
         return;
       }
+      // Record the interruption before the next physical socket opens; local epochs are not service identities.
+      // 在下一条物理连接打开前记录中断；本地 epoch 不是服务实例标识。
+      void conversationEventWindowRegistry.observeConnectionStatus(detail.status);
       if (!serviceHasConnectedRef.current) {
         return;
       }

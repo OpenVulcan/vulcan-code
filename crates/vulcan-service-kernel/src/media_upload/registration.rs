@@ -108,7 +108,7 @@ impl Drop for PendingMediaUploadRegistration {
         // 删除具有相同文本ID的条目之前，在唯一待处理锁内比较实际令牌所有权。
         let Ok(mut pending) = pending_media_uploads().lock() else {
             self.cancellation.cancel();
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] media upload registration `{}` cleanup could not acquire its owner",
                 self.transfer_id
             );

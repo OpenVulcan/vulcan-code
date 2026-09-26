@@ -218,7 +218,7 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
     );
     // Record the effective precheck decision; the UI-ready flag alone does not prove dispatch.
     // 记录最终 PreCheck 决策；界面显示就绪本身不能证明已经派发。
-    eprintln!(
+    tracing::info!(
         "[webui-service][vmm-precheck] stage=plan session={} precheck_ready={} diagnostic={:?} hooks={} skip={}",
         session_id,
         vmm_precheck_ready,
@@ -696,21 +696,21 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         ),
     );
     if let Some(detail) = continuation.precheck_failure_detail.as_deref() {
-        eprintln!("[webui-service] precheck hook failed but request will continue: {detail}");
+        tracing::warn!("[webui-service] precheck hook failed but request will continue: {detail}");
         if let Err(error) = push_webui_service_diagnostic(
             state,
             format!("warning · Precheck hook 执行失败：{detail}"),
         ) {
-            eprintln!("[webui-service] record precheck warning failed: {error}");
+            tracing::warn!("[webui-service] record precheck warning failed: {error}");
         }
     }
     if let Some(detail) = continuation.profile_failure_detail.as_deref() {
-        eprintln!("[webui-service] profile hook failed but request will continue: {detail}");
+        tracing::warn!("[webui-service] profile hook failed but request will continue: {detail}");
         if let Err(error) = push_webui_service_diagnostic(
             state,
             format!("warning · 画像准备 Hook 执行失败：{detail}"),
         ) {
-            eprintln!("[webui-service] record profile warning failed: {error}");
+            tracing::warn!("[webui-service] record profile warning failed: {error}");
         }
     }
     let mut request = continuation.request;
@@ -1051,23 +1051,27 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
         // Keep handler failures visible even when the dispatch policy allows the model turn to continue.
         // 即使派发策略允许模型回合继续，也让处理器失败可见。
         match precheck_outcome.report.as_ref() {
-            Ok(report) => eprintln!(
+            Ok(report) => tracing::info!(
                 "[webui-service][vmm-precheck] stage=hook_result session={} run={} completed={:?} failures={}",
                 session_id,
                 run_precheck,
                 report.completed_hooks,
                 report.failures.len(),
             ),
-            Err(error) => eprintln!(
+            Err(error) => tracing::warn!(
                 "[webui-service][vmm-precheck] stage=hook_result session={} run={} dispatch_error={}",
-                session_id, run_precheck, error,
+                session_id,
+                run_precheck,
+                error,
             ),
         }
         if let Ok(report) = precheck_outcome.report.as_ref() {
             for failure in &report.failures {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service][vmm-precheck] stage=hook_failure session={} hook={} error={}",
-                    session_id, failure.hook_id, failure.message,
+                    session_id,
+                    failure.hook_id,
+                    failure.message,
                 );
             }
         }
@@ -1112,7 +1116,7 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 {
                     Ok(bindings) => request.supplemental_mcp_tools = bindings,
                     Err(error) => {
-                        eprintln!("[webui-service] prepare browser MCP failed: {error}");
+                        tracing::warn!("[webui-service] prepare browser MCP failed: {error}");
                         if let Err(cleanup_error) = mark_webui_prompt_preparation_failed(
                             &app,
                             &state,
@@ -1123,7 +1127,7 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                         )
                         .await
                         {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] cleanup failed browser MCP preparation failed: {cleanup_error}"
                             );
                         }
@@ -1164,7 +1168,7 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 );
             }
             Err(error) => {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] continue WebUI prompt after preparation failed: {error}"
                 );
                 if let Err(cleanup_error) = mark_webui_prompt_preparation_failed(
@@ -1177,7 +1181,7 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
                 )
                 .await
                 {
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] cleanup failed WebUI prompt preparation failed: {cleanup_error}"
                     );
                 }
@@ -1223,7 +1227,7 @@ pub(crate) fn start_webui_precheck_or_continue(
     let Some(expected_kernel_generation) =
         capture_webui_prompt_preparation_generation(state, session_id, &start.preparation_turn_id)?
     else {
-        eprintln!(
+        tracing::info!(
             "[webui-service][vmm-precheck] stage=dispatch session={} result=owner_closed",
             session_id,
         );
@@ -1233,7 +1237,7 @@ pub(crate) fn start_webui_precheck_or_continue(
         );
         return Ok(false);
     };
-    eprintln!(
+    tracing::info!(
         "[webui-service][vmm-precheck] stage=dispatch session={} source={:?} has_hooks={} skip={}",
         session_id,
         start.source,

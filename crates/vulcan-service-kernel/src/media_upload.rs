@@ -1492,7 +1492,7 @@ fn emit_media_operational_telemetry(
     event.upload_channel_id = Some(identity.upload_channel_id.clone());
     event.failure_kind = failure_kind.map(str::to_string);
     if let Err(error) = record_provider_operational_telemetry(event) {
-        eprintln!("[media-upload] structured telemetry was rejected: {error}");
+        tracing::warn!("[media-upload] structured telemetry was rejected: {error}");
     }
 }
 

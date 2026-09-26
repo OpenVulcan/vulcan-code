@@ -63,7 +63,7 @@ fn media_understanding_upload_policy_is_modality_and_threshold_exact() {
         assert_eq!(
             model_replacement_target(
                 crate::MediaDeliveryPolicy::default(),
-                vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+                vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
                 None
             )
             .plan(kind, mime, boundary)
@@ -75,7 +75,7 @@ fn media_understanding_upload_policy_is_modality_and_threshold_exact() {
         assert!(
             model_replacement_target(
                 crate::MediaDeliveryPolicy::default(),
-                vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+                vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
                 None
             )
             .plan(kind, mime, boundary + 1)
@@ -95,7 +95,7 @@ fn media_understanding_policy_honors_upload_preference_and_hard_limit() {
     assert_eq!(
         model_replacement_target(
             crate::MediaDeliveryPolicy::default(),
-            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
             Some(&upload)
         )
         .plan(ResourceKind::Video, "video/mp4", 1)
@@ -109,7 +109,7 @@ fn media_understanding_policy_honors_upload_preference_and_hard_limit() {
     assert_eq!(
         model_replacement_target(
             policy,
-            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
             Some(&upload)
         )
         .plan(ResourceKind::Video, "video/mp4", 8)
@@ -119,7 +119,7 @@ fn media_understanding_policy_honors_upload_preference_and_hard_limit() {
     assert_eq!(
         model_replacement_target(
             policy,
-            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
             Some(&upload)
         )
         .plan(ResourceKind::Video, "video/mp4", 9)
@@ -130,7 +130,7 @@ fn media_understanding_policy_honors_upload_preference_and_hard_limit() {
     assert!(
         model_replacement_target(
             policy,
-            vulcan_ai_protocols::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
             Some(&upload)
         )
         .plan(ResourceKind::Video, "video/mp4", 8)
@@ -150,7 +150,7 @@ fn media_understanding_policy_rejects_invalid_consumer_and_route_before_upload()
     assert!(
         model_replacement_target(
             crate::MediaDeliveryPolicy::default(),
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             Some(&upload)
         )
         .plan(ResourceKind::Video, "video/mp4", 1)
@@ -160,7 +160,7 @@ fn media_understanding_policy_rejects_invalid_consumer_and_route_before_upload()
     assert!(
         model_replacement_target(
             crate::MediaDeliveryPolicy::default(),
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             None
         )
         .plan(ResourceKind::Video, "video/mp4", 1)
@@ -170,7 +170,7 @@ fn media_understanding_policy_rejects_invalid_consumer_and_route_before_upload()
     assert!(
         model_replacement_target(
             crate::MediaDeliveryPolicy::default(),
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             None
         )
         .plan(ResourceKind::File, "application/pdf", 1)
@@ -181,7 +181,7 @@ fn media_understanding_policy_rejects_invalid_consumer_and_route_before_upload()
     let mut policy = crate::MediaDeliveryPolicy::default();
     policy.independent_extension.max_total_encoded_bytes = 4;
     assert!(
-        model_replacement_target(policy, vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, None)
+        model_replacement_target(policy, vulcan_llm_core::OPENAI_CHAT_PROFILE_ID, None)
             .plan(ResourceKind::Audio, "audio/wav", 4)
             .expect_err("encoded aggregate is too large")
             .contains("combined encoded files")
@@ -218,7 +218,7 @@ fn media_understanding_policy_rejects_invalid_consumer_and_route_before_upload()
         // 借用约束在每次独立调用期间保持冻结。
         let mut target = model_replacement_target(
             crate::MediaDeliveryPolicy::default(),
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             None,
         );
         target.constraint = Some(&constraint);

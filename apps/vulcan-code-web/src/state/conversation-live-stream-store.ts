@@ -106,7 +106,11 @@ export class ConversationLiveStreamStore {
       }
       this.#toolRequestProgressSnapshots.set(key, {
         ...progress,
-        preview: progress.preview ? { ...progress.preview } : progress.preview,
+        // The coordinator emits byte progress separately from semantic previews; absence means no update.
+        // 协调器分别发送字节进度和语义预览；预览缺席表示没有更新。
+        // Keep the last sanitized preview for this validated identity until replacement or draft removal.
+        // 为已校验的当前身份保留最近净化预览，直到新预览替换或草稿移除。
+        preview: progress.preview ? { ...progress.preview } : existing?.preview ?? progress.preview,
       });
       if (!existing) {
         this.#toolRequestMembership.set(conversationId, [

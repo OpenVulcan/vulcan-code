@@ -10,7 +10,7 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{AiOperation, ModelCapabilities};
-use vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID;
+use vulcan_llm_core::OPENAI_CHAT_PROFILE_ID;
 
 /// Verifies a non-empty discovery result is unioned with independent manual identities.
 /// 验证非空发现结果与独立手工模型身份取并集。

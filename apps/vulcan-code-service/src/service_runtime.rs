@@ -43,7 +43,9 @@ pub fn run_headless() -> ! {
             std::process::exit(0);
         }
         Err(error) => {
-            eprintln!("[{SERVICE_NAME}] headless startup failed: {error}");
+            crate::logging::startup_error(&format!(
+                "[{SERVICE_NAME}] headless startup failed: {error}"
+            ));
             std::process::exit(1);
         }
     };
@@ -70,7 +72,7 @@ pub fn run_headless() -> ! {
                     && let Err(error) =
                         vulcan_service_kernel::remove_owned_webui_service_discovery(&runtime.state)
                 {
-                    eprintln!("[{SERVICE_NAME}] discovery cleanup failed: {error}");
+                    tracing::error!("[{SERVICE_NAME}] discovery cleanup failed: {error}");
                 }
                 std::process::exit(match exit_reason {
                     HeadlessExitReason::TerminationSignal
@@ -82,7 +84,7 @@ pub fn run_headless() -> ! {
                 // The in-memory session may still contain an unflushed candidate. Keep its owner
                 // alive so an operator can repair storage and signal again, even after HTTP loss.
                 // 内存会话可能仍有未刷盘候选；即使 HTTP 已断，也要保留所有者以便修复存储后再次发信号。
-                eprintln!(
+                tracing::error!(
                     "[{SERVICE_NAME}] headless shutdown failed; service remains alive: {error}"
                 );
                 shutdown.store(false, Ordering::Release);
@@ -142,7 +144,7 @@ fn wait_for_headless_exit(
                         break HeadlessExitReason::ShutdownRequested;
                     }
                     if let Some(failure) = runtime.observed_http_bridge_failure() {
-                        eprintln!("[{SERVICE_NAME}] HTTP bridge failed after acknowledgement: {failure}");
+                        tracing::error!("[{SERVICE_NAME}] HTTP bridge failed after acknowledgement: {failure}");
                         break HeadlessExitReason::HttpBridgeFailure;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -401,7 +403,7 @@ fn spawn_browser_host_reaper(state: SharedServiceBridgeState) {
                     Err(_) => return,
                 };
                 if let Err(error) = manager.expire_control_leases() {
-                    eprintln!("[vulcan-code-service] browser lease cleanup failed: {error}");
+                    tracing::error!("[vulcan-code-service] browser lease cleanup failed: {error}");
                 }
                 match manager.reap_hosts() {
                     Ok(retired) => {
@@ -412,7 +414,7 @@ fn spawn_browser_host_reaper(state: SharedServiceBridgeState) {
                             if projection.status
                                 == vulcan_service_kernel::browser::BrowserSessionStatus::Crashed
                             {
-                                eprintln!(
+                                tracing::error!(
                                     "[vulcan-code-service] browser host for session {} crashed; a new generation requires an explicit reopen",
                                     projection.session_id
                                 );
@@ -420,7 +422,7 @@ fn spawn_browser_host_reaper(state: SharedServiceBridgeState) {
                         }
                     }
                     Err(error) => {
-                        eprintln!("[vulcan-code-service] browser host liveness check failed: {error}");
+                        tracing::error!("[vulcan-code-service] browser host liveness check failed: {error}");
                     }
                 }
             }
@@ -507,6 +509,9 @@ impl HeadlessService {
             // 以成功状态退出。
             return Ok(None);
         };
+        // Only the data-root owner may rotate its logs; install before any service workers start.
+        // 仅数据根所有者可以轮转日志，在任何服务线程启动前安装日志接收器。
+        crate::logging::initialize(&data_root)?;
         let (service_event_bus, _) =
             broadcast::channel(vulcan_service_host::WEBUI_SERVICE_EVENT_BUS_CAPACITY);
         let state = create_service_bridge_state(Arc::new(ServiceShellHostImpl));
@@ -533,20 +538,22 @@ impl HeadlessService {
         match browser_config {
             Ok(config) => {
                 if let Err(error) = clear_orphaned_browser_data(&data_root, &config) {
-                    eprintln!(
+                    tracing::error!(
                         "[vulcan-code-service] browser temporary-data cleanup failed: {error}"
                     );
                 }
                 match vulcan_service_kernel::browser::service_browser_manager(&state) {
                     Ok(manager) => {
                         if let Err(error) = manager.configure_host_runtime(config) {
-                            eprintln!(
+                            tracing::error!(
                                 "[vulcan-code-service] browser host configuration failed: {error}"
                             );
                         }
                     }
                     Err(error) => {
-                        eprintln!("[vulcan-code-service] browser manager access failed: {error}");
+                        tracing::error!(
+                            "[vulcan-code-service] browser manager access failed: {error}"
+                        );
                     }
                 }
             }
@@ -554,7 +561,7 @@ impl HeadlessService {
                 // A missing browser host is reported, never silently replaced by a browser-less
                 // session that would look functional but could never show a page.
                 // 缺失浏览器宿主会被如实报告，绝不被“看起来可用但永远无法显示页面”的无浏览器会话取代。
-                eprintln!("[vulcan-code-service] Core browser is unavailable: {error}");
+                tracing::error!("[vulcan-code-service] Core browser is unavailable: {error}");
             }
         }
         // The HTTP bridge must become reachable only after browser capability is resolved.

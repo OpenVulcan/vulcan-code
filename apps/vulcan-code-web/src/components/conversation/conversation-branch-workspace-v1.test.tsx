@@ -448,7 +448,16 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(host.textContent).toContain("example.ts");
       expect(host.textContent).toContain("+1");
       if (toolName !== "file") expect(host.textContent).toContain("-1");
-      await publish({ ...seed, requestRevision: 3, receivedBytes: 110, receivedCharacters: 110,
+      // Byte-only events must not erase semantic headers between independently delivered previews.
+      // 独立预览之间的纯字节进度事件不能清空语义卡头。
+      const summary = host.querySelector(".tool-presentation-summary");
+      // Preserve the exact recognized header, including its path, operation and current counts.
+      // 保留完整已识别卡头，包括路径、操作及当前行数。
+      const firstHeader = summary?.textContent;
+      await publish({ ...seed, requestRevision: 3, receivedBytes: 105, receivedCharacters: 105 });
+      expect(host.querySelector(".tool-presentation-summary")).toBe(summary);
+      expect(summary?.textContent).toBe(firstHeader);
+      await publish({ ...seed, requestRevision: 4, receivedBytes: 110, receivedCharacters: 110,
         preview: toolName === "file" ? { kind: "file_write", revision: 2,
           title_fields: { path: "src/example.ts" }, progress_fields: { new_line_count: 2 } }
           : { kind: toolName, revision: 2, affected_resources: ["src/example.ts"],
@@ -463,12 +472,79 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(host.querySelectorAll(".tool-presentation-summary")).toHaveLength(1);
       expect(host.querySelector(".tool-presentation-state")).toBeNull();
       expect(host.textContent).not.toContain("110B");
+      // Assembly and readiness carry no preview; only the durable tool handoff ends this draft.
+      // 组装完成与就绪事件不携带预览；仅持久工具交接结束当前草稿。
+      const latestHeader = summary?.textContent;
+      for (const [index, state] of (["receiving", "arguments_assembled", "ready"] as const).entries()) {
+        await publish({ ...seed, state, requestRevision: 5 + index,
+          receivedBytes: 120 + index, receivedCharacters: 120 + index, preview: null });
+        expect(host.querySelector(".tool-presentation-summary")).toBe(summary);
+        expect(summary?.textContent).toBe(latestHeader);
+      }
       await publish(null);
       expect(host.querySelector(".tool-presentation-summary")).toBeNull();
     } finally {
       await React.act(async () => root.unmount());
     }
   });
+  // Verifies unordered write arguments update one card before and after the path arrives; returns nothing.
+  // 验证无序写入参数在路径到达前后更新同一卡片；无返回值。
+  it("streams write counts before a trailing path and enriches the same card", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    // The API exists while the write arguments are still incomplete.
+    // API 已存在，但写入参数尚未完整。
+    const rootInput = completeTurnEvents().find((entry) => entry.event.kind === "user_input")!;
+    const events = [rootInput, eventSummary(rootInput.seq + 1, {
+      kind: "api_started", api_call_id: 7, purpose: "main_generation",
+      request: { provider: "test", model: "test" },
+    })];
+    // The production store and workspace exercise the actual draft-to-card projection.
+    // 生产状态仓库和工作区覆盖实际草稿到卡片投影。
+    const store = new ConversationLiveStreamStore();
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    // Publish a bounded semantic snapshot with an optional completed path; returns after rendering.
+    // 发布包含可选完整路径的有界语义快照；渲染后返回。
+    const publish = async (revision: number, lines: number, path?: string) => {
+      await React.act(async () => {
+        store.applyEnvelope({ generation: revision, delta: {
+          kind: "toolRequestProgressChanged", payload: {
+            conversationId: "session-branch-v1", requestStreamId: "late-path",
+            progress: { apiCallId: 7, requestStreamId: "late-path", toolCallId: "provider-call",
+              toolName: "file", state: "receiving", requestRevision: revision,
+              receivedBytes: revision * 100, receivedCharacters: revision * 100,
+              preview: { kind: "file_write", revision, title_fields: path ? { path } : {},
+                progress_fields: { new_line_count: lines } } },
+          },
+        } });
+        store.flushNotifications();
+      });
+    };
+    try {
+      await React.act(async () => root.render(workspaceTree(events, "inline_output", [], true, undefined, store)));
+      await publish(1, 1);
+      // Retain both the request row and the card element while the path is unknown.
+      // 在路径未知时保留请求行和卡片元素。
+      const row = host.querySelector(".tool-execution-stack");
+      const card = host.querySelector(".tool-presentation-card.file-change");
+      expect(card?.textContent).toContain("编辑");
+      expect(card?.textContent).toContain("+1");
+      expect(card?.textContent).not.toContain("file");
+      await publish(2, 51);
+      expect(host.querySelector(".tool-presentation-card.file-change")).toBe(card);
+      expect(card?.textContent).toContain("+51");
+      await publish(3, 803, "index.html");
+      expect(host.querySelector(".tool-execution-stack")).toBe(row);
+      expect(host.querySelector(".tool-presentation-card.file-change")).toBe(card);
+      expect(card?.textContent).toContain("index.html");
+      expect(card?.textContent).toContain("+803");
+      expect(host.querySelectorAll(".tool-presentation-summary")).toHaveLength(1);
+      expect(host.querySelector(".tool-presentation-state")).toBeNull();
+    } finally {
+      await React.act(async () => root.unmount());
+    }
+  });
+
   // Parameters: current selects the changed setting; returns no value after checking restored history.
   // 参数：current 选择变化的设置；验证恢复后的历史后无返回值。
   it.each([

@@ -8,7 +8,7 @@ use super::super::test_support::{
 use super::*;
 use crate::parse_openai_model_catalog;
 use std::sync::Arc;
-use vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID;
+use vulcan_llm_core::OPENAI_CHAT_PROFILE_ID;
 
 /// Verifies tool policy belongs to the published generation rather than the ignored caller configuration.
 /// 验证工具策略属于已发布代际，而不是被忽略的调用者配置参数。

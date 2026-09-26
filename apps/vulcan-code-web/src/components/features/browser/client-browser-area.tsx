@@ -10,8 +10,8 @@ import {
   type ElectronLocalBrowserViewport,
 } from "@/host-shell/electron-bridge";
 
-// localBrowserAddress validates an explicit HTTP destination without granting a page workbench access.
-// localBrowserAddress 校验明确的 HTTP 目标，不向页面授予工作台访问权限。
+// localBrowserAddress validates web destinations for the ordinary-browser fallback without a native file loader.
+// localBrowserAddress 为没有原生文件加载器的普通浏览器降级入口校验网页目标。
 // input is the user's address; returns a canonical URL or throws a visible validation error.
 // input 是用户地址；返回规范 URL，或抛出可见的校验错误。
 export function localBrowserAddress(input: string): string {
@@ -209,7 +209,9 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
   async function submit(event: React.FormEvent): Promise<void> {
     event.preventDefault();
     try {
-      const url = localBrowserAddress(address);
+      // The desktop host owns native path parsing; adding HTTPS here corrupts Windows drive paths.
+      // 桌面宿主持有原生路径解析；在此添加 HTTPS 会破坏 Windows 盘符路径。
+      const url = bridge ? address.trim() : localBrowserAddress(address);
       setError(null);
       if (bridge && !ownerReady) return;
       setAddressDraft(null);

@@ -9,7 +9,7 @@ use crate::{
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::BTreeMap;
-use vulcan_ai_protocols::CODEX_RESPONSES_USER_AGENT;
+use vulcan_llm_core::CODEX_RESPONSES_USER_AGENT;
 
 /// Stable VulcanCode user agent used by every non-Codex provider protocol.
 /// 所有非 Codex 供应商协议使用的稳定 VulcanCode 用户代理。

@@ -902,7 +902,7 @@ fn media_understanding_description(
             .iter()
             .copied()
             .filter(|mime_type| {
-                vulcan_ai_protocols::protocol_profile_supports_local_media_type(
+                vulcan_llm_core::protocol_profile_supports_local_media_type(
                     protocol_profile_id,
                     resource_kind,
                     mime_type,
@@ -1537,12 +1537,12 @@ mod tests {
 
         assert!(model_replacement_route_supports_media_understanding(
             &capabilities,
-            vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             ProviderToolCapabilityKind::VideoUnderstand,
         ));
         assert!(!model_replacement_route_supports_media_understanding(
             &capabilities,
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             ProviderToolCapabilityKind::VideoUnderstand,
         ));
     }
@@ -1566,7 +1566,7 @@ mod tests {
 
         let description = media_understanding_description(
             ProviderToolCapabilityKind::ImageUnderstand,
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
             constraints.as_slice(),
         )
         .expect("image understanding description");

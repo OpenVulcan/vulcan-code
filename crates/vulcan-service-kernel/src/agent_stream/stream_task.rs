@@ -341,7 +341,7 @@ pub(crate) async fn persist_v1_execution_failure_boundary_for_scope(
             Err(crate::session_runtime_registry_v1::SessionRuntimeError::Storage(error))
                 if attempt < FAILURE_BOUNDARY_PERSIST_ATTEMPTS =>
             {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] retrying V1 execution failure boundary persistence: session={session_id} attempt={attempt} error={error}"
                 );
                 tokio::task::yield_now().await;
@@ -436,7 +436,7 @@ pub(crate) async fn settle_stream_terminal_authority_with_scope(
             scope: scope.clone(),
         },
     ) {
-        eprintln!(
+        tracing::warn!(
             "[webui-service] stream terminal pre-intent repair unavailable: session={session_id} error={error}"
         );
         return false;
@@ -446,7 +446,7 @@ pub(crate) async fn settle_stream_terminal_authority_with_scope(
     ) {
         Ok(handle) => handle,
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] stream terminal settlement owner unavailable: session={session_id} generation={owner_generation} error={error}"
             );
             drop(terminal_persistence_owner);
@@ -456,7 +456,7 @@ pub(crate) async fn settle_stream_terminal_authority_with_scope(
     let now_ms = match current_v1_unix_millis() {
         Ok(now_ms) => now_ms,
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] stream terminal settlement timestamp unavailable: session={session_id} error={error}"
             );
             drop(terminal_persistence_owner);
@@ -501,14 +501,14 @@ pub(crate) async fn settle_stream_terminal_authority_with_scope(
             return released;
         }
         Ok(Err(error)) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] terminal execution binding unavailable: session={session_id} error={error}"
             );
             drop(terminal_persistence_owner);
             return false;
         }
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] stream terminal settlement turn read failed: session={session_id} error={error}"
             );
             drop(terminal_persistence_owner);
@@ -537,7 +537,7 @@ pub(crate) async fn settle_stream_terminal_authority_with_scope(
     )
     .await
     {
-        eprintln!(
+        tracing::warn!(
             "[webui-service] stream terminal settlement intent could not be written: session={session_id} settlement={settlement_id} error={error}"
         );
         drop(terminal_persistence_owner);
@@ -570,11 +570,11 @@ pub(crate) async fn settle_stream_terminal_authority_with_scope(
             )
             .await
             {
-                eprintln!(
+                tracing::warn!(
                     "[webui-service] stream terminal settlement repair mark failed: session={session_id} settlement={settlement_id} error={mark_error}"
                 );
             }
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] stream fallback terminal persistence failed: session={session_id} reason={fallback_reason_code} error={error}"
             );
             drop(terminal_persistence_owner);
@@ -591,7 +591,7 @@ pub(crate) async fn settle_stream_terminal_authority_with_scope(
     )
     .await
     {
-        eprintln!(
+        tracing::warn!(
             "[webui-service] stream terminal settlement resolution failed: session={session_id} settlement={settlement_id} error={error}"
         );
         drop(terminal_persistence_owner);
@@ -618,13 +618,13 @@ fn release_settled_terminal_persistence_owner(
     if let Err(error) = crate::agent_collaboration::child_execution_ownership::release_child_question_execution_owner(
         state, session_id, scope,
     ) {
-        eprintln!("[webui-service] child question admission release failed: session={session_id} error={error}");
+        tracing::warn!("[webui-service] child question admission release failed: session={session_id} error={error}");
         return false;
     }
     match terminal_persistence_owner.release() {
         Ok(()) => true,
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] stream terminal-persistence owner release failed: session={session_id} error={error}"
             );
             false
@@ -668,7 +668,7 @@ async fn finalize_failed_execution_stream_retry_lifecycle(
     ) {
         Ok(guard) => guard,
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] terminal stream failure persistence ownership unavailable: session={session_id} owner={terminal_persistence_owner:?} error={error}"
             );
             return;
@@ -761,7 +761,7 @@ fn spawn_agent_stream_task_with_restart_state(
     let runtime_event_hook_policy = match runtime_event_hook_policy {
         Ok(policy) => policy,
         Err(error) => {
-            eprintln!("[webui-service] runtime event Hook correlation rejected: {error}");
+            tracing::warn!("[webui-service] runtime event Hook correlation rejected: {error}");
             // cleanup_outcome records how the pre-registration contract failure terminalized the session.
             // cleanup_outcome 记录预注册契约失败如何终态化该会话。
             let cleanup_outcome = handle_pre_registration_execution_stream_task_launch_failure(
@@ -789,13 +789,13 @@ fn spawn_agent_stream_task_with_restart_state(
                                 restart_state.terminal_scope(),
                             ));
                         } else {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] finalized Hook correlation failure lacks its kernel generation: session={session_id}"
                             );
                         }
                     }
                 }
-                Err(cleanup_error) => eprintln!(
+                Err(cleanup_error) => tracing::warn!(
                     "[webui-service] runtime event Hook correlation cleanup failed: {cleanup_error}; original error: {error}"
                 ),
             }
@@ -826,14 +826,15 @@ fn spawn_agent_stream_task_with_restart_state(
         // request 在工具解析前仅使用已授权会话选择增强一次。
         let mut request = request;
         if request.knowledge_access.is_none() {
-            request.knowledge_access =
-                match resolve_turn_knowledge_access(&task_state, session_id).await {
-                    Ok(access) => access,
-                    Err(error) => {
-                        eprintln!("[webui-service] knowledge access resolution failed: {error}");
-                        None
-                    }
-                };
+            request.knowledge_access = match resolve_turn_knowledge_access(&task_state, session_id)
+                .await
+            {
+                Ok(access) => access,
+                Err(error) => {
+                    tracing::warn!("[webui-service] knowledge access resolution failed: {error}");
+                    None
+                }
+            };
         }
         if let Some(access) = request.knowledge_access.as_mut()
             && access.knowledge_search_handler.is_none()
@@ -1044,13 +1045,13 @@ fn spawn_agent_stream_task_with_restart_state(
                     }
                     if let Err(error) = permit_result.as_ref() {
                         prepared_retry_checkpoint_error = Some(error.clone());
-                        eprintln!(
+                        tracing::warn!(
                             "[webui-service] Provider V1 preparation boundary failed: {error}"
                         );
                     }
                     let _ = completion.complete(permit_result);
                     if event_kind != ProviderRequestTelemetryEventKind::Started {
-                        eprintln!(
+                        tracing::warn!(
                             "[webui-service] Provider preparation boundary carried a non-Started telemetry event"
                         );
                     }
@@ -1076,7 +1077,7 @@ fn spawn_agent_stream_task_with_restart_state(
                         )
                         .await
                         {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] Provider V1 realtime telemetry update failed: {error}"
                             );
                         }
@@ -1085,7 +1086,7 @@ fn spawn_agent_stream_task_with_restart_state(
                     prepared_retry_checkpoint_error = Some(String::from(
                         "Provider V1 session ownership is unavailable for realtime telemetry.",
                     ));
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] ignored unowned legacy Provider telemetry: session={session_id}"
                     );
                 }
@@ -1146,7 +1147,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                 prepared_retry_checkpoint_error = Some(error.clone());
                             }
                             let _ = completion.complete(Err(error.clone()));
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] Provider V1 durability boundary failed: {error}"
                             );
                             continue;
@@ -1168,7 +1169,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                 if event_kind == ProviderRequestTelemetryEventKind::Started {
                                     prepared_retry_checkpoint_error = Some(error.clone());
                                 }
-                                eprintln!(
+                                tracing::warn!(
                                     "[webui-service] Provider V1 durability completion failed: {error}"
                                 );
                             }
@@ -1182,7 +1183,7 @@ fn spawn_agent_stream_task_with_restart_state(
                     );
                     prepared_retry_checkpoint_error = Some(error.clone());
                     let _ = completion.complete(Err(error.clone()));
-                    eprintln!("[webui-service] {error}");
+                    tracing::warn!("[webui-service] {error}");
                 }
                 ExecutionStreamEvent::ProviderLoweringRepair { .. } => {
                     // Typed V1 request facts supersede legacy segmented lowering-repair rows.
@@ -1232,7 +1233,7 @@ fn spawn_agent_stream_task_with_restart_state(
                         });
                         if let Err(error) = v1_update {
                             prepared_retry_checkpoint_error = Some(error.clone());
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] Provider V1 reasoning update failed: {error}"
                             );
                             continue;
@@ -1254,7 +1255,7 @@ fn spawn_agent_stream_task_with_restart_state(
                     if let Err(error) =
                         emit_transient_reasoning_status(&app, &task_state, session_id, status)
                     {
-                        eprintln!(
+                        tracing::warn!(
                             "[webui-service] transient reasoning status emit failed: {error}"
                         );
                     }
@@ -1270,7 +1271,7 @@ fn spawn_agent_stream_task_with_restart_state(
                         });
                         if let Err(error) = v1_update {
                             prepared_retry_checkpoint_error = Some(error.clone());
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] Provider V1 reasoning completion failed: {error}"
                             );
                             continue;
@@ -1294,7 +1295,7 @@ fn spawn_agent_stream_task_with_restart_state(
                         });
                         if let Err(error) = v1_update {
                             prepared_retry_checkpoint_error = Some(error.clone());
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] Provider V1 assistant update failed: {error}"
                             );
                             continue;
@@ -1331,7 +1332,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                     }
                                 }
                                 Err(error) => {
-                                    eprintln!("[webui-service] tool request preview ownership failed: {error}");
+                                    tracing::warn!("[webui-service] tool request preview ownership failed: {error}");
                                 }
                             }
                         }
@@ -1342,7 +1343,7 @@ fn spawn_agent_stream_task_with_restart_state(
                         if event.tool_execution_boundary.is_some()
                             && let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(&event, boundary_error)
                         {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] reject failed Provider V1 tool boundary failed: {rejection_error}"
                             );
                         }
@@ -1375,14 +1376,14 @@ fn spawn_agent_stream_task_with_restart_state(
                                     // The exact existing tool barrier is rejected; no legacy transcript fallback runs.
                                     // 拒绝精确的既有工具闸门；不运行旧转录降级路径。
                                     if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(&event, &error) {
-                                        eprintln!(
+                                        tracing::warn!(
                                             "[webui-service] reject Provider V1 tool boundary failed: {rejection_error}"
                                         );
                                     }
                                     if prepared_retry_checkpoint_error.is_none() {
                                         prepared_retry_checkpoint_error = Some(error.clone());
                                     }
-                                    eprintln!(
+                                    tracing::warn!(
                                         "[webui-service] Provider V1 tool boundary failed: {error}"
                                     );
                                     continue;
@@ -1396,7 +1397,7 @@ fn spawn_agent_stream_task_with_restart_state(
                                 if prepared_retry_checkpoint_error.is_none() {
                                     prepared_retry_checkpoint_error = Some(error.clone());
                                 }
-                                eprintln!(
+                                tracing::warn!(
                                     "[webui-service] acknowledge Provider V1 tool boundary failed: {error}"
                                 );
                             }
@@ -1413,18 +1414,18 @@ fn spawn_agent_stream_task_with_restart_state(
                             prepared_retry_checkpoint_error = Some(error.clone());
                         }
                         if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(&event, &error) {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] reject unowned Provider V1 tool boundary failed: {rejection_error}"
                             );
                         }
-                        eprintln!("[webui-service] {error} session={session_id}");
+                        tracing::warn!("[webui-service] {error} session={session_id}");
                         continue;
                     }
                     if event.kind
                         == vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolBatchPrepared
                     {
                         if let Err(error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::acknowledge_runtime_event_projection_barrier_from_event(&event) {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] acknowledge durable tool batch boundary failed: {error}"
                             );
                         }
@@ -1454,7 +1455,7 @@ fn spawn_agent_stream_task_with_restart_state(
                     prepared_retry_checkpoint_error = Some(String::from(
                         "Provider V1 session ownership is unavailable for a conversation checkpoint.",
                     ));
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] ignored unowned legacy conversation checkpoint: session={session_id}"
                     );
                 }
@@ -1514,7 +1515,7 @@ fn spawn_agent_stream_task_with_restart_state(
                             return;
                         }
                         Err(error) => {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] context compaction policy refresh failed: session={session_id} reason={reason} error={error}"
                             );
                             let failure_commit = commit_prepared_stream_failure(
@@ -1600,7 +1601,7 @@ fn spawn_agent_stream_task_with_restart_state(
                             return;
                         }
                         Err(error) => {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] pending Provider route activation failed: session={session_id} reason={reason} error={error}"
                             );
                             let failure_commit = commit_prepared_stream_failure(
@@ -1633,7 +1634,7 @@ fn spawn_agent_stream_task_with_restart_state(
                     reason,
                 } => {
                     if restart_state.auto_compaction_already_attempted {
-                        eprintln!(
+                        tracing::warn!(
                             "[webui-service] repeated mid-turn context compaction rejected: session={session_id} reason={reason}"
                         );
                         let failure_commit = commit_prepared_stream_failure(
@@ -1730,7 +1731,7 @@ fn spawn_agent_stream_task_with_restart_state(
                             let error = String::from(
                                 "mid-turn context compaction was required but produced no refreshed request",
                             );
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] {error}: session={session_id} reason={reason}"
                             );
                             let failure_commit = commit_prepared_stream_failure(
@@ -1756,7 +1757,7 @@ fn spawn_agent_stream_task_with_restart_state(
                             return;
                         }
                         Err(error) => {
-                            eprintln!(
+                            tracing::warn!(
                                 "[webui-service] mid-turn context compaction failed: session={session_id} reason={reason} error={error}"
                             );
                             let failure_commit = commit_prepared_stream_failure(
@@ -1820,13 +1821,13 @@ fn spawn_agent_stream_task_with_restart_state(
                 &task_state,
                 session_id,
             ) {
-                eprintln!("[session-usage] cancellation projection: {error}");
+                tracing::warn!("[session-usage] cancellation projection: {error}");
             }
         }
         if transient_reasoning_status_active
             && let Err(error) = emit_transient_reasoning_status(&app, &task_state, session_id, None)
         {
-            eprintln!("[webui-service] transient reasoning status clear failed: {error}");
+            tracing::warn!("[webui-service] transient reasoning status clear failed: {error}");
         }
         // stream_exit_outcome records the exact ownership decision made after polling stops.
         // stream_exit_outcome 记录轮询停止后作出的精确所有权决策。
@@ -1848,7 +1849,7 @@ fn spawn_agent_stream_task_with_restart_state(
                 ) {
                     Ok(guard) => guard,
                     Err(error) => {
-                        eprintln!(
+                        tracing::warn!(
                             "[webui-service] early stream terminal-persistence ownership unavailable: session={session_id} task={active_stream_task_id} error={error}"
                         );
                         return;
@@ -1889,7 +1890,7 @@ fn spawn_agent_stream_task_with_restart_state(
         &registration_expected_kernel_turn_id,
         task_future,
     ) {
-        eprintln!("[webui-service] register stream task failed: {error}");
+        tracing::warn!("[webui-service] register stream task failed: {error}");
         let cleanup_outcome = handle_stream_task_registration_failure(
             &registration_failure_app,
             &registration_failure_state,
@@ -1914,13 +1915,13 @@ fn spawn_agent_stream_task_with_restart_state(
                             registration_failure_scope,
                         ));
                     } else {
-                        eprintln!(
+                        tracing::warn!(
                             "[webui-service] finalized registration failure lacks its kernel generation: session={session_id}"
                         );
                     }
                 }
             }
-            Err(cleanup_error) => eprintln!(
+            Err(cleanup_error) => tracing::warn!(
                 "[webui-service] register stream task failure projection failed: {cleanup_error}"
             ),
         }
@@ -1988,7 +1989,7 @@ async fn handle_v1_provider_request_telemetry(
                                     );
                                 }
                                 Err(error) => {
-                                    eprintln!(
+                                    tracing::warn!(
                                         "[webui-service] Provider V1 goal task binding failed: {error}"
                                     );
                                 }
@@ -1997,7 +1998,7 @@ async fn handle_v1_provider_request_telemetry(
                         goal_id
                     }
                     Err(error) => {
-                        eprintln!("[webui-service] Provider V1 goal binding failed: {error}");
+                        tracing::warn!("[webui-service] Provider V1 goal binding failed: {error}");
                         None
                     }
                 };
@@ -2015,7 +2016,9 @@ async fn handle_v1_provider_request_telemetry(
                     )
                     .await
                 {
-                    eprintln!("[webui-service] Provider V1 goal usage accounting failed: {error}");
+                    tracing::warn!(
+                        "[webui-service] Provider V1 goal usage accounting failed: {error}"
+                    );
                 }
             }
             ProviderRequestTelemetryEventKind::Dispatched

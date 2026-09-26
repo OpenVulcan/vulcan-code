@@ -1133,7 +1133,7 @@ pub(crate) async fn get_or_load_session_v1(
                 handle.flush_all()?;
             }
             if recovered_goal_owners {
-                eprintln!(
+                tracing::info!(
                     "[webui-service] recovered persisted Goal event ownership: session={session_id}"
                 );
             }

@@ -304,7 +304,7 @@ impl ProviderRequestTelemetryContext {
             v1_request_template: ProviderV1RequestTemplate {
                 base_purpose: Some(vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration),
                 continuation_action_id: None,
-                profile: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                profile: String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
                 connection_id: String::from("connection-1"),
                 thinking_level: Some(String::from("medium")),
             },
@@ -315,7 +315,7 @@ impl ProviderRequestTelemetryContext {
             provider_name: String::from("Mock Provider"),
             service_entry_id: String::from("public-api"),
             model_name: String::from("Mock Model"),
-            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            protocol_profile_id: String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
             manifest_revision: 1,
             manifest_generation: 2,
             binding_source: String::from("system_manifest"),
@@ -1242,19 +1242,19 @@ impl ProviderRequestTelemetryTracker {
             Some(facts) => {
                 facts.purpose == vulcan_session_core::v1::event::ApiPurposeKind::Compaction
                     && facts.request.profile.as_deref()
-                        == Some(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID)
+                        == Some(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID)
             }
             None => {
                 context.v1_request_template.base_purpose.is_none()
                     && context.owner_kind == "context_compaction"
                     && context.operation == "compact"
                     && context.v1_request_template.profile
-                        == vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+                        == vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
             }
         };
         if self.pending_request.is_some()
             || !declared_compaction
-            || context.protocol_profile_id != vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+            || context.protocol_profile_id != vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
             || active.transport != Some(AiTransportKind::Http)
             || active.dispatched_at_ms.is_none()
             || active.headers_at_ms.is_none()
@@ -1928,7 +1928,7 @@ fn uncached_input_tokens(
     // inputTokens preserves the Provider-reported input value before statistics normalization.
     // inputTokens 在统计归一化前保留 Provider 报告的输入值。
     let input_tokens = usage.input_tokens?;
-    if protocol_profile_id == vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID {
+    if protocol_profile_id == vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID {
         // Anthropic reports cache writes separately from both uncached input and cache reads.
         // Anthropic 将缓存写入与非缓存输入、缓存读取分别报告。
         input_tokens.checked_add(usage.cache_creation_input_tokens.unwrap_or_default())
@@ -2362,7 +2362,7 @@ mod tests {
             provider_name: String::from("Provider Name"),
             service_entry_id: String::from("public-api"),
             model_name: String::from("Model Name"),
-            protocol_profile_id: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+            protocol_profile_id: String::from(vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID),
             manifest_revision: 17,
             manifest_generation: 23,
             binding_source: String::from("system_manifest"),
@@ -2392,7 +2392,7 @@ mod tests {
             v1_request_template: ProviderV1RequestTemplate {
                 base_purpose: Some(vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration),
                 continuation_action_id: None,
-                profile: String::from(vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID),
+                profile: String::from(vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID),
                 connection_id: String::from("connection-1"),
                 thinking_level: None,
             },
@@ -2431,13 +2431,13 @@ mod tests {
         // context explicitly declares native purpose and protocol before preparation starts.
         // context 在准备开始前明确声明原生用途与协议。
         let context = tracker.context.as_mut().unwrap();
-        context.protocol_profile_id = vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID.into();
+        context.protocol_profile_id = vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID.into();
         context.owner_kind = "context_compaction";
         context.operation = "compact";
         context.v1_request_template.base_purpose =
             Some(vulcan_session_core::v1::event::ApiPurposeKind::Compaction);
         context.v1_request_template.profile =
-            vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID.into();
+            vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID.into();
         tracker
     }
 
@@ -2551,7 +2551,7 @@ mod tests {
                     .as_mut()
                     .unwrap()
                     .v1_request_template
-                    .profile = vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.into();
+                    .profile = vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID.into();
             }
             let snapshot = test_request_snapshot();
             tracker.prepare_request(&snapshot, None).unwrap();
@@ -2575,7 +2575,7 @@ mod tests {
             }
             if invalid == 5 {
                 tracker.context.as_mut().unwrap().protocol_profile_id =
-                    vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID.into();
+                    vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID.into();
             }
             assert!(tracker.complete_native_compaction_success(None).is_err());
             assert_eq!(
@@ -2605,7 +2605,7 @@ mod tests {
         assert_eq!(started[0].payload["connection_id"], "connection-1");
         assert_eq!(
             started[0].payload["protocol_profile_id"],
-            vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID
+            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
         );
         assert_eq!(started[0].payload["manifest_revision"], 17);
         assert_eq!(started[0].payload["manifest_generation"], 23);
@@ -2994,13 +2994,13 @@ mod tests {
 
         assert_eq!(
             uncached_input_tokens(
-                vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+                vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
                 &anthropic_usage,
             ),
             Some(2_540)
         );
         assert_eq!(
-            uncached_input_tokens(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, &openai_usage,),
+            uncached_input_tokens(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID, &openai_usage,),
             Some(2_509)
         );
     }
@@ -3016,7 +3016,7 @@ mod tests {
         };
 
         assert_eq!(
-            uncached_input_tokens(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, &usage),
+            uncached_input_tokens(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID, &usage),
             None
         );
     }
@@ -3067,11 +3067,11 @@ mod tests {
         };
 
         assert_eq!(
-            complete_output_tokens(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID, &usage),
+            complete_output_tokens(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID, &usage),
             200
         );
         assert_eq!(
-            complete_output_tokens(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID, &usage),
+            complete_output_tokens(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID, &usage),
             200
         );
     }

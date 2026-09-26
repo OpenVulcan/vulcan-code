@@ -269,7 +269,7 @@ pub fn spawn_webui_service_http_bridge(
                 Ok(Err(error)) => error,
                 Err(_) => String::from("HTTP bridge thread panicked"),
             };
-            eprintln!("[webui-service] HTTP bridge failed: {error}");
+            tracing::warn!("[webui-service] HTTP bridge failed: {error}");
             // Publish the fault to the same service state that bootstrap checks before ready.
             // 把故障发布到引导在发布 ready 前检查的同一服务状态。
             if let Ok(mut guard) = failure_state.lock() {
@@ -570,7 +570,7 @@ pub(crate) async fn run_webui_service_http_bridge(
             })
         },
     };
-    eprintln!("[webui-service] browser service bridge listening on http://{address}");
+    tracing::info!("[webui-service] browser service bridge listening on http://{address}");
     listening.send(Ok(())).map_err(|error| error.to_string())?;
     // Only a test-support binary can simulate a listener dying after startup acknowledgement.
     // 只有测试支持构建可以模拟监听器在启动确认后死亡。
@@ -796,7 +796,7 @@ pub(crate) fn mark_webui_service_discovery_status(
         dirs::home_dir(),
         std::env::temp_dir(),
     ) {
-        eprintln!("[webui-service] browser service discovery {status} write failed: {error}");
+        tracing::warn!("[webui-service] browser service discovery {status} write failed: {error}");
     }
     drop(state_guard);
 }

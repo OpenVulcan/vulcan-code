@@ -86,7 +86,7 @@ impl SessionHandle {
                             )
                         },
                     ) {
-                        eprintln!("[session-usage] legacy Goal baseline: {error}");
+                        tracing::warn!("[session-usage] legacy Goal baseline: {error}");
                     }
                 }
                 document
@@ -98,7 +98,7 @@ impl SessionHandle {
             }))
         });
         if let Err(error) = result {
-            eprintln!("[session-usage] initialize: {error}");
+            tracing::warn!("[session-usage] initialize: {error}");
         }
     }
 
@@ -135,10 +135,10 @@ impl SessionHandle {
                 Ok(true)
             });
             if let Err(error) = registered {
-                eprintln!("[session-usage] register child: {error}");
+                tracing::warn!("[session-usage] register child: {error}");
             }
         } else if let Err(error) = result {
-            eprintln!("[session-usage] bind child: {error}");
+            tracing::warn!("[session-usage] bind child: {error}");
         }
     }
 
@@ -216,7 +216,7 @@ impl SessionHandle {
             })
         });
         if let Err(error) = result {
-            eprintln!("[session-usage] update: {error}");
+            tracing::warn!("[session-usage] update: {error}");
         }
     }
 }

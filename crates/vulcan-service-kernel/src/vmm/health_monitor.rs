@@ -85,7 +85,9 @@ fn external_vmm_heartbeat_enabled(state: &SharedServiceBridgeState) -> bool {
             .as_ref()
             .map(|runtime| runtime.provider_configuration.vmm.clone()),
         Err(error) => {
-            eprintln!("[webui-service] failed to inspect external VMM heartbeat state: {error}");
+            tracing::warn!(
+                "[webui-service] failed to inspect external VMM heartbeat state: {error}"
+            );
             None
         }
     };

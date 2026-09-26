@@ -34,7 +34,7 @@ use tokio::sync::Mutex as TokioMutex;
 use vulcan_ai_contract::{
     AiExecutionRequest, AiStreamEvent, AiStreamStateMachine, AiTransportKind,
 };
-use vulcan_ai_protocols::ProtocolConversionError;
+use vulcan_llm_core::ProtocolConversionError;
 use vulcan_llm_core::{
     DEFAULT_RESPONSES_WEBSOCKET_MAX_AGE, EncodedWireRequest, LlmCoreError,
     RESPONSES_WEBSOCKET_CONNECTION_LIMIT_CODE, ResponsesWebsocketConfig, ResponsesWebsocketSession,

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use vulcan_ai_contract::{
     ContentItem, DispatchOutcome, ResourceKind, ResourceReference, ResourceSourceKind,
 };
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID,
     CLAUDE_CODE_MESSAGES_PROFILE_ID, GEMINI_GENERATE_CONTENT_PROFILE_ID,
     GEMINI_INTERACTIONS_PROFILE_ID, GOOGLE_CODE_ASSIST_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
@@ -101,7 +101,7 @@ fn production_multimodal_projection_matches_source_capability_registry() {
                 let encoded = client.encode_request(&route, &request);
                 assert_eq!(
                     encoded.is_ok(),
-                    vulcan_ai_protocols::protocol_profile_supports_media_source(
+                    vulcan_llm_core::protocol_profile_supports_media_source(
                         profile, kind, mime, source
                     ),
                     "{profile} {kind:?} {mime} {source:?}: {encoded:?}"
@@ -453,12 +453,12 @@ fn production_multimodal_projection_keeps_standard_responses_contract() {
     });
     assert!(vulcan_llm_core::encode_internal_responses_request(&request).is_ok());
     assert!(
-        vulcan_ai_protocols::OpenAiResponsesProfile
+        vulcan_llm_core::OpenAiResponsesProfile
             .encode(&request)
             .is_err()
     );
     assert!(
-        vulcan_ai_protocols::OpenAiCodexResponsesProfile
+        vulcan_llm_core::OpenAiCodexResponsesProfile
             .encode(&request)
             .is_err()
     );

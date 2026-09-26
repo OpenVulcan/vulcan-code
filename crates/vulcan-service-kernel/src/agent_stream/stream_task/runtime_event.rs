@@ -158,7 +158,7 @@ pub(super) async fn handle_runtime_stream_event(
         ),
         Ok(WaitAgentRuntimeStateCommit::Ignored) => {}
         Err(error) => {
-            eprintln!("[webui-service] update wait-agent runtime state failed: {error}");
+            tracing::warn!("[webui-service] update wait-agent runtime state failed: {error}");
         }
     }
     // The optional transition makes tool-boundary phase changes explicit while leaving all other events unchanged.
@@ -179,7 +179,7 @@ pub(super) async fn handle_runtime_stream_event(
                 ),
             ),
             Err(error) => {
-                eprintln!("[webui-service] {}: {error}", transition.failure_context);
+                tracing::warn!("[webui-service] {}: {error}", transition.failure_context);
             }
         }
     }
@@ -187,7 +187,7 @@ pub(super) async fn handle_runtime_stream_event(
     if let RuntimeEventHookPolicy::ConversationTurn { turn_id } = hook_policy
         && let Err(error) = dispatch_runtime_event_hook(agent_runtime, session_id, &event, turn_id)
     {
-        eprintln!("[webui-service] runtime event Hook dispatch failed: {error}");
+        tracing::warn!("[webui-service] runtime event Hook dispatch failed: {error}");
     }
 
     // DelegateStarted must register its detached listener before delegate projection is consumed.
@@ -200,11 +200,11 @@ pub(super) async fn handle_runtime_stream_event(
         session_id,
         &event,
     ) {
-        eprintln!("[webui-service] start detached subagent listener failed: {error}");
+        tracing::warn!("[webui-service] start detached subagent listener failed: {error}");
         // Provider launch must observe the listener/persistence failure instead of a display acknowledgement.
         // Provider 启动必须观察监听器或持久化失败，不能收到显示确认。
         if let Err(rejection_error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(&event, &error) {
-            eprintln!("[webui-service] reject subagent start barrier failed: {rejection_error}");
+            tracing::warn!("[webui-service] reject subagent start barrier failed: {rejection_error}");
         }
         return;
     }
@@ -220,7 +220,7 @@ pub(super) async fn handle_runtime_stream_event(
     ) {
         Ok(consumed) => consumed,
         Err(error) => {
-            eprintln!("[webui-service] ingest subagent event failed: {error}");
+            tracing::warn!("[webui-service] ingest subagent event failed: {error}");
             false
         }
     };
@@ -233,13 +233,13 @@ pub(super) async fn handle_runtime_stream_event(
             &event,
         )
     {
-        eprintln!("[webui-service] append runtime event failed: {error}");
+        tracing::warn!("[webui-service] append runtime event failed: {error}");
     }
 
     // Provider tool boundaries are durably acknowledged by ProviderV1StreamSink before this path.
     // Provider 工具边界会在进入该路径前由 ProviderV1StreamSink 可靠确认。
     if let Err(error) = release_runtime_event_projection_barrier_after_attempt(&event) {
-        eprintln!("[webui-service] release runtime event projection barrier failed: {error}");
+        tracing::warn!("[webui-service] release runtime event projection barrier failed: {error}");
     }
 }
 

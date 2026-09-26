@@ -8,7 +8,7 @@ use super::super::test_support::{
 use super::*;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CODEX_RESPONSES_PROFILE_ID, ProtocolRegistry,
 };
 

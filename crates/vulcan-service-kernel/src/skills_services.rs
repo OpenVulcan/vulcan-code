@@ -2481,7 +2481,7 @@ fn finalize_luaskills_operation_progress(
     // `foreign` is a defect signal, not routine noise: a non-zero value means an
     // upstream event source exists that the management lock did not serialize.
     // `foreign` 是缺陷信号而非日常噪声：非零值说明存在管理锁未能串行化的上游事件来源。
-    eprintln!(
+    tracing::info!(
         "[webui-service] luaskills {} {} outcome={:?} phases={} latest={} upstream_terminal={} \
          overflowed={} orphaned={} foreign={}",
         crate::luaskills_install_progress::action_label(progress.action),

@@ -999,14 +999,16 @@ fn schedule_native_memory_revalidation(app: ServiceEventEmitter, state: SharedSe
             return;
         };
         if let Err(error) = maintenance.validate_host_ai().await {
-            eprintln!("[webui-service] Native memory capability revalidation failed: {error}");
+            tracing::warn!("[webui-service] Native memory capability revalidation failed: {error}");
         }
         // Failed readiness must also reach the browser; the transaction prevents stale completion after a newer save.
         // 失败就绪状态也必须送达浏览器；事务阻止旧完成结果落在更新保存之后。
         match crate::refresh_workbench_snapshot(state).await {
             Ok(workbench) => emit_workbench_event(&app, &workbench),
             Err(error) => {
-                eprintln!("[webui-service] Native memory readiness publication failed: {error}")
+                tracing::warn!(
+                    "[webui-service] Native memory readiness publication failed: {error}"
+                )
             }
         }
     });

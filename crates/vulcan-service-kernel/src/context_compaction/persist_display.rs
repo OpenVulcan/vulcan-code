@@ -81,7 +81,7 @@ pub(crate) fn spawn_context_compaction_persist_task(
         )
         .await
         {
-            eprintln!("[webui-service] context-compaction persistence failed: {error}");
+            tracing::warn!("[webui-service] context-compaction persistence failed: {error}");
         }
     });
 }

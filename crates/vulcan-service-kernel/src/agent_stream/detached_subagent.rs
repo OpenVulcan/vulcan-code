@@ -605,7 +605,7 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
                                         )
                                     });
                                 if let Err(error) = refresh {
-                                    eprintln!(
+                                    tracing::warn!(
                                         "[subagent] consumed message queue projection failed: {error}"
                                     );
                                 }
@@ -657,7 +657,9 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             if let Err(error) =
                 dispatch_runtime_event_hook(agent_runtime, session_id, &event, execution_id)
             {
-                eprintln!("[webui-service] detached runtime event Hook dispatch failed: {error}");
+                tracing::warn!(
+                    "[webui-service] detached runtime event Hook dispatch failed: {error}"
+                );
             }
             if event.tool_execution_boundary.is_some() {
                 // tool_boundary_result retains the exact sink or timestamp failure before this

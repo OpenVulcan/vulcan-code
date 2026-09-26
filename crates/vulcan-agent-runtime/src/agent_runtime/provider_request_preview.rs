@@ -108,7 +108,7 @@ pub(crate) fn build_provider_request_preview_markdown(
         &uncovered_message_ids,
         continuation_boundary_is_proven,
         preparation.model_blueprint.protocol_profile_key()
-            != vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID
+            != vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
             || vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().openai_append_continuation_enabled,
     );
     let ai_tool_plan_markdown = render_ai_tool_plan_markdown(preparation);
@@ -626,9 +626,7 @@ mod tests {
                 runtime_label: String::from("Anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 model_name: String::from("Claude Sonnet 4.6"),
-                protocol_profile_id: String::from(
-                    vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
-                ),
+                protocol_profile_id: String::from(vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID),
                 manifest_revision: 0,
                 frozen_selection: None,
                 route_revision: String::from("sha256:test-route"),

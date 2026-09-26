@@ -105,6 +105,8 @@ cargo hakari verify
 
 ## 默认资源限制
 
+正式服务日志的归属、轮转和过滤规则见 [服务诊断日志](service-diagnostics.md)。被忽略测试的分类、离线串行门禁及外部验收前置条件见 [显式测试入口](explicit-test-gates.md)。
+
 服务内核的开发模式采用根 `Cargo.toml` 中的包级 `debug = "limited"`：保留源码位置和回溯信息，减少完整类型及局部变量调试信息。原因是 Windows 实测完整调试内核归档达到 4,247,716,754 字节，符号索引已变为 `/SYM64/`，MSVC 报无效库格式并在服务链接时产生 49 个未解析符号；这些符号实际仍存在于归档中。该设置只影响内核包，测试模式继承开发模式，发布模式及其他依赖的设置保持原定义。需要完整局部变量调试信息时，应先解决内核归档体积问题，再覆盖此设置。
 
 根目录 `.cargo/config.toml` 设置 `build.jobs = 4`，限制 Cargo 编译进程并发；同时以 `RUST_TEST_THREADS = 4` 约束常规测试 harness。`.config/nextest.toml` 将 nextest 默认测试线程限制为 4。

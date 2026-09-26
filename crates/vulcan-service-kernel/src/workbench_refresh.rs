@@ -40,7 +40,7 @@ fn trace_workbench_refresh_if_slow(
     if elapsed_ms <= WORKBENCH_REFRESH_SLOW_TRACE_THRESHOLD_MS {
         return;
     }
-    eprintln!(
+    tracing::info!(
         "[webui-service][workbench-refresh-timing] session={session_id} stage={stage} elapsed_ms={elapsed_ms} {}",
         detail.as_ref()
     );
@@ -713,7 +713,7 @@ pub(crate) fn webui_trace(stage: &str, detail: impl AsRef<str>) {
     if !webui_trace_enabled() {
         return;
     }
-    eprintln!(
+    tracing::info!(
         "[webui-service][webui-trace] timestamp={} unix_ms={} stage={} {}",
         current_webui_trace_timestamp(),
         current_unix_millis_text(),
@@ -728,7 +728,7 @@ pub(crate) fn webui_after_precheck_trace(stage: &str, detail: impl AsRef<str>) {
     if !webui_after_precheck_trace_enabled() {
         return;
     }
-    eprintln!(
+    tracing::info!(
         "[webui-service][after-precheck-trace] timestamp={} unix_ms={} stage={} {}",
         current_webui_trace_timestamp(),
         current_unix_millis_text(),
@@ -743,7 +743,7 @@ pub(crate) fn webui_submit_trace(stage: &str, detail: impl AsRef<str>) {
     if !webui_submit_trace_enabled() && !webui_trace_enabled() {
         return;
     }
-    eprintln!(
+    tracing::info!(
         "[webui-service][submit-trace] timestamp={} unix_ms={} stage={} {}",
         current_webui_trace_timestamp(),
         current_unix_millis_text(),

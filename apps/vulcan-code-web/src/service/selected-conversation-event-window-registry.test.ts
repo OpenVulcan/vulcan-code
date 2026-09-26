@@ -230,6 +230,49 @@ describe("selected conversation event window registry", () => {
     expect(fixture.controllers[0]?.recoverConnection).toHaveBeenCalledWith(false);
   });
 
+  it("retains failed recovery for the workbench retry without repeating a successful recovery", async () => {
+    // A transient reconnect RPC failure must not consume the only recovery request.
+    // 短暂的重连 RPC 失败不能消耗唯一恢复请求。
+    const fixture = registryFixture();
+    await fixture.registry.selectSession("session-retry");
+    await fixture.registry.observeConnectionStatus("connected");
+    await fixture.registry.observeConnectionStatus("disconnected");
+    // The exact selected controller fails once, then supplies the authoritative completion.
+    // 精确选中控制器失败一次，然后提供权威完成状态。
+    const controller = fixture.controllers[0]!;
+    controller.recoverConnection.mockRejectedValueOnce(new Error("temporary read failure"));
+    await expect(fixture.registry.observeConnectionStatus("connected")).rejects.toThrow("temporary read failure");
+    await fixture.registry.observeConnectionStatus("connected");
+    await fixture.registry.observeConnectionStatus("connected");
+    expect(controller.recoverConnection).toHaveBeenCalledTimes(2);
+    fixture.registry.dispose();
+  });
+
+  it("keeps repeated workbench recovery attempts waiting for the same transcript read", async () => {
+    // A fast snapshot retry cannot declare recovery complete while the slower transcript RPC is pending.
+    // 快照的快速重试不能在较慢的正文 RPC 仍未完成时宣告恢复完成。
+    const fixture = registryFixture();
+    await fixture.registry.selectSession("session-shared-recovery");
+    await fixture.registry.observeConnectionStatus("connected");
+    await fixture.registry.observeConnectionStatus("disconnected");
+    // The deferred read exposes the overlap deterministically without timers.
+    // 延迟读取无需定时器即可确定性地暴露重叠。
+    let finishRead!: () => void;
+    const pendingRead = new Promise<undefined>((resolve) => { finishRead = () => resolve(undefined); });
+    const controller = fixture.controllers[0]!;
+    controller.recoverConnection.mockReturnValueOnce(pendingRead);
+    const first = fixture.registry.observeConnectionStatus("connected");
+    const settled = vi.fn();
+    const second = fixture.registry.observeConnectionStatus("connected").then(settled);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(controller.recoverConnection).toHaveBeenCalledTimes(1);
+    finishRead();
+    await Promise.all([first, second]);
+    expect(settled).toHaveBeenCalledTimes(1);
+    fixture.registry.dispose();
+  });
+
   it("releases the old controller and relay before hydrating a switched session", async () => {
     // fixture captures both controller generations in allocation order.
     // fixture 按分配顺序捕获两代控制器。

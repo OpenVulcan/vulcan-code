@@ -176,7 +176,7 @@ pub(super) async fn dispatch_service_rpc(
                 rpc_elapsed_ms,
             )
         {
-            eprintln!("[webui-service] failed to retain slow RPC diagnostic: {error}");
+            tracing::warn!("[webui-service] failed to retain slow RPC diagnostic: {error}");
         }
     }
     rpc_result

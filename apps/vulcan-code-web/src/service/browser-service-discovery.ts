@@ -85,8 +85,8 @@ const BROWSER_SERVICE_DISCOVERY_PATH = "/vulcan-service-discovery.json";
 // BROWSER_SERVICE_CONNECTION_EVENT 会在本地服务连接状态变化时发出。
 export const BROWSER_SERVICE_CONNECTION_EVENT = "vulcan:browser-service-connection";
 
-// BrowserServiceConnectionStatus is the frontend-visible local service connection state.
-// BrowserServiceConnectionStatus 是前端可见的本地服务连接状态。
+// BrowserServiceConnectionStatus reports event delivery readiness; only WebSocket open may emit connected.
+// BrowserServiceConnectionStatus 表示事件推送就绪状态；只有 WebSocket open 才能发出 connected。
 export type BrowserServiceConnectionStatus = "connected" | "disconnected" | "reconnecting";
 
 // BrowserServiceConnectionDetail describes one browser service connection state event.
@@ -231,8 +231,8 @@ export function planBrowserServiceCandidates(
   };
 }
 
-// resolveReachableBrowserServiceBaseUrl finds the active local service endpoint.
-// resolveReachableBrowserServiceBaseUrl 查找当前可用的本地服务端点。
+// resolveReachableBrowserServiceBaseUrl finds an HTTP endpoint without declaring event delivery ready.
+// resolveReachableBrowserServiceBaseUrl 查找 HTTP 端点，但不声明事件推送已经就绪。
 export async function resolveReachableBrowserServiceBaseUrl(): Promise<string> {
   // The GUI has already selected and authenticated Core; renderer discovery cannot override it.
   // GUI 已选定并验证 Core，渲染端发现流程不能覆盖此选择。
@@ -242,23 +242,15 @@ export async function resolveReachableBrowserServiceBaseUrl(): Promise<string> {
       throw new Error("The selected desktop service is not ready.");
     }
     rememberBrowserServiceEndpoint(desktopConnection);
-    emitBrowserServiceConnectionStatus("connected");
     return desktopConnection.baseUrl;
   }
-  let plan: BrowserServiceCandidatePlan;
-  try {
-    plan = await browserServiceDiscoveryPlan();
-  } catch (error) {
-    // Invalid explicit selections must become visible connection failures as well as rejected calls.
-    // 非法显式选择既要拒绝调用，也要进入可见的连接失败状态。
-    emitBrowserServiceConnectionStatus("disconnected", String(error));
-    throw error;
-  }
+  // Discovery failures reject the caller; the event transport owns connection status publication.
+  // 发现失败直接拒绝调用方；连接状态发布归事件传输所有。
+  const plan = await browserServiceDiscoveryPlan();
   if (plan.pinnedBaseUrl) {
     const probe = await probeBrowserServiceBaseUrl(plan.pinnedBaseUrl);
     if (probe.kind === "reachable" && probe.endpoint.baseUrl === plan.pinnedBaseUrl) {
       rememberBrowserServiceEndpoint(probe.endpoint);
-      emitBrowserServiceConnectionStatus("connected");
       return probe.endpoint.baseUrl;
     }
     // Falling through to another instance here would silently connect the user to the wrong Core.
@@ -266,7 +258,6 @@ export async function resolveReachableBrowserServiceBaseUrl(): Promise<string> {
     const message = probe.kind === "rejected"
       ? browserServiceRejectedMessage(probe.baseUrl, probe.status)
       : `The selected browser service ${plan.pinnedBaseUrl} is unavailable.`;
-    emitBrowserServiceConnectionStatus("disconnected", message);
     throw new Error(message);
   }
   // firstRejection keeps scanning for an accessible instance, but a refusal must not look like an absent service.
@@ -276,7 +267,6 @@ export async function resolveReachableBrowserServiceBaseUrl(): Promise<string> {
     const probe = await probeBrowserServiceBaseUrl(candidate);
     if (probe.kind === "reachable") {
       rememberBrowserServiceEndpoint(probe.endpoint);
-      emitBrowserServiceConnectionStatus("connected");
       return probe.endpoint.baseUrl;
     }
     if (probe.kind === "rejected" && !firstRejection) {
@@ -287,10 +277,8 @@ export async function resolveReachableBrowserServiceBaseUrl(): Promise<string> {
     // The rejection message is deliberately not retryable, so startup shows an error instead of rescanning forever.
     // 拒绝消息刻意不可重试，使启动页显示错误而不是无休止地重新扫描。
     const message = browserServiceRejectedMessage(firstRejection.baseUrl, firstRejection.status);
-    emitBrowserServiceConnectionStatus("disconnected", message);
     throw new Error(message);
   }
-  emitBrowserServiceConnectionStatus("disconnected", "Browser service is unavailable.");
   throw new Error("Browser service is unavailable.");
 }
 

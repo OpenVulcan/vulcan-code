@@ -3,7 +3,7 @@
 
 use super::failure::{ProviderExecutionFailure, stream_protocol_failure};
 use vulcan_ai_contract::{AiStreamEvent, AiStreamStateMachine};
-use vulcan_ai_protocols::ProtocolConversionError;
+use vulcan_llm_core::ProtocolConversionError;
 
 /// Returns whether one normalized event makes transparent replay unsafe.
 /// 返回一条归一化事件是否会使透明重放变得不安全。

@@ -234,26 +234,22 @@ fn provisional_resource_order_keeps_duplicate_occurrences() {
 /// 普通文件使用真实已注册来源形态矩阵，而不是一律拒绝。
 #[test]
 fn protocol_resource_kind_gate_uses_registered_file_support() {
-    assert!(vulcan_ai_protocols::protocol_profile_supports_media_source(
-        vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
+    assert!(vulcan_llm_core::protocol_profile_supports_media_source(
+        vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
         ResourceKind::File,
         "application/pdf",
         ResourceSourceKind::InlineData
     ));
-    assert!(
-        !vulcan_ai_protocols::protocol_profile_supports_media_source(
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
-            ResourceKind::Video,
-            "video/mp4",
-            ResourceSourceKind::InlineData
-        )
-    );
-    assert!(
-        !vulcan_ai_protocols::protocol_profile_supports_media_source(
-            vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID,
-            ResourceKind::File,
-            "application/pdf",
-            ResourceSourceKind::HostResolved
-        )
-    );
+    assert!(!vulcan_llm_core::protocol_profile_supports_media_source(
+        vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+        ResourceKind::Video,
+        "video/mp4",
+        ResourceSourceKind::InlineData
+    ));
+    assert!(!vulcan_llm_core::protocol_profile_supports_media_source(
+        vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+        ResourceKind::File,
+        "application/pdf",
+        ResourceSourceKind::HostResolved
+    ));
 }

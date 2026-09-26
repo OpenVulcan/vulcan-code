@@ -14,7 +14,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use vulcan_ai_contract::ReasoningEffort;
-use vulcan_ai_protocols::{OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry};
+use vulcan_llm_core::{OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry};
 
 /// Verifies the captured API body is the exact JSON body received by the HTTP server.
 /// 验证捕获的 API 正文就是 HTTP 服务器实际收到的精确 JSON 正文。

@@ -105,6 +105,21 @@ it("updates a focused address on redirect and does not replace an actual unsubmi
   expect(addressInput().value).toBe("https://next.example/final");
 });
 
+// Native paths reach the host verbatim on both open and navigate; only the host may canonicalize them.
+// 原生路径在打开与导航时原样到达宿主；仅由宿主进行规范化。
+it.each([String.raw`C:\Users\lingeasy\.vulcan-debug\projects\vulcan_project\pelican-bicycle.html`,
+  "C:/my files/page.html", "file:///C:/my%20files/page.html"])("passes local address %s to the desktop host", async (address) => {
+  await mount();
+  await editAddress(address);
+  await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(bridge.navigate).toHaveBeenCalledWith("a", address);
+  snapshot = { ownerSessionId: "owner", activeId: null, tabs: [] };
+  await act(async () => publish(snapshot));
+  await editAddress(address);
+  await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(bridge.open).toHaveBeenCalledWith(address);
+});
+
 it("resets drafts when switching tabs and uses native history availability", async () => {
   await mount();
   await editAddress("unsubmitted.example");

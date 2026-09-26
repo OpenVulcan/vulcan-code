@@ -1599,7 +1599,7 @@ impl NativeVmmHostDriver {
         // Cache errors do not mean the already committed Core transaction was rolled back.
         // 缓存错误不表示已经提交的 Core 事务发生了回滚。
         if let Err(error) = self.project_committed_content() {
-            eprintln!(
+            tracing::warn!(
                 "[native-vmm] content committed but resident cache projection failed: {error}"
             );
         }

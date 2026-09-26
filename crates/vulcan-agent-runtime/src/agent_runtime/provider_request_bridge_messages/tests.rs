@@ -119,7 +119,7 @@ fn provider_visible_history_applies_system_update_as_user_wrapper() {
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -176,7 +176,7 @@ fn provider_visible_history_moves_system_update_after_tool_result_gap() {
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -246,7 +246,7 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -283,7 +283,7 @@ fn provider_visible_history_downgrades_model_unsupported_attachments() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         Some(&capabilities),
     )
     .expect("valid provider history projection");
@@ -340,7 +340,7 @@ fn provider_visible_history_filters_legacy_explore_assistant_projection() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("valid provider history projection");
@@ -391,7 +391,7 @@ fn provider_visible_history_preserves_matched_tool_result() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("valid provider history projection");
@@ -453,7 +453,7 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("valid provider history projection");
@@ -541,7 +541,7 @@ fn provider_visible_history_downgrades_orphan_tool_result() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("valid provider history projection");
@@ -597,7 +597,7 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("valid provider history projection");
@@ -643,7 +643,7 @@ fn provider_visible_history_downgrades_unanswered_tool_batch() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("valid provider history projection");
@@ -692,7 +692,7 @@ fn canonical_fixture_plain_text_history_projects_stably() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("valid provider history projection");
@@ -749,7 +749,7 @@ fn canonical_fixture_tool_call_and_result_projects_as_protocol_pair() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("valid provider history projection");
@@ -810,7 +810,7 @@ fn canonical_fixture_provider_switch_downgrades_stale_tool_state() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("valid provider history projection");
@@ -849,7 +849,7 @@ fn canonical_fixture_dynamic_injection_projects_as_system_update_wrapper() {
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -888,7 +888,7 @@ fn canonical_fixture_image_and_video_understanding_respects_model_capabilities()
 
     let responses_projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_RESPONSES_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID),
         Some(&capabilities),
     )
     .expect("valid Responses provider history projection");
@@ -909,7 +909,7 @@ fn canonical_fixture_image_and_video_understanding_respects_model_capabilities()
 
     let openai_projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         Some(&capabilities),
     )
     .expect("valid OpenAI provider history projection");
@@ -1165,7 +1165,7 @@ fn provider_visible_history_pairs_parallel_results_out_of_order_by_identity() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("out-of-order parallel results should project");
@@ -1220,7 +1220,7 @@ fn provider_visible_history_completes_each_tool_call_identity_exactly_once() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
     )
     .expect("a duplicated result must not abort projection");
@@ -1274,7 +1274,7 @@ fn provider_visible_history_degrades_tool_pair_split_by_media_and_keeps_media_na
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         Some(&capabilities),
     )
     .expect("a media-interleaved tool pair must degrade instead of failing");
@@ -1324,7 +1324,7 @@ fn provider_visible_history_preserves_matched_tool_result_media_envelope() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID),
         None,
     )
     .expect("a matched media tool result should project");
@@ -1356,7 +1356,7 @@ fn provider_visible_history_orphan_media_result_becomes_labelled_plain_text() {
 
     let projected = core_messages_to_provider_visible_history_for_model(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID),
         None,
     )
     .expect("an orphan tool result must degrade instead of aborting");
@@ -1417,7 +1417,7 @@ fn provider_visible_history_inserts_system_update_after_media_message_outside_to
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         Some(&capabilities),
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),
@@ -1478,7 +1478,7 @@ fn provider_visible_history_keeps_same_anchor_system_updates_in_input_order() {
 
     let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
         &messages,
-        Some(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
         ProviderSystemUpdateLoweringPolicy::default(),

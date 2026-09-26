@@ -316,7 +316,7 @@ mod tests {
                 runtime_label: String::from("OpenAI"),
                 model_id: String::from("gpt-test"),
                 model_name: String::from("GPT Test"),
-                protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+                protocol_profile_id: String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
                 manifest_revision: 0,
                 frozen_selection: None,
                 route_revision: String::from("sha256:test-route"),
@@ -390,7 +390,7 @@ mod tests {
                 ConversationSnapshot::default(),
             )
             .expect("valid core conversation snapshot"),
-            String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         )
     }
 

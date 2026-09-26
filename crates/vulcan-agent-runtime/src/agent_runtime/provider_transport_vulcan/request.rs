@@ -142,7 +142,7 @@ pub(crate) fn resolve_public_native_tools(
     output_resources: &[ResourceKind],
     mut native_tools: Vec<NativeToolKind>,
 ) -> Vec<NativeToolKind> {
-    if protocol_profile_id == vulcan_ai_protocols::OPENAI_CODEX_RESPONSES_PROFILE_ID
+    if protocol_profile_id == vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
         && output_resources.contains(&ResourceKind::Image)
         && !native_tools.contains(&NativeToolKind::ImageGeneration)
     {

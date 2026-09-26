@@ -190,7 +190,7 @@ pub(crate) fn schedule_vce_reconciliation(
                 }
             }
             Err(error) => {
-                eprintln!("[webui-service] VCE configuration reconciliation failed: {error}");
+                tracing::warn!("[webui-service] VCE configuration reconciliation failed: {error}");
             }
         }
     });

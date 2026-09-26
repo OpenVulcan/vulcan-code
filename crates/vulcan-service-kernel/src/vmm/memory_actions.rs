@@ -1991,7 +1991,7 @@ async fn disable_deleted_native_project_owners(
     let project_paths = match workspace_project_paths_from_state(state, owner_project_ids) {
         Ok(paths) => paths,
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] failed to lock workspace after native VMM deletion: {error}"
             );
             return owner_project_ids.to_vec();
@@ -2021,7 +2021,7 @@ async fn disable_deleted_native_project_owners(
         )
         .await;
         if let Err(error) = result {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] failed to disable VMM for detached project `{owner_project_id}`: {error}"
             );
             failures.push(owner_project_id.clone());
@@ -2151,7 +2151,7 @@ async fn refresh_vmm_health_workbench(app: &ServiceEventEmitter, state: &SharedS
     match refresh_workbench_snapshot(state.clone()).await {
         Ok(workbench) => emit_workbench_event(app, &workbench),
         Err(error) => {
-            eprintln!("[webui-service] failed to refresh VMM health workbench: {error}");
+            tracing::warn!("[webui-service] failed to refresh VMM health workbench: {error}");
         }
     }
 }

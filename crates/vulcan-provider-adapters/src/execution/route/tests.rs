@@ -91,7 +91,7 @@ fn exact_provider_routes_install_specialized_usage_profiles() {
     let minimax_route = bundled_manifest_route(
         "minimax",
         "global",
-        vulcan_ai_protocols::ANTHROPIC_MESSAGES_PROFILE_ID,
+        vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
     );
     assert_eq!(
         minimax_route.protocol_route.usage_extraction_profiles.len(),

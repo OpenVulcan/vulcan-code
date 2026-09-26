@@ -101,7 +101,7 @@ pub(super) fn handle_request_phase_stream_event(
             format!("session={session_id} task={active_stream_task_id} outcome={outcome:?}"),
         ),
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] {}: {error}",
                 request_phase_failure_context(event)
             );

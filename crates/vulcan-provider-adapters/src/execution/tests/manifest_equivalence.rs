@@ -6,7 +6,7 @@ use super::super::test_support::{bundled_manifest_route, minimal_request};
 use crate::{MINIMAX_REASONING_SPLIT_PARAMETER_ID, SAMPLING_TEMPERATURE_PARAMETER_ID};
 use std::sync::Arc;
 use vulcan_ai_contract::{ModelParameterValue, ReasoningEffort};
-use vulcan_ai_protocols::{
+use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
     ProtocolRegistry,
 };

@@ -81,6 +81,14 @@ jobs:
         run: cargo clippy --locked --no-deps -p vulcan-service-kernel --all-targets -- -D clippy::too_many_arguments -D clippy::type_complexity
       - name: Database boundary regression tests
         run: cargo test --locked -p vulcan-workspace-store --lib local_sql -- --test-threads=1
+      - name: Isolated offline LuaSkills callback regressions
+        run: node scripts/test-isolated-callbacks.mjs
+      - name: Service log retention and hidden-process diagnostics
+        run: cargo test --locked -p vulcan-code-service logging::tests -- --test-threads=1
+      - name: Protocol core regressions
+        run: cargo test --locked -p vulcan-llm-core --lib
+      - name: Real host database channel regressions
+        run: cargo test --locked -p vulcan-agent-runtime luaskills_runtime::database_callbacks::tests -- --test-threads=1
   required:
     name: Required quality gates
     if: always()

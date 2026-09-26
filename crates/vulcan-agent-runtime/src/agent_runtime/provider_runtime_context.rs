@@ -3079,7 +3079,7 @@ mod tests {
             runtime_label: String::from("Vulcan Public AI Contract"),
             model_id: String::from("vendor/model"),
             model_name: String::from("Model"),
-            protocol_profile_id: String::from(vulcan_ai_protocols::OPENAI_CHAT_PROFILE_ID),
+            protocol_profile_id: String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
             manifest_revision: 0,
             frozen_selection: None,
             route_revision: String::from("sha256:test-route"),

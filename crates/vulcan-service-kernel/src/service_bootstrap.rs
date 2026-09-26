@@ -286,7 +286,7 @@ impl Drop for PendingLuaSkillsCallbackInstallation {
 /// The monotonic origin used by the matching completion record.
 /// 返回供对应完成记录使用的单调计时起点。
 fn start_bootstrap_stage(stage: &str) -> Instant {
-    eprintln!("[webui-service][startup-timing] stage={stage} status=started");
+    tracing::info!("[webui-service][startup-timing] stage={stage} status=started");
     Instant::now()
 }
 
@@ -303,7 +303,7 @@ fn start_bootstrap_stage(stage: &str) -> Instant {
 /// `detail` 仅包含已经存在的数量或状态标签。
 fn trace_bootstrap_stage(stage: &str, started_at: Instant, detail: impl AsRef<str>) {
     let elapsed_ms = started_at.elapsed().as_millis();
-    eprintln!(
+    tracing::info!(
         "[webui-service][startup-timing] stage={stage} status=completed elapsed_ms={elapsed_ms} {}",
         detail.as_ref()
     );
@@ -1213,7 +1213,7 @@ fn run_service_bootstrap(
             let configuration = match provider_task_recovery_runtime.configuration_snapshot() {
                 Ok(configuration) => configuration,
                 Err(error) => {
-                    eprintln!(
+                    tracing::warn!(
                         "[webui-service] provider task recovery skipped because configuration is unavailable: {error}"
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(15)).await;
@@ -1224,7 +1224,7 @@ fn run_service_bootstrap(
                 .recover_provider_tasks(&configuration)
                 .await
             {
-                eprintln!("[webui-service] provider task recovery observation failed: {error}");
+                tracing::warn!("[webui-service] provider task recovery observation failed: {error}");
             }
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
         }
@@ -1240,7 +1240,7 @@ fn run_service_bootstrap(
             let configuration = match usage_refresh_runtime.configuration_snapshot() {
                 Ok(configuration) => configuration,
                 Err(error) => {
-                    eprintln!("[webui-service] public AI usage refresh skipped: {error}");
+                    tracing::warn!("[webui-service] public AI usage refresh skipped: {error}");
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     continue;
                 }
@@ -1249,7 +1249,7 @@ fn run_service_bootstrap(
                 .refresh_supported_connection_usage(&configuration)
                 .await
             {
-                eprintln!("[webui-service] public AI usage refresh failed: {error}");
+                tracing::warn!("[webui-service] public AI usage refresh failed: {error}");
             }
             match usage_refresh_runtime.usage_cache_snapshot() {
                 Ok(snapshots) => {
@@ -1262,11 +1262,15 @@ fn run_service_bootstrap(
                         )
                         .await
                     {
-                        eprintln!("[webui-service] public AI usage persistence failed: {error}");
+                        tracing::warn!(
+                            "[webui-service] public AI usage persistence failed: {error}"
+                        );
                     }
                 }
                 Err(error) => {
-                    eprintln!("[webui-service] public AI usage cache snapshot failed: {error}");
+                    tracing::warn!(
+                        "[webui-service] public AI usage cache snapshot failed: {error}"
+                    );
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(
@@ -1335,7 +1339,7 @@ fn run_service_bootstrap(
     let workspace_watcher = match crate::workspace_watcher::WorkspaceWatcherCenter::new() {
         Ok(watcher) => Some(watcher),
         Err(error) => {
-            eprintln!("[webui-service] shared workspace watcher unavailable: {error}");
+            tracing::warn!("[webui-service] shared workspace watcher unavailable: {error}");
             None
         }
     };
@@ -1351,7 +1355,7 @@ fn run_service_bootstrap(
             crate::vce::vce_publication_authority(state),
         )),
         Err(error) => {
-            eprintln!("[webui-service] optional native VCE bootstrap unavailable: {error}");
+            tracing::warn!("[webui-service] optional native VCE bootstrap unavailable: {error}");
             None
         }
     };
@@ -1404,7 +1408,7 @@ fn run_service_bootstrap(
         if native_vmm_bootstrap_is_required(&global_vmm_effective)
             && let Err(error) = native_vmm_maintenance.validate_host_ai().await
         {
-            eprintln!("[webui-service] native VMM Host AI validation failed: {error}");
+            tracing::warn!("[webui-service] native VMM Host AI validation failed: {error}");
         }
         let (native_backend_enabled, pending_analysis_notify) =
             native_vmm_maintenance.pending_analysis_activation();
@@ -1442,7 +1446,7 @@ fn run_service_bootstrap(
     ) {
         Ok(maintenance) => Some(maintenance),
         Err(error) if !native_vmm_bootstrap_is_required(&global_vmm_effective) => {
-            eprintln!(
+            tracing::warn!(
                 "[webui-service] optional native VMM bootstrap unavailable while inactive: {error}"
             );
             None

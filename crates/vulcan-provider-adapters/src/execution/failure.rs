@@ -6,8 +6,8 @@ use serde_json::Value;
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome, RetryAfterHint,
 };
-use vulcan_ai_protocols::ProtocolConversionError;
 use vulcan_llm_core::LlmCoreError;
+use vulcan_llm_core::ProtocolConversionError;
 
 /// Carries one structured provider execution failure.
 /// 承载一个结构化供应商执行失败。
