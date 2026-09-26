@@ -2,6 +2,7 @@
 //! Vulcan Core Service 的 HTTP 与 WebSocket 宿主层。
 
 pub mod instance;
+mod rpc_admission;
 
 use std::{
     collections::HashMap,
@@ -1019,30 +1020,13 @@ fn webui_service_browser_error_response(
         .into_response()
 }
 
-/// Handles one browser-facing JSON RPC request.
-/// 处理单个浏览器侧 JSON RPC 请求。
+/// Handles one already-admitted browser-facing JSON RPC request.
+/// 处理一项已经通过准入的浏览器 JSON RPC 请求。
 async fn webui_service_rpc_http_handler(
     AxumState(server_state): AxumState<WebuiServiceHttpState>,
-    headers: AxumHeaderMap,
-    uri: AxumOriginalUri,
+    _admission: rpc_admission::RpcAdmission,
     Json(request): Json<WebuiServiceRpcHttpRequest>,
 ) -> AxumResponse {
-    // A present-but-untrusted Origin is refused exactly like on the event WebSocket.
-    // 存在但不受信任的 Origin 与事件 WebSocket 一样被拒绝。
-    if !webui_service_headers_origin_is_allowed(&headers) {
-        return webui_service_rpc_error_response(
-            AxumStatusCode::FORBIDDEN,
-            "origin_not_allowed",
-            "Browser service origin is not allowed.",
-        );
-    }
-    if !webui_service_request_token_is_valid(&headers, uri.0.query(), &server_state.service_token) {
-        return webui_service_rpc_error_response(
-            AxumStatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "Browser service token is missing or invalid.",
-        );
-    }
     let result = (server_state.rpc_dispatcher)(request.method, request.params).await;
     Json(match result {
         Ok(result) => webui_service_rpc_success_envelope(result),
@@ -1947,6 +1931,71 @@ mod tests {
             StatusCode::FORBIDDEN
         };
         assert_eq!(response.status(), expected);
+    }
+
+    /// Unauthorized bodies must never be polled, even when they advertise a large or invalid carrier.
+    /// 未授权请求体绝不能被轮询，即使请求声明了超大或非法载体。
+    #[tokio::test]
+    async fn browser_rpc_admission_precedes_every_body_read() {
+        for (token, origin, expected) in [
+            (None, None, StatusCode::UNAUTHORIZED),
+            (Some("wrong-token"), None, StatusCode::UNAUTHORIZED),
+            (
+                Some("test-token"),
+                Some("https://untrusted.invalid"),
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let unread = futures_util::stream::poll_fn(
+                |_| -> std::task::Poll<Option<Result<axum::body::Bytes, std::io::Error>>> {
+                    panic!("authentication must reject before polling any request-body bytes")
+                },
+            );
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/rpc")
+                .header("content-type", "application/json")
+                .header(
+                    "content-length",
+                    super::WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES.to_string(),
+                );
+            if let Some(token) = token {
+                request = request.header("x-vulcan-service-token", token);
+            }
+            if let Some(origin) = origin {
+                request = request.header("origin", origin);
+            }
+            let response = test_router()
+                .oneshot(request.body(Body::from_stream(unread)).expect("request"))
+                .await
+                .expect("admission response");
+            assert_eq!(response.status(), expected);
+            let bytes = to_bytes(response.into_body(), 4096)
+                .await
+                .expect("bounded rejection");
+            let envelope: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("existing error envelope");
+            assert_eq!(envelope["ok"], false);
+        }
+    }
+
+    /// Authorized requests still pass through JSON syntax and size validation after admission.
+    /// 授权请求仍在准入后经过 JSON 语法与大小校验。
+    #[tokio::test]
+    async fn browser_rpc_admission_does_not_bypass_body_validation() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/rpc")
+                    .header("content-type", "application/json")
+                    .header("x-vulcan-service-token", "test-token")
+                    .body(Body::from("{invalid"))
+                    .expect("request"),
+            )
+            .await
+            .expect("parser response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     /// Verifies browser RPC rejects requests without the service token.

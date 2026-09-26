@@ -23,5 +23,6 @@ vulcan-service-api.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
+futures-util.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 tower.workspace = true
