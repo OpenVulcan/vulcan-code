@@ -36,14 +36,10 @@
 //!
 //! Error type / 错误类型:
 //!
-//! Helpers return `Result<_, String>` because the call sites they replace already produced
-//! user-facing Chinese messages with `format!` and `map_err`. Returning the engine error here would
-//! force every call site to re-render it, which is churn without benefit; the engine error is
-//! rendered into the message with `Display`.
-//!
-//! 辅助函数返回 `Result<_, String>`，因为它们所取代的调用点本就用 `format!` 与 `map_err` 产出面向
-//! 用户的中文消息。在此返回引擎错误会迫使每个调用点重新渲染，是无收益的改动；引擎错误经 `Display`
-//! 渲染进消息。
+//! The typed module preserves binding, engine, deadline and worker failures. Legacy helpers
+//! explicitly render at their public return boundary; new control flow must use typed errors.
+//! typed 模块保留绑定、引擎、截止时间和工作任务失败。旧辅助函数在公开返回边界显式渲染；
+//! 新控制流程必须使用类型化错误。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -138,13 +134,7 @@ impl OwnedDatabaseTarget {
     /// Returns the normalized file path, or a binding/path-validation error.
     /// 返回规范化文件路径，或绑定／路径校验错误。
     pub fn key(&self, runtime: &LocalDatabaseRuntime) -> Result<DatabaseKey, String> {
-        let path = match self {
-            Self::Logical(logical) => runtime.path_for(*logical).map_err(render)?,
-            Self::File(binding) => binding.path.clone(),
-        };
-        vulcan_sqlite_engine::runtime::normalize_db_path(&path)
-            .map(DatabaseKey::File)
-            .map_err(render)
+        typed::key(self, runtime).map_err(render)
     }
 
     /// Resolves filesystem-backed identity without blocking the asynchronous scheduler.
@@ -207,12 +197,19 @@ impl From<&SqliteFileBinding> for OwnedDatabaseTarget {
 /// 把阻塞边界失败渲染为同步入口同样使用的字符串错误。
 fn render_boundary_failure(error: BlockingBoundaryError<String>) -> String {
     match error {
+        BlockingBoundaryError::DeadlineExceeded => {
+            typed::LocalSqlError::DeadlineExceeded.to_string()
+        }
         BlockingBoundaryError::Operation(inner) => inner,
         BlockingBoundaryError::Task { detail } => {
             format!("blocking database operation did not run to completion: {detail}")
         }
     }
 }
+
+/// Structured SQL operations; legacy helpers explicitly render errors at their return boundary.
+/// 结构化 SQL 操作；旧辅助函数仅在返回边界显式渲染错误。
+pub mod typed;
 
 /// Runs one script on the blocking boundary, off the Tokio core threads.
 /// 在阻塞边界上运行一条脚本，离开 Tokio 核心线程。
@@ -435,18 +432,9 @@ pub async fn query_json_bounded_until_async(
     limits: QueryJsonLimits,
     deadline: std::time::Instant,
 ) -> Result<QueryJsonResult, String> {
-    with_connection_until_async(runtime, target, Some(deadline), move |connection| {
-        let result =
-            sql_exec::query_json_bounded(connection, &sql, &params, limits).map_err(render);
-        if std::time::Instant::now() >= deadline {
-            return Err(
-                "SQLite query deadline exceeded; execution and connection cleanup completed."
-                    .into(),
-            );
-        }
-        result
-    })
-    .await
+    typed::query_json_bounded_until_async(runtime, target, sql, params, limits, deadline)
+        .await
+        .map_err(render)
 }
 
 /// Runs one operation within its original deadline and owns interruption through connection cleanup.
@@ -459,33 +447,11 @@ pub async fn with_connection_until_async<T: Send + 'static>(
     deadline: Option<std::time::Instant>,
     body: impl FnOnce(&mut rusqlite::Connection) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
-    let target = target.into();
-    let key = target.key_async(runtime, deadline).await?;
-    let shared = Arc::clone(runtime);
-    let scheduler = tokio::runtime::Handle::current();
-    runtime
-        .boundary()
-        .run_until(key, deadline, move || {
-            with_connection(shared.as_ref(), target.as_target(), |connection| {
-                let Some(deadline) = deadline else {
-                    return body(connection);
-                };
-                let remaining = deadline
-                    .checked_duration_since(std::time::Instant::now())
-                    .ok_or_else(|| "SQLite query deadline expired before execution.".to_owned())?;
-                connection.busy_timeout(remaining).map_err(render)?;
-                let interrupt = connection.get_interrupt_handle();
-                // Interrupt is connection-specific and never targets a subsequent operation's connection.
-                // 中断专属于当前连接，绝不指向后续操作的连接。
-                let _timer = SqlInterruptTimer(scheduler.spawn(async move {
-                    tokio::time::sleep_until(deadline.into()).await;
-                    interrupt.interrupt();
-                }));
-                body(connection)
-            })
-        })
-        .await
-        .map_err(render_boundary_failure)
+    typed::with_connection_until_async(runtime, target, deadline, move |connection| {
+        body(connection).map_err(typed::LocalSqlError::LegacyOperation)
+    })
+    .await
+    .map_err(render)
 }
 
 /// Cancels the connection-specific interrupt task on both ordinary return and panic.
@@ -922,10 +888,7 @@ pub fn connect<'a>(
     runtime: &LocalDatabaseRuntime,
     target: impl Into<DatabaseTarget<'a>>,
 ) -> Result<rusqlite::Connection, String> {
-    match target.into() {
-        DatabaseTarget::Logical(logical) => runtime.connect(logical).map_err(render),
-        DatabaseTarget::File(binding) => runtime.connect_sqlite_file(binding).map_err(render),
-    }
+    typed::connect(runtime, target).map_err(render)
 }
 
 /// Runs `body` with one connection to the selected database, releasing it afterwards.

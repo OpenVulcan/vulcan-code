@@ -479,6 +479,9 @@ pub enum DatabaseKey {
 /// 阻塞数据库操作未产生值的原因。
 #[derive(Debug)]
 pub enum BlockingBoundaryError<E> {
+    /// Admission or pre-execution preparation exhausted the caller's deadline.
+    /// 准入或执行前准备已耗尽调用方截止时间。
+    DeadlineExceeded,
     /// The operation ran and failed.
     /// 操作已运行并失败。
     Operation(E),
@@ -615,9 +618,7 @@ impl DatabaseBlockingBoundary {
         let permit = if let Some(deadline) = deadline {
             tokio::time::timeout_at(deadline.into(), admission)
                 .await
-                .map_err(|_| BlockingBoundaryError::Task {
-                    detail: "database preparation admission deadline exceeded".into(),
-                })?
+                .map_err(|_| BlockingBoundaryError::DeadlineExceeded)?
         } else {
             admission.await
         }
@@ -629,9 +630,7 @@ impl DatabaseBlockingBoundary {
             // 即使异步调用方取消，实际工作线程仍保留容量占用。
             let _permit = permit;
             if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
-                return Err(BlockingBoundaryError::Task {
-                    detail: "database preparation deadline expired before execution".into(),
-                });
+                return Err(BlockingBoundaryError::DeadlineExceeded);
             }
             operation().map_err(BlockingBoundaryError::Operation)
         })
@@ -675,9 +674,7 @@ impl DatabaseBlockingBoundary {
         let (guard, permit) = if let Some(deadline) = deadline {
             tokio::time::timeout_at(deadline.into(), admission)
                 .await
-                .map_err(|_| BlockingBoundaryError::Task {
-                    detail: "database admission deadline exceeded".into(),
-                })??
+                .map_err(|_| BlockingBoundaryError::DeadlineExceeded)??
         } else {
             admission.await?
         };
@@ -2758,7 +2755,7 @@ mod blocking_boundary_tests {
             .await;
         release_tx.send(()).expect("release actual worker");
         assert!(
-            matches!(queued, Err(BlockingBoundaryError::Task { .. })),
+            matches!(queued, Err(BlockingBoundaryError::DeadlineExceeded)),
             "the cancelled caller must not release active preparation capacity"
         );
         boundary
@@ -2777,7 +2774,10 @@ mod blocking_boundary_tests {
                 panic!("expired preparation must not execute");
             })
             .await;
-        assert!(matches!(result, Err(BlockingBoundaryError::Task { .. })));
+        assert!(matches!(
+            result,
+            Err(BlockingBoundaryError::DeadlineExceeded)
+        ));
     }
 
     /// Proves blocking database work leaves the async executor free rather than stalling it.
