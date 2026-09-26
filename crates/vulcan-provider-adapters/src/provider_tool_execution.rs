@@ -181,17 +181,18 @@ pub(crate) fn canonicalize_provider_tool_arguments(
     target: &ProviderToolTarget,
     mut arguments: Value,
 ) -> Result<Value, String> {
-    validate_provider_tool_arguments(
-        &target.contract.input_schema,
-        &arguments,
-        target.contract.tool_id.as_str(),
-    )?;
+    // One frozen schema owns both validations; default materialization must not recompile it.
+    // 同一冻结 Schema 持有两次校验；默认值物化不得重新编译 Schema。
+    let validator =
+        jsonschema::draft202012::new(&target.contract.input_schema).map_err(|error| {
+            format!(
+                "Provider tool `{}` input schema is invalid: {error}",
+                target.contract.tool_id
+            )
+        })?;
+    validate_provider_tool_arguments(&validator, &arguments, target.contract.tool_id.as_str())?;
     apply_json_schema_defaults(&target.contract.input_schema, &mut arguments, 0)?;
-    validate_provider_tool_arguments(
-        &target.contract.input_schema,
-        &arguments,
-        target.contract.tool_id.as_str(),
-    )?;
+    validate_provider_tool_arguments(&validator, &arguments, target.contract.tool_id.as_str())?;
     validate_provider_tool_numeric_product_ranges(
         &target.contract.input_numeric_product_ranges,
         &arguments,
@@ -985,23 +986,19 @@ fn apply_json_schema_defaults(
 ///
 /// # Parameters
 /// 参数
-/// `schema` is manifest-owned, `arguments` are the exact pre- or post-default values, and
+/// `validator` is compiled from the frozen manifest schema; `arguments` are pre- or post-default values, and
 /// `tool_id` scopes the controlled diagnostic.
-/// `schema` 由 Manifest 持有，`arguments` 是应用默认值前或后的精确值，`tool_id` 限定受控诊断。
+/// `validator` 从冻结 Manifest Schema 编译，`arguments` 是默认值前后的精确值，`tool_id` 限定诊断。
 ///
 /// # Returns
 /// 返回值
-/// Success only when the schema compiles locally and the arguments satisfy every constraint.
-/// 仅当 Schema 可在本地编译且参数满足全部约束时返回成功。
+/// Success only when the arguments satisfy the already-compiled frozen schema.
+/// 仅当参数满足已编译冻结 Schema 的全部约束时返回成功。
 fn validate_provider_tool_arguments(
-    schema: &Value,
+    validator: &jsonschema::Validator,
     arguments: &Value,
     tool_id: &str,
 ) -> Result<(), String> {
-    // Manifest validation rejects remote references, so runtime compilation remains local.
-    // Manifest 校验会拒绝远程引用，因此运行时编译保持纯本地。
-    let validator = jsonschema::draft202012::new(schema)
-        .map_err(|error| format!("Provider tool `{tool_id}` input schema is invalid: {error}"))?;
     validator
         .validate(arguments)
         .map_err(|error| format!("Provider tool `{tool_id}` arguments are invalid: {error}"))
@@ -3821,6 +3818,35 @@ fn format_structured_provider_error(label: &str, status: Option<u16>, body: &Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reusing a validator must still reject both invalid inputs and invalid inserted defaults.
+    /// 复用验证器仍必须拒绝非法输入以及物化后非法的默认值。
+    #[test]
+    fn reused_argument_validator_checks_before_and_after_defaults() {
+        let mut target = bundled_manifest_tool_targets("tavily")
+            .into_iter()
+            .next()
+            .expect("fixture target");
+        target.contract.input_numeric_product_ranges.clear();
+        target.contract.input_schema = serde_json::json!({
+            "type": "object", "required": ["query"],
+            "properties": { "query": {"type": "string"}, "limit": {"type": "integer", "default": 4} }
+        });
+        let value =
+            canonicalize_provider_tool_arguments(&target, serde_json::json!({"query":"hello"}))
+                .expect("valid default is materialized");
+        assert_eq!(value.get("limit"), Some(&serde_json::json!(4)));
+        assert!(
+            canonicalize_provider_tool_arguments(&target, serde_json::json!({"query": false}))
+                .is_err()
+        );
+        target.contract.input_schema["properties"]["limit"]["default"] =
+            serde_json::json!("invalid");
+        assert!(
+            canonicalize_provider_tool_arguments(&target, serde_json::json!({"query":"hello"}))
+                .is_err()
+        );
+    }
 
     /// Verifies direct Coding tools include the frozen Kimi device identity with bearer authorization.
     /// 验证 Coding 直连工具会随 Bearer 鉴权发送冻结的 Kimi 设备身份。
