@@ -190,11 +190,14 @@ impl std::error::Error for FileToolError {}
 
 /// Result returned by the shared runtime before the agent layer adds host-result metadata.
 /// 共享运行时返回的结果，之后由 Agent 层补充宿主结果元数据。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FileToolResponse {
     /// Compact model-visible result body.
     /// 紧凑的模型可见结果正文。
     pub model_output: Value,
+    /// Read-only presentation coordinates into model_output; source text is never duplicated here.
+    /// 指向 model_output 的只读展示坐标；此处绝不重复保存源文件正文。
+    pub read_metadata: Option<Value>,
     /// Optional canonical change-set payload for write operations.
     /// 写入操作可选的 canonical change-set 载荷。
     pub change_set: Option<Value>,
@@ -297,6 +300,7 @@ fn execute_legacy_file_sync(
             "action": action,
             "results": results,
         }),
+        read_metadata: None,
         change_set: None,
     })
 }
@@ -341,6 +345,7 @@ fn execute_native_file_sync(
             }
             Ok(FileToolResponse {
                 model_output,
+                read_metadata: None,
                 change_set: None,
             })
         }
@@ -426,14 +431,13 @@ fn native_read_file(
         request_path,
         &snapshot,
         NativeReadRange {
-            requested_start_line: start_line,
             requested_end_line: requested_end,
             start_index,
             end_index: desired_end_index,
             size_truncated: false,
         },
     );
-    let model_output = if serialized_value_bytes(&full_output) <= MAX_READ_RESPONSE_BYTES {
+    let response = if serialized_value_bytes(&full_output) <= MAX_READ_RESPONSE_BYTES {
         full_output
     } else {
         let metadata_only = native_read_model_output(
@@ -441,7 +445,6 @@ fn native_read_file(
             request_path,
             &snapshot,
             NativeReadRange {
-                requested_start_line: start_line,
                 requested_end_line: requested_end,
                 start_index,
                 end_index: start_index,
@@ -468,7 +471,6 @@ fn native_read_file(
                 request_path,
                 &snapshot,
                 NativeReadRange {
-                    requested_start_line: start_line,
                     requested_end_line: requested_end,
                     start_index,
                     end_index: candidate_end,
@@ -494,7 +496,6 @@ fn native_read_file(
             request_path,
             &snapshot,
             NativeReadRange {
-                requested_start_line: start_line,
                 requested_end_line: requested_end,
                 start_index,
                 end_index: fitting_end,
@@ -502,19 +503,13 @@ fn native_read_file(
             },
         )
     };
-    Ok(FileToolResponse {
-        model_output,
-        change_set: None,
-    })
+    Ok(response)
 }
 
 /// Groups one requested and returned native read range with its size-limit state.
 /// 将原生读取的请求范围、返回范围与大小限制状态组合在一起。
 #[derive(Debug, Clone, Copy)]
 struct NativeReadRange {
-    /// One-based first line requested by the model.
-    /// 模型请求的一基起始行。
-    requested_start_line: usize,
     /// Optional one-based inclusive final line requested by the model.
     /// 模型请求的可选一基闭区间结束行。
     requested_end_line: Option<usize>,
@@ -529,82 +524,101 @@ struct NativeReadRange {
     size_truncated: bool,
 }
 
-/// Builds one native read payload for an already bounded contiguous line range.
-/// 为一个已经有界的连续行范围构建原生读取载荷。
+/// Renders the bounded snapshot range once as Markdown and returns content-free host coordinates.
+/// 将快照中的有界范围渲染为一份 Markdown，并返回不含正文的宿主坐标。
+/// path selects language and canonical identity; request_path labels the model-visible header.
+/// path 确定语言与规范身份；request_path 提供模型可见标题。
 fn native_read_model_output(
     path: &Path,
     request_path: &str,
     snapshot: &TextSnapshot,
     range: NativeReadRange,
-) -> Value {
+) -> FileToolResponse {
+    // Select complete logical lines; normalize only their presentation separators to LF.
+    // 选择完整逻辑行，仅将展示分隔符归一化为 LF。
     let selected = &snapshot.document.lines[range.start_index..range.end_index];
-    let content = selected
-        .iter()
-        .map(|line| {
-            let mut rendered = line.content.clone();
-            if let Some(ending) = line.ending {
-                rendered.push_str(ending.as_str());
-            }
-            rendered
-        })
-        .collect::<String>();
+    // Keep the source range independent from the Markdown header length.
+    // 保持源文件范围独立于 Markdown 标题长度。
     let returned_start_line = range.start_index.saturating_add(1);
-    let returned_end_line = range.start_index.saturating_add(selected.len());
-    let range_truncated = returned_end_line < snapshot.document.lines.len()
-        && range
-            .requested_end_line
-            .is_none_or(|end_line| returned_end_line < end_line);
-    let truncated = range.size_truncated || range_truncated;
-    let lines = selected
+    let returned_end_line = range.end_index;
+    // Report continuation only when the requested range has unread source lines.
+    // 仅当请求范围仍有未读源文件行时报告续读位置。
+    let truncated = range.size_truncated
+        || (returned_end_line < snapshot.document.lines.len()
+            && range
+                .requested_end_line
+                .is_none_or(|end| returned_end_line < end));
+    // A fence longer than every source backtick run prevents source text from closing it.
+    // 围栏长度超过正文所有连续反引号，避免源文件内容提前关闭代码块。
+    let fence_length = selected
         .iter()
-        .enumerate()
-        .map(|(index, line)| {
-            json!({
-                "line_number": range.start_index + index + 1,
-                "content": line.content,
-            })
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "ok": true,
-        "schema": "vulcan.file_access.v2",
+        .flat_map(|line| line.content.split(|character| character != '`'))
+        .map(str::len)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+        .max(3);
+    let fence = "`".repeat(fence_length);
+    // Escape header line breaks so paths cannot invalidate the numeric line mapping.
+    // 转义标题中的换行，防止路径破坏数值行映射。
+    let header_path = request_path.replace('\r', "\\r").replace('\n', "\\n");
+    let language = language_for_path(path);
+    // Empty reads must not display an inverted or fabricated source range.
+    // 空读取不得展示逆序或虚构的源文件范围。
+    let showing = if selected.is_empty() {
+        String::from("empty")
+    } else {
+        format!("{returned_start_line}-{returned_end_line}")
+    };
+    // The Markdown string is the only owner of source text in the returned payload.
+    // Markdown 字符串是返回载荷中源文件正文的唯一持有者。
+    let mut markdown = format!(
+        "# File: {header_path}\n\nLines: {} | Showing: {showing} | Encoding: {}\n\n{fence}{language}\n",
+        snapshot.document.lines.len(),
+        snapshot.document.encoding.label(),
+    );
+    // Record the first body line before appending content instead of hard-coding a header offset.
+    // 追加正文前记录首行位置，避免硬编码标题偏移。
+    let output_start_line = markdown.lines().count() + 1;
+    for line in selected {
+        markdown.push_str(&line.content);
+        markdown.push('\n');
+    }
+    markdown.push_str(&fence);
+    markdown.push('\n');
+    if truncated {
+        markdown.push_str(&format!(
+            "\nTruncated. Continue with start_line={}.\n",
+            returned_end_line.saturating_add(1),
+        ));
+    }
+    // Host metadata contains only coordinates and file-format facts, never source content.
+    // 宿主元数据仅含定位信息和文件格式事实，绝不保存源文件正文。
+    let metadata = json!({
+        "schema": "vulcan.file_read.v1",
         "action": "read",
         "path": display_path(path),
-        "request_path": request_path,
-        "resolved_path": display_path(path),
         "resource_id": "resource-1",
-        "language": language_for_path(path),
-        "version": snapshot.version,
+        "language": language,
         "encoding": snapshot.document.encoding.label(),
-        "encoding_source": snapshot.document.encoding_source.as_str(),
-        "encoding_certain": snapshot.document.encoding_certain,
         "bom": snapshot.document.bom.is_present(),
         "line_ending": snapshot.document.line_ending_label(),
-        "preferred_line_ending": snapshot.document.preferred_line_ending.label(),
         "mixed_line_endings": snapshot.document.mixed_line_endings,
         "final_newline": snapshot.document.final_newline(),
-        "line_count": snapshot.document.lines.len(),
-        "start_line": returned_start_line,
-        "end_line": returned_end_line,
-        "requested_range": {
-            "start_line": range.requested_start_line,
-            "end_line": range.requested_end_line,
+        "total_line_count": snapshot.document.lines.len(),
+        "range": {
+            "source_start_line": returned_start_line,
+            "output_start_line": output_start_line,
+            "line_count": selected.len(),
         },
-        "actual_range": {
-            "start_line": returned_start_line,
-            "end_line": returned_end_line,
-        },
-        "returned_line_count": selected.len(),
         "truncated": truncated,
         "next_start_line": truncated.then_some(returned_end_line.saturating_add(1)),
-        "content": content,
-        "lines": lines,
-        "segments": [{
-            "start_line": returned_start_line,
-            "end_line": returned_end_line,
-            "content": content,
-        }],
-    })
+    });
+    FileToolResponse {
+        model_output: Value::String(markdown),
+        read_metadata: Some(metadata),
+        change_set: None,
+    }
 }
 
 /// Lists one directory through the existing bounded traversal implementation.
@@ -633,6 +647,7 @@ fn native_list_files(
     }
     Ok(FileToolResponse {
         model_output,
+        read_metadata: None,
         change_set: None,
     })
 }
@@ -911,6 +926,7 @@ fn native_file_change_response(action: &str, changes: Vec<PreparedChange>) -> Fi
             "file_count": files.len(),
             "operations": operation_results,
         }),
+        read_metadata: None,
         change_set: Some(json!({
             "mode": "applied",
             "summary": format!("File {action} applied."),
@@ -1560,7 +1576,7 @@ fn line_value(line: usize, content: &str, numbered: bool) -> Value {
 
 /// Returns a conservative serialized size for one bounded result row.
 /// 返回一条有界结果行的保守序列化大小。
-fn serialized_value_bytes(value: &Value) -> usize {
+fn serialized_value_bytes(value: &impl serde::Serialize) -> usize {
     serde_json::to_vec(value)
         .map(|bytes| bytes.len().saturating_add(1))
         .unwrap_or(usize::MAX)
@@ -1737,6 +1753,7 @@ fn execute_exact_file_edit_sync(
             "operation_count": operation_results.len(),
             "operations": operation_results,
         }),
+        read_metadata: None,
         change_set: Some(json!({
             "mode": "applied",
             "summary": "Exact text replacement applied.",
@@ -2034,6 +2051,7 @@ fn execute_apply_patch_sync(
             "operation_count": operation_results.len(),
             "operations": operation_results,
         }),
+        read_metadata: None,
         change_set: Some(json!({
             "mode": "applied",
             "summary": "Apply Patch changes applied.",
@@ -2659,6 +2677,7 @@ fn execute_legacy_file_edit_sync(
             "operations": operation_results,
             "resources": operation_resource_ids,
         }),
+        read_metadata: None,
         change_set: Some(change_set),
     })
 }
@@ -5112,7 +5131,12 @@ mod tests {
         )
         .await
         .expect("external parent-relative read should succeed");
-        assert_eq!(read.model_output["content"], json!("before\n"));
+        assert!(
+            read.model_output
+                .as_str()
+                .expect("Markdown read")
+                .contains("\nbefore\n")
+        );
 
         execute_file_edit(
             workspace.clone(),
@@ -5802,62 +5826,138 @@ mod tests {
     /// 验证公开读取契约返回真实范围以及不含 Lxx 文本的代码正文。
     #[tokio::test]
     async fn native_read_returns_code_content_and_real_range() {
+        // Cover normalized separators, blank lines, fences, Unicode, and an unterminated final line.
+        // 覆盖归一化分隔符、空行、围栏、Unicode 与无末尾换行的最后一行。
         let directory = tempdir().expect("create temporary directory");
         fs::write(
             directory.path().join("sample.rs"),
-            "one\r\ntwo\r\nthree\r\n",
+            "one\r\ntwo\r\n\r\n```\r\n你好",
         )
         .expect("write fixture");
         let response = execute_file(
             directory.path().to_path_buf(),
             json!({
-                "action": "read",
-                "path": "sample.rs",
-                "start_line": 2,
-                "end_line": 3
+                "action": "read", "path": "sample.rs", "start_line": 2, "end_line": 5
             }),
         )
         .await
         .expect("native read should succeed");
-        assert_eq!(response.model_output["start_line"], json!(2));
-        assert_eq!(response.model_output["end_line"], json!(3));
-        assert_eq!(response.model_output["content"], json!("two\r\nthree\r\n"));
-        assert_eq!(response.model_output["request_path"], json!("sample.rs"));
-        assert_eq!(response.model_output["resource_id"], json!("resource-1"));
-        assert_eq!(response.model_output["language"], json!("rust"));
-        assert_eq!(response.model_output["lines"][0]["line_number"], json!(2));
-        assert_eq!(response.model_output["lines"][0]["content"], json!("two"));
-        assert!(
-            !response.model_output["content"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("L2")
+        // Locate the source using metadata, never an assumed Markdown header length.
+        // 使用元数据定位正文，绝不假设 Markdown 标题长度。
+        let markdown = response.model_output.as_str().expect("Markdown result");
+        let metadata = response.read_metadata.as_ref().expect("read coordinates");
+        let offset = metadata["range"]["output_start_line"]
+            .as_u64()
+            .expect("body line") as usize
+            - 1;
+        let count = metadata["range"]["line_count"]
+            .as_u64()
+            .expect("line count") as usize;
+        assert_eq!(metadata["range"]["source_start_line"], json!(2));
+        assert_eq!(metadata["line_ending"], json!("crlf"));
+        assert_eq!(metadata["final_newline"], json!(false));
+        assert_eq!(metadata["language"], json!("rust"));
+        assert_eq!(
+            markdown
+                .lines()
+                .skip(offset)
+                .take(count)
+                .collect::<Vec<_>>(),
+            vec!["two", "", "```", "你好"]
         );
+        assert!(markdown.contains("\n````rust\n"));
+        assert!(markdown.ends_with("\n````\n"));
+        assert!(!markdown.contains("L2"));
+        assert_eq!(markdown.matches("你好").count(), 1);
+        assert!(!metadata.to_string().contains("你好"));
+        for removed in ["content", "lines", "segments"] {
+            assert!(
+                metadata.get(removed).is_none(),
+                "obsolete body field: {removed}"
+            );
+        }
 
+        // Reads past EOF have an explicit zero-length mapping and never invent a source line.
+        // 超出 EOF 的读取有明确零长度映射，绝不伪造源文件行。
         let beyond_end = execute_file(
             directory.path().to_path_buf(),
             json!({
-                "action": "read",
-                "path": "sample.rs",
-                "start_line": 100
+                "action": "read", "path": "sample.rs", "start_line": 100
             }),
         )
         .await
-        .expect("read beyond the file should return a real empty range");
-        assert_eq!(
-            beyond_end.model_output["requested_range"]["start_line"],
-            json!(100)
+        .expect("empty range");
+        let empty_metadata = beyond_end.read_metadata.expect("empty read coordinates");
+        assert_eq!(empty_metadata["range"]["source_start_line"], json!(6));
+        assert_eq!(empty_metadata["range"]["line_count"], json!(0));
+        assert_eq!(empty_metadata["next_start_line"], Value::Null);
+    }
+
+    /// Verifies empty and mixed-ending documents project exactly their logical source lines.
+    /// 验证空文件与混合换行文件精确投影其逻辑源文件行。
+    #[tokio::test]
+    async fn native_read_maps_empty_and_mixed_ending_documents() {
+        // Mixed physical endings must not create extra presentation lines or discard blank lines.
+        // 混合物理换行不得产生额外展示行或丢弃空行。
+        let directory = tempdir().expect("temporary workspace");
+        for (source, expected) in [
+            ("", vec![]),
+            ("\n", vec![""]),
+            ("a\n\rb\rc\nd\r\n", vec!["a", "b", "c", "d"]),
+        ] {
+            fs::write(directory.path().join("sample.txt"), source).expect("write fixture");
+            let response = execute_file(
+                directory.path().to_path_buf(),
+                json!({"action": "read", "path": "sample.txt"}),
+            )
+            .await
+            .expect("read fixture");
+            let metadata = response.read_metadata.expect("mapping metadata");
+            let start = metadata["range"]["output_start_line"]
+                .as_u64()
+                .expect("start") as usize;
+            let count = metadata["range"]["line_count"].as_u64().expect("count") as usize;
+            let body = response.model_output.as_str().expect("Markdown body");
+            assert_eq!(
+                body.split('\n')
+                    .skip(start - 1)
+                    .take(count)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(count, expected.len());
+            assert_eq!(metadata["truncated"], json!(false));
+        }
+    }
+
+    /// Verifies the existing line cap still provides a usable continuation in Markdown.
+    /// 验证既有行数上限仍会在 Markdown 中提供可用续读位置。
+    #[tokio::test]
+    async fn native_read_preserves_line_limit_and_continuation() {
+        // Derive the fixture size from the production limit so future limit changes remain valid.
+        // 从生产上限派生样本大小，确保未来调整上限后测试仍然有效。
+        let directory = tempdir().expect("temporary workspace");
+        fs::write(
+            directory.path().join("many.txt"),
+            "x\n".repeat(MAX_READ_LINES + 1),
+        )
+        .expect("write fixture");
+        let response = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action": "read", "path": "many.txt"}),
+        )
+        .await
+        .expect("bounded read");
+        let metadata = response.read_metadata.expect("mapping metadata");
+        assert_eq!(metadata["range"]["line_count"], json!(MAX_READ_LINES));
+        assert_eq!(metadata["next_start_line"], json!(MAX_READ_LINES + 1));
+        assert!(
+            response
+                .model_output
+                .as_str()
+                .expect("Markdown body")
+                .contains(&format!("start_line={}", MAX_READ_LINES + 1))
         );
-        assert_eq!(
-            beyond_end.model_output["actual_range"]["start_line"],
-            json!(4)
-        );
-        assert_eq!(
-            beyond_end.model_output["actual_range"]["end_line"],
-            json!(3)
-        );
-        assert_eq!(beyond_end.model_output["content"], json!(""));
-        assert_eq!(beyond_end.model_output["lines"], json!([]));
     }
 
     /// Verifies non-recursive directory listing returns child directories as discoverable entries.
@@ -5887,31 +5987,42 @@ mod tests {
         assert!(entries.iter().any(|entry| entry["kind"] == "file"));
     }
 
-    /// Verifies duplicated read presentation fields still remain inside the serialized response budget.
-    /// 验证重复展示读取内容的多个字段仍保持在序列化响应预算以内。
+    /// Verifies the single body and its metadata together remain inside the serialized response budget.
+    /// 验证唯一正文与元数据合计保持在序列化响应预算以内。
     #[tokio::test]
     async fn native_read_truncates_by_complete_serialized_payload_size() {
+        // Escaped characters and Unicode must count toward persisted size, not only source bytes.
+        // 转义字符与 Unicode 必须计入持久化大小，不能只统计源文件字节。
         let directory = tempdir().expect("create temporary directory");
-        let line = format!("{}\n", "x".repeat(1024));
-        let source = line.repeat(3_000);
-        fs::write(directory.path().join("large.txt"), source).expect("write large fixture");
-
+        let line = format!("{}\n", "中\\\"".repeat(256));
+        fs::write(directory.path().join("large.txt"), line.repeat(3_000)).expect("write fixture");
         let response = execute_file(
             directory.path().to_path_buf(),
             json!({"action": "read", "path": "large.txt"}),
         )
         .await
-        .expect("bounded native read should succeed");
-        let encoded = serde_json::to_vec(&response.model_output)
-            .expect("native read result should serialize");
-
+        .expect("bounded native read");
+        let encoded = serde_json::to_vec(&response).expect("serialize result");
+        let metadata = response.read_metadata.as_ref().expect("read coordinates");
+        let count = metadata["range"]["line_count"]
+            .as_u64()
+            .expect("returned lines");
         assert!(encoded.len() <= MAX_READ_RESPONSE_BYTES);
-        assert_eq!(response.model_output["truncated"], json!(true));
-        assert!(response.model_output["next_start_line"].is_number());
+        assert_eq!(metadata["truncated"], json!(true));
+        assert!(count > 0 && count < 3_000);
+        assert_eq!(metadata["next_start_line"], json!(count + 1));
         assert!(
-            response.model_output["returned_line_count"]
-                .as_u64()
-                .is_some_and(|count| count < 2_000)
+            response
+                .model_output
+                .as_str()
+                .expect("Markdown")
+                .contains(&format!("Continue with start_line={}", count + 1))
+        );
+        // One more complete line must exceed the budget; otherwise truncation wastes capacity.
+        // 再增加一个完整行必须超出预算，否则截断浪费了容量。
+        assert!(
+            encoded.len() + serde_json::to_string(&line).expect("encoded line").len() - 2
+                > MAX_READ_RESPONSE_BYTES
         );
     }
 

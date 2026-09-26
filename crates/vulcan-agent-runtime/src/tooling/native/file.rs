@@ -26,7 +26,7 @@ pub(crate) fn build_file_tool() -> Arc<NativeToolDefinition> {
             "Read files and perform whole-file lifecycle operations on one filesystem path. Use file_edit for a localized exact replacement and apply_patch for multiple hunks or multiple files. This tool does not search file contents and does not recursively delete directories. It preserves an existing text file's encoding and BOM unless you explicitly override them.",
         ),
         help_text: Some(String::from(
-            "Provide exactly one path. read returns code content plus an actual one-based range without embedding Lxx prefixes; list performs bounded directory discovery; stat returns metadata; write replaces a complete file; delete removes one regular file; move renames one path to a destination that must not exist. Action-specific fields are rejected when used with another action.",
+            "Provide exactly one path. read returns Markdown with the actual one-based range and a single fenced code block without embedding Lxx prefixes; truncated reads include the next start_line. list performs bounded directory discovery; stat returns metadata; write replaces a complete file; delete removes one regular file; move renames one path to a destination that must not exist. Action-specific fields are rejected when used with another action.",
         )),
         ai_visible: true,
         available_in_plan: true,
@@ -68,7 +68,12 @@ async fn execute_file_tool(
             }),
         });
     }
-    let payload = response.model_output.clone();
+    // Reads already separate their sole Markdown body from content-free presentation metadata.
+    // 读取结果已将唯一 Markdown 正文与不含正文的展示元数据分离。
+    let payload = match response.read_metadata {
+        Some(metadata) => metadata,
+        None => response.model_output.clone(),
+    };
     Ok(VulcanToolInvocationResult {
         model_output: response.model_output,
         host_result: Some(VulcanToolHostResult {

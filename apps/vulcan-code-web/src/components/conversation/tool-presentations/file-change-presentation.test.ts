@@ -86,6 +86,65 @@ describe("native file presentation mapping", () => {
     expect(fileChangeStatusLabel(failedPresentation!, "modify")).toBe("Failed · Not edited");
   });
 
+  it("renders and hydrates a single Markdown read body using metadata coordinates", () => {
+    // Include a blank source line and a literal fence to prove headers are never reparsed as source.
+    // 包含源文件空行与字面围栏，证明标题不会被重新解析为源文件正文。
+    const body = "# File: src/a.ts\n\nShowing selected source\n\n````typescript\nalpha\n\n```\n你好\n````\n";
+    const sourceLines = ["alpha", "", "```", "你好"];
+    const firstSourceIndex = body.split("\n").indexOf(sourceLines[0]);
+    const metadata = {
+      arguments: { action: "read", path: "src/a.ts", start_line: 10, end_line: 13 },
+      host_result: {
+        kind: "file_access",
+        payload: {
+          schema: "vulcan.file_read.v1",
+          action: "read",
+          path: "D:/repo/src/a.ts",
+          range: { source_start_line: 10, output_start_line: firstSourceIndex + 1, line_count: sourceLines.length },
+        },
+      },
+    };
+    const inline = resolveFileAccessPresentation(toolBlock("file", body, metadata), "completed", {});
+    const pending = resolveFileAccessPresentation(toolBlock("file", "", metadata), "completed", {});
+    const hydrated = hydrateFileAccessPresentation(pending!, { body, metadata });
+    const expectedRows = sourceLines.map((content, index) => ({ content, kind: "context", lineNumber: 10 + index }));
+    expect(pending?.items[0].rows).toEqual([]);
+    expect(inline?.items[0].rows).toEqual(expectedRows);
+    expect(hydrated.items[0].rows).toEqual(expectedRows);
+    expect(hydrated.items[0].lineRanges).toEqual([{ startLine: 10, endLine: 13 }]);
+    expect(JSON.stringify(metadata)).not.toContain("alpha");
+  });
+
+  it("keeps empty Markdown reads empty and rejects invalid line coordinates", () => {
+    // Invalid metadata must never fall back to guessed content fields or Markdown parsing.
+    // 无效元数据不得退回猜测正文字段或解析 Markdown。
+    const body = "# Empty file\n\n```text\n```\n";
+    const firstSourceLine = body.split("\n").indexOf("```text") + 2;
+    const metadata = {
+      arguments: { action: "read", path: "empty.txt" },
+      host_result: { kind: "file_access", payload: {
+        schema: "vulcan.file_read.v1", action: "read",
+        range: { source_start_line: 1, output_start_line: firstSourceLine, line_count: 0 },
+      } },
+    };
+    const empty = resolveFileAccessPresentation(toolBlock("file", body, metadata), "completed", {});
+    expect(empty?.items[0].rows).toEqual([]);
+    expect(empty?.items[0].lineRanges).toEqual([]);
+    // Lazy empty results replace the requested range even though no code rows are returned.
+    // 延迟加载的空结果即使没有代码行，也会替换请求范围。
+    const pending = resolveFileAccessPresentation(toolBlock("file", "", {
+      arguments: { action: "read", path: "empty.txt", start_line: 100 },
+    }), "completed", {});
+    const hydrated = hydrateFileAccessPresentation(pending!, { body, metadata });
+    expect(hydrated.items[0].lineRanges).toEqual([]);
+    expect(hydrated.items[0].expandable).toBe(false);
+    metadata.host_result.payload.range.line_count = body.split("\n").length + 1;
+    const invalid = resolveFileAccessPresentation(toolBlock("file", body, metadata), "completed", {});
+    expect(invalid?.items[0].rows).toEqual([
+      { content: "Invalid file read line mapping.", kind: "error", lineNumber: null },
+    ]);
+  });
+
   it("renders a native v2 read range as code rows with actual gutter line numbers", () => {
     const presentation = resolveFileAccessPresentation(
       toolBlock("file", "", {

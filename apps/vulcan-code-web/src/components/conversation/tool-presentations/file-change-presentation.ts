@@ -8,6 +8,11 @@ import { fixedHostPayload, fixedV1ToolEvent } from "./presentation-value-readers
 import { buildV1ChangeSetFilePresentation } from "./v1-change-set-presentation";
 import type { PersistentChangeSet } from "@/service/conversation-event-window-store";
 
+/** Maximum display rows shared by current and historical file-access previews.
+ * 当前与历史文件访问预览共用的最大展示行数。
+ */
+const FILE_ACCESS_PREVIEW_ROW_LIMIT = 2000;
+
 /** Adapts the authoritative persisted changeset into the established interactive diff card.
  * 将权威持久化变更集适配为既有可交互差异卡。
  * Parameters retain source blocks, state, changeset, display options and detail identity; returns counts and rows from one source.
@@ -492,7 +497,7 @@ function buildNativeFileAccessPresentation(
     const rows = displayState === "failed"
       ? errorRowsFromBlocks(blocks)
       : nativeFileResultRowsFromOutput(output, index, accessAction);
-    const result = nativeFileAccessResult(output, index);
+    const result = nativeFileAccessResult(output?.metadata ?? null, index);
     const file = buildFilePresentation({
       added: null,
       blocks,
@@ -1268,15 +1273,64 @@ function editPreviewBodySide(
   return null;
 }
 
-// nativeFileResultRowsFromOutput maps one structured native result to bounded display rows.
-// nativeFileResultRowsFromOutput 将一个结构化原生结果映射为有界展示行。
+/** Validates content-free read coordinates from metadata; returns null for invalid mappings.
+ * 校验元数据中不含正文的读取坐标；映射无效时返回 null。
+ */
+function nativeMarkdownReadRange(result: Record<string, unknown>): {
+  sourceStart: number;
+  outputStart: number;
+  lineCount: number;
+} | null {
+  // All three fields are mandatory in vulcan.file_read.v1 and have one authoritative owner.
+  // vulcan.file_read.v1 强制要求三个字段，且每个字段只有一个权威来源。
+  const range = objectValue(result.range);
+  const sourceStart = numberValue(range?.source_start_line);
+  const outputStart = numberValue(range?.output_start_line);
+  const lineCount = numberValue(range?.line_count);
+  if (sourceStart === null || outputStart === null || lineCount === null
+    || !Number.isSafeInteger(sourceStart) || sourceStart < 1
+    || !Number.isSafeInteger(outputStart) || outputStart < 1
+    || !Number.isSafeInteger(lineCount) || lineCount < 0
+    || !Number.isSafeInteger(sourceStart + lineCount)) {
+    return null;
+  }
+  return { sourceStart, outputStart, lineCount };
+}
+
+/** Projects source rows from the sole Markdown body using validated numeric coordinates.
+ * 使用已校验的数值坐标，从唯一 Markdown 正文投影源文件行。
+ * Empty bodies await detail hydration; invalid mappings return an explicit error row.
+ * 空正文等待详情加载；无效映射返回明确错误行。
+ */
+function nativeMarkdownReadRows(result: Record<string, unknown>, body: string): FileChangeDiffRow[] {
+  if (!body) {
+    return [];
+  }
+  // The producer normalizes presentation separators to LF; source format remains in metadata.
+  // 生产端将展示分隔符归一化为 LF；源文件格式保留在元数据中。
+  const lines = body.split("\n");
+  const range = nativeMarkdownReadRange(result);
+  if (!range || range.outputStart - 1 + range.lineCount > lines.length) {
+    return [{ content: "Invalid file read line mapping.", kind: "error", lineNumber: null }];
+  }
+  return lines.slice(range.outputStart - 1, range.outputStart - 1 + range.lineCount)
+    .slice(0, FILE_ACCESS_PREVIEW_ROW_LIMIT).map((content, index) => ({
+      content,
+      kind: "context",
+      lineNumber: range.sourceStart + index,
+    }));
+}
+
+/** Returns visible rows for one result; output pairs the body and metadata of that result.
+ * 返回单个结果的可见行；output 关联该结果的正文与元数据。
+ */
 function nativeFileResultRowsFromOutput(
-  output: Record<string, unknown> | null,
+  output: NativeFileAccessOutput | null,
   targetIndex: number,
   action: FileAccessAction,
 ): FileChangeDiffRow[] {
-  const result = nativeFileAccessResult(output, targetIndex);
-  if (!result) {
+  const result = nativeFileAccessResult(output?.metadata ?? null, targetIndex);
+  if (!result || !output) {
     return [];
   }
   if (result.ok === false) {
@@ -1290,9 +1344,12 @@ function nativeFileResultRowsFromOutput(
     }];
   }
   if (action === "read") {
+    if (result.schema === "vulcan.file_read.v1") {
+      return nativeMarkdownReadRows(result, output.body);
+    }
     const legacyLines = arrayValue(result.lines);
     if (legacyLines.length) {
-      return legacyLines.slice(0, 2000).map((value) => {
+      return legacyLines.slice(0, FILE_ACCESS_PREVIEW_ROW_LIMIT).map((value) => {
         const line = objectValue(value);
         return {
           content: textValue(line?.content) ?? "",
@@ -1303,14 +1360,14 @@ function nativeFileResultRowsFromOutput(
     }
     const content = textValue(result.content);
     const startLine = numberValue(result.start_line) ?? 1;
-    return splitTextLines(content ?? "").slice(0, 2000).map((line, index) => ({
+    return splitTextLines(content ?? "").slice(0, FILE_ACCESS_PREVIEW_ROW_LIMIT).map((line, index) => ({
       content: line,
       kind: "context" as const,
       lineNumber: startLine + index,
     }));
   }
   if (action === "list") {
-    return arrayValue(result.entries).slice(0, 2000).map((value) => {
+    return arrayValue(result.entries).slice(0, FILE_ACCESS_PREVIEW_ROW_LIMIT).map((value) => {
       const entry = objectValue(value);
       const path = textValue(entry?.path) ?? "";
       const kind = textValue(entry?.kind) ?? "entry";
@@ -1323,7 +1380,7 @@ function nativeFileResultRowsFromOutput(
     });
   }
   if (action === "search") {
-    return arrayValue(result.matches).slice(0, 2000).map((value) => {
+    return arrayValue(result.matches).slice(0, FILE_ACCESS_PREVIEW_ROW_LIMIT).map((value) => {
       const match = objectValue(value);
       const path = textValue(match?.path) ?? "";
       const line = numberValue(match?.line);
@@ -1385,22 +1442,42 @@ function nativeFileTextFormat(
   };
 }
 
-// nativeFileAccessOutput prefers the authoritative built-in file_access payload over visible text.
-// nativeFileAccessOutput 优先使用权威内置 file_access 载荷，而不是可见文本。
+/** Keeps one terminal block's metadata paired with its authoritative model body.
+ * 将同一终态块的元数据与其权威模型正文关联。
+ */
+interface NativeFileAccessOutput {
+  /** Presentation metadata; historical versions may also contain source text.
+   * 展示元数据；历史版本也可能包含源文件正文。
+   */
+  metadata: Record<string, unknown>;
+  /** Sole Markdown body in the native read contract.
+   * 原生读取契约中的唯一 Markdown 正文。
+   */
+  body: string;
+}
+
+/** Selects a host payload with its body, or parses an explicit historical JSON result.
+ * 选择同一宿主载荷与正文，或解析明确的历史 JSON 结果。
+ * blocks are ordered tool events; returns null when no readable file result exists.
+ * blocks 为有序工具事件；不存在可读取文件结果时返回 null。
+ */
 function nativeFileAccessOutput(
   blocks: ToolExecutionConversationBlock[],
-): Record<string, unknown> | null {
+): NativeFileAccessOutput | null {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index];
     const hostResult = objectValue(metadataValue(block?.rawMetadata, ["host_result", "hostResult"]));
     if (stringValue(hostResult?.kind) === "file_access") {
       const payload = objectValue(hostResult?.payload);
       if (payload) {
-        return payload;
+        return { metadata: payload, body: block.body };
       }
     }
   }
-  return visibleJsonOutput(blocks);
+  // Legacy JSON stores its rows in the parsed object and does not use the Markdown body.
+  // 旧版 JSON 将展示行存放在解析对象中，不使用 Markdown 正文。
+  const metadata = visibleJsonOutput(blocks);
+  return metadata ? { metadata, body: "" } : null;
 }
 
 // hydrateFileAccessPresentation restores complete read-only rows from one hidden terminal detail.
@@ -1420,7 +1497,10 @@ export function hydrateFileAccessPresentation(
   }
   const items = presentation.items.map((item, index) => {
     const rows = nativeFileResultRowsFromOutput(output, index, presentation.action);
-    if (!rows.length) {
+    // A zero-line versioned read is authoritative and must clear an earlier requested range.
+    // 带版本的零行读取是权威结果，必须清除先前的请求范围。
+    const result = nativeFileAccessResult(output.metadata, index);
+    if (!rows.length && result?.schema !== "vulcan.file_read.v1") {
       return item;
     }
     const diffFile = presentation.action === "read"
@@ -1436,11 +1516,12 @@ export function hydrateFileAccessPresentation(
     return {
       ...item,
       diffFile,
-      expandable: true,
+      expandable: rows.length > 0,
       lineRanges: nativeFileAccessResultLineRanges(
-        nativeFileAccessResult(output, index),
+        result,
         item.lineRanges,
       ),
+      textFormat: nativeFileTextFormat(result),
       rows,
     };
   });
@@ -1455,7 +1536,7 @@ export function hydrateFileAccessPresentation(
 // fileAccessOutputFromDetail 在考虑正文文本前返回精确的隐藏 file_access 载荷。
 function fileAccessOutputFromDetail(
   payload: ToolDetailPayload,
-): Record<string, unknown> | null {
+): NativeFileAccessOutput | null {
   // hostResult is the terminal metadata boundary stored with the hidden detail record.
   // hostResult 是随隐藏详情记录保存的终态 metadata 边界。
   const hostResult = objectValue(metadataValue(payload.metadata, ["host_result", "hostResult"]));
@@ -1464,10 +1545,13 @@ function fileAccessOutputFromDetail(
     // hostPayload 是强类型原生文件结果投影。
     const hostPayload = objectValue(hostResult?.payload);
     if (hostPayload) {
-      return hostPayload;
+      return { metadata: hostPayload, body: payload.body };
     }
   }
-  return parseFileToolOutput(payload.body);
+  // Historical detail records expose their source rows through JSON only.
+  // 历史详情记录仅通过 JSON 暴露源文件行。
+  const metadata = parseFileToolOutput(payload.body);
+  return metadata ? { metadata, body: payload.body } : null;
 }
 
 // nativeFileAccessResultLineRanges prefers the actual returned range over the request range.
@@ -1478,6 +1562,14 @@ function nativeFileAccessResultLineRanges(
 ): FileAccessLineRangePresentation[] {
   if (!result) {
     return requestRanges;
+  }
+  if (result.schema === "vulcan.file_read.v1") {
+    // The versioned mapping owns the returned range, including an explicitly empty read.
+    // 带版本的映射拥有返回范围，也包含明确的空读取。
+    const range = nativeMarkdownReadRange(result);
+    return range && range.lineCount > 0
+      ? [{ startLine: range.sourceStart, endLine: range.sourceStart + range.lineCount - 1 }]
+      : [];
   }
   // actualRange is the explicit native v2 returned-range object.
   // actualRange 是原生 v2 明确返回的范围对象。

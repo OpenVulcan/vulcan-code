@@ -13,6 +13,54 @@ use vulcan_tools_manager::{
 
 use super::test_native_request_with_workspace;
 
+/// Verifies native read dispatch, canonicalization, and persistence retain exactly one source body.
+/// 验证原生读取调度、规范化与持久化仅保留一份源文件正文。
+#[tokio::test]
+async fn native_file_read_persists_one_markdown_body() {
+    use crate::agent_runtime::tool_runtime_bridge::{
+        canonicalize_tool_invocation_result, persistent_tool_output_from_result,
+    };
+    // A unique source marker detects duplication anywhere in the serialized durable envelope.
+    // 唯一源文件标记用于检测序列化持久封装任意位置的正文重复。
+    let directory = tempfile::tempdir().expect("temporary workspace");
+    let marker = "unique-file-read-source-7319";
+    std::fs::write(directory.path().join("sample.txt"), format!("{marker}\n"))
+        .expect("write source fixture");
+    let arguments = json!({"action": "read", "path": "sample.txt"});
+    let result = build_file_tool()
+        .invoke(test_native_request_with_workspace(
+            arguments.clone(),
+            directory.path().to_path_buf(),
+        ))
+        .await
+        .expect("read invocation");
+    let request = vulcan_core::types::ToolInvocationRequest {
+        request_stream_id: String::from("read-stream"),
+        tool_call_id: String::from("read-call"),
+        tool_name: String::from("file"),
+        arguments,
+        argument_parse_error: None,
+    };
+    let canonical = canonicalize_tool_invocation_result(&request, result);
+    assert!(canonical.model_output.starts_with("# File: sample.txt\n"));
+    assert!(canonical.model_output.contains(marker));
+    assert!(!canonical.is_error);
+    let host = canonical
+        .host_result
+        .as_ref()
+        .expect("presentation metadata");
+    assert_eq!(host["kind"], json!("file_access"));
+    assert_eq!(host["payload"]["schema"], json!("vulcan.file_read.v1"));
+    assert!(!host.to_string().contains(marker));
+    let persisted = persistent_tool_output_from_result(&canonical).expect("durable tool payload");
+    let serialized = serde_json::to_string(&persisted).expect("serialize durable tool payload");
+    assert_eq!(
+        serialized.matches(marker).count(),
+        1,
+        "source text must be stored exactly once"
+    );
+}
+
 /// Verifies the three public native file tools expose the frozen minimal contracts.
 /// 验证三个公开原生文件工具暴露冻结的最小契约。
 #[test]
