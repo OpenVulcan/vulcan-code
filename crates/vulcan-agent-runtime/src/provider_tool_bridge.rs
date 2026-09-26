@@ -32,6 +32,8 @@ use vulcan_tools_manager::{
     VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind,
 };
 
+mod result_markdown;
+
 /// Maximum generated image or generic file size accepted by the host.
 /// 宿主接受的生成图片或通用文件最大字节数。
 const PROVIDER_TOOL_DEFAULT_OUTPUT_BYTE_LIMIT: usize = 50 * 1024 * 1024;
@@ -710,8 +712,8 @@ fn model_extension_executor_schema() -> Value {
 ///
 /// # Returns
 /// 返回值
-/// Structured model-visible JSON containing reviewed profiles and exact target schemas.
-/// 返回包含已审核说明与精确目标 Schema 的模型可见结构化 JSON。
+/// Shared Markdown containing reviewed profiles and unchanged exact argument schemas.
+/// 返回包含已审核说明与原样精确参数 Schema 的共享 Markdown。
 fn render_model_extension_parameters(
     catalog: &BTreeMap<ProviderToolCapabilityKind, Vec<AvailableProviderToolTarget>>,
     arguments: Value,
@@ -769,20 +771,12 @@ fn render_model_extension_parameters(
                     target.target.target_id
                 )
             })?;
-        models.push(json!({
-            "model": model,
-            "display_name": target.target.display_name,
-            "description": profile.summary,
-            "characteristics": profile.characteristics,
-            "input_modes": profile.input_modes,
-            "resolution_policy": profile.resolution_policy,
-            "duration_policy": profile.duration_policy,
-            "format_policy": profile.format_policy,
-            "constraints": profile.constraints,
-            "limitations": profile.limitations,
-            "evidence_refs": profile.evidence_refs,
-            "args_schema": target.target.contract.input_schema
-        }));
+        models.push(result_markdown::extension_parameters::model(
+            &model,
+            &target.target.display_name,
+            profile,
+            &target.target.contract.input_schema,
+        )?);
     }
     if let Some(requested_model) = requested_model.as_deref()
         && models.is_empty()
@@ -791,24 +785,17 @@ fn render_model_extension_parameters(
             "Model `{requested_model}` is not currently enabled for capability `{capability_name}`."
         ));
     }
-    let payload = json!({
-        "kind": "model_extension_parameters",
-        "capability": capability_name,
-        "models": models,
-        "instruction": if catalog.contains_key(&capability) {
-            "Copy one returned `model` field verbatim into the executor call; it is the only valid callable model identifier. Pass `args` matching that model's exact `args_schema`. In declared media-source fields, use a canonical project-resource://ID, an owned attachment://ID, or a readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. The host resolves the exact declared source before provider dispatch. Do not infer alternate model or source fields."
-        } else {
-            "No native model is currently enabled for this extension capability."
-        }
-    });
-    Ok(
-        VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
-            VulcanToolHostResult {
-                kind: String::from("model_extension_parameters"),
-                payload,
-            },
-        ),
-    )
+    let instruction = if !models.is_empty() {
+        "Copy one returned `model` field verbatim into the executor call; it is the only valid callable model identifier. Pass `args` matching that model's exact `args_schema`. In declared media-source fields, use a canonical project-resource://ID, an owned attachment://ID, or a readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. The host resolves the exact declared source before provider dispatch. Do not infer alternate model or source fields."
+    } else {
+        "No native model is currently enabled for this extension capability."
+    };
+    Ok(VulcanToolInvocationResult::from_model_output(
+        Value::String(format!(
+            "# Parameters: {capability_name}\n\n{instruction}\n\n{}",
+            models.join("\n\n")
+        )),
+    ))
 }
 
 /// Parses one stable executor invocation without accepting ambiguous fallback fields.
@@ -1176,19 +1163,9 @@ async fn render_provider_tool_result(
 ) -> Result<VulcanToolInvocationResult, String> {
     match result.output {
         ProviderToolNormalizedOutput::Text(text) => {
-            let payload = json!({
-                "kind": "text",
-                "text": text,
-                "upstream_response_id": result.upstream_response_id
-            });
-            Ok(
-                VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
-                    VulcanToolHostResult {
-                        kind: String::from("provider_tool_output"),
-                        payload,
-                    },
-                ),
-            )
+            Ok(VulcanToolInvocationResult::from_model_output(
+                Value::String(result_markdown::text(&text)),
+            ))
         }
         ProviderToolNormalizedOutput::Resources(resources) => {
             render_provider_resource_result(
@@ -1200,70 +1177,44 @@ async fn render_provider_tool_result(
             .await
         }
         ProviderToolNormalizedOutput::Search(search) => {
-            let payload = json!({
-                "kind": "search",
-                "search": search,
-                "upstream_response_id": result.upstream_response_id
-            });
-            Ok(
-                VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
-                    VulcanToolHostResult {
-                        kind: String::from("provider_tool_output"),
-                        payload,
-                    },
-                ),
-            )
+            Ok(VulcanToolInvocationResult::from_model_output(
+                Value::String(result_markdown::search(&search)),
+            ))
         }
         ProviderToolNormalizedOutput::Extract(extract) => {
-            let payload = json!({
-                "kind": "extract",
-                "extract": extract,
-                "upstream_response_id": result.upstream_response_id
-            });
-            Ok(
-                VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
-                    VulcanToolHostResult {
-                        kind: String::from("provider_tool_output"),
-                        payload,
-                    },
-                ),
-            )
+            Ok(VulcanToolInvocationResult::from_model_output(
+                Value::String(result_markdown::extract(&extract)),
+            ))
         }
         ProviderToolNormalizedOutput::Embedding(embedding) => {
             let payload = json!({
                 "kind": "embedding",
-                "embedding": embedding,
-                "upstream_response_id": result.upstream_response_id
+                "embedding": embedding
             });
-            Ok(
-                VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
-                    VulcanToolHostResult {
-                        kind: String::from("provider_tool_output"),
-                        payload,
-                    },
-                ),
-            )
+            Ok(VulcanToolInvocationResult::from_model_output(payload))
         }
         ProviderToolNormalizedOutput::Rerank(rerank) => {
             let payload = json!({
                 "kind": "rerank",
-                "rerank": rerank,
-                "upstream_response_id": result.upstream_response_id
+                "rerank": rerank
             });
-            Ok(
-                VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
-                    VulcanToolHostResult {
-                        kind: String::from("provider_tool_output"),
-                        payload,
-                    },
-                ),
-            )
+            Ok(VulcanToolInvocationResult::from_model_output(payload))
         }
         ProviderToolNormalizedOutput::Composite(composite) => {
+            // Reading-only composites share one Markdown body; machine-valued variants keep their contract.
+            // 只读内容的复合结果共用一份 Markdown 正文；机器数值变体保留原契约。
+            if composite.resources.is_empty()
+                && composite.embeddings.is_empty()
+                && composite.reranks.is_empty()
+            {
+                return Ok(VulcanToolInvocationResult::from_model_output(
+                    Value::String(result_markdown::reading_composite(&composite)),
+                ));
+            }
             let resources =
                 stage_provider_resources(workspace_root, session_id, composite.resources).await?;
             let has_generated_resources = !resources.host_resources.is_empty();
-            let model_payload = json!({
+            let mut model_payload = json!({
                 "kind": "composite",
                 "composite": {
                     "text": composite.text.clone(),
@@ -1272,36 +1223,29 @@ async fn render_provider_tool_result(
                     "reranks": composite.reranks.clone(),
                     "searches": composite.searches.clone(),
                     "extracts": composite.extracts.clone()
-                },
-                "upstream_response_id": result.upstream_response_id.clone()
+                }
             });
+            // Empty collection fields are not results; each present member keeps its exact data.
+            // 空集合字段不是结果；存在的成员保留精确数据。
+            model_payload["composite"]
+                .as_object_mut()
+                .expect("constructed composite object")
+                .retain(|_, value| !value.as_array().is_some_and(Vec::is_empty));
             let host_result = if has_generated_resources {
-                VulcanToolHostResult {
+                Some(VulcanToolHostResult {
                     kind: String::from(GENERATED_ATTACHMENTS_HOST_RESULT_KIND),
                     payload: json!({
                         "outputs": resources.host_resources,
                         "upstream_response_id": result.upstream_response_id
                     }),
-                }
+                })
             } else {
-                VulcanToolHostResult {
-                    kind: String::from("provider_tool_output"),
-                    payload: json!({
-                        "kind": "composite",
-                        "composite": {
-                            "text": composite.text,
-                            "resources": resources.host_resources,
-                            "embeddings": composite.embeddings,
-                            "reranks": composite.reranks,
-                            "searches": composite.searches,
-                            "extracts": composite.extracts
-                        },
-                        "upstream_response_id": result.upstream_response_id
-                    }),
-                }
+                None
             };
-            Ok(VulcanToolInvocationResult::from_model_output(model_payload)
-                .with_host_result(host_result))
+            Ok(VulcanToolInvocationResult {
+                model_output: model_payload,
+                host_result,
+            })
         }
     }
 }
@@ -1836,23 +1780,28 @@ mod tests {
                 ManifestSourceLayer::Bundled,
                 capability,
             );
+            let expected_schema =
+                serde_json::to_string_pretty(&target.target.contract.input_schema)
+                    .expect("fixture schema serializes");
             let catalog = BTreeMap::from([(capability, vec![target])]);
             let result = render_model_extension_parameters(
                 &catalog,
                 json!({ "capability": capability_name }),
             )
             .expect("selected MiniMax extension parameters should render");
-            let model = &result.model_output["models"][0];
-
-            assert_eq!(model["model"], format!("minimax/{model_id}"));
-            assert!(model.get("provider_id").is_none());
-            assert!(model.get("model_id").is_none());
+            let markdown = result
+                .model_output
+                .as_str()
+                .expect("shared Markdown result");
             assert!(
-                result.model_output["instruction"]
-                    .as_str()
-                    .expect("instruction must be text")
-                    .contains("only valid callable model identifier")
+                markdown.contains(&vulcan_tools_manager::result_markdown::inline_code(
+                    &format!("minimax/{model_id}")
+                ))
             );
+            assert!(markdown.contains("only valid callable model identifier"));
+            assert!(markdown.contains(&expected_schema));
+            assert!(!markdown.contains("evidence_refs"));
+            assert!(result.host_result.is_none());
         }
     }
 
@@ -2158,8 +2107,8 @@ mod tests {
         );
     }
 
-    /// Verifies embedding output remains typed in both model and host payloads.
-    /// 验证向量输出在模型与宿主载荷中均保持强类型。
+    /// Verifies embedding output retains exact data once without an unused host clone.
+    /// 验证向量输出精确保留一次，不带无用途的宿主副本。
     #[tokio::test]
     async fn embedding_output_preserves_vector_indexes_and_values() {
         let result = render_provider_tool_result(
@@ -2182,9 +2131,11 @@ mod tests {
         assert_eq!(result.model_output["kind"], "embedding");
         assert_eq!(result.model_output["embedding"]["vectors"][0]["index"], 2);
         assert_eq!(
-            result.host_result.as_ref().expect("host output").payload["embedding"]["vectors"][0]["values"],
+            result.model_output["embedding"]["vectors"][0]["values"],
             json!([0.25, -0.5])
         );
+        assert!(result.host_result.is_none());
+        assert!(result.model_output.get("upstream_response_id").is_none());
     }
 
     /// Verifies a resource-free composite output does not require a workspace.
@@ -2218,6 +2169,8 @@ mod tests {
 
         assert_eq!(result.model_output["kind"], "composite");
         assert_eq!(result.model_output["composite"]["text"], json!(["summary"]));
+        assert!(result.host_result.is_none());
+        assert!(result.model_output["composite"].get("resources").is_none());
         assert_eq!(
             result.model_output["composite"]["reranks"][0]["results"][0]["score"],
             0.75

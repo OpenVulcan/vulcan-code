@@ -16,8 +16,7 @@ use vulcan_tools_manager::{
     IncrementalJsonEvent, IncrementalJsonPathSegment, ToolRequestParserContext,
     ToolRequestParserFactory, ToolRequestParserSession, ToolRequestPreview, ToolRequestPreviewLine,
     ToolRequestProgressPolicy, ToolRequestSensitivityPolicy, ToolRequestStagingPolicy,
-    ToolRequestStagingStatus, ToolRequestStreamingCapability, VulcanToolHostResult,
-    VulcanToolInvocationResult,
+    ToolRequestStagingStatus, ToolRequestStreamingCapability, VulcanToolInvocationResult,
 };
 
 /// Stable public identifier for the Apply Patch text tool.
@@ -97,18 +96,7 @@ async fn execute_apply_patch_tool(
             ));
         }
     };
-    let Some(payload) = response.change_set else {
-        return Ok(VulcanToolInvocationResult::from_model_output(
-            response.model_output,
-        ));
-    };
-    Ok(VulcanToolInvocationResult {
-        model_output: response.model_output,
-        host_result: Some(VulcanToolHostResult {
-            kind: String::from("change_set"),
-            payload,
-        }),
-    })
+    Ok(super::file_result::project(response))
 }
 
 /// Builds one canonical non-retryable model-facing Apply Patch argument error.

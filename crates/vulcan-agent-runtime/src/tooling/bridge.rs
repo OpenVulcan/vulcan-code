@@ -427,9 +427,18 @@ pub fn build_vulcan_tools_manager(
                                     error
                                 )
                             })?;
-                        tool.invoke_for_owner(owner_session_id, args).await
+                        tool.invoke_for_owner_and_audience(
+                            owner_session_id,
+                            args,
+                            vulcan_mcp_runtime::McpToolResultAudience::Conversation,
+                        )
+                        .await
                     } else {
-                        tool.invoke(args).await
+                        tool.invoke_for_audience(
+                            args,
+                            vulcan_mcp_runtime::McpToolResultAudience::Conversation,
+                        )
+                        .await
                     };
                     result.map(VulcanToolInvocationResult::from_model_output)
                 })

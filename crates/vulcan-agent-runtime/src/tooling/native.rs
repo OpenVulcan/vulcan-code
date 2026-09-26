@@ -224,6 +224,7 @@ mod apply_patch;
 mod codebase_retrieval;
 mod file;
 mod file_edit;
+mod file_result;
 mod knowledge_base;
 mod prompt_skill;
 mod registry;

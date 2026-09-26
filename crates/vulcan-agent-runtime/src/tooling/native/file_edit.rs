@@ -16,7 +16,7 @@ use vulcan_tools_manager::{
     ToolRequestParserContext, ToolRequestParserFactory, ToolRequestParserSession,
     ToolRequestPreview, ToolRequestPreviewLine, ToolRequestProgressPolicy,
     ToolRequestSensitivityPolicy, ToolRequestStagingPolicy, ToolRequestStagingStatus,
-    ToolRequestStreamingCapability, VulcanToolHostResult, VulcanToolInvocationResult,
+    ToolRequestStreamingCapability, VulcanToolInvocationResult,
 };
 
 /// Stable public identifier for exact text replacement.
@@ -74,18 +74,7 @@ async fn execute_file_edit_tool(
             ));
         }
     };
-    let Some(payload) = response.change_set else {
-        return Ok(VulcanToolInvocationResult::from_model_output(
-            response.model_output,
-        ));
-    };
-    Ok(VulcanToolInvocationResult {
-        model_output: response.model_output,
-        host_result: Some(VulcanToolHostResult {
-            kind: String::from("change_set"),
-            payload,
-        }),
-    })
+    Ok(super::file_result::project(response))
 }
 
 /// Returns the portable minimal JSON Schema for exact text replacement.

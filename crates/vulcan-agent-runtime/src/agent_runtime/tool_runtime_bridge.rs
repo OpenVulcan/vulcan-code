@@ -964,7 +964,6 @@ fn build_canonical_tool_error_host_result(
         "tool_name": request.tool_name,
         "status": "failed",
         "error": error,
-        "arguments": request.arguments,
     });
     if let Some(details) = details {
         payload["details"] = details;
@@ -1088,17 +1087,31 @@ pub fn canonicalize_tool_invocation_result(
         ),
         None => (None, false),
     };
-    let model_output = match result.model_output {
-        Value::String(text) => text,
-        other => {
-            match crate::agent_runtime::tool_result_media::canonicalize_tool_model_output(other) {
-                Ok(Value::String(text)) => text,
-                Ok(value) => serde_json::to_string(&value).unwrap_or_else(|_| value.to_string()),
-                Err(message) => {
-                    return build_tool_failure_invocation_result(
-                        request,
-                        format!("Tool result media validation failed: {message}"),
-                    );
+    let model_output = if is_error {
+        // Error details were validated above; input arguments already belong to the tool event.
+        // 错误详情已在上方验证；输入参数已归工具事件持有。
+        let details = &result
+            .host_result
+            .as_ref()
+            .expect("validated tool-owned error")
+            .payload;
+        result_markdown::error_markdown(&request.tool_name, details)
+    } else {
+        match result.model_output {
+            Value::String(text) => text,
+            other => {
+                match crate::agent_runtime::tool_result_media::canonicalize_tool_model_output(other)
+                {
+                    Ok(Value::String(text)) => text,
+                    Ok(value) => {
+                        serde_json::to_string(&value).unwrap_or_else(|_| value.to_string())
+                    }
+                    Err(message) => {
+                        return build_tool_failure_invocation_result(
+                            request,
+                            format!("Tool result media validation failed: {message}"),
+                        );
+                    }
                 }
             }
         }
@@ -1252,3 +1265,52 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
 
 #[cfg(test)]
 mod tests;
+
+mod result_markdown;
+
+/// Measures canonical payload bytes for a frozen pre-change fixture and current producer output.
+/// 对冻结的修改前夹具和当前生产者输出计量规范载荷字节数。
+/// Inputs identify the tool and unique body; asserts one persisted body and lower total size.
+/// 输入标识工具及唯一正文；断言持久化正文唯一且总大小减少。
+#[cfg(test)]
+pub(crate) fn assert_result_payload_cost(
+    tool: &str,
+    before: VulcanToolInvocationResult,
+    after: VulcanToolInvocationResult,
+    unique_body: &str,
+) {
+    let request = CoreToolInvocationRequest {
+        request_stream_id: "cost-fixture".into(),
+        tool_call_id: "cost-call".into(),
+        tool_name: tool.into(),
+        arguments: json!({}),
+        argument_parse_error: None,
+    };
+    let before = canonicalize_tool_invocation_result(&request, before);
+    let after = canonicalize_tool_invocation_result(&request, after);
+    let sizes = |result: &CoreToolInvocationResult| {
+        (
+            result.model_output.len(),
+            result
+                .host_result
+                .as_ref()
+                .map(|host| serde_json::to_vec(host).unwrap().len())
+                .unwrap_or(0),
+            serde_json::to_vec(result).unwrap().len(),
+        )
+    };
+    let old = sizes(&before);
+    let new = sizes(&after);
+    assert!(
+        new.2 < old.2,
+        "Expected payload reduction for {tool}: {old:?} -> {new:?}"
+    );
+    assert_eq!(
+        serde_json::to_string(&after)
+            .unwrap()
+            .matches(unique_body)
+            .count(),
+        1
+    );
+    eprintln!("PAYLOAD_COST {tool}: model/host/envelope {old:?} -> {new:?} bytes");
+}

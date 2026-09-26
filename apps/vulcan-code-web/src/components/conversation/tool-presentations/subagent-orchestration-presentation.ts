@@ -51,6 +51,7 @@ export function resolveSubagentOrchestrationPresentation(
   const operationClosesAgents = operation === "close";
   const operationStopsAgents = operation === "close" || operation === "interrupt";
   return {
+    resultFormat: payload?.format === "markdown" ? "markdown" : undefined,
     // ask_question returns the new ID; reply/wait/cancel receive an existing ID in their input.
     // ask_question 返回新身份；回复、等待及撤销工具通过输入接收已有身份。
     questionId: operation === "collaboration_question" ? stringValue(payload?.question_id)
@@ -60,6 +61,7 @@ export function resolveSubagentOrchestrationPresentation(
     answerText: isCollaborationOperation(operation) ? stringValue(objectValue(payload?.answer)?.body) : null,
     agents: operationHasAgents ? subagentAgents(payload, blocks) : [],
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : true,
+    agentCount: numberValue(payload?.agent_count) ?? undefined,
     debugSummary: subagentDebugSummary(payload?.debug),
     detailRef,
     effectivePrompt: isCollaborationOperation(operation) ? null : stringValue(payload?.prompt),
@@ -110,6 +112,19 @@ export function hydrateSubagentOrchestrationPresentation(
   if (!payload) {
     return presentation;
   }
+  // Delayed details retain the same fixed host-result contract as immediate V1 rows.
+  // 延迟详情与即时 V1 行保留相同的固定宿主结果契约。
+  const metadata = objectValue(payload.metadata);
+  const host = objectValue(metadata?.host_result);
+  const receipt = objectValue(host?.payload);
+  if ((host?.kind === "collaboration_receipt_v1" || host?.kind === "agent_wait_ack_v1" || host?.kind === "subagent_receipt_v1" || host?.kind === "subagent_control") && receipt?.format === "markdown") {
+    return {
+      ...mergeSubagentPayload(presentation, receipt),
+      resultFormat: "markdown",
+      questionId: stringValue(receipt.question_id) ?? presentation.questionId,
+      result: payload.body,
+    };
+  }
   const parsed = parseJsonObject(payload.body);
   if (!parsed || !subagentPayloadMatchesOperation(presentation.operation, parsed)) {
     return presentation;
@@ -140,6 +155,7 @@ function mergeSubagentPayload(
     answerText: isCollaborationOperation(presentation.operation) ? stringValue(objectValue(payload.answer)?.body) : presentation.answerText,
     agents,
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : presentation.agentsKnown,
+    agentCount: numberValue(payload.agent_count) ?? presentation.agentCount,
     debugSummary: isCollaborationOperation(presentation.operation)
       ? presentation.debugSummary
       : subagentDebugSummary(payload.debug) ?? presentation.debugSummary,
@@ -380,13 +396,15 @@ function parseJsonObject(
   if (!trimmed) {
     return null;
   }
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace < 0 || lastBrace <= firstBrace) {
+  // Only whole historical JSON objects are envelopes; embedded source JSON remains Markdown.
+  // 只有完整的历史 JSON 对象才是封套；内嵌源码 JSON 保持为 Markdown。
+  const fenced = /^```(?:json)?\s*\n([\s\S]*)\n```$/i.exec(trimmed);
+  const document = fenced ? fenced[1].trim() : trimmed;
+  if (!document.startsWith("{") || !document.endsWith("}")) {
     return null;
   }
   try {
-    return objectValue(JSON.parse(trimmed.slice(firstBrace, lastBrace + 1)));
+    return objectValue(JSON.parse(document));
   } catch {
     return null;
   }
@@ -521,6 +539,7 @@ function subagentResult(
   payload: Record<string, unknown> | null,
   blocks: ToolExecutionConversationBlock[] = [],
 ): string | null {
+  if (payload?.format === "markdown") return fallbackResultFromBlocks(blocks);
   if (isCollaborationOperation(operation)) {
     return payload ? JSON.stringify(payload) : fallbackResultFromBlocks(blocks);
   }
@@ -557,7 +576,7 @@ function subagentAgentsKnown(
   // 宿主或正文载荷。
   payload: Record<string, unknown> | null,
 ): boolean {
-  return Array.isArray(payload?.agents);
+  return Array.isArray(payload?.agents) || (payload?.format === "markdown" && typeof payload.agent_count === "number");
 }
 
 // subagentAgents converts status payload agents into compact rows.

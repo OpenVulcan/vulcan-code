@@ -526,6 +526,8 @@ fn native_memory_runtime_session_is_required_only_for_native_tools() {
     );
 }
 
+mod result_markdown;
+
 async fn execute_vmm_memory_search_tool(
     request: NativeToolExecutionRequest,
     snapshot: Arc<NativeToolRuntimeSnapshot>,
@@ -548,67 +550,9 @@ async fn execute_vmm_memory_search_tool(
         .await
         .map_err(|error| NativeToolError::new(error.to_string()))?;
 
-    Ok(VulcanToolInvocationResult::from_model_output(json!({
-        "trace_id": response.trace_id,
-        "query_count": response.results.len(),
-        "results": response.results.into_iter().map(|group| {
-            json!({
-                "query_index": group.query_index,
-                "query": group.query,
-                "hit_count": group.hits.len(),
-                "hits": group.hits.into_iter().map(memory_search_hit_output).collect::<Vec<_>>(),
-            })
-        }).collect::<Vec<_>>(),
-    })))
-}
-
-/// Projects one exact search hit to model-visible JSON without inventing external provenance.
-/// 将准确检索命中投影为模型可见 JSON，不编造外置来源。
-/// Takes the service-owned hit and preserves every supplied retrieval fact in the returned object.
-/// 接收服务归属的命中，在返回对象中保留每项已提供检索事实。
-fn memory_search_hit_output(hit: vulcan_vmm::MemorySearchHit) -> Value {
-    // The literal object owns this result shape; only the optional observed facts extend it.
-    // 字面对象拥有该结果形状；仅可选的已观察事实对其扩展。
-    let mut value = json!({
-        "memory_id": hit.memory_id,
-        "source_turn_id": hit.source_turn_id,
-        "has_source_turn": hit.source_turn_id != 0,
-        "abstract": hit.abstract_text,
-        "details_preview": hit.details_preview,
-        "category": hit.category,
-        "created_datetime": hit.created_datetime,
-    });
-    if let Some(retrieval) = hit.retrieval {
-        value["retrieval"] = json!(retrieval);
-    }
-    value
-}
-
-/// Verifies the actual tool projection preserves supplied facts and omits absent external facts.
-/// 验证实际工具投影保留已提供事实，并省略缺失的外置事实。
-#[cfg(test)]
-#[test]
-fn memory_search_tool_preserves_optional_retrieval_facts() {
-    // The fixture deliberately separates creation from retrieval and total from matched evidence.
-    // 夹具刻意区分创建与检索来源，以及总数与匹配证据。
-    let retrieval = json!({
-        "source_kind": "direct", "origin": "lexical_rerank", "origin_label": "Lexical + Rerank",
-        "origin_explanation": "Both recorded stages executed.", "final_score": 0.875,
-        "context_observed": true, "support_count": 9, "rebuttal_count": 5,
-        "matched_context_values": ["fruit=西瓜"], "matched_context_support_count": 2,
-        "matched_context_rebuttal_count": 1, "matched_context_score_delta": -0.01
-    });
-    let native = memory_search_hit_output(vulcan_vmm::MemorySearchHit {
-        memory_id: 7,
-        source_turn_id: 2,
-        retrieval: Some(serde_json::from_value(retrieval.clone()).expect("closed fixture")),
-        ..Default::default()
-    });
-    assert_eq!(native["retrieval"], retrieval);
-    assert_eq!(native["has_source_turn"], true);
-    let external = memory_search_hit_output(vulcan_vmm::MemorySearchHit::default());
-    assert!(external.get("retrieval").is_none());
-    assert_eq!(external["has_source_turn"], false);
+    Ok(VulcanToolInvocationResult::from_model_output(
+        Value::String(result_markdown::search(&response)),
+    ))
 }
 
 /// Executes the host-owned `vmm_turn_details` tool.
@@ -634,22 +578,9 @@ async fn execute_vmm_turn_details_tool(
         .await
         .map_err(|error| NativeToolError::new(error.to_string()))?;
 
-    Ok(VulcanToolInvocationResult::from_model_output(json!({
-        "trace_id": response.trace_id,
-        "turn_count": response.turns.len(),
-        "turns": response.turns.into_iter().map(|turn| json!({
-            "turn_id": turn.turn_id,
-            "user_question": turn.user_question,
-            "timeline": turn.timeline.into_iter().map(|item| json!({
-                "type": item.kind.as_wire_type(),
-                "content": item.content,
-            })).collect::<Vec<_>>(),
-            "assistant_answer": turn.assistant_answer,
-            "detail": turn.detail,
-            "previous_turn_ids": turn.previous_turn_ids,
-            "next_turn_ids": turn.next_turn_ids,
-        })).collect::<Vec<_>>(),
-    })))
+    Ok(VulcanToolInvocationResult::from_model_output(
+        Value::String(result_markdown::turns(&response)),
+    ))
 }
 
 /// Executes the host-owned `vmm_memory_write` tool.
@@ -692,14 +623,9 @@ async fn execute_vmm_memory_write_tool(
         .await
         .map_err(|error| NativeToolError::new(error.to_string()))?;
 
-    Ok(VulcanToolInvocationResult::from_model_output(json!({
-        "trace_id": response.trace_id,
-        "item_count": response.items.len(),
-        "items": response.items.into_iter().map(|item| json!({
-            "memory_id": item.memory_id,
-            "deduped": item.deduped,
-        })).collect::<Vec<_>>(),
-    })))
+    Ok(VulcanToolInvocationResult::from_model_output(
+        Value::String(result_markdown::written(&response)),
+    ))
 }
 
 /// Executes the host-owned `vmm_memory_delete` tool.
@@ -726,14 +652,9 @@ async fn execute_vmm_memory_delete_tool(
         .await
         .map_err(vmm_memory_delete_native_error)?;
 
-    Ok(VulcanToolInvocationResult::from_model_output(json!({
-        "trace_id": response.trace_id,
-        "deleted_count": response.deleted_memory_ids.len(),
-        "not_found_count": response.not_found_memory_ids.len(),
-        "deleted_vector_rows": response.deleted_vector_rows,
-        "deleted_memory_ids": response.deleted_memory_ids,
-        "not_found_memory_ids": response.not_found_memory_ids,
-    })))
+    Ok(VulcanToolInvocationResult::from_model_output(
+        Value::String(result_markdown::deleted(&response)),
+    ))
 }
 
 /// Converts VMM memory-delete errors into model-facing native tool errors.

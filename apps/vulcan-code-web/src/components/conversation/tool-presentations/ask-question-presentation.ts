@@ -12,6 +12,14 @@ export function hydrateAskQuestionPresentation(
   if (!payload) {
     return presentation;
   }
+  // New results reference the single Markdown body; questions stay in the accepted input.
+  // 新结果引用唯一 Markdown 正文；题目仍位于已接受输入。
+  const metadata = objectValue(payload.metadata);
+  const host = objectValue(metadata?.host_result);
+  const receipt = host?.kind === "ask" ? objectValue(host.payload) : null;
+  if (receipt?.format === "markdown") {
+    return { ...presentation, answerMarkdown: payload.body };
+  }
   const display = askQuestionDisplayFromMetadata(payload.metadata);
   if (!display) {
     return presentation;
@@ -47,7 +55,7 @@ export function resolveAskQuestionPresentation(
   const payload = fixedHostPayload(blocks);
   const display = askQuestionDisplayFromPayload(payload);
   const fallbackQuestions = askQuestionItemsFromArguments(blocks);
-  const payloadAnswers = payload ? askQuestionAnswersFromPayload(payload) : null;
+  const payloadAnswers = payload?.format === "markdown" ? null : payload ? askQuestionAnswersFromPayload(payload) : null;
   const baseQuestions = display?.questions.length ? display.questions : fallbackQuestions;
   const questions = applyAskQuestionAnswers(baseQuestions, payloadAnswers);
   return {
@@ -56,6 +64,7 @@ export function resolveAskQuestionPresentation(
     ignoredAnswerText: display?.ignoredAnswerText ?? "User ignored the answer",
     kind: "ask_question",
     questions,
+    answerMarkdown: payload?.format === "markdown" ? blocks.find(block => block.kind === "tool-result")?.body ?? "" : undefined,
     state: displayState,
     title: display?.title ?? "Ask the user",
   };

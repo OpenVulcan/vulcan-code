@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, FileText, FolderSearch, Search } from "lucid
 import { ChangeSetDiffPreview } from "@/components/conversation/conversation-change-set-diff-preview";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
+import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { hydrateFileAccessPresentation, type FileAccessItemPresentation, type FileAccessPresentation } from "@/components/conversation/conversation-tool-presentations";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -82,7 +83,7 @@ export function FileAccessPresentationCard(props: {
   // canExpand remains false until complete returned rows are locally available.
   // canExpand 在完整返回行已在本地可用前始终为 false。
   const resultEvent = React.useContext(ToolResultEventContext);
-  const canExpand = (resultEvent !== undefined && hydratedPresentation.action !== "read") || (hydratedPresentation.interactive
+  const canExpand = hydratedPresentation.markdownBody !== undefined || (resultEvent !== undefined && hydratedPresentation.action !== "read") || (hydratedPresentation.interactive
     && hydratedPresentation.items.some((item) => item.expandable));
   // status is limited to request formation and active execution.
   // status 仅限请求构造与正在执行阶段。
@@ -133,7 +134,7 @@ export function FileAccessPresentationCard(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={`file-access:${hydratedPresentation.id}`} expanded={canExpand && props.expanded}>
         <ToolResultBody>
-        <div className="file-access-detail">
+        {hydratedPresentation.markdownBody !== undefined ? <MarkdownMessage content={hydratedPresentation.markdownBody} eager /> : <div className="file-access-detail">
           {hydratedPresentation.errorDetail ? <FileChangeErrorDetail detail={hydratedPresentation.errorDetail} /> : null}
           {hydratedPresentation.items.map((item) => (
             <FileAccessItem
@@ -144,7 +145,7 @@ export function FileAccessPresentationCard(props: {
               t={t}
             />
           ))}
-        </div>
+        </div>}
         </ToolResultBody>
       </ConversationMeasuredCollapse>
     </div>

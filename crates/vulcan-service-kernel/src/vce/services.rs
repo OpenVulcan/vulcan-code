@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use serde_json::to_value;
 use uuid::Uuid;
 use vulcan_agent_runtime::VceRetrievalHandler;
 use vulcan_context_engine::{
@@ -16,6 +15,8 @@ use vulcan_context_engine::{
 };
 use vulcan_service_api as api;
 use vulcan_workbench_model::{ProjectVceSettings, TaskProjectSummary};
+
+mod tool_result;
 
 use crate::{
     ServiceEvent, ServiceEventEmitter, SharedServiceBridgeState,
@@ -53,8 +54,8 @@ pub(crate) struct VceReconcileReport {
 ///
 /// # Returns
 /// 返回值
-/// A callback that projects VCE results into the stable service JSON contract.
-/// 返回将 VCE 结果投影为稳定服务 JSON 契约的回调。
+/// A callback that projects conversation results as Markdown without changing the service JSON API.
+/// 返回将会话结果投影为 Markdown 且不改变服务 JSON 接口的回调。
 pub(crate) fn vce_retrieval_handler(
     state: SharedServiceBridgeState,
     manager: VceRuntimeManager,
@@ -69,8 +70,9 @@ pub(crate) fn vce_retrieval_handler(
             // publish a result admitted under the previous global contract.
             // 在 Provider 与索引工作完成后重新校验，防止并发公共 AI 撤销发布按旧全局契约准入的结果。
             require_vce_project_runtime_ready(&state, &manager, &project_id).await?;
-            to_value(vce_retrieval_response(project_id, result))
-                .map_err(|error| format!("serialize VCE retrieval response failed: {error}"))
+            Ok(serde_json::Value::String(tool_result::markdown(
+                &vce_retrieval_response(project_id, result),
+            )))
         })
     })
 }
@@ -2261,6 +2263,7 @@ pub(crate) fn verify_retired_reconciliation_preserves_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::to_value;
 
     /// Preserve exact Unicode character coordinates when projecting core hits to the model-facing wire.
     /// 将核心命中投影为模型侧线协议时保留精确 Unicode 字符坐标。

@@ -4,6 +4,8 @@
 use super::*;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 
+mod result_markdown;
+
 /// Parsed read-only action accepted by the `runtime-config` tool.
 /// `runtime-config` 工具接受的已解析只读动作。
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -144,8 +146,8 @@ fn upstream_runtime_config_request(args: RuntimeConfigArgs) -> Result<Value, Nat
 /// `runtime` owns the engine and `request` carries model-provided arguments.
 /// `runtime` 持有引擎，`request` 携带模型提供的参数。
 ///
-/// Returns the official structured LuaSkills response with values forcibly excluded.
-/// 返回强制排除配置值的正式 LuaSkills 结构化响应。
+/// Returns shared Markdown from the official response, with configured values excluded.
+/// 根据正式响应返回共享 Markdown，并排除已配置值。
 async fn execute_runtime_config_tool(
     runtime: LuaSkillsRuntimeHandle,
     request: NativeToolExecutionRequest,
@@ -153,6 +155,7 @@ async fn execute_runtime_config_tool(
     let args = serde_json::from_value::<RuntimeConfigArgs>(request.arguments).map_err(|error| {
         NativeToolError::new(format!("Invalid runtime-config arguments: {error}"))
     })?;
+    let action = args.action;
     let upstream_request = upstream_runtime_config_request(args)?;
     let request_text = serde_json::to_string(&upstream_request).map_err(|error| {
         NativeToolError::new(format!("Failed to encode runtime-config request: {error}"))
@@ -167,10 +170,7 @@ async fn execute_runtime_config_tool(
         .write()
         .map_err(|_| NativeToolError::new("LuaSkills runtime write lock is poisoned"))?
         .dispatch_runtime_config_tool_json(&request_text);
-    let response = serde_json::from_str::<Value>(&response_text).map_err(|error| {
-        NativeToolError::new(format!("Failed to decode runtime-config response: {error}"))
-    })?;
-    Ok(VulcanToolInvocationResult::from_model_output(response))
+    result_markdown::project(action, &response_text)
 }
 
 #[cfg(test)]

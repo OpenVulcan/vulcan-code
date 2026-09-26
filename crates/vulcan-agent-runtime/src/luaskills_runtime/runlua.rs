@@ -596,13 +596,12 @@ async fn execute_runlua_session_tool(
     // elapsed_ms is bounded to u64 for JSON-compatible host metadata.
     // elapsed_ms 被限制为 u64 以形成 JSON 兼容宿主元数据。
     let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-    // pretty_response keeps the model contract readable while preserving exact JSON keys.
-    // pretty_response 在保留精确 JSON 键的同时保持模型契约可读。
-    let pretty_response = serde_json::to_string_pretty(&response)
-        .map_err(|error| format!("Failed to encode runlua_session result: {error}"))?;
+    // readable_response strips lease internals only at the conversation output boundary.
+    // readable_response 仅在会话输出边界移除租约内部信息。
+    let readable_response = result_markdown::render(action, &response)?;
     // model_output applies the same bounded result policy as one-shot RunLua.
     // model_output 应用与一次性 RunLua 相同的有界结果策略。
-    let model_output = render_runlua_text(&pretty_response, workspace_root.as_deref())?;
+    let model_output = render_runlua_text(&readable_response, workspace_root.as_deref())?;
     // host_payload is intentionally compact and never duplicates a potentially large eval result.
     // host_payload 刻意保持紧凑，绝不复制可能很大的 eval 结果。
     let host_payload =
@@ -615,6 +614,8 @@ async fn execute_runlua_session_tool(
             }),
     )
 }
+
+mod result_markdown;
 
 /// Starts one owner-bound public LuaSkills runtime lease.
 /// 启动一个绑定所有者的 LuaSkills 公开运行时租约。

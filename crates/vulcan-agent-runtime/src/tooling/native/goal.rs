@@ -40,14 +40,9 @@ struct UpdateGoalArgs {
     status: UpdateGoalStatusArg,
 }
 
-/// Model-facing goal view aligned with Codex protocol fields.
-/// 与 Codex 协议字段对齐的模型可见目标视图。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// Minimal accounting view used by the conversation receipt.
+/// 会话回执使用的最小记账视图。
 struct GoalModelView {
-    /// Session identifier that owns this goal.
-    /// 拥有该目标的会话标识。
-    thread_id: SessionId,
     /// Human-authored goal objective.
     /// 用户编写的目标内容。
     objective: String,
@@ -56,7 +51,6 @@ struct GoalModelView {
     status: NativeGoalStatus,
     /// Optional explicit token budget.
     /// 可选的显式 token 预算。
-    #[serde(skip_serializing_if = "Option::is_none")]
     token_budget: Option<i64>,
     /// Accounted token usage for this goal.
     /// 当前目标已记账的 token 用量。
@@ -64,28 +58,6 @@ struct GoalModelView {
     /// Accounted wall-clock time in seconds.
     /// 当前目标已记账的墙钟时间秒数。
     time_used_seconds: i64,
-    /// Creation timestamp in Unix epoch seconds.
-    /// 创建时间的 Unix 纪元秒值。
-    created_at: i64,
-    /// Last update timestamp in Unix epoch seconds.
-    /// 最近更新时间的 Unix 纪元秒值。
-    updated_at: i64,
-}
-
-/// Model-facing tool response shared by all Goal native tools.
-/// 所有 Goal 原生工具共享的模型可见工具响应。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GoalToolResponse {
-    /// Current goal, if one exists.
-    /// 当前目标，如果存在。
-    goal: Option<GoalModelView>,
-    /// Remaining explicit token budget, if a budget exists.
-    /// 剩余显式 token 预算，如果存在预算。
-    remaining_tokens: Option<i64>,
-    /// Final usage-report instruction returned for completed goals with budget or elapsed time.
-    /// 在带预算或耗时的目标完成时返回的最终用量汇报指令。
-    completion_budget_report: Option<String>,
 }
 
 /// Builds the AI-visible goal read tool.
@@ -264,7 +236,7 @@ async fn execute_create_goal_tool(
         .create_goal(session_id, args.objective, token_budget)
         .await
         .map_err(|error| NativeToolError::new(format!("failed to create goal: {error}")))?;
-    Ok(goal_tool_result_with_host(Some(goal), false, true))
+    Ok(goal_tool_result_with_context(Some(goal), false, true))
 }
 
 /// Executes one `update_goal` request.
@@ -296,7 +268,7 @@ async fn execute_update_goal_tool(
         .update_goal_status(session_id, target_status)
         .await
         .map_err(|error| NativeToolError::new(format!("failed to update goal: {error}")))?;
-    Ok(goal_tool_result_with_host(
+    Ok(goal_tool_result_with_context(
         Some(goal),
         args.status == UpdateGoalStatusArg::Complete,
         false,
@@ -464,14 +436,11 @@ fn ensure_empty_object_arguments(arguments: &Value) -> Result<(), NativeToolErro
 /// 带秒级时间戳的模型可见目标视图。
 fn goal_model_view(goal: &NativeGoalSnapshot) -> GoalModelView {
     GoalModelView {
-        thread_id: goal.session_id,
         objective: goal.objective.clone(),
         status: goal.status,
         token_budget: goal.token_budget,
         tokens_used: goal.usage_known.then_some(goal.tokens_used),
         time_used_seconds: goal.time_used_seconds,
-        created_at: goal.created_at_ms / 1_000,
-        updated_at: goal.updated_at_ms / 1_000,
     }
 }
 
@@ -497,8 +466,8 @@ fn goal_tool_result(
     VulcanToolInvocationResult::from_model_output(response)
 }
 
-/// Renders the shared goal tool result with a host projection.
-/// 渲染携带宿主投影的共享目标工具结果。
+/// Renders the shared goal result with optional immediate creation guidance.
+/// 渲染可包含即时创建指引的共享目标工具结果。
 ///
 /// # Parameters
 /// 参数
@@ -511,9 +480,9 @@ fn goal_tool_result(
 ///
 /// # Returns
 /// 返回值
-/// A model invocation result plus a host `session_goal` projection.
-/// 模型调用结果以及宿主 `session_goal` 投影。
-fn goal_tool_result_with_host(
+/// One Markdown result shared by model and conversation display.
+/// 模型与会话展示共用一份 Markdown 结果。
+fn goal_tool_result_with_context(
     goal: Option<NativeGoalSnapshot>,
     include_completion_report: bool,
     include_active_context: bool,
@@ -525,13 +494,9 @@ fn goal_tool_result_with_host(
     } else {
         goal_response_value(goal.as_ref(), include_completion_report)
     };
-    let host_payload = json!({
-        "goal": goal.as_ref().map(goal_host_projection),
-    });
-    VulcanToolInvocationResult::from_model_output(response).with_host_result(VulcanToolHostResult {
-        kind: String::from("session_goal"),
-        payload: host_payload,
-    })
+    // Goal controls read the session domain snapshot, not this obsolete duplicated host view.
+    // 目标控件读取会话领域快照，而非此处已废弃的重复宿主视图。
+    VulcanToolInvocationResult::from_model_output(response)
 }
 
 /// Builds the model-facing creation response with immediate append-only goal guidance.
@@ -547,18 +512,16 @@ fn goal_tool_result_with_host(
 /// The ordinary goal response plus guidance consumed directly after the tool call.
 /// 返回普通目标响应以及紧随工具调用后消费的目标引导。
 pub(crate) fn goal_created_response_value(goal: &NativeGoalSnapshot) -> Value {
-    let mut response = goal_response_value(Some(goal), false);
-    if let Some(response_object) = response.as_object_mut() {
-        response_object.insert(
-            String::from("activeGoalContext"),
-            Value::String(render_active_session_goal_context(
-                &goal.goal_id,
-                &goal.objective,
-                goal.token_budget,
-            )),
-        );
-    }
-    response
+    // The immutable guidance already owns the objective; avoid echoing it in the receipt.
+    // 不可变指引已经包含目标正文，回执不再重复。
+    let mut body = goal_response_markdown(Some(goal), false, false);
+    body.push_str("\n");
+    body.push_str(&render_active_session_goal_context(
+        &goal.goal_id,
+        &goal.objective,
+        goal.token_budget,
+    ));
+    Value::String(body)
 }
 
 /// Builds the model-facing goal response value.
@@ -579,23 +542,54 @@ pub(crate) fn goal_response_value(
     goal: Option<&NativeGoalSnapshot>,
     include_completion_report: bool,
 ) -> Value {
-    let remaining_tokens = goal.and_then(|goal| {
-        if !goal.usage_known {
-            return None;
-        }
-        goal.token_budget
-            .map(|budget| (budget - goal.tokens_used).max(0))
-    });
-    let completion_budget_report = if include_completion_report {
-        goal.and_then(goal_completion_budget_report)
-    } else {
-        None
+    Value::String(goal_response_markdown(
+        goal,
+        include_completion_report,
+        true,
+    ))
+}
+
+/// Renders the goal fields needed to act, including explicit unknown token accounting.
+/// 渲染行动所需目标字段，并明确未知的 Token 记账状态。
+/// Takes the optional snapshot and report/objective flags; returns one shared Markdown body.
+/// 接收可选快照及报告、正文开关，返回一份共享 Markdown 正文。
+fn goal_response_markdown(
+    goal: Option<&NativeGoalSnapshot>,
+    report: bool,
+    include_objective: bool,
+) -> String {
+    // A missing goal is not a completed goal.
+    // 未设置目标不代表目标已完成。
+    let Some(goal) = goal else {
+        return String::from("# Goal\n\nNo goal is set.\n");
     };
-    json!(GoalToolResponse {
-        goal: goal.map(goal_model_view),
-        remaining_tokens,
-        completion_budget_report,
-    })
+    // Reuse canonical usage projection so unknown accounting never becomes zero.
+    // 复用规范用量投影，未知记账状态不得变成零。
+    let view = goal_model_view(goal);
+    // Navigation and timestamps belong to the domain snapshot, not the tool reading result.
+    // 导航与时间戳归领域快照所有，不进入工具阅读结果。
+    let mut output = format!("# Goal\n\nStatus: {}\n", view.status.as_str());
+    if include_objective {
+        output.push_str(&format!("\n## Objective\n\n{}\n", view.objective));
+    }
+    match view.tokens_used {
+        Some(used) => output.push_str(&format!("\nTokens used: {used}\n")),
+        None => output.push_str("\nTokens used: unknown\n"),
+    }
+    if let Some(budget) = view.token_budget {
+        output.push_str(&format!("\nToken budget: {budget}\n"));
+        if let Some(used) = view.tokens_used {
+            output.push_str(&format!(
+                "\nRemaining tokens: {}\n",
+                budget.saturating_sub(used).max(0)
+            ));
+        }
+    }
+    output.push_str(&format!("\nElapsed seconds: {}\n", view.time_used_seconds));
+    if report && let Some(instruction) = goal_completion_budget_report(goal) {
+        output.push_str(&format!("\n{instruction}\n"));
+    }
+    output
 }
 
 /// Builds the final completion usage-report instruction used by Codex goal tools.
@@ -615,83 +609,15 @@ fn goal_completion_budget_report(goal: &NativeGoalSnapshot) -> Option<String> {
         None
     } else {
         Some(
-            "Goal achieved. Report final usage from this tool result's structured goal fields. If `goal.tokenBudget` is present, include token usage from `goal.tokensUsed` and `goal.tokenBudget`. If `goal.timeUsedSeconds` is greater than 0, summarize elapsed time in a concise, human-friendly form appropriate to the response language."
+            "Goal achieved. Report final usage from this receipt. Include the token budget when present; never turn unknown token usage into zero. Summarize nonzero elapsed time concisely in the response language."
                 .to_string(),
         )
     }
 }
 
-/// Builds the host-facing goal projection used by workbench snapshots.
-/// 构建工作台快照使用的宿主可见目标投影。
-///
-/// # Parameters
-/// 参数
-/// `goal` is the persisted goal record.
-/// `goal` 是持久化目标记录。
-///
-/// # Returns
-/// 返回值
-/// A JSON projection including internal goal id and millisecond timestamps.
-/// 包含内部目标标识与毫秒时间戳的 JSON 投影。
-fn goal_host_projection(goal: &NativeGoalSnapshot) -> Value {
-    json!({
-        "sessionId": goal.session_id,
-        "goalId": goal.goal_id,
-        "objective": goal.objective,
-        "status": goal.status,
-        "tokenBudget": goal.token_budget,
-        "usageKnown": goal.usage_known,
-        "tokensUsed": goal.usage_known.then_some(goal.tokens_used),
-        "usageTokens": goal.usage_known.then_some(goal.tokens_used),
-        "inputTokens": goal.uncached_input_tokens,
-        "cachedInputTokens": goal.cached_input_tokens,
-        "outputTokens": goal.output_tokens,
-        "reasoningTokens": goal.reasoning_tokens,
-        "totalTokens": goal.total_tokens,
-        "timeUsedSeconds": goal.time_used_seconds,
-        "createdAtMs": goal.created_at_ms,
-        "updatedAtMs": goal.updated_at_ms,
-    })
-}
-
 #[cfg(test)]
 mod goal_projection_tests {
     use super::*;
-
-    /// Verifies host Goal projections preserve every persisted token counter during tool-result refresh.
-    /// 验证宿主目标投影在工具结果刷新期间保留全部持久化 Token 计数。
-    #[test]
-    fn host_goal_projection_preserves_token_breakdown() {
-        // goal carries distinct values so every projection field is independently observable.
-        // goal 使用互不相同的数值，使每个投影字段均可独立观察。
-        let goal = NativeGoalSnapshot {
-            usage_known: true,
-            session_id: SessionId::new_v4(),
-            goal_id: String::from("goal-token-projection"),
-            objective: String::from("keep token details"),
-            status: NativeGoalStatus::Active,
-            token_budget: Some(50_000),
-            tokens_used: 13_579,
-            uncached_input_tokens: 12_345,
-            cached_input_tokens: 23_456,
-            output_tokens: 1_234,
-            reasoning_tokens: 789,
-            total_tokens: 37_035,
-            time_used_seconds: 42,
-            created_at_ms: 1_000,
-            updated_at_ms: 2_000,
-        };
-
-        let projection = goal_host_projection(&goal);
-
-        assert_eq!(projection["tokensUsed"], 13_579);
-        assert_eq!(projection["usageTokens"], 13_579);
-        assert_eq!(projection["inputTokens"], 12_345);
-        assert_eq!(projection["cachedInputTokens"], 23_456);
-        assert_eq!(projection["outputTokens"], 1_234);
-        assert_eq!(projection["reasoningTokens"], 789);
-        assert_eq!(projection["totalTokens"], 37_035);
-    }
 
     /// Verifies get_goal declares an explicit closed empty-object parameter schema.
     /// 验证 get_goal 声明显式封闭的空对象参数 Schema。

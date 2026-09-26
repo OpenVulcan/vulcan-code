@@ -859,12 +859,20 @@ fn parse_after_result(payload: &Value, origin: &VulcanToolOrigin) -> Result<Valu
 fn completed_with_post_hook_failure(
     result: VulcanToolInvocationResult,
 ) -> VulcanToolInvocationResult {
+    // This warning describes post-processing only; the executed action must not be retried blindly.
+    // 此警示仅描述后置处理；不得盲目重试已经执行的动作。
+    const NOTICE: &str = "## Post-processing warning\n\nThe underlying tool already completed. A post-processing hook failed; do not automatically retry the action.";
+    let model_output = crate::agent_runtime::tool_result_media::append_tool_result_notice(
+        result.model_output,
+        NOTICE,
+    )
+    .unwrap_or_else(|error| {
+        Value::String(format!(
+            "{NOTICE}\n\nThe completed result could not be presented: {error}"
+        ))
+    });
     VulcanToolInvocationResult {
-        model_output: serde_json::json!({
-            "status": "completed_with_postprocessing_error",
-            "result": result.model_output,
-            "warning": "The underlying tool already completed. A post-processing hook failed; do not automatically retry the action."
-        }),
+        model_output,
         host_result: result.host_result,
     }
 }
@@ -1657,11 +1665,12 @@ function: before
     fn post_hook_failure_preserves_completed_tool_result() {
         let result = VulcanToolInvocationResult::from_model_output(json!({ "clicked": true }));
         let projected = completed_with_post_hook_failure(result);
-        assert_eq!(
-            projected.model_output["status"],
-            "completed_with_postprocessing_error"
-        );
-        assert_eq!(projected.model_output["result"]["clicked"], true);
+        let body = projected
+            .model_output
+            .as_str()
+            .expect("readable completed result");
+        assert!(body.contains("\"clicked\": true"));
+        assert!(body.contains("already completed") && body.contains("do not automatically retry"));
     }
 
     /// Builds a real invocation identity for the product-plugin hook integration test.
@@ -2138,14 +2147,12 @@ lua_runtime:
         let completed = (first.invoke)(json!({"url": "https://post-fail.test"}), first_context)
             .await
             .expect("post-processing failure must preserve completed target result");
-        assert_eq!(
-            completed.model_output["status"],
-            "completed_with_postprocessing_error"
-        );
-        assert_eq!(
-            completed.model_output["result"]["owner_session_id"],
-            "conversation-one"
-        );
+        let body = completed
+            .model_output
+            .as_str()
+            .expect("readable completed result");
+        assert!(body.contains("already completed"));
+        assert!(body.contains("\"owner_session_id\": \"conversation-one\""));
         assert_eq!(observed.lock().expect("upstream arguments").len(), 3);
         let unmatched = VulcanToolCandidate {
             descriptor: VulcanToolDescriptor::new(

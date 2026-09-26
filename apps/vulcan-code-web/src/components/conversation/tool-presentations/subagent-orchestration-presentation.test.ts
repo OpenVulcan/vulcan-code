@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { ToolDetailPayload } from "@/components/conversation/conversation-detail";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
-import { resolveSubagentOrchestrationPresentation } from "./subagent-orchestration-presentation";
+import { hydrateSubagentOrchestrationPresentation, resolveSubagentOrchestrationPresentation } from "./subagent-orchestration-presentation";
 
 // collaborationBlock builds one exact native collaboration invocation and opaque generic output.
 // collaborationBlock 构建一条精确原生协作调用与不透明通用输出。
@@ -25,6 +26,33 @@ function collaborationBlock(
 }
 
 describe("native collaboration orchestration presentation", () => {
+  // Minimal host receipts preserve status while arbitrary JSON inside Markdown remains source content.
+  // 最小宿主回执保留状态，同时 Markdown 内任意 JSON 保持为源码内容。
+  it.each(["messages", "timeout", "no_pending_work", "needs_reply", "check_failed", "interrupted"])("reads Markdown wait status %s without parsing its body", (status) => {
+    const body = '# Agent wait\n\n```json\n{"status":"not-the-envelope"}\n```';
+    const blocks = collaborationBlock("wait_agents_result", { timeout_ms: 1000 }, body);
+    blocks[0].rawMetadata = { ...blocks[0].rawMetadata as Record<string, unknown>, host_result: {
+      kind: "agent_wait_ack_v1", payload: { format: "markdown", status, interrupted: status === "interrupted", reports: [], context_messages_pending: status === "messages" },
+    } };
+    const presentation = resolveSubagentOrchestrationPresentation(blocks, "completed");
+    expect(presentation).toMatchObject({ result: body, resultFormat: "markdown", timedOut: status === "timeout",
+      noActiveAgents: status === "no_pending_work", waitNeedsReply: status === "needs_reply", waitCheckFailed: status === "check_failed",
+      interrupted: status === "interrupted" });
+  });
+
+  // The question ID joins live domain state; delayed details carry no duplicate answer body.
+  // 问题身份关联实时领域状态；延迟详情不携带重复答案正文。
+  it("hydrates a Markdown question receipt using the exact host identity", () => {
+    const pending = resolveSubagentOrchestrationPresentation(collaborationBlock("ask_question", {
+      target_session_id: "recipient", question: "Inspect the failure.",
+    }, ""), "completed");
+    expect(pending).not.toBeNull();
+    const body = "# Question\n\nQuestion: q1\n";
+    const hydrated = hydrateSubagentOrchestrationPresentation(pending!, {
+      body, metadata: { host_result: { kind: "collaboration_receipt_v1", payload: { format: "markdown", question_id: "q1" } } },
+    });
+    expect(hydrated).toMatchObject({ questionId: "q1", result: body, resultFormat: "markdown", answerText: null });
+  });
   // Unified waiting exposes meaningful inbox outcomes without raw protocol details.
   // 统一等待展示有意义的收件结果，不显示原始协议详情。
   it.each(["messages", "timeout", "no_pending_work", "needs_reply", "check_failed"])("recognizes unified inbox outcome %s", (status) => {
@@ -148,5 +176,17 @@ describe("native collaboration orchestration presentation", () => {
     }], "completed");
 
     expect(presentation?.agents).toHaveLength(1);
+  });
+
+  it("shares a Markdown agent listing with only a header count, including delayed hydration", () => {
+    const body = "# Open agents\n\nworker: completed\n\n```\n{\"result\":\"literal output\"}\n```";
+    const host = { kind: "subagent_receipt_v1", payload: { format: "markdown", agent_count: 1 } };
+    const presentation = resolveSubagentOrchestrationPresentation([{
+      body, id: "listing", kind: "tool-result", rawMetadata: { host_result: host, tool_name: "list_agents" },
+      summary: "", title: "list_agents", toolName: "list_agents",
+    }], "completed");
+    expect(presentation).toMatchObject({ agentsKnown: true, agents: [], agentCount: 1, result: body, resultFormat: "markdown" });
+    expect(hydrateSubagentOrchestrationPresentation(presentation!, { body, metadata: { host_result: host } } as ToolDetailPayload))
+      .toMatchObject({ agentsKnown: true, agents: [], agentCount: 1, result: body, resultFormat: "markdown" });
   });
 });

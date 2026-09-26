@@ -23,8 +23,8 @@ use vulcan_provider_adapters::{
     PublicAiRuntime, ResolvedPublicAiSelection,
 };
 use vulcan_tools_manager::{
-    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
-    VulcanToolInvocationResult, VulcanToolOrigin, VulcanToolSourceKind,
+    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolInvocationResult,
+    VulcanToolOrigin, VulcanToolSourceKind,
 };
 
 /// Maximum UTF-8 byte length accepted for the canonical answer.
@@ -514,7 +514,7 @@ async fn execute_model_replacement_media_understanding(
     // payload 在宿主持有的结果契约中规范化模型的纯文本回答。
     let payload = finalize_media_understanding_output(output_text.as_str(), capability)?;
     validate_media_understanding_payload(&payload, capability)?;
-    Ok(media_understanding_invocation_result(payload))
+    media_understanding_invocation_result(payload)
 }
 
 /// Appends one text event while enforcing the whole-document byte ceiling before allocation.
@@ -605,18 +605,21 @@ pub(crate) fn render_media_understanding_provider_result(
         "warnings": []
     });
     validate_media_understanding_payload(&payload, capability)?;
-    Ok(media_understanding_invocation_result(payload))
+    media_understanding_invocation_result(payload)
 }
 
-/// Wraps one validated canonical payload for model and host consumers.
-/// 为模型与宿主消费者包装一项已校验规范载荷。
-fn media_understanding_invocation_result(payload: Value) -> VulcanToolInvocationResult {
-    VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
-        VulcanToolHostResult {
-            kind: String::from("media_understanding_output"),
-            payload,
-        },
-    )
+mod result_markdown;
+
+/// Projects a validated canonical payload into one body shared by model and host display.
+/// 将已校验规范载荷投影为模型与宿主展示共享的一份正文。
+/// Takes the canonical value; returns the readable result or an explicit projection error.
+/// 接收规范值，返回可读结果或明确的投影错误。
+fn media_understanding_invocation_result(
+    payload: Value,
+) -> Result<VulcanToolInvocationResult, String> {
+    Ok(VulcanToolInvocationResult::from_model_output(
+        Value::String(result_markdown::render(payload)?),
+    ))
 }
 
 /// Validates the canonical result without accepting provider-specific alternate fields.

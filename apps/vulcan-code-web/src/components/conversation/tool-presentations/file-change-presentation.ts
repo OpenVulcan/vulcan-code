@@ -6,6 +6,7 @@ import { argumentsFromMetadata, arrayValue, booleanValue, compactHash, fixedTool
 import { deleteRows, fileChangeDiffFile, insertRows, modifyRows, splitTextLines } from "./file-change-diff-presentation";
 import { fixedHostPayload, fixedV1ToolEvent } from "./presentation-value-readers";
 import { buildV1ChangeSetFilePresentation } from "./v1-change-set-presentation";
+import { v1ModelResult } from "./v1-tool-domain-presentation";
 import type { PersistentChangeSet } from "@/service/conversation-event-window-store";
 
 /** Maximum display rows shared by current and historical file-access previews.
@@ -490,6 +491,11 @@ function buildNativeFileAccessPresentation(
 ): FileAccessPresentation | null {
   const targets = nativeFileAccessTargets(blocks);
   const output = nativeFileAccessOutput(blocks);
+  // V1 list/stat results share their sole model body instead of persisting a second host object.
+  // V1 列表和属性结果共用唯一模型正文，不再持久化第二个宿主对象。
+  const modelResult = v1ModelResult(fixedV1ToolEvent(blocks)?.output);
+  const markdownBody = accessAction !== "read" && displayState !== "running" && typeof modelResult === "string"
+    ? modelResult : undefined;
   if (!targets.length) {
     return null;
   }
@@ -522,10 +528,11 @@ function buildNativeFileAccessPresentation(
   });
   return {
     action: accessAction,
+    markdownBody,
     errorDetail: displayState === "failed" ? errorDetailFromBlocks(blocks) : null,
     detailRef,
     id: fileChangePresentationId(blocks, items, `native-file-${accessAction}`),
-    interactive: displayState !== "running" && items.some((item) => item.expandable),
+    interactive: displayState !== "running" && (markdownBody !== undefined || items.some((item) => item.expandable)),
     items,
     kind: fileAccessPresentationKind(accessAction),
     state: displayState,
@@ -1488,6 +1495,12 @@ export function hydrateFileAccessPresentation(
 ): FileAccessPresentation {
   if (!payload) {
     return presentation;
+  }
+  // Delayed inspection details carry the exact same body as immediate model results.
+  // 延迟检查详情携带与即时模型结果完全相同的正文。
+  const modelResult = v1ModelResult({ model_output: payload.body });
+  if (presentation.action !== "read" && typeof modelResult === "string") {
+    return { ...presentation, markdownBody: modelResult, interactive: presentation.state !== "running" };
   }
   // output prefers the hidden authoritative host_result and only then accepts a strict legacy JSON body.
   // output 优先使用隐藏的权威 host_result，仅在其缺失时接受严格旧版 JSON 正文。

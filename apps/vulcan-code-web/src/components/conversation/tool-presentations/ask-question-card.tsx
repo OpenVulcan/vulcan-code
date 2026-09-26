@@ -4,6 +4,7 @@ import * as React from "react";
 import { ChevronDown, ChevronRight, MessageCircleQuestionMark } from "lucide-react";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
+import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { hydrateAskQuestionPresentation, type AskQuestionPresentation, type AskQuestionPresentationItem } from "@/components/conversation/conversation-tool-presentations";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -106,7 +107,10 @@ export function AskQuestionPresentationCard(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={`ask-question:${presentation.id}`} expanded={expanded}>
         <div className="ask-question-detail">
-          {hydratedPresentation.questions.map((question) => (
+          {hydratedPresentation.answerMarkdown !== undefined ? <>
+            {hydratedPresentation.questions.map(question => <div className="ask-question-item" key={question.id}>{question.question}</div>)}
+            <MarkdownMessage content={hydratedPresentation.answerMarkdown} eager />
+          </> : hydratedPresentation.questions.map((question) => (
             <AskQuestionAnswerItem
               ignoredAnswerText={hydratedPresentation.ignoredAnswerText}
               item={question}

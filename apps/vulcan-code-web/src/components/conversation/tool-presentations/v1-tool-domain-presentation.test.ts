@@ -25,6 +25,43 @@ function event(name: string, input: ToolPayload, result?: ToolJsonValue, host?: 
 }
 
 describe("V1 domain results from actual runtime contracts", () => {
+  it("reads current Ask replies from the sole body and preserves original questions", () => {
+    const answer = "yes🦀, exactly";
+    const body = `## User Answers\n\n- Scope: ${answer}\n`;
+    const domain = resolveV1ToolDomainPresentation(event("ask", { questions: [{ header: "Scope", question: "Proceed?" }] }, body,
+      { kind: "ask", payload: { format: "markdown" } }));
+    expect(domain.sections[0].value).toEqual([{ header: "Scope", question: "Proceed?" }]);
+    expect(domain.sections[1]).toMatchObject({ value: body, markdown: true });
+  });
+  it.each(["knowledge_search", "knowledge_browse", "knowledge_read", "codebase_retrieval",
+    "vmm_memory_search", "vmm_turn_details", "vmm_memory_write", "vmm_memory_delete",
+    "get_goal", "create_goal", "update_goal", "image_understand", "video_understand",
+    "audio_understand", "browser_list", "browser_open", "browser_select", "browser_close"])(
+    "renders the sole Markdown body of %s without needing the historical JSON fields",
+    (name) => {
+      // The fenced object is source content, not another tool-result envelope.
+      // 围栏中的对象是源正文，不是另一个工具结果封装。
+      const body = '# Source\n\n```json\n{"id":"original-source"}\n```';
+      const domain = resolveV1ToolDomainPresentation(event(name, {}, body));
+      expect(domain.sections).toHaveLength(1);
+      expect(domain.sections[0]).toMatchObject({ value: body, markdown: true });
+    },
+  );
+
+  // An accepted plan body is read from its committed snapshot, never reconstructed from the request.
+  // 已接受计划正文读取提交快照，不从请求重新构造。
+  it("keeps a Markdown plan receipt beside its authoritative artifact", () => {
+    const body = "# Plan saved\n\nPath: `docs/plan/accepted.md`";
+    const domain = resolveV1ToolDomainPresentation(event("submit_plan",
+      { name: "Plan", content: "Unaccepted input" }, body,
+      { kind: "plan_artifact", payload: { name: "Plan", path: "docs/plan/accepted.md", content: "Accepted plan" } }));
+    expect(domain.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: body, markdown: true }),
+      expect.objectContaining({ value: "Accepted plan", markdown: true }),
+    ]));
+    expect(JSON.stringify(domain.sections)).not.toContain("Unaccepted input");
+  });
+
   it("decodes the canonical model result without mining unrelated result-shaped fields", () => {
     expect(v1ModelResult({ model_output: '{"hits":[]}', host_result: { kind: "other", payload: { hits: ["wrong"] } } })).toEqual({ hits: [] });
     expect(v1ModelResult({ model_output: "# Readable result" })).toBe("# Readable result");
