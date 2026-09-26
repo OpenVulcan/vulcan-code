@@ -147,6 +147,28 @@ impl OwnedDatabaseTarget {
             .map_err(render)
     }
 
+    /// Resolves filesystem-backed identity without blocking the asynchronous scheduler.
+    /// 解析依赖文件系统的身份，避免阻塞异步调度器。
+    /// `runtime` owns preparation capacity; `deadline` is the original operation deadline.
+    /// `runtime` 持有准备容量；`deadline` 为原始操作截止时间。
+    /// Returns the canonical gate key or a preparation failure after actual cleanup.
+    /// 在实际清理后返回规范闸门键或准备失败。
+    async fn key_async(
+        &self,
+        runtime: &Arc<LocalDatabaseRuntime>,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<DatabaseKey, String> {
+        // Own the binding and runtime until canonical filesystem resolution has completed.
+        // 持有绑定和运行时，直至文件系统规范化解析完成。
+        let target = self.clone();
+        let shared = Arc::clone(runtime);
+        runtime
+            .boundary()
+            .prepare_until(deadline, move || target.key(shared.as_ref()))
+            .await
+            .map_err(render_boundary_failure)
+    }
+
     /// Returns the borrowed target this owned target stands for.
     /// 返回本所有权目标所代表的借用目标。
     fn as_target(&self) -> DatabaseTarget<'_> {
@@ -214,7 +236,7 @@ pub async fn execute_script_async(
     params: Vec<SqliteValue>,
 ) -> Result<ExecuteScriptResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let sql = sql.into();
@@ -244,7 +266,7 @@ pub async fn execute_batch_async(
     batch_params: Vec<Vec<SqliteValue>>,
 ) -> Result<ExecuteBatchResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let sql = sql.into();
@@ -270,7 +292,7 @@ pub async fn with_connection_async<T: Send + 'static>(
     let target = target.into();
     // Preserve the physical identity before moving the owned target into the blocking call.
     // 在将目标所有权移入阻塞调用之前保留物理身份。
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     // Retain the runtime while the blocking operation owns its connection.
     // 阻塞操作持有连接期间保留运行时。
     let shared = Arc::clone(runtime);
@@ -331,7 +353,7 @@ pub async fn execute_scripts_transaction_async(
     terminal_params: Vec<SqliteValue>,
 ) -> Result<ExecuteScriptResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let terminal_sql = terminal_sql.into();
@@ -367,7 +389,7 @@ pub async fn query_json_async(
     params: Vec<SqliteValue>,
 ) -> Result<QueryJsonResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let sql = sql.into();
@@ -438,7 +460,7 @@ pub async fn with_connection_until_async<T: Send + 'static>(
     body: impl FnOnce(&mut rusqlite::Connection) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, deadline).await?;
     let shared = Arc::clone(runtime);
     let scheduler = tokio::runtime::Handle::current();
     runtime
@@ -531,7 +553,7 @@ pub async fn query_stream_async(
     target_chunk_size: usize,
 ) -> Result<QueryStreamResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let sql = sql.into();
@@ -567,7 +589,7 @@ pub async fn ensure_fts_index_async(
     tokenizer_mode: TokenizerMode,
 ) -> Result<EnsureFtsIndexResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let index_name = index_name.into();
@@ -602,7 +624,7 @@ pub async fn rebuild_fts_index_async(
     tokenizer_mode: TokenizerMode,
 ) -> Result<RebuildFtsIndexResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let index_name = index_name.into();
@@ -638,7 +660,7 @@ pub async fn tokenize_async(
     search_mode: bool,
 ) -> Result<TokenizeOutput, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let text = text.into();
@@ -679,7 +701,7 @@ pub async fn upsert_fts_document_async(
     content: impl Into<String>,
 ) -> Result<FtsMutationResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let index_name = index_name.into();
@@ -721,7 +743,7 @@ pub async fn upsert_custom_word_async(
     weight: usize,
 ) -> Result<DictionaryMutationResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let word = word.into();
@@ -749,7 +771,7 @@ pub async fn remove_custom_word_async(
     word: impl Into<String>,
 ) -> Result<DictionaryMutationResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let word = word.into();
@@ -776,7 +798,7 @@ pub async fn list_custom_words_async(
     target: impl Into<OwnedDatabaseTarget>,
 ) -> Result<ListCustomWordsResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     boundary
@@ -807,7 +829,9 @@ pub async fn close_database_file_async(
     runtime: &Arc<LocalDatabaseRuntime>,
     binding: &SqliteFileBinding,
 ) -> Result<bool, String> {
-    let key = DatabaseKey::File(binding.path.clone());
+    let key = OwnedDatabaseTarget::from(binding)
+        .key_async(runtime, None)
+        .await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let binding = binding.clone();
@@ -836,7 +860,7 @@ pub async fn delete_fts_document_async(
     id: impl Into<String>,
 ) -> Result<FtsMutationResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let index_name = index_name.into();
@@ -871,7 +895,7 @@ pub async fn search_fts_async(
     offset: u32,
 ) -> Result<SearchFtsResult, String> {
     let target = target.into();
-    let key = target.key(runtime.as_ref())?;
+    let key = target.key_async(runtime, None).await?;
     let boundary = runtime.boundary().clone();
     let shared = Arc::clone(runtime);
     let index_name = index_name.into();

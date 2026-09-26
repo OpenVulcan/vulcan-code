@@ -2,6 +2,7 @@
 //! service state access 辅助逻辑。
 
 use super::*;
+mod configuration_io;
 
 /// Serializes every global Provider configuration transaction across service request families.
 /// 串行化跨服务请求族的全部全局 Provider 配置事务。
@@ -142,25 +143,39 @@ pub(crate) async fn mutate_project_configuration<Mutation, Commit, Output>(
 ) -> Result<Output, String>
 where
     Mutation: FnOnce(
-        &mut vulcan_provider_config::config::ProjectVulcanCodeConfigurationFile,
-    ) -> Result<(), String>,
+            &mut vulcan_provider_config::config::ProjectVulcanCodeConfigurationFile,
+        ) -> Result<(), String>
+        + Send
+        + 'static,
     Commit: FnOnce(
-        &vulcan_provider_config::config::ProjectVulcanCodeConfigurationFile,
-    ) -> Result<Output, String>,
+            &vulcan_provider_config::config::ProjectVulcanCodeConfigurationFile,
+        ) -> Result<Output, String>
+        + Send
+        + 'static,
+    Output: Send + 'static,
 {
-    // configuration_file is the exact persistence target and therefore the transaction identity.
-    // configuration_file 是精确持久化目标，因此也是事务身份。
+    let workspace_path = workspace_path.to_path_buf();
+    let save_error_context = save_error_context.to_string();
     let configuration_file =
-        vulcan_provider_config::config::project_configuration_file_path(workspace_path);
-    // transaction_guard serializes the full read-modify-save-commit cycle for this exact project file.
-    // transaction_guard 串行化该精确项目文件的完整读取、变更、保存与提交周期。
-    let _transaction_guard = begin_project_configuration_transaction(&configuration_file).await?;
-    let mut configuration =
-        vulcan_provider_config::config::load_project_configuration_file(workspace_path)?;
-    mutate(&mut configuration)?;
-    vulcan_provider_config::config::save_project_configuration_file(workspace_path, &configuration)
+        vulcan_provider_config::config::project_configuration_file_path(&workspace_path);
+    let transaction = begin_project_configuration_transaction(&configuration_file).await?;
+    // Ownership crosses with the entire read-modify-save-commit unit, not only the disk write.
+    // 所有权与完整读取、变更、保存、提交单元一起跨界，而不只是磁盘写入。
+    // Cancelling this caller cannot release the file lock while its write or runtime commit is still running.
+    // 调用方取消时，写入或运行时提交仍在进行就不能释放文件锁。
+    configuration_io::run(move || {
+        let _transaction = transaction;
+        let mut configuration =
+            vulcan_provider_config::config::load_project_configuration_file(&workspace_path)?;
+        mutate(&mut configuration)?;
+        vulcan_provider_config::config::save_project_configuration_file(
+            &workspace_path,
+            &configuration,
+        )
         .map_err(|error| format!("{save_error_context}: {error}"))?;
-    commit(&configuration)
+        commit(&configuration)
+    })
+    .await
 }
 
 /// Clones the latest in-memory workspace snapshot retained by the service bridge.
@@ -961,14 +976,15 @@ mod tests {
 
         // mutation_called records whether invalid persisted state incorrectly reaches business mutation.
         // mutation_called 记录无效持久化状态是否错误进入业务变更逻辑。
-        let mut mutation_called = false;
+        let mutation_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed_mutation = Arc::clone(&mutation_called);
         // result must preserve the loader failure instead of converting it into a default configuration.
         // result 必须保留加载器错误，而不是将其转换为默认配置。
         let result = mutate_project_configuration(
             &workspace_path,
             "save malformed project configuration test",
-            |_| {
-                mutation_called = true;
+            move |_| {
+                observed_mutation.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
             },
             |_| Ok(()),
@@ -982,7 +998,7 @@ mod tests {
             .expect("temporary project configuration workspace should be removed");
 
         assert!(result.is_err());
-        assert!(!mutation_called);
+        assert!(!mutation_called.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(persisted_contents, malformed_contents);
     }
 

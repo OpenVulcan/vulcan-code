@@ -593,6 +593,54 @@ impl DatabaseBlockingBoundary {
         self.run_until(key, None, operation).await
     }
 
+    /// Runs identity preparation on the same bounded blocking budget before a database gate is known.
+    /// 在数据库闸门身份确定之前，使用同一有界阻塞预算执行身份准备。
+    /// `deadline` bounds admission; `operation` owns its inputs and must not acquire a database gate.
+    /// `deadline` 限制准入等待；`operation` 持有输入且不得获取数据库闸门。
+    /// Returns the prepared value or the original operation/task failure after real work ends.
+    /// 在实际工作结束后返回准备值或原始操作／任务失败。
+    pub async fn prepare_until<T, E, F>(
+        &self,
+        deadline: Option<std::time::Instant>,
+        operation: F,
+    ) -> Result<T, BlockingBoundaryError<E>>
+    where
+        F: FnOnce() -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: Send + 'static,
+    {
+        // Preparation never holds a database gate; release this permit before ordinary gate admission.
+        // 准备阶段不持有数据库闸门；普通闸门准入前释放本许可，避免锁顺序反转。
+        let admission = Arc::clone(&self.permits).acquire_owned();
+        let permit = if let Some(deadline) = deadline {
+            tokio::time::timeout_at(deadline.into(), admission)
+                .await
+                .map_err(|_| BlockingBoundaryError::Task {
+                    detail: "database preparation admission deadline exceeded".into(),
+                })?
+        } else {
+            admission.await
+        }
+        .map_err(|error| BlockingBoundaryError::Task {
+            detail: error.to_string(),
+        })?;
+        tokio::task::spawn_blocking(move || {
+            // The actual worker retains capacity even if the asynchronous caller is cancelled.
+            // 即使异步调用方取消，实际工作线程仍保留容量占用。
+            let _permit = permit;
+            if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+                return Err(BlockingBoundaryError::Task {
+                    detail: "database preparation deadline expired before execution".into(),
+                });
+            }
+            operation().map_err(BlockingBoundaryError::Operation)
+        })
+        .await
+        .map_err(|error| BlockingBoundaryError::Task {
+            detail: format!("database preparation task ended abnormally: {error}"),
+        })?
+    }
+
     /// Waits within an optional caller deadline, then owns gates until blocking work actually returns.
     /// 在可选调用方截止时间内等待，随后持有同步门直至阻塞任务实际返回。
     /// Expiry removes queued work; running operations enforce their own interrupt contract.
@@ -2678,6 +2726,59 @@ mod blocking_boundary_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+
+    /// A cancelled preparation retains capacity while unrelated asynchronous work remains responsive.
+    /// 准备调用取消后仍保留容量，同时无关异步工作保持响应。
+    #[tokio::test]
+    async fn preparation_cancellation_keeps_capacity_until_real_completion() {
+        // One slot makes premature release observable without saturating the host thread pool.
+        // 单槽位使提前释放可被观察，无需占满宿主线程池。
+        let boundary = DatabaseBlockingBoundary::new(1);
+        let worker_boundary = boundary.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let task = tokio::spawn(async move {
+            worker_boundary
+                .prepare_until(None, move || {
+                    started_tx.send(()).expect("announce blocking preparation");
+                    release_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(|error| error.to_string())
+                })
+                .await
+        });
+        started_rx
+            .await
+            .expect("preparation started off the executor");
+        task.abort();
+        assert!(task.await.expect_err("cancel waiter").is_cancelled());
+        let deadline = Instant::now() + Duration::from_millis(30);
+        let queued = boundary
+            .prepare_until(Some(deadline), || Ok::<_, String>(()))
+            .await;
+        release_tx.send(()).expect("release actual worker");
+        assert!(
+            matches!(queued, Err(BlockingBoundaryError::Task { .. })),
+            "the cancelled caller must not release active preparation capacity"
+        );
+        boundary
+            .prepare_until(None, || Ok::<_, String>(()))
+            .await
+            .expect("capacity recovered");
+    }
+
+    /// Expired preparation never performs filesystem work even when capacity is immediately free.
+    /// 即使容量立即可用，已到期的准备也不得执行文件操作。
+    #[tokio::test]
+    async fn expired_preparation_never_runs_the_operation() {
+        let boundary = DatabaseBlockingBoundary::new(1);
+        let result = boundary
+            .prepare_until(Some(Instant::now()), || -> Result<(), String> {
+                panic!("expired preparation must not execute");
+            })
+            .await;
+        assert!(matches!(result, Err(BlockingBoundaryError::Task { .. })));
+    }
 
     /// Proves blocking database work leaves the async executor free rather than stalling it.
     /// 证明阻塞数据库工作让异步执行器保持空闲，而不是把它卡住。

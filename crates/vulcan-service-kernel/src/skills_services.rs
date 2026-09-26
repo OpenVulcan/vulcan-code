@@ -4063,16 +4063,16 @@ pub(crate) async fn service_set_agent_skill_project_state(
     state_key: String,
 ) -> Result<(), String> {
     let project_path = vmm_project_scope_path(&state, Some(&project_id))?;
-    let stable_name = name.trim();
+    let stable_name = name.trim().to_string();
     if stable_name.is_empty() {
         return Err(String::from("项目级 Agent Skill 名称不能为空。"));
     }
-    reject_plugin_skill_mutation(&state, stable_name)?;
+    reject_plugin_skill_mutation(&state, &stable_name)?;
     let state_override = parse_agent_skill_project_state(&state_key)?;
     mutate_project_configuration(
         &PathBuf::from(&project_path),
         "保存项目 Agent Skill 状态失败",
-        |project_configuration| {
+        move |project_configuration| {
             match state_override {
                 Some(state_override) => {
                     project_configuration
@@ -4084,7 +4084,7 @@ pub(crate) async fn service_set_agent_skill_project_state(
                     project_configuration
                         .prompt_skills
                         .skill_overrides
-                        .remove(stable_name);
+                        .remove(stable_name.as_str());
                 }
             }
             Ok(())

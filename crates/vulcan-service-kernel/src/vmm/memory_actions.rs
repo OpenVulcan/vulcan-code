@@ -10,6 +10,7 @@ use crate::{
     mutate_project_configuration,
 };
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use vulcan_service_api::{
     ProjectSettingsDomain, ServiceEventEmitter, VmmMemoryActionResponse, VmmNativeClearPreview,
     VmmNativeClearResult, VmmNativeMemoryLevelCounts, VmmNativeMemoryRecordSummary,
@@ -2010,17 +2011,18 @@ async fn disable_deleted_native_project_owners(
             continue;
         };
         let project_path = project.path.clone();
+        let commit_state = Arc::clone(state);
         let result = mutate_project_configuration(
             &std::path::PathBuf::from(&project_path),
             "关闭已解除绑定项目的 VMM 配置失败",
-            |project_configuration| {
+            move |project_configuration| {
                 project_configuration.vmm.enabled = Some(false);
                 Ok(())
             },
-            |project_configuration| {
+            move |project_configuration| {
                 update_cached_project_vmm_layer(&project_path, project_configuration.vmm.clone());
                 refresh_exact_vmm_hook_project_projection(
-                    state,
+                    &commit_state,
                     &project_path,
                     &project_configuration.vmm,
                 )

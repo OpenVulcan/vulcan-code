@@ -1089,7 +1089,14 @@ pub async fn preflight_session_v1_storage(
             session_id: session_id.to_string(),
         })?;
     let locator = storage_locator_from_row(&host_runtime.data_root, row)?;
-    if !exact_metadata_file_exists(&locator)? {
+    let probe_locator = locator.clone();
+    let exists = index_probe::run_io(move || exact_metadata_file_exists(&probe_locator))
+        .await
+        .map_err(|detail| SessionIndexV1Error::Read {
+            session_id: Some(session_id.to_string()),
+            detail,
+        })??;
+    if !exists {
         delete_session_index_v1(host_runtime, session_id).await?;
         return Ok(
             SessionV1StoragePreflightOutcome::MissingStorageIndexRemoved {
@@ -1119,7 +1126,12 @@ pub async fn delete_session_v1(
         });
     };
     let locator = storage_locator_from_row(&host_runtime.data_root, row)?;
-    let directory_removed = remove_exact_session_directory(&locator)?;
+    let directory_removed = index_probe::run_io(move || remove_exact_session_directory(&locator))
+        .await
+        .map_err(|detail| SessionIndexV1Error::Write {
+            session_id: session_id.to_string(),
+            detail,
+        })??;
     delete_session_index_v1(host_runtime, session_id).await?;
     Ok(DeleteSessionV1Outcome {
         index_existed: true,

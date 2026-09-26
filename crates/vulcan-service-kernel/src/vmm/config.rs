@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::{mutate_project_configuration, mutate_provider_configuration_with_state_validation};
+use std::sync::Arc;
 
 #[cfg(test)]
 #[path = "config_save_test_scope.rs"]
@@ -114,10 +115,12 @@ pub(crate) async fn save_vmm_memory_config(
             return Err(String::from("项目级 VMM 设置不接受全局项目绑定计划。"));
         }
         let project_path = vmm_project_scope_path(state, request.project_id.as_deref())?;
+        let commit_state = Arc::clone(state);
+        let commit_path = project_path.clone();
         return mutate_project_configuration(
             &PathBuf::from(&project_path),
             "保存项目 VMM 配置失败",
-            |project_configuration| {
+            move |project_configuration| {
                 project_configuration.vmm = if request.draft.has_override {
                     vmm_config_layer_from_draft(&request.draft, false)?
                 } else {
@@ -125,11 +128,11 @@ pub(crate) async fn save_vmm_memory_config(
                 };
                 Ok(())
             },
-            |project_configuration| {
-                update_cached_project_vmm_layer(&project_path, project_configuration.vmm.clone());
+            move |project_configuration| {
+                update_cached_project_vmm_layer(&commit_path, project_configuration.vmm.clone());
                 refresh_exact_vmm_hook_project_projection(
-                    state,
-                    &project_path,
+                    &commit_state,
+                    &commit_path,
                     &project_configuration.vmm,
                 )
             },
@@ -817,10 +820,11 @@ pub(super) async fn persist_external_project_id_if_unbound(
         return Err(String::from("外置 VMM 项目 ID 必须是正整数。"));
     }
     let project_config_path = project_path.to_string();
+    let commit_state = Arc::clone(state);
     mutate_project_configuration(
         &PathBuf::from(&project_config_path),
         "保存外置 VMM 自动项目 ID 绑定失败",
-        |project_configuration| {
+        move |project_configuration| {
             if project_configuration
                 .vmm
                 .project_id
@@ -831,7 +835,7 @@ pub(super) async fn persist_external_project_id_if_unbound(
             }
             Ok(())
         },
-        |project_configuration| {
+        move |project_configuration| {
             let project_id = project_configuration
                 .vmm
                 .project_id
@@ -842,7 +846,7 @@ pub(super) async fn persist_external_project_id_if_unbound(
                 project_configuration.vmm.clone(),
             );
             refresh_exact_vmm_hook_project_projection(
-                state,
+                &commit_state,
                 &project_config_path,
                 &project_configuration.vmm,
             )?;
