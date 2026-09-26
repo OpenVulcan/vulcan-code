@@ -1861,6 +1861,28 @@ fn failed_provider_async_task_completed_result(error: String) -> ProviderAsyncTa
     ))
 }
 
+/// Appends one non-empty provider result with its separator only after the final size is admitted.
+/// 先验证最终大小，再追加一个非空供应商结果及其分隔符。
+fn append_bounded_provider_result(
+    output: &mut String,
+    text: &str,
+    separator: &str,
+) -> Result<(), String> {
+    let separator = if output.is_empty() { "" } else { separator };
+    let next_size = output
+        .len()
+        .checked_add(separator.len())
+        .and_then(|size| size.checked_add(text.len()));
+    if next_size.is_none_or(|size| size > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT) {
+        return Err(String::from(
+            "Provider task batch follow-up text exceeds the 8 MiB output limit.",
+        ));
+    }
+    output.push_str(separator);
+    output.push_str(text);
+    Ok(())
+}
+
 /// Fetches one bounded public JSON document per terminal item in submitted identity order.
 /// 按已提交身份顺序为每个终态项目拉取一份有界公共 JSON 文档。
 ///
@@ -1932,8 +1954,7 @@ async fn execute_generic_json_async_batch_follow_up(
             ));
         }
     }
-    let mut fetched_results = Vec::with_capacity(fingerprints.len());
-    let mut output_bytes = 0_usize;
+    let mut output = String::new();
     for fingerprint in fingerprints {
         let item = items_by_fingerprint.remove(fingerprint).ok_or_else(|| {
             String::from("Provider task batch follow-up returned an unknown or missing identity.")
@@ -2017,21 +2038,21 @@ async fn execute_generic_json_async_batch_follow_up(
                     })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let fetched = texts.join(follow_up.response_item_separator.as_str());
-        output_bytes = output_bytes.saturating_add(fetched.len());
-        if output_bytes > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
-            return Err(String::from(
-                "Provider task batch follow-up text exceeds the 8 MiB output limit.",
-            ));
+        let mut fetched = String::new();
+        for text in texts {
+            append_bounded_provider_result(
+                &mut fetched,
+                &text,
+                follow_up.response_item_separator.as_str(),
+            )?;
         }
-        fetched_results.push(fetched);
+        append_bounded_provider_result(&mut output, &fetched, follow_up.result_separator.as_str())?;
     }
     if !items_by_fingerprint.is_empty() {
         return Err(String::from(
             "Provider task batch follow-up returned identities outside the recovery order.",
         ));
     }
-    let output = fetched_results.join(follow_up.result_separator.as_str());
     if output.is_empty() {
         return Err(String::from(
             "Provider task batch follow-up produced no text.",
@@ -3851,6 +3872,22 @@ fn format_structured_provider_error(label: &str, status: Option<u16>, body: &Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Separators count as UTF-8 bytes and failed admission leaves the previous result intact.
+    /// 分隔符按 UTF-8 字节计入限制，准入失败保留此前结果不变。
+    #[test]
+    fn batch_result_budget_includes_all_separator_bytes() {
+        let mut output = "x".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT - 4);
+        append_bounded_provider_result(&mut output, "z", "中").expect("exact byte bound");
+        assert_eq!(output.len(), PROVIDER_TOOL_RESPONSE_BYTE_LIMIT);
+        let before = output.clone();
+        assert!(append_bounded_provider_result(&mut output, "x", "|").is_err());
+        assert_eq!(output, before);
+        let mut first = String::new();
+        append_bounded_provider_result(&mut first, "a", "ignored")
+            .expect("first item has no separator");
+        assert_eq!(first, "a");
+    }
 
     /// Length admission handles all padding widths without decoding oversized data.
     /// 长度准入覆盖所有填充宽度，且不解码超限数据。
