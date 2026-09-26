@@ -6,6 +6,7 @@ import { ChangeSetDiffPreview } from "@/components/conversation/conversation-cha
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { ToolPayloadSourceBlock } from "../conversation-tool-result-tabs";
 import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { hydrateFileAccessPresentation, type FileAccessItemPresentation, type FileAccessPresentation } from "@/components/conversation/conversation-tool-presentations";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -99,6 +100,7 @@ export function FileAccessPresentationCard(props: {
   // targetLabel 展示实际目标，不包含编辑计数或变更文案。
   const targetLabel = hydratedPresentation.items
     .map((item) => fileTargetLabel(item.displayPath, item.lineRanges, t))
+    .filter(Boolean)
     .join(", ");
   // handleToggle opens only complete terminal returned content.
   // handleToggle 仅打开完整终态返回内容。
@@ -126,6 +128,8 @@ export function FileAccessPresentationCard(props: {
             {hydratedPresentation.action === "read" && hydratedPresentation.items.length === 1 ? <FileTypeIcon icon={hydratedPresentation.items[0].icon} /> : null}
             <span className="tool-presentation-command-text">{targetLabel ? ` · ${targetLabel}` : ""}</span></span>
         </span>
+        {hydratedPresentation.state === "failed" ? <span className="file-change-error-badge">{t("toolPresentation.file.error.failed")}</span> : null}
+        {hydratedPresentation.emptyFile ? <span className="tool-presentation-state">{t("toolPresentation.fileRead.emptyFile")}</span> : null}
         {canExpand ? (
           props.expanded
             ? <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -134,7 +138,11 @@ export function FileAccessPresentationCard(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={`file-access:${hydratedPresentation.id}`} expanded={canExpand && props.expanded}>
         <ToolResultBody>
-        {hydratedPresentation.markdownBody !== undefined ? <MarkdownMessage content={hydratedPresentation.markdownBody} eager /> : <div className="file-access-detail">
+        {hydratedPresentation.markdownBody !== undefined ? (
+          hydratedPresentation.action === "read"
+            ? <ToolPayloadSourceBlock language="markdown" content={hydratedPresentation.markdownBody} />
+            : <MarkdownMessage content={hydratedPresentation.markdownBody} eager />
+        ) : <div className="file-access-detail">
           {hydratedPresentation.errorDetail ? <FileChangeErrorDetail detail={hydratedPresentation.errorDetail} /> : null}
           {hydratedPresentation.items.map((item) => (
             <FileAccessItem

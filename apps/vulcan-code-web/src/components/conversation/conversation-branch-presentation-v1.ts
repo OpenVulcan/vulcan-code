@@ -117,6 +117,9 @@ interface BranchPresentationContextV1 {
 // CachedEventMessagesV1 records the display messages of one immutable event and the cross-event facts they read.
 // CachedEventMessagesV1 记录一条不可变事件的展示消息及其读取的跨事件事实。
 interface CachedEventMessagesV1 {
+  // Canonical API purpose can arrive when an older page is prepended.
+  // 前置更早分页时可能补齐规范 API 用途。
+  compaction: boolean;
   // Root input of the event Turn when projected.
   // 投影时该事件所属 Turn 的根输入。
   rootInputSeq: number | undefined;
@@ -161,10 +164,16 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // apiStatsByCall makes terminal request facts available without changing event display order.
     // apiStatsByCall 让终态请求事实可供读取，同时不改变事件显示顺序。
     const apiStatsByCall = new Map<number, ApiStatsBody>();
+    // Compaction ownership comes from typed API facts, never from generated summary text.
+    // 压缩归属来自强类型 API 事实，绝不根据生成的摘要正文猜测。
+    const compactionCalls = new Set<number>();
     // rootInputByTurn binds final assistant actions to the root input of the same logical Turn.
     // rootInputByTurn 将最终回答操作绑定到同一逻辑 Turn 的根输入。
     const rootInputByTurn = new Map<number, V1RootInputPresentationMetadata>();
     for (const summary of events) {
+      if ((summary.event.kind === "api_started" || summary.event.kind === "api_stats") && summary.event.purpose === "compaction") {
+        compactionCalls.add(summary.event.api_call_id);
+      }
       if (summary.event.kind === "api_stats") {
         apiStatsByCall.set(summary.event.api_call_id, summary.event);
       }
@@ -195,11 +204,15 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
         }
       }
       const rootInput = summary.turn_id === null ? undefined : rootInputByTurn.get(summary.turn_id);
+      // Only events with an explicit API identity can join its compaction card.
+      // 只有带显式 API 身份的事件才能归入对应压缩卡。
+      const compaction = "api_call_id" in summary.event && summary.event.api_call_id !== undefined
+        && compactionCalls.has(summary.event.api_call_id);
       // Turn statistics read coverage aggregated across the whole Turn, so they are always re-projected.
       // Turn 统计读取整个 Turn 聚合的覆盖度，因此始终重新投影。
       if (summary.event.kind === "turn_stats") {
         messages.push(...conversationMessagesForV1Event(
-          sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, usageCoverageBySeq.get(summary.seq),
+          sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, usageCoverageBySeq.get(summary.seq),
         ));
         continue;
       }
@@ -210,14 +223,15 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
         && cached.rootInputSeq === rootInput?.seq
         && cached.rootInputText === rootInput?.text
         && cached.apiStats === apiStats
+        && cached.compaction === compaction
       ) {
         messages.push(...cached.messages);
         continue;
       }
       const projected = conversationMessagesForV1Event(
-        sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, undefined,
+        sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, undefined,
       );
-      cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, messages: projected });
+      cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, compaction, messages: projected });
       messages.push(...projected);
     }
 
@@ -301,11 +315,20 @@ function conversationMessagesForV1Event(
   resources: ConversationSessionResourceCatalogV1,
   providers: readonly ProviderSummary[],
   t: Translation,
+  // Canonical API purpose resolved by the current event window.
+  // 当前事件窗口解析出的规范 API 用途。
+  compaction: boolean,
   // Optional canonical usage evidence for the current terminal event, never persisted message content.
   // 当前终态事件的可选规范用量证据，绝不是持久化消息正文。
   usageCoverage: TurnUsageCoverage | undefined,
 ): ConversationMessage[] {
   const base = conversationMessageBase(sessionId, summary, rootInput);
+  if (compaction) {
+    // Existing compaction rendering owns progress, reasoning, summary and terminal state as one card.
+    // 既有压缩渲染器用一张卡持有进度、思考、摘要和终态。
+    const message = compactionMessageForV1Event(base, summary, rootInput);
+    if (message) return [message];
+  }
   switch (summary.event.kind) {
     case "user_input":
       // The typed collaboration event owns the visible card; its provider mirror is not a prompt.
@@ -414,6 +437,44 @@ function conversationMessagesForV1Event(
     case "execution_control":
       return [];
   }
+}
+
+// Adapts typed compaction API events into the shared card; returns null for unrelated event kinds.
+// 将强类型压缩 API 事件适配到共享卡片；无关事件类型返回 null。
+// base retains exact event identity and summary supplies the canonical API lifecycle, without persisting display metadata.
+// base 保留精确事件身份，summary 提供规范 API 生命周期，不持久化展示元数据。
+function compactionMessageForV1Event(
+  base: ReturnType<typeof conversationMessageBase>,
+  summary: ConversationEventSummary,
+  // Root identity is explicit because ConversationMessage.metadata is an opaque transport value.
+  // 根输入身份显式传入，因为 ConversationMessage.metadata 是不透明传输值。
+  rootInput: V1RootInputPresentationMetadata | undefined,
+): ConversationMessage | null {
+  // event is narrowed before reading fields owned by each lifecycle variant.
+  // 先收窄 event，再读取各生命周期分支持有的字段。
+  const event = summary.event;
+  if (event.kind !== "api_started" && event.kind !== "api_stats"
+    && event.kind !== "assistant_text" && event.kind !== "assistant_reasoning") return null;
+  // role and state follow API lifecycle; completed text alone does not claim a completed API.
+  // role 与 state 遵循 API 生命周期；正文完成本身不代表 API 已完成。
+  const role = event.kind === "api_started" ? "start" : event.kind === "api_stats" ? "end"
+    : event.kind === "assistant_reasoning" ? "thinking" : "body";
+  const state = event.kind === "api_stats" ? (event.status === "completed" ? "completed" : "failed") : "running";
+  return {
+    ...base,
+    role: "assistant",
+    recordKind: event.kind === "assistant_reasoning" ? "thinking-output" : "compaction-status",
+    body: event.kind === "assistant_text" || event.kind === "assistant_reasoning" ? event.text : "",
+    metadata: {
+      ...presentationMetadata(summary, rootInput),
+      api_call_id: event.api_call_id,
+      context_compaction_section_id: `v1-api-${event.api_call_id}`,
+      context_compaction_role: role,
+      context_compaction_state: state,
+      stream_state: event.kind === "assistant_text" || event.kind === "assistant_reasoning"
+        ? (event.status === "streaming" ? "active" : "sealed") : "sealed",
+    },
+  };
 }
 
 // conversationMessageBase creates the stable display identity shared by all projections of one event.

@@ -89,7 +89,7 @@ describe("conversation tool request progress", () => {
       receivedBytes: 4_096,
       revision: 2,
     });
-    expect(toolRequestProgressLabel(progress!)).toBe("Requesting · 3,032 characters · 4 KiB");
+    expect(toolRequestProgressLabel(progress!)).toBe("Creating(4096B)");
   });
 
   it("does not replace an executing card with stale request construction state", () => {
@@ -134,7 +134,7 @@ describe("conversation tool request progress", () => {
       receivedBytes: 2_112,
       revision: 7,
     });
-    expect(toolRequestProgressLabel(progress!)).toBe("Requesting · 2,048 characters · 2.1 KiB");
+    expect(toolRequestProgressLabel(progress!)).toBe("Creating(2112B)");
   });
 
   it("maps one leaf-store snapshot without changing durable request semantics", () => {
@@ -208,7 +208,7 @@ describe("conversation tool request progress", () => {
       toolName: "file_edit",
     }] as ToolExecutionConversationBlock[];
 
-    expect(toolExecutionSummary(blocks, true)).toBe("Tool call · file_edit · Requesting · 128 characters · 128 B");
+    expect(toolExecutionSummary(blocks, true)).toBe("Tool call · file_edit · Creating(128B)");
   });
 
   it("lets an actual terminal result override a stale ready request block", () => {

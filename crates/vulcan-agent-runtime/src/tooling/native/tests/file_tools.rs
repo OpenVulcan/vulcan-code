@@ -141,7 +141,7 @@ async fn native_file_read_persists_one_markdown_body() {
         .as_ref()
         .expect("presentation metadata");
     assert_eq!(host["kind"], json!("file_access"));
-    assert_eq!(host["payload"]["schema"], json!("vulcan.file_read.v1"));
+    assert_eq!(host["payload"]["schema"], json!("vulcan.file_read.v2"));
     assert!(!host.to_string().contains(marker));
     let persisted = persistent_tool_output_from_result(&canonical).expect("durable tool payload");
     let serialized = serde_json::to_string(&persisted).expect("serialize durable tool payload");

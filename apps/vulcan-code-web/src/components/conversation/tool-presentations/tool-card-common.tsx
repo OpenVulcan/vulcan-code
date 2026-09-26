@@ -44,8 +44,8 @@ export type ToolDetailLoader = (
 
 // activeToolStatusLabel keeps transient progress visible and removes generic terminal success or failure labels.
 // activeToolStatusLabel 保留瞬时进度，并移除通用终态成功或失败文案。
-// Parameters: requestProgress owns request formation, state owns execution, and runningLabel is card-specific copy.
-// 参数：requestProgress 持有请求构造，state 持有执行状态，runningLabel 是卡片专用文案。
+// Parameters: requestProgress owns the optional formation label; state and runningLabel retain the shared caller signature.
+// 参数：requestProgress 持有可选构造文案；state 与 runningLabel 保留共享调用签名。
 // Returns: a transient status label, or null after the tool reaches any terminal state.
 // 返回值：返回瞬时状态文案；工具进入任意终态后返回 null。
 export function activeToolStatusLabel(
@@ -53,10 +53,11 @@ export function activeToolStatusLabel(
   state: ToolPresentationDisplayState,
   runningLabel: string,
 ): string | null {
-  if (requestProgress) {
-    return requestProgress.statusLabel;
-  }
-  return state === "running" ? runningLabel : null;
+  // Only optional formation counters are visible; execution needs no generic status text.
+  // 仅显示可选构造计数；执行阶段无需通用状态文案。
+  void state;
+  void runningLabel;
+  return requestProgress?.statusLabel || null;
 }
 
 // fileTargetLabel combines one exact path with zero or more structured line ranges.
@@ -76,7 +77,10 @@ export function fileTargetLabel(
           start: String(range.startLine),
         }))
     .join(", ");
-  return rangeLabel ? `${path} · ${rangeLabel}` : path;
+  // A relative root is implicit in the current workspace, not a useful visible target.
+  // 相对根目录隐含为当前工作区，不是需要显示的目标。
+  const visiblePath = path === "." || path === "./" || path === ".\\" ? "" : path;
+  return [visiblePath, rangeLabel].filter(Boolean).join(" · ");
 }
 
 // FileTextFormatBadge renders encoding and line-ending facts without duplicating gutter ranges.

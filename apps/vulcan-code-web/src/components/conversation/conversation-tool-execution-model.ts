@@ -12,7 +12,6 @@ import {
   normalizeToolDisplayState,
   subagentToolDisplayName,
 } from "./conversation-tool-metadata";
-import { formatBytes } from "@/lib/display-format";
 
 // ToolRequestProgress describes safe model-side argument construction metadata retained on one tool card.
 // ToolRequestProgress 描述保留在单张工具卡片上的安全模型侧参数构造元数据。
@@ -260,7 +259,7 @@ export function toolRequestProgressLabel(
   progress: ToolRequestProgress,
   t?: (key: TranslationKey) => string,
 ): string {
-  return `${toolRequestProgressStateLabel(progress, t)} · ${toolRequestStreamMetricsLabel(progress, t)}`;
+  return `${toolRequestProgressStateLabel(progress, t)}(${progress.receivedBytes}B)`;
 }
 
 // toolRequestProgressStateLabel formats the request-receiving state used to override execution states.
@@ -282,23 +281,7 @@ export function toolRequestProgressStateLabel(
   t?: (key: TranslationKey) => string,
 ): string {
   void progress;
-  return t ? t("conversation.toolRequest.receiving") : "Requesting";
-}
-
-// toolRequestStreamMetricsLabel formats exact character and UTF-8 byte progress for one request stream.
-// toolRequestStreamMetricsLabel 为单条请求流格式化精确字符数与 UTF-8 字节进度。
-//
-// Parameters: progress is the latest request snapshot and t resolves localized unit text.
-// 参数：progress 是最新请求快照，t 用于解析本地化单位文案。
-//
-// Returns: a compact live metric string whose value changes with every accepted request revision.
-// 返回值：返回紧凑实时指标文本，其值会随每个已接纳请求修订而变化。
-export function toolRequestStreamMetricsLabel(
-  progress: ToolRequestProgress,
-  t?: (key: TranslationKey) => string,
-): string {
-  const characterLabel = `${progress.receivedCharacters.toLocaleString()} ${t ? t("conversation.toolRequest.characters") : "characters"}`;
-  return `${characterLabel} · ${formatBytes(progress.receivedBytes)}`;
+  return t ? t("conversation.toolRequest.receiving") : "Creating";
 }
 
 // buildSubagentToolExecutionDetailBody builds a human-readable detail body for built-in subagent orchestration tools.
