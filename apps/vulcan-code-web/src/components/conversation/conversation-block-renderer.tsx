@@ -122,7 +122,9 @@ export function ConversationBlocksView(props: {
   // 用于本地诊断的可选埋点回调。
   onTrace?: (action: string, detail?: Record<string, unknown>) => void;
 }) {
-  if (props.blocks.length > 1 && props.blocks.every(isMergeableToolBlock)) {
+  // Keep one component path while a call gains its result block, preserving the existing tool row and local state.
+  // 调用增加结果块时保持同一组件路径，保留原工具行及局部状态。
+  if (props.blocks.length > 0 && props.blocks.every(isMergeableToolBlock)) {
     return (
       <ToolExecutionBlock
         blocks={props.blocks}

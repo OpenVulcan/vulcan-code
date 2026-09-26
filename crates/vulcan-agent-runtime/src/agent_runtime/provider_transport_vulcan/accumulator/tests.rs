@@ -141,6 +141,134 @@ fn successful_response_requires_one_normalized_durable_semantic_item() {
     assert!(tool.finish().is_ok());
 }
 
+/// Preserves each streamed item's identity through completion without changing provider-visible call IDs.
+/// 在完成时保留每个流式项标识，不改写供应商可见调用标识。
+/// Returns nothing; six same-name tools must each match their own emitted draft and completion.
+/// 无返回值；六个同名工具必须分别匹配自身发出的草稿和完成事件。
+#[test]
+fn parallel_tool_completion_preserves_stream_identity() {
+    // Retain streamed fragments to compare them with the final controller requests.
+    // 保留流式片段，用于和最终控制器请求对照。
+    let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+    // Capture canonical deltas independently of request-formation fragments.
+    // 独立于请求构造片段捕获规范增量。
+    let mut sink = RecordingProviderDeltaSink::default();
+    // Use the public adapter shared by all normalized provider protocols.
+    // 使用所有规范化供应商协议共用的公共适配器。
+    let mut accumulator = PublicTurnAccumulator::new(
+        "provider",
+        "connection",
+        "https://provider.example/v1",
+        "openai-chat-completions.v1",
+        "model",
+        None,
+    );
+    // Deliberately distinguish item identity from provider call identity for every tool.
+    // 为每个工具刻意区分条目标识与供应商调用标识。
+    let identities = (0..6)
+        .map(|index| {
+            (
+                format!("tool-item-{index}"),
+                format!("provider-call-{index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (index, (item_id, call_id)) in identities.iter().enumerate() {
+        accumulator
+            .apply_event(
+                "provider",
+                &live_sender,
+                &mut sink,
+                AiStreamEvent::ToolCallStarted {
+                    item_id: item_id.clone(),
+                    call_id: call_id.clone(),
+                    tool_name: String::from("file"),
+                    index: u32::try_from(index).expect("fixture index"),
+                },
+            )
+            .expect("start tool");
+    }
+    for (item_id, call_id) in &identities {
+        accumulator
+            .apply_event(
+                "provider",
+                &live_sender,
+                &mut sink,
+                AiStreamEvent::ToolCallCompleted {
+                    item_id: item_id.clone(),
+                    call: PublicToolCall {
+                        id: call_id.clone(),
+                        name: String::from("file"),
+                        arguments: json!({"action": "read", "path": format!("{item_id}.txt")}),
+                        signature: None,
+                    },
+                },
+            )
+            .expect("complete tool");
+    }
+    accumulator
+        .apply_event(
+            "provider",
+            &live_sender,
+            &mut sink,
+            AiStreamEvent::ResponseCompleted,
+        )
+        .expect("finish response");
+    // The controller uses ConversationToolCall.id verbatim as the durable request_stream_id.
+    // 控制器将 ConversationToolCall.id 原样用作持久 request_stream_id。
+    let response = accumulator.finish().expect("finish tools");
+    for (item_id, call_id) in &identities {
+        // Match by provider identity, never tool name or a mutable array position.
+        // 按供应商标识匹配，绝不依赖工具名或可变化的数组位置。
+        let call = response
+            .tool_calls
+            .iter()
+            .find(|call| call.tool_call_id.as_ref() == Some(call_id))
+            .expect("exact provider call");
+        assert_eq!(
+            &call.id, item_id,
+            "durable identity must match the streamed draft"
+        );
+    }
+    // Every started and completed fragment must point at the same final request.
+    // 每个开始与完成片段必须指向同一个最终请求。
+    let mut fragment_count = 0;
+    while let Ok(Ok(ProviderStreamDelta::ToolRequestFragment(fragment))) = live_receiver.try_recv()
+    {
+        match fragment {
+            ToolRequestFragment::Detected {
+                request_stream_id,
+                tool_call_id,
+                ..
+            } => {
+                assert!(
+                    response
+                        .tool_calls
+                        .iter()
+                        .any(|call| call.id == request_stream_id
+                            && call.tool_call_id.as_ref() == Some(&tool_call_id))
+                );
+            }
+            ToolRequestFragment::Completed {
+                request_stream_id,
+                canonical_tool_call_id,
+                ..
+            } => {
+                assert!(
+                    response
+                        .tool_calls
+                        .iter()
+                        .any(|call| call.id == request_stream_id
+                            && call.tool_call_id == canonical_tool_call_id)
+                );
+            }
+            _ => panic!("unexpected fragment"),
+        }
+        fragment_count += 1;
+    }
+    assert_eq!(fragment_count, identities.len() * 2);
+}
+
 /// Verifies split Anthropic usage events retain start-event cache fields and terminal output fields.
 /// 验证拆分的 Anthropic 用量事件会同时保留开始事件的缓存字段与终态输出字段。
 #[test]
@@ -403,6 +531,11 @@ fn public_tool_abort_becomes_non_executable_tool_call() {
         .finish()
         .expect("controlled malformed tool call should finish the Provider turn");
     assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].id, "tool-item");
+    assert_eq!(
+        response.tool_calls[0].tool_call_id.as_deref(),
+        Some("call-1")
+    );
     assert_eq!(response.tool_calls[0].tool_name, "vulcan_file_edit");
     assert_eq!(response.tool_calls[0].arguments, Value::Null);
     assert_eq!(

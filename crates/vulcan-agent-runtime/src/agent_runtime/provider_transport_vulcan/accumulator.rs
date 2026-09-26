@@ -636,13 +636,15 @@ impl PublicTurnAccumulator {
                 })?;
                 let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
                     ToolRequestFragment::Completed {
-                        request_stream_id: item_id,
+                        request_stream_id: item_id.clone(),
                         canonical_tool_call_id: Some(call.id.clone()),
                         final_arguments: Some(final_arguments),
                     },
                 )));
                 self.tool_calls.push(ConversationToolCall {
-                    id: call.id.clone(),
+                    // Preserve the streamed item identity through Core preparation and the durable tool event.
+                    // 将流式条目标识一直保留至 Core 准备和持久工具事件。
+                    id: item_id,
                     tool_call_id: Some(call.id),
                     tool_name: call.name,
                     arguments: call.arguments,
@@ -678,12 +680,14 @@ impl PublicTurnAccumulator {
                     });
                 let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
                     ToolRequestFragment::Invalid {
-                        request_stream_id: item_id,
+                        request_stream_id: item_id.clone(),
                         reason: message.clone(),
                     },
                 )));
                 self.tool_calls.push(ConversationToolCall {
-                    id: call_id.clone(),
+                    // Invalid calls retain the same item identity so failure replaces the original draft too.
+                    // 无效调用同样保留条目标识，使失败结果也能替换原草稿。
+                    id: item_id,
                     tool_call_id: Some(call_id),
                     tool_name,
                     arguments: Value::Null,

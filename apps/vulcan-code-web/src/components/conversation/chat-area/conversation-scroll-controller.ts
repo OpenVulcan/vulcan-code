@@ -325,8 +325,8 @@ export function useConversationScrollController(
     writeScrollTop(element, conversationScrollTopForSnapshot(element, snapshot));
   }, [publishFollowTail, writeScrollTop]);
 
-  // scheduleSnapshotRestore coalesces any pending geometry correction into one animation frame.
-  // scheduleSnapshotRestore 将任意待处理几何校正合并到一个动画帧。
+  // scheduleSnapshotRestore settles a displaced tail immediately and coalesces normal layout work into one frame.
+  // scheduleSnapshotRestore 立即稳定发生位移的尾部，并将正常布局工作合并到一个动画帧。
   // Parameters: surfaceId and snapshot bind the correction to one exact business surface; revision optionally guards reader movement.
   // 参数：surfaceId 与 snapshot 将校正绑定到一个精确业务界面；revision 可选地防止覆盖阅读者移动。
   // Returns: nothing.
@@ -336,6 +336,9 @@ export function useConversationScrollController(
     snapshot: ConversationScrollSnapshot,
     revision: number | null = null,
   ): void => {
+    if (revision !== null && userRevisionRef.current !== revision) {
+      return;
+    }
     // currentOptions and element bind the synchronous geometry observation to the scheduled surface.
     // currentOptions 与 element 将同步几何观察绑定到已调度界面。
     const currentOptions = latestOptionsRef.current;
@@ -351,6 +354,19 @@ export function useConversationScrollController(
         element.scrollTop,
         Math.max(0, element.scrollHeight - element.clientHeight),
       );
+      if (snapshot.followTail && followTailRef.current
+        && Math.abs(element.scrollTop - observedScrollTopRef.current) > 0.5) {
+        // A composer shrink and prompt insertion may both finish before the queued native scroll event.
+        // 输入框收缩和提示词插入可能都在排队的原生滚动事件之前完成。
+        // Settle the owned tail now: the intermediate clamp may no longer match the new scroll range.
+        // 立即稳定已拥有的尾部位置：中间截断位置可能已不再匹配新的滚动范围。
+        // Keep the frame for subsequent layout, while genuine reader movement can still cancel it.
+        // 保留下一帧处理后续布局，真实阅读者移动仍可取消该帧。
+        // Ordinary streaming growth keeps its acknowledged position and remains frame-coalesced.
+        // 普通流式增长保持已确认位置，仍按帧合并处理。
+        restoreSnapshot(element, snapshot);
+        writeCurrentSnapshot(element, surfaceId);
+      }
     }
     cancelPendingFrame();
     pendingFrameRef.current = window.requestAnimationFrame(() => {
@@ -692,6 +708,45 @@ export function useConversationScrollController(
     scheduleStoredRestore,
     writeCurrentSnapshot,
   ]);
+
+  React.useLayoutEffect(() => {
+    // element and surfaceId bind mutation delivery to this mounted transcript, including leaf-only commits.
+    // element 与 surfaceId 将修改派发绑定到当前已挂载转录，包括仅发生在叶子的提交。
+    const element = options.scrollRef.current;
+    const surfaceId = options.surfaceId;
+    if (!options.active || !surfaceId || !element || typeof MutationObserver === "undefined") {
+      return;
+    }
+    // content is the same aggregate root observed for persistent geometry changes.
+    // content 是观察持久几何变化的同一个聚合根节点。
+    const content = element.querySelector<HTMLElement>(".conversation-scroll-content");
+    if (!content) {
+      return;
+    }
+    // A remove/measure/insert commit can clip scrollTop yet restore the original size, producing no resize.
+    // 移除／测量／插入提交可截断 scrollTop 却恢复原尺寸，因此不产生尺寸变化通知。
+    // Acknowledge that displaced owned tail in the mutation microtask before the queued native scroll event.
+    // 在排队的原生滚动事件前，通过修改微任务确认已拥有尾部发生的位移。
+    // Ordinary text growth remains ResizeObserver/frame-coalesced; reader-owned history is never restored here.
+    // 普通文本增长仍由尺寸观察器按帧合并；此处绝不恢复阅读者拥有的历史位置。
+    const observer = new MutationObserver(() => {
+      if (latestOptionsRef.current.surfaceId !== surfaceId
+        || element.dataset.conversationSurfaceId !== surfaceId
+        || !followTailRef.current
+        || Math.abs(element.scrollTop - observedScrollTopRef.current) <= 0.5) {
+        return;
+      }
+      scheduleStoredRestore();
+    });
+    observer.observe(content, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "hidden"],
+    });
+    return () => observer.disconnect();
+  }, [options.active, options.scrollRef, options.surfaceId, scheduleStoredRestore]);
 
   React.useEffect(() => {
     // element owns the native smooth-scroll lifecycle for this exact transcript.

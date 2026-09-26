@@ -790,15 +790,21 @@ fn native_write_file(
             "final_range": {"start_line": 1, "line_count": after_lines.len()},
         })],
     };
-    commit_validated_changes("applied", std::slice::from_ref(&prepared))?;
-    Ok(native_file_change_response("write", vec![prepared]))
+    // Reuse the exact extension accepted before the filesystem commit.
+    // 复用文件系统提交前已通过校验的精确扩展。
+    let extension = commit_validated_changes("applied", std::slice::from_ref(&prepared), "file")?;
+    Ok(native_file_change_response(
+        "write",
+        vec![prepared],
+        extension,
+    ))
 }
 
 /// Deletes one regular file transactionally with rollback bytes retained.
 /// 以事务方式删除一份普通文件并保留回滚字节。
 fn native_delete_file(path: &Path, request_path: &str) -> Result<FileToolResponse, FileToolError> {
     let snapshot = read_raw_snapshot(path)?;
-    let file_payload = raw_lifecycle_payload(path, "delete", &snapshot);
+    let file_payload = raw_lifecycle_payload(path, "delete", &snapshot, "resource-1");
     let prepared = PreparedChange {
         change_kind: String::from("delete"),
         source_path: path.to_path_buf(),
@@ -818,8 +824,14 @@ fn native_delete_file(path: &Path, request_path: &str) -> Result<FileToolRespons
             "final_range": Value::Null,
         })],
     };
-    commit_validated_changes("applied", std::slice::from_ref(&prepared))?;
-    Ok(native_file_change_response("delete", vec![prepared]))
+    // Reuse the exact extension accepted before the filesystem commit.
+    // 复用文件系统提交前已通过校验的精确扩展。
+    let extension = commit_validated_changes("applied", std::slice::from_ref(&prepared), "file")?;
+    Ok(native_file_change_response(
+        "delete",
+        vec![prepared],
+        extension,
+    ))
 }
 
 /// Moves one regular file transactionally without decoding or changing its bytes.
@@ -843,7 +855,7 @@ fn native_move_file(
     }
     validate_parent_directory(&destination)?;
     let snapshot = read_raw_snapshot(path)?;
-    let mut file_payload = raw_lifecycle_payload(path, "rename", &snapshot);
+    let mut file_payload = raw_lifecycle_payload(path, "rename", &snapshot, "resource-1");
     if let Some(payload) = file_payload.as_object_mut() {
         payload.insert(String::from("path"), json!(display_path(&destination)));
         payload.insert(String::from("old_path"), json!(display_path(path)));
@@ -870,8 +882,14 @@ fn native_move_file(
             "final_range": Value::Null,
         })],
     };
-    commit_validated_changes("applied", std::slice::from_ref(&prepared))?;
-    Ok(native_file_change_response("move", vec![prepared]))
+    // Reuse the exact extension accepted before the filesystem commit.
+    // 复用文件系统提交前已通过校验的精确扩展。
+    let extension = commit_validated_changes("applied", std::slice::from_ref(&prepared), "file")?;
+    Ok(native_file_change_response(
+        "move",
+        vec![prepared],
+        extension,
+    ))
 }
 
 /// Builds one whole-file modify row with canonical before and after line domains.
@@ -921,7 +939,15 @@ fn whole_file_create_payload(path: &Path, text: &str, lines: &[String]) -> Value
 
 /// Builds the model result and common change set for native file mutations.
 /// 为原生文件变更构建模型结果与公共 change set。
-fn native_file_change_response(action: &str, changes: Vec<PreparedChange>) -> FileToolResponse {
+/// `action` labels the response; `changes` supplies committed rows; `extension` is the prevalidated metadata.
+/// `action` 标记响应，`changes` 提供已提交记录，`extension` 是预先校验的元数据。
+/// Returns the model result and the same persistable ChangeSet metadata without regenerating it.
+/// 返回模型结果与同一份可持久化 ChangeSet 元数据，不重新生成。
+fn native_file_change_response(
+    action: &str,
+    changes: Vec<PreparedChange>,
+    extension: Value,
+) -> FileToolResponse {
     let files = changes
         .iter()
         .map(|change| change.file_payload.clone())
@@ -930,7 +956,6 @@ fn native_file_change_response(action: &str, changes: Vec<PreparedChange>) -> Fi
         .iter()
         .flat_map(|change| change.operation_results.iter().cloned())
         .collect::<Vec<_>>();
-    let extension = native_file_tools_extension("file", &changes, &operation_results, "all");
     FileToolResponse {
         model_output: json!({
             "ok": true,
@@ -1732,14 +1757,11 @@ fn execute_exact_file_edit_sync(
         file_payload: file_payload.clone(),
         operation_results: operation_results.clone(),
     };
-    commit_validated_changes("applied", std::slice::from_ref(&prepared))
-        .map_err(enrich_request_edit_error)?;
-    let mut extension = native_file_tools_extension(
-        "file_edit",
-        std::slice::from_ref(&prepared),
-        &operation_results,
-        "all",
-    );
+    // Reuse resource formats validated before mutation; the extra fields below are presentation metadata.
+    // 复用变更前已校验的资源格式；下方附加字段仅为展示元数据。
+    let mut extension =
+        commit_validated_changes("applied", std::slice::from_ref(&prepared), "file_edit")
+            .map_err(enrich_request_edit_error)?;
     if let Some(object) = extension.as_object_mut() {
         object.insert(
             String::from("encoding"),
@@ -2046,7 +2068,9 @@ fn execute_apply_patch_sync(
         }
         changes.push(prepared);
     }
-    commit_validated_changes("applied", &changes)?;
+    // Validate the complete resource table before touching any patch destination.
+    // 在修改任何补丁目标之前校验完整资源表。
+    let extension = commit_validated_changes("applied", &changes, "apply_patch")?;
     let files = changes
         .iter()
         .map(|change| change.file_payload.clone())
@@ -2055,7 +2079,6 @@ fn execute_apply_patch_sync(
         .iter()
         .flat_map(|change| change.operation_results.iter().cloned())
         .collect::<Vec<_>>();
-    let extension = native_file_tools_extension("apply_patch", &changes, &operation_results, "all");
     Ok(FileToolResponse {
         model_output: json!({
             "ok": true,
@@ -2084,7 +2107,7 @@ fn build_patch_delete_change(
     snapshot: RawFileSnapshot,
     resource_id: &str,
 ) -> PreparedChange {
-    let file_payload = raw_lifecycle_payload(&source_path, "delete", &snapshot);
+    let file_payload = raw_lifecycle_payload(&source_path, "delete", &snapshot, resource_id);
     PreparedChange {
         change_kind: String::from("delete"),
         source_path,
@@ -2116,7 +2139,7 @@ fn build_patch_move_change(
     snapshot: RawFileSnapshot,
     resource_id: &str,
 ) -> PreparedChange {
-    let mut file_payload = raw_lifecycle_payload(&source_path, "rename", &snapshot);
+    let mut file_payload = raw_lifecycle_payload(&source_path, "rename", &snapshot, resource_id);
     if let Some(payload) = file_payload.as_object_mut() {
         payload.insert(String::from("path"), json!(display_path(&destination_path)));
         payload.insert(String::from("old_path"), json!(display_path(&source_path)));
@@ -2652,7 +2675,7 @@ fn execute_legacy_file_edit_sync(
     // mode binds validation to the exact preview or applied result returned to the caller.
     // mode 将校验绑定到返回给调用方的精确预览或已应用结果。
     let mode = if dry_run { "preview" } else { "applied" };
-    validate_prepared_change_set(mode, &changes)
+    validate_prepared_change_set(mode, &changes, None)
         .map_err(|error| enrich_parsed_edit_error(error, &parsed, None))?;
     if !dry_run {
         verify_preconditions(&changes)
@@ -3442,9 +3465,12 @@ fn verify_preconditions(changes: &[PreparedChange]) -> Result<(), FileToolError>
 /// `mode` 是产出方声明的 ChangeSet 模式，`changes` 包含操作完成后将返回的精确
 /// 公共文件记录。此函数不执行文件系统变更；任意记录违反 V1 生命周期契约时返回稳定的
 /// 内部契约错误。
+/// `extension` is the native v2 resource table; legacy producers omit it because they do not emit v2 metadata.
+/// `extension` 是原生 v2 资源表；旧产出方不输出 v2 元数据，因此不传此参数。
 fn validate_prepared_change_set(
     mode: &str,
     changes: &[PreparedChange],
+    extension: Option<&Value>,
 ) -> Result<(), FileToolError> {
     // files are the unchanged public rows that the caller will receive after commit.
     // files 是提交后调用方将收到的未改写公共记录。
@@ -3459,6 +3485,7 @@ fn validate_prepared_change_set(
         "payload": {
             "mode": mode,
             "files": files,
+            "extensions": extension.map(|value| json!({"vulcan.file_tools.v2": value})).unwrap_or_else(|| json!({})),
         },
     });
     match persistent_change_set_from_host_result(&host_result) {
@@ -3479,13 +3506,27 @@ fn validate_prepared_change_set(
 ///
 /// `mode` and `changes` are first checked against the canonical V1 ChangeSet
 /// contract, then filesystem preconditions are revalidated immediately before the
-/// transactional commit. The function returns no value after a successful commit.
+/// transactional commit. `source_tool` identifies the native producer; returns the validated v2 extension.
 /// `mode` 与 `changes` 会先按 canonical V1 ChangeSet 契约校验，再于事务提交前
-/// 重新核验文件系统前置条件。提交成功后函数不返回额外数据。
-fn commit_validated_changes(mode: &str, changes: &[PreparedChange]) -> Result<(), FileToolError> {
-    validate_prepared_change_set(mode, changes)?;
+/// 重新核验文件系统前置条件。`source_tool` 标识原生产出方；返回已校验的 v2 扩展。
+fn commit_validated_changes(
+    mode: &str,
+    changes: &[PreparedChange],
+    source_tool: &str,
+) -> Result<Value, FileToolError> {
+    // Build the same operation and resource metadata that will cross the durability boundary.
+    // 构建将跨越持久化边界的同一份操作与资源元数据。
+    let operation_results = changes
+        .iter()
+        .flat_map(|change| change.operation_results.iter().cloned())
+        .collect::<Vec<_>>();
+    // Return this exact extension so post-commit assembly cannot reintroduce unvalidated resource identities.
+    // 返回此精确扩展，避免提交后重新组装引入未经校验的资源标识。
+    let extension = native_file_tools_extension(source_tool, changes, &operation_results, "all");
+    validate_prepared_change_set(mode, changes, Some(&extension))?;
     verify_preconditions(changes)?;
-    commit_changes(changes)
+    commit_changes(changes)?;
+    Ok(extension)
 }
 
 /// Commits one validated mutation batch transactionally and rolls back partial writes.
@@ -4021,9 +4062,18 @@ fn insert_lifecycle_content(object: &mut Map<String, Value>, text: &str, lines: 
 
 /// Builds a lifecycle change-set row from raw bytes without lossy text conversion.
 /// 从原始字节构建生命周期 change-set 行且不进行有损文本转换。
-fn raw_lifecycle_payload(path: &Path, change_kind: &str, snapshot: &RawFileSnapshot) -> Value {
+/// `path`, `change_kind`, and `snapshot` describe the file; `resource_id` is allocated by the owning request.
+/// `path`、`change_kind` 与 `snapshot` 描述文件；`resource_id` 由所属请求分配。
+/// Returns one lifecycle row with the same identity as its operation and extension resource.
+/// 返回与操作记录及扩展资源使用同一标识的生命周期行。
+fn raw_lifecycle_payload(
+    path: &Path,
+    change_kind: &str,
+    snapshot: &RawFileSnapshot,
+    resource_id: &str,
+) -> Value {
     let mut payload = Map::new();
-    payload.insert(String::from("resource_id"), json!("resource-1"));
+    payload.insert(String::from("resource_id"), json!(resource_id));
     payload.insert(String::from("change"), json!(change_kind));
     payload.insert(String::from("path"), json!(display_path(path)));
     payload.insert(String::from("byte_count"), json!(snapshot.bytes.len()));
@@ -5074,10 +5124,10 @@ fn glob_matches(name: &str, pattern: &str) -> bool {
 mod tests {
     use super::{
         MAX_EDIT_LINES_PER_ARRAY, MAX_INLINE_LIFECYCLE_BYTES, MAX_READ_LINES,
-        MAX_READ_RESPONSE_BYTES, PreparedChange, commit_changes, commit_validated_changes,
-        display_path, execute_apply_patch, execute_file, execute_file_edit, path_key,
-        persistent_change_set_from_host_result, read_raw_snapshot, resolve_path,
-        verify_preconditions, whole_file_modify_payload,
+        MAX_READ_RESPONSE_BYTES, PreparedChange, build_patch_delete_change, commit_changes,
+        commit_validated_changes, display_path, execute_apply_patch, execute_file,
+        execute_file_edit, path_key, persistent_change_set_from_host_result, read_raw_snapshot,
+        resolve_path, verify_preconditions, whole_file_modify_payload,
     };
     use serde_json::{Value, json};
     use std::fs;
@@ -5147,7 +5197,7 @@ mod tests {
             read.model_output
                 .as_str()
                 .expect("Markdown read")
-                .contains("\nbefore\n")
+                .contains("\nL1: before\n")
         );
 
         execute_file_edit(
@@ -6237,6 +6287,69 @@ mod tests {
         assert_eq!(fs::read(path).expect("read unchanged GBK bytes"), original);
     }
 
+    /// Returns a fully persistable mixed patch with consistent file, resource, and operation identifiers.
+    /// 返回可完整持久化的混合补丁，文件、资源与操作标识保持一致。
+    #[tokio::test]
+    async fn apply_patch_mixed_lifecycles_have_unique_persistent_resources() {
+        // Keep every real mutation within an isolated temporary workspace.
+        // 将所有真实变更限制在隔离的临时工作区内。
+        let directory = tempdir().expect("create temporary directory");
+        for name in ["update.txt", "delete.txt", "move.txt", "move-edit.txt"] {
+            fs::write(directory.path().join(name), "old\n").expect("write fixture");
+        }
+        // Include both raw lifecycle paths after a normal update and creation.
+        // 在常规修改和创建之后覆盖两条原始生命周期路径。
+        let response = execute_apply_patch(
+            directory.path().to_path_buf(),
+            String::from("*** Begin Patch\n*** Update File: update.txt\n@@\n-old\n+new\n*** Add File: add.txt\n+created\n*** Delete File: delete.txt\n*** Update File: move.txt\n*** Move to: moved.txt\n*** Update File: move-edit.txt\n*** Move to: moved-edited.txt\n@@\n-old\n+edited\n*** End Patch\n"),
+        ).await.expect("mixed patch should succeed");
+        // Validate the complete public envelope, including format resources, as persistence does.
+        // 像持久化链路一样校验完整公共信封，包括格式资源表。
+        let payload = response.change_set.expect("change set");
+        assert!(
+            persistent_change_set_from_host_result(&json!({
+                "kind": "change_set", "payload": payload,
+            }))
+            .expect("mixed patch must pass durability validation")
+            .is_some()
+        );
+        // Resolve each resource by identity rather than by an evolving array position.
+        // 按标识定位每个资源，不依赖会演进的数组位置。
+        let extension = &payload["extensions"]["vulcan.file_tools.v2"];
+        for file in payload["files"].as_array().expect("files") {
+            // Match the same identity in the extension and all related operations.
+            // 在扩展及所有相关操作中匹配同一个标识。
+            let resource = extension["resources"]
+                .as_array()
+                .expect("resources")
+                .iter()
+                .find(|resource| resource["resource_id"] == file["resource_id"])
+                .expect("file resource must exist");
+            assert_eq!(resource["resolved_path"], file["path"]);
+            assert!(
+                extension["operation_results"]
+                    .as_array()
+                    .expect("operations")
+                    .iter()
+                    .any(|operation| operation["resource_id"] == file["resource_id"])
+            );
+        }
+        assert!(!directory.path().join("delete.txt").exists());
+        assert!(!directory.path().join("move.txt").exists());
+        assert!(!directory.path().join("move-edit.txt").exists());
+        for (name, expected) in [
+            ("update.txt", "new\n"),
+            ("add.txt", "created\n"),
+            ("moved.txt", "old\n"),
+            ("moved-edited.txt", "edited\n"),
+        ] {
+            assert_eq!(
+                fs::read_to_string(directory.path().join(name)).expect("read result"),
+                expected
+            );
+        }
+    }
+
     /// Verifies Apply Patch supports anchored update plus add in one atomic change set.
     /// 验证 Apply Patch 在一个原子变更集中支持锚定更新与新增。
     #[tokio::test]
@@ -6870,10 +6983,47 @@ mod tests {
 
         // error is the pre-commit contract rejection returned by the shared validator.
         // error 是共享校验器在提交前返回的契约拒绝。
-        let error = commit_validated_changes("applied", &[prepared])
+        let error = commit_validated_changes("applied", &[prepared], "file")
             .expect_err("invalid ChangeSet must fail before mutation");
         assert_eq!(error.code, "invalid_change_set");
         assert!(!path.exists());
+    }
+
+    /// Rejects duplicate native resource metadata before deletion; returns no value on success.
+    /// 在删除前拒绝重复原生资源元数据；测试成功时无返回值。
+    #[test]
+    fn duplicate_patch_resources_are_rejected_before_commit() {
+        // Isolate two independent files whose invalid metadata must never authorize deletion.
+        // 隔离两份独立文件，其无效元数据绝不能允许删除。
+        let directory = tempdir().expect("temporary directory");
+        // Construct individually valid delete rows that collide only in the extension resource table.
+        // 构建单独有效的删除记录，仅在扩展资源表中制造冲突。
+        let changes = ["first.txt", "second.txt"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                // Use a real snapshot so all filesystem preconditions would otherwise pass.
+                // 使用真实快照，使所有文件系统前置条件原本都能通过。
+                let path = directory.path().join(name);
+                fs::write(&path, "keep\n").expect("write fixture");
+                // Preserve the producer-assigned duplicate identifier to exercise the validation barrier.
+                // 保留产出方分配的重复标识，以覆盖校验屏障。
+                let snapshot = read_raw_snapshot(&path).expect("read snapshot");
+                build_patch_delete_change(index, name, path, snapshot, "duplicate-resource")
+            })
+            .collect::<Vec<_>>();
+        // The canonical parser must reject the same metadata used after commit, before touching files.
+        // 规范解析器必须在触碰文件前拒绝提交后使用的同一份元数据。
+        let error = commit_validated_changes("applied", &changes, "apply_patch")
+            .expect_err("duplicate resources must fail before mutation");
+        assert_eq!(error.code, "invalid_change_set");
+        assert!(error.message.contains("duplicate resource identifier"));
+        for name in ["first.txt", "second.txt"] {
+            assert_eq!(
+                fs::read_to_string(directory.path().join(name)).expect("file must remain"),
+                "keep\n"
+            );
+        }
     }
 
     /// Verifies a failed second publication restores the first file and reports a transaction error.

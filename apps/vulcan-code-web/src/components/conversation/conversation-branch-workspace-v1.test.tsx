@@ -343,6 +343,68 @@ describe("ConversationBranchWorkspaceV1", () => {
     const failed = { ...terminal, event: { ...terminal.event, api_call_id: 7, status: "failed" as const } };
     expect(appendToolRequestDraftMessages("session", [], [started, failed], [draft])).toEqual([]);
   });
+  it("updates six same-name tool rows in place through durable handoff and completion", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    // Keep the real API owner and six distinct request streams while provider call IDs differ from durable IDs.
+    // 保留真实 API 所有者和六个不同请求流，供应商调用标识与持久调用标识不同。
+    const rootInput = completeTurnEvents().find((entry) => entry.event.kind === "user_input")!;
+    // The unfinished API owns both construction drafts and the eventual tool records.
+    // 未结束 API 同时拥有构造草稿和最终工具记录。
+    const events = [rootInput, eventSummary(rootInput.seq + 1, {
+      kind: "api_started", api_call_id: 7, purpose: "main_generation",
+      request: { provider: "test", model: "test" },
+    })];
+    // Retain stale draft membership during handoff to exercise the projector's exact identity reconciliation.
+    // 交接时保留旧草稿成员，以覆盖投影器按精确标识协调的行为。
+    const store = new ConversationLiveStreamStore();
+    // Same-name calls must never be deduplicated by tool name.
+    // 同名调用绝不能按工具名称去重。
+    const drafts: ToolRequestProgressSnapshot[] = Array.from({ length: 6 }, (_, index) => ({
+      apiCallId: 7, requestStreamId: `stream-file-${index}`, toolCallId: `provider-call-${index}`,
+      toolName: "file", state: "receiving", receivedBytes: 0, receivedCharacters: 0, requestRevision: 1,
+    }));
+    for (const draft of drafts) store.applyEnvelope({ generation: 1, delta: {
+      kind: "toolRequestProgressChanged", payload: {
+        conversationId: "session-branch-v1", requestStreamId: draft.requestStreamId, progress: draft,
+      },
+    } });
+    store.flushNotifications();
+    // Render the production branch and retain its original DOM rows across every state transition.
+    // 渲染生产分支，并在各状态转换之间保留原始 DOM 行。
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    try {
+      await React.act(async () => root.render(workspaceTree(events, "inline_output", [], true, undefined, store)));
+      // Stable stack elements prove in-place updates rather than duplicate insertion followed by removal.
+      // 稳定的栈元素证明原地更新，而非插入重复节点后再删除。
+      const rows = [...host.querySelectorAll(".tool-execution-stack")];
+      expect(rows).toHaveLength(drafts.length);
+      for (const status of ["running", "completed"] as const) {
+        // Durable preparation carries the original request stream, not the provider-visible call ID.
+        // 持久准备携带原始请求流，而非供应商可见调用标识。
+        const tools = drafts.map((draft, index) => eventSummary(rootInput.seq + 2 + index, {
+          kind: "tool_call", api_call_id: draft.apiCallId, tool_call_id: 100 + index,
+          request_stream_id: draft.requestStreamId, tool_name: draft.toolName, status,
+          input: { action: "read", path: `src/file-${index}.ts` },
+        }));
+        await React.act(async () => root.render(workspaceTree([...events, ...tools], "inline_output", [], true, undefined, store)));
+        expect(host.querySelectorAll(".tool-execution-stack")).toHaveLength(drafts.length);
+        [...host.querySelectorAll(".tool-execution-stack")].forEach((row, index) => {
+          expect(row).toBe(rows[index]);
+          expect(row.textContent).toContain(`file-${index}.ts`);
+        });
+      }
+      await React.act(async () => {
+        drafts.forEach((draft) => store.settleToolRequestProgress("session-branch-v1", draft.requestStreamId));
+        store.flushNotifications();
+      });
+      expect([...host.querySelectorAll(".tool-execution-stack")]).toEqual(rows);
+    } finally {
+      await React.act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(["apply_patch", "file_edit", "file"])("shows %s on name discovery and streams counts before any durable ToolCall", async (toolName) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     // Canonical API ownership exists, but no complete arguments or tool event exists yet.
