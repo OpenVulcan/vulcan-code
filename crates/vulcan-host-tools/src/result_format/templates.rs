@@ -46,16 +46,32 @@ pub(super) fn load_template_text(
     None
 }
 
-/// Replace simple `{{name}}` placeholders with host-provided context values.
-/// 使用宿主提供的上下文值替换简单的 `{{name}}` 占位符。
+/// Replace placeholders in the original template without interpreting inserted values.
+/// 只替换原始模板中的占位符，不再解释已经插入的值。
+/// Unknown and unterminated placeholders remain literal; map iteration order is irrelevant.
+/// 未知及未闭合占位符保持原文；结果与映射遍历顺序无关。
 pub(super) fn render_template_text(
     template_text: &str,
     context: &HashMap<&'static str, String>,
 ) -> String {
-    let mut rendered = template_text.to_string();
-    for (key, value) in context {
-        rendered = rendered.replace(&format!("{{{{{}}}}}", key), value);
+    let mut rendered = String::with_capacity(template_text.len());
+    let mut remaining = template_text;
+    while let Some(start) = remaining.find("{{") {
+        rendered.push_str(&remaining[..start]);
+        let placeholder = &remaining[start..];
+        let Some(end) = placeholder[2..].find("}}") else {
+            rendered.push_str(placeholder);
+            return rendered;
+        };
+        let name = &placeholder[2..end + 2];
+        if let Some(value) = context.get(name) {
+            rendered.push_str(value);
+        } else {
+            rendered.push_str(&placeholder[..end + 4]);
+        }
+        remaining = &placeholder[end + 4..];
     }
+    rendered.push_str(remaining);
     rendered
 }
 
@@ -66,4 +82,61 @@ pub(super) fn render_page_default(context: &HashMap<&'static str, String>) -> St
         "# LARGE RESULT POINTER\n\n## Raw File\n- raw_file: {{raw_file}}\n- format: {{format}}\n- total_bytes: {{total_bytes}}\n- total_lines: {{total_lines}}\n- safe_inline_limit_bytes: {{safe_inline_limit_bytes}}\n- safe_inline_limit_lines: {{safe_inline_limit_lines}}\n- safe_read_limit_bytes: {{safe_read_limit_bytes}}\n- safe_read_limit_lines: {{safe_read_limit_lines}}\n- chunk_count: {{chunk_count}}\n\n{{host_safe_read_chunks_section}}\n\n{{read_strategy_section}}",
         context,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_template_text;
+    use std::collections::HashMap;
+
+    /// Inserted file paths and tool text must never be parsed as another template.
+    /// 插入的文件路径及工具正文绝不能被当作另一份模板解析。
+    #[test]
+    fn inserted_values_are_literal_in_every_context_order() {
+        let entries = [
+            ("raw_file", "/tmp/{{format}}.txt".to_string()),
+            ("format", "markdown".to_string()),
+            ("body", "literal {{raw_file}} and {{body}}".to_string()),
+        ];
+        for reverse in [false, true] {
+            let mut context = HashMap::new();
+            if reverse {
+                context.extend(entries.iter().rev().cloned());
+            } else {
+                context.extend(entries.iter().cloned());
+            }
+            assert_eq!(
+                render_template_text("{{raw_file}}|{{format}}|{{body}}", &context),
+                "/tmp/{{format}}.txt|markdown|literal {{raw_file}} and {{body}}"
+            );
+        }
+    }
+
+    /// Adjacent, repeated and Unicode placeholders use the original template only.
+    /// 相邻、重复及 Unicode 占位符只消费原始模板。
+    #[test]
+    fn repeated_and_unicode_placeholders_are_rendered_once() {
+        let context = HashMap::from([
+            ("name", "世界".to_string()),
+            ("格式", "文本".to_string()),
+        ]);
+        assert_eq!(
+            render_template_text("你好 {{name}}{{name}} / {{格式}}", &context),
+            "你好 世界世界 / 文本"
+        );
+    }
+
+    /// Missing keys and incomplete placeholders are preserved without dropping source text.
+    /// 缺失键及未闭合占位符保持原文，不丢弃源文本。
+    #[test]
+    fn unknown_and_unterminated_placeholders_remain_literal() {
+        let context = HashMap::from([("known", "value".to_string())]);
+        assert_eq!(
+            render_template_text("{{unknown}} / {{known}} / {{unfinished", &context),
+            "{{unknown}} / value / {{unfinished"
+        );
+        assert_eq!(render_template_text("plain text", &context), "plain text");
+        assert_eq!(render_template_text("", &context), "");
+        assert_eq!(render_template_text("{{}}", &context), "{{}}");
+    }
 }
