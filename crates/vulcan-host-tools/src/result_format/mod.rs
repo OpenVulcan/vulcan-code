@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod templates;
@@ -313,7 +314,7 @@ fn render_page_text(
         .as_deref()
         .ok_or_else(|| PAGE_SPILL_ROOT_REQUIRED_ERROR.to_string())?;
 
-    let raw_file = write_overflow_text_file(&output.content, policy, spill_root)?;
+    let raw_file = write_overflow_text_file(&output.content, spill_root)?;
 
     let mut context = HashMap::new();
     context.insert(
@@ -524,26 +525,27 @@ fn render_chunk_lines(chunk_plan: &OverflowChunkPlan) -> String {
 
 /// Persist oversized content into the host-managed spill directory for later page-mode reading.
 /// 将超长内容持久化到宿主管理的超限目录，供后续分页模式读取。
-fn write_overflow_text_file(
-    content: &str,
-    policy: &OverflowPolicy,
-    spill_root: &Path,
-) -> Result<PathBuf, String> {
+fn write_overflow_text_file(content: &str, spill_root: &Path) -> Result<PathBuf, String> {
+    use std::io::Write;
+
     fs::create_dir_all(spill_root)
         .map_err(|error| format!("Failed to create the overflow directory: {error}."))?;
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("Failed to read the system clock: {error}."))?;
-    let file_name = format!(
-        "tool_output_{}_{}.md",
-        policy.template_name.replace('.', "_"),
-        now.as_millis()
-    );
-    let file_path = spill_root.join(file_name);
-    fs::write(&file_path, content)
+    // Exclusive allocation, not clock precision, prevents concurrent results from aliasing.
+    // 依靠独占分配而非时钟精度，避免并发结果指向同一文件。
+    let mut file = tempfile::Builder::new()
+        .prefix("tool_output_")
+        .suffix(".md")
+        .tempfile_in(spill_root)
+        .map_err(|error| format!("Failed to allocate the overflow file: {error}."))?;
+    file.write_all(content.as_bytes())
+        .and_then(|()| file.flush())
         .map_err(|error| format!("Failed to write the overflow file: {error}."))?;
-    Ok(file_path)
+    // Failed writes are removed by the temporary-file guard; publish only a complete file.
+    // 写入失败由临时文件守卫清理；只发布写入完整的文件。
+    let (_, path) = file
+        .keep()
+        .map_err(|error| format!("Failed to retain the overflow file: {error}."))?;
+    Ok(path)
 }
 
 /// Normalize line endings so CRLF does not affect host-side line counting or chunking.
@@ -579,6 +581,49 @@ fn join_lines_with_trailing_newline(existing_lines: &[String], next_line: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Concurrent renders retain distinct, immutable output files independent of wall-clock time.
+    /// 并发渲染保留互不相同且内容不变的输出文件，不依赖墙上时钟。
+    #[test]
+    fn overflow_files_are_exclusively_allocated() {
+        let directory = tempfile::tempdir().expect("create isolated spill directory");
+        let outputs = std::thread::scope(|scope| {
+            let workers = (0..4)
+                .map(|worker| {
+                    let root = directory.path();
+                    scope.spawn(move || {
+                        (0..32)
+                            .map(|sequence| {
+                                let content = format!("worker={worker}; result={sequence}");
+                                let path = write_overflow_text_file(&content, root)
+                                    .expect("allocate one immutable spill file");
+                                (path, content)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .flat_map(|worker| worker.join().expect("spill worker completes"))
+                .collect::<Vec<_>>()
+        });
+        let paths = outputs
+            .iter()
+            .map(|(path, _)| path)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            paths.len(),
+            outputs.len(),
+            "spill file identities must be unique"
+        );
+        for (path, expected) in outputs {
+            assert_eq!(
+                fs::read_to_string(path).expect("read retained output"),
+                expected
+            );
+        }
+    }
 
     /// Verifies page overflow without a host spill path returns a protocol-level error.
     /// 验证分页超限缺少宿主超限路径时返回协议级错误。

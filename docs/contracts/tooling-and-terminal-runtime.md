@@ -38,7 +38,7 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   向模型复述该上限并禁止用 `cat` 等方式整份读取日志；技能中的数值由
   `terminal_skill_quotes_current_output_hard_limit` 测试与常量比对，修改上限时必须同步技能文本。
 - 未越过硬上限但内联渲染结果超过 `200000` 字节时，切换为项目内 `.vulcan/temp/` 分页文件；文件名
-  形如 `tool_output_overflow_page_md_<unix_ms>.md`。
+  形如 `tool_output_<exclusive-random-id>.md`，使用独占创建，写入完成后发布；并发调用不共享文件身份。
 - `auto` 使用用户已配置且当前可检测的默认 Shell；没有用户配置时按平台稳定优先级选择。
 - Windows 当前检测优先级为 `pwsh`、`powershell`、`cmd`、`bash`、`sh`、`zsh`，但只暴露实际
   检测成功的启动器。
