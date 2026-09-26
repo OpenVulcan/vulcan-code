@@ -124,23 +124,11 @@ if [ ! -f "$BuiltTerminalHostPath" ]; then
     exit 1
 fi
 
-# Publish compiled executables into the stable output directory used by make run.
-# 把已编译可执行文件发布到 make run 使用的稳定 output 目录。
-mkdir -p "$OutputBinDir"
-# ObsoleteWindowsConsoleHelperPath identifies the removed pre-unification terminal executable.
-# ObsoleteWindowsConsoleHelperPath 标识跨平台统一前已移除的旧终端可执行文件。
-ObsoleteWindowsConsoleHelperPath="$OutputBinDir/vulcan-windows-console-helper.exe"
-# Removing this generated artifact prevents stale dual-host layouts after an in-place upgrade.
-# 删除此生成制品可避免原地升级后继续残留双宿主目录布局。
-rm -f -- "$ObsoleteWindowsConsoleHelperPath"
-cp "$BuiltBinaryPath" "$OutputBinaryPath"
-cp "$BuiltTerminalHostPath" "$OutputTerminalHostPath"
-
-echo "==> Done. Binary: $OutputBinaryPath"
-echo "==> Done. Terminal host: $OutputTerminalHostPath"
 # Debug distributions also serve a complete static WebUI through Core.
 # 调试发行物同样通过 Core 提供完整静态网页。
 if [ "$Release" = "0" ]; then
     pnpm --dir "$ProjectDir/apps/vulcan-code-web" run build
 fi
-node "$ProjectDir/scripts/desktop-runtime.mjs" package "$ProfileName"
+# Stage and validate a complete generation before switching the published directory.
+# 切换正式目录之前，暂存并验证完整一代。
+node "$ProjectDir/scripts/publish-distribution.mjs" "$ProfileName" "$BuiltBinaryPath" "$BuiltTerminalHostPath"
