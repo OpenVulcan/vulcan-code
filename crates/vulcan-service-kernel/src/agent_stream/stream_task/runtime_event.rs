@@ -106,6 +106,12 @@ struct RuntimeEventPhaseTransition {
 /// # 返回值
 /// This function returns no value; recoverable projection failures are logged and stream polling continues.
 /// 此函数无返回值；可恢复的投影失败会被记录，流轮询继续执行。
+// Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary.
+// 事件边界显式保留流所有权、代际守卫和独立借用的遥测状态。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary."
+)]
 pub(super) async fn handle_runtime_stream_event(
     app: &ServiceEventEmitter,
     task_state: &SharedServiceBridgeState,

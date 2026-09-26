@@ -730,6 +730,12 @@ pub(crate) fn spawn_agent_stream_task(
 /// `restart_state`跨每次同所有者重启保留两个守卫，仅在可靠API许可后重置配置抖动。
 /// Returns after scheduling the task under the existing registration and failure-ownership gates.
 /// 在既有登记及失败所有权闸门下调度任务后返回。
+// Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary.
+// 事件边界显式保留流所有权、代际守卫和独立借用的遥测状态。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary."
+)]
 fn spawn_agent_stream_task_with_restart_state(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,

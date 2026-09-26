@@ -756,6 +756,12 @@ fn composer_media_session_route_state(
 
 /// Plans every staged attachment without performing network I/O or mutating conversation state.
 /// 在不执行网络 I/O 或修改会话状态的情况下规划全部已暂存附件。
+// Media preparation keeps source identity, frozen execution and cancellation ownership separate.
+// 媒体准备分别保留来源身份、冻结执行及取消所有权。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Media preparation keeps source identity, frozen execution and cancellation ownership separate."
+)]
 pub(crate) async fn service_plan_composer_attachments(
     state: SharedServiceBridgeState,
     project_id: Option<String>,
@@ -1664,6 +1670,12 @@ async fn resolve_submission_media_execution(
 /// 返回值
 /// Success after every attachment crosses its required preparation path, or the first explicit error.
 /// 全部附件越过其必需准备路径后返回成功；否则返回首个明确错误。
+// Media preparation keeps source identity, frozen execution and cancellation ownership separate.
+// 媒体准备分别保留来源身份、冻结执行及取消所有权。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Media preparation keeps source identity, frozen execution and cancellation ownership separate."
+)]
 async fn prepare_submission_media_inner(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -2435,6 +2447,12 @@ fn prepared_media_reference_from_attachment_index(
 
 /// Converts one freshly verified source and upload contract into a ledger candidate.
 /// 将一个刚验证的源与上传契约转换为账本候选项。
+// Media preparation keeps source identity, frozen execution and cancellation ownership separate.
+// 媒体准备分别保留来源身份、冻结执行及取消所有权。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Media preparation keeps source identity, frozen execution and cancellation ownership separate."
+)]
 fn prepared_media_reference_from_source(
     execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
     upload_contract: &vulcan_provider_adapters::ConversationMediaUploadContract,

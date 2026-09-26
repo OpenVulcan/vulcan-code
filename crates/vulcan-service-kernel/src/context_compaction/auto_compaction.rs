@@ -69,6 +69,12 @@ pub(crate) async fn force_auto_compact_webui_session_after_provider_boundary(
 
 /// Executes the shared compaction transaction with an explicit trigger mode.
 /// 使用显式触发模式执行共享上下文压缩事务。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 async fn maybe_auto_compact_webui_session_with_mode(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -866,6 +872,12 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
 /// 返回值
 /// Returns success after scheduling persistence, or an ownership/state error before persistence.
 /// 持久化任务排队后返回成功；持久化前所有权或状态异常时返回错误。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 pub(crate) async fn persist_failed_webui_context_compaction(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -995,6 +1007,12 @@ fn apply_session_provider_tool_cache_snapshot_to_compaction(
 /// # 返回值
 /// A validated immutable launch request, or an explicit mismatch/routing error.
 /// 返回校验后的不可变启动请求；策略不匹配或路由失败时返回显式错误。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 pub(crate) fn build_webui_context_compaction_job_request(
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,

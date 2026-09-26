@@ -291,6 +291,12 @@ fn synchronize_continue_controller_state_from_v1(
 /// 返回值
 /// A provider execution request when the turn should continue, or `None` when stopped.
 /// 当回合应继续时返回 Provider 执行请求；停止时返回 `None`。
+// Prompt continuation carries independent profile, precheck and native memory publication outcomes.
+// 提示词继续流程携带独立的配置、预检及原生记忆发布结果。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Prompt continuation carries independent profile, precheck and native memory publication outcomes."
+)]
 pub(crate) fn continue_webui_prompt_turn_after_preparation_from_state(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -336,6 +342,12 @@ pub(crate) enum PromptContinuationPurpose {
 /// 参数为发送器、共享状态、控制器、代理运行时、启动记录、代次和准备结果；用途控制目标副作用。
 /// Returns the prepared request, no request for a stale owner, or an explicit preparation error.
 /// 返回已准备请求、owner 已失效时的空值，或明确的准备错误。
+// Prompt continuation carries independent profile, precheck and native memory publication outcomes.
+// 提示词继续流程携带独立的配置、预检及原生记忆发布结果。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Prompt continuation carries independent profile, precheck and native memory publication outcomes."
+)]
 pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,

@@ -12,6 +12,12 @@ use vulcan_session_core::v1::collaboration::CollaborationExecutionId;
 /// 捕获的所有者及监听器坐标授权清理；宿主事件提供原始失败。
 /// Returns after source/parent durability and exact gate cleanup, preserving errors for recovery.
 /// 来源与父状态可靠落盘并完成精确门清理后返回，保留错误以便恢复。
+// Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary.
+// 事件边界显式保留流所有权、代际守卫和独立借用的遥测状态。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary."
+)]
 pub(crate) fn handle_startup_abort(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,

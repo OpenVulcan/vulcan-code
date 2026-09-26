@@ -55,6 +55,12 @@ pub(crate) fn append_webui_context_compaction_status_message_to_workspace(
 
 /// Appends model-produced summary output into the visible compaction body row.
 /// 将模型生成的总结输出追加到可见压缩正文行。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 pub(crate) fn append_webui_context_compaction_output_delta(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,

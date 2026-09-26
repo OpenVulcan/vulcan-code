@@ -1778,6 +1778,12 @@ mod continuation_terminal_projection_tests {
 
 /// Claims one frozen continuation and starts the exact retained execution without user input.
 /// 领取一份冻结 Continue，并在不追加用户输入的情况下启动精确保留执行。
+// Submission admission, media ownership and execution options remain explicit across durable materialization.
+// 持久化提交边界显式保留准入、媒体所有权与执行选项。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Submission admission, media ownership and execution options remain explicit across durable materialization."
+)]
 pub(super) async fn service_continue_conversation(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -2136,6 +2142,12 @@ async fn load_existing_submission_v1_authority(
 /// 唯一注册槽后返回。
 /// Explicit Continue returns its durable receipt; other submission modes return no continuation receipt.
 /// 显式继续返回其可靠回执；其他提交模式不返回继续回执。
+// Submission admission, media ownership and execution options remain explicit across durable materialization.
+// 持久化提交边界显式保留准入、媒体所有权与执行选项。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Submission admission, media ownership and execution options remain explicit across durable materialization."
+)]
 async fn materialize_submission_session_v1(
     state: &SharedServiceBridgeState,
     controller_runtime: &HostRuntimeHandle,
@@ -2308,6 +2320,12 @@ async fn materialize_submission_session_v1(
 ///
 /// `submission_mode` selects ordinary user input or a revision-bound recovery with an optional durable follow-up.
 /// `submission_mode` 选择普通用户输入，或带可选持久补充消息且绑定修订号的恢复请求。
+// Submission admission, media ownership and execution options remain explicit across durable materialization.
+// 持久化提交边界显式保留准入、媒体所有权与执行选项。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Submission admission, media ownership and execution options remain explicit across durable materialization."
+)]
 async fn service_start_conversation_execution(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,

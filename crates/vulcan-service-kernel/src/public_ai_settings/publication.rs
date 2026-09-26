@@ -270,6 +270,12 @@ where
 /// and Workbench commit together; any failure restores configuration/runtime and leases.
 /// 仅当配置、租约、工作区与工作台共同提交后返回已安装配置及预备输出；任何失败都会恢复
 /// 配置、运行时与租约。
+// Transactional publication separates mutation, session reconciliation and durable commit callbacks.
+// 事务发布分别保留变更、会话协调与持久化提交回调。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Transactional publication separates mutation, session reconciliation and durable commit callbacks."
+)]
 pub(super) fn mutate_public_ai_configuration_and_publish_sessions_in_transaction<
     Mutation,
     PrepareOutput,
@@ -688,6 +694,12 @@ where
 /// The atomically installed Workbench snapshot, or an error with Service state and revoked leases
 /// restored.
 /// 返回原子安装的工作台快照；失败时恢复 Service 状态与已撤销租约。
+// Transactional publication separates mutation, session reconciliation and durable commit callbacks.
+// 事务发布分别保留变更、会话协调与持久化提交回调。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Transactional publication separates mutation, session reconciliation and durable commit callbacks."
+)]
 pub(super) fn publish_public_ai_workbench_with_workspace_reconciliation_and_commit<
     ReconcileWorkspace,
     Commit,

@@ -190,6 +190,12 @@ pub(super) fn webui_pending_prompt_dispatch_context(
 /// This function never changes V1 authority, asset leases, or `SessionRuntimeStateEntry`.
 /// 在进程镜像接纳该行后返回 Hook 事实，或明确的镜像错误；该函数绝不修改 V1 权威、
 /// 资产租约或 `SessionRuntimeStateEntry`。
+// Queued input retains client identity, attachments and model options without fabricating user input.
+// 排队输入保留客户端身份、附件及模型选项，不伪造用户输入。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Queued input retains client identity, attachments and model options without fabricating user input."
+)]
 pub(super) fn enqueue_webui_pending_prompt_from_submission(
     service_state: &mut ServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,

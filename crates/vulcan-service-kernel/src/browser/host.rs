@@ -1489,7 +1489,20 @@ mod tests {
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().expect("accept");
             let mut buffer = [0_u8; 4096];
-            socket.read(&mut buffer).expect("read hello");
+            // A TCP read may split the hello frame; acknowledge only a complete decoded message.
+            // TCP 读取可能拆分 hello 帧；仅在完整解码消息后确认。
+            let mut decoder = BrowserHostFrameDecoder::new();
+            loop {
+                let read = socket.read(&mut buffer).expect("read hello");
+                assert_ne!(read, 0, "client closed before hello completed");
+                if !decoder
+                    .push(&buffer[..read])
+                    .expect("decode hello")
+                    .is_empty()
+                {
+                    break;
+                }
+            }
             let frame = encode_host_frame(&handshake_value("session", "1")).expect("handshake");
             socket.write_all(&frame).expect("write handshake");
         });

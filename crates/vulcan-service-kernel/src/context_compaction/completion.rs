@@ -423,6 +423,12 @@ fn dispatch_context_compaction_committed_hook(
 /// 返回值
 /// Returns a committed or rejected durable outcome, or an error only when no terminal workspace state could be committed.
 /// 返回已提交或已拒绝的可持久化终态；仅在无法提交任何工作区终态时返回错误。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 pub(crate) async fn finish_webui_context_compaction_execution(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -659,6 +665,12 @@ pub(crate) async fn finish_webui_context_compaction_execution(
 /// 返回值
 /// Returns the workspace snapshot containing the committed failure record, or a pre-commit state error.
 /// 返回包含已提交失败记录的工作区快照，或提交前状态错误。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 pub(crate) fn fail_webui_context_compaction_execution(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,

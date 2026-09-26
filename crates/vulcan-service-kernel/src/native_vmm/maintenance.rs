@@ -4517,6 +4517,12 @@ fn compact_migration_preview_text(value: &str) -> String {
 
 /// Computes the confirmation token for the exact migration preview shown to the user.
 /// 计算用户所见准确迁移预检的确认令牌。
+// The migration fingerprint covers source, destination, before/after counts and exact rename records.
+// 迁移指纹覆盖来源、目标、前后计数及精确重命名记录。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The migration fingerprint covers source, destination, before/after counts and exact rename records."
+)]
 fn migration_preview_fingerprint(
     storage_version: u64,
     source_project_id: u64,

@@ -55,6 +55,12 @@ pub(crate) struct WebuiContextCompactionExecution {
 /// # 返回值
 /// The terminal compaction execution when a durable summary was produced.
 /// 当产出持久摘要时返回终态压缩执行结果。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 pub(crate) async fn stream_webui_context_compaction_execution(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -222,6 +228,12 @@ pub(crate) async fn stream_webui_context_compaction_execution(
 /// `raw_assistant_output`必须为空；app/state 转发用量，遥测守卫持有取消责任。
 /// Returns explicit kind, ownership, or durability errors to both caller and waiting producer.
 /// 向调用方和等待中的生产者同时返回明确的种类、归属或持久化错误。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 pub(crate) async fn apply_remote_compaction_completion(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -259,6 +271,12 @@ pub(crate) async fn apply_remote_compaction_completion(
 /// 启动当前会话的上下文压缩流，并将流式事件镜像到 WebUI 状态。
 /// `model_target` is the exact route and adaptive tail policy frozen before planning.
 /// `model_target` 是规划前冻结的精确路由与自适应尾部策略。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 pub(crate) fn spawn_webui_context_compaction_task(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -509,6 +527,12 @@ pub(crate) struct CompactionStreamPresentation<'a> {
 /// 已处理事件返回 None；没有根界面时，非工具宿主事件交回所属子监听器。
 /// Deferred host events retain their barrier; presentation absence never authorizes a child lifecycle transition.
 /// 延迟宿主事件保留屏障；缺少展示绝不授权子生命周期转换。
+// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
+// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
+)]
 pub(crate) async fn apply_context_compaction_stream_event(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,

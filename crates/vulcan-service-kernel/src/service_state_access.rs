@@ -1,7 +1,18 @@
 //! service state access helpers.
 //! service state access 辅助逻辑。
 
-use super::*;
+use crate::{
+    ServiceBridgeState, SharedServiceBridgeState, TauriLuaSkillsCatalog, TauriLuaSkillsHandle,
+};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use vulcan_agent_runtime::agent_runtime::prompt_composer_runtime::invalidate_runtime_prompt_luaskill_catalog_cache;
+use vulcan_provider_config::config::ProviderConfigurationFile;
+use vulcan_service_api::ProjectSummary;
+use vulcan_workbench_model::{SessionId, TaskProjectSummary};
+use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 mod configuration_io;
 
 /// Serializes every global Provider configuration transaction across service request families.
@@ -822,6 +833,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ServiceShellHost, create_service_bridge_state};
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// Verifies a failed durable write leaves the browser-visible runtime snapshot unchanged.
     /// 验证持久写入失败会让浏览器可见运行时快照保持不变。

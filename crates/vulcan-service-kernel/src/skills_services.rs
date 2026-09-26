@@ -1143,6 +1143,12 @@ fn rollback_initial_plugin_mcp_secrets(
 /// 返回值
 /// Returns every rollback failure; an unsafe lifecycle or package cleanup failure leaves dependent state intact for retry.
 /// 返回全部回滚失败；不安全的生命周期或插件包清理失败会保留依赖状态以供重试。
+// Rollback needs previous credential and enablement evidence plus explicit lifecycle compensation.
+// 回滚需要此前凭据、启用证据及明确的生命周期补偿。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Rollback needs previous credential and enablement evidence plus explicit lifecycle compensation."
+)]
 async fn rollback_local_plugin_install(
     state: &SharedServiceBridgeState,
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,

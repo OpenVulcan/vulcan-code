@@ -286,6 +286,12 @@ fn cached_webui_diff_cache_value<Entry, Value: Clone>(
 /// `entry_created_at_ms` 读取条目创建时间戳。
 /// `make_entry` builds the stored entry from the key.
 /// `make_entry` 使用键构建要保存的条目。
+// The generic cache borrows storage and independent key, age and construction callbacks.
+// 通用缓存借用存储及独立的键、年龄与构造回调。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The generic cache borrows storage and independent key, age and construction callbacks."
+)]
 fn store_webui_diff_cache_entry<Entry>(
     cache: &mut VecDeque<Entry>,
     key: String,

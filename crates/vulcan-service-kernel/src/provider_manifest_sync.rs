@@ -1862,6 +1862,12 @@ fn resolved_manifest_model_source(
 /// 返回值
 /// A deterministic model-id map with exact source attribution, or a fail-closed source error.
 /// 返回按模型标识确定性排序且来源精确的映射；来源无法归属时失败关闭。
+// Manifest reconciliation distinguishes declaration, connection and catalog authorities.
+// 清单协调区分声明、连接和目录权威。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Manifest reconciliation distinguishes declaration, connection and catalog authorities."
+)]
 fn manifest_model_inventory_for_scope(
     manifest_models: &BTreeMap<String, (String, bool)>,
     configuration: &PersistedAiConfiguration,
@@ -2713,6 +2719,12 @@ fn diagnostic_contains_absolute_path(diagnostic: &str) -> bool {
 /// 返回值
 /// A complete typed preview with empty, explicitly complete delta sets.
 /// 返回具有空且明确完整差异集合的完整类型化预览。
+// Manifest reconciliation distinguishes declaration, connection and catalog authorities.
+// 清单协调区分声明、连接和目录权威。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Manifest reconciliation distinguishes declaration, connection and catalog authorities."
+)]
 fn manifest_preview_without_diffs(
     provider_id: &str,
     outcome: ProviderManifestPreviewOutcome,

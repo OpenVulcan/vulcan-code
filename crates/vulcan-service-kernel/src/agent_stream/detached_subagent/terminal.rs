@@ -7,6 +7,12 @@ use super::*;
 /// 使用原子会话及已完成助手回执处理精确父事件。
 /// Service owners authorize publication and continuation; returns an error without discarding retry ownership.
 /// 服务所有者授权发布与续跑；返回错误时不丢弃重试归属。
+// Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary.
+// 事件边界显式保留流所有权、代际守卫和独立借用的遥测状态。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary."
+)]
 pub(super) async fn handle_parent_event(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,

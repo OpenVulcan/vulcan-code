@@ -1668,6 +1668,12 @@ fn validate_question_target_delivery(
 
 /// Settles the target inbound delivery and acknowledges it on the source document.
 /// 在目标可靠结算入站投递后于来源文档持久化确认。
+// Delivery identity, participants and settlement evidence remain explicit at the cross-session boundary.
+// 跨会话边界显式保留投递身份、参与方及结算证据。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Delivery identity, participants and settlement evidence remain explicit at the cross-session boundary."
+)]
 async fn settle_and_acknowledge_delivery(
     invocation: &ValidatedInvocation,
     source_handle: &Arc<SessionHandle>,

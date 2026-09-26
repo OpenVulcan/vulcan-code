@@ -116,6 +116,12 @@ fn question_launch_restart_state(
 /// 运行时参数提供分发服务；`request`、`execution` 及内核字段必须指向同一所有者。
 /// Returns after scheduling or an explicit ownership error; never converts a QA request into business execution.
 /// 调度后返回，或返回明确的归属错误；绝不把答疑请求转为业务执行。
+// Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary.
+// 事件边界显式保留流所有权、代际守卫和独立借用的遥测状态。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary."
+)]
 pub(crate) async fn spawn_question_execution_stream_task(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,

@@ -139,6 +139,12 @@ pub(crate) fn load_webui_workspace_diff_file_detail(
 
 /// Builds a hunk-scoped expanded diff payload for targeted WebUI hunk expansion.
 /// 为定向 WebUI hunk 展开构建仅包含目标 hunk 的扩展 diff 载荷。
+// Exact diff scope includes revision selection, path, context and hunk expansion.
+// 精确差异范围包含版本选择、路径、上下文及片段展开。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Exact diff scope includes revision selection, path, context and hunk expansion."
+)]
 fn webui_diff_detail_hunk_scoped_unified_diff(
     repository_root: &Path,
     mode: WebuiWorkspaceDiffMode,

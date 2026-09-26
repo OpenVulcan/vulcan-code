@@ -567,6 +567,12 @@ fn authoritative_revision_frontier(
 /// Overlays the active resident tail over a complete persisted range while
 /// rejecting generation drift, gaps, or an active snapshot behind disk.
 /// 用活动驻留尾段覆盖完整持久化范围，同时拒绝代次漂移、缺口或落后磁盘的活动快照。
+// The event projection returns one atomic snapshot with its revision, turn, sequence and configuration.
+// 事件投影一次返回包含修订、回合、序号及配置的原子快照。
+#[expect(
+    clippy::type_complexity,
+    reason = "The event projection returns one atomic snapshot with its revision, turn, sequence and configuration."
+)]
 fn merge_persisted_with_resident(
     persisted_state: SessionV1EventWindowState,
     persisted_events: Vec<ConversationEvent>,

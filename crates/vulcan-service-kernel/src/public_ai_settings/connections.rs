@@ -222,6 +222,12 @@ pub(crate) async fn service_add_public_ai_connection(
 /// 返回值
 /// The settings snapshot after successful publication, with failures retaining the existing secret and activation compensation.
 /// 成功发布后返回设置快照，失败时保留既有秘密与激活补偿。
+// Connection creation keeps credential material distinct from provider routing and management credentials.
+// 连接创建将凭据材料与供应商路由、管理凭据分开。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Connection creation keeps credential material distinct from provider routing and management credentials."
+)]
 pub(super) async fn add_public_ai_connection_with_secret(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,

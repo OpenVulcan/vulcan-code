@@ -103,6 +103,12 @@ impl PendingTerminal {
 /// 捕获的服务所有者及启动所有者授权重试；接收器继续接收普通事件。
 /// Returns after EOF and successful terminal processing; unresolved failures retain their owner in this task.
 /// 流结束且终态处理成功后返回；未解决失败在此任务中保留其所有者。
+// Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary.
+// 事件边界显式保留流所有权、代际守卫和独立借用的遥测状态。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary."
+)]
 pub(crate) async fn drive<S>(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,

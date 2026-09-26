@@ -1175,6 +1175,12 @@ where
 /// 返回值
 /// Success after atomic owner validation and registration, or a concrete admission/owner error.
 /// 原子校验所有者并登记后返回成功，或返回具体准入/所有者错误。
+// Registration binds future ownership to an exact session, task, turn and kernel generation.
+// 注册将异步任务所有权绑定到精确会话、任务、回合及内核代际。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Registration binds future ownership to an exact session, task, turn and kernel generation."
+)]
 pub(crate) fn spawn_registered_kernel_stream_task_with_mode<F>(
     state: &SharedServiceBridgeState,
     session_id: SessionId,

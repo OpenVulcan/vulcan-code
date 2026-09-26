@@ -133,6 +133,12 @@ pub(super) async fn send_notification(
 /// revocation between the two halves is honored instead of being silently bypassed by recovery.
 /// 跨项目授权与目标文档准入都在此处重新判定，因此两半之间的授权撤销会被如实执行，而不会被恢复
 /// 路径静默绕过。
+// Delivery identity, participants and settlement evidence remain explicit at the cross-session boundary.
+// 跨会话边界显式保留投递身份、参与方及结算证据。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Delivery identity, participants and settlement evidence remain explicit at the cross-session boundary."
+)]
 pub(super) async fn deliver_recorded_notification(
     invocation: &ValidatedInvocation,
     target_session_id: Uuid,

@@ -578,6 +578,12 @@ pub struct BrowserManager {
     runtime_maintenance: Arc<Mutex<runtime_install::BrowserRuntimeMaintenance>>,
     /// Serialized AI-to-MCP connection state keyed by trusted conversation identity.
     /// 按可信会话身份索引的串行化 AI 至 MCP 连接状态。
+    // The registry mutex and per-connection asynchronous mutex protect different lifetimes.
+    // 注册表互斥锁与逐连接异步互斥锁保护不同生命周期。
+    #[expect(
+        clippy::type_complexity,
+        reason = "The registry mutex and per-connection asynchronous mutex protect different lifetimes."
+    )]
     ai_connections: Arc<
         Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<Option<ai_tools::BrowserAiConnection>>>>>,
     >,
@@ -4401,6 +4407,12 @@ impl BrowserManager {
 
     /// Publishes one host frame to every subscriber, keeping only the newest frames.
     /// 向每个订阅者发布一个宿主帧，仅保留最新帧。
+    // Page and viewport generations must accompany each independently captured frame.
+    // 每次独立捕获的帧必须携带页面与视口代际。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Page and viewport generations must accompany each independently captured frame."
+    )]
     pub fn publish_page_frame(
         &self,
         session_id: &str,

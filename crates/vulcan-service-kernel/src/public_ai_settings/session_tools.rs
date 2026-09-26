@@ -474,6 +474,12 @@ pub(crate) async fn service_rebuild_public_ai_session_provider_tool_selections(
 /// 返回值
 /// The normalized direct capabilities, direct selections, exact media routes, extension target sets, and whether projection fields changed.
 /// 返回规范化的直连能力、直连选择、精确媒体路由、扩展目标集合，以及投影字段是否发生变化。
+// Reconciliation returns capabilities, targets, media backends and change state from the same calculation.
+// 协调过程从同一次计算返回能力、目标、媒体后端与变化状态。
+#[expect(
+    clippy::type_complexity,
+    reason = "Reconciliation returns capabilities, targets, media backends and change state from the same calculation."
+)]
 fn reconcile_session_provider_tool_settings(
     runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
     configuration: &PersistedAiConfiguration,

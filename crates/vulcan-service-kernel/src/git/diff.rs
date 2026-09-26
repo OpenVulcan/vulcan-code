@@ -371,6 +371,12 @@ pub(crate) fn load_webui_selected_workspace_unified_diff(
 /// 参数：repository_root 是 Git 根目录，选择字段标识请求来源，pathspec/context_lines 限定单文件 diff。
 /// Returns: loaded file-scoped diff text plus notices with the caller-specific missing commit message.
 /// 返回：加载出的单文件 diff 文本和提示，并保留调用方指定的缺失提交文案。
+// Revision selection and path scope remain explicit in the shared diff loader.
+// 共享差异加载器显式保留版本选择及路径范围。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Revision selection and path scope remain explicit in the shared diff loader."
+)]
 pub(crate) fn load_webui_selected_workspace_unified_diff_for_path(
     repository_root: &Path,
     mode: WebuiWorkspaceDiffMode,

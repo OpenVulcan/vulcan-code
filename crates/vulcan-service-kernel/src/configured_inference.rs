@@ -1227,6 +1227,12 @@ impl InternalInferenceTelemetryFacts {
     /// 返回值
     /// One privacy-safe terminal telemetry record.
     /// 返回一项隐私安全终态遥测记录。
+    // Frozen route identity, caller identity and execution accounting are separate authorities.
+    // 冻结路由身份、调用方身份及执行计量属于不同权威。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Frozen route identity, caller identity and execution accounting are separate authorities."
+    )]
     fn succeeded(
         caller: &InferenceCallerContext,
         consumer_profile_id: &str,
@@ -1267,6 +1273,12 @@ impl InternalInferenceTelemetryFacts {
     /// 返回值
     /// One privacy-safe failed terminal telemetry record.
     /// 返回一项隐私安全失败终态遥测记录。
+    // Frozen route identity, caller identity and execution accounting are separate authorities.
+    // 冻结路由身份、调用方身份及执行计量属于不同权威。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Frozen route identity, caller identity and execution accounting are separate authorities."
+    )]
     fn failed(
         caller: &InferenceCallerContext,
         consumer_profile_id: &str,
@@ -2798,6 +2810,12 @@ impl ConfiguredInferenceService {
     /// 返回值
     /// The provider result, or a route-bound controlled failure after emitting terminal telemetry.
     /// 返回供应商结果；失败时在发出终态遥测后返回绑定路由的受控错误。
+    // Frozen route identity, caller identity and execution accounting are separate authorities.
+    // 冻结路由身份、调用方身份及执行计量属于不同权威。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Frozen route identity, caller identity and execution accounting are separate authorities."
+    )]
     async fn execute_embedding_batch_provider_operation<T, Attempt, SuccessMetrics>(
         &self,
         caller: &InferenceCallerContext,
@@ -3959,6 +3977,12 @@ impl ConfiguredInferenceService {
     /// 参数
     /// All arguments are frozen before the worker starts and contain no secret material.
     /// 全部参数在工作器启动前冻结且不包含秘密材料。
+    // Frozen route identity, caller identity and execution accounting are separate authorities.
+    // 冻结路由身份、调用方身份及执行计量属于不同权威。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Frozen route identity, caller identity and execution accounting are separate authorities."
+    )]
     async fn drive_llm_execution(
         &self,
         state: Arc<ConfiguredLlmExecutionState>,

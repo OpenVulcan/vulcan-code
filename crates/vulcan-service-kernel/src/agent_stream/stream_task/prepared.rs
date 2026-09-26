@@ -162,6 +162,12 @@ pub(crate) fn commit_prepared_stream_failure(
 /// 返回值
 /// A control-flow action telling the caller whether to continue or stop the current task.
 /// 返回控制流动作，告知调用方继续当前任务还是停止当前任务。
+// Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary.
+// 事件边界显式保留流所有权、代际守卫和独立借用的遥测状态。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary."
+)]
 pub(super) async fn handle_prepared_stream_event(
     app: &ServiceEventEmitter,
     task_state: &SharedServiceBridgeState,

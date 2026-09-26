@@ -385,6 +385,12 @@ impl KnowledgeOperationReporter {
 
     /// Starts one LLM or embedding request and resets the active preview.
     /// 开始一次 LLM 或向量请求，并重置当前动态预览。
+    // Request telemetry preserves provider route, request identity and retry status as separate fields.
+    // 请求遥测分别保留供应商路由、请求身份及重试状态。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Request telemetry preserves provider route, request identity and retry status as separate fields."
+    )]
     async fn begin_request(
         &self,
         request_id: &str,

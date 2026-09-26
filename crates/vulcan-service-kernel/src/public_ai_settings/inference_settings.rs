@@ -975,6 +975,12 @@ pub(super) fn build_internal_inference_candidates(
 /// 返回值
 /// Returns one enabled exact candidate, or an explicit missing/disabled-route error.
 /// 返回一个已启用精确候选，或显式缺失/禁用路由错误。
+// The candidate binds exact provider, entry, connection and model identities to operation and usage scope.
+// 候选项将精确供应商、入口、连接及模型身份绑定到操作和用途。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The candidate binds exact provider, entry, connection and model identities to operation and usage scope."
+)]
 pub(crate) fn resolve_knowledge_internal_inference_candidate(
     state: &SharedServiceBridgeState,
     provider_id: &str,

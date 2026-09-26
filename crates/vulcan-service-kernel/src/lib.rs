@@ -6,14 +6,6 @@
 // Keep this compiler-only bound test-scoped; production recursion and lint policy stay unchanged.
 // 将此编译器边界限定于测试；生产递归与 lint 策略保持不变。
 #![cfg_attr(test, recursion_limit = "256")]
-#![expect(
-    clippy::too_many_arguments,
-    reason = "service-kernel WebUI boundary functions still pass explicit runtime handles while the shared service context object is being designed as a separate architectural refactor"
-)]
-#![expect(
-    clippy::type_complexity,
-    reason = "service-kernel runtime handle bundles intentionally remain explicit until the shared service context object lands"
-)]
 
 // Re-export the extracted protocol core under the historical source name during namespace migration.
 // 在命名空间迁移期间以历史源码名称引用已提取的协议核心。
@@ -48,7 +40,6 @@ use vulcan_agent_runtime::{
         conversation_hooks::{ConversationHookRuntime, ConversationTurnCompletionStatus},
         events::{ProviderRequestDurabilityCompletion, RuntimeEvent, RuntimeEventKind},
         extension_generation::ExtensionGeneration,
-        prompt_composer_runtime::invalidate_runtime_prompt_luaskill_catalog_cache,
         provider_request_telemetry::{
             ProviderRequestCompletedUsage, ProviderRequestTelemetryEvent,
             ProviderRequestTelemetryEventKind,

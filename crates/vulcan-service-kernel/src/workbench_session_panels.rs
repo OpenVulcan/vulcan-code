@@ -232,6 +232,12 @@ pub(crate) fn session_output_style_summary_from_runtime_state(
 /// 返回值
 /// A retained list delta when any addon panel should be shown.
 /// 当任意附属面板需要展示时返回保留列表增量。
+// A retained session delta combines independently optional addon snapshots without loading the transcript.
+// 保留会话增量组合独立可选的附加快照，不加载转录。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "A retained session delta combines independently optional addon snapshots without loading the transcript."
+)]
 pub(crate) fn session_addons_changed_delta_for_retained_list(
     conversation_id: String,
     session_goal: Option<SessionGoalSummary>,

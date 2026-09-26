@@ -243,6 +243,12 @@ pub(super) async fn require_source_acknowledgements(
 /// `document` 是规范驻留文档，或由其精确定位器加载的冷态文档。
 /// Returns owned evidence that remains valid while the caller awaits a separate source owner.
 /// 返回自有凭据，使调用方等待独立来源所有者期间仍保持有效。
+// Settlement evidence keeps deliveries, notifications, task acceptances and operation revision together.
+// 结算证据一并保留投递、通知、任务接纳及操作修订。
+#[expect(
+    clippy::type_complexity,
+    reason = "Settlement evidence keeps deliveries, notifications, task acceptances and operation revision together."
+)]
 fn terminal_settlement_evidence(
     document: &SessionDocument,
 ) -> (

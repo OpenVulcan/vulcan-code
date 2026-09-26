@@ -360,6 +360,12 @@ fn append_exact_v1_subagent_return(
 
 /// Applies one detached subagent runtime event to the shared WebUI transcript projection.
 /// 将单条分离子代理运行时事件应用到共享 WebUI 转录投影。
+// Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary.
+// 事件边界显式保留流所有权、代际守卫和独立借用的遥测状态。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary."
+)]
 pub(crate) async fn handle_webui_detached_subagent_task_event(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -495,6 +501,12 @@ pub(crate) fn clear_webui_detached_listener_execution_if_current(
 
 /// Applies one child execution stream event using the same projection functions as root WebUI turns.
 /// 使用与根 WebUI 回合相同的投影函数应用单条子执行流事件。
+// Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary.
+// 事件边界显式保留流所有权、代际守卫和独立借用的遥测状态。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Stream ownership, generation guards and independently borrowed telemetry remain explicit at this event boundary."
+)]
 pub(crate) async fn handle_webui_detached_child_execution_event(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,

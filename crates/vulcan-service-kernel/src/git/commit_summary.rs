@@ -523,6 +523,12 @@ fn estimate_git_commit_prompt_tokens(text: &str) -> usize {
 
 /// Runs the internal provider request that generates a Git commit message.
 /// 执行生成 Git 提交信息的内部 Provider 请求。
+// The summary route needs its own provider, model and reasoning selection.
+// 总结路由需要自身的供应商、模型和推理选择。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The summary route needs its own provider, model and reasoning selection."
+)]
 async fn run_git_commit_summary_model(
     state: SharedServiceBridgeState,
     agent_runtime: AgentRuntimeBridge,
