@@ -12,6 +12,10 @@
 
 ## 一、Ask 工具边界
 
+- 新的已完成 Ask 结果共用一份回答 Markdown，宿主仅保存 `ask.payload.format = markdown`。
+  题目仍取原调用参数，待回答和结算事实仍由 QuestionRuntime 持有；不通过解析 Markdown 恢复选择状态。
+  旧的结构化答案按历史契约读取。具体输出边界见 [会话工具结果契约](tool-result-presentation.md)。
+
 - 模型可见工具只注册 `ask`，不保留 `question` 别名。
 - `ask` 的 description、Schema 和参数说明使用英文。
 - 工具最终模型输出使用 Markdown。
