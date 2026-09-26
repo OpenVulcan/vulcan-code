@@ -1,7 +1,7 @@
 use super::HostRenderOptions;
 use crate::runtime_assets;
 use std::collections::HashMap;
-use std::fs;
+use std::sync::Arc;
 
 /// Load template text with skill-local templates taking precedence over shared fallback templates.
 /// 按“技能本地模板优先，共享模板兜底”的顺序加载模板文本。
@@ -9,7 +9,7 @@ pub(super) fn load_template_text(
     skill_name: Option<&str>,
     template_name: &str,
     render_options: &HostRenderOptions,
-) -> Option<String> {
+) -> Result<Option<Arc<str>>, String> {
     let mut candidates = Vec::new();
 
     if let Some(skill_name) = skill_name {
@@ -36,14 +36,18 @@ pub(super) fn load_template_text(
     }
 
     for candidate in candidates {
-        if candidate.exists()
-            && let Ok(text) = fs::read_to_string(&candidate)
-        {
-            return Some(text);
+        match super::template_cache::read(&candidate) {
+            Ok(text) => return Ok(Some(text)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to read tool-result template `{}`: {error}",
+                    candidate.display()
+                ));
+            }
         }
     }
-
-    None
+    Ok(None)
 }
 
 /// Replace placeholders in the original template without interpreting inserted values.
@@ -86,7 +90,7 @@ pub(super) const DEFAULT_PAGE_TEMPLATE: &str = "# LARGE RESULT POINTER\n\n## Raw
 
 #[cfg(test)]
 mod tests {
-    use super::render_template_text;
+    use super::{HostRenderOptions, load_template_text, render_template_text};
     use std::collections::HashMap;
 
     /// Inserted file paths and tool text must never be parsed as another template.
@@ -135,5 +139,41 @@ mod tests {
         assert_eq!(render_template_text("plain text", &context), "plain text");
         assert_eq!(render_template_text("", &context), "");
         assert_eq!(render_template_text("{{}}", &context), "{{}}");
+    }
+
+    #[test]
+    fn new_higher_priority_templates_override_cached_fallback_without_negative_caching() {
+        let root = tempfile::tempdir().expect("isolated template roots");
+        let skills = root.path().join("skills");
+        let shared = root.path().join("shared");
+        std::fs::create_dir_all(shared.join("overflow_templates")).expect("shared directory");
+        std::fs::write(shared.join("overflow_templates/page.md"), "fallback").expect("fallback");
+        let options = HostRenderOptions {
+            spill_root: None,
+            template_skill_roots: vec![skills.clone()],
+            template_resources_root: Some(shared),
+        };
+        assert_eq!(
+            load_template_text(Some("example"), "page.md", &options)
+                .expect("load")
+                .expect("fallback")
+                .as_ref(),
+            "fallback"
+        );
+        let local = skills.join("example/overflow_templates/page.md");
+        std::fs::create_dir_all(local.parent().expect("parent")).expect("local root");
+        std::fs::write(&local, "local").expect("local template");
+        assert_eq!(
+            load_template_text(Some("example"), "page.md", &options)
+                .expect("load")
+                .expect("local")
+                .as_ref(),
+            "local"
+        );
+        std::fs::write(&local, [0xff]).expect("invalid UTF-8");
+        assert!(
+            load_template_text(Some("example"), "page.md", &options).is_err(),
+            "an unreadable preferred template must not silently select a fallback"
+        );
     }
 }

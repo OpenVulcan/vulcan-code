@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod render_budget;
+mod template_cache;
 mod templates;
 
 /// A bounded preview, not an unbounded table describing an already oversized result.
@@ -257,8 +258,8 @@ fn render_truncate_text(
         return Ok(normalize_text(&output.content).into_owned());
     }
 
-    let template = load_template_text(skill_name, policy.template_name.as_str(), render_options)
-        .unwrap_or_else(|| "{{truncated_content}}\n...\n# {{truncate_notice}}".to_owned());
+    let template = load_template_text(skill_name, policy.template_name.as_str(), render_options)?
+        .unwrap_or_else(|| "{{truncated_content}}\n...\n# {{truncate_notice}}".into());
     let mut context = HashMap::from([("truncate_notice", DEFAULT_TRUNCATE_NOTICE.to_string())]);
     let normalized = normalize_text(&output.content);
     let prefix = render_budget::truncate(&normalized, &template, &context, tool_result_budget)?;
@@ -341,8 +342,8 @@ fn render_page_text(
     context.insert("optional_summary_section", String::new());
     context.insert("scope_advice_section", String::new());
 
-    let template = load_template_text(skill_name, policy.template_name.as_str(), render_options)
-        .unwrap_or_else(|| DEFAULT_PAGE_TEMPLATE.to_owned());
+    let template = load_template_text(skill_name, policy.template_name.as_str(), render_options)?
+        .unwrap_or_else(|| DEFAULT_PAGE_TEMPLATE.into());
     let mut rows = MAX_INLINE_CHUNK_ROWS.min(chunk_plan.chunks.len());
     let rendered = loop {
         context.insert(
