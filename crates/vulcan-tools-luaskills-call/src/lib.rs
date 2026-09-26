@@ -9,7 +9,7 @@ pub const CALL_LUASKILL_TOOL_NAME: &str = "call_luaskill";
 
 /// AI-facing usage guide bundled with this dispatcher protocol.
 /// 与当前调度器协议绑定的 AI 使用说明。
-pub const CALL_LUASKILL_USAGE_MD: &str = include_str!("../docs/call_luaskill.md");
+pub const CALL_LUASKILL_USAGE_MD: &str = vulcan_runtime_assets::CALL_LUASKILL_USAGE_MD;
 
 /// Lightweight target-entry view required for dispatcher argument restoration.
 /// 调度参数恢复所需的轻量目标入口视图。
@@ -272,6 +272,38 @@ mod tests {
         restore_call_luaskill_args_for_entry,
     };
     use serde_json::json;
+
+    /// The shipped guide is compiled from the canonical resource and its example follows the parser.
+    /// 发布指引从规范资源编译，其示例遵循实际解析器。
+    #[test]
+    fn bundled_usage_guide_example_matches_dispatch_protocol() {
+        // Git may check out Markdown as CRLF; fence parsing must be platform independent.
+        // Git 可能将 Markdown 检出为 CRLF；围栏解析必须独立于平台换行。
+        let guide = super::CALL_LUASKILL_USAGE_MD.replace("\r\n", "\n");
+        assert!(guide.contains("`luaskill`") && guide.contains("complete canonical"));
+        let example = guide
+            .split_once("```json\n")
+            .expect("documented JSON example")
+            .1
+            .split_once("\n```")
+            .expect("closed JSON example")
+            .0;
+        let request =
+            parse_call_luaskill_request(serde_json::from_str(example).expect("valid example JSON"))
+                .expect("documented request is accepted");
+        let schema = json!({"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}}});
+        let canonical_name = request.name.clone();
+        let restored = restore_call_luaskill_args_for_entry(
+            request.args,
+            LuaSkillCallEntryView {
+                canonical_name: &canonical_name,
+                input_schema: &schema,
+            },
+        )
+        .expect("documented types are restored");
+        assert_eq!(restored["limit"], 4);
+        assert_eq!(restored["query"], "source ownership");
+    }
 
     /// Verifies the dispatcher resolves entries by complete canonical tool names only.
     /// 验证调度器只通过完整 canonical 工具名解析入口。

@@ -12,4 +12,5 @@ workspace = true
 
 [dependencies]
 serde_json.workspace = true
+vulcan-runtime-assets = { path = "../vulcan-runtime-assets" }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
