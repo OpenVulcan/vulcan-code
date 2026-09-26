@@ -55,7 +55,7 @@ import { ConversationTurnSeatList } from "@/components/conversation/conversation
 import { ConversationPromptNavigator } from "@/components/conversation/conversation-prompt-navigator";
 import {
   CONVERSATION_PROMPT_NAVIGATOR_MIN_ENTRIES,
-  projectConversationPromptNavigatorEntries,
+  createConversationPromptNavigatorProjector,
 } from "@/components/conversation/conversation-prompt-navigator-model";
 import {
   ConversationTimelineProjectionStore,
@@ -302,9 +302,12 @@ export function ConversationWorkspace(props: {
   const promptNavigatorEnabled = Boolean(props.onRevealPromptAnchor);
   // promptNavigatorEntries lists every rendered user prompt; surfaces without a navigator skip the projection.
   // promptNavigatorEntries 列出全部已渲染用户提示词；未启用导航的界面跳过该投影。
+  // promptNavigatorProjector reuses unchanged entries, so streaming one Turn keeps the entry array identity stable.
+  // promptNavigatorProjector 复用未变化的条目，使单个 Turn 流式输出时条目数组身份保持稳定。
+  const promptNavigatorProjector = React.useMemo(createConversationPromptNavigatorProjector, [timelineCacheScopeKey]);
   const promptNavigatorEntries = React.useMemo(
-    () => promptNavigatorEnabled ? projectConversationPromptNavigatorEntries(turnGroups) : [],
-    [promptNavigatorEnabled, turnGroups],
+    () => promptNavigatorEnabled ? promptNavigatorProjector(turnGroups) : [],
+    [promptNavigatorEnabled, promptNavigatorProjector, turnGroups],
   );
   // timelineProjectionLocaleRef forces complete row replacement only when localized projection content changes.
   // timelineProjectionLocaleRef 仅在本地化投影内容变化时强制完整替换行。

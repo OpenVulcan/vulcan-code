@@ -40,8 +40,18 @@ export interface UseChatAreaPlanActionsOptions {
 
 // useChatAreaPlanActions builds stable handlers for execute/suggest/cancel Plan artifact actions.
 // useChatAreaPlanActions 为执行、建议和取消计划 artifact 动作构建稳定处理器。
-export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
+export function useChatAreaPlanActions(currentOptions: UseChatAreaPlanActionsOptions) {
+  // latestOptions lets the handlers read the committed options while keeping one identity for the whole mount; the
+  // options object is rebuilt on every ChatArea render, so depending on it would re-render every transcript row.
+  // latestOptions 让处理器读取已提交的选项并在整个挂载期间保持同一身份；选项对象在每次 ChatArea 渲染时重建，
+  // 依赖它会使每个转录行重新渲染。
+  const latestOptions = React.useRef(currentOptions);
+  React.useLayoutEffect(() => {
+    latestOptions.current = currentOptions;
+  });
+
   const handlePlanArtifactExecute = React.useCallback(async (payload: PlanArtifactActionPayload) => {
+    const options = latestOptions.current;
     if (!options.conversationId) {
       return;
     }
@@ -64,9 +74,10 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
       modelSelection: null,
       sessionSettings: null,
     });
-  }, [options]);
+  }, []);
 
   const handlePlanArtifactSuggest = React.useCallback(async (payload: PlanArtifactActionPayload) => {
+    const options = latestOptions.current;
     if (!options.conversationId) {
       return;
     }
@@ -88,11 +99,11 @@ export function useChatAreaPlanActions(options: UseChatAreaPlanActionsOptions) {
       modelSelection: null,
       sessionSettings: null,
     });
-  }, [options]);
+  }, []);
 
   const handlePlanArtifactCancel = React.useCallback(async () => {
-    await options.onSetSessionPlanMode(true);
-  }, [options]);
+    await latestOptions.current.onSetSessionPlanMode(true);
+  }, []);
 
   return {
     handlePlanArtifactCancel,

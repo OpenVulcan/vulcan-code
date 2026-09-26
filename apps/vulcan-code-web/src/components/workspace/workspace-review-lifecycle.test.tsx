@@ -13,7 +13,10 @@ import { WorkspaceReviewPanelHost } from "./workspace-review-panel-host";
 // 捕获真实宿主边界，同时保留全部项目/仓库副作用及动作归属逻辑。
 let panel: React.ComponentProps<typeof DiffReviewPanel>;
 vi.mock("@/diff/diff-review-panel", () => ({ DiffReviewPanel: (props: React.ComponentProps<typeof DiffReviewPanel>) => { panel = props; return null; } }));
-vi.mock("@/state/conversation-event-window-react", () => ({ useSelectedConversationEventWindowSnapshot: () => ({ owner: null }) }));
+vi.mock("@/state/conversation-event-window-react", () => ({
+  conversationSelectionEqual: Object.is,
+  useSelectedConversationEventWindowSelector: (selector: (snapshot: { owner: null }) => unknown) => selector({ owner: null }),
+}));
 vi.mock("@/service/workbench-snapshot-service", () => ({ loadWorkspaceGitCatalog: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 // The transport-free parser uses the same production parsing function without requiring a browser Worker.

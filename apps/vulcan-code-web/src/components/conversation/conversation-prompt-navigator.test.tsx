@@ -9,6 +9,7 @@ import { ConversationPromptNavigator } from "./conversation-prompt-navigator";
 import {
   CONVERSATION_PROMPT_NAVIGATOR_PREVIEW_MAX_CHARS,
   CONVERSATION_PROMPT_NAVIGATOR_TITLE_MAX_CHARS,
+  createConversationPromptNavigatorProjector,
   markdownToNavigatorPreview,
   projectConversationPromptNavigatorEntries,
   resolveActivePromptNavigatorIndex,
@@ -99,6 +100,30 @@ describe("projectConversationPromptNavigatorEntries", () => {
 
   it("drops fenced code delimiters from reply previews", () => {
     expect(markdownToNavigatorPreview("运行：\n```bash\nls\n```\n完成")).toBe("运行：\nls\n完成");
+  });
+});
+
+describe("createConversationPromptNavigatorProjector", () => {
+  // Unchanged Turns keep their entry and the whole array identity; a changed Turn rebuilds only its own entry.
+  // 未变化的 Turn 保留其条目与整个数组身份；变化的 Turn 只重建自身条目。
+  it("reuses entries whose source text is unchanged", () => {
+    const project = createConversationPromptNavigatorProjector();
+    const settled: ConversationTurnProjection = { key: "turn-a", items: [userItem("u1", "修复"), finalReplyItem("a1", "完成")] };
+    const running: ConversationTurnProjection = { key: "turn-b", items: [userItem("u2", "继续"), runningProcessItem("p2")] };
+
+    const first = project([settled, running]);
+    // Fresh Turn objects with identical text model a streaming update that did not touch these Turns.
+    // 文本相同的新 Turn 对象模拟未触及这些 Turn 的流式更新。
+    const second = project([{ ...settled, items: [...settled.items] }, { ...running, items: [...running.items] }]);
+    expect(second).toBe(first);
+
+    const third = project([settled, { key: "turn-b", items: [userItem("u2", "继续"), finalReplyItem("a2", "好了")] }]);
+    expect(third).not.toBe(first);
+    expect(third.find((entry) => entry.rowKey === "turn-a")).toBe(first.find((entry) => entry.rowKey === "turn-a"));
+    expect(third.find((entry) => entry.rowKey === "turn-b")).toMatchObject({ replyPreview: "好了", running: false });
+
+    const fourth = project([settled]);
+    expect(fourth.map((entry) => entry.rowKey)).toEqual(["turn-a"]);
   });
 });
 

@@ -59,9 +59,16 @@ function collectTurnShells(scrollElement: HTMLElement): Map<string, HTMLElement>
 // 参数：props 包含有序条目、转录滚动视口与控制器定位回调。
 // Returns: the navigator overlay.
 // 返回值：导航覆盖层。
-export function ConversationPromptNavigator(props: ConversationPromptNavigatorProps) {
+export const ConversationPromptNavigator = React.memo(function ConversationPromptNavigator(props: ConversationPromptNavigatorProps) {
   const { t } = useI18n();
   const { entries, onRevealAnchor, scrollRef } = props;
+  // entriesRef lets scroll measurement read the newest entries without resubscribing on content-only updates.
+  // entriesRef 让滚动测量读取最新条目，而不必在纯内容更新时重新订阅。
+  const entriesRef = React.useRef(entries);
+  entriesRef.current = entries;
+  // rowKeySignature changes only when prompts are added, removed, or reordered, which is when positions must be re-measured.
+  // rowKeySignature 仅在提示词增删或重排时变化，此时才需要重新测量位置。
+  const rowKeySignature = entries.map((entry) => entry.rowKey).join("\n");
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const listRef = React.useRef<HTMLOListElement | null>(null);
   const cardRef = React.useRef<HTMLDivElement | null>(null);
@@ -87,12 +94,13 @@ export function ConversationPromptNavigator(props: ConversationPromptNavigatorPr
       }
       const shells = collectTurnShells(element);
       const activeLine = element.getBoundingClientRect().top + element.clientHeight * CONVERSATION_PROMPT_NAVIGATOR_ACTIVE_LINE_RATIO;
+      const current = entriesRef.current;
       const index = resolveActivePromptNavigatorIndex(
-        entries.length,
-        (position) => shells.get(entries[position].rowKey)?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY,
+        current.length,
+        (position) => shells.get(current[position].rowKey)?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY,
         activeLine,
       );
-      setActiveKey(index >= 0 ? entries[index].rowKey : null);
+      setActiveKey(index >= 0 ? current[index].rowKey : null);
     };
     const schedule = (): void => {
       if (pinnedKeyRef.current) {
@@ -121,7 +129,7 @@ export function ConversationPromptNavigator(props: ConversationPromptNavigatorPr
         window.cancelAnimationFrame(frame);
       }
     };
-  }, [entries, scrollRef]);
+  }, [rowKeySignature, scrollRef]);
 
   // Keep the current tick inside the rail's own hidden-scrollbar viewport.
   // 让当前刻度保持在轨道自身无滚动条视口之内。
@@ -141,7 +149,7 @@ export function ConversationPromptNavigator(props: ConversationPromptNavigatorPr
     if (itemTop < list.scrollTop || itemBottom > list.scrollTop + list.clientHeight) {
       list.scrollTop = itemTop - (list.clientHeight - item.offsetHeight) / 2;
     }
-  }, [activeKey, entries]);
+  }, [activeKey, rowKeySignature]);
 
   // Clamp the preview card inside the overlay after its content height is known.
   // 在卡片内容高度确定后将预览卡片约束在覆盖层内部。
@@ -244,4 +252,4 @@ export function ConversationPromptNavigator(props: ConversationPromptNavigatorPr
       ) : null}
     </div>
   );
-}
+});

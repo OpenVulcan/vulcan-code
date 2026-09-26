@@ -80,6 +80,26 @@ function OwnedCommandsProbe(props: {
   return <span data-command-surface="selected" />;
 }
 
+/** Frame scheduler driven explicitly by the test instead of animation frames.
+ * 由测试显式驱动、而非依赖动画帧的帧调度器。 */
+function manualFrameScheduler() {
+  const queued = new Set<() => void>();
+  return {
+    schedule: (flush: () => void) => {
+      queued.add(flush);
+      return () => {
+        queued.delete(flush);
+      };
+    },
+    pending: () => queued.size,
+    flush: () => {
+      const due = Array.from(queued);
+      queued.clear();
+      for (const flush of due) flush();
+    },
+  };
+}
+
 describe("conversation event window React external store", () => {
   it("binds stable snapshot and idempotent unsubscribe callbacks", () => {
     // snapshot is the exact immutable object returned by every read before publication.
@@ -109,7 +129,8 @@ describe("conversation event window React external store", () => {
     };
     // externalStore freezes the callback identities consumed by useSyncExternalStore.
     // externalStore 固定 useSyncExternalStore 消费的回调身份。
-    const externalStore = createConversationEventWindowExternalStore(readable);
+    const frames = manualFrameScheduler();
+    const externalStore = createConversationEventWindowExternalStore(readable, frames.schedule);
     // listener records notifications while the subscription remains active.
     // listener 在订阅有效期间记录通知。
     const listener = vi.fn();
@@ -122,12 +143,51 @@ describe("conversation event window React external store", () => {
     expect(externalStore.getCommands()).toBe(commands);
     expect(externalStore.getStatus()).toEqual(readyStatus());
     for (const activeListener of listenerSet) activeListener();
+    frames.flush();
     expect(listener).toHaveBeenCalledTimes(1);
 
     unsubscribe();
     unsubscribe();
     for (const activeListener of listenerSet) activeListener();
+    frames.flush();
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(listenerSet.size).toBe(0);
+  });
+
+  it("publishes only the latest snapshot once per frame during a burst", () => {
+    // current is the controller-side snapshot advanced by every simulated streaming delta.
+    // current 是每个模拟流式增量推进的控制器侧快照。
+    let current = emptySnapshot(1);
+    const listenerSet = new Set<() => void>();
+    const readable: ConversationEventWindowOwnedStore = {
+      snapshot: () => current,
+      subscribe: (listener) => {
+        listenerSet.add(listener);
+        return () => listenerSet.delete(listener);
+      },
+      commands: () => ({ rehydrate: vi.fn(async () => true), prependOlder: vi.fn(async () => true) }),
+      status: readyStatus,
+    };
+    const frames = manualFrameScheduler();
+    const externalStore = createConversationEventWindowExternalStore(readable, frames.schedule);
+    const listener = vi.fn();
+    externalStore.subscribe(listener);
+    const first = externalStore.getSnapshot();
+
+    for (let revision = 2; revision <= 6; revision += 1) {
+      current = emptySnapshot(revision);
+      for (const activeListener of listenerSet) activeListener();
+    }
+
+    // Until the frame flushes, readers keep the previously published snapshot.
+    // 帧刷新前，读取方保持上一份已发布快照。
+    expect(listener).not.toHaveBeenCalled();
+    expect(externalStore.getSnapshot()).toBe(first);
+    expect(frames.pending()).toBe(1);
+
+    frames.flush();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(externalStore.getSnapshot()).toBe(current);
   });
 
   it("provides the authoritative server snapshot to the React bridge", () => {

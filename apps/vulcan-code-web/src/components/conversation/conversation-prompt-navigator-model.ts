@@ -43,33 +43,85 @@ export interface ConversationPromptNavigatorEntry {
 // 返回值：按转录顺序为每个以用户提示词开头的 Turn 返回一个条目。
 export function projectConversationPromptNavigatorEntries(
   turns: readonly ConversationTurnProjection[],
-): ConversationPromptNavigatorEntry[] {
-  const entries: ConversationPromptNavigatorEntry[] = [];
-  for (const turn of turns) {
-    // first is the Turn's leading row; only a user row makes the Turn a prompt target.
-    // first 是 Turn 的首行；只有用户行才使该 Turn 成为提示词目标。
-    const first = turn.items[0];
-    if (!first || first.kind !== "item" || first.item.role !== "user") {
-      continue;
+): readonly ConversationPromptNavigatorEntry[] {
+  return createConversationPromptNavigatorProjector()(turns);
+}
+
+// ConversationPromptNavigatorProjector projects entries while reusing every entry whose source text is unchanged.
+// ConversationPromptNavigatorProjector 投影条目，并复用源文本未变化的每个条目。
+export type ConversationPromptNavigatorProjector = (
+  turns: readonly ConversationTurnProjection[],
+) => readonly ConversationPromptNavigatorEntry[];
+
+// PromptNavigatorEntrySource records the exact inputs one cached entry was derived from.
+// PromptNavigatorEntrySource 记录单个缓存条目所依据的精确输入。
+interface PromptNavigatorEntrySource {
+  // Raw user prompt body.
+  // 原始用户提示词正文。
+  prompt: string;
+  // Raw final reply text, or null before a final reply exists.
+  // 原始最终回复文本；最终回复出现前为 null。
+  reply: string | null;
+  // Whether the Turn was processing.
+  // Turn 是否仍在处理中。
+  running: boolean;
+  // Entry derived from these inputs.
+  // 由这些输入派生的条目。
+  entry: ConversationPromptNavigatorEntry;
+}
+
+// createConversationPromptNavigatorProjector creates a projector for one transcript surface.
+// createConversationPromptNavigatorProjector 为单个转录界面创建投影器。
+// Returns: a projector that rebuilds only changed entries and returns the previous array when nothing changed,
+// so streaming updates of one Turn neither re-run text cleanup for every Turn nor re-trigger rail measurement.
+// 返回值：只重建变化条目、且无变化时返回上一数组的投影器，使单个 Turn 的流式更新既不对每个 Turn 重跑文本
+// 清理，也不重新触发轨道测量。
+export function createConversationPromptNavigatorProjector(): ConversationPromptNavigatorProjector {
+  let sources = new Map<string, PromptNavigatorEntrySource>();
+  let previous: readonly ConversationPromptNavigatorEntry[] = [];
+  return (turns) => {
+    const nextSources = new Map<string, PromptNavigatorEntrySource>();
+    const entries: ConversationPromptNavigatorEntry[] = [];
+    let changed = false;
+    for (const turn of turns) {
+      // first is the Turn's leading row; only a user row makes the Turn a prompt target.
+      // first 是 Turn 的首行；只有用户行才使该 Turn 成为提示词目标。
+      const first = turn.items[0];
+      if (!first || first.kind !== "item" || first.item.role !== "user") {
+        continue;
+      }
+      // finalReply is the Turn's final assistant answer when one has been produced.
+      // finalReply 是当前 Turn 已产生的最终助手回答。
+      const finalReply = turn.items.find(
+        (item): item is Extract<ConversationTimelineItem, { kind: "item" }> => item.kind === "item" && item.finalAssistantOutput === true,
+      );
+      const prompt = first.item.userMessage?.body ?? "";
+      const reply = finalReply ? finalAssistantOutputText(finalReply.item) : null;
+      const running = turn.items.some((item) => item.kind === "process" && item.process.running);
+      const cached = sources.get(turn.key);
+      const entry = cached && cached.prompt === prompt && cached.reply === reply && cached.running === running
+        ? cached.entry
+        : {
+            rowKey: turn.key,
+            prompt: truncateNavigatorText(
+              collapseNavigatorWhitespace(stripUserPromptHeading(prompt)),
+              CONVERSATION_PROMPT_NAVIGATOR_TITLE_MAX_CHARS,
+            ),
+            replyPreview: reply === null
+              ? ""
+              : truncateNavigatorText(markdownToNavigatorPreview(reply), CONVERSATION_PROMPT_NAVIGATOR_PREVIEW_MAX_CHARS),
+            running,
+          };
+      nextSources.set(turn.key, { prompt, reply, running, entry });
+      changed ||= previous[entries.length] !== entry;
+      entries.push(entry);
     }
-    // finalReply is the Turn's final assistant answer when one has been produced.
-    // finalReply 是当前 Turn 已产生的最终助手回答。
-    const finalReply = turn.items.find(
-      (item): item is Extract<ConversationTimelineItem, { kind: "item" }> => item.kind === "item" && item.finalAssistantOutput === true,
-    );
-    entries.push({
-      rowKey: turn.key,
-      prompt: truncateNavigatorText(
-        collapseNavigatorWhitespace(stripUserPromptHeading(first.item.userMessage?.body ?? "")),
-        CONVERSATION_PROMPT_NAVIGATOR_TITLE_MAX_CHARS,
-      ),
-      replyPreview: finalReply
-        ? truncateNavigatorText(markdownToNavigatorPreview(finalAssistantOutputText(finalReply.item)), CONVERSATION_PROMPT_NAVIGATOR_PREVIEW_MAX_CHARS)
-        : "",
-      running: turn.items.some((item) => item.kind === "process" && item.process.running),
-    });
-  }
-  return entries;
+    sources = nextSources;
+    if (changed || entries.length !== previous.length) {
+      previous = entries;
+    }
+    return previous;
+  };
 }
 
 // resolveActivePromptNavigatorIndex finds the last prompt whose top edge has passed the active line.

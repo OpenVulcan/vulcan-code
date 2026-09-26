@@ -146,11 +146,13 @@ export function useConversationSessionResourcesV1(
     return client.contentUrl(sessionId, currentResourceId);
   }, [client, sessionId]);
 
-  return {
+  // The catalog keeps its identity until a field changes, so presentation caches keyed on it survive re-renders.
+  // 目录在字段变化前保持身份不变，使以其为键的展示缓存能跨重新渲染保留。
+  return React.useMemo(() => ({
     sessionId,
     status: effectiveState.status,
     resources: effectiveState.resources,
     error: effectiveState.error,
     contentUrl,
-  };
+  }), [contentUrl, effectiveState.error, effectiveState.resources, effectiveState.status, sessionId]);
 }

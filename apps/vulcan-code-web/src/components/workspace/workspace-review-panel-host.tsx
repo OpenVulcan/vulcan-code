@@ -34,7 +34,8 @@ import type {
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import { loadWorkspaceGitCatalog } from "@/service/workbench-snapshot-service";
-import { useSelectedConversationEventWindowSnapshot } from "@/state/conversation-event-window-react";
+import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
+import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import { useWorkspaceReviewRequestOwnership } from "@/components/workspace/workspace-review-panel-request-ownership";
 import type { WorkbenchSnapshot } from "@/types";
 
@@ -168,17 +169,16 @@ export function WorkspaceReviewPanelHost(props: {
   // t translates the review panel shell labels.
   // t 翻译审核面板外壳标签。
   const { t } = useI18n();
-  // conversationEventWindowSnapshot is the atomically published selected-session V1 authority.
-  // conversationEventWindowSnapshot 是原子发布的选中会话 V1 权威快照。
-  const conversationEventWindowSnapshot = useSelectedConversationEventWindowSnapshot();
-  // conversationChangeSetSelection is empty while the external-store owner belongs to another route.
-  // conversationChangeSetSelection 在 external-store owner 属于其他路由时为空。
-  const conversationChangeSetSelection = React.useMemo(() => {
-    if (conversationEventWindowSnapshot.owner?.session_id !== props.selectedConversationId) {
-      return null;
-    }
-    return selectLatestWorkspaceReviewChangeSetV1(conversationEventWindowSnapshot);
-  }, [conversationEventWindowSnapshot, props.selectedConversationId]);
+  // conversationChangeSetSelection is read from the atomically published selected-session V1 authority and stays
+  // empty while the external-store owner belongs to another route; it re-renders only when the selection changes.
+  // conversationChangeSetSelection 从原子发布的选中会话 V1 权威读取，在 external-store owner 属于其他路由时为空；
+  // 仅在选择结果变化时重新渲染。
+  const conversationChangeSetSelection = useSelectedConversationEventWindowSelector(React.useCallback(
+    (snapshot: ConversationEventWindowControllerSnapshot) => snapshot.owner?.session_id === props.selectedConversationId
+      ? selectLatestWorkspaceReviewChangeSetV1(snapshot)
+      : null,
+    [props.selectedConversationId],
+  ), conversationSelectionEqual);
   // conversationReviewSnapshot projects the typed persistent ChangeSet without raw-diff parsing.
   // conversationReviewSnapshot 无需解析 raw diff，直接投影强类型持久化 ChangeSet。
   const conversationReviewSnapshot = React.useMemo(

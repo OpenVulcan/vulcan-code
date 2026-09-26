@@ -8,10 +8,11 @@ import { ThinkingPopupContext } from "./thinking-preview";
 import type { GeneratedMediaAttachment, GeneratedMediaKind } from "@/components/media/generated-media";
 import {
   completedTurnEndSeqForPresentation,
-  projectConversationBranchPresentationV1,
+  createConversationBranchPresentationProjectorV1,
+  NO_REQUEST_DRAFTS,
   rootInputPresentationMetadata,
 } from "@/components/conversation/conversation-branch-presentation-v1";
-import { projectConversationRenderItems } from "@/components/conversation/conversation-transcript";
+import { createConversationRenderItemsProjector } from "@/components/conversation/conversation-transcript";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
 import type { ConversationSurfaceExpandedState } from "@/components/conversation/conversation-layout-restore";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
@@ -191,26 +192,45 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   );
   // Navigation remains host-owned; the UI never decides whether an agent question should be cancelled.
   // 导航仍归宿主所有；界面不决定是否撤销代理问题。
+  // subagentNames keeps its identity while streaming deltas leave every name unchanged.
+  // subagentNames 在流式增量未改变任何名称时保持身份。
+  const subagentNames = useEqualValue(
+    React.useMemo(() => conversationV1SubagentNames(events, collaborationRoutes?.subagentNames), [collaborationRoutes, events]),
+    sameMapEntries,
+  );
   const collaborationActions = React.useMemo(() => ({
     onOpenSession: collaborationRoutes?.onOpenSession,
     availableSessionIds: collaborationRoutes?.availableSessionIds,
-    subagentNames: conversationV1SubagentNames(events, collaborationRoutes?.subagentNames),
-  }), [collaborationRoutes, events]);
+    subagentNames,
+  }), [collaborationRoutes, subagentNames]);
+  // collaborationEvents is the only input of the collaboration state; it keeps its identity while deltas touch
+  // other events, so the context consumers do not re-render per streaming delta.
+  // collaborationEvents 是协作状态的唯一输入；增量只触及其他事件时它保持身份，使上下文消费者不会随每个流式增量
+  // 重新渲染。
+  const collaborationEvents = useEqualValue(
+    React.useMemo(() => events.filter((summary) => summary.event.kind === "collaboration"), [events]),
+    sameReferences,
+  );
   // Latest facts update the original cards without creating independent delivery rows.
   // 最新事实更新原卡片，不创建独立投递行。
-  const collaborationState = React.useMemo(() => projectConversationCollaborationState(events), [events]);
+  const collaborationState = React.useMemo(() => projectConversationCollaborationState(collaborationEvents), [collaborationEvents]);
   // resourceIds preserves first occurrence order across typed user and generated-resource references.
   // resourceIds 保留强类型用户资源与生成资源引用的首次出现顺序。
   const resourceIds = React.useMemo(() => collectConversationResourceIdsV1(events), [events]);
   // resources resolves only project-level ResourceIds owned by this exact session.
   // resources 仅解析由当前精确会话拥有的项目级 ResourceId。
   const resources = useConversationSessionResourcesV1(ownerReady ? props.sessionId : null, resourceIds);
+  // projectBranchPresentation keeps per-event projections across snapshots of this surface: it projects everything
+  // on first open or after the session changes, then re-projects only the events each streaming update replaced.
+  // projectBranchPresentation 在本界面的各次快照之间保留逐事件投影：首次打开或会话变化后全量投影，之后每次流式
+  // 更新只重新投影被替换的事件。
+  const [projectBranchPresentation] = React.useState(createConversationBranchPresentationProjectorV1);
   // canonicalPresentation is a pure display projection and never becomes storage or RPC authority.
   // canonicalPresentation 是纯展示投影，绝不成为存储或 RPC 权威。
   const canonicalPresentation = React.useMemo(
-    () => projectConversationBranchPresentationV1(props.sessionId, events, resources, t, props.providers,
-      props.sessionRunning ? requestDrafts : []),
-    [events, props.sessionId, props.providers, props.sessionRunning, requestDrafts, resources, t],
+    () => projectBranchPresentation(props.sessionId, events, resources, t, props.providers,
+      props.sessionRunning ? requestDrafts : NO_REQUEST_DRAFTS),
+    [events, projectBranchPresentation, props.sessionId, props.providers, props.sessionRunning, requestDrafts, resources, t],
   );
   // messages appends only the process-local optimistic bubble after canonical V1 facts.
   // messages 仅在规范 V1 事实之后追加进程内乐观气泡。
@@ -223,20 +243,28 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   }, [canonicalPresentation.messages, props.optimisticUserInput, props.sessionId]);
   // renderItems reuses the exact branch parser only when the optimistic overlay changes the display list.
   // renderItems 仅在乐观层改变展示列表时复用精确的分支解析器。
+  // projectOptimisticRenderItems reuses parsed canonical messages while the optimistic bubble is visible.
+  // projectOptimisticRenderItems 在乐观气泡可见期间复用已解析的规范消息。
+  const projectOptimisticRenderItems = React.useMemo(() => createConversationRenderItemsProjector(t), [t]);
   const renderItems = React.useMemo(
     () => props.optimisticUserInput
-      ? projectConversationRenderItems(messages, t)
+      ? projectOptimisticRenderItems(messages)
       : canonicalPresentation.renderItems,
-    [canonicalPresentation.renderItems, messages, props.optimisticUserInput, t],
+    [canonicalPresentation.renderItems, messages, projectOptimisticRenderItems, props.optimisticUserInput],
   );
   // hiddenThinkingBlockIds restores the branch inline/popup filtering contract.
   // hiddenThinkingBlockIds 恢复分支的内联与弹窗过滤契约。
-  const hiddenThinkingBlockIds = React.useMemo(
-    () => hiddenThinkingBlockIdsForDisplayMode(
-      props.reasoningDisplayMode,
-      renderItems,
+  // It keeps its identity while the hidden set is unchanged, because every transcript row re-renders when it changes.
+  // 隐藏集合未变化时保持身份，因为它一变化每个转录行都会重新渲染。
+  const hiddenThinkingBlockIds = useEqualValue(
+    React.useMemo(
+      () => hiddenThinkingBlockIdsForDisplayMode(
+        props.reasoningDisplayMode,
+        renderItems,
+      ),
+      [props.reasoningDisplayMode, renderItems],
     ),
-    [props.reasoningDisplayMode, renderItems],
+    sameSetMembers,
   );
 
   React.useEffect(() => {
@@ -275,6 +303,13 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     });
   }, [props.onRootInputGenerationAction, props.sessionRunning]);
 
+  // canonicalMessages lets the fork action read the committed messages without changing identity per delta.
+  // canonicalMessages 让分叉操作读取已提交消息，且不随每个增量改变身份。
+  const canonicalMessages = React.useRef(canonicalPresentation.messages);
+  React.useLayoutEffect(() => {
+    canonicalMessages.current = canonicalPresentation.messages;
+  }, [canonicalPresentation.messages]);
+
   // handleForkConversation maps the Turn-end fork icon to the same Turn's terminal statistics seq.
   // handleForkConversation 把 Turn 末尾分叉图标映射到同一回合的终态统计 seq。
   const handleForkConversation = React.useCallback((
@@ -282,9 +317,10 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     anchorMessageId?: string,
   ): boolean => {
     if (!anchorMessageId || props.sessionRunning) return false;
-    const sourceMessage = canonicalPresentation.messages.find((message) => message.id === anchorMessageId);
+    const messages = canonicalMessages.current;
+    const sourceMessage = messages.find((message) => message.id === anchorMessageId);
     const sourceTurnEndSeq = completedTurnEndSeqForPresentation(
-      canonicalPresentation.messages,
+      messages,
       sourceMessage,
     );
     if (sourceTurnEndSeq === null || !props.onRootInputGenerationAction) return false;
@@ -293,7 +329,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       sourceTurnEndSeq,
     });
     return true;
-  }, [canonicalPresentation.messages, props.onRootInputGenerationAction, props.sessionRunning]);
+  }, [props.onRootInputGenerationAction, props.sessionRunning]);
 
   return (
     <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "popup_only"}>
@@ -315,7 +351,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       onExpandedStateChange={props.onExpandedStateChange}
       onExtractGeneratedMediaAttachments={emptyGeneratedMediaAttachmentsV1}
       onForkConversation={props.onRootInputGenerationAction ? handleForkConversation : undefined}
-      onLoadMoreHistory={async () => handleLoadMoreHistory()}
+      onLoadMoreHistory={handleLoadMoreHistory}
       onLoadToolDetail={unavailableToolDetailV1}
       onOpenSubagentPanel={props.onOpenSubagentPanel}
       onPlanArtifactCancel={props.onPlanArtifactCancel}
@@ -426,4 +462,36 @@ async function unavailableToolDetailV1(): Promise<ToolDetailPayload | null> {
 // emptyGeneratedMediaAttachmentsV1 拒绝隐藏详情媒体回退；V1 生成资源是内联事实。
 function emptyGeneratedMediaAttachmentsV1(): GeneratedMediaAttachment[] {
   return [];
+}
+
+// useEqualValue returns the previously returned value while isEqual holds, so derived collections keep one identity.
+// useEqualValue 在 isEqual 成立期间返回上一次的值，使派生集合保持同一身份。
+// Parameters: value is the newly derived value; isEqual decides whether it matches the previous one.
+// 参数：value 是新派生的值；isEqual 判断它是否与上一个值相同。
+function useEqualValue<T>(value: T, isEqual: (left: T, right: T) => boolean): T {
+  const [memo] = React.useState(() => ({ value }));
+  if (!Object.is(memo.value, value) && !isEqual(memo.value, value)) memo.value = value;
+  return memo.value;
+}
+
+// sameReferences reports whether two lists hold the same objects in the same order.
+// sameReferences 判断两个列表是否按相同顺序持有相同对象。
+function sameReferences<T>(left: readonly T[], right: readonly T[]): boolean {
+  return left.length === right.length && left.every((item, index) => Object.is(item, right[index]));
+}
+
+// sameSetMembers reports whether two sets hold the same members.
+// sameSetMembers 判断两个集合是否持有相同成员。
+function sameSetMembers<T>(left: ReadonlySet<T>, right: ReadonlySet<T>): boolean {
+  if (left.size !== right.size) return false;
+  for (const member of left) if (!right.has(member)) return false;
+  return true;
+}
+
+// sameMapEntries reports whether two maps hold the same keys with identical values.
+// sameMapEntries 判断两个映射是否持有相同键及同一值。
+function sameMapEntries<K, V>(left: ReadonlyMap<K, V>, right: ReadonlyMap<K, V>): boolean {
+  if (left.size !== right.size) return false;
+  for (const [key, value] of left) if (!right.has(key) || !Object.is(right.get(key), value)) return false;
+  return true;
 }

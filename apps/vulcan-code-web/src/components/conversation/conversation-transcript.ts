@@ -26,6 +26,110 @@ export function projectConversationRenderItems(
   // 用于本地化元数据摘要的可选翻译函数。
   t?: (key: TranslationKey) => string,
 ): ConversationRenderItem[] {
+  return projectConversationRenderItemsWith(messages, (message, projectionMessage) => sourceBoundConversationBlocks(message, projectionMessage, t));
+}
+
+// ConversationRenderItemsProjector projects render items for one transcript surface across successive updates.
+// ConversationRenderItemsProjector 为单个转录界面在连续更新之间投影渲染项。
+export type ConversationRenderItemsProjector = (messages: ConversationMessage[]) => ConversationRenderItem[];
+
+// ParsedConversationMessageBlocks records the blocks parsed for one exact message under one projection id.
+// ParsedConversationMessageBlocks 记录单条精确消息在某个投影标识下解析出的块。
+interface ParsedConversationMessageBlocks {
+  // Projection id the blocks were parsed under; duplicate-id rewriting can change it between updates.
+  // 解析这些块时使用的投影标识；重复标识改写可能使其在更新之间变化。
+  projectionId: string;
+  // Source-bound blocks parsed from the message.
+  // 从消息解析出的绑定来源块。
+  blocks: ConversationBlock[];
+}
+
+// createConversationRenderItemsProjector creates an incremental equivalent of projectConversationRenderItems.
+// createConversationRenderItemsProjector 创建 projectConversationRenderItems 的增量等价实现。
+// Parameters: t is the translator fixed for the projector's lifetime; a new translator needs a new projector.
+// 参数：t 是投影器生命周期内固定的翻译函数；翻译函数变化时需要新投影器。
+// Returns: a projector whose output always equals the full projection, while parsing only messages it has not seen
+// and returning the previous row object (and the previous array when nothing changed) for every unchanged row.
+// 返回值：输出始终等于完整投影的投影器；它只解析未见过的消息，并为每个未变化的行返回上一行对象（全部未变化时
+// 返回上一数组）。
+export function createConversationRenderItemsProjector(t?: (key: TranslationKey) => string): ConversationRenderItemsProjector {
+  // parsed is keyed by the immutable message object, so a streaming update re-parses only the message it replaced.
+  // parsed 以不可变消息对象为键，因此一次流式更新只重新解析被替换的消息。
+  const parsed = new WeakMap<ConversationMessage, ParsedConversationMessageBlocks>();
+  let previousByKey = new Map<string, ConversationRenderItem>();
+  let previous: ConversationRenderItem[] = [];
+  return (messages) => {
+    const items = projectConversationRenderItemsWith(messages, (message, projectionMessage) => {
+      const cached = parsed.get(message);
+      if (cached && cached.projectionId === projectionMessage.id) {
+        return cached.blocks;
+      }
+      const blocks = sourceBoundConversationBlocks(message, projectionMessage, t);
+      parsed.set(message, { projectionId: projectionMessage.id, blocks });
+      return blocks;
+    });
+    const nextByKey = new Map<string, ConversationRenderItem>();
+    let changed = items.length !== previous.length;
+    const reconciled = items.map((item, index) => {
+      const key = item.renderKey ?? item.id;
+      const prior = previousByKey.get(key);
+      const kept = prior && sameConversationRenderItem(prior, item) ? prior : item;
+      nextByKey.set(key, kept);
+      changed ||= previous[index] !== kept;
+      return kept;
+    });
+    previousByKey = nextByKey;
+    if (changed) {
+      previous = reconciled;
+    }
+    return previous;
+  };
+}
+
+// sourceBoundConversationBlocks parses one message and binds every block to the backend message identity.
+// sourceBoundConversationBlocks 解析一条消息，并将每个块绑定到后端消息身份。
+function sourceBoundConversationBlocks(
+  message: ConversationMessage,
+  projectionMessage: ConversationMessage,
+  t?: (key: TranslationKey) => string,
+): ConversationBlock[] {
+  // blocks retain the backend message identity even when projectionId is rewritten for duplicate visual rows.
+  // 即使 projectionId 因重复视觉行被改写，blocks 仍保留后端消息身份。
+  return parseConversationBlocks(projectionMessage, t).map((block) => ({
+    ...block,
+    sourceMessageId: message.id,
+  }));
+}
+
+// sameConversationRenderItem reports whether two rows were built from identical parts.
+// sameConversationRenderItem 判断两行是否由完全相同的部件构建。
+function sameConversationRenderItem(left: ConversationRenderItem, right: ConversationRenderItem): boolean {
+  return left.id === right.id
+    && left.renderKey === right.renderKey
+    && left.role === right.role
+    && left.sourceMessage === right.sourceMessage
+    && left.userMessage === right.userMessage
+    && left.leadingThinking === right.leadingThinking
+    && left.reserveThinkingPrefix === right.reserveThinkingPrefix
+    && sameReferences(left.blocks, right.blocks)
+    && sameReferences(left.sourceMessages, right.sourceMessages);
+}
+
+// sameReferences compares two ordered lists by element identity.
+// sameReferences 按元素身份比较两个有序列表。
+function sameReferences<T>(left: readonly T[], right: readonly T[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+// projectConversationRenderItemsWith groups messages into render items using the supplied block source.
+// projectConversationRenderItemsWith 使用给定的块来源将消息分组为渲染项。
+// Parameters: parseBlocks returns the source-bound blocks of one message; grouping never mutates them, so they may be
+// shared across projection passes.
+// 参数：parseBlocks 返回单条消息的绑定来源块；分组过程绝不修改它们，因此可在多次投影之间共享。
+function projectConversationRenderItemsWith(
+  messages: ConversationMessage[],
+  parseBlocks: (message: ConversationMessage, projectionMessage: ConversationMessage) => ConversationBlock[],
+): ConversationRenderItem[] {
   const items: ConversationRenderItem[] = [];
   const toolMergeState = createToolMergeProjectionState();
   const compactionItems = new Map<string, ConversationRenderItem>();
@@ -98,13 +202,7 @@ export function projectConversationRenderItems(
       return;
     }
 
-    // blocks retain the backend message identity even when projectionId is rewritten for duplicate visual rows.
-    // 即使 projectionId 因重复视觉行被改写，blocks 仍保留后端消息身份。
-    const blocks = parseConversationBlocks(projectionMessage, t).map((block) => ({
-      ...block,
-      sourceMessageId: message.id,
-    }));
-    for (const block of blocks) {
+    for (const block of parseBlocks(message, projectionMessage)) {
       if (isContextCompactionBlock(block)) {
         const sectionId = block.compactionSectionId ?? block.id;
         const sectionKey = contextCompactionInstanceKey(

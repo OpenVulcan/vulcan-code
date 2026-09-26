@@ -9,7 +9,10 @@ import type {
 import type {
   ConversationRenderItem,
 } from "@/components/conversation/conversation-model";
-import { projectConversationRenderItems } from "@/components/conversation/conversation-transcript";
+import {
+  createConversationRenderItemsProjector,
+  type ConversationRenderItemsProjector,
+} from "@/components/conversation/conversation-transcript";
 import type {
   ConversationEventBody,
   ConversationEventSummary,
@@ -80,65 +83,163 @@ export function projectConversationBranchPresentationV1(
   // 瞬态种子绝不成为规范事件或可执行输入。
   requestDrafts: readonly ToolRequestProgressSnapshot[] = [],
 ): ConversationBranchPresentationV1 {
-  // usageCoverageBySeq retains known API contributions separately from strict persisted totals.
-  // usageCoverageBySeq 将已知 API 贡献与严格持久化总量分开保留。
-  const usageCoverageBySeq = projectTurnUsageCoverage(events);
-  // apiStatsByCall makes terminal request facts available without changing event display order.
-  // apiStatsByCall 让终态请求事实可供读取，同时不改变事件显示顺序。
-  const apiStatsByCall = new Map<number, ApiStatsBody>();
-  // rootInputByTurn binds final assistant actions to the root input of the same logical Turn.
-  // rootInputByTurn 将最终回答操作绑定到同一逻辑 Turn 的根输入。
-  const rootInputByTurn = new Map<number, V1RootInputPresentationMetadata>();
-  for (const summary of events) {
-    if (summary.event.kind === "api_stats") {
-      apiStatsByCall.set(summary.event.api_call_id, summary.event);
-    }
-    if (
-      summary.turn_id !== null
-      && summary.event.kind === "user_input"
-      && summary.event.input_source === "root"
-    ) {
-      rootInputByTurn.set(summary.turn_id, {
-        seq: summary.seq,
-        text: summary.event.text,
-      });
-    }
-  }
+  return createConversationBranchPresentationProjectorV1()(sessionId, events, resources, t, providers, requestDrafts);
+}
 
-  // Display copies bind collaboration to its real turn and put execution results before that turn's statistics.
-  // 展示副本将协作绑定到真实回合，并把执行结果放到所属回合统计之前。
-  const messages: ConversationMessage[] = [];
-  // Source and target receipts update the first card for the exact same delivery.
-  // 来源与目标回执更新同一精确投递的首张卡片。
-  const taskMessageIds = new Set<string>();
-  for (const summary of projectCollaborationTurnLayout(events)) {
-    if (summary.event.kind === "collaboration") {
-      const deliveryId = collaborationTaskMessageId(summary.event.after_state);
-      if (deliveryId !== null) {
-        if (taskMessageIds.has(deliveryId)) continue;
-        taskMessageIds.add(deliveryId);
+// ConversationBranchPresentationProjectorV1 projects one branch surface across successive event-window snapshots.
+// ConversationBranchPresentationProjectorV1 在连续事件窗口快照之间投影单个分支界面。
+export type ConversationBranchPresentationProjectorV1 = (
+  sessionId: string,
+  events: readonly ConversationEventSummary[],
+  resources: ConversationSessionResourceCatalogV1,
+  t: Translation,
+  providers?: readonly ProviderSummary[],
+  requestDrafts?: readonly ToolRequestProgressSnapshot[],
+) => ConversationBranchPresentationV1;
+
+// NO_PROVIDERS is the shared empty provider catalog, so omitting providers never invalidates the projector cache.
+// NO_PROVIDERS 是共享的空供应商目录，使省略供应商参数不会使投影器缓存失效。
+const NO_PROVIDERS: readonly ProviderSummary[] = [];
+
+// NO_REQUEST_DRAFTS is the shared empty draft list for surfaces without a running request.
+// NO_REQUEST_DRAFTS 是没有运行中请求的界面共享的空草稿列表。
+export const NO_REQUEST_DRAFTS: readonly ToolRequestProgressSnapshot[] = [];
+
+// BranchPresentationContextV1 is the set of inputs every cached projection depends on.
+// BranchPresentationContextV1 是全部缓存投影共同依赖的输入集合。
+interface BranchPresentationContextV1 {
+  sessionId: string;
+  resources: ConversationSessionResourceCatalogV1;
+  t: Translation;
+  providers: readonly ProviderSummary[];
+}
+
+// CachedEventMessagesV1 records the display messages of one immutable event and the cross-event facts they read.
+// CachedEventMessagesV1 记录一条不可变事件的展示消息及其读取的跨事件事实。
+interface CachedEventMessagesV1 {
+  // Root input of the event Turn when projected.
+  // 投影时该事件所属 Turn 的根输入。
+  rootInputSeq: number | undefined;
+  rootInputText: string | undefined;
+  // Terminal API facts the event read when projected.
+  // 投影时该事件读取的终态 API 事实。
+  apiStats: ApiStatsBody | undefined;
+  // Display messages derived from these inputs.
+  // 由这些输入派生的展示消息。
+  messages: ConversationMessage[];
+}
+
+// createConversationBranchPresentationProjectorV1 creates an incremental equivalent of the branch presentation.
+// createConversationBranchPresentationProjectorV1 创建分支展示的增量等价实现。
+// The first call, and any call after the session, resources, translator or providers change, projects every event;
+// later calls reuse the messages of every event object the store kept unchanged and re-project only replaced or new
+// events, so one streaming delta costs work proportional to what changed rather than to the whole conversation.
+// 首次调用以及会话、资源、翻译函数或供应商变化后的调用投影全部事件；此后的调用复用 store 保持不变的每个
+// 事件对象的消息，只重新投影被替换或新增的事件，使一次流式增量的开销与变化量成正比，而不是与整段会话成正比。
+// Returns: a projector whose output always equals projectConversationBranchPresentationV1 for the same inputs.
+// 返回值：对相同输入，其输出始终等于 projectConversationBranchPresentationV1 的投影器。
+export function createConversationBranchPresentationProjectorV1(): ConversationBranchPresentationProjectorV1 {
+  let context: BranchPresentationContextV1 | null = null;
+  let eventMessages = new WeakMap<ConversationEventSummary, CachedEventMessagesV1>();
+  let projectRenderItems: ConversationRenderItemsProjector = createConversationRenderItemsProjector();
+  return (sessionId, events, resources, t, providers = NO_PROVIDERS, requestDrafts = NO_REQUEST_DRAFTS) => {
+    if (
+      context === null
+      || context.sessionId !== sessionId
+      || context.resources !== resources
+      || context.t !== t
+      || context.providers !== providers
+    ) {
+      context = { sessionId, resources, t, providers };
+      eventMessages = new WeakMap();
+      projectRenderItems = createConversationRenderItemsProjector(t);
+    }
+    const cache = eventMessages;
+    // usageCoverageBySeq retains known API contributions separately from strict persisted totals.
+    // usageCoverageBySeq 将已知 API 贡献与严格持久化总量分开保留。
+    const usageCoverageBySeq = projectTurnUsageCoverage(events);
+    // apiStatsByCall makes terminal request facts available without changing event display order.
+    // apiStatsByCall 让终态请求事实可供读取，同时不改变事件显示顺序。
+    const apiStatsByCall = new Map<number, ApiStatsBody>();
+    // rootInputByTurn binds final assistant actions to the root input of the same logical Turn.
+    // rootInputByTurn 将最终回答操作绑定到同一逻辑 Turn 的根输入。
+    const rootInputByTurn = new Map<number, V1RootInputPresentationMetadata>();
+    for (const summary of events) {
+      if (summary.event.kind === "api_stats") {
+        apiStatsByCall.set(summary.event.api_call_id, summary.event);
+      }
+      if (
+        summary.turn_id !== null
+        && summary.event.kind === "user_input"
+        && summary.event.input_source === "root"
+      ) {
+        rootInputByTurn.set(summary.turn_id, {
+          seq: summary.seq,
+          text: summary.event.text,
+        });
       }
     }
-    const rootInput = summary.turn_id === null ? undefined : rootInputByTurn.get(summary.turn_id);
-    messages.push(...conversationMessagesForV1Event(
-      sessionId,
-      summary,
-      rootInput,
-      apiStatsByCall,
-      resources,
-      providers,
-      t,
-      usageCoverageBySeq.get(summary.seq),
-    ));
-  }
 
-  // Bind drafts to the exact unfinished API and reject already handed-off or terminal identities.
-  // 将草稿绑定到精确未结束 API，排除已交接或终态身份。
-  const projectedMessages = appendToolRequestDraftMessages(sessionId, messages, events, requestDrafts);
-  return {
-    messages: projectedMessages,
-    renderItems: projectConversationRenderItems(projectedMessages, t),
+    // Display copies bind collaboration to its real turn and put execution results before that turn's statistics.
+    // 展示副本将协作绑定到真实回合，并把执行结果放到所属回合统计之前。
+    const messages: ConversationMessage[] = [];
+    // Source and target receipts update the first card for the exact same delivery.
+    // 来源与目标回执更新同一精确投递的首张卡片。
+    const taskMessageIds = new Set<string>();
+    for (const summary of projectCollaborationTurnLayout(events)) {
+      if (summary.event.kind === "collaboration") {
+        const deliveryId = collaborationTaskMessageId(summary.event.after_state);
+        if (deliveryId !== null) {
+          if (taskMessageIds.has(deliveryId)) continue;
+          taskMessageIds.add(deliveryId);
+        }
+      }
+      const rootInput = summary.turn_id === null ? undefined : rootInputByTurn.get(summary.turn_id);
+      // Turn statistics read coverage aggregated across the whole Turn, so they are always re-projected.
+      // Turn 统计读取整个 Turn 聚合的覆盖度，因此始终重新投影。
+      if (summary.event.kind === "turn_stats") {
+        messages.push(...conversationMessagesForV1Event(
+          sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, usageCoverageBySeq.get(summary.seq),
+        ));
+        continue;
+      }
+      const apiStats = eventApiStatsDependency(summary.event, apiStatsByCall);
+      const cached = cache.get(summary);
+      if (
+        cached
+        && cached.rootInputSeq === rootInput?.seq
+        && cached.rootInputText === rootInput?.text
+        && cached.apiStats === apiStats
+      ) {
+        messages.push(...cached.messages);
+        continue;
+      }
+      const projected = conversationMessagesForV1Event(
+        sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, undefined,
+      );
+      cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, messages: projected });
+      messages.push(...projected);
+    }
+
+    // Bind drafts to the exact unfinished API and reject already handed-off or terminal identities.
+    // 将草稿绑定到精确未结束 API，排除已交接或终态身份。
+    const projectedMessages = appendToolRequestDraftMessages(sessionId, messages, events, requestDrafts);
+    return {
+      messages: projectedMessages,
+      renderItems: projectRenderItems(projectedMessages),
+    };
   };
+}
+
+// eventApiStatsDependency returns the terminal API facts one event display reads, if any.
+// eventApiStatsDependency 返回单条事件展示所读取的终态 API 事实（如有）。
+function eventApiStatsDependency(
+  event: ConversationEventBody,
+  apiStatsByCall: ReadonlyMap<number, ApiStatsBody>,
+): ApiStatsBody | undefined {
+  if (event.kind === "assistant_reasoning") return apiStatsByCall.get(event.api_call_id);
+  if (event.kind === "display_note" && event.api_call_id !== undefined) return apiStatsByCall.get(event.api_call_id);
+  return undefined;
 }
 
 // Adds safe formation rows to their exact active API; returns display copies without inventing ledger seqs.

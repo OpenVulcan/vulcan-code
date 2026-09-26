@@ -7,6 +7,7 @@ import { Check, Copy, Text, TextWrap } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
 import { SvgPreview } from "@/components/conversation/conversation-svg-preview";
+import { splitStreamingMarkdownBlocks, STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS } from "@/components/conversation/streaming-markdown-blocks";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import {
   highlightedDiffLineSpansForLanguage,
@@ -106,8 +107,8 @@ export const MarkdownMessage = React.memo(function MarkdownMessage(props: {
   );
 });
 
-// StreamingMarkdownMessage renders the active Markdown block as one complete region.
-// StreamingMarkdownMessage 将活跃 Markdown 块作为完整区域渲染。
+// StreamingMarkdownMessage renders a growing body as independent blocks so each update re-parses only changed blocks.
+// StreamingMarkdownMessage 将增长中的正文渲染为独立块，使每次更新只重新解析发生变化的块。
 function StreamingMarkdownMessage(props: {
   // Raw Markdown content for the active streaming block.
   // 活跃流式块的原始 Markdown 内容。
@@ -120,6 +121,50 @@ function StreamingMarkdownMessage(props: {
   workspacePath: string | null;
   // Optional media opener used by Markdown images.
   // Markdown 图片使用的可选媒体打开器。
+  onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
+}) {
+  // deferredContent lets urgent interactions interrupt block parsing; React renders only the newest body it reaches.
+  // deferredContent 让紧急交互可以打断块解析；React 只渲染它赶上的最新正文。
+  const deferredContent = React.useDeferredValue(props.content);
+  const blocks = React.useMemo(() => splitStreamingMarkdownBlocks(deferredContent), [deferredContent]);
+  // onOpenMediaRef keeps block props stable when the owner recreates its media callback.
+  // onOpenMediaRef 在所有者重建媒体回调时保持块属性稳定。
+  const onOpenMediaRef = React.useRef(props.onOpenMedia);
+  onOpenMediaRef.current = props.onOpenMedia;
+  const openMedia = React.useCallback((attachment: GeneratedMediaAttachment) => onOpenMediaRef.current?.(attachment), []);
+  return (
+    <>
+      {blocks.map((block, index) => (
+        index === blocks.length - 1 && block.length > STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS ? (
+          <pre className="streaming-markdown-raw-preview" key={index}><code>{block}</code></pre>
+        ) : (
+          <StreamingMarkdownBlock
+            content={block}
+            defaultCodeWrap={props.defaultCodeWrap}
+            key={index}
+            onOpenMedia={props.onOpenMedia ? openMedia : undefined}
+            workspacePath={props.workspacePath}
+          />
+        )
+      ))}
+    </>
+  );
+}
+
+// StreamingMarkdownBlock parses one block and is skipped by React while the block's text is unchanged.
+// StreamingMarkdownBlock 解析单个块；块文本不变时 React 会跳过它。
+const StreamingMarkdownBlock = React.memo(function StreamingMarkdownBlock(props: {
+  // Markdown source of one top-level block.
+  // 单个顶层块的 Markdown 源码。
+  content: string;
+  // Whether fenced code blocks should start in wrapped mode for this Markdown surface.
+  // 当前 Markdown 区域中的围栏代码块是否默认启用自动换行。
+  defaultCodeWrap?: boolean;
+  // Current project workspace path for image source resolution.
+  // 当前项目工作区路径，用于解析图片来源。
+  workspacePath: string | null;
+  // Optional stable media opener used by Markdown images.
+  // Markdown 图片使用的可选稳定媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const normalizedContent = React.useMemo(
@@ -135,7 +180,7 @@ function StreamingMarkdownMessage(props: {
       workspacePath={props.workspacePath}
     />
   );
-}
+});
 
 // MarkdownContentRenderer renders one already-normalized Markdown fragment.
 // MarkdownContentRenderer 渲染单个已经规范化的 Markdown 片段。

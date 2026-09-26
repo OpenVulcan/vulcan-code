@@ -69,7 +69,8 @@ import {
   selectConversationSessionTodolistV1,
 } from "@/service/conversation-session-tools-v1";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
-import { useSelectedConversationEventWindowSnapshot } from "@/state/conversation-event-window-react";
+import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
+import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { WorkspaceGitChangedEvent } from "@/types";
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
 import { useI18n, formatMessage } from "@/i18n";
@@ -120,6 +121,12 @@ const LazyAgentSkillCategoryMenu = React.lazy(() => import("@/components/feature
 const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/knowledge-base-area").then((module) => ({ default: module.KnowledgeBaseArea })));
 // WorkspaceShell renders the shadcn dashboard-like fused sidebar and inset console area.
 // WorkspaceShell 渲染类似 shadcn dashboard 的融合侧栏与 inset 控制台区域。
+// selectEventWindowOwnerSessionId reads the selected V1 owner id with a stable selector identity.
+// selectEventWindowOwnerSessionId 以稳定的选择器身份读取选中的 V1 归属 id。
+function selectEventWindowOwnerSessionId(snapshot: ConversationEventWindowControllerSnapshot): string | null {
+  return snapshot.owner?.session_id ?? null;
+}
+
 export function WorkspaceShell(props: WorkspaceShellProps) {
   return (
     <SidebarProvider
@@ -169,9 +176,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // t translates shared workspace chrome labels.
   // t 翻译共享工作区外壳标签。
   const { locale, t } = useI18n();
-  // eventWindowSnapshot supplies the durable selected-session tool-panel facts.
-  // eventWindowSnapshot 提供选中会话可靠的工具面板事实。
-  const eventWindowSnapshot = useSelectedConversationEventWindowSnapshot();
+  // eventWindowOwnerSessionId is the selected V1 owner; the shell reads only derived facts from the event window,
+  // so streaming deltas do not re-render the sidebar and the rest of the shell.
+  // eventWindowOwnerSessionId 是选中的 V1 归属；外壳只从事件窗口读取派生事实，使流式增量不会重新渲染侧栏和
+  // 外壳其余部分。
+  const eventWindowOwnerSessionId = useSelectedConversationEventWindowSelector(selectEventWindowOwnerSessionId);
   // routeDraftConversation ends draft-only chrome once the exact durable summary is present.
   // routeDraftConversation 在精确持久摘要出现后结束仅草稿界面状态。
   const routeDraftConversation = props.selectedConversation ? null : props.selectedDraftConversation;
@@ -191,10 +200,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   React.useLayoutEffect(() => {
     const navigation = props.conversationNavigation;
     if (navigation?.phase !== "waiting-owner" || props.selectedConversationId !== navigation.targetId) return;
-    if (!hasServiceRuntime() || eventWindowSnapshot.owner?.session_id === navigation.targetId) {
+    if (!hasServiceRuntime() || eventWindowOwnerSessionId === navigation.targetId) {
       props.onConversationNavigationReady?.(navigation.targetId);
     }
-  }, [eventWindowSnapshot.owner?.session_id, props.conversationNavigation, props.onConversationNavigationReady, props.selectedConversationId]);
+  }, [eventWindowOwnerSessionId, props.conversationNavigation, props.onConversationNavigationReady, props.selectedConversationId]);
   // shellRef measures the available workspace width for automatic panel collapse.
   // shellRef 测量工作台可用宽度，用于自动折叠面板。
   const shellRef = React.useRef<HTMLDivElement | null>(null);
@@ -413,12 +422,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   );
   // terminalMutationToken identifies every completed terminal operation in the selected durable V1 window.
   // terminalMutationToken 标识选中可靠 V1 窗口内每次完成的终端操作。
-  const terminalMutationToken = React.useMemo(
-    () => eventWindowSnapshot.owner?.session_id === props.selectedConversationId
-      ? selectConversationSessionTerminalMutationTokenV1(eventWindowSnapshot)
+  const terminalMutationToken = useSelectedConversationEventWindowSelector(React.useCallback(
+    (snapshot: ConversationEventWindowControllerSnapshot) => snapshot.owner?.session_id === props.selectedConversationId
+      ? selectConversationSessionTerminalMutationTokenV1(snapshot)
       : null,
-    [eventWindowSnapshot, props.selectedConversationId],
-  );
+    [props.selectedConversationId],
+  ));
   React.useEffect(() => {
     if (!hasSelectedChatConversation || !terminalMutationToken) {
       return;
@@ -809,13 +818,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
 
   // sessionTodolist restores the latest exact todolist from the selected V1 event generation.
   // sessionTodolist 从选中的 V1 事件代次恢复最近一份精确待办清单。
-  const sessionTodolist = React.useMemo(
-    () => hasSelectedChatConversation
-      && eventWindowSnapshot.owner?.session_id === props.selectedConversationId
-      ? selectConversationSessionTodolistV1(eventWindowSnapshot)
+  const sessionTodolist = useSelectedConversationEventWindowSelector(React.useCallback(
+    (snapshot: ConversationEventWindowControllerSnapshot) => hasSelectedChatConversation
+      && snapshot.owner?.session_id === props.selectedConversationId
+      ? selectConversationSessionTodolistV1(snapshot)
       : null,
-    [eventWindowSnapshot, hasSelectedChatConversation, props.selectedConversationId],
-  );
+    [hasSelectedChatConversation, props.selectedConversationId],
+  ), conversationSelectionEqual);
   // sessionGitRepositoryAvailable tracks whether the current chat project resolved as a Git repository.
   // sessionGitRepositoryAvailable 标记当前聊天项目是否已解析为 Git 仓库。
   const sessionGitRepositoryAvailable = Boolean(sessionReviewRepositories.length || sessionReviewSummary || selectedWorkspaceGitState?.loading);
