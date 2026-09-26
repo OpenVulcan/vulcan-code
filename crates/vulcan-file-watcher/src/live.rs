@@ -20,7 +20,6 @@ use notify::Watcher;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
-use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tracing::warn;
@@ -28,6 +27,8 @@ use tracing::warn;
 /// Registration-scoped read-only observation evidence.
 /// 注册范围的只读观察证据。
 mod health;
+mod pending_paths;
+mod raw_events;
 pub use health::LiveWatchObservationHealth;
 use health::{LiveWatchHealthState, LiveWatchLoopGuard};
 
@@ -35,8 +36,8 @@ use health::{LiveWatchHealthState, LiveWatchLoopGuard};
 /// 单个订阅者收到的合并文件变更通知。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveFileWatchEvent {
-    /// Changed paths in sorted order with duplicates removed.
-    /// 已排序且去重的变更路径。
+    /// Changed paths in sorted order with duplicates removed. A root invalidates all its descendants.
+    /// 已排序去重的变更路径；根路径表示需要重新核对该根的全部后代。
     pub paths: Vec<PathBuf>,
 }
 
@@ -147,7 +148,10 @@ struct LiveWatchSender {
 struct ReceiverInner {
     /// Buffered changed paths waiting to be emitted.
     /// 等待发出的缓冲变更路径。
-    changed_paths: AsyncMutex<BTreeSet<PathBuf>>,
+    changed_paths: AsyncMutex<pending_paths::PendingPaths>,
+    /// Records degradation immediately, before a slow subscriber consumes its root invalidation.
+    /// 慢订阅者消费根失效通知之前，立即记录退化证据。
+    health: Arc<LiveWatchHealthState>,
     /// Notification used to wake receivers.
     /// 用于唤醒接收器的通知对象。
     notify: Notify,
@@ -172,7 +176,7 @@ impl LiveWatchReceiver {
                 let mut changed_paths = self.inner.changed_paths.lock().await;
                 if !changed_paths.is_empty() {
                     return Some(LiveFileWatchEvent {
-                        paths: std::mem::take(&mut *changed_paths).into_iter().collect(),
+                        paths: changed_paths.take(),
                     });
                 }
                 if self.inner.sender_count.load(Ordering::Acquire) == 0 {
@@ -185,19 +189,17 @@ impl LiveWatchReceiver {
 }
 
 impl LiveWatchSender {
-    /// Add changed paths and wake the receiver when the set grows.
-    /// 添加变更路径，并在集合增长时唤醒接收器。
-    async fn add_changed_paths(&self, paths: &[PathBuf]) {
+    /// Bound pending paths and degrade to the exact registered roots rather than dropping changes.
+    /// 限制待处理路径数量，超限时退化为精确注册根失效，而不是丢弃变化。
+    async fn add_changed_paths(&self, paths: &[PathBuf], roots: &[PathBuf]) {
         if paths.is_empty() {
             return;
         }
-
         let mut changed_paths = self.inner.changed_paths.lock().await;
-        let previous_len = changed_paths.len();
-        changed_paths.extend(paths.iter().cloned());
-        if changed_paths.len() != previous_len {
-            self.inner.notify.notify_one();
+        if changed_paths.add(paths, roots) {
+            self.inner.health.record_gap();
         }
+        self.inner.notify.notify_one();
     }
 }
 
@@ -224,9 +226,10 @@ impl Drop for LiveWatchSender {
 
 /// Create one sender and receiver pair.
 /// 创建一组发送器和接收器。
-fn watch_channel() -> (LiveWatchSender, LiveWatchReceiver) {
+fn watch_channel(health: Arc<LiveWatchHealthState>) -> (LiveWatchSender, LiveWatchReceiver) {
     let inner = Arc::new(ReceiverInner {
-        changed_paths: AsyncMutex::new(BTreeSet::new()),
+        changed_paths: AsyncMutex::new(pending_paths::PendingPaths::default()),
+        health,
         notify: Notify::new(),
         sender_count: AtomicUsize::new(1),
     });
@@ -452,14 +455,11 @@ impl LiveFileWatcher {
     /// Create a live filesystem watcher and spawn its event loop when possible.
     /// 创建实时文件系统监听器，并在可用时启动事件循环。
     pub fn new() -> notify::Result<Self> {
-        let (raw_tx, raw_rx) = mpsc::unbounded_channel();
-        let raw_tx_clone = raw_tx;
-        let watcher = notify::recommended_watcher(move |res| {
-            let _ = raw_tx_clone.send(res);
-        })?;
-        // Share backend failure evidence without changing existing subscriber event shapes.
-        // 共享后端失败证据，不改变既有订阅者事件结构。
         let health = Arc::new(LiveWatchHealthState::default());
+        let (raw_tx, raw_rx) = raw_events::channel(Arc::clone(&health));
+        let watcher = notify::recommended_watcher(move |res| {
+            let _ = raw_tx.send(res);
+        })?;
         let inner = LiveFileWatcherInner {
             health: Arc::clone(&health),
             watcher,
@@ -487,7 +487,7 @@ impl LiveFileWatcher {
     /// Add one logical subscriber and return its handle plus receiver.
     /// 添加一个逻辑订阅者，并返回其句柄和接收器。
     pub fn add_subscriber(self: &Arc<Self>) -> (LiveFileWatcherSubscriber, LiveWatchReceiver) {
-        let (tx, rx) = watch_channel();
+        let (tx, rx) = watch_channel(Arc::clone(&self.health));
         let mut state = self
             .state
             .write()
@@ -737,7 +737,7 @@ impl LiveFileWatcher {
 
     /// Bridge raw notify events into subscriber notifications.
     /// 将原始 notify 事件桥接为订阅者通知。
-    fn spawn_event_loop(&self, mut raw_rx: mpsc::UnboundedReceiver<notify::Result<Event>>) {
+    fn spawn_event_loop(&self, mut raw_rx: raw_events::RawWatchReceiver) {
         if let Ok(handle) = Handle::try_current() {
             // Construct ownership before spawning so dropping an unpolled future also retires liveness.
             // 派生任务前构造归属，使丢弃未轮询未来值也会退役存活状态。
@@ -751,7 +751,7 @@ impl LiveFileWatcher {
                 let event_loop_health = health_guard;
                 loop {
                     match raw_rx.recv().await {
-                        Some(Ok(event)) => {
+                        Some(raw_events::RawWatchMessage::Event(Ok(event))) => {
                             // A rescan flag may have no paths; retain the gap before ordinary event filtering.
                             // 重新扫描标志可能没有路径；在普通事件过滤之前保留缺口。
                             if event.need_rescan() {
@@ -763,9 +763,32 @@ impl LiveFileWatcher {
                             let inner = inner.as_ref().and_then(std::sync::Weak::upgrade);
                             Self::notify_subscribers(&state, inner.as_ref(), &event.paths).await;
                         }
-                        Some(Err(err)) => {
+                        Some(raw_events::RawWatchMessage::Event(Err(err))) => {
                             event_loop_health.0.record_gap();
                             warn!("file watcher error: {err}");
+                        }
+                        Some(raw_events::RawWatchMessage::Rescan) => {
+                            let roots = {
+                                let guard = state
+                                    .read()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                guard
+                                    .subscribers
+                                    .values()
+                                    .flat_map(|subscriber| {
+                                        subscriber
+                                            .watched_paths
+                                            .keys()
+                                            .map(|key| key.requested.path.clone())
+                                    })
+                                    .collect::<BTreeSet<_>>()
+                                    .into_iter()
+                                    .collect::<Vec<_>>()
+                            };
+                            let inner = inner.as_ref().and_then(std::sync::Weak::upgrade);
+                            // Root delivery both reconciles fallback watches and forces consumer rescan.
+                            // 根通知同时重新核对回退监听，并要求消费者重新扫描。
+                            Self::notify_subscribers(&state, inner.as_ref(), &roots).await;
                         }
                         None => break,
                     }
@@ -783,7 +806,7 @@ impl LiveFileWatcher {
         inner: Option<&Arc<Mutex<LiveFileWatcherInner>>>,
         event_paths: &[PathBuf],
     ) {
-        let subscribers_to_notify: Vec<(LiveWatchSender, Vec<PathBuf>)> = {
+        let subscribers_to_notify: Vec<(LiveWatchSender, Vec<PathBuf>, Vec<PathBuf>)> = {
             let mut state = state
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -815,7 +838,12 @@ impl LiveFileWatcher {
                     }
                 }
                 if !changed_paths.is_empty() {
-                    subscribers_to_notify.push((subscriber.tx.clone(), changed_paths));
+                    let roots = subscriber
+                        .watched_paths
+                        .keys()
+                        .map(|key| key.requested.path.clone())
+                        .collect();
+                    subscribers_to_notify.push((subscriber.tx.clone(), changed_paths, roots));
                 }
             }
 
@@ -834,8 +862,8 @@ impl LiveFileWatcher {
             subscribers_to_notify
         };
 
-        for (subscriber, changed_paths) in subscribers_to_notify {
-            subscriber.add_changed_paths(&changed_paths).await;
+        for (subscriber, changed_paths, roots) in subscribers_to_notify {
+            subscriber.add_changed_paths(&changed_paths, &roots).await;
         }
     }
 

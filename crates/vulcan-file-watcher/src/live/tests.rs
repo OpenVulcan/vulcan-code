@@ -39,10 +39,10 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 /// 验证节流会合并两次发出之间的待处理路径。
 #[tokio::test]
 async fn throttled_receiver_coalesces_within_interval() {
-    let (tx, rx) = watch_channel();
+    let (tx, rx) = watch_channel(Arc::new(LiveWatchHealthState::default()));
     let mut throttled = ThrottledLiveWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
 
-    tx.add_changed_paths(&[path("a")]).await;
+    tx.add_changed_paths(&[path("a")], &[path("root")]).await;
     let first = timeout(Duration::from_secs(1), throttled.recv())
         .await
         .expect("first emit timeout");
@@ -53,7 +53,8 @@ async fn throttled_receiver_coalesces_within_interval() {
         })
     );
 
-    tx.add_changed_paths(&[path("b"), path("c")]).await;
+    tx.add_changed_paths(&[path("b"), path("c")], &[path("root")])
+        .await;
     let blocked = timeout(TEST_THROTTLE_INTERVAL / 2, throttled.recv()).await;
     assert!(blocked.is_err());
 
@@ -185,4 +186,35 @@ async fn receiver_closes_when_subscriber_drops() {
         .await
         .expect("closed recv timeout");
     assert_eq!(closed, None);
+}
+
+/// Queue overflow wakes every current subscriber with its exact roots for full reconciliation.
+/// 队列溢出通过精确根路径唤醒所有当前订阅者，要求完整核对。
+#[tokio::test]
+async fn raw_overflow_delivers_current_registered_roots() {
+    let watcher = Arc::new(LiveFileWatcher::noop());
+    let (subscriber, mut receiver) = watcher.add_subscriber();
+    let root = std::env::temp_dir()
+        .canonicalize()
+        .expect("existing temporary root");
+    let registration = subscriber.register_path(root.clone(), true);
+    let (sender, raw) = raw_events::channel(Arc::clone(&watcher.health));
+    for _ in 0..300 {
+        sender
+            .send(Ok(Event::new(EventKind::Other)))
+            .expect("bounded raw admission");
+    }
+    watcher.spawn_event_loop(raw);
+    let event = timeout(Duration::from_secs(2), receiver.recv())
+        .await
+        .expect("recovery wakes consumer")
+        .expect("root event");
+    assert_eq!(event.paths, vec![root]);
+    assert!(
+        registration
+            .observation_health()
+            .expect("gap evidence")
+            .loss_revision
+            > 0
+    );
 }

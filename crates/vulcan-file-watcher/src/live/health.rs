@@ -187,7 +187,7 @@ mod tests {
         let (subscriber, mut receiver) = watcher.add_subscriber();
         let root = std::fs::canonicalize(std::env::temp_dir()).expect("temporary root");
         let registration = subscriber.register_path(root.clone(), true);
-        let (sender, raw) = mpsc::unbounded_channel();
+        let (sender, raw) = raw_events::channel(Arc::clone(&watcher.health));
         watcher.spawn_event_loop(raw);
         wait_health(&registration, 0, true).await;
         sender
@@ -238,7 +238,7 @@ mod tests {
         let watcher = Arc::new(LiveFileWatcher::noop());
         let (subscriber, _receiver) = watcher.add_subscriber();
         let registration = subscriber.register_path(std::env::temp_dir(), true);
-        let (_sender, raw) = mpsc::unbounded_channel();
+        let (_sender, raw) = raw_events::channel(Arc::clone(&watcher.health));
         {
             // Entering allows task admission but does not poll the task.
             // 进入运行时允许任务准入，但不轮询任务。
