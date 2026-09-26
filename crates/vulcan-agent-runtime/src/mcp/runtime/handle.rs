@@ -1083,7 +1083,7 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                         shutdown_server_runtime_state(&inner, &server.id).await;
                         return;
                     }
-                    result = event_rx.recv() => result,
+                    result = receive_server_runtime_event(&mut event_rx, &server.name) => result,
                 };
 
                 match event {
@@ -1121,15 +1121,10 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                         clear_server_runtime_state(&inner, &server.id, None, Some(reason)).await;
                         break;
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        clear_server_runtime_state(
-                            &inner,
-                            &server.id,
-                            None,
-                            Some(format!("MCP 服务器 `{}` 的事件通道已关闭。", server.name)),
-                        )
-                        .await;
+                    Err(error) => {
+                        // A gap invalidates this connection's catalog; bounded reconnect performs a fresh discovery.
+                        // 缺口使本连接目录失效；通过有界重连重新发现完整目录。
+                        clear_server_runtime_state(&inner, &server.id, None, Some(error)).await;
                         break;
                     }
                 }
@@ -1271,6 +1266,22 @@ async fn wait_for_retry_or_shutdown(
         _ = shutdown_rx.changed() => true,
         _ = tokio::time::sleep(delay) => false,
     }
+}
+
+/// Converts event loss into an explicit lifecycle failure instead of trusting a stale catalog.
+/// 将事件丢失转为明确生命周期失败，不再信任过期目录。
+async fn receive_server_runtime_event(
+    receiver: &mut tokio::sync::broadcast::Receiver<McpTransportEvent>,
+    server_name: &str,
+) -> Result<McpTransportEvent, String> {
+    receiver.recv().await.map_err(|error| match error {
+        tokio::sync::broadcast::error::RecvError::Lagged(skipped) => format!(
+            "MCP server `{server_name}` event stream lagged by {skipped} events; reconnecting to restore catalog consistency."
+        ),
+        tokio::sync::broadcast::error::RecvError::Closed => format!(
+            "MCP server `{server_name}` event stream closed."
+        ),
+    })
 }
 
 /// Subscribes before initial discovery so notifications during the read remain observable.
@@ -2110,6 +2121,36 @@ mod optional_capability_tests {
                 .try_recv()
                 .expect("retained discovery notification"),
             McpTransportEvent::ToolsChanged
+        );
+    }
+
+    /// Losing the final catalog notification must request reconnection without waiting for another event.
+    /// 丢失最后一次目录通知后必须要求重连，无需等待下一个事件。
+    #[tokio::test]
+    async fn event_loss_is_an_explicit_reconnect_failure() {
+        let (sender, mut receiver) = broadcast::channel(1);
+        sender
+            .send(McpTransportEvent::ToolsChanged)
+            .expect("first notification");
+        sender
+            .send(McpTransportEvent::ResourcesChanged)
+            .expect("overwrite old notification");
+        let error = receive_server_runtime_event(&mut receiver, "gap-fixture")
+            .await
+            .expect_err("a gap must not remain connected");
+        assert!(error.contains("lagged by 1") && error.contains("reconnecting"));
+        assert_eq!(
+            receive_server_runtime_event(&mut receiver, "gap-fixture")
+                .await
+                .expect("retained event"),
+            McpTransportEvent::ResourcesChanged
+        );
+        drop(sender);
+        assert!(
+            receive_server_runtime_event(&mut receiver, "gap-fixture")
+                .await
+                .expect_err("closed stream")
+                .contains("closed")
         );
     }
 
