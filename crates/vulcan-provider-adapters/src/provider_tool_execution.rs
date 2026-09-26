@@ -905,10 +905,7 @@ fn decode_and_project_generic_json_response(
     request_arguments: Option<&Value>,
 ) -> Result<ProviderToolExecutionResult, String> {
     let response = decode_and_project_generic_json_value(profiles, text, operation)?;
-    let projected = serde_json::to_string(&response).map_err(|error| {
-        format!("{operation} projected response could not be serialized: {error}")
-    })?;
-    decode_generic_json_sync_output_with_request(contract, projected.as_str(), request_arguments)
+    decode_projected_generic_json_output(contract, &response, request_arguments)
 }
 
 /// Applies literal JSON Schema defaults to one canonical provider-tool argument tree.
@@ -1765,19 +1762,9 @@ fn decode_completed_generic_json_async_result(
     response: &Value,
     provider_task_id: &str,
 ) -> ProviderAsyncTaskPoll {
-    // projected preserves the exact successful follow-up document for the shared output decoder.
-    // projected 为共享输出解码器保留精确的成功跟随文档。
-    let projected = match serde_json::to_string(response) {
-        Ok(projected) => projected,
-        Err(error) => {
-            return failed_provider_async_task_completed_result(format!(
-                "Provider task successful response could not be serialized: {error}"
-            ));
-        }
-    };
-    // result is terminal because the provider has already confirmed that generation completed.
-    // result 属于终态，因为供应商已经确认生成完成。
-    let mut result = match decode_generic_json_sync_output(contract, projected.as_str()) {
+    // The provider has confirmed completion; decode the retained tree without a text round trip.
+    // 供应商已确认完成；直接解码保留的树，不经过文本往返转换。
+    let mut result = match decode_projected_generic_json_output(contract, response, None) {
         Ok(result) => result,
         Err(error) => return failed_provider_async_task_completed_result(error),
     };
@@ -2748,6 +2735,7 @@ async fn execute_generic_json_sync_request_with_headers<T: Serialize>(
 /// 结果字段，使具有相同封闭输出类别的新供应商操作无需命名适配器即可执行（方案 §R9.6）。
 /// Decodes one generic response without request-owned normalization context.
 /// 在没有请求自有归一化上下文的情况下解码一份通用响应。
+#[cfg(test)]
 fn decode_generic_json_sync_output(
     contract: &crate::ProviderToolOutputContract,
     body: &str,
@@ -2763,11 +2751,60 @@ fn decode_generic_json_sync_output_with_request(
     request_arguments: Option<&Value>,
 ) -> Result<ProviderToolExecutionResult, String> {
     let response = parse_bounded_provider_json(body, "Provider tool response")?;
+    decode_generic_json_value_output(contract, &response, request_arguments)
+}
+
+/// Decodes a projected tree after validating its byte, depth and node budgets without allocating JSON text.
+/// 校验投影树的字节、深度与节点预算后直接解码，不分配 JSON 文本。
+fn decode_projected_generic_json_output(
+    contract: &crate::ProviderToolOutputContract,
+    response: &Value,
+    request_arguments: Option<&Value>,
+) -> Result<ProviderToolExecutionResult, String> {
+    validate_projected_provider_json(response)?;
+    decode_generic_json_value_output(contract, response, request_arguments)
+}
+
+/// Counts canonical UTF-8 JSON bytes into a bounded sink; no second tree or serialized string is retained.
+/// 通过有界接收器计数规范 UTF-8 JSON 字节，不保留第二棵树或序列化字符串。
+fn validate_projected_provider_json(value: &Value) -> Result<(), String> {
+    // Bound recursion before serialization, including trees expanded by projection profiles.
+    // 序列化前限制递归，包括由投影 Profile 扩展的树。
+    crate::provider_manifest::validate_runtime_json_bounds(value, "Provider tool response")?;
+    struct ByteCounter(usize);
+    impl std::io::Write for ByteCounter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let next = self
+                .0
+                .checked_add(bytes.len())
+                .filter(|size| *size <= PROVIDER_TOOL_RESPONSE_BYTE_LIMIT)
+                .ok_or_else(|| {
+                    std::io::Error::other("projected provider JSON exceeds its byte limit")
+                })?;
+            self.0 = next;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(ByteCounter(0), value).map_err(|error| {
+        format!("Provider tool response serialization/byte limit check failed: {error}")
+    })
+}
+
+/// Normalizes an already-admitted JSON tree; transport and projection boundaries own size validation.
+/// 归一化已准入的 JSON 树；大小校验由传输与投影边界负责。
+fn decode_generic_json_value_output(
+    contract: &crate::ProviderToolOutputContract,
+    response: &Value,
+    request_arguments: Option<&Value>,
+) -> Result<ProviderToolExecutionResult, String> {
     if response.get("error").is_some() {
         return Err(format_structured_provider_error(
             "Provider tool",
             None,
-            &response,
+            response,
         ));
     }
     if contract.kind == crate::ProviderToolOutputKind::Resources {
@@ -2776,9 +2813,9 @@ fn decode_generic_json_sync_output_with_request(
                 "Provider tool resource output has no declared resource decoder.",
             ));
         }
-        let resources = decode_declared_generic_resources(contract, &response, request_arguments)?;
+        let resources = decode_declared_generic_resources(contract, response, request_arguments)?;
         return Ok(ProviderToolExecutionResult {
-            upstream_response_id: generic_provider_response_id(&response),
+            upstream_response_id: generic_provider_response_id(response),
             output: ProviderToolNormalizedOutput::Resources(resources),
         });
     }
@@ -2802,7 +2839,7 @@ fn decode_generic_json_sync_output_with_request(
                     )
                 })?;
             Ok(ProviderToolExecutionResult {
-                upstream_response_id: generic_provider_response_id(&response),
+                upstream_response_id: generic_provider_response_id(response),
                 output: ProviderToolNormalizedOutput::Text(text.to_string()),
             })
         }
@@ -3816,6 +3853,61 @@ fn format_structured_provider_error(label: &str, status: Option<u16>, body: &Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Direct Value normalization preserves raw decoder results, Unicode and error envelopes.
+    /// 直接 Value 归一化保留原解码结果、Unicode 与错误信封。
+    #[test]
+    fn projected_value_output_matches_text_decoder() {
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Text,
+            source_path: "/answer".to_string(),
+            normalized_result_path: "/text".to_string(),
+            resource_kind: None,
+            mime_types: Vec::new(),
+            resource_decoders: Vec::new(),
+        };
+        for value in [
+            serde_json::json!({"answer": "中文\"\\\n🙂", "id":"result-1"}),
+            serde_json::json!({"answer": "literal {{format}}"}),
+            serde_json::json!({"error": {"message": "invalid request", "code": "bad_input"}}),
+        ] {
+            let text = serde_json::to_string(&value).expect("fixture serializes");
+            assert_eq!(
+                decode_generic_json_sync_output(&contract, &text),
+                decode_projected_generic_json_output(&contract, &value, None),
+            );
+        }
+    }
+
+    /// Escaping and structure expansion remain subject to the old post-projection limits.
+    /// 转义与结构扩展仍受原有投影后上限约束。
+    #[test]
+    fn projected_json_limits_include_escaping_depth_and_nodes() {
+        let exact = Value::String("x".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT - 2));
+        validate_projected_provider_json(&exact).expect("JSON quotes fit exactly");
+        let oversized = Value::String("x".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT - 1));
+        assert!(validate_projected_provider_json(&oversized).is_err());
+        let escaped = Value::String("\n".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT / 2));
+        assert!(
+            validate_projected_provider_json(&escaped).is_err(),
+            "JSON escaping counts as bytes"
+        );
+        let mut nested = Value::Null;
+        for _ in 0..=crate::provider_manifest::MAX_JSON_DEPTH {
+            nested = Value::Array(vec![nested]);
+        }
+        assert!(
+            validate_projected_provider_json(&nested)
+                .expect_err("depth bound")
+                .contains("depth")
+        );
+        let wide = Value::Array(vec![Value::Null; crate::provider_manifest::MAX_JSON_NODES]);
+        assert!(
+            validate_projected_provider_json(&wide)
+                .expect_err("node bound")
+                .contains("node")
+        );
+    }
 
     /// Separators count as UTF-8 bytes and failed admission leaves the previous result intact.
     /// 分隔符按 UTF-8 字节计入限制，准入失败保留此前结果不变。
