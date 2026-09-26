@@ -1026,7 +1026,7 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
             // Discovery still owns an unpublished transport, so shutdown must interrupt
             // tools/list and explicitly close that exact candidate before returning.
             // 工具发现仍持有尚未发布的传输，因此关闭必须中断 tools/list 并在返回前明确关闭该候选者。
-            let tools_result = tokio::select! {
+            let discovery_result = tokio::select! {
                 _ = shutdown_rx.changed() => {
                     shutdown_server_runtime_state_with_transport(
                         &inner,
@@ -1035,32 +1035,35 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                     ).await;
                     return;
                 }
-                result = refresh_server_tools(&inner, &server, transport.clone()) => result,
+                result = discover_server_tools_with_events(&inner, &server, transport.clone()) => result,
             };
-            if let Err(error) = tools_result {
-                let should_stop = record_server_failure_and_should_stop(
-                    &inner,
-                    &server,
-                    &mut consecutive_failures,
-                    Some(transport.clone()),
-                    error,
-                )
-                .await;
-                drop(startup_permit);
-                if should_stop {
-                    return;
+            let mut event_rx = match discovery_result {
+                Ok(receiver) => receiver,
+                Err(error) => {
+                    let should_stop = record_server_failure_and_should_stop(
+                        &inner,
+                        &server,
+                        &mut consecutive_failures,
+                        Some(transport.clone()),
+                        error,
+                    )
+                    .await;
+                    drop(startup_permit);
+                    if should_stop {
+                        return;
+                    }
+                    if wait_for_retry_or_shutdown(
+                        &mut shutdown_rx,
+                        retry_delay(&server.id, consecutive_failures),
+                    )
+                    .await
+                    {
+                        shutdown_server_runtime_state(&inner, &server.id).await;
+                        break;
+                    }
+                    continue;
                 }
-                if wait_for_retry_or_shutdown(
-                    &mut shutdown_rx,
-                    retry_delay(&server.id, consecutive_failures),
-                )
-                .await
-                {
-                    shutdown_server_runtime_state(&inner, &server.id).await;
-                    break;
-                }
-                continue;
-            }
+            };
             drop(startup_permit);
 
             tokio::select! {
@@ -1074,7 +1077,6 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
             // connectedAt distinguishes a stable connection from a short-lived crash loop.
             // connectedAt 用于区分稳定连接与短生命周期崩溃循环。
             let connected_at = tokio::time::Instant::now();
-            let mut event_rx = transport.event_receiver();
             loop {
                 let event = tokio::select! {
                     _ = shutdown_rx.changed() => {
@@ -1269,6 +1271,18 @@ async fn wait_for_retry_or_shutdown(
         _ = shutdown_rx.changed() => true,
         _ = tokio::time::sleep(delay) => false,
     }
+}
+
+/// Subscribes before initial discovery so notifications during the read remain observable.
+/// 在首次发现前订阅，使读取期间的通知仍可被观察。
+async fn discover_server_tools_with_events(
+    inner: &Arc<McpRuntimeInner>,
+    server: &McpServerConfig,
+    transport: Arc<dyn McpTransport>,
+) -> Result<tokio::sync::broadcast::Receiver<McpTransportEvent>, String> {
+    let receiver = transport.event_receiver();
+    refresh_server_tools(inner, server, transport).await?;
+    Ok(receiver)
 }
 
 /// Refreshes one server tool snapshot after the connection is established or a tool-list change arrives.
@@ -2045,6 +2059,59 @@ mod optional_capability_tests {
     use std::time::Instant;
     use tokio::sync::broadcast;
     use vulcan_mcp_runtime::{McpRuntimeError, McpToolSchema};
+
+    /// A transport may notify during tools/list; subscribing afterwards loses this last notification.
+    /// 传输可能在 tools/list 期间通知；之后才订阅会丢失最后一次通知。
+    #[tokio::test]
+    async fn initial_discovery_retains_notifications_emitted_during_the_read() {
+        struct NotifyingDiscoveryTransport {
+            events: broadcast::Sender<McpTransportEvent>,
+        }
+        #[async_trait]
+        impl McpTransport for NotifyingDiscoveryTransport {
+            fn endpoint(&self) -> &str {
+                "test://discovery-order"
+            }
+            fn event_receiver(&self) -> broadcast::Receiver<McpTransportEvent> {
+                self.events.subscribe()
+            }
+            async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
+                self.events
+                    .send(McpTransportEvent::ToolsChanged)
+                    .expect("the lifecycle must subscribe before initial discovery");
+                Ok(Vec::new())
+            }
+            async fn call_tool(&self, _name: &str, _args: Value) -> Result<Value, McpRuntimeError> {
+                panic!("discovery must not execute tools")
+            }
+        }
+        let server = McpServerConfig {
+            source: crate::mcp::config::McpServerSource::UserConfigured,
+            id: "discovery-order".to_string(),
+            name: "Discovery order".to_string(),
+            enabled: false,
+            transport: crate::mcp::config::McpServerTransportConfig::Stdio {
+                command: "unused".to_string(),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+                env_passthrough: Vec::new(),
+                inherit_environment: false,
+            },
+        };
+        let inner = empty_runtime_inner();
+        let (events, _) = broadcast::channel(4);
+        let transport = Arc::new(NotifyingDiscoveryTransport { events });
+        let mut receiver = discover_server_tools_with_events(&inner, &server, transport)
+            .await
+            .expect("valid discovery");
+        assert_eq!(
+            receiver
+                .try_recv()
+                .expect("retained discovery notification"),
+            McpTransportEvent::ToolsChanged
+        );
+    }
 
     /// Verifies aborting an unpublished startup future requests shutdown for every tracked runtime.
     /// 验证中止未发布的启动 Future 会请求关闭所有已跟踪的运行时。
