@@ -1575,15 +1575,31 @@ fn run_service_bootstrap(
     // workspace_index_started_at measures only the indexed project/session summary load.
     // workspace_index_started_at 仅测量已索引项目与会话摘要加载。
     let workspace_index_started_at = start_bootstrap_stage("workspace_index");
-    let mut workspace_snapshot = bootstrap_step(
+    let workspace_report = bootstrap_step(
         runtime.block_on(
-            vulcan_workspace_store::workspace_store::load_or_seed_workspace_index(
+            vulcan_workspace_store::workspace_store::load_workspace_index_report(
                 controller_runtime.clone(),
             ),
         ),
         "workspace",
         "Workspace",
     )?;
+    let workspace_complete = workspace_report.is_complete();
+    let workspace_step_message = if workspace_complete {
+        "项目与会话索引已载入".to_string()
+    } else {
+        format!(
+            "索引仅部分载入（{} 项问题），未能读取的会话不代表已删除；详情见启动日志",
+            workspace_report.issues.len()
+        )
+    };
+    for issue in &workspace_report.issues {
+        logs.push(format!(
+            "[workspace-index-incomplete] stage={:?} project={:?} session={:?}: {}",
+            issue.stage, issue.project_id, issue.session_id, issue.detail
+        ));
+    }
+    let mut workspace_snapshot = workspace_report.snapshot;
     trace_bootstrap_stage(
         "workspace_index",
         workspace_index_started_at,
@@ -1682,8 +1698,12 @@ fn run_service_bootstrap(
                 ),
                 (
                     "workspace",
-                    StartupStepStatus::Ready,
-                    "项目与会话索引已载入",
+                    if workspace_complete {
+                        StartupStepStatus::Ready
+                    } else {
+                        StartupStepStatus::Warning
+                    },
+                    workspace_step_message.as_str(),
                 ),
             ],
         ),

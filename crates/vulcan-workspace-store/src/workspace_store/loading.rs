@@ -329,6 +329,19 @@ fn descending_session_updated_at_key(
 pub async fn load_workspace_index_snapshot(
     host_runtime: HostRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
+    load_workspace_index_report(host_runtime)
+        .await?
+        .into_complete()
+}
+
+/// Loads validated index data with explicit completeness evidence for tolerant cold startup.
+/// 为可容错冷启动加载已校验索引数据，并返回明确的完整性证据。
+/// Refresh and submission must use the strict snapshot entry instead of discarding these issues.
+/// 刷新与提交必须使用严格快照入口，而不能丢弃这些问题。
+pub async fn load_workspace_index_report(
+    host_runtime: HostRuntimeHandle,
+) -> Result<WorkspaceIndexLoadReport, String> {
+    let mut issues = Vec::new();
     // project_rows are validated before their archive flags are allowed to trigger default seeding.
     // project_rows 在其归档标记获准触发默认播种前完成验证。
     let mut project_rows = query_validated_project_rows(&host_runtime).await?;
@@ -345,9 +358,12 @@ pub async fn load_workspace_index_snapshot(
     let session_index_available = match ensure_session_v1_storage_schema(&host_runtime).await {
         Ok(()) => true,
         Err(error) => {
-            eprintln!(
-                "[workspace-store][session-index-v1-ignored] schema bootstrap failed; starting without persisted sessions: {error}"
-            );
+            issues.push(WorkspaceIndexLoadIssue {
+                stage: WorkspaceIndexLoadStage::Schema,
+                project_id: None,
+                session_id: None,
+                detail: error.to_string(),
+            });
             false
         }
     };
@@ -359,17 +375,23 @@ pub async fn load_workspace_index_snapshot(
                 Ok(sessions) => {
                     indexed_sessions.extend(sessions.into_iter().map(|session| (session, false)))
                 }
-                Err(error) => eprintln!(
-                    "[workspace-store][session-index-v1-ignored] active list failed for project {project_id}; ignoring only that session list: {error}"
-                ),
+                Err(error) => issues.push(WorkspaceIndexLoadIssue {
+                    stage: WorkspaceIndexLoadStage::ActiveList,
+                    project_id: Some(project_id.to_string()),
+                    session_id: None,
+                    detail: error.to_string(),
+                }),
             }
             match list_archived_sessions_v1(&host_runtime, project_id).await {
                 Ok(sessions) => {
                     indexed_sessions.extend(sessions.into_iter().map(|session| (session, true)))
                 }
-                Err(error) => eprintln!(
-                    "[workspace-store][session-index-v1-ignored] archived list failed for project {project_id}; ignoring only that session list: {error}"
-                ),
+                Err(error) => issues.push(WorkspaceIndexLoadIssue {
+                    stage: WorkspaceIndexLoadStage::ArchivedList,
+                    project_id: Some(project_id.to_string()),
+                    session_id: None,
+                    detail: error.to_string(),
+                }),
             }
         }
     }
@@ -413,10 +435,12 @@ pub async fn load_workspace_index_snapshot(
         let session_id = match row.session_id.parse::<SessionId>() {
             Ok(session_id) => session_id,
             Err(error) => {
-                eprintln!(
-                    "[workspace-store][session-index-v1-ignored] invalid session_id {}; ignoring that session: {error}",
-                    row.session_id
-                );
+                issues.push(WorkspaceIndexLoadIssue {
+                    stage: WorkspaceIndexLoadStage::SessionIdentity,
+                    project_id: Some(row.project_id.clone()),
+                    session_id: Some(row.session_id.clone()),
+                    detail: error.to_string(),
+                });
                 continue;
             }
         };
@@ -427,9 +451,12 @@ pub async fn load_workspace_index_snapshot(
             continue;
         };
         if !archived && project_row.archived {
-            eprintln!(
-                "[workspace-store][session-index-v1-ignored] active session {session_id} belongs to archived project {project_id}; ignoring that session"
-            );
+            issues.push(WorkspaceIndexLoadIssue {
+                stage: WorkspaceIndexLoadStage::SessionIdentity,
+                project_id: Some(project_id.to_string()),
+                session_id: Some(row.session_id.clone()),
+                detail: "active session belongs to an archived project".to_string(),
+            });
             continue;
         }
         // Validate every indexed metadata path before exposing sidebar or archive membership.
@@ -440,7 +467,14 @@ pub async fn load_workspace_index_snapshot(
         // 这里只检查精确文件是否存在，绝不水合历史或扫描同级目录。
         match preflight_session_v1_storage(&host_runtime, &row.session_id).await {
             Ok(SessionV1StoragePreflightOutcome::Ready { .. }) => {}
-            Ok(SessionV1StoragePreflightOutcome::MissingStorageIndexRemoved { .. }) | Err(_) => {
+            Ok(SessionV1StoragePreflightOutcome::MissingStorageIndexRemoved { .. }) => continue,
+            Err(error) => {
+                issues.push(WorkspaceIndexLoadIssue {
+                    stage: WorkspaceIndexLoadStage::Metadata,
+                    project_id: Some(project_id.to_string()),
+                    session_id: Some(row.session_id.clone()),
+                    detail: error.to_string(),
+                });
                 continue;
             }
         }
@@ -533,17 +567,20 @@ pub async fn load_workspace_index_snapshot(
         .map(|session| (session.id, SessionRunPhase::Idle))
         .collect::<BTreeMap<_, _>>();
 
-    Ok(WorkspaceSnapshot {
-        task_projects,
-        archived_task_projects,
-        sessions: visible_sessions,
-        archived_sessions,
-        session_runtime_state: runtime_state_map,
-        archived_session_runtime_state: archived_runtime_state_map,
-        session_run_phases,
-        expanded_task_projects,
-        selected_session,
-        hydrated_session_ids: BTreeSet::new(),
+    Ok(WorkspaceIndexLoadReport {
+        snapshot: WorkspaceSnapshot {
+            task_projects,
+            archived_task_projects,
+            sessions: visible_sessions,
+            archived_sessions,
+            session_runtime_state: runtime_state_map,
+            archived_session_runtime_state: archived_runtime_state_map,
+            session_run_phases,
+            expanded_task_projects,
+            selected_session,
+            hydrated_session_ids: BTreeSet::new(),
+        },
+        issues,
     })
 }
 

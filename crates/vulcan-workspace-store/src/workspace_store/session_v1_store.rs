@@ -1038,10 +1038,8 @@ pub async fn list_active_sessions_v1(
     host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<Vec<SessionV1ListEntry>, SessionV1StoreError> {
-    list_active_session_index_v1(host_runtime, project_id)
-        .await
-        .map(|rows| current_partition_list_entries(&host_runtime.data_root, rows))
-        .map_err(SessionV1StoreError::from)
+    let rows = list_active_session_index_v1(host_runtime, project_id).await?;
+    current_partition_list_entries(&host_runtime.data_root, rows)
 }
 
 /// Lists archived V1 sessions from SQLite rows only.
@@ -1050,25 +1048,27 @@ pub async fn list_archived_sessions_v1(
     host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<Vec<SessionV1ListEntry>, SessionV1StoreError> {
-    list_archived_session_index_v1(host_runtime, project_id)
-        .await
-        .map(|rows| current_partition_list_entries(&host_runtime.data_root, rows))
-        .map_err(SessionV1StoreError::from)
+    let rows = list_archived_session_index_v1(host_runtime, project_id).await?;
+    current_partition_list_entries(&host_runtime.data_root, rows)
 }
 
-/// Projects only exact current-partition locators and silently ignores unsupported development rows.
-/// 仅投影精确的当前分区定位信息，并静默忽略不受支持的开发期记录。
+/// Projects supported locators without silently hiding corrupt current-partition records.
+/// 投影受支持定位器，不再静默隐藏当前分区的损坏记录。
+/// Only the explicitly retired duplicate-root partition remains omitted, as documented.
+/// 仅按文档约定继续排除明确退役的重复根分区。
 fn current_partition_list_entries(
     data_root: &Path,
     rows: Vec<SessionIndexV1Row>,
-) -> Vec<SessionV1ListEntry> {
-    rows.into_iter()
-        .filter_map(|row| {
-            storage_locator_from_row(data_root, row.clone())
-                .ok()
-                .map(|_| SessionV1ListEntry::from(row))
-        })
-        .collect()
+) -> Result<Vec<SessionV1ListEntry>, SessionV1StoreError> {
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.storage_partition == "code/sessions" {
+            continue;
+        }
+        storage_locator_from_row(data_root, row.clone())?;
+        entries.push(SessionV1ListEntry::from(row));
+    }
+    Ok(entries)
 }
 
 /// Validates one V1 restore target without changing an existing SQLite lifecycle row.
@@ -2576,7 +2576,11 @@ connection.close()
             .expect_err("duplicate code partition must be unsupported");
 
         assert!(matches!(error, SessionIndexV1Error::InvalidLocator { .. }));
-        assert!(current_partition_list_entries(data_root.path(), vec![row]).is_empty());
+        assert!(
+            current_partition_list_entries(data_root.path(), vec![row])
+                .expect("retired partition is deliberately omitted")
+                .is_empty()
+        );
     }
 
     /// Missing metadata is reported as absence and never triggers a sibling scan.
@@ -2808,11 +2812,28 @@ INSERT INTO session_index_v1 (
         .success
         .then_some(())
         .expect("unsupported session row insert must succeed");
-        let unsupported_snapshot =
+        let unsupported_report =
+            super::super::loading::load_workspace_index_report(host_runtime.clone())
+                .await
+                .expect("unsupported session row must not block tolerant workspace startup");
+        assert!(unsupported_report.snapshot.sessions.is_empty());
+        assert!(
+            !unsupported_report.is_complete(),
+            "an unsupported current row must be reported"
+        );
+        assert!(
             super::super::loading::load_workspace_index_snapshot(host_runtime.clone())
                 .await
-                .expect("unsupported session row must not block workspace startup");
-        assert!(unsupported_snapshot.sessions.is_empty());
+                .is_err(),
+            "a refresh must not publish the partial list as an authoritative replacement"
+        );
+        assert!(
+            locate_session_index_v1(&host_runtime, "not-a-session-uuid")
+                .await
+                .expect("index remains readable")
+                .is_some(),
+            "reporting invalid data must not delete it"
+        );
         local_sql::execute_batch(
             app,
             LogicalDatabase::AppState,
