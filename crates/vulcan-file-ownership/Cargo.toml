@@ -1,0 +1,19 @@
+[package]
+name = "vulcan-file-ownership"
+description = "Shared sidecar file ownership primitive for Vulcan storage engines."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fs4.workspace = true
+thiserror.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tempfile.workspace = true

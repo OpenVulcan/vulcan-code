@@ -1,268 +1,59 @@
-//! Database-root file ownership lock for LanceDB.
-//! LanceDB 的库根文件所有权锁。
-//!
-//! Purpose / 目的:
-//!
-//! Exactly one **Vulcan Code process** may treat a given LanceDB database root as its sole writer. The v1
-//! baseline settles that LanceDB gains a stable database-root lock, that multiple logical consumers inside one
-//! process share one lock and one engine, and that a failed acquisition reports the occupied path and lock
-//! identity instead of copying the database, deleting the lock file or continuing silently.
-//! 同一个 LanceDB 库根只能被一个 **Vulcan Code 进程** 当作唯一写者。v1 基线裁定 LanceDB 获得稳定的库根锁、同一
-//! 进程内多个逻辑消费者共享同一把锁与同一个引擎，且获取失败时报告占用路径与锁身份，而不是复制数据库、删除锁文件
-//! 或静默继续。
-//!
-//! Why the lock sits beside the root and not inside it / 锁为何位于根旁而非根内:
-//!
-//! A LanceDB database root is a **directory that LanceDB itself scans** for tables and manifests. A foreign file
-//! written inside it is not inert: it is something the engine may list, and it makes the data directory's
-//! contents depend on which process happens to be running. The lock therefore lives next to the root directory,
-//! named after it. The sidecar files may remain after the database directory is deleted, but an unlocked sidecar
-//! is reusable and its owner record is overwritten by the next holder.
-//! LanceDB 库根是一个**由 LanceDB 自身扫描**以寻找表与清单的目录。写入其中的外来文件并非惰性之物：引擎可能会列出
-//! 它，并使数据目录的内容取决于当时运行的进程。因此锁位于根目录旁边、以根命名。数据库目录删除后旁路文件可能保留，
-//! 但未锁定的旁路文件可直接复用，且下一位持有者会覆盖其中的持有者记录。
-//!
-//! Two-file layout and why it is required / 双文件布局及其必要性:
-//!
-//! 1. `<root>.vldb.lock` — the **held** file. Its OS-level exclusive lock expresses ownership and nothing is ever
-//!    written into it.
-//! 2. `<root>.vldb.lock.owner` — the **owner record**, freely readable so a losing process can report who holds
-//!    the lock.
-//!
-//! On Windows a process holding an exclusive lock cannot read or write that file's contents — attempts fail with
-//! `ERROR_LOCK_VIOLATION` (OS error 33) — so storing the owner record inside the held file would make contention
-//! reporting impossible and would break the acquisition path itself.
-//! 在 Windows 上，持有独占锁的进程无法读写该文件内容——尝试会以 `ERROR_LOCK_VIOLATION`（系统错误 33）失败——
-//! 因此把持有者记录放进被持有文件会让竞争报告无法实现，并破坏加锁路径本身。
-//!
-//! The lock path shape is an `OPEN` item in the v1 baseline; this module chooses the SQLite convention of
-//! "same name, next to the target" and records that choice here.
-//! 锁路径形状在 v1 基线中是 `OPEN` 项；本模块选择 SQLite 那一惯例——"同名、位于目标旁"——并在此记录该选择。
+//! lancedb ownership policy over the shared sidecar lock primitive.
+//! lancedb 基于共用旁路锁原语的所有权策略。
 
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+#[cfg(test)]
+use std::fs;
 use std::path::{Path, PathBuf};
+use vulcan_file_ownership::{OwnershipLock, OwnershipLockError};
 
 use crate::error::{EngineResult, LanceDbEngineError};
 
-/// Suffix appended to the database root directory name to derive its ownership lock path.
-/// 追加到数据库根目录名后以派生其所有权锁路径的后缀。
-const LOCK_FILE_SUFFIX: &str = ".vldb.lock";
-
-/// Suffix appended to the lock path to derive the owner record path.
-/// 追加到锁路径后以派生持有者记录路径的后缀。
-const OWNER_FILE_SUFFIX: &str = ".owner";
-
-/// Fallback lock file name used when the root path has no final path segment.
-/// 当根路径没有最终路径段时使用的兜底锁文件名。
-const FALLBACK_LOCK_FILE_NAME: &str = "lancedb.vldb.lock";
-
-/// An exclusively held ownership lock for one LanceDB database root.
-/// 针对一个 LanceDB 库根的独占所有权锁。
-///
-/// The lock is released when this value is dropped. Holding the value is what expresses ownership: there is no
-/// separate "is locked" query, because any such query would be racy.
-/// 该值被丢弃时锁即释放。持有该值本身即表达所有权；不提供单独的"是否已加锁"查询，因为任何这样的查询都存在竞争。
+/// Retains exclusive storage ownership for the lifetime of this value.
+/// 在此值的生命周期内保留存储独占所有权。
 #[derive(Debug)]
 pub struct DatabaseRootLock {
-    /// Held lock file path.
-    /// 被持有的锁文件路径。
-    lock_path: PathBuf,
-    /// Owner record path that carries this holder's identity.
-    /// 携带本持有者身份的记录文件路径。
-    owner_path: PathBuf,
-    /// Open handle whose OS-level lock expresses ownership.
-    /// 以操作系统级锁表达所有权的已打开句柄。
-    file: File,
-    /// Owner identity recorded for this holder.
-    /// 为本持有者记录的持有者身份。
-    owner: String,
+    inner: OwnershipLock,
 }
 
 impl DatabaseRootLock {
-    /// Acquires the exclusive ownership lock for one database root directory.
-    /// 为一个数据库根目录获取独占所有权锁。
-    ///
-    /// # Parameters / 参数
-    /// `root` is the physical database root; its parent directory is created when missing.
-    /// `root` 是物理数据库根；其父目录在缺失时会被创建。
-    ///
-    /// # Returns / 返回值
-    /// Returns [`LanceDbEngineError::LockHeld`] when another holder currently owns the lock, and
-    /// [`LanceDbEngineError::LockIo`] only for a genuine I/O failure. The two are deliberately distinct because
-    /// the host reaction differs: contention is an expected environmental condition, while an I/O failure means
-    /// the lock location itself is unusable.
-    /// 当其他持有者当前持有该锁时返回 [`LanceDbEngineError::LockHeld`]；仅在真实 I/O 失败时返回
-    /// [`LanceDbEngineError::LockIo`]。二者刻意区分，因为宿主应对方式不同：竞争是预期的环境状态，而 I/O 失败
-    /// 说明锁位置本身不可用。
-    pub fn acquire(root: &Path) -> EngineResult<Self> {
-        let lock_path = derive_lock_path(root);
-        let owner_path = derive_owner_path(&lock_path);
-
-        if let Some(parent) = lock_path.parent() {
-            fs::create_dir_all(parent).map_err(|source| LanceDbEngineError::LockIo {
-                lock_path: lock_path.clone(),
-                source,
-            })?;
-        }
-
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|source| LanceDbEngineError::LockIo {
-                lock_path: lock_path.clone(),
-                source,
-            })?;
-
-        // Read the owner record before attempting the lock so a contention report can name the current holder.
-        // 在尝试加锁前读取持有者记录，使竞争报告能给出当前持有者。
-        let existing_owner = read_owner_record(&owner_path);
-
-        if let Err(lock_error) = fs4::FileExt::try_lock(&file) {
-            return Err(match lock_error {
-                fs4::TryLockError::WouldBlock => LanceDbEngineError::LockHeld {
-                    lock_path,
-                    owner: existing_owner.unwrap_or_else(|| "unknown".to_string()),
+    /// Acquires the unchanged engine-specific sidecar, preserving typed conflict and I/O errors.
+    /// 获取引擎专属且布局不变的旁路锁，保留强类型竞争及 I/O 错误。
+    pub fn acquire(resource: &Path) -> EngineResult<Self> {
+        let owner = format!("pid={} db_root={}", std::process::id(), resource.display());
+        let inner =
+            OwnershipLock::acquire(derive_lock_path(resource), owner).map_err(
+                |error| match error {
+                    OwnershipLockError::Held { lock_path, owner } => {
+                        LanceDbEngineError::LockHeld { lock_path, owner }
+                    }
+                    OwnershipLockError::Io { lock_path, source } => {
+                        LanceDbEngineError::LockIo { lock_path, source }
+                    }
                 },
-                fs4::TryLockError::Error(source) => {
-                    LanceDbEngineError::LockIo { lock_path, source }
-                }
-            });
-        }
-
-        let owner = current_owner_identity(root);
-        write_owner_record(&owner_path, &owner, &lock_path)?;
-
-        Ok(Self {
-            lock_path,
-            owner_path,
-            file,
-            owner,
-        })
+            )?;
+        Ok(Self { inner })
     }
-
-    /// Returns the held lock file path.
-    /// 返回被持有的锁文件路径。
+    /// Returns the held lock path.
+    /// 返回持有锁路径。
     pub fn lock_path(&self) -> &Path {
-        &self.lock_path
+        self.inner.lock_path()
     }
-
-    /// Returns the owner record path.
-    /// 返回持有者记录路径。
+    /// Returns the separate diagnostic owner record path.
+    /// 返回独立诊断持有者记录路径。
     pub fn owner_path(&self) -> &Path {
-        &self.owner_path
+        self.inner.owner_path()
     }
-
-    /// Returns the owner identity recorded for this holder.
-    /// 返回为本持有者记录的持有者身份。
+    /// Returns the diagnostic identity published by this holder.
+    /// 返回本持有者发布的诊断身份。
     pub fn owner(&self) -> &str {
-        &self.owner
+        self.inner.owner()
     }
 }
 
-impl Drop for DatabaseRootLock {
-    /// Releases the OS-level lock.
-    /// 释放操作系统级锁。
-    ///
-    /// The trait method is named explicitly because `std::fs::File` has an inherent `unlock` of the same name,
-    /// and an unqualified call would resolve to the standard-library method.
-    /// 这里显式写出 trait 方法名，因为 `std::fs::File` 有同名的固有方法 `unlock`，非限定调用会解析到标准库方法。
-    fn drop(&mut self) {
-        let _ = fs4::FileExt::unlock(&self.file);
-    }
-}
-
-/// Derives the held lock path for one database root.
-/// 为一个数据库根派生被持有的锁路径。
-///
-/// The lock sits beside the root so it is never part of the directory LanceDB scans.
-/// 锁位于根旁，使它绝不成为 LanceDB 所扫描目录的一部分。
-fn derive_lock_path(root: &Path) -> PathBuf {
-    let file_name = root.file_name().map_or_else(
-        || std::ffi::OsString::from(FALLBACK_LOCK_FILE_NAME),
-        |name| {
-            let mut value = name.to_os_string();
-            value.push(LOCK_FILE_SUFFIX);
-            value
-        },
-    );
-
-    // `parent()` is `None` for a root path such as `/` on Windows, and for a bare directory name. In both cases
-    // the resolved directory must still be usable, so fall back explicitly instead of producing a relative path
-    // that would depend on the process working directory.
-    // 在 Windows 上形如 `/` 的根路径以及裸目录名都会让 `parent()` 返回 `None`。两种情况都必须得到可用的目录，
-    // 因此显式兜底，而不是产生依赖进程工作目录的相对路径。
-    match root.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.join(file_name),
-        _ => PathBuf::from(file_name),
-    }
-}
-
-/// Derives the owner record path from a held lock path.
-/// 由被持有的锁路径派生持有者记录路径。
-fn derive_owner_path(lock_path: &Path) -> PathBuf {
-    let mut value = lock_path.as_os_str().to_os_string();
-    value.push(OWNER_FILE_SUFFIX);
-    PathBuf::from(value)
-}
-
-/// Builds the owner identity string recorded for this process and database root.
-/// 构造为本进程与该数据库根记录的持有者身份字符串。
-fn current_owner_identity(root: &Path) -> String {
-    format!("pid={} db_root={}", std::process::id(), root.display())
-}
-
-/// Reads the owner record, if one exists and is readable.
-/// 读取持有者记录（若存在且可读）。
-///
-/// # Parameters / 参数
-/// `owner_path` is the record produced by a previous holder.
-/// `owner_path` 是先前持有者产生的记录。
-///
-/// # Returns / 返回值
-/// Returns the recorded identity, or `None` when the record is absent or unreadable. An unreadable record is
-/// treated as absent rather than fatal: it is diagnostic data, and refusing to acquire a lock because a
-/// diagnostic file cannot be read would turn a reporting problem into an availability problem.
-/// 返回记录的身份；记录缺失或不可读时返回 `None`。不可读的记录被视同缺失而非致命：它属于诊断数据，因无法读取
-/// 诊断文件而拒绝加锁会把报告问题变成可用性问题。
-fn read_owner_record(owner_path: &Path) -> Option<String> {
-    let text = fs::read_to_string(owner_path).ok()?;
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-/// Writes the owner record.
-/// 写入持有者记录。
-///
-/// # Parameters / 参数
-/// `owner_path` receives `owner`; `lock_path` is used only to name the lock in an error.
-/// `owner_path` 接收 `owner`；`lock_path` 仅用于在错误中命名该锁。
-///
-/// # Returns / 返回值
-/// Returns an error when the record cannot be written. The caller has already taken the OS-level lock, so this
-/// failure surfaces while the lock is released by the drop of the held handle.
-/// 记录无法写入时返回错误。调用方已取得操作系统级锁，因此该失败会向上暴露，而锁由被持有句柄的析构释放。
-fn write_owner_record(owner_path: &Path, owner: &str, lock_path: &Path) -> EngineResult<()> {
-    let mut file = File::create(owner_path).map_err(|source| LanceDbEngineError::LockIo {
-        lock_path: lock_path.to_path_buf(),
-        source,
-    })?;
-    file.write_all(owner.as_bytes())
-        .map_err(|source| LanceDbEngineError::LockIo {
-            lock_path: lock_path.to_path_buf(),
-            source,
-        })?;
-    file.flush().map_err(|source| LanceDbEngineError::LockIo {
-        lock_path: lock_path.to_path_buf(),
-        source,
-    })
+/// Keeps the engine's historical file/directory sidecar location without lossy native-name conversion.
+/// 保留引擎历史文件或目录旁路位置，不对原生名称进行有损转换。
+fn derive_lock_path(resource: &Path) -> PathBuf {
+    vulcan_file_ownership::sidecar_path(resource, "lancedb.vldb.lock")
 }
 
 #[cfg(test)]

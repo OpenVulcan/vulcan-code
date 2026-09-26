@@ -29,6 +29,7 @@ members = [
     "crates/vulcan-prompt-composer",
     "crates/vulcan-prompt-skills",
     "crates/vulcan-file-watcher",
+    "crates/vulcan-file-ownership",
     "crates/vulcan-mcp-runtime",
     "crates/vulcan-plugin-runtime",
     "crates/vulcan-tools-manager",
@@ -100,6 +101,7 @@ vulcan-context-compaction = { path = "crates/vulcan-context-compaction" }
 vulcan-prompt-composer = { path = "crates/vulcan-prompt-composer" }
 vulcan-prompt-skills = { path = "crates/vulcan-prompt-skills" }
 vulcan-file-watcher = { path = "crates/vulcan-file-watcher" }
+vulcan-file-ownership = { path = "crates/vulcan-file-ownership" }
 vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
 vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vulcan-luaskills-config = { path = "crates/vulcan-luaskills-config" }

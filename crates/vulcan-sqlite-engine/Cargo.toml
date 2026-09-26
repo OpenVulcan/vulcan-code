@@ -57,7 +57,7 @@ unwrap_used = "warn"
 
 [dependencies]
 arrow.workspace = true
-fs4.workspace = true
+vulcan-file-ownership.workspace = true
 jieba-rs.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

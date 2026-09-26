@@ -1,259 +1,76 @@
-//! Database lifetime file ownership lock.
-//! 数据库生命周期文件所有权锁。
-//!
-//! Purpose / 目的:
-//!
-//! Exactly one **Vulcan Code process** may treat a given normalized SQLite database path as its
-//! sole writer. The lock is a sidecar file next to the database; the database file itself is never
-//! moved, copied or deleted to resolve contention.
-//!
-//! 同一个规范化 SQLite 数据库路径只能被一个 **Vulcan Code 进程** 当作唯一写者。锁是数据库旁的
-//! 旁路文件；发生竞争时绝不移动、复制或删除数据库文件本身。
-//!
-//! Scope / 范围:
-//!
-//! This lock exists only to prevent two host processes from writing the same database. It carries
-//! no controller interoperability requirement and no cross-version negotiation.
-//!
-//! 本锁只用于防止两个宿主进程写同一个数据库，不承担控制器互操作义务，也不做跨版本协商。
-//!
-//! Two-file layout and why it is required / 双文件布局及其必要性:
-//!
-//! 1. `<database>.vldb.lock` — the **held** file. Its OS-level exclusive lock is what expresses
-//!    ownership. Nothing is ever written into it.
-//! 2. `<database>.vldb.lock.owner` — the **owner record**. Freely readable and writable by any
-//!    process, so a losing process can report who holds the lock.
-//!
-//! The split is not cosmetic. On Windows a process that holds an exclusive lock on a file cannot
-//! read or write that file's contents — attempts fail with `ERROR_LOCK_VIOLATION` (OS error 33).
-//! Storing the owner record inside the locked file therefore makes contention reporting impossible
-//! and makes the acquisition path itself fail. Keeping the held file content-free removes both
-//! problems while preserving exactly the same ownership semantics.
-//!
-//! 拆成两个文件不是形式问题。在 Windows 上，持有文件独占锁的进程无法读写该文件内容——尝试会以
-//! `ERROR_LOCK_VIOLATION`（系统错误 33）失败。把持有者记录写进被锁文件会导致竞争报告无法实现，
-//! 且加锁路径本身就会失败。让被锁文件保持无内容可消除这两个问题，同时保持完全相同的所有权语义。
-//!
-//! Deliberate design points / 刻意设计点:
-//!
-//! 1. **Contention is not an I/O error.** `fs4 1.1.0` returns [`fs4::TryLockError`], whose
-//!    `WouldBlock` variant means "someone else holds the lock". It must never be folded into a
-//!    generic I/O failure, because the two require different host reactions.
-//! 2. **Release is explicit and fully qualified.** `std::fs::File` gained inherent `unlock` in
-//!    Rust 1.89, so the `Drop` path names `fs4::FileExt::unlock` explicitly to avoid resolving to
-//!    the standard-library method.
+//! sqlite ownership policy over the shared sidecar lock primitive.
+//! sqlite 基于共用旁路锁原语的所有权策略。
 
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
+use vulcan_file_ownership::{OwnershipLock, OwnershipLockError};
+#[cfg(test)]
+use vulcan_file_ownership::{owner_record_path as derive_owner_path, read_owner_record};
 
 use crate::error::{EngineResult, SqliteEngineError};
 
-/// Suffix appended to the database file name to derive its ownership lock path.
-/// 追加到数据库文件名后以派生其所有权锁路径的后缀。
-const LOCK_FILE_SUFFIX: &str = ".vldb.lock";
-
-/// Suffix appended to the lock path to derive the owner record path.
-/// 追加到锁路径后以派生持有者记录路径的后缀。
-const OWNER_FILE_SUFFIX: &str = ".owner";
-
-/// Fallback lock file name used when the database path has no final path segment.
-/// 当数据库路径没有最终路径段时使用的兜底锁文件名。
-const FALLBACK_LOCK_FILE_NAME: &str = "sqlite.vldb.lock";
-
-/// An exclusively held ownership lock for one SQLite database path.
-/// 针对一个 SQLite 数据库路径的独占所有权锁。
-///
-/// The lock is released when this value is dropped. Holding the value is what expresses
-/// ownership: there is no separate "is locked" query, because any such query would be racy.
-///
-/// 该值被丢弃时锁即释放。持有该值本身即表达所有权；不提供单独的“是否已加锁”查询，因为任何
-/// 这样的查询都存在竞争。
+/// Retains exclusive storage ownership for the lifetime of this value.
+/// 在此值的生命周期内保留存储独占所有权。
 #[derive(Debug)]
 pub struct DatabaseFileLock {
-    /// Held lock file path.
-    /// 被持有的锁文件路径。
-    lock_path: PathBuf,
-    /// Owner record path that carries this holder's identity.
-    /// 携带本持有者身份的记录文件路径。
-    owner_path: PathBuf,
-    /// Open handle whose OS-level lock expresses ownership.
-    /// 以操作系统级锁表达所有权的已打开句柄。
-    file: File,
-    /// Owner identity recorded for this holder.
-    /// 为本持有者记录的持有者身份。
-    owner: String,
+    inner: OwnershipLock,
 }
 
 impl DatabaseFileLock {
-    /// Acquires the exclusive ownership lock for `db_path`.
-    /// 为 `db_path` 获取独占所有权锁。
-    ///
-    /// Returns [`SqliteEngineError::LockHeld`] when another holder currently owns the lock, and
-    /// [`SqliteEngineError::LockIo`] only for a genuine I/O failure. These are deliberately
-    /// distinct because the host reaction differs: contention is an expected environmental
-    /// condition, whereas an I/O failure indicates a broken lock location.
-    ///
-    /// 当其他持有者当前持有该锁时返回 [`SqliteEngineError::LockHeld`]；仅在真实 I/O 失败时返回
-    /// [`SqliteEngineError::LockIo`]。二者刻意区分，因为宿主应对方式不同：竞争是预期的环境状态，
-    /// 而 I/O 失败说明锁位置本身不可用。
-    pub fn acquire(db_path: &Path) -> EngineResult<Self> {
-        let lock_path = derive_lock_path(db_path);
-        let owner_path = derive_owner_path(&lock_path);
-
-        if let Some(parent) = lock_path.parent() {
-            fs::create_dir_all(parent).map_err(|source| SqliteEngineError::LockIo {
-                lock_path: lock_path.clone(),
-                source,
-            })?;
-        }
-
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|source| SqliteEngineError::LockIo {
-                lock_path: lock_path.clone(),
-                source,
-            })?;
-
-        // Read the owner record before attempting the lock so a contention report can name the
-        // current holder. This is a separate, unlocked file by design.
-        // 在尝试加锁前读取持有者记录，使竞争报告能给出当前持有者。按设计它是独立的、未被锁定的文件。
-        let existing_owner = read_owner_record(&owner_path);
-
-        if let Err(lock_error) = fs4::FileExt::try_lock(&file) {
-            return Err(match lock_error {
-                // Someone else holds the lock. This is contention, not an I/O failure.
-                // 其他持有者持有该锁：这是竞争，不是 I/O 失败。
-                fs4::TryLockError::WouldBlock => SqliteEngineError::LockHeld {
-                    lock_path,
-                    owner: existing_owner.unwrap_or_else(|| "unknown".to_string()),
+    /// Acquires the unchanged engine-specific sidecar, preserving typed conflict and I/O errors.
+    /// 获取引擎专属且布局不变的旁路锁，保留强类型竞争及 I/O 错误。
+    pub fn acquire(resource: &Path) -> EngineResult<Self> {
+        let owner = format!("pid={} db_path={}", std::process::id(), resource.display());
+        let inner =
+            OwnershipLock::acquire(derive_lock_path(resource), owner).map_err(
+                |error| match error {
+                    OwnershipLockError::Held { lock_path, owner } => {
+                        SqliteEngineError::LockHeld { lock_path, owner }
+                    }
+                    OwnershipLockError::Io { lock_path, source } => {
+                        SqliteEngineError::LockIo { lock_path, source }
+                    }
                 },
-                fs4::TryLockError::Error(source) => SqliteEngineError::LockIo { lock_path, source },
-            });
-        }
-
-        let owner = current_owner_identity(db_path);
-
-        // The owner record is diagnostic data. It is written after the lock is held, and a failure
-        // to write it is surfaced rather than hidden. The lock itself is released by the drop of
-        // `file` on this error path.
-        // 持有者记录属于诊断数据，在加锁成功后写入；写入失败会向上暴露而不被隐藏。此错误路径上
-        // 锁本身由 `file` 的析构释放。
-        write_owner_record(&owner_path, &owner, &lock_path)?;
-
-        Ok(Self {
-            lock_path,
-            owner_path,
-            file,
-            owner,
-        })
+            )?;
+        Ok(Self { inner })
     }
-
-    /// Returns the held lock file path.
-    /// 返回被持有的锁文件路径。
+    /// Returns the held lock path.
+    /// 返回持有锁路径。
     pub fn lock_path(&self) -> &Path {
-        &self.lock_path
+        self.inner.lock_path()
     }
-
-    /// Returns the owner record path.
-    /// 返回持有者记录路径。
+    /// Returns the separate diagnostic owner record path.
+    /// 返回独立诊断持有者记录路径。
     pub fn owner_path(&self) -> &Path {
-        &self.owner_path
+        self.inner.owner_path()
     }
-
-    /// Returns the owner identity recorded for this holder.
-    /// 返回为本持有者记录的持有者身份。
+    /// Returns the diagnostic identity published by this holder.
+    /// 返回本持有者发布的诊断身份。
     pub fn owner(&self) -> &str {
-        &self.owner
+        self.inner.owner()
     }
 }
 
-impl Drop for DatabaseFileLock {
-    /// Releases the OS-level lock.
-    /// 释放操作系统级锁。
-    ///
-    /// The trait method is named explicitly because `std::fs::File` has an inherent `unlock` of
-    /// the same name, and an unqualified call would resolve to the standard-library method.
-    ///
-    /// 这里显式写出 trait 方法名，因为 `std::fs::File` 有同名的固有方法 `unlock`，非限定调用
-    /// 会解析到标准库方法。
-    fn drop(&mut self) {
-        let _ = fs4::FileExt::unlock(&self.file);
-    }
-}
-
-/// Derives the held lock path for one database path.
-/// 为一个数据库路径派生被持有的锁路径。
-///
-/// The lock lives next to the database so that the two cannot be separated by a mount change, and
-/// so that deleting a database directory also removes its stale lock.
-///
-/// 锁与数据库相邻，避免二者因挂载变化而分离，也使删除数据库目录时一并移除陈旧锁。
-fn derive_lock_path(db_path: &Path) -> PathBuf {
-    let file_name = db_path.file_name().map_or_else(
-        || FALLBACK_LOCK_FILE_NAME.to_string(),
-        |name| format!("{}{LOCK_FILE_SUFFIX}", name.to_string_lossy()),
-    );
-
-    // `parent()` is `None` for a root path such as `/` on Windows, and for a bare file name. In
-    // both cases the resolved directory must still be usable, so fall back explicitly instead of
-    // producing a relative path that would depend on the process working directory.
-    // 在 Windows 上形如 `/` 的根路径以及裸文件名都会让 `parent()` 返回 `None`。两种情况都必须
-    // 得到可用的目录，因此显式兜底，而不是产生依赖进程工作目录的相对路径。
-    match db_path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.join(file_name),
-        _ => PathBuf::from(file_name),
-    }
-}
-
-/// Derives the owner record path from a held lock path.
-/// 由被持有的锁路径派生持有者记录路径。
-fn derive_owner_path(lock_path: &Path) -> PathBuf {
-    let mut value = lock_path.as_os_str().to_os_string();
-    value.push(OWNER_FILE_SUFFIX);
-    PathBuf::from(value)
-}
-
-/// Builds the owner identity string recorded for this process and database.
-/// 构造为本进程与该数据库记录的持有者身份字符串。
-fn current_owner_identity(db_path: &Path) -> String {
-    format!("pid={} db_path={}", std::process::id(), db_path.display())
-}
-
-/// Writes the owner record atomically enough for diagnostic purposes.
-/// 以对诊断而言足够原子性的方式写入持有者记录。
-fn write_owner_record(owner_path: &Path, owner: &str, lock_path: &Path) -> EngineResult<()> {
-    let mut file = File::create(owner_path).map_err(|source| SqliteEngineError::LockIo {
-        lock_path: lock_path.to_path_buf(),
-        source,
-    })?;
-    file.write_all(owner.as_bytes())
-        .and_then(|()| file.write_all(b"\n"))
-        .and_then(|()| file.flush())
-        .map_err(|source| SqliteEngineError::LockIo {
-            lock_path: lock_path.to_path_buf(),
-            source,
-        })
-}
-
-/// Reads an existing owner record, returning `None` when it is absent or empty.
-/// 读取既有持有者记录；不存在或为空时返回 `None`。
-fn read_owner_record(owner_path: &Path) -> Option<String> {
-    let text = fs::read_to_string(owner_path).ok()?;
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+/// Keeps the engine's historical file/directory sidecar location without lossy native-name conversion.
+/// 保留引擎历史文件或目录旁路位置，不对原生名称进行有损转换。
+fn derive_lock_path(resource: &Path) -> PathBuf {
+    vulcan_file_ownership::sidecar_path(resource, "sqlite.vldb.lock")
 }
 
 #[cfg(test)]
 mod tests {
+    /// The engine wrapper retains distinct native names instead of using their lossy display text.
+    /// 引擎包装保留不同的原生名称，不使用有损显示文本。
+    #[cfg(unix)]
+    #[test]
+    fn native_database_names_do_not_alias() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+        let root = tempfile::tempdir().expect("isolated lock fixture");
+        let a = root.path().join(OsString::from_vec(vec![0x80]));
+        let b = root.path().join(OsString::from_vec(vec![0x81]));
+        let a = DatabaseFileLock::acquire(&a).expect("first database lock");
+        let b = DatabaseFileLock::acquire(&b).expect("second database lock");
+        assert_ne!(a.lock_path(), b.lock_path());
+    }
     use super::{DatabaseFileLock, derive_lock_path, derive_owner_path};
     use crate::error::SqliteEngineError;
     use std::fs;
@@ -269,9 +86,8 @@ mod tests {
         );
     }
 
-    /// Verifies a path without a usable parent still yields an absolute or bare lock file name
-    /// rather than one that depends on the process working directory.
-    /// 验证没有可用父目录的路径仍能得到不依赖进程工作目录的锁文件名。
+    /// Bare input keeps its relative identity; production resources are normalized before acquisition.
+    /// 裸输入保留相对身份；生产资源在获取锁之前完成规范化。
     #[test]
     fn derive_lock_path_handles_missing_parent() {
         // A bare file name has no parent segment.
