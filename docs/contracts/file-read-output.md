@@ -45,6 +45,20 @@
 
 `file_edit.encoding` 指定源编码，编辑保留该编码。`file.write.source_encoding` 仅用于已有文件的源解码，`encoding` 独立指定目标编码；省略目标编码时保留已确认的源编码。预检确认的变更前后格式必须直接进入持久回执，不能重新自动检测后覆盖。`apply_patch` 保持现有补丁语法；遇到不确定编码时整批不写入，并提示改用支持显式编码的 `file_edit`。
 
+### 编码参数对照
+
+| 操作 | 未声明源编码 | 显式源编码 | 写出编码 |
+| --- | --- | --- | --- |
+| `file read` | 自动检测；不确定时返回候选及警告，或拒绝无法识别的文本 | `encoding` | 不写入 |
+| `file_edit` | 仅允许证据足够的自动检测结果 | `encoding` | 保持已确认的源编码 |
+| `file write` 修改已有文件 | 仅允许证据足够的自动检测结果 | `source_encoding` | `encoding` 指定目标；省略则保持源编码 |
+| `file write` 新建文件 | 没有源文件 | 不允许 `source_encoding` | `encoding` 指定目标；省略使用默认 UTF-8 |
+| `apply_patch` 修改已有文件 | 仅允许证据足够的自动检测结果；不确定时整批拒绝 | 当前补丁语法不提供编码参数，应改用 `file_edit` | 保持源编码 |
+
+`encoding_source` 表示本次解码的证据来源：`utf8_validation` 为严格 UTF-8 校验，`bom` 为字节序标记，`detector` 为编码检测器，`unicode_pattern` 为无 BOM Unicode 字节模式，`explicit` 为调用方显式选择。`encoding_certain` 表示当前证据是否允许自动写回，不是概率，也不证明调用方选择的编码就是文件历史上的原始编码。显式源编码仍须通过字节及 BOM 兼容性校验。
+
+两种写入工具共用源编码检查。比较防护行为时，应比较 `file_edit.encoding` 与 `file.write.source_encoding`，不能把显式确认源编码的编辑和未确认源编码的整文件写入当作相同输入。
+
 无 BOM UTF-16/32 只有在字节模式提供充分证据时自动识别；中文短样本不能保证自动判断端序。二进制拒绝信息提供显式编码线索，真正二进制仍禁止当作文本修改。`retryable=false` 表示原参数不得自动重试，不禁止确认编码后发出新请求。
 
 文件列表与文件信息使用独立内容卡，不展示通用输入、输出标签页。工作区根目录的单独 `.` 标签省略；父目录 `..` 不省略。仓库概览工具 `vulcan_codekit_repo_map` 显示“查看仓库概览”，展开后展示原始 Markdown 源码块。
@@ -53,7 +67,7 @@
 
 - 请求参数保持兼容。未指定 `end_line` 时，默认最多读取 `DEFAULT_READ_LINES`（当前 400 行），序列化预算为 `DEFAULT_READ_RESPONSE_BYTES`（当前 64 KiB）。
 - 显式指定结束行时，仍受 `MAX_READ_LINES`（当前 10000 行）与 `MAX_READ_RESPONSE_BYTES`（当前 2 MiB）硬上限约束。各常量在 `file_runtime.rs` 唯一定义，工具帮助直接引用。
-- 大小预算同时计算唯一正文和元数据的序列化成本；截断后使用 `next_start_line` 续读，不能重漏源行。
+- 大小预算按 `FileToolResponse` 经 `serde_json::to_vec` 序列化后的 UTF-8 字节数计算，包含唯一 Markdown 正文、元数据、字段名和 JSON 转义开销。正文中的 `Lnn: ` 行号、围栏、标题及续读提示都计入；不是源文件字节数，也不是仅计算渲染后的正文。默认预算为 64 × 1024 字节，不包含之后其他层追加的外部消息信封。截断后使用 `next_start_line` 续读，不能重漏源行。
 - 仅截取完整源文件行；单行无法放入预算时显式失败，避免返回无法推进的续读位置。
 - 前端保留历史无编号 `vulcan.file_read.v1`、带编号但映射位于 `range` 的 `vulcan.file_read.v2`、`vulcan.file_access.v2` 和旧多文件结果读取能力；不批量改写历史会话。
 - 新格式的映射无效时明确显示映射错误，不猜测替代字段或将标题当作源文件内容。
@@ -74,3 +88,32 @@
 - 精确替换的 `ambiguous_match` 返回 `match_count`（全部匹配数）、`candidate_count`（实际返回候选数）、`candidate_ranges`（一基 `start_line` 与 `line_count`）与 `candidates_truncated`；候选上限唯一来源是 `text_document::MAX_ERROR_CANDIDATE_RANGES`。
 - 回滚失败报告 `commit_scope=unknown`、`rollback_state=failed`；执行状态不明不能宣称没有副作用。
 - 工具已返回但完成回执持久化失败时，终止继续执行并禁止自动重试。已应用变更集应保留 `side_effect_observed=true` 和 `tool_result_persistence_failed`，明确告知变更已经生效，不得为了补回执重复执行。
+
+### 常见错误码与调用方动作
+
+下表覆盖文件工具的常见公开错误，不是全部内部诊断码的封闭枚举。
+
+| 错误码 | 触发条件 | 调用方动作 |
+| --- | --- | --- |
+| `path_not_found` | 操作需要的源路径不存在 | 检查路径或列出现存父目录；不要重读不存在的路径 |
+| `unsupported_file_type` | 当前操作不支持目录、链接或其他目标类型 | 用 `stat` 确认类型；目录发现使用 `list` |
+| `unsupported_encoding` | 编码名称不支持、源字节不满足声明编码或声明与 BOM 冲突 | 根据编码证据修正声明；不要仅更换标签掩盖错误 |
+| `encoding_ambiguous` | 修改所需源编码尚未确认 | 先确认源编码，再使用 `file_edit.encoding` 或 `file.write.source_encoding` |
+| `binary_file` | 自动读取或文本修改识别到二进制特征 | 已知是无 BOM 文本时显式声明源编码；真正二进制不得按文本修改 |
+| `no_change` | 请求没有产生实际字节变化 | 跳过操作；确需修改时提供不同内容 |
+| `ambiguous_match` | 单次精确替换命中多处 | 检查候选行范围，增加唯一上下文；确需全部替换才指定 `replace_all` |
+| `match_not_found` | 精确替换的旧内容不存在 | 重读相关范围，再生成匹配原文的请求 |
+| `same_path` | 移动的源与目标是同一路径 | 跳过移动或选择不同目标 |
+| `destination_exists` | 创建或移动的目标已存在 | 检查目标，选择新路径或明确采用修改操作 |
+| `patch_context_not_found` | 补丁上下文无法匹配 | 重读相关文件，再生成补丁 |
+| `invalid_change_set` | 宿主生成的变更回执违反 V1 契约 | 视为内部缺陷，保留诊断并报告；不要调整业务参数或重复执行绕过 |
+| `output_limit_exceeded` | 元数据或单行无法放入当前读取预算 | 缩小范围；显式范围可使用较高硬预算，仍无法容纳时需其他读取方式 |
+| `tool_result_persistence_failed` | 工具已经返回，但终态回执保存被拒绝；属于执行链错误 | 检查已经产生的结果，禁止为了补回执自动重放操作 |
+
+`requires_read` 表示修正请求前是否需要重新获取相关文件内容或编码证据，不表示必须原样重试同一个读操作。`retryable=false` 禁止原请求自动重试，不禁止经确认后提交语义不同的新请求。`commit_scope` 与 `rollback_state` 只在相关错误附带时解释：`none` / `not_started` 表示未提交，`unknown` 或回滚 `failed` 必须先核对磁盘状态，不能推断无副作用。
+
+`invalid_change_set` 的校验发生在文件提交前，必须保留生产运行时的受控拒绝，不能替换为仅调试有效的断言或进程崩溃。它和用户路径、匹配参数错误不是同一类缺陷。
+
+### 回执失败的隔离验证
+
+测试使用真实原生文件工具和流式执行器，在临时工作区完成文件修改后，通过 `reject_runtime_event_projection_barrier_from_event_with_reason` 拒绝 `ToolFinished` 屏障，模拟终态存储拒绝。验证磁盘结果已生效、工具只调用一次、错误保留副作用且禁止自动重试、控制器不再发送下一次模型请求。此接口是宿主已有的回执确认机制，不是新增的生产环境故障开关；测试不修改实际会话数据库的权限或内容。

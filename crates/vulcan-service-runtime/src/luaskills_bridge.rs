@@ -948,7 +948,10 @@ pub fn update_luaskill(
     invalidate_config_capability_cache(handle, &result.skill_id).map_err(|error| {
         post_commit_projection_failure(&result.skill_id, "更新", "配置能力缓存失效失败", &error)
     })?;
-    let catalog = reload_catalog_after_management(handle, &mut engine).map_err(|error| {
+    // LuaSkills 0.5.9 reloads the runtime inside the update transaction. Project its
+    // committed state without destroying a second VM pool and its native libraries.
+    // LuaSkills 0.5.9 在更新事务内重载运行时；直接投影已提交状态，避免再次销毁 VM 池及其原生库。
+    let catalog = build_luaskills_catalog(handle, &engine).map_err(|error| {
         post_commit_projection_failure(&result.skill_id, "更新", "刷新技能目录失败", &error)
     })?;
     Ok((result.message, catalog))

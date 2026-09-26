@@ -736,6 +736,12 @@ fn production_install_and_update_use_local_github_routes_safely() {
             .contains("2.0.0")
     );
 
+    // A no-op upstream update does not reload; the host must still project the current catalog.
+    // 上游无版本变化的更新不会重载，宿主仍须正确投影当前目录。
+    let (_, unchanged) = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID))
+        .expect("updating the current version must preserve its catalog");
+    assert_eq!(catalog_version(&unchanged, FIXTURE_SKILL_ID), "2.0.0");
+
     let (_, _) = uninstall_luaskill(&handle, String::from(FIXTURE_SKILL_ID))
         .expect("remove fixture before warm reinstall");
     let warm_asset_requests = server.request_count_ending_with("fixture-skill-v2.0.0-skill.zip");

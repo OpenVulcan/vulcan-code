@@ -5,10 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
 import { configDefaults } from "vitest/config";
-
-// VULCAN_DEV_WEBUI_ORIGIN is the exact debug workbench allowed to read its service discovery token.
-// VULCAN_DEV_WEBUI_ORIGIN 是获准读取服务发现令牌的精确调试工作台来源。
-const VULCAN_DEV_WEBUI_ORIGIN = "http://127.0.0.1:17601";
+import { VULCAN_DEV_WEBUI_ORIGIN } from "./src/service/vite-service-discovery-origin";
 
 // Configure the Vite app served by Core and loaded by the desktop shell.
 // 配置由 Core 提供页面并供桌面壳加载的 Vite 应用。
@@ -64,8 +61,8 @@ export default defineConfig(({ mode }) => {
     server: isRelease
       ? undefined
       : {
-          host: "127.0.0.1",
-          port: 17601,
+          host: new URL(VULCAN_DEV_WEBUI_ORIGIN).hostname,
+          port: Number(new URL(VULCAN_DEV_WEBUI_ORIGIN).port),
           strictPort: true,
         },
   };

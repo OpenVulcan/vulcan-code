@@ -3116,6 +3116,9 @@ fn edit_error_recovery_hint(code: &str) -> &'static str {
         "execution_failed" => {
             "Execution stopped without a confirmed outcome. Inspect affected paths before retrying; changes may already have been applied."
         }
+        "invalid_change_set" => {
+            "The host generated an invalid change receipt before committing file changes. Report this internal defect with its diagnostic; do not change tool arguments or repeat the operation to work around it."
+        }
         _ => "Inspect the structured error and correct the request before retrying.",
     }
 }
@@ -6892,6 +6895,19 @@ mod tests {
                 "encoding_ambiguous" | "binary_file"
             ));
             assert_eq!(fs::read(&path).unwrap(), bytes);
+            // Selecting a destination codec must not bypass the same source guard used by file_edit.
+            // 选择目标编码不得绕过与 file_edit 相同的源编码防护。
+            let denied_write = execute_file(
+                directory.path().to_path_buf(),
+                json!({
+                    "action":"write", "path":"encoded.txt", "content":replacement,
+                    "encoding":"utf-8",
+                }),
+            )
+            .await
+            .expect_err("output encoding alone must not authorize an uncertain source");
+            assert_eq!(denied_write.code, denied.code);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
             let explicit_read = execute_file(
                 directory.path().to_path_buf(),
                 json!({
@@ -7381,6 +7397,17 @@ mod tests {
         let error = commit_validated_changes("applied", &[prepared], "file")
             .expect_err("invalid ChangeSet must fail before mutation");
         assert_eq!(error.code, "invalid_change_set");
+        // Internal contract defects must not invite argument changes or automatic replay.
+        // 内部契约缺陷不得诱导修改参数或自动重放。
+        let diagnostic = error.as_value();
+        assert_eq!(diagnostic["retryable"], false);
+        assert_eq!(diagnostic["requires_read"], false);
+        assert!(
+            diagnostic["hint"]
+                .as_str()
+                .unwrap()
+                .contains("internal defect")
+        );
         assert!(!path.exists());
     }
 

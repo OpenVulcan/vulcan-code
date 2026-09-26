@@ -1,5 +1,6 @@
 import { readElectronServiceConnection } from "@/host-shell/electron-bridge";
 import { notificationClientInstanceId } from "@/notifications/client-identity";
+import { VULCAN_DEV_WEBUI_ORIGIN } from "./vite-service-discovery-origin";
 
 // BrowserServiceDiscoverySnapshot describes the service endpoint advertised by /health or dev discovery.
 // BrowserServiceDiscoverySnapshot 描述 /health 或开发发现端点公布的服务端点。
@@ -328,12 +329,16 @@ async function browserServiceDiscoveryPlan(): Promise<BrowserServiceCandidatePla
   // 显式目标须先完成校验，不能预先读取其他实例的发现文档。
   const fromQuery = new URLSearchParams(window.location.search).get("service");
   const fromEnv = importMeta.env?.VITE_VULCAN_SERVICE_URL ?? null;
+  // Only the configured Vite dev server owns this route; Core ports and built pages do not.
+  // 只有配置的 Vite 开发服务器拥有该路由，Core 端口和已构建页面均不提供它。
+  const useViteDiscovery = import.meta.env.DEV
+    && window.location.origin === VULCAN_DEV_WEBUI_ORIGIN
+    && fromQuery === null && fromEnv === null;
   return planBrowserServiceCandidates({
     fromQuery,
     fromEnv,
     fromLocation: browserServiceBaseUrlFromLocation(),
-    fromDiscovery: fromQuery !== null || fromEnv !== null
-      ? null : await readBrowserServiceDiscoveryBaseUrl(),
+    fromDiscovery: useViteDiscovery ? await readBrowserServiceDiscoveryBaseUrl() : null,
     fromStorage: window.localStorage.getItem(BROWSER_SERVICE_URL_STORAGE_KEY),
     fromDefault: DEFAULT_BROWSER_SERVICE_URL,
     rangeCandidates: browserServicePortRangeCandidates(),
