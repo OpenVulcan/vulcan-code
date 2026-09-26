@@ -30,4 +30,5 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "pr
 tokio-util.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-runtime-assets.workspace = true
+vulcan-tools-manager.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

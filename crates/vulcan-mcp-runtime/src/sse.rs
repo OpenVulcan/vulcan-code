@@ -37,7 +37,7 @@ use crate::auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession};
 use crate::error::McpRuntimeError;
 use crate::http_support::parse_http_headers_to_header_map;
 use crate::rmcp_support::{
-    build_rmcp_call_tool_request_params, rmcp_call_tool_result_to_value,
+    build_rmcp_call_tool_request_params, project_rmcp_tool_result,
     rmcp_capabilities_support_prompts, rmcp_capabilities_support_resources, rmcp_tool_to_schema,
 };
 use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
@@ -529,6 +529,18 @@ impl McpTransport for SseTransport {
         name: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, McpRuntimeError> {
+        self.call_tool_with_audience(name, args, crate::McpToolResultAudience::Machine)
+            .await
+    }
+
+    /// Sends one legacy SSE call, retaining consumer-specific projection after the response.
+    /// 发送一次旧式 SSE 调用，在响应后保留消费者对应投影。
+    async fn call_tool_with_audience(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        audience: crate::McpToolResultAudience,
+    ) -> Result<serde_json::Value, McpRuntimeError> {
         let params = build_rmcp_call_tool_request_params(name, args)?;
         let request_id = self.next_request_id();
         let request = CallToolRequest::new(params);
@@ -543,7 +555,7 @@ impl McpTransport for SseTransport {
                 "legacy SSE tools/call did not return a callTool result".to_string(),
             ));
         };
-        rmcp_call_tool_result_to_value(result)
+        project_rmcp_tool_result(result, audience)
     }
 }
 

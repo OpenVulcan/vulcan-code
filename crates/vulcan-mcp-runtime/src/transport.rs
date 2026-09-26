@@ -8,6 +8,18 @@ use rmcp::model::{GetPromptResult, Prompt, ReadResourceResult, Resource};
 use serde_json::Value;
 use tokio::sync::broadcast;
 
+/// Selects a result projection without changing MCP requests or machine-call contracts.
+/// 选择结果投影，不改变 MCP 请求或机器调用契约。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpToolResultAudience {
+    /// Preserve the existing structured result for programmatic consumers.
+    /// 为程序消费者保留既有结构化结果。
+    Machine,
+    /// Preserve all conversation content blocks for model reading.
+    /// 保留全部会话内容块供模型阅读。
+    Conversation,
+}
+
 /// Negotiated MCP server identity returned by the initialize handshake.
 /// MCP initialize 握手返回的已协商服务器身份。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,4 +195,17 @@ pub trait McpTransport: Send + Sync {
     /// Invoke one named tool with a JSON argument object.
     /// 使用一个 JSON 参数对象调用单个具名工具。
     async fn call_tool(&self, name: &str, args: Value) -> Result<Value, McpRuntimeError>;
+
+    /// Invokes one tool for the selected consumer; opaque custom transports retain their contract.
+    /// 为选定消费者调用工具；不透明自定义传输保留自身契约。
+    /// Inputs identify the tool, arguments and audience; returns one result without a second call.
+    /// 输入标识工具、参数与消费者；返回单份结果，不进行二次调用。
+    async fn call_tool_with_audience(
+        &self,
+        name: &str,
+        args: Value,
+        _audience: McpToolResultAudience,
+    ) -> Result<Value, McpRuntimeError> {
+        self.call_tool(name, args).await
+    }
 }

@@ -408,6 +408,18 @@ impl McpTransport for StdioTransport {
     async fn call_tool(&self, name: &str, args: Value) -> Result<Value, McpRuntimeError> {
         call_rmcp_tool(&self.peer, "stdio", name, args).await
     }
+
+    /// Projects one completed call for its declared consumer without altering transport behavior.
+    /// 为声明消费者投影一次已完成调用，不改变传输行为。
+    async fn call_tool_with_audience(
+        &self,
+        name: &str,
+        args: Value,
+        audience: crate::McpToolResultAudience,
+    ) -> Result<Value, McpRuntimeError> {
+        crate::rmcp_support::call_rmcp_tool_with_audience(&self.peer, "stdio", name, args, audience)
+            .await
+    }
 }
 
 #[cfg(test)]

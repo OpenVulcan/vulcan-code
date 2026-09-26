@@ -15,6 +15,7 @@ const MAX_PUBLIC_TOOL_NAME_LEN: usize = 64;
 mod manager;
 mod public_names;
 mod request_streaming;
+pub mod result_markdown;
 mod schema_projection;
 #[cfg(test)]
 mod tests;
