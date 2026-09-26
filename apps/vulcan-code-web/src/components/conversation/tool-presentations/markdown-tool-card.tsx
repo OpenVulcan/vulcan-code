@@ -2,6 +2,7 @@
 // Markdown 文档工具卡。
 import * as React from "react";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
+import type { ToolDetailPayload } from "@/components/conversation/conversation-detail";
 import { ChevronDown, ChevronRight, Code2, FileText, FolderTree, FolderSearch, GitBranch, Search } from "lucide-react";
 import { ChangeSetDiffPreview } from "@/components/conversation/conversation-change-set-diff-preview";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
@@ -15,7 +16,7 @@ import { ToolResultBody, type ToolRequestCardProgress, type ToolDetailLoader, ac
 
 // markdownToolPresentationDetailCache avoids refetching full Markdown-output detail after remounts.
 // markdownToolPresentationDetailCache 避免重挂后重复请求完整 Markdown 输出详情。
-const markdownToolPresentationDetailCache = new Map<string, MarkdownToolPresentation>();
+const markdownToolPresentationDetailCache = new Map<string, ToolDetailPayload | null>();
 
 // MarkdownToolPresentationCard renders exact-tool Markdown output.
 // MarkdownToolPresentationCard 渲染精确工具标识对应的 Markdown 输出。
@@ -52,36 +53,46 @@ export function MarkdownToolPresentationCard(props: {
     presentation,
   } = props;
   const detailCacheKey = markdownToolPresentationDetailCacheKey(presentation);
-  const [hydratedPresentation, setHydratedPresentation] = React.useState<MarkdownToolPresentation>(
-    () => detailCacheKey ? markdownToolPresentationDetailCache.get(detailCacheKey) ?? presentation : presentation,
+  // loadedDetail owns asynchronous content only; streaming presentation props remain authoritative.
+  // loadedDetail 仅持有异步正文；流式展示属性始终保持权威。
+  const [loadedDetail, setLoadedDetail] = React.useState<{ key: string; payload: ToolDetailPayload | null } | null>(null);
+  // detailRef stays stable across equivalent projected objects, preventing cancellation/reload churn.
+  // detailRef 在等价投影对象间保持稳定，防止反复取消及重新加载。
+  const detailRef = React.useMemo(() => presentation.detailRef, [
+    presentation.detailRef?.sessionId, presentation.detailRef?.recordId,
+    presentation.detailRef?.toolCallId, presentation.detailRef?.seq, presentation.detailRef?.messageIndex,
+  ]);
+  // detail belongs to the current reference; a recycled card must never show the previous tool's body.
+  // detail 属于当前引用；复用的卡片绝不能显示上一工具的正文。
+  const detail = detailCacheKey === loadedDetail?.key ? loadedDetail.payload
+    : detailCacheKey ? markdownToolPresentationDetailCache.get(detailCacheKey) : undefined;
+  // Derive current UI directly instead of copying every new presentation object into state in an effect.
+  // 直接派生当前界面，不通过 effect 将每个新展示对象复制到状态中。
+  const hydratedPresentation = React.useMemo(
+    () => detail ? hydrateMarkdownToolPresentation(presentation, detail) : presentation,
+    [detail, presentation],
   );
   React.useEffect(() => {
-    const cached = detailCacheKey ? markdownToolPresentationDetailCache.get(detailCacheKey) : undefined;
-    setHydratedPresentation(cached ?? presentation);
-  }, [detailCacheKey, presentation]);
-  React.useEffect(() => {
-    if (!expanded || !onLoadToolDetail || !presentation.detailRef || !detailCacheKey || markdownToolPresentationDetailCache.has(detailCacheKey)) {
+    if (!expanded || !onLoadToolDetail || !detailRef || !detailCacheKey || markdownToolPresentationDetailCache.has(detailCacheKey)) {
       return;
     }
     let cancelled = false;
-    void onLoadToolDetail(presentation.detailRef)
+    void onLoadToolDetail(detailRef)
       .then((payload) => {
         if (cancelled) {
           return;
         }
-        const nextPresentation = hydrateMarkdownToolPresentation(presentation, payload);
-        markdownToolPresentationDetailCache.set(detailCacheKey, nextPresentation);
-        setHydratedPresentation(nextPresentation);
+        markdownToolPresentationDetailCache.set(detailCacheKey, payload);
+        setLoadedDetail({ key: detailCacheKey, payload });
       })
       .catch(() => {
-        if (!cancelled) {
-          setHydratedPresentation(presentation);
-        }
+        // The parent detail-loader owns the visible error and explicit retry; current props need no reset.
+        // 父级详情加载器负责可见错误及显式重试；当前属性无需重置。
       });
     return () => {
       cancelled = true;
     };
-  }, [detailCacheKey, expanded, onLoadToolDetail, presentation]);
+  }, [detailCacheKey, detailRef, expanded, onLoadToolDetail]);
   const markdown = hydratedPresentation.markdown.trim();
   // markdownBlock is a fallback for Markdown tools and unparseable source envelopes.
   // markdownBlock 是 Markdown 工具及无法解析源码封套时的兜底内容。
