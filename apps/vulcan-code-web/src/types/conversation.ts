@@ -20,12 +20,12 @@ import type { ProjectSummary } from "./projects-files";
 import type { ContextCompactionWindowNodeId } from "./public-ai";
 import type { ConversationEventBody, ConversationEventSummary } from "@/service/conversation-event-window-store";
 
-// ConversationAgentInteraction retains exact collaboration or child-result facts for display only.
-// ConversationAgentInteraction 仅为展示保留精确协作或子任务结果事实。
+// ConversationAgentInteraction retains exact collaboration, authenticated question input or child-result facts for display only.
+// ConversationAgentInteraction 仅为展示保留精确协作、已验证问题输入或子任务结果事实。
 export type ConversationAgentInteraction = Omit<ConversationEventSummary, "event"> & {
-  // Only host-owned interaction variants can select an agent card; text cannot select this type.
-  // 只有宿主持有的交互分支可选择代理卡片，正文不能选择此类型。
-  event: Extract<ConversationEventBody, { kind: "collaboration" | "subagent_return" }>;
+  // User inputs enter only after host agent-message identity and recipient validation; human prose never selects a card.
+  // 输入仅在验证宿主代理消息身份及接收方后进入；人类正文绝不选择卡片。
+  event: Extract<ConversationEventBody, { kind: "collaboration" | "subagent_return" | "user_input" }>;
 };
 
 // ConversationRunOutcome identifies the strict terminal result of a settled run.

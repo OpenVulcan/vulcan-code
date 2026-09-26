@@ -1564,7 +1564,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.detail.arguments": "技术详情",
     "conversation.collaboration.detail.output": "工具回执",
     "conversation.collaboration.timeline.question": "代理提问",
-    "conversation.collaboration.timeline.answer": "问题回答回执",
+    "conversation.collaboration.timeline.answer": "问题回复",
     "conversation.collaboration.timeline.delivery": "协作投递",
     "conversation.collaboration.timeline.notification": "代理阶段通知",
     "conversation.collaboration.timeline.task": "子任务结果",

@@ -78,6 +78,8 @@ export function collaborationEventIsUserVisible(event: CollaborationEvent): bool
   // 传输进度按精确身份附加到原工具或消息卡片。
   return event.after_state.kind !== "outbound_delivery"
     && event.after_state.kind !== "inbound_delivery"
+    && event.after_state.kind !== "answer_delivery"
+    && event.after_state.kind !== "question_execution"
     && event.after_state.kind !== "task_result_acknowledgement"
     && event.after_state.kind !== "task_result_projection"
     && event.event_kind !== "run_control_changed"

@@ -8,6 +8,7 @@ import type {
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationMenuAction } from "@/components/project/project-sidebar-types";
@@ -489,7 +490,7 @@ export function WorkspaceResizableBody(props: {
       {props.children}
       {workspaceMainPluginMounts.length > 0 ? (
         <div className="workspace-plugin-main-mounts">
-          <React.Suspense fallback={<div role="status">{t("skills.plugins.loadingPage")}</div>}>
+          <React.Suspense fallback={<StreamPlaceholder className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
             {workspaceMainPluginMounts.map(({ plugin, mount }) => (
               <DynamicPluginMountPanel
                 key={`${plugin.id}:${mount.id}`}
@@ -577,7 +578,7 @@ export function WorkspaceResizableBody(props: {
             id="workspaceContext"
             inert={!rightPanelTransition.visible}
           >
-            <React.Suspense fallback={<div role="status">{t("skills.plugins.loadingPage")}</div>}>
+            <React.Suspense fallback={<StreamPlaceholder className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
             <WorkspaceContextPanel
               aiBrowserAvailable={props.aiBrowserAvailable && Boolean(aiBrowserMount)}
               localBrowserAvailable={props.localBrowserAvailable}
@@ -627,7 +628,7 @@ export function WorkspaceResizableBody(props: {
             </React.Suspense>
             {otherPluginMounts.length > 0 ? (
               <div className="conversation-plugin-right-mounts">
-                <React.Suspense fallback={<div role="status">{t("skills.plugins.loadingPage")}</div>}>
+                <React.Suspense fallback={<StreamPlaceholder className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
                   {otherPluginMounts.map(({ plugin, mount }) => (
                     <DynamicPluginMountPanel
                       key={`${plugin.id}:${mount.id}:${props.selectedConversationId ?? "none"}`}

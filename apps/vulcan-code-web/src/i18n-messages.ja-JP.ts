@@ -1564,7 +1564,7 @@ export const jaJPTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.detail.arguments": "技術的な詳細",
     "conversation.collaboration.detail.output": "ツールの受領",
     "conversation.collaboration.timeline.question": "エージェントの質問",
-    "conversation.collaboration.timeline.answer": "質問への回答の受領",
+    "conversation.collaboration.timeline.answer": "質問への回答",
     "conversation.collaboration.timeline.delivery": "協調の配信",
     "conversation.collaboration.timeline.notification": "エージェントのフェーズ通知",
     "conversation.collaboration.timeline.task": "子タスクの結果",

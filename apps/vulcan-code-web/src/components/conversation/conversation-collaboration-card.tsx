@@ -5,6 +5,7 @@ import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ConversationCollaborationStateContext } from "./conversation-collaboration-state";
 import { collaborationTaskMessageId } from "@/service/conversation-event-display-projection";
+import { decodeAgentQuestionInput, type ConversationAgentQuestionInput } from "@/service/conversation-agent-question-input";
 import { MarkdownMessage } from "./conversation-markdown";
 import type { ConversationAgentInteraction } from "@/types/conversation";
 import type {
@@ -51,6 +52,12 @@ export function ConversationAgentInteractionView({ interaction }: { interaction:
   // actions 仅包含回调，不包含持久化权威或重建的消息角色。
   const actions = React.useContext(ConversationAgentInteractionActionsContext);
   const { locale, t } = useI18n();
+  if (interaction.event.kind === "user_input") {
+    // Only the production projection's host-authored question mirror reaches this branch.
+    // 仅生产投影中的宿主问题镜像进入此分支。
+    const question = decodeAgentQuestionInput(interaction.event);
+    return question ? <ConversationReceivedQuestion {...actions} question={question} seq={interaction.seq} createdAtMs={interaction.created_at_ms} /> : null;
+  }
   if (interaction.event.kind === "collaboration") {
     return <ConversationCollaborationCard key={interaction.event.operation_id} {...actions} event={interaction.event} seq={interaction.seq} createdAtMs={interaction.created_at_ms} />;
   }
@@ -64,6 +71,41 @@ export function ConversationAgentInteractionView({ interaction }: { interaction:
       </footer>
     </CollaborationToolCard>
   );
+}
+
+/** Renders a received question body with the shared incoming bubble and exact delivery state.
+ * 使用共享接收气泡及精确投递状态渲染收到的问题正文。
+ * Props contain the decoded host question, event coordinates and host-owned navigation; returns one card.
+ * 参数包含解码宿主问题、事件坐标和宿主导航；返回一张卡片。 */
+function ConversationReceivedQuestion(props: ConversationAgentInteractionActions & {
+  /** Original question and its immutable event coordinates.
+   * 原问题及其不可变事件坐标。 */
+  question: ConversationAgentQuestionInput; seq: number; createdAtMs: number;
+}) {
+  // Exact question identity attaches delivery updates without importing an answer into this body.
+  // 精确问题身份关联投递更新，不将答案混入本正文。
+  const { locale, t } = useI18n();
+  const state = React.useContext(ConversationCollaborationStateContext);
+  const delivery = state.deliveries.get(props.question.questionId);
+  // Execution is local to the receiver and belongs on this bubble, never on an independent empty card.
+  // 执行属于接收方，应显示在本气泡上，绝不生成独立空卡片。
+  const execution = state.questionExecutions.get(props.question.questionId);
+  // A recorded answer/cancellation takes precedence over an earlier running execution snapshot.
+  // 已记录的回答或撤销优先于此前仍在运行的执行快照。
+  const settled = delivery?.kind === "inbound_delivery" && delivery.delivery.settlement !== undefined;
+  const status = [...new Set([
+    delivery ? collaborationStatus(delivery, t) : null,
+    execution && !settled ? collaborationStatus(execution, t) : null,
+  ].filter(Boolean))].join(" · ");
+  return <CollaborationToolCard id={`collaboration:received-question:${props.question.eventId}`} seq={props.seq}
+    eventKind="user_input" cardKind="question" incoming title={t("conversation.collaboration.timeline.question")}
+    status={status}
+    participant={<CollaborationSessionButton {...props} sessionId={props.question.source} title={t("conversation.collaboration.openSource")} />}
+    footer={<footer className="user-message-meta conversation-v1-collaboration-time">
+      <time dateTime={new Date(props.createdAtMs).toISOString()}>{new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
+    </footer>}>
+    <div className="conversation-v1-collaboration-content"><MarkdownMessage content={props.question.body} eager /></div>
+  </CollaborationToolCard>;
 }
 
 /** Renders one collaboration event as an independent user-facing timeline card.
@@ -90,6 +132,13 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   const afterState = event.after_state.kind === "question"
     ? collaborationState.questions.get(event.after_state.question.question_id) ?? event.after_state
     : taskMessageId !== null ? collaborationState.taskMessages.get(taskMessageId) ?? event.after_state : event.after_state;
+  // The original event selects question versus reply; later snapshots update status, never change that identity.
+  // 原始事件决定提问还是回复；后续快照只更新状态，绝不改变此身份。
+  const isAnswer = event.event_kind === "question_answered" && afterState.kind === "question";
+  const answer = isAnswer ? afterState.question.answer : undefined;
+  const answerReceipt = isAnswer ? collaborationState.answerDeliveries.get(afterState.question.question_id) : undefined;
+  const answerDelivery = answerReceipt && answer && answerReceipt.delivery.delivery_revision >= answer.delivery.delivery_revision
+    ? answerReceipt.delivery : answer?.delivery;
   const isNotification = afterState.kind === "outbound_notification" || afterState.kind === "inbound_notification";
   // Task-message cards describe delivery, never a child task's terminal result.
   // 任务消息卡片描述投递，绝不表示子任务终态结果。
@@ -108,7 +157,7 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
   // Direction is declared by the stored receiver variant, never inferred from names or message text.
   // 方向由持久化的接收方分支声明，绝不通过名称或消息正文推断。
   const incoming = afterState.kind === "inbound_task_message" || afterState.kind === "received_task_result"
-    || afterState.kind === "inbound_notification";
+    || afterState.kind === "inbound_notification" || isAnswer;
   const taskMessageEffect = taskMessageId !== null ? collaborationState.taskMessageEffects.get(taskMessageId) : undefined;
   // Only result snapshots own result receipts; message cards keep their independent application state.
   // 只有结果快照承载结果回执，消息卡保留独立的应用状态。
@@ -120,7 +169,8 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
       ? t("conversation.collaboration.status.resultUnavailable") : t("conversation.collaboration.status.resultInContext"))
     : resultProgress?.kind === "task_result_acknowledgement" || afterState.kind === "received_task_result"
       ? t("conversation.collaboration.status.resultDelivered") : null;
-  const status = [...new Set([collaborationStatus(taskMessageEffect ?? afterState, t), resultProgressLabel].filter(Boolean))].join(" · ");
+  const status = [...new Set([collaborationStatus(taskMessageEffect ?? afterState, t), resultProgressLabel,
+    answerDelivery ? collaborationAnswerDeliveryStateLabel(answerDelivery.state, t) : null].filter(Boolean))].join(" · ");
   const title = isFailedTaskDelivery
     ? t("conversation.collaboration.timeline.taskMessage")
     : collaborationTimelineTitle(event.event_kind, t);
@@ -130,8 +180,13 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
     ? afterState.kind === "outbound_task_message" ? "sent" : afterState.kind === "inbound_task_message" ? "received"
       : afterState.kind === "task_result" && !isFailedTaskDelivery ? "reply" : null
     : null;
-  const body = event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState);
-  const secondaryBody = collaborationSecondaryBody(afterState);
+  const body = isAnswer ? answer?.body ?? null
+    : event.event_kind === "child_task_non_success_projected" ? null : collaborationBody(afterState);
+  // Cancellation diagnostics belong to their own event, never the original question or answer body.
+  // 撤销诊断属于自身事件，绝不混入原问题或答案正文。
+  const secondaryBody = event.event_kind === "question_cancelled" && afterState.kind === "question" && afterState.question.cancellation
+    ? { label: "conversation.collaboration.detail.cancellationReason" as const, body: afterState.question.cancellation.reason }
+    : collaborationSecondaryBody(afterState);
   return (
     <CollaborationToolCard
       id={taskMessageId !== null ? `collaboration:task-message:${taskMessageId}` : `collaboration:${event.operation_id}:${props.seq}`} seq={props.seq}
@@ -147,7 +202,7 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
       participant={participants.map((participant) => (
         <CollaborationSessionButton {...props} key={`${participant.role}:${participant.sessionId}`}
           sessionId={participant.sessionId}
-          title={participant.role === "source" ? t("conversation.collaboration.openSource") : t("conversation.collaboration.openTarget")} />
+          title={isAnswer || participant.role === "source" ? t("conversation.collaboration.openSource") : t("conversation.collaboration.openTarget")} />
       ))}
       footer={<footer className={incoming ? "user-message-meta conversation-v1-collaboration-time" : "conversation-v1-collaboration-footer"}>
         <time dateTime={new Date(props.createdAtMs).toISOString()}>
@@ -162,7 +217,7 @@ export function ConversationCollaborationCard(props: ConversationAgentInteractio
           <MarkdownMessage content={secondaryBody.body} eager />
         </section>
       ) : null}
-      {afterState.kind === "question" ? <ConversationCollaborationStatus questionId={afterState.question.question_id} /> : null}
+      {afterState.kind === "question" && !isAnswer ? <ConversationCollaborationStatus questionId={afterState.question.question_id} /> : null}
     </CollaborationToolCard>
   );
 }
@@ -191,7 +246,7 @@ export function ConversationCollaborationStatus(props: { questionId?: string | n
 function CollaborationToolCard(props: React.PropsWithChildren<{
   // Stable fold identity and persisted event coordinates.
   // 稳定折叠身份与持久事件坐标。
-  id: string; seq: number; eventKind: "collaboration" | "subagent_return";
+  id: string; seq: number; eventKind: "collaboration" | "subagent_return" | "user_input";
   // Distinct semantic card kind and optional collaboration subtype.
   // 独立语义卡片类型与可选协作子类型。
   cardKind: string; collaborationEventKind?: CollaborationEventKind;
@@ -395,19 +450,8 @@ function collaborationSecondaryBody(
       body: afterState.result.acceptance.message.body,
     };
   }
-  if (afterState.kind !== "question") return null;
-  if (afterState.question.answer) {
-    return {
-      label: "conversation.collaboration.detail.answer",
-      body: afterState.question.answer.body,
-    };
-  }
-  if (afterState.question.cancellation) {
-    return {
-      label: "conversation.collaboration.detail.cancellationReason",
-      body: afterState.question.cancellation.reason,
-    };
-  }
+  // Question and answer bodies have independent cards; neither duplicates the other's text.
+  // 问题与答案正文各有独立卡片，互不重复对方文本。
   return null;
 }
 

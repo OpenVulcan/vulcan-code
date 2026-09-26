@@ -1564,7 +1564,7 @@ export const frFRTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.detail.arguments": "Détails techniques",
     "conversation.collaboration.detail.output": "Accusé de l’outil",
     "conversation.collaboration.timeline.question": "Question de l’agent",
-    "conversation.collaboration.timeline.answer": "Accusé de réponse à la question",
+    "conversation.collaboration.timeline.answer": "Réponse à la question",
     "conversation.collaboration.timeline.delivery": "Livraison de collaboration",
     "conversation.collaboration.timeline.notification": "Notification de phase de l’agent",
     "conversation.collaboration.timeline.task": "Résultat de la sous-tâche",

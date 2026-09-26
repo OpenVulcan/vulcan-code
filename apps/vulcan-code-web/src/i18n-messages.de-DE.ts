@@ -1564,7 +1564,7 @@ export const deDETranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.detail.arguments": "Technische Details",
     "conversation.collaboration.detail.output": "Tool-Bestätigung",
     "conversation.collaboration.timeline.question": "Agentenfrage",
-    "conversation.collaboration.timeline.answer": "Empfangsbestätigung der Antwort",
+    "conversation.collaboration.timeline.answer": "Antwort auf die Frage",
     "conversation.collaboration.timeline.delivery": "Kollaborationszustellung",
     "conversation.collaboration.timeline.notification": "Phasenbenachrichtigung des Agenten",
     "conversation.collaboration.timeline.task": "Ergebnis der Unteraufgabe",

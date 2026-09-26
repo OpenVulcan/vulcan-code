@@ -22,6 +22,7 @@ import type {
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { collaborationEventIsUserVisible, collaborationTaskMessageId, requestConfigChangeKind } from "@/service/conversation-event-display-projection";
 import { projectCollaborationTurnLayout } from "@/service/conversation-collaboration-turn-layout";
+import { decodeAgentQuestionInput } from "@/service/conversation-agent-question-input";
 import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conversation-usage-coverage";
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
 import { goalNoticeTitle } from "./conversation-goal-notice";
@@ -170,7 +171,14 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // rootInputByTurn binds final assistant actions to the root input of the same logical Turn.
     // rootInputByTurn 将最终回答操作绑定到同一逻辑 Turn 的根输入。
     const rootInputByTurn = new Map<number, V1RootInputPresentationMetadata>();
+    // Only an actually loaded outbound question card can replace its successful ask-tool receipt.
+    // 只有实际加载的发出提问卡，才能替代对应的成功提问工具回执。
+    const visibleQuestionIds = new Set<string>();
     for (const summary of events) {
+      if (summary.event.kind === "collaboration" && summary.event.event_kind === "question_created"
+        && summary.event.after_state.kind === "question") {
+        visibleQuestionIds.add(summary.event.after_state.question.question_id);
+      }
       if ((summary.event.kind === "api_started" || summary.event.kind === "api_stats") && summary.event.purpose === "compaction") {
         compactionCalls.add(summary.event.api_call_id);
       }
@@ -196,6 +204,9 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // 来源与目标回执更新同一精确投递的首张卡片。
     const taskMessageIds = new Set<string>();
     for (const summary of projectCollaborationTurnLayout(events)) {
+      // Filter before consulting the event cache so pagination and live question arrival remain reversible.
+      // 读取事件缓存前过滤，使分页及实时问题到达后的显示切换保持可逆。
+      if (summary.event.kind === "tool_call" && questionCardReplacesToolReceipt(summary.event, visibleQuestionIds)) continue;
       if (summary.event.kind === "collaboration") {
         const deliveryId = collaborationTaskMessageId(summary.event.after_state);
         if (deliveryId !== null) {
@@ -243,6 +254,22 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
       renderItems: projectRenderItems(projectedMessages),
     };
   };
+}
+
+/** Returns whether a completed ask receipt already has its exact outbound question card in this window.
+ * 返回当前窗口是否已有可替代成功提问回执的精确发出提问卡。
+ * Inputs are canonical tool facts and visible question IDs; failed, active or unmatched calls stay visible.
+ * 参数为规范工具事实与可见问题身份；失败、活动中或未匹配的调用保持显示。 */
+function questionCardReplacesToolReceipt(event: ToolCallBody, visibleQuestionIds: ReadonlySet<string>): boolean {
+  if (event.status !== "completed" || (event.tool_name !== "ask_question" && event.tool_name !== "ask_parent")) return false;
+  // The native result_markdown producer keeps this join ID in collaboration_receipt_v1, never in display prose.
+  // 原生 result_markdown 生产者在 collaboration_receipt_v1 中保留关联身份，绝不从展示正文提取。
+  const result = toolHostResult(event);
+  if (result?.kind !== "collaboration_receipt_v1") return false;
+  const payload = result.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const questionId = (payload as Record<string, unknown>).question_id;
+  return typeof questionId === "string" && visibleQuestionIds.has(questionId);
 }
 
 // eventApiStatsDependency returns the terminal API facts one event display reads, if any.
@@ -333,7 +360,13 @@ function conversationMessagesForV1Event(
     case "user_input":
       // The typed collaboration event owns the visible card; its provider mirror is not a prompt.
       // 强类型协作事件拥有可见卡片，其供应商镜像不是人类提示词。
-      if (summary.event.input_source === "agent_message") return [];
+      if (summary.event.input_source === "agent_message") {
+        // Received questions have no typed body in inbound_delivery; their exact host envelope owns the body.
+        // 接收问题的 inbound_delivery 不含强类型正文；其精确宿主信封拥有正文。
+        const question = decodeAgentQuestionInput(summary.event);
+        return question?.target === sessionId ? [{ ...base, role: "system", recordKind: "agent-interaction",
+          body: "", agentInteraction: { ...summary, event: summary.event } }] : [];
+      }
       return [userInputMessage(base, summary.event, resources)];
     case "assistant_reasoning":
       return [{

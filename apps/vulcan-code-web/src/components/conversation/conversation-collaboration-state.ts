@@ -7,6 +7,12 @@ export interface ConversationCollaborationState {
   /** Source-owned question snapshots, including their final answer or cancellation.
    * 来源持有的问题快照，包含最终回答或撤销。 */
   questions: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "question" }>>;
+  /** Answer receipts enrich only the reply identified by question ID.
+   * 回答回执仅补充按问题身份绑定的回复。 */
+  answerDeliveries: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "answer_delivery" }>>;
+  /** Receiver-owned execution snapshots enrich the incoming question identified by question ID.
+   * 接收方执行快照按问题身份补充收到的提问。 */
+  questionExecutions: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "question_execution" }>>;
   /** Latest delivery progress for each exact question in this session.
    * 当前会话内每个精确问题的最新投递进度。 */
   deliveries: ReadonlyMap<string, Extract<CollaborationAfterState, { kind: "outbound_delivery" | "inbound_delivery" }>>;
@@ -27,7 +33,7 @@ export interface ConversationCollaborationState {
 /** Shares the exact mounted session's facts with both tool and message cards.
  * 向工具与消息卡片共享精确已挂载会话的事实。 */
 export const ConversationCollaborationStateContext = React.createContext<ConversationCollaborationState>({
-  questions: new Map(), deliveries: new Map(), tasks: new Map(), taskMessages: new Map(), taskMessageEffects: new Map(), taskResultProgress: new Map(),
+  questions: new Map(), answerDeliveries: new Map(), questionExecutions: new Map(), deliveries: new Map(), tasks: new Map(), taskMessages: new Map(), taskMessageEffects: new Map(), taskResultProgress: new Map(),
 });
 
 /** Folds canonical event order into latest snapshots without modifying persisted history.
@@ -38,6 +44,12 @@ export function projectConversationCollaborationState(events: readonly Conversat
   // Separate maps preserve the distinction between question settlement and transport progress.
   // 分离映射以保留问题结算和传输进度的区别。
   const questions = new Map<string, Extract<CollaborationAfterState, { kind: "question" }>>();
+  // Answer delivery revisions are independent of question snapshots and never replace their body.
+  // 回答交付修订独立于问题快照，绝不替换其正文。
+  const answerDeliveries = new Map<string, Extract<CollaborationAfterState, { kind: "answer_delivery" }>>();
+  // Canonical event order supplies the latest local execution snapshot for each exact question.
+  // 规范事件顺序提供每个精确问题的最新本地执行快照。
+  const questionExecutions = new Map<string, Extract<CollaborationAfterState, { kind: "question_execution" }>>();
   const deliveries = new Map<string, Extract<CollaborationAfterState, { kind: "outbound_delivery" | "inbound_delivery" }>>();
   const tasks = new Map<string, Extract<CollaborationAfterState, { kind: "child_task" }>>();
   // Content and effect snapshots remain separate so state-only receipts cannot erase the message.
@@ -53,6 +65,14 @@ export function projectConversationCollaborationState(events: readonly Conversat
     // 判别字段确定归属；不按相邻时间或名称匹配。
     const state = summary.event.after_state;
     switch (state.kind) {
+      case "question_execution":
+        questionExecutions.set(state.execution.question_id, state);
+        break;
+      case "answer_delivery":
+        if (state.delivery.delivery_revision > (answerDeliveries.get(state.question_id)?.delivery.delivery_revision ?? -1)) {
+          answerDeliveries.set(state.question_id, state);
+        }
+        break;
       case "task_result_acknowledgement":
         // A delayed acknowledgement cannot regress an already projected result.
         // 迟到的送达确认不能回退已加入上下文的结果状态。
@@ -85,5 +105,5 @@ export function projectConversationCollaborationState(events: readonly Conversat
         break;
     }
   }
-  return { questions, deliveries, tasks, taskMessages, taskMessageEffects, taskResultProgress };
+  return { questions, answerDeliveries, questionExecutions, deliveries, tasks, taskMessages, taskMessageEffects, taskResultProgress };
 }

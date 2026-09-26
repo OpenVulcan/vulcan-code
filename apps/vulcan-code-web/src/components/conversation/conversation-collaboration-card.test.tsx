@@ -11,6 +11,8 @@ import type {
 import type { ConversationAgentInteraction } from "@/types/conversation";
 import { ConversationCollaborationCard, ConversationAgentInteractionView, ConversationAgentInteractionActionsContext } from "./conversation-collaboration-card";
 import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
+import { clientActionId } from "@/service/conversation-event-window-store";
+import { ConversationCollaborationStateContext, projectConversationCollaborationState } from "./conversation-collaboration-state";
 
 // This file mounts the card directly; the display renderer only proves it renders somewhere.
 // 本文件直接挂载该卡片；显示渲染器只证明它被渲染，不证明其自身行为。
@@ -328,6 +330,128 @@ it.each(["pending", "answered"] as const)("shows no cancellation control or tech
   expect(host.querySelector(".conversation-v1-collaboration-cancel-button")).toBeNull();
   expect(host.querySelector(".conversation-v1-collaboration-details")).toBeNull();
   expect(host.textContent).toContain("Which file owns this behavior?");
+});
+
+// Both received question and received answer reuse the same short/long bubble behavior.
+// 收到的问题与答案复用同一套短文和长文气泡行为。
+it.each([false, true])("renders received questions and answers as incoming bubbles (long: %s)", async (long) => {
+  contentHeight = long ? 20 * (USER_PROMPT_COLLAPSE_LINE_LIMIT + 1) : 40;
+  // The producer fixture mirrors HostMessageEnvelope::render, including escaped literal body text.
+  // 生产者夹具镜像 HostMessageEnvelope::render，包含转义的原始正文。
+  const incoming: ConversationAgentInteraction = { ...interaction(questionEvent()), event: {
+    kind: "user_input", client_action_id: clientActionId("agent-message:delivery-1"), input_id: 9,
+    input_source: "agent_message", text: '<vulcan_agent_message version="1" event_id="delivery-1" kind="question" source="session-source" target="session-target" question_id="question-1" scope="question">Question `&lt;literal&gt;` &amp; text</vulcan_agent_message>',
+  } };
+  await act(async () => root.render(<I18nProvider initialLocale="en-US"><ConversationAgentInteractionView interaction={incoming} /></I18nProvider>));
+  expect(host.querySelector(".user-bubble")?.textContent).toContain("Question <literal> & text");
+  expect(host.querySelector(".conversation-v1-collaboration-row-toggle")).toBeNull();
+  expect(Boolean(host.querySelector(".conversation-v1-collaboration-overflow-toggle"))).toBe(long);
+  // The answer's source snapshot contains the original question, which must never appear in its bubble.
+  // 答案来源快照含原问题，但它绝不能出现在答案气泡里。
+  const replied = questionEvent("answered", "question_answered");
+  if (replied.after_state.kind !== "question") throw new Error("Expected a question fixture");
+  replied.after_state.question.answer = { operation_id: "reply", responder: participant("target"), body: "Only the answer.", settled_at_ms: 110,
+    delivery: { state: "undelivered", delivery_revision: 1, last_operation_id: "reply", updated_at_ms: 110 } };
+  await mount(replied);
+  expect(host.querySelector(".user-bubble")?.textContent).toContain("Only the answer.");
+  expect(host.textContent).not.toContain("Which file owns this behavior?");
+  expect(host.querySelector(".conversation-v1-collaboration-row-toggle")).toBeNull();
+  expect(Boolean(host.querySelector(".conversation-v1-collaboration-overflow-toggle"))).toBe(long);
+  await mount({ ...replied, event_kind: "question_created" });
+  expect(host.querySelector(".user-bubble")).toBeNull();
+  expect(host.textContent).toContain("Which file owns this behavior?");
+  expect(host.textContent).not.toContain("Only the answer.");
+});
+
+// Receipts update the existing answer while unrelated or stale revisions cannot replace its state.
+// 回执原位更新现有答案，无关或过期修订不能覆盖其状态。
+it("attaches exact answer receipts in place without duplicating or moving the reply", async () => {
+  const reply = questionEvent("answered", "question_answered");
+  if (reply.after_state.kind !== "question") throw new Error("Expected a question fixture");
+  reply.after_state.question.answer = { operation_id: "reply", responder: participant("target"), body: "Reply body", settled_at_ms: 110,
+    delivery: { state: "undelivered", delivery_revision: 1, last_operation_id: "reply", updated_at_ms: 110 } };
+  // Controlled snapshots use question IDs and receipt revisions from the production contract.
+  // 可控快照使用生产契约的问题身份及回执修订。
+  const receipt = (questionId: string, revision: number, state: "delivered" | "failed"): ConversationAgentInteraction => ({
+    ...interaction(reply), seq: 5 + revision, event: { kind: "collaboration", version: 1, operation_id: `receipt-${questionId}-${revision}`,
+      event_kind: state === "delivered" ? "answer_delivered" : "answer_delivery_failed",
+      after_state: { kind: "answer_delivery", question_id: questionId, delivery: {
+        state, delivery_revision: revision, last_operation_id: `receipt-${revision}`, updated_at_ms: 110 + revision,
+      } },
+    },
+  });
+  // Rerender only presentation state; the original event and timestamp remain immutable.
+  // 仅重新渲染展示状态；原始事件与时间戳保持不可变。
+  const render = async (receipts: ConversationAgentInteraction[]) => {
+    await act(async () => root.render(<I18nProvider initialLocale="en-US">
+      <ConversationCollaborationStateContext.Provider value={projectConversationCollaborationState([interaction(reply), ...receipts])}>
+        <ConversationAgentInteractionView interaction={interaction(reply)} />
+      </ConversationCollaborationStateContext.Provider>
+    </I18nProvider>));
+  };
+  await render([]);
+  const card = host.querySelector("article");
+  const timestamp = host.querySelector("time")?.dateTime;
+  await render([receipt("another-question", 9, "failed"), receipt("question-1", 3, "delivered"), receipt("question-1", 2, "failed")]);
+  expect(host.querySelector("article")).toBe(card);
+  expect(host.querySelectorAll("article")).toHaveLength(1);
+  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toContain("Delivered");
+  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).not.toContain("Failed");
+  expect(host.querySelector(".user-bubble")?.textContent).toBe("Reply body");
+  expect(host.querySelector("time")?.dateTime).toBe(timestamp);
+});
+
+// Incoming execution transitions enrich the same question bubble without leaking across question IDs.
+// 接收方执行转换补充同一个提问气泡，不能跨问题身份混入。
+it("updates receiver execution in the question bubble and suppresses stale running after settlement", async () => {
+  // The received host question is immutable while execution and delivery facts evolve independently.
+  // 收到的宿主问题保持不可变，执行和投递事实独立演进。
+  const incoming: ConversationAgentInteraction = { ...interaction(questionEvent()), event: {
+    kind: "user_input", client_action_id: clientActionId("agent-message:delivery-1"), input_id: 9, input_source: "agent_message",
+    text: '<vulcan_agent_message version="1" event_id="delivery-1" kind="question" source="session-source" target="session-target" question_id="question-1" scope="question">Original question</vulcan_agent_message>',
+  } };
+  // Build typed receiver execution facts for one exact question; returns its persisted envelope.
+  // 为一个精确问题构造接收方执行事实；返回持久信封。
+  const execution = (questionId: string, state: "running" | "completed", outcome?: "settled" | "failed"): ConversationAgentInteraction => ({
+    ...interaction(questionEvent()), event: { kind: "collaboration", version: 1, operation_id: `execution-${state}`,
+      event_kind: state === "running" ? "question_execution_started" : "question_execution_completed",
+      after_state: { kind: "question_execution", execution: { execution_id: `execution-${questionId}`, operation_id: "start", question_id: questionId,
+        participant: participant("target"), purpose: "in_turn_question", state, outcome, started_at_ms: 100 } },
+    },
+  });
+  // Preserve the original event, position and timestamp while updating the presentation context.
+  // 更新展示上下文时保留原事件、位置及时间戳。
+  const render = async (events: ConversationAgentInteraction[]) => {
+    await act(async () => root.render(<I18nProvider initialLocale="en-US">
+      <ConversationCollaborationStateContext.Provider value={projectConversationCollaborationState(events)}>
+        <ConversationAgentInteractionView interaction={incoming} />
+      </ConversationCollaborationStateContext.Provider>
+    </I18nProvider>));
+  };
+  await render([execution("question-1", "running"), execution("unrelated", "completed", "failed")]);
+  const card = host.querySelector("article");
+  const timestamp = host.querySelector("time")?.dateTime;
+  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toBe("Running");
+  for (const outcome of ["settled", "failed"] as const) {
+    await render([execution("question-1", "running"), execution("question-1", "completed", outcome)]);
+    expect(host.querySelector("article")).toBe(card);
+    expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toBe(outcome === "settled" ? "Settled" : "Failed");
+  }
+  // A persisted settlement wins even when the window still contains the earlier running snapshot.
+  // 即使窗口仍含此前运行快照，持久化结算也应优先显示。
+  await render([execution("question-1", "running"), { ...interaction(questionEvent()), event: {
+    kind: "collaboration", version: 1, operation_id: "settlement", event_kind: "delivery_settled",
+    after_state: { kind: "inbound_delivery", delivery: { delivery_id: "delivery-1", question_id: "question-1", operation_id: "delivery",
+      source: participant("source"), target: participant("target"), execution_purpose: "in_turn_question", state: "projected", target_revision: 2, updated_at_ms: 200,
+      settlement: { state: "answered", source_event_seq: 12, source_operation_id: "reply", target_operation_id: "settlement", acknowledged_at_ms: 200 },
+    } },
+  } }]);
+  expect(host.querySelector("article")).toBe(card);
+  expect(host.querySelectorAll("article")).toHaveLength(1);
+  expect(host.querySelector(".conversation-v1-collaboration-badge")?.textContent).toContain("Answered");
+  expect(host.textContent).not.toContain("Running");
+  expect(host.querySelector(".user-bubble")?.textContent).toBe("Original question");
+  expect(host.querySelector("time")?.dateTime).toBe(timestamp);
 });
 
 it("retains the original event timestamp across a delivery update", async () => {

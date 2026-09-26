@@ -1564,7 +1564,7 @@ export const ruRUTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.detail.arguments": "Технические подробности",
     "conversation.collaboration.detail.output": "Подтверждение инструмента",
     "conversation.collaboration.timeline.question": "Вопрос агента",
-    "conversation.collaboration.timeline.answer": "Подтверждение ответа на вопрос",
+    "conversation.collaboration.timeline.answer": "Ответ на вопрос",
     "conversation.collaboration.timeline.delivery": "Доставка совместной работы",
     "conversation.collaboration.timeline.notification": "Уведомление агента об этапе",
     "conversation.collaboration.timeline.task": "Результат подзадачи",

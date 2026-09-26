@@ -31,7 +31,7 @@ import type { ConversationSummary, ToolRequestProgressSnapshot } from "@/types";
 import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
 import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
-import { appendToolRequestDraftMessages, projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
+import { appendToolRequestDraftMessages, createConversationBranchPresentationProjectorV1, projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
 import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
@@ -630,6 +630,110 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(container.querySelectorAll("[data-collaboration-attached-status]"), markup).toHaveLength(1);
     expect(container.querySelector("[data-collaboration-attached-status]")?.textContent).toContain("已完成");
     expect(container.querySelector('[data-collaboration-card-kind]')).toBeNull();
+  });
+
+  // Keep the named outbound question card and hide only its successfully correlated tool receipt.
+  // 保留带名称的发出提问卡，仅隐藏与其成功关联的工具回执。
+  it.each(["ask_question", "ask_parent"])("replaces the successful %s receipt with its question card", (toolName) => {
+    const tool = eventSummary(8, { kind: "tool_call", api_call_id: 1, tool_call_id: 3, request_stream_id: "ask-stream",
+      tool_name: toolName, status: "completed", input: { target_session_id: "session-target", question: "请确认归属" },
+      output: { model_output: "Question recorded", host_result: { kind: "collaboration_receipt_v1", payload: { format: "markdown", question_id: "question-1" } } },
+    });
+    const question = questionEvent();
+    const container = document.createElement("div");
+    container.innerHTML = renderWorkspace([tool, question]);
+    expect(container.querySelectorAll('[data-collaboration-event-kind="question_created"]')).toHaveLength(1);
+    expect(container.querySelectorAll(".tool-execution-stack")).toHaveLength(0);
+    expect(container.textContent).toContain("请确认归属");
+    // Reuse cached event objects as the question arrives and leaves a paged window.
+    // 在问题进入及离开分页窗口时复用已缓存事件对象。
+    const project = createConversationBranchPresentationProjectorV1();
+    const resources = emptyResourceCatalog();
+    const t: Parameters<typeof project>[3] = (key) => key;
+    expect(project("session-branch-v1", [tool], resources, t).messages.some((message) => message.recordKind === "tool-call-output")).toBe(true);
+    expect(project("session-branch-v1", [tool, question], resources, t).messages.some((message) => message.recordKind === "tool-call-output")).toBe(false);
+    expect(project("session-branch-v1", [tool], resources, t).messages.some((message) => message.recordKind === "tool-call-output")).toBe(true);
+  });
+
+  // Failed/active tools and unrelated receipts retain their independent evidence even beside a question.
+  // 失败或活动工具以及无关回执保留独立证据，即使旁边存在提问卡。
+  it.each([
+    { status: "failed", toolName: "ask_question", questionId: "question-1" },
+    { status: "running", toolName: "ask_question", questionId: "question-1" },
+    { status: "cancelled", toolName: "ask_question", questionId: "question-1" },
+    { status: "completed", toolName: "ask_question", questionId: "different-question" },
+    { status: "completed", toolName: "reply_question", questionId: "question-1" },
+  ] as const)("preserves a tool without a replaceable successful question receipt: %j", ({ status, toolName, questionId }) => {
+    const tool = eventSummary(8, { kind: "tool_call", api_call_id: 1, tool_call_id: 3, request_stream_id: "ask-stream",
+      tool_name: toolName, status, input: { target_session_id: "session-target", question: "请确认归属", question_id: questionId, answer: "Reply" },
+      output: { model_output: "Visible receipt", host_result: { kind: "collaboration_receipt_v1", payload: { format: "markdown", question_id: questionId } } },
+    });
+    const result = projectConversationBranchPresentationV1("session-branch-v1", [tool, questionEvent()], emptyResourceCatalog(), (key) => key);
+    expect(result.messages.some((message) => message.recordKind === "tool-call-output")).toBe(true);
+  });
+
+  // Source questions and answers retain separate bodies; receipts enrich only the exact answer.
+  // 来源问题和答案保留独立正文；回执仅补充精确对应的答案。
+  it("separates question and answer content and merges answer delivery receipts", () => {
+    // Build real typed collaboration snapshots instead of parsing display labels.
+    // 构造真实强类型协作快照，不解析展示标签。
+    const question = questionEvent();
+    if (question.event.kind !== "collaboration" || question.event.after_state.kind !== "question") throw new Error("Expected a question fixture");
+    const answer = eventSummary(question.seq + 1, { ...question.event, operation_id: "reply", event_kind: "question_answered",
+      after_state: { ...question.event.after_state, question: { ...question.event.after_state.question, state: "answered",
+        answer: { operation_id: "reply", responder: question.event.after_state.question.target, body: "独立回答正文", settled_at_ms: 1020,
+          delivery: { state: "undelivered", delivery_revision: 1, last_operation_id: "reply", updated_at_ms: 1020 } },
+      } },
+    }, "host_only");
+    const receipt = eventSummary(answer.seq + 1, { kind: "collaboration", version: 1, operation_id: "delivered", event_kind: "answer_delivered",
+      after_state: { kind: "answer_delivery", question_id: "question-1", delivery: {
+        state: "delivered", delivery_revision: 2, last_operation_id: "delivered", updated_at_ms: 1030,
+      } },
+    }, "host_only");
+    const container = document.createElement("div");
+    container.innerHTML = renderWorkspace([question, answer, receipt]);
+    const questionCard = container.querySelector('[data-collaboration-event-kind="question_created"]');
+    const answerCard = container.querySelector('[data-collaboration-event-kind="question_answered"]');
+    expect(questionCard?.textContent).toContain("请确认归属");
+    expect(questionCard?.textContent).not.toContain("独立回答正文");
+    expect(questionCard?.querySelector(".user-bubble")).toBeNull();
+    expect(answerCard?.querySelector(".user-bubble")?.textContent).toContain("独立回答正文");
+    expect(answerCard?.textContent).not.toContain("请确认归属");
+    expect(answerCard?.textContent).toContain("已交付");
+    expect(container.querySelector('[data-collaboration-event-kind="answer_delivered"]')).toBeNull();
+    // A receipt-only page must not invent an empty answer card.
+    // 仅回执分页不能伪造空答案卡片。
+    container.innerHTML = renderWorkspace([receipt]);
+    expect(container.querySelector("[data-collaboration-card-kind]")).toBeNull();
+  });
+
+  // Host question inputs are displayed once while their ordinary protocol mirrors stay hidden.
+  // 宿主问题输入只展示一次，其余普通协议镜像仍保持隐藏。
+  it("projects a received host question as a collaboration bubble, never a human input", () => {
+    const incoming = eventSummary(2, { kind: "user_input", input_source: "agent_message", input_id: 2,
+      client_action_id: clientActionId("agent-message:question-delivery"),
+      text: '<vulcan_agent_message version="1" event_id="question-delivery" kind="question" source="session-source" target="session-branch-v1" question_id="question-1" scope="question">收到的提问正文</vulcan_agent_message>',
+    });
+    const container = document.createElement("div");
+    // The receiver publishes execution before the question input; both must occupy the same bubble.
+    // 接收方先发布执行再发布问题输入，两者必须合并到同一气泡。
+    const started = eventSummary(1, { kind: "collaboration", version: 1, operation_id: "question-start", event_kind: "question_execution_started",
+      after_state: { kind: "question_execution", execution: { execution_id: "question-execution", operation_id: "question-start",
+        question_id: "question-1", participant: { session_id: "session-branch-v1", root_session_id: "session-branch-v1", project_id: "project-1", segment_generation: 1 },
+        purpose: "in_turn_question", state: "running", started_at_ms: 1001 } },
+    }, "host_only");
+    container.innerHTML = renderWorkspace([started, incoming]);
+    expect(container.querySelectorAll('[data-collaboration-card-kind="question"]')).toHaveLength(1);
+    expect(container.querySelectorAll("[data-collaboration-card-kind]")).toHaveLength(1);
+    expect(container.querySelector(".conversation-v1-collaboration-badge")?.textContent).toContain("运行中");
+    expect(container.querySelector('[data-collaboration-event-kind="question_execution_started"]')).toBeNull();
+    expect(container.querySelector(".user-bubble")?.textContent).toContain("收到的提问正文");
+    expect(container.querySelector(".user-message-copy")).toBeNull();
+    expect(container.textContent).not.toContain("vulcan_agent_message");
+    // Execution-only pagination does not invent a question body or an empty execution card.
+    // 仅执行记录分页不伪造问题正文或生成空执行卡。
+    container.innerHTML = renderWorkspace([started]);
+    expect(container.querySelector("[data-collaboration-card-kind]")).toBeNull();
   });
 
   it("updates a task message in place without merging identical content", () => {

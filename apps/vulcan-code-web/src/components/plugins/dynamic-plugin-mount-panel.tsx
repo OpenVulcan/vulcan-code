@@ -2,6 +2,7 @@ import * as React from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { StatusPill } from "@/components/shared/status";
 import {
@@ -396,7 +397,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     </div>;
   }
   if (Panel === null) {
-    return <div className="rounded-md border border-border bg-card p-4 text-sm text-muted-foreground" role="status">{t("skills.plugins.loadingPage")}</div>;
+    return <StreamPlaceholder className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />;
   }
   return <Panel />;
 }

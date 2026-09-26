@@ -1564,7 +1564,7 @@ export const koKRTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.detail.arguments": "기술 세부 정보",
     "conversation.collaboration.detail.output": "도구 수신 확인",
     "conversation.collaboration.timeline.question": "에이전트 질문",
-    "conversation.collaboration.timeline.answer": "질문 답변 수신 확인",
+    "conversation.collaboration.timeline.answer": "질문 답변",
     "conversation.collaboration.timeline.delivery": "협업 전달",
     "conversation.collaboration.timeline.notification": "에이전트 단계 알림",
     "conversation.collaboration.timeline.task": "하위 작업 결과",

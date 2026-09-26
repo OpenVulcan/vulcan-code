@@ -1564,7 +1564,7 @@ export const zhTWTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.detail.arguments": "技術詳細資訊",
     "conversation.collaboration.detail.output": "工具回執",
     "conversation.collaboration.timeline.question": "代理提問",
-    "conversation.collaboration.timeline.answer": "問題回答回執",
+    "conversation.collaboration.timeline.answer": "問題回覆",
     "conversation.collaboration.timeline.delivery": "協作投遞",
     "conversation.collaboration.timeline.notification": "代理階段通知",
     "conversation.collaboration.timeline.task": "子工作結果",

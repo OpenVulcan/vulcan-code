@@ -1564,7 +1564,7 @@ export const ptBRTranslations: Record<TranslationKey, string> = {
     "conversation.collaboration.detail.arguments": "Detalhes técnicos",
     "conversation.collaboration.detail.output": "Confirmação da ferramenta",
     "conversation.collaboration.timeline.question": "Pergunta do agente",
-    "conversation.collaboration.timeline.answer": "Confirmação de resposta à pergunta",
+    "conversation.collaboration.timeline.answer": "Resposta à pergunta",
     "conversation.collaboration.timeline.delivery": "Entrega de colaboração",
     "conversation.collaboration.timeline.notification": "Notificação de fase do agente",
     "conversation.collaboration.timeline.task": "Resultado da subtarefa",
