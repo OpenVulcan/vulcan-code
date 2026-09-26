@@ -19,6 +19,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+mod chat_sse;
+
 /// Maximum provider tool metadata response accepted before typed decoding.
 /// 强类型解码前允许接收的供应商工具元数据响应上限。
 ///
@@ -774,10 +776,7 @@ fn decode_bounded_multipart_data_url(data_url: &str) -> Result<(String, Vec<u8>)
 /// 返回唯一 `[DONE]` 终止记录之后确认的非空可见文本。
 async fn decode_generic_openai_chat_sse(response: reqwest::Response) -> Result<String, String> {
     let mut stream = response.bytes_stream();
-    let mut pending = Vec::new();
-    let mut output = String::new();
-    let mut terminal = false;
-    let mut received_bytes = 0usize;
+    let mut decoder = chat_sse::ChatSseDecoder::default();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| {
             format!(
@@ -785,64 +784,9 @@ async fn decode_generic_openai_chat_sse(response: reqwest::Response) -> Result<S
                 error.without_url()
             )
         })?;
-        received_bytes = received_bytes.saturating_add(chunk.len());
-        if received_bytes > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
-            return Err(format!(
-                "Provider Chat SSE exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
-            ));
-        }
-        pending.extend_from_slice(chunk.as_ref());
-        while let Some(position) = pending.iter().position(|byte| *byte == b'\n') {
-            let mut line = pending.drain(..=position).collect::<Vec<_>>();
-            while matches!(line.last(), Some(b'\n' | b'\r')) {
-                line.pop();
-            }
-            if line.is_empty() || line.starts_with(b":") {
-                continue;
-            }
-            let Some(data) = line.strip_prefix(b"data:") else {
-                continue;
-            };
-            let data = std::str::from_utf8(data)
-                .map_err(|_| String::from("Provider Chat SSE data is not UTF-8."))?
-                .trim();
-            if data == "[DONE]" {
-                if terminal {
-                    return Err(String::from(
-                        "Provider Chat SSE emitted more than one terminal record.",
-                    ));
-                }
-                terminal = true;
-                continue;
-            }
-            if terminal {
-                return Err(String::from(
-                    "Provider Chat SSE emitted data after its terminal record.",
-                ));
-            }
-            let value = parse_bounded_provider_json(data, "Provider Chat SSE")?;
-            append_generic_openai_chat_delta(&mut output, &value)?;
-            if output.len() > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
-                return Err(format!(
-                    "Provider Chat SSE text exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
-                ));
-            }
-        }
+        decoder.push(&chunk)?;
     }
-    if !pending.iter().all(u8::is_ascii_whitespace) {
-        return Err(String::from(
-            "Provider Chat SSE ended with an incomplete record.",
-        ));
-    }
-    if !terminal {
-        return Err(String::from(
-            "Provider Chat SSE ended before the [DONE] terminal record.",
-        ));
-    }
-    if output.trim().is_empty() {
-        return Err(String::from("Provider Chat SSE returned no visible text."));
-    }
-    Ok(output)
+    decoder.finish()
 }
 
 /// Appends visible text from one closed OpenAI-compatible Chat delta event.
