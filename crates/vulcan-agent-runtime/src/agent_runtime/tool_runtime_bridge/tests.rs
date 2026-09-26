@@ -2031,7 +2031,7 @@ fn streaming_tool_executor_propagates_tool_finished_rejection_reason() {
             .expect_err("rejected terminal barrier must fail the tool call");
         assert!(matches!(
             error,
-            VulcanCoreError::ToolDurabilityFailure { ref tool_name, ref message }
+            VulcanCoreError::ToolDurabilityFailure { ref tool_name, ref message, .. }
                 if tool_name == "demo_tool" && message.contains(original_error)
         ));
     });

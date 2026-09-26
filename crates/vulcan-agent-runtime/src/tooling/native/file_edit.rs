@@ -41,7 +41,7 @@ pub(crate) fn build_file_edit_tool() -> Arc<NativeToolDefinition> {
             "Replace one exact text substring in one existing file. Provide path, old_string, and new_string. Line-ending spelling is normalized for matching, so CRLF, LFCR, CR, and LF are equivalent logical boundaries. By default old_string must occur exactly once; set replace_all=true only when every non-overlapping occurrence should change. The file's encoding, BOM, untouched line endings, and permissions are preserved, and no bytes are written when matching or encoding fails.",
         ),
         help_text: Some(String::from(
-            "Read the current file first, then copy a distinctive exact old_string with enough surrounding text to make it unique. new_string is the complete replacement for that substring and may be empty. Do not send line-number ranges, arrays, anchors, operation IDs, dry_run, or expected_version. Use file for whole-file lifecycle actions and apply_patch for patch-shaped or multi-file edits.",
+            "Read the current file first, then copy a distinctive exact old_string with enough surrounding text to make it unique. new_string is the complete replacement for that substring and may be empty. If automatic encoding detection is unverified, confirm it with file read using encoding and pass that encoding here. Do not send line-number ranges, arrays, anchors, operation IDs, dry_run, or expected_version. Use file for whole-file lifecycle actions and apply_patch for patch-shaped or multi-file edits.",
         )),
         ai_visible: true,
         available_in_plan: false,
@@ -102,6 +102,11 @@ fn file_edit_args_schema() -> Value {
                 "type": "boolean",
                 "default": false,
                 "description": "Replace every non-overlapping occurrence. Defaults to false, which rejects multiple matches instead of guessing."
+            },
+            "encoding": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional explicit source encoding, such as gbk, big5, shift_jis, utf-16le, or utf-16be. Decoding validates BOM compatibility and byte sequences. The edit preserves this encoding; use file write for conversion. Required when automatic detection is unverified."
             }
         },
         "required": ["path", "old_string", "new_string"]

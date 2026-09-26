@@ -1388,6 +1388,7 @@ mod tests {
         let error = VulcanCoreError::ToolDurabilityFailure {
             tool_name: String::from("file"),
             message: String::from("canonical ChangeSet rejection"),
+            details: None,
         };
         assert!(policy().next_retry(&error, 0, false).is_none());
         assert!(classify_retry_reason(&error, true).is_none());

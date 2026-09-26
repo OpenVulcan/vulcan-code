@@ -60,6 +60,30 @@ describe("V1 branch request configuration presentation", () => {
     expect(parseSystemProviderError(presentation.messages[0]!.body)?.modelId).toBe("model-a");
     expect(parseConversationBlocks(presentation.messages[0]!)[0]?.kind).toBe("notice");
   });
+  // Tool persistence failures after a successful API retain applied effects in the permanent error card.
+  // API 成功后工具持久化失败时，永久错误卡保留已应用副作用。
+  it("retains applied file effects after the provider request has already completed", () => {
+    // This is the registered public-error format carried by the terminal report into redacted_detail.
+    // 这是由终态报告传入 redacted_detail 的已登记公共错误格式。
+    const detail = 'Provider streaming execution failed: provider `provider-a` failure: ' + JSON.stringify({
+      category: "unclassified", subcategory: "tool_result_persistence", stage: "terminal",
+      dispatch_outcome: "dispatched", semantic_output_observed: false, side_effect_observed: true,
+      terminal: true, retryable: false, provider_id: "provider-a", entry_id: "entry-a", model_id: "model-a",
+      upstream_code: "tool_result_persistence_failed", upstream_message: "duplicate resource identifier",
+      message: "The file changes were already applied. Do not repeat the operation to recover its receipt.",
+    });
+    const presentation = projectConversationBranchPresentationV1("session-request-config", [{
+      seq: 1, turn_id: 1, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
+      event: { kind: "display_note", notice_kind: "system_error", severity: "error", reason_code: "stream_failed_after_v1_api_terminal", redacted_detail: detail },
+    }], EMPTY_RESOURCES, (key) => zhCNTranslations[key]);
+    const error = parseSystemProviderError(presentation.messages[0]!.body)!;
+    expect(error.sideEffectObserved).toBe(true);
+    expect(error.retryable).toBe(false);
+    expect(error.upstreamCode).toBe("tool_result_persistence_failed");
+    expect(error.message).toContain("already applied");
+    expect(error.modelId).toBe("model-a");
+  });
+
   // The real branch adapter and parser must select the notice-card path for historical Goal events too.
   // 真实分支适配器与解析器也必须为历史目标事件选择提示卡路径。
   it("routes goal states into localized notice blocks", () => {

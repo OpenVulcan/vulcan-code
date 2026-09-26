@@ -6,6 +6,10 @@ use crate::text_encoding::{
 };
 use std::fmt::{Display, Formatter};
 
+/// Maximum source ranges returned for an ambiguous edit; shared with the file error projection.
+/// 歧义编辑返回的源范围上限，与文件错误投影共享。
+pub const MAX_ERROR_CANDIDATE_RANGES: usize = 32;
+
 /// One recognized logical line terminator, including the uncommon LFCR pair.
 /// 一种已识别的逻辑行终止符，包括不常见的 LFCR 组合。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -215,10 +219,23 @@ impl TextDocument {
             ));
         }
         if matches.len() > 1 && !replace_all {
-            return Err(TextDocumentError::with_count(
+            return Err(TextDocumentError::with_candidates(
                 "ambiguous_match",
                 "old_string matches more than once. Include more surrounding text or set replace_all=true.",
                 matches.len(),
+                matches
+                    .iter()
+                    .take(MAX_ERROR_CANDIDATE_RANGES)
+                    .map(|(start, end)| {
+                        // Match offsets address normalized Unicode text, so CRLF and multibyte text retain source lines.
+                        // 匹配偏移指向归一化 Unicode 文本，因此 CRLF 和多字节文本保留源行坐标。
+                        let first = line_number_at_offset(&normalized_source, *start) - 1;
+                        (
+                            first,
+                            first + logical_span_line_count(&normalized_source[*start..*end]),
+                        )
+                    })
+                    .collect(),
             ));
         }
         let selected = if replace_all {
@@ -314,6 +331,9 @@ pub struct TextDocumentError {
     /// Optional match count for ambiguity diagnostics.
     /// 用于歧义诊断的可选匹配数量。
     pub match_count: Option<usize>,
+    /// Bounded zero-based source ranges; None means candidate discovery was not performed.
+    /// 有界的零基源范围；None 表示未进行候选发现。
+    pub candidate_ranges: Option<Vec<(usize, usize)>>,
 }
 
 impl TextDocumentError {
@@ -324,16 +344,23 @@ impl TextDocumentError {
             code,
             message: message.into(),
             match_count: None,
+            candidate_ranges: None,
         }
     }
 
-    /// Creates one document error with a bounded match count.
-    /// 创建一条带有界匹配数量的文档错误。
-    fn with_count(code: &'static str, message: impl Into<String>, count: usize) -> Self {
+    /// Creates an ambiguity error from the total count and bounded source ranges; returns its diagnostic value.
+    /// 从总匹配数与有界源范围创建歧义错误，返回诊断值。
+    fn with_candidates(
+        code: &'static str,
+        message: impl Into<String>,
+        count: usize,
+        ranges: Vec<(usize, usize)>,
+    ) -> Self {
         Self {
             code,
             message: message.into(),
             match_count: Some(count),
+            candidate_ranges: Some(ranges),
         }
     }
 }

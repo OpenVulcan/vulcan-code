@@ -399,7 +399,9 @@ fn public_execution_failure(
 
 /// Serializes one public execution error as JSON for lossless user-facing diagnostics.
 /// 将一个公共执行错误序列化为 JSON，以便面向用户的诊断信息无损传递。
-fn public_execution_failure_message(error: &vulcan_ai_contract::AiExecutionError) -> String {
+pub(crate) fn public_execution_failure_message(
+    error: &vulcan_ai_contract::AiExecutionError,
+) -> String {
     // AiExecutionError contains only serde-supported scalar, option, enum, and nested struct fields.
     // AiExecutionError 仅包含 serde 支持的标量、可选值、枚举与嵌套结构字段。
     serde_json::to_string(error).expect("AiExecutionError serialization is infallible")

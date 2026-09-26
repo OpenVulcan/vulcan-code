@@ -774,8 +774,8 @@ where
                                 },
                             );
                         let _ = task_sender.send(final_delta);
-                        let _ = task_sender.send(Err(format!(
-                            "Provider streaming execution failed: {error}"
+                        let _ = task_sender.send(Err(terminal_controller_failure_message(
+                            &error, &retry_route_key,
                         )));
                         break;
                     }
@@ -867,19 +867,48 @@ fn observe_provider_request_retry_safety(
     }
 }
 
+/// Formats a terminal controller failure using the existing lossless public-error wire format.
+/// 使用既有无损公共错误传输格式构造控制器终态失败。
+/// `error` owns execution facts; `route` supplies the already-frozen provider identity.
+/// `error` 持有执行事实；`route` 提供已冻结的供应商身份。
+/// Returns the report diagnostic persisted even when the physical request has already closed.
+/// 返回即使物理请求已闭合仍会持久化的报告诊断。
+fn terminal_controller_failure_message(error: &CoreError, route: &ProviderRouteIdentity) -> String {
+    if let CoreError::ToolDurabilityFailure {
+        details: Some(details),
+        ..
+    } = error
+    {
+        // A closed API must not receive a second terminal; the existing display-note format retains these facts instead.
+        // 已闭合 API 不能接收第二个终态；通过既有显示提示格式保留这些事实。
+        let mut details = details.clone();
+        details.provider_id = Some(route.provider_id.clone());
+        details.entry_id = Some(route.service_entry_id.clone());
+        details.model_id = Some(route.model_id.clone());
+        return format!(
+            "Provider streaming execution failed: provider `{}` failure: {}",
+            route.provider_id,
+            crate::agent_runtime::provider_transport_vulcan::public_execution_failure_message(
+                &details
+            ),
+        );
+    }
+    format!("Provider streaming execution failed: {error}")
+}
+
 /// Extracts the structured provider failure retained by the controller error.
 /// 提取控制器错误中保留的结构化供应商失败。
 fn structured_provider_failure(
     error: &CoreError,
 ) -> Option<Box<vulcan_ai_contract::AiExecutionError>> {
     match error {
-        CoreError::ProviderFailure { details, .. } => details.clone(),
+        CoreError::ProviderFailure { details, .. }
+        | CoreError::ToolDurabilityFailure { details, .. } => details.clone(),
         CoreError::InvalidState { .. }
         | CoreError::ContextCompactionRequired { .. }
         | CoreError::ContextCompactionPolicyRefreshRequired { .. }
         | CoreError::ProviderRouteSwitchRequired { .. }
         | CoreError::ToolFailure { .. }
-        | CoreError::ToolDurabilityFailure { .. }
         | CoreError::ToolProtocolFailure { .. } => None,
     }
 }
@@ -1176,6 +1205,72 @@ mod tests {
         assert_eq!(metadata["catalog_generation"], 17);
         assert_eq!(metadata["manifest_revision"], 23);
         assert_eq!(metadata["route_revision"], "sha256:route-a");
+    }
+
+    /// Verifies final error projection preserves proven file effects without asserting preview effects.
+    /// 验证终态错误投影保留已证明的文件副作用，且不将预览认作副作用。
+    #[test]
+    fn tool_persistence_failure_preserves_applied_effects() {
+        // The frozen route supplies only identity, without inventing another physical API attempt.
+        // 冻结路由仅提供身份，不虚构另一次物理 API 尝试。
+        let route = ProviderRouteIdentity {
+            provider_id: String::from("provider-a"),
+            service_entry_id: String::from("entry-a"),
+            connection_id: String::from("connection-a"),
+            credential_profile_id: String::from("credential-a"),
+            model_id: String::from("model-a"),
+            protocol_profile_id: String::from("responses-a"),
+            catalog_generation: 17,
+            manifest_revision: 23,
+            route_revision: String::from("sha256:route-a"),
+        };
+        for (mode, applied) in [("applied", true), ("preview", false)] {
+            // The fixture follows the canonical host envelope used by the real streaming executor.
+            // 夹具遵循真实流式执行器使用的规范宿主信封。
+            let result = vulcan_core::types::ToolInvocationResult {
+                tool_call_id: String::from("patch-call"),
+                tool_name: String::from("apply_patch"),
+                model_output: String::from("receipt"),
+                host_result: Some(serde_json::json!({
+                    "kind": "change_set", "payload": { "mode": mode }
+                })),
+                is_error: false,
+            };
+            // Exercise the production error builder and the final stream extraction together.
+            // 联合验证生产错误构建与最终流错误提取。
+            let error = crate::agent_runtime::provider_transport_stream_executor::tool_result_persistence_failure(
+                &result, String::from("duplicate resource identifier"),
+            );
+            let details = structured_provider_failure(&error).expect("durability details");
+            assert_eq!(details.side_effect_observed, applied);
+            assert!(details.terminal);
+            assert!(!details.retryable);
+            assert_eq!(
+                details.upstream_code.as_deref(),
+                Some("tool_result_persistence_failed")
+            );
+            assert_eq!(
+                details.upstream_message.as_deref(),
+                Some("duplicate resource identifier")
+            );
+            assert_eq!(details.message.contains("already applied"), applied);
+            assert!(refreshed_oauth_credential_retry_decision(&error, 0, false).is_none());
+            // Reports still carry the typed facts when RequestSucceeded has already closed telemetry.
+            // RequestSucceeded 已关闭遥测时，报告仍携带强类型事实。
+            let report = terminal_controller_failure_message(&error, &route);
+            let retained: vulcan_ai_contract::AiExecutionError = serde_json::from_str(
+                report
+                    .strip_prefix(
+                        "Provider streaming execution failed: provider `provider-a` failure: ",
+                    )
+                    .expect("registered public error prefix"),
+            )
+            .expect("lossless report diagnostic");
+            assert_eq!(retained.side_effect_observed, applied);
+            assert_eq!(retained.provider_id.as_deref(), Some("provider-a"));
+            assert_eq!(retained.model_id.as_deref(), Some("model-a"));
+            assert_eq!(retained.message, details.message);
+        }
     }
 
     /// Builds one typed context-window provider failure for compensation-safety tests.

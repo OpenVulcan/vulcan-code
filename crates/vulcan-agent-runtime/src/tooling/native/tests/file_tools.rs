@@ -13,6 +13,81 @@ use vulcan_tools_manager::{
 
 use super::test_native_request_with_workspace;
 
+/// Verifies explicit source codecs are model-visible and survive native execution plus durable projection.
+/// 验证显式源编码对模型可见，并贯通原生执行及持久投影。
+/// No parameters or return value; also covers a pure final-newline edit through the registered adapter.
+/// 无参数或返回值；同时通过已注册适配器覆盖纯末尾换行编辑。
+#[tokio::test]
+async fn native_file_encoding_and_newline_recovery_is_exposed() {
+    // The registered definitions are the same schemas exposed to model request construction.
+    // 已注册定义就是模型请求构建所暴露的同一份 Schema。
+    let edit = build_file_edit_tool();
+    let file = build_file_tool();
+    assert_eq!(edit.args_schema["properties"]["encoding"]["type"], "string");
+    assert_eq!(
+        file.args_schema["properties"]["source_encoding"]["type"],
+        "string"
+    );
+    // This BOM-less BE fixture cannot rely on the short-sample automatic detector.
+    // 此无 BOM 大端夹具不能依赖短样本自动检测。
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("encoded.txt");
+    std::fs::write(&path, [0x4E, 0x2D, 0x65, 0x87]).unwrap();
+    // Adding only a terminator must still produce a valid ChangeSet and compact success receipt.
+    // 只添加终止符仍须产生合法 ChangeSet 及简洁成功回执。
+    let edited = edit.invoke(test_native_request_with_workspace(json!({
+        "path":"encoded.txt", "old_string":"中文", "new_string":"中文\n", "encoding":"utf-16be",
+    }), directory.path().to_path_buf())).await.unwrap();
+    assert!(
+        edited
+            .model_output
+            .as_str()
+            .unwrap()
+            .contains("+1 / -1 lines")
+    );
+    let host = edited.host_result.unwrap();
+    let persistent =
+        persistent_change_set_from_host_result(&json!({"kind":host.kind,"payload":host.payload}))
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        persistent
+            .files
+            .first()
+            .unwrap()
+            .after_text_format
+            .as_ref()
+            .unwrap()
+            .encoding
+            .as_deref(),
+        Some("utf-16be")
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        [0x4E, 0x2D, 0x65, 0x87, 0, 10]
+    );
+    // A whole-file conversion declares source and destination independently.
+    // 整文件转换独立声明源编码及目标编码。
+    let converted = file
+        .invoke(test_native_request_with_workspace(
+            json!({
+                "action":"write", "path":"encoded.txt", "content":"中文\n",
+                "source_encoding":"utf-16be", "encoding":"utf-8",
+            }),
+            directory.path().to_path_buf(),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        converted
+            .model_output
+            .as_str()
+            .unwrap()
+            .starts_with("# File changes applied")
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), "中文\n".as_bytes());
+}
+
 /// Verifies list/stat return readable results without a duplicate host file-access object.
 /// 验证列表和属性返回可读结果，不携带重复的宿主文件访问对象。
 #[tokio::test]
@@ -55,25 +130,35 @@ async fn native_file_mutations_keep_review_structure_and_compact_receipts() {
         (
             build_file_tool(),
             json!({"action": "write", "path": "edit.txt", "content": "first-unique-source\n"}),
+            Some("+1 / -0 lines"),
         ),
         (
             build_file_edit_tool(),
             json!({"path": "edit.txt", "old_string": "first-unique-source", "new_string": "second-unique-source"}),
+            Some("+1 / -1 lines"),
         ),
         (
             build_apply_patch_tool(),
             json!({"patch": "*** Begin Patch\n*** Add File: patch.txt\n+patch-unique-source\n*** End Patch"}),
+            Some("+1 / -0 lines"),
         ),
         (
             build_file_tool(),
             json!({"action": "move", "path": "patch.txt", "destination": "moved.txt"}),
+            None,
         ),
         (
             build_file_tool(),
             json!({"action": "delete", "path": "moved.txt"}),
+            Some("+0 / -1 lines"),
+        ),
+        (
+            build_file_tool(),
+            json!({"action": "write", "path": "edit.txt", "content": "second-unique-source\nadded\n"}),
+            Some("+1 / -0 lines"),
         ),
     ];
-    for (tool, arguments) in cases {
+    for (tool, arguments, counts) in cases {
         // The authoritative changeset must survive the model-only projection.
         // 权威变更集必须在仅面向模型的投影后保留。
         let result = tool
@@ -85,6 +170,14 @@ async fn native_file_mutations_keep_review_structure_and_compact_receipts() {
             .expect("mutation invocation");
         let body = result.model_output.as_str().expect("Markdown receipt");
         assert!(body.starts_with("# File changes applied"), "{body}");
+        if let Some(counts) = counts {
+            assert!(body.contains(counts), "missing {counts}: {body}");
+        } else {
+            assert!(
+                !body.contains(" lines"),
+                "rename must not invent line changes: {body}"
+            );
+        }
         assert!(
             !body.contains("unique-source"),
             "receipt must not echo written content"
@@ -141,7 +234,7 @@ async fn native_file_read_persists_one_markdown_body() {
         .as_ref()
         .expect("presentation metadata");
     assert_eq!(host["kind"], json!("file_access"));
-    assert_eq!(host["payload"]["schema"], json!("vulcan.file_read.v2"));
+    assert_eq!(host["payload"]["schema"], json!("vulcan.file_read.v3"));
     assert!(!host.to_string().contains(marker));
     let persisted = persistent_tool_output_from_result(&canonical).expect("durable tool payload");
     let serialized = serde_json::to_string(&persisted).expect("serialize durable tool payload");
@@ -358,6 +451,57 @@ async fn native_apply_patch_argument_errors_are_structured() {
             result.host_result.as_ref().map(|value| value.kind.as_str()),
             Some(VULCAN_TOOL_ERROR_DETAIL_KIND)
         );
+    }
+}
+
+/// Verifies all public file adapters preserve flat diagnostics through model Markdown projection.
+/// 验证所有公开文件适配器经过模型 Markdown 投影后仍保留扁平诊断。
+#[tokio::test]
+async fn native_file_errors_share_flat_diagnostics_after_projection() {
+    use crate::agent_runtime::tool_runtime_bridge::canonicalize_tool_invocation_result;
+    // Missing targets exercise each adapter without filesystem mutation.
+    // 缺失目标覆盖各适配器，且不修改文件系统。
+    let directory = tempfile::tempdir().expect("workspace");
+    for (tool, arguments) in [
+        (
+            build_file_tool(),
+            json!({"action":"read", "path":"missing.txt"}),
+        ),
+        (
+            build_file_edit_tool(),
+            json!({"path":"missing.txt", "old_string":"old", "new_string":"new"}),
+        ),
+        (
+            build_apply_patch_tool(),
+            json!({"patch":"*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch"}),
+        ),
+    ] {
+        // Canonicalization is the same boundary used before persistence and delivery to the model.
+        // 规范化与持久化及发送给模型前使用的是同一边界。
+        let result = tool
+            .invoke(test_native_request_with_workspace(
+                arguments.clone(),
+                directory.path().to_path_buf(),
+            ))
+            .await
+            .expect("structured error");
+        let request = vulcan_core::types::ToolInvocationRequest {
+            request_stream_id: String::from("error-stream"),
+            tool_call_id: String::from("error-call"),
+            tool_name: tool.descriptor.id.clone(),
+            arguments,
+            argument_parse_error: None,
+        };
+        let canonical = canonicalize_tool_invocation_result(&request, result);
+        assert!(canonical.is_error);
+        assert!(canonical.model_output.contains("path_not_found"));
+        assert!(!canonical.model_output.starts_with('{'));
+        let host = canonical.host_result.expect("error host metadata");
+        let details = &host["payload"]["details"];
+        assert_eq!(details["code"], "path_not_found");
+        assert_eq!(details["requires_read"], false);
+        assert!(details.get("details").is_none());
+        assert!(details.get("requires_reread").is_none());
     }
 }
 

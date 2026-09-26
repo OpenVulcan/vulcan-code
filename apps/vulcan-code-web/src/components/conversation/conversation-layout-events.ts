@@ -45,8 +45,8 @@ export function dispatchConversationLayoutSettled(surfaceId: string | null): voi
   ));
 }
 
-// dispatchConversationManualViewportInteraction tells transcript auto-follow to yield to a user fold action.
-// dispatchConversationManualViewportInteraction 通知转录自动追随让位给用户折叠操作。
+// dispatchConversationManualViewportInteraction captures existing scroll ownership before a user fold action.
+// dispatchConversationManualViewportInteraction 在用户折叠操作前捕获既有滚动所有权。
 // Parameters: none; the active control resolves its exact owning transcript from the committed DOM.
 // 参数：无；活动控件通过已提交 DOM 解析其所属的精确转录界面。
 // Returns: nothing.

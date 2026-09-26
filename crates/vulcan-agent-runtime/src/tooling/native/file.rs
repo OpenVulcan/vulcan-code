@@ -7,7 +7,9 @@ use super::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
-use vulcan_host_tools::file_runtime::{MAX_LIST_ENTRIES, MAX_READ_LINES, execute_file};
+use vulcan_host_tools::file_runtime::{
+    DEFAULT_READ_LINES, DEFAULT_READ_RESPONSE_BYTES, MAX_LIST_ENTRIES, MAX_READ_LINES, execute_file,
+};
 use vulcan_tools_manager::VulcanToolInvocationResult;
 
 mod request_preview;
@@ -26,7 +28,7 @@ pub(crate) fn build_file_tool() -> Arc<NativeToolDefinition> {
             "Read files and perform whole-file lifecycle operations on one filesystem path. Use file_edit for a localized exact replacement and apply_patch for multiple hunks or multiple files. This tool does not search file contents and does not recursively delete directories. It preserves an existing text file's encoding and BOM unless you explicitly override them.",
         ),
         help_text: Some(String::from(
-            "Provide exactly one path. read returns Markdown with the actual one-based range and a single fenced code block without embedding Lxx prefixes; truncated reads include the next start_line. list performs bounded directory discovery; stat returns metadata; write replaces a complete file; delete removes one regular file; move renames one path to a destination that must not exist. Action-specific fields are rejected when used with another action.",
+            "Provide exactly one path. read returns one Markdown block with real source line prefixes such as L12:; truncated reads include the next start_line. list performs bounded directory discovery; stat returns metadata; write replaces a complete file; delete removes one regular file; move renames one path to a destination that must not exist. Action-specific fields are rejected when used with another action.",
         )),
         ai_visible: true,
         available_in_plan: true,
@@ -87,7 +89,7 @@ fn file_args_schema() -> Value {
             "end_line": {
                 "type": "integer",
                 "minimum": 1,
-                "description": format!("read only. Inclusive one-based final logical line. At most {MAX_READ_LINES} lines are returned.")
+                "description": format!("read only. Inclusive one-based final logical line. Omit for a page of at most {DEFAULT_READ_LINES} lines and {DEFAULT_READ_RESPONSE_BYTES} serialized bytes. Explicit ranges allow up to {MAX_READ_LINES} lines, subject to the hard response budget. Follow next_start_line when truncated.")
             },
             "recursive": {
                 "type": "boolean",
@@ -118,7 +120,12 @@ fn file_args_schema() -> Value {
             "encoding": {
                 "type": "string",
                 "minLength": 1,
-                "description": "read/write only. Explicit encoding label such as utf-8, utf-16le, gbk, big5, shift_jis, euc-jp, euc-kr, or windows-1252. Omit to detect reads and preserve existing files."
+                "description": "read/write only. Explicit decoding (read) or target encoding (write), such as utf-8, utf-16le, gbk, big5, or shift_jis. Explicit reads validate BOM compatibility and byte sequences; the reported encoding is the chosen codec, not independent proof of the original encoding. Omit to detect reads and preserve existing files."
+            },
+            "source_encoding": {
+                "type": "string",
+                "minLength": 1,
+                "description": "write only, existing files only. Confirm the original file's encoding when automatic detection is uncertain or the file uses BOM-less Unicode. This controls source decoding; encoding separately selects the output encoding. Omit encoding to preserve the confirmed source encoding."
             },
             "bom": {
                 "type": "string",

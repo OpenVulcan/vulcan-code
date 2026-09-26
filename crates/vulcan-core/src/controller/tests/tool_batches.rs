@@ -32,6 +32,7 @@ impl VulcanToolExecutor for FatalDurabilityExecutor {
                     "durable batch preparation rejected {} invocation(s)",
                     requests.len()
                 ),
+                details: None,
             });
         }
         Ok(())
@@ -52,6 +53,7 @@ impl VulcanToolExecutor for FatalDurabilityExecutor {
             return Err(CoreError::ToolDurabilityFailure {
                 tool_name: request.tool_name.clone(),
                 message: String::from("tool finish persistence rejected"),
+                details: None,
             });
         }
         self.completed_siblings.fetch_add(1, Ordering::SeqCst);
@@ -219,7 +221,7 @@ fn fatal_tool_durability_failure_stops_provider_loop_after_sibling_settlement() 
 
         assert!(matches!(
             error,
-            CoreError::ToolDurabilityFailure { ref tool_name, ref message }
+            CoreError::ToolDurabilityFailure { ref tool_name, ref message, .. }
                 if tool_name == "fatal" && message == "tool finish persistence rejected"
         ));
         assert_eq!(executor.completed_siblings.load(Ordering::SeqCst), 1);
@@ -281,7 +283,7 @@ fn fatal_batch_preparation_failure_stops_before_tool_execution() {
 
         assert!(matches!(
             error,
-            CoreError::ToolDurabilityFailure { ref tool_name, ref message }
+            CoreError::ToolDurabilityFailure { ref tool_name, ref message, .. }
                 if tool_name == "tool_batch"
                     && message == "durable batch preparation rejected 1 invocation(s)"
         ));

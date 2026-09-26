@@ -91,6 +91,24 @@ struct AppliedFile<'a> {
     /// Original path supplied only for a rename.
     /// 仅重命名提供的原路径。
     old_path: Option<&'a str>,
+    /// Change hunks for edits; absent on lifecycle-only and binary records.
+    /// 编辑差异块；纯生命周期和二进制记录不提供。
+    hunks: Option<Vec<AppliedHunk>>,
+    /// Exact logical line count supplied for text creation/deletion, even when content is omitted.
+    /// 文本创建／删除提供的精确逻辑行数，即使正文被省略也保留。
+    total_line_count: Option<usize>,
+}
+
+/// Counts authoritative changed rows without cloning or returning their source text.
+/// 统计权威变更行，不复制或返回其源码正文。
+#[derive(Deserialize)]
+struct AppliedHunk {
+    /// Removed source rows.
+    /// 删除的源行。
+    delete: Vec<serde::de::IgnoredAny>,
+    /// Inserted source rows.
+    /// 插入的源行。
+    insert: Vec<serde::de::IgnoredAny>,
 }
 
 /// Adapts one successful file-runtime response for conversation display and model reading.
@@ -217,6 +235,19 @@ fn mutation(changeset: &Value, receipt: &Value) -> Result<String, serde_json::Er
         text.push_str(&format!("\n- {}: {}", file.change, inline_code(file.path)));
         if let Some(previous) = file.old_path {
             text.push_str(&format!(" (from {})", inline_code(previous)));
+        }
+        // Count only facts provided by this changeset; a binary lifecycle has no invented text-line count.
+        // 只统计此变更集提供的事实；二进制生命周期不得虚构文本行数。
+        let counts = match (file.change, file.hunks.as_ref(), file.total_line_count) {
+            (_, Some(hunks), _) => Some(hunks.iter().fold((0, 0), |(added, removed), hunk| {
+                (added + hunk.insert.len(), removed + hunk.delete.len())
+            })),
+            ("create", None, Some(lines)) => Some((lines, 0)),
+            ("delete", None, Some(lines)) => Some((0, lines)),
+            _ => None,
+        };
+        if let Some((added, removed)) = counts {
+            text.push_str(&format!(" · +{added} / -{removed} lines"));
         }
     }
     // Exact replacement alone supplies a match count; lifecycle and patch results do not.

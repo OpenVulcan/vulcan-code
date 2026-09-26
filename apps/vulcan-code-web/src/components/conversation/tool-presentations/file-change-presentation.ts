@@ -495,7 +495,7 @@ function buildNativeFileAccessPresentation(
   // V1 文件检查共用唯一模型正文，不再持久化第二个宿主对象。
   const modelResult = v1ModelResult(fixedV1ToolEvent(blocks)?.output);
   const markdownBody = displayState !== "running" && typeof modelResult === "string"
-    ? modelResult : output?.metadata.schema === "vulcan.file_read.v2" && output.body ? output.body : undefined;
+    ? modelResult : output && isNumberedFileRead(output.metadata.schema) && output.body ? output.body : undefined;
   if (!targets.length) {
     return null;
   }
@@ -1281,6 +1281,20 @@ function editPreviewBodySide(
   return null;
 }
 
+/** Tests the explicit numbered Markdown protocol versions; accepts a schema tag and returns membership.
+ * 检查明确的带编号 Markdown 协议版本；接受 schema 标记并返回是否属于该协议。
+ */
+function isNumberedFileRead(schema: unknown): boolean {
+  return schema === "vulcan.file_read.v2" || schema === "vulcan.file_read.v3";
+}
+
+/** Tests all supported Markdown read versions, including historical unnumbered v1.
+ * 检查所有受支持的 Markdown 读取版本，包括历史无编号 v1。
+ */
+function isMarkdownFileRead(schema: unknown): boolean {
+  return schema === "vulcan.file_read.v1" || isNumberedFileRead(schema);
+}
+
 /** Validates content-free read coordinates from metadata; returns null for invalid mappings.
  * 校验元数据中不含正文的读取坐标；映射无效时返回 null。
  */
@@ -1289,11 +1303,12 @@ function nativeMarkdownReadRange(result: Record<string, unknown>): {
   outputStart: number;
   lineCount: number;
 } | null {
-  // Both versioned read formats require these three coordinates from the same result.
-  // 两种版本的读取格式都要求这三个坐标来自同一结果。
+  // V3 separates rendering coordinates; v1/v2 history keeps its original mapping without guessing.
+  // v3 分离展示坐标；v1/v2 历史按原始映射读取，不猜测字段。
   const range = objectValue(result.range);
   const sourceStart = numberValue(range?.source_start_line);
-  const outputStart = numberValue(range?.output_start_line);
+  const outputStart = numberValue(result.schema === "vulcan.file_read.v3"
+    ? objectValue(result.render)?.output_start_line : range?.output_start_line);
   const lineCount = numberValue(range?.line_count);
   if (sourceStart === null || outputStart === null || lineCount === null
     || !Number.isSafeInteger(sourceStart) || sourceStart < 1
@@ -1323,15 +1338,15 @@ function nativeMarkdownReadRows(result: Record<string, unknown>, body: string): 
   }
   return lines.slice(range.outputStart - 1, range.outputStart - 1 + range.lineCount)
     .slice(0, FILE_ACCESS_PREVIEW_ROW_LIMIT).map((content, index) => {
-      // v2 owns an exact positional prefix; v1 source text must remain untouched.
-      // v2 定义精确的位置前缀；v1 源文件正文必须保持原样。
+      // v2/v3 own an exact positional prefix; v1 source text must remain untouched.
+      // v2/v3 定义精确的位置前缀；v1 源文件正文必须保持原样。
       const lineNumber = range.sourceStart + index;
       const prefix = `L${lineNumber}: `;
-      if (result.schema === "vulcan.file_read.v2" && !content.startsWith(prefix)) {
+      if (isNumberedFileRead(result.schema) && !content.startsWith(prefix)) {
         return { content: "Invalid file read line prefix.", kind: "error", lineNumber: null };
       }
       return {
-        content: result.schema === "vulcan.file_read.v2" ? content.slice(prefix.length) : content,
+        content: isNumberedFileRead(result.schema) ? content.slice(prefix.length) : content,
         kind: "context",
         lineNumber,
       };
@@ -1361,7 +1376,7 @@ function nativeFileResultRowsFromOutput(
     }];
   }
   if (action === "read") {
-    if (result.schema === "vulcan.file_read.v1" || result.schema === "vulcan.file_read.v2") {
+    if (isMarkdownFileRead(result.schema)) {
       return nativeMarkdownReadRows(result, output.body);
     }
     const legacyLines = arrayValue(result.lines);
@@ -1532,7 +1547,7 @@ export function hydrateFileAccessPresentation(
     // A zero-line versioned read is authoritative and must clear an earlier requested range.
     // 带版本的零行读取是权威结果，必须清除先前的请求范围。
     const result = nativeFileAccessResult(output.metadata, index);
-    if (!rows.length && result?.schema !== "vulcan.file_read.v1" && result?.schema !== "vulcan.file_read.v2") {
+    if (!rows.length && !isMarkdownFileRead(result?.schema)) {
       return item;
     }
     const diffFile = presentation.action === "read"
@@ -1563,7 +1578,7 @@ export function hydrateFileAccessPresentation(
     items,
     // Versioned numbered reads retain their original Markdown, including empty-range explanations.
     // 带编号的版本化读取保留原始 Markdown，也包括空范围说明。
-    ...(output.metadata.schema === "vulcan.file_read.v2" ? {
+    ...(isNumberedFileRead(output.metadata.schema) ? {
       markdownBody: output.body, interactive: presentation.state !== "running",
       emptyFile: output.metadata.total_line_count === 0,
     } : {}),
@@ -1601,7 +1616,7 @@ function nativeFileAccessResultLineRanges(
   if (!result) {
     return requestRanges;
   }
-  if (result.schema === "vulcan.file_read.v1" || result.schema === "vulcan.file_read.v2") {
+  if (isMarkdownFileRead(result.schema)) {
     // The versioned mapping owns the returned range, including an explicitly empty read.
     // 带版本的映射拥有返回范围，也包含明确的空读取。
     const range = nativeMarkdownReadRange(result);

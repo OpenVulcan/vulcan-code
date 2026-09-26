@@ -112,13 +112,13 @@ describe("native file presentation mapping", () => {
     expect(fileChangeStatusLabel(failedPresentation!, "modify")).toBe("Failed · Not edited");
   });
 
-  it.each(["vulcan.file_read.v1", "vulcan.file_read.v2"])("renders and hydrates %s using metadata coordinates", (schema) => {
+  it.each(["vulcan.file_read.v1", "vulcan.file_read.v2", "vulcan.file_read.v3"])("renders and hydrates %s using metadata coordinates", (schema) => {
     // Include a blank source line and a literal fence to prove headers are never reparsed as source.
     // 包含源文件空行与字面围栏，证明标题不会被重新解析为源文件正文。
     const sourceLines = ["alpha", "", "```", "你好", "L14: original prefix"];
     // v2 adds exactly one positional prefix; literal prefixes inside source must survive.
     // v2 仅增加一个位置前缀；源文件自身的字面前缀必须保留。
-    const renderedLines = sourceLines.map((line, index) => schema === "vulcan.file_read.v2" ? `L${10 + index}: ${line}` : line);
+    const renderedLines = sourceLines.map((line, index) => schema !== "vulcan.file_read.v1" ? `L${10 + index}: ${line}` : line);
     const body = "# File: src/a.ts\n\nShowing selected source\n\n````typescript\n" + renderedLines.join("\n") + "\n````\n";
     const firstSourceIndex = body.split("\n").indexOf(renderedLines[0]);
     const metadata = {
@@ -129,7 +129,12 @@ describe("native file presentation mapping", () => {
           schema,
           action: "read",
           path: "D:/repo/src/a.ts",
-          range: { source_start_line: 10, output_start_line: firstSourceIndex + 1, line_count: sourceLines.length },
+          ...(schema === "vulcan.file_read.v3" ? {
+            range: { source_start_line: 10, line_count: sourceLines.length },
+            render: { output_start_line: firstSourceIndex + 1 },
+          } : {
+            range: { source_start_line: 10, output_start_line: firstSourceIndex + 1, line_count: sourceLines.length },
+          }),
         },
       },
     };
@@ -172,6 +177,45 @@ describe("native file presentation mapping", () => {
     expect(invalid?.items[0].rows).toEqual([
       { content: "Invalid file read line mapping.", kind: "error", lineNumber: null },
     ]);
+  });
+
+  it("does not use historical rendering coordinates for an invalid v3 result", () => {
+    // A misplaced legacy field must not hide a broken v3 producer.
+    // 错放的历史字段不能掩盖 v3 生产端的损坏。
+    const body = "# File\n\n```text\nL1: alpha\n```\n";
+    const metadata = {
+      arguments: { action: "read", path: "a.txt" },
+      host_result: { kind: "file_access", payload: {
+        schema: "vulcan.file_read.v3", action: "read",
+        range: { source_start_line: 1, output_start_line: body.split("\n").indexOf("L1: alpha") + 1, line_count: 1 },
+      } },
+    };
+    const invalid = resolveFileAccessPresentation(toolBlock("file", body, metadata), "completed", {});
+    expect(invalid?.items[0].rows).toEqual([
+      { content: "Invalid file read line mapping.", kind: "error", lineNumber: null },
+    ]);
+  });
+
+  it.each(["empty_file", "range_beyond_eof"])("keeps v3 %s diagnostics available after lazy hydration", (readStatus) => {
+    // The unique Markdown diagnostic remains expandable despite having no source rows.
+    // 即使没有源文件行，唯一 Markdown 诊断仍然可展开。
+    const body = `# File\n\n[${readStatus}] No content returned.\n\n\`\`\`text\n\`\`\`\n`;
+    const metadata = {
+      arguments: { action: "read", path: "empty.txt", start_line: 99 },
+      host_result: { kind: "file_access", payload: {
+        schema: "vulcan.file_read.v3", action: "read", path: "empty.txt", read_status: readStatus,
+        total_line_count: readStatus === "empty_file" ? 0 : 3,
+        range: { source_start_line: 99, line_count: 0 },
+        render: { output_start_line: body.split("\n").indexOf("```text") + 2 },
+      } },
+    };
+    const pending = resolveFileAccessPresentation(toolBlock("file", "", metadata), "completed", {});
+    const hydrated = hydrateFileAccessPresentation(pending!, { body, metadata });
+    expect(hydrated.items[0].rows).toEqual([]);
+    expect(hydrated.items[0].lineRanges).toEqual([]);
+    expect(hydrated.interactive).toBe(true);
+    expect(hydrated.markdownBody).toBe(body);
+    expect(hydrated.emptyFile).toBe(readStatus === "empty_file");
   });
 
   it("renders a native v2 read range as code rows with actual gutter line numbers", () => {

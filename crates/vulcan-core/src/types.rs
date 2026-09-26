@@ -73,6 +73,9 @@ pub enum CoreError {
         /// Original durability or projection failure detail.
         /// 原始持久化或投影失败详情。
         message: String,
+        /// Structured terminal facts when the tool outcome is already known at the failed boundary.
+        /// 失败边界已知工具结果时保留的结构化终态事实。
+        details: Option<Box<vulcan_ai_contract::AiExecutionError>>,
     },
     /// The Provider repeated invalid tool-call arguments after the single automatic correction round.
     /// Provider 在唯一一次自动纠错轮之后仍重复提交无效工具调用参数。
@@ -112,7 +115,9 @@ impl Display for CoreError {
             CoreError::ToolFailure { tool_name, message } => {
                 write!(f, "tool `{tool_name}` failure: {message}")
             }
-            CoreError::ToolDurabilityFailure { tool_name, message } => {
+            CoreError::ToolDurabilityFailure {
+                tool_name, message, ..
+            } => {
                 write!(
                     f,
                     "tool `{tool_name}` durability boundary failure: {message}"

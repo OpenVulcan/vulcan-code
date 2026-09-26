@@ -2,8 +2,8 @@
 //! 供原生 AI 工具使用的共享 Rust 文件读写运行时。
 
 use crate::text_document::{
-    LineEnding, TextDocument, TextReplacementRange, parse_document_lines,
-    rewrite_replacement_line_endings,
+    DocumentLine, LineEnding, MAX_ERROR_CANDIDATE_RANGES, TextDocument, TextReplacementRange,
+    parse_document_lines, rewrite_replacement_line_endings,
 };
 use crate::text_encoding::{
     DecodedText, TextBom, TextEncoding, TextEncodingSource, decode_text, encode_text,
@@ -37,6 +37,14 @@ pub const MAX_READ_SEGMENTS: usize = 64;
 /// Maximum logical lines returned by one read target.
 /// 单个 read 目标最多返回的逻辑行数。
 pub const MAX_READ_LINES: usize = 10_000;
+
+/// Default page length when the caller omits end_line; explicit ranges retain the hard limit.
+/// 调用方省略 end_line 时的默认页长；显式范围保留硬上限。
+pub const DEFAULT_READ_LINES: usize = 400;
+
+/// Default serialized response budget, including Markdown and content-free metadata.
+/// 默认序列化响应预算，包含 Markdown 和无正文元数据。
+pub const DEFAULT_READ_RESPONSE_BYTES: usize = 64 * 1024;
 
 /// Maximum serialized JSON bytes accepted by one file_edit request.
 /// 单次 file_edit 请求允许的序列化 JSON 最大字节数。
@@ -93,10 +101,6 @@ const MAX_SEARCH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 /// Maximum inline lifecycle content retained in a change-set row.
 /// 变更集文件行允许内联保留的生命周期正文最大字节数。
 const MAX_INLINE_LIFECYCLE_BYTES: usize = 64 * 1024;
-
-/// Maximum candidate ranges retained in one structured edit error.
-/// 单条结构化编辑错误最多保留的候选范围数量。
-const MAX_ERROR_CANDIDATE_RANGES: usize = 32;
 
 /// Maximum operation contexts retained in one structured edit error.
 /// 单条结构化编辑错误最多保留的操作上下文数量。
@@ -171,8 +175,21 @@ impl FileToolError {
         {
             object.insert(String::from("path"), path.clone());
         }
-        if !self.details.is_null() {
-            object.insert(String::from("details"), self.details.clone());
+        // Emit each diagnostic once; common fields above own the public names, legacy aliases stay internal.
+        // 每个诊断只输出一次；上方公共字段拥有公开名称，旧别名留在内部。
+        if let Some(details) = detail_object {
+            for (key, value) in details {
+                if !value.is_null() && !matches!(key.as_str(), "requires_reread" | "recovery_hint")
+                {
+                    object.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+            }
+        }
+        if self.code == "execution_failed" {
+            // A failed blocking task may have exited during commit; never claim that execution did not start.
+            // 阻塞任务失败可能发生于提交期间；绝不能声称执行尚未开始。
+            object.insert(String::from("commit_scope"), json!("unknown"));
+            object.insert(String::from("rollback_state"), json!("unknown"));
         }
         Value::Object(object)
     }
@@ -374,6 +391,7 @@ fn validate_native_file_fields(
             "path",
             "content",
             "encoding",
+            "source_encoding",
             "bom",
             "line_ending",
         ]
@@ -423,21 +441,29 @@ fn native_read_file(
     let start_index = start_line
         .saturating_sub(1)
         .min(snapshot.document.lines.len());
+    // Explicit ranges opt into the existing hard budget; unbounded requests use a small continuable page.
+    // 显式范围选择现有硬预算；无结束行的请求使用可续读的小页。
+    let response_budget = if requested_end.is_some() {
+        MAX_READ_RESPONSE_BYTES
+    } else {
+        DEFAULT_READ_RESPONSE_BYTES
+    };
     let desired_end_index = requested_end
-        .unwrap_or(maximum_end)
+        .unwrap_or_else(|| start_line.saturating_add(DEFAULT_READ_LINES - 1))
         .min(snapshot.document.lines.len());
     let full_output = native_read_model_output(
         path,
         request_path,
         &snapshot,
         NativeReadRange {
+            requested_start_line: start_line,
             requested_end_line: requested_end,
             start_index,
             end_index: desired_end_index,
             size_truncated: false,
         },
     );
-    let response = if serialized_value_bytes(&full_output) <= MAX_READ_RESPONSE_BYTES {
+    let response = if serialized_value_bytes(&full_output) <= response_budget {
         full_output
     } else {
         let metadata_only = native_read_model_output(
@@ -445,13 +471,14 @@ fn native_read_file(
             request_path,
             &snapshot,
             NativeReadRange {
+                requested_start_line: start_line,
                 requested_end_line: requested_end,
                 start_index,
                 end_index: start_index,
                 size_truncated: true,
             },
         );
-        if serialized_value_bytes(&metadata_only) > MAX_READ_RESPONSE_BYTES {
+        if serialized_value_bytes(&metadata_only) > response_budget {
             return Err(FileToolError::new(
                 "output_limit_exceeded",
                 "The file read metadata exceeds the native response size limit.",
@@ -471,13 +498,14 @@ fn native_read_file(
                 request_path,
                 &snapshot,
                 NativeReadRange {
+                    requested_start_line: start_line,
                     requested_end_line: requested_end,
                     start_index,
                     end_index: candidate_end,
                     size_truncated: true,
                 },
             );
-            if serialized_value_bytes(&candidate) <= MAX_READ_RESPONSE_BYTES {
+            if serialized_value_bytes(&candidate) <= response_budget {
                 fitting_end = candidate_end;
             } else {
                 overflowing_end = candidate_end;
@@ -487,7 +515,7 @@ fn native_read_file(
             return Err(FileToolError::new(
                 "output_limit_exceeded",
                 format!(
-                    "Logical line {start_line} cannot fit inside the native read response size limit."
+                    "Logical line {start_line} cannot fit inside the {response_budget}-byte read budget. Specify end_line explicitly to request the hard budget; if it still fails, use a tool supporting partial-line reads."
                 ),
             ));
         }
@@ -496,6 +524,7 @@ fn native_read_file(
             request_path,
             &snapshot,
             NativeReadRange {
+                requested_start_line: start_line,
                 requested_end_line: requested_end,
                 start_index,
                 end_index: fitting_end,
@@ -510,6 +539,9 @@ fn native_read_file(
 /// 将原生读取的请求范围、返回范围与大小限制状态组合在一起。
 #[derive(Debug, Clone, Copy)]
 struct NativeReadRange {
+    /// Exact requested one-based start; retained even when it exceeds EOF.
+    /// 精确请求的一基起始行；超出文件末尾时仍保留。
+    requested_start_line: usize,
     /// Optional one-based inclusive final line requested by the model.
     /// 模型请求的可选一基闭区间结束行。
     requested_end_line: Option<usize>,
@@ -539,7 +571,7 @@ fn native_read_model_output(
     let selected = &snapshot.document.lines[range.start_index..range.end_index];
     // Keep the source range independent from the Markdown header length.
     // 保持源文件范围独立于 Markdown 标题长度。
-    let returned_start_line = range.start_index.saturating_add(1);
+    let returned_start_line = range.requested_start_line;
     let returned_end_line = range.end_index;
     // Report continuation only when the requested range has unread source lines.
     // 仅当请求范围仍有未读源文件行时报告续读位置。
@@ -573,9 +605,10 @@ fn native_read_model_output(
     // The Markdown string is the only owner of source text in the returned payload.
     // Markdown 字符串是返回载荷中源文件正文的唯一持有者。
     let mut markdown = format!(
-        "# File: {header_path}\n\nLines: {} | Showing: {showing} | Encoding: {}\n\n{fence}{language}\n",
+        "# File: {header_path}\n\nLines: {} | Showing: {showing} | Encoding: {} ({})\n\n{fence}{language}\n",
         snapshot.document.lines.len(),
         snapshot.document.encoding.label(),
+        snapshot.document.encoding_source.as_str(),
     );
     // Record the first body line before appending content instead of hard-coding a header offset.
     // 追加正文前记录首行位置，避免硬编码标题偏移。
@@ -591,12 +624,15 @@ fn native_read_model_output(
     }
     markdown.push_str(&fence);
     markdown.push('\n');
+    if !snapshot.document.encoding_certain {
+        markdown.push_str("\n[encoding_unverified] Automatic detection has limited evidence; this decoding may be incorrect. Confirm the source encoding with file read using encoding before editing; pass that encoding to file_edit.\n");
+    }
     // Empty files and out-of-range requests are distinct successful reads, never missing paths.
     // 空文件与越界请求是两种不同的成功读取，不能混同路径不存在。
     if snapshot.document.lines.is_empty() {
         markdown.push_str("\n[empty_file] The file exists but contains no text. There are no source lines to read.\n");
     } else if selected.is_empty() {
-        markdown.push_str("\n[empty_range] The file exists, but the requested range is beyond its last line. Choose start_line within the reported total line count.\n");
+        markdown.push_str(&format!("\n[range_beyond_eof] Requested start line {} exceeds the file's {} lines. No content returned.\n", range.requested_start_line, snapshot.document.lines.len()));
     }
     if truncated {
         markdown.push_str(&format!(
@@ -607,22 +643,26 @@ fn native_read_model_output(
     // Host metadata contains only coordinates and file-format facts, never source content.
     // 宿主元数据仅含定位信息和文件格式事实，绝不保存源文件正文。
     let metadata = json!({
-        "schema": "vulcan.file_read.v2",
+        "schema": "vulcan.file_read.v3",
         "action": "read",
         "path": display_path(path),
         "resource_id": "resource-1",
         "language": language,
         "encoding": snapshot.document.encoding.label(),
+        "encoding_source": snapshot.document.encoding_source.as_str(),
+        "encoding_certain": snapshot.document.encoding_certain,
         "bom": snapshot.document.bom.is_present(),
         "line_ending": snapshot.document.line_ending_label(),
         "mixed_line_endings": snapshot.document.mixed_line_endings,
         "final_newline": snapshot.document.final_newline(),
         "total_line_count": snapshot.document.lines.len(),
+        "read_status": if snapshot.document.lines.is_empty() { "empty_file" } else if range.start_index == snapshot.document.lines.len() { "range_beyond_eof" } else { "content" },
+        "requested_range": { "start_line": range.requested_start_line, "end_line": range.requested_end_line },
         "range": {
             "source_start_line": returned_start_line,
-            "output_start_line": output_start_line,
             "line_count": selected.len(),
         },
+        "render": { "output_start_line": output_start_line },
         "truncated": truncated,
         "next_start_line": truncated.then_some(returned_end_line.saturating_add(1)),
     });
@@ -673,6 +713,9 @@ fn native_write_file(
 ) -> Result<FileToolResponse, FileToolError> {
     let content = required_text(object, "content")?;
     let requested_encoding = optional_string(object, "encoding")?;
+    // Source and destination codecs have separate authority; an output override cannot reinterpret old bytes.
+    // 源编码与目标编码各有独立权威；输出覆盖不能重新解释原始字节。
+    let source_encoding = optional_string(object, "source_encoding")?;
     let bom_policy = optional_string(object, "bom")?.unwrap_or_else(|| String::from("preserve"));
     let line_ending_policy =
         optional_string(object, "line_ending")?.unwrap_or_else(|| String::from("preserve"));
@@ -690,19 +733,15 @@ fn native_write_file(
     }
     validate_parent_directory(path)?;
     let existing = if path_exists_including_symlink(path) {
-        // An explicit write encoding confirms an ambiguous source only after automatic detection
-        // fails; otherwise the detected source remains authoritative so true conversion is possible.
-        // 仅在自动检测失败后，显式写入编码才确认歧义源格式；否则继续以检测到的源格式为准，
-        // 从而支持真正的编码转换。
-        let snapshot = match read_snapshot(path) {
-            Ok(snapshot) => snapshot,
-            Err(error) if error.code == "encoding_ambiguous" && requested_encoding.is_some() => {
-                read_snapshot_with_encoding(path, requested_encoding.as_deref())?
-            }
-            Err(error) => return Err(error),
-        };
+        let snapshot = read_edit_snapshot(path, source_encoding.as_deref())?;
         Some(snapshot)
     } else {
+        if source_encoding.is_some() {
+            return Err(FileToolError::new(
+                "invalid_arguments",
+                "source_encoding requires an existing source file. Use encoding to select a new file's output encoding.",
+            ));
+        }
         None
     };
     let encoding = match (requested_encoding.as_deref(), existing.as_ref()) {
@@ -740,7 +779,7 @@ fn native_write_file(
         return Err(FileToolError::new(
             "no_change",
             "The write content is byte-identical to the existing file.",
-        ));
+        ).with_details(json!({"hint": "Provide content that differs from the current file, or skip the write."})));
     }
     let change_kind = if existing.is_some() {
         "modify"
@@ -761,12 +800,19 @@ fn native_write_file(
     let after_lines = after_document.logical_lines();
     // file_payload selects the only lifecycle representation allowed by the canonical V1 parser.
     // file_payload 选择规范 V1 解析器允许的唯一生命周期表示。
-    let file_payload = if existing.is_some() {
-        whole_file_modify_payload(path, &before_lines, &after_lines)
+    let file_payload = if let Some(snapshot) = &existing {
+        whole_file_modify_payload(path, &snapshot.document.lines, &after_document.lines)
     } else {
         whole_file_create_payload(path, &after_document.text, &after_lines)
     };
     let prepared = PreparedChange {
+        text_formats: Some(PreparedTextFormats {
+            before: existing
+                .as_ref()
+                .map(|snapshot| document_text_format(&snapshot.document))
+                .unwrap_or(Value::Null),
+            after: document_text_format(&after_document),
+        }),
         change_kind: String::from(change_kind),
         source_path: path.to_path_buf(),
         destination_path: None,
@@ -806,6 +852,7 @@ fn native_delete_file(path: &Path, request_path: &str) -> Result<FileToolRespons
     let snapshot = read_raw_snapshot(path)?;
     let file_payload = raw_lifecycle_payload(path, "delete", &snapshot, "resource-1");
     let prepared = PreparedChange {
+        text_formats: None,
         change_kind: String::from("delete"),
         source_path: path.to_path_buf(),
         destination_path: None,
@@ -844,6 +891,12 @@ fn native_move_file(
 ) -> Result<FileToolResponse, FileToolError> {
     let destination_raw = required_string(object, "destination")?;
     let destination = resolve_path(workspace_root, &destination_raw)?;
+    if path_key(path)? == path_key(&destination)? {
+        return Err(FileToolError::new(
+            "same_path",
+            "The source and destination refer to the same path. No move was performed.",
+        ));
+    }
     if path_exists_including_symlink(&destination) {
         return Err(FileToolError::new(
             "destination_exists",
@@ -862,6 +915,7 @@ fn native_move_file(
         payload.insert(String::from("new_path"), json!(display_path(&destination)));
     }
     let prepared = PreparedChange {
+        text_formats: None,
         change_kind: String::from("rename"),
         source_path: path.to_path_buf(),
         destination_path: Some(destination.clone()),
@@ -896,23 +950,46 @@ fn native_move_file(
 /// 使用 canonical 的变更前后逻辑行域构建一条整文件修改记录。
 ///
 /// `path` identifies the modified file, `before_lines` contains the original logical
-/// lines, and `after_lines` contains the replacement logical lines. The returned row
+/// lines with terminators, and `after_lines` contains the replacement lines and terminators. The returned row
 /// is valid only for the V1 `modify` lifecycle and therefore always carries one hunk.
-/// `path` 标识被修改文件，`before_lines` 包含原始逻辑行，`after_lines` 包含替换后的
-/// 逻辑行。返回记录仅用于 V1 `modify` 生命周期，因此始终携带一条 hunk。
+/// `path` 标识被修改文件，`before_lines` 包含原始行及终止符，`after_lines` 包含替换后的
+/// 行及终止符。返回记录仅用于 V1 `modify` 生命周期，因此始终携带一条 hunk。
 fn whole_file_modify_payload(
     path: &Path,
-    before_lines: &[String],
-    after_lines: &[String],
+    before_lines: &[DocumentLine],
+    after_lines: &[DocumentLine],
 ) -> Value {
+    // Trim unchanged edges so a small whole-file overwrite does not report every line as edited.
+    // 去除未变的首尾，避免小范围整文件覆盖把所有行都报告为编辑。
+    let mut prefix = before_lines
+        .iter()
+        .zip(after_lines)
+        .take_while(|(left, right)| left == right)
+        .count();
+    // Format-only rewrites still replace the final physical line; formats carry the exact byte distinction.
+    // 仅格式变化仍替换最后一条物理行；格式元数据记录精确字节差异。
+    let format_only = prefix == before_lines.len() && prefix == after_lines.len();
+    if format_only && prefix > 0 {
+        prefix -= 1;
+    }
+    let suffix = if format_only {
+        0
+    } else {
+        before_lines[prefix..]
+            .iter()
+            .rev()
+            .zip(after_lines[prefix..].iter().rev())
+            .take_while(|(left, right)| left == right)
+            .count()
+    };
     json!({
         "resource_id": "resource-1",
         "change": "modify",
         "path": display_path(path),
         "hunks": [{
             "before": "",
-            "delete": before_lines.iter().enumerate().map(|(index, content)| json!({"line": index + 1, "content": content})).collect::<Vec<_>>(),
-            "insert": after_lines.iter().enumerate().map(|(index, content)| json!({"line": index + 1, "content": content})).collect::<Vec<_>>(),
+            "delete": before_lines[prefix..before_lines.len() - suffix].iter().enumerate().map(|(index, line)| json!({"line": prefix + index + 1, "content": line.content})).collect::<Vec<_>>(),
+            "insert": after_lines[prefix..after_lines.len() - suffix].iter().enumerate().map(|(index, line)| json!({"line": prefix + index + 1, "content": line.content})).collect::<Vec<_>>(),
             "after": "",
         }],
     })
@@ -1030,8 +1107,14 @@ fn native_file_tools_extension(
                 ),
                 "operation_indexes": operation_indexes,
                 "hunk_indexes": hunk_indexes,
-                "before_text_format": strict_text_format(change.before_bytes.as_deref()),
-                "after_text_format": strict_text_format(change.after_bytes.as_deref()),
+                "before_text_format": match &change.text_formats {
+                    Some(formats) => formats.before.clone(),
+                    None => strict_text_format(change.before_bytes.as_deref()),
+                },
+                "after_text_format": match &change.text_formats {
+                    Some(formats) => formats.after.clone(),
+                    None => strict_text_format(change.after_bytes.as_deref()),
+                },
                 "actual_ranges": ranges,
             })
         })
@@ -1054,6 +1137,14 @@ fn strict_text_format(bytes: Option<&[u8]>) -> Value {
         return Value::Null;
     };
     let document = TextDocument::from_decoded(decoded);
+    document_text_format(&document)
+}
+
+/// Projects the already chosen codec and exact terminators without detecting the same bytes again.
+/// 投影已选定编码及精确终止符，不重新检测同一份字节。
+/// Parameters: document is the preflight authority; returns content-free format metadata.
+/// 参数：document 是预检权威；返回不包含正文的格式元数据。
+fn document_text_format(document: &TextDocument) -> Value {
     json!({
         "encoding": document.encoding.label(),
         "encoding_source": document.encoding_source.as_str(),
@@ -1648,7 +1739,13 @@ fn execute_exact_file_edit_sync(
     })?;
     validate_allowed_fields(
         object,
-        &["path", "old_string", "new_string", "replace_all"],
+        &[
+            "path",
+            "old_string",
+            "new_string",
+            "replace_all",
+            "encoding",
+        ],
         "file_edit request",
     )
     .map_err(enrich_request_edit_error)?;
@@ -1682,7 +1779,9 @@ fn execute_exact_file_edit_sync(
     let resource_locks =
         acquire_resource_locks(std::slice::from_ref(&path)).map_err(enrich_request_edit_error)?;
     let _resource_guards = lock_resource_set(&resource_locks).map_err(enrich_request_edit_error)?;
-    let snapshot = read_snapshot(&path).map_err(enrich_request_edit_error)?;
+    let encoding = optional_string(object, "encoding").map_err(enrich_request_edit_error)?;
+    let snapshot =
+        read_edit_snapshot(&path, encoding.as_deref()).map_err(enrich_request_edit_error)?;
     let replacement = snapshot
         .document
         .replace_exact(&old_string, &new_string, replace_all)
@@ -1693,6 +1792,17 @@ fn execute_exact_file_edit_sync(
             details.insert(String::from("retryable"), Value::Bool(false));
             if let Some(match_count) = error.match_count {
                 details.insert(String::from("match_count"), json!(match_count));
+            }
+            if let Some(ranges) = error.candidate_ranges.as_ref() {
+                details.insert(String::from("candidate_count"), json!(ranges.len()));
+                details.insert(
+                    String::from("candidate_ranges"),
+                    candidate_ranges_value(ranges),
+                );
+                details.insert(
+                    String::from("candidates_truncated"),
+                    json!(error.match_count.is_some_and(|count| count > ranges.len())),
+                );
             }
             enrich_request_edit_error(
                 FileToolError::new(error.code, error.message).with_details(Value::Object(details)),
@@ -1711,11 +1821,14 @@ fn execute_exact_file_edit_sync(
         return Err(enrich_request_edit_error(FileToolError::new(
             "no_change",
             "The exact replacement would not change the file.",
-        )));
+        ).with_details(json!({"hint": "Provide new_string that differs from the matched text, or skip the edit."}))));
     }
     let final_lines = replacement.document.logical_lines();
-    let (operation_windows, merged_windows) =
-        exact_edit_line_windows(&snapshot.lines, &final_lines, &replacement.ranges);
+    let (operation_windows, merged_windows) = exact_edit_line_windows(
+        &snapshot.document.lines,
+        &replacement.document.lines,
+        &replacement.ranges,
+    );
     let hunks = merged_windows
         .iter()
         .map(|window| exact_edit_hunk(&snapshot.lines, &final_lines, *window))
@@ -1747,6 +1860,10 @@ fn execute_exact_file_edit_sync(
         "hunks": hunks,
     });
     let prepared = PreparedChange {
+        text_formats: Some(PreparedTextFormats {
+            before: document_text_format(&snapshot.document),
+            after: document_text_format(&replacement.document),
+        }),
         change_kind: String::from("modify"),
         source_path: path.clone(),
         destination_path: None,
@@ -1818,8 +1935,8 @@ struct ExactEditLineWindow {
 /// Projects exact substring matches into per-operation and non-overlapping file hunks.
 /// 将精确子串命中投影为逐操作范围与互不重叠的文件 hunk。
 fn exact_edit_line_windows(
-    before_lines: &[String],
-    after_lines: &[String],
+    before_lines: &[DocumentLine],
+    after_lines: &[DocumentLine],
     ranges: &[TextReplacementRange],
 ) -> (Vec<ExactEditLineWindow>, Vec<ExactEditLineWindow>) {
     let mut cumulative_delta = 0isize;
@@ -1868,11 +1985,11 @@ fn exact_edit_line_windows(
     (operation_windows, merged_windows)
 }
 
-/// Removes equal complete lines from both ends of one candidate edit window.
-/// 从候选编辑窗口两端移除相等的完整行。
+/// Removes equal complete lines, including terminators, from both ends of an edit window.
+/// 从编辑窗口两端移除包含终止符在内完全相等的行。
 fn trim_exact_edit_line_window(
-    before_lines: &[String],
-    after_lines: &[String],
+    before_lines: &[DocumentLine],
+    after_lines: &[DocumentLine],
     window: &mut ExactEditLineWindow,
 ) {
     while window.original_start < window.original_end
@@ -2040,7 +2157,7 @@ fn execute_apply_patch_sync(
                         &resource_id,
                     )
                 } else {
-                    let snapshot = read_snapshot(&source_path)?;
+                    let snapshot = read_edit_snapshot(&source_path, None)?;
                     build_patch_update_change(
                         operation_index,
                         operation.path(),
@@ -2109,6 +2226,7 @@ fn build_patch_delete_change(
 ) -> PreparedChange {
     let file_payload = raw_lifecycle_payload(&source_path, "delete", &snapshot, resource_id);
     PreparedChange {
+        text_formats: None,
         change_kind: String::from("delete"),
         source_path,
         destination_path: None,
@@ -2149,6 +2267,7 @@ fn build_patch_move_change(
         );
     }
     PreparedChange {
+        text_formats: None,
         change_kind: String::from("rename"),
         source_path,
         destination_path: Some(destination_path),
@@ -2247,6 +2366,7 @@ fn build_patch_update_change(
         }));
     }
     Ok(PreparedChange {
+        text_formats: None,
         change_kind: String::from(change_kind),
         source_path,
         destination_path,
@@ -2596,7 +2716,7 @@ fn execute_legacy_file_edit_sync(
         if !matches!(operation.kind, EditKind::Create)
             && !snapshots.contains_key(&operation_path_key)
         {
-            let snapshot = read_snapshot(&operation.path).map_err(|error| {
+            let snapshot = read_edit_snapshot(&operation.path, None).map_err(|error| {
                 enrich_parsed_edit_error(error, &parsed, Some(std::slice::from_ref(&index)))
             })?;
             snapshots.insert(operation_path_key.clone(), snapshot);
@@ -2894,12 +3014,6 @@ fn insert_error_contract_defaults(details: &mut Map<String, Value>, code: &str) 
         .entry(String::from("rollback_state"))
         .or_insert_with(|| Value::String(String::from("not_started")));
     details
-        .entry(String::from("candidate_ranges"))
-        .or_insert_with(|| Value::Array(Vec::new()));
-    details
-        .entry(String::from("candidate_count"))
-        .or_insert_with(|| json!(0));
-    details
         .entry(String::from("requires_reread"))
         .or_insert_with(|| Value::Bool(requires_read));
     details
@@ -2921,8 +3035,7 @@ fn insert_error_contract_defaults(details: &mut Map<String, Value>, code: &str) 
 fn edit_error_requires_reread(code: &str) -> bool {
     matches!(
         code,
-        "path_not_found"
-            | "path_already_exists"
+        "path_already_exists"
             | "expected_lines_not_found"
             | "target_not_unique"
             | "anchor_chain_not_found"
@@ -2945,10 +3058,13 @@ fn edit_error_recovery_hint(code: &str) -> &'static str {
         "invalid_arguments" => {
             "Correct the current operation according to the schema; do not guess fields."
         }
-        "path_not_found" => "Use file to rediscover the path before retrying.",
+        "path_not_found" => {
+            "Check the path or use file with action=list on an existing parent directory before retrying."
+        }
+        "same_path" => "Choose a different destination, or skip the move.",
         "path_already_exists" => "Choose another path or explicitly handle the existing target.",
         "unsupported_file_type" => {
-            "Use a tool that supports this directory, symbolic link, binary, or non-UTF-8 target."
+            "Check the target type with file stat. Use file list for directories; this action requires a supported regular file."
         }
         "expected_lines_not_found" => {
             "Use file read and copy the complete current logical lines before retrying."
@@ -2977,7 +3093,7 @@ fn edit_error_recovery_hint(code: &str) -> &'static str {
         "stale_version" => "Use file stat or read to obtain a fresh version token before retrying.",
         "stale_file" => "Read all affected files again and regenerate the complete request.",
         "no_change" => {
-            "Remove the operation or provide new_lines that differ from the current content."
+            "Skip the operation or provide replacement text that differs from the current content."
         }
         "write_failed" => {
             "Fix the reported filesystem error, reread affected paths, and retry with a fresh request."
@@ -2986,13 +3102,19 @@ fn edit_error_recovery_hint(code: &str) -> &'static str {
             "The transaction was rolled back; reread every affected path before retrying."
         }
         "encoding_ambiguous" => {
-            "Read with an explicit encoding and convert the complete file explicitly before localized editing."
+            "Confirm the source encoding with file read using encoding, then use file_edit with that encoding. For whole-file writes provide source_encoding; encoding selects the output encoding."
+        }
+        "binary_file" => {
+            "If this is known text without a BOM (for example UTF-16LE/BE), read it with an explicit encoding. Do not retry unchanged arguments or edit a binary file as text."
         }
         "encoding_unrepresentable" => {
             "Use text representable in the current encoding, or explicitly convert the complete file."
         }
         "disk_state_uncertain" => {
             "Reread every affected path listed in the error before taking any further action."
+        }
+        "execution_failed" => {
+            "Execution stopped without a confirmed outcome. Inspect affected paths before retrying; changes may already have been applied."
         }
         _ => "Inspect the structured error and correct the request before retrying.",
     }
@@ -3310,6 +3432,7 @@ fn build_prepared_change(
         }));
     }
     Ok(PreparedChange {
+        text_formats: None,
         change_kind: change_kind.to_string(),
         source_path: first.path.clone(),
         destination_path: move_operation.and_then(|value| value.destination.clone()),
@@ -3353,6 +3476,7 @@ fn build_create_change(
     })?;
     insert_lifecycle_content(&mut file_payload, &content, &operation.new_lines);
     Ok(PreparedChange {
+        text_formats: None,
         change_kind: String::from("create"),
         source_path: operation.path.clone(),
         destination_path: None,
@@ -3395,6 +3519,7 @@ fn build_delete_change(
     );
     insert_lifecycle_content(&mut file_payload, &snapshot.document.text, &snapshot.lines);
     Ok(PreparedChange {
+        text_formats: None,
         change_kind: String::from("delete"),
         source_path: operation.path.clone(),
         destination_path: None,
@@ -3633,7 +3758,7 @@ fn commit_changes(changes: &[PreparedChange]) -> Result<(), FileToolError> {
                     format!("{} Rollback failed: {}", error.message, rollback_error.message),
                 )
                 .with_details(json!({
-                    "commit_scope": "none",
+                    "commit_scope": "unknown",
                     "rollback_state": "failed",
                     "affected_paths": backups.keys().map(|path| display_path(path)).collect::<Vec<_>>(),
                     "cause": error.as_value(),
@@ -4768,9 +4893,23 @@ enum EditKind {
     Move,
 }
 
+/// Authoritative text formats frozen by decoded mutation preflight.
+/// 由解码变更预检冻结的权威文本格式。
+struct PreparedTextFormats {
+    /// Original format, or null for a newly created resource.
+    /// 原始格式；新建资源为 null。
+    before: Value,
+    /// Committed format, or null if the resource is removed.
+    /// 提交格式；资源被删除时为 null。
+    after: Value,
+}
+
 /// One prepared resource-level mutation ready for dry-run display or commit.
 /// 一条可用于 dry-run 展示或提交的资源级准备变更。
 struct PreparedChange {
+    /// Known formats for decoded edits; raw lifecycle operations derive optional metadata from their bytes.
+    /// 解码编辑的已知格式；原始字节生命周期操作从字节派生可选元数据。
+    text_formats: Option<PreparedTextFormats>,
     /// Canonical file-level change kind.
     /// canonical 文件级变更类型。
     change_kind: String,
@@ -4870,6 +5009,25 @@ struct ReplacementPlan {
 /// 读取一份自动检测编码的文本快照并计算宿主版本令牌。
 fn read_snapshot(path: &Path) -> Result<TextSnapshot, FileToolError> {
     read_snapshot_with_encoding(path, None)
+}
+
+/// Reads a mutation source using an explicit codec or independently supported automatic evidence.
+/// 使用显式编码或独立证据支持的自动检测读取变更源。
+/// Parameters select the path and optional source codec; returns a snapshot or a no-write ambiguity error.
+/// 参数指定路径及可选源编码；返回快照，或不写入任何字节的歧义错误。
+fn read_edit_snapshot(path: &Path, encoding: Option<&str>) -> Result<TextSnapshot, FileToolError> {
+    let snapshot = read_snapshot_with_encoding(path, encoding)?;
+    if !snapshot.document.encoding_certain {
+        return Err(FileToolError::new("encoding_ambiguous", format!(
+            "The automatic encoding candidate {} is unverified for {}. No bytes were changed. Confirm the source encoding explicitly before editing.",
+            snapshot.document.encoding.label(), display_path(path),
+        )).with_details(json!({
+            "path": display_path(path),
+            "encoding_candidate": snapshot.document.encoding.label(),
+            "encoding_certain": false,
+        })));
+    }
+    Ok(snapshot)
 }
 
 /// Reads one strict text snapshot with an optional explicit encoding override.
@@ -5129,6 +5287,7 @@ mod tests {
         execute_file_edit, path_key, persistent_change_set_from_host_result, read_raw_snapshot,
         resolve_path, verify_preconditions, whole_file_modify_payload,
     };
+    use crate::text_document::parse_document_lines;
     use serde_json::{Value, json};
     use std::fs;
     use std::path::Path;
@@ -5908,7 +6067,7 @@ mod tests {
         // 使用元数据定位正文，绝不假设 Markdown 标题长度。
         let markdown = response.model_output.as_str().expect("Markdown result");
         let metadata = response.read_metadata.as_ref().expect("read coordinates");
-        let offset = metadata["range"]["output_start_line"]
+        let offset = metadata["render"]["output_start_line"]
             .as_u64()
             .expect("body line") as usize
             - 1;
@@ -5929,7 +6088,8 @@ mod tests {
         );
         assert!(markdown.contains("\n````rust\n"));
         assert!(markdown.ends_with("\n````\n"));
-        assert_eq!(metadata["schema"], json!("vulcan.file_read.v2"));
+        assert_eq!(metadata["schema"], json!("vulcan.file_read.v3"));
+        assert!(metadata["range"].get("output_start_line").is_none());
         assert_eq!(markdown.matches("你好").count(), 1);
         assert!(!metadata.to_string().contains("你好"));
         for removed in ["content", "lines", "segments"] {
@@ -5950,7 +6110,9 @@ mod tests {
         .await
         .expect("empty range");
         let empty_metadata = beyond_end.read_metadata.expect("empty read coordinates");
-        assert_eq!(empty_metadata["range"]["source_start_line"], json!(6));
+        assert_eq!(empty_metadata["range"]["source_start_line"], json!(100));
+        assert_eq!(empty_metadata["requested_range"]["start_line"], json!(100));
+        assert_eq!(empty_metadata["read_status"], json!("range_beyond_eof"));
         assert_eq!(empty_metadata["range"]["line_count"], json!(0));
         assert_eq!(empty_metadata["next_start_line"], Value::Null);
         assert!(
@@ -5958,7 +6120,7 @@ mod tests {
                 .model_output
                 .as_str()
                 .unwrap()
-                .contains("[empty_range]")
+                .contains("[range_beyond_eof]")
         );
         assert!(
             !beyond_end
@@ -5989,7 +6151,7 @@ mod tests {
             .await
             .expect("read fixture");
             let metadata = response.read_metadata.expect("mapping metadata");
-            let start = metadata["range"]["output_start_line"]
+            let start = metadata["render"]["output_start_line"]
                 .as_u64()
                 .expect("start") as usize;
             let count = metadata["range"]["line_count"].as_u64().expect("count") as usize;
@@ -6030,14 +6192,20 @@ mod tests {
         .await
         .expect("bounded read");
         let metadata = response.read_metadata.expect("mapping metadata");
-        assert_eq!(metadata["range"]["line_count"], json!(MAX_READ_LINES));
-        assert_eq!(metadata["next_start_line"], json!(MAX_READ_LINES + 1));
+        assert_eq!(
+            metadata["range"]["line_count"],
+            json!(super::DEFAULT_READ_LINES)
+        );
+        assert_eq!(
+            metadata["next_start_line"],
+            json!(super::DEFAULT_READ_LINES + 1)
+        );
         assert!(
             response
                 .model_output
                 .as_str()
                 .expect("Markdown body")
-                .contains(&format!("start_line={}", MAX_READ_LINES + 1))
+                .contains(&format!("start_line={}", super::DEFAULT_READ_LINES + 1))
         );
     }
 
@@ -6079,7 +6247,7 @@ mod tests {
         fs::write(directory.path().join("large.txt"), line.repeat(3_000)).expect("write fixture");
         let response = execute_file(
             directory.path().to_path_buf(),
-            json!({"action": "read", "path": "large.txt"}),
+            json!({"action": "read", "path": "large.txt", "end_line": 3000}),
         )
         .await
         .expect("bounded native read");
@@ -6129,8 +6297,8 @@ mod tests {
         assert!(error.message.contains("Logical line 1"));
     }
 
-    /// Verifies exact replacement preserves a detected GBK encoding and untouched LFCR endings.
-    /// 验证精确替换保留检测到的 GBK 编码与未触及的 LFCR 换行。
+    /// Verifies exact replacement preserves an explicitly confirmed GBK encoding and untouched LFCR endings.
+    /// 验证精确替换保留显式确认的 GBK 编码与未触及的 LFCR 换行。
     #[tokio::test]
     async fn exact_edit_preserves_legacy_encoding_and_lfcr() {
         let directory = tempdir().expect("create temporary directory");
@@ -6144,7 +6312,8 @@ mod tests {
             json!({
                 "path": "legacy.txt",
                 "old_string": "旧值",
-                "new_string": "新值"
+                "new_string": "新值",
+                "encoding": "gbk"
             }),
         )
         .await
@@ -6279,7 +6448,7 @@ mod tests {
 
         let error = execute_file_edit(
             directory.path().to_path_buf(),
-            json!({"path": "legacy.txt", "old_string": "旧值", "new_string": "🙂"}),
+            json!({"path": "legacy.txt", "old_string": "旧值", "new_string": "🙂", "encoding": "gbk"}),
         )
         .await
         .expect_err("GBK cannot represent emoji");
@@ -6544,7 +6713,8 @@ mod tests {
                 "action": "write",
                 "path": "ambiguous.txt",
                 "content": "café",
-                "encoding": "windows-1252"
+                "encoding": "windows-1252",
+                "source_encoding": "windows-1252"
             }),
         )
         .await
@@ -6584,6 +6754,229 @@ mod tests {
             fs::read(directory.path().join("new.txt")).expect("read new file"),
             b"a\nb\nc\nd"
         );
+    }
+
+    /// Verifies terminator-only rewrites produce durable nonempty hunks in both public write paths.
+    /// 验证两种公开写入路径的纯终止符变更都生成可持久化的非空 hunk。
+    /// No parameters or return value; asserts exact bytes, final-newline formats and unchanged-file rejection.
+    /// 无参数或返回值；断言精确字节、末尾换行格式及无变化文件拒绝语义。
+    #[tokio::test]
+    async fn native_writes_preserve_terminator_only_changes() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("newline.txt");
+        for exact_edit in [false, true] {
+            for (before, after) in [
+                ("alpha", "alpha\n"),
+                ("alpha\n", "alpha"),
+                ("alpha\nbeta", "alpha\nbeta\n"),
+                ("alpha\nbeta\n", "alpha\nbeta"),
+                ("alpha\r\nbeta", "alpha\r\nbeta\r\n"),
+                ("alpha\r\nbeta\r\n", "alpha\r\nbeta"),
+            ] {
+                fs::write(&path, before).unwrap();
+                // Both public tools must validate the receipt before committing these byte-only changes.
+                // 两个公开工具都必须在提交这些纯字节变化前校验回执。
+                let result = if exact_edit {
+                    execute_file_edit(
+                        directory.path().to_path_buf(),
+                        json!({
+                            "path":"newline.txt", "old_string":before, "new_string":after,
+                        }),
+                    )
+                    .await
+                } else {
+                    execute_file(
+                        directory.path().to_path_buf(),
+                        json!({
+                            "action":"write", "path":"newline.txt", "content":after,
+                        }),
+                    )
+                    .await
+                }
+                .expect("terminator-only mutation must succeed");
+                assert_eq!(fs::read(&path).unwrap(), after.as_bytes());
+                let persistent = persistent_change_set_from_host_result(&json!({
+                    "kind":"change_set", "payload":result.change_set.unwrap(),
+                }))
+                .expect("terminator receipt must satisfy V1")
+                .unwrap();
+                let file = persistent
+                    .files
+                    .iter()
+                    .find(|file| file.path.as_deref() == Some(display_path(&path).as_str()))
+                    .expect("receipt must contain the changed path");
+                assert_eq!(file.hunks.len(), 1);
+                let hunk = &file.hunks[0];
+                assert_eq!(
+                    file.before_text_format.as_ref().unwrap().final_newline,
+                    Some(before.ends_with('\n'))
+                );
+                assert_eq!(
+                    file.after_text_format.as_ref().unwrap().final_newline,
+                    Some(after.ends_with('\n'))
+                );
+                assert_eq!(hunk.deleted.len(), 1);
+                assert_eq!(hunk.inserted.len(), 1);
+                assert_eq!(hunk.deleted[0].content, hunk.inserted[0].content);
+                assert_eq!(hunk.deleted[0].line, before.lines().count());
+                let unchanged = execute_file(
+                    directory.path().to_path_buf(),
+                    json!({
+                        "action":"write", "path":"newline.txt", "content":after,
+                    }),
+                )
+                .await
+                .expect_err("identical bytes remain no_change");
+                assert_eq!(unchanged.code, "no_change");
+            }
+        }
+    }
+
+    /// Confirms ambiguous reads cannot silently authorize mutation and explicit codecs survive durable projection.
+    /// 确认歧义读取不能静默授权修改，且显式编码在持久投影中保持不变。
+    /// No parameters or return value; checks exact legacy and BOM-less UTF-16 bytes through public tools.
+    /// 无参数或返回值；通过公开工具核对传统编码和无 BOM UTF-16 的精确字节。
+    #[tokio::test]
+    async fn native_explicit_encoding_closes_read_edit_write_recovery() {
+        use crate::text_encoding::{TextBom, encode_text, parse_encoding_label};
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("encoded.txt");
+        for (label, original, replacement) in [
+            ("gbk", "中文测试\n", "中文修改\n"),
+            ("shift_jis", "テストです\n", "変更です\n"),
+            ("big5", "測試\n", "修改\n"),
+            ("utf-16le", "中文测试\n", "中文修改\n"),
+            ("utf-16be", "中文测试\n", "中文修改\n"),
+        ] {
+            let codec = parse_encoding_label(label).unwrap();
+            let bytes = encode_text(original, codec, TextBom::None).unwrap();
+            fs::write(&path, &bytes).unwrap();
+            let auto_read = execute_file(
+                directory.path().to_path_buf(),
+                json!({"action":"read", "path":"encoded.txt"}),
+            )
+            .await;
+            match auto_read {
+                Ok(read) => {
+                    assert_eq!(
+                        read.read_metadata.as_ref().unwrap()["encoding_certain"],
+                        false
+                    );
+                    assert!(
+                        read.model_output
+                            .as_str()
+                            .unwrap()
+                            .contains("[encoding_unverified]")
+                    );
+                }
+                Err(error) => {
+                    assert_eq!(error.code, "binary_file");
+                    assert!(
+                        error.as_value()["hint"]
+                            .as_str()
+                            .unwrap()
+                            .contains("UTF-16")
+                    );
+                }
+            }
+            let denied = execute_file_edit(
+                directory.path().to_path_buf(),
+                json!({
+                    "path":"encoded.txt", "old_string":original, "new_string":replacement,
+                }),
+            )
+            .await
+            .expect_err("uncertain source must not be rewritten automatically");
+            assert!(matches!(
+                denied.code.as_str(),
+                "encoding_ambiguous" | "binary_file"
+            ));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            let explicit_read = execute_file(
+                directory.path().to_path_buf(),
+                json!({
+                    "action":"read", "path":"encoded.txt", "encoding":label,
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(
+                explicit_read
+                    .model_output
+                    .as_str()
+                    .unwrap()
+                    .contains(original.trim_end())
+            );
+            assert_eq!(
+                explicit_read.read_metadata.as_ref().unwrap()["encoding_source"],
+                "explicit"
+            );
+            let edited = execute_file_edit(directory.path().to_path_buf(), json!({
+                "path":"encoded.txt", "old_string":original, "new_string":replacement, "encoding":label,
+            })).await.unwrap();
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                encode_text(replacement, codec, TextBom::None).unwrap()
+            );
+            // Persisted metadata must retain the confirmed codec rather than guessing the changed bytes again.
+            // 持久元数据必须保留已确认编码，而不是再次猜测修改后的字节。
+            let persistent = persistent_change_set_from_host_result(&json!({
+                "kind":"change_set", "payload":edited.change_set.unwrap(),
+            }))
+            .unwrap()
+            .unwrap();
+            let file = persistent.files.first().unwrap();
+            assert_eq!(
+                file.before_text_format
+                    .as_ref()
+                    .unwrap()
+                    .encoding
+                    .as_deref(),
+                Some(codec.label())
+            );
+            assert_eq!(
+                file.after_text_format.as_ref().unwrap().encoding.as_deref(),
+                Some(codec.label())
+            );
+            // An explicit source can be converted to an independently selected destination codec.
+            // 显式源编码可以转换成独立选择的目标编码。
+            execute_file(
+                directory.path().to_path_buf(),
+                json!({
+                    "action":"write", "path":"encoded.txt", "content":replacement,
+                    "source_encoding":label, "encoding":"utf-8",
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(fs::read(&path).unwrap(), replacement.as_bytes());
+        }
+    }
+
+    /// Rejects a patch batch before any sibling is committed when one source encoding is unverified.
+    /// 当任一源编码未确认时，在任何同批文件提交前拒绝整批补丁。
+    /// No parameters or return value; the recovery hint must name an available explicit-codec tool.
+    /// 无参数或返回值；恢复提示必须指向实际可用的显式编码工具。
+    #[tokio::test]
+    async fn uncertain_patch_source_preserves_all_siblings() {
+        // Independent fixtures expose accidental partial publication.
+        // 独立夹具用于暴露意外的部分发布。
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("legacy.txt");
+        let bytes = [0xB4, 0xFA, 0xB8, 0xD5, b'\n'];
+        fs::write(&path, bytes).unwrap();
+        let error = execute_apply_patch(directory.path().to_path_buf(), String::from(
+            "*** Begin Patch\n*** Add File: sibling.txt\n+must-not-exist\n*** Update File: legacy.txt\n-測試\n+修改\n*** End Patch"
+        )).await.expect_err("uncertain encoding must stop the entire preflight");
+        assert_eq!(error.code, "encoding_ambiguous");
+        assert!(
+            error.as_value()["hint"]
+                .as_str()
+                .unwrap()
+                .contains("file_edit")
+        );
+        assert!(!directory.path().join("sibling.txt").exists());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
     }
 
     /// Verifies whole-file write accepts empty content for both creation and truncation.
@@ -6923,6 +7316,7 @@ mod tests {
         fs::write(&path, "before\n").expect("write fixture");
         let snapshot = read_raw_snapshot(&path).expect("read raw snapshot");
         let prepared = PreparedChange {
+            text_formats: None,
             change_kind: String::from("modify"),
             source_path: path.clone(),
             destination_path: None,
@@ -6932,8 +7326,8 @@ mod tests {
             after_bytes: Some(b"after\n".to_vec()),
             file_payload: whole_file_modify_payload(
                 &path,
-                &[String::from("before")],
-                &[String::from("after")],
+                &parse_document_lines("before\n"),
+                &parse_document_lines("after\n"),
             ),
             operation_results: Vec::new(),
         };
@@ -6960,6 +7354,7 @@ mod tests {
         // prepared intentionally violates the create lifecycle contract with one modify hunk.
         // prepared 故意通过一条修改 hunk 违反创建生命周期契约。
         let prepared = PreparedChange {
+            text_formats: None,
             change_kind: String::from("create"),
             source_path: path.clone(),
             destination_path: None,
@@ -7038,6 +7433,7 @@ mod tests {
         let first = read_raw_snapshot(&first_path).expect("read first snapshot");
         let changes = vec![
             PreparedChange {
+                text_formats: None,
                 change_kind: String::from("modify"),
                 source_path: first_path.clone(),
                 destination_path: None,
@@ -7049,6 +7445,7 @@ mod tests {
                 operation_results: Vec::new(),
             },
             PreparedChange {
+                text_formats: None,
                 change_kind: String::from("create"),
                 source_path: blocked_path,
                 destination_path: None,
@@ -7070,6 +7467,216 @@ mod tests {
         );
     }
 
+    /// Verifies public errors retain actionable facts once and never invent candidate discovery.
+    /// 验证公开错误仅保留一份可操作事实，且不虚构候选发现。
+    #[tokio::test]
+    async fn native_error_contract_is_flat_and_actionable() {
+        // Use real dispatch so error enrichment and serialization are both exercised.
+        // 使用真实调度，同时覆盖错误补全与序列化。
+        let directory = tempdir().expect("workspace");
+        fs::write(directory.path().join("same.txt"), "unchanged\n").expect("fixture");
+        for action in ["read", "stat", "delete"] {
+            let error = execute_file(
+                directory.path().to_path_buf(),
+                json!({"action": action, "path": "missing.txt"}),
+            )
+            .await
+            .expect_err("missing path")
+            .as_value();
+            assert_eq!(error["code"], "path_not_found");
+            assert_eq!(error["requires_read"], false);
+            assert!(error["hint"].as_str().unwrap().contains("action=list"));
+            assert!(error.get("details").is_none());
+        }
+        // No-op hints name only parameters accepted by their respective public schemas.
+        // 无变化提示仅使用各自公开 Schema 接受的参数名。
+        let write = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action":"write", "path":"same.txt", "content":"unchanged\n"}),
+        )
+        .await
+        .expect_err("no write")
+        .as_value();
+        let edit = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({"path":"same.txt", "old_string":"unchanged", "new_string":"unchanged"}),
+        )
+        .await
+        .expect_err("no edit")
+        .as_value();
+        for (error, parameter) in [(&write, "content"), (&edit, "new_string")] {
+            assert_eq!(error["code"], "no_change");
+            assert_eq!(error["requires_read"], false);
+            assert!(error["hint"].as_str().unwrap().contains(parameter));
+            for obsolete in [
+                "details",
+                "requires_reread",
+                "recovery_hint",
+                "candidate_count",
+                "candidate_ranges",
+            ] {
+                assert!(
+                    error.get(obsolete).is_none(),
+                    "unexpected field {obsolete}: {error}"
+                );
+            }
+            assert!(!error.to_string().contains("new_lines"));
+        }
+        let same = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action":"move", "path":"same.txt", "destination":"./same.txt"}),
+        )
+        .await
+        .expect_err("same path")
+        .as_value();
+        assert_eq!(same["code"], "same_path");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("same.txt")).unwrap(),
+            "unchanged\n"
+        );
+        let unknown = super::FileToolError::new("execution_failed", "worker stopped").as_value();
+        assert_eq!(unknown["commit_scope"], "unknown");
+        assert_eq!(unknown["rollback_state"], "unknown");
+        assert!(
+            unknown["hint"]
+                .as_str()
+                .unwrap()
+                .contains("may already have been applied")
+        );
+    }
+
+    /// Verifies bounded ambiguity ranges retain Unicode and mixed-ending source coordinates without editing.
+    /// 验证有界歧义范围保留 Unicode 与混合换行的源坐标，且不修改文件。
+    #[tokio::test]
+    async fn native_ambiguity_reports_real_candidate_lines() {
+        // The repeated two-line Unicode substring has known separated source positions.
+        // 重复的两行 Unicode 子串具有已知且分隔的源位置。
+        let directory = tempdir().expect("workspace");
+        let source = "head\r\n你好\r\n世界\rgap\n你好\n世界\n";
+        fs::write(directory.path().join("matches.txt"), source).unwrap();
+        let error = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({"path":"matches.txt", "old_string":"你好\n世界", "new_string":"replacement"}),
+        )
+        .await
+        .expect_err("ambiguous")
+        .as_value();
+        assert_eq!(error["match_count"], 2);
+        assert_eq!(error["candidate_count"], 2);
+        assert_eq!(
+            error["candidate_ranges"],
+            json!([{"start_line":2,"line_count":2},{"start_line":5,"line_count":2}])
+        );
+        assert_eq!(error["candidates_truncated"], false);
+        assert_eq!(error["commit_scope"], "none");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("matches.txt")).unwrap(),
+            source
+        );
+        // Candidate truncation reports the total separately from returned ranges.
+        // 候选截断将总数与返回范围数量分开报告。
+        let total = super::MAX_ERROR_CANDIDATE_RANGES + 5;
+        fs::write(directory.path().join("matches.txt"), "x\n".repeat(total)).unwrap();
+        let bounded = execute_file_edit(
+            directory.path().to_path_buf(),
+            json!({"path":"matches.txt", "old_string":"x", "new_string":"y"}),
+        )
+        .await
+        .expect_err("bounded ambiguity")
+        .as_value();
+        assert_eq!(bounded["match_count"], total);
+        assert_eq!(
+            bounded["candidate_count"],
+            super::MAX_ERROR_CANDIDATE_RANGES
+        );
+        assert_eq!(
+            bounded["candidate_ranges"].as_array().unwrap().len(),
+            super::MAX_ERROR_CANDIDATE_RANGES
+        );
+        assert_eq!(bounded["candidates_truncated"], true);
+    }
+
+    /// Verifies default byte-bounded pages reconstruct the exact source and explicit ranges keep the hard budget.
+    /// 验证默认字节有界分页重建精确源码，显式范围仍保留硬预算。
+    #[tokio::test]
+    async fn native_read_pages_and_encoding_sources_are_explicit() {
+        // Wide Unicode lines exhaust the byte budget before the default line budget.
+        // 宽 Unicode 行会先耗尽字节预算，再到默认行数预算。
+        let directory = tempdir().expect("workspace");
+        let lines = (0..super::DEFAULT_READ_LINES + 1)
+            .map(|index| format!("{index}:{}", "中".repeat(100)))
+            .collect::<Vec<_>>();
+        fs::write(directory.path().join("pages.txt"), lines.join("\n")).unwrap();
+        let mut start = 1;
+        let mut recovered = Vec::new();
+        loop {
+            let response = execute_file(
+                directory.path().to_path_buf(),
+                json!({"action":"read", "path":"pages.txt", "start_line":start}),
+            )
+            .await
+            .expect("page");
+            assert!(
+                serde_json::to_vec(&response).unwrap().len() <= super::DEFAULT_READ_RESPONSE_BYTES
+            );
+            let metadata = response.read_metadata.unwrap();
+            let body = response.model_output.as_str().unwrap();
+            let count = metadata["range"]["line_count"].as_u64().unwrap() as usize;
+            assert!(count > 0 && count <= super::DEFAULT_READ_LINES);
+            assert_eq!(metadata["read_status"], "content");
+            for line in body
+                .lines()
+                .skip(metadata["render"]["output_start_line"].as_u64().unwrap() as usize - 1)
+                .take(count)
+            {
+                recovered.push(line.split_once(": ").expect("numbered line").1.to_string());
+            }
+            if metadata["truncated"] == false {
+                break;
+            }
+            let next = metadata["next_start_line"].as_u64().unwrap() as usize;
+            assert_eq!(next, start + count);
+            start = next;
+        }
+        assert_eq!(recovered, lines);
+        let explicit = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action":"read", "path":"pages.txt", "end_line":lines.len()}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            explicit.read_metadata.unwrap()["range"]["line_count"],
+            lines.len()
+        );
+        fs::write(directory.path().join("ascii.txt"), "ascii\n").unwrap();
+        let encoded = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action":"read", "path":"ascii.txt", "encoding":"gbk"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            encoded.read_metadata.unwrap()["encoding_source"],
+            "explicit"
+        );
+        assert!(
+            encoded
+                .model_output
+                .as_str()
+                .unwrap()
+                .contains("GBK (explicit)")
+        );
+        fs::write(directory.path().join("empty.txt"), "").unwrap();
+        let empty = execute_file(
+            directory.path().to_path_buf(),
+            json!({"action":"read", "path":"empty.txt"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(empty.read_metadata.unwrap()["read_status"], "empty_file");
+    }
+
     /// Verifies rollback failure reports every path as requiring a fresh read.
     /// 验证回滚失败会报告每个需要重新读取的路径。
     #[test]
@@ -7079,6 +7686,7 @@ mod tests {
         let destination = directory.path().join("z-destination.txt");
         fs::create_dir(&source_directory).expect("create invalid source directory");
         let change = PreparedChange {
+            text_formats: None,
             change_kind: String::from("rename"),
             source_path: source_directory,
             destination_path: Some(destination.clone()),
@@ -7093,6 +7701,7 @@ mod tests {
         let error = commit_changes(&[change]).expect_err("rollback should be uncertain");
         assert_eq!(error.code, "disk_state_uncertain");
         assert_eq!(error.details["rollback_state"], json!("failed"));
+        assert_eq!(error.as_value()["commit_scope"], json!("unknown"));
         assert!(!destination.exists());
     }
 }

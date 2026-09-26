@@ -283,7 +283,7 @@ pub fn decode_text(
     }
     // chardetng is used only after strict Unicode paths fail, and the guessed codec must round-trip.
     // chardetng 仅在严格 Unicode 路径失败后使用，并且检测到的编码必须能够往返一致。
-    let guessed = trusted_legacy_encoding(bytes)?;
+    let (guessed, certain) = trusted_legacy_encoding(bytes)?;
     let encoding = TextEncoding::Legacy(guessed);
     let text = decode_with_encoding(bytes, encoding)?;
     validate_decoded_text(&text)?;
@@ -299,7 +299,7 @@ pub fn decode_text(
         encoding,
         bom: TextBom::None,
         source: TextEncodingSource::Detector,
-        certain: true,
+        certain,
     })
 }
 
@@ -313,9 +313,9 @@ pub fn decode_text(
 ///
 /// # Returns
 /// 返回值
-/// A stable Encoding Standard codec, or an explicit ambiguity error with the final candidate.
-/// 返回稳定的 Encoding Standard 编码，或带最终候选的明确歧义错误。
-fn trusted_legacy_encoding(bytes: &[u8]) -> Result<&'static Encoding, TextCodecError> {
+/// A codec and whether independent checkpoints support write-back, or an explicit ambiguity error.
+/// 返回编码及独立检查点是否支持写回，或返回明确歧义错误。
+fn trusted_legacy_encoding(bytes: &[u8]) -> Result<(&'static Encoding, bool), TextCodecError> {
     let mut detector = EncodingDetector::new(Iso2022JpDetection::Allow);
     let mut non_ascii_count = 0usize;
     let mut supported_guesses = Vec::new();
@@ -336,8 +336,13 @@ fn trusted_legacy_encoding(bytes: &[u8]) -> Result<&'static Encoding, TextCodecE
             .rev()
             .take(2)
             .all(|encoding| std::ptr::eq(*encoding, candidate));
-    if converged || short_legacy_sample_is_consistent(bytes, candidate)? {
-        return Ok(candidate);
+    if converged {
+        return Ok((candidate, true));
+    }
+    if short_legacy_sample_is_consistent(bytes, candidate)? {
+        // Repeating the same sample cannot establish its original encoding; allow a labelled preview only.
+        // 重复同一样本不能证明原始编码；只允许带标记的预览。
+        return Ok((candidate, false));
     }
     Err(TextCodecError::new(
         "encoding_ambiguous",
@@ -800,6 +805,10 @@ mod tests {
         assert_eq!(decoded.text, source);
         assert_eq!(decoded.encoding.label(), encoding_rs::GBK.name());
         assert_eq!(decoded.source, TextEncodingSource::Detector);
+        assert!(
+            decoded.certain,
+            "independent checkpoints must support this long fixture"
+        );
         assert_eq!(
             encode_text(&decoded.text, decoded.encoding, decoded.bom)
                 .expect("detected sample should re-encode"),

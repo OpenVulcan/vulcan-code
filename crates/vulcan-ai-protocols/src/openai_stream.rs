@@ -447,20 +447,41 @@ impl OpenAiChatStreamDecoder {
         events
     }
 
-    /// Completes every started tool call after the provider finish signal.
-    /// 在供应商结束信号后完成每个已开始工具调用。
-    fn complete_tools(&mut self) -> Vec<AiStreamEvent> {
+    /// Finalizes buffered calls at the transport boundary, preserving unknown names for host rejection.
+    /// 在传输边界完成缓存调用，保留未知工具名以交由宿主拒绝。
+    /// No parameters; returns ordered lifecycle events, or an error for missing wire identity.
+    /// 无参数；返回有序生命周期事件，或在传输身份缺失时返回错误。
+    fn complete_tools(&mut self) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
+        // Validate all identities before mutating any sibling's terminal state.
+        // 修改任何同批调用的终态前，先校验全部身份。
+        for state in self.tools.values().filter(|state| !state.terminal) {
+            if state.call_id.is_empty() || state.tool_name.is_empty() {
+                return Err(ProtocolConversionError::new(format!(
+                    "OpenAI Chat tool item `{}` ended with an incomplete identity (missing call id: {}, missing tool name: {}).",
+                    state.item_id,
+                    state.call_id.is_empty(),
+                    state.tool_name.is_empty(),
+                )));
+            }
+        }
         let mut events = Vec::new();
-        for state in self.tools.values_mut().filter(|state| !state.terminal) {
+        for (index, state) in self.tools.iter_mut().filter(|(_, state)| !state.terminal) {
             state.terminal = true;
             if !state.started {
-                events.push(AiStreamEvent::ToolCallAborted {
+                // The boundary makes the accumulated name final even when it is not registered.
+                // 边界使累积名称成为最终名称，即使该名称未注册。
+                // Registration is an execution check; skipping start here breaks the public lifecycle.
+                // 注册校验属于执行层；在此跳过开始事件会破坏公共生命周期。
+                state.started = true;
+                events.push(AiStreamEvent::ToolCallStarted {
                     item_id: state.item_id.clone(),
-                    message: String::from(
-                        "OpenAI tool input ended before the tool identity was complete.",
-                    ),
+                    call_id: state.call_id.clone(),
+                    tool_name: state.tool_name.clone(),
+                    index: *index,
                 });
-                continue;
+                if !state.arguments.is_empty() {
+                    events.push(tool_argument_delta(state, state.arguments.as_str())?);
+                }
             }
             match serde_json::from_str::<Value>(state.arguments.as_str()) {
                 Ok(arguments) => events.push(AiStreamEvent::ToolCallCompleted {
@@ -480,7 +501,7 @@ impl OpenAiChatStreamDecoder {
                 }),
             }
         }
-        events
+        Ok(events)
     }
 }
 
@@ -498,7 +519,7 @@ impl ProtocolStreamDecoder for OpenAiChatStreamDecoder {
         let mut events = self.start_if_needed();
         if data.trim() == "[DONE]" {
             events.extend(self.close_open_items());
-            events.extend(self.complete_tools());
+            events.extend(self.complete_tools()?);
             self.terminal = true;
             events.push(AiStreamEvent::ResponseCompleted);
             return Ok(events);
@@ -534,7 +555,7 @@ impl ProtocolStreamDecoder for OpenAiChatStreamDecoder {
             // EOF after a finish reason is the registered terminal substitute for a missing `[DONE]`.
             // 带结束原因的 EOF 是缺失 `[DONE]` 时已注册的终态替代边界。
             let mut events = self.close_open_items();
-            events.extend(self.complete_tools());
+            events.extend(self.complete_tools()?);
             self.terminal = true;
             events.push(AiStreamEvent::ResponseCompleted);
             return Ok(events);
@@ -2761,6 +2782,118 @@ mod tests {
             AiStreamEvent::ToolCallStarted { tool_name, .. }
                 if tool_name == "vulcan_file_edit"
         )));
+    }
+
+    /// Checks known and unknown calls against the real lifecycle through both Chat terminal boundaries.
+    /// 使用真实生命周期校验已知和未知调用，覆盖两种 Chat 终态边界。
+    /// No parameters or return value; unknown tools remain model-correctable host errors.
+    /// 无参数或返回值；未知工具仍可通过宿主错误回执让模型纠正。
+    #[test]
+    fn chat_unknown_tool_keeps_valid_lifecycle_with_registered_siblings() {
+        for eof in [false, true] {
+            for arguments in ["{}", "{"] {
+                // Decoder receives three registered siblings and a fragmented unknown fourth name.
+                // 解码器接收三个已注册同批调用，以及第四个未知工具名的片段。
+                let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+                    String::from("unknown-tool"),
+                    BTreeSet::from([String::from("file")]),
+                );
+                // Machine validates exactly the event sequence consumed by the public provider layer.
+                // 状态机校验公共供应商层实际消费的事件序列。
+                let mut machine = vulcan_ai_contract::AiStreamStateMachine::default();
+                let mut calls = (0..3)
+                    .map(|index| {
+                        json!({
+                            "index": index, "id": format!("call-{index}"),
+                            "function": {"name": "file", "arguments": "{}"},
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                calls.push(json!({"index":3,"id":"call-3","function":{"name":"invented_","arguments":arguments}}));
+                let mut events = decoder
+                    .push_sse(
+                        None,
+                        &json!({"choices":[{"delta":{"tool_calls":calls}}]}).to_string(),
+                    )
+                    .unwrap();
+                events.extend(decoder.push_sse(None, r#"{"choices":[{"delta":{"tool_calls":[{"index":3,"function":{"name":"tool"}}]},"finish_reason":"tool_calls"}]}"#).unwrap());
+                events.extend(if eof {
+                    decoder.finish().unwrap()
+                } else {
+                    decoder.push_sse(None, "[DONE]").unwrap()
+                });
+                for event in &events {
+                    machine
+                        .apply(event)
+                        .expect("all starts, deltas and terminals must balance");
+                }
+                assert!(events.iter().any(|event| matches!(event,
+                    AiStreamEvent::ToolCallStarted { tool_name, call_id, index: 3, .. }
+                    if tool_name == "invented_tool" && call_id == "call-3"
+                )));
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| matches!(event, AiStreamEvent::ToolCallStarted { .. }))
+                        .count(),
+                    4
+                );
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| matches!(event, AiStreamEvent::ToolCallCompleted { .. }))
+                        .count(),
+                    if arguments == "{}" { 4 } else { 3 }
+                );
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| matches!(event, AiStreamEvent::ToolCallAborted { .. }))
+                        .count(),
+                    usize::from(arguments != "{}")
+                );
+                assert!(matches!(
+                    events.last(),
+                    Some(AiStreamEvent::ResponseCompleted)
+                ));
+            }
+        }
+    }
+
+    /// Rejects genuinely absent identities without inventing call ids or emitting an unstarted abort.
+    /// 拒绝真正缺失的身份，不伪造调用标识，也不发送未开始调用的中止事件。
+    /// No parameters or return value; both transport boundaries must expose the original protocol defect.
+    /// 无参数或返回值；两种传输边界都必须暴露原始协议缺陷。
+    #[test]
+    fn chat_missing_identity_reports_the_missing_fields() {
+        for eof in [false, true] {
+            for (id, name) in [("", "file"), ("call", ""), ("", "")] {
+                let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+                    String::from("missing-identity"),
+                    BTreeSet::from([String::from("file")]),
+                );
+                decoder
+                    .push_sse(
+                        None,
+                        &json!({"choices":[{"delta":{"tool_calls":[{
+                    "index":3,"id":id,"function":{"name":name,"arguments":"{}"}
+                }]},"finish_reason":"tool_calls"}]})
+                        .to_string(),
+                    )
+                    .unwrap();
+                let error = if eof {
+                    decoder.finish()
+                } else {
+                    decoder.push_sse(None, "[DONE]")
+                }
+                .unwrap_err();
+                let message = error.to_string();
+                assert!(message.contains("incomplete identity"));
+                assert!(message.contains(&format!("missing call id: {}", id.is_empty())));
+                assert!(message.contains(&format!("missing tool name: {}", name.is_empty())));
+                assert!(!message.contains("was not started"));
+            }
+        }
     }
 
     /// Verifies malformed arguments.done waits for an authoritative valid output item.

@@ -796,8 +796,8 @@ export function useConversationScrollController(
   }, [captureAndScheduleLayoutRestore]);
 
   React.useEffect(() => {
-    // handleManualViewportInteraction transfers ownership only for the exact transcript containing the focused control.
-    // handleManualViewportInteraction 仅为包含聚焦控件的精确转录转移所有权。
+    // handleManualViewportInteraction preserves the current ownership while the focused tool changes geometry.
+    // handleManualViewportInteraction 在聚焦工具改变几何时保留当前滚动所有权。
     const handleManualViewportInteraction = (event: Event): void => {
       // detail carries the exact committed surface identity resolved by the fold action.
       // detail 携带折叠操作从已提交 DOM 解析出的精确界面身份。
@@ -817,9 +817,8 @@ export function useConversationScrollController(
       cancelPendingFrame();
       programmaticTargetRef.current = null;
       userRevisionRef.current += 1;
-      publishFollowTail(false);
-      // snapshot freezes the reader-owned viewport before the fold mutation changes geometry.
-      // snapshot 在折叠修改改变几何前固定阅读者拥有的视口。
+      // A fold click changes layout, not scroll intent: preserve tail ownership or the existing reader anchor.
+      // 折叠点击只改变布局，不改变滚动意图：保留锁底状态或既有阅读锚点。
       const snapshot = writeCurrentSnapshot(element, detail.surfaceId);
       layoutTransactionRef.current = {
         surfaceId: detail.surfaceId,
@@ -830,7 +829,7 @@ export function useConversationScrollController(
     };
     window.addEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
     return () => window.removeEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
-  }, [cancelPendingFrame, publishFollowTail, scheduleSnapshotRestore, writeCurrentSnapshot]);
+  }, [cancelPendingFrame, scheduleSnapshotRestore, writeCurrentSnapshot]);
 
   React.useEffect(() => {
     // handleLayoutSettled applies one final correction and releases per-frame transaction ownership.
