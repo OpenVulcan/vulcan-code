@@ -4,7 +4,7 @@ import { ArrowRight, Download, Globe2, Hand, Keyboard, MonitorSmartphone, MoreHo
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import { CoreBrowserRuntimeControls } from "./core-browser-runtime-controls";
-import { useBrowserFrameRate } from "./use-browser-frame-rate";
+import { BrowserFrameImage, BrowserFrameRateCounter, createBrowserFrameSource } from "./browser-frame-surface";
 import { maintainCoreBrowserStream } from "@/service/browser-stream-reconnect";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -126,9 +126,6 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // selectedPageId is this observer's page choice, not the AI's automation target.
   // selectedPageId 是本观察端的页面选择，而非 AI 的自动化目标。
   const [selectedPageId, setSelectedPageId] = React.useState<string | null>(null);
-  // fps counts received frames for this exact selection, never the cumulative sequence number.
-  // fps 统计此精确选择的接收帧率，绝不使用累计序号。
-  const { fps, recordFrame } = useBrowserFrameRate(props.ownerSessionId, selectedSessionId, selectedPageId);
   // Auxiliary controls open explicitly so the page keeps the available panel area.
   // 辅助控件按需展开，让页面占据可用面板区域。
   const [showViewport, setShowViewport] = React.useState(false);
@@ -152,12 +149,10 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // textInput is committed user text sent to the browser page, including IME text.
   // textInput 是发送到浏览器页面的用户已提交文本，包括输入法文本。
   const [textInput, setTextInput] = React.useState("");
-  // imageUrl points to the latest binary frame rendered by this observer.
-  // imageUrl 指向本观察端渲染的最新二进制帧。
-  const [imageUrl, setImageUrl] = React.useState<string | null>(null);
-  // frame records the page and viewport generations that authorize new input.
-  // frame 记录授权新输入的页面和视口代次。
-  const [frame, setFrame] = React.useState<CoreBrowserFrame | null>(null);
+  // frameSource updates picture consumers without rerendering browser controls per frame.
+  // frameSource 更新画面消费者，不使浏览器控件随每一帧重绘。
+  const [frameSource] = React.useState(createBrowserFrameSource);
+  const [hasFrame, setHasFrame] = React.useState(false);
   // streamStatus names the current observation connection state.
   // streamStatus 命名当前观察连接状态。
   const [streamStatus, setStreamStatus] = React.useState("disconnected");
@@ -175,9 +170,6 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // leaseRef lets unmount cleanup release the exact grant without persisting it.
   // leaseRef 允许卸载清理释放精确授权，而不将其持久化。
   const leaseRef = React.useRef<CoreBrowserLease | null>(null);
-  // imageUrlRef revokes the previous Blob URL whenever a fresh frame arrives.
-  // imageUrlRef 在新帧到达时回收先前的 Blob URL。
-  const imageUrlRef = React.useRef<string | null>(null);
   // frameRef gives pointer handlers the newest measured image geometry.
   // frameRef 为指针处理器提供最新测量的图像尺寸。
   const frameRef = React.useRef<CoreBrowserFrame | null>(null);
@@ -327,11 +319,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   React.useLayoutEffect(() => {
     // A page switch must hide the previous frame before its old stream cleanup runs.
     // 页面切换时须在旧流清理运行前隐藏上一页画面。
-    if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
-    imageUrlRef.current = null;
+    frameSource.clear();
     frameRef.current = null;
-    setImageUrl(null);
-    setFrame(null);
+    setHasFrame(false);
   }, [props.ownerSessionId, selectedSessionId, selectedPageId]);
 
   React.useEffect(() => {
@@ -448,17 +438,12 @@ export function BrowserArea(props: { ownerSessionId: string }) {
               projectionSuspended.current = false;
               requiredFrame.current = null;
             }
-            // blobUrl holds one browser-renderable frame without exposing the page's origin.
-            // blobUrl 保存浏览器可渲染的一帧，而不暴露页面源站。
-            const blobUrl = URL.createObjectURL(new Blob([nextFrame.image], { type: nextFrame.mimeType }));
-            if (imageUrlRef.current) {
-              URL.revokeObjectURL(imageUrlRef.current);
-            }
-            imageUrlRef.current = blobUrl;
+            // Only the first accepted frame changes the surrounding control state.
+            // 仅第一帧有效画面改变外围控件状态。
+            const firstFrame = frameRef.current === null;
+            frameSource.publish(nextFrame);
             frameRef.current = nextFrame;
-            recordFrame();
-            setFrame(nextFrame);
-            setImageUrl(blobUrl);
+            if (firstFrame) setHasFrame(true);
           },
           onState: (status) => {
             if (cancelled || ownerSessionRef.current !== props.ownerSessionId
@@ -480,15 +465,11 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     return () => {
       cancelled = true;
       stopStream();
-      if (imageUrlRef.current) {
-        URL.revokeObjectURL(imageUrlRef.current);
-        imageUrlRef.current = null;
-      }
+      frameSource.clear();
       frameRef.current = null;
-      setImageUrl(null);
-      setFrame(null);
+      setHasFrame(false);
     };
-  }, [props.ownerSessionId, selectedPageId, selectedSessionId, recordFrame]);
+  }, [props.ownerSessionId, selectedPageId, selectedSessionId, frameSource]);
 
   React.useEffect(() => {
     if (!lease || lease.session.ownerSessionId !== props.ownerSessionId) {
@@ -832,7 +813,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     };
     element.addEventListener("wheel", handleWheel, { passive: false });
     return () => element.removeEventListener("wheel", handleWheel);
-  }, [props.ownerSessionId, selectedSessionId, selectedPageId, ownsControl, Boolean(imageUrl)]);
+  }, [props.ownerSessionId, selectedSessionId, selectedPageId, ownsControl, hasFrame]);
 
   // navigate changes only the selected Core page after a real host confirmation.
   // navigate 仅在真实宿主确认后改变选定的 Core 页面。
@@ -864,10 +845,8 @@ export function BrowserArea(props: { ownerSessionId: string }) {
       projectionSuspended.current = true;
       requiredFrame.current = { pageGeneration: updated.pageGeneration, viewportGeneration: updated.viewportGeneration };
       frameRef.current = null;
-      setFrame(null);
-      setImageUrl(null);
-      if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
-      imageUrlRef.current = null;
+      setHasFrame(false);
+      frameSource.clear();
       setSessions((current) => current.map((session) => session.sessionId === updated.sessionId ? updated : session));
       await refreshPages(selectedSessionId);
       if (!isCurrentPage(selectedSessionId, selectedPageId)) return;
@@ -968,10 +947,8 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     projectionSuspended.current = true;
     requiredFrame.current = null;
     frameRef.current = null;
-    setFrame(null);
-    setImageUrl(null);
-    if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
-    imageUrlRef.current = null;
+    setHasFrame(false);
+    frameSource.clear();
     try {
       const updated = await requestCoreBrowser<CoreBrowserSession>(props.ownerSessionId, "browser.viewport.set", {
         sessionId: selectedSessionId,
@@ -1151,7 +1128,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           </div> : null}
           {error ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{error}</div> : null}
           <div data-browser-viewport className="relative flex min-h-0 min-w-0 w-full flex-1 basis-0 items-center justify-center overflow-hidden rounded bg-muted/20">
-            {imageUrl && selectedPage ? (
+            {hasFrame && selectedPage ? (
               <div ref={projectionRef} className={`relative h-full w-full outline-none ${ownsControl ? "cursor-crosshair touch-none" : "cursor-default"}`}
                 role="img" aria-label={t("browser.liveCoreBrowserPage")} tabIndex={ownsControl ? 0 : -1}
                 onPointerDown={pressPointer}
@@ -1176,7 +1153,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
                   for (const key of heldKeys.current) queueInput("key", { type: "up", key });
                   heldKeys.current.clear();
                 }}>
-                <img className="pointer-events-none h-full w-full object-contain" src={imageUrl} alt="" draggable={false} />
+                <BrowserFrameImage source={frameSource} />
               </div>
             ) : <span className="text-xs text-muted-foreground">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : t("browser.waitingForBrowserFrame")}</span>}
           </div>
@@ -1200,7 +1177,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
           ))}
           <div className="flex h-6 shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
             <span className="min-w-0 flex-1 truncate">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : streamStatus === "connected" ? (ownsControl ? t("browser.manualControl") : t("browser.liveView")) : t("browser.connectingView")}</span>
-            <span className="tabular-nums" title={t("browser.receivedFramesOverThe")}>{fps.toFixed(1)} FPS</span>
+            <BrowserFrameRateCounter source={frameSource} owner={props.ownerSessionId} browser={selectedSessionId} page={selectedPageId} title={t("browser.receivedFramesOverThe")} />
             <Button type="button" size="icon" variant="ghost" className="h-6 w-6" title={t("browser.sendTextWithIme")} aria-label={t("browser.textInput")} aria-pressed={showTextInput} onClick={() => setShowTextInput((shown) => !shown)}><Keyboard size={13} /></Button>
             <Button type="button" size="icon" variant="ghost" className="relative h-6 w-6" title={formatMessage(t("browser.downloads"), { length: downloads.length })} aria-label={t("browser.downloadList")} aria-pressed={showDownloads} onClick={() => setShowDownloads((shown) => !shown)}><Download size={13} />{downloads.length ? <span className="absolute -right-1 -top-1 text-[9px]">{downloads.length}</span> : null}</Button>
           </div>
@@ -1208,7 +1185,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
             <input className="h-8 min-w-0 flex-1 rounded border bg-background px-2 text-xs" value={textInput}
               onChange={(event) => setTextInput(event.target.value)} placeholder={t("browser.typeTextToSend")}
               aria-label={t("browser.textToSendTo")} />
-            <Button type="button" size="sm" disabled={!ownsControl || !frame || !textInput}
+            <Button type="button" size="sm" disabled={!ownsControl || !hasFrame || !textInput}
               onClick={() => { queueInput("text", { text: textInput }); setTextInput(""); }}>
               {t("browser.sendText")}
             </Button>

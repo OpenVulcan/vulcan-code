@@ -733,3 +733,46 @@ it("shares session discovery with a shell observer without sharing different own
     stopShell(); stopOther();
   }
 });
+
+it("updates accepted pictures without rerendering controls and releases every owned URL", async () => {
+  const controls = await import("./core-browser-runtime-controls");
+  const chrome = vi.spyOn(controls, "CoreBrowserRuntimeControls").mockImplementation(() => <div data-test-browser-chrome />);
+  const previousCreate = URL.createObjectURL, previousRevoke = URL.revokeObjectURL;
+  let sequence = 0;
+  URL.createObjectURL = vi.fn(() => `blob:accepted-${++sequence}`);
+  URL.revokeObjectURL = vi.fn();
+  const session: CoreBrowserSession = {
+    sessionId: "browser-a", ownerSessionId: "conversation-a", status: "running",
+    profileMode: "ephemeral", currentUrl: "https://a.example/", leaseState: "free", blockedReason: null,
+    automationState: "detached", pageGeneration: "1", viewportGeneration: "1", controlEpoch: "1", hostGeneration: "1",
+    viewportSize: { width: 1280, height: 800 }, pageCount: 1, requiresExplicitReopen: false,
+  };
+  vi.mocked(listCoreBrowserSessions).mockResolvedValue([session]);
+  vi.mocked(listCoreBrowserPages).mockResolvedValue([
+    { pageId: "page-a", targetId: "target-a", url: "https://a.example/", title: "Current page", openerPageId: null, hostGeneration: 1 },
+  ]);
+  try {
+    await act(async () => root.render(<BrowserArea ownerSessionId="conversation-a" />));
+    const callbacks = vi.mocked(openCoreBrowserStream).mock.calls.at(-1)![3];
+    const frame = {
+      sequence: "1", pageId: "page-a", pageGeneration: "1", viewportGeneration: "1",
+      width: 1280, height: 800, capturedAt: "2026-09-19T00:00:00Z", mimeType: "image/png",
+      image: new Uint8Array([1, 2, 3]),
+    };
+    await act(async () => callbacks.onFrame(frame));
+    chrome.mockClear();
+    for (let index = 0; index < 50; index++) {
+      await act(async () => callbacks.onFrame({ ...frame, sequence: String(index + 2) }));
+    }
+    expect(chrome).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-browser-viewport] img')?.getAttribute("src")).toBe("blob:accepted-51");
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(50);
+    await act(async () => root.render(null));
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(51);
+    expect(new Set(vi.mocked(URL.revokeObjectURL).mock.calls.map(([url]) => url)).size).toBe(51);
+  } finally {
+    await act(async () => root.render(null));
+    chrome.mockRestore();
+    URL.createObjectURL = previousCreate; URL.revokeObjectURL = previousRevoke;
+  }
+});
