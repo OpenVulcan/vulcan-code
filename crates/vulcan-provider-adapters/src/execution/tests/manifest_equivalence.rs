@@ -7,8 +7,8 @@ use crate::{MINIMAX_REASONING_SPLIT_PARAMETER_ID, SAMPLING_TEMPERATURE_PARAMETER
 use std::sync::Arc;
 use vulcan_ai_contract::{ModelParameterValue, ReasoningEffort};
 use vulcan_llm_core::{
-    ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
-    ProtocolRegistry,
+    ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
+    OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry,
 };
 
 /// Builds one execution client used by the projection equivalence tests.
@@ -324,6 +324,111 @@ fn minimax_manifest_request_profiles_produce_legacy_equivalent_wire() {
         "unexpected error: {}",
         error.error.message
     );
+}
+
+/// Verifies the Token Plan M3.1 Flash Preview rule and every explicit reasoning effort.
+/// 验证 Token Plan 的 M3.1 Flash Preview 规则与全部显式推理档位。
+#[test]
+fn minimax_m3_1_flash_preview_projects_token_plan_efforts() {
+    // manifest is the compiled bundled authority used to resolve credential-scoped model rules.
+    // manifest 是解析凭据作用域模型规则所使用的已编译内置权威清单。
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    let manifest = manifests
+        .get("minimax")
+        .expect("MiniMax manifest must be bundled");
+    // tokenPlanRule proves the exact preview model is declared only for Token Plan credentials.
+    // tokenPlanRule 验证预览模型的精确规则仅向 Token Plan 凭据声明。
+    let token_plan_rule = manifest
+        .rule_for_model(
+            "global",
+            Some("token-plan-key"),
+            "MiniMax-M3.1-Flash-Preview",
+        )
+        .expect("Token Plan M3.1 Flash Preview rule must resolve");
+    assert_eq!(
+        token_plan_rule.rule_id,
+        "minimax-m3-1-flash-preview-token-plan"
+    );
+    assert_eq!(
+        token_plan_rule.selected_protocol.as_deref(),
+        Some(ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID)
+    );
+    // capabilities is the fully inherited exact-rule contract compiled for both Token Plan routes.
+    // capabilities 是为两个 Token Plan 路由编译出的完整继承后精确规则契约。
+    let capabilities = token_plan_rule
+        .capabilities
+        .as_ref()
+        .expect("M3.1 Flash capabilities must compile");
+    assert_eq!(capabilities.context_limit, Some(1_000_000));
+    assert_eq!(capabilities.output_limit, Some(128_000));
+    assert_eq!(
+        capabilities.reasoning_efforts,
+        vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::XHigh,
+            ReasoningEffort::Max,
+        ]
+    );
+    // paygRule confirms the Token Plan declaration does not leak into pay-as-you-go identity.
+    // paygRule 确认 Token Plan 声明不会泄漏到按量付费身份。
+    let payg_rule = manifest
+        .rule_for_model("global", Some("payg-api-key"), "MiniMax-M3.1-Flash-Preview")
+        .expect("the existing M3 prefix remains the pay-as-you-go fallback");
+    assert_eq!(payg_rule.rule_id, "reasoning-minimax-m3");
+
+    // effortProfile is the model-owned projection that replaces the older adaptive-thinking chain.
+    // effortProfile 是替换旧自适应思考链的模型专属投影。
+    let effort_profile = manifest
+        .request_profiles
+        .iter()
+        .find(|profile| profile.profile_id == "minimax.anthropic.m3-1-flash-effort.v1")
+        .and_then(|profile| profile.payload.clone())
+        .expect("M3.1 Flash effort profile must compile");
+    // route uses the exact multimodal Anthropic protocol selected by the model rule.
+    // route 使用模型规则选定的精确多模态 Anthropic 协议。
+    let mut route =
+        bundled_manifest_route("minimax", "global", ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID);
+    route.request_projection_profiles = vec![effort_profile];
+    // client runs the production protocol encoder followed by the model request profile.
+    // client 依次运行生产协议编码器与模型请求投影。
+    let client = projection_test_client();
+    // efforts is the closed effort set observed in the official managed MiniMax Code catalog.
+    // efforts 是官方 MiniMax Code 管理目录中观测到的封闭档位集合。
+    let efforts = [
+        (ReasoningEffort::Low, "low"),
+        (ReasoningEffort::Medium, "medium"),
+        (ReasoningEffort::High, "high"),
+        (ReasoningEffort::XHigh, "xhigh"),
+        (ReasoningEffort::Max, "max"),
+    ];
+    for (effort, wire_label) in efforts {
+        // request carries one exact user-selected effort without a synthetic thinking toggle.
+        // request 携带一个精确的用户所选档位，且不引入虚构的思考开关。
+        let mut request = minimal_request();
+        request.model_id = String::from("MiniMax-M3.1-Flash-Preview");
+        request.reasoning_effort = Some(effort);
+        // encoded must match MiniMax Code's forced-on output_config effort contract.
+        // encoded 必须符合 MiniMax Code 强制开启思考时的 output_config 档位契约。
+        let encoded = client
+            .encode_request(&route, &request)
+            .expect("M3.1 Flash explicit effort should encode");
+        assert_eq!(encoded.body["output_config"]["effort"], wire_label);
+        assert!(encoded.body.get("thinking").is_none());
+    }
+
+    // defaultRequest represents the user-visible default option and must omit an explicit effort.
+    // defaultRequest 表示用户可见的默认选项，必须省略显式档位。
+    let mut default_request = minimal_request();
+    default_request.model_id = String::from("MiniMax-M3.1-Flash-Preview");
+    // defaultEncoded delegates effort selection to MiniMax without leaving empty objects.
+    // defaultEncoded 将档位选择交给 MiniMax，且不会遗留空对象。
+    let default_encoded = client
+        .encode_request(&route, &default_request)
+        .expect("M3.1 Flash provider default should encode");
+    assert!(default_encoded.body.get("thinking").is_none());
+    assert!(default_encoded.body.get("output_config").is_none());
 }
 
 /// Verifies the projection executor rejects an unsupported MiniMax effort like the legacy fn.

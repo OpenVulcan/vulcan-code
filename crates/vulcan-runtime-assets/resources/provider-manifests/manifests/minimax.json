@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 26,
-  "published_at": "2026-09-03T09:10:59Z",
+  "revision": 27,
+  "published_at": "2026-09-27T07:06:38Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -322,6 +322,93 @@
     "default_operation_refs": []
   },
   "model_rules": [
+    {
+      "rule_id": "minimax-m3-1-flash-preview-token-plan",
+      "display_name": "M3.1-Flash-Preview",
+      "scope": {
+        "credential_profile_ids": [
+          "token-plan-key",
+          "token-plan-oauth"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "MiniMax-M3.1-Flash-Preview"
+      },
+      "supported_protocols": [
+        "anthropic-messages-video.v1"
+      ],
+      "selected_protocol": "anthropic-messages-video.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": ["image", "video"],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "prompt_cache": {
+          "provider_default_behavior": "MiniMax M3.1 Flash Preview caching follows the Token Plan provider default.",
+          "supports_managed_explicit": false
+        },
+        "context_limit": 1000000,
+        "output_limit": 128000,
+        "evidence_revision": "minimax-code-managed-m3.1-flash-preview-2026-09-27"
+      },
+      "input_resource_constraints": [
+        {
+          "resource_kind": "image",
+          "max_bytes": 10485760
+        },
+        {
+          "resource_kind": "video",
+          "accepted_mime_types": [
+            "video/mp4",
+            "video/x-msvideo",
+            "video/quicktime",
+            "video/mov",
+            "video/x-matroska"
+          ],
+          "max_bytes": 50000000,
+          "reference_policy": "local_only"
+        }
+      ],
+      "request_profile_refs": [
+        "minimax.anthropic.m3-1-flash-effort.v1"
+      ],
+      "model_parameters": [
+        {
+          "id": "sampling.temperature",
+          "display_name": "Temperature",
+          "description": "Controls MiniMax M3.1 Flash Preview sampling randomness; the verified compatible-API range is greater than 0 through 1.",
+          "schema": {
+            "type": "decimal",
+            "maximum": "1",
+            "exclusive_minimum": "0"
+          },
+          "default": {
+            "type": "provider_default"
+          },
+          "protocol_ids": [
+            "anthropic-messages-video.v1"
+          ],
+          "model_ids": [
+            "MiniMax-M3.1-Flash-Preview"
+          ],
+          "dependent_required": [],
+          "conflicts": [],
+          "evidence_revision": "minimax-code-managed-m3.1-flash-preview-2026-09-27"
+        }
+      ]
+    },
     {
       "rule_id": "reasoning-minimax-m3",
       "matcher": {
@@ -731,6 +818,35 @@
             "op": "copy_request_field",
             "path": "/reasoning_split",
             "field": "model_parameters.minimax.reasoning_split"
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "minimax.anthropic.m3-1-flash-effort.v1",
+      "description": "MiniMax M3.1 Flash Preview Anthropic effort projection",
+      "payload": {
+        "profile_id": "minimax.anthropic.m3-1-flash-effort.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "copy_request_field",
+            "path": "/output_config/effort",
+            "field": "reasoning_effort"
+          },
+          {
+            "op": "delete_json_pointer",
+            "path": "/thinking"
+          },
+          {
+            "op": "remove_if_empty",
+            "path": "/output_config"
+          },
+          {
+            "op": "reject_if_present",
+            "source": "request_field",
+            "source_path": "@model_parameters.minimax.reasoning_split",
+            "message": "MiniMax reasoning_split is registered only for OpenAI Chat."
           }
         ]
       }
@@ -4618,6 +4734,10 @@
       {
         "url": "https://platform.minimax.io/docs/api-reference/text-post",
         "note": "MiniMax documents response_format structured output only for MiniMax-Text-01; the M2 and M3 conversation models therefore remain explicitly unsupported for native structured output."
+      },
+      {
+        "url": "https://github.com/MiniMax-AI/minimax-code/tree/0f6ad5229ff1f144c72dd15a4b2d520feb26cd3d",
+        "note": "MiniMax Code implements managed forced-on reasoning effort selection and validates the M3.1 1,000,000-token context and 128,000-token output contract; the official managed catalog snapshot observed on 2026-09-27 identifies MiniMax-M3.1-Flash-Preview with low, medium, high, xhigh, and max efforts plus image and video input."
       }
     ]
   }

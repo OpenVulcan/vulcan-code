@@ -1373,6 +1373,21 @@
                                              ]
                    },
                    {
+                       "key":  "minimax-m3.1-flash-preview",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text",
+                                                "video"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "moonshotai/kimi-k2.5",
                        "aliases":  [
 

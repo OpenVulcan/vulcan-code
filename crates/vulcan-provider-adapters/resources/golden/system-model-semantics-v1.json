@@ -7933,6 +7933,95 @@
     "model_rules": [
       {
         "capabilities": {
+          "context_limit": 1000000,
+          "evidence_revision": "minimax-code-managed-m3.1-flash-preview-2026-09-27",
+          "input_resources": [
+            "image",
+            "video"
+          ],
+          "operations": [
+            "conversation_respond"
+          ],
+          "output_limit": 128000,
+          "output_resources": [],
+          "prompt_cache": {
+            "provider_default_behavior": "MiniMax M3.1 Flash Preview caching follows the Token Plan provider default.",
+            "supports_managed_explicit": false
+          },
+          "provider_native_tools": [],
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "input_resource_constraints": [
+          {
+            "max_bytes": 10485760,
+            "resource_kind": "image"
+          },
+          {
+            "accepted_mime_types": [
+              "video/mp4",
+              "video/x-msvideo",
+              "video/quicktime",
+              "video/mov",
+              "video/x-matroska"
+            ],
+            "max_bytes": 50000000,
+            "reference_policy": "local_only",
+            "resource_kind": "video"
+          }
+        ],
+        "matcher": {
+          "kind": "exact",
+          "value": "MiniMax-M3.1-Flash-Preview"
+        },
+        "model_parameters": [
+          {
+            "conflicts": [],
+            "default": {
+              "type": "provider_default"
+            },
+            "dependent_required": [],
+            "description": "Controls MiniMax M3.1 Flash Preview sampling randomness; the verified compatible-API range is greater than 0 through 1.",
+            "display_name": "Temperature",
+            "evidence_revision": "minimax-code-managed-m3.1-flash-preview-2026-09-27",
+            "id": "sampling.temperature",
+            "model_ids": [
+              "MiniMax-M3.1-Flash-Preview"
+            ],
+            "protocol_ids": [
+              "anthropic-messages-video.v1"
+            ],
+            "schema": {
+              "exclusive_minimum": "0",
+              "maximum": "1",
+              "type": "decimal"
+            }
+          }
+        ],
+        "request_profile_refs": [
+          "minimax.anthropic.m3-1-flash-effort.v1"
+        ],
+        "rule_id": "minimax-m3-1-flash-preview-token-plan",
+        "scope": {
+          "credential_profile_ids": [
+            "token-plan-key",
+            "token-plan-oauth"
+          ]
+        },
+        "selected_protocol": "anthropic-messages-video.v1",
+        "supported_protocols": [
+          "anthropic-messages-video.v1"
+        ]
+      },
+      {
+        "capabilities": {
           "context_limit": 204800,
           "evidence_revision": "minimax-m2-provider-adaptive-2026-09-01",
           "input_resources": [],
