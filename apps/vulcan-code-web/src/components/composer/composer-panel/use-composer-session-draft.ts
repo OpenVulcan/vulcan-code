@@ -106,6 +106,10 @@ export interface ComposerQueuedDraftReplacementToken {
  * UseComposerSessionDraftState 暴露一个完整一致的输入区草稿事务边界。
  */
 export interface UseComposerSessionDraftState extends Omit<UseComposerAttachmentsState, "setAttachments"> {
+  /** Installs server-issued PNG replacements only for exact original objects still owned by this draft.
+   * 仅为此草稿仍持有的精确原对象安装服务签发的PNG替代附件。
+   */
+  installConvertedAttachments: (replacements: ReadonlyMap<ComposerAttachmentSummary, ComposerAttachmentSummary>) => void;
   /** Stable key identifying the active conversation or new-conversation draft slot.
    * 标识活动会话或新建会话草稿槽位的稳定键。
    */
@@ -277,6 +281,13 @@ export function useComposerSessionDraft(
     invalidatePendingAttachmentStaging,
     ...attachmentControls
   } = attachmentState;
+
+  /** Applies `replacements` through the existing attachment state and draft persistence effects; returns nothing.
+   * 通过既有附件状态及草稿持久化effect应用`replacements`；无返回值。
+   */
+  const installConvertedAttachments = React.useCallback((replacements: ReadonlyMap<ComposerAttachmentSummary, ComposerAttachmentSummary>) => {
+    setAttachments((current) => current.map((attachment) => replacements.get(attachment) ?? attachment));
+  }, [setAttachments]);
 
   React.useLayoutEffect(() => {
     inputRef.current = draftInput;
@@ -622,6 +633,7 @@ export function useComposerSessionDraft(
 
   return {
     ...attachmentControls,
+    installConvertedAttachments,
     draftSlotKey: draftKey,
     attachments,
     invalidatePendingAttachmentStaging,

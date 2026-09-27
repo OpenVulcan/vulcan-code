@@ -79,6 +79,9 @@ pub(crate) fn append_tool_result_notice(value: Value, notice: &str) -> Result<Va
     let normalized = canonicalize_tool_model_output(value)?;
     match normalized {
         Value::String(text) => {
+            if let Some(updated) = crate::native_media_input::append_notice(&text, notice)? {
+                return Ok(Value::String(updated));
+            }
             if let Some(mut envelope) = parse_marked_media_envelope(&text)? {
                 envelope
                     .content
@@ -147,6 +150,9 @@ pub(crate) fn project_tool_result_content(
 /// A textual preview for media results, or the original text for ordinary results.
 /// 媒体结果返回文本预览，普通结果返回原始文本。
 pub(crate) fn tool_result_text_preview(text: &str) -> Result<String, String> {
+    if let Some(preview) = crate::native_media_input::text_preview(text)? {
+        return Ok(preview);
+    }
     let Some(envelope) = parse_marked_media_envelope(text)? else {
         return Ok(text.to_string());
     };

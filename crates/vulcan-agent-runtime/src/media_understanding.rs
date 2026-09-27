@@ -224,6 +224,14 @@ pub(crate) fn build_model_replacement_media_candidate(
             .input_resource_constraints
             .as_slice(),
     )?;
+    // Name the exact configured backend instead of implying the main model has these capabilities.
+    // 标明精确配置后端，避免暗示主模型具有这些能力。
+    let description = format!(
+        "Backend model: {}; provider: {}; protocol: {}. {description}",
+        resolved_selection.model.id,
+        resolved_selection.route.provider.id,
+        resolved_selection.route.protocol_route.protocol_profile_id
+    );
     let origin = VulcanToolOrigin::new(
         VulcanToolSourceKind::AiHostBinding,
         selection.provider_id.clone(),
@@ -319,6 +327,33 @@ async fn execute_model_replacement_media_understanding(
         media_resource_runtime,
     )
     .await?;
+    // Use the replacement model's frozen input contract, independently of the main conversation model.
+    // 使用替代模型的冻结输入契约，独立于主会话模型。
+    let accepts_image = |mime: &str| {
+        crate::image_conversion::native_image_mime_supported(
+            &resolved_selection.route.protocol_route.protocol_profile_id,
+            &resolved_selection.model.capabilities.input_resources,
+            &resolved_selection
+                .route
+                .protocol_route
+                .input_resource_constraints,
+            mime,
+        )
+    };
+    // Keep the derivative alive through media preparation and the understanding request.
+    // 在媒体准备及理解请求期间保留派生产物。
+    let converted = crate::image_conversion::convert_attachment_if_needed(
+        &attachment,
+        accepts_image(&attachment.mime_type),
+        accepts_image("image/png"),
+    )
+    .await?;
+    // An explicit conversion result is the sole alternate source owner.
+    // 显式转换结果是唯一替代来源所有者。
+    let attachment = match &converted {
+        Some(converted) => &converted.attachment,
+        None => &attachment,
+    };
     let media_path = PathBuf::from(attachment.local_path.as_str());
     // resourceKind is the exact provider-neutral media category.
     // resourceKind 是精确的供应商无关媒体类别。
@@ -897,7 +932,7 @@ fn media_understanding_description(
     // acceptedMimeTypes is the exact intersection of the host resolver, protocol encoder, and
     // optional frozen route declaration; no provider capability is inferred from its name.
     // acceptedMimeTypes 是宿主解析器、协议编码器与可选冻结路线声明的精确交集；不会根据供应商名称推断能力。
-    let accepted_mime_types =
+    let mut accepted_mime_types =
         registered_media_attachment_mime_types(media_understanding_attachment_kind(capability)?)
             .iter()
             .copied()
@@ -918,6 +953,25 @@ fn media_understanding_description(
                 })
             })
             .collect::<Vec<_>>();
+    if resource_kind == ResourceKind::Image
+        && let Some(constraint) = constraint
+    {
+        for codec in crate::image_conversion::CODECS {
+            if !accepted_mime_types.contains(&codec.mime)
+                && constraint
+                    .accepted_mime_types
+                    .iter()
+                    .any(|mime| mime.eq_ignore_ascii_case(codec.mime))
+                && vulcan_llm_core::protocol_profile_supports_local_media_type(
+                    protocol_profile_id,
+                    resource_kind,
+                    codec.mime,
+                )
+            {
+                accepted_mime_types.push(codec.mime);
+            }
+        }
+    }
     let mime_description = if accepted_mime_types.is_empty() {
         String::from("none in the host media format registry")
     } else {
@@ -931,8 +985,17 @@ fn media_understanding_description(
         .and_then(|constraint| constraint.max_count)
         .map(|max_count| format!(" Frozen route count limit: {max_count}."))
         .unwrap_or_default();
+    // Image conversion follows this backend's exact native MIME set; other modalities never transcode.
+    // 图片转换遵循此后端精确原生MIME集合；其他模态绝不转码。
+    let conversion_description = if capability == ProviderToolCapabilityKind::ImageUnderstand {
+        crate::image_conversion::guidance(&accepted_mime_types)
+    } else {
+        String::from(
+            "Audio and video are never transcoded; only the listed source formats are accepted.",
+        )
+    };
     Ok(format!(
-        "Understand exactly one {media_label} using the configured media-understanding backend. Use a canonical `project-resource://` id, an owned `attachment://` id, or a readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. Accepted source MIME types: {mime_description}.{byte_description}{count_description} The host never calls this tool automatically; preserve the user's exact analysis intent in `prompt`."
+        "Understand exactly one {media_label} using the configured media-understanding backend. Use a canonical `project-resource://` id, an owned `attachment://` id, or a readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. Accepted native source MIME types: {mime_description}.{byte_description}{count_description} {conversion_description} The host never calls this tool automatically; preserve the user's exact analysis intent in `prompt`."
     ))
 }
 
@@ -969,7 +1032,7 @@ pub(crate) fn direct_media_understanding_description(
         // accepted retains only formats that both the canonical attachment resolver and exact
         // provider-tool route can consume.
         // accepted 仅保留规范附件解析器与精确供应商工具路线均可消费的格式。
-        let accepted = registered
+        let mut accepted = registered
             .iter()
             .copied()
             .filter(|mime_type| {
@@ -980,6 +1043,18 @@ pub(crate) fn direct_media_understanding_description(
                         .any(|accepted| accepted.eq_ignore_ascii_case(mime_type))
             })
             .collect::<Vec<_>>();
+        if resource_kind == ResourceKind::Image {
+            for codec in crate::image_conversion::CODECS {
+                if !accepted.contains(&codec.mime)
+                    && route
+                        .accepted_mime_types
+                        .iter()
+                        .any(|mime| mime.eq_ignore_ascii_case(codec.mime))
+                {
+                    accepted.push(codec.mime);
+                }
+            }
+        }
         if accepted.is_empty() {
             return Err(format!(
                 "Provider media route {} has no MIME type shared with the host registry.",
@@ -1001,6 +1076,11 @@ pub(crate) fn direct_media_understanding_description(
             max_bytes,
             max_count
         ));
+        if capability == ProviderToolCapabilityKind::ImageUnderstand {
+            route_descriptions.push(crate::image_conversion::guidance(&accepted));
+        } else {
+            route_descriptions.push(String::from("Audio and video are never transcoded; only the listed source formats are accepted."));
+        }
     }
     Ok(format!(
         "{} Use exactly one canonical `project-resource://` id, owned `attachment://` id, or readable local file path. Relative paths resolve from the active workspace; absolute and project-external paths are accepted until filesystem permissions are enabled. Provider file ids are rejected. {} The host never invokes this understanding tool automatically, so preserve the user's exact analysis intent.",
@@ -1571,7 +1651,7 @@ mod tests {
         )
         .expect("image understanding description");
 
-        assert!(description.contains("Accepted source MIME types: image/png, image/webp."));
+        assert!(description.contains("Accepted native source MIME types: image/png, image/webp."));
         assert!(!description.contains("image/svg+xml"));
         assert!(description.contains("Maximum source size: 1048576 bytes."));
         assert!(description.contains("Frozen route count limit: 2."));

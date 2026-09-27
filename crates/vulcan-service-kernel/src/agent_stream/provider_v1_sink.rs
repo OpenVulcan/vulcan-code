@@ -1408,6 +1408,11 @@ fn rebuild_provider_transport_candidate_with_compaction(
                     provider_wire_tool_call_id(*tool_call_id, provider_tool_call_id.as_deref());
                 let output =
                     serde_json::to_value(output).map_err(provider_projection_runtime_error)?;
+                // Native tool media is owned by the persisted model_output field, not the host metadata object.
+                // 原生工具媒体归持久model_output字段持有，而非宿主元数据对象。
+                let output = vulcan_agent_runtime::native_media_input::v1_native_media_content(&output)
+                    .map_err(provider_projection_runtime_error)?
+                    .unwrap_or(output);
                 request_messages.push(AiMessage {
                     role: MessageRole::Tool,
                     content: vec![ContentItem::ToolResult {
@@ -1461,6 +1466,11 @@ fn rebuild_provider_transport_candidate_with_compaction(
     // 动态层现在位于可靠 SystemContext 历史中，不能再由传输候选重复渲染。
     candidate.dynamic_prompt_layers = ProviderPromptLayers::default();
     candidate.exact_request.model_id = facts.request.model.clone();
+    vulcan_agent_runtime::native_media_input::project_native_media_messages(
+        &mut request_messages,
+        candidate.media_context.as_ref(),
+    )
+    .map_err(provider_projection_runtime_error)?;
     candidate.exact_request.messages = request_messages;
     candidate.exact_request.resources.clear();
     candidate.exact_request.continuation = None;
@@ -2776,6 +2786,7 @@ fn persistent_tool_completion_payloads(
 mod tests {
     mod host_guidance;
     mod model_selection;
+    mod native_media;
     mod remote_checkpoint;
     use super::*;
 

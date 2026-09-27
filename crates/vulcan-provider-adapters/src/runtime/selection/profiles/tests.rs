@@ -7,6 +7,78 @@ use super::{
 };
 use vulcan_llm_core::OPENAI_CHAT_PROFILE_ID;
 
+/// Model MIME configuration replaces provider MIME configuration, while absent restrictions leave host defaults available.
+/// 模型MIME配置替换供应商MIME配置，未声明限制时保留宿主默认类型。
+#[test]
+fn native_media_mime_precedence_preserves_independent_configuration() {
+    // Use an isolated compiled manifest clone; no shared registry or signed resource is modified.
+    // 使用隔离的已编译清单副本；不修改共享注册表或签名资源。
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    // OpenRouter's known model supplies a real resolved rule with entry and credential ownership.
+    // OpenRouter已知模型提供带入口及凭据归属的真实解析规则。
+    let mut manifest = manifests
+        .get("openrouter")
+        .expect("OpenRouter must be bundled")
+        .as_ref()
+        .clone();
+    // Keep exactly the selected rule so this test controls only its media constraints.
+    // 仅保留选定规则，使本测试只控制其媒体约束。
+    let mut rule = manifest
+        .rule_for_model("public-api", Some("api-key"), "openai/gpt-5.6-terra")
+        .expect("the fixture model must resolve its exact rule")
+        .clone();
+    rule.input_resource_constraints.clear();
+    manifest.rule_instances = vec![rule.clone()];
+    assert!(
+        resolve_input_resource_constraints(
+            &manifest,
+            "public-api",
+            Some("api-key"),
+            "openai/gpt-5.6-terra",
+            Vec::new()
+        )
+        .is_empty()
+    );
+    // A provider-level PNG/JPEG list must survive unchanged when the model declares no independent list.
+    // 模型未声明独立列表时，供应商级PNG/JPEG列表必须原样保留。
+    let provider_constraint = crate::InputResourceConstraint {
+        resource_kind: vulcan_ai_contract::ResourceKind::Image,
+        accepted_mime_types: vec!["image/png".into(), "image/jpeg".into()],
+        max_bytes: None,
+        max_count: None,
+        reference_policy: crate::ResourceReferencePolicy::Any,
+        upload_channel_refs: Vec::new(),
+    };
+    assert_eq!(
+        resolve_input_resource_constraints(
+            &manifest,
+            "public-api",
+            Some("api-key"),
+            "openai/gpt-5.6-terra",
+            vec![provider_constraint.clone()]
+        ),
+        vec![provider_constraint.clone()]
+    );
+    // The model narrows the provider formats to JPEG; PNG and other defaults must not leak back in.
+    // 模型将供应商格式收紧为JPEG；PNG及其他默认格式不能重新混入。
+    let model_constraint = crate::InputResourceConstraint {
+        accepted_mime_types: vec!["image/jpeg".into()],
+        ..provider_constraint.clone()
+    };
+    rule.input_resource_constraints = vec![model_constraint.clone()];
+    manifest.rule_instances = vec![rule];
+    assert_eq!(
+        resolve_input_resource_constraints(
+            &manifest,
+            "public-api",
+            Some("api-key"),
+            "openai/gpt-5.6-terra",
+            vec![provider_constraint]
+        ),
+        vec![model_constraint]
+    );
+}
+
 /// Replays the two captured Step Plan chunks through the selected manifest usage chain.
 /// 将 Step Plan 实际捕获的两帧按所选清单用量链重放，验证累计值不会提前冻结或重复相加。
 #[test]

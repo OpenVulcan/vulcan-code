@@ -266,6 +266,7 @@ export function ComposerPanel(props: {
     draftInput,
     setDraftInput,
     attachments,
+    installConvertedAttachments,
     pendingAttachmentCount,
     hasPendingAttachmentStaging,
     isAttachmentDragOver,
@@ -446,6 +447,7 @@ export function ComposerPanel(props: {
     routePlanningRevision,
     routeSelectionPending,
     attachments,
+    onConvertedAttachments: installConvertedAttachments,
   });
   // removePreparedAttachment binds asynchronous removal to the exact draft owner and object.
   // removePreparedAttachment 将异步移除绑定到精确草稿所有者与对象。

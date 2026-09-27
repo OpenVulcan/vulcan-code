@@ -107,6 +107,11 @@ function Harness({
     conversationId: null,
     onStageAttachmentBytes: stageAttachmentBytes,
   });
+  // Install only derivatives whose original object still belongs to the current draft.
+  // 仅安装原对象仍属于当前草稿的派生产物。
+  const installConverted = React.useCallback((replacements: ReadonlyMap<ComposerAttachmentSummary, ComposerAttachmentSummary>) => {
+    state.setAttachments((current) => current.map((attachment) => replacements.get(attachment) ?? attachment));
+  }, [state.setAttachments]);
   controller = useComposerAttachmentPreparation({
     draftSlotKey: slot,
     projectId: "project-a",
@@ -115,6 +120,7 @@ function Harness({
     routePlanningRevision: `sha256:route-${modelId}`,
     routeSelectionPending: false,
     attachments: state.attachments,
+    onConvertedAttachments: installConverted,
   });
   remove = useComposerAttachmentRemoval({
     draftSlotKey: slot,
@@ -170,6 +176,44 @@ afterEach(async () => {
 });
 
 describe("composer cancellation with real React effects", () => {
+  // A pasted unsupported image must be replaced, leased and replanned before submission can proceed.
+  // 粘贴的不支持图片必须先替换、取得租约并重新规划，才允许提交。
+  it("installs the canonical PNG after paste and replans without uploading the rejected original", async () => {
+    initial = [];
+    // The service owns both immutable identities; the browser never edits original MIME or digest in place.
+    // 服务持有两个不可变身份；浏览器绝不原地修改原MIME或摘要。
+    const original = { ...asset("tiff-source"), fileName: "pasted.tiff", mimeType: "image/tiff" };
+    const converted = asset("png-derived");
+    stageAttachmentBytes.mockResolvedValue(original);
+    vi.mocked(planComposerAttachments).mockImplementation(async (_project, _conversation, _slot, generation, _model, files) => files.map((file) => ({
+      attachmentId: file.assetId!, generation, transferId: `convert:${generation}:${file.assetId}`,
+      deliveryPlan: "metadata_only", phase: "local_ready", blocksSubmission: file.assetId === original.assetId,
+      routeRevision: "sha256:route-model-a", reason: "image_conversion", error: null,
+      convertedAttachment: file.assetId === original.assetId ? converted : null,
+    })));
+    await act(async () => { root.render(<Harness enableStaging />); });
+    await act(async () => { selectFiles([new File(["TIFF fixture"], "pasted.tiff", { type: "image/tiff" })]); });
+    expect(attachments).toEqual([converted]);
+    expect(planComposerAttachments).toHaveBeenCalledTimes(2);
+    expect(prepareComposerAttachment).not.toHaveBeenCalled();
+    expect(reconcileComposerAttachmentDraftLease).toHaveBeenLastCalledWith("project-a", null, "draft-a", [converted]);
+    expect(controller.blocksSubmission).toBe(false);
+  });
+
+  // Conversion errors must retain the source, show the exact reason and keep the send barrier closed.
+  // 转换错误必须保留来源、显示精确原因并保持发送屏障关闭。
+  it("keeps a failed conversion visible and blocks submission", async () => {
+    vi.mocked(planComposerAttachments).mockImplementation(async (_project, _conversation, _slot, generation, _model, files) => files.map((file) => ({
+      attachmentId: file.assetId!, generation, transferId: `failed:${generation}`,
+      deliveryPlan: "metadata_only", phase: "failed", blocksSubmission: true,
+      routeRevision: "sha256:route-model-a", reason: "image_conversion_failed", error: "TIFF decoder: truncated header",
+    })));
+    await act(async () => { root.render(<Harness />); });
+    expect(attachments).toEqual(initial);
+    expect(controller.blocksSubmission).toBe(true);
+    expect(controller.preparations["asset-a"].error).toBe("TIFF decoder: truncated header");
+    expect(prepareComposerAttachment).not.toHaveBeenCalled();
+  });
   // Completing an older file selection cannot append it after an explicit full-draft replacement begins.
   // 较早文件选择完成后，不能在显式完整草稿替换开始后追加该文件。
   it("discards staged bytes completed after the draft generation is invalidated", async () => {

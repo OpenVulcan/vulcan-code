@@ -127,6 +127,26 @@ beforeEach(() => {
 });
 
 describe("composer send preflight ownership", () => {
+  // Converted assets must persist through the real draft writer while unrelated text and attachments survive.
+  // 转换资产必须通过真实草稿写入器持久化，同时保留无关文本和附件。
+  it("persists an exact converted attachment replacement without overwriting newer draft content", async () => {
+    // The service owns immutable source and derivative identities.
+    // 服务持有不可变来源及派生产物身份。
+    const source: ComposerAttachmentSummary = { assetId: "source-tiff", kind: "image", fileName: "source.tiff", localPath: "/fixture/source.tiff", mimeType: "image/tiff" };
+    const png: ComposerAttachmentSummary = { assetId: "derived-png", kind: "image", fileName: "source.png", localPath: "/fixture/source.png", mimeType: "image/png" };
+    draftRpc.read.mockResolvedValue({ sessionId: "session-order", text: "keep my prompt", attachments: [source] });
+    draftRpc.write.mockImplementation(async (sessionId: string, text: string, attachments: ComposerAttachmentSummary[]) => ({ sessionId, text, attachments }));
+    await act(async () => root.render(<Harness />));
+    // Use the hydrated object identity exactly as the preparation hook does.
+    // 与准备Hook相同，使用精确的加载后对象身份。
+    const original = controller.attachments.find((attachment) => attachment.assetId === source.assetId)!;
+    await act(async () => controller.installConvertedAttachments(new Map([[original, png]])));
+    expect(controller.draftInput).toBe("keep my prompt");
+    expect(controller.attachments).toEqual([png]);
+    expect(draftRpc.write).toHaveBeenLastCalledWith("session-order", "keep my prompt", [png]);
+    await act(async () => controller.installConvertedAttachments(new Map([[original, source]])));
+    expect(controller.attachments).toEqual([png]);
+  });
   // A configuration acknowledgement cannot turn an old send into a new-conversation draft mutation.
   // 配置确认不能把旧发送变成对新会话草稿的修改。
   it("keeps the new conversation untouched when an earlier preflight settles", async () => {

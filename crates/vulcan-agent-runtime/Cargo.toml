@@ -27,6 +27,12 @@ futures-util.workspace = true
 jsonschema.workspace = true
 luaskills.workspace = true
 png.workspace = true
+# Converts declared static image formats locally without a separate AI request.
+# 在本地转换已声明的静态图片格式，不发起独立AI请求。
+image.workspace = true
+# Inspects TIFF page count without silently dropping additional pages.
+# 检查TIFF页数，避免静默丢弃后续页面。
+tiff.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

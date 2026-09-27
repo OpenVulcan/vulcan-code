@@ -1,5 +1,6 @@
 import type { ConversationDetailRef } from "@/components/conversation/conversation-detail";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
+import { resolveMediaReadPresentation } from "./tool-presentations/media-read-presentation";
 import {
   askQuestionStatusLabel,
   hydrateAskQuestionPresentation,
@@ -107,6 +108,7 @@ export function resolveToolPresentation(
     ?? resolveProviderToolExtractPresentation(blocks, displayState)
     ?? resolveProviderToolSearchPresentation(blocks, displayState)
     ?? resolveAskQuestionPresentation(blocks, displayState, detailRef)
+    ?? resolveMediaReadPresentation(blocks, displayState)
     ?? resolveFileAccessPresentation(blocks, displayState, options, detailRef)
     ?? resolveFileChangePresentation(blocks, displayState, options, detailRef)
     ?? resolveLuaExecutionPresentation(blocks, displayState, detailRef)

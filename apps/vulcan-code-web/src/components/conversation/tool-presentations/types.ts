@@ -924,6 +924,30 @@ export interface GenericToolMarkdownPresentation {
   detailRef?: ConversationDetailRef;
 }
 
+/** A non-expandable receipt identifying the resource read by the current model.
+ * 标识当前模型已读取资源的不可展开回执。
+ */
+export interface MediaReadPresentation {
+  // Dedicated display discriminator, independent of file-text reading.
+  // 独立展示判别字段，与文本文件读取分开。
+  kind: "media_read";
+  // Stable identity of this tool invocation.
+  // 本次工具调用的稳定身份。
+  id: string;
+  // Authoritative lifecycle state retained by the transcript.
+  // 转录保留的权威生命周期状态。
+  state: ToolPresentationDisplayState;
+  // Original requested path or owned resource locator, used as the tooltip.
+  // 原始请求路径或有归属的资源定位符，用作悬停提示。
+  path: string;
+  // Human-readable resource name, without binary media or provider references.
+  // 可读资源名称，不包含媒体二进制或供应商引用。
+  fileName: string;
+  // Exact failure text shown on hover; empty for successful or pending reads.
+  // 悬停显示的精确失败文字；成功或等待读取时为空。
+  error: string;
+}
+
 // ToolPresentation is the union of all recognized custom tool displays.
 // ToolPresentation 是所有已识别自定义工具展示的联合类型。
-export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | FileAccessPresentation | MarkdownToolPresentation | LuaExecutionPresentation | AskQuestionPresentation | SubagentOrchestrationPresentation | ProviderToolSearchPresentation | ProviderToolExtractPresentation | ProviderToolTextPresentation | ProviderToolStructuredPresentation | NativeSemanticToolPresentation | GenericToolMarkdownPresentation;
+export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | FileAccessPresentation | MarkdownToolPresentation | LuaExecutionPresentation | AskQuestionPresentation | SubagentOrchestrationPresentation | ProviderToolSearchPresentation | ProviderToolExtractPresentation | ProviderToolTextPresentation | ProviderToolStructuredPresentation | NativeSemanticToolPresentation | GenericToolMarkdownPresentation | MediaReadPresentation;

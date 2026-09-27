@@ -51,7 +51,7 @@ fn composer_attachment_kind_metadata(
             key: "image",
             aliases: &[],
             label: "图片",
-            accept: "image/png,image/jpeg,image/webp,image/gif,image/bmp",
+            accept: "image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,image/x-icon,.tif,.tiff,.ico,.pbm,.pgm,.ppm,.pnm,.pam,.tga,.qoi",
         },
         ConversationAttachmentKind::Video => ComposerAttachmentKindMetadata {
             key: "video",

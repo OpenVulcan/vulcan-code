@@ -99,6 +99,13 @@ async fn context(
     context_with_observer(second_model, uploaded, None).await
 }
 
+/// Returns the existing isolated inline context to V1 native-tool tests without exposing credential internals.
+/// 向V1原生工具测试返回既有隔离内联上下文，不暴露凭据内部结构。
+pub(in crate::agent_stream::provider_v1_sink) async fn native_input_context()
+-> Result<ProviderRequestMediaContext, String> {
+    context(false, false).await.map(|(context, _)| context)
+}
+
 /// Verifies original draft single-start and cancellation/observer lifetimes using the existing real frozen route fixture.
 /// 使用既有真实冻结路线夹具验证原草稿单次启动及取消与观察者生命周期。
 #[tokio::test]
@@ -113,6 +120,16 @@ async fn composer_draft_original_upload_has_one_physical_owner()
         "view changes do not read credentials"
     );
     Ok(())
+}
+
+/// Real pasted image staging is converted for the frozen model and retains exact draft ownership.
+/// 真实粘贴图片暂存按冻结模型转换，并保留精确草稿归属。
+#[tokio::test]
+async fn composer_image_conversion_stages_png_before_delivery_intent() -> Result<(), String> {
+    // Reuse the established offline route; this test performs no provider request.
+    // 复用既有离线路线；此测试不执行供应商请求。
+    let (context, _) = context(false, false).await?;
+    crate::media_upload::exercise_composer_image_conversion(&context.execution).await
 }
 
 /// Builds the real frozen `second_model`/`uploaded` fixture with an optional existing runtime `observer`.

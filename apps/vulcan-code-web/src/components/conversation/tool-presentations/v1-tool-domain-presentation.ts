@@ -2,6 +2,7 @@ import { formatMessage, type TranslationKey } from "@/i18n";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import type { ToolJsonValue, ToolPayload } from "@/service/conversation-event-window-store";
 import { modelExtensionToolTitleKey } from "./model-extension-tool-presentation";
+import { nativeMediaInputPreview } from "./native-media-input-preview";
 
 /** One readable result section; value is retained verbatim, while markdown explicitly opts into rendering.
  * 一个可读结果区域；value 原样保留，markdown 显式启用 Markdown 渲染。 */
@@ -53,6 +54,10 @@ export function v1ModelResult(output: ToolPayload | undefined): ToolJsonValue | 
   // Canonical output is a string: objects are serialized once by the runtime bridge.
   // 规范输出是字符串：对象由运行时桥接序列化一次。
   const value = output?.model_output;
+  // Native media keeps binary bytes out of ordinary result cards.
+  // 原生媒体不将二进制字节放入普通结果卡片。
+  const mediaPreview = nativeMediaInputPreview(value);
+  if (mediaPreview !== undefined) return mediaPreview;
   if (typeof value !== "string") return value;
   try {
     return JSON.parse(value) as ToolJsonValue;

@@ -93,6 +93,9 @@ export type ComposerAttachmentPreparationPhase =
 // ComposerAttachmentPreparationSummary carries route planning and retry state for one attachment.
 // ComposerAttachmentPreparationSummary 携带单个附件的路线规划与重试状态。
 export interface ComposerAttachmentPreparationSummary {
+  // Canonical PNG replacement produced before the original draft acquires a delivery intent.
+  // 在原草稿取得交付意图前产出的规范PNG替代附件。
+  convertedAttachment?: ComposerAttachmentSummary | null;
   // Stable attachment identity.
   // 稳定附件身份。
   attachmentId: string;

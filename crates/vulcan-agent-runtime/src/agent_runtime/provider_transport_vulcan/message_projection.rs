@@ -122,6 +122,15 @@ pub(crate) async fn build_responses_compaction_messages(
     messages.retain(|message| {
         !message.content.is_empty() || !message.provider_context_items.is_empty()
     });
+    // Native tool results use the same upload-free projector as ordinary dispatch and capture.
+    // 原生工具结果使用与普通分派及捕获相同的无上传投影器。
+    let media_context = session_scope_id.map(|session_scope_id| {
+        crate::agent_runtime::events::ProviderRequestMediaContext {
+            execution: std::sync::Arc::clone(resolved),
+            session_scope_id: session_scope_id.into(),
+        }
+    });
+    crate::native_media_input::project_native_media_messages(&mut messages, media_context.as_ref())?;
     Ok(messages)
 }
 

@@ -27,6 +27,7 @@ import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conv
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
 import { goalNoticeTitle } from "./conversation-goal-notice";
 import { parseSystemProviderError } from "./conversation-system-error-card";
+import { nativeMediaInputPreview } from "./tool-presentations/native-media-input-preview";
 
 // V1RootInputPresentationMetadata stores the exact generation anchor used by restored edit and fork actions.
 // V1RootInputPresentationMetadata 保存恢复后的编辑与分叉操作使用的精确 generation 锚点。
@@ -704,7 +705,7 @@ function toolOutputEnvelope(event: ToolCallBody): Record<string, unknown> | null
 function toolDisplayOutput(event: ToolCallBody): unknown {
   const output = toolOutputEnvelope(event);
   if (output && Object.prototype.hasOwnProperty.call(output, "model_output")) {
-    return output.model_output;
+    return nativeMediaInputPreview(output.model_output) ?? output.model_output;
   }
   return event.output ?? event.changeset ?? { status: event.status };
 }

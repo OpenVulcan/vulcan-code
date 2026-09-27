@@ -135,6 +135,12 @@ pub(crate) fn build_provider_request_budget_evidence(
     protocol_profile_id: &str,
     route_revision: &str,
 ) -> Result<ProviderRequestBudgetEvidence, String> {
+    // Native media contributes attachment metadata instead of Base64 prompt characters.
+    // 原生媒体贡献附件元数据，而非Base64提示词字符。
+    let media_snapshot = crate::native_media_input::budget_snapshot(snapshot)?;
+    // All evidence measurements below share the same non-persistent accounting representation.
+    // 下方所有证据测量共享相同非持久记账表示。
+    let snapshot = media_snapshot.as_ref();
     validate_provider_request_json_depth(snapshot)?;
     // distinct_prompt excludes the display-oriented prompt copy when canonical history already owns it.
     // 当规范历史已经持有提示词时，distinct_prompt 排除仅供展示使用的提示词副本。
@@ -413,6 +419,12 @@ impl ProviderRequestBudgetGuard {
         &self,
         snapshot: &CoreProviderRequestSnapshot,
     ) -> Result<ContextBudgetSnapshot, String> {
+        // Preliminary admission uses the same media accounting as the authoritative V1 request.
+        // 初步准入使用与权威V1请求相同的媒体记账方式。
+        let media_snapshot = crate::native_media_input::budget_snapshot(snapshot)?;
+        // Keep evidence and the fallback estimator aligned without rewriting controller history.
+        // 对齐证据与回退估算器，不改写控制器历史。
+        let snapshot = media_snapshot.as_ref();
         build_provider_request_budget_evidence(
             snapshot,
             self.protocol_profile_id.as_str(),
@@ -458,6 +470,12 @@ impl ProviderRequestBudgetGuard {
         projection: &ProviderProjectionProof,
         anchor: Option<&ProviderUsageBudgetAnchor>,
     ) -> Result<ProviderRequestBudgetDecision, String> {
+        // Preserve the durable tool payload while reusing the ordinary attachment estimator.
+        // 保留持久工具载荷，同时复用普通附件估算器。
+        let media_snapshot = crate::native_media_input::budget_snapshot(snapshot)?;
+        // Anchor comparison and fallback estimates must use identical media-aware history.
+        // 锚点比较及回退估算必须使用相同的媒体感知历史。
+        let snapshot = media_snapshot.as_ref();
         let evidence = build_provider_request_budget_evidence(
             snapshot,
             self.protocol_profile_id.as_str(),
@@ -1003,6 +1021,40 @@ mod tests {
             decision.context_budget.accounting_warning_code.as_deref(),
             Some("provider_usage_baseline_mismatch")
         );
+    }
+
+    /// Native media cannot trigger preliminary compaction by being mistaken for Base64 prompt text.
+    /// 原生媒体不能因Base64被误作提示词正文而触发初步压缩。
+    #[test]
+    fn native_media_budget_admits_direct_and_v1_wrapped_results() {
+        // A small context window would reject this fixture if media were counted as ordinary text.
+        // 若把媒体计作普通正文，小型上下文窗口将拒绝本夹具。
+        let guard = ProviderRequestBudgetGuard::new_v1(
+            "test-provider", "test-model", vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+            "sha256:test-route",
+            ModelCapabilities { context_limit: Some(10_000), ..ModelCapabilities::default() },
+            ProviderRuntimeReasoningResolution::default(),
+            Some(ContextCompactionPolicy::default()), Some(8_000), None,
+        );
+        // Exact durable binary content is retained while its accounting uses existing attachment metadata.
+        // 保留精确持久二进制内容，同时记账使用既有附件元数据。
+        let envelope = serde_json::json!({"$vulcan_native_media_input":1,"text":"Read image","byte_len":60_000,"upload":null,
+            "resource":{"id":"budget-media","kind":"image","media_type":"image/png","source_kind":"inline_data","file_name":"image.png","url":format!("data:image/png;base64,{}", "YWJj".repeat(20_000))}}).to_string();
+        for text in [envelope.clone(), serde_json::json!({"model_output":envelope,"host_result":null}).to_string()] {
+            // Exercise both real controller representations at the same preliminary guard.
+            // 在同一初步守卫处覆盖两种真实控制器表示。
+            let request = request_snapshot(vec![ConversationMessage {
+                id: "native-budget".into(),
+                payload: ConversationPayload::ToolResult {
+                    tool_call_id: Some("read".into()), is_error: false, text,
+                },
+            }]);
+            // Production validates this budget before the authoritative V1 rebuild.
+            // 生产流程在权威V1重建之前校验此预算。
+            let budget = guard.build_budget_snapshot(&request).unwrap();
+            guard.validate_budget(&budget).unwrap();
+            assert!(serde_json::to_string(&request).unwrap().contains("$vulcan_native_media_input"));
+        }
     }
 
     /// Verifies a large tool result is rechecked before the next physical provider request.

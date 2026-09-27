@@ -6,6 +6,7 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import { ToolResultEventContext, type ToolRequestCardProgress, type ToolDetailLoader } from "./tool-presentations/tool-card-common";
 import { FileChangePresentationCard } from "./tool-presentations/file-change-card";
 import { FileAccessPresentationCard } from "./tool-presentations/file-access-card";
+import { MediaReadPresentationCard } from "./tool-presentations/media-read-card";
 import { CommandExecutionPresentationCard } from "./tool-presentations/command-execution-card";
 import { AskQuestionPresentationCard } from "./tool-presentations/ask-question-card";
 import { SubagentOrchestrationPresentationCard } from "./tool-presentations/subagent-orchestration-card";
@@ -113,6 +114,9 @@ function ToolPresentationCardContent(props: {
       props.onExpandedChange(presentationId, nextExpanded);
     }
   }, [props.onExpandedChange, props.requestProgress]);
+  if (props.presentation.kind === "media_read") {
+    return <MediaReadPresentationCard presentation={props.presentation} />;
+  }
   if (props.presentation.kind === "command_execution") {
     return (
       <CommandExecutionPresentationCard

@@ -158,6 +158,8 @@ impl Drop for ProviderTaskCancellationOnDrop {
 /// 参数
 /// `runtime`, `configuration`, and `workspace_root` are frozen for this execution turn.
 /// `runtime`、`configuration` 与 `workspace_root` 在当前执行回合保持冻结。
+/// `native_media_selection` owns exact native input capabilities; supported modalities replace external understanding in this turn.
+/// `native_media_selection`持有精确原生输入能力；支持的模态在本回合替代外部理解。
 ///
 /// # Returns
 /// 返回值
@@ -181,6 +183,7 @@ pub(crate) fn build_provider_tool_candidates(
         BTreeMap<String, vulcan_workbench_model::SessionMediaUnderstandingSelection>,
     >,
     suppress_web_search: bool,
+    native_media_selection: Option<&vulcan_provider_adapters::ResolvedPublicAiSelection>,
     media_resource_runtime: Option<Arc<dyn crate::media_resource_runtime::MediaResourceRuntime>>,
 ) -> Result<Vec<VulcanToolCandidate>, String> {
     apply_session_provider_tool_selections(
@@ -190,9 +193,24 @@ pub(crate) fn build_provider_tool_candidates(
         session_extension_target_sets,
         session_media_understanding_selections,
     )?;
+    // Native input replaces external understanding only in this turn's configuration copy.
+    // 原生输入仅在本回合配置副本中替代外部理解。
+    if let Some(selection) = native_media_selection {
+        crate::native_media_input::suppress_external_understanding(&mut configuration, selection);
+    }
     validate_enabled_media_understanding_backends(&configuration)?;
     let available = runtime.available_provider_tool_targets(&configuration)?;
     let mut candidates = Vec::new();
+    if let Some(selection) = native_media_selection
+        && let Some(candidate) = crate::native_media_input::build_read_media_candidate(
+            Arc::clone(&runtime),
+            selection.clone(),
+            workspace_root.clone(),
+            media_resource_runtime.clone(),
+        )
+    {
+        candidates.push(candidate);
+    }
     for (capability, selection) in &configuration.provider_tool_selections {
         if media_understanding_tool_id(*capability).is_some() {
             return Err(format!(
@@ -1034,16 +1052,33 @@ fn build_direct_provider_tool_candidate(
     // description preserves provider-authored facts and derives formats and limits only from the
     // exact operation and upload channels used by this selection.
     // description 保留供应商编写的事实，并只从当前选择使用的精确操作与上传通道派生格式和限制。
-    let description = if media_understanding_tool_id(capability).is_some() {
-        let profile = runtime
-            .provider_tool_media_input_profile(&configuration, capability, &target_selection)?
-            .ok_or_else(|| {
-                format!(
-                    "Media-understanding target `{}` has no media input profile.",
-                    selected.target.target_id
-                )
-            })?;
-        direct_media_understanding_description(capability, contract.description.as_str(), &profile)?
+    // Freeze the exact input profile for both advertised formats and local image conversion.
+    // 为格式说明及本地图片转换冻结精确输入Profile。
+    let media_profile = if media_understanding_tool_id(capability).is_some() {
+        Some(
+            runtime
+                .provider_tool_media_input_profile(&configuration, capability, &target_selection)?
+                .ok_or_else(|| {
+                    format!(
+                        "Media-understanding target `{}` has no media input profile.",
+                        selected.target.target_id
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+    let description = if let Some(profile) = &media_profile {
+        format!(
+            "Backend target: {}; provider: {}. {}",
+            selected.target.target_id,
+            selected.target.provider_id,
+            direct_media_understanding_description(
+                capability,
+                contract.description.as_str(),
+                profile
+            )?
+        )
     } else {
         contract.description.clone()
     };
@@ -1064,6 +1099,9 @@ fn build_direct_provider_tool_candidate(
             let workspace_root = workspace_root.clone();
             let target_selection = target_selection.clone();
             let media_input_projection = media_input_projection.clone();
+            // Retain the same target MIME authority after asynchronous source resolution.
+            // 异步来源解析后保留相同目标MIME权威。
+            let media_profile = media_profile.clone();
             // The exact host resource resolver follows the invoking session, not a model-selected project.
             // 精确宿主资源解析器遵循发起会话，而非模型选择的项目。
             let media_resource_runtime = media_resource_runtime.clone();
@@ -1078,7 +1116,7 @@ fn build_direct_provider_tool_candidate(
                 );
                 // Resolved sources travel outside JSON while arguments retain only their safe locators.
                 // 解析来源在JSON之外传递，参数只保留其安全定位符。
-                let (resolved_arguments, media_sources) =
+                let (resolved_arguments, mut media_sources) =
                     if media_understanding_tool_id(capability).is_some() {
                         // Fixed media tools own one explicit resource, including its original filename and digest.
                         // 固定媒体工具持有一个显式资源，包括其原始文件名及摘要。
@@ -1094,6 +1132,18 @@ fn build_direct_provider_tool_candidate(
                     } else {
                         (arguments, Vec::new())
                     };
+                // Temporary PNG owners must outlive physical provider upload/materialization.
+                // 临时PNG所有者必须存活到真实供应商上传或物化完成。
+                let _converted_images = match &media_profile {
+                    Some(profile) => {
+                        crate::image_conversion::convert_provider_sources(
+                            &mut media_sources,
+                            profile,
+                        )
+                        .await?
+                    }
+                    None => Vec::new(),
+                };
                 // projectedArguments maps the fixed facade only through reviewed target metadata.
                 // projectedArguments 仅通过已审核目标元数据映射固定外壳。
                 let projected_arguments = if media_understanding_tool_id(capability).is_some() {

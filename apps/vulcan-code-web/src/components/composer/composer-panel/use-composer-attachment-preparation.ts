@@ -200,6 +200,9 @@ export function useComposerAttachmentPreparation(options: {
   // Canonical staged draft attachments.
   // 规范已暂存草稿附件。
   attachments: ComposerAttachmentSummary[];
+  // Replaces only still-current original objects with server-issued PNG assets before a new lease and plan.
+  // 在新租约及规划前，仅将仍为当前对象的原附件替换为服务签发的PNG资产。
+  onConvertedAttachments: (replacements: ReadonlyMap<ComposerAttachmentSummary, ComposerAttachmentSummary>) => void;
 }): ComposerAttachmentPreparationController {
   // serviceProgresses provides ordered byte facts from the desktop upload bridge.
   // serviceProgresses 提供桌面上传桥发出的有序字节事实。
@@ -559,6 +562,24 @@ export function useComposerAttachmentPreparation(options: {
           await discardUnconsumedComposerAttachmentPlans(planned);
           throw new Error("Attachment route planning returned a mismatched draft or route identity.");
         }
+        // The server returns derivatives under the original identities so stale plans cannot replace newer files.
+        // 服务以原身份返回派生文件，防止陈旧规划替换更新文件。
+        const replacements = new Map<ComposerAttachmentSummary, ComposerAttachmentSummary>();
+        for (const preparation of planned) {
+          if (preparation.convertedAttachment) {
+            // Exact draft identity was checked above; never select an attachment by filename or position.
+            // 上方已校验精确草稿身份；绝不按文件名或位置选择附件。
+            const original = attachmentById.get(preparation.attachmentId);
+            if (!original) throw new Error("Converted image has no matching original draft attachment.");
+            replacements.set(original, preparation.convertedAttachment);
+          }
+        }
+        if (replacements.size > 0) {
+          await discardUnconsumedComposerAttachmentPlans(planned);
+          if (disposed || planningGeneration.current !== generation) return;
+          options.onConvertedAttachments(replacements);
+          return;
+        }
         const next = Object.fromEntries(planned.map((preparation) => [preparation.attachmentId, preparation]));
         commitPreparations(() => next);
         setPlanningPending(false);
@@ -609,6 +630,7 @@ export function useComposerAttachmentPreparation(options: {
     options.projectId,
     options.routePlanningRevision,
     options.routeSelectionPending,
+    options.onConvertedAttachments,
     expectedLeaseSignature,
     leaseCommittedSignature,
     cancel,
@@ -695,6 +717,12 @@ export function useComposerAttachmentPreparation(options: {
     }
     const preparation = preparationsRef.current[attachmentId];
     const attachment = attachmentById.get(attachmentId);
+    // A failed local conversion retries the normalization plan; it never starts a provider upload directly.
+    // 本地转换失败重试规范化规划；绝不直接启动供应商上传。
+    if (preparation?.reason === "image_conversion_failed" && attachment) {
+      setPlanningRetry((current) => current + 1);
+      return;
+    }
     if (
       !preparation
       || !attachment

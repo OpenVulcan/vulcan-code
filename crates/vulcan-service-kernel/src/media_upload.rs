@@ -23,6 +23,9 @@ use vulcan_workbench_model::{SessionMediaReferenceEntry, SessionMediaReferenceSc
 
 mod composer_policy;
 mod draft_execution;
+mod image_conversion;
+#[cfg(test)]
+pub(crate) use image_conversion::exercise_composer_image_conversion;
 mod registration;
 use composer_policy::ComposerMediaDeliveryPlanner;
 pub(crate) use composer_policy::media_receipt_is_usable;
@@ -796,6 +799,19 @@ pub(crate) async fn service_plan_composer_attachments(
         )
         .await?,
     );
+    // Finish image normalization for the whole draft before recording any upload intention.
+    // 在记录任何上传意图前完成整份草稿的图片规范化。
+    if let Some(converted) = image_conversion::prepare_image_conversions(
+        &workspace_path,
+        &draft_scope,
+        generation,
+        &execution,
+        &attachments,
+    )
+    .await?
+    {
+        return Ok(converted);
+    }
     let mut summaries = Vec::with_capacity(attachments.len());
     // uploadPlans are published only after every attachment has been validated and planned.
     // uploadPlans 仅在全部附件完成校验与规划后统一发布。
@@ -913,6 +929,7 @@ pub(crate) async fn service_plan_composer_attachments(
             // 既有完成上传已经就绪；真正未准备的项目媒体只由其下一提示词准备。
             let restored_upload = matches!(preparation, vulcan_session_core::v1::UserPromptResourcePreparation::Prepared(ref original) if matches!(original.delivery, vulcan_session_core::v1::UserPromptResourceDeliveryKind::Uploaded { .. } | vulcan_session_core::v1::UserPromptResourceDeliveryKind::UploadPending { draft_intent_id: Some(_), .. }));
             summaries.push(ComposerAttachmentPreparationSummary {
+                converted_attachment: None,
                 attachment_id: format!("project-resource:{raw_resource_id}:{position}"),
                 generation,
                 transfer_id: format!("project-media-view:{}", uuid::Uuid::new_v4()),
@@ -1105,6 +1122,7 @@ pub(crate) async fn service_plan_composer_attachments(
             ));
         }
         summaries.push(ComposerAttachmentPreparationSummary {
+            converted_attachment: None,
             attachment_id,
             generation,
             transfer_id,
@@ -2728,6 +2746,7 @@ mod tests {
     /// 构建一条与冻结夹具匹配的调用方可见上传准备记录。
     fn draft_upload_preparation() -> ComposerAttachmentPreparationSummary {
         ComposerAttachmentPreparationSummary {
+            converted_attachment: None,
             attachment_id: String::from("asset-a"),
             generation: 7,
             transfer_id: String::from("draft-media:transfer-a"),

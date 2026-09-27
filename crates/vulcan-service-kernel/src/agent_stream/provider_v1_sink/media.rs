@@ -1410,7 +1410,7 @@ fn attachment_text(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 mod readonly;
 pub(crate) use readonly::frozen_prompt_media_projection;

@@ -135,6 +135,10 @@ pub enum ComposerAttachmentPreparationPhase {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposerAttachmentPreparationSummary {
+    /// New canonical PNG asset for this unsent draft; the browser replaces only the matching original occurrence.
+    /// 此未发送草稿的新规范PNG资产；浏览器仅替换匹配的原始出现。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub converted_attachment: Option<ComposerAttachmentSummary>,
     /// Stable managed attachment identifier.
     /// 稳定托管附件标识。
     pub attachment_id: String,

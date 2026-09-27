@@ -312,6 +312,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         &request.provider_extension_target_sets_override,
         &request.provider_tool_media_understanding_selections_override,
         suppress_external_web_search,
+        model_blueprint.frozen_selection.as_ref(),
         request.media_resource_runtime.clone(),
     )?;
     after_precheck_trace(

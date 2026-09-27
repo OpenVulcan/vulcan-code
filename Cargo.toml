@@ -160,6 +160,12 @@ luaskills = "=0.5.9"
 notify = "8.2.0"
 notify-rust = "=4.18.0"
 png = "0.18.1"
+# Uses portable image codecs with permissive licenses; never enable default AVIF/native media features.
+# 使用宽松许可的可移植图片编解码器；不启用默认AVIF或原生媒体特性。
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
+# Shares image's TIFF decoder to reject multipage input before PNG conversion.
+# 复用image的TIFF解码器，在转换PNG前拒绝多页输入。
+tiff = { version = "0.11.2", default-features = false }
 portable-pty = "0.9.0"
 prost = "0.14.4"
 prost-build = "0.14.4"

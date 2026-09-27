@@ -18,7 +18,11 @@ pub(super) async fn prepare_capture_user_media(
     projection: Option<&dyn PromptMediaProjectionRuntime>,
 ) -> Result<(), String> {
     let Some(projection) = projection else {
-        return validate_capture_authority(&request.controller_snapshot.messages);
+        validate_capture_authority(&request.controller_snapshot.messages)?;
+        return crate::native_media_input::project_native_media_messages(
+            &mut request.public.messages,
+            Some(&context),
+        );
     };
     // Source order comes from the exact assembled snapshot, not lexical map order or latest session state.
     // 来源顺序取自精确组装快照，而非映射字典序或最新会话状态。
@@ -30,12 +34,16 @@ pub(super) async fn prepare_capture_user_media(
         .collect::<Vec<_>>();
     // The host enforces upload-free capture using the same frozen execution as final encoding.
     // 宿主使用与最终编码相同的冻结执行强制无上传捕获。
-    let replacements = projection.project_capture(&source_ids, context).await?;
+    let replacements = projection.project_capture(&source_ids, context.clone()).await?;
     apply_capture_media(
         &request.controller_snapshot.messages,
         &request.source_message_positions,
         &mut request.public.messages,
         replacements,
+    )?;
+    crate::native_media_input::project_native_media_messages(
+        &mut request.public.messages,
+        Some(&context),
     )
 }
 

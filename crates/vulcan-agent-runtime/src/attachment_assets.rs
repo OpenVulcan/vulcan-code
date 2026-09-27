@@ -283,12 +283,18 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
             mime_type: "application/json",
             extension: "json",
         }),
-        _ => None,
+        _ => crate::image_conversion::codec_for_mime(&normalized_mime_type).map(|codec| {
+            AttachmentDescriptor {
+                kind: ConversationAttachmentKind::Image,
+                mime_type: codec.mime,
+                extension: codec.extensions[0],
+            }
+        }),
     }
 }
 
-/// Returns every concrete MIME type that the host can resolve for one media attachment kind.
-/// 返回宿主能够为一种媒体附件类型解析的全部具体 MIME 类型。
+/// Returns default native MIME types for one media kind, excluding formats supported only by image conversion.
+/// 返回一种媒体类型的默认原生MIME，不包含仅通过图片转换支持的格式。
 ///
 /// # Parameters
 /// 参数
@@ -297,9 +303,10 @@ pub fn attachment_descriptor_from_mime_type(mime_type: &str) -> Option<Attachmen
 ///
 /// # Returns
 /// 返回值
-/// A stable MIME list accepted by the local media-understanding path resolver. Non-media kinds
-/// return an empty list.
-/// 返回本地媒体理解路径解析器可接受的稳定 MIME 列表；非媒体类型返回空列表。
+/// A stable native default list; independent target constraints may select additional registered image formats.
+/// 稳定的原生默认列表；独立目标约束可以选择额外已注册图片格式。
+/// Non-media kinds return an empty list.
+/// 非媒体类型返回空列表。
 pub(crate) fn registered_media_attachment_mime_types(
     kind: ConversationAttachmentKind,
 ) -> &'static [&'static str] {
@@ -1369,7 +1376,14 @@ fn attachment_descriptor_from_extension(extension: &str) -> Option<AttachmentDes
             mime_type: "application/pdf",
             extension: "pdf",
         }),
-        _ => None,
+        _ => crate::image_conversion::CODECS
+            .iter()
+            .find(|codec| codec.extensions.contains(&extension))
+            .map(|codec| AttachmentDescriptor {
+                kind: ConversationAttachmentKind::Image,
+                mime_type: codec.mime,
+                extension: codec.extensions[0],
+            }),
     }
 }
 

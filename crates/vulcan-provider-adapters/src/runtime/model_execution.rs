@@ -101,6 +101,14 @@ pub struct ResolvedPublicAiExecution {
     pub client: ProviderExecutionClient,
 }
 
+impl ResolvedPublicAiExecution {
+    /// Returns the frozen route revision for replay ownership checks without consulting mutable catalogs.
+    /// 返回冻结路由修订供重放归属检查使用，不查询可变目录。
+    pub fn frozen_route_revision(&self) -> &str {
+        &self.media_upload_telemetry.route_revision
+    }
+}
+
 impl PublicAiRuntime {
     /// Resolves one immutable execution route, model, secret, and local overrides.
     /// 解析一条不可变执行路由、模型、秘密与本地覆盖。

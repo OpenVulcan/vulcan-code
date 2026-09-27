@@ -30,6 +30,7 @@ fn publish(
     // 路线身份只来自既有冻结夹具。
     let execution = &original.execution;
     let preparation = ComposerAttachmentPreparationSummary {
+        converted_attachment: None,
         attachment_id: original.identity.attachment_id.clone(),
         generation,
         transfer_id: format!("draft-view:{}", uuid::Uuid::new_v4()),
