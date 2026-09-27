@@ -1,9 +1,9 @@
 import React from "react";
 import { runConversationControlAction } from "./conversation-control-feedback";
-import ReactMarkdown from "react-markdown";
-import rehypeSanitize from "rehype-sanitize";
+import ReactMarkdown, { defaultUrlTransform, type UrlTransform } from "react-markdown";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { Check, Copy, Text, TextWrap } from "lucide-react";
+import { Check, Copy, Globe, Text, TextWrap } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
 import { SvgPreview } from "@/components/conversation/conversation-svg-preview";
@@ -36,7 +36,25 @@ const markdownPlugins = [remarkGfm];
 
 // markdownSanitizers stores the HTML sanitization pipeline for untrusted transcript content.
 // markdownSanitizers 保存用于不可信转录内容的 HTML 清理管线。
-const markdownSanitizers = [rehypeSanitize];
+const markdownSanitizers: NonNullable<React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]> = [[rehypeSanitize, {
+  ...defaultSchema,
+  protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "file"] },
+}]];
+
+// markdownUrlTransform preserves explicit file hyperlinks while retaining the default policy for all other URLs.
+// markdownUrlTransform 保留明确的文件超链接，其余 URL 继续使用默认安全策略。
+// url, key and node identify the sanitized attribute; returns a navigable href or the default sanitized URL.
+// url、key 和 node 标识已清理的属性；返回可导航 href 或默认清理后的 URL。
+const markdownUrlTransform: UrlTransform = (url, key, node) => {
+  if (key === "href" && node.tagName === "a" && /^file:\/\//i.test(url)) {
+    try {
+      return new URL(url).href;
+    } catch {
+      return "";
+    }
+  }
+  return defaultUrlTransform(url);
+};
 
 // MarkdownImageWorkspacePathContext carries the current project root for relative image links.
 // MarkdownImageWorkspacePathContext 为相对图片链接携带当前项目根目录。
@@ -203,7 +221,9 @@ function MarkdownContentRenderer(props: {
 }) {
   const components = React.useMemo(() => ({
     a: ({ children, href }: { children?: React.ReactNode; href?: string }) => (
-      <a href={href} rel="noreferrer" target="_blank">{children}</a>
+      <a href={href} rel="noreferrer" target="_blank">
+        {href ? <Globe aria-hidden="true" className="markdown-link-icon" /> : null}{children}
+      </a>
     ),
     code: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
       const inline = !className;
@@ -251,6 +271,7 @@ function MarkdownContentRenderer(props: {
       components={components}
       rehypePlugins={markdownSanitizers}
       remarkPlugins={markdownPlugins}
+      urlTransform={markdownUrlTransform}
     >
       {props.content}
     </ReactMarkdown>

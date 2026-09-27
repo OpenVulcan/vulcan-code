@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, shell } from 'electron';
 import { LocalBrowserManager } from '../dist/gui/local-browser.js';
 
 // until polls a native observation until truthy; observe is asynchronous and failures have a fixed deadline.
@@ -48,6 +48,11 @@ async function runAcceptance() {
   // 隐藏原生视图仍覆盖 Chromium 导航和真实生产安全配置。
   const window = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
   const manager = new LocalBrowserManager(window, new Set(['http://127.0.0.1:17921']), () => {});
+  // Record OS dispatch without opening the tester's browser or launching any file association.
+  // 记录操作系统派发，不打开测试者的浏览器或启动任何文件关联程序。
+  const externalUrls = [];
+  const originalOpenExternal = shell.openExternal;
+  shell.openExternal = async (url) => { externalUrls.push(url); };
   try {
     await window.loadURL('about:blank');
     manager.setOwner('local-file-test');
@@ -61,6 +66,16 @@ async function runAcceptance() {
     assert.equal(await contents.executeJavaScript('getComputedStyle(document.body).backgroundColor'), 'rgb(1, 2, 3)');
     assert.deepEqual(await contents.executeJavaScript('[typeof require, typeof process, typeof window.vulcanDesktop]'),
       ['undefined', 'undefined', 'undefined']);
+    // External routing preserves the same encoded URL and never creates another embedded page.
+    // 外部路由保留同一个编码 URL，且不创建额外内置页面。
+    await manager.openExternalUrl(pageUrl);
+    await manager.openExternal(id);
+    await manager.openExternalUrl('https://example.com/page');
+    assert.deepEqual(externalUrls, [pageUrl, pageUrl, 'https://example.com/page']);
+    assert.equal(manager.snapshot().tabs.length, 1);
+    await assert.rejects(manager.openExternalUrl('javascript:alert(1)'), /Only website/);
+    await assert.rejects(manager.openExternalUrl('http://127.0.0.1:17921/private'), /Only website/);
+    assert.equal(externalUrls.length, 3);
     // A real click activates the document; Chromium otherwise skips unactivated script-driven history entries.
     // 真实点击会激活文档；否则 Chromium 会跳过未激活文档的脚本导航历史条目。
     await contents.executeJavaScript("document.querySelector('a').click()", true);
@@ -76,8 +91,9 @@ async function runAcceptance() {
     assert.throws(() => manager.navigate(id, 'javascript:alert(1)'), /unavailable/);
     console.log(JSON.stringify({ ok: true, fixture, checks: ['raw path open', 'encoded file URL',
       'relative script and CSS', 'relative local link', 'history', 'file URL navigation',
-      'forward-slash path', 'sandbox isolation', 'protected origin and scheme rejection'] }));
+      'forward-slash path', 'sandbox isolation', 'protected origin and scheme rejection', 'external file/website dispatch without tabs'] }));
   } finally {
+    shell.openExternal = originalOpenExternal;
     manager.dispose();
     window.destroy();
   }

@@ -6,7 +6,7 @@
 // GUI 只拥有窗口与原生集成。它启动或复用独立 Core 服务、等待真实业务就绪，并且在关闭窗口时
 // 绝不停止该服务。
 
-import { BrowserWindow, Notification, app, clipboard, dialog, ipcMain, shell } from 'electron';
+import { BrowserWindow, Notification, app, clipboard, ipcMain, shell } from 'electron';
 import path from 'node:path';
 
 import {
@@ -33,7 +33,6 @@ import {
   DESKTOP_TEXT,
   detectDesktopLocale,
   formatDesktopText,
-  normalizeDesktopLocale,
   type DesktopLocale,
 } from './desktop-text.js';
 import { canUseNativeNotifications, configureGuiNotificationIdentity } from './notification-identity.js';
@@ -340,29 +339,15 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
   handle(LOCAL_BROWSER_CHANNELS.move, (_event, id: string, targetId: string) => localBrowser.move(id, targetId));
   handle(LOCAL_BROWSER_CHANNELS.openDeveloperTools, (_event, id: string) => localBrowser.openDeveloperTools(id));
   handle(LOCAL_BROWSER_CHANNELS.openExternal, (_event, id: string) => localBrowser.openExternal(id));
+  handle(LOCAL_BROWSER_CHANNELS.openExternalUrl, (_event, url: string) => localBrowser.openExternalUrl(url));
   handle(LOCAL_BROWSER_CHANNELS.select, (_event, id: string) => localBrowser.select(id));
   handle(LOCAL_BROWSER_CHANNELS.close, (_event, id: string) => localBrowser.close(id));
-  // Native modal confirmation stays above embedded WebContentsViews and defaults to cancellation.
-  // 原生模态确认始终位于内嵌 WebContentsView 之上，并默认选择取消。
-  handle(LOCAL_BROWSER_CHANNELS.closeOwner, (_event, ownerSessionId: string, locale: string) =>
-    localBrowser.closeOwner(ownerSessionId, async (count) => {
-      // text follows the WebUI language, falling back to the device language for an unknown value.
-      // text 跟随 WebUI 语言，未知值回退到设备语言。
-      const text = DESKTOP_TEXT[normalizeDesktopLocale(locale) ?? deviceDesktopLocale()];
-      // result is the user's explicit decision for this owning GUI window.
-      // result 是用户对当前所属 GUI 窗口作出的明确选择。
-      const result = await dialog.showMessageBox(window, {
-        type: 'question',
-        title: text.closeBrowserTitle,
-        message: formatDesktopText(text.closeBrowserMessage, { count }),
-        detail: text.closeBrowserDetail,
-        buttons: [text.cancel, text.closeAll],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-      });
-      return result.response === 1;
-    }));
+  // The trusted workbench owns confirmation UI; the native manager still validates and isolates the owner.
+  // 可信工作台负责确认界面；原生管理器仍校验并隔离会话归属。
+  handle(LOCAL_BROWSER_CHANNELS.closeOwner, (_event, ownerSessionId: string, confirmed: boolean) => {
+    if (typeof confirmed !== 'boolean') throw new TypeError('Browser close confirmation must be a boolean.');
+    return localBrowser.closeOwner(ownerSessionId, async () => confirmed);
+  });
   handle(LOCAL_BROWSER_CHANNELS.viewport, (_event, viewport: LocalBrowserViewport | null) =>
     localBrowser.setViewport(viewport));
   // The shared handler guard limits DevTools activation to this workbench's trusted main frame.

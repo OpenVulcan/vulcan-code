@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isAllowedLocalBrowserUrl, normalizeLocalBrowserUrl } from './local-browser-url.js';
+import { isAllowedLocalBrowserUrl, normalizeLocalBrowserUrl, validateExternalBrowserUrl } from './local-browser-url.js';
 
 // The real manager supplies its privileged service origins to both entry and navigation checks.
 // 真实管理器向地址入口与导航校验提供特权服务来源。
 const blockedOrigins = new Set(['http://127.0.0.1:17921']);
+
+test('external conversation links accept explicit websites and files but never arbitrary OS protocols', () => {
+  for (const url of ['https://example.com/page', 'http://localhost:5173/', 'file:///C:/my%20files/page.html#demo']) {
+    assert.equal(validateExternalBrowserUrl(url, blockedOrigins), url);
+  }
+  for (const url of ['http://127.0.0.1:17921/private', 'about:blank', 'javascript:alert(1)',
+    'data:text/html,hello', 'vulcan://private', 'ms-settings:display', 'C:/page.html', 'example.com']) {
+    assert.throws(() => validateExternalBrowserUrl(url, blockedOrigins), /Only website|Invalid URL/, url);
+  }
+});
 
 test('converts absolute file paths before considering web hosts', () => {
   // These forms cover the reported Windows path, copied paths, UNC and POSIX absolute paths.

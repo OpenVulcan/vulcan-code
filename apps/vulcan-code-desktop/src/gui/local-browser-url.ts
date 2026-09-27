@@ -56,3 +56,18 @@ export function isAllowedLocalBrowserUrl(target: string, blockedOrigins: Readonl
     return false;
   }
 }
+
+// validateExternalBrowserUrl accepts only explicit website/file URLs outside privileged workbench origins.
+// validateExternalBrowserUrl 仅接受特权工作台来源之外的明确网页或文件 URL。
+// input is the clicked URL and blockedOrigins is the host-owned origin set; returns a canonical URL or throws.
+// input 为点击的 URL，blockedOrigins 为宿主持有的来源集合；返回规范 URL，非法时抛错。
+export function validateExternalBrowserUrl(input: string, blockedOrigins: ReadonlySet<string>): string {
+  // Unlike the address bar, links must already declare their protocol and cannot launch arbitrary OS handlers.
+  // 与地址栏不同，链接必须已声明协议，不能调用任意操作系统协议处理器。
+  const destination = new URL(input);
+  if (!['http:', 'https:', 'file:'].includes(destination.protocol)
+    || !isAllowedLocalBrowserUrl(destination.href, blockedOrigins)) {
+    throw new Error('Only website or file URLs outside the workbench can be opened externally.');
+  }
+  return destination.href;
+}

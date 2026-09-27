@@ -2,7 +2,7 @@
 // 客户端持有的临时页面同时与 Core 浏览器及工作台预加载桥隔离。
 import { randomUUID } from 'node:crypto';
 import { BrowserWindow, WebContentsView, session, shell } from 'electron';
-import { isAllowedLocalBrowserUrl, normalizeLocalBrowserUrl } from './local-browser-url.js';
+import { isAllowedLocalBrowserUrl, normalizeLocalBrowserUrl, validateExternalBrowserUrl } from './local-browser-url.js';
 
 // Bounds native views created by user actions and untrusted page popups in one GUI window.
 // 限制单个 GUI 窗口由用户操作或不受信任页面弹窗创建的原生视图数量。
@@ -319,18 +319,22 @@ export class LocalBrowserManager {
     this.requireCurrentTab(id).view.webContents.openDevTools({ mode: 'detach', activate: true });
   }
 
-  // openExternal opens the actual committed HTTP(S) address in the system browser.
-  // openExternal 在系统浏览器打开实际已提交的 HTTP(S) 地址。
+  // openExternal opens the actual committed website or file address externally.
+  // openExternal 在外部打开实际已提交的网页或文件地址。
   // id identifies the current owner's page; resolves when the OS accepts the request.
   // id 标识当前归属的页面；操作系统接受请求后完成。
   async openExternal(id: string): Promise<void> {
-    // url comes from native contents, never from a renderer-supplied external protocol.
-    // url 来自原生页面，绝不采用渲染端传入的外部协议。
-    const url = this.requireCurrentTab(id).view.webContents.getURL();
-    if (!/^https?:\/\//i.test(url) || !this.isAllowedUrl(url)) {
-      throw new Error('Only an active HTTP or HTTPS page can be opened externally.');
-    }
-    await shell.openExternal(url);
+    // Read the committed native URL rather than a renderer-supplied address for this tab.
+    // 读取此标签原生页面的已提交地址，而不是渲染器提供的地址。
+    await this.openExternalUrl(this.requireCurrentTab(id).view.webContents.getURL());
+  }
+
+  // openExternalUrl opens one explicit conversation link through the OS without creating a native tab.
+  // openExternalUrl 通过操作系统打开一个明确的会话链接，不创建原生标签。
+  // url is an HTTP(S) or file URL; resolves after dispatch, rejecting unsupported schemes and protected origins.
+  // url 是 HTTP(S) 或 file URL；派发后完成，不支持的协议和受保护来源会被拒绝。
+  async openExternalUrl(url: string): Promise<void> {
+    await shell.openExternal(validateExternalBrowserUrl(url, this.blockedOrigins));
   }
 
   // select makes one existing tab the only potentially visible native view.

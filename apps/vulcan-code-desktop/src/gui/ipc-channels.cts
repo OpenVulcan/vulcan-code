@@ -39,6 +39,9 @@ export const LOCAL_BROWSER_CHANNELS = {
   // Opens the actual page URL in the default browser.
   // 在默认浏览器打开实际页面地址。
   openExternal: 'vulcan:local-browser:external',
+  // Opens an explicit conversation URL without creating an embedded tab.
+  // 打开明确的会话 URL，不创建内置标签。
+  openExternalUrl: 'vulcan:local-browser:external-url',
   // Selects one existing temporary tab.
   // 选中一个已有临时标签。
   select: 'vulcan:local-browser:select',

@@ -30,11 +30,18 @@ afterEach(async () => {
 
 // mountMenu renders the transcript and an adjacent composer-shaped text outside its selection scope.
 // mountMenu 渲染会话转录及一段位于选区范围外的输入区形态文本。
-async function mountMenu(onCopyText: (text: string) => Promise<void> | void): Promise<void> {
+// onCopyText receives clipboard writes; enabled selects the desktop menu instead of native browser handling.
+// onCopyText 接收剪贴板写入；enabled 选择桌面菜单，而非浏览器原生处理。
+async function mountMenu(onCopyText: (text: string) => Promise<void> | void, enabled = true): Promise<void> {
   await act(async () => root.render(
-    <ConversationTextContextMenu enabled timelineRef={timelineRef} onCopyText={onCopyText}>
+    <ConversationTextContextMenu enabled={enabled} timelineRef={timelineRef} onCopyText={onCopyText}>
       <div>
-        <div ref={timelineRef}><span>Selected transcript</span><span> second line</span></div>
+        <div ref={timelineRef}>
+          <span>Selected transcript</span><span> second line</span>
+          <a data-link="web" href="https://example.com/page?q=1#section"><svg aria-hidden="true"><circle /></svg>Website</a>
+          <a data-link="file" href="file:///C:/my%20files/page.html#section">Local page</a>
+          <a data-link="empty" href="">Filtered link</a>
+        </div>
         <div data-composer-text>Composer draft</div>
       </div>
     </ConversationTextContextMenu>,
@@ -72,4 +79,45 @@ it("selects the transcript without selecting the adjacent composer text", async 
   await act(async () => items.find((item) => item.textContent === "conversation.contextMenu.selectAll")!.click());
   expect(window.getSelection()?.toString()).toContain("Selected transcript second line");
   expect(window.getSelection()?.toString()).not.toContain("Composer draft");
+});
+
+it.each([
+  ['[data-link="web"] circle', "https://example.com/page?q=1#section"],
+  ['[data-link="file"]', "file:///C:/my%20files/page.html#section"],
+])("copies the actual address when right-clicking %s", async (selector, expected) => {
+  // copy observes the production clipboard callback without modifying the system clipboard.
+  // copy 观察生产剪贴板回调，不修改系统剪贴板。
+  const copy = vi.fn(async (_text: string) => {});
+  await mountMenu(copy);
+  await act(async () => timelineRef.current!.querySelector(selector)!.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+  ));
+  // item locates the action by meaning rather than its position alongside existing text actions.
+  // item 按语义而非与既有文本操作的相对位置定位菜单项。
+  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    .find((entry) => entry.textContent === "conversation.contextMenu.copyLinkAddress")!;
+  expect(item).toBeDefined();
+  await act(async () => item.click());
+  expect(copy).toHaveBeenCalledExactlyOnceWith(expected);
+  await openMenu();
+  expect(document.body.textContent).not.toContain("conversation.contextMenu.copyLinkAddress");
+});
+
+it("does not offer copying for an empty sanitized link", async () => {
+  await mountMenu(vi.fn());
+  await act(async () => timelineRef.current!.querySelector('[data-link="empty"]')!.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+  ));
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  expect(document.body.textContent).not.toContain("conversation.contextMenu.copyLinkAddress");
+});
+
+it("leaves the web client's native link context menu untouched", async () => {
+  await mountMenu(vi.fn(), false);
+  // event retains its default action so the browser can provide Copy link address itself.
+  // event 保留默认动作，浏览器可自行提供复制链接地址。
+  const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+  await act(async () => timelineRef.current!.querySelector('[data-link="web"]')!.dispatchEvent(event));
+  expect(event.defaultPrevented).toBe(false);
+  expect(document.querySelector('[role="menu"]')).toBeNull();
 });

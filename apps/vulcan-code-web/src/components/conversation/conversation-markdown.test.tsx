@@ -12,6 +12,38 @@ import {
 // This regression test verifies that the static Markdown renderer emits semantic block elements.
 // 该回归测试验证静态 Markdown 渲染器会输出语义化块级元素。
 describe("MarkdownMessage", () => {
+  it.each([false, true])("preserves webpage and encoded local page hyperlinks (streaming=%s)", (streaming) => {
+    // host parses actual rendered anchors, including the sanitizer and URL transform stages.
+    // host 解析实际渲染的链接，包含清理器与 URL 转换阶段。
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<MarkdownMessage eager streaming={streaming} content={[
+      "[Website](https://example.com/page?q=1#demo)",
+      "",
+      "[Local](file:///C:/my%20files/page.html#demo)",
+      "",
+      "[POSIX](file:///tmp/page.html)",
+      "",
+      "[Spaced](<file:///C:/my files/page.html>)",
+      "",
+      "Done.\n\n",
+    ].join("\n")} />);
+    expect(Array.from(host.querySelectorAll("a"), (link) => link.getAttribute("href"))).toEqual([
+      "https://example.com/page?q=1#demo", "file:///C:/my%20files/page.html#demo",
+      "file:///tmp/page.html", "file:///C:/my%20files/page.html",
+    ]);
+    expect(Array.from(host.querySelectorAll("a"), (link) => link.target)).toEqual(Array(4).fill("_blank"));
+    expect(host.querySelectorAll('a > svg.markdown-link-icon[aria-hidden="true"]')).toHaveLength(4);
+    expect(Array.from(host.querySelectorAll("a"), (link) => link.textContent)).toEqual(["Website", "Local", "POSIX", "Spaced"]);
+  });
+
+  it.each(["javascript:alert%281%29", "data:text/html,hello", "vbscript:evil", "vulcan://private"])("does not turn %s into a navigable link", (url) => {
+    // host verifies the rendered URL rather than only the parser input.
+    // host 验证最终渲染的 URL，而不只是解析器输入。
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<MarkdownMessage eager content={`[Unsafe](${url})`} />);
+    expect(host.querySelector("a")?.getAttribute("href") ?? "").toBe("");
+  });
+
   it("renders headings and unordered lists from standard Markdown", () => {
     // markup captures the server-rendered HTML used to verify Markdown structure.
     // markup 捕获服务端渲染出的 HTML，用于验证 Markdown 结构。

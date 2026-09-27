@@ -109,6 +109,23 @@
   color: var(--primary);
 }
 
+/* Keep wrapped links in normal text flow while making their clickable extent visible. */
+/* 保持换行链接处于普通文本流，同时明确标示可点击范围。 */
+.markdown-message a[href] {
+  text-decoration-line: underline;
+  text-underline-offset: 0.18em;
+}
+
+/* Match the text size without making long links an unbreakable inline-flex box. */
+/* 跟随文字尺寸，不使用会让长链接无法换行的 inline-flex 容器。 */
+.markdown-message .markdown-link-icon {
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  margin-inline-end: 0.25em;
+  vertical-align: -0.12em;
+}
+
 .markdown-message img {
   max-width: min(100%, 800px);
   height: auto;

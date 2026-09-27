@@ -163,7 +163,9 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
         return;
       }
       const bounds = element.getBoundingClientRect();
-      const modalOpen = document.querySelector('[role="dialog"][data-state="open"], [aria-modal="true"], [role="menu"][data-state="open"]') !== null;
+      // Radix confirmation dialogs use alertdialog without necessarily emitting aria-modal.
+      // Radix 确认弹窗使用 alertdialog，不保证输出 aria-modal。
+      const modalOpen = document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [aria-modal="true"], [role="menu"][data-state="open"]') !== null;
       const visible = bounds.width > 0 && bounds.height > 0 && bounds.bottom > 0 && bounds.right > 0
         && bounds.top < window.innerHeight && bounds.left < window.innerWidth
         && getComputedStyle(element).visibility !== "hidden" && !modalOpen;
@@ -346,7 +348,7 @@ export function ClientBrowserArea(props: { ownerSessionId: string }) {
           <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
             aria-label={t("browser.browserMenu")} disabled={!ownerReady || !activeTab}><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuItem disabled={!activeTab || !/^https?:\/\//i.test(activeTab.url)} onSelect={() => {
+            <DropdownMenuItem disabled={!activeTab || !/^(?:https?|file):\/\//i.test(activeTab.url)} onSelect={() => {
               if (activeTab) void bridge.openExternal(activeTab.id).catch((reason: unknown) => setError(String(reason)));
             }}><ExternalLink className="h-4 w-4" />{t("browser.openInDefaultBrowser")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => {

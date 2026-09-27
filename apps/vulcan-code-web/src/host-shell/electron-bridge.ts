@@ -146,8 +146,8 @@ export interface ElectronLocalBrowserBridge {
   // snapshot returns the current client-local tabs.
   // snapshot 返回当前客户端本地标签。
   snapshot: () => Promise<ElectronLocalBrowserSnapshot>;
-  // open creates one sandboxed HTTP tab and returns its id.
-  // open 创建一个沙箱 HTTP 标签并返回其标识。
+  // open creates one sandboxed website or file tab and returns its id.
+  // open 创建一个沙箱网页或文件标签并返回其标识。
   open: (url: string) => Promise<string>;
   // navigate changes one existing local tab's address.
   // navigate 更改一个已有本地标签的地址。
@@ -161,18 +161,21 @@ export interface ElectronLocalBrowserBridge {
   // Opens id's inspector in a separate native window; resolves after opening.
   // 在独立原生窗口打开 id 的检查器；打开后完成。
   openDeveloperTools: (id: string) => Promise<void>;
-  // Opens id's actual HTTP(S) URL in the system browser; resolves after the OS request.
-  // 在系统浏览器打开 id 的实际 HTTP(S) 地址；操作系统请求后完成。
+  // Opens id's actual website or file URL externally; resolves after the OS request.
+  // 在外部打开 id 的实际网页或文件地址；操作系统请求后完成。
   openExternal: (id: string) => Promise<void>;
+  // Opens a validated conversation website or file URL without creating a tab; resolves after the OS request.
+  // 打开经校验的会话网页或文件 URL，不创建标签；操作系统请求后完成。
+  openExternalUrl: (url: string) => Promise<void>;
   // select displays one existing local tab.
   // select 显示一个已有本地标签。
   select: (id: string) => Promise<void>;
   // close destroys one local tab.
   // close 销毁一个本地标签。
   close: (id: string) => Promise<void>;
-  // Confirms closing ownerSessionId's pages in locale; resolves true only after destruction.
-  // 使用 locale 确认关闭 ownerSessionId 的页面；销毁完成后才返回 true。
-  closeOwner: (ownerSessionId: string, locale: string) => Promise<boolean>;
+  // Applies the in-app decision to ownerSessionId's pages; resolves true only after destruction.
+  // 将应用内决策应用于 ownerSessionId 的页面；销毁完成后才返回 true。
+  closeOwner: (ownerSessionId: string, confirmed: boolean) => Promise<boolean>;
   // viewport updates or hides the native sidebar view.
   // viewport 更新或隐藏侧栏中的原生视图。
   viewport: (rect: ElectronLocalBrowserViewport | null) => Promise<void>;
@@ -276,7 +279,7 @@ export function readElectronLocalBrowserBridge(): ElectronLocalBrowserBridge | n
   const api = (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop;
   const bridge = api?.localBrowser;
   if (!bridge) return null;
-  const methods = ["initialize", "setOwner", "snapshot", "open", "navigate", "history", "move", "openDeveloperTools", "openExternal", "select", "close", "closeOwner", "viewport", "subscribeChanged"];
+  const methods = ["initialize", "setOwner", "snapshot", "open", "navigate", "history", "move", "openDeveloperTools", "openExternal", "openExternalUrl", "select", "close", "closeOwner", "viewport", "subscribeChanged"];
   return methods.every((method) => typeof (bridge as unknown as Record<string, unknown>)[method] === "function")
     ? bridge : null;
 }

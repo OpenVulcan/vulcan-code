@@ -47,6 +47,9 @@ const LOCAL_BROWSER_CHANNELS = {
   move: 'vulcan:local-browser:move',
   openDeveloperTools: 'vulcan:local-browser:devtools',
   openExternal: 'vulcan:local-browser:external',
+  // Matches the validated conversation URL opener in the main process.
+  // 与主进程中经过校验的会话 URL 打开器一致。
+  openExternalUrl: 'vulcan:local-browser:external-url',
   select: 'vulcan:local-browser:select',
   close: 'vulcan:local-browser:close',
   // Matches the confirmed conversation-wide close operation.
@@ -143,9 +146,9 @@ const service = {
 // localBrowser exposes only tab operations and sidebar geometry, never native WebContents objects.
 // localBrowser 只暴露标签操作与侧栏几何，不暴露原生 WebContents 对象。
 const localBrowser = {
-  // closeOwner resolves true after confirmation and page destruction; false means cancellation.
-  // closeOwner 在确认并销毁页面后返回 true；false 表示取消。
-  closeOwner: (ownerSessionId: string, locale: string): Promise<boolean> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.closeOwner, ownerSessionId, locale),
+  // closeOwner forwards the in-app confirmation for one owner; resolves true only after page destruction.
+  // closeOwner 转发一个会话的应用内确认；仅在页面销毁后返回 true。
+  closeOwner: (ownerSessionId: string, confirmed: boolean): Promise<boolean> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.closeOwner, ownerSessionId, confirmed),
   // initialize releases pages left by the previous renderer; resolves after reset.
   // initialize 释放上一个渲染界面遗留的页面；重置后完成。
   initialize: (): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.initialize),
@@ -167,6 +170,9 @@ const localBrowser = {
   // openExternal uses the given page's native URL; resolves after the OS request.
   // openExternal 使用指定页面的原生地址；操作系统请求后完成。
   openExternal: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.openExternal, id),
+  // openExternalUrl forwards an explicit link; resolves after the main process validates and opens it.
+  // openExternalUrl 转发明确链接；主进程校验并打开后完成。
+  openExternalUrl: (url: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.openExternalUrl, url),
   select: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.select, id),
   close: (id: string): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.close, id),
   viewport: (rect: unknown): Promise<void> => ipcRenderer.invoke(LOCAL_BROWSER_CHANNELS.viewport, rect),
