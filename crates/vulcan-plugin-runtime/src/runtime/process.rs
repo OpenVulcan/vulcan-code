@@ -22,74 +22,30 @@ use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Host-resolved process launch data for one plugin-owned stdio MCP server.
-/// 单个插件自有 stdio MCP 服务器的宿主解析进程启动数据。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VulcanPluginMcpStdioLaunchSpec {
-    /// Exact executable selected without Shell or PATH lookup.
-    /// 不经 Shell 或 PATH 查找选定的精确可执行文件。
-    pub program: PathBuf,
-    /// Host-owned arguments that must precede manifest-resolved server arguments.
-    /// 必须位于清单解析服务器参数之前的宿主持有参数。
-    pub base_args: Vec<String>,
-    /// Canonical working directory contained by the immutable plugin environment.
-    /// 受不可变插件环境约束的规范工作目录。
-    pub cwd: PathBuf,
-    /// Host-owned non-secret environment values required by the launcher.
-    /// 启动器所需的宿主持有非敏感环境变量值。
-    pub env: BTreeMap<String, String>,
-}
-
-/// Resolves one plugin-owned logical process entry into an absolute LuaSkills process spec.
-/// 把一个插件持有的逻辑进程入口解析为绝对 LuaSkills 进程规范。
-///
-/// # Parameters
-/// 参数
-/// `state` is the active manager state and `request_args` contains bridge-injected identity.
-/// `state` 是活动管理器状态，`request_args` 包含桥接层注入的身份。
-///
-/// # Returns
-/// 返回值
-/// Returns a contained executable specification or an explicit policy error.
-/// 返回受目录边界约束的可执行规范或显式策略错误。
-pub(super) fn resolve_plugin_process_spec(
+/// Resolve validated process arguments against the caller's exact retained plugin and workspace.
+/// 针对调用方保留的精确插件及工作区解析已校验进程参数。
+/// Return the authorized launch specification without consulting a newer catalog descriptor.
+/// 返回已授权启动规格，不读取更新的目录描述符。
+pub(super) fn resolve_plugin_process_for_snapshot(
     state: &VulcanPluginManagerState,
-    request_args: &Value,
+    plugin: &crate::VulcanPluginDescriptor,
+    workspace_root: &Path,
+    payload: &Map<String, Value>,
 ) -> Result<Value, String> {
-    let request = request_args
-        .as_object()
-        .ok_or_else(|| "Vulcan plugin process request must be an object.".to_string())?;
-    let plugin_id = required_json_string(request, "plugin_id")?;
-    let lease_scope =
-        VulcanPluginBridgeLeaseScope::parse(required_json_string(request, "lease_scope")?)?;
-    let workspace_root = canonical_bridge_workspace_root(request)?;
-    let payload = request
-        .get("payload")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            "Vulcan plugin process request requires object field `payload`.".to_string()
-        })?;
+    // The package ID, process declarations and dependency environment share one frozen owner.
+    // 包 ID、进程声明及依赖环境共用一个冻结所有者。
+    let plugin_id = &plugin.id;
+    // Required process entry is business input; it never supplies a program or cwd.
+    // 必需进程入口属于业务输入；它绝不提供程序或 cwd。
     let entry_id = required_json_string(payload, "entry_id")?;
+    // Only the two explicitly supported process protocols are accepted.
+    // 仅接受两个显式支持的进程协议。
     let mode = required_json_string(payload, "mode")?;
     if mode != "exec" && mode != "session" {
         return Err("Vulcan plugin process mode must be `exec` or `session`.".to_string());
     }
-
-    let snapshot = state
-        .snapshot
-        .read()
-        .map_err(|_| "Vulcan plugin catalog lock was poisoned.".to_string())?;
-    let plugin = snapshot
-        .plugins
-        .get(plugin_id)
-        .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is not installed."))?;
-    let required_runtime_state = lease_scope.required_runtime_state();
-    if plugin.runtime_state != required_runtime_state {
-        return Err(format!(
-            "Vulcan plugin `{plugin_id}` runtime state does not authorize process bridge scope `{}`.",
-            lease_scope.as_str()
-        ));
-    }
+    // The manifest belongs to the original authorized generation.
+    // 清单属于原已授权代次。
     let manifest = plugin
         .manifest
         .as_ref()
@@ -144,7 +100,7 @@ pub(super) fn resolve_plugin_process_spec(
                 binary,
                 mode,
                 options,
-                &workspace_root,
+                workspace_root,
             )
         }
         (None, Some(node_entry), None) => {
@@ -176,6 +132,81 @@ pub(super) fn resolve_plugin_process_spec(
             "Vulcan plugin `{plugin_id}` does not declare process entry `{entry_id}`."
         )),
     }
+}
+
+/// Host-resolved process launch data for one plugin-owned stdio MCP server.
+/// 单个插件自有 stdio MCP 服务器的宿主解析进程启动数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VulcanPluginMcpStdioLaunchSpec {
+    /// Exact executable selected without Shell or PATH lookup.
+    /// 不经 Shell 或 PATH 查找选定的精确可执行文件。
+    pub program: PathBuf,
+    /// Host-owned arguments that must precede manifest-resolved server arguments.
+    /// 必须位于清单解析服务器参数之前的宿主持有参数。
+    pub base_args: Vec<String>,
+    /// Canonical working directory contained by the immutable plugin environment.
+    /// 受不可变插件环境约束的规范工作目录。
+    pub cwd: PathBuf,
+    /// Host-owned non-secret environment values required by the launcher.
+    /// 启动器所需的宿主持有非敏感环境变量值。
+    pub env: BTreeMap<String, String>,
+}
+
+/// Resolves one plugin-owned logical process entry into an absolute LuaSkills process spec.
+/// 把一个插件持有的逻辑进程入口解析为绝对 LuaSkills 进程规范。
+///
+/// # Parameters
+/// 参数
+/// `state` is the active manager state and `request_args` contains bridge-injected identity.
+/// `state` 是活动管理器状态，`request_args` 包含桥接层注入的身份。
+///
+/// # Returns
+/// 返回值
+/// Returns a contained executable specification or an explicit policy error.
+/// 返回受目录边界约束的可执行规范或显式策略错误。
+pub(super) fn resolve_plugin_process_spec(
+    state: &VulcanPluginManagerState,
+    request_args: &Value,
+) -> Result<Value, String> {
+    // The compatibility envelope is accepted only from the legacy trusted bridge.
+    // 兼容信封仅从旧可信桥接接收。
+    let request = request_args
+        .as_object()
+        .ok_or_else(|| "Vulcan plugin process request must be an object.".to_string())?;
+    // Read the exact bridge-injected plugin identity.
+    // 读取桥接注入的精确插件身份。
+    let plugin_id = required_json_string(request, "plugin_id")?;
+    // Lifecycle scope is validated before resolving executable resources.
+    // 在解析可执行资源前校验生命周期作用域。
+    let scope = VulcanPluginBridgeLeaseScope::parse(required_json_string(request, "lease_scope")?)?;
+    // Workspace authorization belongs to the host envelope.
+    // 工作区授权属于宿主信封。
+    let workspace = canonical_bridge_workspace_root(request)?;
+    // Process-specific options retain their existing strict interpretation.
+    // 进程特定选项保留既有严格解释。
+    let payload = request
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            "Vulcan plugin process request requires object field `payload`.".to_string()
+        })?;
+    // Retain the descriptor before releasing the short catalog lock.
+    // 在释放短目录锁前保留描述符。
+    let plugin = state
+        .snapshot
+        .read()
+        .map_err(|_| "Vulcan plugin catalog lock was poisoned.".to_string())?
+        .plugins
+        .get(plugin_id)
+        .cloned()
+        .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is not installed."))?;
+    if plugin.runtime_state != scope.required_runtime_state() {
+        return Err(format!(
+            "Vulcan plugin `{plugin_id}` runtime state does not authorize process bridge scope `{}`.",
+            scope.as_str()
+        ));
+    }
+    resolve_plugin_process_for_snapshot(state, &plugin, &workspace, payload)
 }
 
 /// Resolves one plugin MCP stdio launcher into an exact managed process specification.

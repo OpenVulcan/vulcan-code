@@ -55,23 +55,17 @@ fn validate_plugin_config_value(
 }
 
 impl VulcanPluginRuntimeManager {
-    /// Reads the effective configuration for one manifest-declared plugin.
-    /// 读取一个清单声明插件的生效配置。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `plugin_id` is the exact catalog identity.
-    /// `plugin_id` 是精确目录身份。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the persisted configuration or the package defaults when no state exists.
-    /// 返回持久化配置；状态不存在时返回插件包默认值。
-    pub fn plugin_config(&self, plugin_id: &str) -> Result<Value, VulcanPluginRuntimeError> {
-        let snapshot = self.snapshot();
-        let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
-        })?;
+    /// Read configuration using the caller's exact retained package descriptor.
+    /// 使用调用方保留的精确包描述符读取配置。
+    /// Return validated state/defaults without looking up a newer package generation.
+    /// 返回已校验状态或默认值，不查找更新的包代次。
+    pub(super) fn plugin_config_for_snapshot(
+        &self,
+        plugin: &crate::VulcanPluginDescriptor,
+    ) -> Result<Value, VulcanPluginRuntimeError> {
+        // The ID and schema belong to the same immutable descriptor.
+        // ID 与 Schema 属于同一不可变描述符。
+        let plugin_id = &plugin.id;
         // manifest determines whether this package owns any executable resource requiring isolation.
         // manifest 决定当前插件包是否持有任何需要隔离的可执行资源。
         let manifest = plugin.manifest.as_ref().ok_or_else(|| {
@@ -104,33 +98,39 @@ impl VulcanPluginRuntimeManager {
         Ok(value)
     }
 
-    /// Validates and atomically persists one complete plugin configuration object.
-    /// 校验并原子持久化一个完整插件配置对象。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `plugin_id` selects the package and `value` is the complete replacement document.
-    /// `plugin_id` 选择插件包，`value` 是完整替换文档。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the exact persisted configuration after durable publication.
-    /// 在持久发布后返回精确持久化配置。
-    pub fn update_plugin_config(
+    /// Write the value under the exact retained package schema and current-generation gate.
+    /// 在精确保留包 Schema 及当前代次门控下写入值。
+    /// Reject a changed generation before touching persistent state; return the committed value.
+    /// 在触及持久状态前拒绝已变代次；返回已提交值。
+    pub(super) fn update_plugin_config_for_snapshot(
         &self,
-        plugin_id: &str,
+        plugin: &crate::VulcanPluginDescriptor,
         value: Value,
     ) -> Result<Value, VulcanPluginRuntimeError> {
-        // Configuration writes and catalog publication share the registration gate so a
-        // concurrent package refresh cannot publish an older registration-cache revision.
-        // 配置写入和目录发布共用注册门，避免并发包刷新发布旧的注册缓存修订。
+        // Configuration mutation shares the existing publication gate.
+        // 配置变更共用既有发布门。
         let _registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
+        // Resolve current authority once while publication cannot change it.
+        // 发布不能改变权威期间，一次性解析当前权威。
         let snapshot = self.snapshot();
-        let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
+        // Retain the original plugin ID, including the state-file namespace.
+        // 保留原插件 ID，包括状态文件命名空间。
+        let plugin_id = &plugin.id;
+        // A matching name cannot substitute for the exact generation and package bytes.
+        // 相同名称不能替代精确代次及包字节。
+        let current = snapshot.plugins.get(plugin_id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Plugin configuration owner is no longer installed.")
         })?;
+        if current.generation != plugin.generation
+            || current.content_fingerprint != plugin.content_fingerprint
+            || current.package_root != plugin.package_root
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin configuration generation changed before write.",
+            ));
+        }
         let manifest = plugin.manifest.as_ref().ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(
                 "Vulcan plugin `{plugin_id}` has no valid manifest."
@@ -165,6 +165,60 @@ impl VulcanPluginRuntimeManager {
         next_snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
         *published = Arc::new(next_snapshot);
         Ok(value)
+    }
+}
+
+impl VulcanPluginRuntimeManager {
+    /// Reads the effective configuration for one manifest-declared plugin.
+    /// 读取一个清单声明插件的生效配置。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plugin_id` is the exact catalog identity.
+    /// `plugin_id` 是精确目录身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the persisted configuration or the package defaults when no state exists.
+    /// 返回持久化配置；状态不存在时返回插件包默认值。
+    pub fn plugin_config(&self, plugin_id: &str) -> Result<Value, VulcanPluginRuntimeError> {
+        // Retain one complete package snapshot for schema and defaults.
+        // 为 Schema 及默认值保留一个完整包快照。
+        let snapshot = self.snapshot();
+        // Resolve only the explicitly requested plugin.
+        // 仅解析显式请求的插件。
+        let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
+        })?;
+        self.plugin_config_for_snapshot(plugin)
+    }
+
+    /// Validates and atomically persists one complete plugin configuration object.
+    /// 校验并原子持久化一个完整插件配置对象。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plugin_id` selects the package and `value` is the complete replacement document.
+    /// `plugin_id` 选择插件包，`value` 是完整替换文档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the exact persisted configuration after durable publication.
+    /// 在持久发布后返回精确持久化配置。
+    pub fn update_plugin_config(
+        &self,
+        plugin_id: &str,
+        value: Value,
+    ) -> Result<Value, VulcanPluginRuntimeError> {
+        // The write helper checks this exact descriptor again under the publication gate.
+        // 写入辅助入口在发布门内再次校验此精确描述符。
+        let snapshot = self.snapshot();
+        // Freeze schema ownership before entering the common mutation path.
+        // 在进入共同变更路径前冻结 Schema 归属。
+        let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
+        })?;
+        self.update_plugin_config_for_snapshot(plugin, value)
     }
 
     /// Checks for existing state before writing one initial complete configuration document.

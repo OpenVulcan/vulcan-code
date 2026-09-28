@@ -17,6 +17,13 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+mod embedded;
+pub use embedded::VulcanPluginEmbeddedHost;
+
+/// Maximum encoded bytes in a plugin-local UI invalidation topic.
+/// 插件内界面失效主题的编码字节上限。
+const UI_INVALIDATION_TOPIC_MAX_BYTES: usize = 128;
+
 /// Fixed LuaSkills host-tool name used to resolve one manifest-declared plugin process.
 /// 用于解析单个清单声明插件进程的固定 LuaSkills 宿主工具名称。
 const VULCAN_PLUGIN_PROCESS_RESOLVE_TOOL: &str = "vulcan.plugin.process.resolve";
@@ -105,7 +112,7 @@ static VULCAN_PLUGIN_MANAGER_REGISTRY: OnceLock<
 /// Host-injected lease scope that binds bridge calls to one exact runtime lifecycle state.
 /// 宿主注入的租约作用域，把桥接调用绑定到一个精确运行时生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum VulcanPluginBridgeLeaseScope {
+pub enum VulcanPluginBridgeLeaseScope {
     /// Ordinary action, tool, or hook work accepted only while enabled.
     /// 仅在已启用状态接收的普通 Action、工具或 Hook 工作。
     Enabled,
@@ -620,9 +627,9 @@ fn dispatch_plugin_ui_invalidation(
     let topic = payload
         .get("topic")
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .filter(|value| !value.is_empty() && value.len() <= UI_INVALIDATION_TOPIC_MAX_BYTES)
         .ok_or_else(|| {
-            "Vulcan plugin UI invalidation requires a topic of 1 to 128 bytes.".to_string()
+            format!("Vulcan plugin UI invalidation requires a topic of 1 to {UI_INVALIDATION_TOPIC_MAX_BYTES} bytes.")
         })?;
     // revision is a monotonic plugin-owned data version.
     // revision 是插件持有的单调数据版本。

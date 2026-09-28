@@ -1,0 +1,490 @@
+//! Runtime-owned native capabilities bound to exact plugin execution generations.
+//! 绑定精确插件执行代次、由运行时拥有的原生能力。
+
+use super::*;
+use crate::VulcanPluginDescriptor;
+use luaskills::runtime::embedded::capabilities::{
+    CapabilityDescriptor, CapabilityEffects, CapabilityExecution, CapabilityIdempotency,
+    CapabilityInvocation, CapabilityOutcome, CapabilityPermissions, CapabilityRegistrationRequest,
+    CapabilityScope,
+};
+use luaskills::runtime::embedded::{
+    EffectState, EmbeddedError, EmbeddedErrorCode, EmbeddedResult, EmbeddedRuntime,
+    EmbeddedRuntimeConfig, ModuleDefinition, ModuleResourceOwner, PluginPoolConfig,
+};
+use std::time::{Duration, Instant};
+
+mod dispatch;
+
+/// Exact native names installed atomically in each formal runtime.
+/// 在每个正式运行时中原子安装的精确原生名称。
+const CAPABILITIES: &[&str] = &[
+    VULCAN_PLUGIN_PROCESS_RESOLVE_TOOL,
+    VULCAN_PLUGIN_CONFIG_GET_TOOL,
+    VULCAN_PLUGIN_CONFIG_UPDATE_TOOL,
+    VULCAN_PLUGIN_STORAGE_SQLITE_MIGRATE_TOOL,
+    VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_TOOL,
+    VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_BATCH_TOOL,
+    VULCAN_PLUGIN_STORAGE_SQLITE_QUERY_TOOL,
+    VULCAN_PLUGIN_STORAGE_SQLITE_FLUSH_TOOL,
+    VULCAN_PLUGIN_STORAGE_LANCEDB_CREATE_TABLE_TOOL,
+    VULCAN_PLUGIN_STORAGE_LANCEDB_UPSERT_TOOL,
+    VULCAN_PLUGIN_STORAGE_LANCEDB_SEARCH_TOOL,
+    VULCAN_PLUGIN_STORAGE_LANCEDB_DELETE_TOOL,
+    VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL,
+    VULCAN_VLDB_SQLITE_QUERY_V1_TOOL,
+    VULCAN_VLDB_SQLITE_EXECUTE_V1_TOOL,
+    VULCAN_VLDB_SQLITE_EXECUTE_BATCH_V1_TOOL,
+    VULCAN_VLDB_SQLITE_FLUSH_V1_TOOL,
+    VULCAN_PLUGIN_UI_INVALIDATE_TOOL,
+];
+
+/// Owns a formal runtime and installs this manager's native services without global dispatch.
+/// 拥有正式运行时并安装此管理器的原生服务，不经过全局分发。
+/// Hosts supply trusted module source and explicit budgets; this adapter does not sandbox source.
+/// 宿主提供可信模块源码和显式预算；此适配器不对源码建立沙箱。
+pub struct VulcanPluginEmbeddedHost {
+    /// Core owns all execution, queue, session, capability and shutdown lifetimes.
+    /// 核心拥有全部执行、队列、会话、能力及关闭寿命。
+    runtime: EmbeddedRuntime,
+    /// Native callbacks share identity lookup but never strongly own this runtime.
+    /// 原生回调共享身份查询，但绝不强持有此运行时。
+    authority: Arc<HostAuthority>,
+}
+
+/// Small runtime-local authority registry; weak entries cannot pin retired packages.
+/// 运行时内的小型权威注册表；弱条目不能固定已退役包。
+struct HostAuthority {
+    /// Manager services remain externally owned to avoid a manager/runtime cycle.
+    /// 管理器服务仍由外部持有，避免管理器与运行时循环引用。
+    manager: Weak<VulcanPluginManagerState>,
+    /// Opaque core namespace checked against every trusted invocation.
+    /// 对每次可信调用检查的核心不透明命名空间。
+    runtime_id: String,
+    /// Capacity derives from the same core pool-registration budget.
+    /// 容量派生自同一核心池注册预算。
+    max_domains: usize,
+    /// Exact execution revisions map to resources retained by actual core pools.
+    /// 精确执行修订映射到真实核心池保留的资源。
+    domains: Mutex<BTreeMap<String, Weak<ExecutionAuthority>>>,
+}
+
+/// Immutable business authority retained by the core until real VM cleanup completes.
+/// 核心保留至真实 VM 清理完成的不可变业务权威。
+struct ExecutionAuthority {
+    /// Cloning this descriptor retains its managed physical generation pin.
+    /// 克隆此描述符会保留其受管物理代次固定句柄。
+    plugin: VulcanPluginDescriptor,
+    /// Exact core generation spelling used by this registration.
+    /// 此注册使用的精确核心代次拼写。
+    generation: String,
+    /// Lifecycle transition that authorizes the callback.
+    /// 授权回调的生命周期转换。
+    scope: VulcanPluginBridgeLeaseScope,
+    /// Canonical host workspace; business JSON cannot replace it.
+    /// 规范宿主工作区；业务 JSON 不能替换它。
+    workspace: PathBuf,
+    /// Original trusted workspace spelling copied into the core caller context.
+    /// 复制到核心调用上下文的原始可信工作区拼写。
+    workspace_declaration: String,
+    /// Host-assigned isolation partition, independently checked against the caller.
+    /// 宿主分配的隔离分区，与调用方独立核对。
+    security_partition: String,
+}
+
+impl VulcanPluginEmbeddedHost {
+    /// Construct a runtime for `manager` with explicit parent and per-capability time budgets.
+    /// 使用显式父级及单能力时间预算，为 `manager` 构造运行时。
+    /// Return the owner after atomic capability registration, or a construction error.
+    /// 在原子注册能力后返回所有者，失败则返回构造错误。
+    pub fn new(
+        manager: &VulcanPluginRuntimeManager,
+        config: EmbeddedRuntimeConfig,
+        max_capability_call_ms: u64,
+    ) -> EmbeddedResult<Self> {
+        // Validate before allocating any runtime-owned worker.
+        // 在分配任何运行时工作线程前校验。
+        config.validate()?;
+        if max_capability_call_ms == 0 || config.max_registered_capabilities < CAPABILITIES.len() {
+            return Err(error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Native capability budgets are insufficient.",
+            ));
+        }
+        // Use the already isolated immutable plugin engine.
+        // 使用已经隔离的不可变插件引擎。
+        let engine = manager
+            .runtime_engine()
+            .map_err(|failure| error(EmbeddedErrorCode::Closed, failure.message))?;
+        // This core instance is the single owner of every plugin pool in this adapter.
+        // 此核心实例是本适配器中全部插件池的唯一所有者。
+        let runtime = EmbeddedRuntime::new(engine, config.clone())?;
+        // Callback closures hold only this acyclic authority object.
+        // 回调闭包仅持有此无环权威对象。
+        let authority = Arc::new(HostAuthority {
+            manager: Arc::downgrade(&manager.state),
+            runtime_id: runtime.id().to_string(),
+            max_domains: config.max_registered_pools,
+            domains: Mutex::new(BTreeMap::new()),
+        });
+        // Publish the entire fixed native surface as one registry transaction.
+        // 将完整固定原生接口作为一个注册表事务发布。
+        let registrations = CAPABILITIES
+            .iter()
+            .map(|&name| {
+                // Each callback captures only its fixed name and runtime-local authority.
+                // 每个回调仅捕获固定名称及运行时内权威。
+                let captured = Arc::clone(&authority);
+                CapabilityRegistrationRequest {
+                    descriptor: CapabilityDescriptor {
+                        name: name.to_string(),
+                        version: "1.0.0".to_string(),
+                        description: format!(
+                            "Execute {name} for the authenticated plugin generation."
+                        ),
+                        input_schema: json!({"type":"object"}),
+                        output_schema: json!(true),
+                        execution: CapabilityExecution::Native,
+                        permissions: [name.to_string()].into(),
+                        scope: CapabilityScope::Invocation,
+                        max_concurrent: config.max_running_calls.min(config.max_host_requests),
+                        max_call_ms: max_capability_call_ms,
+                        max_input_bytes: config.max_value_bytes,
+                        max_output_bytes: config.max_value_bytes,
+                        effects: CapabilityEffects::Mutating,
+                        idempotency: CapabilityIdempotency::None,
+                    },
+                    native: Some(Arc::new(move |invocation| {
+                        captured.invoke(name, invocation)
+                    })),
+                }
+            })
+            .collect();
+        runtime.capabilities().register(registrations)?;
+        Ok(Self { runtime, authority })
+    }
+
+    /// Borrow the sole core owner for plugin budgets, calls, sessions, revocation and shutdown.
+    /// 借用唯一核心所有者，管理插件预算、调用、会话、撤权及关闭。
+    /// Pool source remains trusted host input; use this adapter's registration for native services.
+    /// 池源码仍属于可信宿主输入；使用本适配器的注册入口获得原生服务。
+    pub fn runtime(&self) -> &EmbeddedRuntime {
+        &self.runtime
+    }
+
+    /// Register trusted `definition` and `policy` under an exact live catalog `scope`.
+    /// 在精确实时目录 `scope` 下注册可信 `definition` 及 `policy`。
+    /// Identity, generation, dependencies and package root must match the retained catalog entry.
+    /// 身份、代次、依赖及包根必须匹配保留的目录条目。
+    /// Returns a core pool ID; the host must first register the plugin's aggregate budget.
+    /// 返回核心池 ID；宿主必须先注册插件聚合预算。
+    pub fn register_pool(
+        &self,
+        definition: ModuleDefinition,
+        policy: PluginPoolConfig,
+        scope: VulcanPluginBridgeLeaseScope,
+    ) -> EmbeddedResult<String> {
+        // Upgrading the manager protects the short registration operation only.
+        // 升级管理器仅保护此短注册操作。
+        let state = self
+            .authority
+            .manager
+            .upgrade()
+            .ok_or_else(|| error(EmbeddedErrorCode::Closed, "Plugin manager is closed."))?;
+        // Resolve one complete frozen catalog descriptor before deriving permissions.
+        // 在派生权限前解析一个完整冻结的目录描述符。
+        let plugin = state
+            .snapshot
+            .read()
+            .map_err(|_| internal("Plugin catalog lock is poisoned."))?
+            .plugins
+            .get(&definition.plugin_id)
+            .cloned()
+            .ok_or_else(|| {
+                error(
+                    EmbeddedErrorCode::StaleGeneration,
+                    "Plugin is no longer installed.",
+                )
+            })?;
+        // Exact dependencies come from the validated manifest, never a caller fallback.
+        // 精确依赖来自已校验清单，绝不使用调用方回退值。
+        let manifest = plugin.manifest.as_ref().ok_or_else(|| {
+            error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Plugin has no valid manifest.",
+            )
+        })?;
+        if plugin.runtime_state != scope.required_runtime_state() {
+            return Err(error(
+                EmbeddedErrorCode::PermissionDenied,
+                "Plugin lifecycle state does not authorize pool registration.",
+            ));
+        }
+        if definition.generation != plugin.generation.to_string()
+            || manifest.execution.dependencies.manifest.as_deref()
+                != Some(definition.dependencies_file.as_str())
+        {
+            return Err(error(
+                EmbeddedErrorCode::StaleGeneration,
+                "Module generation or dependencies do not match the catalog.",
+            ));
+        }
+        // Package materialization retains the existing host environment resolution contract.
+        // 包物化保留现有宿主环境解析契约。
+        let package = super::super::environment::plugin_execution_package_root(&state, &plugin)
+            .map_err(|message| error(EmbeddedErrorCode::InvalidArgument, message))?;
+        if definition.package_root != package.to_string_lossy() {
+            return Err(error(
+                EmbeddedErrorCode::StaleGeneration,
+                "Module declaration does not match the exact catalog generation and package.",
+            ));
+        }
+        // Workspaces are explicit and canonicalized once, outside plugin business arguments.
+        // 工作区为显式值，在插件业务参数之外一次性规范化。
+        let workspace = definition.workspace_root.as_ref().ok_or_else(|| {
+            error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Plugin host capabilities require an explicit workspace.",
+            )
+        })?;
+        // Preserve the exact core declaration separately from its canonical process path.
+        // 将精确核心声明与其规范进程路径分开保留。
+        let workspace_declaration = workspace.clone();
+        // Reject a missing or non-directory workspace before exposing host services.
+        // 在暴露宿主服务前拒绝缺失或非目录工作区。
+        let workspace = PathBuf::from(workspace)
+            .canonicalize()
+            .map_err(|failure| error(EmbeddedErrorCode::InvalidArgument, failure.to_string()))?;
+        if !workspace.is_dir() {
+            return Err(error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Plugin workspace is not a directory.",
+            ));
+        }
+        // Each fixed capability requires its own revocable grant, derived from the manifest.
+        // 每个固定能力要求其自身可撤销授权，该授权从清单派生。
+        let permissions = CapabilityPermissions::new(
+            CAPABILITIES
+                .iter()
+                .copied()
+                .filter(|name| permitted(name, &manifest.permissions))
+                .map(str::to_string)
+                .collect(),
+        )?;
+        // Revision is opaque and cannot be selected by Lua or reused by another registration.
+        // 修订为不透明值，Lua 不能选择，其他注册不能复用。
+        let revision = uuid::Uuid::new_v4().to_string();
+        // Actual core pool ownership pins the descriptor, not historical host handles.
+        // 真实核心池所有权固定描述符，历史宿主句柄不固定它。
+        let domain = Arc::new(ExecutionAuthority {
+            plugin,
+            generation: definition.generation.clone(),
+            scope,
+            workspace,
+            workspace_declaration,
+            security_partition: definition.security_partition.clone(),
+        });
+        // Catalog publication cannot race the final authority check and pool registration.
+        // 目录发布不能与最终权威检查及池注册竞争。
+        let _publication = state
+            .session_registration_gate
+            .lock()
+            .map_err(|_| internal("Plugin publication gate is poisoned."))?;
+        validate_current(&state, &domain)?;
+        {
+            // Prune dead entries and reserve one bounded identity before core publication.
+            // 在核心发布前清除死亡条目并预留一个有界身份。
+            let mut domains = self
+                .authority
+                .domains
+                .lock()
+                .map_err(|_| internal("Plugin authority lock is poisoned."))?;
+            domains.retain(|_, entry| entry.strong_count() != 0);
+            if domains.len() >= self.authority.max_domains {
+                return Err(error(
+                    EmbeddedErrorCode::CapacityExceeded,
+                    "Plugin authority capacity is exhausted.",
+                ));
+            }
+            domains.insert(revision.clone(), Arc::downgrade(&domain));
+        }
+        // No callback can run during registration; initialization starts on later core admission.
+        // 注册期间不会运行回调；初始化在后续核心入场时开始。
+        let registered = self.runtime.register_pool_with_owner(
+            definition,
+            policy,
+            permissions,
+            revision.clone(),
+            ModuleResourceOwner::new(domain),
+        );
+        if registered.is_err() {
+            // A failed registration has no pool owner and must release its identity reservation.
+            // 失败注册没有池所有者，必须释放其身份预留。
+            self.authority
+                .domains
+                .lock()
+                .map_err(|_| internal("Plugin authority lock is poisoned."))?
+                .remove(&revision);
+        }
+        registered
+    }
+}
+
+impl HostAuthority {
+    /// Resolve `invocation` against this runtime and dispatch the exact fixed `name`.
+    /// 针对此运行时解析 `invocation`，并分发精确固定的 `name`。
+    /// Rejected admission reports no effect; opaque service execution conservatively stays unknown.
+    /// 被拒入场报告尚无副作用；不透明服务执行保守保留未知状态。
+    fn invoke(&self, name: &str, invocation: &CapabilityInvocation) -> CapabilityOutcome {
+        // Admission errors never enter a host service.
+        // 入场错误绝不进入宿主服务。
+        let admitted = (|| {
+            invocation.authorize()?;
+            // Upgrade only the owner named by the authenticated core execution revision.
+            // 仅升级由核心认证执行修订指向的所有者。
+            let domain = self
+                .domains
+                .lock()
+                .map_err(|_| internal("Plugin authority lock is poisoned."))?
+                .get(&invocation.caller.execution_revision)
+                .and_then(Weak::upgrade)
+                .ok_or_else(|| {
+                    error(
+                        EmbeddedErrorCode::StaleGeneration,
+                        "Plugin execution authority has retired.",
+                    )
+                })?;
+            if invocation.caller.runtime_id != self.runtime_id
+                || invocation.caller.plugin_id != domain.plugin.id
+                || invocation.caller.package_generation != domain.generation
+                || invocation.caller.security_partition != domain.security_partition
+                || invocation.caller.workspace_root.as_deref()
+                    != Some(domain.workspace_declaration.as_str())
+            {
+                return Err(error(
+                    EmbeddedErrorCode::PermissionDenied,
+                    "Plugin invocation authority does not match its registered domain.",
+                ));
+            }
+            // The service owner is retained only for this admitted invocation.
+            // 服务所有者仅为此已接纳调用保留。
+            let state = self
+                .manager
+                .upgrade()
+                .ok_or_else(|| error(EmbeddedErrorCode::Closed, "Plugin manager is closed."))?;
+            validate_current(&state, &domain)?;
+            // Capture the clock before sampling remaining budget to avoid extending the deadline.
+            // 在采样剩余预算前读取时钟，避免延长截止时间。
+            let now = Instant::now();
+            // Millisecond flooring may shorten the budget but never grants additional time.
+            // 毫秒向下取整可能缩短预算，但绝不授予额外时间。
+            let deadline = now
+                .checked_add(Duration::from_millis(invocation.budget.remaining_ms()))
+                .ok_or_else(|| {
+                    error(
+                        EmbeddedErrorCode::InvalidArgument,
+                        "Plugin host deadline is out of range.",
+                    )
+                })?;
+            invocation.authorize()?;
+            Ok((state, domain, deadline))
+        })();
+        match admitted {
+            Ok((state, domain, deadline)) => {
+                dispatch::execute(&state, &domain, name, invocation, deadline)
+            }
+            Err(failure) => CapabilityOutcome {
+                result: Err(failure),
+                effects: EffectState::NotStarted,
+            },
+        }
+    }
+}
+
+/// Require `domain` to retain the exact installed bytes and authorized lifecycle state.
+/// 要求 `domain` 保留精确已安装字节及已授权生命周期状态。
+/// The catalog read lock ends before any external service or Lua code executes.
+/// 目录读锁在任何外部服务或 Lua 代码执行前结束。
+fn validate_current(
+    state: &VulcanPluginManagerState,
+    domain: &ExecutionAuthority,
+) -> EmbeddedResult<()> {
+    // A short immutable snapshot protects one complete identity comparison.
+    // 短不可变快照保护一次完整身份比较。
+    let snapshot = state
+        .snapshot
+        .read()
+        .map_err(|_| internal("Plugin catalog lock is poisoned."))?;
+    // Missing installation never authorizes a retained VM to enter services.
+    // 安装缺失绝不授权保留 VM 进入服务。
+    let current = snapshot.plugins.get(&domain.plugin.id).ok_or_else(|| {
+        error(
+            EmbeddedErrorCode::StaleGeneration,
+            "Plugin is no longer installed.",
+        )
+    })?;
+    if current.generation != domain.plugin.generation
+        || current.content_fingerprint != domain.plugin.content_fingerprint
+        || current.package_root != domain.plugin.package_root
+    {
+        return Err(error(
+            EmbeddedErrorCode::StaleGeneration,
+            "Plugin generation changed before host admission.",
+        ));
+    }
+    if current.runtime_state != domain.scope.required_runtime_state() {
+        return Err(error(
+            EmbeddedErrorCode::PermissionDenied,
+            "Plugin lifecycle state does not authorize this execution scope.",
+        ));
+    }
+    Ok(())
+}
+
+/// Check whether `permissions` authorize the fixed `name`; unknown names are never granted.
+/// 检查 `permissions` 是否授权固定 `name`；未知名称绝不获授权。
+/// Process resolution needs one execution permission, then validates the selected entry itself.
+/// 进程解析需要一种执行权限，随后自行校验所选入口。
+fn permitted(name: &str, permissions: &[VulcanPluginPermission]) -> bool {
+    match name {
+        VULCAN_PLUGIN_PROCESS_RESOLVE_TOOL => [
+            VulcanPluginPermission::ProcessBinary,
+            VulcanPluginPermission::ProcessNode,
+            VulcanPluginPermission::ProcessPython,
+        ]
+        .iter()
+        .any(|permission| permissions.contains(permission)),
+        VULCAN_PLUGIN_CONFIG_GET_TOOL | VULCAN_PLUGIN_CONFIG_UPDATE_TOOL => {
+            permissions.contains(&VulcanPluginPermission::Config)
+        }
+        VULCAN_PLUGIN_UI_INVALIDATE_TOOL => {
+            permissions.contains(&VulcanPluginPermission::UiHostContext)
+        }
+        _ => {
+            if let Some(operation) = plugin_storage_operation(name) {
+                return permissions.contains(&if operation.is_sqlite() {
+                    VulcanPluginPermission::StorageSqlite
+                } else {
+                    VulcanPluginPermission::StorageLancedb
+                });
+            }
+            plugin_vldb_operation(name).is_some()
+                && permissions.contains(&VulcanPluginPermission::SystemVldbAccess)
+        }
+    }
+}
+
+/// Build a structured `code` and English `message` without interpreting business payloads.
+/// 使用结构化 `code` 和英文 `message` 构造错误，不解释业务载荷。
+fn error(code: EmbeddedErrorCode, message: impl Into<String>) -> EmbeddedError {
+    EmbeddedError::new(code, message)
+}
+
+/// Report an internal host invariant failure using the exact diagnostic `message`.
+/// 使用精确诊断 `message` 报告宿主内部不变量失败。
+fn internal(message: &str) -> EmbeddedError {
+    error(EmbeddedErrorCode::Internal, message)
+}
+
+#[cfg(test)]
+mod tests;
