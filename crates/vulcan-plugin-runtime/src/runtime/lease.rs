@@ -2,10 +2,7 @@
 //! LuaSkills租约创建、执行、关闭与精确响应解码。
 
 use super::bridge::VulcanPluginBridgeLeaseScope;
-use super::{
-    ManagedVulcanPluginSession, VULCAN_PLUGIN_PROBE_TIMEOUT_MS, VulcanPluginRuntimeError,
-    VulcanPluginRuntimeManager,
-};
+use super::{VULCAN_PLUGIN_PROBE_TIMEOUT_MS, VulcanPluginRuntimeError, VulcanPluginRuntimeManager};
 use crate::{VulcanPluginLuaRuntimeManifest, VulcanPluginManifest};
 use luaskills::LuaEngine;
 use serde_json::{Value, json};
@@ -475,27 +472,6 @@ fn required_response_u64(response: &Value, field: &str) -> Result<u64, VulcanPlu
     response.get(field).and_then(Value::as_u64).ok_or_else(|| {
         VulcanPluginRuntimeError::new(format!("System lease response omitted {field}."))
     })
-}
-
-/// Closes one LuaSkills System lease synchronously during manager drop.
-/// 在管理器释放期间同步关闭一个 LuaSkills 系统租约。
-/// Uses `engine` and the identity in `session`; returns the close response or a runtime diagnostic.
-/// 使用`engine`及`session`中的身份；返回关闭响应或运行时诊断。
-pub(super) fn close_system_lease_sync(
-    engine: &LuaEngine,
-    session: &ManagedVulcanPluginSession,
-) -> Result<Value, VulcanPluginRuntimeError> {
-    let raw = engine
-        .close_system_runtime_lease_json(
-            &json!({
-                "lease_id": session.lease_id,
-                "sid": session.sid,
-                "generation": session.generation,
-            })
-            .to_string(),
-        )
-        .map_err(VulcanPluginRuntimeError::new)?;
-    parse_engine_response(&raw, "close Vulcan Plugin runtime lease")
 }
 
 /// Closes one raw LuaSkills System lease synchronously during manager drop.

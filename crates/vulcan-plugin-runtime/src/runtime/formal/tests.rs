@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 mod draining;
+mod pinned;
 mod stateless;
 
 /// Observe complete shutdown with the same configured finite test budget.

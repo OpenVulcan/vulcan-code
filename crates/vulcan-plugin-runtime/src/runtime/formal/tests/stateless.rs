@@ -9,12 +9,12 @@ use std::sync::{Condvar, Mutex};
 
 /// Bounded test observation deadline, independent of the deliberately short cleanup wait budget.
 /// 有界测试观测截止时间，独立于刻意缩短的清理等待预算。
-const WAIT: Duration = Duration::from_secs(10);
+pub(super) const WAIT: Duration = Duration::from_secs(10);
 
 /// One controllable real native callback and its committed event history.
 /// 单个可控真实原生回调及其已提交事件历史。
 #[derive(Default)]
-struct Events {
+pub(super) struct Events {
     /// Actual entry is observed before any test requests cancellation or lifecycle change.
     /// 测试请求取消或生命周期变化前先观测实际入场。
     entered: AtomicBool,
@@ -26,13 +26,13 @@ struct Events {
     changed: Condvar,
     /// Only effects after the controlled wait enter this ledger.
     /// 仅受控等待之后的副作用进入此账本。
-    values: Mutex<Vec<VulcanPluginUiInvalidation>>,
+    pub(super) values: Mutex<Vec<VulcanPluginUiInvalidation>>,
 }
 
 impl Events {
     /// Release the actual native callback, including during test-unwind cleanup.
     /// 释放真实原生回调，包含测试展开清理期间。
-    fn release(&self) {
+    pub(super) fn release(&self) {
         *self
             .released
             .lock()
@@ -65,16 +65,16 @@ impl VulcanPluginUiEventPublisher for Events {
 
 /// Real production fixture; fields retain package bytes through runtime cleanup.
 /// 真实生产夹具；字段在运行时清理期间保留包字节。
-struct Fixture {
+pub(super) struct Fixture {
     /// Manager exposes the same public invocation path used in production.
     /// 管理器暴露生产使用的相同公开调用路径。
-    manager: VulcanPluginRuntimeManager,
+    pub(super) manager: VulcanPluginRuntimeManager,
     /// Actual native observer used to prove side effects and blocking ownership.
     /// 用于证明副作用及阻塞所有权的真实原生观测者。
-    events: Arc<Events>,
+    pub(super) events: Arc<Events>,
     /// Runtime remains alive until all test calls and cleanup have completed.
     /// 运行时保持存活至所有测试调用及清理完成。
-    runtime: tokio::runtime::Runtime,
+    pub(super) runtime: tokio::runtime::Runtime,
     /// Files outlive the manager and its callbacks.
     /// 文件比管理器及回调存活更久。
     root: tempfile::TempDir,
@@ -93,14 +93,15 @@ impl Fixture {
     /// 使用明确父级 `settings` 构造单个真实启用的无状态包。
     /// Returns a bounded runtime whose blocking pool can be deliberately saturated by a test.
     /// 返回阻塞池可由测试刻意占满的有界运行时。
-    fn new(settings: VulcanPluginRuntimeSettings) -> Self {
+    pub(super) fn new(settings: VulcanPluginRuntimeSettings) -> Self {
         let root = tempfile::tempdir().expect("create stateless fixture");
         let bundled = root.path().join("bundled");
         write_idle_session_package(&bundled);
         let package = bundled.join("idle-plugin");
         let mut manifest =
             std::fs::read_to_string(package.join("plugin.yaml")).expect("read fixture manifest");
-        manifest.push_str("permissions: [ui_host_context]\n");
+        manifest.push_str("    - id: idle_call\n      group: idle_tools\n      description: Call one pinned test session.\n      parameters_file: schemas/call.json\n      execution:\n        kind: session_call\n        operation: call\n        timeout_ms: 1000\npermissions: [ui_host_context]\n");
+        std::fs::write(package.join("schemas/call.json"), r#"{"type":"object","properties":{"session_id":{"type":"string"},"mode":{"type":"string"}},"required":["session_id"]}"#).expect("write session call schema");
         std::fs::write(package.join("plugin.yaml"), manifest).expect("declare actual permission");
         std::fs::write(package.join("runtime/plugin.bundle.lua"), r#"
 -- Module state must remain local to one stateless physical instance.
@@ -112,7 +113,7 @@ local M, count, business_id, closing_error = {}, 0, nil, false
 -- args 包含 payload_json 及 host_timeout_ms；成功结果暴露关联供验证。
 function M.dispatch(args)
     local p = vulcan.json.decode(args.payload_json)
-    assert(p.op == 'ping' and p.host_timeout_ms == args.host_timeout_ms)
+    assert((p.op == 'ping' or p.op == 'open' or p.op == 'call') and p.host_timeout_ms == args.host_timeout_ms)
     count, business_id, closing_error = count + 1, p.request_id, p.mode == 'shutdown_error'
     if p.mode == 'block' then vulcan.host.call('vulcan.plugin.ui.invalidate', {topic='block',revision=count}) end
     if p.mode == 'business_error' then return vulcan.json.encode({ok=false,error='business-marker'}) end
@@ -125,7 +126,7 @@ end
 -- args 为冻结关闭信封；返回明确关闭成功或失败帧。
 function M.shutdown(args)
     local p = vulcan.json.decode(args.payload_json)
-    assert(p.op == 'shutdown' and p.request_id ~= business_id and p.host_timeout_ms == args.host_timeout_ms)
+    assert((p.op == 'shutdown' or p.op == 'close') and p.request_id ~= business_id and p.host_timeout_ms == args.host_timeout_ms)
     vulcan.host.call('vulcan.plugin.ui.invalidate', {topic='closed',revision=count})
     if closing_error then return vulcan.json.encode({ok=false,error='shutdown-marker'}) end
     return vulcan.json.encode({ok=true,result={closed=true}})
@@ -162,7 +163,7 @@ return M
 
     /// Build the unchanged production request shape for `mode` under one fixed controller owner.
     /// 为 `mode` 在单个固定控制器所有者下构造未改变的生产请求形状。
-    fn request(&self, mode: &str) -> crate::VulcanPluginInvocationRequest {
+    pub(super) fn request(&self, mode: &str) -> crate::VulcanPluginInvocationRequest {
         crate::VulcanPluginInvocationRequest {
             tool_id: "idle_ping".to_string(),
             arguments: json!({"mode":mode}),
@@ -173,7 +174,7 @@ return M
 
     /// Observe actual native entry with a bounded deadline; returns no inferred completion.
     /// 使用有界截止时间观测真实原生入场；不返回推测完成。
-    async fn wait_entered(&self) {
+    pub(super) async fn wait_entered(&self) {
         tokio::time::timeout(WAIT, async {
             while !self.events.entered.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 /// One control observation interval; polling never occupies a waiting OS thread.
 /// 唯一控制观测间隔；轮询不会占用等待中的系统线程。
-const OBSERVATION_INTERVAL: Duration = Duration::from_millis(10);
+pub(super) const OBSERVATION_INTERVAL: Duration = Duration::from_millis(10);
 
 /// One exact admitted host invocation; metadata never owns another VM scheduler.
 /// 单个精确已接纳宿主调用；元数据绝不拥有另一个 VM 调度器。
@@ -30,7 +30,7 @@ pub(super) struct FormalCall {
     owner_session_id: String,
     /// Conservative serialized input reservation persists until the result is acknowledged.
     /// 保守序列化输入预留保留至结果被确认。
-    input_bytes: usize,
+    pub(super) input_bytes: usize,
     /// Cancellation remains live before and after core admission.
     /// 核心入场前后取消均保持实时。
     cancelled: AtomicBool,
@@ -414,7 +414,16 @@ impl VulcanPluginRuntimeManager {
             let mut calls = owner.calls.lock().map_err(|_| calls_error())?;
             let total_bytes = calls
                 .values()
-                .try_fold(input_bytes, |sum, call| sum.checked_add(call.input_bytes));
+                .map(|call| call.input_bytes)
+                .chain(
+                    owner
+                        .pinned
+                        .lock()
+                        .map_err(|_| calls_error())?
+                        .values()
+                        .map(|session| session.input_bytes),
+                )
+                .try_fold(input_bytes, usize::checked_add);
             if total_bytes.is_none_or(|bytes| bytes > owner.settings.parent.max_queued_bytes) {
                 return Err(VulcanPluginRuntimeError::new(
                     "Formal invocation input byte capacity is exhausted.",
@@ -752,7 +761,7 @@ impl VulcanPluginRuntimeManager {
     /// 向已校验版本一载荷加入唯一宿主关联及 `timeout_ms`。
     /// Return the exact bridge envelope; exhausted identities fail instead of wrapping.
     /// 返回精确桥接信封；身份耗尽时失败而不回绕。
-    fn formal_envelope(
+    pub(super) fn formal_envelope(
         &self,
         mut payload: Value,
         timeout_ms: u64,
@@ -900,7 +909,9 @@ fn owned_call(
 
 /// Preserve the structured core diagnostic as the existing host error type.
 /// 将结构化核心诊断保留为既有宿主错误类型。
-fn core_error(error: luaskills::runtime::embedded::EmbeddedError) -> VulcanPluginRuntimeError {
+pub(super) fn core_error(
+    error: luaskills::runtime::embedded::EmbeddedError,
+) -> VulcanPluginRuntimeError {
     VulcanPluginRuntimeError::new(error.to_string())
 }
 

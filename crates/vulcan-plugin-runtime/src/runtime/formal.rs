@@ -7,6 +7,8 @@ use serde::Serialize;
 
 mod calls;
 pub use calls::VulcanPluginFormalCallStatus;
+mod pinned;
+pub use pinned::VulcanPluginFormalSessionStatus;
 
 /// Manager-owned formal runtime and the exact settings frozen at construction.
 /// 管理器持有的正式运行时及构造时冻结的精确设置。
@@ -20,6 +22,9 @@ pub(super) struct ManagedFormalRuntime {
     /// Bounded host ownership covers preparation through physical cleanup and unacknowledged results.
     /// 有界宿主所有权覆盖准备、物理清理及未确认结果。
     calls: Mutex<BTreeMap<String, Arc<calls::FormalCall>>>,
+    /// Host session identities exist before preparation and survive interrupted observers.
+    /// 宿主会话身份在准备前存在，并在观测者中断后存活。
+    pinned: Mutex<BTreeMap<String, Arc<pinned::PinnedSession>>>,
 }
 
 /// Read-only observation of this manager's formal runtime, separate from legacy lease accounting.
@@ -75,6 +80,7 @@ impl VulcanPluginRuntimeManager {
             host,
             settings,
             calls: Mutex::new(BTreeMap::new()),
+            pinned: Mutex::new(BTreeMap::new()),
         }));
         Ok(())
     }
@@ -128,6 +134,7 @@ impl VulcanPluginRuntimeManager {
     pub fn request_formal_runtime_close(&self) -> Result<(), VulcanPluginRuntimeError> {
         if let Some(owner) = self.formal_runtime_owner()? {
             owner.cancel_calls()?;
+            owner.cancel_pinned()?;
             owner
                 .host
                 .runtime()
@@ -144,6 +151,7 @@ impl VulcanPluginRuntimeManager {
     pub fn poll_formal_runtime_closed(&self) -> Result<bool, VulcanPluginRuntimeError> {
         match self.formal_runtime_owner()? {
             Some(owner) if !owner.calls_drained()? => Ok(false),
+            Some(owner) if !owner.pinned_drained()? => Ok(false),
             Some(owner) => owner
                 .host
                 .runtime()

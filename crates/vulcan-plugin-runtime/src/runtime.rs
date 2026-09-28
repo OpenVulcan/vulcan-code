@@ -33,12 +33,11 @@ pub use bridge::{
 };
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
-pub use formal::{VulcanPluginFormalCallStatus, VulcanPluginFormalRuntimeStatus};
-pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
-use lease::{
-    call_engine_blocking, close_raw_system_lease_sync, close_system_lease_sync,
-    parse_engine_response,
+pub use formal::{
+    VulcanPluginFormalCallStatus, VulcanPluginFormalRuntimeStatus, VulcanPluginFormalSessionStatus,
 };
+pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
+use lease::{call_engine_blocking, close_raw_system_lease_sync, parse_engine_response};
 pub use lifecycle::VulcanPluginLifecycleEvent;
 use local_files::{
     canonical_plugin_file, copy_plugin_directory_tree, read_plugin_json_state,
@@ -113,47 +112,6 @@ impl fmt::Display for VulcanPluginRuntimeError {
 }
 
 impl Error for VulcanPluginRuntimeError {}
-
-/// One owner-bound managed plugin session.
-/// 单个绑定所有者的受管插件会话。
-struct ManagedVulcanPluginSession {
-    /// Public host-owned session identifier.
-    /// 宿主自有的公开会话标识。
-    session_id: String,
-    /// Stable owning plugin identifier.
-    /// 稳定的所属插件标识。
-    plugin_id: String,
-    /// Host plugin generation captured when the session opened.
-    /// 会话打开时捕获的宿主插件代次。
-    plugin_generation: u64,
-    /// Stable controller session owner.
-    /// 稳定的控制器会话所有者。
-    owner_session_id: String,
-    /// LuaSkills managed lease identifier.
-    /// LuaSkills 受管租约标识。
-    lease_id: String,
-    /// Stable LuaSkills session identifier returned with the managed lease.
-    /// 与受管租约一同返回的稳定 LuaSkills 会话标识。
-    sid: String,
-    /// LuaSkills managed lease generation.
-    /// LuaSkills 受管租约代次。
-    generation: u64,
-    /// Manifest revision captured when the session opened.
-    /// 会话打开时捕获的插件清单。
-    manifest: Arc<VulcanPluginManifest>,
-    /// Serial operation gate required by ordered stateful protocols.
-    /// 有序有状态协议要求的串行操作门。
-    operation_gate: AsyncMutex<()>,
-    /// Whole-session close gate that makes concurrent lifecycle drains wait for one owner.
-    /// 使并发生命周期排空等待唯一关闭所有者的完整会话关闭门。
-    close_gate: AsyncMutex<()>,
-    /// Closing state used to reject late operations.
-    /// 用于拒绝迟到操作的关闭状态。
-    closing: AtomicBool,
-    /// Last successful or attempted activity timestamp in Unix milliseconds.
-    /// 最近一次成功或尝试活动的 Unix 毫秒时间戳。
-    last_activity_unix_ms: AtomicU64,
-}
 
 /// One persistent plugin-level Lua lease dedicated to one handler category and plugin generation.
 /// 专用于一个处理器类别和插件代次的持久插件级 Lua 租约。
@@ -282,9 +240,6 @@ struct VulcanPluginManagerState {
     /// Monotonic sidecar request identifier counter.
     /// 单调 sidecar 请求标识计数器。
     next_request_id: AtomicU64,
-    /// Active sessions keyed by public host identifier.
-    /// 以宿主公开标识为键的活动会话集合。
-    sessions: Mutex<BTreeMap<String, Arc<ManagedVulcanPluginSession>>>,
     /// Short gate that orders catalog generation publication against final session registration.
     /// 对目录代次发布与最终会话注册进行排序的短同步门。
     session_registration_gate: Mutex<()>,
@@ -336,19 +291,12 @@ impl Drop for VulcanPluginManagerState {
         {
             let _ = owner.host.runtime().request_close();
         }
-        let sessions = self
-            .sessions
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Ok(engine_slot) = self.engine.get_mut() else {
             return;
         };
         let Some(engine) = engine_slot.as_ref() else {
             return;
         };
-        for session in sessions.values() {
-            let _ = close_system_lease_sync(engine, session);
-        }
         let hook_runtimes = self
             .hook_runtimes
             .get_mut()
@@ -521,7 +469,6 @@ impl VulcanPluginRuntimeManager {
                 snapshot: RwLock::new(snapshot),
                 next_revision: AtomicU64::new(1),
                 next_request_id: AtomicU64::new(1),
-                sessions: Mutex::new(BTreeMap::new()),
                 session_registration_gate: Mutex::new(()),
                 active_session_counts: Mutex::new(BTreeMap::new()),
                 hook_runtimes: Mutex::new(BTreeMap::new()),
@@ -620,19 +567,6 @@ impl VulcanPluginRuntimeManager {
     pub fn plugin_state_root(&self) -> &Path {
         &self.state.plugin_state_root
     }
-}
-
-/// Acquires the shared active-session registry.
-/// 获取共享活动会话注册表。
-fn lock_sessions(
-    sessions: &Mutex<BTreeMap<String, Arc<ManagedVulcanPluginSession>>>,
-) -> Result<
-    MutexGuard<'_, BTreeMap<String, Arc<ManagedVulcanPluginSession>>>,
-    VulcanPluginRuntimeError,
-> {
-    sessions.lock().map_err(|_| {
-        VulcanPluginRuntimeError::new("Vulcan Plugin session registry lock is poisoned.")
-    })
 }
 
 /// Acquires the shared persistent hook-runtime registry.
