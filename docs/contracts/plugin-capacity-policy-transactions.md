@@ -7,7 +7,7 @@ LuaSkills 的 `capacity_policy`／`revise_capacity` 是原生修订及资源计�
 同步原子快照、前驱比较、忙碌及关闭语义。宿主只保留生效配置、事务证据和原生身份，不建立另一份 VM 账本。
 
 当前管理接口只修订已登记的精确插件用途容量。父级总预算、插件聚合预算及执行超时继续冻结。
-未登记容量可以通过下述可信管理入口建立；完整控制 RPC／WebUI、自动排空推进和通用预热尚待接入。
+未登记容量可以通过下述可信管理入口建立；正式控制 RPC 复用同一管理器，WebUI、自动排空推进和通用预热尚待接入。
 独立进程后端不在此事务中实现。
 这些是本地候选源码能力，不表示正式依赖、五平台验收或发布已完成。
 
@@ -38,6 +38,50 @@ LuaSkills 的 `capacity_policy`／`revise_capacity` 是原生修订及资源计�
 
 新增用途的管理流程为：读取目录确认缺失 → 明确登记 → 用返回的精确原生容量及策略前驱提交策略事务。
 登记本身不提供新权限；如果目标已经由正常业务或启动设置登记，直接使用已观测的原所有者进行策略修订。
+
+### 精确关闭与遗忘
+
+`control_formal_capacity(request)` 接受 `runtimeId`、`capacityId`、`expectedRevision`、
+`pluginId`、`purpose` 和 `action`。动作仅为 `close` 或 `forget`，身份不可空或包含零字节。
+在同一发布门及容量锁下完成精确父级、原容量和当前策略前驱校验，再调用原生操作，避免先查询再操作之间的替换窗口。
+父级不符、容量已经替换或策略已修订均明确拒绝；不取新前驱重试，不让旧页面请求关闭新所有者。
+已附加精确父级中映射缺失返回 `false`，表示未找到映射，不构成物理排空证据；未附加父级返回错误。
+
+`close` 永久关闭入场并请求成员关闭，保留映射，可重复针对原对象执行；应答不表示已完成物理清理。
+它可以用于关闭存在预备策略事务的原容量，但不会取消、推进或抹除该事务。
+`forget` 要求无未完成策略事务、无宿主准备声明，并通过核心原生关闭及成员排空检查后才移除映射。
+不会删除持久用途策略；后续业务或重启仍可能根据该策略登记新容量。
+既有可信进程内的按插件／用途关闭及遗忘接口复用同一实现，但不暴露为远程无前驱管理入口。
+
+### 控制服务线协议
+
+全部方法复用已有 HTTP RPC 信封和来源／实例令牌准入，没有另一套运行时或管理状态。
+解析发生在服务访问前，参数对象、请求内字段及动作严格校验；未知字段、遗漏身份或遗漏可空 `config` 均报错。
+
+| RPC 方法 | 参数与结果 |
+| --- | --- |
+| `service_plugin_runtime_status` | 空参数；正式父级状态或空值 |
+| `service_plugin_capacity_catalog` | 空参数；容量目录或空值 |
+| `service_plugin_capacity_registration_status` | `runtimeId`、`registrationId`；原登记状态或空值 |
+| `service_register_plugin_capacity` | `request` 为完整登记请求；返回原容量状态 |
+| `service_control_plugin_capacity` | `request` 为精确控制请求；返回映射存在性 |
+| `service_begin_plugin_capacity_policy_update` | `request` 为完整策略事务；返回保留检查点 |
+| `service_plugin_capacity_policy_update_status` | `updateId`；返回原检查点或空值 |
+| `service_resume_plugin_capacity_policy_update` | `updateId`；从原检查点明确恢复 |
+| `service_cancel_plugin_capacity_policy_update` | `updateId`；明确取消尚未应用的原事务 |
+| `service_forget_plugin_capacity_policy_update` | `updateId`；成功持久确认终态后返回空值 |
+
+宿主包装沿用驼峰字段，内嵌 LuaSkills 类型沿用核心序列化结构，例如 `snapshot.capacity_id` 和
+`config.max_queued_calls`；不猜测别名。核心类型更新时应同步消费契约，不能仅修改文档。
+注册表及策略前驱均为不透明字符串。查询状态不触发目录发布；策略改变后由现有明确目录刷新流程重新发布业务可用性。
+
+服务将同步锁及磁盘操作移到阻塞执行器，不在异步执行器上等待文件同步；服务状态锁仅用于克隆原管理器。
+HTTP 观测者断线不撤销已进入工作者的操作，调用方必须保留原请求身份，使用查询接口确认结果，
+不可将传输错误当作原生未执行而生成替代请求。未进入工作者前的取消不保证被接纳，应通过查询核实。
+策略事务 UUID 持久保留，可以在重启后明确查询／恢复；原生登记回执只在原父级及原容量寿命内保留。
+
+此权限边界是已认证宿主客户端。当前插件 UI 模块与宿主处在同一浏览器环境，不能宣称具有独立沙箱，
+也不能把未向插件 UI SDK 暴露这些函数当作恶意界面脚本的隔离保障。Lua 原生能力表未增加管理权限。
 
 ### 已登记用途的策略事务
 

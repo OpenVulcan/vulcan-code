@@ -4,6 +4,7 @@
 use super::*;
 use luaskills::runtime::embedded::{EmbeddedCapacityConfig, PoolKind};
 
+mod control;
 mod lifecycle;
 mod management;
 mod policy;

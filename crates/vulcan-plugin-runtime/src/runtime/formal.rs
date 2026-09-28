@@ -9,6 +9,7 @@ mod budgets;
 pub use budgets::VulcanPluginFormalPluginStatus;
 mod capacities;
 pub use capacities::{
+    VulcanPluginCapacityControlAction, VulcanPluginCapacityControlRequest,
     VulcanPluginCapacityRegistrationRequest, VulcanPluginFormalCapacityCatalog,
     VulcanPluginFormalCapacityStatus,
 };

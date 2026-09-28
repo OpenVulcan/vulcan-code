@@ -8,10 +8,12 @@ use luaskills::runtime::embedded::{
 };
 use std::collections::BTreeSet;
 
+mod control;
 mod lifecycle;
 mod management;
 mod policy;
 
+pub use control::{VulcanPluginCapacityControlAction, VulcanPluginCapacityControlRequest};
 pub use management::{VulcanPluginCapacityRegistrationRequest, VulcanPluginFormalCapacityCatalog};
 
 /// Keep exact capacity identities and explicit lifecycle retirement intent under one ownership lock.
@@ -316,42 +318,12 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         purpose: VulcanPluginCapacityPurpose,
     ) -> Result<bool, VulcanPluginRuntimeError> {
-        crate::catalog::validate_identifier(plugin_id, "capacity owner")
-            .map_err(VulcanPluginRuntimeError::new)?;
-        // Order explicit lifecycle control with every production registration preparation.
-        // 将显式生命周期控制与全部生产注册准备排序。
-        let _publication =
-            self.state.session_registration_gate.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
-            })?;
-        // A metadata-only manager has nothing to close.
-        // 纯元数据管理器没有需要关闭的资源。
-        let Some(owner) = self.formal_runtime_owner()? else {
-            return Ok(false);
-        };
-        // Retain the original mapping even after permanent native admission closure.
-        // 原生入场永久关闭后仍保留原映射。
-        let registrations = owner.capacities.lock().map_err(|_| capacity_lock_error())?;
-        // Explicit absence does not create a capacity.
-        // 明确缺失不创建容量。
-        let Some(registration) = registrations
-            .registrations
-            .get(&(plugin_id.to_owned(), purpose))
-        else {
-            return Ok(false);
-        };
-        owner.verify_capacity(
+        self.control_capacity_owner(
             plugin_id,
             purpose,
-            registration,
-            &registrations.policy.settings,
-        )?;
-        owner
-            .host
-            .runtime()
-            .close_capacity(&registration.identity)
-            .map_err(calls::core_error)?;
-        Ok(true)
+            None,
+            VulcanPluginCapacityControlAction::Close,
+        )
     }
 
     /// Forget exact plugin_id/purpose only after preparation and native members drain; return whether removed.
@@ -363,49 +335,12 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         purpose: VulcanPluginCapacityPurpose,
     ) -> Result<bool, VulcanPluginRuntimeError> {
-        crate::catalog::validate_identifier(plugin_id, "capacity owner")
-            .map_err(VulcanPluginRuntimeError::new)?;
-        // Prevent publication from inserting a new preparation between checking and removing the original owner.
-        // 防止发布在检查及移除原所有者之间插入新准备。
-        let _publication =
-            self.state.session_registration_gate.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
-            })?;
-        // An unattached manager has no native capacity metadata to release.
-        // 未附加管理器没有需要释放的原生容量元数据。
-        let Some(owner) = self.formal_runtime_owner()? else {
-            return Ok(false);
-        };
-        // No callbacks or physical destructors run during this metadata transaction.
-        // 此元数据事务期间不运行回调或物理析构器。
-        let mut registrations = owner.capacities.lock().map_err(|_| capacity_lock_error())?;
-        // Keep exactly this semantic owner until both layers have acknowledged release.
-        // 在两层均确认释放前保留此精确语义所有者。
-        let key = (plugin_id.to_owned(), purpose);
-        // Absence is reported rather than inventing a successful release of another object.
-        // 报告缺失，不虚构另一对象成功释放。
-        let Some(registration) = registrations.registrations.get(&key) else {
-            return Ok(false);
-        };
-        registrations.require_policy_admission(plugin_id, purpose)?;
-        owner.verify_capacity(
+        self.control_capacity_owner(
             plugin_id,
             purpose,
-            registration,
-            &registrations.policy.settings,
-        )?;
-        if registration.preparing_members != 0 {
-            return Err(VulcanPluginRuntimeError::new(
-                "Plugin capacity still owns unfinished member preparation.",
-            ));
-        }
-        owner
-            .host
-            .runtime()
-            .forget_capacity(&registration.identity)
-            .map_err(calls::core_error)?;
-        registrations.remove_registration(&key);
-        Ok(true)
+            None,
+            VulcanPluginCapacityControlAction::Forget,
+        )
     }
 }
 
