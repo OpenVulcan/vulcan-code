@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 id: context7
 version: 0.1.0
 default_enabled: true
@@ -30,6 +30,45 @@ execution:
   dependencies:
     manifest: dependencies.yaml
     install_mode: bundled
+runtime_requirements:
+  protocol_version: 1
+  backend: in_process
+  core_capabilities:
+    - bounded_transports_v1
+    - plugin_budgets_v1
+    - capacity_groups_v1
+    - fixed_sessions_v1
+    - strict_json_v1
+  host_capabilities:
+    - name: vulcan.plugin.config.get
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.config.update
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.storage.sqlite.migrate
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.storage.sqlite.execute
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.storage.sqlite.query
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.storage.sqlite.flush
+      version: 1.0.0
+      execution: native
+      scope: invocation
+    - name: vulcan.plugin.ui.invalidate
+      version: 1.0.0
+      execution: native
+      scope: invocation
+  capacities: []
 lua_runtime:
   bundle: runtime/plugin.bundle.lua
   lua_modules:

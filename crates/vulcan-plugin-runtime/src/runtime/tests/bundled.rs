@@ -1,6 +1,8 @@
 //! Integration tests for the real bundled plugin surfaces and authenticated VLDB requests.
 //! 真实内建插件暴露面与已认证VLDB请求的集成测试。
 
+mod prepared;
+
 use super::super::VulcanPluginActionRequest;
 use super::test_manager;
 use crate::{
@@ -569,6 +571,11 @@ fn bundled_context7_plugin_loads_with_typed_json_surface() {
     // manager loads the production catalog and fixed bridge sources.
     // manager 加载生产插件目录与固定桥源码。
     let manager = test_manager(&runtime_root, repository_root.join("plugins"));
+    // Match production bootstrap: attach the parent before checking version-two admission.
+    // 对齐生产启动顺序：检查第二版入场前先附加父级。
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal Context7 probe parent");
     // disabled selects the real package for a host-owned enabling probe, not a Hook-only no-op.
     // disabled为真实插件选择宿主持有的启用探测，而不是仅Hook预热的空操作。
     let disabled = BTreeSet::from([String::from("context7")]);
@@ -593,9 +600,6 @@ fn bundled_context7_plugin_loads_with_typed_json_surface() {
     manager
         .begin_enabling("context7")
         .expect("begin Context7 enabling probe");
-    manager
-        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
-        .expect("attach formal Context7 probe parent");
     // runtime executes real Context7 initialization through the attached formal parent.
     // runtime 通过已附加正式父级执行真实 Context7 初始化。
     let runtime = tokio::runtime::Builder::new_current_thread()

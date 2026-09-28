@@ -229,6 +229,22 @@ pub(super) fn test_manager(
     runtime_root: &Path,
     vulcan_plugin_root: PathBuf,
 ) -> VulcanPluginRuntimeManager {
+    test_manager_with_distribution(
+        runtime_root,
+        vulcan_plugin_root,
+        runtime_root.join("managed_runtime"),
+    )
+}
+
+/// Build an isolated manager using the explicitly selected managed distribution; return the real production owner.
+/// 使用明确选择的受管发行根构建隔离管理器；返回真实生产所有者。
+/// runtime_root owns state, vulcan_plugin_root selects sources, and managed_runtime_distribution_root selects prepared dependencies.
+/// runtime_root 拥有状态，vulcan_plugin_root 选择源码，managed_runtime_distribution_root 选择已准备依赖。
+pub(super) fn test_manager_with_distribution(
+    runtime_root: &Path,
+    vulcan_plugin_root: PathBuf,
+    managed_runtime_distribution_root: PathBuf,
+) -> VulcanPluginRuntimeManager {
     let bridge_root = runtime_root
         .join("system_lua_lib")
         .join("vulcan-plugin-bridge");
@@ -240,7 +256,6 @@ pub(super) fn test_manager(
     )
     .expect("write bridge module");
     let user_plugin_root = runtime_root.join("user_plugins");
-    let managed_runtime_distribution_root = runtime_root.join("managed_runtime");
     fs::create_dir_all(&user_plugin_root).expect("create user plugin root");
     fs::create_dir_all(&managed_runtime_distribution_root)
         .expect("create managed runtime distribution root");

@@ -74,7 +74,9 @@ fn manifest_authoring_schema_matches_all_shipped_packages_and_artifacts() {
                 .map(|error| error.to_string())
                 .collect::<Vec<_>>()
         );
-        validate_manifest(
+        // Bundled packages must remain on the current schema; user packages retain explicit legacy support.
+        // 内置插件必须保持当前清单版本；用户插件继续具有明确旧版支持。
+        let manifest = validate_manifest(
             &source,
             path.file_name()
                 .expect("package directory name")
@@ -82,6 +84,12 @@ fn manifest_authoring_schema_matches_all_shipped_packages_and_artifacts() {
                 .expect("UTF-8 package identity"),
         )
         .expect("same Rust semantics");
+        assert_eq!(
+            manifest.schema_version,
+            VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION,
+            "Bundled manifest {} needs an explicit schema migration.",
+            path.display()
+        );
         checked += 1;
     }
     assert!(
