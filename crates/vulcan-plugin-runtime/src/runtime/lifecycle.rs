@@ -3,7 +3,7 @@
 
 use super::authorization::plugin_is_authorized;
 use super::bridge::VulcanPluginBridgeLeaseScope;
-use super::environment::{ensure_plugin_execution_environment, plugin_execution_package_root};
+use super::environment::plugin_execution_package_root;
 use super::{
     RetainedVulcanPluginLease, VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
     VULCAN_PLUGIN_PROBE_TIMEOUT_MS, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
@@ -339,6 +339,15 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         event: VulcanPluginLifecycleEvent,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // The original deadline includes environment preparation, core initialization and business work.
+        // 原截止时间涵盖环境准备、核心初始化及业务工作。
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_millis(
+                VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
+            ))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Plugin lifecycle deadline is out of range.")
+            })?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
@@ -369,56 +378,20 @@ impl VulcanPluginRuntimeManager {
         let Some(function) = function else {
             return Ok(());
         };
-        // environmentRoot provides lifecycle-owned writable dependency and process state.
-        // environmentRoot 提供生命周期持有的可写依赖与进程状态。
-        let environment_root = ensure_plugin_execution_environment(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        // executionRoot pins lifecycle Lua code to the trusted package generation.
-        // executionRoot 把生命周期 Lua 代码固定到可信插件包代次。
-        let execution_root = plugin_execution_package_root(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        self.reserve_session_slot(plugin_id, lua_runtime.max_active_sessions)?;
-        let lifecycle_id = format!("lifecycle-{event_key}-{}", Uuid::new_v4());
-        let lease_result = self
-            .create_managed_lease(
-                &lifecycle_id,
-                &execution_root,
-                &environment_root,
-                &manifest,
-                VulcanPluginBridgeLeaseScope::from(event),
-            )
-            .await;
-        let (lease_id, sid, generation) = match lease_result {
-            Ok(lease) => lease,
-            Err(error) => {
-                self.release_session_slot(plugin_id);
-                return Err(error);
-            }
-        };
-        let callback_result = self
-            .evaluate_bridge_function(
-                &lease_id,
-                &sid,
-                generation,
-                &function,
-                json!({
-                    "event": event_key,
-                    "plugin_id": plugin_id,
-                    "environment_root": environment_root,
-                }),
-                VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
-            )
-            .await
-            .map(|_| ());
-        let close_result = self.close_raw_lease(&lease_id, &sid, generation).await;
-        self.release_session_slot(plugin_id);
-        match (callback_result, close_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(callback_error), Err(close_error)) => Err(VulcanPluginRuntimeError::new(format!(
-                "{callback_error}; lifecycle lease cleanup failed: {close_error}"
-            ))),
-        }
+        // The registered blocking worker prepares the original writable environment before Lua admission.
+        // 已登记阻塞工作者在 Lua 入场前准备原可写环境。
+        self.invoke_formal_lifecycle(
+            plugin.clone(),
+            event,
+            function,
+            json!({
+                "event": event_key,
+                "plugin_id": plugin_id,
+            }),
+            deadline,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Requires one tool definition to match the current enabled plugin generation.

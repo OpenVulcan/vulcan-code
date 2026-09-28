@@ -73,7 +73,7 @@ impl VulcanPluginRuntimeManager {
             let mut pinned = owner.pinned.lock().map_err(|_| registry_error())?;
             let total = calls
                 .values()
-                .map(|call| call.input_bytes)
+                .map(|call| call.input_bytes.load(Ordering::Acquire))
                 .chain(pinned.values().map(|session| session.input_bytes))
                 .try_fold(input_bytes, usize::checked_add);
             if pinned.len() >= owner.settings.parent.max_sessions

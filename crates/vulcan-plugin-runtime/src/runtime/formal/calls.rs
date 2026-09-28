@@ -9,8 +9,36 @@ use luaskills::runtime::embedded::{
     ModuleFinalizer, OperationHandle, OperationSnapshot, PluginPoolConfig, PoolKind,
 };
 use serde_json::{Map, Value, json};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+
+mod admission;
+
+#[cfg(test)]
+mod tests;
+
+/// Caller ownership determines who may inspect and acknowledge retained evidence.
+/// 调用方归属决定谁可以检查及确认保留证据。
+#[derive(Serialize)]
+enum CallOwner {
+    /// A controller retains failed tool results until explicit acknowledgement.
+    /// 控制器保留失败工具结果，直至显式确认。
+    Controller(String),
+    /// The lifecycle caller consumes its result; actual cleanup always precedes reclamation.
+    /// 生命周期调用方消费其结果；实际清理始终先于回收。
+    Lifecycle,
+}
+
+impl CallOwner {
+    /// Return the exact controller ID, or none for host lifecycle work without a controller.
+    /// 返回精确控制器标识；没有控制器的宿主生命周期工作返回空值。
+    fn controller_id(&self) -> Option<&str> {
+        match self {
+            Self::Controller(id) => Some(id),
+            Self::Lifecycle => None,
+        }
+    }
+}
 
 /// One control observation interval; polling never occupies a waiting OS thread.
 /// 唯一控制观测间隔；轮询不会占用等待中的系统线程。
@@ -25,15 +53,18 @@ pub(super) struct FormalCall {
     /// Frozen descriptor pins the original managed package generation.
     /// 冻结描述符固定原受管包代次。
     plugin: VulcanPluginDescriptor,
-    /// Exact controller session owns both pending and completed evidence.
-    /// 精确控制器会话拥有待处理及完成证据。
-    owner_session_id: String,
-    /// Conservative serialized input reservation persists until the result is acknowledged.
-    /// 保守序列化输入预留保留至结果被确认。
-    pub(super) input_bytes: usize,
+    /// Typed ownership prevents lifecycle records from masquerading as controller calls.
+    /// 类型化归属防止生命周期记录冒充控制器调用。
+    ownership: CallOwner,
+    /// Serialized input reservation changes only under the shared call registry lock and persists until acknowledgement.
+    /// 序列化输入预留仅在共享调用注册表锁下改变，并保留至确认。
+    pub(super) input_bytes: AtomicUsize,
     /// Cancellation remains live before and after core admission.
     /// 核心入场前后取消均保持实时。
     cancelled: AtomicBool,
+    /// Lifecycle results may be reclaimed only after the caller leaves and resources really retire.
+    /// 生命周期结果仅在调用方离开且资源真实退役后可以回收。
+    acknowledged: AtomicBool,
     /// Short state lock protects identity publication and cleanup evidence only.
     /// 短状态锁仅保护身份发布及清理证据。
     state: Mutex<CallState>,
@@ -66,18 +97,39 @@ struct CallState {
     cleanup_error: Option<String>,
 }
 
-/// Frozen, byte-checked inputs moved into one bounded preparation task.
-/// 移入单个有界准备任务的冻结且已校验字节输入。
+/// Workspace preparation is explicit; lifecycle environment creation belongs to the registered worker.
+/// 工作区准备为显式声明；生命周期环境创建属于已登记工作者。
+#[derive(Serialize)]
+enum CallWorkspace {
+    /// A caller has already supplied its authorized workspace.
+    /// 调用方已经提供其授权工作区。
+    Provided(PathBuf),
+    /// Resolve and prepare the original descriptor's writable environment inside the tracked blocking task.
+    /// 在受跟踪阻塞任务内解析并准备原描述符的可写环境。
+    LifecycleEnvironment,
+}
+
+/// Byte-checked inputs moved into one bounded preparation task, with explicit workspace preparation.
+/// 移入单个有界准备任务的已校验字节输入，具有显式工作区准备。
 struct Preparation {
     /// Workspace is host-owned and canonicalized by the bundle registrar.
     /// 工作区由宿主持有，由 bundle 注册器规范化。
-    workspace: PathBuf,
+    workspace: CallWorkspace,
     /// Exact business envelope includes its unique correlation and finite budget.
     /// 精确业务信封包含唯一关联及有限预算。
     arguments: Value,
-    /// Shutdown has independent correlation and its own finite budget.
-    /// 关闭拥有独立关联及自身有限预算。
-    finalizer_arguments: Value,
+    /// Only tool calls select automatic business shutdown; lifecycle callbacks never borrow it.
+    /// 仅工具调用选择自动业务关闭；生命周期回调绝不借用它。
+    finalizer: Option<ModuleFinalizer>,
+    /// Exact manifest function selected before preparation begins.
+    /// 准备开始前选定的精确清单函数。
+    export: String,
+    /// Host lifecycle authority is frozen independently from the plugin arguments.
+    /// 宿主生命周期权威独立于插件参数冻结。
+    scope: VulcanPluginBridgeLeaseScope,
+    /// Explicit security partition keeps controller and lifecycle domains separate.
+    /// 显式安全分区分离控制器与生命周期执行域。
+    security_partition: String,
     /// Absolute admission deadline includes blocking preparation and core queue waits.
     /// 绝对入场截止时间包含阻塞准备及核心队列等待。
     deadline: Instant,
@@ -177,6 +229,7 @@ impl Drop for ObservationGuard {
         if !self.completed {
             self.call.cancelled.store(true, Ordering::Release);
         }
+        self.call.acknowledged.store(true, Ordering::Release);
     }
 }
 
@@ -282,6 +335,9 @@ impl VulcanPluginRuntimeManager {
                 state.result = Some(result);
             }
             supervision.completed = true;
+            if let Err(error) = manager.reap_lifecycle_calls(&retry_owner) {
+                let _ = manager.record_cleanup_failure(&retry_call.plugin.id, error.to_string());
+            }
         });
         Ok(())
     }
@@ -305,7 +361,7 @@ impl VulcanPluginRuntimeManager {
             .values()
             .filter(|call| {
                 plugin_id.is_none_or(|id| call.plugin.id == id)
-                    && owner_session_id.is_none_or(|id| call.owner_session_id == id)
+                    && owner_session_id.is_none_or(|id| call.ownership.controller_id() == Some(id))
             })
             .cloned()
             .collect();
@@ -347,6 +403,7 @@ impl VulcanPluginRuntimeManager {
                 tokio::time::sleep(OBSERVATION_INTERVAL).await;
             }
         }
+        self.reap_lifecycle_calls(&owner)?;
         Ok(report)
     }
 
@@ -362,143 +419,60 @@ impl VulcanPluginRuntimeManager {
         payload: Value,
         timeout_ms: u64,
     ) -> Result<Value, VulcanPluginRuntimeError> {
-        let owner = self.formal_runtime_owner()?.ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Formal plugin runtime is not attached.")
-        })?;
+        // Freeze the existing tool budget before constructing either independent envelope.
+        // 在构造两个独立信封之前冻结现有工具预算。
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(timeout_ms))
             .ok_or_else(|| {
                 VulcanPluginRuntimeError::new("Plugin execution deadline is out of range.")
             })?;
-        // Reuse the core's streaming JSON counter before allocating an envelope or retaining input.
-        // 在分配信封或保留输入前复用核心流式 JSON 计数器。
+        let owner = self.required_formal_owner()?;
+        self.ensure_current_tool_generation(tool)?;
+        let plugin = self
+            .snapshot()
+            .plugins
+            .get(&tool.plugin_id)
+            .cloned()
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Plugin disappeared before formal admission.")
+            })?;
+        if plugin.generation != tool.plugin_generation {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin generation changed before formal admission.",
+            ));
+        }
+        let manifest = plugin
+            .manifest
+            .as_ref()
+            .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin has no valid manifest."))?;
+        let runtime = super::super::lease::required_lua_runtime(manifest)?;
+        // Count before allocating the larger envelope, then reserve every frozen input together.
+        // 分配更大信封之前先计数，再共同预留全部冻结输入。
         luaskills::runtime::embedded::json_size(&payload, owner.settings.parent.max_value_bytes)
             .map_err(core_error)?;
-        let arguments = self.formal_envelope(payload, timeout_ms)?;
-        let finalizer_arguments = self.formal_envelope(
-            plugin_payload("shutdown", Map::new())?,
-            owner.settings.shutdown_timeout_ms,
-        )?;
-        luaskills::runtime::embedded::json_size(&arguments, owner.settings.parent.max_value_bytes)
-            .map_err(core_error)?;
-        let input_bytes = luaskills::runtime::embedded::json_size(
-            &(
-                &arguments,
-                &finalizer_arguments,
-                &owner_session_id,
-                &workspace_root,
-            ),
-            owner.settings.parent.max_queued_bytes,
+        let input = Preparation {
+            workspace: CallWorkspace::Provided(workspace_root),
+            arguments: self.formal_envelope(payload, timeout_ms)?,
+            finalizer: Some(ModuleFinalizer {
+                export: runtime.shutdown_function.clone(),
+                arguments: self.formal_envelope(
+                    plugin_payload("shutdown", Map::new())?,
+                    owner.settings.shutdown_timeout_ms,
+                )?,
+                timeout_ms: owner.settings.shutdown_timeout_ms,
+            }),
+            export: runtime.invoke_function.clone(),
+            scope: VulcanPluginBridgeLeaseScope::Enabled,
+            security_partition: format!("tool:{owner_session_id}"),
+            deadline,
+        };
+        self.invoke_owned_formal_call(
+            owner,
+            plugin,
+            CallOwner::Controller(owner_session_id),
+            input,
         )
-        .map_err(core_error)?;
-        // Publication cannot race host registration; every later preparation is already visible to drain.
-        // 发布不能与宿主登记竞争；之后的每次准备都已对排空可见。
-        let call = {
-            let _publication = self.state.session_registration_gate.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
-            })?;
-            self.ensure_current_tool_generation(tool)?;
-            let plugin = self
-                .snapshot()
-                .plugins
-                .get(&tool.plugin_id)
-                .cloned()
-                .ok_or_else(|| {
-                    VulcanPluginRuntimeError::new("Plugin disappeared before formal admission.")
-                })?;
-            let manifest = plugin
-                .manifest
-                .as_ref()
-                .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin has no valid manifest."))?;
-            let maximum = super::super::lease::required_lua_runtime(manifest)?.max_active_sessions;
-            let mut calls = owner.calls.lock().map_err(|_| calls_error())?;
-            let total_bytes = calls
-                .values()
-                .map(|call| call.input_bytes)
-                .chain(
-                    owner
-                        .pinned
-                        .lock()
-                        .map_err(|_| calls_error())?
-                        .values()
-                        .map(|session| session.input_bytes),
-                )
-                .try_fold(input_bytes, usize::checked_add);
-            if total_bytes.is_none_or(|bytes| bytes > owner.settings.parent.max_queued_bytes) {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Formal invocation input byte capacity is exhausted.",
-                ));
-            }
-            if calls.len() >= owner.settings.parent.max_operations {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Formal invocation retention capacity is exhausted; inspect and acknowledge retained calls.",
-                ));
-            }
-            if owner.host.runtime().usage().map_err(core_error)?.closing {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Formal plugin runtime is closing.",
-                ));
-            }
-            self.reserve_session_slot_locked(&tool.plugin_id, maximum, &_publication)?;
-            let call = Arc::new(FormalCall {
-                id: Uuid::new_v4().to_string(),
-                plugin,
-                owner_session_id,
-                input_bytes,
-                cancelled: AtomicBool::new(false),
-                state: Mutex::new(CallState {
-                    supervised: true,
-                    ..CallState::default()
-                }),
-            });
-            calls.insert(call.id.clone(), Arc::clone(&call));
-            call
-        };
-        let mut observation = ObservationGuard {
-            call: Arc::clone(&call),
-            completed: false,
-        };
-        let manager = self.clone();
-        let supervisor_owner = Arc::clone(&owner);
-        let supervisor_call = Arc::clone(&call);
-        let supervision = SupervisionGuard {
-            call: Arc::clone(&call),
-            completed: false,
-        };
-        // This task uses bounded core status polling; only finite package preparation enters Tokio's blocking pool.
-        // 此任务使用有界核心状态轮询；仅有限包准备进入 Tokio 阻塞池。
-        tokio::spawn(async move {
-            let mut supervision = supervision;
-            manager
-                .supervise_formal_call(
-                    supervisor_owner,
-                    supervisor_call,
-                    Preparation {
-                        workspace: workspace_root,
-                        arguments,
-                        finalizer_arguments,
-                        deadline,
-                    },
-                )
-                .await;
-            supervision.completed = true;
-        });
-        loop {
-            let observed = call.lock()?.result.clone();
-            if let Some(result) = observed {
-                observation.completed = true;
-                if result.is_ok() {
-                    self.forget_formal_call(&call.id, &call.owner_session_id)?;
-                }
-                return result.map_err(|error| {
-                    VulcanPluginRuntimeError::new(format!(
-                        "{error} [formal invocation {}]",
-                        call.id
-                    ))
-                });
-            }
-            tokio::time::sleep(OBSERVATION_INTERVAL).await;
-        }
+        .await
     }
 
     /// List retained records belonging to `owner_session_id`, without creating a runtime or changing state.
@@ -517,7 +491,7 @@ impl VulcanPluginRuntimeManager {
             .lock()
             .map_err(|_| calls_error())?
             .values()
-            .filter(|call| call.owner_session_id == owner_session_id)
+            .filter(|call| call.ownership.controller_id() == Some(owner_session_id))
             .cloned()
             .collect();
         calls.iter().map(|call| call.status()).collect()
@@ -560,7 +534,7 @@ impl VulcanPluginRuntimeManager {
         let mut calls = owner.calls.lock().map_err(|_| calls_error())?;
         let call = calls
             .get(id)
-            .filter(|call| call.owner_session_id == owner_session_id)
+            .filter(|call| call.ownership.controller_id() == Some(owner_session_id))
             .ok_or_else(|| {
                 VulcanPluginRuntimeError::new("Owned formal invocation was not found.")
             })?;
@@ -637,19 +611,30 @@ impl VulcanPluginRuntimeManager {
         &self,
         owner: &ManagedFormalRuntime,
         call: &FormalCall,
-        input: Preparation,
+        mut input: Preparation,
     ) -> Result<(), VulcanPluginRuntimeError> {
         if call.cancelled.load(Ordering::Acquire) {
             return Err(VulcanPluginRuntimeError::new(
                 "Formal invocation cancelled before preparation.",
             ));
         }
-        let manifest = call
-            .plugin
-            .manifest
-            .as_ref()
-            .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin has no valid manifest."))?;
-        let runtime = super::super::lease::required_lua_runtime(manifest)?;
+        if Instant::now() >= input.deadline {
+            return Err(VulcanPluginRuntimeError::new(
+                "Formal invocation deadline expired before preparation.",
+            ));
+        }
+        // Environment copying and dependency installation must remain owned if the observer disappears.
+        // 观测者消失时，环境复制及依赖安装必须继续保持归属。
+        if matches!(input.workspace, CallWorkspace::LifecycleEnvironment) {
+            self.prepare_lifecycle_environment(owner, call, &mut input)?;
+        }
+        // Workspace preparation has a single explicit result; it never probes alternate directories.
+        // 工作区准备只有单个明确结果；绝不探测备用目录。
+        let CallWorkspace::Provided(workspace) = input.workspace else {
+            return Err(VulcanPluginRuntimeError::new(
+                "Lifecycle environment preparation produced no workspace.",
+            ));
+        };
         {
             // Plugin aggregate creation is atomic under the same host publication gate, never a guessed fallback.
             // 插件聚合在同一宿主发布门下原子创建，绝不是猜测性回退。
@@ -680,15 +665,14 @@ impl VulcanPluginRuntimeManager {
                 Err(error) => return Err(core_error(error)),
             }
         }
-        let shutdown_ms = owner.settings.shutdown_timeout_ms;
         let pool = owner
             .host
             .register_bundle_pool(VulcanPluginBundlePoolRequest {
                 plugin_id: call.plugin.id.clone(),
                 plugin_generation: call.plugin.generation,
-                workspace_root: input.workspace,
-                security_partition: format!("tool:{}", call.owner_session_id),
-                scope: VulcanPluginBridgeLeaseScope::Enabled,
+                workspace_root: workspace,
+                security_partition: input.security_partition,
+                scope: input.scope,
                 policy: PluginPoolConfig {
                     kind: PoolKind::Shared,
                     min_resident_vms: 0,
@@ -701,11 +685,7 @@ impl VulcanPluginRuntimeManager {
                     idle_ttl_ms: None,
                     max_uses: None,
                 },
-                finalizer: Some(ModuleFinalizer {
-                    export: runtime.shutdown_function.clone(),
-                    arguments: input.finalizer_arguments,
-                    timeout_ms: shutdown_ms,
-                }),
+                finalizer: input.finalizer,
             })
             .map_err(core_error)?;
         call.lock()?.pool = Some(pool.clone());
@@ -720,7 +700,7 @@ impl VulcanPluginRuntimeManager {
             VulcanPluginRuntimeError::new("Plugin disappeared before submission.")
         })?;
         if current.generation != call.plugin.generation
-            || current.runtime_state != crate::VulcanPluginRuntimeState::Enabled
+            || current.runtime_state != input.scope.required_runtime_state()
         {
             return Err(VulcanPluginRuntimeError::new(
                 "Plugin generation changed before formal submission.",
@@ -746,7 +726,7 @@ impl VulcanPluginRuntimeManager {
             .submit(
                 EmbeddedCall {
                     pool_id: pool,
-                    export: runtime.invoke_function.clone(),
+                    export: input.export,
                     arguments: input.arguments,
                     context: LuaInvocationContext::default(),
                 },
@@ -902,7 +882,7 @@ fn owned_call(
         .lock()
         .map_err(|_| calls_error())?
         .get(id)
-        .filter(|call| call.owner_session_id == owner_session_id)
+        .filter(|call| call.ownership.controller_id() == Some(owner_session_id))
         .cloned()
         .ok_or_else(|| VulcanPluginRuntimeError::new("Owned formal invocation was not found."))
 }

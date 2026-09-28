@@ -196,9 +196,13 @@ fn enable_rollback_uses_declared_disable_callback_in_enabling_scope() {
     manager
         .begin_enabling("hook-plugin")
         .expect("begin lifecycle enabling transition");
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal lifecycle parent");
     // runtime executes the asynchronous compensation lease deterministically.
     // runtime 确定性执行异步补偿租约。
     let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
         .build()
         .expect("create lifecycle Tokio runtime");
     // error proves the manifest disable callback ran through the rollback scope.
