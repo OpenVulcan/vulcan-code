@@ -230,7 +230,7 @@ impl VulcanPluginRuntimeManager {
         // 读取已校验 Lua 声明，包含可选 Hook 关闭器。
         let lua = crate::runtime::lease::required_lua_runtime(manifest)?;
         owner
-            .settings
+            .effective_settings()?
             .validate_manifest_requirements(manifest, None)?;
         // Resolve the host-authorized workspace for this precise execution scope.
         // 为此精确执行作用域解析宿主授权工作区。

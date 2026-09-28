@@ -3,6 +3,25 @@
 
 use super::*;
 
+/// Decode the declared document from bytes; return only committed settings without rewriting any file.
+/// 从 bytes 解码已声明文档；仅返回已提交设置，不回写任何文件。
+pub(super) fn decode(bytes: &str) -> Result<VulcanPluginRuntimeSettings, String> {
+    Ok(decode_container(bytes)?.settings)
+}
+
+/// Decode bytes into one current transaction container; historical documents gain no persisted metadata.
+/// 将 bytes 解码为单个当前事务容器；历史文档不增加任何持久元数据。
+pub(super) fn decode_container(bytes: &str) -> Result<policy::PolicyDocument, String> {
+    // The discriminator is parsed from the original immutable bytes before selecting the strict shape.
+    // 在选择严格形状前，从原不可变字节解析判别字段。
+    let version = serde_json::from_str::<Version>(bytes).map_err(|error| error.to_string())?;
+    if version.schema_version == policy::DOCUMENT_VERSION {
+        policy::decode_document(bytes)
+    } else {
+        Ok(policy::PolicyDocument::new(decode_settings(bytes)?, None))
+    }
+}
+
 /// Read only the declared discriminator before selecting its exact strict schema.
 /// 在选择对应严格 Schema 前仅读取声明的判别字段。
 #[derive(Deserialize)]
@@ -61,7 +80,7 @@ struct VersionTwo {
 /// 从字节解码精确声明版本；仅在内存中升级历史版本。
 /// Returns current-format settings or an explicit error; original input is never rewritten or normalized.
 /// 返回当前格式设置或明确错误；绝不回写或规范化原输入。
-pub(super) fn decode(bytes: &str) -> Result<VulcanPluginRuntimeSettings, String> {
+fn decode_settings(bytes: &str) -> Result<VulcanPluginRuntimeSettings, String> {
     // Parse the original bytes twice so strict decoders can still detect duplicate struct fields.
     // 两次解析原字节，使严格解码器仍可检测重复结构字段。
     let version = serde_json::from_str::<Version>(bytes).map_err(|error| error.to_string())?;

@@ -13,6 +13,7 @@ const SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 mod budgets;
 mod capacities;
+pub(in crate::runtime) mod policy;
 mod version;
 
 #[cfg(test)]
@@ -22,6 +23,10 @@ mod capacity_tests;
 
 pub use budgets::VulcanPluginBudgetSource;
 pub use capacities::{VulcanPluginCapacityBudgetSource, VulcanPluginCapacityPurpose};
+pub use policy::{
+    VulcanPluginCapacityPolicyPhase, VulcanPluginCapacityPolicyRecord,
+    VulcanPluginCapacityPolicyUpdate,
+};
 
 /// Persisted host configuration; core budget fields use the upstream type without a duplicated schema.
 /// 持久化宿主配置；核心预算字段使用上游类型，不复制 Schema。
@@ -133,7 +138,7 @@ pub fn load_plugin_runtime_settings(
 ) -> Result<VulcanPluginRuntimeSettings, String> {
     // This is host state, outside every plugin package and plugin-owned configuration namespace.
     // 这是宿主状态，位于每个插件包及插件自有配置命名空间之外。
-    let path = plugin_state_root.join("plugin-runtime-settings.json");
+    let path = plugin_state_root.join(policy::SETTINGS_FILE_NAME);
     // Only an absent file has defined default semantics; all malformed or unreadable existing files fail.
     // 仅文件缺失具有已定义的默认语义；全部格式错误或无法读取的既有文件均失败。
     let settings = match std::fs::read_to_string(&path) {

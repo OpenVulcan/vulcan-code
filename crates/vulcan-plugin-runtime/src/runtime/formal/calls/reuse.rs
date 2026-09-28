@@ -31,6 +31,9 @@ struct DomainKey {
     /// Core-owned capability registration revision captured before pool registration.
     /// 池注册前捕获的核心能力注册修订号。
     capabilities: String,
+    /// Native capacity policy revision selects fresh bindings without rewriting original module state.
+    /// 原生容量策略修订选择新绑定，不重写原模块状态。
+    capacity_policy: String,
 }
 
 /// Metadata counts actual host borrows, never physical VM or scheduler permits.
@@ -256,6 +259,13 @@ impl VulcanPluginRuntimeManager {
                 .capabilities()
                 .snapshot()
                 .map_err(core_error)?;
+            // A policy claim spans both cached selection and any real registration; updates wait for it to return.
+            // 策略声明覆盖缓存选择及实际注册；更新等待其归还。
+            let capacity = owner.admit_capacity_member(
+                &call.plugin.id,
+                VulcanPluginCapacityPurpose::ToolCall,
+                &publication,
+            )?;
             let key = DomainKey {
                 generation: call.plugin.generation,
                 controller: controller.to_owned(),
@@ -263,6 +273,7 @@ impl VulcanPluginRuntimeManager {
                 workspace: workspace.clone(),
                 configuration: self.reusable_configuration(&call.plugin)?,
                 capabilities: capability_snapshot.revision(),
+                capacity_policy: capacity.policy_revision.clone(),
             };
             // Call registry ownership serializes all increases to the shared retained-input budget.
             // 调用表所有权串行化共享保留输入预算的全部增加。
@@ -318,6 +329,7 @@ impl VulcanPluginRuntimeManager {
                 if domain.key.generation != key.generation
                     || domain.key.configuration != key.configuration
                     || domain.key.capabilities != key.capabilities
+                    || domain.key.capacity_policy != key.capacity_policy
                 {
                     domain.closing = true;
                 }
@@ -328,6 +340,7 @@ impl VulcanPluginRuntimeManager {
                 if domain.preparing {
                     drop(registry);
                     drop(calls);
+                    drop(capacity);
                     drop(publication);
                     // The already-bounded registered blocking preparation owns this wait, never an untracked task.
                     // 已有界的已登记阻塞准备拥有此次等待，绝非未跟踪任务。
@@ -385,11 +398,6 @@ impl VulcanPluginRuntimeManager {
                     "Reusable routing input byte capacity is exhausted.",
                 ));
             }
-            let capacity = owner.admit_capacity_member(
-                &call.plugin.id,
-                VulcanPluginCapacityPurpose::ToolCall,
-                &publication,
-            )?;
             call.lock()?.reusable_domain = Some(call.id.clone());
             registry.domains.insert(
                 call.id.clone(),
@@ -481,6 +489,10 @@ impl VulcanPluginRuntimeManager {
             .snapshot()
             .map_err(core_error)?
             .revision();
+        // Final submission uses the same live policy authority as preparation, including unfinished-transaction fencing.
+        // 最终提交使用与准备相同的活动策略权威，包含未完成事务屏障。
+        let capacity_policy =
+            owner.capacity_revision(&call.plugin.id, VulcanPluginCapacityPurpose::ToolCall)?;
         let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
         // A health failure discovered after borrowing also prevents final submission.
         // 借用后发现的健康失败同样阻止最终提交。
@@ -495,6 +507,7 @@ impl VulcanPluginRuntimeManager {
         if domain.closing
             || domain.key.configuration != configuration
             || domain.key.capabilities != capabilities
+            || domain.key.capacity_policy != capacity_policy
         {
             domain.closing = true;
             return Err(VulcanPluginRuntimeError::new(

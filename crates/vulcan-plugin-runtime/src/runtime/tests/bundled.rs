@@ -677,7 +677,10 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
             reuse_enabled_runtime: true,
         }))
         .expect("invoke RTK statistics action");
-    assert_eq!(statistics["available"], true);
+    assert_eq!(
+        statistics["available"], true,
+        "RTK statistics result: {statistics}"
+    );
     assert!(statistics["byCommand"].is_array());
 
     let invocation = HookInvocation {

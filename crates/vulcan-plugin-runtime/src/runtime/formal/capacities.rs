@@ -2,14 +2,21 @@
 //! 稳定用途归属将宿主准备连接至唯一原生容量权威。
 
 use super::*;
-use luaskills::runtime::embedded::{EmbeddedCapacityConfig, EmbeddedCapacitySnapshot};
+use crate::runtime::settings::policy::{PolicyDocument, PolicyStore};
+use luaskills::runtime::embedded::{
+    EmbeddedCapacityConfig, EmbeddedCapacityPolicySnapshot, EmbeddedCapacitySnapshot,
+};
 use std::collections::BTreeSet;
 
 mod lifecycle;
+mod policy;
 
 /// Keep exact capacity identities and explicit lifecycle retirement intent under one ownership lock.
 /// 在同一归属锁下保留精确容量身份及明确生命周期回收意图。
 pub(super) struct CapacityRegistry {
+    /// Current effective purpose policy and retained durable transaction share the ownership lock.
+    /// 当前生效用途策略及保留持久事务共用归属锁。
+    policy: PolicyStore,
     /// Each semantic owner retains the core-issued identity until successful explicit removal.
     /// 每个语义所有者保留核心签发身份，直到显式移除成功。
     registrations: BTreeMap<(String, VulcanPluginCapacityPurpose), CapacityRegistration>,
@@ -25,6 +32,7 @@ pub(super) struct CapacityRegistry {
 pub(super) fn register_configured_capacities(
     host: &VulcanPluginEmbeddedHost,
     settings: &VulcanPluginRuntimeSettings,
+    policy: PolicyStore,
 ) -> Result<CapacityRegistry, VulcanPluginRuntimeError> {
     // Only actual native success may become a host identity; the owner is not public during this transaction.
     // 只有实际原生成功才能成为宿主身份；此事务期间所有者尚未公开。
@@ -53,6 +61,7 @@ pub(super) fn register_configured_capacities(
         }
     }
     Ok(CapacityRegistry {
+        policy,
         registrations,
         retiring_plugins: BTreeSet::new(),
     })
@@ -84,6 +93,9 @@ pub(super) struct CapacityAdmission<'a> {
     /// The complete validated policy supplies member kind and queue limits.
     /// 完整已校验策略提供成员类别及队列上限。
     pub(super) config: EmbeddedCapacityConfig,
+    /// Exact current native policy revision partitions newly registered execution bindings.
+    /// 精确当前原生策略修订划分新注册执行绑定。
+    pub(super) policy_revision: String,
 }
 
 impl Drop for CapacityAdmission<'_> {
@@ -117,14 +129,20 @@ impl Drop for CapacityAdmission<'_> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VulcanPluginFormalCapacityStatus {
-    /// The exact parent identity distinguishes this immutable policy lifetime.
-    /// 精确父级身份区分此不可变策略寿命。
+    /// The exact parent identity distinguishes this native ownership lifetime.
+    /// 精确父级身份区分此原生归属寿命。
     pub runtime_id: String,
+    /// Opaque predecessor belongs to the same atomic native observation as snapshot.
+    /// 不透明前驱与 snapshot 属于同一次原子原生观测。
+    pub policy_revision: String,
+    /// Actual retained usage still exceeds the published desired policy.
+    /// 实际保留用量仍超过已发布目标策略。
+    pub pending_convergence: bool,
     /// Host routing chose this purpose independently of plugin business arguments.
     /// 宿主路由独立于插件业务参数选择此用途。
     pub purpose: VulcanPluginCapacityPurpose,
-    /// Complete policy provenance remains derived from frozen host settings.
-    /// 完整策略来源继续从冻结宿主设置派生。
+    /// Complete policy provenance comes from the same current settings that govern member admission.
+    /// 完整策略来源来自治理成员入场的同一当前设置。
     pub budget_source: VulcanPluginCapacityBudgetSource,
     /// Actual unfinished registration preparations prevent metadata forgetting.
     /// 实际未结束注册准备阻止元数据遗忘。
@@ -140,8 +158,8 @@ pub struct VulcanPluginFormalCapacityStatus {
 impl ManagedFormalRuntime {
     /// Claim plugin_id/purpose under the caller-held publication gate; return one exact capacity binding.
     /// 在调用方持有的发布门下声明 plugin_id／purpose；返回单个精确容量绑定。
-    /// First registration uses frozen settings; retained, missing or closed identities are never silently replaced.
-    /// 首次注册使用冻结设置；绝不静默替换保留、缺失或关闭的身份。
+    /// First registration uses current effective settings; retained, missing or closed identities are never silently replaced.
+    /// 首次注册使用当前生效设置；绝不静默替换保留、缺失或关闭的身份。
     pub(super) fn admit_capacity_member(
         &self,
         plugin_id: &str,
@@ -149,90 +167,97 @@ impl ManagedFormalRuntime {
         publication: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<CapacityAdmission<'_>, VulcanPluginRuntimeError> {
         self.ensure_plugin_budget(plugin_id, publication)?;
-        // Resolve once before entering the capacity identity map; no Lua or filesystem work occurs under it.
-        // 进入容量身份映射前解析一次；锁内不发生 Lua 或文件系统工作。
-        let (config, _) = self.settings.capacity_budget(plugin_id, purpose);
-        // Lock order is publication gate, capacity metadata, then native control.
-        // 锁顺序为发布门、容量元数据、原生控制。
-        let mut registrations = self.capacities.lock().map_err(|_| capacity_lock_error())?;
-        if registrations.retiring_plugins.contains(plugin_id) {
+        // Publication orders native policy changes, new claims and explicit metadata removal.
+        // 发布门排序原生策略变化、新声明及显式元数据移除。
+        let mut registry = self.capacities.lock().map_err(|_| capacity_lock_error())?;
+        registry.require_policy_admission(plugin_id, purpose)?;
+        if registry.retiring_plugins.contains(plugin_id) {
             return Err(VulcanPluginRuntimeError::new(
                 "Plugin capacity lifecycle retirement is unfinished.",
             ));
         }
-        // Package generation is intentionally absent: multiple immutable generations share this purpose budget.
-        // 有意不包含包代次：多个不可变代次共享此用途预算。
+        // Semantic ownership remains independent of package generation and mutable module state.
+        // 语义归属保持独立于包代次及可变模块状态。
         let key = (plugin_id.to_owned(), purpose);
-        if let Some(registration) = registrations.registrations.get_mut(&key) {
-            if self
-                .verify_capacity(plugin_id, purpose, registration)?
-                .closing
-            {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Plugin purpose capacity admission is permanently closed.",
-                ));
-            }
-            registration.preparing_members = registration
-                .preparing_members
-                .checked_add(1)
-                .ok_or_else(|| {
-                    VulcanPluginRuntimeError::new("Capacity preparation count overflow.")
-                })?;
-        } else {
-            // Native registration is atomic and bounded by the existing parent and plugin metadata limits.
-            // 原生注册为原子操作，并受既有父级及插件元数据上限约束。
+        if !registry.registrations.contains_key(&key) {
+            // Resolve the complete live policy from its sole host authority.
+            // 从唯一宿主权威解析完整活动策略。
+            let config = registry
+                .policy
+                .settings
+                .capacity_budget(plugin_id, purpose)
+                .0;
+            // Retain successful native ownership before performing another fallible observation.
+            // 进行另一个可能失败的观测前保留成功原生归属。
             let identity = self
                 .host
                 .runtime()
-                .register_capacity(plugin_id, config.clone())
+                .register_capacity(plugin_id, config)
                 .map_err(calls::core_error)?;
-            registrations.registrations.insert(
+            registry.registrations.insert(
                 key.clone(),
                 CapacityRegistration {
                     identity,
-                    preparing_members: 1,
+                    preparing_members: 0,
                 },
             );
         }
-        // The claim is published before releasing metadata; forget cannot race a future pool registration.
-        // 释放元数据前发布声明；遗忘不能与后续池注册竞争。
-        let capacity_id = registrations
+        // Read revision and configuration together before publishing the actual preparation claim.
+        // 发布实际准备声明前，同时读取修订及配置。
+        let policy = self.verify_capacity(
+            plugin_id,
+            purpose,
+            registry.registrations.get(&key).expect("retained capacity"),
+            &registry.policy.settings,
+        )?;
+        if policy.capacity.closing {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin purpose capacity admission is permanently closed.",
+            ));
+        }
+        // The original registration remains retained even when validation fails, without a fabricated active claim.
+        // 即使校验失败，原注册仍保持保留，不虚构活动声明。
+        let registration = registry
             .registrations
-            .get(&key)
-            .expect("registered capacity")
-            .identity
-            .clone();
+            .get_mut(&key)
+            .expect("retained capacity");
+        registration.preparing_members = registration
+            .preparing_members
+            .checked_add(1)
+            .ok_or_else(|| VulcanPluginRuntimeError::new("Capacity preparation count overflow."))?;
         Ok(CapacityAdmission {
             owner: self,
             key,
-            capacity_id,
-            config,
+            capacity_id: registration.identity.clone(),
+            config: policy.capacity.config,
+            policy_revision: policy.revision,
         })
     }
 
-    /// Validate registration against exact plugin_id/purpose and frozen config; return its live core snapshot.
-    /// 针对精确 plugin_id／purpose 及冻结配置校验 registration；返回其实时核心快照。
+    /// Validate registration against exact plugin_id/purpose and supplied effective settings; return one atomic native policy.
+    /// 针对精确 plugin_id／purpose 及给定生效 settings 校验 registration；返回单个原子原生策略。
     fn verify_capacity(
         &self,
         plugin_id: &str,
         purpose: VulcanPluginCapacityPurpose,
         registration: &CapacityRegistration,
-    ) -> Result<EmbeddedCapacitySnapshot, VulcanPluginRuntimeError> {
-        // A missing core identity is an ownership error, never permission to recreate a replacement.
-        // 核心身份缺失是归属错误，绝不据此重新创建替代身份。
-        let snapshot = self
+        settings: &VulcanPluginRuntimeSettings,
+    ) -> Result<EmbeddedCapacityPolicySnapshot, VulcanPluginRuntimeError> {
+        // Missing native identity is an ownership failure, never permission to register a replacement.
+        // 原生身份缺失是归属失败，绝不据此注册替代身份。
+        let policy = self
             .host
             .runtime()
-            .capacity(&registration.identity)
+            .capacity_policy(&registration.identity)
             .map_err(calls::core_error)?;
-        if snapshot.plugin_id != plugin_id
-            || snapshot.config != self.settings.capacity_budget(plugin_id, purpose).0
+        if policy.capacity.plugin_id != plugin_id
+            || policy.capacity.config != settings.capacity_budget(plugin_id, purpose).0
         {
             return Err(VulcanPluginRuntimeError::new(
-                "Plugin capacity differs from its frozen host ownership or configuration.",
+                "Plugin capacity differs from its current host ownership or configuration.",
             ));
         }
-        Ok(snapshot)
+        Ok(policy)
     }
 }
 
@@ -248,29 +273,37 @@ impl VulcanPluginRuntimeManager {
     ) -> Result<Option<VulcanPluginFormalCapacityStatus>, VulcanPluginRuntimeError> {
         crate::catalog::validate_identifier(plugin_id, "capacity owner")
             .map_err(VulcanPluginRuntimeError::new)?;
-        // Missing attachment is an actual state, not a lazy construction request.
-        // 缺少附加是真实状态，不是延迟构造请求。
+        // A read never allocates a missing runtime or capacity.
+        // 读取绝不分配缺失运行时或容量。
         let Some(owner) = self.formal_runtime_owner()? else {
             return Ok(None);
         };
-        // Keep identity and pending ownership stable throughout native snapshot validation.
-        // 在原生快照校验期间保持身份及待处理归属稳定。
-        let registrations = owner.capacities.lock().map_err(|_| capacity_lock_error())?;
-        // Lookup is exact and does not select another purpose or generation.
-        // 查找为精确匹配，不选择其他用途或代次。
-        let Some(registration) = registrations
-            .registrations
-            .get(&(plugin_id.to_owned(), purpose))
+        // One ownership lock orders the host policy with the same native revision and resource snapshot.
+        // 同一归属锁将宿主策略与相同原生修订及资源快照排序。
+        let registry = owner.capacities.lock().map_err(|_| capacity_lock_error())?;
+        // Exact semantic lookup cannot switch to another purpose or generation.
+        // 精确语义查找不能切换至另一用途或代次。
+        let Some(registration) = registry.registrations.get(&(plugin_id.to_owned(), purpose))
         else {
             return Ok(None);
         };
+        // Revision and convergence originate in one atomic native observation, not separately sampled counters.
+        // 修订及收敛来自一次原子原生观测，不分别取样计数。
+        let policy =
+            owner.verify_capacity(plugin_id, purpose, registration, &registry.policy.settings)?;
         Ok(Some(VulcanPluginFormalCapacityStatus {
             runtime_id: owner.host.runtime().id().to_owned(),
+            policy_revision: policy.revision,
+            pending_convergence: policy.pending_convergence,
             purpose,
-            budget_source: owner.settings.capacity_budget(plugin_id, purpose).1,
+            budget_source: registry
+                .policy
+                .settings
+                .capacity_budget(plugin_id, purpose)
+                .1,
             preparing_members: registration.preparing_members,
-            retirement_requested: registrations.retiring_plugins.contains(plugin_id),
-            snapshot: owner.verify_capacity(plugin_id, purpose, registration)?,
+            retirement_requested: registry.retiring_plugins.contains(plugin_id),
+            snapshot: policy.capacity,
         }))
     }
 
@@ -307,7 +340,12 @@ impl VulcanPluginRuntimeManager {
         else {
             return Ok(false);
         };
-        owner.verify_capacity(plugin_id, purpose, registration)?;
+        owner.verify_capacity(
+            plugin_id,
+            purpose,
+            registration,
+            &registrations.policy.settings,
+        )?;
         owner
             .host
             .runtime()
@@ -349,7 +387,13 @@ impl VulcanPluginRuntimeManager {
         let Some(registration) = registrations.registrations.get(&key) else {
             return Ok(false);
         };
-        owner.verify_capacity(plugin_id, purpose, registration)?;
+        registrations.require_policy_admission(plugin_id, purpose)?;
+        owner.verify_capacity(
+            plugin_id,
+            purpose,
+            registration,
+            &registrations.policy.settings,
+        )?;
         if registration.preparing_members != 0 {
             return Err(VulcanPluginRuntimeError::new(
                 "Plugin capacity still owns unfinished member preparation.",

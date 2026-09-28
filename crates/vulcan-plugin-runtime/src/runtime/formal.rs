@@ -26,8 +26,8 @@ pub(super) struct ManagedFormalRuntime {
     /// Native adapter owns the core parent and all runtime-local capability registrations.
     /// 原生适配器拥有核心父级及全部运行时内能力注册。
     pub host: VulcanPluginEmbeddedHost,
-    /// Effective host settings remain immutable until the manager is recreated.
-    /// 生效宿主设置保持不可变，直到管理器重新创建。
+    /// Construction baseline freezes parent/plugin limits and timeouts; live purpose policy belongs to capacities.
+    /// 构造基线冻结父级／插件上限及超时；活动用途策略属于 capacities。
     pub settings: VulcanPluginRuntimeSettings,
     /// Exact core capacity identities and preparing-member claims survive module generation changes.
     /// 精确核心容量身份及准备中成员声明在模块代次变化后保持存活。
@@ -63,6 +63,9 @@ pub struct VulcanPluginFormalRuntimeStatus {
     /// Exact validated settings, including the effective parent limits.
     /// 精确已校验设置，包含生效父级上限。
     pub settings: VulcanPluginRuntimeSettings,
+    /// Current retained administrative receipt is captured atomically with its effective settings.
+    /// 当前保留管理回执与其生效设置原子捕获。
+    pub policy_update: Option<VulcanPluginCapacityPolicyRecord>,
     /// Current queue and operation accounting from the sole core owner.
     /// 来自唯一核心所有者的当前队列及操作记账。
     pub operations: EmbeddedRuntimeUsage,
@@ -93,6 +96,11 @@ impl VulcanPluginRuntimeManager {
                 "Formal plugin runtime is already attached.",
             ));
         }
+        // Preserve disk transaction evidence before creating any native owner; attachment never rewrites it.
+        // 创建任何原生所有者前保留磁盘事务证据；附加绝不回写它。
+        let policy =
+            super::settings::policy::PolicyStore::load(self.plugin_state_root(), &settings)
+                .map_err(VulcanPluginRuntimeError::new)?;
         // The adapter validates native registration capacity before starting its core owner.
         // 适配器在启动核心所有者前校验原生注册容量。
         let host = VulcanPluginEmbeddedHost::new(
@@ -103,7 +111,7 @@ impl VulcanPluginRuntimeManager {
         .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
         // Explicit guarantees exist before any shared production work can consume the parent budget.
         // 在任何公共生产工作消费父级预算前，显式保证已经存在。
-        let capacities = capacities::register_configured_capacities(&host, &settings)?;
+        let capacities = capacities::register_configured_capacities(&host, &settings, policy)?;
         *slot = Some(Arc::new(ManagedFormalRuntime {
             host,
             settings,
@@ -170,9 +178,13 @@ impl VulcanPluginRuntimeManager {
         // The cloned owner keeps this exact runtime alive throughout both observations.
         // 克隆所有者在两次观测期间保持此精确运行时存活。
         let runtime = owner.host.runtime();
+        // Persisted intent and current settings must never be sampled from different policy transactions.
+        // 持久意图及当前设置绝不能采样自不同策略事务。
+        let (settings, policy_update) = owner.policy_status()?;
         Ok(Some(VulcanPluginFormalRuntimeStatus {
             runtime_id: runtime.id().to_string(),
-            settings: owner.settings.clone(),
+            settings,
+            policy_update,
             operations: runtime
                 .usage()
                 .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?,

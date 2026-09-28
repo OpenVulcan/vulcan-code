@@ -111,6 +111,27 @@ impl VulcanPluginRuntimeManager {
         {
             let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
             for (domain_id, domain) in &mut registry.domains {
+                // Only active domains need current policy; retired failure evidence survives explicit capacity forgetting.
+                // 仅活动域需要当前策略；已退役失败证据在显式遗忘容量后仍保留。
+                if !domain.closing {
+                    // Native policy changes retire old bindings without cancelling their current business borrowers.
+                    // 原生策略变化退役旧绑定，不取消其当前业务借用者。
+                    let policy = self
+                        .formal_capacity_status(
+                            &domain.plugin_id,
+                            VulcanPluginCapacityPurpose::ToolCall,
+                        )?
+                        .ok_or_else(|| {
+                            VulcanPluginRuntimeError::new(
+                                "Active reusable domain lost its capacity owner.",
+                            )
+                        })?;
+                    if policy.snapshot.closing
+                        || policy.policy_revision != domain.key.capacity_policy
+                    {
+                        domain.closing = true;
+                    }
+                }
                 let current = snapshot.plugins.get(&domain.plugin_id);
                 if current.is_none_or(|plugin| {
                     plugin.generation != domain.key.generation
@@ -130,7 +151,7 @@ impl VulcanPluginRuntimeManager {
                             (domain_id.clone(), domain.plugin_id.clone(), message),
                         );
                     }
-                    if domain.closing && !domain.pool_retired {
+                    if domain.closing && !domain.pool_retired && domain.borrowers == 0 {
                         owner.host.runtime().close_pool(&pool).map_err(core_error)?;
                         if domain.borrowers == 0 {
                             match owner.host.runtime().forget_pool(&pool) {

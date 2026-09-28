@@ -78,7 +78,7 @@ fn plugin_budget_versions_reject_undeclared_fields_and_duplicate_discriminators(
             .expect_err("old schema")
             .contains("pluginBudgets")
     );
-    value["schemaVersion"] = serde_json::json!(SETTINGS_SCHEMA_VERSION + 1);
+    value["schemaVersion"] = serde_json::json!(policy::DOCUMENT_VERSION + 1);
     assert!(
         read_unchanged(&value.to_string())
             .expect_err("future schema")

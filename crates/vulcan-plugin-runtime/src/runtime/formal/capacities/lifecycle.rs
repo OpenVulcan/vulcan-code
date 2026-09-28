@@ -51,7 +51,13 @@ impl ManagedFormalRuntime {
         }
         // Unconfigured purposes remain explicitly lazy and do not allocate metadata during activation.
         // 未配置用途保持明确延迟创建，不在启用期间分配元数据。
-        let Some(configured) = self.settings.capacity_budgets.get(plugin_id) else {
+        let Some(configured) = registry
+            .policy
+            .settings
+            .capacity_budgets
+            .get(plugin_id)
+            .cloned()
+        else {
             return Ok(());
         };
         if configured.is_empty() {
@@ -59,11 +65,13 @@ impl ManagedFormalRuntime {
         }
         self.ensure_plugin_budget(plugin_id, publication)?;
         for purpose in configured.keys() {
+            registry.require_policy_admission(plugin_id, *purpose)?;
             if let Some(registration) = registry
                 .registrations
                 .get(&(plugin_id.to_owned(), *purpose))
                 && self
-                    .verify_capacity(plugin_id, *purpose, registration)?
+                    .verify_capacity(plugin_id, *purpose, registration, &registry.policy.settings)?
+                    .capacity
                     .closing
             {
                 return Err(VulcanPluginRuntimeError::new(
@@ -77,7 +85,7 @@ impl ManagedFormalRuntime {
         for (purpose, config) in configured {
             // The exact semantic owner remains independent of package generation.
             // 精确语义所有者保持独立于包代次。
-            let key = (plugin_id.to_owned(), *purpose);
+            let key = (plugin_id.to_owned(), purpose);
             if registry.registrations.contains_key(&key) {
                 continue;
             }
@@ -152,6 +160,7 @@ impl ManagedFormalRuntime {
             .cloned()
             .collect();
         for key in &keys {
+            registry.require_policy_admission(plugin_id, key.1)?;
             // Native state remains the sole source for retained members and physical ownership.
             // 原生状态继续作为保留成员及物理归属的唯一来源。
             let registration = registry.registrations.get(key).expect("retained capacity");
@@ -161,7 +170,8 @@ impl ManagedFormalRuntime {
                 ));
             }
             if self
-                .verify_capacity(plugin_id, key.1, registration)?
+                .verify_capacity(plugin_id, key.1, registration, &registry.policy.settings)?
+                .capacity
                 .retained_pools
                 != 0
             {

@@ -132,7 +132,7 @@ impl VulcanPluginRuntimeManager {
             .is_cleanup()
             .then_some(VulcanPluginCapacityPurpose::Lifecycle);
         owner
-            .settings
+            .effective_settings()?
             .validate_manifest_requirements(manifest, purpose)?;
         owner
             .host

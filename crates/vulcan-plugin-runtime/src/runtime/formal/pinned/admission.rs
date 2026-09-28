@@ -200,7 +200,7 @@ impl VulcanPluginRuntimeManager {
             .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin has no valid manifest."))?;
         let runtime = crate::runtime::lease::required_lua_runtime(manifest)?;
         owner
-            .settings
+            .effective_settings()?
             .validate_manifest_requirements(manifest, None)?;
         // Keep the session purpose owner stable until this actual member registration finishes.
         // 在此实际成员注册结束前保持会话用途所有者稳定。

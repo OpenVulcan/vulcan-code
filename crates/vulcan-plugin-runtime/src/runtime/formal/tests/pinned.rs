@@ -6,6 +6,100 @@ use super::*;
 use crate::{VulcanPluginUiEventPublisher, VulcanPluginUiInvalidation};
 use serde_json::json;
 
+/// A committed aggregate policy change preserves the exact pinned VM, its counter and original finalizer.
+/// 已提交聚合策略变化保留精确固定 VM、计数器及原关闭器。
+#[test]
+fn formal_pinned_capacity_policy_preserves_original_state() {
+    // The existing production fixture dispatches real stateful session operations.
+    // 既有生产夹具分发真实有状态会话操作。
+    let fixture = Fixture::new(VulcanPluginRuntimeSettings::default());
+    fixture.runtime.block_on(async {
+        // Opening commits the first private counter value before any policy change.
+        // 开启在任何策略变化之前提交首个私有计数值。
+        let id = opened(&fixture).await;
+        let original = fixture
+            .manager
+            .formal_session_status(&id, "owner")
+            .expect("original session")
+            .core
+            .expect("native session");
+        let policy = fixture
+            .manager
+            .formal_capacity_status("idle-plugin", VulcanPluginCapacityPurpose::ToolSession)
+            .expect("capacity")
+            .expect("registered");
+        // Convert the same aggregate owner to an explicit smaller dedicated policy.
+        // 将同一聚合所有者转换为明确较小专用策略。
+        let mut config = policy.snapshot.config.clone();
+        config.resources.kind = luaskills::runtime::embedded::PoolKind::Dedicated;
+        config.resources.min_resident_vms = 1;
+        config.resources.max_resident_vms = 1;
+        config.resources.max_running_calls = 1;
+        let change = crate::VulcanPluginCapacityPolicyUpdate {
+            update_id: uuid::Uuid::new_v4().to_string(),
+            runtime_id: policy.runtime_id,
+            capacity_id: policy.snapshot.capacity_id,
+            expected_revision: policy.policy_revision,
+            plugin_id: "idle-plugin".into(),
+            purpose: VulcanPluginCapacityPurpose::ToolSession,
+            config: Some(config),
+        };
+        assert_eq!(
+            fixture
+                .manager
+                .begin_capacity_policy_update(change.clone())
+                .expect("commit")
+                .phase,
+            crate::VulcanPluginCapacityPolicyPhase::Committed
+        );
+        for expected in 2..=3 {
+            // State continuity proves the original instance was neither reset nor migrated.
+            // 状态连续证明原实例既未重置也未迁移。
+            let value = fixture
+                .manager
+                .invoke(request(&fixture, "idle_call", Some(&id), "ok"))
+                .await
+                .expect("original state");
+            assert_eq!(value["result"]["count"], expected);
+        }
+        let current = fixture
+            .manager
+            .formal_session_status(&id, "owner")
+            .expect("current session")
+            .core
+            .expect("native session");
+        assert_eq!(current.session_id, original.session_id);
+        assert_eq!(current.pool_id, original.pool_id);
+        fixture
+            .manager
+            .invoke(request(&fixture, "idle_close", Some(&id), "ok"))
+            .await
+            .expect("original close");
+        // Successful shutdown acknowledges its sole finalization record automatically.
+        // 成功关闭会自动确认唯一关闭记录。
+        assert!(
+            fixture
+                .manager
+                .formal_sessions("owner")
+                .expect("healthy session acknowledged")
+                .is_empty()
+        );
+        fixture
+            .manager
+            .forget_capacity_policy_update(&change.update_id)
+            .expect("policy acknowledgement");
+        assert_eq!(
+            fixture
+                .events
+                .values
+                .lock()
+                .expect("one original finalizer")
+                .len(),
+            1
+        );
+    });
+}
+
 /// Wait for the original `id` in `fixture` to physically retire; returns its retained evidence.
 /// 等待 `fixture` 中原始 `id` 物理退役；返回其保留证据。
 async fn retired(fixture: &Fixture, id: &str) -> VulcanPluginFormalSessionStatus {

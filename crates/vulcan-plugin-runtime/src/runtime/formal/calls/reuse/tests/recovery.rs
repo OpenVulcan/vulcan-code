@@ -3,6 +3,325 @@
 
 use super::*;
 
+/// Current manifest resource floors reject policy changes before either native or persistent state is touched.
+/// 当前清单资源下限在触碰原生或持久状态前拒绝策略变化。
+#[tokio::test]
+async fn hot_reuse_capacity_policy_validates_current_manifest_before_commit() {
+    // A real version-two package supplies both current admission and reusable-tool requirements.
+    // 真实第二版包同时提供当前入场及可复用工具要求。
+    let fixture = Fixture::new(10_000, 100);
+    fixture
+        .invoke("owner", fixture.root.path().to_path_buf(), "ok")
+        .await
+        .expect("register actual capacity");
+    let status = fixture
+        .manager
+        .formal_capacity_status("idle-plugin", VulcanPluginCapacityPurpose::ToolCall)
+        .expect("current policy")
+        .expect("registered");
+    // Publish an exact manifest floor satisfied by the currently active queue policy.
+    // 发布由当前活动队列策略满足的精确清单下限。
+    let path = fixture.root.path().join("bundled/idle-plugin/plugin.yaml");
+    let mut manifest: Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).expect("original manifest"))
+            .expect("manifest");
+    manifest["runtime_requirements"]["capacities"] = json!([{
+        "purpose":"tool_call","reserved_resident_vms":0,"resident_vms":1,"running_calls":1,
+        "queued_calls":status.snapshot.config.max_queued_calls,"queued_bytes":1
+    }]);
+    std::fs::write(
+        path,
+        serde_yaml::to_string(&manifest).expect("manifest bytes"),
+    )
+    .expect("publish manifest");
+    fixture
+        .manager
+        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+        .expect("new requirements");
+    // The otherwise valid core change now conflicts with the current package's declared minimum.
+    // 原本合法的核心变化现在与当前包声明下限冲突。
+    let mut config = status.snapshot.config;
+    config.max_queued_calls -= 1;
+    let request = crate::VulcanPluginCapacityPolicyUpdate {
+        update_id: uuid::Uuid::new_v4().to_string(),
+        runtime_id: status.runtime_id,
+        capacity_id: status.snapshot.capacity_id,
+        expected_revision: status.policy_revision.clone(),
+        plugin_id: "idle-plugin".into(),
+        purpose: VulcanPluginCapacityPurpose::ToolCall,
+        config: Some(config),
+    };
+    assert!(
+        fixture
+            .manager
+            .begin_capacity_policy_update(request.clone())
+            .expect_err("manifest floor")
+            .to_string()
+            .contains("queued_calls")
+    );
+    assert!(
+        fixture
+            .manager
+            .capacity_policy_update(&request.update_id)
+            .expect("no transaction")
+            .is_none()
+    );
+    assert!(
+        !fixture
+            .manager
+            .plugin_state_root()
+            .join("plugin-runtime-settings.json")
+            .exists()
+    );
+    assert_eq!(
+        fixture
+            .manager
+            .formal_capacity_status("idle-plugin", request.purpose)
+            .expect("unchanged policy")
+            .expect("registered")
+            .policy_revision,
+        status.policy_revision
+    );
+    assert_eq!(
+        fixture
+            .invoke("owner", fixture.root.path().to_path_buf(), "ok")
+            .await
+            .expect("same accepted policy")["count"],
+        json!(1)
+    );
+    fixture.close().await;
+}
+
+/// Execution shrink waits for two real callbacks and then resumes the original predecessor without silent retries.
+/// 执行缩容等待两个真实回调，然后恢复原前驱，不进行静默重试。
+#[tokio::test]
+async fn hot_reuse_capacity_policy_busy_shrink_waits_for_original_operations() {
+    // Separate controllers keep distinct real VMs while sharing the same native purpose budget.
+    // 独立控制器保持不同真实 VM，同时共享同一原生用途预算。
+    let recovery = RecoveryFixture::new(false);
+    let manager = recovery.fixture.manager.clone();
+    let workspace = recovery.fixture.root.path().to_path_buf();
+    let mut running = Vec::new();
+    for controller in ["first", "second"] {
+        // Each original task retains its immutable controller and native callback ownership.
+        // 每个原任务保留不可变控制器及原生回调归属。
+        let manager = manager.clone();
+        let workspace = workspace.clone();
+        running.push(tokio::spawn(async move {
+            manager
+                .invoke(VulcanPluginInvocationRequest {
+                    tool_id: "idle_ping".into(),
+                    arguments: json!({"mode":"block"}),
+                    owner_session_id: controller.into(),
+                    workspace_root: workspace,
+                })
+                .await
+        }));
+    }
+    recovery.events.wait_entered().await;
+    // Observe the real dispatched count instead of assuming the second spawn already entered Lua.
+    // 观测真实分发数量，不假定第二个派生任务已进入 Lua。
+    let before = tokio::time::timeout(WAIT, async {
+        loop {
+            let status = manager
+                .formal_capacity_status("idle-plugin", VulcanPluginCapacityPurpose::ToolCall)
+                .expect("capacity")
+                .expect("registered");
+            if status.snapshot.active_operations == 2 {
+                break status;
+            }
+            tokio::time::sleep(OBSERVATION_INTERVAL).await;
+        }
+    })
+    .await
+    .expect("both real operations");
+    // One execution remains sufficient for each declared member while the aggregate currently has two in flight.
+    // 每个声明成员只需一个执行，而聚合当前有两个进行中操作。
+    let mut config = before.snapshot.config.clone();
+    config.resources.max_running_calls = 1;
+    let change = crate::VulcanPluginCapacityPolicyUpdate {
+        update_id: uuid::Uuid::new_v4().to_string(),
+        runtime_id: before.runtime_id,
+        capacity_id: before.snapshot.capacity_id,
+        expected_revision: before.policy_revision.clone(),
+        plugin_id: "idle-plugin".into(),
+        purpose: VulcanPluginCapacityPurpose::ToolCall,
+        config: Some(config),
+    };
+    let waiting = manager
+        .begin_capacity_policy_update(change.clone())
+        .expect("busy receipt");
+    assert_eq!(
+        waiting.phase,
+        crate::VulcanPluginCapacityPolicyPhase::Prepared
+    );
+    assert!(waiting.error.is_some());
+    assert_eq!(
+        manager
+            .formal_capacity_status("idle-plugin", change.purpose)
+            .expect("same policy")
+            .expect("registered")
+            .policy_revision,
+        before.policy_revision
+    );
+    let projection = manager
+        .formal_runtime_status()
+        .expect("management status")
+        .expect("parent");
+    assert_eq!(
+        projection
+            .policy_update
+            .expect("discover retained receipt")
+            .request
+            .update_id,
+        change.update_id
+    );
+    recovery.events.release();
+    for task in running {
+        assert_eq!(
+            task.await
+                .expect("original task")
+                .expect("original business")["count"],
+            json!(1)
+        );
+    }
+    assert_eq!(
+        manager
+            .resume_capacity_policy_update(&change.update_id)
+            .expect("explicit drain continuation")
+            .phase,
+        crate::VulcanPluginCapacityPolicyPhase::Committed
+    );
+    assert_eq!(
+        manager
+            .formal_capacity_status("idle-plugin", change.purpose)
+            .expect("new policy")
+            .expect("registered")
+            .snapshot
+            .config
+            .resources
+            .max_running_calls,
+        1
+    );
+    manager
+        .forget_capacity_policy_update(&change.update_id)
+        .expect("acknowledge");
+    recovery.fixture.close().await;
+}
+
+/// A live business borrower finishes on its original VM while a committed policy selects a fresh execution binding.
+/// 活动业务借用者在原 VM 完成，同时已提交策略选择新的执行绑定。
+#[tokio::test]
+async fn hot_reuse_capacity_policy_revision_drains_original_business_without_replay() {
+    // Existing instrumentation records actual native business and finalization effects.
+    // 既有插桩记录实际原生业务及关闭副作用。
+    let recovery = RecoveryFixture::new(false);
+    let manager = recovery.fixture.manager.clone();
+    let workspace = recovery.fixture.root.path().to_path_buf();
+    // Keep one original business call blocked in its native callback across the policy commit.
+    // 在策略提交期间，使一个原业务调用阻塞于原生回调。
+    let running = tokio::spawn({
+        // The task owns its manager and original input independently from the administrative observer.
+        // 任务独立于管理观测者拥有其管理器及原输入。
+        let manager = manager.clone();
+        let workspace = workspace.clone();
+        async move {
+            manager
+                .invoke(VulcanPluginInvocationRequest {
+                    tool_id: "idle_ping".into(),
+                    arguments: json!({"mode":"block"}),
+                    owner_session_id: "owner".into(),
+                    workspace_root: workspace,
+                })
+                .await
+        }
+    });
+    recovery.events.wait_entered().await;
+    // Capture the actual capacity predecessor and original domain before changing policy.
+    // 改变策略前捕获实际容量前驱及原域。
+    let before = manager
+        .formal_capacity_status("idle-plugin", VulcanPluginCapacityPurpose::ToolCall)
+        .expect("capacity")
+        .expect("registered");
+    let original = manager
+        .reusable_tool_domains("owner")
+        .expect("original domain")
+        .into_iter()
+        .find(|domain| domain.tool_id == "idle_ping")
+        .expect("original tool");
+    let mut config = before.snapshot.config.clone();
+    config.resources.kind = luaskills::runtime::embedded::PoolKind::Dedicated;
+    config.resources.min_resident_vms = 1;
+    // A non-execution shrink can commit while the exact original business operation remains active.
+    // 非执行额度缩减可在精确原业务操作仍活动时提交。
+    let request = crate::VulcanPluginCapacityPolicyUpdate {
+        update_id: uuid::Uuid::new_v4().to_string(),
+        runtime_id: before.runtime_id,
+        capacity_id: before.snapshot.capacity_id,
+        expected_revision: before.policy_revision,
+        plugin_id: "idle-plugin".into(),
+        purpose: VulcanPluginCapacityPurpose::ToolCall,
+        config: Some(config),
+    };
+    let committed = manager
+        .begin_capacity_policy_update(request.clone())
+        .expect("policy commit");
+    assert_eq!(
+        committed.phase,
+        crate::VulcanPluginCapacityPolicyPhase::Committed
+    );
+    manager
+        .maintain_reusable_domains(&recovery.fixture.owner())
+        .expect("retire old binding");
+    assert!(
+        !running.is_finished(),
+        "policy update must not cancel the original callback"
+    );
+    // The original borrower and pool remain physically owned until its actual native return.
+    // 直到实际原生返回，原借用者及池仍保留物理归属。
+    let retained = manager
+        .reusable_tool_domains("owner")
+        .expect("retained original")
+        .into_iter()
+        .find(|domain| domain.domain_id == original.domain_id)
+        .expect("same domain");
+    assert_eq!(retained.pool_id, original.pool_id);
+    assert_eq!(retained.borrowers, 1);
+    recovery.events.release();
+    assert_eq!(
+        running
+            .await
+            .expect("original task")
+            .expect("original business")["count"],
+        json!(1)
+    );
+    assert_eq!(
+        recovery
+            .fixture
+            .invoke("owner", workspace, "ok")
+            .await
+            .expect("new binding")["count"],
+        json!(1)
+    );
+    // Two original operations committed once each; the second counter proves fresh private module state.
+    // 两个原操作各提交一次；第二个计数证明新的私有模块状态。
+    assert_eq!(
+        recovery
+            .events
+            .values
+            .lock()
+            .expect("actual effects")
+            .iter()
+            .filter(|event| event.topic == "business")
+            .count(),
+        2
+    );
+    manager
+        .forget_capacity_policy_update(&request.update_id)
+        .expect("acknowledge policy");
+    recovery.fixture.close().await;
+}
+
 /// Actual native effects and a finite-test-controlled callback barrier.
 /// 真实原生副作用及有限测试控制的回调屏障。
 #[derive(Default)]
