@@ -192,42 +192,50 @@ impl VulcanPluginRuntimeManager {
             .as_ref()
             .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin has no valid manifest."))?;
         let runtime = crate::runtime::lease::required_lua_runtime(manifest)?;
-        // Resolve the same immutable plugin aggregate before any execution domain can register.
-        // 在任何执行域可以注册之前，解析同一不可变插件聚合预算。
-        let budget = {
+        // Keep the session purpose owner stable until this actual member registration finishes.
+        // 在此实际成员注册结束前保持会话用途所有者稳定。
+        let capacity = {
             // Serialize the first registration and all later verification with host publication.
             // 将首次注册及全部后续核验与宿主发布排序。
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
-            owner.ensure_plugin_budget(&session.plugin.id, &publication)?
+            self.require_pinned_current(session)?;
+            owner.admit_capacity_member(
+                &session.plugin.id,
+                VulcanPluginCapacityPurpose::ToolSession,
+                &publication,
+            )?
         };
         let pool = owner
             .host
-            .register_bundle_pool(VulcanPluginBundlePoolRequest {
-                plugin_id: session.plugin.id.clone(),
-                plugin_generation: session.plugin.generation,
-                workspace_root: workspace,
-                security_partition: format!("session:{}:{}", session.owner, session.id),
-                scope: VulcanPluginBridgeLeaseScope::Enabled,
-                policy: PluginPoolConfig {
-                    kind: PoolKind::Shared,
-                    min_resident_vms: 0,
-                    max_resident_vms: 1,
-                    max_running_calls: 1,
-                    max_queued_calls: budget.max_queued_calls,
-                    reuse: InstanceReuse::Session,
-                    serial: true,
-                    backend: ExecutionBackend::InProcess,
-                    idle_ttl_ms: None,
-                    max_uses: None,
+            .register_bundle_pool_in_capacity(
+                &capacity.capacity_id,
+                VulcanPluginBundlePoolRequest {
+                    plugin_id: session.plugin.id.clone(),
+                    plugin_generation: session.plugin.generation,
+                    workspace_root: workspace,
+                    security_partition: format!("session:{}:{}", session.owner, session.id),
+                    scope: VulcanPluginBridgeLeaseScope::Enabled,
+                    policy: PluginPoolConfig {
+                        kind: capacity.config.resources.kind,
+                        min_resident_vms: 0,
+                        max_resident_vms: 1,
+                        max_running_calls: 1,
+                        max_queued_calls: capacity.config.max_queued_calls,
+                        reuse: InstanceReuse::Session,
+                        serial: true,
+                        backend: ExecutionBackend::InProcess,
+                        idle_ttl_ms: None,
+                        max_uses: None,
+                    },
+                    finalizer: Some(ModuleFinalizer {
+                        export: runtime.shutdown_function.clone(),
+                        arguments: close_arguments,
+                        timeout_ms: close_ms,
+                    }),
                 },
-                finalizer: Some(ModuleFinalizer {
-                    export: runtime.shutdown_function.clone(),
-                    arguments: close_arguments,
-                    timeout_ms: close_ms,
-                }),
-            })
+            )
             .map_err(core_error)?;
         session.lock()?.pool = Some(pool.clone());
         let _publication = self

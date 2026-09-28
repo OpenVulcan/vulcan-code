@@ -7,7 +7,7 @@ use super::*;
 /// 通过公开文件读取器加载给定字节，即使解码失败也保留原字节。
 /// Return the decoded settings or diagnostic after asserting that no write occurred.
 /// 断言未发生写入后，返回已解码设置或诊断。
-fn read_unchanged(bytes: &str) -> Result<VulcanPluginRuntimeSettings, String> {
+pub(super) fn read_unchanged(bytes: &str) -> Result<VulcanPluginRuntimeSettings, String> {
     // Keep this independent persisted fixture alive until the post-read assertion completes.
     // 保持独立持久夹具存活至读取后断言完成。
     let root = tempfile::tempdir().expect("settings fixture");
@@ -43,6 +43,10 @@ fn plugin_budget_version_one_migration_preserves_user_configuration() {
         .as_object_mut()
         .expect("object")
         .remove("pluginBudgets");
+    original
+        .as_object_mut()
+        .expect("object")
+        .remove("capacityBudgets");
     // Formatting is deliberately retained byte for byte by the reader.
     // 读取器有意逐字节保留格式。
     let bytes = serde_json::to_string_pretty(&original).expect("original bytes");
@@ -64,6 +68,10 @@ fn plugin_budget_versions_reject_undeclared_fields_and_duplicate_discriminators(
     // Current bytes include pluginBudgets, which version one explicitly cannot contain.
     // 当前字节包含第一版明确不能含有的 pluginBudgets。
     let mut value = serde_json::to_value(VulcanPluginRuntimeSettings::default()).expect("settings");
+    value
+        .as_object_mut()
+        .expect("settings object")
+        .remove("capacityBudgets");
     value["schemaVersion"] = serde_json::json!(1);
     assert!(
         read_unchanged(&value.to_string())

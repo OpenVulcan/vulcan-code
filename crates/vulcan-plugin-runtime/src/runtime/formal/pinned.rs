@@ -7,7 +7,7 @@ use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor, VulcanPluginTool
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
     EmbeddedErrorCode, EmbeddedSessionPhase, EmbeddedSessionSnapshot, ExecutionBackend,
-    InstanceReuse, ModuleFinalizer, OperationHandle, OperationSnapshot, PluginPoolConfig, PoolKind,
+    InstanceReuse, ModuleFinalizer, OperationHandle, OperationSnapshot, PluginPoolConfig,
     json_size,
 };
 use serde_json::{Map, Value, json};

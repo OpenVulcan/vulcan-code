@@ -236,9 +236,9 @@ impl VulcanPluginRuntimeManager {
             &runtime.plugin,
         )
         .map_err(VulcanPluginRuntimeError::new)?;
-        // Resolve the same immutable plugin aggregate before any execution domain can register.
-        // 在任何执行域可以注册之前，解析同一不可变插件聚合预算。
-        let budget = {
+        // Preserve distinct Hook and UI capacity owners without changing their fixed-state semantics.
+        // 保留不同 Hook 及 UI 容量所有者，不改变固定状态语义。
+        let capacity = {
             // Serialize the first registration and all later verification with host publication.
             // 将首次注册及全部后续核验与宿主发布排序。
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
@@ -248,7 +248,16 @@ impl VulcanPluginRuntimeManager {
                 &runtime.plugin.id,
                 runtime.plugin.generation,
             )?;
-            owner.ensure_plugin_budget(&runtime.plugin.id, &publication)?
+            owner.admit_capacity_member(
+                &runtime.plugin.id,
+                match runtime.kind {
+                    VulcanPluginPersistentRuntimeKind::Hook => VulcanPluginCapacityPurpose::Hook,
+                    VulcanPluginPersistentRuntimeKind::UiAction => {
+                        VulcanPluginCapacityPurpose::UiAction
+                    }
+                },
+                &publication,
+            )?
         };
         // Optional Hook shutdown differs from the mandatory tool shutdown export.
         // 可选 Hook 关闭不同于必填工具关闭导出。
@@ -267,31 +276,34 @@ impl VulcanPluginRuntimeManager {
         // 接纳固定会话之前注册原执行域。
         let pool = owner
             .host
-            .register_bundle_pool(VulcanPluginBundlePoolRequest {
-                plugin_id: runtime.plugin.id.clone(),
-                plugin_generation: runtime.plugin.generation,
-                workspace_root: workspace.clone(),
-                security_partition: format!(
-                    "{}:{}:{}",
-                    runtime.kind.label(),
-                    runtime.plugin.id,
-                    runtime.plugin.generation
-                ),
-                scope: VulcanPluginBridgeLeaseScope::Enabled,
-                policy: PluginPoolConfig {
-                    kind: PoolKind::Shared,
-                    min_resident_vms: 0,
-                    max_resident_vms: 1,
-                    max_running_calls: 1,
-                    max_queued_calls: budget.max_queued_calls,
-                    reuse: InstanceReuse::Session,
-                    serial: true,
-                    backend: ExecutionBackend::InProcess,
-                    idle_ttl_ms: None,
-                    max_uses: None,
+            .register_bundle_pool_in_capacity(
+                &capacity.capacity_id,
+                VulcanPluginBundlePoolRequest {
+                    plugin_id: runtime.plugin.id.clone(),
+                    plugin_generation: runtime.plugin.generation,
+                    workspace_root: workspace.clone(),
+                    security_partition: format!(
+                        "{}:{}:{}",
+                        runtime.kind.label(),
+                        runtime.plugin.id,
+                        runtime.plugin.generation
+                    ),
+                    scope: VulcanPluginBridgeLeaseScope::Enabled,
+                    policy: PluginPoolConfig {
+                        kind: capacity.config.resources.kind,
+                        min_resident_vms: 0,
+                        max_resident_vms: 1,
+                        max_running_calls: 1,
+                        max_queued_calls: capacity.config.max_queued_calls,
+                        reuse: InstanceReuse::Session,
+                        serial: true,
+                        backend: ExecutionBackend::InProcess,
+                        idle_ttl_ms: None,
+                        max_uses: None,
+                    },
+                    finalizer,
                 },
-                finalizer,
-            })
+            )
             .map_err(core_error)?;
         {
             // Keep the exact lifecycle evidence within this synchronous lock scope.

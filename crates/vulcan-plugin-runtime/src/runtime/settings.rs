@@ -9,15 +9,19 @@ use std::time::{Duration, Instant};
 
 /// Exact schema version understood by this host settings reader and writer projection.
 /// 此宿主设置读取器及写出投影理解的精确 Schema 版本。
-const SETTINGS_SCHEMA_VERSION: u32 = 2;
+const SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 mod budgets;
+mod capacities;
 mod version;
 
 #[cfg(test)]
 mod budget_tests;
+#[cfg(test)]
+mod capacity_tests;
 
 pub use budgets::VulcanPluginBudgetSource;
+pub use capacities::{VulcanPluginCapacityBudgetSource, VulcanPluginCapacityPurpose};
 
 /// Persisted host configuration; core budget fields use the upstream type without a duplicated schema.
 /// 持久化宿主配置；核心预算字段使用上游类型，不复制 Schema。
@@ -34,6 +38,16 @@ pub struct VulcanPluginRuntimeSettings {
     /// 精确插件级覆盖；缺省插件将父级上限整体继承为预算。
     #[serde(default, deserialize_with = "budgets::deserialize_unique_budgets")]
     pub plugin_budgets: BTreeMap<String, EmbeddedPluginConfig>,
+    /// Complete host overrides per exact plugin and purpose; omitted purposes inherit shared plugin limits.
+    /// 按精确插件及用途提供完整宿主覆盖；缺省用途继承公共插件上限。
+    #[serde(
+        default,
+        deserialize_with = "capacities::deserialize_unique_capacities"
+    )]
+    pub capacity_budgets: BTreeMap<
+        String,
+        BTreeMap<VulcanPluginCapacityPurpose, luaskills::runtime::embedded::EmbeddedCapacityConfig>,
+    >,
     /// Maximum duration of one native capability, also constrained by its original operation deadline.
     /// 单项原生能力的最大时长，同时受原操作截止时间约束。
     pub max_capability_call_ms: u64,
@@ -65,6 +79,7 @@ impl Default for VulcanPluginRuntimeSettings {
                 max_value_bytes: 8 * 1024 * 1024,
             },
             plugin_budgets: BTreeMap::new(),
+            capacity_budgets: BTreeMap::new(),
             max_capability_call_ms: 60_000,
             shutdown_timeout_ms: super::VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS,
         }
@@ -104,6 +119,7 @@ impl VulcanPluginRuntimeSettings {
                 ));
             }
         }
+        self.validate_capacity_budgets()?;
         Ok(())
     }
 }

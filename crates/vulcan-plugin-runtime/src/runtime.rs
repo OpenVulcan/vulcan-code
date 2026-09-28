@@ -34,8 +34,8 @@ pub use bridge::{
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
 pub use formal::{
-    VulcanPluginFormalCallStatus, VulcanPluginFormalPluginStatus, VulcanPluginFormalRuntimeStatus,
-    VulcanPluginFormalSessionStatus,
+    VulcanPluginFormalCallStatus, VulcanPluginFormalCapacityStatus, VulcanPluginFormalPluginStatus,
+    VulcanPluginFormalRuntimeStatus, VulcanPluginFormalSessionStatus,
 };
 pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
 pub use lifecycle::VulcanPluginLifecycleEvent;
@@ -47,7 +47,8 @@ pub use process::VulcanPluginMcpStdioLaunchSpec;
 pub use sessions::VulcanPluginInvocationRequest;
 use sessions::plugin_payload;
 pub use settings::{
-    VulcanPluginBudgetSource, VulcanPluginRuntimeSettings, load_plugin_runtime_settings,
+    VulcanPluginBudgetSource, VulcanPluginCapacityBudgetSource, VulcanPluginCapacityPurpose,
+    VulcanPluginRuntimeSettings, load_plugin_runtime_settings,
 };
 
 use crate::{VulcanPluginCatalogSnapshot, VulcanPluginHostServices, VulcanPluginRuntimeState};

@@ -6,7 +6,7 @@ use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
     EmbeddedCall, EmbeddedErrorCode, ExecutionBackend, InstanceReuse, ModuleFinalizer,
-    OperationHandle, OperationSnapshot, PluginPoolConfig, PoolKind,
+    OperationHandle, OperationSnapshot, PluginPoolConfig,
 };
 use serde_json::{Map, Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -161,6 +161,17 @@ enum CallAdmission {
 }
 
 impl CallAdmission {
+    /// Return the host-selected purpose without consulting business payloads or export name guesses.
+    /// 返回宿主选择的用途，不读取业务载荷或猜测导出名称。
+    fn capacity_purpose(&self) -> VulcanPluginCapacityPurpose {
+        match self {
+            Self::Controller { .. } => VulcanPluginCapacityPurpose::ToolCall,
+            Self::Lifecycle { .. } => VulcanPluginCapacityPurpose::Lifecycle,
+            Self::Action { .. } => VulcanPluginCapacityPurpose::UiAction,
+            Self::Probe => VulcanPluginCapacityPurpose::ActivationProbe,
+        }
+    }
+
     /// Project retained ownership from this one authoritative admission intent.
     /// 从此唯一权威入场意图投影保留归属。
     fn ownership(&self) -> CallOwner {
@@ -779,15 +790,20 @@ impl VulcanPluginRuntimeManager {
                 "Formal preparation produced no workspace.",
             ));
         };
-        // Resolve the same immutable plugin aggregate before any execution domain can register.
-        // 在任何执行域可以注册之前，解析同一不可变插件聚合预算。
-        let budget = {
+        // Retain exact purpose capacity through this real preparation and original core registration.
+        // 在此真实准备及原核心注册期间保留精确用途容量。
+        let capacity = {
             // Serialize the first registration and all later verification with host publication.
             // 将首次注册及全部后续核验与宿主发布排序。
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
-            owner.ensure_plugin_budget(&call.plugin.id, &publication)?
+            self.validate_formal_submission(call, input.scope)?;
+            owner.admit_capacity_member(
+                &call.plugin.id,
+                input.admission.capacity_purpose(),
+                &publication,
+            )?
         };
         // Temporary sessions separate initialization from business while remaining private to this one call.
         // 临时会话将初始化与业务分离，同时仍为此单次调用私有。
@@ -801,30 +817,33 @@ impl VulcanPluginRuntimeManager {
         // 在记录任何实际初始化或业务操作前登记原 bundle。
         let pool = owner
             .host
-            .register_bundle_pool(VulcanPluginBundlePoolRequest {
-                plugin_id: call.plugin.id.clone(),
-                plugin_generation: call.plugin.generation,
-                workspace_root: workspace.clone(),
-                security_partition: input.security_partition.clone(),
-                scope: input.scope,
-                policy: PluginPoolConfig {
-                    kind: PoolKind::Shared,
-                    min_resident_vms: 0,
-                    max_resident_vms: 1,
-                    max_running_calls: 1,
-                    max_queued_calls: budget.max_queued_calls,
-                    reuse: if separate {
-                        InstanceReuse::Session
-                    } else {
-                        InstanceReuse::SingleCall
+            .register_bundle_pool_in_capacity(
+                &capacity.capacity_id,
+                VulcanPluginBundlePoolRequest {
+                    plugin_id: call.plugin.id.clone(),
+                    plugin_generation: call.plugin.generation,
+                    workspace_root: workspace.clone(),
+                    security_partition: input.security_partition.clone(),
+                    scope: input.scope,
+                    policy: PluginPoolConfig {
+                        kind: capacity.config.resources.kind,
+                        min_resident_vms: 0,
+                        max_resident_vms: 1,
+                        max_running_calls: 1,
+                        max_queued_calls: capacity.config.max_queued_calls,
+                        reuse: if separate {
+                            InstanceReuse::Session
+                        } else {
+                            InstanceReuse::SingleCall
+                        },
+                        serial: true,
+                        backend: ExecutionBackend::InProcess,
+                        idle_ttl_ms: None,
+                        max_uses: None,
                     },
-                    serial: true,
-                    backend: ExecutionBackend::InProcess,
-                    idle_ttl_ms: None,
-                    max_uses: None,
+                    finalizer: input.finalizer.take(),
                 },
-                finalizer: input.finalizer.take(),
-            })
+            )
             .map_err(core_error)?;
         call.lock()?.pool = Some(pool.clone());
         // No catalog publication may interleave this final generation check and core admission.

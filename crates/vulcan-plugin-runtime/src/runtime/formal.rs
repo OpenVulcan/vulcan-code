@@ -7,6 +7,8 @@ use serde::Serialize;
 
 mod budgets;
 pub use budgets::VulcanPluginFormalPluginStatus;
+mod capacities;
+pub use capacities::VulcanPluginFormalCapacityStatus;
 
 mod calls;
 pub use calls::VulcanPluginFormalCallStatus;
@@ -26,6 +28,10 @@ pub(super) struct ManagedFormalRuntime {
     /// Effective host settings remain immutable until the manager is recreated.
     /// 生效宿主设置保持不可变，直到管理器重新创建。
     pub settings: VulcanPluginRuntimeSettings,
+    /// Exact core capacity identities and preparing-member claims survive module generation changes.
+    /// 精确核心容量身份及准备中成员声明在模块代次变化后保持存活。
+    capacities:
+        Mutex<BTreeMap<(String, VulcanPluginCapacityPurpose), capacities::CapacityRegistration>>,
     /// Bounded host ownership covers preparation through physical cleanup and unacknowledged results.
     /// 有界宿主所有权覆盖准备、物理清理及未确认结果。
     calls: Mutex<BTreeMap<String, Arc<calls::FormalCall>>>,
@@ -89,9 +95,13 @@ impl VulcanPluginRuntimeManager {
             settings.max_capability_call_ms,
         )
         .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        // Explicit guarantees exist before any shared production work can consume the parent budget.
+        // 在任何公共生产工作消费父级预算前，显式保证已经存在。
+        let capacities = capacities::register_configured_capacities(&host, &settings)?;
         *slot = Some(Arc::new(ManagedFormalRuntime {
             host,
             settings,
+            capacities: Mutex::new(capacities),
             calls: Mutex::new(BTreeMap::new()),
             pinned: Mutex::new(BTreeMap::new()),
             hooks: Mutex::new(BTreeMap::new()),

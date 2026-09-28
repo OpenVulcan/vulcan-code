@@ -7,7 +7,7 @@ use super::*;
 use crate::{VulcanPluginDescriptor, VulcanPluginHookDescriptor};
 use luaskills::runtime::embedded::{
     EmbeddedCall, EmbeddedErrorCode, EmbeddedSessionPhase, ExecutionBackend, InstanceReuse,
-    ModuleFinalizer, OperationHandle, OperationSnapshot, PluginPoolConfig, PoolKind,
+    ModuleFinalizer, OperationHandle, OperationSnapshot, PluginPoolConfig,
 };
 use luaskills::{LuaInvocationContext, RuntimeRequestContext};
 use serde_json::{Value, json};

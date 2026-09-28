@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+mod capacities;
+
 /// Bound evidence polling without substituting an arbitrary sleep for physical completion.
 /// 限制证据轮询时长，不以任意休眠替代物理完成。
 const WAIT: Duration = Duration::from_secs(5);
