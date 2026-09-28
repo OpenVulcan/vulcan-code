@@ -3,6 +3,7 @@
 
 mod atomic_file;
 mod catalog;
+mod generation_store;
 mod host_services;
 mod manifest;
 mod runtime;
@@ -34,6 +35,7 @@ pub(crate) fn metadata_is_link_or_reparse_point(metadata: &std::fs::Metadata) ->
 }
 
 pub use catalog::*;
+pub use generation_store::*;
 pub use host_services::*;
 pub use manifest::*;
 pub use runtime::*;

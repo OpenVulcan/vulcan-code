@@ -2616,7 +2616,7 @@ fn update_package_digest_path(digest: &mut Sha256, path: &Path) {
 
 /// Validates one lowercase kebab/snake identifier used in host dispatch.
 /// 校验一个用于宿主调度的小写短横线或下划线标识符。
-fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
+pub(crate) fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
     let valid = !value.is_empty()
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
