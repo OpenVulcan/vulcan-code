@@ -202,6 +202,14 @@ async fn formal_capacity_lifecycle_activation_rolls_back_partial_reservations() 
     // Failed activation must not advance the published routing generation.
     // 失败启用不能推进已发布路由代次。
     let generation = fixture.manager.snapshot().plugins["hook-plugin"].generation;
+    // A compensated create/remove cycle must invalidate an earlier observation of absence.
+    // 被补偿的创建／移除周期必须使先前缺失观测失效。
+    let capacity_revision = fixture
+        .manager
+        .formal_capacities()
+        .expect("mapping")
+        .expect("parent")
+        .registry_revision;
     // Registration fails before any activation callback or Hook instance is admitted.
     // 注册在任何启用回调或 Hook 实例入场前失败。
     let failure = fixture
@@ -209,6 +217,15 @@ async fn formal_capacity_lifecycle_activation_rolls_back_partial_reservations() 
         .begin_enabling("hook-plugin")
         .expect_err("insufficient combined guarantee");
     assert!(failure.to_string().contains("capacity"), "{failure}");
+    assert_ne!(
+        fixture
+            .manager
+            .formal_capacities()
+            .expect("compensated mapping")
+            .expect("parent")
+            .registry_revision,
+        capacity_revision
+    );
     assert_eq!(
         fixture.manager.snapshot().plugins["hook-plugin"].generation,
         generation

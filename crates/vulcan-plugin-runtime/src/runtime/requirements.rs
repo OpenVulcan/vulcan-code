@@ -1,5 +1,5 @@
-//! Compare plugin requirements with the sole frozen host policy before activation or admission.
-//! 在激活或入场前，将插件必需条件与唯一冻结宿主策略比较。
+//! Compare plugin requirements with the sole effective host policy before activation or admission.
+//! 在激活或入场前，将插件必需条件与唯一生效宿主策略比较。
 
 use super::{
     VulcanPluginBridgeLeaseScope, VulcanPluginCapacityPurpose, VulcanPluginRuntimeError,

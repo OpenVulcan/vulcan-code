@@ -8,7 +8,10 @@ use serde::Serialize;
 mod budgets;
 pub use budgets::VulcanPluginFormalPluginStatus;
 mod capacities;
-pub use capacities::VulcanPluginFormalCapacityStatus;
+pub use capacities::{
+    VulcanPluginCapacityRegistrationRequest, VulcanPluginFormalCapacityCatalog,
+    VulcanPluginFormalCapacityStatus,
+};
 
 mod calls;
 pub use calls::VulcanPluginFormalCallStatus;

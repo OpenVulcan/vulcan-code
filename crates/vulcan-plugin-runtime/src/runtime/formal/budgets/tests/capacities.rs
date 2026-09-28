@@ -5,6 +5,7 @@ use super::*;
 use luaskills::runtime::embedded::{EmbeddedCapacityConfig, PoolKind};
 
 mod lifecycle;
+mod management;
 mod policy;
 
 /// Derive one dedicated purpose config from settings and plugin_id; minimum selects its explicit guarantee.

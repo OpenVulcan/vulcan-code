@@ -9,11 +9,17 @@ use luaskills::runtime::embedded::{
 use std::collections::BTreeSet;
 
 mod lifecycle;
+mod management;
 mod policy;
+
+pub use management::{VulcanPluginCapacityRegistrationRequest, VulcanPluginFormalCapacityCatalog};
 
 /// Keep exact capacity identities and explicit lifecycle retirement intent under one ownership lock.
 /// 在同一归属锁下保留精确容量身份及明确生命周期回收意图。
 pub(super) struct CapacityRegistry {
+    /// Opaque mapping predecessor changes on insertion or removal, including compensated registrations.
+    /// 不透明映射前驱在插入或移除时变化，包含被补偿的注册。
+    revision: String,
     /// Current effective purpose policy and retained durable transaction share the ownership lock.
     /// 当前生效用途策略及保留持久事务共用归属锁。
     policy: PolicyStore,
@@ -56,11 +62,13 @@ pub(super) fn register_configured_capacities(
                 CapacityRegistration {
                     identity,
                     preparing_members: 0,
+                    management_request: None,
                 },
             );
         }
     }
     Ok(CapacityRegistry {
+        revision: uuid::Uuid::new_v4().to_string(),
         policy,
         registrations,
         retiring_plugins: BTreeSet::new(),
@@ -70,6 +78,9 @@ pub(super) fn register_configured_capacities(
 /// One native identity per exact plugin purpose; this is not a second physical resource ledger.
 /// 每个精确插件用途对应单个原生身份；这不是第二份物理资源账本。
 pub(super) struct CapacityRegistration {
+    /// Successful administrative request remains attached to this original identity until explicit forgetting.
+    /// 成功管理请求附着于此原身份，直至显式遗忘。
+    management_request: Option<VulcanPluginCapacityRegistrationRequest>,
     /// Core-issued identity never changes while retained, including after closure.
     /// 核心签发身份在保留期间绝不变化，包括关闭后。
     identity: String,
@@ -129,6 +140,9 @@ impl Drop for CapacityAdmission<'_> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VulcanPluginFormalCapacityStatus {
+    /// Retained management identity allows observers to recover the original registration without resubmission.
+    /// 保留管理身份使观测者无需重新提交即可恢复原登记。
+    pub management_request: Option<VulcanPluginCapacityRegistrationRequest>,
     /// The exact parent identity distinguishes this native ownership lifetime.
     /// 精确父级身份区分此原生归属寿命。
     pub runtime_id: String,
@@ -194,11 +208,12 @@ impl ManagedFormalRuntime {
                 .runtime()
                 .register_capacity(plugin_id, config)
                 .map_err(calls::core_error)?;
-            registry.registrations.insert(
+            registry.insert_registration(
                 key.clone(),
                 CapacityRegistration {
                     identity,
                     preparing_members: 0,
+                    management_request: None,
                 },
             );
         }
@@ -287,24 +302,9 @@ impl VulcanPluginRuntimeManager {
         else {
             return Ok(None);
         };
-        // Revision and convergence originate in one atomic native observation, not separately sampled counters.
-        // 修订及收敛来自一次原子原生观测，不分别取样计数。
-        let policy =
-            owner.verify_capacity(plugin_id, purpose, registration, &registry.policy.settings)?;
-        Ok(Some(VulcanPluginFormalCapacityStatus {
-            runtime_id: owner.host.runtime().id().to_owned(),
-            policy_revision: policy.revision,
-            pending_convergence: policy.pending_convergence,
-            purpose,
-            budget_source: registry
-                .policy
-                .settings
-                .capacity_budget(plugin_id, purpose)
-                .1,
-            preparing_members: registration.preparing_members,
-            retirement_requested: registry.retiring_plugins.contains(plugin_id),
-            snapshot: policy.capacity,
-        }))
+        owner
+            .capacity_status_locked(&registry, plugin_id, purpose, registration)
+            .map(Some)
     }
 
     /// Close the exact plugin_id/purpose and its current members; return whether a registration existed.
@@ -404,7 +404,7 @@ impl VulcanPluginRuntimeManager {
             .runtime()
             .forget_capacity(&registration.identity)
             .map_err(calls::core_error)?;
-        registrations.registrations.remove(&key);
+        registrations.remove_registration(&key);
         Ok(true)
     }
 }

@@ -102,6 +102,10 @@ RPC／WebUI 暴露尚待完成。原始核心字段命名由上游类型决定�
 `formal_capacity_status(plugin_id, purpose)` 返回原父级身份、用途、策略来源 `plugin_budget`／
 `host_override`、宿主准备计数、`retirementRequested` 及原生 `EmbeddedCapacitySnapshot`；无注册时返回空值且不分配资源。
 另含 `policyRevision` 和 `pendingConvergence`，与原生快照来自同一次核心原子观测。
+`formal_capacities()` 提供已登记用途目录及独立映射前驱。管理端通过 `register_formal_capacity`
+可以先登记尚未执行过业务的用途，再用策略事务设置专用额度；登记不启动 Lua 或写配置。
+成功请求由原容量的 `managementRequest` 保留，可按父级和提交身份查询，原对象遗忘后旧请求不可重放。
+完整前驱、只读及恢复语义见[容量策略管理契约](plugin-capacity-policy-transactions.md)。
 `request_formal_capacity_close` 永久关闭该身份及成员入场，只确认关闭请求，不证明物理排空；
 后续调用不会自动选择另一用途或创建替代身份。宿主成员注册准备守卫保留原映射，直到真实准备返回，
 关闭期间尚未完成的注册会明确失败。`forget_formal_capacity` 必须等待全部准备结束、成员实际清理且

@@ -95,11 +95,12 @@ impl ManagedFormalRuntime {
                 .register_capacity(plugin_id, config.clone())
             {
                 Ok(identity) => {
-                    registry.registrations.insert(
+                    registry.insert_registration(
                         key.clone(),
                         CapacityRegistration {
                             identity,
                             preparing_members: 0,
+                            management_request: None,
                         },
                     );
                     created.push(key);
@@ -123,7 +124,7 @@ impl ManagedFormalRuntime {
                                 self.host.runtime().forget_capacity(&registration.identity)
                             }) {
                             Ok(()) => {
-                                registry.registrations.remove(&created_key);
+                                registry.remove_registration(&created_key);
                             }
                             Err(cleanup) => failures.push(cleanup.to_string()),
                         }
@@ -197,7 +198,7 @@ impl ManagedFormalRuntime {
                 .map_err(calls::core_error)?;
             // Acknowledge each completed native removal before attempting another fallible step.
             // 尝试另一个可能失败的步骤前，确认每次完成的原生移除。
-            registry.registrations.remove(&key);
+            registry.remove_registration(&key);
         }
         registry.retiring_plugins.remove(plugin_id);
         Ok(())

@@ -616,6 +616,51 @@ fn bundled_context7_plugin_loads_with_typed_json_surface() {
 #[cfg(target_os = "windows")]
 #[test]
 fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
+    // Run this integration in its own process so RTK history stays private without mutating shared process environment.
+    // 在独立进程运行此集成，使 RTK 历史保持私有，而不修改共享进程环境。
+    const CHILD_MARKER: &str = "VULCAN_RTK_INTEGRATION_CHILD";
+    if std::env::var_os(CHILD_MARKER).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        // An empty real database bounds fixture work independently from the user's history size or concurrent commands.
+        // 空的真实数据库使夹具工作独立于用户历史大小及并发命令而保持有界。
+        let history = tempfile::tempdir().expect("isolated RTK history");
+        // The child CLI owns this one test database until the subprocess has finished.
+        // 子 CLI 在子进程结束前拥有此单个测试数据库。
+        let database = history.path().join("history.db");
+        // The current test executable preserves the exact compiled runtime and production plugin path.
+        // 当前测试程序保留精确已编译运行时及生产插件路径。
+        let executable = std::env::current_exe().expect("integration test executable");
+        // Derive the current harness entry from its real module identity rather than a source line or test index.
+        // 从真实模块身份派生当前测试入口，不使用源码行或测试下标。
+        let test_path = concat!(
+            module_path!(),
+            "::bundled_rtk_plugin_uses_generic_action_and_hook_boundaries"
+        );
+        // Rust's test harness omits only the crate prefix from the declared module path.
+        // Rust 测试器仅从声明模块路径省略 crate 前缀。
+        let (_, test_name) = test_path
+            .split_once("::")
+            .expect("crate-qualified test name");
+        // Child-local environment keeps other tests and the user's running RTK commands untouched.
+        // 子进程局部环境保持其他测试及用户正在运行的 RTK 命令不变。
+        let output = std::process::Command::new(executable)
+            .args([test_name, "--exact", "--test-threads=1", "--nocapture"])
+            .env(CHILD_MARKER, "1")
+            .env("RTK_DB_PATH", &database)
+            .env("RTK_TELEMETRY_DISABLED", "1")
+            .output()
+            .expect("isolated RTK integration process");
+        assert!(
+            output.status.success(),
+            "RTK integration failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            database.is_file(),
+            "RTK integration must use the private history database"
+        );
+        return;
+    }
     let temp = tempfile::tempdir().expect("create RTK plugin test directory");
     let runtime_root = temp.path().join("runtime");
     fs::create_dir_all(&runtime_root).expect("create RTK test runtime root");
