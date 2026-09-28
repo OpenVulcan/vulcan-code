@@ -146,6 +146,22 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         diagnostic: String,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Serialize diagnostics with lifecycle capacity retirement and its final catalog publication.
+        // 将诊断与生命周期容量回收及最终目录发布排序。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        self.record_cleanup_failure_locked(plugin_id, diagnostic, &registration)
+    }
+
+    /// Retain diagnostic for plugin_id under an existing publication guard; return after its live projection is updated.
+    /// 在既有发布守卫下为 plugin_id 保留 diagnostic；更新实时投影后返回。
+    pub(super) fn record_cleanup_failure_locked(
+        &self,
+        plugin_id: &str,
+        diagnostic: String,
+        registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
         let mut diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
         })?;
@@ -154,17 +170,18 @@ impl VulcanPluginRuntimeManager {
             plugin_diagnostics.push(diagnostic);
         }
         drop(diagnostics);
-        self.publish_cleanup_diagnostics(plugin_id)
+        self.publish_cleanup_diagnostics(plugin_id, registration)
     }
 
     /// Publishes newly recorded cleanup failures without waiting for a later catalog refresh.
     /// 无需等待后续目录刷新即可发布新记录的清理失败。
     /// plugin_id selects the immutable catalog projection to update; returns unit or a lock diagnostic.
     /// plugin_id选择要更新的不可变目录投影；返回空值或锁诊断。
-    fn publish_cleanup_diagnostics(&self, plugin_id: &str) -> Result<(), VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
-        })?;
+    fn publish_cleanup_diagnostics(
+        &self,
+        plugin_id: &str,
+        _registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
         let cleanup_diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
         })?;
@@ -202,6 +219,23 @@ impl VulcanPluginRuntimeManager {
         let _registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
+        self.clear_cleanup_diagnostics_locked(plugin_id, &_registration)
+    }
+
+    /// Clear resolved diagnostics for plugin_id while the caller holds publication; retain explicit unfinished capacity retirement.
+    /// 调用方持有发布门时清除 plugin_id 已解决诊断；保留明确未完成容量回收。
+    /// Return success after projection, or a precise ownership error without claiming cleanup completion.
+    /// 投影后返回成功；或返回精确归属错误而不宣称清理完成。
+    pub(super) fn clear_cleanup_diagnostics_locked(
+        &self,
+        plugin_id: &str,
+        _registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        if let Some(owner) = self.formal_runtime_owner()?
+            && owner.has_retiring_capacities(plugin_id)?
+        {
+            return Ok(());
+        }
         // Probe preparation has no legacy session quota, but still retains real cleanup ownership.
         // 探测准备不占旧会话配额，但仍保留真实清理所有权。
         let has_formal_calls = self.has_unretired_formal_calls(plugin_id)?;

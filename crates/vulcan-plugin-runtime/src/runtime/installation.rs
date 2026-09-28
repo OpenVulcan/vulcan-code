@@ -928,6 +928,14 @@ impl VulcanPluginRuntimeManager {
         } else {
             None
         };
+        // The caller completes uninstall callbacks first; refuse removal while any formal capacity member still owns the package.
+        // 调用方先完成卸载回调；任何正式容量成员仍持有包时拒绝移除。
+        if let Some(owner) = self.formal_runtime_owner()?
+            && let Err(error) = owner.retire_plugin_capacities(plugin_id, &_registration)
+        {
+            self.record_cleanup_failure_locked(plugin_id, error.to_string(), &_registration)?;
+            return Err(error);
+        }
         let tombstone =
             canonical_user_root.join(format!(".uninstall-{}-{}", plugin_id, Uuid::new_v4()));
         fs::rename(&canonical_package, &tombstone).map_err(|error| {

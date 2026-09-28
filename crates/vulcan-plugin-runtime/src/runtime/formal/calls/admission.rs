@@ -4,6 +4,31 @@
 use super::*;
 
 impl VulcanPluginRuntimeManager {
+    /// Validate plugin's exact generation and scope against one live catalog; return the authoritative admission result.
+    /// 针对单份实时目录校验 plugin 的精确代次及 scope；返回权威入场结果。
+    fn validate_formal_plugin(
+        &self,
+        plugin: &VulcanPluginDescriptor,
+        scope: VulcanPluginBridgeLeaseScope,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // All callers use the same identity and lifecycle predicate before registration or execution.
+        // 全部调用方在注册或执行前使用同一身份及生命周期判定。
+        let snapshot = self.snapshot();
+        // A retained descriptor never follows a later catalog incarnation.
+        // 保留描述符绝不跟随后续目录实例。
+        let current = snapshot.plugins.get(&plugin.id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Plugin disappeared before submission.")
+        })?;
+        if current.generation != plugin.generation
+            || current.runtime_state != scope.required_runtime_state()
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin generation changed before formal submission.",
+            ));
+        }
+        Ok(())
+    }
+
     /// Check one frozen call against the current catalog under the caller's publication gate.
     /// 在调用方持有的发布门下，对照当前目录检查单个冻结调用。
     /// Scope is host-selected; returns explicit generation or cancellation failures before submission.
@@ -13,21 +38,7 @@ impl VulcanPluginRuntimeManager {
         call: &FormalCall,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        // Use one catalog snapshot for identity and lifecycle authority.
-        // 使用单个目录快照同时检查身份及生命周期权威。
-        let snapshot = self.snapshot();
-        // The original descriptor cannot follow another generation.
-        // 原描述符不能跟随另一个代次。
-        let current = snapshot.plugins.get(&call.plugin.id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Plugin disappeared before submission.")
-        })?;
-        if current.generation != call.plugin.generation
-            || current.runtime_state != scope.required_runtime_state()
-        {
-            return Err(VulcanPluginRuntimeError::new(
-                "Plugin generation changed before formal submission.",
-            ));
-        }
+        self.validate_formal_plugin(&call.plugin, scope)?;
         if call.cancelled.load(Ordering::Acquire) {
             return Err(VulcanPluginRuntimeError::new(
                 "Formal invocation cancelled before submission.",
@@ -190,6 +201,17 @@ impl VulcanPluginRuntimeManager {
         // Scope derives exclusively from the trusted event, not a plugin-provided string.
         // 作用域仅由可信事件派生，不读取插件提供的字符串。
         let scope = VulcanPluginBridgeLeaseScope::from(event);
+        {
+            // An explicit lifecycle retry may finish prior capacity retirement after actual member drain.
+            // 明确生命周期重试可在实际成员排空后完成此前容量回收。
+            let publication = self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+            })?;
+            self.validate_formal_plugin(&plugin, scope)?;
+            if owner.has_retiring_capacities(&plugin.id)? {
+                owner.prepare_plugin_capacities(&plugin.id, &publication)?;
+            }
+        }
         // A lifecycle callback has fresh state and no tool or Hook business finalizer.
         // 生命周期回调拥有全新状态，没有工具或 Hook 业务关闭器。
         let input = Preparation {

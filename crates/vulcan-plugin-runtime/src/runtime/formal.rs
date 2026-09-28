@@ -30,8 +30,7 @@ pub(super) struct ManagedFormalRuntime {
     pub settings: VulcanPluginRuntimeSettings,
     /// Exact core capacity identities and preparing-member claims survive module generation changes.
     /// 精确核心容量身份及准备中成员声明在模块代次变化后保持存活。
-    capacities:
-        Mutex<BTreeMap<(String, VulcanPluginCapacityPurpose), capacities::CapacityRegistration>>,
+    capacities: Mutex<capacities::CapacityRegistry>,
     /// Bounded host ownership covers preparation through physical cleanup and unacknowledged results.
     /// 有界宿主所有权覆盖准备、物理清理及未确认结果。
     calls: Mutex<BTreeMap<String, Arc<calls::FormalCall>>>,

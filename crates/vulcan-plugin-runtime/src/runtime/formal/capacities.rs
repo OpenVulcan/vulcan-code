@@ -3,6 +3,20 @@
 
 use super::*;
 use luaskills::runtime::embedded::{EmbeddedCapacityConfig, EmbeddedCapacitySnapshot};
+use std::collections::BTreeSet;
+
+mod lifecycle;
+
+/// Keep exact capacity identities and explicit lifecycle retirement intent under one ownership lock.
+/// 在同一归属锁下保留精确容量身份及明确生命周期回收意图。
+pub(super) struct CapacityRegistry {
+    /// Each semantic owner retains the core-issued identity until successful explicit removal.
+    /// 每个语义所有者保留核心签发身份，直到显式移除成功。
+    registrations: BTreeMap<(String, VulcanPluginCapacityPurpose), CapacityRegistration>,
+    /// Failed lifecycle retirement fences fresh admission and preserves cleanup diagnostics.
+    /// 失败的生命周期回收阻止新入场，并保留清理诊断。
+    retiring_plugins: BTreeSet<String>,
+}
 
 /// Register every explicit settings policy in host before publishing the parent; return exact retained identities.
 /// 发布父级前，在 host 中注册全部显式 settings 策略；返回精确保留身份。
@@ -11,10 +25,7 @@ use luaskills::runtime::embedded::{EmbeddedCapacityConfig, EmbeddedCapacitySnaps
 pub(super) fn register_configured_capacities(
     host: &VulcanPluginEmbeddedHost,
     settings: &VulcanPluginRuntimeSettings,
-) -> Result<
-    BTreeMap<(String, VulcanPluginCapacityPurpose), CapacityRegistration>,
-    VulcanPluginRuntimeError,
-> {
+) -> Result<CapacityRegistry, VulcanPluginRuntimeError> {
     // Only actual native success may become a host identity; the owner is not public during this transaction.
     // 只有实际原生成功才能成为宿主身份；此事务期间所有者尚未公开。
     let mut registrations = BTreeMap::new();
@@ -41,7 +52,10 @@ pub(super) fn register_configured_capacities(
             );
         }
     }
-    Ok(registrations)
+    Ok(CapacityRegistry {
+        registrations,
+        retiring_plugins: BTreeSet::new(),
+    })
 }
 
 /// One native identity per exact plugin purpose; this is not a second physical resource ledger.
@@ -84,6 +98,7 @@ impl Drop for CapacityAdmission<'_> {
         // Explicit forgetting is forbidden while this guard exists, so the original entry must remain.
         // 此守卫存在期间禁止显式遗忘，因此原条目必须保留。
         let registration = registrations
+            .registrations
             .get_mut(&self.key)
             .expect("capacity admission retains its registration");
         assert_eq!(
@@ -114,6 +129,9 @@ pub struct VulcanPluginFormalCapacityStatus {
     /// Actual unfinished registration preparations prevent metadata forgetting.
     /// 实际未结束注册准备阻止元数据遗忘。
     pub preparing_members: usize,
+    /// True while this plugin's explicit lifecycle retirement still owns unfinished cleanup.
+    /// 此插件明确生命周期回收仍持有未完成清理时为真。
+    pub retirement_requested: bool,
     /// Physical use and core work come only from the original native capacity owner.
     /// 物理用量及核心工作仅来自原原生容量所有者。
     pub snapshot: EmbeddedCapacitySnapshot,
@@ -137,10 +155,15 @@ impl ManagedFormalRuntime {
         // Lock order is publication gate, capacity metadata, then native control.
         // 锁顺序为发布门、容量元数据、原生控制。
         let mut registrations = self.capacities.lock().map_err(|_| capacity_lock_error())?;
+        if registrations.retiring_plugins.contains(plugin_id) {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin capacity lifecycle retirement is unfinished.",
+            ));
+        }
         // Package generation is intentionally absent: multiple immutable generations share this purpose budget.
         // 有意不包含包代次：多个不可变代次共享此用途预算。
         let key = (plugin_id.to_owned(), purpose);
-        if let Some(registration) = registrations.get_mut(&key) {
+        if let Some(registration) = registrations.registrations.get_mut(&key) {
             if self
                 .verify_capacity(plugin_id, purpose, registration)?
                 .closing
@@ -163,7 +186,7 @@ impl ManagedFormalRuntime {
                 .runtime()
                 .register_capacity(plugin_id, config.clone())
                 .map_err(calls::core_error)?;
-            registrations.insert(
+            registrations.registrations.insert(
                 key.clone(),
                 CapacityRegistration {
                     identity,
@@ -174,6 +197,7 @@ impl ManagedFormalRuntime {
         // The claim is published before releasing metadata; forget cannot race a future pool registration.
         // 释放元数据前发布声明；遗忘不能与后续池注册竞争。
         let capacity_id = registrations
+            .registrations
             .get(&key)
             .expect("registered capacity")
             .identity
@@ -234,7 +258,10 @@ impl VulcanPluginRuntimeManager {
         let registrations = owner.capacities.lock().map_err(|_| capacity_lock_error())?;
         // Lookup is exact and does not select another purpose or generation.
         // 查找为精确匹配，不选择其他用途或代次。
-        let Some(registration) = registrations.get(&(plugin_id.to_owned(), purpose)) else {
+        let Some(registration) = registrations
+            .registrations
+            .get(&(plugin_id.to_owned(), purpose))
+        else {
             return Ok(None);
         };
         Ok(Some(VulcanPluginFormalCapacityStatus {
@@ -242,6 +269,7 @@ impl VulcanPluginRuntimeManager {
             purpose,
             budget_source: owner.settings.capacity_budget(plugin_id, purpose).1,
             preparing_members: registration.preparing_members,
+            retirement_requested: registrations.retiring_plugins.contains(plugin_id),
             snapshot: owner.verify_capacity(plugin_id, purpose, registration)?,
         }))
     }
@@ -273,7 +301,10 @@ impl VulcanPluginRuntimeManager {
         let registrations = owner.capacities.lock().map_err(|_| capacity_lock_error())?;
         // Explicit absence does not create a capacity.
         // 明确缺失不创建容量。
-        let Some(registration) = registrations.get(&(plugin_id.to_owned(), purpose)) else {
+        let Some(registration) = registrations
+            .registrations
+            .get(&(plugin_id.to_owned(), purpose))
+        else {
             return Ok(false);
         };
         owner.verify_capacity(plugin_id, purpose, registration)?;
@@ -315,7 +346,7 @@ impl VulcanPluginRuntimeManager {
         let key = (plugin_id.to_owned(), purpose);
         // Absence is reported rather than inventing a successful release of another object.
         // 报告缺失，不虚构另一对象成功释放。
-        let Some(registration) = registrations.get(&key) else {
+        let Some(registration) = registrations.registrations.get(&key) else {
             return Ok(false);
         };
         owner.verify_capacity(plugin_id, purpose, registration)?;
@@ -329,7 +360,7 @@ impl VulcanPluginRuntimeManager {
             .runtime()
             .forget_capacity(&registration.identity)
             .map_err(calls::core_error)?;
-        registrations.remove(&key);
+        registrations.registrations.remove(&key);
         Ok(true)
     }
 }
