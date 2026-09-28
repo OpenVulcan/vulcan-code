@@ -695,13 +695,12 @@ fn plugin_execution_engine_is_independent_of_skill_management() {
     // Management and plugin execution must receive independent engine instances.
     // 管理与插件执行必须取得独立引擎实例。
     let handle = isolated_handle(&root.path, &server, false);
-    // Use an explicitly trusted System package for the low-level typed execution contract.
-    // 使用显式可信 System 包验证低层类型化执行契约。
-    let package = handle
-        .runtime_root
-        .join("system_lua_lib")
-        .join("engine-isolation");
-    fs::create_dir_all(&package).expect("create trusted package");
+    // Authorize an immutable-generation layout outside the engine's legacy System trust root.
+    // 授权位于引擎旧 System 信任根外的不可变代次布局。
+    let package = root.path.join(
+        "user-plugins/.vulcan-generations/packages/engine-isolation/physical-one/engine-isolation",
+    );
+    fs::create_dir_all(&package).expect("create host-authorized external package");
     fs::write(package.join("dependencies.yaml"), "{}\n").expect("write package dependencies");
     // The exact declaration and source are fixed before the ordinary engine is locked.
     // 精确声明及源码在普通引擎加锁前固定。
