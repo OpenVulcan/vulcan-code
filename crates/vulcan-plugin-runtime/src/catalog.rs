@@ -1285,6 +1285,60 @@ fn validate_manifest_identity(
         }
     }
     for tool in &runtime.tools {
+        if let Some(reuse) = &tool.execution.reusable {
+            if manifest.schema_version != crate::VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION
+                || tool.execution.kind != VulcanPluginToolExecutionKind::Stateless
+            {
+                return Err(format!(
+                    "Tool `{}` reuse requires a version-two stateless declaration.",
+                    tool.id
+                ));
+            }
+            for function in [&reuse.before_call, &reuse.after_call, &reuse.reuse_check] {
+                validate_lua_identifier(function, "tool reuse callback")?;
+            }
+            // Hygiene cannot alias a business export or another cleanup phase.
+            // 清理不能与业务导出或其他清理阶段共用名称。
+            let hygiene = [&reuse.before_call, &reuse.after_call, &reuse.reuse_check];
+            // Include every captured public export, not just the shared tool dispatcher.
+            // 包含每个捕获的公开导出，不仅包含共用工具分发器。
+            let public = [&runtime.invoke_function, &runtime.shutdown_function]
+                .into_iter()
+                .chain(runtime.hook_shutdown_function.iter())
+                .chain(runtime.hooks.iter().map(|hook| &hook.function))
+                .chain(runtime.actions.iter().map(|action| &action.function))
+                .chain(
+                    [
+                        &runtime.lifecycle.install,
+                        &runtime.lifecycle.enable,
+                        &runtime.lifecycle.disable,
+                        &runtime.lifecycle.uninstall,
+                    ]
+                    .into_iter()
+                    .flatten(),
+                );
+            if hygiene.into_iter().collect::<BTreeSet<_>>().len() != hygiene.len()
+                || public.into_iter().any(|export| hygiene.contains(&export))
+            {
+                return Err(format!(
+                    "Tool `{}` hygiene callbacks must be distinct private functions.",
+                    tool.id
+                ));
+            }
+            if reuse.max_resident_vms == 0
+                || reuse.max_running_calls == 0
+                || reuse.max_running_calls > reuse.max_resident_vms
+                || reuse.idle_ttl_ms == 0
+                || reuse.max_uses == 0
+                || (reuse.ordering == crate::VulcanPluginToolOrdering::KeySerial
+                    && reuse.max_running_calls != 1)
+            {
+                return Err(format!(
+                    "Tool `{}` has invalid reuse capacity, ordering or retirement limits.",
+                    tool.id
+                ));
+            }
+        }
         validate_identifier(&tool.id, "tool id")?;
         validate_identifier(&tool.group, "tool group")?;
         validate_identifier(&tool.execution.operation, "tool operation")?;

@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 mod admission;
 mod initialized;
+pub(super) mod reuse;
 
 #[cfg(test)]
 mod tests;
@@ -81,9 +82,12 @@ pub(super) struct FormalCall {
 /// 单个宿主调用的可变控制证据，独立于观测者寿命。
 #[derive(Default)]
 struct CallState {
-    /// Pool identity is published before submission and retained until physical forgetting succeeds.
-    /// 池身份在提交前发布，并保留至物理遗忘成功。
+    /// Pool identity precedes submission and lasts until exclusive retirement or completed reusable borrow release.
+    /// 池身份先于提交，并保留至独占退役或已完成复用借用释放。
     pool: Option<String>,
+    /// A borrowed reusable domain survives this call; its borrow ends only after request cleanup.
+    /// 借用的可复用域在此调用后存活；借用仅在请求清理后结束。
+    reusable_domain: Option<String>,
     /// Core-issued operation owns the actual execution and automatic finalization.
     /// 核心签发操作拥有实际执行及自动关闭。
     operation: Option<OperationHandle>,
@@ -96,8 +100,8 @@ struct CallState {
     /// Result becomes observable only after cleanup, or as an explicit retained failure.
     /// 结果仅在清理后可见，或作为明确保留失败可见。
     result: Option<Result<Value, VulcanPluginRuntimeError>>,
-    /// Physical retirement, not cancellation or a returned business value, releases the host slot.
-    /// 物理退役释放宿主槽位，取消或已返回业务值不释放。
+    /// Completed request cleanup and exclusive retirement or reusable borrow release permit host slot reclamation.
+    /// 已完成请求清理，以及独占退役或复用借用释放，允许回收宿主槽位。
     retired: bool,
     /// A single asynchronous observer owns completion at a time.
     /// 同时仅一个异步观测者拥有完成处理。
@@ -134,6 +138,9 @@ enum CallAdmission {
         /// The original controller owns this tool's retained history.
         /// 原控制器拥有此工具的保留历史。
         owner_session_id: String,
+        /// Exact manifest tool identity selects the optional private reuse contract.
+        /// 精确清单工具身份选择可选私有复用契约。
+        tool_id: String,
         /// The validated manifest selects the exact tool export.
         /// 已校验清单选择精确工具导出。
         export: String,
@@ -246,8 +253,8 @@ pub struct VulcanPluginFormalCallStatus {
     /// Core status is absent only before operation publication or when preparation failed.
     /// 仅操作发布前或准备失败时缺少核心状态。
     pub operation: Option<OperationSnapshot>,
-    /// True only after actual pool ownership has been forgotten successfully.
-    /// 仅在真实池所有权成功遗忘后为真。
+    /// True only after request cleanup and exclusive pool retirement or completed reusable borrow release.
+    /// 仅在请求清理完成，以及独占池退役或已完成复用借用释放后为真。
     pub retired: bool,
     /// An interrupted supervisor requires explicit drain recovery, while actual resources stay owned.
     /// 中断的监督者需要显式排空恢复，真实资源仍保持归属。
@@ -580,6 +587,7 @@ impl VulcanPluginRuntimeManager {
                 timeout_ms: owner.settings.shutdown_timeout_ms,
             }),
             admission: CallAdmission::Controller {
+                tool_id: tool.id.clone(),
                 export: runtime.invoke_function.clone(),
                 owner_session_id: owner_session_id.clone(),
             },
@@ -790,62 +798,89 @@ impl VulcanPluginRuntimeManager {
                 "Formal preparation produced no workspace.",
             ));
         };
-        // Retain exact purpose capacity through this real preparation and original core registration.
-        // 在此真实准备及原核心注册期间保留精确用途容量。
-        let capacity = {
-            // Serialize the first registration and all later verification with host publication.
-            // 将首次注册及全部后续核验与宿主发布排序。
-            let publication = self.state.session_registration_gate.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
-            })?;
-            self.validate_formal_submission(call, input.scope)?;
-            owner.admit_capacity_member(
-                &call.plugin.id,
-                input.admission.capacity_purpose(),
-                &publication,
-            )?
+        // Reuse is selected only by the exact validated stateless tool entry.
+        // 复用仅由精确已校验无状态工具入口选择。
+        let reusable = match &input.admission {
+            CallAdmission::Controller { tool_id, .. } => {
+                let manifest = call.plugin.manifest.as_ref().ok_or_else(|| {
+                    VulcanPluginRuntimeError::new("Formal tool manifest is missing.")
+                })?;
+                let runtime = super::super::lease::required_lua_runtime(manifest)?;
+                let tool = runtime
+                    .tools
+                    .iter()
+                    .find(|tool| &tool.id == tool_id)
+                    .ok_or_else(|| {
+                        VulcanPluginRuntimeError::new("Formal tool declaration is missing.")
+                    })?;
+                tool.execution
+                    .reusable
+                    .clone()
+                    .map(|reuse| (tool_id.clone(), reuse))
+            }
+            _ => None,
         };
-        // Temporary sessions separate initialization from business while remaining private to this one call.
-        // 临时会话将初始化与业务分离，同时仍为此单次调用私有。
         let separate = input.admission.separates_initialization();
-        if separate && input.finalizer.is_some() {
-            return Err(VulcanPluginRuntimeError::new(
-                "Action and probe sessions cannot select a business finalizer.",
-            ));
-        }
-        // Register the original bundle before recording any actual initialization or business operation.
-        // 在记录任何实际初始化或业务操作前登记原 bundle。
-        let pool = owner
-            .host
-            .register_bundle_pool_in_capacity(
-                &capacity.capacity_id,
-                VulcanPluginBundlePoolRequest {
-                    plugin_id: call.plugin.id.clone(),
-                    plugin_generation: call.plugin.generation,
-                    workspace_root: workspace.clone(),
-                    security_partition: input.security_partition.clone(),
-                    scope: input.scope,
-                    policy: PluginPoolConfig {
-                        kind: capacity.config.resources.kind,
-                        min_resident_vms: 0,
-                        max_resident_vms: 1,
-                        max_running_calls: 1,
-                        max_queued_calls: capacity.config.max_queued_calls,
-                        reuse: if separate {
-                            InstanceReuse::Session
-                        } else {
-                            InstanceReuse::SingleCall
+        let pool = if let Some((tool, reuse)) = reusable {
+            self.prepare_reusable_call(owner, call, input, &tool, &reuse)?
+        } else {
+            // Retain exact purpose capacity through this real preparation and original core registration.
+            // 在此真实准备及原核心注册期间保留精确用途容量。
+            let capacity = {
+                // Serialize the first registration and all later verification with host publication.
+                // 将首次注册及全部后续核验与宿主发布排序。
+                let publication = self.state.session_registration_gate.lock().map_err(|_| {
+                    VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+                })?;
+                self.validate_formal_submission(call, input.scope)?;
+                owner.admit_capacity_member(
+                    &call.plugin.id,
+                    input.admission.capacity_purpose(),
+                    &publication,
+                )?
+            };
+            // Temporary sessions separate initialization from business while remaining private to this one call.
+            // 临时会话将初始化与业务分离，同时仍为此单次调用私有。
+            if separate && input.finalizer.is_some() {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Action and probe sessions cannot select a business finalizer.",
+                ));
+            }
+            // Register the original bundle before recording any actual initialization or business operation.
+            // 在记录任何实际初始化或业务操作前登记原 bundle。
+            let pool = owner
+                .host
+                .register_bundle_pool_in_capacity(
+                    &capacity.capacity_id,
+                    VulcanPluginBundlePoolRequest {
+                        plugin_id: call.plugin.id.clone(),
+                        plugin_generation: call.plugin.generation,
+                        workspace_root: workspace.clone(),
+                        security_partition: input.security_partition.clone(),
+                        scope: input.scope,
+                        policy: PluginPoolConfig {
+                            kind: capacity.config.resources.kind,
+                            min_resident_vms: 0,
+                            max_resident_vms: 1,
+                            max_running_calls: 1,
+                            max_queued_calls: capacity.config.max_queued_calls,
+                            reuse: if separate {
+                                InstanceReuse::Session
+                            } else {
+                                InstanceReuse::SingleCall
+                            },
+                            serial: true,
+                            backend: VULCAN_PLUGIN_EXECUTION_BACKEND,
+                            idle_ttl_ms: None,
+                            max_uses: None,
                         },
-                        serial: true,
-                        backend: VULCAN_PLUGIN_EXECUTION_BACKEND,
-                        idle_ttl_ms: None,
-                        max_uses: None,
+                        finalizer: input.finalizer.take(),
                     },
-                    finalizer: input.finalizer.take(),
-                },
-            )
-            .map_err(core_error)?;
-        call.lock()?.pool = Some(pool.clone());
+                )
+                .map_err(core_error)?;
+            call.lock()?.pool = Some(pool.clone());
+            pool
+        };
         // No catalog publication may interleave this final generation check and core admission.
         // 任何目录发布都不能插入此次最终代次检查与核心入场之间。
         let _publication =
@@ -853,6 +888,7 @@ impl VulcanPluginRuntimeManager {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
         self.validate_formal_submission(call, input.scope)?;
+        self.validate_reusable_submission(owner, call)?;
         if let CallAdmission::Action { execution, .. } = &input.admission {
             execution.record.check()?;
         }
@@ -872,8 +908,8 @@ impl VulcanPluginRuntimeManager {
                 opening.operation,
             ));
         } else {
-            // Ordinary tools and lifecycle callbacks keep the declared SingleCall protocol.
-            // 普通工具及生命周期回调保留声明的 SingleCall 协议。
+            // Core admission owns ordering for both exclusive and explicitly reusable tool domains.
+            // 核心入场拥有独占及显式可复用工具域的顺序。
             let export = input.admission.export().ok_or_else(|| {
                 VulcanPluginRuntimeError::new("Formal business admission has no declared export.")
             })?;
@@ -972,6 +1008,9 @@ impl VulcanPluginRuntimeManager {
         }
         self.close_initialized_call(owner, call).await?;
         owner.host.reap_workspace_requests().map_err(core_error)?;
+        // Release only the request borrow; the reusable registry owns idle VM retirement.
+        // 仅释放请求借用；可复用注册表拥有空闲 VM 退役。
+        self.release_reusable_call(owner, call)?;
         let pool = call.lock()?.pool.clone();
         if let Some(pool) = pool {
             owner.host.runtime().close_pool(&pool).map_err(core_error)?;

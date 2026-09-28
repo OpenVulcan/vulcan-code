@@ -164,6 +164,10 @@ impl VulcanPluginRuntimeManager {
         let mut next_snapshot = (**published).clone();
         next_snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
         *published = Arc::new(next_snapshot);
+        drop(published);
+        // Already-running calls drain on their original VM; no later call reuses pre-update state.
+        // 已运行调用在原 VM 中排空；后续调用不复用更新前状态。
+        self.close_reusable_domains(Some(plugin_id), None, false)?;
         Ok(value)
     }
 }

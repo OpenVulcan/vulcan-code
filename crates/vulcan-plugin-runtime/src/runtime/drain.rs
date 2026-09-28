@@ -13,8 +13,8 @@ use std::sync::atomic::Ordering;
 /// 报告排空尝试中完成的插件清理与保留的失败。
 #[derive(Debug, Clone, Default)]
 pub struct VulcanPluginDrainReport {
-    /// Number of tracked formal calls whose actual pool ownership has retired.
-    /// 真实池所有权已退役的受跟踪正式调用数量。
+    /// Number of tracked formal calls whose request ownership, including any reusable borrow, has retired.
+    /// 请求归属已退役的受跟踪正式调用数量，包含其可复用借用。
     pub closed_formal_calls: usize,
     /// Number of sessions closed and removed successfully.
     /// 成功关闭并移除的会话数量。
@@ -86,6 +86,7 @@ impl VulcanPluginRuntimeManager {
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
         let mut report = VulcanPluginDrainReport::default();
         report.merge(self.drain_formal_calls(Some(plugin_id), None).await?);
+        report.merge(self.drain_reusable_domains(Some(plugin_id), None).await?);
         report.merge(self.drain_pinned(Some(plugin_id), None).await?);
         for kind in [
             VulcanPluginPersistentRuntimeKind::Hook,
@@ -125,9 +126,18 @@ impl VulcanPluginRuntimeManager {
                 .into_iter()
                 .map(|session| session.plugin_id),
         );
+        affected_plugin_ids.extend(
+            self.reusable_tool_domains(owner_session_id)?
+                .into_iter()
+                .map(|domain| domain.plugin_id),
+        );
         let mut report = VulcanPluginDrainReport::default();
         report.merge(
             self.drain_formal_calls(None, Some(owner_session_id))
+                .await?,
+        );
+        report.merge(
+            self.drain_reusable_domains(None, Some(owner_session_id))
                 .await?,
         );
         report.merge(self.drain_pinned(None, Some(owner_session_id)).await?);
@@ -254,7 +264,12 @@ impl VulcanPluginRuntimeManager {
             .copied()
             .unwrap_or_default()
             > 0;
-        if has_formal_calls || has_hook_runtime || has_ui_action_runtime || has_active_count {
+        if self.has_reusable_domains(plugin_id)?
+            || has_formal_calls
+            || has_hook_runtime
+            || has_ui_action_runtime
+            || has_active_count
+        {
             return Ok(());
         }
         let removed_diagnostics = self

@@ -12,6 +12,7 @@ pub use capacities::VulcanPluginFormalCapacityStatus;
 
 mod calls;
 pub use calls::VulcanPluginFormalCallStatus;
+pub use calls::reuse::VulcanPluginReusableDomainStatus;
 mod pinned;
 pub use pinned::VulcanPluginFormalSessionStatus;
 pub(super) use pinned::deadline as operation_deadline;
@@ -34,6 +35,12 @@ pub(super) struct ManagedFormalRuntime {
     /// Bounded host ownership covers preparation through physical cleanup and unacknowledged results.
     /// 有界宿主所有权覆盖准备、物理清理及未确认结果。
     calls: Mutex<BTreeMap<String, Arc<calls::FormalCall>>>,
+    /// Bounded reusable domain metadata; physical VM accounting remains exclusively in LuaSkills.
+    /// 有界可复用域元数据；物理 VM 记账仍完全属于 LuaSkills。
+    reusable: Mutex<calls::reuse::Registry>,
+    /// One weakly owned observer collects independent idle-instance finalizations.
+    /// 单个弱持有观测者收集独立空闲实例关闭结果。
+    reuse_observer: AtomicBool,
     /// Host session identities exist before preparation and survive interrupted observers.
     /// 宿主会话身份在准备前存在，并在观测者中断后存活。
     pinned: Mutex<BTreeMap<String, Arc<pinned::PinnedSession>>>,
@@ -102,6 +109,8 @@ impl VulcanPluginRuntimeManager {
             settings,
             capacities: Mutex::new(capacities),
             calls: Mutex::new(BTreeMap::new()),
+            reusable: Mutex::new(calls::reuse::Registry::default()),
+            reuse_observer: AtomicBool::new(false),
             pinned: Mutex::new(BTreeMap::new()),
             hooks: Mutex::new(BTreeMap::new()),
             ui_actions: Mutex::new(BTreeMap::new()),
@@ -157,6 +166,7 @@ impl VulcanPluginRuntimeManager {
     /// 没有运行时即没有工作；已附加所有者继续可供后续观测。
     pub fn request_formal_runtime_close(&self) -> Result<(), VulcanPluginRuntimeError> {
         if let Some(owner) = self.formal_runtime_owner()? {
+            self.close_reusable_domains(None, None, true)?;
             owner.cancel_calls()?;
             owner.cancel_pinned()?;
             owner.cancel_instances()?;
@@ -174,6 +184,17 @@ impl VulcanPluginRuntimeManager {
     /// Returns true only without a runtime, or after host ownership drains and the core confirms complete shutdown.
     /// 仅在无运行时，或宿主所有权排空且核心确认完整关闭后返回真值。
     pub fn poll_formal_runtime_closed(&self) -> Result<bool, VulcanPluginRuntimeError> {
+        if let Some(owner) = self.formal_runtime_owner()? {
+            self.maintain_reusable_domains(&owner)?;
+            if !owner
+                .reusable
+                .lock()
+                .map_err(|_| formal_lock_error())?
+                .is_empty()
+            {
+                return Ok(false);
+            }
+        }
         match self.formal_runtime_owner()? {
             Some(owner) if !owner.calls_drained()? => Ok(false),
             Some(owner) if !owner.pinned_drained()? => Ok(false),

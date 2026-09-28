@@ -2,8 +2,10 @@
 //! 面向正式池所有者、绑定清单的受限 Lua 模块。
 
 use super::*;
+mod hygiene;
 use crate::runtime::lease::required_lua_runtime;
 use crate::runtime::local_files::canonical_plugin_file;
+use hygiene::bundle_source_with_hygiene;
 use luaskills::runtime::embedded::{ModuleExport, ModuleFinalizer};
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -46,7 +48,7 @@ impl VulcanPluginEmbeddedHost {
         &self,
         request: VulcanPluginBundlePoolRequest,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(None, request)
+        self.register_bundle_pool_with_capacity(None, request, None)
     }
 
     /// Register request's real bundle in exact capacity_id and return its native member pool identity.
@@ -58,7 +60,20 @@ impl VulcanPluginEmbeddedHost {
         capacity_id: &str,
         request: VulcanPluginBundlePoolRequest,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(Some(capacity_id), request)
+        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None)
+    }
+
+    /// Register the exact reusable tool in capacity_id; request must match its declared policy and shutdown.
+    /// 在 capacity_id 中注册精确可复用工具；request 必须匹配其声明策略及关闭器。
+    /// Returns the core pool identity after capturing private hygiene callbacks on every original VM.
+    /// 在每个原始 VM 中捕获私有清理回调后返回核心池身份。
+    pub fn register_reusable_bundle_pool_in_capacity(
+        &self,
+        capacity_id: &str,
+        request: VulcanPluginBundlePoolRequest,
+        tool_id: &str,
+    ) -> EmbeddedResult<String> {
+        self.register_bundle_pool_with_capacity(Some(capacity_id), request, Some(tool_id))
     }
 
     /// Load the manifest-selected bundle and fixed restricted loader for `request`.
@@ -73,6 +88,7 @@ impl VulcanPluginEmbeddedHost {
         &self,
         capacity_id: Option<&str>,
         request: VulcanPluginBundlePoolRequest,
+        reusable_tool: Option<&str>,
     ) -> EmbeddedResult<String> {
         // Keep the owning manager alive during exact descriptor and file resolution.
         // 在精确描述符及文件解析期间保持所属管理器存活。
@@ -120,6 +136,49 @@ impl VulcanPluginEmbeddedHost {
         // 这是现有工具及 Hook 分发使用的同一已校验 Lua 契约。
         let runtime = required_lua_runtime(manifest)
             .map_err(|failure| error(EmbeddedErrorCode::InvalidArgument, failure.message))?;
+        // Resolve hygiene exclusively from the validated manifest, never from request-supplied Lua.
+        // 仅从已校验清单解析清理契约，绝不接受请求提供的 Lua。
+        let reusable = reusable_tool
+            .map(|tool_id| {
+                let tool = runtime
+                    .tools
+                    .iter()
+                    .find(|tool| tool.id == tool_id)
+                    .ok_or_else(|| {
+                        error(
+                            EmbeddedErrorCode::InvalidArgument,
+                            "Reusable tool is not declared.",
+                        )
+                    })?;
+                let reuse = tool.execution.reusable.as_ref().ok_or_else(|| {
+                    error(
+                        EmbeddedErrorCode::InvalidArgument,
+                        "Tool does not declare reuse hygiene.",
+                    )
+                })?;
+                if request.scope != VulcanPluginBridgeLeaseScope::Enabled
+                    || request.policy.reuse != luaskills::runtime::embedded::InstanceReuse::Reusable
+                    || request.policy.max_resident_vms != reuse.max_resident_vms
+                    || request.policy.max_running_calls != reuse.max_running_calls
+                    || request.policy.min_resident_vms != 0
+                    || request.policy.serial
+                        != (reuse.ordering == crate::VulcanPluginToolOrdering::KeySerial)
+                    || request.policy.idle_ttl_ms != Some(reuse.idle_ttl_ms)
+                    || request.policy.max_uses != Some(reuse.max_uses)
+                    || request
+                        .finalizer
+                        .as_ref()
+                        .map(|finalizer| finalizer.export.as_str())
+                        != Some(runtime.shutdown_function.as_str())
+                {
+                    return Err(error(
+                        EmbeddedErrorCode::InvalidArgument,
+                        "Reusable tool policy differs from its exact manifest contract.",
+                    ));
+                }
+                Ok(reuse)
+            })
+            .transpose()?;
         // Shutdown selection is explicit; sharing a bundle does not imply sharing lifecycle semantics.
         // 关闭选择为显式声明；共享 bundle 不表示共享生命周期语义。
         if let Some(finalizer) = &request.finalizer
@@ -200,15 +259,31 @@ impl VulcanPluginEmbeddedHost {
         .collect();
         // Source and manifest values cross into the loader as a single encoded data value.
         // 源码及清单值作为一个已编码数据值进入加载器。
+        let mut capture_names = functions.clone();
+        for reuse in runtime
+            .tools
+            .iter()
+            .filter_map(|tool| tool.execution.reusable.as_ref())
+        {
+            capture_names.extend([
+                reuse.before_call.clone(),
+                reuse.after_call.clone(),
+                reuse.reuse_check.clone(),
+            ]);
+        }
+        // Capture hygiene privately; the core exports remain restricted to manifest business declarations.
+        // 私有捕获清理函数；核心导出仍限制为清单业务声明。
         let load_arguments = json!({"plugin_id":plugin.id,"bundle_source":bundle_source,
-            "lua_modules":runtime.lua_modules,"function_names":functions,
+            "lua_modules":runtime.lua_modules,"function_names":capture_names,
             "finalizer_name":request.finalizer.as_ref().map(|finalizer| &finalizer.export)})
         .to_string();
         // Literal quoting prevents bundle contents, newlines and delimiters from becoming wrapper code.
         // 字面量引用防止 bundle 内容、换行及分隔符变成包装代码。
-        let source = format!(
-            "local bridge = (function()\n{bridge_source}\nend)()\nreturn bridge.load_module(vulcan.json.decode({}))",
-            lua_string_literal(&load_arguments)
+        let source = bundle_source_with_hygiene(
+            &bridge_source,
+            &load_arguments,
+            &runtime.invoke_function,
+            reusable,
         );
         // Normalize the trusted workspace once before its spelling enters the core invocation identity.
         // 在可信工作区拼写进入核心调用身份前进行一次规范化。

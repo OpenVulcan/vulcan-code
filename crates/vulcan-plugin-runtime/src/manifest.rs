@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_hooks::{HookCapability, HookFailurePolicy, HookMode, HookScope};
 
 mod requirements;
+mod reuse;
 pub use requirements::{VulcanPluginCapacityRequirement, VulcanPluginRuntimeRequirements};
+pub use reuse::{VulcanPluginReusableToolManifest, VulcanPluginToolOrdering};
 
 /// Current manifest schema version accepted by the host.
 /// 当前宿主接受的清单结构版本。
@@ -911,6 +913,10 @@ pub enum VulcanPluginToolExecutionKind {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VulcanPluginToolExecutionManifest {
+    /// Explicit version-two reusable instance contract; omission preserves single-call execution.
+    /// 明确的第二版可复用实例契约；省略保留单次调用执行。
+    #[serde(default, deserialize_with = "reuse::deserialize_present_reuse")]
+    pub reusable: Option<VulcanPluginReusableToolManifest>,
     /// Generic session lifecycle kind.
     /// 通用会话生命周期类型。
     pub kind: VulcanPluginToolExecutionKind,

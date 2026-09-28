@@ -37,6 +37,7 @@ pub use drain::VulcanPluginDrainReport;
 pub use formal::{
     VulcanPluginFormalCallStatus, VulcanPluginFormalCapacityStatus, VulcanPluginFormalPluginStatus,
     VulcanPluginFormalRuntimeStatus, VulcanPluginFormalSessionStatus,
+    VulcanPluginReusableDomainStatus,
 };
 pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
 pub use lifecycle::VulcanPluginLifecycleEvent;

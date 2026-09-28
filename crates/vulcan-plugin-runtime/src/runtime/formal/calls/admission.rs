@@ -118,6 +118,10 @@ impl Preparation {
                 &self.arguments,
                 &self.finalizer,
                 self.admission.export(),
+                match &self.admission {
+                    CallAdmission::Controller { tool_id, .. } => Some(tool_id),
+                    _ => None,
+                },
                 &self.workspace,
                 &self.security_partition,
                 self.scope.as_str(),
@@ -242,6 +246,7 @@ impl VulcanPluginRuntimeManager {
                 "Formal invocation requires a Tokio runtime: {error}"
             ))
         })?;
+        self.ensure_reuse_observer(&owner);
         self.reap_internal_calls(&owner)?;
         // Retained ownership is derived once from the same intent used for initialization and business.
         // 保留归属从用于初始化及业务的同一意图一次性派生。

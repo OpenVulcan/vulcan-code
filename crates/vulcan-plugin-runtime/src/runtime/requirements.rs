@@ -66,6 +66,25 @@ impl VulcanPluginRuntimeSettings {
                 }
             }
         }
+        if purpose.is_none_or(|purpose| purpose == VulcanPluginCapacityPurpose::ToolCall)
+            && let Some(runtime) = &manifest.lua_runtime
+        {
+            // Per-tool ceilings are admission requirements, never silently clipped host overrides.
+            // 逐工具上限属于入场要求，绝不静默裁剪宿主覆盖。
+            let (capacity, _) =
+                self.capacity_budget(&manifest.id, VulcanPluginCapacityPurpose::ToolCall);
+            for tool in &runtime.tools {
+                if let Some(reuse) = &tool.execution.reusable
+                    && (reuse.max_resident_vms > capacity.resources.max_resident_vms
+                        || reuse.max_running_calls > capacity.resources.max_running_calls)
+                {
+                    return Err(VulcanPluginRuntimeError::new(format!(
+                        "Reusable tool `{}` exceeds the configured tool-call capacity.",
+                        tool.id
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 }

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reusable stateless plugin tool declaration",
+  "description": "Fragment for schema version 2 lua_runtime.tools[].execution.reusable. Full manifest identity, private callback aliases, cross-field limits and host policy are validated by production Rust.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["before_call", "after_call", "reuse_check", "ordering", "max_resident_vms", "max_running_calls", "idle_ttl_ms", "max_uses"],
+  "properties": {
+    "before_call": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "after_call": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "reuse_check": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "ordering": { "enum": ["key_serial", "parallel"] },
+    "max_resident_vms": { "type": "integer", "minimum": 1 },
+    "max_running_calls": { "type": "integer", "minimum": 1 },
+    "idle_ttl_ms": { "type": "integer", "minimum": 1 },
+    "max_uses": { "type": "integer", "minimum": 1 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "ordering": { "const": "key_serial" } } },
+      "then": { "properties": { "max_running_calls": { "const": 1 } } }
+    }
+  ]
+}
