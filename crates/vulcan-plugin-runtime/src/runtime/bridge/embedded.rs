@@ -17,7 +17,9 @@ use std::time::{Duration, Instant};
 
 mod bundle;
 mod dispatch;
+mod workspaces;
 pub use bundle::VulcanPluginBundlePoolRequest;
+use workspaces::WorkspaceRequests;
 
 /// Exact native names installed atomically in each formal runtime.
 /// 在每个正式运行时中原子安装的精确原生名称。
@@ -70,6 +72,9 @@ struct HostAuthority {
     /// Exact execution revisions map to resources retained by actual core pools.
     /// 精确执行修订映射到真实核心池保留的资源。
     domains: Mutex<BTreeMap<String, Weak<ExecutionAuthority>>>,
+    /// Request scopes retain exact operation observers, never the runtime or package owner.
+    /// 请求作用域保留精确操作观察者，绝不保留运行时或包所有者。
+    workspaces: Mutex<WorkspaceRequests>,
 }
 
 /// Immutable business authority retained by the core until real VM cleanup completes.
@@ -174,6 +179,7 @@ impl VulcanPluginEmbeddedHost {
             runtime_id: runtime.id().to_string(),
             max_domains: config.max_registered_pools,
             domains: Mutex::new(BTreeMap::new()),
+            workspaces: Mutex::new(WorkspaceRequests::new(&config)),
         });
         // Publish the entire fixed native surface as one registry transaction.
         // 将完整固定原生接口作为一个注册表事务发布。
@@ -422,6 +428,9 @@ impl HostAuthority {
                 .upgrade()
                 .ok_or_else(|| error(EmbeddedErrorCode::Closed, "Plugin manager is closed."))?;
             validate_invocation_current(&state, &domain, invocation)?;
+            // Correlated calls require their exact admitted operation; absent correlation uses the module declaration.
+            // 带关联调用要求精确已入场操作；无关联调用使用模块声明。
+            let workspace = self.workspace(&domain, invocation)?;
             // Capture the clock before sampling remaining budget to avoid extending the deadline.
             // 在采样剩余预算前读取时钟，避免延长截止时间。
             let now = Instant::now();
@@ -436,11 +445,11 @@ impl HostAuthority {
                     )
                 })?;
             invocation.authorize()?;
-            Ok((state, domain, deadline))
+            Ok((state, domain, workspace, deadline))
         })();
         match admitted {
-            Ok((state, domain, deadline)) => {
-                dispatch::execute(&state, &domain, name, invocation, deadline)
+            Ok((state, domain, workspace, deadline)) => {
+                dispatch::execute(&state, &domain, &workspace, name, invocation, deadline)
             }
             Err(failure) => CapabilityOutcome {
                 result: Err(failure),

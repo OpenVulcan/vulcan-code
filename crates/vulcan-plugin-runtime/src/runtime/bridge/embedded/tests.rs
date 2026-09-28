@@ -14,10 +14,15 @@ use std::fs;
 use tempfile::TempDir;
 
 mod bundle;
+mod workspaces;
 
 /// One bounded initialization, invocation and cleanup budget for these local fixtures.
 /// 这些本地夹具的统一有界初始化、调用及清理预算。
 const WAIT: Duration = Duration::from_secs(5);
+
+/// One parent byte budget supplies both fixture queue configuration and workspace-capacity probes.
+/// 唯一父级字节预算同时提供夹具队列配置与工作区容量探测。
+const QUEUED_BYTES: usize = 16384;
 
 /// Services retain exact requests so tests can distinguish host identity from forged JSON.
 /// 服务保留精确请求，使测试区分宿主身份与伪造 JSON。
@@ -147,7 +152,7 @@ impl Fixture {
             max_resident_vms: 2,
             max_running_calls: 2,
             max_queued_calls: 4,
-            max_queued_bytes: 16384,
+            max_queued_bytes: QUEUED_BYTES,
             max_operations: 16,
             max_effect_records_per_operation: 16,
             max_effect_bytes_per_operation: 16384,

@@ -2,14 +2,18 @@
 //! 使用不可变身份及原始操作预算的原生服务分发。
 
 use super::*;
+use std::path::Path;
 
 /// Dispatch validated `name` and business arguments with the retained `domain` and bounded `deadline`.
 /// 使用保留的 `domain` 及有界 `deadline` 分发已校验 `name` 和业务参数。
+/// The canonical `workspace` was selected by native admission from the module or exact request scope.
+/// 规范 `workspace` 由原生入场从模块或精确请求作用域选择。
 /// Preparation failures have no effect; service execution never invents a commit acknowledgement.
 /// 准备失败没有副作用；服务执行绝不虚构提交确认。
 pub(super) fn execute(
     state: &Arc<VulcanPluginManagerState>,
     domain: &ExecutionAuthority,
+    workspace: &Path,
     name: &str,
     invocation: &CapabilityInvocation,
     deadline: Instant,
@@ -29,7 +33,7 @@ pub(super) fn execute(
                     super::super::super::process::resolve_plugin_process_for_snapshot(
                         state,
                         &domain.plugin,
-                        &domain.workspace,
+                        workspace,
                         arguments,
                     )
                 }))
