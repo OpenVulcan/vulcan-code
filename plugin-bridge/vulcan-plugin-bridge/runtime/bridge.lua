@@ -437,6 +437,40 @@ function M.load_module(args)
         end
         exports[function_name] = plugin[function_name]
     end
+    if args.finalizer_name ~= nil and not is_json_null(args.finalizer_name) then
+        -- The host selects one declared shutdown entry; the captured reference keeps its original VM state.
+        -- 宿主选择一个已声明关闭入口；捕获引用保留其原始 VM 状态。
+        local finalizer_name = require_function_name(args.finalizer_name)
+        local finalizer = exports[finalizer_name]
+        if type(finalizer) ~= "function" then
+            error("Vulcan plugin finalizer is not a declared export")
+        end
+        -- Convert the version-one error frame into a failed closing outcome while preserving successful bytes.
+        -- 将版本一错误帧转换为失败关闭结果，同时保留成功返回的原始字节。
+        -- close_args is the frozen host envelope; returns its successful JSON frame or raises its protocol error.
+        -- close_args 为冻结宿主信封；返回成功 JSON 帧，或抛出其协议错误。
+        exports[finalizer_name] = function(close_args)
+            local frame = finalizer(close_args)
+            if type(frame) ~= "string" then
+                error("Vulcan Plugin shutdown returned no JSON frame")
+            end
+            local decoded = host_vulcan.json.decode(frame)
+            if type(decoded) ~= "table" or decoded.ok ~= true then
+                -- Error details follow the existing string-or-JSON plugin frame contract.
+                -- 错误详情遵循既有字符串或 JSON 插件帧契约。
+                local message = "Unknown Vulcan Plugin runtime error."
+                if type(decoded) == "table" and decoded.error ~= nil then
+                    if type(decoded.error) == "string" then
+                        message = decoded.error
+                    else
+                        message = host_vulcan.json.encode(decoded.error)
+                    end
+                end
+                error("Vulcan Plugin shutdown failed: " .. message)
+            end
+            return frame
+        end
+    end
     return exports
 end
 

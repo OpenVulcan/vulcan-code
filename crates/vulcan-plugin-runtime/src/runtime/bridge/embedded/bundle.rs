@@ -4,7 +4,7 @@
 use super::*;
 use crate::runtime::lease::required_lua_runtime;
 use crate::runtime::local_files::canonical_plugin_file;
-use luaskills::runtime::embedded::ModuleExport;
+use luaskills::runtime::embedded::{ModuleExport, ModuleFinalizer};
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::fs;
@@ -30,6 +30,11 @@ pub struct VulcanPluginBundlePoolRequest {
     /// Explicit host-resolved policy; callers must preserve manifest reuse and ordering requirements.
     /// 显式宿主解析策略；调用方必须保留清单复用及顺序要求。
     pub policy: PluginPoolConfig,
+    /// Optional host-selected manifest shutdown entry, with frozen arguments and an independent finite budget.
+    /// 可选宿主选择的清单关闭入口，携带冻结参数及独立有限预算。
+    /// Tool and Hook routes must supply their own version-one envelopes; ordinary exports cannot be selected.
+    /// 工具及 Hook 路由必须提供各自的版本一信封；不能选择普通业务导出。
+    pub finalizer: Option<ModuleFinalizer>,
 }
 
 impl VulcanPluginEmbeddedHost {
@@ -89,6 +94,17 @@ impl VulcanPluginEmbeddedHost {
         // 这是现有工具及 Hook 分发使用的同一已校验 Lua 契约。
         let runtime = required_lua_runtime(manifest)
             .map_err(|failure| error(EmbeddedErrorCode::InvalidArgument, failure.message))?;
+        // Shutdown selection is explicit; sharing a bundle does not imply sharing lifecycle semantics.
+        // 关闭选择为显式声明；共享 bundle 不表示共享生命周期语义。
+        if let Some(finalizer) = &request.finalizer
+            && finalizer.export != runtime.shutdown_function
+            && Some(finalizer.export.as_str()) != runtime.hook_shutdown_function.as_deref()
+        {
+            return Err(error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Plugin finalizer must select a declared tool or Hook shutdown function.",
+            ));
+        }
         // Missing dependencies are explicit, never synthesized into an authorized package.
         // 缺失依赖为显式错误，绝不在已授权包内合成依赖。
         let dependencies_file = manifest
@@ -159,7 +175,8 @@ impl VulcanPluginEmbeddedHost {
         // Source and manifest values cross into the loader as a single encoded data value.
         // 源码及清单值作为一个已编码数据值进入加载器。
         let load_arguments = json!({"plugin_id":plugin.id,"bundle_source":bundle_source,
-            "lua_modules":runtime.lua_modules,"function_names":functions})
+            "lua_modules":runtime.lua_modules,"function_names":functions,
+            "finalizer_name":request.finalizer.as_ref().map(|finalizer| &finalizer.export)})
         .to_string();
         // Literal quoting prevents bundle contents, newlines and delimiters from becoming wrapper code.
         // 字面量引用防止 bundle 内容、换行及分隔符变成包装代码。
@@ -187,7 +204,7 @@ impl VulcanPluginEmbeddedHost {
             .collect();
         self.register_pool(
             ModuleDefinition {
-                finalizer: None,
+                finalizer: request.finalizer,
                 plugin_id: plugin.id.clone(),
                 generation: plugin.generation.to_string(),
                 package_root: package.to_string_lossy().into_owned(),

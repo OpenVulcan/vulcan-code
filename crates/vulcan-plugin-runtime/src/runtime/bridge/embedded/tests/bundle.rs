@@ -5,6 +5,8 @@ use super::*;
 use luaskills::runtime::embedded::OperationSnapshot;
 use std::path::Path;
 
+mod finalization;
+
 /// The formal loader cannot bypass the catalog requirement for a Lua dependency declaration.
 /// 正式加载器不能绕过目录对 Lua 依赖声明的要求。
 #[test]
@@ -55,6 +57,7 @@ fn restricted_bundle_rejects_missing_required_dependency_declaration() {
             security_partition: "invalid-dependency-fixture".to_string(),
             scope: VulcanPluginBridgeLeaseScope::Enabled,
             policy: policy(),
+            finalizer: None,
         })
         .expect_err("reject unavailable Lua package");
     assert_eq!(rejected.code, EmbeddedErrorCode::PermissionDenied);
@@ -98,8 +101,11 @@ fn restricted_bundle_loads_production_packages_and_native_config() {
             repository.join("plugins"),
             plugin_id,
         );
-        // The request is resolved from the actual production catalog, including every export.
-        // 请求从真实生产目录解析，包含每个导出。
+        // Pin initialization and optional business to the same VM before automatic shutdown.
+        // 将初始化及可选业务固定到同一 VM，再自动关闭。
+        let mut policy = policy();
+        policy.reuse = InstanceReuse::Session;
+        let timeout_ms = WAIT.as_millis() as u64;
         let pool = fixture
             .host
             .register_bundle_pool(VulcanPluginBundlePoolRequest {
@@ -108,18 +114,55 @@ fn restricted_bundle_loads_production_packages_and_native_config() {
                 workspace_root: fixture.root.path().to_path_buf(),
                 security_partition: "production-bundle-fixture".to_string(),
                 scope: VulcanPluginBridgeLeaseScope::Enabled,
-                policy: policy(),
+                policy,
+                finalizer: Some(luaskills::runtime::embedded::ModuleFinalizer {
+                    export: "shutdown".to_string(),
+                    arguments: json!({
+                        "payload_json": json!({"op":"shutdown","request_id":"host-fixture-shutdown","host_timeout_ms":timeout_ms}).to_string(),
+                        "host_timeout_ms": timeout_ms,
+                    }),
+                    timeout_ms,
+                }),
             })
             .expect("register production bundle");
+        let opening = fixture
+            .host
+            .runtime()
+            .open_session(&pool, WAIT)
+            .expect("initialize actual bundle");
+        assert_eq!(
+            opening
+                .operation
+                .wait(WAIT)
+                .expect("wait production initialization")
+                .phase,
+            OperationPhase::Succeeded
+        );
+        fixture
+            .host
+            .runtime()
+            .forget_operation(opening.operation.id())
+            .expect("forget production initialization");
         if plugin_id == "context7" {
             // This real UI export reaches the native configuration capability without loading unused native modules.
             // 此真实界面导出到达原生配置能力，不加载未使用的原生模块。
-            let settings = decoded(invoke_bundle(
-                &fixture,
-                &pool,
-                "settings_get",
-                json!({"arguments":{}}),
-            ));
+            let operation = fixture
+                .host
+                .runtime()
+                .submit_session(
+                    &opening.session_id,
+                    "settings_get".to_string(),
+                    json!({"arguments":{}}),
+                    LuaInvocationContext::default(),
+                    WAIT,
+                )
+                .expect("submit real settings export");
+            let settings = decoded(operation.wait(WAIT).expect("wait actual settings"));
+            fixture
+                .host
+                .runtime()
+                .forget_operation(operation.id())
+                .expect("forget settings operation");
             // The authoritative package defaults provide the expected value without a copied configuration snapshot.
             // 权威包默认配置提供期望值，不维护复制的配置快照。
             let defaults: Value = serde_json::from_str(
@@ -129,17 +172,50 @@ fn restricted_bundle_loads_production_packages_and_native_config() {
             .expect("decode actual Context7 defaults");
             assert_eq!(settings["result"], defaults);
         }
-        assert_eq!(
-            decoded(invoke_bundle(&fixture, &pool, "shutdown", json!({})))["result"]["closed"],
-            true
-        );
         fixture.close();
+        // Use the session's independent closing identity, never a second ordinary shutdown invocation.
+        // 使用会话独立关闭身份，绝不再次进行普通关闭调用。
+        let closing_id = fixture
+            .host
+            .runtime()
+            .session(&opening.session_id)
+            .expect("closed production session")
+            .finalization_operation
+            .expect("automatic production shutdown");
+        let closing = fixture
+            .host
+            .runtime()
+            .operation(&closing_id)
+            .expect("production closing operation")
+            .snapshot()
+            .expect("production closing result")
+            .finalization
+            .expect("production closing evidence");
+        let result = closing
+            .outcome
+            .expect("production closing outcome")
+            .result()
+            .expect("production shutdown success");
+        let frame: Value = serde_json::from_str(result.as_str().expect("production JSON frame"))
+            .expect("decode production shutdown");
+        assert_eq!(frame["result"]["closed"], true);
     }
 }
 
 /// Write `source` to the fixture's real bundle, publish its changed fingerprint, and return its pool.
 /// 将 `source` 写入夹具真实 bundle，发布已变化指纹，并返回其池。
 fn bundle_pool(fixture: &Fixture, source: &str) -> String {
+    fixture
+        .host
+        .register_bundle_pool(bundle_request(fixture, source))
+        .expect("register actual manifest bundle")
+}
+
+/// Freeze fixture source in the real catalog and return its host-selected request for policy-specific tests.
+/// 在真实目录内冻结夹具源码，返回宿主选择的请求供特定策略测试使用。
+/// `fixture` owns the package; `source` replaces its bundle; no Lua runs while preparing this request.
+/// `fixture` 拥有包；`source` 替换其 bundle；准备此请求时不执行 Lua。
+fn bundle_request(fixture: &Fixture, source: &str) -> VulcanPluginBundlePoolRequest {
     // Resolve the actual catalog path before changing its source content.
     // 在改变源码内容前解析实际目录路径。
     let package = fixture.manager.snapshot().plugins["hook-plugin"]
@@ -150,20 +226,15 @@ fn bundle_pool(fixture: &Fixture, source: &str) -> String {
         .manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("publish bundle generation");
-    // The preparation API receives no caller-provided source or export definitions.
-    // 准备 API 不接收调用方提供的源码或导出定义。
-    let request = VulcanPluginBundlePoolRequest {
+    VulcanPluginBundlePoolRequest {
         plugin_id: "hook-plugin".to_string(),
         plugin_generation: fixture.manager.snapshot().plugins["hook-plugin"].generation,
         workspace_root: fixture.root.path().to_path_buf(),
         security_partition: "fixture-bundle".to_string(),
         scope: VulcanPluginBridgeLeaseScope::Enabled,
         policy: policy(),
-    };
-    fixture
-        .host
-        .register_bundle_pool(request)
-        .expect("register actual manifest bundle")
+        finalizer: None,
+    }
 }
 
 /// Execute exact `export` with `arguments` in the real `pool` and return terminal evidence.
