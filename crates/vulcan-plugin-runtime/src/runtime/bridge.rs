@@ -282,7 +282,6 @@ impl VulcanPluginRuntimeManager {
 fn dispatch_registered_plugin_host_tool_request(
     request: &RuntimeHostToolRequest,
 ) -> Result<Value, String> {
-    let _timing = super::action_status::HostCallTimer::start();
     if request.action != RuntimeHostToolAction::Call {
         return dispatch_plugin_host_tool_request(&Weak::new(), request);
     }
@@ -537,7 +536,9 @@ fn dispatch_plugin_storage_request(
         .clone()
         .ok_or_else(|| "Vulcan plugin storage service is unavailable.".to_string())?;
     storage_service.execute(VulcanPluginStorageRequest {
-        deadline: super::action_status::callback_deadline(),
+        // The generic legacy bridge has no Action authority; formal native calls carry their own deadline.
+        // 通用旧桥不具有 Action 权威；正式原生调用携带自身截止时间。
+        deadline: None,
         plugin_id: plugin_identity.to_string(),
         operation: storage_operation,
         payload: Value::Object(payload.clone()),
@@ -587,7 +588,9 @@ fn dispatch_plugin_vldb_request(
         .clone()
         .ok_or_else(|| "Vulcan plugin VLDB service is unavailable.".to_string())?;
     vldb_service.execute(VulcanPluginVldbRequest {
-        deadline: super::action_status::callback_deadline(),
+        // The generic legacy bridge has no Action authority; formal native calls carry their own deadline.
+        // 通用旧桥不具有 Action 权威；正式原生调用携带自身截止时间。
+        deadline: None,
         plugin_id: plugin_identity.to_string(),
         operation,
         payload: Value::Object(payload.clone()),

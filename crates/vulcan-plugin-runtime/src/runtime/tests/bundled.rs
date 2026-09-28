@@ -593,8 +593,11 @@ fn bundled_context7_plugin_loads_with_typed_json_surface() {
     manager
         .begin_enabling("context7")
         .expect("begin Context7 enabling probe");
-    // runtime executes the real Context7 module initialization under LuaSkills 0.5.5.
-    // runtime 在 LuaSkills 0.5.5 下执行真实 Context7 模块初始化。
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal Context7 probe parent");
+    // runtime executes real Context7 initialization through the attached formal parent.
+    // runtime 通过已附加正式父级执行真实 Context7 初始化。
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()

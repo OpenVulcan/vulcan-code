@@ -4,7 +4,6 @@
 use super::{VulcanPluginRuntimeError, VulcanPluginRuntimeManager};
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     collections::BTreeMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -114,36 +113,9 @@ struct RecordState {
 }
 
 tokio::task_local! {
-    /// Async supervisor context propagated explicitly onto engine blocking threads.
-    /// 异步监督上下文，显式传播到引擎阻塞线程。
+    /// Async supervisor context used to attach preparation to the originating Action.
+    /// 用于将准备关联至原始 Action 的异步监督上下文。
     pub(super) static ACTION_RECORD: Arc<ActionRecord>;
-}
-thread_local! {
-    /// Only the current synchronous engine call may populate this callback context.
-    /// 仅当前同步引擎调用可以设置此回调上下文。
-    static BLOCKING_RECORD: RefCell<Option<Arc<ActionRecord>>> = const { RefCell::new(None) };
-}
-
-/// Restores the preceding callback context on normal return and panic alike.
-/// 正常返回与异常展开时都恢复先前回调上下文。
-pub(super) struct BlockingActionScope(Option<Arc<ActionRecord>>);
-impl BlockingActionScope {
-    /// Installs an optional supervisor record for one blocking closure.
-    /// 为单个阻塞闭包安装可选监督记录。
-    pub(super) fn enter(record: Option<Arc<ActionRecord>>) -> Self {
-        Self(BLOCKING_RECORD.with(|slot| slot.replace(record)))
-    }
-}
-impl Drop for BlockingActionScope {
-    fn drop(&mut self) {
-        BLOCKING_RECORD.with(|slot| slot.replace(self.0.take()));
-    }
-}
-
-/// Returns the actual host deadline for the currently executing plugin callback.
-/// 返回当前执行插件回调的实际宿主截止时间。
-pub(super) fn callback_deadline() -> Option<Instant> {
-    BLOCKING_RECORD.with(|slot| slot.borrow().as_ref().map(|record| record.deadline))
 }
 
 /// Validated admission inputs include the exact owned capacity permit.
@@ -284,13 +256,13 @@ impl ActionRecord {
     /// Records waiter cancellation without interrupting an already running VM.
     /// 记录等待方取消，不中断已经运行的 VM。
     pub(super) fn withdraw(&self) {
-        // Read or update one exact ownership record under its short evidence lock.
-        // 在短证据锁下读取或更新一条精确所有权记录。
+        // Serialize cancellation with business admission; late observer loss preserves timeout classification.
+        // 将取消与业务入场排序；观测者迟到丢失保留超时分类。
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.cancellable && !state.started {
+        if self.cancellable && !state.started && !state.terminal && Instant::now() < self.deadline {
             state.cancel_requested = true;
         }
     }
@@ -554,7 +526,7 @@ impl VulcanPluginRuntimeManager {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !state.terminal && !state.started {
+            if !state.terminal && !state.started && Instant::now() < record.deadline {
                 state.cancel_requested = true;
                 record.cancelled.notify_one();
             }
@@ -567,11 +539,6 @@ impl VulcanPluginRuntimeManager {
 /// 测量同步宿主回调，不保留其参数。
 pub(super) struct HostCallTimer(Option<Arc<ActionRecord>>, Instant);
 impl HostCallTimer {
-    /// Captures only the current trusted blocking context and start instant.
-    /// 仅捕获当前可信阻塞上下文与开始时刻。
-    pub(super) fn start() -> Self {
-        Self::for_record(BLOCKING_RECORD.with(|slot| slot.borrow().clone()))
-    }
     /// Measure a callback attributed to an explicitly authenticated record, or no action.
     /// 测量归属于明确已认证记录的回调，或无 Action 的回调。
     pub(super) fn for_record(record: Option<Arc<ActionRecord>>) -> Self {

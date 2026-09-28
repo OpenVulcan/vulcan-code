@@ -1,5 +1,5 @@
-//! Long-lived generic Vulcan Plugin session runtime backed by LuaSkills leases.
-//! 由 LuaSkills 租约承载的长生命周期通用 Vulcan 插件会话运行时。
+//! Generic Vulcan Plugin execution owned by the formal LuaSkills parent runtime.
+//! 由正式 LuaSkills 父运行时持有的通用 Vulcan 插件执行。
 
 mod action_status;
 mod actions;
@@ -37,7 +37,6 @@ pub use formal::{
     VulcanPluginFormalCallStatus, VulcanPluginFormalRuntimeStatus, VulcanPluginFormalSessionStatus,
 };
 pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
-use lease::{call_engine_blocking, close_raw_system_lease_sync, parse_engine_response};
 pub use lifecycle::VulcanPluginLifecycleEvent;
 use local_files::{
     canonical_plugin_file, copy_plugin_directory_tree, read_plugin_json_state,
@@ -55,12 +54,12 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
-/// Maximum Lua execution time shared by bundle loading and lifecycle probing.
-/// bundle加载与生命周期探测共用的Lua最大执行时长。
+/// Sole enabling-probe budget covers registered preparation and actual module initialization.
+/// 唯一启用探测预算覆盖已登记准备及实际模块初始化。
 const VULCAN_PLUGIN_PROBE_TIMEOUT_MS: u64 = 5_000;
 
 /// Default Lua execution time used when one hook declaration omits a timeout.
@@ -133,30 +132,6 @@ impl VulcanPluginPersistentRuntimeKind {
     }
 }
 
-/// One raw lease retained after a failed immediate cleanup so later lifecycle drains can retry it.
-/// 在立即清理失败后保留的原始租约，使后续生命周期排空可以重试。
-#[derive(Debug, Clone)]
-struct RetainedVulcanPluginLease {
-    /// Stable owning plugin identifier.
-    /// 稳定的所属插件标识。
-    plugin_id: String,
-    /// Optional controller session that caused this lease to be created.
-    /// 触发创建该租约的可选控制器会话。
-    owner_session_id: Option<String>,
-    /// LuaSkills managed lease identifier.
-    /// LuaSkills 受管租约标识。
-    lease_id: String,
-    /// Stable LuaSkills session identifier.
-    /// 稳定的 LuaSkills 会话标识。
-    sid: String,
-    /// LuaSkills managed lease generation.
-    /// LuaSkills 受管租约代次。
-    generation: u64,
-    /// Whether successful cleanup must release one plugin session slot.
-    /// 成功清理后是否必须释放一个插件会话名额。
-    reserved_session_slot: bool,
-}
-
 /// Weak admission gates are keyed by the exact plugin and persistent purpose.
 /// 弱入场门以精确插件及持久用途为键。
 type PersistentRuntimeGates =
@@ -210,9 +185,6 @@ struct VulcanPluginManagerState {
     /// Active session counts keyed by plugin identifier.
     /// 以插件标识为键的活动会话计数。
     active_session_counts: Mutex<BTreeMap<String, usize>>,
-    /// Raw leases retained after cleanup failures and keyed by lease identifier.
-    /// 清理失败后保留并以租约标识为键的原始租约集合。
-    retained_leases: Mutex<BTreeMap<String, RetainedVulcanPluginLease>>,
     /// Weak plugin/category gates shared by initialization and drain; inactive entries are reclaimed.
     /// 初始化与排空共享的插件及类别弱引用同步门；回收无人持有的条目。
     persistent_runtime_gates: Mutex<PersistentRuntimeGates>,
@@ -234,11 +206,11 @@ struct VulcanPluginManagerState {
 }
 
 impl Drop for VulcanPluginManagerState {
-    /// Requests formal shutdown and closes remaining legacy leases; only core polling proves formal termination.
-    /// 请求正式关闭并清理剩余旧租约；仅核心轮询可证明正式终止。
+    /// Request formal shutdown; unfinished physical work remains owned by the core.
+    /// 请求正式关闭；未完成物理工作继续由核心持有。
+    /// No input or return value; only subsequent core polling proves termination.
+    /// 无参数或返回值；仅后续核心轮询证明终止。
     fn drop(&mut self) {
-        // Stop formal admission before tearing down legacy leases; actual core owners retain unfinished work.
-        // 在清理旧租约前停止正式入场；真实核心所有者保留未完成工作。
         if let Some(owner) = self
             .formal_runtime
             .get_mut()
@@ -246,20 +218,6 @@ impl Drop for VulcanPluginManagerState {
             .as_ref()
         {
             let _ = owner.host.runtime().request_close();
-        }
-        let Ok(engine_slot) = self.engine.get_mut() else {
-            return;
-        };
-        let Some(engine) = engine_slot.as_ref() else {
-            return;
-        };
-        let retained_leases = self
-            .retained_leases
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for lease in retained_leases.values() {
-            let _ =
-                close_raw_system_lease_sync(engine, &lease.lease_id, &lease.sid, lease.generation);
         }
     }
 }
@@ -403,7 +361,6 @@ impl VulcanPluginRuntimeManager {
                 next_request_id: AtomicU64::new(1),
                 session_registration_gate: Mutex::new(()),
                 active_session_counts: Mutex::new(BTreeMap::new()),
-                retained_leases: Mutex::new(BTreeMap::new()),
                 persistent_runtime_gates: Mutex::new(BTreeMap::new()),
                 action_admissions: Mutex::new(BTreeMap::new()),
                 action_records: Mutex::new(BTreeMap::new()),
@@ -497,16 +454,6 @@ impl VulcanPluginRuntimeManager {
     pub fn plugin_state_root(&self) -> &Path {
         &self.state.plugin_state_root
     }
-}
-
-/// Locks the retained raw-lease registry without silently recovering poisoned state.
-/// 锁定保留原始租约注册表，不静默恢复已中毒状态。
-fn lock_retained_leases(
-    leases: &Mutex<BTreeMap<String, RetainedVulcanPluginLease>>,
-) -> Result<MutexGuard<'_, BTreeMap<String, RetainedVulcanPluginLease>>, VulcanPluginRuntimeError> {
-    leases.lock().map_err(|_| {
-        VulcanPluginRuntimeError::new("Vulcan Plugin retained lease registry lock is poisoned.")
-    })
 }
 
 #[cfg(test)]

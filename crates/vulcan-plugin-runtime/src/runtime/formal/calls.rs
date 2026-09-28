@@ -1,5 +1,5 @@
-//! Bounded host ownership for stateless calls submitted to the sole formal runtime.
-//! 提交到唯一正式运行时的无状态调用有界宿主所有权。
+//! Bounded host ownership for one-shot tool, lifecycle, transient Action and probe execution.
+//! 单次工具、生命周期、瞬时 Action 及探测执行的有界宿主所有权。
 
 use super::*;
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 mod admission;
+mod initialized;
 
 #[cfg(test)]
 mod tests;
@@ -27,15 +28,21 @@ enum CallOwner {
     /// The lifecycle caller consumes its result; actual cleanup always precedes reclamation.
     /// 生命周期调用方消费其结果；实际清理始终先于回收。
     Lifecycle,
+    /// A transient Action retains its own public action diagnostics while call history is reclaimed.
+    /// 瞬时 Action 保留自身公开诊断，同时回收调用历史。
+    Action,
+    /// A probe validates module initialization without invoking any business export.
+    /// 探测校验模块初始化，不调用任何业务导出。
+    Probe,
 }
 
 impl CallOwner {
-    /// Return the exact controller ID, or none for host lifecycle work without a controller.
-    /// 返回精确控制器标识；没有控制器的宿主生命周期工作返回空值。
+    /// Return the exact controller ID, or none for internal host calls.
+    /// 返回精确控制器标识；宿主内部调用返回空值。
     fn controller_id(&self) -> Option<&str> {
         match self {
             Self::Controller(id) => Some(id),
-            Self::Lifecycle => None,
+            Self::Lifecycle | Self::Action | Self::Probe => None,
         }
     }
 }
@@ -53,8 +60,8 @@ pub(super) struct FormalCall {
     /// Frozen descriptor pins the original managed package generation.
     /// 冻结描述符固定原受管包代次。
     plugin: VulcanPluginDescriptor,
-    /// Typed ownership prevents lifecycle records from masquerading as controller calls.
-    /// 类型化归属防止生命周期记录冒充控制器调用。
+    /// Typed ownership prevents internal records from masquerading as controller calls.
+    /// 类型化归属防止内部记录冒充控制器调用。
     ownership: CallOwner,
     /// Serialized input reservation changes only under the shared call registry lock and persists until acknowledgement.
     /// 序列化输入预留仅在共享调用注册表锁下改变，并保留至确认。
@@ -62,8 +69,8 @@ pub(super) struct FormalCall {
     /// Cancellation remains live before and after core admission.
     /// 核心入场前后取消均保持实时。
     cancelled: AtomicBool,
-    /// Lifecycle results may be reclaimed only after the caller leaves and resources really retire.
-    /// 生命周期结果仅在调用方离开且资源真实退役后可以回收。
+    /// Internal results may be reclaimed only after the caller leaves and resources really retire.
+    /// 内部结果仅在调用方离开且资源真实退役后可以回收。
     acknowledged: AtomicBool,
     /// Short state lock protects identity publication and cleanup evidence only.
     /// 短状态锁仅保护身份发布及清理证据。
@@ -80,6 +87,12 @@ struct CallState {
     /// Core-issued operation owns the actual execution and automatic finalization.
     /// 核心签发操作拥有实际执行及自动关闭。
     operation: Option<OperationHandle>,
+    /// A temporary core session separates cancellable initialization from Action business admission.
+    /// 临时核心会话将可取消初始化与 Action 业务入场分离。
+    initialized: Option<initialized::InitializedCall>,
+    /// Actual Action ownership spans preparation, initialization, business and physical pool retirement.
+    /// 真实 Action 所有权覆盖准备、初始化、业务及物理池退役。
+    action_work: Option<crate::runtime::action_status::ActionWorkGuard>,
     /// Result becomes observable only after cleanup, or as an explicit retained failure.
     /// 结果仅在清理后可见，或作为明确保留失败可见。
     result: Option<Result<Value, VulcanPluginRuntimeError>>,
@@ -107,6 +120,76 @@ enum CallWorkspace {
     /// Resolve and prepare the original descriptor's writable environment inside the tracked blocking task.
     /// 在受跟踪阻塞任务内解析并准备原描述符的可写环境。
     LifecycleEnvironment,
+    /// Resolve the frozen execution package inside the registered preparation task.
+    /// 在已登记准备任务内解析冻结执行包。
+    ExecutionPackage,
+}
+
+/// Admission intent owns the exact export and any Action cancellation receiver.
+/// 入场意图拥有精确导出及可选 Action 取消接收器。
+enum CallAdmission {
+    /// Tool admission binds its declared export to one controller owner.
+    /// 工具入场将声明导出绑定至一个控制器所有者。
+    Controller {
+        /// The original controller owns this tool's retained history.
+        /// 原控制器拥有此工具的保留历史。
+        owner_session_id: String,
+        /// The validated manifest selects the exact tool export.
+        /// 已校验清单选择精确工具导出。
+        export: String,
+    },
+    /// Lifecycle admission invokes one host-selected declaration.
+    /// 生命周期入场调用一个宿主选择的声明。
+    Lifecycle {
+        /// The host-selected lifecycle event resolves to this declared export.
+        /// 宿主选择的生命周期事件解析至此声明导出。
+        export: String,
+    },
+    /// Action cancellation remains live until initialization completes and business admission starts.
+    /// Action 取消保持实时，直到初始化完成且业务入场开始。
+    Action {
+        /// The validated Action declaration selects its sole business export.
+        /// 已校验 Action 声明选择其唯一业务导出。
+        export: String,
+        /// The original cancellation receiver, diagnostic record and deadline remain owned together.
+        /// 原取消接收器、诊断记录及截止时间继续共同具有归属。
+        execution: crate::runtime::execution::ActionExecution,
+    },
+    /// A probe requires only the declared module's successful initialization.
+    /// 探测仅要求声明模块成功初始化。
+    Probe,
+}
+
+impl CallAdmission {
+    /// Project retained ownership from this one authoritative admission intent.
+    /// 从此唯一权威入场意图投影保留归属。
+    fn ownership(&self) -> CallOwner {
+        match self {
+            Self::Controller {
+                owner_session_id, ..
+            } => CallOwner::Controller(owner_session_id.clone()),
+            Self::Lifecycle { .. } => CallOwner::Lifecycle,
+            Self::Action { .. } => CallOwner::Action,
+            Self::Probe => CallOwner::Probe,
+        }
+    }
+
+    /// Return the declared business export; probes intentionally have no business function.
+    /// 返回声明业务导出；探测有意不具有业务函数。
+    fn export(&self) -> Option<&str> {
+        match self {
+            Self::Controller { export, .. }
+            | Self::Lifecycle { export }
+            | Self::Action { export, .. } => Some(export),
+            Self::Probe => None,
+        }
+    }
+
+    /// Return whether initialization must be a distinct, tracked core operation.
+    /// 返回初始化是否必须成为独立且受跟踪的核心操作。
+    fn separates_initialization(&self) -> bool {
+        matches!(self, Self::Action { .. } | Self::Probe)
+    }
 }
 
 /// Byte-checked inputs moved into one bounded preparation task, with explicit workspace preparation.
@@ -115,20 +198,20 @@ struct Preparation {
     /// Workspace is host-owned and canonicalized by the bundle registrar.
     /// 工作区由宿主持有，由 bundle 注册器规范化。
     workspace: CallWorkspace,
-    /// Exact business envelope includes its unique correlation and finite budget.
-    /// 精确业务信封包含唯一关联及有限预算。
+    /// The exact route-specific envelope is retained without adding unrelated protocol fields.
+    /// 保留精确路由信封，不添加无关协议字段。
     arguments: Value,
-    /// Only tool calls select automatic business shutdown; lifecycle callbacks never borrow it.
-    /// 仅工具调用选择自动业务关闭；生命周期回调绝不借用它。
+    /// Only tool calls select automatic business shutdown; internal calls never borrow it.
+    /// 仅工具调用选择自动业务关闭；内部调用绝不借用它。
     finalizer: Option<ModuleFinalizer>,
-    /// Exact manifest function selected before preparation begins.
-    /// 准备开始前选定的精确清单函数。
-    export: String,
+    /// One typed intent selects business routing, observation and initialization semantics together.
+    /// 单个类型化意图共同选择业务路由、观测及初始化语义。
+    admission: CallAdmission,
     /// Host lifecycle authority is frozen independently from the plugin arguments.
     /// 宿主生命周期权威独立于插件参数冻结。
     scope: VulcanPluginBridgeLeaseScope,
-    /// Explicit security partition keeps controller and lifecycle domains separate.
-    /// 显式安全分区分离控制器与生命周期执行域。
+    /// Explicit security partitions distinguish controller and each internal execution purpose.
+    /// 显式安全分区区分控制器及每种内部执行用途。
     security_partition: String,
     /// Absolute admission deadline includes blocking preparation and core queue waits.
     /// 绝对入场截止时间包含阻塞准备及核心队列等待。
@@ -296,6 +379,30 @@ impl ManagedFormalRuntime {
 }
 
 impl VulcanPluginRuntimeManager {
+    /// Check whether the exact plugin still owns an unretired formal call, including probe preparation.
+    /// 检查精确插件是否仍持有未退役正式调用，包括探测准备。
+    /// Returns true only for physical ownership; errors preserve cleanup diagnostics.
+    /// 仅对物理所有权返回真；错误保留清理诊断。
+    pub(in crate::runtime) fn has_unretired_formal_calls(
+        &self,
+        plugin_id: &str,
+    ) -> Result<bool, VulcanPluginRuntimeError> {
+        // The optional parent is the sole authority for every formal call.
+        // 可选父级是每个正式调用的唯一权威。
+        let Some(owner) = self.formal_runtime_owner()? else {
+            return Ok(false);
+        };
+        // Retain the registry while checking the same physical-retirement checkpoints.
+        // 检查同一物理退役检查点期间保留注册表。
+        let calls = owner.calls.lock().map_err(|_| calls_error())?;
+        for call in calls.values().filter(|call| call.plugin.id == plugin_id) {
+            if !call.lock()?.retired {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Resume only idle cleanup after actual preparation ended; never repeat module preparation or submission.
     /// 仅在实际准备结束后恢复闲置清理；绝不重复模块准备或提交。
     /// `owner` and `call` are retained originals; return explicit metadata failure without inventing evidence.
@@ -335,7 +442,7 @@ impl VulcanPluginRuntimeManager {
                 state.result = Some(result);
             }
             supervision.completed = true;
-            if let Err(error) = manager.reap_lifecycle_calls(&retry_owner) {
+            if let Err(error) = manager.reap_internal_calls(&retry_owner) {
                 let _ = manager.record_cleanup_failure(&retry_call.plugin.id, error.to_string());
             }
         });
@@ -403,7 +510,7 @@ impl VulcanPluginRuntimeManager {
                 tokio::time::sleep(OBSERVATION_INTERVAL).await;
             }
         }
-        self.reap_lifecycle_calls(&owner)?;
+        self.reap_internal_calls(&owner)?;
         Ok(report)
     }
 
@@ -461,18 +568,15 @@ impl VulcanPluginRuntimeManager {
                 )?,
                 timeout_ms: owner.settings.shutdown_timeout_ms,
             }),
-            export: runtime.invoke_function.clone(),
+            admission: CallAdmission::Controller {
+                export: runtime.invoke_function.clone(),
+                owner_session_id: owner_session_id.clone(),
+            },
             scope: VulcanPluginBridgeLeaseScope::Enabled,
             security_partition: format!("tool:{owner_session_id}"),
             deadline,
         };
-        self.invoke_owned_formal_call(
-            owner,
-            plugin,
-            CallOwner::Controller(owner_session_id),
-            input,
-        )
-        .await
+        self.invoke_owned_formal_call(owner, plugin, input).await
     }
 
     /// List retained records belonging to `owner_session_id`, without creating a runtime or changing state.
@@ -572,31 +676,54 @@ impl VulcanPluginRuntimeManager {
         &self,
         owner: Arc<ManagedFormalRuntime>,
         call: Arc<FormalCall>,
-        input: Preparation,
+        mut input: Preparation,
     ) {
+        // Keep the same manager and call alive through the actual blocking closure.
+        // 在真实阻塞闭包期间保持同一管理器及调用存活。
         let manager = self.clone();
+        // The worker retains the original formal parent even if its join observer is lost.
+        // 即使等待观测者丢失，工作者仍保留原正式父级。
         let prepare_owner = Arc::clone(&owner);
+        // Publish preparation against the exact original record.
+        // 在精确原记录上发布准备状态。
         let prepare_call = Arc::clone(&call);
         if let Ok(mut state) = call.lock() {
             state.preparing = true;
         } else {
             return;
         }
+        // This guard exists before queueing and follows physical preparation completion.
+        // 此守卫在排队前存在，并跟随物理准备完成。
         let preparation_guard = PreparationGuard {
             call: Arc::clone(&call),
         };
-        let preparation = tokio::task::spawn_blocking(move || {
+        // Return remaining typed admission input without duplicating the retained business payload.
+        // 返回剩余类型化入场输入，不复制保留的业务载荷。
+        let prepared = tokio::task::spawn_blocking(move || {
+            // Keep preparation marked live until this exact closure exits.
+            // 直到此精确闭包退出前，保持准备处于存活状态。
             let _preparation_guard = preparation_guard;
-            manager.prepare_formal_call(&prepare_owner, &prepare_call, input)
+            // Preserve the real preparation result beside its original unconsumed admission input.
+            // 将真实准备结果与其原未消费入场输入共同保留。
+            let outcome = manager.prepare_formal_call(&prepare_owner, &prepare_call, &mut input);
+            (outcome, input)
         })
-        .await
-        .map_err(|error| {
-            VulcanPluginRuntimeError::new(format!("Formal preparation task failed: {error}"))
-        })
-        .and_then(|result| result);
+        .await;
+        // Only normal preparation may proceed from initialization into a first business call.
+        // 仅正常准备可以从初始化进入首次业务调用。
+        let preparation = match prepared {
+            Ok((Ok(()), input)) => {
+                self.complete_initialized_admission(&owner, &call, input)
+                    .await
+            }
+            Ok((Err(error), _)) => Err(error),
+            Err(error) => Err(VulcanPluginRuntimeError::new(format!(
+                "Formal preparation task failed: {error}"
+            ))),
+        };
+        // Retirement always follows the original identities, including failed or cancelled initialization.
+        // 退役始终跟随原身份，包含失败或取消的初始化。
         let result = self.finish_formal_call(&owner, &call, preparation).await;
-        // Errors in evidence or retirement keep the record and capacity instead of pretending cleanup completed.
-        // 证据或退役错误保留记录及容量，不伪称清理完成。
         if let Ok(mut state) = call.lock() {
             state.supervised = false;
             state.result = Some(result);
@@ -611,39 +738,58 @@ impl VulcanPluginRuntimeManager {
         &self,
         owner: &ManagedFormalRuntime,
         call: &FormalCall,
-        mut input: Preparation,
+        input: &mut Preparation,
     ) -> Result<(), VulcanPluginRuntimeError> {
         if call.cancelled.load(Ordering::Acquire) {
             return Err(VulcanPluginRuntimeError::new(
                 "Formal invocation cancelled before preparation.",
             ));
         }
+        if let CallAdmission::Action { execution, .. } = &input.admission {
+            execution.record.check()?;
+        }
         if Instant::now() >= input.deadline {
             return Err(VulcanPluginRuntimeError::new(
                 "Formal invocation deadline expired before preparation.",
             ));
         }
-        // Environment copying and dependency installation must remain owned if the observer disappears.
-        // 观测者消失时，环境复制及依赖安装必须继续保持归属。
-        if matches!(input.workspace, CallWorkspace::LifecycleEnvironment) {
-            self.prepare_lifecycle_environment(owner, call, &mut input)?;
+        // Blocking workspace preparation belongs to the already-published invocation, never its waiter.
+        // 阻塞工作区准备属于已发布调用，绝不属于其等待者。
+        match &input.workspace {
+            CallWorkspace::LifecycleEnvironment => {
+                self.prepare_lifecycle_environment(owner, call, input)?
+            }
+            CallWorkspace::ExecutionPackage => {
+                // Resolve exactly the descriptor pinned before publication and retain its full path budget.
+                // 精确解析发布前固定的描述符，并保留其完整路径预算。
+                let workspace = crate::runtime::environment::plugin_execution_package_root(
+                    &self.state,
+                    &call.plugin,
+                )
+                .map_err(VulcanPluginRuntimeError::new)?;
+                input.workspace = CallWorkspace::Provided(workspace);
+                self.reserve_prepared_input(owner, call, input)?;
+            }
+            CallWorkspace::Provided(_) => {}
         }
-        // Workspace preparation has a single explicit result; it never probes alternate directories.
-        // 工作区准备只有单个明确结果；绝不探测备用目录。
-        let CallWorkspace::Provided(workspace) = input.workspace else {
+        // Every route now has one explicit workspace; no alternate directory is probed.
+        // 每条路由现在都有一个明确工作区；不探测备用目录。
+        let CallWorkspace::Provided(workspace) = &input.workspace else {
             return Err(VulcanPluginRuntimeError::new(
-                "Lifecycle environment preparation produced no workspace.",
+                "Formal preparation produced no workspace.",
             ));
         };
         {
-            // Plugin aggregate creation is atomic under the same host publication gate, never a guessed fallback.
-            // 插件聚合在同一宿主发布门下原子创建，绝不是猜测性回退。
+            // Aggregate registration is serialized with host publication and derives all limits from the parent.
+            // 聚合登记与宿主发布串行，所有上限均派生自父级。
             let _publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
             match owner.host.runtime().plugin(&call.plugin.id) {
                 Ok(_) => {}
                 Err(error) if error.code == EmbeddedErrorCode::NotFound => {
+                    // The parent remains the unique aggregate-limit authority.
+                    // 父级保持为唯一聚合上限权威。
                     let parent = &owner.settings.parent;
                     owner
                         .host
@@ -665,13 +811,23 @@ impl VulcanPluginRuntimeManager {
                 Err(error) => return Err(core_error(error)),
             }
         }
+        // Temporary sessions separate initialization from business while remaining private to this one call.
+        // 临时会话将初始化与业务分离，同时仍为此单次调用私有。
+        let separate = input.admission.separates_initialization();
+        if separate && input.finalizer.is_some() {
+            return Err(VulcanPluginRuntimeError::new(
+                "Action and probe sessions cannot select a business finalizer.",
+            ));
+        }
+        // Register the original bundle before recording any actual initialization or business operation.
+        // 在记录任何实际初始化或业务操作前登记原 bundle。
         let pool = owner
             .host
             .register_bundle_pool(VulcanPluginBundlePoolRequest {
                 plugin_id: call.plugin.id.clone(),
                 plugin_generation: call.plugin.generation,
-                workspace_root: workspace,
-                security_partition: input.security_partition,
+                workspace_root: workspace.clone(),
+                security_partition: input.security_partition.clone(),
                 scope: input.scope,
                 policy: PluginPoolConfig {
                     kind: PoolKind::Shared,
@@ -679,61 +835,68 @@ impl VulcanPluginRuntimeManager {
                     max_resident_vms: 1,
                     max_running_calls: 1,
                     max_queued_calls: owner.settings.parent.max_queued_calls,
-                    reuse: InstanceReuse::SingleCall,
+                    reuse: if separate {
+                        InstanceReuse::Session
+                    } else {
+                        InstanceReuse::SingleCall
+                    },
                     serial: true,
                     backend: ExecutionBackend::InProcess,
                     idle_ttl_ms: None,
                     max_uses: None,
                 },
-                finalizer: input.finalizer,
+                finalizer: input.finalizer.take(),
             })
             .map_err(core_error)?;
         call.lock()?.pool = Some(pool.clone());
-        // A lifecycle transition cannot interleave the final current-generation check and submission.
-        // 生命周期转换不能插入最后的当前代次检查与提交之间。
+        // No catalog publication may interleave this final generation check and core admission.
+        // 任何目录发布都不能插入此次最终代次检查与核心入场之间。
         let _publication =
             self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
-        let snapshot = self.snapshot();
-        let current = snapshot.plugins.get(&call.plugin.id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Plugin disappeared before submission.")
-        })?;
-        if current.generation != call.plugin.generation
-            || current.runtime_state != input.scope.required_runtime_state()
-        {
-            return Err(VulcanPluginRuntimeError::new(
-                "Plugin generation changed before formal submission.",
-            ));
+        self.validate_formal_submission(call, input.scope)?;
+        if let CallAdmission::Action { execution, .. } = &input.admission {
+            execution.record.check()?;
         }
-        if call.cancelled.load(Ordering::Acquire) {
-            return Err(VulcanPluginRuntimeError::new(
-                "Formal invocation cancelled before submission.",
+        // Initialization and later business share the same original absolute deadline.
+        // 初始化及后续业务共用同一原绝对截止时间。
+        let remaining = initialized::remaining(input.deadline)?;
+        if separate {
+            // Initialization receives its own core identity without invoking the Action export.
+            // 初始化获得自身核心身份，不调用 Action 导出。
+            let opening = owner
+                .host
+                .runtime()
+                .open_session(&pool, remaining)
+                .map_err(core_error)?;
+            call.lock()?.initialized = Some(initialized::InitializedCall::new(
+                opening.session_id,
+                opening.operation,
             ));
-        }
-        let remaining = input
-            .deadline
-            .checked_duration_since(Instant::now())
-            .filter(|duration| !duration.is_zero())
-            .ok_or_else(|| {
-                VulcanPluginRuntimeError::new(
-                    "Formal invocation deadline expired during preparation.",
-                )
+        } else {
+            // Ordinary tools and lifecycle callbacks keep the declared SingleCall protocol.
+            // 普通工具及生命周期回调保留声明的 SingleCall 协议。
+            let export = input.admission.export().ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Formal business admission has no declared export.")
             })?;
-        let operation = owner
-            .host
-            .runtime()
-            .submit(
-                EmbeddedCall {
-                    pool_id: pool,
-                    export: input.export,
-                    arguments: input.arguments,
-                    context: LuaInvocationContext::default(),
-                },
-                remaining,
-            )
-            .map_err(core_error)?;
-        call.lock()?.operation = Some(operation);
+            // The returned handle is the sole actual business identity.
+            // 返回句柄为唯一真实业务身份。
+            let operation = owner
+                .host
+                .runtime()
+                .submit(
+                    EmbeddedCall {
+                        pool_id: pool,
+                        export: export.to_owned(),
+                        arguments: std::mem::take(&mut input.arguments),
+                        context: LuaInvocationContext::default(),
+                    },
+                    remaining,
+                )
+                .map_err(core_error)?;
+            call.lock()?.operation = Some(operation);
+        }
         Ok(())
     }
 
@@ -798,6 +961,8 @@ impl VulcanPluginRuntimeManager {
                 )?;
             }
             project_result(&terminal)
+        } else if matches!(call.ownership, CallOwner::Probe) {
+            preparation.map(|()| Value::Bool(true))
         } else {
             preparation.and_then(|()| {
                 Err(VulcanPluginRuntimeError::new(
@@ -805,6 +970,11 @@ impl VulcanPluginRuntimeManager {
                 ))
             })
         };
+        if let Some(work) = &call.lock()?.action_work {
+            work.record().phase("cleanup");
+        }
+        self.close_initialized_call(owner, call).await?;
+        owner.host.reap_workspace_requests().map_err(core_error)?;
         let pool = call.lock()?.pool.clone();
         if let Some(pool) = pool {
             owner.host.runtime().close_pool(&pool).map_err(core_error)?;
@@ -821,8 +991,14 @@ impl VulcanPluginRuntimeManager {
                 }
             }
         }
-        self.release_session_slot_checked(&call.plugin.id)?;
-        call.lock()?.retired = true;
+        if !matches!(call.ownership, CallOwner::Probe) {
+            self.release_session_slot_checked(&call.plugin.id)?;
+        }
+        // Physical Action capacity outlives every core session, request scope and pool checkpoint.
+        // 物理 Action 容量比全部核心会话、请求作用域及池检查点存活更久。
+        let mut state = call.lock()?;
+        state.retired = true;
+        state.action_work.take();
         result
     }
 }

@@ -164,21 +164,6 @@ impl VulcanPluginRuntimeManager {
             .await
     }
 
-    /// Reserves one plugin-scoped session slot under an exact hard limit.
-    /// 在精确硬上限下预留一个插件作用域会话名额。
-    /// plugin_id and maximum select the capacity bound; returns unit after reservation/publication or compensates on failure.
-    /// plugin_id与maximum选择容量上限；预留/发布后返回空值，失败时执行补偿。
-    pub(super) fn reserve_session_slot(
-        &self,
-        plugin_id: &str,
-        maximum: usize,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let publication = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
-        })?;
-        self.reserve_session_slot_locked(plugin_id, maximum, &publication)
-    }
-
     /// Reserve `plugin_id` below `maximum` while the caller retains this manager's publication gate.
     /// 调用方保留此管理器发布门时，在 `maximum` 以内预留 `plugin_id`。
     /// `publication` proves the caller-held gate; return success only after count projection is published.
@@ -202,14 +187,6 @@ impl VulcanPluginRuntimeManager {
         self.publish_active_session_count(plugin_id, active_count, publication)?;
         counts.insert(plugin_id.to_owned(), active_count);
         Ok(())
-    }
-
-    /// Releases one previously reserved plugin-scoped session slot.
-    /// 释放一个此前预留的插件作用域会话名额。
-    /// plugin_id selects one reserved count; decrements and publishes it without returning a value.
-    /// plugin_id选择一项预留计数；递减并发布，不返回值。
-    pub(super) fn release_session_slot(&self, plugin_id: &str) {
-        let _ = self.release_session_slot_checked(plugin_id);
     }
 
     /// Release one known reservation for `plugin_id`, reporting metadata failures without changing its count.

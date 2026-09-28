@@ -3,7 +3,6 @@
 
 use super::super::VulcanPluginInvocationRequest;
 use super::super::tests::{test_manager, write_idle_session_package};
-use super::RetainedVulcanPluginLease;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::fs;
@@ -71,47 +70,4 @@ fn lifecycle_rollback_preserves_cleanup_diagnostic_for_active_session() {
                 .any(|diagnostic| diagnostic == "rollback cleanup fixture")
         );
     });
-}
-
-/// Verifies retained lease retry ownership is atomically claimed and restored after failure.
-/// 验证保留租约的重试所有权会被原子领取，并可在失败后恢复。
-#[test]
-fn retained_lease_retry_claim_is_atomic() {
-    let temp = tempfile::tempdir().expect("create temp directory");
-    let runtime_root = temp.path().join("runtime");
-    let vulcan_plugin_root = runtime_root.join("plugins");
-    fs::create_dir_all(&vulcan_plugin_root).expect("create Vulcan Plugin root");
-    let manager = test_manager(&runtime_root, vulcan_plugin_root);
-    manager
-        .retain_failed_lease(
-            RetainedVulcanPluginLease {
-                plugin_id: String::from("claim-plugin"),
-                owner_session_id: Some(String::from("claim-owner")),
-                lease_id: String::from("claim-lease"),
-                sid: String::from("claim-sid"),
-                generation: 1,
-                reserved_session_slot: false,
-            },
-            String::from("claim fixture"),
-        )
-        .expect("retain fixture lease");
-
-    let first = manager
-        .take_retained_leases(|lease| lease.plugin_id == "claim-plugin")
-        .expect("claim retained lease");
-    let second = manager
-        .take_retained_leases(|lease| lease.plugin_id == "claim-plugin")
-        .expect("repeat retained lease claim");
-    assert_eq!(first.len(), 1);
-    assert!(second.is_empty());
-    manager
-        .restore_retained_lease(first[0].clone())
-        .expect("restore claimed lease");
-    assert_eq!(
-        manager
-            .take_retained_leases(|lease| lease.plugin_id == "claim-plugin")
-            .expect("claim restored lease")
-            .len(),
-        1
-    );
 }

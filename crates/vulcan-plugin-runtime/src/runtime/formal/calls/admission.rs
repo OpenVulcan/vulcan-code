@@ -3,6 +3,92 @@
 
 use super::*;
 
+impl VulcanPluginRuntimeManager {
+    /// Check one frozen call against the current catalog under the caller's publication gate.
+    /// 在调用方持有的发布门下，对照当前目录检查单个冻结调用。
+    /// Scope is host-selected; returns explicit generation or cancellation failures before submission.
+    /// 作用域由宿主选择；在提交前返回明确代次或取消失败。
+    pub(super) fn validate_formal_submission(
+        &self,
+        call: &FormalCall,
+        scope: VulcanPluginBridgeLeaseScope,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Use one catalog snapshot for identity and lifecycle authority.
+        // 使用单个目录快照同时检查身份及生命周期权威。
+        let snapshot = self.snapshot();
+        // The original descriptor cannot follow another generation.
+        // 原描述符不能跟随另一个代次。
+        let current = snapshot.plugins.get(&call.plugin.id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Plugin disappeared before submission.")
+        })?;
+        if current.generation != call.plugin.generation
+            || current.runtime_state != scope.required_runtime_state()
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin generation changed before formal submission.",
+            ));
+        }
+        if call.cancelled.load(Ordering::Acquire) {
+            return Err(VulcanPluginRuntimeError::new(
+                "Formal invocation cancelled before submission.",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl VulcanPluginRuntimeManager {
+    /// Replace one prepared input reservation under the shared call and pinned-session budget.
+    /// 在共享调用及固定会话预算下替换单个已准备输入预留。
+    /// The exact call and parent must still be registered; any error keeps its previous reservation.
+    /// 精确调用及父级必须仍已登记；任何错误都保留其原预留。
+    pub(super) fn reserve_prepared_input(
+        &self,
+        owner: &ManagedFormalRuntime,
+        call: &FormalCall,
+        input: &Preparation,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Recount the exact prepared metadata against the parent's original bounds.
+        // 根据父级原始边界重新计量精确准备后元数据。
+        let bytes = input.input_bytes(&call.ownership, &owner.settings)?;
+        // Hold the shared call registry while inspecting or changing retained ownership.
+        // 检查或变更保留所有权期间持有共享调用注册表。
+        let calls = owner.calls.lock().map_err(|_| calls_error())?;
+        // Verify that preparation still belongs to the originally registered identity.
+        // 验证准备仍属于最初登记的身份。
+        let registered = calls.get(&call.id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Formal ownership disappeared during preparation.")
+        })?;
+        if !std::ptr::eq(registered.as_ref(), call) {
+            return Err(VulcanPluginRuntimeError::new(
+                "Formal preparation identity changed.",
+            ));
+        }
+        // Replace the current record's reservation; do not count it twice or reset another call's budget.
+        // 替换当前记录的预留；不重复计数，也不重置其他调用预算。
+        let total = calls
+            .values()
+            .filter(|other| other.id != call.id)
+            .map(|other| other.input_bytes.load(Ordering::Acquire))
+            .chain(
+                owner
+                    .pinned
+                    .lock()
+                    .map_err(|_| calls_error())?
+                    .values()
+                    .map(|session| session.input_bytes),
+            )
+            .try_fold(bytes, usize::checked_add);
+        if total.is_none_or(|total| total > owner.settings.parent.max_queued_bytes) {
+            return Err(VulcanPluginRuntimeError::new(
+                "Formal invocation input byte capacity is exhausted after environment preparation.",
+            ));
+        }
+        call.input_bytes.store(bytes, Ordering::Release);
+        Ok(())
+    }
+}
+
 impl Preparation {
     /// Measure the exact retained input against parent value and queue budgets.
     /// 按父级值及队列预算计量精确保留输入。
@@ -19,7 +105,7 @@ impl Preparation {
             &(
                 &self.arguments,
                 &self.finalizer,
-                &self.export,
+                self.admission.export(),
                 &self.workspace,
                 &self.security_partition,
                 self.scope.as_str(),
@@ -81,44 +167,7 @@ impl VulcanPluginRuntimeManager {
         })?;
         arguments.insert("environment_root".into(), json!(&workspace));
         input.workspace = CallWorkspace::Provided(workspace);
-        // Adding the resolved directory is a second explicit reservation under the same shared registry lock.
-        // 加入已解析目录是在同一共享注册表锁下进行的第二次显式预留。
-        let bytes = input.input_bytes(&call.ownership, &owner.settings)?;
-        // Hold the shared call registry while inspecting or changing retained ownership.
-        // 检查或变更保留所有权期间持有共享调用注册表。
-        let calls = owner.calls.lock().map_err(|_| calls_error())?;
-        // Verify that preparation still belongs to the originally registered identity.
-        // 验证准备仍属于最初登记的身份。
-        let registered = calls.get(&call.id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Lifecycle ownership disappeared during preparation.")
-        })?;
-        if !std::ptr::eq(registered.as_ref(), call) {
-            return Err(VulcanPluginRuntimeError::new(
-                "Lifecycle preparation identity changed.",
-            ));
-        }
-        // Replace the current record's reservation; do not count it twice or reset another call's budget.
-        // 替换当前记录的预留；不重复计数，也不重置其他调用预算。
-        let total = calls
-            .values()
-            .filter(|other| other.id != call.id)
-            .map(|other| other.input_bytes.load(Ordering::Acquire))
-            .chain(
-                owner
-                    .pinned
-                    .lock()
-                    .map_err(|_| calls_error())?
-                    .values()
-                    .map(|session| session.input_bytes),
-            )
-            .try_fold(bytes, usize::checked_add);
-        if total.is_none_or(|total| total > owner.settings.parent.max_queued_bytes) {
-            return Err(VulcanPluginRuntimeError::new(
-                "Formal invocation input byte capacity is exhausted after environment preparation.",
-            ));
-        }
-        call.input_bytes.store(bytes, Ordering::Release);
-        Ok(())
+        self.reserve_prepared_input(owner, call, input)
     }
 }
 
@@ -147,13 +196,12 @@ impl VulcanPluginRuntimeManager {
             workspace: CallWorkspace::LifecycleEnvironment,
             arguments,
             finalizer: None,
-            export,
+            admission: CallAdmission::Lifecycle { export },
             scope,
             security_partition: format!("lifecycle:{}:{}", scope.as_str(), plugin.generation),
             deadline,
         };
-        self.invoke_owned_formal_call(owner, plugin, CallOwner::Lifecycle, input)
-            .await
+        self.invoke_owned_formal_call(owner, plugin, input).await
     }
 
     /// Admit bounded frozen input using the sole runtime and preserve actual work independently of waiting.
@@ -164,7 +212,6 @@ impl VulcanPluginRuntimeManager {
         &self,
         owner: Arc<ManagedFormalRuntime>,
         plugin: VulcanPluginDescriptor,
-        ownership: CallOwner,
         input: Preparation,
     ) -> Result<Value, VulcanPluginRuntimeError> {
         tokio::runtime::Handle::try_current().map_err(|error| {
@@ -172,7 +219,22 @@ impl VulcanPluginRuntimeManager {
                 "Formal invocation requires a Tokio runtime: {error}"
             ))
         })?;
-        self.reap_lifecycle_calls(&owner)?;
+        self.reap_internal_calls(&owner)?;
+        // Retained ownership is derived once from the same intent used for initialization and business.
+        // 保留归属从用于初始化及业务的同一意图一次性派生。
+        let ownership = input.admission.ownership();
+        // Hold Action capacity before any worker can be queued, even if its observer disappears.
+        // 在任何工作者排队前持有 Action 容量，即使其观测者消失。
+        let action_work = match &input.admission {
+            CallAdmission::Action { execution, .. } => {
+                execution.record.check()?;
+                Some(crate::runtime::action_status::ActionWorkGuard::new(
+                    Arc::clone(&execution.record),
+                    None,
+                )?)
+            }
+            _ => None,
+        };
         // Count all retained source-selection metadata and both envelopes before publishing ownership.
         // 发布所有权前计入全部保留的源码选择元数据及两个信封。
         let input_bytes = input.input_bytes(&ownership, &owner.settings)?;
@@ -246,7 +308,9 @@ impl VulcanPluginRuntimeManager {
                     "Formal plugin runtime is closing.",
                 ));
             }
-            self.reserve_session_slot_locked(&plugin.id, maximum, &publication)?;
+            if !matches!(ownership, CallOwner::Probe) {
+                self.reserve_session_slot_locked(&plugin.id, maximum, &publication)?;
+            }
             // Keep the exact invocation record independently of its observer.
             // 独立于观测者保留精确调用记录。
             let call = Arc::new(FormalCall {
@@ -257,6 +321,7 @@ impl VulcanPluginRuntimeManager {
                 cancelled: AtomicBool::new(false),
                 acknowledged: AtomicBool::new(false),
                 state: Mutex::new(CallState {
+                    action_work,
                     supervised: true,
                     ..CallState::default()
                 }),
@@ -293,9 +358,9 @@ impl VulcanPluginRuntimeManager {
                 .supervise_formal_call(Arc::clone(&supervisor_owner), supervisor_call, input)
                 .await;
             supervision.completed = true;
-            // If the waiter was dropped, completion itself reclaims only physically retired lifecycle work.
-            // 等待方已被丢弃时，完成处理自身仅回收物理退役的生命周期工作。
-            if let Err(error) = manager.reap_lifecycle_calls(&supervisor_owner) {
+            // If the waiter was dropped, completion itself reclaims only physically retired internal calls.
+            // 等待方已被丢弃时，完成处理自身仅回收物理退役的内部调用。
+            if let Err(error) = manager.reap_internal_calls(&supervisor_owner) {
                 // A diagnostic-lock failure cannot turn incomplete cleanup into successful retirement.
                 // 诊断锁失败不能把未完成清理变成成功退役。
                 let _ =
@@ -313,8 +378,8 @@ impl VulcanPluginRuntimeManager {
                     CallOwner::Controller(id) if result.is_ok() => {
                         self.forget_formal_call(&call.id, id)?;
                     }
-                    CallOwner::Lifecycle => {
-                        self.reap_lifecycle_calls(&owner)?;
+                    CallOwner::Lifecycle | CallOwner::Action | CallOwner::Probe => {
+                        self.reap_internal_calls(&owner)?;
                     }
                     CallOwner::Controller(_) => {}
                 }
@@ -329,11 +394,11 @@ impl VulcanPluginRuntimeManager {
         }
     }
 
-    /// Reclaim acknowledged lifecycle evidence only after physical retirement and completed supervision.
-    /// 仅在物理退役及监督完成后回收已确认的生命周期证据。
+    /// Reclaim acknowledged internal-call evidence only after physical retirement and completed supervision.
+    /// 仅在物理退役及监督完成后回收已确认的内部调用证据。
     /// The exact parent supplies operation identities; any failure retains the current record for recovery.
     /// 精确父级提供操作身份；任何失败均保留当前记录以供恢复。
-    pub(super) fn reap_lifecycle_calls(
+    pub(super) fn reap_internal_calls(
         &self,
         owner: &ManagedFormalRuntime,
     ) -> Result<(), VulcanPluginRuntimeError> {
@@ -349,7 +414,7 @@ impl VulcanPluginRuntimeManager {
             let call = calls
                 .get(&id)
                 .expect("ID was collected under the same registry lock");
-            if !matches!(call.ownership, CallOwner::Lifecycle)
+            if matches!(call.ownership, CallOwner::Controller(_))
                 || !call.acknowledged.load(Ordering::Acquire)
             {
                 continue;

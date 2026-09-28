@@ -2,23 +2,19 @@
 //! 插件目录投影、精确代次守卫与宿主生命周期转换。
 
 use super::authorization::plugin_is_authorized;
-use super::bridge::VulcanPluginBridgeLeaseScope;
-use super::environment::plugin_execution_package_root;
 use super::{
-    RetainedVulcanPluginLease, VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
-    VULCAN_PLUGIN_PROBE_TIMEOUT_MS, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
-    call_engine_blocking, parse_engine_response,
+    VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS, VULCAN_PLUGIN_PROBE_TIMEOUT_MS,
+    VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
 };
 use crate::{
     VulcanPluginAvailability, VulcanPluginCatalogSnapshot, VulcanPluginHookDescriptor,
     VulcanPluginPackageOrigin, VulcanPluginRuntimeState, VulcanPluginToolDescriptor,
     load_vulcan_plugin_catalog,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use uuid::Uuid;
 
 /// Host-owned plugin lifecycle event that may invoke one manifest callback.
 /// 可调用清单回调的宿主自有插件生命周期事件。
@@ -195,9 +191,18 @@ impl VulcanPluginRuntimeManager {
     ///
     /// # Returns
     /// 返回值
-    /// Returns success only after the probe lease is also closed successfully.
-    /// 仅在探测租约也成功关闭后返回成功。
+    /// Returns success only after the original probe initialization and actual core retirement complete.
+    /// 仅在原探测初始化及实际核心退役完成后返回成功。
     pub async fn probe_plugin(&self, plugin_id: &str) -> Result<(), VulcanPluginRuntimeError> {
+        // Probe preparation and initialization share the existing finite probe budget from API entry.
+        // 探测准备及初始化从接口入场起共用既有有限探测预算。
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_millis(
+                VULCAN_PLUGIN_PROBE_TIMEOUT_MS,
+            ))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Plugin probe deadline is out of range.")
+            })?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(
@@ -221,90 +226,7 @@ impl VulcanPluginRuntimeManager {
         if !manifest.has_lua_runtime() {
             return Ok(());
         }
-        // executionRoot prevents a post-catalog package mutation from changing probe code.
-        // executionRoot 防止目录扫描后的插件包变更替换探测代码。
-        let execution_root = plugin_execution_package_root(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        let probe_id = Uuid::new_v4().to_string();
-        let (lease_id, sid, generation) = self
-            .create_managed_lease(
-                &probe_id,
-                &execution_root,
-                &execution_root,
-                &manifest,
-                VulcanPluginBridgeLeaseScope::EnablingProbe,
-            )
-            .await?;
-        // code probes the already loaded plugin through the fixed bridge ABI.
-        // code 通过固定桥接 ABI 探测已加载插件。
-        let code = String::from("local bridge = require('runtime.bridge')\nreturn bridge.probe()");
-        let engine = self.runtime_engine()?;
-        let stable_plugin_id = plugin_id.to_owned();
-        let probe_result = call_engine_blocking(Arc::clone(&engine), {
-            let lease_id = lease_id.clone();
-            let sid = sid.clone();
-            let plugin_id = stable_plugin_id.clone();
-            move |engine| {
-                let raw = engine
-                    .eval_system_runtime_lease_json(
-                        &json!({
-                            "lease_id": lease_id,
-                            "sid": sid,
-                            "generation": generation,
-                            "code": code,
-                            "args": {},
-                            "timeout_ms": VULCAN_PLUGIN_PROBE_TIMEOUT_MS,
-                        })
-                        .to_string(),
-                    )
-                    .map_err(VulcanPluginRuntimeError::new)?;
-                let response = parse_engine_response(&raw, "probe Vulcan Plugin runtime lease")?;
-                if response.get("result").and_then(Value::as_bool) != Some(true) {
-                    return Err(VulcanPluginRuntimeError::new(format!(
-                        "Vulcan Plugin `{plugin_id}` probe did not return true."
-                    )));
-                }
-                Ok(())
-            }
-        })
-        .await;
-        let retained_lease = RetainedVulcanPluginLease {
-            plugin_id: stable_plugin_id.clone(),
-            owner_session_id: None,
-            lease_id: lease_id.clone(),
-            sid: sid.clone(),
-            generation,
-            reserved_session_slot: false,
-        };
-        let close_result = call_engine_blocking(engine, move |engine| {
-            let raw = engine
-                .close_system_runtime_lease_json(
-                    &json!({
-                        "lease_id": lease_id,
-                        "sid": sid,
-                        "generation": generation,
-                    })
-                    .to_string(),
-                )
-                .map_err(VulcanPluginRuntimeError::new)?;
-            parse_engine_response(&raw, "close Vulcan Plugin probe lease").map(|_| ())
-        })
-        .await;
-        match (probe_result, close_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(probe_error), Ok(())) => Err(probe_error),
-            (probe_result, Err(close_error)) => {
-                let diagnostic = format!(
-                    "Vulcan Plugin `{stable_plugin_id}` probe lease cleanup failed and remains retained: {close_error}"
-                );
-                self.retain_failed_lease(retained_lease, diagnostic.clone())?;
-                let message = match probe_result {
-                    Ok(()) => diagnostic,
-                    Err(probe_error) => format!("{probe_error}; {diagnostic}"),
-                };
-                Err(VulcanPluginRuntimeError::new(message))
-            }
-        }
+        self.invoke_formal_probe(plugin.clone(), deadline).await
     }
 
     /// Returns one immutable current catalog snapshot.

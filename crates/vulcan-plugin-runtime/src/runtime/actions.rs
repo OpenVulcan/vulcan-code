@@ -2,13 +2,12 @@
 //! 带调用方策略、Schema校验与租约清理的清单声明业务Action。
 
 use super::action_status::{ACTION_RECORD, ActionAdmission, VulcanPluginActionIdentity};
-use super::bridge::VulcanPluginBridgeLeaseScope;
 use super::environment::plugin_execution_package_root;
 use super::execution::ActionExecution;
 use super::lease::required_lua_runtime;
 use super::{
-    RetainedVulcanPluginLease, VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError,
-    VulcanPluginRuntimeManager, canonical_plugin_file, read_plugin_json_state,
+    VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
+    canonical_plugin_file, read_plugin_json_state,
 };
 use crate::VulcanPluginRuntimeState;
 use serde_json::{Value, json};
@@ -136,8 +135,8 @@ impl VulcanPluginRuntimeManager {
         // Submitted mutations survive waiter disconnect; only the original deadline limits admission.
         // 已提交变更在等待方断开后继续；仅原始截止时间限制入场。
         let mutation_waiter = if cancellable { None } else { waiter.take() };
-        // The supervisor retains gates and temporary lease cleanup after an HTTP waiter is dropped.
-        // HTTP 等待方被丢弃后，监督任务仍持有同步门并完成临时租约清理。
+        // The supervisor retains registered execution and physical cleanup after an HTTP waiter is dropped.
+        // HTTP 等待方被丢弃后，监督任务仍保留已登记执行及物理清理。
         let manager = self.clone();
         // Own completion before spawning so an unpolled task cannot leak active admission.
         // 派发之前拥有完成记录，避免未轮询任务泄漏活动入场。
@@ -281,68 +280,17 @@ impl VulcanPluginRuntimeManager {
             )?;
             return Ok(result);
         }
-        self.reserve_session_slot(&plugin.id, lua_runtime.max_active_sessions)?;
-        execution.record.phase("initializing");
-        let action_lease_id = format!("action-{}", Uuid::new_v4());
-        let create_result = self
-            .create_managed_lease(
-                &action_lease_id,
-                &execution_root,
-                &workspace_root,
-                &manifest,
-                VulcanPluginBridgeLeaseScope::Enabled,
+        // The formal call owns its private initialization, sole business operation and physical retirement.
+        // 正式调用持有其私有初始化、唯一业务操作及物理退役。
+        let result = self
+            .invoke_formal_action(
+                plugin.clone(),
+                workspace_root,
+                action.function.clone(),
+                json!({ "arguments": request.arguments }),
+                execution,
             )
-            .await;
-        let (lease_id, sid, generation) = match create_result {
-            Ok(lease) => lease,
-            Err(error) => {
-                self.release_session_slot(&plugin.id);
-                return Err(error);
-            }
-        };
-        let invocation_result = match execution.remaining_ms().and_then(|remaining| {
-            self.ensure_current_persistent_generation(&plugin.id, expected_generation)?;
-            execution.record.start().map(|()| remaining)
-        }) {
-            Err(error) => Err(error),
-            Ok(remaining_ms) => {
-                self.evaluate_bridge_function(
-                    &lease_id,
-                    &sid,
-                    generation,
-                    &action.function,
-                    json!({ "arguments": request.arguments }),
-                    remaining_ms,
-                )
-                .await
-            }
-        };
-        execution.record.phase("cleanup");
-        let close_result = self.close_raw_lease(&lease_id, &sid, generation).await;
-        match close_result {
-            Ok(()) => self.release_session_slot(&plugin.id),
-            Err(close_error) => {
-                let diagnostic = format!(
-                    "Vulcan plugin action lease `{lease_id}` cleanup failed and remains retained: {close_error}"
-                );
-                self.retain_failed_lease(
-                    RetainedVulcanPluginLease {
-                        plugin_id: plugin.id.clone(),
-                        owner_session_id: None,
-                        lease_id,
-                        sid,
-                        generation,
-                        reserved_session_slot: true,
-                    },
-                    diagnostic.clone(),
-                )?;
-                return Err(VulcanPluginRuntimeError::new(match invocation_result {
-                    Ok(_) => diagnostic,
-                    Err(invoke_error) => format!("{invoke_error}; {diagnostic}"),
-                }));
-            }
-        }
-        let result = invocation_result?;
+            .await?;
         validate_plugin_action_value(
             &execution_root,
             action.output_schema_file.as_deref(),

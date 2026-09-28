@@ -237,6 +237,9 @@ fn draining_rollback_reenters_enabling_before_probe() {
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load enabled lifecycle fixture");
     manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal probe parent");
+    manager
         .begin_draining("hook-plugin")
         .expect("begin draining transition");
     manager
@@ -246,9 +249,10 @@ fn draining_rollback_reenters_enabling_before_probe() {
         manager.snapshot().plugins["hook-plugin"].runtime_state,
         VulcanPluginRuntimeState::Enabling
     );
-    // runtime proves the enabling probe lease is accepted after the reverse transition.
-    // runtime 证明反向转换后允许创建启用探测租约。
+    // runtime proves formal initialization is admitted after the reverse transition.
+    // runtime 证明反向转换后允许正式初始化入场。
     let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
         .build()
         .expect("create lifecycle Tokio runtime");
     runtime

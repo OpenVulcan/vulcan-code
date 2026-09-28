@@ -1,9 +1,8 @@
-//! Deterministic plugin drain ownership, retained-lease retries, and cleanup diagnostics.
-//! 确定性插件排空所有权、保留租约重试与清理诊断。
+//! Deterministic formal plugin drain ownership and cleanup diagnostics.
+//! 确定性正式插件排空所有权与清理诊断。
 
 use super::{
-    RetainedVulcanPluginLease, VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError,
-    VulcanPluginRuntimeManager, lock_retained_leases,
+    VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
 };
 use crate::VulcanPluginRuntimeState;
 use std::collections::BTreeSet;
@@ -26,9 +25,6 @@ pub struct VulcanPluginDrainReport {
     /// Number of persistent plugin UI action runtimes closed successfully.
     /// 成功关闭的持久插件界面 Action 运行时数量。
     pub closed_ui_action_runtimes: usize,
-    /// Number of previously retained raw leases closed successfully.
-    /// 成功关闭的此前保留原始租约数量。
-    pub closed_retained_leases: usize,
     /// Deterministic cleanup failures retained for diagnostics and retry.
     /// 为诊断与重试保留的确定性清理失败集合。
     pub failures: Vec<String>,
@@ -50,9 +46,6 @@ impl VulcanPluginDrainReport {
         self.closed_ui_action_runtimes = self
             .closed_ui_action_runtimes
             .saturating_add(other.closed_ui_action_runtimes);
-        self.closed_retained_leases = self
-            .closed_retained_leases
-            .saturating_add(other.closed_retained_leases);
         self.failures.extend(other.failures);
     }
 }
@@ -100,8 +93,6 @@ impl VulcanPluginRuntimeManager {
         ] {
             report.merge(self.drain_formal_instance(plugin_id, kind).await?);
         }
-        let retained = self.take_retained_leases(|lease| lease.plugin_id == plugin_id)?;
-        report.merge(self.drain_retained_leases(retained).await?);
         Ok(report)
     }
 
@@ -140,110 +131,10 @@ impl VulcanPluginRuntimeManager {
                 .await?,
         );
         report.merge(self.drain_pinned(None, Some(owner_session_id)).await?);
-        let retained = self.take_retained_leases(|lease| {
-            lease.owner_session_id.as_deref() == Some(owner_session_id)
-        })?;
-        affected_plugin_ids.extend(retained.iter().map(|lease| lease.plugin_id.clone()));
-        report.merge(self.drain_retained_leases(retained).await?);
         for plugin_id in affected_plugin_ids {
             self.clear_cleanup_diagnostics_if_fully_drained(&plugin_id)?;
         }
         Ok(report)
-    }
-
-    /// Retries exact closure for raw leases retained by earlier failed cleanup paths.
-    /// 对此前清理失败路径保留的原始租约重试精确关闭。
-    /// leases contains atomically claimed retry identities; returns cleanup counts while restoring failed entries.
-    /// leases包含原子领取的重试身份；返回清理计数并恢复失败条目。
-    async fn drain_retained_leases(
-        &self,
-        leases: Vec<RetainedVulcanPluginLease>,
-    ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
-        let mut report = VulcanPluginDrainReport::default();
-        for lease in leases {
-            match self
-                .close_raw_lease(&lease.lease_id, &lease.sid, lease.generation)
-                .await
-            {
-                Ok(()) => {
-                    if lease.reserved_session_slot {
-                        self.release_session_slot(&lease.plugin_id);
-                    }
-                    report.closed_retained_leases += 1;
-                }
-                Err(error) => {
-                    self.restore_retained_lease(lease.clone())?;
-                    let diagnostic = format!(
-                        "Retained lease `{}` cleanup retry failed: {error}",
-                        lease.lease_id
-                    );
-                    self.record_cleanup_failure(&lease.plugin_id, diagnostic.clone())?;
-                    report.failures.push(diagnostic);
-                }
-            }
-        }
-        Ok(report)
-    }
-
-    /// Atomically claims retained raw leases that match one exact lifecycle predicate.
-    /// 原子领取匹配一个精确生命周期谓词的保留原始租约。
-    /// predicate selects identities under one lock; returns and removes only the matching leases.
-    /// predicate在同一个锁内选择身份；返回并移除匹配租约。
-    fn take_retained_leases(
-        &self,
-        predicate: impl Fn(&RetainedVulcanPluginLease) -> bool,
-    ) -> Result<Vec<RetainedVulcanPluginLease>, VulcanPluginRuntimeError> {
-        let mut retained = lock_retained_leases(&self.state.retained_leases)?;
-        let lease_ids = retained
-            .values()
-            .filter(|lease| predicate(lease))
-            .map(|lease| lease.lease_id.clone())
-            .collect::<Vec<_>>();
-        Ok(lease_ids
-            .into_iter()
-            .filter_map(|lease_id| retained.remove(&lease_id))
-            .collect())
-    }
-
-    /// Retains one raw lease after immediate cleanup fails and records a visible diagnostic.
-    /// 在立即清理失败后保留一个原始租约，并记录可见诊断。
-    /// lease preserves the retry identity and diagnostic is published; returns unit or a duplicate/lock error.
-    /// lease保留重试身份并发布diagnostic；返回空值或重复/锁错误。
-    pub(super) fn retain_failed_lease(
-        &self,
-        lease: RetainedVulcanPluginLease,
-        diagnostic: String,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let plugin_id = lease.plugin_id.clone();
-        let lease_id = lease.lease_id.clone();
-        let mut retained = lock_retained_leases(&self.state.retained_leases)?;
-        if retained.contains_key(&lease_id) {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Retained Vulcan Plugin lease id `{lease_id}` already exists."
-            )));
-        }
-        retained.insert(lease_id, lease);
-        drop(retained);
-        self.record_cleanup_failure(&plugin_id, diagnostic)
-    }
-
-    /// Restores one atomically claimed lease after its cleanup retry fails.
-    /// 在清理重试失败后恢复一个已被原子领取的租约。
-    /// lease is one failed claimed retry; returns unit after reinsertion or an explicit concurrent-restore error.
-    /// lease是一次失败的已领取重试；重新插入后返回空值，否则显式报告并发恢复错误。
-    fn restore_retained_lease(
-        &self,
-        lease: RetainedVulcanPluginLease,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let lease_id = lease.lease_id.clone();
-        let mut retained = lock_retained_leases(&self.state.retained_leases)?;
-        if retained.contains_key(&lease_id) {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Retained Vulcan Plugin lease id `{lease_id}` was restored concurrently."
-            )));
-        }
-        retained.insert(lease_id, lease);
-        Ok(())
     }
 
     /// Retains one cleanup diagnostic so UI and later refreshes cannot hide leaked resources.
@@ -311,9 +202,9 @@ impl VulcanPluginRuntimeManager {
         let _registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
-        let has_retained_leases = lock_retained_leases(&self.state.retained_leases)?
-            .values()
-            .any(|lease| lease.plugin_id == plugin_id);
+        // Probe preparation has no legacy session quota, but still retains real cleanup ownership.
+        // 探测准备不占旧会话配额，但仍保留真实清理所有权。
+        let has_formal_calls = self.has_unretired_formal_calls(plugin_id)?;
         let has_hook_runtime =
             self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::Hook)?;
         let has_ui_action_runtime =
@@ -329,7 +220,7 @@ impl VulcanPluginRuntimeManager {
             .copied()
             .unwrap_or_default()
             > 0;
-        if has_retained_leases || has_hook_runtime || has_ui_action_runtime || has_active_count {
+        if has_formal_calls || has_hook_runtime || has_ui_action_runtime || has_active_count {
             return Ok(());
         }
         let removed_diagnostics = self

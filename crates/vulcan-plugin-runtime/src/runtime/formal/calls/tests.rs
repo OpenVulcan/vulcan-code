@@ -2,6 +2,8 @@
 //! 生命周期生产迁移测试使用真实 Lua 初始化及原生回调。
 
 use super::*;
+
+mod transient;
 use crate::runtime::tests::{test_manager, write_hook_package};
 use crate::{
     VulcanPluginHostServices, VulcanPluginLifecycleEvent as Event, VulcanPluginUiEventPublisher,
