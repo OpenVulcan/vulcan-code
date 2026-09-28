@@ -13,6 +13,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use tempfile::TempDir;
 
+mod bundle;
+
 /// One bounded initialization, invocation and cleanup budget for these local fixtures.
 /// 这些本地夹具的统一有界初始化、调用及清理预算。
 const WAIT: Duration = Duration::from_secs(5);
@@ -107,6 +109,14 @@ impl Fixture {
             r#"{"owner":"initial"}"#,
         )
         .expect("write defaults");
+        Self::from_catalog(root, bundled, "hook-plugin")
+    }
+
+    /// Open the real `bundled` catalog for `plugin_id` using filesystem ownership from `root`.
+    /// 使用 `root` 的文件系统所有权为 `plugin_id` 打开真实 `bundled` 目录。
+    /// Return an independent native host with explicitly bounded test budgets and recording services.
+    /// 返回具有显式有界测试预算及记录服务的独立原生宿主。
+    fn from_catalog(root: tempfile::TempDir, bundled: PathBuf, plugin_id: &str) -> Self {
         // Construct the actual isolated engine using the common runtime fixture.
         // 使用公共运行时夹具构造真实隔离引擎。
         let manager = test_manager(root.path(), bundled);
@@ -114,7 +124,7 @@ impl Fixture {
             .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
             .expect("publish catalog");
         assert_eq!(
-            manager.snapshot().plugins["hook-plugin"].runtime_state,
+            manager.snapshot().plugins[plugin_id].runtime_state,
             VulcanPluginRuntimeState::Enabled
         );
         // Service capture stays independent of process-global legacy callbacks.
@@ -165,7 +175,7 @@ impl Fixture {
         )
         .expect("construct native host");
         host.runtime()
-            .register_plugin("hook-plugin".to_string(), aggregate)
+            .register_plugin(plugin_id.to_string(), aggregate)
             .expect("register aggregate");
         Self {
             host,

@@ -14,7 +14,9 @@ use luaskills::runtime::embedded::{
 };
 use std::time::{Duration, Instant};
 
+mod bundle;
 mod dispatch;
+pub use bundle::VulcanPluginBundlePoolRequest;
 
 /// Exact native names installed atomically in each formal runtime.
 /// 在每个正式运行时中原子安装的精确原生名称。

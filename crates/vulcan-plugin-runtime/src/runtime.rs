@@ -26,7 +26,9 @@ pub use authorization::{
     VulcanPluginPermissionPreview, plugin_permission_key,
 };
 
-pub use bridge::{VulcanPluginBridgeLeaseScope, VulcanPluginEmbeddedHost};
+pub use bridge::{
+    VulcanPluginBridgeLeaseScope, VulcanPluginBundlePoolRequest, VulcanPluginEmbeddedHost,
+};
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
 pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};

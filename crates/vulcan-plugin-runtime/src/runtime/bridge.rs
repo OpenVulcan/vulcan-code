@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 mod embedded;
-pub use embedded::VulcanPluginEmbeddedHost;
+pub use embedded::{VulcanPluginBundlePoolRequest, VulcanPluginEmbeddedHost};
 
 /// Maximum encoded bytes in a plugin-local UI invalidation topic.
 /// 插件内界面失效主题的编码字节上限。
