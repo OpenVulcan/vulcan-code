@@ -38,14 +38,40 @@ pub struct VulcanPluginBundlePoolRequest {
 }
 
 impl VulcanPluginEmbeddedHost {
+    /// Register request's manifest bundle with independent capacity and return its native pool identity.
+    /// 以独立容量注册 request 的清单 bundle，并返回原生池身份。
+    /// Exact catalog and capability validation remains shared with capacity-bound registration.
+    /// 精确目录及能力校验继续与绑定容量的注册共用。
+    pub fn register_bundle_pool(
+        &self,
+        request: VulcanPluginBundlePoolRequest,
+    ) -> EmbeddedResult<String> {
+        self.register_bundle_pool_with_capacity(None, request)
+    }
+
+    /// Register request's real bundle in exact capacity_id and return its native member pool identity.
+    /// 在精确 capacity_id 中注册 request 的真实 bundle，并返回原生成员池身份。
+    /// This shares capacity only; package, Lua state and native authority remain bound to the original member.
+    /// 此方法仅共享容量；包、Lua 状态及原生权威保持绑定原成员。
+    pub fn register_bundle_pool_in_capacity(
+        &self,
+        capacity_id: &str,
+        request: VulcanPluginBundlePoolRequest,
+    ) -> EmbeddedResult<String> {
+        self.register_bundle_pool_with_capacity(Some(capacity_id), request)
+    }
+
     /// Load the manifest-selected bundle and fixed restricted loader for `request`.
     /// 为 `request` 加载清单选择的 bundle 及固定受限加载器。
     /// Returns a registered core pool; module initialization and declared exports run only on admission.
     /// 返回已注册核心池；模块初始化及声明导出仅在入场后运行。
     /// The plugin aggregate must already exist; explicit package dependencies are required.
     /// 插件聚合必须已存在；要求显式包依赖声明。
-    pub fn register_bundle_pool(
+    /// capacity_id selects exact membership when present and independent placement when absent.
+    /// capacity_id 存在时选择精确成员关系，缺省时选择独立归属。
+    fn register_bundle_pool_with_capacity(
         &self,
+        capacity_id: Option<&str>,
         request: VulcanPluginBundlePoolRequest,
     ) -> EmbeddedResult<String> {
         // Keep the owning manager alive during exact descriptor and file resolution.
@@ -202,7 +228,8 @@ impl VulcanPluginEmbeddedHost {
                 output_schema: json!({"type":"string"}),
             })
             .collect();
-        self.register_pool(
+        self.register_pool_with_capacity(
+            capacity_id,
             ModuleDefinition {
                 finalizer: request.finalizer,
                 plugin_id: plugin.id.clone(),

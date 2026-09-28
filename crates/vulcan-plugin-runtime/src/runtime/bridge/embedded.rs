@@ -226,14 +226,44 @@ impl VulcanPluginEmbeddedHost {
         &self.runtime
     }
 
+    /// Register trusted definition and policy in scope with independent capacity; return the native pool identity.
+    /// 在 scope 中以独立容量注册可信 definition 及 policy；返回原生池身份。
+    /// The plugin budget must exist; catalog and capability checks are shared with capacity-bound registration.
+    /// 插件预算必须已存在；目录及能力检查与绑定容量的注册共用。
+    pub fn register_pool(
+        &self,
+        definition: ModuleDefinition,
+        policy: PluginPoolConfig,
+        scope: VulcanPluginBridgeLeaseScope,
+    ) -> EmbeddedResult<String> {
+        self.register_pool_with_capacity(None, definition, policy, scope)
+    }
+
+    /// Register definition and policy in scope as a member of the exact capacity_id; return the native pool identity.
+    /// 在 scope 中将 definition 及 policy 注册为精确 capacity_id 的成员；返回原生池身份。
+    /// Missing, closed or foreign ownership is rejected by the core without independent-placement fallback.
+    /// 核心拒绝缺失、关闭或外来归属，不回退独立归属。
+    pub fn register_pool_in_capacity(
+        &self,
+        capacity_id: &str,
+        definition: ModuleDefinition,
+        policy: PluginPoolConfig,
+        scope: VulcanPluginBridgeLeaseScope,
+    ) -> EmbeddedResult<String> {
+        self.register_pool_with_capacity(Some(capacity_id), definition, policy, scope)
+    }
+
     /// Register trusted `definition` and `policy` under an exact live catalog `scope`.
     /// 在精确实时目录 `scope` 下注册可信 `definition` 及 `policy`。
     /// Identity, generation, dependencies and package root must match the retained catalog entry.
     /// 身份、代次、依赖及包根必须匹配保留的目录条目。
     /// Returns a core pool ID; the host must first register the plugin's aggregate budget.
     /// 返回核心池 ID；宿主必须先注册插件聚合预算。
-    pub fn register_pool(
+    /// capacity_id explicitly selects exact membership; None preserves independent placement.
+    /// capacity_id 显式选择精确成员关系；None 保留独立归属。
+    fn register_pool_with_capacity(
         &self,
+        capacity_id: Option<&str>,
         definition: ModuleDefinition,
         policy: PluginPoolConfig,
         scope: VulcanPluginBridgeLeaseScope,
@@ -365,13 +395,23 @@ impl VulcanPluginEmbeddedHost {
         }
         // No callback can run during registration; initialization starts on later core admission.
         // 注册期间不会运行回调；初始化在后续核心入场时开始。
-        let registered = self.runtime.register_pool_with_owner(
-            definition,
-            policy,
-            permissions,
-            revision.clone(),
-            ModuleResourceOwner::new(domain),
-        );
+        let registered = match capacity_id {
+            Some(capacity_id) => self.runtime.register_pool_with_owner_in_capacity(
+                capacity_id,
+                definition,
+                policy,
+                permissions,
+                revision.clone(),
+                ModuleResourceOwner::new(domain),
+            ),
+            None => self.runtime.register_pool_with_owner(
+                definition,
+                policy,
+                permissions,
+                revision.clone(),
+                ModuleResourceOwner::new(domain),
+            ),
+        };
         if registered.is_err() {
             // A failed registration has no pool owner and must release its identity reservation.
             // 失败注册没有池所有者，必须释放其身份预留。

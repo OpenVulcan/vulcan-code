@@ -5,6 +5,7 @@ use super::*;
 use luaskills::runtime::embedded::OperationSnapshot;
 use std::path::Path;
 
+mod capacities;
 mod finalization;
 
 /// The formal loader cannot bypass the catalog requirement for a Lua dependency declaration.
