@@ -1002,7 +1002,7 @@ fn load_vulcan_plugin_package(
 
 /// Validates version, identity, host-owned package origin, and identifier grammar.
 /// 校验版本、身份、宿主持有的插件包来源与标识符语法。
-fn validate_manifest_identity(
+pub(crate) fn validate_manifest_identity(
     manifest: &VulcanPluginManifest,
     package_directory_id: &str,
 ) -> Result<(), String> {

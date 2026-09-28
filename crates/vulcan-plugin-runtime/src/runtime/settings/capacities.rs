@@ -11,6 +11,7 @@ use std::marker::PhantomData;
 /// 宿主选择的执行用途；插件业务参数不能选择容量归属。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginCapacityPurpose {
     /// Ordinary tool invocations keep their declared single-call semantics.
     /// 普通工具调用保留声明的单次调用语义。

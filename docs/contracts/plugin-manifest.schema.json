@@ -1,0 +1,1916 @@
+{
+  "$defs": {
+    "CapabilityExecution": {
+      "description": "Host execution transport, explicitly selected before a capability is published.\n宿主执行传输，在能力发布前显式选择。",
+      "oneOf": [
+        {
+          "const": "native",
+          "description": "Short cooperative Rust callback executed on the owning VM thread.\n在所属 VM 线程执行的短时协作 Rust 回调。",
+          "type": "string"
+        },
+        {
+          "const": "queued",
+          "description": "Reliable request consumed and completed by an SDK event pump.\n由 SDK 事件泵消费并完成的可靠请求。",
+          "type": "string"
+        }
+      ]
+    },
+    "CapabilityScope": {
+      "description": "Scope required from the trusted caller, independent from Lua business arguments.\n可信调用方必须具备的作用域，独立于 Lua 业务参数。",
+      "oneOf": [
+        {
+          "const": "invocation",
+          "description": "Available during an ordinary operation or session invocation.\n在普通操作或会话调用期间可用。",
+          "type": "string"
+        },
+        {
+          "const": "session",
+          "description": "Requires an explicitly bound session identity.\n要求显式绑定的会话身份。",
+          "type": "string"
+        }
+      ]
+    },
+    "ExecutionBackend": {
+      "description": "Declared backend; unavailable variants are rejected instead of downgraded.\n声明的执行后端；不可用的取值直接拒绝，不降级。",
+      "oneOf": [
+        {
+          "const": "in_process",
+          "description": "Execute in owned Lua VMs inside the current host process.\n在当前宿主进程内的受管 Lua VM 中执行。",
+          "type": "string"
+        },
+        {
+          "const": "worker_process",
+          "description": "Reserved protocol identity; no worker backend is advertised yet.\n预留的协议身份；目前尚未声明工作进程后端可用。",
+          "type": "string"
+        }
+      ]
+    },
+    "HookCapability": {
+      "description": "Declares one capability a hook may request from the host.\n声明 hook 可向宿主请求的一项能力。",
+      "oneOf": [
+        {
+          "const": "history_visible_read",
+          "description": "Read visible conversation history.\n读取可见会话历史。",
+          "type": "string"
+        },
+        {
+          "const": "history_filtered_read",
+          "description": "Read filtered conversation history prepared for extensions.\n读取为扩展准备的过滤后会话历史。",
+          "type": "string"
+        },
+        {
+          "const": "history_internal_read",
+          "description": "Read internal conversation history when explicitly granted.\n在明确授权后读取内部会话历史。",
+          "type": "string"
+        },
+        {
+          "const": "config_read",
+          "description": "Read project and session configuration.\n读取项目和会话配置。",
+          "type": "string"
+        },
+        {
+          "const": "config_write",
+          "description": "Write project or session configuration.\n写入项目或会话配置。",
+          "type": "string"
+        },
+        {
+          "const": "injection_write",
+          "description": "Submit context injection operations.\n提交上下文注入操作。",
+          "type": "string"
+        },
+        {
+          "const": "tool_summary_read",
+          "description": "Read summarized tool arguments and results.\n读取工具参数和结果摘要。",
+          "type": "string"
+        },
+        {
+          "const": "tool_full_read",
+          "description": "Read full tool arguments and results.\n读取完整工具参数和结果。",
+          "type": "string"
+        },
+        {
+          "const": "storage_plugin",
+          "description": "Use plugin-scoped persistent storage.\n使用插件作用域持久化存储。",
+          "type": "string"
+        },
+        {
+          "const": "network",
+          "description": "Use outbound network access.\n使用出站网络访问。",
+          "type": "string"
+        }
+      ]
+    },
+    "HookFailurePolicy": {
+      "description": "Describes how dispatch should react when one hook fails.\n描述单个 hook 失败时调度器应如何响应。",
+      "oneOf": [
+        {
+          "const": "continue",
+          "description": "Record the failure and continue running later hooks.\n记录失败并继续运行后续 hook。",
+          "type": "string"
+        },
+        {
+          "const": "stop",
+          "description": "Stop dispatch and return the failure to the caller.\n停止调度并把失败返回给调用方。",
+          "type": "string"
+        },
+        {
+          "const": "queue",
+          "description": "Record the failure as queueable work and continue running later hooks.\n将失败记录为可入队工作并继续运行后续 hook。",
+          "type": "string"
+        }
+      ]
+    },
+    "HookMode": {
+      "description": "Describes the behavior class expected from a hook point.\n描述 hook 点位期望的行为类别。",
+      "oneOf": [
+        {
+          "const": "observe",
+          "description": "Observes a runtime event without changing the payload or control flow.\n观察运行时事件，不修改 payload 或控制流。",
+          "type": "string"
+        },
+        {
+          "const": "transform",
+          "description": "May return a payload replacement or additive runtime operations.\n可以返回 payload 替换或追加运行时操作。",
+          "type": "string"
+        },
+        {
+          "const": "decision",
+          "description": "May allow, block, or defer a runtime operation.\n可以允许、阻断或延迟运行时操作。",
+          "type": "string"
+        },
+        {
+          "const": "effect",
+          "description": "Runs side effects such as indexing, memory writeback, or logging.\n运行索引、记忆写回或日志记录等副作用。",
+          "type": "string"
+        }
+      ]
+    },
+    "HookScope": {
+      "description": "Describes the configuration layer that owns a hook registration.\n描述拥有某个 hook 注册项的配置层级。",
+      "oneOf": [
+        {
+          "const": "global",
+          "description": "Registration applies to the whole application.\n注册项应用于整个应用。",
+          "type": "string"
+        },
+        {
+          "const": "workspace",
+          "description": "Registration applies to one workspace.\n注册项应用于单个工作区。",
+          "type": "string"
+        },
+        {
+          "const": "project",
+          "description": "Registration applies to one project.\n注册项应用于单个项目。",
+          "type": "string"
+        },
+        {
+          "const": "session",
+          "description": "Registration applies to one session.\n注册项应用于单个会话。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginActionCaller": {
+      "description": "Authorized caller class for one plugin action.\n单个插件 action 的授权调用方类别。",
+      "oneOf": [
+        {
+          "const": "plugin_runtime",
+          "description": "The plugin's own Lua bundle may invoke the action.\n插件自身 Lua bundle 可以调用 action。",
+          "type": "string"
+        },
+        {
+          "const": "plugin_ui",
+          "description": "The plugin's mounted WebUI component may invoke the action.\n插件挂载的 WebUI 组件可以调用 action。",
+          "type": "string"
+        },
+        {
+          "const": "lifecycle",
+          "description": "The host lifecycle state machine may invoke the action.\n宿主生命周期状态机可以调用 action。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginActionEffect": {
+      "description": "Manifest authority for query sharing versus explicitly submitted effects.\n清单对查询共享及显式提交操作的权威分类。",
+      "oneOf": [
+        {
+          "const": "read",
+          "description": "A local read that may share an identical in-flight request.\n可共享相同在途请求的本地只读操作。",
+          "type": "string"
+        },
+        {
+          "const": "mutation",
+          "description": "A write or externally consuming request; never deduplicated or replayed automatically.\n写操作或消耗外部资源的请求；不自动去重或重放。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginActionManifest": {
+      "additionalProperties": false,
+      "description": "One plugin business action callable through the generic service boundary.\n一个可通过通用服务边界调用的插件业务 action。",
+      "properties": {
+        "callers": {
+          "description": "Explicit caller classes allowed to invoke this action.\n允许调用当前 action 的显式调用方类别。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginActionCaller"
+          },
+          "type": "array"
+        },
+        "effect": {
+          "$ref": "#/$defs/VulcanPluginActionEffect",
+          "description": "Explicit semantic effect; names never determine replay or query policy.\n明确的语义效果；不得根据名称判断重放或查询策略。"
+        },
+        "function": {
+          "description": "Exact Lua bundle function invoked for this action.\n当前 action 调用的精确 Lua bundle 函数。",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable plugin-local action identifier.\n稳定的插件内 action 标识。",
+          "type": "string"
+        },
+        "input_schema_file": {
+          "default": null,
+          "description": "Optional package-relative JSON Schema for action input.\n可选的插件包相对 action 输入 JSON Schema。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_schema_file": {
+          "default": null,
+          "description": "Optional package-relative JSON Schema for action output.\n可选的插件包相对 action 输出 JSON Schema。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result_cache_ms": {
+          "default": 0,
+          "description": "Allowed lifetime for non-secret read projections; zero permits in-flight sharing only.\n非敏感只读投影允许保留的时长；零表示仅共享在途请求。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "snapshot_time_arguments": {
+          "default": [],
+          "description": "Top-level query arguments whose explicit null means freeze the current Unix millisecond time.\n明确空值表示冻结当前 Unix 毫秒时间的顶层查询参数。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timeout_ms": {
+          "description": "Hard action execution timeout in milliseconds.\naction 执行硬超时毫秒数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "function",
+        "timeout_ms",
+        "callers",
+        "effect"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginBinaryManifest": {
+      "additionalProperties": false,
+      "description": "One logical native executable with package-relative target mappings.\n一个带有插件包相对目标映射的逻辑原生可执行文件。",
+      "properties": {
+        "allow_workspace_cwd": {
+          "default": false,
+          "description": "Whether this binary may run in a caller workspace directory captured by the trusted bridge.\n此二进制是否可以在可信桥接层捕获的调用方工作区目录内运行。",
+          "type": "boolean"
+        },
+        "allowed_env": {
+          "default": [],
+          "description": "Environment variable names that plugin calls may set for this executable.\n插件调用此可执行文件时允许设置的环境变量名。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Stable plugin-local executable identifier.\n稳定的插件内可执行文件标识。",
+          "type": "string"
+        },
+        "targets": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Package-relative executable paths keyed by exact Rust target triple.\n以精确 Rust 目标三元组为键的插件包相对可执行文件路径。",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "targets"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginCapacityPurpose": {
+      "description": "Host-selected execution purpose; plugin business arguments cannot select capacity ownership.\n宿主选择的执行用途；插件业务参数不能选择容量归属。",
+      "oneOf": [
+        {
+          "const": "tool_call",
+          "description": "Ordinary tool invocations keep their declared single-call semantics.\n普通工具调用保留声明的单次调用语义。",
+          "type": "string"
+        },
+        {
+          "const": "tool_session",
+          "description": "Controller-owned tool sessions retain one exact VM for their lifetime.\n控制器拥有的工具会话在整个寿命内保留一个精确 VM。",
+          "type": "string"
+        },
+        {
+          "const": "hook",
+          "description": "Persistent Hook instances preserve their ordering and original shutdown declaration.\n持久 Hook 实例保留顺序及原关闭声明。",
+          "type": "string"
+        },
+        {
+          "const": "ui_action",
+          "description": "Transient and persistent UI Actions share limits without sharing Lua state.\n瞬时及持久 UI Action 共享上限，不共享 Lua 状态。",
+          "type": "string"
+        },
+        {
+          "const": "lifecycle",
+          "description": "Host lifecycle callbacks retain their own capacity across catalog generations.\n宿主生命周期回调跨目录代次保留自身容量。",
+          "type": "string"
+        },
+        {
+          "const": "activation_probe",
+          "description": "Activation probes consume real initialization resources without a business export.\n启用探测消费真实初始化资源，不具有业务导出。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginCapacityRequirement": {
+      "additionalProperties": false,
+      "description": "Minimum host policy needed by one execution purpose, separate from current free capacity.\n单个执行用途所需的最小宿主策略，独立于当前空闲容量。",
+      "properties": {
+        "purpose": {
+          "$ref": "#/$defs/VulcanPluginCapacityPurpose",
+          "description": "Exact production purpose whose frozen configuration must satisfy these floors.\n冻结配置必须满足这些下限的精确生产用途。"
+        },
+        "queued_bytes": {
+          "description": "Minimum acceptable pending-input byte limit, positive and never interpreted as unlimited.\n可接受的最小等待输入字节上限，必须为正，绝不解释为无限。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "queued_calls": {
+          "description": "Minimum acceptable pending-call limit, positive and never interpreted as unlimited.\n可接受的最小等待调用上限，必须为正，绝不解释为无限。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "reserved_resident_vms": {
+          "description": "Required non-lendable guarantee; zero requires no reservation or prewarming.\n必需的不可出借保证；零表示不要求预留或预热。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resident_vms": {
+          "description": "Minimum acceptable resident limit, positive and not a request to allocate instances.\n可接受的最小常驻上限，必须为正，且不表示申请分配实例。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "running_calls": {
+          "description": "Minimum acceptable running-call limit, positive and bounded by resident_vms.\n可接受的最小执行调用上限，必须为正且不超过 resident_vms。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "purpose",
+        "reserved_resident_vms",
+        "resident_vms",
+        "running_calls",
+        "queued_calls",
+        "queued_bytes"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginConfigManifest": {
+      "additionalProperties": false,
+      "description": "Plugin-owned configuration schema and defaults.\n插件持有的配置 Schema 与默认值。",
+      "properties": {
+        "defaults_file": {
+          "description": "Package-relative JSON file containing default configuration.\n包含默认配置的插件包相对 JSON 文件。",
+          "type": "string"
+        },
+        "schema_file": {
+          "description": "Package-relative JSON Schema for the complete configuration object.\n完整配置对象使用的插件包相对 JSON Schema。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_file",
+        "defaults_file"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginDependenciesManifest": {
+      "additionalProperties": false,
+      "description": "Dependency declaration for one plugin-private execution environment.\n单个插件私有执行环境的依赖声明。",
+      "properties": {
+        "install_mode": {
+          "$ref": "#/$defs/VulcanPluginDependencyInstallMode",
+          "description": "Whether dependencies come from bundled assets or an approved registry.\n依赖来自随包资产还是经授权的注册表。"
+        },
+        "manifest": {
+          "default": null,
+          "description": "Package-relative dependency manifest consumed by the managed runtime installer.\n由受管运行时安装器消费的插件包相对依赖清单。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginDependencyInstallMode": {
+      "description": "Supported dependency acquisition modes.\n支持的依赖获取模式。",
+      "oneOf": [
+        {
+          "const": "bundled",
+          "description": "Install exclusively from artifacts shipped inside the plugin package.\n仅从插件包内随附的制品安装。",
+          "type": "string"
+        },
+        {
+          "const": "registry",
+          "description": "Install from a registry after explicit network authorization.\n在获得明确网络授权后从注册表安装。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginDisplayManifest": {
+      "additionalProperties": false,
+      "description": "Default user-facing plugin metadata.\n默认的用户可见插件元数据。",
+      "properties": {
+        "capability": {
+          "description": "Default concise capability description.\n默认的简洁能力描述。",
+          "type": "string"
+        },
+        "name": {
+          "description": "Default plugin name.\n默认插件名称。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "capability"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginExecutionManifest": {
+      "additionalProperties": false,
+      "description": "Host-managed execution resources shared by Lua and MCP protocols.\n由 Lua 与 MCP 协议共享的宿主管理执行资源。",
+      "properties": {
+        "dependencies": {
+          "$ref": "#/$defs/VulcanPluginDependenciesManifest",
+          "description": "Dependency graph and acquisition policy for the private plugin environment.\n插件私有环境的依赖图与获取策略。"
+        },
+        "native_binaries": {
+          "description": "Logical native executable resources resolved by the Vulcan host.\n由 Vulcan 宿主解析的逻辑原生可执行资源。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginBinaryManifest"
+          },
+          "type": "array"
+        },
+        "node_entries": {
+          "description": "Logical Node.js entries resolved through the managed runtime distribution.\n通过受管运行时发行版解析的逻辑 Node.js 入口。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginNodeEntryManifest"
+          },
+          "type": "array"
+        },
+        "python_entries": {
+          "description": "Logical Python entries resolved through the managed runtime distribution.\n通过受管运行时发行版解析的逻辑 Python 入口。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginPythonEntryManifest"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginHookManifest": {
+      "additionalProperties": false,
+      "description": "One Lua handler bound to an existing host-owned hook point.\n绑定到现有宿主自有 hook 点位的单个 Lua 处理器。",
+      "properties": {
+        "display_name": {
+          "default": null,
+          "description": "Optional user-facing handler label.\n可选的用户可见处理器标签。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failure_policy": {
+          "$ref": "#/$defs/HookFailurePolicy",
+          "default": "continue",
+          "description": "Failure behavior delegated to the existing hook dispatcher.\n委托给现有 hook 调度器的失败处理行为。"
+        },
+        "function": {
+          "description": "Lua module function that receives the exact serialized invocation frame.\n接收精确序列化调用帧的 Lua 模块函数。",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable hook identifier within the owning plugin.\n所属插件内部稳定的 hook 标识。",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/HookMode",
+          "description": "Existing host hook behavior mode used for result aggregation.\n结果聚合所使用的现有宿主 hook 行为模式。"
+        },
+        "point": {
+          "description": "Exact host hook point subscribed by this handler.\n该处理器订阅的精确宿主 hook 点位。",
+          "type": "string"
+        },
+        "priority": {
+          "default": 0,
+          "description": "Lower priority values execute before larger values.\n优先级数值越低越早执行。",
+          "format": "int32",
+          "type": "integer"
+        },
+        "progress_label": {
+          "default": null,
+          "description": "Optional progress label for blocking preflight execution.\n阻塞式前置执行使用的可选进度标签。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_capabilities": {
+          "default": [],
+          "description": "Host capabilities requested by the handler.\n处理器请求的宿主能力集合。",
+          "items": {
+            "$ref": "#/$defs/HookCapability"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/HookScope",
+          "default": "global",
+          "description": "Configuration scope projected into the host registration.\n投影到宿主注册项的配置作用域。"
+        },
+        "timeout_ms": {
+          "default": null,
+          "description": "Host-side execution timeout in milliseconds.\n宿主侧执行超时时间，单位毫秒。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tool_target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginToolHookTargetManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exact original tool identity required by the three generic tool hook points.\n三个通用工具 Hook 点位必须声明的原始工具精确身份。"
+        }
+      },
+      "required": [
+        "id",
+        "point",
+        "mode",
+        "function"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginHostCapabilityRequirement": {
+      "additionalProperties": false,
+      "description": "One required registered host contract, independent from permission grants or external service readiness.\n单个必需的已注册宿主契约，独立于权限授予或外部服务就绪状态。",
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/CapabilityExecution",
+          "description": "Declared core dispatch transport, checked against the actual captured descriptor.\n声明的核心分发传输，针对实际捕获描述符校验。"
+        },
+        "name": {
+          "description": "Exact namespaced callback name; aliases and alternate names are never probed.\n精确命名空间回调名称；绝不探测别名或备用名称。",
+          "minLength": 1,
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/CapabilityScope",
+          "description": "Required trusted caller scope, independently enforced by core invocation admission.\n必需的可信调用方作用域，由核心调用入场独立执行。"
+        },
+        "version": {
+          "description": "Exact semantic interface version; a range or a newer version does not implicitly match.\n精确语义接口版本；版本范围或更新版本不隐式匹配。",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "execution",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginLifecycleManifest": {
+      "additionalProperties": false,
+      "description": "Optional Lua lifecycle function declarations.\n可选 Lua 生命周期函数声明。",
+      "properties": {
+        "disable": {
+          "default": null,
+          "description": "Function invoked while a plugin is being disabled.\n插件停用过程中调用的函数。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enable": {
+          "default": null,
+          "description": "Function invoked before a plugin becomes enabled.\n插件进入启用状态前调用的函数。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "install": {
+          "default": null,
+          "description": "Function invoked after a user plugin package is installed.\n用户插件包安装完成后调用的函数。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uninstall": {
+          "default": null,
+          "description": "Function invoked before a user plugin package is removed.\n用户插件包移除前调用的函数。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginLuaRuntimeManifest": {
+      "additionalProperties": false,
+      "description": "Optional managed Lua protocol implemented by one plugin bundle.\n由单个插件 bundle 实现的可选受管 Lua 协议。",
+      "properties": {
+        "actions": {
+          "description": "Host-callable plugin business actions implemented by Lua functions.\n由 Lua 函数实现且可由宿主调用的插件业务 action 集合。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginActionManifest"
+          },
+          "type": "array"
+        },
+        "bundle": {
+          "description": "Package-relative bundled Lua source loaded through the fixed Vulcan bridge package.\n通过固定 Vulcan 桥接包加载的插件包相对 Lua bundle 源文件。",
+          "type": "string"
+        },
+        "hook_shutdown_function": {
+          "default": null,
+          "description": "Optional Lua function invoked before closing the persistent hook lease.\n关闭持久 hook 租约前调用的可选 Lua 函数。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hooks": {
+          "description": "Lua hook handlers registered into host-owned hook points.\n注册到宿主自有 hook 点位的 Lua hook 处理器。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginHookManifest"
+          },
+          "type": "array"
+        },
+        "invoke_function": {
+          "description": "Lua function used for normal operations.\n常规操作使用的 Lua 函数。",
+          "type": "string"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/VulcanPluginLifecycleManifest",
+          "description": "Lifecycle callbacks exported by the Lua bundle.\nLua bundle 导出的生命周期回调。"
+        },
+        "lua_modules": {
+          "default": [],
+          "description": "Host-allowlisted Lua modules exposed through the restricted plugin runtime API.\n通过受限插件运行时 API 暴露的宿主白名单 Lua 模块。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_active_sessions": {
+          "description": "Hard upper bound for concurrently active sessions.\n并发活动会话的硬上限。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session_idle_timeout_sec": {
+          "default": null,
+          "description": "Optional idle timeout that triggers host-owned session cleanup.\n触发宿主自有会话清理的可选空闲超时秒数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "shutdown_function": {
+          "description": "Lua function used before closing a session lease.\n关闭会话租约前使用的 Lua 函数。",
+          "type": "string"
+        },
+        "tools": {
+          "description": "Atomic provider-visible Lua tool group.\n原子化的 Provider 可见 Lua 工具组。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginToolManifest"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "bundle",
+        "invoke_function",
+        "shutdown_function",
+        "max_active_sessions"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginMcpManifest": {
+      "additionalProperties": false,
+      "description": "Model Context Protocol servers contributed by one plugin.\n单个插件贡献的模型上下文协议服务器集合。",
+      "properties": {
+        "servers": {
+          "description": "Independently managed servers keyed by their plugin-local identifiers.\n以插件内标识独立管理的服务器集合。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginMcpServerManifest"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginMcpOAuthManifest": {
+      "additionalProperties": false,
+      "description": "Host-driven OAuth settings for one plugin-owned remote MCP server.\n单个插件自有远端 MCP 服务器的宿主驱动 OAuth 设置。",
+      "properties": {
+        "client_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginValueSourceManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional pre-registered client identifier.\n可选的预注册客户端标识。"
+        },
+        "client_secret": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginValueSourceManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional pre-registered client secret from the host Secret Store.\n可选的宿主 Secret Store 预注册客户端密钥。"
+        },
+        "redirect_uri": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginValueSourceManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional exact redirect URI.\n可选的精确回调 URI。"
+        },
+        "scopes": {
+          "default": [],
+          "description": "Ordered OAuth scopes requested during authorization.\n授权期间请求的有序 OAuth scope 集合。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginMcpScopeManifest": {
+      "description": "Lifetime of one plugin-owned MCP server declaration.\n单个插件自有 MCP 服务器声明的生命周期。",
+      "oneOf": [
+        {
+          "const": "global",
+          "description": "Start with the enabled plugin's global MCP runtime partition.\n随已启用插件的全局 MCP 运行时分区启动。",
+          "type": "string"
+        },
+        {
+          "const": "conversation",
+          "description": "Start only for one trusted conversation after a Core-owned grant is issued.\n仅在 Core 为某个可信会话颁发授权后启动。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginMcpServerManifest": {
+      "additionalProperties": false,
+      "description": "One plugin-owned Model Context Protocol server.\n单个插件自有的模型上下文协议服务器。",
+      "properties": {
+        "id": {
+          "description": "Stable server identifier within the owning plugin.\n所属插件内部稳定的服务器标识。",
+          "type": "string"
+        },
+        "name": {
+          "description": "Default user-facing server name.\n默认的用户可见服务器名称。",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/VulcanPluginMcpScopeManifest",
+          "description": "Launch lifetime selected for this server; conversation servers require an owner grant.\n当前服务器选择的启动生命周期；会话服务器要求所有者授权。"
+        },
+        "transport": {
+          "$ref": "#/$defs/VulcanPluginMcpTransportManifest",
+          "description": "Strictly selected transport and its transport-specific settings.\n严格选择的传输方式及其专属设置。"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "transport"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginMcpStdioLauncherManifest": {
+      "description": "Managed local launcher variants accepted by plugin MCP stdio servers.\n插件 MCP stdio 服务器允许使用的受管本地启动器变体。",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Execute a declared Node.js module through the managed Node runtime.\n通过受管 Node 运行时执行已声明的 Node.js 模块。",
+          "properties": {
+            "entry_id": {
+              "description": "Identifier from `execution.node_entries`.\n来自 `execution.node_entries` 的标识。",
+              "type": "string"
+            },
+            "type": {
+              "const": "node_entry",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "entry_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Execute one exact package bin from the plugin-private dependency environment.\n从插件私有依赖环境执行一个精确的 package bin。",
+          "properties": {
+            "bin": {
+              "description": "Exact bin key declared by the installed package.\n已安装依赖包声明的精确 bin 键。",
+              "type": "string"
+            },
+            "package": {
+              "description": "Exact dependency package name.\n精确依赖包名称。",
+              "type": "string"
+            },
+            "type": {
+              "const": "node_package_bin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "package",
+            "bin"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Execute a declared native binary directly without a Shell.\n不经 Shell 直接执行已声明的原生二进制文件。",
+          "properties": {
+            "binary_id": {
+              "description": "Identifier from `execution.native_binaries`.\n来自 `execution.native_binaries` 的标识。",
+              "type": "string"
+            },
+            "type": {
+              "const": "native_binary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "binary_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "VulcanPluginMcpTransportManifest": {
+      "description": "Transport-specific settings for one plugin MCP server.\n单个插件 MCP 服务器的传输专属设置。",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Local stdio transport launched through a manifest-owned managed entry.\n通过清单自有受管入口启动的本地 stdio 传输。",
+          "properties": {
+            "args": {
+              "description": "Ordered launcher arguments resolved from explicit value sources.\n从显式值来源解析的有序启动参数。",
+              "items": {
+                "$ref": "#/$defs/VulcanPluginValueSourceManifest"
+              },
+              "type": "array"
+            },
+            "env": {
+              "additionalProperties": {
+                "$ref": "#/$defs/VulcanPluginValueSourceManifest"
+              },
+              "description": "Child environment values keyed by exact variable name.\n以精确变量名为键的子进程环境变量值。",
+              "type": "object"
+            },
+            "launcher": {
+              "$ref": "#/$defs/VulcanPluginMcpStdioLauncherManifest",
+              "description": "Managed launcher resolved without Shell or PATH lookup.\n不经 Shell 或 PATH 查找解析的受管启动器。"
+            },
+            "type": {
+              "const": "stdio",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "launcher"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Streamable HTTP transport connected to an explicit remote endpoint.\n连接到显式远程端点的 Streamable HTTP 传输。",
+          "properties": {
+            "headers": {
+              "additionalProperties": {
+                "$ref": "#/$defs/VulcanPluginValueSourceManifest"
+              },
+              "description": "Request headers keyed by exact header name.\n以精确 Header 名称为键的请求 Header。",
+              "type": "object"
+            },
+            "oauth": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VulcanPluginMcpOAuthManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional host-driven OAuth client settings.\n可选的宿主驱动 OAuth 客户端设置。"
+            },
+            "type": {
+              "const": "http",
+              "type": "string"
+            },
+            "url": {
+              "$ref": "#/$defs/VulcanPluginValueSourceManifest",
+              "description": "Remote endpoint resolved from one typed value source.\n从唯一带类型值来源解析的远程端点。"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Legacy Server-Sent Events transport connected to an explicit endpoint.\n连接到显式端点的旧式服务器发送事件传输。",
+          "properties": {
+            "headers": {
+              "additionalProperties": {
+                "$ref": "#/$defs/VulcanPluginValueSourceManifest"
+              },
+              "description": "Request headers keyed by exact header name.\n以精确 Header 名称为键的请求 Header。",
+              "type": "object"
+            },
+            "oauth": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VulcanPluginMcpOAuthManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional host-driven OAuth client settings.\n可选的宿主驱动 OAuth 客户端设置。"
+            },
+            "type": {
+              "const": "sse",
+              "type": "string"
+            },
+            "url": {
+              "$ref": "#/$defs/VulcanPluginValueSourceManifest",
+              "description": "Remote endpoint resolved from one typed value source.\n从唯一带类型值来源解析的远程端点。"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "VulcanPluginNodeEntryManifest": {
+      "additionalProperties": false,
+      "description": "One logical Node.js script entry owned by a plugin package.\n单个由插件包持有的逻辑 Node.js 脚本入口。",
+      "properties": {
+        "cwd": {
+          "description": "Package-relative working directory.\n插件包相对工作目录。",
+          "type": "string"
+        },
+        "file": {
+          "description": "Package-relative JavaScript module file.\n插件包相对 JavaScript 模块文件。",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable plugin-local Node entry identifier.\n稳定的插件内 Node 入口标识。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "file",
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginPermission": {
+      "description": "Host permission that must be declared and authorized before use.\n使用前必须声明并授权的宿主权限。",
+      "oneOf": [
+        {
+          "const": "runtime_lua_modules",
+          "description": "Access host-allowlisted Lua runtime modules declared by this bundled plugin.\n访问当前内建插件声明且经宿主白名单允许的 Lua 运行时模块。",
+          "type": "string"
+        },
+        {
+          "const": "network_https",
+          "description": "Perform HTTPS requests through an explicitly declared runtime network client.\n通过显式声明的运行时网络客户端执行 HTTPS 请求。",
+          "type": "string"
+        },
+        {
+          "const": "process_binary",
+          "description": "Execute manifest-declared native binaries.\n执行清单声明的原生二进制文件。",
+          "type": "string"
+        },
+        {
+          "const": "process_node",
+          "description": "Execute manifest-declared Node.js entries.\n执行清单声明的 Node.js 入口。",
+          "type": "string"
+        },
+        {
+          "const": "process_python",
+          "description": "Execute manifest-declared Python entries.\n执行清单声明的 Python 入口。",
+          "type": "string"
+        },
+        {
+          "const": "process_session",
+          "description": "Open long-lived process sessions.\n打开长生命周期进程会话。",
+          "type": "string"
+        },
+        {
+          "const": "config",
+          "description": "Read and update the current plugin configuration.\n读取并更新当前插件配置。",
+          "type": "string"
+        },
+        {
+          "const": "secrets_read",
+          "description": "Read explicitly referenced secrets scoped to the current plugin.\n读取限定到当前插件且被显式引用的 Secret。",
+          "type": "string"
+        },
+        {
+          "const": "ui_host_context",
+          "description": "Render dynamic UI with the stable host UI context.\n使用稳定宿主 UI 上下文渲染动态界面。",
+          "type": "string"
+        },
+        {
+          "const": "model_catalog_read",
+          "description": "Read the host model catalog for future workflow binding.\n读取宿主模型目录以供后续工作流绑定。",
+          "type": "string"
+        },
+        {
+          "const": "system_vldb_access",
+          "description": "Read, modify, and delete data through host-registered system VLDB bindings.\n通过宿主注册的系统 VLDB 绑定读取、修改和删除数据。",
+          "type": "string"
+        },
+        {
+          "const": "model_invoke",
+          "description": "Invoke one user-authorized model binding.\n调用一个经用户授权的模型绑定。",
+          "type": "string"
+        },
+        {
+          "const": "dependency_registry_network",
+          "description": "Install dependencies from a remote registry.\n从远程注册表安装依赖。",
+          "type": "string"
+        },
+        {
+          "const": "storage_sqlite",
+          "description": "Use the current plugin's isolated SQLite database.\n使用当前插件的隔离 SQLite 数据库。",
+          "type": "string"
+        },
+        {
+          "const": "storage_lancedb",
+          "description": "Use the current plugin's isolated LanceDB database.\n使用当前插件的隔离 LanceDB 数据库。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginPlatformManifest": {
+      "additionalProperties": false,
+      "description": "Target-platform availability declaration.\n目标平台可用性声明。",
+      "properties": {
+        "excluded_targets": {
+          "default": [],
+          "description": "Exact Rust target triples excluded by the package.\n插件包明确排除的 Rust 目标三元组。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginPromptManifest": {
+      "additionalProperties": false,
+      "description": "One plugin-level model instruction contribution.\n单个插件级模型说明贡献。",
+      "properties": {
+        "file": {
+          "description": "Markdown file relative to the package root.\n相对于插件包根目录的 Markdown 文件。",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable contribution identifier within the plugin.\n插件内部稳定的贡献标识。",
+          "type": "string"
+        },
+        "required_tools": {
+          "description": "Exact tools that must all be visible before this contribution is emitted.\n发出此贡献前必须全部可见的精确工具集合。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "file",
+        "required_tools"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginPythonEntryManifest": {
+      "additionalProperties": false,
+      "description": "One logical Python script entry owned by a plugin package.\n单个由插件包持有的逻辑 Python 脚本入口。",
+      "properties": {
+        "cwd": {
+          "description": "Package-relative working directory.\n插件包相对工作目录。",
+          "type": "string"
+        },
+        "file": {
+          "description": "Package-relative Python script file.\n插件包相对 Python 脚本文件。",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable plugin-local Python entry identifier.\n稳定的插件内 Python 入口标识。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "file",
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginReusableToolManifest": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ordering": {
+                "const": "key_serial"
+              }
+            },
+            "required": [
+              "ordering"
+            ]
+          },
+          "then": {
+            "properties": {
+              "max_running_calls": {
+                "const": 1
+              }
+            }
+          }
+        }
+      ],
+      "description": "Opt-in module contract; callbacks must clear request state and confirm reuse before another request runs.\n主动声明的模块契约；回调必须清除请求状态，并在其他请求运行前确认可复用。",
+      "properties": {
+        "after_call": {
+          "description": "Declared module function called with the envelope and business success flag; must return true.\n使用信封及业务执行成功标志调用的模块声明函数；必须返回 true。",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "type": "string"
+        },
+        "before_call": {
+          "description": "Declared module function called with this invocation's envelope before business; must return true.\n在业务前使用本次调用信封调用的模块声明函数；必须返回 true。",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "type": "string"
+        },
+        "idle_ttl_ms": {
+          "description": "Positive idle duration before retirement; pool metadata is retired after its users leave too.\n退役前的正数空闲时长；用户离开后池元数据也会退役。",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_resident_vms": {
+          "description": "Requested positive per-domain resident ceiling, required to fit the host purpose policy.\n请求的正数域常驻上限，必须满足宿主用途策略。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_running_calls": {
+          "description": "Requested positive per-domain running ceiling; key_serial requires exactly one.\n请求的正数域执行上限；key_serial 要求恰好为一。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_uses": {
+          "description": "Positive successful invocation count before an instance is retired.\n实例退役前允许的正数成功调用次数。",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ordering": {
+          "$ref": "#/$defs/VulcanPluginToolOrdering",
+          "description": "Explicit ordering applies to the same immutable partition, never all plugin conversations implicitly.\n显式顺序作用于同一不可变分区，绝不隐式作用于插件全部会话。"
+        },
+        "reuse_check": {
+          "description": "Declared argument-free module function called after cleanup; only true permits reuse.\n清理后调用的无参数模块声明函数；仅 true 允许复用。",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "before_call",
+        "after_call",
+        "reuse_check",
+        "ordering",
+        "max_resident_vms",
+        "max_running_calls",
+        "idle_ttl_ms",
+        "max_uses"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginRuntimeRequirements": {
+      "additionalProperties": false,
+      "description": "Required compatibility and capacity floors; host policy must satisfy these without being rewritten.\n必需的兼容性及容量下限；宿主策略必须满足这些条件，且不能被自动改写。",
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/ExecutionBackend",
+          "description": "Required execution backend; unsupported backends are rejected without substitution.\n必需执行后端；不支持的后端直接拒绝，不替代。"
+        },
+        "capacities": {
+          "description": "Distinct purpose requirements; an empty list explicitly requests no additional resource floors.\n不重复的用途要求；空列表明确表示不要求额外资源下限。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginCapacityRequirement"
+          },
+          "type": "array"
+        },
+        "core_capabilities": {
+          "description": "Exact versioned semantic feature names advertised by the linked core, never permission grants.\n链接核心声明的精确版本化语义功能名，绝不表示权限授予。",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "host_capabilities": {
+          "description": "Exact registered host contracts required for business admission; omission declares no callback requirement.\n业务入场所需的精确已注册宿主契约；省略表示不声明回调要求。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginHostCapabilityRequirement"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "protocol_version": {
+          "description": "Exact embedded core protocol identity, independent from the package manifest version.\n精确嵌入式核心协议身份，独立于插件包清单版本。",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "backend",
+        "core_capabilities",
+        "capacities"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginToolExecutionKind": {
+      "description": "Supported generic tool execution lifecycle.\n支持的通用工具执行生命周期。",
+      "oneOf": [
+        {
+          "const": "stateless",
+          "description": "Create, invoke, and close one temporary managed lease for a single call.\n为单次调用创建、执行并关闭一个临时受管租约。",
+          "type": "string"
+        },
+        {
+          "const": "session_open",
+          "description": "Open and register one owner-bound managed session.\n打开并注册一个绑定所有者的受管会话。",
+          "type": "string"
+        },
+        {
+          "const": "session_call",
+          "description": "Invoke one operation through an existing owner-bound session.\n通过已有的所有者绑定会话调用操作。",
+          "type": "string"
+        },
+        {
+          "const": "session_close",
+          "description": "Close and retire one existing owner-bound session.\n关闭并回收一个已有的所有者绑定会话。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginToolExecutionManifest": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "reusable"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "stateless"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Runtime dispatch declaration attached to one plugin tool.\n附着在单个插件工具上的运行时调度声明。",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/VulcanPluginToolExecutionKind",
+          "description": "Generic session lifecycle kind.\n通用会话生命周期类型。"
+        },
+        "max_timeout_ms": {
+          "default": null,
+          "description": "Maximum accepted value for the optional timeout argument.\n可选超时参数允许的最大值。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "operation": {
+          "description": "Plugin-owned operation name inserted into the exact JSON payload.\n插入精确 JSON 载荷的插件自有操作名。",
+          "type": "string"
+        },
+        "reusable": {
+          "$ref": "#/$defs/VulcanPluginReusableToolManifest",
+          "description": "Explicit version-two reusable instance contract; omission preserves single-call execution.\n明确的第二版可复用实例契约；省略保留单次调用执行。"
+        },
+        "timeout_argument": {
+          "default": null,
+          "description": "Optional argument whose value extends the fixed host timeout.\n可选参数，其数值会扩展固定宿主超时。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout_grace_ms": {
+          "default": 0,
+          "description": "Grace window added after the selected operation timeout.\n选定操作超时后追加的宽限窗口。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "description": "Fixed host timeout when no bounded timeout argument is declared.\n未声明有界超时参数时使用的固定宿主超时。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "operation",
+        "timeout_ms"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginToolHookSourceKind": {
+      "description": "Supported source kinds for an explicitly targeted generic tool hook.\n显式定向的通用工具 Hook 所支持的来源类别。",
+      "oneOf": [
+        {
+          "const": "native",
+          "description": "Host-owned native Rust tool.\n宿主自有的 Rust 原生工具。",
+          "type": "string"
+        },
+        {
+          "const": "vulcan_managed",
+          "description": "Host-managed internal runtime tool.\n宿主管理的内部运行时工具。",
+          "type": "string"
+        },
+        {
+          "const": "vulcan_plugin",
+          "description": "Manifest-driven plugin tool.\n清单驱动的插件工具。",
+          "type": "string"
+        },
+        {
+          "const": "lua_skills",
+          "description": "LuaSkills runtime tool.\nLuaSkills 运行时工具。",
+          "type": "string"
+        },
+        {
+          "const": "mcp",
+          "description": "Tool discovered from a Model Context Protocol server.\n从模型上下文协议服务器发现的工具。",
+          "type": "string"
+        },
+        {
+          "const": "ai_host_binding",
+          "description": "AI-specialized alias backed by a host tool.\n由宿主工具承载的 AI 专用别名。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginToolHookTargetManifest": {
+      "additionalProperties": false,
+      "description": "Original source identity matched before the host changes a tool's public name.\n宿主改写工具公开名称前用于匹配的原始来源身份。",
+      "properties": {
+        "namespace": {
+          "description": "Exact source-owned namespace, such as one MCP server identity.\n来源持有的精确命名空间，例如一个 MCP 服务器身份。",
+          "type": "string"
+        },
+        "original_name": {
+          "description": "Exact source-owned name, never the normalized AI-visible tool name.\n来源持有的精确名称，绝非归一化后 AI 可见的工具名称。",
+          "type": "string"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/VulcanPluginToolHookSourceKind",
+          "description": "Exact kind of the original tool source.\n原始工具来源的精确类别。"
+        }
+      },
+      "required": [
+        "source_kind",
+        "namespace",
+        "original_name"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginToolManifest": {
+      "additionalProperties": false,
+      "description": "One provider-visible tool declared by a plugin package.\n插件包声明的单个 Provider 可见工具。",
+      "properties": {
+        "available_in_plan": {
+          "default": false,
+          "description": "Whether the tool may execute in Plan mode.\n工具是否允许在计划模式中执行。",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "English model-visible tool description.\n面向模型的英文工具描述。",
+          "type": "string"
+        },
+        "execution": {
+          "$ref": "#/$defs/VulcanPluginToolExecutionManifest",
+          "description": "Generic runtime dispatch declaration.\n通用运行时调度声明。"
+        },
+        "group": {
+          "description": "Atomic tool group identifier.\n原子工具组标识。",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable globally unique tool identifier.\n全局唯一的稳定工具标识。",
+          "type": "string"
+        },
+        "parameters_file": {
+          "description": "JSON Schema file relative to the package root.\n相对于插件包根目录的 JSON Schema 文件。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "group",
+        "description",
+        "parameters_file",
+        "execution"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginToolOrdering": {
+      "description": "Ordering inside one exact controller, workspace, plugin generation and tool partition.\n单个精确控制器、工作区、插件代次及工具分区内的顺序。",
+      "oneOf": [
+        {
+          "const": "key_serial",
+          "description": "Serialize calls in admission order inside this exact partition.\n在此精确分区内按入场顺序串行化调用。",
+          "type": "string"
+        },
+        {
+          "const": "parallel",
+          "description": "Permit concurrent independent instances within the host-approved resident and running limits.\n在宿主批准的常驻及执行上限内允许独立实例并行。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginUiManifest": {
+      "additionalProperties": false,
+      "description": "Dynamic UI declarations for one plugin.\n单个插件的动态 UI 声明。",
+      "properties": {
+        "mounts": {
+          "description": "Ordered UI mounts contributed by the plugin.\n插件贡献的有序 UI 挂载集合。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginUiMountManifest"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginUiMountIcon": {
+      "description": "Stable host-owned icons available to dynamic plugin navigation entries.\n动态插件导航条目可使用的稳定宿主图标。",
+      "oneOf": [
+        {
+          "const": "plugin",
+          "description": "Generic plugin puzzle icon.\n通用插件拼图图标。",
+          "type": "string"
+        },
+        {
+          "const": "route",
+          "description": "Command-routing icon.\n命令路由图标。",
+          "type": "string"
+        },
+        {
+          "const": "chart",
+          "description": "Usage statistics chart icon.\n用量统计图表图标。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginUiMountManifest": {
+      "additionalProperties": false,
+      "description": "One uncompressed ESM module mounted into a host-owned UI location.\n一个挂载到宿主持有界面位置的未压缩 ESM 模块。",
+      "properties": {
+        "entry": {
+          "description": "Package-relative uncompressed ESM file.\n插件包相对未压缩 ESM 文件。",
+          "type": "string"
+        },
+        "export": {
+          "description": "Named ESM export containing the mount factory.\n包含挂载工厂的 ESM 命名导出。",
+          "type": "string"
+        },
+        "icon": {
+          "$ref": "#/$defs/VulcanPluginUiMountIcon",
+          "description": "Host-owned icon rendered beside the navigation label.\n在导航名称旁渲染的宿主持有图标。"
+        },
+        "id": {
+          "description": "Stable plugin-local mount identifier.\n稳定的插件内挂载标识。",
+          "type": "string"
+        },
+        "label": {
+          "default": null,
+          "description": "Default host navigation label for this mount.\n此挂载点使用的默认宿主导航名称。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label_message_key": {
+          "default": null,
+          "description": "Plugin locale message key overriding the navigation label.\n覆盖导航名称的插件语言包消息键。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "point": {
+          "$ref": "#/$defs/VulcanPluginUiMountPoint",
+          "description": "Host-owned mount point.\n宿主持有的挂载点。"
+        }
+      },
+      "required": [
+        "id",
+        "point",
+        "entry",
+        "export"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginUiMountPoint": {
+      "description": "Stable host-owned dynamic UI mount points.\n稳定的宿主持有动态 UI 挂载点。",
+      "oneOf": [
+        {
+          "const": "skills_plugin_detail",
+          "description": "Plugin detail page below the LuaSkills/Plugins area.\nLuaSkills/插件区域下的插件详情页。",
+          "type": "string"
+        },
+        {
+          "const": "workspace_main",
+          "description": "Main workspace page used by future workflows.\n供后续工作流使用的主工作区页面。",
+          "type": "string"
+        },
+        {
+          "const": "conversation_right_panel",
+          "description": "Conversation right-side auxiliary panel.\n会话右侧辅助面板。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginValueSourceManifest": {
+      "description": "One unambiguous source for a plugin configuration value.\n单个插件配置值的无歧义来源。",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Inline non-secret value stored in the plugin manifest.\n存储在插件清单中的内联非敏感值。",
+          "properties": {
+            "source": {
+              "const": "literal",
+              "type": "string"
+            },
+            "value": {
+              "description": "Exact literal value.\n精确字面值。",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reference to one key from the plugin configuration contract.\n对插件配置契约中单个键的引用。",
+          "properties": {
+            "key": {
+              "description": "Exact plugin configuration key.\n精确插件配置键。",
+              "type": "string"
+            },
+            "source": {
+              "const": "config",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reference to one host-managed secret scoped to the plugin.\n对限定到当前插件的单个宿主管理 Secret 的引用。",
+          "properties": {
+            "key": {
+              "description": "Exact plugin-scoped secret key.\n精确插件作用域 Secret 键。",
+              "type": "string"
+            },
+            "source": {
+              "const": "secret",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reference to one explicitly named host environment variable.\n对单个显式命名宿主环境变量的引用。",
+          "properties": {
+            "name": {
+              "description": "Exact environment variable name.\n精确环境变量名称。",
+              "type": "string"
+            },
+            "source": {
+              "const": "environment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One-use browser-level CDP endpoint issued by Core for this conversation.\nCore 针对当前会话颁发的一次性浏览器级 CDP 端点。",
+          "properties": {
+            "source": {
+              "const": "core_browser_endpoint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "runtime_requirements"
+          ]
+        },
+        "properties": {
+          "lua_runtime": {
+            "properties": {
+              "tools": {
+                "items": {
+                  "properties": {
+                    "execution": {
+                      "not": {
+                        "required": [
+                          "reusable"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "else": {
+          "not": {
+            "required": [
+              "runtime_requirements"
+            ]
+          }
+        },
+        "if": {
+          "properties": {
+            "lua_runtime": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "lua_runtime"
+          ]
+        },
+        "then": {
+          "required": [
+            "runtime_requirements"
+          ]
+        }
+      }
+    }
+  ],
+  "description": "One complete Vulcan Plugin package manifest.\n一份完整的 Vulcan 插件包清单。",
+  "properties": {
+    "config": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VulcanPluginConfigManifest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional plugin configuration contract.\n可选插件配置契约。"
+    },
+    "default_enabled": {
+      "description": "Whether the plugin is enabled before user overrides are applied.\n应用用户覆盖前插件是否默认启用。",
+      "type": "boolean"
+    },
+    "display": {
+      "$ref": "#/$defs/VulcanPluginDisplayManifest",
+      "description": "Default user-facing metadata.\n默认的用户可见元数据。"
+    },
+    "execution": {
+      "$ref": "#/$defs/VulcanPluginExecutionManifest",
+      "description": "Host-managed execution resources shared by executable plugin protocols.\n由可执行插件协议共享的宿主管理执行资源。"
+    },
+    "id": {
+      "description": "Stable plugin identifier.\n稳定插件标识。",
+      "type": "string"
+    },
+    "locales": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Locale file paths keyed by locale identifier.\n以语言标识为键的本地化文件路径。",
+      "type": "object"
+    },
+    "lua_runtime": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VulcanPluginLuaRuntimeManifest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional managed Lua protocol declaration.\n可选的受管 Lua 协议声明。"
+    },
+    "mcp": {
+      "$ref": "#/$defs/VulcanPluginMcpManifest",
+      "description": "Optional Model Context Protocol server declarations.\n可选的模型上下文协议服务器声明。"
+    },
+    "permissions": {
+      "description": "Explicit host permissions requested by this plugin.\n当前插件请求的显式宿主权限集合。",
+      "items": {
+        "$ref": "#/$defs/VulcanPluginPermission"
+      },
+      "type": "array"
+    },
+    "platforms": {
+      "$ref": "#/$defs/VulcanPluginPlatformManifest",
+      "description": "Platform availability declaration.\n平台可用性声明。"
+    },
+    "prompt_contributions": {
+      "description": "Prompt contributions activated with their required tools.\n随所需工具共同激活的提示词贡献。",
+      "items": {
+        "$ref": "#/$defs/VulcanPluginPromptManifest"
+      },
+      "type": "array"
+    },
+    "required_files": {
+      "default": [],
+      "description": "Package-relative regular files required for every enabled plugin component.\n每个已启用插件组件都要求存在的插件包相对普通文件集合。",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "runtime_requirements": {
+      "$ref": "#/$defs/VulcanPluginRuntimeRequirements",
+      "description": "Version-two Lua requirements; omission is allowed only for non-Lua or legacy manifests.\n第二版 Lua 必需条件；仅非 Lua 或旧版清单允许省略。"
+    },
+    "schema_version": {
+      "description": "Manifest schema version.\n清单结构版本。",
+      "enum": [
+        1,
+        2
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ui": {
+      "$ref": "#/$defs/VulcanPluginUiManifest",
+      "description": "Dynamic WebUI mount declarations.\n动态 WebUI 挂载声明。"
+    },
+    "version": {
+      "description": "Package semantic version.\n插件包语义版本。",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "default_enabled",
+    "display"
+  ],
+  "title": "VulcanPluginManifest",
+  "type": "object"
+}

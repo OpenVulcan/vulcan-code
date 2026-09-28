@@ -1,24 +1,100 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Reusable stateless plugin tool declaration",
-  "description": "Fragment for schema version 2 lua_runtime.tools[].execution.reusable. Full manifest identity, private callback aliases, cross-field limits and host policy are validated by production Rust.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["before_call", "after_call", "reuse_check", "ordering", "max_resident_vms", "max_running_calls", "idle_ttl_ms", "max_uses"],
-  "properties": {
-    "before_call": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
-    "after_call": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
-    "reuse_check": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
-    "ordering": { "enum": ["key_serial", "parallel"] },
-    "max_resident_vms": { "type": "integer", "minimum": 1 },
-    "max_running_calls": { "type": "integer", "minimum": 1 },
-    "idle_ttl_ms": { "type": "integer", "minimum": 1 },
-    "max_uses": { "type": "integer", "minimum": 1 }
+  "$defs": {
+    "VulcanPluginToolOrdering": {
+      "description": "Ordering inside one exact controller, workspace, plugin generation and tool partition.\n单个精确控制器、工作区、插件代次及工具分区内的顺序。",
+      "oneOf": [
+        {
+          "const": "key_serial",
+          "description": "Serialize calls in admission order inside this exact partition.\n在此精确分区内按入场顺序串行化调用。",
+          "type": "string"
+        },
+        {
+          "const": "parallel",
+          "description": "Permit concurrent independent instances within the host-approved resident and running limits.\n在宿主批准的常驻及执行上限内允许独立实例并行。",
+          "type": "string"
+        }
+      ]
+    }
   },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
   "allOf": [
     {
-      "if": { "properties": { "ordering": { "const": "key_serial" } } },
-      "then": { "properties": { "max_running_calls": { "const": 1 } } }
+      "if": {
+        "properties": {
+          "ordering": {
+            "const": "key_serial"
+          }
+        },
+        "required": [
+          "ordering"
+        ]
+      },
+      "then": {
+        "properties": {
+          "max_running_calls": {
+            "const": 1
+          }
+        }
+      }
     }
-  ]
+  ],
+  "description": "Opt-in module contract; callbacks must clear request state and confirm reuse before another request runs.\n主动声明的模块契约；回调必须清除请求状态，并在其他请求运行前确认可复用。",
+  "properties": {
+    "after_call": {
+      "description": "Declared module function called with the envelope and business success flag; must return true.\n使用信封及业务执行成功标志调用的模块声明函数；必须返回 true。",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "type": "string"
+    },
+    "before_call": {
+      "description": "Declared module function called with this invocation's envelope before business; must return true.\n在业务前使用本次调用信封调用的模块声明函数；必须返回 true。",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "type": "string"
+    },
+    "idle_ttl_ms": {
+      "description": "Positive idle duration before retirement; pool metadata is retired after its users leave too.\n退役前的正数空闲时长；用户离开后池元数据也会退役。",
+      "format": "uint64",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "max_resident_vms": {
+      "description": "Requested positive per-domain resident ceiling, required to fit the host purpose policy.\n请求的正数域常驻上限，必须满足宿主用途策略。",
+      "format": "uint",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "max_running_calls": {
+      "description": "Requested positive per-domain running ceiling; key_serial requires exactly one.\n请求的正数域执行上限；key_serial 要求恰好为一。",
+      "format": "uint",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "max_uses": {
+      "description": "Positive successful invocation count before an instance is retired.\n实例退役前允许的正数成功调用次数。",
+      "format": "uint64",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "ordering": {
+      "$ref": "#/$defs/VulcanPluginToolOrdering",
+      "description": "Explicit ordering applies to the same immutable partition, never all plugin conversations implicitly.\n显式顺序作用于同一不可变分区，绝不隐式作用于插件全部会话。"
+    },
+    "reuse_check": {
+      "description": "Declared argument-free module function called after cleanup; only true permits reuse.\n清理后调用的无参数模块声明函数；仅 true 允许复用。",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "before_call",
+    "after_call",
+    "reuse_check",
+    "ordering",
+    "max_resident_vms",
+    "max_running_calls",
+    "idle_ttl_ms",
+    "max_uses"
+  ],
+  "title": "VulcanPluginReusableToolManifest",
+  "type": "object"
 }

@@ -158,7 +158,8 @@ RPC／WebUI 暴露尚待完成。原始核心字段命名由上游类型决定�
 清单结构由本仓库 `manifest.rs`、`manifest/requirements.rs` 与 `catalog.rs` 共同校验。
 `schema_version: 1` 保留既有语义，禁止新增 `runtime_requirements`；第二版 Lua 插件必须明确声明该对象，
 非 Lua 插件不得声明。省略与空值不等价，未知版本、字段、用途、重复字段或重复用途直接拒绝。
-不会在发现、刷新或启动时重写插件清单及宿主配置。内置包尚保留第一版，迁移工具及完整清单 Schema 仍待交付。
+不会在发现、刷新或启动时重写插件清单及宿主配置。内置包尚保留第一版；完整生成 Schema、显式迁移及包校验命令见
+[插件清单编写工具](plugin-manifest-authoring.md)，内置包逐个升级仍须另行完成真实运行验收。
 
 下面为第二版 Lua 插件的新增顶层片段，其余 Lua 声明保持现有结构：
 
@@ -209,10 +210,10 @@ runtime_requirements:
 能力授权及核心当前预算检查保持不变。检查没有执行 Lua。第二版 Lua 插件在正式父级尚未附加时不发布活动能力；附加之后须正常显式刷新目录。
 服务启动已有“附加正式父级 → 刷新目录”顺序。停用资源回收及重新启用恢复继续遵循前节规则。
 
-[编写辅助 Schema](plugin-runtime-requirements.schema.json) 只描述 `runtime_requirements` 对象的结构，不是完整插件清单 Schema。
+[运行时要求片段](plugin-runtime-requirements.schema.json) 与[完整清单 Schema](plugin-manifest.schema.json) 均从真实 Rust 类型生成。
 精确版本、链接核心支持、同用途重复、数值间关系、机器整数范围和有效宿主策略由 Rust 校验，不能仅凭 Schema 通过宣称可激活。
-结构对照测试、真实目录拒绝测试及实际启用探测／业务调用测试共同验证此边界。完整清单 Schema、显式迁移、
-预热仍须后续交付；已接入的无状态工具复用与分区顺序见下文，第一版不会被自动升级为可复用或可并行。
+结构对照测试、真实目录拒绝测试及实际启用探测／业务调用测试共同验证此边界。显式迁移保留第一版执行语义，
+不自动开启复用或并行；内置包逐个升级与通用预热仍须后续交付，已接入的无状态工具复用与分区顺序见下文。
 
 第二版 `runtime_requirements.host_capabilities` 可声明宿主回调要求；省略或空数组表示不要求额外回调，
 显式空值、未知字段及重复名称拒绝。每项必须包含 `name`、`version`、`execution`、`scope`：

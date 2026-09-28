@@ -11,19 +11,23 @@ use luaskills::runtime::embedded::capabilities::{CapabilityExecution, Capability
 /// 必需的兼容性及容量下限；宿主策略必须满足这些条件，且不能被自动改写。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginRuntimeRequirements {
     /// Exact embedded core protocol identity, independent from the package manifest version.
     /// 精确嵌入式核心协议身份，独立于插件包清单版本。
+    #[cfg_attr(feature = "manifest-schema", schemars(with = "std::num::NonZeroU32", range(max = u32::MAX)))]
     pub protocol_version: u32,
     /// Required execution backend; unsupported backends are rejected without substitution.
     /// 必需执行后端；不支持的后端直接拒绝，不替代。
     pub backend: ExecutionBackend,
     /// Exact versioned semantic feature names advertised by the linked core, never permission grants.
     /// 链接核心声明的精确版本化语义功能名，绝不表示权限授予。
+    #[cfg_attr(feature = "manifest-schema", schemars(inner(length(min = 1)), extend("uniqueItems" = true)))]
     pub core_capabilities: Vec<String>,
     /// Exact registered host contracts required for business admission; omission declares no callback requirement.
     /// 业务入场所需的精确已注册宿主契约；省略表示不声明回调要求。
     #[serde(default)]
+    #[cfg_attr(feature = "manifest-schema", schemars(extend("uniqueItems" = true)))]
     pub host_capabilities: Vec<VulcanPluginHostCapabilityRequirement>,
     /// Distinct purpose requirements; an empty list explicitly requests no additional resource floors.
     /// 不重复的用途要求；空列表明确表示不要求额外资源下限。
@@ -34,12 +38,15 @@ pub struct VulcanPluginRuntimeRequirements {
 /// 单个必需的已注册宿主契约，独立于权限授予或外部服务就绪状态。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginHostCapabilityRequirement {
     /// Exact namespaced callback name; aliases and alternate names are never probed.
     /// 精确命名空间回调名称；绝不探测别名或备用名称。
+    #[cfg_attr(feature = "manifest-schema", schemars(length(min = 1)))]
     pub name: String,
     /// Exact semantic interface version; a range or a newer version does not implicitly match.
     /// 精确语义接口版本；版本范围或更新版本不隐式匹配。
+    #[cfg_attr(feature = "manifest-schema", schemars(length(min = 1)))]
     pub version: String,
     /// Declared core dispatch transport, checked against the actual captured descriptor.
     /// 声明的核心分发传输，针对实际捕获描述符校验。
@@ -53,6 +60,7 @@ pub struct VulcanPluginHostCapabilityRequirement {
 /// 单个执行用途所需的最小宿主策略，独立于当前空闲容量。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginCapacityRequirement {
     /// Exact production purpose whose frozen configuration must satisfy these floors.
     /// 冻结配置必须满足这些下限的精确生产用途。
@@ -62,15 +70,19 @@ pub struct VulcanPluginCapacityRequirement {
     pub reserved_resident_vms: usize,
     /// Minimum acceptable resident limit, positive and not a request to allocate instances.
     /// 可接受的最小常驻上限，必须为正，且不表示申请分配实例。
+    #[cfg_attr(feature = "manifest-schema", schemars(with = "std::num::NonZeroUsize"))]
     pub resident_vms: usize,
     /// Minimum acceptable running-call limit, positive and bounded by resident_vms.
     /// 可接受的最小执行调用上限，必须为正且不超过 resident_vms。
+    #[cfg_attr(feature = "manifest-schema", schemars(with = "std::num::NonZeroUsize"))]
     pub running_calls: usize,
     /// Minimum acceptable pending-call limit, positive and never interpreted as unlimited.
     /// 可接受的最小等待调用上限，必须为正，绝不解释为无限。
+    #[cfg_attr(feature = "manifest-schema", schemars(with = "std::num::NonZeroUsize"))]
     pub queued_calls: usize,
     /// Minimum acceptable pending-input byte limit, positive and never interpreted as unlimited.
     /// 可接受的最小等待输入字节上限，必须为正，绝不解释为无限。
+    #[cfg_attr(feature = "manifest-schema", schemars(with = "std::num::NonZeroUsize"))]
     pub queued_bytes: usize,
 }
 

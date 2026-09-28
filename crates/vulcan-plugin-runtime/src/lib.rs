@@ -6,6 +6,8 @@ mod catalog;
 mod generation_store;
 mod host_services;
 mod manifest;
+#[cfg(feature = "manifest-schema")]
+pub mod manifest_authoring;
 mod runtime;
 
 /// Returns whether metadata identifies a symbolic link or any Windows reparse point.

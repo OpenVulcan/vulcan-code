@@ -11,6 +11,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+schemars = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
 luaskills.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
@@ -30,3 +32,11 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[features]
+manifest-schema = ["dep:schemars", "dep:tempfile", "luaskills/contract-generation", "vulcan-hooks/manifest-schema"]
+
+[[bin]]
+name = "vulcan-plugin-manifest"
+path = "src/bin/vulcan-plugin-manifest.rs"
+required-features = ["manifest-schema"]
