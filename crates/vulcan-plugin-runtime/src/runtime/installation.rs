@@ -336,6 +336,21 @@ impl VulcanPluginRuntimeManager {
                 ))
             })?;
         let destination = canonical_user_root.join(&source_descriptor.id);
+        // Legacy installation cannot publish a hidden flat package behind a managed selection or tombstone.
+        // 旧安装流程不能在受管选择或停用记录之后发布隐藏的平铺包。
+        if let Some(store) =
+            crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+            && store
+                .activation(&source_descriptor.id)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+                .is_some()
+        {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Vulcan plugin `{}` has managed generation state; legacy installation cannot replace it.",
+                source_descriptor.id
+            )));
+        }
         if destination.exists() {
             return Err(VulcanPluginRuntimeError::new(format!(
                 "Vulcan plugin `{}` is already installed for this user.",

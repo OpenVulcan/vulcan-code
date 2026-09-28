@@ -1,6 +1,9 @@
 //! Secure package discovery and immutable Vulcan Plugin catalog snapshots.
 //! 安全的插件包发现与不可变 Vulcan 插件目录快照。
 
+mod generations;
+pub use generations::VulcanPluginManagedPackage;
+
 use crate::{
     VULCAN_PLUGIN_HOOK_TOOL_AFTER, VULCAN_PLUGIN_HOOK_TOOL_BEFORE,
     VULCAN_PLUGIN_HOOK_TOOL_REGISTRATION, VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION,
@@ -183,6 +186,9 @@ pub struct VulcanPluginDescriptor {
     /// Canonical package root.
     /// 规范化插件包根目录。
     pub package_root: PathBuf,
+    /// Exact managed activation and its live package lease; absent for bundled and legacy packages.
+    /// 精确受管激活及其活动包租约；内置包及旧平铺包没有此字段。
+    pub(crate) managed_package: Option<VulcanPluginManagedPackage>,
     /// Effective package origin selected by deterministic root precedence.
     /// 通过确定性根目录优先级选定的生效插件包来源。
     pub origin: VulcanPluginPackageOrigin,
@@ -243,6 +249,14 @@ pub struct VulcanPluginDescriptor {
 }
 
 impl VulcanPluginDescriptor {
+    /// Returns the managed selection retained by this descriptor, or `None` for legacy/bundled packages.
+    /// 返回此描述符保留的受管选择；旧平铺包及内置包返回 `None`。
+    /// Borrow or clone its generation handle while consuming files beyond this descriptor's lifetime.
+    /// 在此描述符寿命之外使用包文件时，必须借用或克隆其中的代次句柄。
+    pub fn managed_package(&self) -> Option<&VulcanPluginManagedPackage> {
+        self.managed_package.as_ref()
+    }
+
     /// Returns localized metadata or the manifest defaults when no exact locale exists.
     /// 返回本地化元数据；不存在精确语言时回退到清单默认值。
     ///
@@ -346,9 +360,9 @@ impl VulcanPluginCatalogSnapshot {
 ///
 /// # Returns
 /// 返回值
-/// Returns a deterministic snapshot with valid packages and rejection diagnostics.
-/// 返回包含有效插件及拒绝诊断的确定性快照。
-fn load_plugin_root_catalog(
+/// Returns discovered packages and diagnostics; global contribution surfaces are built after final selection.
+/// 返回已发现插件及诊断；全局贡献表面在最终选择完成后构建。
+fn discover_plugin_root_catalog(
     root: &Path,
     disabled_plugin_ids: &BTreeSet<String>,
     enabled_plugin_ids: &BTreeSet<String>,
@@ -379,6 +393,11 @@ fn load_plugin_root_catalog(
             }
         };
         let path = entry.path();
+        // Private generation storage is discovered through its activation records, never as a package.
+        // 私有代次存储通过激活记录发现，绝不作为插件包发现。
+        if crate::VulcanPluginGenerationStore::is_store_entry(&path) {
+            continue;
+        }
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) => {
@@ -426,7 +445,8 @@ fn load_plugin_root_catalog(
         }
         snapshot.plugins.insert(plugin_id, descriptor);
     }
-    rebuild_catalog_surface(&mut snapshot);
+    // Global names are reserved only after managed selection and bundled precedence are resolved.
+    // 仅在受管选择及内置优先级确定后才保留全局名称。
     snapshot
 }
 
@@ -448,7 +468,7 @@ pub fn load_vulcan_plugin_catalog(
     enabled_plugin_ids: &BTreeSet<String>,
     revision: u64,
 ) -> VulcanPluginCatalogSnapshot {
-    let mut bundled = load_plugin_root_catalog(
+    let mut bundled = discover_plugin_root_catalog(
         bundled_root,
         disabled_plugin_ids,
         enabled_plugin_ids,
@@ -464,7 +484,12 @@ pub fn load_vulcan_plugin_catalog(
             snapshot
         },
         |user_root| {
-            load_plugin_root_catalog(user_root, disabled_plugin_ids, enabled_plugin_ids, revision)
+            generations::load_user_catalog(
+                user_root,
+                disabled_plugin_ids,
+                enabled_plugin_ids,
+                revision,
+            )
         },
     );
     for plugin in user.plugins.values_mut() {
@@ -608,6 +633,7 @@ fn load_vulcan_plugin_package(
         id: fallback_id.clone(),
         version: None,
         package_root: canonical_package_root.clone(),
+        managed_package: None,
         origin: VulcanPluginPackageOrigin::Bundled,
         content_fingerprint: String::new(),
         availability: VulcanPluginAvailability::Unavailable,
@@ -666,6 +692,7 @@ fn load_vulcan_plugin_package(
         id: manifest.id.clone(),
         version: Some(manifest.version.clone()),
         package_root: canonical_package_root.clone(),
+        managed_package: None,
         origin: VulcanPluginPackageOrigin::Bundled,
         content_fingerprint: String::new(),
         availability: VulcanPluginAvailability::Enabled,
@@ -2676,6 +2703,25 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Loads `root` through the public single-root path with the supplied policies and revision.
+    /// 使用传入策略及修订，通过公开单根路径加载 `root`。
+    /// Returns the final validated surface rather than the private discovery-only intermediate result.
+    /// 返回最终已校验表面，而非私有的仅发现中间结果。
+    fn load_plugin_root_catalog(
+        root: &Path,
+        disabled_plugin_ids: &BTreeSet<String>,
+        enabled_plugin_ids: &BTreeSet<String>,
+        revision: u64,
+    ) -> VulcanPluginCatalogSnapshot {
+        load_vulcan_plugin_catalog(
+            root,
+            None,
+            disabled_plugin_ids,
+            enabled_plugin_ids,
+            revision,
+        )
+    }
+
     /// Verifies generic tool hooks require an exact original identity and a phase-compatible mode.
     /// 验证通用工具 Hook 必须声明精确原始身份及与阶段兼容的模式。
     #[test]
@@ -2919,7 +2965,7 @@ display:
     /// 参数
     /// `root` is the catalog root, `plugin_id` is the package identity, and `tool_ids` preserves manifest order.
     /// `root` 是目录根，`plugin_id` 是插件身份，`tool_ids` 保持清单顺序。
-    fn write_named_stateless_package(root: &Path, plugin_id: &str, tool_ids: &[&str]) {
+    pub(super) fn write_named_stateless_package(root: &Path, plugin_id: &str, tool_ids: &[&str]) {
         let package = root.join(plugin_id);
         fs::create_dir_all(package.join("runtime")).expect("create named runtime directory");
         fs::create_dir_all(package.join("schemas")).expect("create named schema directory");

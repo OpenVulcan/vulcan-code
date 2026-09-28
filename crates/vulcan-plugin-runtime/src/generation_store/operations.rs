@@ -23,7 +23,7 @@ impl VulcanPluginGenerationStore {
     ) -> Result<super::VulcanPluginGenerationPhase> {
         // The namespace fence coordinates metadata reads with activation and collection.
         // 命名空间屏障使元数据读取与激活及回收协调。
-        let _namespace = self.namespace_lock(&identity.plugin_id)?;
+        let _namespace = self.namespace_lock(&identity.plugin_id, true)?;
         self.read_generation(identity)
             .map(|(_, record)| record.state)
     }
@@ -156,7 +156,7 @@ impl VulcanPluginGenerationStore {
     ) -> Result<PinnedVulcanPluginGeneration> {
         // Namespace ownership closes the race between selecting a generation and acquiring its real lease.
         // 命名空间所有权封闭选择代次与取得实际租约之间的竞态。
-        let _namespace = self.namespace_lock(&identity.plugin_id)?;
+        let _namespace = self.namespace_lock(&identity.plugin_id, true)?;
         self.pin_locked(identity)
     }
 
@@ -165,7 +165,7 @@ impl VulcanPluginGenerationStore {
     pub fn activation(&self, plugin_id: &str) -> Result<Option<VulcanPluginActivation>> {
         // Readers coordinate with writers through the same real namespace lock.
         // 读取者经相同实际命名空间锁与写入者协调。
-        let _namespace = self.namespace_lock(plugin_id)?;
+        let _namespace = self.namespace_lock(plugin_id, true)?;
         self.read_activation(plugin_id)
     }
 
@@ -176,7 +176,7 @@ impl VulcanPluginGenerationStore {
     pub fn pin_active(&self, plugin_id: &str) -> Result<VulcanPluginActiveGeneration> {
         // The namespace fence remains held through acquiring the selected shared generation lease.
         // 命名空间屏障持续持有至所选共享代次租约取得。
-        let _namespace = self.namespace_lock(plugin_id)?;
+        let _namespace = self.namespace_lock(plugin_id, true)?;
         // The exact on-disk choice is the sole source of generation selection.
         // 精确磁盘选择是代次选择的唯一来源。
         let activation = self.read_activation(plugin_id)?;
@@ -209,7 +209,7 @@ impl VulcanPluginGenerationStore {
         }
         // Only the target plugin is fenced; copying and unrelated plugin work do not hold this lock.
         // 仅对目标插件建立屏障；复制及其他插件工作不持有此锁。
-        let _namespace = self.namespace_lock(&generation.identity.plugin_id)?;
+        let _namespace = self.namespace_lock(&generation.identity.plugin_id, false)?;
         // Revalidate physical contents before allowing any activation mutation.
         // 允许任何激活变更前重新校验物理内容。
         let _verified = self.pin_locked(&generation.identity)?;
@@ -231,7 +231,7 @@ impl VulcanPluginGenerationStore {
     ) -> Result<VulcanPluginActivation> {
         // Use the same fence and revision semantics as activation.
         // 使用与激活相同的屏障及修订语义。
-        let _namespace = self.namespace_lock(plugin_id)?;
+        let _namespace = self.namespace_lock(plugin_id, false)?;
         self.replace_activation(plugin_id, expected_revision, None)
     }
 
@@ -242,7 +242,7 @@ impl VulcanPluginGenerationStore {
     pub fn collect(&self, identity: &VulcanPluginGenerationIdentity) -> Result<bool> {
         // Namespace first, then generation lock is the common ordering for all ownership changes.
         // 先命名空间、后代次锁，是所有所有权变更的共同顺序。
-        let _namespace = self.namespace_lock(&identity.plugin_id)?;
+        let _namespace = self.namespace_lock(&identity.plugin_id, false)?;
         files::validate_identity(identity)?;
         // An active generation cannot be collected even when no current process holds a package lease.
         // 即使当前没有进程持有插件租约，也不能回收激活代次。
@@ -297,7 +297,7 @@ impl VulcanPluginGenerationStore {
 
     /// Validate every fixed layout directory before dereferencing controlled descendants.
     /// 解引用受控后代前校验每个固定布局目录。
-    fn validate_layout(&self) -> Result<()> {
+    pub(super) fn validate_layout(&self) -> Result<()> {
         for path in [
             &self.root,
             &self.root.join("packages"),
@@ -311,15 +311,17 @@ impl VulcanPluginGenerationStore {
         Ok(())
     }
 
-    /// Acquire one plugin's exclusive control lease; validates `plugin_id` before deriving its lock name.
-    /// 取得一个插件的排他控制租约；派生锁名之前校验 `plugin_id`。
-    fn namespace_lock(&self, plugin_id: &str) -> Result<File> {
+    /// Acquire a namespace fence after validating `plugin_id`; `shared` selects readers instead of mutations.
+    /// 校验 `plugin_id` 后取得命名空间屏障；`shared` 为真时选择读取锁，否则选择变更锁。
+    /// Returns an owning file handle; shared readers coexist while activation and collection remain exclusive.
+    /// 返回拥有锁的文件句柄；共享读取者可以共存，激活及回收继续保持排他。
+    fn namespace_lock(&self, plugin_id: &str, shared: bool) -> Result<File> {
         crate::catalog::validate_identifier(plugin_id, "generation plugin id")
             .map_err(Error::invalid)?;
         self.validate_layout()?;
         files::lock(
             &self.root.join("locks").join(format!("{plugin_id}.lock")),
-            false,
+            shared,
         )
     }
 

@@ -6,6 +6,66 @@ use crate::VulcanPluginPackageOrigin;
 use std::collections::BTreeSet;
 use std::fs;
 
+/// Legacy installation rejects both selected and removed managed namespaces without writing a hidden package.
+/// 旧安装流程拒绝选中及已移除的受管命名空间，不写入隐藏包。
+#[test]
+fn managed_catalog_installation_rejects_legacy_publication_behind_managed_records() {
+    // Use the real manager installation API and a separate immutable storage root.
+    // 使用实际管理器安装接口及独立不可变存储根。
+    let temp = tempfile::tempdir().expect("create legacy installation guard fixture");
+    // Manager paths match the production fixture conventions.
+    // 管理器路径匹配生产夹具约定。
+    let runtime_root = temp.path().join("runtime");
+    // Empty bundled root leaves the test identity user-owned.
+    // 空内置根使测试身份归用户所有。
+    let bundled = runtime_root.join("plugins");
+    fs::create_dir_all(&bundled).expect("create legacy guard bundled root");
+    // All invocation and state validation use the actual manager.
+    // 全部调用及状态校验使用实际管理器。
+    let manager = test_manager(&runtime_root, bundled);
+    // Inspected source remains outside the installed user root.
+    // 已检查来源始终位于已安装用户根之外。
+    let source = temp.path().join("source/local-plugin");
+    write_user_plugin_package(&source, "local-plugin");
+    // Permission and content identities are frozen before both attempted installations.
+    // 两次安装尝试之前固定权限及内容身份。
+    let preview = manager
+        .inspect_local_user_plugin(&source)
+        .expect("inspect legacy guard source");
+    // Production generation store publishes exact records without creating legacy state files.
+    // 生产代次存储发布精确记录，不创建旧状态文件。
+    let store = crate::VulcanPluginGenerationStore::open(&runtime_root.join("user_plugins"))
+        .expect("open legacy guard store");
+    // Keep the selected physical generation available across both rejection paths.
+    // 在两个拒绝路径之间保持选中的物理代次可用。
+    let generation = store
+        .prepare(&source, &preview.content_fingerprint)
+        .expect("prepare legacy guard generation");
+    store
+        .activate(&generation, 0)
+        .expect("select managed generation");
+    for removed in [false, true] {
+        if removed {
+            store
+                .deactivate("local-plugin", 1)
+                .expect("publish managed tombstone");
+        }
+        // The old write path must fail before creating a destination or authorization/install records.
+        // 旧写入路径必须在创建目标或授权及安装记录之前失败。
+        let error = manager
+            .install_local_user_plugin(
+                &source,
+                &preview.content_fingerprint,
+                preview.permissions.clone(),
+                false,
+            )
+            .expect_err("reject legacy install into managed namespace");
+        assert!(error.to_string().contains("has managed generation state"));
+        assert!(!runtime_root.join("user_plugins/local-plugin").exists());
+        assert!(!runtime_root.join("plugin_state/local-plugin").exists());
+    }
+}
+
 /// A failed public rollback retains original state after consuming its only live transaction handle.
 /// 公开回滚消费唯一存活事务句柄后失败，仍保留原始状态。
 #[test]

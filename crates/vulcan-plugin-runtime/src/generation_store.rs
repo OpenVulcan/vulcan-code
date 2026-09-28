@@ -1,6 +1,7 @@
 //! Immutable package generations with explicit activation revisions and actual filesystem leases.
 //! 具有显式激活修订及实际文件系统租约的不可变插件包代次。
 
+mod discovery;
 mod files;
 mod operations;
 #[cfg(test)]

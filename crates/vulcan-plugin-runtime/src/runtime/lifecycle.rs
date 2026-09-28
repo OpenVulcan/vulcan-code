@@ -524,15 +524,41 @@ impl VulcanPluginRuntimeManager {
                     "The plugin package is valid, but its Lua execution runtime is unavailable; read-only skills and agents remain active.",
                 ));
             }
+            // Remember prior incarnations even when a tombstone removed the preceding catalog row.
+            // 即使停用记录移除了前一目录条目，也必须记住先前实例。
+            let previously_seen = generations.contains_key(&plugin.id);
+            // Routing identity remains process-local and must never be reused after disappearance.
+            // 路由身份保持进程内归属，插件消失后也绝不能复用。
             let generation = generations.entry(plugin.id.clone()).or_insert(1);
-            let changed = previous.plugins.get(&plugin.id).is_some_and(|prior| {
-                prior.version != plugin.version
-                    || prior.content_fingerprint != plugin.content_fingerprint
-                    || prior.desired_enabled != plugin.desired_enabled
-                    || prior.availability != plugin.availability
-            });
+            // Managed activation identity is independent from semantic version and content authorization.
+            // 受管激活身份独立于语义版本及内容授权。
+            let changed = previous
+                .plugins
+                .get(&plugin.id)
+                .map_or(previously_seen, |prior| {
+                    prior.version != plugin.version
+                        || prior.content_fingerprint != plugin.content_fingerprint
+                        || prior.desired_enabled != plugin.desired_enabled
+                        || prior.availability != plugin.availability
+                        || prior.managed_package().map(|managed| {
+                            (
+                                managed.activation_revision(),
+                                managed.generation().identity(),
+                            )
+                        }) != plugin.managed_package().map(|managed| {
+                            (
+                                managed.activation_revision(),
+                                managed.generation().identity(),
+                            )
+                        })
+                });
             if changed {
-                *generation = generation.saturating_add(1);
+                *generation = generation.checked_add(1).ok_or_else(|| {
+                    VulcanPluginRuntimeError::new(format!(
+                        "Vulcan Plugin `{}` routing generation is exhausted.",
+                        plugin.id
+                    ))
+                })?;
             }
             plugin.generation = *generation;
             plugin.active_session_count = active_counts.get(&plugin.id).copied().unwrap_or(0);
