@@ -14,6 +14,21 @@
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
     },
+    "host_capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "version", "execution", "scope"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "version": { "type": "string", "minLength": 1 },
+          "execution": { "enum": ["native", "queued"] },
+          "scope": { "enum": ["invocation", "session"] }
+        }
+      }
+    },
     "capacities": {
       "type": "array",
       "items": {

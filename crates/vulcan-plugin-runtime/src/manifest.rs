@@ -7,7 +7,10 @@ use vulcan_hooks::{HookCapability, HookFailurePolicy, HookMode, HookScope};
 
 mod requirements;
 mod reuse;
-pub use requirements::{VulcanPluginCapacityRequirement, VulcanPluginRuntimeRequirements};
+pub use requirements::{
+    VulcanPluginCapacityRequirement, VulcanPluginHostCapabilityRequirement,
+    VulcanPluginRuntimeRequirements,
+};
 pub use reuse::{VulcanPluginReusableToolManifest, VulcanPluginToolOrdering};
 
 /// Current manifest schema version accepted by the host.

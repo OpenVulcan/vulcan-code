@@ -48,7 +48,7 @@ impl VulcanPluginEmbeddedHost {
         &self,
         request: VulcanPluginBundlePoolRequest,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(None, request, None)
+        self.register_bundle_pool_with_capacity(None, request, None, None)
     }
 
     /// Register request's real bundle in exact capacity_id and return its native member pool identity.
@@ -60,7 +60,7 @@ impl VulcanPluginEmbeddedHost {
         capacity_id: &str,
         request: VulcanPluginBundlePoolRequest,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None)
+        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None)
     }
 
     /// Register the exact reusable tool in capacity_id; request must match its declared policy and shutdown.
@@ -73,7 +73,26 @@ impl VulcanPluginEmbeddedHost {
         request: VulcanPluginBundlePoolRequest,
         tool_id: &str,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(Some(capacity_id), request, Some(tool_id))
+        self.register_bundle_pool_with_capacity(Some(capacity_id), request, Some(tool_id), None)
+    }
+
+    /// Register tool_id in capacity_id with the exact snapshot already used to choose its reusable domain.
+    /// 使用已用于选择可复用域的精确 snapshot，在 capacity_id 中注册 tool_id。
+    /// request supplies unchanged package and policy authority; returns the pool without replacing the snapshot.
+    /// request 提供不变的插件包及策略权威；返回池且不替换快照。
+    pub(in crate::runtime) fn register_reusable_bundle_pool_with_snapshot_in_capacity(
+        &self,
+        capacity_id: &str,
+        request: VulcanPluginBundlePoolRequest,
+        tool_id: &str,
+        snapshot: CapabilitySnapshot,
+    ) -> EmbeddedResult<String> {
+        self.register_bundle_pool_with_capacity(
+            Some(capacity_id),
+            request,
+            Some(tool_id),
+            Some(snapshot),
+        )
     }
 
     /// Load the manifest-selected bundle and fixed restricted loader for `request`.
@@ -89,6 +108,7 @@ impl VulcanPluginEmbeddedHost {
         capacity_id: Option<&str>,
         request: VulcanPluginBundlePoolRequest,
         reusable_tool: Option<&str>,
+        capability_snapshot: Option<CapabilitySnapshot>,
     ) -> EmbeddedResult<String> {
         // Keep the owning manager alive during exact descriptor and file resolution.
         // 在精确描述符及文件解析期间保持所属管理器存活。
@@ -320,6 +340,7 @@ impl VulcanPluginEmbeddedHost {
             },
             request.policy,
             request.scope,
+            capability_snapshot,
         )
     }
 }

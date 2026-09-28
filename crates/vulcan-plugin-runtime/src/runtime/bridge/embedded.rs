@@ -6,7 +6,7 @@ use crate::VulcanPluginDescriptor;
 use luaskills::runtime::embedded::capabilities::{
     CapabilityDescriptor, CapabilityEffects, CapabilityExecution, CapabilityIdempotency,
     CapabilityInvocation, CapabilityOutcome, CapabilityPermissions, CapabilityRegistrationRequest,
-    CapabilityScope,
+    CapabilityScope, CapabilitySnapshot, ModuleCapabilities,
 };
 use luaskills::runtime::embedded::{
     EffectState, EmbeddedError, EmbeddedErrorCode, EmbeddedResult, EmbeddedRuntime,
@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 mod bundle;
 mod dispatch;
+mod requirements;
 mod workspaces;
 pub use bundle::VulcanPluginBundlePoolRequest;
 use workspaces::WorkspaceRequests;
@@ -236,7 +237,7 @@ impl VulcanPluginEmbeddedHost {
         policy: PluginPoolConfig,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> EmbeddedResult<String> {
-        self.register_pool_with_capacity(None, definition, policy, scope)
+        self.register_pool_with_capacity(None, definition, policy, scope, None)
     }
 
     /// Register definition and policy in scope as a member of the exact capacity_id; return the native pool identity.
@@ -250,7 +251,7 @@ impl VulcanPluginEmbeddedHost {
         policy: PluginPoolConfig,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> EmbeddedResult<String> {
-        self.register_pool_with_capacity(Some(capacity_id), definition, policy, scope)
+        self.register_pool_with_capacity(Some(capacity_id), definition, policy, scope, None)
     }
 
     /// Register trusted `definition` and `policy` under an exact live catalog `scope`.
@@ -267,6 +268,7 @@ impl VulcanPluginEmbeddedHost {
         definition: ModuleDefinition,
         policy: PluginPoolConfig,
         scope: VulcanPluginBridgeLeaseScope,
+        capability_snapshot: Option<CapabilitySnapshot>,
     ) -> EmbeddedResult<String> {
         // Upgrading the manager protects the short registration operation only.
         // 升级管理器仅保护此短注册操作。
@@ -347,17 +349,20 @@ impl VulcanPluginEmbeddedHost {
         }
         // Each fixed capability requires its own revocable grant, derived from the manifest.
         // 每个固定能力要求其自身可撤销授权，该授权从清单派生。
-        let permissions = CapabilityPermissions::new(
-            CAPABILITIES
-                .iter()
-                .copied()
-                .filter(|name| permitted(name, &manifest.permissions))
-                .map(str::to_string)
-                .collect(),
-        )?;
+        let permissions = requirements::permissions_for(manifest)?;
+        // A supplied snapshot is the caller's exact partition authority; omission selects current membership.
+        // 已提供快照是调用方精确分区权威；省略时选择当前成员。
+        let snapshot = match capability_snapshot {
+            Some(snapshot) => snapshot,
+            None => self.runtime.capabilities().snapshot()?,
+        };
+        requirements::validate(manifest, scope, &snapshot, &permissions)?;
         // Revision is opaque and cannot be selected by Lua or reused by another registration.
         // 修订为不透明值，Lua 不能选择，其他注册不能复用。
         let revision = uuid::Uuid::new_v4().to_string();
+        // Bind exactly what compatibility validation observed; the core must never reread a newer snapshot.
+        // 精确绑定兼容性检查所观测内容；核心绝不能重新读取更新快照。
+        let binding = ModuleCapabilities::new(snapshot, permissions, revision.clone())?;
         // Actual core pool ownership pins the descriptor, not historical host handles.
         // 真实核心池所有权固定描述符，历史宿主句柄不固定它。
         let domain = Arc::new(ExecutionAuthority {
@@ -395,23 +400,13 @@ impl VulcanPluginEmbeddedHost {
         }
         // No callback can run during registration; initialization starts on later core admission.
         // 注册期间不会运行回调；初始化在后续核心入场时开始。
-        let registered = match capacity_id {
-            Some(capacity_id) => self.runtime.register_pool_with_owner_in_capacity(
-                capacity_id,
-                definition,
-                policy,
-                permissions,
-                revision.clone(),
-                ModuleResourceOwner::new(domain),
-            ),
-            None => self.runtime.register_pool_with_owner(
-                definition,
-                policy,
-                permissions,
-                revision.clone(),
-                ModuleResourceOwner::new(domain),
-            ),
-        };
+        let registered = self.runtime.register_pool_with_binding(
+            definition,
+            policy,
+            binding,
+            Some(ModuleResourceOwner::new(domain)),
+            capacity_id,
+        );
         if registered.is_err() {
             // A failed registration has no pool owner and must release its identity reservation.
             // 失败注册没有池所有者，必须释放其身份预留。

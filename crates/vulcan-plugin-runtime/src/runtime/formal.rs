@@ -118,6 +118,28 @@ impl VulcanPluginRuntimeManager {
         Ok(())
     }
 
+    /// Return the actual attached capability registry for trusted host registration and queued dispatch.
+    /// 返回真实附加的能力注册表，供可信宿主注册及分发排队调用。
+    /// Uses only this manager; absence is an error and never creates a parent or another registry.
+    /// 仅使用此管理器；未附加时返回错误，绝不创建父级或另一个注册表。
+    /// The returned handle retains its original identity after shutdown; core closure still rejects new registration.
+    /// 返回句柄在关闭后保留原身份；核心关闭仍拒绝新注册。
+    /// Callers explicitly refresh the catalog after changing registrations and retain responsibility for handler authority.
+    /// 调用方在变更注册后显式刷新目录，并继续负责处理器授权。
+    pub fn formal_capabilities(
+        &self,
+    ) -> Result<
+        Arc<luaskills::runtime::embedded::capabilities::CapabilityRegistry>,
+        VulcanPluginRuntimeError,
+    > {
+        // Keep the exact attached parent alive until its existing registry handle has been cloned.
+        // 保持精确附加父级存活，直到其已有注册表句柄完成克隆。
+        let owner = self.formal_runtime_owner()?.ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Formal plugin runtime is not attached.")
+        })?;
+        Ok(owner.host.runtime().capabilities())
+    }
+
     /// Return this manager's shared formal owner, or `None` for a metadata-only manager.
     /// 返回此管理器共享的正式所有者；纯元数据管理器返回 `None`。
     /// The attachment lock is released before callers enter core control or execution.

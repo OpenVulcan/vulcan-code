@@ -77,6 +77,7 @@ fn manifest_requirements_schema_matches_structural_contract() {
 }
 
 use super::*;
+mod callbacks;
 use crate::runtime::tests::{test_manager, write_idle_session_package};
 use crate::{VulcanPluginCapacityPurpose, VulcanPluginInvocationRequest, VulcanPluginRuntimeState};
 use luaskills::ffi_embedded::embedded_core_description;

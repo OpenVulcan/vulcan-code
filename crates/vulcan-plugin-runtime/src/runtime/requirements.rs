@@ -128,20 +128,16 @@ impl VulcanPluginRuntimeManager {
         })?;
         // Only host-owned teardown events can restrict validation to lifecycle resource requirements.
         // 仅宿主自有清理事件可将校验限制到生命周期资源要求。
-        let purpose = match scope {
-            VulcanPluginBridgeLeaseScope::LifecycleDisable
-            | VulcanPluginBridgeLeaseScope::LifecycleEnableRollback
-            | VulcanPluginBridgeLeaseScope::LifecycleUninstall => {
-                Some(VulcanPluginCapacityPurpose::Lifecycle)
-            }
-            VulcanPluginBridgeLeaseScope::Enabled
-            | VulcanPluginBridgeLeaseScope::EnablingProbe
-            | VulcanPluginBridgeLeaseScope::LifecycleInstall
-            | VulcanPluginBridgeLeaseScope::LifecycleEnable => None,
-        };
+        let purpose = scope
+            .is_cleanup()
+            .then_some(VulcanPluginCapacityPurpose::Lifecycle);
         owner
             .settings
-            .validate_manifest_requirements(manifest, purpose)
+            .validate_manifest_requirements(manifest, purpose)?;
+        owner
+            .host
+            .validate_manifest_capabilities(manifest, scope)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))
     }
 }
 

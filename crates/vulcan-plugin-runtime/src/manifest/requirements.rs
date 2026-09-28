@@ -5,6 +5,7 @@ use super::*;
 use crate::VulcanPluginCapacityPurpose;
 use luaskills::ffi_embedded::embedded_core_description;
 use luaskills::runtime::embedded::ExecutionBackend;
+use luaskills::runtime::embedded::capabilities::{CapabilityExecution, CapabilityScope};
 
 /// Required compatibility and capacity floors; host policy must satisfy these without being rewritten.
 /// 必需的兼容性及容量下限；宿主策略必须满足这些条件，且不能被自动改写。
@@ -20,9 +21,32 @@ pub struct VulcanPluginRuntimeRequirements {
     /// Exact versioned semantic feature names advertised by the linked core, never permission grants.
     /// 链接核心声明的精确版本化语义功能名，绝不表示权限授予。
     pub core_capabilities: Vec<String>,
+    /// Exact registered host contracts required for business admission; omission declares no callback requirement.
+    /// 业务入场所需的精确已注册宿主契约；省略表示不声明回调要求。
+    #[serde(default)]
+    pub host_capabilities: Vec<VulcanPluginHostCapabilityRequirement>,
     /// Distinct purpose requirements; an empty list explicitly requests no additional resource floors.
     /// 不重复的用途要求；空列表明确表示不要求额外资源下限。
     pub capacities: Vec<VulcanPluginCapacityRequirement>,
+}
+
+/// One required registered host contract, independent from permission grants or external service readiness.
+/// 单个必需的已注册宿主契约，独立于权限授予或外部服务就绪状态。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VulcanPluginHostCapabilityRequirement {
+    /// Exact namespaced callback name; aliases and alternate names are never probed.
+    /// 精确命名空间回调名称；绝不探测别名或备用名称。
+    pub name: String,
+    /// Exact semantic interface version; a range or a newer version does not implicitly match.
+    /// 精确语义接口版本；版本范围或更新版本不隐式匹配。
+    pub version: String,
+    /// Declared core dispatch transport, checked against the actual captured descriptor.
+    /// 声明的核心分发传输，针对实际捕获描述符校验。
+    pub execution: CapabilityExecution,
+    /// Required trusted caller scope, independently enforced by core invocation admission.
+    /// 必需的可信调用方作用域，由核心调用入场独立执行。
+    pub scope: CapabilityScope,
 }
 
 /// Minimum host policy needed by one execution purpose, separate from current free capacity.
@@ -120,6 +144,26 @@ impl VulcanPluginManifest {
             if !core.capabilities.contains(&name.as_str()) {
                 return Err(format!("Required core capability `{name}` is unavailable."));
             }
+        }
+        // Callback identities are requirements only; this structural check cannot grant any authority.
+        // 回调身份仅是必需条件；此结构检查不能授予任何权威。
+        let mut host_capabilities = BTreeSet::new();
+        for required in &requirements.host_capabilities {
+            if required.name.trim().is_empty() || required.name.contains('\0') {
+                return Err("Required host capability name must be nonempty without NUL.".into());
+            }
+            if !host_capabilities.insert(&required.name) {
+                return Err(format!(
+                    "Duplicate required host capability `{}`.",
+                    required.name
+                ));
+            }
+            semver::Version::parse(&required.version).map_err(|_| {
+                format!(
+                    "Required host capability `{}` must declare an exact semantic version.",
+                    required.name
+                )
+            })?;
         }
         // Purpose identities have the same type as the actual production routing and host policy.
         // 用途身份与真实生产路由及宿主策略使用同一类型。

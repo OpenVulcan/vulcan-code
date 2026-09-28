@@ -137,6 +137,15 @@ pub enum VulcanPluginBridgeLeaseScope {
 }
 
 impl VulcanPluginBridgeLeaseScope {
+    /// Return whether this trusted scope performs teardown that must remain possible after business requirements change.
+    /// 返回此可信作用域是否执行在业务必需条件变化后仍须可进行的清理。
+    pub(super) fn is_cleanup(self) -> bool {
+        matches!(
+            self,
+            Self::LifecycleDisable | Self::LifecycleEnableRollback | Self::LifecycleUninstall
+        )
+    }
+
     /// Returns the immutable wire value injected into the fixed Lua bridge.
     /// 返回注入固定 Lua 桥接层的不可变线协议值。
     ///

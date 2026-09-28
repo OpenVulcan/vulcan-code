@@ -248,19 +248,21 @@ impl VulcanPluginRuntimeManager {
                 .lock()
                 .map_err(|_| calls_error())?;
             self.validate_formal_submission(call, input.scope)?;
+            // One immutable snapshot supplies both the partition key and the registered native binding.
+            // 单个不可变快照同时提供分区键和所注册原生绑定。
+            let capability_snapshot = owner
+                .host
+                .runtime()
+                .capabilities()
+                .snapshot()
+                .map_err(core_error)?;
             let key = DomainKey {
                 generation: call.plugin.generation,
                 controller: controller.to_owned(),
                 tool: tool_id.to_owned(),
                 workspace: workspace.clone(),
                 configuration: self.reusable_configuration(&call.plugin)?,
-                capabilities: owner
-                    .host
-                    .runtime()
-                    .capabilities()
-                    .snapshot()
-                    .map_err(core_error)?
-                    .revision(),
+                capabilities: capability_snapshot.revision(),
             };
             // Call registry ownership serializes all increases to the shared retained-input budget.
             // 调用表所有权串行化共享保留输入预算的全部增加。
@@ -418,7 +420,7 @@ impl VulcanPluginRuntimeManager {
             };
             let pool = owner
                 .host
-                .register_reusable_bundle_pool_in_capacity(
+                .register_reusable_bundle_pool_with_snapshot_in_capacity(
                     &capacity.capacity_id,
                     VulcanPluginBundlePoolRequest {
                         plugin_id: call.plugin.id.clone(),
@@ -441,6 +443,7 @@ impl VulcanPluginRuntimeManager {
                         },
                     },
                     tool_id,
+                    capability_snapshot,
                 )
                 .map_err(core_error)?;
             // Publish native ownership even if a concurrent drain has already requested closure.

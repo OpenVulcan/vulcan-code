@@ -226,6 +226,9 @@ fn metadata_only_manager_does_not_allocate_formal_runtime() {
             .is_none()
     );
     manager.request_formal_runtime_close().expect("empty close");
+    // Public capability access cannot create an implicit registry for a metadata-only manager.
+    // 公开能力访问不能为纯元数据管理器隐式创建注册表。
+    assert!(manager.formal_capabilities().is_err());
     assert!(
         manager
             .poll_formal_runtime_closed()
