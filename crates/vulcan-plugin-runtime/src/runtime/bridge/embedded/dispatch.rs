@@ -183,7 +183,7 @@ fn effect(
             effects: EffectState::NotStarted,
         };
     }
-    if let Err(failure) = validate_current(state, domain) {
+    if let Err(failure) = validate_invocation_current(state, domain, invocation) {
         return CapabilityOutcome {
             result: Err(failure),
             effects: EffectState::NotStarted,

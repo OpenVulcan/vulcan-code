@@ -12,6 +12,7 @@ use luaskills::runtime::embedded::{
     EffectState, EmbeddedError, EmbeddedErrorCode, EmbeddedResult, EmbeddedRuntime,
     EmbeddedRuntimeConfig, ModuleDefinition, ModuleResourceOwner, PluginPoolConfig,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 mod bundle;
@@ -92,9 +93,54 @@ struct ExecutionAuthority {
     /// Host-assigned isolation partition, independently checked against the caller.
     /// 宿主分配的隔离分区，与调用方独立核对。
     security_partition: String,
+    /// Exact draining generation granted by the manager; zero means no transition grant.
+    /// 管理器授予的精确排空代次；零表示没有转换授权。
+    closing_generation: AtomicU64,
 }
 
 impl VulcanPluginEmbeddedHost {
+    /// Grant only existing enabled domains from `plugin` access during `transition_generation` finalization.
+    /// 仅授权 `plugin` 的既有启用域在 `transition_generation` 的关闭阶段访问能力。
+    /// The manager must hold its publication gate; returns an error if the authority registry is unavailable.
+    /// 管理器必须持有发布门；权威注册表不可用时返回错误。
+    pub(crate) fn authorize_draining(
+        &self,
+        plugin: &VulcanPluginDescriptor,
+        transition_generation: u64,
+    ) -> EmbeddedResult<()> {
+        // A strictly newer generation prevents an old grant from becoming a future transition credential.
+        // 严格更新的代次防止旧授权成为未来转换的凭据。
+        if transition_generation <= plugin.generation {
+            return Err(error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Draining generation must advance.",
+            ));
+        }
+        let domains = self
+            .authority
+            .domains
+            .lock()
+            .map_err(|_| internal("Plugin authority lock is poisoned."))?;
+        for entry in domains.values() {
+            // Upgrading an existing weak owner cannot create a domain or retain it beyond this publication.
+            // 升级既有弱所有者不会创建执行域，也不会在本次发布之后额外保留它。
+            let Some(domain) = entry.upgrade() else {
+                continue;
+            };
+            if domain.scope == VulcanPluginBridgeLeaseScope::Enabled
+                && domain.plugin.id == plugin.id
+                && domain.plugin.generation == plugin.generation
+                && domain.plugin.content_fingerprint == plugin.content_fingerprint
+                && domain.plugin.package_root == plugin.package_root
+            {
+                domain
+                    .closing_generation
+                    .store(transition_generation, Ordering::Release);
+            }
+        }
+        Ok(())
+    }
+
     /// Construct a runtime for `manager` with explicit parent and per-capability time budgets.
     /// 使用显式父级及单能力时间预算，为 `manager` 构造运行时。
     /// Return the owner after atomic capability registration, or a construction error.
@@ -285,6 +331,7 @@ impl VulcanPluginEmbeddedHost {
             workspace,
             workspace_declaration,
             security_partition: definition.security_partition.clone(),
+            closing_generation: AtomicU64::new(0),
         });
         // Catalog publication cannot race the final authority check and pool registration.
         // 目录发布不能与最终权威检查及池注册竞争。
@@ -292,7 +339,7 @@ impl VulcanPluginEmbeddedHost {
             .session_registration_gate
             .lock()
             .map_err(|_| internal("Plugin publication gate is poisoned."))?;
-        validate_current(&state, &domain)?;
+        validate_current(&state, &domain, false)?;
         {
             // Prune dead entries and reserve one bounded identity before core publication.
             // 在核心发布前清除死亡条目并预留一个有界身份。
@@ -374,7 +421,7 @@ impl HostAuthority {
                 .manager
                 .upgrade()
                 .ok_or_else(|| error(EmbeddedErrorCode::Closed, "Plugin manager is closed."))?;
-            validate_current(&state, &domain)?;
+            validate_invocation_current(&state, &domain, invocation)?;
             // Capture the clock before sampling remaining budget to avoid extending the deadline.
             // 在采样剩余预算前读取时钟，避免延长截止时间。
             let now = Instant::now();
@@ -405,30 +452,44 @@ impl HostAuthority {
 
 /// Require `domain` to retain the exact installed bytes and authorized lifecycle state.
 /// 要求 `domain` 保留精确已安装字节及已授权生命周期状态。
+/// `finalizing` is core-owned evidence; return success only for current authority or its exact draining grant.
+/// `finalizing` 为核心自有证据；仅当前权威或其精确排空授权返回成功。
 /// The catalog read lock ends before any external service or Lua code executes.
 /// 目录读锁在任何外部服务或 Lua 代码执行前结束。
 fn validate_current(
     state: &VulcanPluginManagerState,
     domain: &ExecutionAuthority,
+    finalizing: bool,
 ) -> EmbeddedResult<()> {
-    // A short immutable snapshot protects one complete identity comparison.
-    // 短不可变快照保护一次完整身份比较。
+    // One immutable snapshot binds the package and lifecycle transition to the same observation.
+    // 单个不可变快照将包与生命周期转换绑定至同一次观测。
     let snapshot = state
         .snapshot
         .read()
         .map_err(|_| internal("Plugin catalog lock is poisoned."))?;
-    // Missing installation never authorizes a retained VM to enter services.
-    // 安装缺失绝不授权保留 VM 进入服务。
     let current = snapshot.plugins.get(&domain.plugin.id).ok_or_else(|| {
         error(
             EmbeddedErrorCode::StaleGeneration,
             "Plugin is no longer installed.",
         )
     })?;
-    if current.generation != domain.plugin.generation
-        || current.content_fingerprint != domain.plugin.content_fingerprint
+    if current.content_fingerprint != domain.plugin.content_fingerprint
         || current.package_root != domain.plugin.package_root
     {
+        return Err(error(
+            EmbeddedErrorCode::StaleGeneration,
+            "Plugin content changed before host admission.",
+        ));
+    }
+    // Only trusted core finalization may use the manager's exact, still-current draining grant.
+    // 仅可信核心关闭阶段可使用管理器精确且仍为当前代次的排空授权。
+    if finalizing
+        && current.runtime_state == crate::VulcanPluginRuntimeState::Draining
+        && current.generation == domain.closing_generation.load(Ordering::Acquire)
+    {
+        return Ok(());
+    }
+    if current.generation != domain.plugin.generation {
         return Err(error(
             EmbeddedErrorCode::StaleGeneration,
             "Plugin generation changed before host admission.",
@@ -441,6 +502,18 @@ fn validate_current(
         ));
     }
     Ok(())
+}
+
+/// Validate `invocation` against `domain` using only core-owned stage evidence and current host state.
+/// 仅使用核心自有阶段证据及当前宿主状态，校验 `invocation` 与 `domain`。
+/// Returns the original identity failure; this never substitutes for `invocation.authorize()`.
+/// 返回原始身份失败；这绝不替代 `invocation.authorize()`。
+fn validate_invocation_current(
+    state: &VulcanPluginManagerState,
+    domain: &ExecutionAuthority,
+    invocation: &CapabilityInvocation,
+) -> EmbeddedResult<()> {
+    validate_current(state, domain, invocation.budget.is_finalization()?)
 }
 
 /// Check whether `permissions` authorize the fixed `name`; unknown names are never granted.

@@ -647,9 +647,21 @@ impl VulcanPluginRuntimeManager {
                 VulcanPluginRuntimeError::new("Vulcan Plugin generation lock is poisoned.")
             })?;
             let generation = generations.entry(plugin_id.to_owned()).or_insert(1);
-            *generation = generation.saturating_add(1);
+            *generation = generation.checked_add(1).ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin generation is exhausted.")
+            })?;
             *generation
         };
+        // Grant only existing formal domains while publication is excluded; the grant needs the new snapshot to work.
+        // 在排除发布竞争时仅授权既有正式域；授权必须匹配新快照才生效。
+        if runtime_state == VulcanPluginRuntimeState::Draining
+            && let Some(owner) = self.formal_runtime_owner()?
+        {
+            owner
+                .host
+                .authorize_draining(plugin, generation)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        }
         self.state
             .lifecycle_overrides
             .lock()

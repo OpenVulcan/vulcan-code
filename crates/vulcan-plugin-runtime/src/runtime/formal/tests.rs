@@ -12,6 +12,8 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
+mod draining;
+
 /// Observe complete shutdown with the same configured finite test budget.
 /// 使用同一已配置有限测试预算观测完整关闭。
 /// `manager` retains the owner; returns only after actual core termination, or fails the test.
