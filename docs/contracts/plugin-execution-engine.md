@@ -104,7 +104,7 @@ RPC／WebUI 暴露尚待完成。原始核心字段命名由上游类型决定�
 关闭期间尚未完成的注册会明确失败。`forget_formal_capacity` 必须等待全部准备结束、成员实际清理且
 原生成员池显式遗忘；失败保留同一身份和预留。只有显式遗忘成功后，后续合法入场才可重新注册。
 目录刷新、普通会话结束或包代次切换本身不释放用途容量；调用方应按生命周期安排成员排空及显式释放。
-父级物理关闭也不能替代元数据遗忘。策略修订、清单资源要求、通用预热和 RPC／WebUI 控制仍待完成。
+父级物理关闭也不能替代元数据遗忘。策略修订、通用预热和 RPC／WebUI 控制仍待完成；清单资源要求见下节。
 
 生命周期容量实现位于 `runtime/formal/capacities/lifecycle.rs`。停用、启用补偿等事务调用
 `finish_lifecycle_transition` 时，按扫描得到的最终策略决定是否回收该插件全部用途容量。
@@ -152,6 +152,67 @@ RPC／WebUI 暴露尚待完成。原始核心字段命名由上游类型决定�
 此测试直接创建真实模块，尚未验证生产插件管理器的混合池路由或安装更新事务；实际代次固定句柄
 现由下述原生适配器交给核心生命周期持有。
 宿主正式接入仍须从已核验目录及授权记录构造定义，并完整限制第三方 Lua 的能力；路径声明本身不是插件沙箱。
+
+## 第二版清单的兼容性与资源必需条件
+
+清单结构由本仓库 `manifest.rs`、`manifest/requirements.rs` 与 `catalog.rs` 共同校验。
+`schema_version: 1` 保留既有语义，禁止新增 `runtime_requirements`；第二版 Lua 插件必须明确声明该对象，
+非 Lua 插件不得声明。省略与空值不等价，未知版本、字段、用途、重复字段或重复用途直接拒绝。
+不会在发现、刷新或启动时重写插件清单及宿主配置。内置包尚保留第一版，迁移工具及完整清单 Schema 仍待交付。
+
+下面为第二版 Lua 插件的新增顶层片段，其余 Lua 声明保持现有结构：
+
+```yaml
+schema_version: 2
+runtime_requirements:
+  protocol_version: 1
+  backend: in_process
+  core_capabilities: [capacity_groups_v1]
+  capacities:
+    - purpose: tool_call
+      reserved_resident_vms: 1
+      resident_vms: 2
+      running_calls: 1
+      queued_calls: 4
+      queued_bytes: 65536
+```
+
+示例数字是插件的业务要求，不是生产默认值或自动写入值。`protocol_version` 指 LuaSkills 嵌入式核心协议，
+与插件清单版本独立；版本、核心后端和语义功能的实际支持集合直接读取链接核心的
+`ffi_embedded::embedded_core_description()`，上游版本升级时须回读此描述及对应实现。
+后端还须匹配宿主 `VULCAN_PLUGIN_EXECUTION_BACKEND`，该单一定义同时用于三条真实生产注册路径；
+核心新增后端不会自动使尚未适配的宿主宣称支持。
+`core_capabilities` 只声明版本化语义功能，不授予权限，也不代替宿主回调的名称、版本及授权契约。
+预留的 `worker_process` 当前被明确拒绝，没有静默回退。未知复用或顺序字段同样拒绝，尚未接入相应生产策略。
+
+用途与宿主 `capacityBudgets` 使用同一 `VulcanPluginCapacityPurpose` 类型，支持普通工具、工具会话、Hook、
+界面动作、生命周期和启用探测。每项完整要求的含义如下：
+
+| 字段 | 约束与对应宿主配置 |
+| --- | --- |
+| `reserved_resident_vms` | 非负，对应不可出借的 `resources.min_resident_vms`；零不要求预留 |
+| `resident_vms` | 正数，要求 `resources.max_resident_vms` 至少达到该值 |
+| `running_calls` | 正数，不超过本项 `resident_vms`；要求 `resources.max_running_calls` 至少达到该值 |
+| `queued_calls` | 正数，要求 `max_queued_calls` 至少达到该值 |
+| `queued_bytes` | 正数，要求 `max_queued_bytes` 至少达到该值 |
+
+预留数不得超过常驻要求。`capacities: []` 明确表示没有额外资源下限，`core_capabilities: []` 明确表示没有额外
+语义功能要求。宿主用生产容量解析器逐项比较冻结配置，错误包含插件、用途、字段、所需值、实际值及配置来源。
+插件声明不能提高宿主预算、改写设置、自动选择专用池或分配 VM。公共配置的最小预留为零，因此不能满足正数预留要求。
+这些是可接受策略的下限，不保证调用时存在空闲实例、实际执行并发或已经预热；真实入场仍受核心当前占用、队列、
+插件聚合、父级预算及原业务顺序约束。
+
+管理器发布目录时先验证完整插件的要求；不满足则设置 `runtime_execution_available = false` 并移除全部活动暴露面，
+保留诊断、原包和既有生命周期状态，保证仍可进入停用及卸载流程。进入启用中状态前再次检查，实际工具、
+安装／启用回调、固定会话、持久 Hook／界面准备也检查同一冻结策略。明确停用、启用回滚、卸载回调仅要求
+其生命周期用途的资源下限；工具等业务额度不足不能阻止清理，生命周期自身下限仍不能绕过。精确代次、事件作用域、
+能力授权及核心当前预算检查保持不变。检查没有执行 Lua。第二版 Lua 插件在正式父级尚未附加时不发布活动能力；附加之后须正常显式刷新目录。
+服务启动已有“附加正式父级 → 刷新目录”顺序。停用资源回收及重新启用恢复继续遵循前节规则。
+
+[编写辅助 Schema](plugin-runtime-requirements.schema.json) 只描述 `runtime_requirements` 对象的结构，不是完整插件清单 Schema。
+精确版本、链接核心支持、同用途重复、数值间关系、机器整数范围和有效宿主策略由 Rust 校验，不能仅凭 Schema 通过宣称可激活。
+结构对照测试、真实目录拒绝测试及实际启用探测／业务调用测试共同验证此边界。完整清单 Schema、显式迁移、入口复用、
+调用顺序、宿主回调版本要求及预热仍须后续交付，第一版不会被自动升级为可复用或可并行。
 
 ## 原生能力适配入口
 

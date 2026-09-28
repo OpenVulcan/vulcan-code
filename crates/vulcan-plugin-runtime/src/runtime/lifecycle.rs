@@ -546,6 +546,12 @@ impl VulcanPluginRuntimeManager {
             if let Some(diagnostics) = cleanup_diagnostics.get(&plugin.id) {
                 plugin.diagnostics.extend(diagnostics.iter().cloned());
             }
+            // Resource requirements gate the complete plugin surface before any activation is published.
+            // 在任何激活发布前，资源必需条件门控插件的完整暴露面。
+            if let Err(error) = self.validate_plugin_requirements(plugin) {
+                plugin.runtime_execution_available = false;
+                plugin.diagnostics.push(error.to_string());
+            }
         }
         rebuild_enabled_surface(snapshot);
         Ok(())
@@ -591,6 +597,11 @@ impl VulcanPluginRuntimeManager {
             return Err(VulcanPluginRuntimeError::new(format!(
                 "Vulcan Plugin `{plugin_id}` cannot enter a lifecycle transition while unavailable."
             )));
+        }
+        // Check requirements before changing generations, allocating guarantees, or publishing Enabling.
+        // 在变更代次、分配保证或发布启用中状态前检查必需条件。
+        if runtime_state == VulcanPluginRuntimeState::Enabling {
+            self.validate_plugin_requirements(plugin)?;
         }
         // Re-establish all configured guarantees before callbacks or the Enabling catalog can observe activation.
         // 在回调或启用中目录可观测启用之前，重新建立全部配置保证。
@@ -665,6 +676,11 @@ fn rebuild_enabled_surface(snapshot: &mut VulcanPluginCatalogSnapshot) {
     for plugin in snapshot.plugins.values() {
         if plugin.availability != VulcanPluginAvailability::Enabled
             || plugin.runtime_state != VulcanPluginRuntimeState::Enabled
+            || (!plugin.runtime_execution_available
+                && plugin
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|manifest| manifest.runtime_requirements.is_some()))
         {
             continue;
         }

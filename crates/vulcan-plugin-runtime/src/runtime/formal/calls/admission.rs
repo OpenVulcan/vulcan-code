@@ -26,6 +26,7 @@ impl VulcanPluginRuntimeManager {
                 "Plugin generation changed before formal submission.",
             ));
         }
+        self.validate_plugin_requirements_in_scope(current, scope)?;
         Ok(())
     }
 

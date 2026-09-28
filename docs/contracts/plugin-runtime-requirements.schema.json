@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openvulcan:plugin-runtime-requirements:2",
+  "title": "Vulcan plugin manifest version two runtime_requirements",
+  "description": "Validates the runtime_requirements object only. The Rust manifest validator owns version dispatch, linked-core compatibility, unique purposes and capacity relationships; the host owns effective policy checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "backend", "core_capabilities", "capacities"],
+  "properties": {
+    "protocol_version": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+    "backend": { "enum": ["in_process", "worker_process"] },
+    "core_capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "capacities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["purpose", "reserved_resident_vms", "resident_vms", "running_calls", "queued_calls", "queued_bytes"],
+        "properties": {
+          "purpose": { "enum": ["tool_call", "tool_session", "hook", "ui_action", "lifecycle", "activation_probe"] },
+          "reserved_resident_vms": { "type": "integer", "minimum": 0 },
+          "resident_vms": { "type": "integer", "minimum": 1 },
+          "running_calls": { "type": "integer", "minimum": 1 },
+          "queued_calls": { "type": "integer", "minimum": 1 },
+          "queued_bytes": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

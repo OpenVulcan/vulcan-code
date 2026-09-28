@@ -5,9 +5,15 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_hooks::{HookCapability, HookFailurePolicy, HookMode, HookScope};
 
+mod requirements;
+pub use requirements::{VulcanPluginCapacityRequirement, VulcanPluginRuntimeRequirements};
+
 /// Current manifest schema version accepted by the host.
 /// 当前宿主接受的清单结构版本。
-pub const VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 2;
+/// Original manifest format retains its exact single-call and fixed-session semantics.
+/// 初版清单格式保留其精确的单次调用及固定会话语义。
+pub const VULCAN_PLUGIN_LEGACY_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 /// Host point for a cached transformation of one AI-visible tool definition.
 /// 对单个 AI 可见工具定义执行缓存变换的宿主点位。
@@ -68,6 +74,13 @@ pub struct VulcanPluginManifest {
     /// 可选的受管 Lua 协议声明。
     #[serde(default)]
     pub lua_runtime: Option<VulcanPluginLuaRuntimeManifest>,
+    /// Version-two Lua requirements; omission is allowed only for non-Lua or legacy manifests.
+    /// 第二版 Lua 必需条件；仅非 Lua 或旧版清单允许省略。
+    #[serde(
+        default,
+        deserialize_with = "requirements::deserialize_present_requirements"
+    )]
+    pub runtime_requirements: Option<VulcanPluginRuntimeRequirements>,
     /// Optional Model Context Protocol server declarations.
     /// 可选的模型上下文协议服务器声明。
     #[serde(default)]

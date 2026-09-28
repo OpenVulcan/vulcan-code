@@ -6,13 +6,12 @@ pub use generations::VulcanPluginManagedPackage;
 
 use crate::{
     VULCAN_PLUGIN_HOOK_TOOL_AFTER, VULCAN_PLUGIN_HOOK_TOOL_BEFORE,
-    VULCAN_PLUGIN_HOOK_TOOL_REGISTRATION, VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION,
-    VULCAN_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS, VULCAN_PLUGIN_SESSION_ID_ARGUMENT,
-    VulcanPluginDependencyInstallMode, VulcanPluginHookManifest, VulcanPluginLocaleManifest,
-    VulcanPluginManifest, VulcanPluginMcpScopeManifest, VulcanPluginMcpServerManifest,
-    VulcanPluginMcpStdioLauncherManifest, VulcanPluginMcpTransportManifest, VulcanPluginPermission,
-    VulcanPluginPromptManifest, VulcanPluginToolExecutionKind, VulcanPluginToolManifest,
-    VulcanPluginValueSourceManifest,
+    VULCAN_PLUGIN_HOOK_TOOL_REGISTRATION, VULCAN_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS,
+    VULCAN_PLUGIN_SESSION_ID_ARGUMENT, VulcanPluginDependencyInstallMode, VulcanPluginHookManifest,
+    VulcanPluginLocaleManifest, VulcanPluginManifest, VulcanPluginMcpScopeManifest,
+    VulcanPluginMcpServerManifest, VulcanPluginMcpStdioLauncherManifest,
+    VulcanPluginMcpTransportManifest, VulcanPluginPermission, VulcanPluginPromptManifest,
+    VulcanPluginToolExecutionKind, VulcanPluginToolManifest, VulcanPluginValueSourceManifest,
 };
 use luaskills::PackageDependencyManifest;
 use serde_json::Value;
@@ -1007,12 +1006,7 @@ fn validate_manifest_identity(
     manifest: &VulcanPluginManifest,
     package_directory_id: &str,
 ) -> Result<(), String> {
-    if manifest.schema_version != VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION {
-        return Err(format!(
-            "Unsupported Vulcan Plugin manifest schema version `{}`.",
-            manifest.schema_version
-        ));
-    }
+    manifest.validate_runtime_requirements()?;
     validate_identifier(&manifest.id, "plugin id")?;
     if manifest.id != package_directory_id {
         return Err(format!(

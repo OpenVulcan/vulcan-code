@@ -192,6 +192,9 @@ impl VulcanPluginRuntimeManager {
             .as_ref()
             .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin has no valid manifest."))?;
         let runtime = crate::runtime::lease::required_lua_runtime(manifest)?;
+        owner
+            .settings
+            .validate_manifest_requirements(manifest, None)?;
         // Keep the session purpose owner stable until this actual member registration finishes.
         // 在此实际成员注册结束前保持会话用途所有者稳定。
         let capacity = {
@@ -225,7 +228,7 @@ impl VulcanPluginRuntimeManager {
                         max_queued_calls: capacity.config.max_queued_calls,
                         reuse: InstanceReuse::Session,
                         serial: true,
-                        backend: ExecutionBackend::InProcess,
+                        backend: VULCAN_PLUGIN_EXECUTION_BACKEND,
                         idle_ttl_ms: None,
                         max_uses: None,
                     },

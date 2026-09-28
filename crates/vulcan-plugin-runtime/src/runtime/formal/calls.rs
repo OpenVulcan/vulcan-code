@@ -5,8 +5,8 @@ use super::*;
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
-    EmbeddedCall, EmbeddedErrorCode, ExecutionBackend, InstanceReuse, ModuleFinalizer,
-    OperationHandle, OperationSnapshot, PluginPoolConfig,
+    EmbeddedCall, EmbeddedErrorCode, InstanceReuse, ModuleFinalizer, OperationHandle,
+    OperationSnapshot, PluginPoolConfig,
 };
 use serde_json::{Map, Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -837,7 +837,7 @@ impl VulcanPluginRuntimeManager {
                             InstanceReuse::SingleCall
                         },
                         serial: true,
-                        backend: ExecutionBackend::InProcess,
+                        backend: VULCAN_PLUGIN_EXECUTION_BACKEND,
                         idle_ttl_ms: None,
                         max_uses: None,
                     },

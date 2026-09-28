@@ -229,6 +229,9 @@ impl VulcanPluginRuntimeManager {
         // Read the validated Lua declarations, including the optional Hook finalizer.
         // 读取已校验 Lua 声明，包含可选 Hook 关闭器。
         let lua = crate::runtime::lease::required_lua_runtime(manifest)?;
+        owner
+            .settings
+            .validate_manifest_requirements(manifest, None)?;
         // Resolve the host-authorized workspace for this precise execution scope.
         // 为此精确执行作用域解析宿主授权工作区。
         let workspace = crate::runtime::environment::plugin_execution_package_root(
@@ -297,7 +300,7 @@ impl VulcanPluginRuntimeManager {
                         max_queued_calls: capacity.config.max_queued_calls,
                         reuse: InstanceReuse::Session,
                         serial: true,
-                        backend: ExecutionBackend::InProcess,
+                        backend: VULCAN_PLUGIN_EXECUTION_BACKEND,
                         idle_ttl_ms: None,
                         max_uses: None,
                     },

@@ -16,6 +16,7 @@ mod lifecycle;
 mod local_files;
 mod persistent;
 mod process;
+mod requirements;
 mod sessions;
 mod settings;
 
@@ -73,6 +74,11 @@ const VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS: u64 = 60_000;
 /// Sole default shutdown budget for formal host finalizers and explicit host drains.
 /// 正式宿主关闭器及显式宿主排空的唯一默认关闭预算。
 const VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
+
+/// Exact backend implemented by every production plugin route and checked against manifest requirements.
+/// 全部生产插件路由实现并用于清单要求检查的精确后端。
+pub(crate) const VULCAN_PLUGIN_EXECUTION_BACKEND: luaskills::runtime::embedded::ExecutionBackend =
+    luaskills::runtime::embedded::ExecutionBackend::InProcess;
 
 /// Structured generic plugin runtime failure.
 /// 结构化的通用插件运行时失败。
