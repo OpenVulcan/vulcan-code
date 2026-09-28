@@ -4,6 +4,10 @@
 use super::*;
 use luaskills::runtime::embedded::OperationContext;
 
+/// Maximum retry interval for unhealthy maintenance; normal observation uses the shared call interval.
+/// 不健康维护的最大重试间隔；正常观测使用共用调用间隔。
+const MAX_MAINTENANCE_RETRY: Duration = Duration::from_secs(1);
+
 /// Reset observer ownership even if its asynchronous supervisor is aborted.
 /// 即使异步监督者被中止，也重置观测者归属。
 struct ObserverGuard(std::sync::Weak<ManagedFormalRuntime>);
@@ -25,7 +29,7 @@ fn collect_finalizations(
     owner: &ManagedFormalRuntime,
     domain: &mut Domain,
     pool: &str,
-) -> Result<Vec<String>, VulcanPluginRuntimeError> {
+) -> Result<Vec<(String, String)>, VulcanPluginRuntimeError> {
     // The core's own retained-operation limit bounds the complete page and failure identities.
     // 核心自身保留操作上限约束完整页及失败身份。
     let page = owner
@@ -69,8 +73,14 @@ fn collect_finalizations(
             },
             Err(error) => {
                 domain.closing = true;
-                if domain.failures.insert(id.clone()) {
-                    diagnostics.push(format!("Reusable domain shutdown {id} failed: {error}"));
+                // Remember publication separately; a failed diagnostic write must retry the same evidence.
+                // 分别记住发布状态；诊断写入失败必须重试同一证据。
+                let reported = domain.failures.entry(id.clone()).or_insert(false);
+                if !*reported {
+                    diagnostics.push((
+                        id.clone(),
+                        format!("Reusable domain shutdown {id} failed: {error}"),
+                    ));
                 }
             }
         }
@@ -80,6 +90,99 @@ fn collect_finalizations(
 }
 
 impl VulcanPluginRuntimeManager {
+    /// Advance domain cleanup under publication; return the original core or ownership error.
+    /// 在发布门下推进域清理；返回原核心或归属错误。
+    /// owner retains actual resources and publication orders diagnostics against lifecycle and acknowledgement.
+    /// owner 保留真实资源，publication 将诊断与生命周期和确认排序。
+    fn maintain_reusable_domains_locked(
+        &self,
+        owner: &ManagedFormalRuntime,
+        publication: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        let snapshot = self.snapshot();
+        // Closed capability authority explicitly retires every domain; cleanup no longer needs a new snapshot.
+        // 能力权威关闭时明确退役全部域；清理不再需要新快照。
+        let capabilities = match owner.host.runtime().capabilities().snapshot() {
+            Ok(snapshot) => Some(snapshot.revision()),
+            Err(error) if error.code == EmbeddedErrorCode::Closed => None,
+            Err(error) => return Err(core_error(error)),
+        };
+        let mut diagnostics = BTreeMap::new();
+        {
+            let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
+            for (domain_id, domain) in &mut registry.domains {
+                let current = snapshot.plugins.get(&domain.plugin_id);
+                if current.is_none_or(|plugin| {
+                    plugin.generation != domain.key.generation
+                        || plugin.runtime_state != crate::VulcanPluginRuntimeState::Enabled
+                }) || capabilities.as_ref() != Some(&domain.key.capabilities)
+                    || (domain.borrowers == 0 && domain.idle_since.elapsed() >= domain.idle_ttl)
+                {
+                    domain.closing = true;
+                }
+                if domain.preparing {
+                    continue;
+                }
+                if let Some(pool) = domain.pool.clone() {
+                    for (operation, message) in collect_finalizations(owner, domain, &pool)? {
+                        diagnostics.insert(
+                            operation,
+                            (domain_id.clone(), domain.plugin_id.clone(), message),
+                        );
+                    }
+                    if domain.closing && !domain.pool_retired {
+                        owner.host.runtime().close_pool(&pool).map_err(core_error)?;
+                        if domain.borrowers == 0 {
+                            match owner.host.runtime().forget_pool(&pool) {
+                                Ok(()) => {
+                                    domain.pool_retired = true;
+                                    // Physical forgetting excludes future shutdown publication; collect the last raced completion.
+                                    // 物理遗忘排除后续关闭发布；收集最后一个竞态完成结果。
+                                    for (operation, message) in
+                                        collect_finalizations(owner, domain, &pool)?
+                                    {
+                                        diagnostics.insert(
+                                            operation,
+                                            (domain_id.clone(), domain.plugin_id.clone(), message),
+                                        );
+                                    }
+                                }
+                                Err(error) if error.code == EmbeddedErrorCode::Busy => {}
+                                Err(error) => return Err(core_error(error)),
+                            }
+                        }
+                    }
+                }
+            }
+            registry.domains.retain(|_, domain| {
+                domain.preparing
+                    || domain.borrowers > 0
+                    || (domain.pool.is_some() && !domain.pool_retired)
+                    || !domain.failures.is_empty()
+                    || domain.pending_finalizations
+            });
+        }
+        // Keep the original publication guard until diagnostics are visible, while releasing registry ownership first.
+        // 保留原发布守卫直至诊断可见，同时先释放注册表归属。
+        for (operation, (domain_id, plugin, message)) in diagnostics {
+            self.record_cleanup_failure_locked(&plugin, message, publication)?;
+            // Acknowledgement shares this publication gate, so the original failure cannot disappear here.
+            // 确认共用此发布门，因此原失败不能在此消失。
+            let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
+            let reported = registry
+                .domains
+                .get_mut(&domain_id)
+                .and_then(|domain| domain.failures.get_mut(&operation))
+                .ok_or_else(|| {
+                    VulcanPluginRuntimeError::new(
+                        "Reusable failure ownership disappeared before diagnostic publication.",
+                    )
+                })?;
+            *reported = true;
+        }
+        Ok(())
+    }
+
     /// Start one weak observer using the caller's live Tokio runtime; no manager is retained across waits.
     /// 使用调用方活跃 Tokio 运行时启动单个弱观测者；等待期间不保留管理器。
     /// Existing domain identities remain recoverable if the executor later stops.
@@ -97,18 +200,19 @@ impl VulcanPluginRuntimeManager {
         let manager = Arc::downgrade(&self.state);
         tokio::spawn(async move {
             let _guard = guard;
+            // Bound unhealthy retries without relinquishing ownership or repeatedly spawning supervisors.
+            // 限制不健康重试，不放弃归属，也不反复派生监督者。
+            let mut retry_interval = OBSERVATION_INTERVAL;
             loop {
                 {
                     let (Some(state), Some(owner)) = (manager.upgrade(), _guard.0.upgrade()) else {
                         break;
                     };
                     let manager = VulcanPluginRuntimeManager { state };
-                    if let Err(error) = manager.maintain_reusable_domains(&owner) {
-                        if let Ok(mut registry) = owner.reusable.lock() {
-                            registry.observer_error = Some(error.to_string());
-                        }
-                        break;
-                    }
+                    retry_interval = match manager.maintain_reusable_domains(&owner) {
+                        Ok(()) => OBSERVATION_INTERVAL,
+                        Err(_) => retry_interval.saturating_mul(2).min(MAX_MAINTENANCE_RETRY),
+                    };
                     if owner
                         .reusable
                         .lock()
@@ -117,7 +221,7 @@ impl VulcanPluginRuntimeManager {
                         break;
                     }
                 }
-                tokio::time::sleep(OBSERVATION_INTERVAL).await;
+                tokio::time::sleep(retry_interval).await;
             }
         });
     }
@@ -130,75 +234,22 @@ impl VulcanPluginRuntimeManager {
         &self,
         owner: &ManagedFormalRuntime,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        // Serialize cleanup publication with explicit acknowledgement and catalog/configuration changes.
-        // 将清理发布与明确确认及目录／配置变化排序。
-        let publication = self
-            .state
-            .session_registration_gate
-            .lock()
-            .map_err(|_| calls_error())?;
-        let snapshot = self.snapshot();
-        // Closed capability authority explicitly retires every domain; cleanup no longer needs a new snapshot.
-        // 能力权威关闭时明确退役全部域；清理不再需要新快照。
-        let capabilities = match owner.host.runtime().capabilities().snapshot() {
-            Ok(snapshot) => Some(snapshot.revision()),
-            Err(error) if error.code == EmbeddedErrorCode::Closed => None,
-            Err(error) => return Err(core_error(error)),
-        };
-        let mut diagnostics = Vec::new();
-        {
-            let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
-            for domain in registry.domains.values_mut() {
-                let current = snapshot.plugins.get(&domain.plugin.id);
-                if current.is_none_or(|plugin| {
-                    plugin.generation != domain.key.generation
-                        || plugin.runtime_state != crate::VulcanPluginRuntimeState::Enabled
-                }) || capabilities.as_ref() != Some(&domain.key.capabilities)
-                    || (domain.borrowers == 0 && domain.idle_since.elapsed() >= domain.idle_ttl)
-                {
-                    domain.closing = true;
-                }
-                if domain.preparing {
-                    continue;
-                }
-                if let Some(pool) = domain.pool.clone() {
-                    for message in collect_finalizations(owner, domain, &pool)? {
-                        diagnostics.push((domain.plugin.id.clone(), message));
-                    }
-                    if domain.closing && !domain.pool_retired {
-                        owner.host.runtime().close_pool(&pool).map_err(core_error)?;
-                        if domain.borrowers == 0 {
-                            match owner.host.runtime().forget_pool(&pool) {
-                                Ok(()) => {
-                                    domain.pool_retired = true;
-                                    // Physical forgetting excludes future shutdown publication; collect the last raced completion.
-                                    // 物理遗忘排除后续关闭发布；收集最后一个竞态完成结果。
-                                    for message in collect_finalizations(owner, domain, &pool)? {
-                                        diagnostics.push((domain.plugin.id.clone(), message));
-                                    }
-                                }
-                                Err(error) if error.code == EmbeddedErrorCode::Busy => {}
-                                Err(error) => return Err(core_error(error)),
-                            }
-                        }
-                    }
-                }
-            }
-            registry.domains.retain(|_, domain| {
-                domain.preparing
-                    || domain.borrowers > 0
-                    || (domain.pool.is_some() && !domain.pool_retired)
-                    || !domain.failures.is_empty()
-                    || domain.pending_finalizations
-            });
-            registry.observer_error = None;
-        }
-        // Keep the original publication guard until diagnostics are visible, while releasing registry ownership first.
-        // 保留原发布守卫直至诊断可见，同时先释放注册表归属。
-        for (plugin, message) in diagnostics {
-            self.record_cleanup_failure_locked(&plugin, message, &publication)?;
-        }
-        Ok(())
+        // Publish health and cleanup evidence under the same gate used by final business admission.
+        // 在最终业务入场使用的同一门控下发布健康状态及清理证据。
+        let publication =
+            self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+            })?;
+        // A failed pass preserves exact ownership and cannot be mistaken for healthy admission.
+        // 失败轮次保留精确归属，不能被误认为健康入场。
+        let result = self.maintain_reusable_domains_locked(owner, &publication);
+        // Store only the latest health error; physical failure records remain in their original core operations.
+        // 仅保存最新健康错误；物理失败记录仍位于原核心操作中。
+        let mut registry = owner.reusable.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Reusable domain registry lock is poisoned.")
+        })?;
+        registry.observer_error = result.as_ref().err().map(ToString::to_string);
+        result
     }
 
     /// Close matching domains under caller-held publication; return without waiting for native callbacks.
@@ -217,7 +268,7 @@ impl VulcanPluginRuntimeManager {
         let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
         registry.closing |= parent;
         for domain in registry.domains.values_mut().filter(|domain| {
-            plugin.is_none_or(|id| domain.plugin.id == id)
+            plugin.is_none_or(|id| domain.plugin_id == id)
                 && controller.is_none_or(|id| domain.key.controller == id)
         }) {
             domain.closing = true;
@@ -247,7 +298,7 @@ impl VulcanPluginRuntimeManager {
             .map_err(|_| calls_error())?
             .domains
             .values()
-            .any(|domain| domain.plugin.id == plugin))
+            .any(|domain| domain.plugin_id == plugin))
     }
 
     /// Observe only domains owned by controller; return actual core shutdown failures without secret configuration.
@@ -267,7 +318,7 @@ impl VulcanPluginRuntimeManager {
             .map(|(id, domain)| {
                 let failures = domain
                     .failures
-                    .iter()
+                    .keys()
                     .map(|id| {
                         owner
                             .host
@@ -279,9 +330,10 @@ impl VulcanPluginRuntimeManager {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(VulcanPluginReusableDomainStatus {
                     domain_id: id.clone(),
-                    plugin_id: domain.plugin.id.clone(),
+                    plugin_id: domain.plugin_id.clone(),
                     plugin_generation: domain.key.generation,
                     tool_id: domain.key.tool.clone(),
+                    retained_input_bytes: domain.input_bytes,
                     pool_id: domain.pool.clone(),
                     pool_retired: domain.pool_retired,
                     pending_finalizations: domain.pending_finalizations,
@@ -332,7 +384,7 @@ impl VulcanPluginRuntimeManager {
             }
             // Remove evidence one acknowledged core record at a time so a partial failure remains recoverable.
             // 逐个移除已确认核心记录，使局部失败仍可恢复。
-            for id in domain.failures.clone() {
+            for id in domain.failures.keys().cloned().collect::<Vec<_>>() {
                 owner
                     .host
                     .runtime()
@@ -340,7 +392,7 @@ impl VulcanPluginRuntimeManager {
                     .map_err(core_error)?;
                 domain.failures.remove(&id);
             }
-            let plugin = domain.plugin.id.clone();
+            let plugin = domain.plugin_id.clone();
             registry.domains.remove(domain_id);
             plugin
         };
@@ -372,13 +424,13 @@ impl VulcanPluginRuntimeManager {
                     .domains
                     .iter()
                     .filter(|(_, domain)| {
-                        plugin.is_none_or(|id| domain.plugin.id == id)
+                        plugin.is_none_or(|id| domain.plugin_id == id)
                             && controller.is_none_or(|id| domain.key.controller == id)
                     })
                     .map(|(id, domain)| {
                         (
                             id.clone(),
-                            domain.plugin.id.clone(),
+                            domain.plugin_id.clone(),
                             domain.preparing
                                 || domain.borrowers > 0
                                 || (domain.pool.is_some() && !domain.pool_retired)

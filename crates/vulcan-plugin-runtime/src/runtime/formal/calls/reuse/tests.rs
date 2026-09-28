@@ -4,7 +4,11 @@
 use super::*;
 use crate::VulcanPluginInvocationRequest;
 use crate::{VulcanPluginHostServices, VulcanPluginUiEventPublisher, VulcanPluginUiInvalidation};
+use std::collections::BTreeSet;
 use std::sync::Condvar;
+
+mod budget;
+mod recovery;
 
 /// Two real native callbacks must overlap before either may return.
 /// 两个真实原生回调必须重叠，任一回调才能返回。
@@ -332,11 +336,11 @@ struct Fixture {
     manager: VulcanPluginRuntimeManager,
 }
 impl Fixture {
-    /// Build a validated version-two package using ttl and uses as exact declared retirement limits.
-    /// 使用 ttl 及 uses 作为精确声明退役上限，构建已校验第二版包。
-    /// Returns an enabled manager with real core execution and configuration state.
-    /// 返回具有真实核心执行及配置状态的已启用管理器。
-    fn new(ttl: u64, uses: u64) -> Self {
+    /// Build the real fixture under exact settings; ttl and uses remain explicit manifest limits.
+    /// 在精确 settings 下构建真实夹具；ttl 和 uses 保持为显式清单上限。
+    /// Returns one enabled manager without changing or clipping supplied host limits.
+    /// 返回单个已启用管理器，不更改或裁剪提供的宿主上限。
+    fn with_settings(ttl: u64, uses: u64, settings: VulcanPluginRuntimeSettings) -> Self {
         let root = tempfile::tempdir().expect("reuse fixture root");
         let bundled = root.path().join("bundled");
         write_idle_session_package(&bundled);
@@ -426,7 +430,7 @@ return M
         .expect("real reusable bundle");
         let manager = test_manager(root.path(), bundled);
         manager
-            .initialize_formal_runtime(VulcanPluginRuntimeSettings::default())
+            .initialize_formal_runtime(settings)
             .expect("formal owner");
         manager
             .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
@@ -437,6 +441,14 @@ return M
             manager.snapshot().plugins["idle-plugin"].diagnostics
         );
         Self { root, manager }
+    }
+
+    /// Build a validated version-two package using ttl and uses as exact declared retirement limits.
+    /// 使用 ttl 及 uses 作为精确声明退役上限，构建已校验第二版包。
+    /// Returns an enabled manager with real core execution and configuration state.
+    /// 返回具有真实核心执行及配置状态的已启用管理器。
+    fn new(ttl: u64, uses: u64) -> Self {
+        Self::with_settings(ttl, uses, VulcanPluginRuntimeSettings::default())
     }
 
     /// Execute the public stateless route for controller and mode using workspace; return its exact result.
@@ -710,6 +722,18 @@ async fn hot_reuse_idle_shutdown_failure_requires_exact_acknowledgement() {
             .resident,
         0
     );
+    assert!(domain.retained_input_bytes > 0);
+    assert_eq!(
+        fixture
+            .owner()
+            .reusable
+            .lock()
+            .expect("domain registry")
+            .retained_input_bytes()
+            .expect("retained failed routing"),
+        domain.retained_input_bytes,
+        "physical pool retirement cannot free unacknowledged routing evidence"
+    );
     // A normal retry must not silently replace the failed original partition.
     // 普通重试不能静默替换失败的原分区。
     fixture
@@ -740,6 +764,16 @@ async fn hot_reuse_idle_shutdown_failure_requires_exact_acknowledgement() {
         .manager
         .forget_reusable_tool_domain(&domain.domain_id, "owner")
         .expect("explicit acknowledgement");
+    assert_eq!(
+        fixture
+            .owner()
+            .reusable
+            .lock()
+            .expect("domain registry")
+            .retained_input_bytes()
+            .expect("acknowledged routing"),
+        0
+    );
     assert!(
         fixture
             .manager

@@ -4,7 +4,6 @@
 use super::*;
 use crate::VulcanPluginReusableToolManifest;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 
 mod maintenance;
 #[cfg(test)]
@@ -12,7 +11,7 @@ mod tests;
 
 /// One exact cache partition; configuration fingerprints are private and never projected in status.
 /// 一个精确缓存分区；配置指纹为私有数据，绝不投影到状态。
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 struct DomainKey {
     /// Catalog generation owns package and permission identity.
     /// 目录代次拥有包及权限身份。
@@ -37,14 +36,20 @@ struct DomainKey {
 /// Metadata counts actual host borrows, never physical VM or scheduler permits.
 /// 元数据计数真实宿主借用，绝不计数物理 VM 或调度许可。
 struct Domain {
-    /// Retained immutable descriptor keeps the original package alive during idle and closing.
-    /// 保留的不可变描述符在空闲及关闭期间保持原包存活。
-    plugin: VulcanPluginDescriptor,
+    /// Exact plugin identity remains available after its catalog descriptor is replaced.
+    /// 目录描述符替换后精确插件身份仍然可用。
+    plugin_id: String,
+    /// The real immutable package lease survives idle time and unacknowledged cleanup evidence.
+    /// 真实不可变包租约在空闲和未确认清理证据期间保持存活。
+    _managed_package: Option<crate::VulcanPluginManagedPackage>,
+    /// Serialized retained routing input shares the parent budget with calls and pinned sessions.
+    /// 序列化保留路由输入与调用及固定会话共享父级预算。
+    input_bytes: usize,
     /// Original exact partition remains unchanged throughout the domain lifetime.
     /// 原精确分区在域寿命期间不变。
     key: DomainKey,
-    /// Registration publishes exactly one core identity; None also represents completed pool retirement.
-    /// 注册恰好发布一个核心身份；None 同时表示池退役已完成。
+    /// Registration publishes one core identity retained even after physical pool retirement.
+    /// 注册发布一个核心身份，在物理池退役后仍保留。
     pool: Option<String>,
     /// Physical pool forgetting is separate from acknowledgement of its finalization records.
     /// 物理池遗忘与其关闭记录确认分开。
@@ -67,9 +72,9 @@ struct Domain {
     /// Explicit manifest idle duration, shared with the original core pool policy.
     /// 显式清单空闲时长，与原核心池策略共用。
     idle_ttl: Duration,
-    /// Independent failed finalizations remain in the core until explicit owner acknowledgement.
-    /// 独立失败关闭保留在核心中，直到所有者明确确认。
-    failures: BTreeSet<String>,
+    /// Core failure IDs map to successful host diagnostic publication; false remains pending across retries.
+    /// 核心失败标识映射至宿主诊断发布成功状态；false 在重试期间保持待发布。
+    failures: BTreeMap<String, bool>,
 }
 
 /// One manager-local registry bounds pending, active, draining and unacknowledged domains together.
@@ -88,6 +93,18 @@ pub(in crate::runtime::formal) struct Registry {
 }
 
 impl Registry {
+    /// Sum every pending, live and retiring domain reservation, returning an error on overflow.
+    /// 汇总所有准备、存活和退役域预留；溢出返回错误。
+    pub(in crate::runtime::formal) fn retained_input_bytes(
+        &self,
+    ) -> Result<usize, VulcanPluginRuntimeError> {
+        self.domains
+            .values()
+            .map(|domain| domain.input_bytes)
+            .try_fold(0usize, usize::checked_add)
+            .ok_or_else(|| VulcanPluginRuntimeError::new("Reusable routing input size overflow."))
+    }
+
     /// Return whether no domain preparation, physical resource, or unacknowledged failure remains.
     /// 返回是否不再残留域准备、物理资源或未确认失败。
     pub(in crate::runtime::formal) fn is_empty(&self) -> bool {
@@ -112,8 +129,11 @@ pub struct VulcanPluginReusableDomainStatus {
     /// Original tool entry, distinct from its shared bundle dispatcher.
     /// 原工具入口，与其共享 bundle 分发器区分。
     pub tool_id: String,
-    /// Original core pool identity, absent only before registration or after physical forgetting.
-    /// 原核心池身份，仅在注册前或物理遗忘后不存在。
+    /// Serialized retained routing bytes remain reserved until this exact domain is removed.
+    /// 序列化保留路由字节在此精确域移除前持续预留。
+    pub retained_input_bytes: usize,
+    /// Original core pool identity, absent only when registration has not published a pool.
+    /// 原核心池身份，仅在注册尚未发布池时不存在。
     pub pool_id: Option<String>,
     /// True only after the core confirms physical pool forgetting.
     /// 仅在核心确认物理池遗忘后为真。
@@ -220,8 +240,8 @@ impl VulcanPluginRuntimeManager {
                     "Reusable tool preparation cancelled or expired.",
                 ));
             }
-            // Lock order is publication, registry, call; Lua and package registration run after release.
-            // 锁顺序为发布、注册表、调用；Lua 及包注册在释放后运行。
+            // Lock order is publication, calls, pinned sessions, reusable domains, then call state.
+            // 锁顺序为发布、调用表、固定会话、复用域，最后为调用状态。
             let publication = self
                 .state
                 .session_registration_gate
@@ -242,16 +262,43 @@ impl VulcanPluginRuntimeManager {
                     .map_err(core_error)?
                     .revision(),
             };
+            // Call registry ownership serializes all increases to the shared retained-input budget.
+            // 调用表所有权串行化共享保留输入预算的全部增加。
+            let calls = owner.calls.lock().map_err(|_| calls_error())?;
+            // Pinned admission also owns the call registry; removal can only decrease this sum.
+            // 固定会话入场同样持有调用表；移除只会减小此总和。
+            let other_input_bytes = calls
+                .values()
+                .map(|call| call.input_bytes.load(Ordering::Acquire))
+                .chain(
+                    owner
+                        .pinned
+                        .lock()
+                        .map_err(|_| calls_error())?
+                        .values()
+                        .map(|session| session.input_bytes),
+                )
+                .try_fold(0usize, usize::checked_add)
+                .ok_or_else(|| {
+                    VulcanPluginRuntimeError::new("Formal retained input size overflow.")
+                })?;
             let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
             if registry.closing {
                 return Err(VulcanPluginRuntimeError::new(
                     "Reusable domain admission is closed.",
                 ));
             }
+            // Failed maintenance fences fresh borrows until a complete pass verifies the original ownership.
+            // 维护失败阻止新借用，直到完整轮次验证原归属。
+            if let Some(error) = &registry.observer_error {
+                return Err(VulcanPluginRuntimeError::new(format!(
+                    "Reusable domain maintenance has not recovered: {error}"
+                )));
+            }
             // An observed closing failure cannot be bypassed by minting a replacement for the same partition.
             // 不能通过为同一分区创建替代身份来绕过已观测关闭失败。
             if registry.domains.values().any(|domain| {
-                domain.plugin.id == call.plugin.id
+                domain.plugin_id == call.plugin.id
                     && domain.key == key
                     && !domain.failures.is_empty()
             }) {
@@ -264,7 +311,7 @@ impl VulcanPluginRuntimeManager {
             for domain in registry
                 .domains
                 .values_mut()
-                .filter(|domain| domain.plugin.id == call.plugin.id)
+                .filter(|domain| domain.plugin_id == call.plugin.id)
             {
                 if domain.key.generation != key.generation
                     || domain.key.configuration != key.configuration
@@ -274,10 +321,11 @@ impl VulcanPluginRuntimeManager {
                 }
             }
             if let Some((id, domain)) = registry.domains.iter_mut().find(|(_, domain)| {
-                domain.plugin.id == call.plugin.id && domain.key == key && !domain.closing
+                domain.plugin_id == call.plugin.id && domain.key == key && !domain.closing
             }) {
                 if domain.preparing {
                     drop(registry);
+                    drop(calls);
                     drop(publication);
                     // The already-bounded registered blocking preparation owns this wait, never an untracked task.
                     // 已有界的已登记阻塞准备拥有此次等待，绝非未跟踪任务。
@@ -309,12 +357,30 @@ impl VulcanPluginRuntimeManager {
                 || registry
                     .domains
                     .values()
-                    .filter(|domain| domain.plugin.id == call.plugin.id)
+                    .filter(|domain| domain.plugin_id == call.plugin.id)
                     .count()
                     >= plugin_limit
             {
                 return Err(VulcanPluginRuntimeError::new(
                     "Reusable domain metadata capacity is exhausted.",
+                ));
+            }
+            // Reserve the exact privately serialized routing selection before native registration.
+            // 原生注册前预留精确的私有序列化路由选择。
+            let input_bytes = luaskills::runtime::embedded::json_size(
+                &(&call.id, &call.plugin.id, &key),
+                owner.settings.parent.max_queued_bytes,
+            )
+            .map_err(core_error)?;
+            // Preserve one aggregate bound across every independent retained input owner.
+            // 为每个独立保留输入所有者维护同一聚合边界。
+            let total_bytes = registry
+                .retained_input_bytes()?
+                .checked_add(other_input_bytes)
+                .and_then(|bytes| bytes.checked_add(input_bytes));
+            if total_bytes.is_none_or(|bytes| bytes > owner.settings.parent.max_queued_bytes) {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Reusable routing input byte capacity is exhausted.",
                 ));
             }
             let capacity = owner.admit_capacity_member(
@@ -326,7 +392,9 @@ impl VulcanPluginRuntimeManager {
             registry.domains.insert(
                 call.id.clone(),
                 Domain {
-                    plugin: call.plugin.clone(),
+                    plugin_id: call.plugin.id.clone(),
+                    _managed_package: call.plugin.managed_package.clone(),
+                    input_bytes,
                     key,
                     pool: None,
                     pool_retired: false,
@@ -336,10 +404,11 @@ impl VulcanPluginRuntimeManager {
                     closing: false,
                     idle_since: Instant::now(),
                     idle_ttl: Duration::from_millis(reuse.idle_ttl_ms),
-                    failures: BTreeSet::new(),
+                    failures: BTreeMap::new(),
                 },
             );
             drop(registry);
+            drop(calls);
             drop(publication);
             // Guard preserves cleanup ownership if registration errors or its worker unwinds.
             // 注册错误或工作者展开时，守卫保留清理归属。
@@ -410,6 +479,13 @@ impl VulcanPluginRuntimeManager {
             .map_err(core_error)?
             .revision();
         let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
+        // A health failure discovered after borrowing also prevents final submission.
+        // 借用后发现的健康失败同样阻止最终提交。
+        if let Some(error) = &registry.observer_error {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Reusable domain maintenance has not recovered: {error}"
+            )));
+        }
         let domain = registry.domains.get_mut(&id).ok_or_else(|| {
             VulcanPluginRuntimeError::new("Reusable domain disappeared before submission.")
         })?;

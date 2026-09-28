@@ -90,6 +90,13 @@ impl VulcanPluginRuntimeManager {
                     .values()
                     .map(|session| session.input_bytes),
             )
+            .chain(std::iter::once(
+                owner
+                    .reusable
+                    .lock()
+                    .map_err(|_| calls_error())?
+                    .retained_input_bytes()?,
+            ))
             .try_fold(bytes, usize::checked_add);
         if total.is_none_or(|total| total > owner.settings.parent.max_queued_bytes) {
             return Err(VulcanPluginRuntimeError::new(
@@ -307,8 +314,8 @@ impl VulcanPluginRuntimeManager {
             // Hold the shared call registry while inspecting or changing retained ownership.
             // 检查或变更保留所有权期间持有共享调用注册表。
             let mut calls = owner.calls.lock().map_err(|_| calls_error())?;
-            // Include retained calls and pinned sessions in the same checked byte sum.
-            // 在同一受检字节总和中包含保留调用及固定会话。
+            // Include retained calls, pinned sessions and cached routing in the same checked byte sum.
+            // 在同一受检字节总和中包含保留调用、固定会话及缓存路由。
             let total_bytes = calls
                 .values()
                 .map(|call| call.input_bytes.load(Ordering::Acquire))
@@ -320,6 +327,13 @@ impl VulcanPluginRuntimeManager {
                         .values()
                         .map(|session| session.input_bytes),
                 )
+                .chain(std::iter::once(
+                    owner
+                        .reusable
+                        .lock()
+                        .map_err(|_| calls_error())?
+                        .retained_input_bytes()?,
+                ))
                 .try_fold(input_bytes, usize::checked_add);
             if total_bytes.is_none_or(|bytes| bytes > owner.settings.parent.max_queued_bytes) {
                 return Err(VulcanPluginRuntimeError::new(

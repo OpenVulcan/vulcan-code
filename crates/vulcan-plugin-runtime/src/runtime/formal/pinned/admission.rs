@@ -75,6 +75,13 @@ impl VulcanPluginRuntimeManager {
                 .values()
                 .map(|call| call.input_bytes.load(Ordering::Acquire))
                 .chain(pinned.values().map(|session| session.input_bytes))
+                .chain(std::iter::once(
+                    owner
+                        .reusable
+                        .lock()
+                        .map_err(|_| registry_error())?
+                        .retained_input_bytes()?,
+                ))
                 .try_fold(input_bytes, usize::checked_add);
             if pinned.len() >= owner.settings.parent.max_sessions
                 || total.is_none_or(|bytes| bytes > owner.settings.parent.max_queued_bytes)
