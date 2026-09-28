@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+mod rollback;
+
 /// Durable installation record for one atomically published user plugin package.
 /// 一个原子发布用户插件包的持久安装记录。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -78,6 +80,9 @@ pub struct VulcanPluginUpdateTransaction {
     /// Previous installation record bytes restored verbatim on rollback.
     /// 回滚时逐字节恢复的旧安装记录内容。
     previous_installation: Vec<u8>,
+    /// Original installed content identity required before any package rollback.
+    /// 执行任何插件包回滚前必须匹配的原始已安装内容身份。
+    previous_fingerprint: String,
     /// Candidate version used to remove only its unpublished private environment on rollback.
     /// 回滚时仅移除其未发布私有环境的候选版本。
     candidate_version: String,
@@ -586,6 +591,14 @@ impl VulcanPluginRuntimeManager {
         })?;
         let candidate_fingerprint = source_descriptor.content_fingerprint.clone();
         let update_result = (|| -> Result<(), VulcanPluginRuntimeError> {
+            // Persist exact old records before the first package or authorization mutation.
+            // 首次插件包或授权变更前持久保存精确旧记录。
+            rollback::preserve_rollback_records(
+                &transaction_root,
+                &source_descriptor.id,
+                &previous_authorization,
+                &previous_installation,
+            )?;
             copy_plugin_directory_tree(&source_descriptor.package_root, &staged_package)
                 .map_err(VulcanPluginRuntimeError::new)?;
             let staged_descriptor = inspect_user_plugin_package(&staged_package)
@@ -621,53 +634,24 @@ impl VulcanPluginRuntimeManager {
             Ok(())
         })();
         if let Err(error) = update_result {
-            // rollback_failures preserves every failure while restoring the old package and records.
-            // rollback_failures 保留恢复旧插件包与记录期间的全部失败。
-            let mut rollback_failures = Vec::new();
-            if destination.exists()
-                && previous_package.exists()
-                && let Err(rollback_error) = fs::remove_dir_all(&destination)
-            {
-                rollback_failures.push(format!(
-                    "Failed to remove candidate package during update rollback: {rollback_error}"
-                ));
-            }
-            if previous_package.exists()
-                && !destination.exists()
-                && let Err(rollback_error) = fs::rename(&previous_package, &destination)
-            {
-                rollback_failures.push(format!(
-                    "Failed to restore previous package during update rollback: {rollback_error}"
-                ));
-            }
-            for (path, bytes, label) in [
-                (
-                    &authorization_path,
-                    &previous_authorization,
-                    "authorization",
-                ),
-                (&installation_path, &previous_installation, "installation"),
-            ] {
-                if let Err(rollback_error) = crate::atomic_file::write_file_atomically(path, bytes)
-                {
-                    rollback_failures.push(format!(
-                        "Failed to restore previous plugin {label} record: {rollback_error}"
-                    ));
-                }
-            }
-            if transaction_root.exists()
-                && let Err(rollback_error) = fs::remove_dir_all(&transaction_root)
-            {
-                rollback_failures.push(format!(
-                    "Failed to remove update transaction root: {rollback_error}"
-                ));
-            }
+            // Keep the transaction directory and old record bytes whenever restoration fails.
+            // 任一恢复失败时保留事务目录及旧记录字节。
+            let rollback_failures = rollback::rollback_failed_preparation(
+                &transaction_root,
+                &destination,
+                &authorization_path,
+                &installation_path,
+                &previous_authorization,
+                &previous_installation,
+                &installed.content_fingerprint,
+            );
             return if rollback_failures.is_empty() {
                 Err(error)
             } else {
                 Err(VulcanPluginRuntimeError::new(format!(
-                    "{error}; update rollback failed: {}",
-                    rollback_failures.join("; ")
+                    "{error}; update rollback failed: {}; recovery files retained at `{}`",
+                    rollback_failures.join("; "),
+                    transaction_root.display()
                 )))
             };
         }
@@ -677,6 +661,7 @@ impl VulcanPluginRuntimeManager {
             destination,
             previous_authorization,
             previous_installation,
+            previous_fingerprint: installed.content_fingerprint.clone(),
             candidate_version,
             candidate_fingerprint,
             permission_preview: preview,
@@ -782,6 +767,10 @@ impl VulcanPluginRuntimeManager {
             plugin_authorization_state_path(&self.state.plugin_state_root, &transaction.plugin_id);
         let installation_path =
             plugin_installation_state_path(&self.state.plugin_state_root, &transaction.plugin_id);
+        // A conflicting retained package must not replace the candidate or erase recovery evidence.
+        // 存在冲突的保留插件包不得替换候选或擦除恢复证据。
+        rollback::verify_original_package(&previous_package, &transaction.previous_fingerprint)
+            .map_err(VulcanPluginRuntimeError::new)?;
         fs::rename(&transaction.destination, &failed_candidate).map_err(|error| {
             VulcanPluginRuntimeError::new(format!(
                 "Failed to hide candidate package during update rollback: {error}"
@@ -799,6 +788,10 @@ impl VulcanPluginRuntimeManager {
             ));
         }
         let rollback_result = (|| -> Result<(), String> {
+            rollback::verify_original_package(
+                &transaction.destination,
+                &transaction.previous_fingerprint,
+            )?;
             crate::atomic_file::write_file_atomically(
                 &authorization_path,
                 &transaction.previous_authorization,
@@ -812,6 +805,14 @@ impl VulcanPluginRuntimeManager {
                     format!("Failed to remove rolled-back candidate package: {error}")
                 })?;
             }
+            // Both original records are restored before their independent recovery copy is removed.
+            // 两份原始记录均已恢复后，才删除其独立恢复副本。
+            fs::remove_file(
+                transaction
+                    .transaction_root
+                    .join(rollback::ROLLBACK_RECORDS_FILE),
+            )
+            .map_err(|error| format!("Failed to remove completed rollback snapshot: {error}"))?;
             fs::remove_dir(&transaction.transaction_root).map_err(|error| {
                 format!("Failed to remove completed update rollback root: {error}")
             })?;
