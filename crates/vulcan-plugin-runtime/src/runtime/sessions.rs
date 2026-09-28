@@ -74,8 +74,8 @@ impl VulcanPluginRuntimeManager {
         }
     }
 
-    /// Invokes one tool through a temporary lease, retaining its identity and capacity if cleanup fails.
-    /// 通过临时租约调用单个工具，清理失败时保留其身份与容量。
+    /// Invokes one tool through a tracked formal single-call instance, retaining ownership until actual retirement.
+    /// 通过已跟踪的正式单次实例调用单个工具，保留所有权至实际退役。
     /// tool fixes the declared operation and request supplies owner/workspace arguments; returns the result or combined invocation/cleanup errors.
     /// tool固定声明的操作，request提供所有者/工作区参数；返回结果或合并的调用/清理错误。
     async fn invoke_stateless(
@@ -91,92 +91,14 @@ impl VulcanPluginRuntimeManager {
         }
         let timeout_ms = resolve_host_timeout(tool, &arguments)?;
         let payload = plugin_payload(&tool.manifest.execution.operation, arguments)?;
-        let workspace_root = request.workspace_root.canonicalize().map_err(|error| {
-            VulcanPluginRuntimeError::new(format!("Failed to resolve workspace root: {error}"))
-        })?;
-        let snapshot = self.snapshot();
-        let plugin = snapshot.plugins.get(&tool.plugin_id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{}` is missing from the current catalog.",
-                tool.plugin_id
-            ))
-        })?;
-        let manifest = plugin.manifest.clone().ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{}` has no valid manifest.",
-                tool.plugin_id
-            ))
-        })?;
-        let lua_runtime = required_lua_runtime(&manifest)?;
-        // executionRoot pins stateless tool code to one trusted package generation.
-        // executionRoot 把无状态工具代码固定到一个可信插件包代次。
-        let execution_root = plugin_execution_package_root(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        self.reserve_session_slot(&tool.plugin_id, lua_runtime.max_active_sessions)?;
-        let temporary_id = Uuid::new_v4().to_string();
-        let create_result = self
-            .create_managed_lease(
-                &format!("stateless-{temporary_id}"),
-                &execution_root,
-                &workspace_root,
-                &manifest,
-                VulcanPluginBridgeLeaseScope::Enabled,
-            )
-            .await;
-        let (lease_id, sid, generation) = match create_result {
-            Ok(lease) => lease,
-            Err(error) => {
-                self.release_session_slot(&tool.plugin_id);
-                return Err(error);
-            }
-        };
-        let session = Arc::new(ManagedVulcanPluginSession {
-            session_id: temporary_id,
-            plugin_id: tool.plugin_id.clone(),
-            plugin_generation: tool.plugin_generation,
-            owner_session_id: request.owner_session_id,
-            lease_id,
-            sid,
-            generation,
-            manifest,
-            operation_gate: AsyncMutex::new(()),
-            close_gate: AsyncMutex::new(()),
-            closing: AtomicBool::new(false),
-            last_activity_unix_ms: AtomicU64::new(current_unix_millis_u64()),
-        });
-        let invocation_result = self
-            .dispatch(Arc::clone(&session), payload, timeout_ms, false)
-            .await;
-        session.closing.store(true, Ordering::Release);
-        let shutdown_payload = plugin_payload("shutdown", Map::new())?;
-        let shutdown_result = self
-            .dispatch(Arc::clone(&session), shutdown_payload, timeout_ms, true)
-            .await;
-        let close_result = self.close_lease(Arc::clone(&session)).await;
-        if let Err(cleanup_error) = close_result {
-            let diagnostic = format!(
-                "Stateless Vulcan Plugin lease `{}` cleanup failed and remains retained: {cleanup_error}",
-                session.lease_id
-            );
-            self.retain_failed_session_lease(&session, diagnostic.clone())?;
-            let mut failures = Vec::new();
-            if let Err(error) = invocation_result {
-                failures.push(error.to_string());
-            }
-            if let Err(error) = shutdown_result {
-                failures.push(error.to_string());
-            }
-            failures.push(diagnostic);
-            return Err(VulcanPluginRuntimeError::new(failures.join("; ")));
-        }
-        self.release_session_slot(&tool.plugin_id);
-        match (invocation_result, shutdown_result) {
-            (Ok(result), Ok(_)) => Ok(result),
-            (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
-            (Err(invocation_error), Err(shutdown_error)) => Err(VulcanPluginRuntimeError::new(
-                format!("{invocation_error}; {shutdown_error}"),
-            )),
-        }
+        self.invoke_formal_stateless(
+            tool,
+            request.owner_session_id,
+            request.workspace_root,
+            payload,
+            timeout_ms,
+        )
+        .await
     }
 
     /// Schedules idle cleanup without retaining the plugin manager past host shutdown.
@@ -654,22 +576,34 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         maximum: usize,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        let publication = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        self.reserve_session_slot_locked(plugin_id, maximum, &publication)
+    }
+
+    /// Reserve `plugin_id` below `maximum` while the caller retains this manager's publication gate.
+    /// 调用方保留此管理器发布门时，在 `maximum` 以内预留 `plugin_id`。
+    /// `publication` proves the caller-held gate; return success only after count projection is published.
+    /// `publication` 表示调用方持有的门；仅在计数投影发布后返回成功。
+    pub(crate) fn reserve_session_slot_locked(
+        &self,
+        plugin_id: &str,
+        maximum: usize,
+        publication: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
         let mut counts = self.state.active_session_counts.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
         })?;
-        let count = counts.entry(plugin_id.to_owned()).or_default();
-        if *count >= maximum {
+        let count = counts.get(plugin_id).copied().unwrap_or_default();
+        if count >= maximum {
             return Err(VulcanPluginRuntimeError::new(format!(
                 "Vulcan Plugin `{plugin_id}` reached its active session limit of {maximum}."
             )));
         }
-        *count += 1;
-        let active_count = *count;
-        drop(counts);
-        if let Err(error) = self.publish_active_session_count(plugin_id, active_count) {
-            self.release_session_slot(plugin_id);
-            return Err(error);
-        }
+        let active_count = count + 1;
+        self.publish_active_session_count(plugin_id, active_count, publication)?;
+        counts.insert(plugin_id.to_owned(), active_count);
         Ok(())
     }
 
@@ -678,33 +612,54 @@ impl VulcanPluginRuntimeManager {
     /// plugin_id selects one reserved count; decrements and publishes it without returning a value.
     /// plugin_id选择一项预留计数；递减并发布，不返回值。
     pub(super) fn release_session_slot(&self, plugin_id: &str) {
-        let Ok(mut counts) = self.state.active_session_counts.lock() else {
-            return;
-        };
-        let Some(count) = counts.get_mut(plugin_id) else {
-            return;
-        };
-        *count = count.saturating_sub(1);
-        let active_count = *count;
+        let _ = self.release_session_slot_checked(plugin_id);
+    }
+
+    /// Release one known reservation for `plugin_id`, reporting metadata failures without changing its count.
+    /// 释放 `plugin_id` 的一个已知预留；元数据失败时报告错误且不改变计数。
+    /// Returns success only after the reduced count is published; missing ownership is an invariant error.
+    /// 仅在发布减少后的计数后返回成功；缺失所有权是不变量错误。
+    pub(crate) fn release_session_slot_checked(
+        &self,
+        plugin_id: &str,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Every reservation change takes publication before counters, preventing stale projections and nested gates.
+        // 每次预留变化先取发布门再取计数锁，防止过期投影及嵌套门。
+        let publication = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        let mut counts = self.state.active_session_counts.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
+        })?;
+        let active_count = counts
+            .get(plugin_id)
+            .and_then(|count| count.checked_sub(1))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new(
+                    "Vulcan Plugin active session reservation is missing.",
+                )
+            })?;
+        self.publish_active_session_count(plugin_id, active_count, &publication)?;
         if active_count == 0 {
             counts.remove(plugin_id);
+        } else {
+            counts.insert(plugin_id.to_owned(), active_count);
         }
-        drop(counts);
-        let _ = self.publish_active_session_count(plugin_id, active_count);
+        Ok(())
     }
 
     /// Publishes one active-session count without changing plugin lifecycle generation.
     /// 发布单个活动会话计数，同时不改变插件生命周期代次。
     /// plugin_id selects the projection and active_session_count is authoritative; returns publication status without advancing generation.
     /// plugin_id选择投影，active_session_count是权威计数；返回发布状态，不推进代次。
+    /// The supplied publication guard prevents nested acquisition and orders count changes with catalog changes.
+    /// 传入发布守卫防止嵌套获取，并将计数变化与目录变化排序。
     fn publish_active_session_count(
         &self,
         plugin_id: &str,
         active_session_count: usize,
+        _publication: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
-        })?;
         let mut snapshot = (*self.snapshot()).clone();
         let Some(plugin) = snapshot.plugins.get_mut(plugin_id) else {
             return Ok(());

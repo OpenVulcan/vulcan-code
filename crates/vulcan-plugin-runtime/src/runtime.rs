@@ -33,7 +33,7 @@ pub use bridge::{
 };
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
-pub use formal::VulcanPluginFormalRuntimeStatus;
+pub use formal::{VulcanPluginFormalCallStatus, VulcanPluginFormalRuntimeStatus};
 pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
 use lease::{
     call_engine_blocking, close_raw_system_lease_sync, close_system_lease_sync,

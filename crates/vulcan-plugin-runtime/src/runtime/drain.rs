@@ -17,6 +17,9 @@ use std::sync::atomic::Ordering;
 /// 报告排空尝试中完成的插件清理与保留的失败。
 #[derive(Debug, Clone, Default)]
 pub struct VulcanPluginDrainReport {
+    /// Number of tracked formal calls whose actual pool ownership has retired.
+    /// 真实池所有权已退役的受跟踪正式调用数量。
+    pub closed_formal_calls: usize,
     /// Number of sessions closed and removed successfully.
     /// 成功关闭并移除的会话数量。
     pub closed_sessions: usize,
@@ -40,6 +43,9 @@ impl VulcanPluginDrainReport {
     /// other contributes ordered counts and diagnostics to self; returns no value.
     /// other向self贡献有序计数与诊断；不返回值。
     fn merge(&mut self, other: Self) {
+        self.closed_formal_calls = self
+            .closed_formal_calls
+            .saturating_add(other.closed_formal_calls);
         self.closed_sessions = self.closed_sessions.saturating_add(other.closed_sessions);
         self.closed_hook_runtimes = self
             .closed_hook_runtimes
@@ -94,6 +100,7 @@ impl VulcanPluginRuntimeManager {
             .cloned()
             .collect::<Vec<_>>();
         let mut report = self.drain_sessions(sessions).await?;
+        report.merge(self.drain_formal_calls(Some(plugin_id), None).await?);
         self.drain_persistent_runtime(
             plugin_id,
             VulcanPluginPersistentRuntimeKind::Hook,
@@ -189,7 +196,18 @@ impl VulcanPluginRuntimeManager {
             .iter()
             .map(|session| session.plugin_id.clone())
             .collect::<BTreeSet<_>>();
+        // Include formal-only owners so a completed retry clears the original drain warning.
+        // 包含仅持有正式调用的所有者，使重试完成后清除原排空警告。
+        affected_plugin_ids.extend(
+            self.formal_calls(owner_session_id)?
+                .into_iter()
+                .map(|call| call.plugin_id),
+        );
         let mut report = self.drain_sessions(sessions).await?;
+        report.merge(
+            self.drain_formal_calls(None, Some(owner_session_id))
+                .await?,
+        );
         let retained = self.take_retained_leases(|lease| {
             lease.owner_session_id.as_deref() == Some(owner_session_id)
         })?;

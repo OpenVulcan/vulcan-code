@@ -19,6 +19,9 @@ fn idle_session_timeout_reaps_managed_lease() {
     write_idle_session_package(&vulcan_plugin_root);
     let manager = test_manager(&runtime_root, vulcan_plugin_root);
     manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal stateless runtime");
+    manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load idle plugin catalog");
     let runtime = tokio::runtime::Builder::new_current_thread()

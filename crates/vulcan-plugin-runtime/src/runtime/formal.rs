@@ -5,6 +5,9 @@ use super::*;
 use luaskills::runtime::embedded::{EmbeddedRuntimeUsage, PoolUsage};
 use serde::Serialize;
 
+mod calls;
+pub use calls::VulcanPluginFormalCallStatus;
+
 /// Manager-owned formal runtime and the exact settings frozen at construction.
 /// 管理器持有的正式运行时及构造时冻结的精确设置。
 pub(super) struct ManagedFormalRuntime {
@@ -14,6 +17,9 @@ pub(super) struct ManagedFormalRuntime {
     /// Effective host settings remain immutable until the manager is recreated.
     /// 生效宿主设置保持不可变，直到管理器重新创建。
     pub settings: VulcanPluginRuntimeSettings,
+    /// Bounded host ownership covers preparation through physical cleanup and unacknowledged results.
+    /// 有界宿主所有权覆盖准备、物理清理及未确认结果。
+    calls: Mutex<BTreeMap<String, Arc<calls::FormalCall>>>,
 }
 
 /// Read-only observation of this manager's formal runtime, separate from legacy lease accounting.
@@ -65,7 +71,11 @@ impl VulcanPluginRuntimeManager {
             settings.max_capability_call_ms,
         )
         .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        *slot = Some(Arc::new(ManagedFormalRuntime { host, settings }));
+        *slot = Some(Arc::new(ManagedFormalRuntime {
+            host,
+            settings,
+            calls: Mutex::new(BTreeMap::new()),
+        }));
         Ok(())
     }
 
@@ -117,6 +127,7 @@ impl VulcanPluginRuntimeManager {
     /// 没有运行时即没有工作；已附加所有者继续可供后续观测。
     pub fn request_formal_runtime_close(&self) -> Result<(), VulcanPluginRuntimeError> {
         if let Some(owner) = self.formal_runtime_owner()? {
+            owner.cancel_calls()?;
             owner
                 .host
                 .runtime()
@@ -128,10 +139,11 @@ impl VulcanPluginRuntimeManager {
 
     /// Check actual core worker and VM termination after a close request.
     /// 在关闭请求后检查核心工作线程与 VM 的真实终止。
-    /// Returns true only when no runtime was attached or the core confirms complete shutdown.
-    /// 仅在没有附加运行时或核心确认完整关闭时返回真值。
+    /// Returns true only without a runtime, or after host ownership drains and the core confirms complete shutdown.
+    /// 仅在无运行时，或宿主所有权排空且核心确认完整关闭后返回真值。
     pub fn poll_formal_runtime_closed(&self) -> Result<bool, VulcanPluginRuntimeError> {
         match self.formal_runtime_owner()? {
+            Some(owner) if !owner.calls_drained()? => Ok(false),
             Some(owner) => owner
                 .host
                 .runtime()
