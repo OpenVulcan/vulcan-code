@@ -3,13 +3,11 @@
 
 use super::bridge::VulcanPluginBridgeLeaseScope;
 use super::environment::plugin_execution_package_root;
-use super::lease::{call_engine_blocking, parse_engine_response, parse_plugin_result};
 use super::process::current_plugin_target_triple;
 use super::{
-    ManagedVulcanPluginHookRuntime, VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
-    VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS, VulcanPluginPersistentRuntimeKind,
-    VulcanPluginRuntimeError, VulcanPluginRuntimeManager, canonical_plugin_file,
-    lock_hook_runtimes,
+    ManagedVulcanPluginUiRuntime, VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
+    VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
+    canonical_plugin_file, lock_ui_runtimes,
 };
 use crate::{VulcanPluginHookDescriptor, VulcanPluginPermission, VulcanPluginRuntimeState};
 use serde_json::{Value, json};
@@ -160,21 +158,22 @@ impl VulcanPluginRuntimeManager {
         &self,
         plugin_id: &str,
     ) -> Result<bool, VulcanPluginRuntimeError> {
+        // Resolve current eligibility before preparing the sole formal Hook instance.
+        // 准备唯一正式 Hook 实例前解析当前资格。
         let snapshot = self.snapshot();
         let Some(plugin) = snapshot.plugins.get(plugin_id) else {
             return Ok(false);
         };
-        let eligible = plugin.runtime_state == VulcanPluginRuntimeState::Enabled
-            && plugin.runtime_execution_available
-            && !plugin.hooks.is_empty();
-        if !eligible {
+        if plugin.runtime_state != VulcanPluginRuntimeState::Enabled
+            || !plugin.runtime_execution_available
+            || plugin.hooks.is_empty()
+        {
             return Ok(false);
         }
-        let generation = plugin.generation;
-        self.ensure_enabled_plugin_runtime(
+        self.ensure_formal_hook(
             plugin_id,
-            generation,
-            VulcanPluginPersistentRuntimeKind::Hook,
+            plugin.generation,
+            super::formal::operation_deadline(VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS)?,
         )
         .await?;
         Ok(true)
@@ -192,57 +191,58 @@ impl VulcanPluginRuntimeManager {
         hook: &VulcanPluginHookDescriptor,
         invocation: HookInvocation,
     ) -> Result<HookResult, VulcanPluginRuntimeError> {
+        // Freeze the deadline before supervisor scheduling so executor delay cannot renew the budget.
+        // 在监督任务调度前冻结截止时间，防止执行器延迟续期预算。
+        let expires = super::formal::operation_deadline(
+            hook.manifest
+                .timeout_ms
+                .unwrap_or(VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS),
+        )?;
+        // Detached observation preserves the original manager and declaration until its finite result.
+        // 分离观测保留原管理器及声明，直至有限结果返回。
         let manager = self.clone();
+        // Freeze the exact catalog identity supplied to this public invocation.
+        // 冻结本次公开调用提供的精确目录身份。
         let hook = hook.clone();
-        tokio::spawn(async move { manager.invoke_hook_owned(&hook, invocation).await })
+        tokio::spawn(async move { manager.invoke_hook_owned(&hook, invocation, expires).await })
             .await
             .map_err(|error| {
                 VulcanPluginRuntimeError::new(format!("Plugin hook supervisor failed: {error}"))
             })?
     }
 
-    /// Retains the hook operation gate until actual synchronous execution returns.
-    /// 保留 Hook 执行门，直至实际同步执行返回。
+    /// Admits the original Hook to its formal fixed session and observes actual execution.
+    /// 将原 Hook 接纳至其正式固定会话并观测实际执行。
     /// Frozen hook identity and invocation produce one typed result, even after waiter cancellation.
     /// 冻结的 Hook 身份及调用生成一个强类型结果，即使等待方已取消。
     async fn invoke_hook_owned(
         &self,
         hook: &VulcanPluginHookDescriptor,
         invocation: HookInvocation,
+        expires: std::time::Instant,
     ) -> Result<HookResult, VulcanPluginRuntimeError> {
+        // Preserve the declared version-one hint; actual execution uses the deadline frozen before scheduling.
+        // 保留已声明版本一提示；实际执行使用调度前冻结的截止时间。
+        let host_timeout_ms = hook
+            .manifest
+            .timeout_ms
+            .unwrap_or(VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS);
         self.ensure_current_hook_generation(hook)?;
-        let runtime = self.ensure_hook_runtime(hook).await?;
-        let _operation = runtime.operation_gate.lock().await;
-        if runtime.closing.load(Ordering::Acquire) {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{}` hook runtime is closing.",
-                hook.plugin_id
-            )));
-        }
-        self.ensure_current_hook_generation(hook)?;
-        if runtime.plugin_generation != hook.plugin_generation {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{}` hook runtime belongs to a stale lifecycle generation.",
-                hook.plugin_id
-            )));
-        }
-        // trusted_workspace_root is the normalized host path authorized for Lua bridge operations.
-        // trusted_workspace_root 是授权给 Lua bridge 操作的规范化宿主路径。
-        let trusted_workspace_root = trusted_hook_workspace_root(&invocation.context)?;
-        // lua_context prevents the original verbatim workspace metadata from entering the Lua invocation payload.
-        // lua_context 防止原始 verbatim 工作区元数据进入 Lua 调用载荷。
-        let mut lua_context = invocation.context;
-        // workspace_root borrows the already-normalized Lua boundary value when this hook has workspace scope.
-        // workspace_root 在当前 Hook 具有工作区作用域时借用已完成规范化的 Lua 边界值。
-        if let Some(workspace_root) = trusted_workspace_root.as_ref() {
-            lua_context.metadata.insert(
+        // Only host metadata supplies the optional canonical workspace.
+        // 仅宿主元数据提供可选规范工作区。
+        let workspace = trusted_hook_workspace_root(&invocation.context)?;
+        let mut context = invocation.context;
+        if let Some(workspace_root) = &workspace {
+            context.metadata.insert(
                 String::from("workspace_root"),
                 Value::String(workspace_root.clone()),
             );
         }
+        // Preserve the actual Hook version-one envelope and its registration/context/payload fields.
+        // 保留实际 Hook 版本一信封及其注册、上下文、载荷字段。
         let invocation_json = serde_json::to_string(&json!({
             "registration": invocation.registration,
-            "context": lua_context,
+            "context": context,
             "payload": invocation.payload,
         }))
         .map_err(|error| {
@@ -250,44 +250,14 @@ impl VulcanPluginRuntimeManager {
                 "Failed to encode Vulcan Plugin hook invocation: {error}"
             ))
         })?;
-        let function = hook.manifest.function.clone();
-        // code dispatches the validated hook function through the fixed bridge ABI.
-        // code 通过固定桥接 ABI 调度已校验的 hook 函数。
-        let code =
-            String::from("local bridge = require('runtime.bridge')\nreturn bridge.invoke(args)");
-        let lease_id = runtime.lease_id.clone();
-        let generation = runtime.generation;
-        let host_timeout_ms = hook
-            .manifest
-            .timeout_ms
-            .unwrap_or(VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS);
-        let engine = self.runtime_engine()?;
-        let sid = runtime.sid.clone();
-        let result = call_engine_blocking(engine, move |engine| {
-            let raw = engine
-                .eval_system_runtime_lease_json(
-                    &json!({
-                        "lease_id": lease_id,
-                        "sid": sid,
-                        "generation": generation,
-                        "code": code,
-                        "args": {
-                            "function_name": function,
-                            "workspace_root": trusted_workspace_root,
-                            "plugin_args": {
-                                "invocation_json": invocation_json,
-                                "host_timeout_ms": host_timeout_ms,
-                            },
-                        },
-                        "timeout_ms": host_timeout_ms,
-                    })
-                    .to_string(),
-                )
-                .map_err(VulcanPluginRuntimeError::new)?;
-            let response = parse_engine_response(&raw, "evaluate Vulcan Plugin hook lease")?;
-            parse_plugin_result(&response)
-        })
-        .await?;
+        let result = self
+            .invoke_formal_hook(
+                hook,
+                json!({"invocation_json": invocation_json, "host_timeout_ms": host_timeout_ms}),
+                workspace.map(PathBuf::from),
+                expires,
+            )
+            .await?;
         serde_json::from_value(result).map_err(|error| {
             VulcanPluginRuntimeError::new(format!(
                 "Failed to decode Vulcan Plugin hook result: {error}"
@@ -295,33 +265,17 @@ impl VulcanPluginRuntimeManager {
         })
     }
 
-    /// Resolves or creates the persistent Lua lease for one current plugin generation.
-    /// 解析或创建一个当前插件代次使用的持久 Lua 租约。
-    /// hook provides the exact plugin generation; returns its shared Hook runtime or a stale-generation error.
-    /// hook提供精确插件代次；返回其共享Hook运行时或陈旧代次错误。
-    async fn ensure_hook_runtime(
-        &self,
-        hook: &VulcanPluginHookDescriptor,
-    ) -> Result<Arc<ManagedVulcanPluginHookRuntime>, VulcanPluginRuntimeError> {
-        self.ensure_current_hook_generation(hook)?;
-        self.ensure_enabled_plugin_runtime(
-            &hook.plugin_id,
-            hook.plugin_generation,
-            VulcanPluginPersistentRuntimeKind::Hook,
-        )
-        .await
-    }
-
     /// Resolves or creates one category-isolated persistent Lua lease for an enabled plugin.
     /// 为一个已启用插件解析或创建按类别隔离的持久 Lua 租约。
     /// plugin_id, plugin_generation, and runtime_kind select the exact isolated runtime; returns its shared handle or a preparation error.
     /// plugin_id、plugin_generation与runtime_kind选择精确隔离运行时；返回共享句柄或准备错误。
+    #[cfg(test)]
     pub(super) async fn ensure_enabled_plugin_runtime(
         &self,
         plugin_id: &str,
         plugin_generation: u64,
         runtime_kind: VulcanPluginPersistentRuntimeKind,
-    ) -> Result<Arc<ManagedVulcanPluginHookRuntime>, VulcanPluginRuntimeError> {
+    ) -> Result<Arc<ManagedVulcanPluginUiRuntime>, VulcanPluginRuntimeError> {
         // A detached waiter must not orphan a lease created by an in-flight blocking engine call.
         // 等待方离开时不能遗失仍在阻塞引擎调用中创建的租约。
         let manager = self.clone();
@@ -343,12 +297,13 @@ impl VulcanPluginRuntimeManager {
     /// 即使原等待方离开，也持有初始化过程直至发布或清理完成。
     /// Identity arguments select one lifecycle; returns only a currently enabled runtime.
     /// 身份参数选择单个生命周期；只返回当前仍启用的运行时。
+    #[cfg(test)]
     async fn initialize_enabled_plugin_runtime(
         &self,
         plugin_id: &str,
         plugin_generation: u64,
         runtime_kind: VulcanPluginPersistentRuntimeKind,
-    ) -> Result<Arc<ManagedVulcanPluginHookRuntime>, VulcanPluginRuntimeError> {
+    ) -> Result<Arc<ManagedVulcanPluginUiRuntime>, VulcanPluginRuntimeError> {
         let gate = self.persistent_runtime_gate(plugin_id, runtime_kind)?;
         let initialization = gate.lock_owned().await;
         self.initialize_enabled_plugin_runtime_locked(
@@ -370,14 +325,18 @@ impl VulcanPluginRuntimeManager {
         plugin_generation: u64,
         runtime_kind: VulcanPluginPersistentRuntimeKind,
         _initialization: tokio::sync::OwnedMutexGuard<()>,
-    ) -> Result<Arc<ManagedVulcanPluginHookRuntime>, VulcanPluginRuntimeError> {
+    ) -> Result<Arc<ManagedVulcanPluginUiRuntime>, VulcanPluginRuntimeError> {
         self.ensure_current_persistent_generation(plugin_id, plugin_generation)?;
         let runtimes = match runtime_kind {
-            VulcanPluginPersistentRuntimeKind::Hook => &self.state.hook_runtimes,
+            VulcanPluginPersistentRuntimeKind::Hook => {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Hook instances require the formal runtime.",
+                ));
+            }
             VulcanPluginPersistentRuntimeKind::UiAction => &self.state.ui_action_runtimes,
         };
         let existing_runtime = {
-            let runtimes = lock_hook_runtimes(runtimes)?;
+            let runtimes = lock_ui_runtimes(runtimes)?;
             runtimes.get(plugin_id).cloned()
         };
         if let Some(runtime) = existing_runtime {
@@ -394,7 +353,7 @@ impl VulcanPluginRuntimeManager {
             }
             // Remove only the exact closed incarnation, even if publication rules change later.
             // 仅移除刚关闭的精确实例，即使未来发布规则发生改变。
-            lock_hook_runtimes(runtimes)?
+            lock_ui_runtimes(runtimes)?
                 .retain(|id, current| id != plugin_id || !Arc::ptr_eq(current, &runtime));
         }
         let snapshot = self.snapshot();
@@ -431,13 +390,11 @@ impl VulcanPluginRuntimeManager {
                 VulcanPluginBridgeLeaseScope::Enabled,
             )
             .await?;
-        let runtime = Arc::new(ManagedVulcanPluginHookRuntime {
-            plugin_id: plugin_id.to_string(),
+        let runtime = Arc::new(ManagedVulcanPluginUiRuntime {
             plugin_generation,
             lease_id,
             sid,
             generation,
-            manifest,
             operation_gate: AsyncMutex::new(()),
             closing: AtomicBool::new(false),
         });
@@ -449,8 +406,7 @@ impl VulcanPluginRuntimeManager {
             })?;
             self.ensure_current_persistent_generation(plugin_id, plugin_generation)
                 .and_then(|()| {
-                    lock_hook_runtimes(runtimes)?
-                        .insert(plugin_id.to_string(), Arc::clone(&runtime));
+                    lock_ui_runtimes(runtimes)?.insert(plugin_id.to_string(), Arc::clone(&runtime));
                     Ok(())
                 })
         })();
@@ -504,74 +460,27 @@ impl VulcanPluginRuntimeManager {
         }
     }
 
-    /// Stops one category-isolated persistent runtime and closes its System lease after optional Hook shutdown.
-    /// 停止一个按类别隔离的持久运行时，在可选Hook关闭之后关闭其系统租约。
-    /// runtime and runtime_kind identify the shared lease; returns an optional graceful-shutdown diagnostic after close, or an explicit failure.
-    /// runtime与runtime_kind标识共享租约；关闭后返回可选优雅关闭诊断，或明确失败。
+    /// Retire the remaining legacy UI Action lease after its actual synchronous execution returns.
+    /// 实际同步执行返回后退役剩余旧 UI Action 租约。
+    /// runtime and runtime_kind identify the UI lease; return no graceful callback result, or an explicit close error.
+    /// runtime 及 runtime_kind 标识 UI 租约；返回无优雅回调结果，或明确关闭错误。
     pub(super) async fn close_persistent_runtime(
         &self,
-        runtime: Arc<ManagedVulcanPluginHookRuntime>,
+        runtime: Arc<ManagedVulcanPluginUiRuntime>,
         runtime_kind: VulcanPluginPersistentRuntimeKind,
     ) -> Result<Option<String>, VulcanPluginRuntimeError> {
+        if runtime_kind != VulcanPluginPersistentRuntimeKind::UiAction {
+            return Err(VulcanPluginRuntimeError::new(
+                "Hook instances require formal draining.",
+            ));
+        }
         runtime.closing.store(true, Ordering::Release);
+        // Legacy UI actions retire only after the actual synchronous call returns.
+        // 旧 UI Action 仅在实际同步调用返回后退役。
         let _operation = runtime.operation_gate.lock().await;
-        let shutdown_result = if runtime_kind == VulcanPluginPersistentRuntimeKind::Hook
-            && let Some(function) = runtime
-                .manifest
-                .lua_runtime
-                .as_ref()
-                .and_then(|lua_runtime| lua_runtime.hook_shutdown_function.clone())
-        {
-            let plugin_id = runtime.plugin_id.clone();
-            // code dispatches graceful hook shutdown through the fixed bridge ABI.
-            // code 通过固定桥接 ABI 调度 hook 的优雅关闭。
-            let code = String::from(
-                "local bridge = require('runtime.bridge')\nreturn bridge.invoke(args)",
-            );
-            let lease_id = runtime.lease_id.clone();
-            let sid = runtime.sid.clone();
-            let generation = runtime.generation;
-            let engine = self.runtime_engine()?;
-            call_engine_blocking(engine, move |engine| {
-                let raw = engine
-                    .eval_system_runtime_lease_json(
-                        &json!({
-                            "lease_id": lease_id,
-                            "sid": sid,
-                            "generation": generation,
-                            "code": code,
-                            "args": {
-                                "function_name": function,
-                                "plugin_args": {
-                                    "payload_json": json!({
-                                        "event": "hook_runtime_shutdown",
-                                        "plugin_id": plugin_id,
-                                    })
-                                    .to_string(),
-                                    "host_timeout_ms": VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS,
-                                },
-                            },
-                            "timeout_ms": VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS,
-                        })
-                        .to_string(),
-                    )
-                    .map_err(VulcanPluginRuntimeError::new)?;
-                let response = parse_engine_response(&raw, "shutdown Vulcan Plugin hook lease")?;
-                parse_plugin_result(&response).map(|_| ())
-            })
-            .await
-        } else {
-            Ok(())
-        };
         self.close_raw_lease(&runtime.lease_id, &runtime.sid, runtime.generation)
             .await?;
-        Ok(shutdown_result.err().map(|error| {
-            format!(
-                "Plugin `{}` persistent {} lease closed after graceful shutdown failed: {error}",
-                runtime.plugin_id,
-                runtime_kind.label()
-            )
-        }))
+        Ok(None)
     }
 }
 

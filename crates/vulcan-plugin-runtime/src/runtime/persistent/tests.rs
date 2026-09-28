@@ -361,6 +361,9 @@ fn hook_runtime_reuses_state_and_drains_by_plugin_generation() {
     fs::create_dir_all(&vulcan_plugin_root).expect("create Vulcan Plugin root");
     write_hook_package(&vulcan_plugin_root);
     let manager = test_manager(&runtime_root, vulcan_plugin_root);
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal Hook parent");
     let catalog = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load hook catalog");

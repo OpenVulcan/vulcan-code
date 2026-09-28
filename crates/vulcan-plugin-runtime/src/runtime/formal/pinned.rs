@@ -263,14 +263,18 @@ async fn wait_operation(
 
 /// Decode the fixed version-one business frame from a terminal core operation.
 /// 从终态核心操作解码固定版本一业务帧。
-fn project_business(snapshot: &OperationSnapshot) -> Result<Value, VulcanPluginRuntimeError> {
+pub(super) fn project_business(
+    snapshot: &OperationSnapshot,
+) -> Result<Value, VulcanPluginRuntimeError> {
     let frame = core_result(snapshot)?;
     super::super::lease::parse_plugin_result(&json!({"result":frame}))
 }
 
 /// Read the independent closing frame instead of the lifecycle operation's null business baseline.
 /// 读取独立关闭帧，而非生命周期操作的空值业务基线。
-fn project_closing(snapshot: &OperationSnapshot) -> Result<Value, VulcanPluginRuntimeError> {
+pub(super) fn project_closing(
+    snapshot: &OperationSnapshot,
+) -> Result<Value, VulcanPluginRuntimeError> {
     let stages = snapshot.finalization.as_ref().ok_or_else(|| {
         VulcanPluginRuntimeError::new("Session closing operation has no finalization evidence.")
     })?;
@@ -297,7 +301,7 @@ fn core_result(snapshot: &OperationSnapshot) -> Result<Value, VulcanPluginRuntim
 
 /// Freeze a positive millisecond budget as an absolute monotonic deadline or return an explicit range error.
 /// 将正毫秒预算冻结为绝对单调截止时间，或返回明确范围错误。
-fn deadline(timeout_ms: u64) -> Result<Instant, VulcanPluginRuntimeError> {
+pub(in crate::runtime) fn deadline(timeout_ms: u64) -> Result<Instant, VulcanPluginRuntimeError> {
     if timeout_ms == 0 {
         return Err(VulcanPluginRuntimeError::new(
             "Formal session timeout must be positive.",
@@ -310,7 +314,7 @@ fn deadline(timeout_ms: u64) -> Result<Instant, VulcanPluginRuntimeError> {
 
 /// Derive remaining admission time from the original deadline without extending it during preparation.
 /// 从原截止时间派生剩余入场时间，不在准备期间延长。
-fn remaining(deadline: Instant) -> Result<Duration, VulcanPluginRuntimeError> {
+pub(super) fn remaining(deadline: Instant) -> Result<Duration, VulcanPluginRuntimeError> {
     deadline
         .checked_duration_since(Instant::now())
         .filter(|time| !time.is_zero())

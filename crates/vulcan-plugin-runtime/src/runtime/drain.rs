@@ -3,7 +3,7 @@
 
 use super::{
     RetainedVulcanPluginLease, VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError,
-    VulcanPluginRuntimeManager, lock_hook_runtimes, lock_retained_leases,
+    VulcanPluginRuntimeManager, lock_retained_leases, lock_ui_runtimes,
 };
 use crate::VulcanPluginRuntimeState;
 use std::collections::BTreeSet;
@@ -94,12 +94,7 @@ impl VulcanPluginRuntimeManager {
         let mut report = VulcanPluginDrainReport::default();
         report.merge(self.drain_formal_calls(Some(plugin_id), None).await?);
         report.merge(self.drain_pinned(Some(plugin_id), None).await?);
-        self.drain_persistent_runtime(
-            plugin_id,
-            VulcanPluginPersistentRuntimeKind::Hook,
-            &mut report,
-        )
-        .await?;
+        report.merge(self.drain_formal_hook(plugin_id).await?);
         self.drain_persistent_runtime(
             plugin_id,
             VulcanPluginPersistentRuntimeKind::UiAction,
@@ -124,10 +119,14 @@ impl VulcanPluginRuntimeManager {
         let gate = self.persistent_runtime_gate(plugin_id, runtime_kind)?;
         let _lifecycle = gate.lock().await;
         let runtimes = match runtime_kind {
-            VulcanPluginPersistentRuntimeKind::Hook => &self.state.hook_runtimes,
+            VulcanPluginPersistentRuntimeKind::Hook => {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Hook instances require formal draining.",
+                ));
+            }
             VulcanPluginPersistentRuntimeKind::UiAction => &self.state.ui_action_runtimes,
         };
-        let runtime = lock_hook_runtimes(runtimes)?.get(plugin_id).cloned();
+        let runtime = lock_ui_runtimes(runtimes)?.get(plugin_id).cloned();
         let Some(runtime) = runtime else {
             return Ok(());
         };
@@ -136,7 +135,7 @@ impl VulcanPluginRuntimeManager {
             .await
         {
             Ok(shutdown_diagnostic) => {
-                lock_hook_runtimes(runtimes)?
+                lock_ui_runtimes(runtimes)?
                     .retain(|id, current| id != plugin_id || !Arc::ptr_eq(current, &runtime));
                 match runtime_kind {
                     VulcanPluginPersistentRuntimeKind::Hook => {
@@ -373,10 +372,9 @@ impl VulcanPluginRuntimeManager {
         let has_retained_leases = lock_retained_leases(&self.state.retained_leases)?
             .values()
             .any(|lease| lease.plugin_id == plugin_id);
-        let has_hook_runtime =
-            lock_hook_runtimes(&self.state.hook_runtimes)?.contains_key(plugin_id);
+        let has_hook_runtime = self.has_formal_hook(plugin_id)?;
         let has_ui_action_runtime =
-            lock_hook_runtimes(&self.state.ui_action_runtimes)?.contains_key(plugin_id);
+            lock_ui_runtimes(&self.state.ui_action_runtimes)?.contains_key(plugin_id);
         let has_active_count = self
             .state
             .active_session_counts

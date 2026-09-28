@@ -48,10 +48,7 @@ pub use sessions::VulcanPluginInvocationRequest;
 use sessions::plugin_payload;
 pub use settings::{VulcanPluginRuntimeSettings, load_plugin_runtime_settings};
 
-use crate::{
-    VulcanPluginCatalogSnapshot, VulcanPluginHostServices, VulcanPluginManifest,
-    VulcanPluginRuntimeState,
-};
+use crate::{VulcanPluginCatalogSnapshot, VulcanPluginHostServices, VulcanPluginRuntimeState};
 use luaskills::LuaEngine;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -70,8 +67,8 @@ const VULCAN_PLUGIN_PROBE_TIMEOUT_MS: u64 = 5_000;
 /// hook 声明省略超时时使用的 Lua 默认执行时长。
 const VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS: u64 = 60_000;
 
-/// Sole default shutdown budget shared by legacy Hook cleanup and formal host finalizers.
-/// 旧 Hook 清理与正式宿主关闭器共享的唯一默认关闭预算。
+/// Sole default shutdown budget for formal host finalizers and explicit host drains.
+/// 正式宿主关闭器及显式宿主排空的唯一默认关闭预算。
 const VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
 
 /// Structured generic plugin runtime failure.
@@ -113,14 +110,11 @@ impl fmt::Display for VulcanPluginRuntimeError {
 
 impl Error for VulcanPluginRuntimeError {}
 
-/// One persistent plugin-level Lua lease dedicated to one handler category and plugin generation.
-/// 专用于一个处理器类别和插件代次的持久插件级 Lua 租约。
-struct ManagedVulcanPluginHookRuntime {
-    /// Stable owning plugin identifier.
-    /// 稳定的所属插件标识。
-    plugin_id: String,
-    /// Host plugin generation captured when the hook runtime opened.
-    /// hook 运行时打开时捕获的宿主插件代次。
+/// Legacy UI Action ownership pending migration to the formal parent.
+/// 等待迁移至正式父级的旧 UI Action 所有权。
+struct ManagedVulcanPluginUiRuntime {
+    /// Host plugin generation captured when the UI Action runtime opened.
+    /// UI Action 运行时打开时捕获的宿主插件代次。
     plugin_generation: u64,
     /// LuaSkills managed lease identifier.
     /// LuaSkills 受管租约标识。
@@ -131,11 +125,8 @@ struct ManagedVulcanPluginHookRuntime {
     /// LuaSkills managed lease generation.
     /// LuaSkills 受管租约代次。
     generation: u64,
-    /// Manifest revision captured when the hook runtime opened.
-    /// hook 运行时打开时捕获的插件清单。
-    manifest: Arc<VulcanPluginManifest>,
-    /// Serial gate that preserves deterministic plugin-local hook state.
-    /// 保持插件本地 hook 状态确定性的串行门。
+    /// Serial gate preserves deterministic plugin-local UI Action state.
+    /// 串行门保持插件本地 UI Action 状态确定性。
     operation_gate: AsyncMutex<()>,
     /// Closing state used to reject late invocations.
     /// 用于拒绝迟到调用的关闭状态。
@@ -246,12 +237,9 @@ struct VulcanPluginManagerState {
     /// Active session counts keyed by plugin identifier.
     /// 以插件标识为键的活动会话计数。
     active_session_counts: Mutex<BTreeMap<String, usize>>,
-    /// Persistent hook runtimes keyed by plugin identifier.
-    /// 以插件标识为键的持久 hook 运行时集合。
-    hook_runtimes: Mutex<BTreeMap<String, Arc<ManagedVulcanPluginHookRuntime>>>,
     /// Persistent global UI action runtimes keyed by plugin identifier.
     /// 以插件标识为键的持久全局界面 Action 运行时集合。
-    ui_action_runtimes: Mutex<BTreeMap<String, Arc<ManagedVulcanPluginHookRuntime>>>,
+    ui_action_runtimes: Mutex<BTreeMap<String, Arc<ManagedVulcanPluginUiRuntime>>>,
     /// Raw leases retained after cleanup failures and keyed by lease identifier.
     /// 清理失败后保留并以租约标识为键的原始租约集合。
     retained_leases: Mutex<BTreeMap<String, RetainedVulcanPluginLease>>,
@@ -297,18 +285,6 @@ impl Drop for VulcanPluginManagerState {
         let Some(engine) = engine_slot.as_ref() else {
             return;
         };
-        let hook_runtimes = self
-            .hook_runtimes
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for runtime in hook_runtimes.values() {
-            let _ = close_raw_system_lease_sync(
-                engine,
-                &runtime.lease_id,
-                &runtime.sid,
-                runtime.generation,
-            );
-        }
         let ui_action_runtimes = self
             .ui_action_runtimes
             .get_mut()
@@ -471,7 +447,6 @@ impl VulcanPluginRuntimeManager {
                 next_request_id: AtomicU64::new(1),
                 session_registration_gate: Mutex::new(()),
                 active_session_counts: Mutex::new(BTreeMap::new()),
-                hook_runtimes: Mutex::new(BTreeMap::new()),
                 ui_action_runtimes: Mutex::new(BTreeMap::new()),
                 retained_leases: Mutex::new(BTreeMap::new()),
                 persistent_runtime_gates: Mutex::new(BTreeMap::new()),
@@ -569,16 +544,16 @@ impl VulcanPluginRuntimeManager {
     }
 }
 
-/// Acquires the shared persistent hook-runtime registry.
-/// 获取共享持久 hook 运行时注册表。
-fn lock_hook_runtimes(
-    runtimes: &Mutex<BTreeMap<String, Arc<ManagedVulcanPluginHookRuntime>>>,
+/// Acquire the legacy UI Action registry; return its guard or an explicit poison error.
+/// 获取旧 UI Action 注册表；返回其守卫或明确中毒错误。
+fn lock_ui_runtimes(
+    runtimes: &Mutex<BTreeMap<String, Arc<ManagedVulcanPluginUiRuntime>>>,
 ) -> Result<
-    MutexGuard<'_, BTreeMap<String, Arc<ManagedVulcanPluginHookRuntime>>>,
+    MutexGuard<'_, BTreeMap<String, Arc<ManagedVulcanPluginUiRuntime>>>,
     VulcanPluginRuntimeError,
 > {
     runtimes.lock().map_err(|_| {
-        VulcanPluginRuntimeError::new("Vulcan Plugin hook runtime registry lock is poisoned.")
+        VulcanPluginRuntimeError::new("Vulcan Plugin UI Action registry lock is poisoned.")
     })
 }
 

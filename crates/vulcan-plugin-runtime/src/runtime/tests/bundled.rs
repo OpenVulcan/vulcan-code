@@ -604,6 +604,9 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
         .expect("resolve repository root");
     let workspace_root = repository_root.to_path_buf();
     let manager = test_manager(&runtime_root, repository_root.join("plugins"));
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal RTK Hook parent");
     let catalog = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load repository plugin catalog");
