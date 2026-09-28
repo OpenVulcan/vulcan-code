@@ -5,6 +5,81 @@ use super::*;
 use luaskills::runtime::embedded::OperationSnapshot;
 use std::path::Path;
 
+/// The formal loader cannot bypass the catalog requirement for a Lua dependency declaration.
+/// 正式加载器不能绕过目录对 Lua 依赖声明的要求。
+#[test]
+fn restricted_bundle_rejects_missing_required_dependency_declaration() {
+    // Start from a real enabled package, then remove only its required declaration.
+    // 从真实已启用包开始，仅移除其必需声明。
+    let fixture = Fixture::new();
+    // The package path comes from the actual catalog, not a guessed fixture layout.
+    // 包路径来自真实目录，不猜测夹具布局。
+    let package = fixture.manager.snapshot().plugins["hook-plugin"]
+        .package_root
+        .clone();
+    // Keep the physical dependency file to prove its presence cannot substitute for a declaration.
+    // 保留物理依赖文件，证明其存在不能替代声明。
+    let original = fs::read_to_string(package.join("plugin.yaml")).expect("read fixture manifest");
+    // Remove the exact known field while leaving bundled install mode and Lua exports intact.
+    // 删除精确已知字段，保持内置安装模式及 Lua 导出不变。
+    let changed = original.replace("    manifest: dependencies.yaml\n", "");
+    assert_ne!(
+        changed, original,
+        "fixture dependency declaration may have changed"
+    );
+    fs::write(package.join("plugin.yaml"), changed).expect("remove manifest declaration");
+    // Production catalog validation is the authority for whether this package may execute.
+    // 生产目录校验是此包是否可执行的权威。
+    let catalog = fixture
+        .manager
+        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+        .expect("refresh invalid package");
+    // Find the semantic diagnostic without binding the test to a diagnostic array position.
+    // 按语义查找诊断，不将测试绑定到诊断数组位置。
+    let plugin = &catalog.plugins["hook-plugin"];
+    assert_ne!(plugin.runtime_state, VulcanPluginRuntimeState::Enabled);
+    assert!(
+        plugin.diagnostics.iter().any(|message| message
+            .contains("Lua, Node, and Python components require an execution dependency manifest")),
+        "missing dependency diagnostic: {:?}",
+        plugin.diagnostics
+    );
+    // A current-generation request must still fail before acquiring a formal execution domain.
+    // 当前代次请求仍必须在取得正式执行域前失败。
+    let rejected = fixture
+        .host
+        .register_bundle_pool(VulcanPluginBundlePoolRequest {
+            plugin_id: plugin.id.clone(),
+            plugin_generation: plugin.generation,
+            workspace_root: fixture.root.path().to_path_buf(),
+            security_partition: "invalid-dependency-fixture".to_string(),
+            scope: VulcanPluginBridgeLeaseScope::Enabled,
+            policy: policy(),
+        })
+        .expect_err("reject unavailable Lua package");
+    assert_eq!(rejected.code, EmbeddedErrorCode::PermissionDenied);
+    assert!(
+        fixture
+            .host
+            .authority
+            .domains
+            .lock()
+            .expect("inspect execution authority")
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .host
+            .runtime()
+            .resources()
+            .expect("inspect actual VM ownership")
+            .resident,
+        0
+    );
+    assert!(package.join("dependencies.yaml").is_file());
+    fixture.close();
+}
+
 /// Checked-in packages initialize through the formal loader, and Context7 reads its real defaults.
 /// 仓库内包经正式加载器初始化，Context7 读取其真实默认配置。
 #[test]
