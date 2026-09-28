@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 impl VulcanPluginRuntimeManager {
     /// Creates one LuaSkills managed System lease for an exact validated package.
@@ -350,16 +350,15 @@ pub(super) fn required_lua_runtime(
 
 /// Runs one synchronous LuaSkills operation outside the async executor thread.
 /// 在异步执行器线程之外运行一个同步 LuaSkills 操作。
-/// Locks the supplied shared `engine` on a blocking worker and returns `operation`'s typed result or a task/engine error.
-/// 在阻塞工作线程锁定传入的共享`engine`，返回`operation`的强类型结果或任务/引擎错误。
+/// Retains the immutable plugin `engine` on a blocking worker and returns `operation`'s typed result or task error.
+/// 在阻塞工作线程保留不可变插件 `engine`，返回 `operation` 的强类型结果或任务错误。
 ///
-/// The read guard is sufficient because `operation` only receives `&LuaEngine`: every plugin lease
-/// create, evaluate, status and close entry is an upstream `&self` method. Distinct plugin leases
-/// therefore overlap, while a skill-management write still drains them before it mutates the engine.
-/// 读守卫已经足够，因为 `operation` 只接收 `&LuaEngine`：插件租约的创建、执行、状态与关闭入口
-/// 在上游都是 `&self` 方法。因此不同插件租约可以重叠，而技能管理写操作仍会在变更引擎前排空它们。
+/// Plugin execution owns a separate engine, so ordinary skill management cannot lock or reload it.
+/// 插件执行拥有独立引擎，因此普通技能管理不能锁定或重载它。
+/// A dropped async waiter does not release the engine while its actual blocking operation still runs.
+/// 异步等待方被丢弃时，只要实际阻塞操作仍在运行就不会释放引擎。
 pub(super) async fn call_engine_blocking<T>(
-    engine: Arc<RwLock<LuaEngine>>,
+    engine: Arc<LuaEngine>,
     operation: impl FnOnce(&LuaEngine) -> Result<T, VulcanPluginRuntimeError> + Send + 'static,
 ) -> Result<T, VulcanPluginRuntimeError>
 where
@@ -373,13 +372,6 @@ where
         let _scope = super::action_status::BlockingActionScope::enter(record.clone());
         if let Some(record) = &record {
             record.observe("blocking_queue", queued.elapsed());
-        }
-        let lock_started = std::time::Instant::now();
-        let engine = engine.read().map_err(|_| {
-            VulcanPluginRuntimeError::new("LuaSkills engine read lock is poisoned.")
-        })?;
-        if let Some(record) = &record {
-            record.observe("engine_lock", lock_started.elapsed());
         }
         let started = std::time::Instant::now();
         let result = operation(&engine);

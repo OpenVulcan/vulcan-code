@@ -17,33 +17,129 @@ use vulcan_hooks::{
 #[test]
 fn initialization_retirement_rejects_old_publication_and_reopen_shares_one_lease() {
     use super::super::VulcanPluginPersistentRuntimeKind::UiAction;
-    let temp = tempfile::tempdir().unwrap();
+    use crate::{VulcanPluginHostServices, VulcanPluginVldbRequest, VulcanPluginVldbService};
+    use serde_json::Value;
+    use std::sync::{Arc, Mutex, atomic::AtomicUsize, mpsc};
+    // One bounded wait controls both the real callback and its observer.
+    // 同一有界等待控制真实回调及其观察者。
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+    /// Blocks only the first real source-initialization callback, allowing the successor to reopen.
+    /// 只阻塞首次真实源码初始化回调，允许后继重新开启。
+    struct InitializationBarrier {
+        /// Signals actual native entry instead of observing an earlier scheduling phase.
+        /// 标记实际原生进入，而非观察更早的调度阶段。
+        entered: tokio::sync::Notify,
+        /// Retains the first callback until the test explicitly retires its generation.
+        /// 保留首次回调，直至测试显式退役其代次。
+        release: Mutex<mpsc::Receiver<()>>,
+        /// Distinguishes the old initialization from the later shared successor.
+        /// 区分旧初始化与后续共享的后继。
+        entries: AtomicUsize,
+    }
+    impl VulcanPluginVldbService for InitializationBarrier {
+        /// Handles the fixture's read request, returning rows after the first entry is released.
+        /// 处理夹具的读取请求，在首次进入被释放后返回行结果。
+        fn execute(&self, _request: VulcanPluginVldbRequest) -> Result<Value, String> {
+            if self
+                .entries
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+                == 0
+            {
+                self.entered.notify_one();
+                self.release
+                    .lock()
+                    .map_err(|error| error.to_string())?
+                    .recv_timeout(WAIT)
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(json!({"rows": []}))
+        }
+    }
+    // All package and engine writes remain in one disposable fixture.
+    // 所有插件包及引擎写入保持在同一个可丢弃夹具中。
+    let temp = tempfile::tempdir().expect("create initialization fixture");
+    // Build the existing real hook/UI bundle before adding an initialization-only host call.
+    // 先构造既有真实 Hook/UI 包，再增加仅在初始化执行的宿主调用。
     let plugins = temp.path().join("plugins");
-    fs::create_dir_all(&plugins).unwrap();
+    fs::create_dir_all(&plugins).expect("create plugin root");
     write_hook_package(&plugins);
+    // The call uses the explicitly declared host permission through the production bridge.
+    // 调用通过生产桥使用显式声明的宿主权限。
+    let manifest_path = plugins.join("hook-plugin/plugin.yaml");
+    fs::write(
+        &manifest_path,
+        fs::read_to_string(&manifest_path)
+            .expect("read fixture manifest")
+            .replace(
+                "default_enabled: true",
+                "default_enabled: true\npermissions: [system_vldb_access]",
+            ),
+    )
+    .expect("declare initialization callback permission");
+    // Initialization is genuinely in progress while its real native handler holds the release channel.
+    // 真实原生处理器持有释放通道期间，初始化确实正在执行。
+    let bundle_path = plugins.join("hook-plugin/runtime/plugin.bundle.lua");
+    fs::write(&bundle_path, format!("vulcan.host.call('vulcan.vldb.sqlite.query.v1', {{ binding = 'system.statistics', sql = 'SELECT 1', params = {{}} }})\n{}",
+        fs::read_to_string(&bundle_path).expect("read fixture bundle")))
+        .expect("add real initialization callback");
+    // The immutable engine belongs only to this plugin manager.
+    // 不可变引擎只归此插件管理器所有。
     let manager = test_manager(temp.path(), plugins);
+    // Dropping the sender on assertion failure also releases the waiting handler with an explicit error.
+    // 断言失败后丢弃发送端也会以显式错误释放等待处理器。
+    let (release, receive) = mpsc::channel();
+    // Host registration is installed before catalog publication and the first call.
+    // 宿主注册在目录发布及首次调用前安装。
+    let barrier = Arc::new(InitializationBarrier {
+        entered: tokio::sync::Notify::new(),
+        release: Mutex::new(receive),
+        entries: AtomicUsize::new(0),
+    });
+    manager
+        .install_host_services(VulcanPluginHostServices {
+            storage: None,
+            vldb: Some(barrier.clone()),
+            ui_events: None,
+        })
+        .expect("install initialization barrier");
+    // Catalog generation remains the authority for the action's original identity.
+    // 目录代次仍是操作原始身份的权威。
     let catalog = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-        .unwrap();
+        .expect("publish fixture");
+    // Every action receives distinct exact ownership identifiers.
+    // 每个操作都收到不同的精确所有权标识。
     let identity = crate::VulcanPluginActionIdentity {
         client_id: Uuid::new_v4().to_string(),
         invocation_id: Uuid::new_v4().to_string(),
     };
+    // Preserve the original published generation through the concurrent retirement.
+    // 在并发退役期间保留原始已发布代次。
     let runtime_identity = format!(
         "{}:{}",
         catalog.service_epoch, catalog.plugins["hook-plugin"].generation
     );
-    let engine = manager.runtime_engine().unwrap();
-    let engine_guard = engine.write().unwrap();
+    // The async executor remains available while the native handler waits.
+    // 原生处理器等待时，异步执行器仍保持可用。
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
-        .unwrap();
+        .expect("create test runtime");
     runtime.block_on(async {
+        // The spawned owner retains execution independently of this observer.
+        // 派生所有者独立于此观察者保留执行。
         let worker = manager.clone();
+        // Move only cloned identity and the trusted workspace into the spawned owner.
+        // 仅将克隆身份及可信工作区移动到派生所有者中。
         let child_identity = identity.clone();
+        // Freeze the original runtime identity before retirement.
+        // 在退役前冻结原运行时身份。
         let child_runtime = runtime_identity.clone();
+        // The workspace remains owned by the fixture for the entire native call.
+        // 整个原生调用期间工作区保持由夹具所有。
         let root = temp.path().to_owned();
+        // This starts real bridge initialization and waits inside the registered native handler.
+        // 此处启动真实桥初始化，并在注册的原生处理器中等待。
         let initializing = tokio::spawn(async move {
             worker
                 .invoke_ui_action(
@@ -60,32 +156,38 @@ fn initialization_retirement_rejects_old_publication_and_reopen_shares_one_lease
                 )
                 .await
         });
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            loop {
-                if manager
-                    .find_action_status("hook-plugin", &runtime_identity, &identity, false)
-                    .unwrap()
-                    .is_some_and(|status| status.phase == "initializing")
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        manager.begin_draining("hook-plugin").unwrap();
-        drop(engine_guard);
-        assert!(initializing.await.unwrap().is_err());
-        assert!(manager.state.ui_action_runtimes.lock().unwrap().is_empty());
+        tokio::time::timeout(WAIT, barrier.entered.notified())
+            .await
+            .expect("real source initialization must enter");
+        assert!(
+            manager
+                .find_action_status("hook-plugin", &runtime_identity, &identity, false)
+                .expect("read original action")
+                .is_some_and(|status| status.phase == "initializing")
+        );
+        manager
+            .begin_draining("hook-plugin")
+            .expect("retire initializing generation");
+        release.send(()).expect("release old source initializer");
+        assert!(initializing.await.expect("join original action").is_err());
+        assert!(
+            manager
+                .state
+                .ui_action_runtimes
+                .lock()
+                .expect("inspect published runtimes")
+                .is_empty()
+        );
         assert!(
             manager
                 .drain_plugin_sessions("hook-plugin")
                 .await
-                .unwrap()
+                .expect("drain old generation")
                 .failures
                 .is_empty()
         );
+        // The successor is published only after the original initialization and cleanup have left.
+        // 原初始化及清理离开后才发布后继。
         let current = manager
             .finish_lifecycle_transition(
                 "hook-plugin",
@@ -93,13 +195,24 @@ fn initialization_retirement_rejects_old_publication_and_reopen_shares_one_lease
                 &BTreeSet::new(),
                 Vec::new(),
             )
-            .unwrap();
+            .expect("publish successor");
+        // Concurrent reopen calls must share exactly one new VM.
+        // 并发重新开启调用必须共享恰好一个新 VM。
         let generation = current.plugins["hook-plugin"].generation;
+        // Join both actual initialization requests rather than comparing scheduling promises.
+        // 等待两个实际初始化请求，而非比较调度承诺。
         let (first, second) = tokio::join!(
             manager.ensure_enabled_plugin_runtime("hook-plugin", generation, UiAction),
             manager.ensure_enabled_plugin_runtime("hook-plugin", generation, UiAction)
         );
-        assert!(std::sync::Arc::ptr_eq(&first.unwrap(), &second.unwrap()));
+        assert!(Arc::ptr_eq(
+            &first.expect("first successor"),
+            &second.expect("shared successor")
+        ));
+        assert_eq!(
+            barrier.entries.load(std::sync::atomic::Ordering::Acquire),
+            2
+        );
     });
 }
 

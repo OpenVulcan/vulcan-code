@@ -145,9 +145,12 @@ impl LuaSkillConfigCapabilityCache {
 /// 由服务运行时保留的长生命周期 LuaSkills 句柄。
 #[derive(Clone)]
 pub struct TauriLuaSkillsHandle {
-    /// Shared LuaSkills engine kept alive for later plugin panels and hooks.
-    /// 为后续插件面板与 hook 保持存活的共享 LuaSkills 引擎。
+    /// Mutable ordinary-skill engine guarded for skill catalog and configuration management.
+    /// 为技能目录及配置管理加锁的可变普通技能引擎。
     pub engine: Arc<RwLock<LuaEngine>>,
+    /// Immutable plugin execution engine, independent of ordinary-skill reloads and their management lock.
+    /// 不可变插件执行引擎，独立于普通技能重载及其管理锁。
+    pub plugin_engine: Arc<LuaEngine>,
     /// Runtime root resolved from the prepared Vulcan output bundle.
     /// 从准备好的 Vulcan output 包解析出的运行时根目录。
     pub runtime_root: PathBuf,
@@ -157,8 +160,8 @@ pub struct TauriLuaSkillsHandle {
     /// LuaSkills-owned writable root containing reusable managed environments.
     /// LuaSkills 持有的可写根目录，包含可复用受管环境。
     pub managed_runtime_environment_root: PathBuf,
-    /// Output-owned Vulcan configuration directory shared by both LuaSkills engines.
-    /// 两个 LuaSkills 引擎共享的 output 自有 Vulcan 配置目录。
+    /// Output-owned Vulcan configuration directory shared by host LuaSkills engines.
+    /// 宿主 LuaSkills 引擎共享的 output 自有 Vulcan 配置目录。
     pub output_config_directory: PathBuf,
     /// Mounted ROOT and USER skill roots.
     /// 已挂载的 ROOT 与 USER 技能根目录。
@@ -393,6 +396,12 @@ where
         max_size: runtime_settings.vm_pool.max_size,
         idle_ttl_secs: runtime_settings.vm_pool.idle_ttl_secs,
     };
+    // Retain the same resolved host settings while keeping plugin execution outside skill mutation locks.
+    // 保持相同已解析宿主设置，同时让插件执行独立于技能变更锁。
+    let plugin_engine = Arc::new(
+        LuaEngine::new(LuaEngineOptions::new(pool_config, host_options.clone()))
+            .map_err(|error| format!("创建插件执行引擎失败：{error}"))?,
+    );
     let mut engine = LuaEngine::new(LuaEngineOptions::new(pool_config, host_options))
         .map_err(|error| format!("创建 LuaSkills 引擎失败：{error}"))?;
     ensure_configured_root_skills_installed(&skill_roots, &mut engine, &mut progress)?;
@@ -406,6 +415,7 @@ where
     let managed_runtime_environment_root = runtime_root.join("dependencies").join("envs");
     Ok(TauriLuaSkillsHandle {
         engine: Arc::new(RwLock::new(engine)),
+        plugin_engine,
         runtime_root,
         managed_runtime_distribution_root,
         managed_runtime_environment_root,

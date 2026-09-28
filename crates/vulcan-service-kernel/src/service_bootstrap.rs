@@ -2048,7 +2048,7 @@ fn prepare_vulcan_plugin_runtime(
     );
     if let Some(luaskills_runtime) = luaskills_runtime {
         vulcan_plugin_runtime
-            .attach_runtime_engine(Arc::clone(&luaskills_runtime.engine))
+            .attach_runtime_engine(Arc::clone(&luaskills_runtime.plugin_engine))
             .map_err(|error| {
                 ServiceBootstrapError::new(
                     "plugins",

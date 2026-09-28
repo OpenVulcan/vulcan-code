@@ -648,6 +648,12 @@ fn isolated_handle(
         max_size: 2,
         idle_ttl_secs: 30,
     };
+    // Use the same production ownership split in management fixtures.
+    // 在管理夹具中使用与生产相同的所有权分离。
+    let plugin_engine = Arc::new(
+        LuaEngine::new(LuaEngineOptions::new(pool_config, host_options.clone()))
+            .expect("create isolated plugin execution engine"),
+    );
     let mut engine = LuaEngine::new(LuaEngineOptions::new(pool_config, host_options))
         .expect("create isolated LuaSkills engine");
     engine
@@ -655,6 +661,7 @@ fn isolated_handle(
         .expect("load empty isolated skill roots");
     TauriLuaSkillsHandle {
         engine: Arc::new(RwLock::new(engine)),
+        plugin_engine,
         runtime_root,
         managed_runtime_distribution_root,
         managed_runtime_environment_root,
@@ -665,6 +672,131 @@ fn isolated_handle(
         config_capability_cache: Arc::new(Mutex::new(LuaSkillConfigCapabilityCache::default())),
         effective_runtime_settings: runtime_settings,
     }
+}
+
+/// Proves real typed plugin execution survives an ordinary-engine write lock and catalog reload.
+/// 证明真实类型化插件执行不受普通引擎写锁及目录重载影响。
+#[test]
+fn plugin_execution_engine_is_independent_of_skill_management() {
+    use luaskills::LuaInvocationContext;
+    use luaskills::runtime::embedded::{
+        CallControl, ModuleDefinition, ModuleExport, ModuleInvocation,
+    };
+    use std::sync::mpsc;
+    // One budget governs initialization, each call, and bounded observation in this scenario.
+    // 同一预算约束此场景的初始化、每次调用及有界观察。
+    const WAIT: Duration = Duration::from_secs(5);
+    // Reuse the real handle fixture, including production host-option construction.
+    // 复用真实句柄夹具，包括生产宿主选项构造。
+    let root = TestRoot::new();
+    // The loopback server supplies only the fixture configuration; this test must not contact it.
+    // 回环服务仅提供夹具配置；此测试不得向它发起请求。
+    let server = LocalGithubServer::start();
+    // Management and plugin execution must receive independent engine instances.
+    // 管理与插件执行必须取得独立引擎实例。
+    let handle = isolated_handle(&root.path, &server, false);
+    // Use an explicitly trusted System package for the low-level typed execution contract.
+    // 使用显式可信 System 包验证低层类型化执行契约。
+    let package = handle
+        .runtime_root
+        .join("system_lua_lib")
+        .join("engine-isolation");
+    fs::create_dir_all(&package).expect("create trusted package");
+    fs::write(package.join("dependencies.yaml"), "{}\n").expect("write package dependencies");
+    // The exact declaration and source are fixed before the ordinary engine is locked.
+    // 精确声明及源码在普通引擎加锁前固定。
+    let definition = ModuleDefinition {
+        plugin_id: "engine-isolation".into(),
+        generation: "retained-plugin-generation".into(),
+        package_root: vulcan_runtime_assets::native_host_path(&package.canonicalize().expect("canonicalize package")).to_string_lossy().into_owned(),
+        dependencies_file: "dependencies.yaml".into(),
+        workspace_root: None,
+        cwd: None,
+        mounts: serde_json::json!({}),
+        security_partition: "engine-isolation-fixture".into(),
+        source: "-- Preserve state through ordinary skill reload.\n-- 在普通技能重载期间保留状态。\nlocal count = 0\n-- Return the next value without consulting mutable skill state.\n-- 返回下一个值，不读取可变技能状态。\nreturn {call=function() count=count+1; return count end}".into(),
+        exports: vec![ModuleExport {
+            name: "call".into(),
+            input_schema: serde_json::json!(true),
+            output_schema: serde_json::json!({"type":"integer"}),
+        }],
+    };
+    // Hold the actual production management lock across both plugin execution and ordinary reload.
+    // 在插件执行及普通重载期间持续持有真实生产管理锁。
+    let mut management = handle
+        .engine
+        .write()
+        .expect("hold ordinary management write lock");
+    // Only the immutable plugin engine moves into the native worker.
+    // 只有不可变插件引擎移动到原生工作线程。
+    let plugin_engine = Arc::clone(&handle.plugin_engine);
+    // The worker reports each real result, not an admission or scheduling acknowledgement.
+    // 工作线程报告每个真实结果，而非入场或调度确认。
+    let (completed, observed) = mpsc::channel();
+    // Advance the second invocation only after the ordinary catalog has really reloaded.
+    // 只有普通目录真实重载后才推进第二次调用。
+    let (continue_call, continuation) = mpsc::channel();
+    // The real Lua module remains in this thread across the management mutation.
+    // 真实 Lua 模块在管理变更期间持续存在于此线程中。
+    let worker = thread::spawn(move || {
+        // Initial allocation also happens while the management write guard is held.
+        // 初始分配同样发生在管理写守卫持有期间。
+        let mut module = plugin_engine
+            .create_embedded_module(
+                definition,
+                "engine-isolation-instance",
+                Arc::new(CallControl::new(WAIT).expect("initialization budget")),
+            )
+            .expect("initialize independent module");
+        for operation in ["before-management-reload", "after-management-reload"] {
+            if operation == "after-management-reload" {
+                continuation
+                    .recv_timeout(WAIT)
+                    .expect("wait for actual ordinary reload");
+            }
+            // Each real call has its own control budget and keeps the same module instance.
+            // 每次真实调用有独立控制预算，并保留同一模块实例。
+            let value = module
+                .invoke(ModuleInvocation {
+                    operation_id: operation,
+                    session_id: None,
+                    export: "call",
+                    arguments: &serde_json::Value::Null,
+                    context: &LuaInvocationContext::default(),
+                    control: Arc::new(CallControl::new(WAIT).expect("call budget")),
+                })
+                .expect("execute while ordinary management is locked");
+            completed.send(value).expect("publish actual plugin result");
+        }
+        module.close().expect("close actual plugin module");
+    });
+    assert_eq!(
+        observed
+            .recv_timeout(WAIT)
+            .expect("first call cannot wait on skill management"),
+        serde_json::json!(1)
+    );
+    management
+        .reload_from_roots(&handle.skill_roots)
+        .expect("reload ordinary skill catalog");
+    continue_call
+        .send(())
+        .expect("allow call after real reload");
+    assert_eq!(
+        observed
+            .recv_timeout(WAIT)
+            .expect("same plugin state survives ordinary reload"),
+        serde_json::json!(2)
+    );
+    worker
+        .join()
+        .expect("native module and its worker actually exit");
+    drop(management);
+    assert_eq!(
+        server.request_count(),
+        0,
+        "engine ownership test must remain offline"
+    );
 }
 
 /// Finds one effective skill version in a projected catalog.

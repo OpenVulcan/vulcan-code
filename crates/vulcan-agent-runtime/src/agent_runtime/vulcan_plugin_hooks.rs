@@ -1204,8 +1204,8 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::Path;
+    use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-    use std::sync::{Barrier, RwLock};
     use vulcan_hooks::{HookMode, HookPointDescriptor};
     use vulcan_tools_manager::{
         VulcanPlanToolPolicy, VulcanToolDescriptor, VulcanToolOrigin, VulcanToolSourceKind,
@@ -1452,7 +1452,7 @@ lua_runtime:
         fs::create_dir_all(&plugin_state_root).expect("create plugin state root");
         fs::create_dir_all(&plugin_runtime_root).expect("create plugin runtime root");
         let manager = VulcanPluginRuntimeManager::new(
-            Arc::new(RwLock::new(test_engine(&runtime_root))),
+            Arc::new(test_engine(&runtime_root)),
             plugin_root,
             user_plugin_root,
             bridge_root,
@@ -1726,7 +1726,7 @@ function: before
         fs::create_dir_all(&plugin_state_root).expect("create plugin state root");
         fs::create_dir_all(&plugin_runtime_root).expect("create plugin runtime root");
         VulcanPluginRuntimeManager::new(
-            Arc::new(RwLock::new(test_engine(runtime_root))),
+            Arc::new(test_engine(runtime_root)),
             bundled_root,
             user_plugin_root,
             bridge_root,

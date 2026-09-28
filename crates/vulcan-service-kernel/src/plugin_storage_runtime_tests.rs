@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use vulcan_plugin_runtime::{
     VulcanPluginActionCaller, VulcanPluginActionRequest, VulcanPluginHostServices,
@@ -221,7 +221,7 @@ fn real_plugin_empty_database_stage_measurements() {
     .unwrap();
     let engine_ms = started.elapsed().as_secs_f64() * 1000.0;
     let manager = VulcanPluginRuntimeManager::new(
-        Arc::new(RwLock::new(engine)),
+        Arc::new(engine),
         repository.join("plugins"),
         root.join("user_plugins"),
         bridge,

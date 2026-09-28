@@ -235,9 +235,9 @@ struct VulcanPluginManagerState {
     /// Unique runtime identity injected into every fixed bridge host call.
     /// 注入每次固定桥接宿主调用的唯一运行时身份。
     manager_id: String,
-    /// Shared LuaSkills engine used for host-managed bridge leases.
-    /// 用于宿主受管桥接租约的共享 LuaSkills 引擎。
-    engine: RwLock<Option<Arc<RwLock<LuaEngine>>>>,
+    /// Immutable plugin engine; this lock guards only one-time attachment, never Lua execution.
+    /// 不可变插件引擎；此锁仅保护一次性附加，绝不包围 Lua 执行。
+    engine: RwLock<Option<Arc<LuaEngine>>>,
     /// Root containing deployed Vulcan Plugin packages.
     /// 包含已部署 Vulcan 插件包的根目录。
     vulcan_plugin_root: PathBuf,
@@ -322,11 +322,8 @@ impl Drop for VulcanPluginManagerState {
         let Some(engine) = engine_slot.as_ref() else {
             return;
         };
-        let Ok(engine) = engine.read() else {
-            return;
-        };
         for session in sessions.values() {
-            let _ = close_system_lease_sync(&engine, session);
+            let _ = close_system_lease_sync(engine, session);
         }
         let hook_runtimes = self
             .hook_runtimes
@@ -334,7 +331,7 @@ impl Drop for VulcanPluginManagerState {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         for runtime in hook_runtimes.values() {
             let _ = close_raw_system_lease_sync(
-                &engine,
+                engine,
                 &runtime.lease_id,
                 &runtime.sid,
                 runtime.generation,
@@ -346,7 +343,7 @@ impl Drop for VulcanPluginManagerState {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         for runtime in ui_action_runtimes.values() {
             let _ = close_raw_system_lease_sync(
-                &engine,
+                engine,
                 &runtime.lease_id,
                 &runtime.sid,
                 runtime.generation,
@@ -358,7 +355,7 @@ impl Drop for VulcanPluginManagerState {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         for lease in retained_leases.values() {
             let _ =
-                close_raw_system_lease_sync(&engine, &lease.lease_id, &lease.sid, lease.generation);
+                close_raw_system_lease_sync(engine, &lease.lease_id, &lease.sid, lease.generation);
         }
     }
 }
@@ -397,20 +394,20 @@ impl fmt::Debug for VulcanPluginRuntimeManager {
 }
 
 impl VulcanPluginRuntimeManager {
-    /// Creates one manager around the shared LuaSkills engine and deployed plugin root.
-    /// 围绕共享 LuaSkills 引擎与已部署插件根目录创建管理器。
+    /// Creates one manager around an immutable plugin engine and deployed plugin root.
+    /// 围绕不可变插件引擎与已部署插件根目录创建管理器。
     ///
     /// # Parameters
     /// 参数
-    /// `engine` is the shared LuaSkills engine and `vulcan_plugin_root` is the trusted package root.
-    /// `engine` 是共享 LuaSkills 引擎，`vulcan_plugin_root` 是受信任包根。
+    /// `engine` is separate from mutable ordinary-skill management; `vulcan_plugin_root` is the trusted package root.
+    /// `engine` 独立于可变普通技能管理；`vulcan_plugin_root` 是受信任包根。
     ///
     /// # Returns
     /// 返回值
     /// Returns a manager initialized with an empty catalog snapshot.
     /// 返回以空目录快照初始化的管理器。
     pub fn new(
-        engine: Arc<RwLock<LuaEngine>>,
+        engine: Arc<LuaEngine>,
         vulcan_plugin_root: PathBuf,
         user_plugin_root: PathBuf,
         bridge_package_root: PathBuf,
@@ -473,7 +470,7 @@ impl VulcanPluginRuntimeManager {
     /// A fully initialized shared manager.
     /// 返回完整初始化的共享管理器。
     fn new_with_optional_engine(
-        engine: Option<Arc<RwLock<LuaEngine>>>,
+        engine: Option<Arc<LuaEngine>>,
         vulcan_plugin_root: PathBuf,
         user_plugin_root: PathBuf,
         bridge_package_root: PathBuf,
@@ -519,8 +516,8 @@ impl VulcanPluginRuntimeManager {
         manager
     }
 
-    /// Attaches the shared Lua engine used by executable plugins.
-    /// 附加执行型插件使用的共享 Lua 引擎。
+    /// Attaches the immutable execution engine used by plugins exactly once.
+    /// 恰好附加一次插件使用的不可变执行引擎。
     ///
     /// # Parameters
     /// 参数
@@ -531,7 +528,7 @@ impl VulcanPluginRuntimeManager {
     /// 返回值
     /// Returns unit after the engine and fixed bridge are published.
     /// 发布引擎与固定桥接后返回空值。
-    pub fn attach_runtime_engine(&self, engine: Arc<RwLock<LuaEngine>>) -> Result<(), String> {
+    pub fn attach_runtime_engine(&self, engine: Arc<LuaEngine>) -> Result<(), String> {
         let mut slot = self
             .state
             .engine
@@ -555,7 +552,7 @@ impl VulcanPluginRuntimeManager {
     /// 返回值
     /// The shared engine required by one executable plugin operation.
     /// 单次执行型插件操作所需的共享引擎。
-    fn runtime_engine(&self) -> Result<Arc<RwLock<LuaEngine>>, VulcanPluginRuntimeError> {
+    fn runtime_engine(&self) -> Result<Arc<LuaEngine>, VulcanPluginRuntimeError> {
         self.state
             .engine
             .read()

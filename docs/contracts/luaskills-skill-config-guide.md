@@ -25,7 +25,7 @@ checksum = "3f04f7301f2fd516b14f5a6a90849294b51dbd09156d0fccba5cd74ad31633b9"
 
 ## 2. 宿主持久化位置
 
-Vulcan Code 为两个 LuaSkills 引擎传入同一个固定配置根：
+Vulcan Code 为宿主中的 LuaSkills 引擎传入同一个固定配置根：
 
 ```text
 <application_data_root>/luaskills-config
@@ -44,6 +44,8 @@ Vulcan Code 为两个 LuaSkills 引擎传入同一个固定配置根：
 其中 `<user-vulcan-root>` 会随构建配置变化：release 为 `~/.vulcan`，debug 为 `~/.vulcan-debug`。
 
 普通 USER 技能使用 `skills/config.json`，ROOT 系统技能使用 `system-skills/config.json`。配置根与技能安装目录、构建产物和运行时资源目录相互独立。
+
+插件执行引擎独立于普通技能管理引擎；共享配置路径不表示共享引擎或执行锁。当前接入及迁移边界见[插件执行引擎归属](plugin-execution-engine.md)。
 
 ## 3. 技能包作者声明配置
 
