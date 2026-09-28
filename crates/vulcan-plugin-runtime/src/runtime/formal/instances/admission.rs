@@ -236,44 +236,20 @@ impl VulcanPluginRuntimeManager {
             &runtime.plugin,
         )
         .map_err(VulcanPluginRuntimeError::new)?;
-        {
-            // Order this state transition against catalog generation publication.
-            // 使当前状态转换与目录代次发布保持顺序。
-            let _publication = self
-                .state
-                .session_registration_gate
-                .lock()
-                .map_err(|_| instance_error("Plugin publication gate is poisoned."))?;
+        // Resolve the same immutable plugin aggregate before any execution domain can register.
+        // 在任何执行域可以注册之前，解析同一不可变插件聚合预算。
+        let budget = {
+            // Serialize the first registration and all later verification with host publication.
+            // 将首次注册及全部后续核验与宿主发布排序。
+            let publication = self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+            })?;
             self.ensure_current_persistent_generation(
                 &runtime.plugin.id,
                 runtime.plugin.generation,
             )?;
-            match owner.host.runtime().plugin(&runtime.plugin.id) {
-                Ok(_) => {}
-                Err(error) if error.code == EmbeddedErrorCode::NotFound => {
-                    // Derive plugin aggregate limits from the one parent configuration.
-                    // 从唯一父级配置派生插件聚合上限。
-                    let parent = &owner.settings.parent;
-                    owner
-                        .host
-                        .runtime()
-                        .register_plugin(
-                            runtime.plugin.id.clone(),
-                            EmbeddedPluginConfig {
-                                max_registered_pools: parent.max_registered_pools,
-                                max_sessions: parent.max_sessions,
-                                max_resident_vms: parent.max_resident_vms,
-                                max_running_calls: parent.max_running_calls,
-                                max_queued_calls: parent.max_queued_calls,
-                                max_queued_bytes: parent.max_queued_bytes,
-                                max_operations: parent.max_operations,
-                            },
-                        )
-                        .map_err(core_error)?;
-                }
-                Err(error) => return Err(core_error(error)),
-            }
-        }
+            owner.ensure_plugin_budget(&runtime.plugin.id, &publication)?
+        };
         // Optional Hook shutdown differs from the mandatory tool shutdown export.
         // 可选 Hook 关闭不同于必填工具关闭导出。
         let finalizer = match runtime.kind {
@@ -307,7 +283,7 @@ impl VulcanPluginRuntimeManager {
                     min_resident_vms: 0,
                     max_resident_vms: 1,
                     max_running_calls: 1,
-                    max_queued_calls: owner.settings.parent.max_queued_calls,
+                    max_queued_calls: budget.max_queued_calls,
                     reuse: InstanceReuse::Session,
                     serial: true,
                     backend: ExecutionBackend::InProcess,

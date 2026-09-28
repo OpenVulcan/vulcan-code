@@ -23,10 +23,13 @@
 初始化阶段只注册原生能力并创建有界核心工作线程，没有提前执行插件 Lua。
 
 正式预算从宿主状态根下的 `plugin-runtime-settings.json` 读取，权威实现为
-`vulcan-plugin-runtime/src/runtime/settings.rs`。顶层字段为 `schemaVersion`、`parent`、
-`maxCapabilityCallMs`、`shutdownTimeoutMs`；`parent` 直接反序列化上游
-`EmbeddedRuntimeConfig` 的字段和命名，不维护宿主复制 Schema。既有文件必须提供完整结构，
-未知字段、未知版本、非法父级限制及非正或不可表示的时长均报错。原生能力注册容量另由适配器
+`vulcan-plugin-runtime/src/runtime/settings.rs`。当前设置版本为 `schemaVersion: 2`，顶层字段为
+`schemaVersion`、`parent`、`pluginBudgets`、`maxCapabilityCallMs`、`shutdownTimeoutMs`；
+`parent` 直接反序列化上游 `EmbeddedRuntimeConfig` 的字段和命名，不维护宿主复制 Schema。
+除可缺省的 `pluginBudgets` 外，既有文件必须提供完整结构；未知字段、未知版本、非法父级或
+插件限制及非正或不可表示的时长均报错。第一版只按其原严格结构解码，随后在内存升级至第二版，
+保留父级和时长原值，插件覆盖为空；第一版携带新字段同样拒绝。重复版本字段和重复插件键报错，
+不会通过中间 JSON 映射消除重复证据。原生能力注册容量另由适配器
 在分配核心线程前验证。文件缺失使用唯一 `Default` 中的内存值，不创建目录、不写回配置。
 这些默认值是当前开发联调起点；完整方案的性能基准、最终默认值冻结和发布验收仍待完成。
 
@@ -38,6 +41,36 @@
 
 父级已覆盖本管理器的工具、Hook、Action、生命周期和启用探测生产执行路由。
 核心统计不等同于整个进程、插件环境磁盘或外部服务的资源预算。
+
+### 插件聚合预算
+
+`pluginBudgets` 是按精确插件 ID 索引的宿主覆盖表。缺省表或表中缺少某个 ID 时，明确从冻结
+父级派生该插件的全部七项聚合上限；不是另一份编译默认值。存在覆盖时，必须完整提供上游
+`EmbeddedPluginConfig` 的七个 snake_case 字段：`max_registered_pools`、`max_sessions`、
+`max_resident_vms`、`max_running_calls`、`max_queued_calls`、`max_queued_bytes`、`max_operations`。
+不做逐字段合并、裁剪或未知名称兼容。全部字段必须为正、不超过父级，并通过上游组合约束；
+无效插件 ID 和未来尚未安装插件的无效预算，也在启动线程前统一拒绝。
+
+权威实现为宿主 `runtime/settings/budgets.rs`、`runtime/formal/budgets.rs` 及上游
+`runtime/embedded/plugin_config.rs`。首次入场在目录发布门内注册插件预算；随后所有生产路径
+复核同一冻结配置。既有核心所有者配置不一致或已永久关闭时明确报错，不能重新注册来绕过。
+无状态工具、工具固定会话、Hook、持久 UI、瞬时 Action、生命周期与启用探测均共用同一插件
+核心所有者，包括尚未退役的旧代次。执行域的队列上限从这一有效插件预算派生，避免较小
+插件覆盖被父级大小的域声明绕过或导致声明冲突。
+
+聚合计数由 LuaSkills 核心执行，包括创建中、空闲、运行中及退役中的 VM，排队请求与字节，
+保留池、会话与操作。一个插件占满自身常驻额度后，其他插件仍能使用父级剩余容量；
+同一插件的 Hook 与 UI 也相互消耗该额度，因此仅配置一个 VM 时，两者不能同时常驻。
+这里提供的是上限隔离，没有承诺共享容量的最低保障，也没有把临时调用的独立池解释为
+插件专用池。按用途的共享／专用池选择、非借用预留、预热及策略修订仍需后续接入。
+
+`formal_plugin_status(plugin_id)` 返回原 `runtime_id`、整份策略来源 `parent` 或
+`host_override`，以及核心 `EmbeddedPluginSnapshot`。该读取不创建插件；父级未附加或 ID
+尚未注册时返回空值，非法 ID 或实际配置不一致返回错误。它目前是 Rust 管理接口，完整
+RPC／WebUI 暴露尚待完成。原始核心字段命名由上游类型决定，上游升级时须同步回读和验证。
+宿主准备阶段的保留记录及序列化输入仍使用既有父级预算；不能把核心插件计数当成宿主准备
+内存、进程总内存或外部服务硬配额。运行中的配置保持冻结，文件编辑不触发隐式重载；
+显式策略修订与相应状态查询仍待交付。此次内存迁移不执行持久配置写入，也不声称提供持久迁移工具。
 
 `begin_draining` 在目录发布门内为该管理器持有的正式运行时中、精确源代次的既有启用域
 签发本次排空代次。仅核心 `CapabilityBudget::is_finalization()` 证明的自动关闭阶段可使用，

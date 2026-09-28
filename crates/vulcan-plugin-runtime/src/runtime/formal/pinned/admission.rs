@@ -192,36 +192,16 @@ impl VulcanPluginRuntimeManager {
             .as_ref()
             .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin has no valid manifest."))?;
         let runtime = crate::runtime::lease::required_lua_runtime(manifest)?;
-        {
-            let _publication = self
-                .state
-                .session_registration_gate
-                .lock()
-                .map_err(|_| publication_error())?;
-            match owner.host.runtime().plugin(&session.plugin.id) {
-                Ok(_) => {}
-                Err(error) if error.code == EmbeddedErrorCode::NotFound => {
-                    let parent = &owner.settings.parent;
-                    owner
-                        .host
-                        .runtime()
-                        .register_plugin(
-                            session.plugin.id.clone(),
-                            EmbeddedPluginConfig {
-                                max_registered_pools: parent.max_registered_pools,
-                                max_sessions: parent.max_sessions,
-                                max_resident_vms: parent.max_resident_vms,
-                                max_running_calls: parent.max_running_calls,
-                                max_queued_calls: parent.max_queued_calls,
-                                max_queued_bytes: parent.max_queued_bytes,
-                                max_operations: parent.max_operations,
-                            },
-                        )
-                        .map_err(core_error)?;
-                }
-                Err(error) => return Err(core_error(error)),
-            }
-        }
+        // Resolve the same immutable plugin aggregate before any execution domain can register.
+        // 在任何执行域可以注册之前，解析同一不可变插件聚合预算。
+        let budget = {
+            // Serialize the first registration and all later verification with host publication.
+            // 将首次注册及全部后续核验与宿主发布排序。
+            let publication = self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+            })?;
+            owner.ensure_plugin_budget(&session.plugin.id, &publication)?
+        };
         let pool = owner
             .host
             .register_bundle_pool(VulcanPluginBundlePoolRequest {
@@ -235,7 +215,7 @@ impl VulcanPluginRuntimeManager {
                     min_resident_vms: 0,
                     max_resident_vms: 1,
                     max_running_calls: 1,
-                    max_queued_calls: owner.settings.parent.max_queued_calls,
+                    max_queued_calls: budget.max_queued_calls,
                     reuse: InstanceReuse::Session,
                     serial: true,
                     backend: ExecutionBackend::InProcess,

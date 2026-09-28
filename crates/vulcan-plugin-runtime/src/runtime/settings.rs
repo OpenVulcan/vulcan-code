@@ -1,14 +1,23 @@
-//! Host-owned parent budgets for the formal plugin runtime.
-//! 正式插件运行时的宿主自有父级预算。
+//! Host-owned parent and plugin aggregate budgets for the formal runtime.
+//! 正式运行时的宿主自有父级及插件聚合预算。
 
-use luaskills::runtime::embedded::EmbeddedRuntimeConfig;
+use luaskills::runtime::embedded::{EmbeddedPluginConfig, EmbeddedRuntimeConfig};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// Exact schema version understood by this host settings reader and writer projection.
 /// 此宿主设置读取器及写出投影理解的精确 Schema 版本。
-const SETTINGS_SCHEMA_VERSION: u32 = 1;
+const SETTINGS_SCHEMA_VERSION: u32 = 2;
+
+mod budgets;
+mod version;
+
+#[cfg(test)]
+mod budget_tests;
+
+pub use budgets::VulcanPluginBudgetSource;
 
 /// Persisted host configuration; core budget fields use the upstream type without a duplicated schema.
 /// 持久化宿主配置；核心预算字段使用上游类型，不复制 Schema。
@@ -21,6 +30,10 @@ pub struct VulcanPluginRuntimeSettings {
     /// One parent budget shared by all formal plugin execution domains.
     /// 全部正式插件执行域共享的单个父级预算。
     pub parent: EmbeddedRuntimeConfig,
+    /// Exact plugin-wide overrides; an absent plugin inherits the parent limits as one whole budget.
+    /// 精确插件级覆盖；缺省插件将父级上限整体继承为预算。
+    #[serde(default, deserialize_with = "budgets::deserialize_unique_budgets")]
+    pub plugin_budgets: BTreeMap<String, EmbeddedPluginConfig>,
     /// Maximum duration of one native capability, also constrained by its original operation deadline.
     /// 单项原生能力的最大时长，同时受原操作截止时间约束。
     pub max_capability_call_ms: u64,
@@ -51,6 +64,7 @@ impl Default for VulcanPluginRuntimeSettings {
                 max_host_request_bytes: 32 * 1024 * 1024,
                 max_value_bytes: 8 * 1024 * 1024,
             },
+            plugin_budgets: BTreeMap::new(),
             max_capability_call_ms: 60_000,
             shutdown_timeout_ms: super::VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS,
         }
@@ -70,6 +84,12 @@ impl VulcanPluginRuntimeSettings {
             ));
         }
         self.parent.validate().map_err(|error| error.to_string())?;
+        for (plugin_id, budget) in &self.plugin_budgets {
+            crate::catalog::validate_identifier(plugin_id, "budget owner")?;
+            budget
+                .validate(&self.parent)
+                .map_err(|error| format!("Invalid plugin budget for {plugin_id}: {error}"))?;
+        }
         for (name, milliseconds) in [
             ("maxCapabilityCallMs", self.max_capability_call_ms),
             ("shutdownTimeoutMs", self.shutdown_timeout_ms),
@@ -101,14 +121,12 @@ pub fn load_plugin_runtime_settings(
     // Only an absent file has defined default semantics; all malformed or unreadable existing files fail.
     // 仅文件缺失具有已定义的默认语义；全部格式错误或无法读取的既有文件均失败。
     let settings = match std::fs::read_to_string(&path) {
-        Ok(bytes) => {
-            serde_json::from_str::<VulcanPluginRuntimeSettings>(&bytes).map_err(|error| {
-                format!(
-                    "Invalid plugin runtime settings {}: {error}",
-                    path.display()
-                )
-            })?
-        }
+        Ok(bytes) => version::decode(&bytes).map_err(|error| {
+            format!(
+                "Invalid plugin runtime settings {}: {error}",
+                path.display()
+            )
+        })?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             VulcanPluginRuntimeSettings::default()
         }

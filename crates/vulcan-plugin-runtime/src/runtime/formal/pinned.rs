@@ -6,9 +6,9 @@ use super::*;
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor, VulcanPluginToolExecutionKind};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
-    EmbeddedErrorCode, EmbeddedPluginConfig, EmbeddedSessionPhase, EmbeddedSessionSnapshot,
-    ExecutionBackend, InstanceReuse, ModuleFinalizer, OperationHandle, OperationSnapshot,
-    PluginPoolConfig, PoolKind, json_size,
+    EmbeddedErrorCode, EmbeddedSessionPhase, EmbeddedSessionSnapshot, ExecutionBackend,
+    InstanceReuse, ModuleFinalizer, OperationHandle, OperationSnapshot, PluginPoolConfig, PoolKind,
+    json_size,
 };
 use serde_json::{Map, Value, json};
 use std::sync::atomic::Ordering;

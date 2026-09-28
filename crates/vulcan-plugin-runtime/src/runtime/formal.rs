@@ -5,6 +5,9 @@ use super::*;
 use luaskills::runtime::embedded::{EmbeddedRuntimeUsage, PoolUsage};
 use serde::Serialize;
 
+mod budgets;
+pub use budgets::VulcanPluginFormalPluginStatus;
+
 mod calls;
 pub use calls::VulcanPluginFormalCallStatus;
 mod pinned;
