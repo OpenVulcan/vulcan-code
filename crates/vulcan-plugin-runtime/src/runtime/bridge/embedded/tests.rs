@@ -197,6 +197,7 @@ impl Fixture {
         // 描述符是插件身份及依赖的唯一来源。
         let plugin = &snapshot.plugins["hook-plugin"];
         ModuleDefinition {
+            finalizer: None,
             plugin_id: plugin.id.clone(),
             generation: plugin.generation.to_string(),
             package_root: super::super::super::environment::plugin_execution_package_root(

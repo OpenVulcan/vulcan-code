@@ -187,6 +187,7 @@ impl VulcanPluginEmbeddedHost {
             .collect();
         self.register_pool(
             ModuleDefinition {
+                finalizer: None,
                 plugin_id: plugin.id.clone(),
                 generation: plugin.generation.to_string(),
                 package_root: package.to_string_lossy().into_owned(),
