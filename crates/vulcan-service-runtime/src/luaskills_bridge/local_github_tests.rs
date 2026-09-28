@@ -705,6 +705,7 @@ fn plugin_execution_engine_is_independent_of_skill_management() {
     // The exact declaration and source are fixed before the ordinary engine is locked.
     // 精确声明及源码在普通引擎加锁前固定。
     let definition = ModuleDefinition {
+        finalizer: None,
         plugin_id: "engine-isolation".into(),
         generation: "retained-plugin-generation".into(),
         package_root: vulcan_runtime_assets::native_host_path(&package.canonicalize().expect("canonicalize package")).to_string_lossy().into_owned(),

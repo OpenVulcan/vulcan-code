@@ -2047,6 +2047,18 @@ fn prepare_vulcan_plugin_runtime(
         })?,
     );
     if let Some(luaskills_runtime) = luaskills_runtime {
+        // Read host-owned formal budgets once; missing settings remain memory-only defaults.
+        // 一次性读取宿主自有正式预算；缺失设置保持内存默认值。
+        let plugin_runtime_settings = vulcan_plugin_runtime::load_plugin_runtime_settings(
+            &plugin_state_root,
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "plugins",
+                "Vulcan Plugins",
+                format!("读取插件运行时预算失败：{error}"),
+            )
+        })?;
         vulcan_plugin_runtime
             .attach_runtime_engine(Arc::clone(&luaskills_runtime.plugin_engine))
             .map_err(|error| {
@@ -2054,6 +2066,17 @@ fn prepare_vulcan_plugin_runtime(
                     "plugins",
                     "Vulcan Plugins",
                     format!("附加 Vulcan 插件执行运行时失败：{error}"),
+                )
+            })?;
+        // Every production plugin route will share this one parent instead of allocating another engine.
+        // 每条生产插件路由将共享此唯一父级，不另行分配引擎。
+        vulcan_plugin_runtime
+            .initialize_formal_runtime(plugin_runtime_settings)
+            .map_err(|error| {
+                ServiceBootstrapError::new(
+                    "plugins",
+                    "Vulcan Plugins",
+                    format!("初始化插件正式运行时失败：{error}"),
                 )
             })?;
     }

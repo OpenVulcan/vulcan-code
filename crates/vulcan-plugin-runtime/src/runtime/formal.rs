@@ -1,0 +1,152 @@
+//! Single manager ownership and control for the formal plugin parent runtime.
+//! 正式插件父运行时的单个管理器所有权及控制。
+
+use super::*;
+use luaskills::runtime::embedded::{EmbeddedRuntimeUsage, PoolUsage};
+use serde::Serialize;
+
+/// Manager-owned formal runtime and the exact settings frozen at construction.
+/// 管理器持有的正式运行时及构造时冻结的精确设置。
+pub(super) struct ManagedFormalRuntime {
+    /// Native adapter owns the core parent and all runtime-local capability registrations.
+    /// 原生适配器拥有核心父级及全部运行时内能力注册。
+    pub host: VulcanPluginEmbeddedHost,
+    /// Effective host settings remain immutable until the manager is recreated.
+    /// 生效宿主设置保持不可变，直到管理器重新创建。
+    pub settings: VulcanPluginRuntimeSettings,
+}
+
+/// Read-only observation of this manager's formal runtime, separate from legacy lease accounting.
+/// 此管理器正式运行时的只读观测，与旧租约记账分开。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VulcanPluginFormalRuntimeStatus {
+    /// Core-issued identity shared by every clone of this manager.
+    /// 此管理器全部克隆共享的核心签发身份。
+    pub runtime_id: String,
+    /// Exact validated settings, including the effective parent limits.
+    /// 精确已校验设置，包含生效父级上限。
+    pub settings: VulcanPluginRuntimeSettings,
+    /// Current queue and operation accounting from the sole core owner.
+    /// 来自唯一核心所有者的当前队列及操作记账。
+    pub operations: EmbeddedRuntimeUsage,
+    /// Actual VM accounting, including creation and unfinished retirement.
+    /// 真实 VM 记账，包含创建中及尚未完成退役。
+    pub resources: PoolUsage,
+}
+
+impl VulcanPluginRuntimeManager {
+    /// Attach exactly one formal runtime using `settings` and the already attached plugin engine.
+    /// 使用 `settings` 及已附加插件引擎，恰好附加一个正式运行时。
+    /// Returns an error without publishing a partial runtime; repeated attachment never replaces an owner.
+    /// 错误时不发布局部运行时；重复附加绝不替换所有者。
+    pub fn initialize_formal_runtime(
+        &self,
+        settings: VulcanPluginRuntimeSettings,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        settings.validate().map_err(VulcanPluginRuntimeError::new)?;
+        // Hold only the attachment lock; construction registers metadata and starts bounded core workers, never Lua.
+        // 仅持有附加锁；构造注册元数据并启动有界核心工作线程，绝不运行 Lua。
+        let mut slot = self
+            .state
+            .formal_runtime
+            .lock()
+            .map_err(|_| formal_lock_error())?;
+        if slot.is_some() {
+            return Err(VulcanPluginRuntimeError::new(
+                "Formal plugin runtime is already attached.",
+            ));
+        }
+        // The adapter validates native registration capacity before starting its core owner.
+        // 适配器在启动核心所有者前校验原生注册容量。
+        let host = VulcanPluginEmbeddedHost::new(
+            self,
+            settings.parent.clone(),
+            settings.max_capability_call_ms,
+        )
+        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        *slot = Some(Arc::new(ManagedFormalRuntime { host, settings }));
+        Ok(())
+    }
+
+    /// Return this manager's shared formal owner, or `None` for a metadata-only manager.
+    /// 返回此管理器共享的正式所有者；纯元数据管理器返回 `None`。
+    /// The attachment lock is released before callers enter core control or execution.
+    /// 调用方进入核心控制或执行前释放附加锁。
+    pub(super) fn formal_runtime_owner(
+        &self,
+    ) -> Result<Option<Arc<ManagedFormalRuntime>>, VulcanPluginRuntimeError> {
+        Ok(self
+            .state
+            .formal_runtime
+            .lock()
+            .map_err(|_| formal_lock_error())?
+            .clone())
+    }
+
+    /// Observe effective settings and current accounting without creating a runtime or changing configuration.
+    /// 观测生效设置及当前记账，不创建运行时或修改配置。
+    /// Returns `None` before explicit attachment; core observation failures remain explicit errors.
+    /// 显式附加前返回 `None`；核心观测失败保持显式错误。
+    pub fn formal_runtime_status(
+        &self,
+    ) -> Result<Option<VulcanPluginFormalRuntimeStatus>, VulcanPluginRuntimeError> {
+        // Absence is a real attachment state, never a reason to create an implicit runtime.
+        // 缺失是真实附加状态，绝不据此隐式创建运行时。
+        let Some(owner) = self.formal_runtime_owner()? else {
+            return Ok(None);
+        };
+        // The cloned owner keeps this exact runtime alive throughout both observations.
+        // 克隆所有者在两次观测期间保持此精确运行时存活。
+        let runtime = owner.host.runtime();
+        Ok(Some(VulcanPluginFormalRuntimeStatus {
+            runtime_id: runtime.id().to_string(),
+            settings: owner.settings.clone(),
+            operations: runtime
+                .usage()
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?,
+            resources: runtime
+                .resources()
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?,
+        }))
+    }
+
+    /// Permanently close formal admission and request cancellation without claiming that resources have drained.
+    /// 永久关闭正式入场并请求取消，不宣称资源已经排空。
+    /// No runtime means no work; attached owners remain available for subsequent observations.
+    /// 没有运行时即没有工作；已附加所有者继续可供后续观测。
+    pub fn request_formal_runtime_close(&self) -> Result<(), VulcanPluginRuntimeError> {
+        if let Some(owner) = self.formal_runtime_owner()? {
+            owner
+                .host
+                .runtime()
+                .request_close()
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Check actual core worker and VM termination after a close request.
+    /// 在关闭请求后检查核心工作线程与 VM 的真实终止。
+    /// Returns true only when no runtime was attached or the core confirms complete shutdown.
+    /// 仅在没有附加运行时或核心确认完整关闭时返回真值。
+    pub fn poll_formal_runtime_closed(&self) -> Result<bool, VulcanPluginRuntimeError> {
+        match self.formal_runtime_owner()? {
+            Some(owner) => owner
+                .host
+                .runtime()
+                .poll_closed()
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string())),
+            None => Ok(true),
+        }
+    }
+}
+
+/// Construct the stable attachment-lock error without hiding poisoned ownership.
+/// 构造稳定附加锁错误，不隐藏已中毒的所有权。
+fn formal_lock_error() -> VulcanPluginRuntimeError {
+    VulcanPluginRuntimeError::new("Formal plugin runtime attachment lock is poisoned.")
+}
+
+#[cfg(test)]
+mod tests;

@@ -7,8 +7,9 @@ use super::lease::{call_engine_blocking, parse_engine_response, parse_plugin_res
 use super::process::current_plugin_target_triple;
 use super::{
     ManagedVulcanPluginHookRuntime, VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
-    VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
-    canonical_plugin_file, lock_hook_runtimes,
+    VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS, VulcanPluginPersistentRuntimeKind,
+    VulcanPluginRuntimeError, VulcanPluginRuntimeManager, canonical_plugin_file,
+    lock_hook_runtimes,
 };
 use crate::{VulcanPluginHookDescriptor, VulcanPluginPermission, VulcanPluginRuntimeState};
 use serde_json::{Value, json};
@@ -18,10 +19,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex as AsyncMutex;
 use vulcan_hooks::{HookInvocation, HookResult};
-
-/// Maximum Lua execution time used while shutting down one persistent hook runtime.
-/// 关闭单个持久 hook 运行时时使用的 Lua 最大执行时长。
-const VULCAN_PLUGIN_HOOK_SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
 
 impl VulcanPluginRuntimeManager {
     /// Acquires the stable lifecycle gate for one plugin/category without awaiting under the registry lock.
@@ -551,10 +548,10 @@ impl VulcanPluginRuntimeManager {
                                         "plugin_id": plugin_id,
                                     })
                                     .to_string(),
-                                    "host_timeout_ms": VULCAN_PLUGIN_HOOK_SHUTDOWN_TIMEOUT_MS,
+                                    "host_timeout_ms": VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS,
                                 },
                             },
-                            "timeout_ms": VULCAN_PLUGIN_HOOK_SHUTDOWN_TIMEOUT_MS,
+                            "timeout_ms": VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS,
                         })
                         .to_string(),
                     )

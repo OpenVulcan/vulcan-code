@@ -17,6 +17,28 @@
 
 ## 当前迁移状态
 
+生产启动在附加独立插件引擎后，显式调用 `initialize_formal_runtime` 建立管理器唯一的
+`ManagedFormalRuntime`。管理器克隆只共享该父级，不另建 VM 治理器；重复附加返回错误，
+即使原运行时已完全关闭也不允许在同一管理器中静默替换身份。纯内容管理器不创建正式运行时。
+初始化阶段只注册原生能力并创建有界核心工作线程，没有提前执行插件 Lua。
+
+正式预算从宿主状态根下的 `plugin-runtime-settings.json` 读取，权威实现为
+`vulcan-plugin-runtime/src/runtime/settings.rs`。顶层字段为 `schemaVersion`、`parent`、
+`maxCapabilityCallMs`、`shutdownTimeoutMs`；`parent` 直接反序列化上游
+`EmbeddedRuntimeConfig` 的字段和命名，不维护宿主复制 Schema。既有文件必须提供完整结构，
+未知字段、未知版本、非法父级限制及非正或不可表示的时长均报错。原生能力注册容量另由适配器
+在分配核心线程前验证。文件缺失使用唯一 `Default` 中的内存值，不创建目录、不写回配置。
+这些默认值是当前开发联调起点；完整方案的性能基准、最终默认值冻结和发布验收仍待完成。
+
+配置在构造时冻结；文件外部修改不替换运行中的父级。`formal_runtime_status` 可读取核心身份、
+生效预算、队列与操作、实际 VM 记账；这些是控制接口的实时观测，不是跨字段事务快照。
+`request_formal_runtime_close` 仅永久关闭入场并请求取消，`poll_formal_runtime_closed`
+须由核心确认工作线程及 VM 真实终止后才返回完成。最后一个管理器释放时先请求正式父级关闭；
+实际生命周期关闭仍应走显式控制和排空，不能把析构触发理解成完整排空验收。
+
+此阶段父级已接入生产启动，但下述业务路由仍在迁移；因此其统计目前只覆盖正式入口，
+不包含旧 System 租约，也不表示已经统一全部插件或进程级预算。
+
 现有插件业务仍使用原固定桥及 System 租约；独立引擎已提供给正式 `EmbeddedRuntime`，
 原生能力及真实清单加载入口可以独立验收，业务路由迁移尚未完成。
 不得把此阶段描述为全部工具、Hook、UI Action 或会话已迁移到正式混合池。

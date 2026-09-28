@@ -9,6 +9,7 @@ mod configuration;
 mod drain;
 mod environment;
 mod execution;
+mod formal;
 mod installation;
 mod lease;
 mod lifecycle;
@@ -16,6 +17,7 @@ mod local_files;
 mod persistent;
 mod process;
 mod sessions;
+mod settings;
 
 // Preserve the existing public plugin API at its original module path.
 // 在原模块路径保留既有公开插件API。
@@ -31,6 +33,7 @@ pub use bridge::{
 };
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
+pub use formal::VulcanPluginFormalRuntimeStatus;
 pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
 use lease::{
     call_engine_blocking, close_raw_system_lease_sync, close_system_lease_sync,
@@ -44,6 +47,7 @@ use local_files::{
 pub use process::VulcanPluginMcpStdioLaunchSpec;
 pub use sessions::VulcanPluginInvocationRequest;
 use sessions::plugin_payload;
+pub use settings::{VulcanPluginRuntimeSettings, load_plugin_runtime_settings};
 
 use crate::{
     VulcanPluginCatalogSnapshot, VulcanPluginHostServices, VulcanPluginManifest,
@@ -66,6 +70,10 @@ const VULCAN_PLUGIN_PROBE_TIMEOUT_MS: u64 = 5_000;
 /// Default Lua execution time used when one hook declaration omits a timeout.
 /// hook 声明省略超时时使用的 Lua 默认执行时长。
 const VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS: u64 = 60_000;
+
+/// Sole default shutdown budget shared by legacy Hook cleanup and formal host finalizers.
+/// 旧 Hook 清理与正式宿主关闭器共享的唯一默认关闭预算。
+const VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
 
 /// Structured generic plugin runtime failure.
 /// 结构化的通用插件运行时失败。
@@ -241,6 +249,9 @@ struct VulcanPluginManagerState {
     /// Immutable plugin engine; this lock guards only one-time attachment, never Lua execution.
     /// 不可变插件引擎；此锁仅保护一次性附加，绝不包围 Lua 执行。
     engine: RwLock<Option<Arc<LuaEngine>>>,
+    /// One formal parent runtime attached to this manager; the lock never spans Lua execution.
+    /// 附加到此管理器的单个正式父运行时；此锁绝不包围 Lua 执行。
+    formal_runtime: Mutex<Option<Arc<formal::ManagedFormalRuntime>>>,
     /// Root containing deployed Vulcan Plugin packages.
     /// 包含已部署 Vulcan 插件包的根目录。
     vulcan_plugin_root: PathBuf,
@@ -312,9 +323,19 @@ struct VulcanPluginManagerState {
 }
 
 impl Drop for VulcanPluginManagerState {
-    /// Closes every remaining managed lease during deterministic host shutdown.
-    /// 在宿主确定性关闭期间释放所有剩余受管租约。
+    /// Requests formal shutdown and closes remaining legacy leases; only core polling proves formal termination.
+    /// 请求正式关闭并清理剩余旧租约；仅核心轮询可证明正式终止。
     fn drop(&mut self) {
+        // Stop formal admission before tearing down legacy leases; actual core owners retain unfinished work.
+        // 在清理旧租约前停止正式入场；真实核心所有者保留未完成工作。
+        if let Some(owner) = self
+            .formal_runtime
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+        {
+            let _ = owner.host.runtime().request_close();
+        }
         let sessions = self
             .sessions
             .get_mut()
@@ -489,6 +510,7 @@ impl VulcanPluginRuntimeManager {
             state: Arc::new(VulcanPluginManagerState {
                 manager_id: Uuid::new_v4().to_string(),
                 engine: RwLock::new(engine),
+                formal_runtime: Mutex::new(None),
                 vulcan_plugin_root,
                 user_plugin_root,
                 bridge_package_root,
