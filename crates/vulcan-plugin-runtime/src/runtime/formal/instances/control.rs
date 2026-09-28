@@ -1,39 +1,51 @@
-//! Hook cleanup observes original core identities and resumes after executor interruption.
-//! Hook 清理观测原核心身份，并在执行器中断后恢复。
+//! Persistent instance cleanup observes original core identities and resumes after executor interruption.
+//!持久清理观测原核心身份，并在执行器中断后恢复。
 
 use super::*;
 
 impl ManagedFormalRuntime {
-    /// Request closure of every registered Hook, including unfinished preparation; retain all ownership.
-    /// 请求关闭每个已注册 Hook，包含未完成准备；保留全部所有权。
-    pub(in crate::runtime::formal) fn cancel_hooks(&self) -> Result<(), VulcanPluginRuntimeError> {
-        for runtime in self
-            .hooks
-            .lock()
-            .map_err(|_| hook_error("Hook registry lock is poisoned."))?
-            .values()
-        {
-            runtime.closing.store(true, Ordering::Release);
+    /// Request closure of every registered persistent instance, including unfinished preparation; retain all ownership.
+    /// 请求关闭每个已注册 持久实例，包含未完成准备；保留全部所有权。
+    pub(in crate::runtime::formal) fn cancel_instances(
+        &self,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        for kind in [
+            VulcanPluginPersistentRuntimeKind::Hook,
+            VulcanPluginPersistentRuntimeKind::UiAction,
+        ] {
+            for runtime in self
+                .instances(kind)
+                .lock()
+                .map_err(|_| instance_error("Persistent registry lock is poisoned."))?
+                .values()
+            {
+                runtime.closing.store(true, Ordering::Release);
+            }
         }
         Ok(())
     }
 
-    /// Return true only when all Hook preparation and physical cleanup have finished.
-    /// 仅在全部 Hook 准备及物理清理完成后返回真值。
-    pub(in crate::runtime::formal) fn hooks_drained(
+    /// Return true only when all persistent preparation and physical cleanup have finished.
+    /// 仅在全部持久准备及物理清理完成后返回真值。
+    pub(in crate::runtime::formal) fn instances_drained(
         &self,
     ) -> Result<bool, VulcanPluginRuntimeError> {
-        for runtime in self
-            .hooks
-            .lock()
-            .map_err(|_| hook_error("Hook registry lock is poisoned."))?
-            .values()
-        {
-            // Keep the exact lifecycle evidence within this synchronous lock scope.
-            // 在当前同步锁作用域内保留精确生命周期证据。
-            let state = runtime.lock()?;
-            if !state.retired || state.preparing {
-                return Ok(false);
+        for kind in [
+            VulcanPluginPersistentRuntimeKind::Hook,
+            VulcanPluginPersistentRuntimeKind::UiAction,
+        ] {
+            for runtime in self
+                .instances(kind)
+                .lock()
+                .map_err(|_| instance_error("Persistent registry lock is poisoned."))?
+                .values()
+            {
+                // Keep the exact lifecycle evidence within this synchronous lock scope.
+                // 在当前同步锁作用域内保留精确生命周期证据。
+                let state = runtime.lock()?;
+                if !state.retired || state.preparing {
+                    return Ok(false);
+                }
             }
         }
         Ok(true)
@@ -43,15 +55,15 @@ impl ManagedFormalRuntime {
 impl VulcanPluginRuntimeManager {
     /// Restart cleanup for owner/runtime without recreating a session or replaying business work.
     /// 为 owner/runtime 重启清理，不重建会话或重放业务工作。
-    pub(super) fn start_hook_monitor(
+    pub(super) fn start_instance_monitor(
         &self,
         owner: &Arc<ManagedFormalRuntime>,
-        runtime: &Arc<HookRuntime>,
+        runtime: &Arc<PersistentRuntime>,
     ) -> Result<(), VulcanPluginRuntimeError> {
         // Require a current Tokio executor before starting supervision.
         // 启动监督前要求存在当前 Tokio 执行器。
         let executor = tokio::runtime::Handle::try_current()
-            .map_err(|_| hook_error("Hook monitoring requires a Tokio executor."))?;
+            .map_err(|_| instance_error("persistent monitoring requires a Tokio executor."))?;
         {
             // Keep the exact lifecycle evidence within this synchronous lock scope.
             // 在当前同步锁作用域内保留精确生命周期证据。
@@ -68,12 +80,12 @@ impl VulcanPluginRuntimeManager {
         // Retain this manager's sole formal runtime parent.
         // 保留此管理器唯一正式运行时父级。
         let owner = Arc::clone(owner);
-        // Retain the original Hook instance across preparation and observation.
-        // 跨准备及观测保留原 Hook 实例。
+        // Retain the original persistent instance across preparation and observation.
+        // 跨准备及观测保留原持久实例。
         let runtime = Arc::clone(runtime);
         // Preserve supervision interruption evidence if this task is dropped.
         // 此任务被丢弃时保留监督中断证据。
-        let monitor = HookMonitor(Arc::clone(&runtime));
+        let monitor = PersistentMonitor(Arc::clone(&runtime));
         executor.spawn(async move {
             // Keep the supervision guard alive for exactly this monitoring task.
             // 仅在此监控任务期间保持监督守卫存活。
@@ -89,7 +101,7 @@ impl VulcanPluginRuntimeManager {
                     // Keep the manager alive for the bounded preparation or synchronous monitor step.
                     // 为有界准备或同步监控步骤保持管理器存活。
                     let manager = VulcanPluginRuntimeManager { state };
-                    match manager.advance_hook(&owner, &runtime) {
+                    match manager.advance_instance(&owner, &runtime) {
                         Ok(done) => done,
                         Err(error) => {
                             if let Ok(mut state) = runtime.lock() {
@@ -112,10 +124,10 @@ impl VulcanPluginRuntimeManager {
 
     /// Advance runtime's physical cleanup on owner; return true only after every recorded resource retires.
     /// 在 owner 上推进 runtime 的物理清理；仅在每项记录资源退役后返回真值。
-    fn advance_hook(
+    fn advance_instance(
         &self,
         owner: &ManagedFormalRuntime,
-        runtime: &HookRuntime,
+        runtime: &PersistentRuntime,
     ) -> Result<bool, VulcanPluginRuntimeError> {
         // Order this state transition against catalog generation publication.
         // 使当前状态转换与目录代次发布保持顺序。
@@ -123,7 +135,7 @@ impl VulcanPluginRuntimeManager {
             .state
             .session_registration_gate
             .lock()
-            .map_err(|_| hook_error("Plugin publication gate is poisoned."))?;
+            .map_err(|_| instance_error("Plugin publication gate is poisoned."))?;
         // Keep the exact lifecycle evidence within this synchronous lock scope.
         // 在当前同步锁作用域内保留精确生命周期证据。
         let mut state = runtime.lock()?;
@@ -132,6 +144,15 @@ impl VulcanPluginRuntimeManager {
         }
         if state.preparing {
             return Ok(false);
+        }
+        if let Some(initialization) = &state.initialization
+            && initialization
+                .snapshot()
+                .map_err(core_error)?
+                .phase
+                .is_terminal()
+        {
+            state.preparation_action.take();
         }
         // Reclaim completed acknowledged calls while the persistent instance remains open.
         // 持久实例仍开启时回收已完成且已确认的调用。
@@ -233,15 +254,16 @@ impl VulcanPluginRuntimeManager {
                 Err(error) => return Err(core_error(error)),
             }
         }
+        state.preparation_action.take();
         state.retired = true;
         Ok(true)
     }
 
     /// Await runtime retirement until expires; interruption and cleanup failures remain explicit.
     /// 等待 runtime 退役至 expires；中断及清理失败保持明确。
-    pub(super) async fn wait_hook_retired(
+    pub(super) async fn wait_instance_retired(
         &self,
-        runtime: &HookRuntime,
+        runtime: &PersistentRuntime,
         expires: Instant,
     ) -> Result<(), VulcanPluginRuntimeError> {
         loop {
@@ -256,21 +278,24 @@ impl VulcanPluginRuntimeManager {
                     return Err(VulcanPluginRuntimeError::new(error.clone()));
                 }
                 if !state.monitored {
-                    return Err(hook_error("Hook cleanup supervision was interrupted."));
+                    return Err(instance_error(
+                        "persistent cleanup supervision was interrupted.",
+                    ));
                 }
             }
             remaining(expires).map_err(|_| {
-                hook_error("Hook cleanup timed out; original ownership remains retained.")
+                instance_error("persistent cleanup timed out; original ownership remains retained.")
             })?;
             tokio::time::sleep(OBSERVATION_INTERVAL).await;
         }
     }
 
-    /// Drain plugin_id's original Hook; return counts and independent shutdown diagnostics.
-    /// 排空 plugin_id 的原 Hook；返回计数及独立关闭诊断。
-    pub(crate) async fn drain_formal_hook(
+    /// Drain plugin_id's original instance of kind; return counts and independent shutdown diagnostics.
+    /// 排空 plugin_id 的原 持久；返回计数及独立关闭诊断。
+    pub(in crate::runtime) async fn drain_formal_instance(
         &self,
         plugin_id: &str,
+        kind: VulcanPluginPersistentRuntimeKind,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
         // Accumulate physical-close counts independently from shutdown failures.
         // 独立于关闭失败累计物理关闭计数。
@@ -281,10 +306,9 @@ impl VulcanPluginRuntimeManager {
         // Freeze one absolute deadline for this complete cleanup attempt.
         // 为本次完整清理尝试冻结一个绝对截止时间。
         let expires = deadline(owner.settings.shutdown_timeout_ms)?;
-        // Serialize only this plugin's Hook initialization and explicit drain.
-        // 仅串行化此插件的 Hook 初始化及显式排空。
-        let gate =
-            self.persistent_runtime_gate(plugin_id, VulcanPluginPersistentRuntimeKind::Hook)?;
+        // Serialize only this plugin's persistent initialization and explicit drain.
+        // 仅串行化此插件的持久初始化及显式排空。
+        let gate = self.persistent_runtime_gate(plugin_id, kind)?;
         // Stop retained preparation before waiting for its initialization gate.
         // 等待初始化门前停止已保留准备。
         {
@@ -294,11 +318,11 @@ impl VulcanPluginRuntimeManager {
                 .state
                 .session_registration_gate
                 .lock()
-                .map_err(|_| hook_error("Plugin publication gate is poisoned."))?;
+                .map_err(|_| instance_error("Plugin publication gate is poisoned."))?;
             if let Some(runtime) = owner
-                .hooks
+                .instances(kind)
                 .lock()
-                .map_err(|_| hook_error("Hook registry lock is poisoned."))?
+                .map_err(|_| instance_error("persistent registry lock is poisoned."))?
                 .get(plugin_id)
             {
                 runtime.closing.store(true, Ordering::Release);
@@ -308,9 +332,9 @@ impl VulcanPluginRuntimeManager {
         // 在原有限入场预算内保持初始化顺序。
         let _initialization = tokio::time::timeout(remaining(expires)?, gate.lock_owned())
             .await
-            .map_err(|_| hook_error("Hook drain admission timed out."))?;
-        // Retain the original Hook instance across preparation and observation.
-        // 跨准备及观测保留原 Hook 实例。
+            .map_err(|_| instance_error("persistent drain admission timed out."))?;
+        // Retain the original persistent instance across preparation and observation.
+        // 跨准备及观测保留原持久实例。
         let runtime = {
             // Order this state transition against catalog generation publication.
             // 使当前状态转换与目录代次发布保持顺序。
@@ -318,13 +342,13 @@ impl VulcanPluginRuntimeManager {
                 .state
                 .session_registration_gate
                 .lock()
-                .map_err(|_| hook_error("Plugin publication gate is poisoned."))?;
-            // Retain the original Hook instance across preparation and observation.
-            // 跨准备及观测保留原 Hook 实例。
+                .map_err(|_| instance_error("Plugin publication gate is poisoned."))?;
+            // Retain the original persistent instance across preparation and observation.
+            // 跨准备及观测保留原持久实例。
             let runtime = owner
-                .hooks
+                .instances(kind)
                 .lock()
-                .map_err(|_| hook_error("Hook registry lock is poisoned."))?
+                .map_err(|_| instance_error("persistent registry lock is poisoned."))?
                 .get(plugin_id)
                 .cloned();
             if let Some(runtime) = &runtime {
@@ -335,8 +359,8 @@ impl VulcanPluginRuntimeManager {
         let Some(runtime) = runtime else {
             return Ok(report);
         };
-        self.start_hook_monitor(&owner, &runtime)?;
-        match self.wait_hook_retired(&runtime, expires).await {
+        self.start_instance_monitor(&owner, &runtime)?;
+        match self.wait_instance_retired(&runtime, expires).await {
             Ok(()) => {
                 // Keep the exact lifecycle evidence within this synchronous lock scope.
                 // 在当前同步锁作用域内保留精确生命周期证据。
@@ -346,20 +370,25 @@ impl VulcanPluginRuntimeManager {
                 {
                     report
                         .failures
-                        .push(format!("Plugin Hook shutdown failed: {error}"));
+                        .push(format!("Plugin persistent shutdown failed: {error}"));
                 }
                 if let Some(Err(error)) = &state.prepared {
                     report
                         .failures
-                        .push(format!("Plugin Hook preparation failed: {error}"));
+                        .push(format!("Plugin persistent preparation failed: {error}"));
                 }
                 drop(state);
                 owner
-                    .hooks
+                    .instances(kind)
                     .lock()
-                    .map_err(|_| hook_error("Hook registry lock is poisoned."))?
+                    .map_err(|_| instance_error("persistent registry lock is poisoned."))?
                     .retain(|id, current| id != plugin_id || !Arc::ptr_eq(current, &runtime));
-                report.closed_hook_runtimes = 1;
+                match kind {
+                    VulcanPluginPersistentRuntimeKind::Hook => report.closed_hook_runtimes = 1,
+                    VulcanPluginPersistentRuntimeKind::UiAction => {
+                        report.closed_ui_action_runtimes = 1
+                    }
+                }
             }
             Err(error) => {
                 self.record_cleanup_failure(plugin_id, error.to_string())?;
@@ -369,19 +398,20 @@ impl VulcanPluginRuntimeManager {
         Ok(report)
     }
 
-    /// Report retained Hook ownership for plugin_id before clearing cleanup diagnostics.
-    /// 清除清理诊断前报告 plugin_id 的保留 Hook 所有权。
-    pub(crate) fn has_formal_hook(
+    /// Report retained ownership for plugin_id and kind before clearing cleanup diagnostics.
+    /// 清除清理诊断前报告 plugin_id 及 kind 的保留持久所有权。
+    pub(in crate::runtime) fn has_formal_instance(
         &self,
         plugin_id: &str,
+        kind: VulcanPluginPersistentRuntimeKind,
     ) -> Result<bool, VulcanPluginRuntimeError> {
         let Some(owner) = self.formal_runtime_owner()? else {
             return Ok(false);
         };
         Ok(owner
-            .hooks
+            .instances(kind)
             .lock()
-            .map_err(|_| hook_error("Hook registry lock is poisoned."))?
+            .map_err(|_| instance_error("persistent registry lock is poisoned."))?
             .contains_key(plugin_id))
     }
 }

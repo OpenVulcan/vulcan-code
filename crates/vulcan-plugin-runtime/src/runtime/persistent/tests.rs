@@ -85,6 +85,9 @@ fn initialization_retirement_rejects_old_publication_and_reopen_shares_one_lease
     // The immutable engine belongs only to this plugin manager.
     // 不可变引擎只归此插件管理器所有。
     let manager = test_manager(temp.path(), plugins);
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal parent");
     // Dropping the sender on assertion failure also releases the waiting handler with an explicit error.
     // 断言失败后丢弃发送端也会以显式错误释放等待处理器。
     let (release, receive) = mpsc::channel();
@@ -170,13 +173,12 @@ fn initialization_retirement_rejects_old_publication_and_reopen_shares_one_lease
             .expect("retire initializing generation");
         release.send(()).expect("release old source initializer");
         assert!(initializing.await.expect("join original action").is_err());
+        // The registered original remains discoverable until explicit physical retirement.
+        // 显式物理退役之前，已登记原始实例保持可发现。
         assert!(
             manager
-                .state
-                .ui_action_runtimes
-                .lock()
-                .expect("inspect published runtimes")
-                .is_empty()
+                .has_formal_instance("hook-plugin", UiAction)
+                .expect("retained initializer")
         );
         assert!(
             manager
@@ -185,6 +187,11 @@ fn initialization_retirement_rejects_old_publication_and_reopen_shares_one_lease
                 .expect("drain old generation")
                 .failures
                 .is_empty()
+        );
+        assert!(
+            !manager
+                .has_formal_instance("hook-plugin", UiAction)
+                .expect("retired initializer")
         );
         // The successor is published only after the original initialization and cleanup have left.
         // 原初始化及清理离开后才发布后继。
@@ -222,24 +229,27 @@ fn initialization_retirement_rejects_old_publication_and_reopen_shares_one_lease
 fn explicit_cancellation_and_mutation_detachment_have_distinct_outcomes() {
     use super::super::VulcanPluginPersistentRuntimeKind::UiAction;
     for mutation in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir().expect("create cancellation fixture");
         let plugins = temp.path().join("plugins");
-        fs::create_dir_all(&plugins).unwrap();
+        fs::create_dir_all(&plugins).expect("create plugin directory");
         write_hook_package(&plugins);
         if mutation {
             let path = plugins.join("hook-plugin/plugin.yaml");
             fs::write(
                 &path,
                 fs::read_to_string(&path)
-                    .unwrap()
+                    .expect("read action effect declaration")
                     .replace("effect: read", "effect: mutation"),
             )
-            .unwrap();
+            .expect("write mutation declaration");
         }
         let manager = test_manager(temp.path(), plugins);
+        manager
+            .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+            .expect("attach formal parent");
         let catalog = manager
             .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-            .unwrap();
+            .expect("publish cancellation catalog");
         let generation = catalog.plugins["hook-plugin"].generation;
         let runtime_identity = format!("{}:{}", catalog.service_epoch, generation);
         let identity = crate::VulcanPluginActionIdentity {
@@ -249,12 +259,12 @@ fn explicit_cancellation_and_mutation_detachment_have_distinct_outcomes() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
-            .unwrap();
+            .expect("create cancellation executor");
         runtime.block_on(async {
             let lease = manager
                 .ensure_enabled_plugin_runtime("hook-plugin", generation, UiAction)
                 .await
-                .unwrap();
+                .expect("prepare persistent UI instance");
             let held = lease.operation_gate.lock().await;
             let worker = manager.clone();
             let child_identity = identity.clone();
@@ -277,7 +287,7 @@ fn explicit_cancellation_and_mutation_detachment_have_distinct_outcomes() {
                 loop {
                     if manager
                         .find_action_status("hook-plugin", &runtime_identity, &identity, false)
-                        .unwrap()
+                        .expect("query queued action")
                         .is_some_and(|status| status.phase == "operation_wait")
                     {
                         break;
@@ -286,37 +296,45 @@ fn explicit_cancellation_and_mutation_detachment_have_distinct_outcomes() {
                 }
             })
             .await
-            .unwrap();
+            .expect("observe cancellable queue");
             manager
                 .action_status("hook-plugin", &runtime_identity, &identity, true)
-                .unwrap();
+                .expect("request read cancellation");
             if mutation {
                 submitted.abort();
-                assert!(submitted.await.unwrap_err().is_cancelled());
+                assert!(
+                    submitted
+                        .await
+                        .expect_err("cancel outer mutation waiter")
+                        .is_cancelled()
+                );
             } else {
-                assert!(submitted.await.unwrap().is_err());
+                assert!(submitted.await.expect("join cancelled read").is_err());
             }
             drop(held);
             tokio::time::timeout(std::time::Duration::from_secs(2), async {
                 while !manager
                     .action_status("hook-plugin", &runtime_identity, &identity, false)
-                    .unwrap()
+                    .expect("query terminal action")
                     .terminal
                 {
                     tokio::task::yield_now().await;
                 }
             })
             .await
-            .unwrap();
+            .expect("observe action completion");
             let status = manager
                 .action_status("hook-plugin", &runtime_identity, &identity, false)
-                .unwrap();
+                .expect("read final action status");
             assert_eq!(
                 status.phase,
                 if mutation { "succeeded" } else { "cancelled" }
             );
             assert_eq!(
-                manager.invoke_action(request).await.unwrap()["count"],
+                manager
+                    .invoke_action(request)
+                    .await
+                    .expect("invoke successor action")["count"],
                 if mutation { 200 } else { 100 }
             );
         });
@@ -416,22 +434,37 @@ fn hook_runtime_reuses_state_and_drains_by_plugin_generation() {
 #[test]
 fn persistent_gates_are_local_and_reclaim_unused_entries() {
     use super::super::VulcanPluginPersistentRuntimeKind::{Hook, UiAction};
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir().expect("create gate fixture");
     let manager = test_manager(temp.path(), temp.path().join("plugins"));
-    let first = manager.persistent_runtime_gate("first", UiAction).unwrap();
-    let same = manager.persistent_runtime_gate("first", UiAction).unwrap();
-    let other = manager.persistent_runtime_gate("second", UiAction).unwrap();
-    let hook = manager.persistent_runtime_gate("first", Hook).unwrap();
+    let first = manager
+        .persistent_runtime_gate("first", UiAction)
+        .expect("create first UI gate");
+    let same = manager
+        .persistent_runtime_gate("first", UiAction)
+        .expect("reuse first UI gate");
+    let other = manager
+        .persistent_runtime_gate("second", UiAction)
+        .expect("create independent plugin gate");
+    let hook = manager
+        .persistent_runtime_gate("first", Hook)
+        .expect("create independent Hook gate");
     assert!(std::sync::Arc::ptr_eq(&first, &same));
-    let _held = first.try_lock().unwrap();
+    let _held = first.try_lock().expect("hold first UI gate");
     assert!(same.try_lock().is_err());
     assert!(other.try_lock().is_ok());
     assert!(hook.try_lock().is_ok());
     drop(other);
     drop(hook);
-    let _next = manager.persistent_runtime_gate("next", UiAction).unwrap();
+    let _next = manager
+        .persistent_runtime_gate("next", UiAction)
+        .expect("create successor gate");
     assert_eq!(
-        manager.state.persistent_runtime_gates.lock().unwrap().len(),
+        manager
+            .state
+            .persistent_runtime_gates
+            .lock()
+            .expect("inspect weak gate registry")
+            .len(),
         2
     );
 }
@@ -441,25 +474,28 @@ fn persistent_gates_are_local_and_reclaim_unused_entries() {
 #[test]
 fn cancelled_queued_action_does_not_execute_after_gate_release() {
     use super::super::VulcanPluginPersistentRuntimeKind::UiAction;
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir().expect("create queued-action fixture");
     let root = temp.path().join("runtime");
     let plugins = root.join("plugins");
-    fs::create_dir_all(&plugins).unwrap();
+    fs::create_dir_all(&plugins).expect("create queued-action directory");
     write_hook_package(&plugins);
     let manager = test_manager(&root, plugins);
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal parent");
     let catalog = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-        .unwrap();
+        .expect("publish queued-action catalog");
     let generation = catalog.plugins["hook-plugin"].generation;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
-        .unwrap();
+        .expect("create queued-action executor");
     runtime.block_on(async {
         let lease = manager
             .ensure_enabled_plugin_runtime("hook-plugin", generation, UiAction)
             .await
-            .unwrap();
+            .expect("prepare queued-action instance");
         let held = lease.operation_gate.lock().await;
         let request = VulcanPluginActionRequest {
             plugin_id: "hook-plugin".into(),
@@ -480,7 +516,7 @@ fn cancelled_queued_action_does_not_execute_after_gate_release() {
                     .state
                     .action_admissions
                     .lock()
-                    .unwrap()
+                    .expect("inspect admission registry")
                     .get("hook-plugin")
                     .and_then(std::sync::Weak::upgrade);
                 if let Some(semaphore) = semaphore {
@@ -490,9 +526,14 @@ fn cancelled_queued_action_does_not_execute_after_gate_release() {
             }
         })
         .await
-        .unwrap();
+        .expect("observe action admission");
         queued.abort();
-        assert!(queued.await.unwrap_err().is_cancelled());
+        assert!(
+            queued
+                .await
+                .expect_err("cancel queued waiter")
+                .is_cancelled()
+        );
         drop(held);
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             while semaphore.available_permits() == 0 {
@@ -500,8 +541,11 @@ fn cancelled_queued_action_does_not_execute_after_gate_release() {
             }
         })
         .await
-        .unwrap();
-        let result = manager.invoke_action(request).await.unwrap();
+        .expect("observe admission release");
+        let result = manager
+            .invoke_action(request)
+            .await
+            .expect("invoke action after cancelled predecessor");
         assert_eq!(
             result["count"], 100,
             "cancelled action must not increment persistent state"
@@ -530,35 +574,36 @@ fn abandoned_running_action_keeps_lease_exclusive_and_other_plugin_progresses() 
             self.entered.notify_one();
             self.release
                 .lock()
-                .unwrap()
+                .expect("lock native release receiver")
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .map_err(|error| error.to_string())?;
             Ok(json!({"rows": []}))
         }
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir().expect("create blocked-action fixture");
     let root = temp.path().join("runtime");
     let plugins = root.join("plugins");
-    fs::create_dir_all(&plugins).unwrap();
+    fs::create_dir_all(&plugins).expect("create blocked-action directory");
     write_hook_package(&plugins);
     let manifest_path = plugins.join("hook-plugin/plugin.yaml");
-    let original_manifest = fs::read_to_string(&manifest_path).unwrap();
-    fs::create_dir_all(plugins.join("fast-plugin/runtime")).unwrap();
+    let original_manifest = fs::read_to_string(&manifest_path).expect("read original manifest");
+    fs::create_dir_all(plugins.join("fast-plugin/runtime"))
+        .expect("create independent plugin directory");
     fs::write(
         plugins.join("fast-plugin/plugin.yaml"),
         original_manifest.replace("hook-plugin", "fast-plugin"),
     )
-    .unwrap();
+    .expect("write independent manifest");
     fs::copy(
         plugins.join("hook-plugin/dependencies.yaml"),
         plugins.join("fast-plugin/dependencies.yaml"),
     )
-    .unwrap();
+    .expect("copy dependency declaration");
     fs::copy(
         plugins.join("hook-plugin/runtime/plugin.bundle.lua"),
         plugins.join("fast-plugin/runtime/plugin.bundle.lua"),
     )
-    .unwrap();
+    .expect("copy independent bundle");
     fs::write(
         &manifest_path,
         original_manifest
@@ -568,10 +613,13 @@ fn abandoned_running_action_keeps_lease_exclusive_and_other_plugin_progresses() 
             )
             .replace("timeout_ms: 1000", "timeout_ms: 4000"),
     )
-    .unwrap();
+    .expect("write native permission declaration");
     let bundle = plugins.join("hook-plugin/runtime/plugin.bundle.lua");
-    fs::write(&bundle, fs::read_to_string(&bundle).unwrap().replace("count = count + 100", "vulcan.host.call('vulcan.vldb.sqlite.query.v1', { binding = 'system.statistics', sql = 'SELECT 1', params = {} })\n    count = count + 100")).unwrap();
+    fs::write(&bundle, fs::read_to_string(&bundle).expect("read blocking bundle").replace("count = count + 100", "vulcan.host.call('vulcan.vldb.sqlite.query.v1', { binding = 'system.statistics', sql = 'SELECT 1', params = {} })\n    count = count + 100")).expect("write blocking bundle");
     let manager = test_manager(&root, plugins);
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal parent");
     let (release, receive) = mpsc::channel();
     let host = Arc::new(BlockingVldb {
         entered: tokio::sync::Notify::new(),
@@ -583,10 +631,10 @@ fn abandoned_running_action_keeps_lease_exclusive_and_other_plugin_progresses() 
             vldb: Some(host.clone()),
             ui_events: None,
         })
-        .unwrap();
+        .expect("install blocking native service");
     let catalog = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-        .unwrap();
+        .expect("publish blocking catalog");
     let runtime_identity = format!(
         "{}:{}",
         catalog.service_epoch, catalog.plugins["hook-plugin"].generation
@@ -598,7 +646,7 @@ fn abandoned_running_action_keeps_lease_exclusive_and_other_plugin_progresses() 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
-        .unwrap();
+        .expect("create blocked-action executor");
     runtime.block_on(async {
         let worker = manager.clone();
         let request = VulcanPluginActionRequest {
@@ -619,10 +667,22 @@ fn abandoned_running_action_keeps_lease_exclusive_and_other_plugin_progresses() 
         });
         tokio::time::timeout(std::time::Duration::from_secs(2), host.entered.notified())
             .await
-            .unwrap();
+            .expect("observe actual native entry");
         running.abort();
-        assert!(running.await.unwrap_err().is_cancelled());
-        let lease = manager.state.ui_action_runtimes.lock().unwrap()["hook-plugin"].clone();
+        assert!(
+            running
+                .await
+                .expect_err("cancel running outer waiter")
+                .is_cancelled()
+        );
+        let lease = manager
+            .ensure_enabled_plugin_runtime(
+                "hook-plugin",
+                catalog.plugins["hook-plugin"].generation,
+                super::super::VulcanPluginPersistentRuntimeKind::UiAction,
+            )
+            .await
+            .expect("same live UI instance");
         assert!(
             lease.operation_gate.try_lock().is_err(),
             "real host callback must retain the VM gate"
@@ -630,7 +690,7 @@ fn abandoned_running_action_keeps_lease_exclusive_and_other_plugin_progresses() 
         assert!(
             !manager
                 .action_status("hook-plugin", &runtime_identity, &identity, false)
-                .unwrap()
+                .expect("query active original action")
                 .terminal
         );
         let mut other_request = request.clone();
@@ -640,8 +700,8 @@ fn abandoned_running_action_keeps_lease_exclusive_and_other_plugin_progresses() 
             manager.invoke_action(other_request),
         )
         .await
-        .unwrap()
-        .unwrap();
+        .expect("bound independent action completion")
+        .expect("complete independent action");
         assert_eq!(
             other["count"], 100,
             "other plugin must finish before releasing the slow host call"
@@ -653,22 +713,22 @@ fn abandoned_running_action_keeps_lease_exclusive_and_other_plugin_progresses() 
                 .action_status("hook-plugin", &runtime_identity, &foreign, true)
                 .is_err()
         );
-        release.send(()).unwrap();
+        release.send(()).expect("release original native callback");
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             while !manager
                 .action_status("hook-plugin", &runtime_identity, &identity, false)
-                .unwrap()
+                .expect("query original physical completion")
                 .terminal
             {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .unwrap();
+        .expect("observe original completion");
         assert!(lease.operation_gate.try_lock().is_ok());
         let status = manager
             .action_status("hook-plugin", &runtime_identity, &identity, false)
-            .unwrap();
+            .expect("read measured final status");
         assert!(status.stages_ms.contains_key("host_callback"));
     });
 }

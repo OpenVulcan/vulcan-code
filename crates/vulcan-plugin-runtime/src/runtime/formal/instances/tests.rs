@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod ui;
+
 use crate::runtime::tests::{test_manager, write_hook_package};
 use crate::{VulcanPluginHostServices, VulcanPluginUiEventPublisher, VulcanPluginUiInvalidation};
 use std::collections::BTreeSet;
@@ -401,7 +403,7 @@ fn formal_hook_state_workspace_and_history_reclamation() {
                 .len(),
             0
         );
-        assert!(owner.hooks_drained().expect("Hook drained"));
+        assert!(owner.instances_drained().expect("Hook drained"));
     });
 }
 
@@ -474,7 +476,7 @@ fn formal_hook_timeout_retains_physical_owner_until_native_return() {
         // Inspect the actual formal parent used by production dispatch.
         // 检查生产分发使用的实际正式父级。
         let owner = fixture.owner();
-        assert!(!owner.hooks_drained().expect("actual ownership"));
+        assert!(!owner.instances_drained().expect("actual ownership"));
         // Keep the original Hook record to prove later cleanup does not replace it.
         // 保留原 Hook 记录，以证明后续清理未将其替换。
         let retained = owner.hooks.lock().expect("Hook registry")["hook-plugin"].clone();

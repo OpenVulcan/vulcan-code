@@ -17,6 +17,20 @@ struct WorkspaceRequest {
     /// Exact serialized correlation and path bytes retained for admission accounting.
     /// 入场记账保留的精确序列化关联与路径字节数。
     bytes: usize,
+    /// Real Action ownership includes its admission gate and survives lost observers.
+    /// 真实 Action 所有权包含其入场门，并在观察者离开后存活。
+    action: Option<crate::runtime::action_status::ActionWorkGuard>,
+}
+
+/// Authenticated callback scope carries a fixed path and optional Action timing owner.
+/// 已认证回调作用域携带固定路径及可选 Action 计时所有者。
+pub(super) struct CallbackScope {
+    /// Canonical workspace selected by the exact operation.
+    /// 精确操作选择的规范工作区。
+    pub workspace: PathBuf,
+    /// Diagnostics never grant capability authority and retain no business payload.
+    /// 诊断绝不授予能力权威，且不保留业务载荷。
+    pub action: Option<Arc<crate::runtime::action_status::ActionRecord>>,
 }
 
 /// Bounded request scopes use the core's existing operation and input budget sources.
@@ -88,7 +102,7 @@ impl VulcanPluginEmbeddedHost {
         // Borrow identity before moving the exact unchanged call into native admission.
         // 在将精确未改动调用移入原生入场前借用身份。
         let request_id = request_identity(&call)?.to_owned();
-        self.admit_workspace(&request_id, workspace, deadline, |remaining| {
+        self.admit_workspace(&request_id, workspace, deadline, None, |remaining| {
             self.runtime.submit(call, remaining)
         })
     }
@@ -116,7 +130,7 @@ impl VulcanPluginEmbeddedHost {
         // Require a host declaration instead of synthesizing or overwriting correlation.
         // 要求宿主声明，不合成或覆盖关联。
         let request_id = request_identity(&call)?.to_owned();
-        self.admit_workspace(&request_id, workspace, deadline, |remaining| {
+        self.admit_workspace(&request_id, workspace, deadline, None, |remaining| {
             self.runtime.submit_session(
                 session_id,
                 call.export,
@@ -148,6 +162,7 @@ impl VulcanPluginEmbeddedHost {
         request_id: &str,
         workspace: &Path,
         deadline: Instant,
+        action: Option<crate::runtime::action_status::ActionWorkGuard>,
         submit: impl FnOnce(Duration) -> EmbeddedResult<OperationHandle>,
     ) -> EmbeddedResult<OperationHandle> {
         // Only host-supplied existing directories can become request workspaces.
@@ -215,6 +230,7 @@ impl VulcanPluginEmbeddedHost {
                 operation: operation.clone(),
                 workspace,
                 bytes,
+                action,
             },
         );
         Ok(operation)
@@ -224,17 +240,20 @@ impl VulcanPluginEmbeddedHost {
 impl HostAuthority {
     /// Resolve `invocation` to its registered request workspace or the explicitly uncorrelated `domain` workspace.
     /// 将 `invocation` 解析到已登记请求工作区，或明确无关联的 `domain` 工作区。
-    /// Return a copied path; unknown or foreign request identities fail before any host service executes.
-    /// 返回复制路径；未知或外来请求身份在任何宿主服务执行前失败。
+    /// Return the copied workspace and diagnostic scope; unknown or foreign request identities fail before any host service executes.
+    /// 返回复制工作区及诊断作用域；未知或外来请求身份在任何宿主服务执行前失败。
     pub(super) fn workspace(
         &self,
         domain: &ExecutionAuthority,
         invocation: &CapabilityInvocation,
-    ) -> EmbeddedResult<PathBuf> {
+    ) -> EmbeddedResult<CallbackScope> {
         // Absence is the declared initialization/independent-finalization and fixed-workspace mode.
         // 缺省表示已声明的初始化／独立关闭及固定工作区模式。
         let Some(request_id) = invocation.caller.request_id.as_deref() else {
-            return Ok(domain.workspace.clone());
+            return Ok(CallbackScope {
+                workspace: domain.workspace.clone(),
+                action: None,
+            });
         };
         // Runtime and execution-domain identity are already checked by the native admission entry.
         // 原生入场入口已检查运行时与执行域身份。
@@ -254,7 +273,10 @@ impl HostAuthority {
                     "Plugin request workspace authority is absent or belongs to another operation.",
                 )
             })?;
-        Ok(scope.workspace.clone())
+        Ok(CallbackScope {
+            workspace: scope.workspace.clone(),
+            action: scope.action.as_ref().map(|action| action.record()),
+        })
     }
 }
 
@@ -288,4 +310,38 @@ fn workspace_deadline(timeout: Duration) -> EmbeddedResult<Instant> {
             "Plugin request timeout is out of range.",
         )
     })
+}
+
+impl VulcanPluginEmbeddedHost {
+    /// Submit call to its fixed session before expires, retaining trusted workspace and actual Action work.
+    /// 在 expires 前向固定会话提交 call，保留可信 workspace 及真实 Action 工作。
+    /// Return the actual handle; failed admission releases the unsubmitted work guard.
+    /// 返回实际句柄；入场失败时释放未提交工作守卫。
+    pub(in crate::runtime) fn submit_action(
+        &self,
+        session_id: &str,
+        call: EmbeddedCall,
+        workspace: &Path,
+        expires: Instant,
+        action: crate::runtime::action_status::ActionWorkGuard,
+    ) -> EmbeddedResult<OperationHandle> {
+        if self.runtime.session(session_id)?.pool_id != call.pool_id {
+            return Err(error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Action pool does not match its session.",
+            ));
+        }
+        // This identity is selected by the host, never parsed from plugin arguments.
+        // 此身份由宿主选择，绝不从插件参数解析。
+        let request_id = request_identity(&call)?.to_owned();
+        self.admit_workspace(&request_id, workspace, expires, Some(action), |remaining| {
+            self.runtime.submit_session(
+                session_id,
+                call.export,
+                call.arguments,
+                call.context,
+                remaining,
+            )
+        })
+    }
 }

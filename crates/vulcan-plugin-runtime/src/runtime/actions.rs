@@ -1,7 +1,7 @@
 //! Manifest-declared business actions with caller policy, schema validation, and lease cleanup.
 //! 带调用方策略、Schema校验与租约清理的清单声明业务Action。
 
-use super::action_status::{ACTION_RECORD, VulcanPluginActionIdentity};
+use super::action_status::{ACTION_RECORD, ActionAdmission, VulcanPluginActionIdentity};
 use super::bridge::VulcanPluginBridgeLeaseScope;
 use super::environment::plugin_execution_package_root;
 use super::execution::ActionExecution;
@@ -13,7 +13,6 @@ use super::{
 use crate::VulcanPluginRuntimeState;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 /// One host or WebUI invocation of a manifest-declared plugin business action.
@@ -122,15 +121,16 @@ impl VulcanPluginRuntimeManager {
                 VulcanPluginRuntimeError::new("Plugin action timeout exceeds the host clock range.")
             })?;
         let cancellable = action.effect == crate::VulcanPluginActionEffect::Read;
-        let record = self.register_action(
+        let record = self.register_action(ActionAdmission {
             identity,
-            &plugin.id,
-            &action.id,
-            format!("{}:{}", snapshot.service_epoch, plugin_generation),
-            entered.into_std(),
-            deadline.into_std(),
+            plugin_id: plugin.id.clone(),
+            action_id: action.id.clone(),
+            runtime_identity: format!("{}:{}", snapshot.service_epoch, plugin_generation),
+            entered: entered.into_std(),
+            deadline: deadline.into_std(),
             cancellable,
-        )?;
+            permit,
+        })?;
         let (waiter, cancelled) = tokio::sync::oneshot::channel();
         let mut waiter = Some(waiter);
         // Submitted mutations survive waiter disconnect; only the original deadline limits admission.
@@ -139,10 +139,12 @@ impl VulcanPluginRuntimeManager {
         // The supervisor retains gates and temporary lease cleanup after an HTTP waiter is dropped.
         // HTTP 等待方被丢弃后，监督任务仍持有同步门并完成临时租约清理。
         let manager = self.clone();
+        // Own completion before spawning so an unpolled task cannot leak active admission.
+        // 派发之前拥有完成记录，避免未轮询任务泄漏活动入场。
+        let completion = super::action_status::ActionCompletionGuard(record.clone());
         let task = tokio::spawn(async move {
-            let _permit = permit;
+            let _completion = completion;
             let _mutation_waiter = mutation_waiter;
-            let _completion = super::action_status::ActionCompletionGuard(record.clone());
             ACTION_RECORD
                 .scope(record.clone(), async {
                     let result = manager
@@ -252,41 +254,23 @@ impl VulcanPluginRuntimeManager {
             VulcanPluginRuntimeError::new(format!("Failed to resolve workspace root: {error}"))
         })?;
         if request.reuse_enabled_runtime {
-            let plugin_generation = plugin.generation;
-            execution.record.phase("initialization_wait", false);
-            let initialization = self
-                .persistent_runtime_gate(&plugin.id, VulcanPluginPersistentRuntimeKind::UiAction)?;
-            let initialization = execution.wait(initialization.lock_owned()).await?;
-            execution.record.phase("initializing", false);
-            let runtime = self
-                .initialize_enabled_plugin_runtime_locked(
+            execution.record.phase("initialization_wait");
+            // Cancel only this waiter; the instance registry owns any real preparation already admitted.
+            // 仅取消此等待者；实例注册表持有已接纳的真实准备。
+            let runtime = execution
+                .wait(self.ensure_formal_instance(
                     &plugin.id,
-                    plugin_generation,
+                    plugin.generation,
                     VulcanPluginPersistentRuntimeKind::UiAction,
-                    initialization,
-                )
-                .await?;
-            execution.record.phase("operation_wait", false);
-            let _operation = execution.wait(runtime.operation_gate.lock()).await?;
-            if runtime.closing.load(Ordering::Acquire)
-                || runtime.plugin_generation != plugin_generation
-            {
-                return Err(VulcanPluginRuntimeError::new(format!(
-                    "Vulcan Plugin `{}` persistent runtime is closing or stale.",
-                    plugin.id
-                )));
-            }
-            self.ensure_current_persistent_generation(&plugin.id, plugin_generation)?;
-            let remaining_ms = execution.remaining_ms()?;
-            execution.record.start()?;
+                    execution.deadline.into_std(),
+                ))
+                .await??;
             let result = self
-                .evaluate_bridge_function(
-                    &runtime.lease_id,
-                    &runtime.sid,
-                    runtime.generation,
+                .invoke_formal_ui_action(
+                    &runtime,
                     &action.function,
                     json!({ "arguments": request.arguments }),
-                    remaining_ms,
+                    &mut execution,
                 )
                 .await?;
             validate_plugin_action_value(
@@ -298,7 +282,7 @@ impl VulcanPluginRuntimeManager {
             return Ok(result);
         }
         self.reserve_session_slot(&plugin.id, lua_runtime.max_active_sessions)?;
-        execution.record.phase("initializing", false);
+        execution.record.phase("initializing");
         let action_lease_id = format!("action-{}", Uuid::new_v4());
         let create_result = self
             .create_managed_lease(
@@ -333,7 +317,7 @@ impl VulcanPluginRuntimeManager {
                 .await
             }
         };
-        execution.record.phase("cleanup", false);
+        execution.record.phase("cleanup");
         let close_result = self.close_raw_lease(&lease_id, &sid, generation).await;
         match close_result {
             Ok(()) => self.release_session_slot(&plugin.id),

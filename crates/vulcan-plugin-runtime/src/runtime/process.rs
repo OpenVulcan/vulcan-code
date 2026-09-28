@@ -24,8 +24,10 @@ use std::path::{Path, PathBuf};
 
 /// Resolve validated process arguments against the caller's exact retained plugin and workspace.
 /// 针对调用方保留的精确插件及工作区解析已校验进程参数。
-/// Return the authorized launch specification without consulting a newer catalog descriptor.
-/// 返回已授权启动规格，不读取更新的目录描述符。
+/// Return the original launch specification; intersect its permissions with current authorization only.
+/// 返回原启动规格；仅将其权限与当前授权取交集。
+/// Current catalog data cannot replace original executable declarations, package paths or environment identity.
+/// 当前目录数据不能替换原可执行声明、包路径或环境身份。
 pub(super) fn resolve_plugin_process_for_snapshot(
     state: &VulcanPluginManagerState,
     plugin: &crate::VulcanPluginDescriptor,
@@ -50,17 +52,38 @@ pub(super) fn resolve_plugin_process_for_snapshot(
         .manifest
         .as_ref()
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` has no valid manifest."))?;
+    // Permission withdrawal applies to the exact process subtype and session mode as well as its broad capability.
+    // 权限撤回除宽泛能力外，也适用于精确进程子类型及会话模式。
+    let current_permissions = {
+        // Read authorization only; all executable and environment fields keep their original owner.
+        // 仅读取授权；全部可执行及环境字段保留原所有者。
+        let snapshot = state
+            .snapshot
+            .read()
+            .map_err(|_| "Plugin catalog lock is poisoned.".to_string())?;
+        let current = snapshot
+            .plugins
+            .get(plugin_id)
+            .ok_or_else(|| "Plugin is no longer installed.".to_string())?;
+        current
+            .manifest
+            .as_ref()
+            .ok_or_else(|| "Plugin current manifest is unavailable.".to_string())?
+            .permissions
+            .clone()
+    };
+    // Require both the original declaration and current grant for one exact permission.
+    // 对单个精确权限同时要求原声明及当前授权。
+    let permitted = |permission: VulcanPluginPermission| {
+        manifest.permissions.contains(&permission) && current_permissions.contains(&permission)
+    };
     let options = payload
         .get("options")
         .and_then(Value::as_object)
         .ok_or_else(|| {
             "Vulcan plugin process request requires object field `options`.".to_string()
         })?;
-    if mode == "session"
-        && !manifest
-            .permissions
-            .contains(&VulcanPluginPermission::ProcessSession)
-    {
+    if mode == "session" && !permitted(VulcanPluginPermission::ProcessSession) {
         return Err(format!(
             "Vulcan plugin `{plugin_id}` did not declare process_session capability."
         ));
@@ -86,10 +109,7 @@ pub(super) fn resolve_plugin_process_for_snapshot(
     let execution_root = plugin_execution_package_root(state, plugin)?;
     match (binary, node_entry, python_entry) {
         (Some(binary), None, None) => {
-            if !manifest
-                .permissions
-                .contains(&VulcanPluginPermission::ProcessBinary)
-            {
+            if !permitted(VulcanPluginPermission::ProcessBinary) {
                 return Err(format!(
                     "Vulcan plugin `{plugin_id}` did not declare process_binary capability."
                 ));
@@ -104,10 +124,7 @@ pub(super) fn resolve_plugin_process_for_snapshot(
             )
         }
         (None, Some(node_entry), None) => {
-            if !manifest
-                .permissions
-                .contains(&VulcanPluginPermission::ProcessNode)
-            {
+            if !permitted(VulcanPluginPermission::ProcessNode) {
                 return Err(format!(
                     "Vulcan plugin `{plugin_id}` did not declare process_node capability."
                 ));
@@ -115,10 +132,7 @@ pub(super) fn resolve_plugin_process_for_snapshot(
             resolve_plugin_node_spec(state, plugin, manifest, node_entry, mode, options)
         }
         (None, None, Some(python_entry)) => {
-            if !manifest
-                .permissions
-                .contains(&VulcanPluginPermission::ProcessPython)
-            {
+            if !permitted(VulcanPluginPermission::ProcessPython) {
                 return Err(format!(
                     "Vulcan plugin `{plugin_id}` did not declare process_python capability."
                 ));

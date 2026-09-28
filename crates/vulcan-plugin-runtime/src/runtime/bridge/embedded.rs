@@ -345,7 +345,7 @@ impl VulcanPluginEmbeddedHost {
             .session_registration_gate
             .lock()
             .map_err(|_| internal("Plugin publication gate is poisoned."))?;
-        validate_current(&state, &domain, false)?;
+        validate_current(&state, &domain, false, None)?;
         {
             // Prune dead entries and reserve one bounded identity before core publication.
             // 在核心发布前清除死亡条目并预留一个有界身份。
@@ -427,10 +427,10 @@ impl HostAuthority {
                 .manager
                 .upgrade()
                 .ok_or_else(|| error(EmbeddedErrorCode::Closed, "Plugin manager is closed."))?;
-            validate_invocation_current(&state, &domain, invocation)?;
+            validate_invocation_current(&state, &domain, name, invocation)?;
             // Correlated calls require their exact admitted operation; absent correlation uses the module declaration.
             // 带关联调用要求精确已入场操作；无关联调用使用模块声明。
-            let workspace = self.workspace(&domain, invocation)?;
+            let scope = self.workspace(&domain, invocation)?;
             // Capture the clock before sampling remaining budget to avoid extending the deadline.
             // 在采样剩余预算前读取时钟，避免延长截止时间。
             let now = Instant::now();
@@ -445,11 +445,21 @@ impl HostAuthority {
                     )
                 })?;
             invocation.authorize()?;
-            Ok((state, domain, workspace, deadline))
+            Ok((state, domain, scope, deadline))
         })();
         match admitted {
-            Ok((state, domain, workspace, deadline)) => {
-                dispatch::execute(&state, &domain, &workspace, name, invocation, deadline)
+            Ok((state, domain, scope, deadline)) => {
+                // Correlation was authenticated before attributing native execution time.
+                // 原生执行计时归属前已认证关联。
+                let _timer = crate::runtime::action_status::HostCallTimer::for_record(scope.action);
+                dispatch::execute(
+                    &state,
+                    &domain,
+                    &scope.workspace,
+                    name,
+                    invocation,
+                    deadline,
+                )
             }
             Err(failure) => CapabilityOutcome {
                 result: Err(failure),
@@ -463,12 +473,15 @@ impl HostAuthority {
 /// 要求 `domain` 保留精确已安装字节及已授权生命周期状态。
 /// `finalizing` is core-owned evidence; return success only for current authority or its exact draining grant.
 /// `finalizing` 为核心自有证据；仅当前权威或其精确排空授权返回成功。
+/// capability is absent for registration; calls require the exact capability's current permission.
+/// capability 在注册时缺省；调用要求精确能力的当前权限。
 /// The catalog read lock ends before any external service or Lua code executes.
 /// 目录读锁在任何外部服务或 Lua 代码执行前结束。
 fn validate_current(
     state: &VulcanPluginManagerState,
     domain: &ExecutionAuthority,
     finalizing: bool,
+    capability: Option<&str>,
 ) -> EmbeddedResult<()> {
     // One immutable snapshot binds the package and lifecycle transition to the same observation.
     // 单个不可变快照将包与生命周期转换绑定至同一次观测。
@@ -489,6 +502,24 @@ fn validate_current(
             EmbeddedErrorCode::StaleGeneration,
             "Plugin content changed before host admission.",
         ));
+    }
+    // The frozen core grant is an upper bound; current manifest withdrawal still removes access.
+    // 冻结核心授权只是上界；当前清单撤回仍会移除访问权。
+    if let Some(name) = capability {
+        // Check current authority under the same catalog observation as identity and lifecycle.
+        // 在与身份及生命周期相同的目录观测下检查当前权威。
+        let manifest = current.manifest.as_ref().ok_or_else(|| {
+            error(
+                EmbeddedErrorCode::PermissionDenied,
+                "Plugin current manifest is unavailable.",
+            )
+        })?;
+        if !permitted(name, &manifest.permissions) {
+            return Err(error(
+                EmbeddedErrorCode::PermissionDenied,
+                format!("Plugin current manifest no longer authorizes native capability: {name}."),
+            ));
+        }
     }
     // Only trusted core finalization may use the manager's exact, still-current draining grant.
     // 仅可信核心关闭阶段可使用管理器精确且仍为当前代次的排空授权。
@@ -515,14 +546,22 @@ fn validate_current(
 
 /// Validate `invocation` against `domain` using only core-owned stage evidence and current host state.
 /// 仅使用核心自有阶段证据及当前宿主状态，校验 `invocation` 与 `domain`。
+/// name selects the fixed native capability whose current authorization must remain valid.
+/// name 选择当前授权必须保持有效的固定原生能力。
 /// Returns the original identity failure; this never substitutes for `invocation.authorize()`.
 /// 返回原始身份失败；这绝不替代 `invocation.authorize()`。
 fn validate_invocation_current(
     state: &VulcanPluginManagerState,
     domain: &ExecutionAuthority,
+    name: &str,
     invocation: &CapabilityInvocation,
 ) -> EmbeddedResult<()> {
-    validate_current(state, domain, invocation.budget.is_finalization()?)
+    validate_current(
+        state,
+        domain,
+        invocation.budget.is_finalization()?,
+        Some(name),
+    )
 }
 
 /// Check whether `permissions` authorize the fixed `name`; unknown names are never granted.

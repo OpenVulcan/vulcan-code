@@ -10,7 +10,9 @@ pub use calls::VulcanPluginFormalCallStatus;
 mod pinned;
 pub use pinned::VulcanPluginFormalSessionStatus;
 pub(super) use pinned::deadline as operation_deadline;
-mod hooks;
+mod instances;
+#[cfg(test)]
+pub(super) use instances::PersistentRuntime;
 
 /// Manager-owned formal runtime and the exact settings frozen at construction.
 /// 管理器持有的正式运行时及构造时冻结的精确设置。
@@ -29,7 +31,10 @@ pub(super) struct ManagedFormalRuntime {
     pinned: Mutex<BTreeMap<String, Arc<pinned::PinnedSession>>>,
     /// Persistent Hook ownership includes preparation and physical retirement.
     /// 持久 Hook 所有权包含准备及物理退役。
-    hooks: Mutex<BTreeMap<String, Arc<hooks::HookRuntime>>>,
+    hooks: Mutex<BTreeMap<String, Arc<instances::PersistentRuntime>>>,
+    /// Persistent UI instances share ownership mechanics but never Hook state or finalizers.
+    /// 持久 UI 实例共享所有权机制，但绝不共享 Hook 状态或关闭器。
+    ui_actions: Mutex<BTreeMap<String, Arc<instances::PersistentRuntime>>>,
 }
 
 /// Read-only observation of this manager's formal runtime, separate from legacy lease accounting.
@@ -87,6 +92,7 @@ impl VulcanPluginRuntimeManager {
             calls: Mutex::new(BTreeMap::new()),
             pinned: Mutex::new(BTreeMap::new()),
             hooks: Mutex::new(BTreeMap::new()),
+            ui_actions: Mutex::new(BTreeMap::new()),
         }));
         Ok(())
     }
@@ -141,7 +147,7 @@ impl VulcanPluginRuntimeManager {
         if let Some(owner) = self.formal_runtime_owner()? {
             owner.cancel_calls()?;
             owner.cancel_pinned()?;
-            owner.cancel_hooks()?;
+            owner.cancel_instances()?;
             owner
                 .host
                 .runtime()
@@ -159,7 +165,7 @@ impl VulcanPluginRuntimeManager {
         match self.formal_runtime_owner()? {
             Some(owner) if !owner.calls_drained()? => Ok(false),
             Some(owner) if !owner.pinned_drained()? => Ok(false),
-            Some(owner) if !owner.hooks_drained()? => Ok(false),
+            Some(owner) if !owner.instances_drained()? => Ok(false),
             Some(owner) => owner
                 .host
                 .runtime()

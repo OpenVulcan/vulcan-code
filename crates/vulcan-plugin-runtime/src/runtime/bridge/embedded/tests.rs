@@ -776,3 +776,109 @@ fn native_host_rechecks_generation_after_service_lock_wait() {
     );
     fixture.close();
 }
+
+/// Current permission withdrawal also wins while native dispatch waits for service resolution.
+/// 原生分发等待服务解析期间，当前权限撤回也必须生效。
+#[test]
+fn native_host_rechecks_permissions_after_service_lock_wait() {
+    // The real native request is delayed at service lookup while catalog publication remains free.
+    // 真实原生请求在服务查询处延迟，而目录发布保持可用。
+    let fixture = Fixture::new();
+    // Reuse this real pool across the later catalog change.
+    // 在后续目录变化期间复用此真实池。
+    let pool = fixture.pool("return {call=function(a) return vulcan.host.call('vulcan.plugin.storage.sqlite.query',a) end}");
+    // Prevent service entry without holding the independent catalog publication gate.
+    // 不持有独立目录发布门，同时阻止服务入场。
+    let service_gate = fixture
+        .manager
+        .state
+        .host_services
+        .write()
+        .expect("pause service lookup");
+    // Core admission and native dispatch run before the package refresh below.
+    // 核心入场及原生分发在下方包刷新之前运行。
+    let operation = fixture
+        .host
+        .runtime()
+        .submit(
+            EmbeddedCall {
+                pool_id: pool,
+                export: "call".to_string(),
+                arguments: json!({}),
+                context: LuaInvocationContext::default(),
+            },
+            WAIT,
+        )
+        .expect("submit blocked native call");
+    // Observe actual native dispatch with a bounded control-plane deadline.
+    // 使用有界控制面截止时间观测真实原生分发。
+    let deadline = Instant::now() + WAIT;
+    loop {
+        // The host effect ledger remains live throughout service lookup contention.
+        // 宿主副作用账本在服务查询竞争期间保持实时。
+        let snapshot = operation.snapshot().expect("inspect native dispatch");
+        if snapshot
+            .host_effects
+            .iter()
+            .any(|effect| effect.phase == luaskills::runtime::embedded::HostEffectPhase::Running)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native handler did not run: {snapshot:?}"
+        );
+        std::thread::yield_now();
+    }
+    // Publish a permission-only withdrawal while preserving the exact generation and package identity.
+    // 保留精确代次及包身份，同时发布仅权限撤回。
+    let mut snapshot = fixture.manager.snapshot().as_ref().clone();
+    // Change only the currently declared storage permission.
+    // 仅改变当前声明的存储权限。
+    let plugin = snapshot
+        .plugins
+        .get_mut("hook-plugin")
+        .expect("current plugin");
+    let mut manifest = plugin
+        .manifest
+        .as_ref()
+        .expect("current manifest")
+        .as_ref()
+        .clone();
+    manifest
+        .permissions
+        .retain(|permission| *permission != VulcanPluginPermission::StorageSqlite);
+    plugin.manifest = Some(Arc::new(manifest));
+    *fixture
+        .manager
+        .state
+        .snapshot
+        .write()
+        .expect("publish permission withdrawal") = Arc::new(snapshot);
+    drop(service_gate);
+    // Lua receives an explicit permission-denied result, without any storage execution.
+    // Lua 收到显式权限拒绝结果，不发生任何存储执行。
+    let terminal = operation
+        .wait(WAIT)
+        .expect("wait permission-denied native result");
+    assert_eq!(terminal.phase, OperationPhase::Succeeded, "{terminal:?}");
+    assert_eq!(
+        terminal.value.as_ref().expect("Lua envelope")["error"]["code"],
+        "permission_denied"
+    );
+    assert!(
+        terminal
+            .host_effects
+            .iter()
+            .all(|effect| effect.effects == EffectState::NotStarted)
+    );
+    assert!(
+        fixture
+            .services
+            .storage
+            .lock()
+            .expect("no storage entry")
+            .is_empty()
+    );
+    fixture.close();
+}

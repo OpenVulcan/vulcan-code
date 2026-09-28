@@ -365,7 +365,14 @@ where
         .try_with(Arc::clone)
         .ok();
     let queued = std::time::Instant::now();
+    // Own the work before scheduling, including closures dropped before their first instruction.
+    // 在调度之前拥有工作，包含首条指令前被丢弃的闭包。
+    let work = record
+        .as_ref()
+        .map(|record| super::action_status::ActionWorkGuard::new(Arc::clone(record), None))
+        .transpose()?;
     tokio::task::spawn_blocking(move || {
+        let _work = work;
         let _scope = super::action_status::BlockingActionScope::enter(record.clone());
         if let Some(record) = &record {
             record.observe("blocking_queue", queued.elapsed());

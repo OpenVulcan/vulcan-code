@@ -265,6 +265,9 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     // manager loads the real repository package through the production catalog path.
     // manager 通过生产目录路径加载真实仓库插件包。
     let manager = test_manager(&runtime_root, repository_root.join("plugins"));
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach the production formal parent for persistent UI");
     // vldb records every authoritative logical-binding query emitted by the real Lua bundle.
     // vldb 记录真实 Lua Bundle 发出的每个权威逻辑绑定查询。
     let vldb = Arc::new(RecordingVldbService::default());
@@ -531,7 +534,19 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
             reuse_enabled_runtime: true,
         }))
         .expect_err("reject statistics VLDB access without capability");
-    assert!(capability_error.message.contains("system_vldb_access"));
+    assert!(capability_error.message.contains("no longer authorizes"));
+    assert!(
+        capability_error
+            .message
+            .contains("vulcan.vldb.sqlite.query.v1")
+    );
+    assert_eq!(
+        vldb.calls
+            .lock()
+            .expect("no call after permission withdrawal")
+            .len(),
+        24
+    );
 }
 
 /// Verifies the repository Context7 bundle loads through the LuaSkills typed JSON surface.

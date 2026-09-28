@@ -29,7 +29,7 @@ pub(super) fn execute(
             .ok_or_else(|| internal("Native capability arguments are not an object."))?;
         match name {
             VULCAN_PLUGIN_PROCESS_RESOLVE_TOOL => {
-                Ok(effect(state, domain, invocation, deadline, || {
+                Ok(effect(state, domain, name, invocation, deadline, || {
                     super::super::super::process::resolve_plugin_process_for_snapshot(
                         state,
                         &domain.plugin,
@@ -39,7 +39,7 @@ pub(super) fn execute(
                 }))
             }
             VULCAN_PLUGIN_CONFIG_GET_TOOL => {
-                Ok(effect(state, domain, invocation, deadline, || {
+                Ok(effect(state, domain, name, invocation, deadline, || {
                     VulcanPluginRuntimeManager {
                         state: Arc::clone(state),
                     }
@@ -56,7 +56,7 @@ pub(super) fn execute(
                         "Plugin configuration update requires field `value`.",
                     )
                 })?;
-                Ok(effect(state, domain, invocation, deadline, || {
+                Ok(effect(state, domain, name, invocation, deadline, || {
                     VulcanPluginRuntimeManager {
                         state: Arc::clone(state),
                     }
@@ -95,7 +95,7 @@ pub(super) fn execute(
                             "Plugin UI publisher is unavailable.",
                         )
                     })?;
-                Ok(effect(state, domain, invocation, deadline, || {
+                Ok(effect(state, domain, name, invocation, deadline, || {
                     publisher.publish(VulcanPluginUiInvalidation {
                         plugin_id: domain.plugin.id.clone(),
                         topic: topic.to_string(),
@@ -120,7 +120,7 @@ pub(super) fn execute(
                                 "Plugin storage service is unavailable.",
                             )
                         })?;
-                    return Ok(effect(state, domain, invocation, deadline, || {
+                    return Ok(effect(state, domain, name, invocation, deadline, || {
                         storage.execute(VulcanPluginStorageRequest {
                             deadline: Some(deadline),
                             plugin_id: domain.plugin.id.clone(),
@@ -144,7 +144,7 @@ pub(super) fn execute(
                                 "Plugin VLDB service is unavailable.",
                             )
                         })?;
-                    return Ok(effect(state, domain, invocation, deadline, || {
+                    return Ok(effect(state, domain, name, invocation, deadline, || {
                         vldb.execute(VulcanPluginVldbRequest {
                             deadline: Some(deadline),
                             plugin_id: domain.plugin.id.clone(),
@@ -172,11 +172,14 @@ pub(super) fn execute(
 /// 在运行 `call` 前立即重验实时 `invocation` 权威及 `deadline`。
 /// `state` must still authorize the retained `domain` after any service lookup wait.
 /// 任何服务查询等待结束后，`state` 仍必须授权保留的 `domain`。
+/// name identifies the exact native capability to recheck before entering the service.
+/// name 标识进入服务前需要重验的精确原生能力。
 /// Opaque service results carry unknown effects even when their business result succeeds.
 /// 即使业务结果成功，不透明服务结果仍携带未知副作用状态。
 fn effect(
     state: &VulcanPluginManagerState,
     domain: &ExecutionAuthority,
+    name: &str,
     invocation: &CapabilityInvocation,
     deadline: Instant,
     call: impl FnOnce() -> Result<Value, String>,
@@ -187,7 +190,7 @@ fn effect(
             effects: EffectState::NotStarted,
         };
     }
-    if let Err(failure) = validate_invocation_current(state, domain, invocation) {
+    if let Err(failure) = validate_invocation_current(state, domain, name, invocation) {
         return CapabilityOutcome {
             result: Err(failure),
             effects: EffectState::NotStarted,

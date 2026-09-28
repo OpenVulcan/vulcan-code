@@ -3,7 +3,7 @@
 
 use super::{
     RetainedVulcanPluginLease, VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError,
-    VulcanPluginRuntimeManager, lock_retained_leases, lock_ui_runtimes,
+    VulcanPluginRuntimeManager, lock_retained_leases,
 };
 use crate::VulcanPluginRuntimeState;
 use std::collections::BTreeSet;
@@ -94,73 +94,15 @@ impl VulcanPluginRuntimeManager {
         let mut report = VulcanPluginDrainReport::default();
         report.merge(self.drain_formal_calls(Some(plugin_id), None).await?);
         report.merge(self.drain_pinned(Some(plugin_id), None).await?);
-        report.merge(self.drain_formal_hook(plugin_id).await?);
-        self.drain_persistent_runtime(
-            plugin_id,
+        for kind in [
+            VulcanPluginPersistentRuntimeKind::Hook,
             VulcanPluginPersistentRuntimeKind::UiAction,
-            &mut report,
-        )
-        .await?;
+        ] {
+            report.merge(self.drain_formal_instance(plugin_id, kind).await?);
+        }
         let retained = self.take_retained_leases(|lease| lease.plugin_id == plugin_id)?;
         report.merge(self.drain_retained_leases(retained).await?);
         Ok(report)
-    }
-
-    /// Drains one category-isolated persistent runtime into the shared lifecycle report.
-    /// 把一个按类别隔离的持久运行时排空到共享生命周期报告中。
-    /// plugin_id and runtime_kind select one registry; appends cleanup results to report and returns unit or a lock error.
-    /// plugin_id与runtime_kind选择一个注册表；向report追加清理结果，返回空值或锁错误。
-    async fn drain_persistent_runtime(
-        &self,
-        plugin_id: &str,
-        runtime_kind: VulcanPluginPersistentRuntimeKind,
-        report: &mut VulcanPluginDrainReport,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let gate = self.persistent_runtime_gate(plugin_id, runtime_kind)?;
-        let _lifecycle = gate.lock().await;
-        let runtimes = match runtime_kind {
-            VulcanPluginPersistentRuntimeKind::Hook => {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Hook instances require formal draining.",
-                ));
-            }
-            VulcanPluginPersistentRuntimeKind::UiAction => &self.state.ui_action_runtimes,
-        };
-        let runtime = lock_ui_runtimes(runtimes)?.get(plugin_id).cloned();
-        let Some(runtime) = runtime else {
-            return Ok(());
-        };
-        match self
-            .close_persistent_runtime(Arc::clone(&runtime), runtime_kind)
-            .await
-        {
-            Ok(shutdown_diagnostic) => {
-                lock_ui_runtimes(runtimes)?
-                    .retain(|id, current| id != plugin_id || !Arc::ptr_eq(current, &runtime));
-                match runtime_kind {
-                    VulcanPluginPersistentRuntimeKind::Hook => {
-                        report.closed_hook_runtimes += 1;
-                    }
-                    VulcanPluginPersistentRuntimeKind::UiAction => {
-                        report.closed_ui_action_runtimes += 1;
-                    }
-                }
-                if let Some(diagnostic) = shutdown_diagnostic {
-                    report.failures.push(diagnostic);
-                }
-            }
-            Err(error) => {
-                // A failed close remains quarantined; subsequent drains may retry cleanup.
-                // 关闭失败的实例保持隔离；后续排空可以重试清理。
-                let diagnostic = format!(
-                    "Plugin `{plugin_id}` persistent {} runtime cleanup failed and remains retained: {error}",
-                    runtime_kind.label()
-                );
-                self.record_cleanup_failure(plugin_id, diagnostic.clone())?;
-                report.failures.push(diagnostic);
-            }
-        }
-        Ok(())
     }
 
     /// Closes every retained plugin session owned by one archived conversation.
@@ -372,9 +314,10 @@ impl VulcanPluginRuntimeManager {
         let has_retained_leases = lock_retained_leases(&self.state.retained_leases)?
             .values()
             .any(|lease| lease.plugin_id == plugin_id);
-        let has_hook_runtime = self.has_formal_hook(plugin_id)?;
+        let has_hook_runtime =
+            self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::Hook)?;
         let has_ui_action_runtime =
-            lock_ui_runtimes(&self.state.ui_action_runtimes)?.contains_key(plugin_id);
+            self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::UiAction)?;
         let has_active_count = self
             .state
             .active_session_counts

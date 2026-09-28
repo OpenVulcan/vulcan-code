@@ -110,29 +110,6 @@ impl fmt::Display for VulcanPluginRuntimeError {
 
 impl Error for VulcanPluginRuntimeError {}
 
-/// Legacy UI Action ownership pending migration to the formal parent.
-/// 等待迁移至正式父级的旧 UI Action 所有权。
-struct ManagedVulcanPluginUiRuntime {
-    /// Host plugin generation captured when the UI Action runtime opened.
-    /// UI Action 运行时打开时捕获的宿主插件代次。
-    plugin_generation: u64,
-    /// LuaSkills managed lease identifier.
-    /// LuaSkills 受管租约标识。
-    lease_id: String,
-    /// Stable LuaSkills session identifier returned with the managed lease.
-    /// 与受管租约一同返回的稳定 LuaSkills 会话标识。
-    sid: String,
-    /// LuaSkills managed lease generation.
-    /// LuaSkills 受管租约代次。
-    generation: u64,
-    /// Serial gate preserves deterministic plugin-local UI Action state.
-    /// 串行门保持插件本地 UI Action 状态确定性。
-    operation_gate: AsyncMutex<()>,
-    /// Closing state used to reject late invocations.
-    /// 用于拒绝迟到调用的关闭状态。
-    closing: AtomicBool,
-}
-
 /// Persistent runtime category used to isolate latency-sensitive hooks from plugin UI actions.
 /// 用于隔离延迟敏感 Hook 与插件界面 Action 的持久运行时类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -146,15 +123,6 @@ enum VulcanPluginPersistentRuntimeKind {
 }
 
 impl VulcanPluginPersistentRuntimeKind {
-    /// Returns the stable managed-lease identifier for this runtime category.
-    /// 返回当前运行时类别的稳定受管租约标识。
-    fn lease_id(self) -> &'static str {
-        match self {
-            Self::Hook => "enabled-plugin-hook-runtime",
-            Self::UiAction => "enabled-plugin-ui-action-runtime",
-        }
-    }
-
     /// Returns the diagnostic category label used in lifecycle errors.
     /// 返回生命周期错误使用的诊断类别标签。
     fn label(self) -> &'static str {
@@ -188,6 +156,11 @@ struct RetainedVulcanPluginLease {
     /// 成功清理后是否必须释放一个插件会话名额。
     reserved_session_slot: bool,
 }
+
+/// Weak admission gates are keyed by the exact plugin and persistent purpose.
+/// 弱入场门以精确插件及持久用途为键。
+type PersistentRuntimeGates =
+    BTreeMap<(String, VulcanPluginPersistentRuntimeKind), std::sync::Weak<AsyncMutex<()>>>;
 
 /// Shared mutable state retained across runtime-foundation refreshes.
 /// 跨运行时基础刷新保留的共享可变状态。
@@ -237,17 +210,12 @@ struct VulcanPluginManagerState {
     /// Active session counts keyed by plugin identifier.
     /// 以插件标识为键的活动会话计数。
     active_session_counts: Mutex<BTreeMap<String, usize>>,
-    /// Persistent global UI action runtimes keyed by plugin identifier.
-    /// 以插件标识为键的持久全局界面 Action 运行时集合。
-    ui_action_runtimes: Mutex<BTreeMap<String, Arc<ManagedVulcanPluginUiRuntime>>>,
     /// Raw leases retained after cleanup failures and keyed by lease identifier.
     /// 清理失败后保留并以租约标识为键的原始租约集合。
     retained_leases: Mutex<BTreeMap<String, RetainedVulcanPluginLease>>,
     /// Weak plugin/category gates shared by initialization and drain; inactive entries are reclaimed.
     /// 初始化与排空共享的插件及类别弱引用同步门；回收无人持有的条目。
-    persistent_runtime_gates: Mutex<
-        BTreeMap<(String, VulcanPluginPersistentRuntimeKind), std::sync::Weak<AsyncMutex<()>>>,
-    >,
+    persistent_runtime_gates: Mutex<PersistentRuntimeGates>,
     /// Bounded outstanding actions shared across lifecycle generations until actual cleanup.
     /// 跨生命周期代次共享的有界在途 Action，直至实际清理完成。
     action_admissions: Mutex<BTreeMap<String, std::sync::Weak<tokio::sync::Semaphore>>>,
@@ -285,18 +253,6 @@ impl Drop for VulcanPluginManagerState {
         let Some(engine) = engine_slot.as_ref() else {
             return;
         };
-        let ui_action_runtimes = self
-            .ui_action_runtimes
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for runtime in ui_action_runtimes.values() {
-            let _ = close_raw_system_lease_sync(
-                engine,
-                &runtime.lease_id,
-                &runtime.sid,
-                runtime.generation,
-            );
-        }
         let retained_leases = self
             .retained_leases
             .get_mut()
@@ -447,7 +403,6 @@ impl VulcanPluginRuntimeManager {
                 next_request_id: AtomicU64::new(1),
                 session_registration_gate: Mutex::new(()),
                 active_session_counts: Mutex::new(BTreeMap::new()),
-                ui_action_runtimes: Mutex::new(BTreeMap::new()),
                 retained_leases: Mutex::new(BTreeMap::new()),
                 persistent_runtime_gates: Mutex::new(BTreeMap::new()),
                 action_admissions: Mutex::new(BTreeMap::new()),
@@ -542,19 +497,6 @@ impl VulcanPluginRuntimeManager {
     pub fn plugin_state_root(&self) -> &Path {
         &self.state.plugin_state_root
     }
-}
-
-/// Acquire the legacy UI Action registry; return its guard or an explicit poison error.
-/// 获取旧 UI Action 注册表；返回其守卫或明确中毒错误。
-fn lock_ui_runtimes(
-    runtimes: &Mutex<BTreeMap<String, Arc<ManagedVulcanPluginUiRuntime>>>,
-) -> Result<
-    MutexGuard<'_, BTreeMap<String, Arc<ManagedVulcanPluginUiRuntime>>>,
-    VulcanPluginRuntimeError,
-> {
-    runtimes.lock().map_err(|_| {
-        VulcanPluginRuntimeError::new("Vulcan Plugin UI Action registry lock is poisoned.")
-    })
 }
 
 /// Locks the retained raw-lease registry without silently recovering poisoned state.
