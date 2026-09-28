@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { StatusPill } from "@/components/shared/status";
 import { formatMessage, useI18n } from "@/i18n";
 import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
+import { PluginRuntimeControls } from "./plugin-runtime-controls";
 import type { PluginSummary, VulcanPluginPermissionPreview } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
@@ -652,6 +653,7 @@ export function VulcanPluginsPanel(props: {
           </div>
         ) : null}
       </section>
+      <PluginRuntimeControls plugins={props.plugins} onRefreshCatalog={props.actions.onRefreshLuaSkills} />
       <div className="agent-catalog-filter-row skill-list-filter-row plugin-skill-filter-row">
         <label className="agent-catalog-search-input skill-list-search-input">
           <Search size={15} />

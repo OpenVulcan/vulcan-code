@@ -436,6 +436,14 @@ async fn plugin_control_rpc_preserves_registration_policy_and_exact_closure() {
         .await
         .expect("status");
     assert_eq!(runtime_status["policyUpdate"], committed);
+    assert_browser_wire_fixture(
+        &original,
+        &runtime_status,
+        &fixture
+            .rpc("service_plugin_capacity_catalog", json!({}))
+            .await
+            .expect("wire catalog"),
+    );
     control["expectedRevision"] = committed["appliedRevision"].clone();
     assert_eq!(
         fixture
@@ -486,4 +494,111 @@ async fn plugin_control_rpc_preserves_registration_policy_and_exact_closure() {
         Value::Null
     );
     fixture.close().await;
+}
+
+/// Compare actual RPC values with the browser fixture; an explicit test flag regenerates the portable file.
+/// 将实际 RPC 值与浏览器夹具比较；明确测试标志重新生成可移植文件。
+/// initial, runtime and catalog contain real serialized results; only opaque per-run identities are normalized.
+/// initial、runtime 及 catalog 包含真实序列化结果；仅规范化每轮不透明身份。
+fn assert_browser_wire_fixture(initial: &Value, runtime: &Value, catalog: &Value) {
+    // Exact observed tokens map to portable examples without changing any field name, number or optionality.
+    // 精确观测令牌映射为可移植示例，不改变任何字段名、数值或可选性。
+    let tokens = [
+        (
+            initial["runtimeId"].as_str().expect("runtime"),
+            "runtime-fixture",
+        ),
+        (
+            initial["snapshot"]["capacity_id"]
+                .as_str()
+                .expect("capacity"),
+            "capacity-fixture",
+        ),
+        (
+            initial["policyRevision"].as_str().expect("before"),
+            "policy-before",
+        ),
+        (
+            runtime["policyUpdate"]["appliedRevision"]
+                .as_str()
+                .expect("after"),
+            "policy-after",
+        ),
+        (
+            initial["managementRequest"]["registrationId"]
+                .as_str()
+                .expect("registration"),
+            "00000000-0000-4000-8000-000000000001",
+        ),
+        (
+            runtime["policyUpdate"]["request"]["updateId"]
+                .as_str()
+                .expect("update"),
+            "00000000-0000-4000-8000-000000000002",
+        ),
+        (
+            initial["managementRequest"]["expectedRegistryRevision"]
+                .as_str()
+                .expect("mapping before"),
+            "registry-before",
+        ),
+        (
+            catalog["registryRevision"].as_str().expect("mapping after"),
+            "registry-current",
+        ),
+    ];
+    // Compare full JSON, including fields not currently rendered by the browser projection.
+    // 比较完整 JSON，包含浏览器投影当前未渲染的字段。
+    let mut actual = json!({"initialCapacity": initial, "runtime": runtime, "catalog": catalog});
+    normalize_wire_tokens(&mut actual, &tokens);
+    // The path is repository-relative and never embeds a developer machine root.
+    // 此路径相对仓库，绝不嵌入开发者机器根。
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/vulcan-code-web/src/service/__fixtures__/plugin-runtime-wire.json");
+    if std::env::var("VULCAN_UPDATE_PLUGIN_WIRE_FIXTURE").as_deref() == Ok("1") {
+        std::fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&actual).expect("wire JSON")
+            ),
+        )
+        .expect("explicit fixture regeneration");
+    }
+    // A stale or missing artifact fails with the exact explicit regeneration entrypoint.
+    // 陈旧或缺失产物失败时给出精确明确重新生成入口。
+    let expected: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect(
+        "browser wire fixture; regenerate this test with VULCAN_UPDATE_PLUGIN_WIRE_FIXTURE=1",
+    ))
+    .expect("browser wire fixture JSON");
+    assert_eq!(
+        actual, expected,
+        "RPC contract changed; inspect the browser decoder before explicitly regenerating its fixture"
+    );
+}
+
+/// Replace only exact string tokens in value using observed replacements; leave all structural and numeric evidence intact.
+/// 使用已观测 replacements 仅替换 value 内精确字符串令牌；保持全部结构及数值证据完整。
+fn normalize_wire_tokens(value: &mut Value, replacements: &[(&str, &str)]) {
+    match value {
+        Value::String(text) => {
+            if let Some((_, replacement)) =
+                replacements.iter().find(|(original, _)| *original == text)
+            {
+                *text = (*replacement).to_owned();
+            }
+        }
+        Value::Object(fields) => {
+            for field in fields.values_mut() {
+                normalize_wire_tokens(field, replacements);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_wire_tokens(item, replacements);
+            }
+        }
+        _ => {}
+    }
 }
