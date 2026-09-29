@@ -5,6 +5,298 @@ use super::*;
 use crate::tests::provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH;
 use vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase as Phase;
 
+/// Recovery waits for the actual configuration writer and rejects a policy change before publishing any routes.
+/// 恢复等待实际配置写入器，并在发布任何路由前拒绝策略变化。
+#[tokio::test]
+async fn immutable_service_update_policy_recovery_serializes_with_user_edits() {
+    // Keep the original public catalog independent from the already committed candidate selection.
+    // 保持原公开目录独立于已提交候选选择。
+    let fixture = Fixture::new(false);
+    // Preparation and readiness use the same production path as normal updates.
+    // 准备及就绪使用与正常更新相同的生产路径。
+    let mut prepared = fixture.prepare(uuid::Uuid::new_v4()).expect("prepare");
+    prepared = validate_and_install(&fixture.runtime, prepared)
+        .await
+        .expect("readiness");
+    prepared
+        .store
+        .commit_activation_transaction(&mut prepared.transaction)
+        .expect("selected target");
+    // Retain only durable identity after dropping the actual owner.
+    // 释放实际所有者后仅保留持久身份。
+    let request_id = prepared.transaction.record().request_id();
+    // Store and catalog observers do not own the original request lock.
+    // 存储及目录观察者不拥有原请求锁。
+    let store = prepared.store.clone();
+    // Pointer identity detects even a transient replacement by a wrongly enabled candidate catalog.
+    // 指针身份可检测被错误启用候选目录的短暂替换。
+    let original_catalog = fixture.runtime.snapshot();
+    drop(prepared);
+    // A real user edit holds the same process-wide authority used by production persistence.
+    // 真实用户编辑持有生产持久化使用的相同进程级权威。
+    let user_edit = crate::service_state_access::begin_provider_configuration_transaction().await;
+    // The recovery task owns only the original service state and request.
+    // 恢复任务仅拥有原服务状态及请求。
+    let recovery_state = Arc::clone(&fixture.state);
+    // Spawn real service recovery while the user writer remains active.
+    // 用户写入器仍活动时启动真实服务恢复。
+    let recovery = tokio::spawn(async move {
+        resume_published(
+            &ServiceEventEmitter::new(Vec::new()),
+            &recovery_state,
+            PLUGIN,
+            &request_id.to_string(),
+        )
+        .await
+    });
+    // Wait for actual request-lock acquisition, not an assumed task scheduling delay.
+    // 等待实际请求锁获取，不假定任务调度延迟。
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match store.resume_activation_transaction(PLUGIN, request_id) {
+                Err(error)
+                    if error.code == vulcan_plugin_runtime::VulcanPluginStoreErrorCode::Busy =>
+                {
+                    break;
+                }
+                Ok(owner) => drop(owner),
+                Err(error) => panic!("unexpected original ownership failure: {error}"),
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("recovery owns original while waiting for user writer");
+    assert!(!recovery.is_finished());
+    assert!(Arc::ptr_eq(&original_catalog, &fixture.runtime.snapshot()));
+    {
+        // Commit an explicit new user choice before releasing the configuration writer.
+        // 释放配置写入器前提交明确新用户选择。
+        let mut state = fixture.state.lock().expect("state");
+        // The serialized writer also replaces this exact retained authority.
+        // 串行写入器同样替换此精确保留权威。
+        let configuration = &mut state
+            .agent_runtime
+            .as_mut()
+            .expect("bridge")
+            .provider_configuration;
+        configuration
+            .luaskills
+            .enabled_vulcan_plugins
+            .insert(PLUGIN.to_owned());
+        configuration
+            .luaskills
+            .disabled_vulcan_plugins
+            .remove(PLUGIN);
+    }
+    drop(user_edit);
+    assert!(
+        recovery
+            .await
+            .expect("recovery task")
+            .expect_err("late policy conflict")
+            .contains("不一致")
+    );
+    assert!(Arc::ptr_eq(&original_catalog, &fixture.runtime.snapshot()));
+    assert_eq!(
+        store
+            .activation_request(PLUGIN, request_id)
+            .expect("read")
+            .expect("original")
+            .phase(),
+        Phase::Published
+    );
+}
+
+/// Policy comparison preserves unrelated edits and rejects changed membership even when effective disabled state is unchanged.
+/// 策略比较保留无关编辑，即使有效停用状态未变也拒绝已变成员关系。
+#[tokio::test]
+async fn immutable_service_update_policy_uses_original_plugin_only_compare_and_set() {
+    for changed_plugin in [false, true] {
+        // Each scenario owns real service configuration and a separate persistence destination.
+        // 每个场景拥有真实服务配置及独立持久目标。
+        let fixture = Fixture::new(false);
+        // The original request must contain the old default, not the candidate's changed enabled baseline.
+        // 原请求必须包含旧默认值，而非候选已变化的启用基线。
+        let request_id = uuid::Uuid::new_v4();
+        // Production preparation fixes this plugin's membership before any candidate callback.
+        // 生产准备在任何候选回调前固定此插件的成员关系。
+        let prepared = fixture.prepare(request_id).expect("prepared");
+        // Read the durable original independently of the foreground wrapper.
+        // 独立于前台包装器读取持久原请求。
+        let original = prepared
+            .store
+            .activation_request(PLUGIN, request_id)
+            .expect("read")
+            .expect("original");
+        assert_eq!(
+            original.update_policy(),
+            Some(&VulcanPluginUpdatePolicy {
+                explicitly_enabled: false,
+                explicitly_disabled: true,
+                predecessor_default_enabled: false,
+            })
+        );
+        {
+            // Simulate a completed independent user edit after the original request was frozen.
+            // 模拟原请求固定后完成的独立用户编辑。
+            let mut state = fixture.state.lock().expect("state");
+            // Edit only authoritative retained configuration, as the serialized writer does.
+            // 与串行写入器一样，仅编辑权威保留配置。
+            let configuration = &mut state
+                .agent_runtime
+                .as_mut()
+                .expect("bridge")
+                .provider_configuration;
+            configuration
+                .luaskills
+                .enabled_vulcan_plugins
+                .insert("unrelated-enabled".to_owned());
+            configuration
+                .luaskills
+                .disabled_vulcan_plugins
+                .insert("unrelated-disabled".to_owned());
+            if changed_plugin {
+                // Removing the redundant override leaves effective false under the original manifest.
+                // 原清单下删除冗余覆盖仍保持有效假值。
+                configuration
+                    .luaskills
+                    .disabled_vulcan_plugins
+                    .remove(PLUGIN);
+                assert!(
+                    !configuration
+                        .luaskills
+                        .vulcan_plugin_enabled_or_default(PLUGIN, false)
+                );
+            }
+        }
+        // Exact before-image verifies conflicts perform no policy write.
+        // 精确前像验证冲突不执行策略写入。
+        let before = provider_configuration_from_state(&fixture.state).expect("before");
+        // The file is absent initially, so a rejected write cannot hide behind old persisted contents.
+        // 文件初始不存在，被拒写入不能隐藏在旧持久内容后。
+        let destination = fixture.root.path().join("policy-cas.json");
+        PROVIDER_CONFIGURATION_PATH
+            .scope(destination.clone(), async {
+                // Exercise the production serialized writer, not a local test-only policy transformation.
+                // 验证生产串行写入器，而非测试专用局部策略变换。
+                let result = persist_update_policy(&fixture.state, &prepared).await;
+                if changed_plugin {
+                    assert!(result.expect_err("policy conflict").contains("已改变"));
+                    assert!(!destination.exists());
+                } else {
+                    result.expect("unrelated edit preserved");
+                    assert!(destination.is_file());
+                }
+                // Compare retained settings including unrelated plugins after the attempted mutation.
+                // 尝试变更后比较保留设置，包含无关插件。
+                let after = provider_configuration_from_state(&fixture.state).expect("after");
+                assert_eq!(
+                    after.luaskills.enabled_vulcan_plugins,
+                    before.luaskills.enabled_vulcan_plugins
+                );
+                assert_eq!(
+                    after.luaskills.disabled_vulcan_plugins,
+                    before.luaskills.disabled_vulcan_plugins
+                );
+                assert_eq!(
+                    prepared
+                        .store
+                        .activation_request(PLUGIN, request_id)
+                        .expect("retained"),
+                    Some(original)
+                );
+                assert!(
+                    prepared
+                        .store
+                        .activation_effects(PLUGIN, request_id)
+                        .expect("effects")
+                        .is_none()
+                );
+                assert!(
+                    prepared
+                        .store
+                        .installation_receipt(PLUGIN, request_id)
+                        .expect("install")
+                        .is_none()
+                );
+            })
+            .await;
+    }
+}
+
+/// Preparation rejects a policy/catalog mismatch before publishing durable intent or allocating candidate resources.
+/// 准备在发布持久意图或分配候选资源前拒绝策略与目录不符。
+#[test]
+fn immutable_service_update_policy_mismatch_precedes_durable_preparation() {
+    // Catalog remains disabled while a direct later settings edit requests enabled.
+    // 目录保持停用，而直接后续设置编辑要求启用。
+    let fixture = Fixture::new(false);
+    {
+        // Update only this isolated retained service authority.
+        // 仅更新此隔离的保留服务权威。
+        let mut state = fixture.state.lock().expect("state");
+        state
+            .agent_runtime
+            .as_mut()
+            .expect("bridge")
+            .provider_configuration
+            .luaskills
+            .enabled_vulcan_plugins
+            .insert(PLUGIN.to_owned());
+    }
+    // No journal may be allocated for this incoherent input snapshot.
+    // 不得为此不一致输入快照分配日志。
+    let request_id = uuid::Uuid::new_v4();
+    assert!(
+        fixture
+            .prepare(request_id)
+            .err()
+            .expect("mismatch")
+            .contains("不一致")
+    );
+    assert!(list(&fixture.runtime, PLUGIN).expect("query").is_empty());
+}
+
+/// Frozen policy resolution stays identical to the authoritative provider contract for every membership combination.
+/// 对于每种成员关系组合，固定策略解析均保持与权威供应商契约一致。
+#[test]
+fn immutable_service_update_policy_resolution_matches_provider_contract() {
+    // No runtime or persistence is needed to exercise the actual configuration resolver.
+    // 验证实际配置解析器无需运行时或持久化。
+    let mut configuration =
+        vulcan_provider_config::config::PersistedLuaSkillsConfiguration::default();
+    for enabled in [false, true] {
+        for disabled in [false, true] {
+            for default_enabled in [false, true] {
+                configuration.enabled_vulcan_plugins.clear();
+                configuration.disabled_vulcan_plugins.clear();
+                if enabled {
+                    configuration
+                        .enabled_vulcan_plugins
+                        .insert(PLUGIN.to_owned());
+                }
+                if disabled {
+                    configuration
+                        .disabled_vulcan_plugins
+                        .insert(PLUGIN.to_owned());
+                }
+                // Preserve both original memberships instead of prematurely normalizing away evidence.
+                // 保留两个原成员关系，而非提前归一化并丢弃证据。
+                let policy = VulcanPluginUpdatePolicy {
+                    explicitly_enabled: enabled,
+                    explicitly_disabled: disabled,
+                    predecessor_default_enabled: default_enabled,
+                };
+                assert_eq!(
+                    policy.desired_enabled(),
+                    configuration.vulcan_plugin_enabled_or_default(PLUGIN, default_enabled)
+                );
+            }
+        }
+    }
+}
+
 /// Real candidate initialization is projected through service queries and requires explicit abandonment acknowledgement.
 /// 真实候选初始化经服务查询投影，并要求明确放弃确认。
 #[tokio::test]
@@ -363,6 +655,7 @@ impl Fixture {
             .expect("candidate preview");
         prepare_update(
             &self.runtime,
+            &provider_configuration_from_state(&self.state)?.luaskills,
             &self.source,
             &preview.content_fingerprint,
             preview.permissions,
@@ -855,7 +1148,7 @@ async fn immutable_service_update_recovery_does_not_infer_commit_or_policy() {
         )
         .await
         .expect_err("policy changed")
-        .contains("停用策略已经改变")
+        .contains("停用目标与当前用户策略不一致")
     );
     assert_eq!(
         list(&fixture.runtime, PLUGIN).expect("retained published request")[0].phase,

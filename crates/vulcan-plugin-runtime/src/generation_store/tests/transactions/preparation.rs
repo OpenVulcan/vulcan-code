@@ -8,6 +8,8 @@ use crate::{
 };
 use std::collections::BTreeSet;
 
+mod update_policy;
+
 /// An abandoned reservation cannot be recycled through standalone staging after a newer request replaces the index.
 /// 较新请求替换索引后，已放弃预留不能通过独立暂存再次使用。
 #[test]

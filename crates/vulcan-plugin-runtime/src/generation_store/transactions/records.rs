@@ -161,7 +161,7 @@ impl VulcanPluginGenerationStore {
     ) -> VulcanPluginStoreResult<()> {
         if !matches!(
             record.schema_version,
-            TRANSACTION_RECORD_VERSION | PREPARATION_RECORD_VERSION
+            TRANSACTION_RECORD_VERSION | PREPARATION_RECORD_VERSION | UPDATE_RECORD_VERSION
         ) || record.phase == VulcanPluginActivationTransactionPhase::Preparing
             || record.request_id != request_id
             || record.target.schema_version != CONFIGURED_ACTIVATION_VERSION
@@ -173,7 +173,10 @@ impl VulcanPluginGenerationStore {
         }
         match (record.schema_version, record.preparation.as_ref()) {
             (TRANSACTION_RECORD_VERSION, None) => {}
-            (PREPARATION_RECORD_VERSION, Some(intent)) if intent.matches_target(&record.target) => {
+            (PREPARATION_RECORD_VERSION | UPDATE_RECORD_VERSION, Some(intent))
+                if intent.matches_target(&record.target) =>
+            {
+                intent.validate_schema(record.schema_version)?;
                 Self::validate_preparation_intent(intent, record.predecessor.as_ref(), plugin_id)?;
             }
             _ => {

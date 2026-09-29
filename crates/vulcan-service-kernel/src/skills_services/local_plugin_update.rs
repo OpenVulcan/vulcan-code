@@ -7,7 +7,7 @@ use vulcan_agent_runtime::mcp::{CandidatePluginMcpRuntime, candidate_local_mcp_s
 use vulcan_plugin_runtime::{
     VulcanPluginActivationTransaction, VulcanPluginCredentialKey, VulcanPluginCredentialValues,
     VulcanPluginDescriptor, VulcanPluginGenerationStore, VulcanPluginRuntimeManager,
-    VulcanPluginRuntimeState,
+    VulcanPluginRuntimeState, VulcanPluginUpdatePolicy,
 };
 
 #[cfg(test)]
@@ -234,6 +234,32 @@ pub(super) fn abort(
     )
 }
 
+/// Check the disabled publication path against original policy and current explicit overrides under the writer fence.
+/// 在写入屏障下按原策略及当前显式覆盖检查停用发布路径。
+/// Legacy records declare the existing disabled-only contract; newer requests must also retain a disabled original target.
+/// 旧记录声明既有仅停用契约；较新请求还必须保留停用的原目标。
+/// Returns a conflict before selection or catalog publication instead of enabling a candidate through a changed policy.
+/// 在选择或目录发布前返回冲突，不经已变策略启用候选。
+fn validate_disabled_update_publication_policy(
+    record: &vulcan_plugin_runtime::VulcanPluginActivationTransactionRecord,
+    configuration: &vulcan_provider_config::config::PersistedLuaSkillsConfiguration,
+) -> Result<(), String> {
+    // Identity and original desired state come from the same validated durable request.
+    // 身份及原期望状态来自相同已校验持久请求。
+    let plugin_id = &record.target().plugin_id;
+    if record
+        .update_policy()
+        .is_some_and(VulcanPluginUpdatePolicy::desired_enabled)
+        || !configuration.disabled_vulcan_plugins.contains(plugin_id)
+        || configuration.enabled_vulcan_plugins.contains(plugin_id)
+    {
+        return Err(String::from(
+            "原更新请求的停用目标与当前用户策略不一致，不能发布候选路由。",
+        ));
+    }
+    Ok(())
+}
+
 /// Finish the exact already-published request without invoking preparation, readiness, or installation again.
 /// 终结精确已发布请求，不再次调用准备、就绪或安装。
 /// App/state own route publication; request_id is explicit and target must still be the actual durable selection.
@@ -274,22 +300,14 @@ pub(super) async fn resume_published(
             "原请求尚无确定的已提交目标；此恢复入口只补齐已提交路由，不重放验证或安装。",
         ));
     }
-    // Recovery requires the original explicit disabled policy; it does not silently modify user settings.
-    // 恢复要求原明确停用策略；不静默修改用户设置。
+    // The same serialized configuration authority fences readback and every route publication.
+    // 相同串行配置权威对回读及全部路由发布设立屏障。
+    let policy_publication =
+        crate::service_state_access::begin_provider_configuration_transaction().await;
+    // Read the latest retained settings only after taking that authority.
+    // 仅在取得该权威后读取最新保留设置。
     let configuration = provider_configuration_from_state(state)?;
-    if !configuration
-        .luaskills
-        .disabled_vulcan_plugins
-        .contains(plugin_id)
-        || configuration
-            .luaskills
-            .enabled_vulcan_plugins
-            .contains(plugin_id)
-    {
-        return Err(String::from(
-            "已提交更新的停用策略已经改变，必须先核对当前用户策略。",
-        ));
-    }
+    validate_disabled_update_publication_policy(transaction.record(), &configuration.luaskills)?;
     store
         .commit_activation_transaction(&mut transaction)
         .map_err(|error| error.to_string())?;
@@ -322,6 +340,7 @@ pub(super) async fn resume_published(
     store
         .complete_activation_transaction(&mut transaction)
         .map_err(|error| error.to_string())?;
+    drop(policy_publication);
     refresh_plugin_catalog_local_state_and_emit(app, state).await
 }
 
@@ -343,8 +362,11 @@ struct PreparedLocalPluginUpdate {
 /// 按精确批准及 request_id 准备 source，不发布目录或覆盖前驱字节。
 /// Runtime owns the catalog, submitted secrets satisfy its inspected requirements; returns the durable request owner.
 /// runtime 拥有目录，提交秘密满足其已检查要求；返回持久请求所有者。
+/// Configuration supplies the original retained user policy and must agree with the predecessor catalog.
+/// configuration 提供原保留用户策略，必须与前驱目录一致。
 fn prepare_update(
     runtime: &VulcanPluginRuntimeManager,
+    configuration: &vulcan_provider_config::config::PersistedLuaSkillsConfiguration,
     source: &Path,
     fingerprint: &str,
     mut permissions: Vec<String>,
@@ -380,6 +402,26 @@ fn prepare_update(
     {
         return Err(String::from(
             "用户插件必须先停用并完全排空，再执行此更新入口。",
+        ));
+    }
+    // Freeze only this plugin's exact original override membership and manifest baseline.
+    // 仅固定此插件的精确原覆盖成员关系及清单基线。
+    let update_policy = VulcanPluginUpdatePolicy {
+        explicitly_enabled: configuration
+            .enabled_vulcan_plugins
+            .contains(&predecessor.id),
+        explicitly_disabled: configuration
+            .disabled_vulcan_plugins
+            .contains(&predecessor.id),
+        predecessor_default_enabled: predecessor
+            .manifest
+            .as_ref()
+            .ok_or("原插件缺少有效清单。")?
+            .default_enabled,
+    };
+    if update_policy.desired_enabled() != predecessor.desired_enabled {
+        return Err(String::from(
+            "插件用户策略与当前运行时快照不一致，请先刷新后再更新。",
         ));
     }
     if predecessor.content_fingerprint == fingerprint {
@@ -447,12 +489,13 @@ fn prepare_update(
     // Persist the original request and both physical resource identities before copying or secure-store writes.
     // 复制或安全存储写入之前，持久保存原请求及两个物理资源身份。
     let preparation = store
-        .begin_activation_preparation(
+        .begin_activation_update_preparation(
             request_id,
             source,
             fingerprint,
             selected.as_ref(),
             permissions,
+            update_policy,
         )
         .map_err(|error| error.to_string())?;
     // This handle owns the copied package and is used by every subsequent target decision.
@@ -531,6 +574,72 @@ fn prepare_update(
         transaction,
         predecessor,
     })
+}
+
+/// Persist the frozen target policy only if this plugin's current overrides still equal the original snapshot.
+/// 仅此插件当前覆盖仍等于原快照时，持久保存固定目标策略。
+/// State owns the serialized configuration writer; prepared owns the original request. Other plugin changes are preserved.
+/// state 拥有串行配置写入器；prepared 拥有原请求。保留其他插件的变更。
+/// Returns confirmation or a conflict before configuration writes and candidate callbacks.
+/// 返回确认，或在配置写入及候选回调前返回冲突。
+async fn persist_update_policy(
+    state: &SharedServiceBridgeState,
+    prepared: &PreparedLocalPluginUpdate,
+) -> Result<(), String> {
+    // Newly prepared updates must carry their policy; legacy recovery has a separate declared path.
+    // 新准备更新必须携带策略；旧恢复具有独立声明路径。
+    let policy = *prepared
+        .transaction
+        .record()
+        .update_policy()
+        .ok_or("原更新请求缺少用户策略，不能继续候选执行。")?;
+    // Use the durable target namespace instead of mutable catalog discovery.
+    // 使用持久目标命名空间，而非可变目录发现。
+    let plugin_id = prepared.transaction.record().target().plugin_id.clone();
+    mutate_provider_configuration(
+        state,
+        "保存原更新请求的插件策略失败",
+        move |configuration| {
+            if !policy.matches_overrides(
+                configuration
+                    .luaskills
+                    .enabled_vulcan_plugins
+                    .contains(&plugin_id),
+                configuration
+                    .luaskills
+                    .disabled_vulcan_plugins
+                    .contains(&plugin_id),
+            ) {
+                return Err(String::from(
+                    "更新准备期间此插件用户策略已改变；保留原请求，不覆盖新设置。",
+                ));
+            }
+            // The explicit update target remains stable across either manifest baseline and process restart.
+            // 明确更新目标跨任一清单基线及进程重启保持稳定。
+            if policy.desired_enabled() {
+                configuration
+                    .luaskills
+                    .enabled_vulcan_plugins
+                    .insert(plugin_id.clone());
+                configuration
+                    .luaskills
+                    .disabled_vulcan_plugins
+                    .remove(&plugin_id);
+            } else {
+                configuration
+                    .luaskills
+                    .disabled_vulcan_plugins
+                    .insert(plugin_id.clone());
+                configuration
+                    .luaskills
+                    .enabled_vulcan_plugins
+                    .remove(&plugin_id);
+            }
+            Ok(())
+        },
+        |_, _| (),
+    )
+    .await
 }
 
 /// Validate and install the original prepared target, preserving public state and durable callback evidence.
@@ -624,12 +733,16 @@ pub(super) async fn update(
         // Clone only access to the original manager before moving filesystem preparation to its existing worker.
         // 仅克隆原管理器访问，再将文件系统准备移入既有工作线程。
         let preparing_runtime = runtime.clone();
+        // Capture the authoritative configuration before the original request is created or copying starts.
+        // 原请求创建或复制开始前捕获权威配置。
+        let original_configuration = provider_configuration_from_state(state)?;
         // Preparation completes inside the service-owned management task even if its external waiter disappears.
         // 即使外部等待者消失，准备也在服务自有管理任务内完成。
         let mut prepared =
             run_extension_management_blocking("prepare immutable plugin update", move || {
                 prepare_update(
                     &preparing_runtime,
+                    &original_configuration.luaskills,
                     Path::new(&source_path),
                     &fingerprint,
                     permissions,
@@ -672,36 +785,25 @@ pub(super) async fn update(
                 drained.failures.join("；")
             ));
         }
-        // Keep the explicitly updated plugin disabled across a crash or a changed new manifest default.
-        // 在崩溃或新清单默认值改变时，保持此次明确更新的插件停用。
-        // This is an explicit update mutation, never a startup or catalog-refresh rewrite.
-        // 此处为明确更新变更，绝不是启动或目录刷新回写。
-        let disabled_id = plugin_id.clone();
-        mutate_provider_configuration(
-            state,
-            "保持更新插件停用失败",
-            move |configuration| {
-                configuration
-                    .luaskills
-                    .disabled_vulcan_plugins
-                    .insert(disabled_id.clone());
-                configuration
-                    .luaskills
-                    .enabled_vulcan_plugins
-                    .remove(&disabled_id);
-                Ok(())
-            },
-            |_, _| (),
-        )
-        .await?;
+        persist_update_policy(state, &prepared).await?;
         prepared = validate_and_install(&runtime, prepared).await?;
+        // Keep the existing configuration writer excluded through selection commit and route publication.
+        // 在选择提交及路由发布期间，持续排除既有配置写入器。
+        let policy_publication =
+            crate::service_state_access::begin_provider_configuration_transaction().await;
+        // Recheck after readiness, which may have waited while other user edits completed.
+        // 就绪可能等待其他用户编辑完成，因此在其后重新检查。
+        let configuration = provider_configuration_from_state(state)?;
+        validate_disabled_update_publication_policy(
+            prepared.transaction.record(),
+            &configuration.luaskills,
+        )?;
         prepared
             .store
             .commit_activation_transaction(&mut prepared.transaction)
             .map_err(|error| error.to_string())?;
         // Durable selection is committed; failures below must resume publication rather than restore old bytes.
         // 持久选择已提交；以下失败必须恢复发布，而不是恢复旧字节。
-        let configuration = provider_configuration_from_state(state)?;
         // The persisted disabled policy prevents the candidate from acquiring business admission during publication.
         // 持久停用策略防止候选在发布期间取得业务入场。
         let catalog = runtime
@@ -722,6 +824,7 @@ pub(super) async fn update(
             .store
             .complete_activation_transaction(&mut prepared.transaction)
             .map_err(|error| error.to_string())?;
+        drop(policy_publication);
         refresh_plugin_catalog_local_state_and_emit(app, state).await
     }
     .await;

@@ -5,6 +5,129 @@ use super::*;
 use VulcanPluginActivationTransactionPhase as Phase;
 
 impl VulcanPluginGenerationStore {
+    /// Begin an approved update with its original plugin policy before any package or credential mutation.
+    /// 在任何插件包或凭据变更前，以原插件策略开始已批准更新。
+    /// Arguments bind the original request, source digest, full predecessor, permissions and user policy; return its exclusive owner.
+    /// 参数绑定原请求、来源摘要、完整前驱、权限及用户策略；返回其排他所有者。
+    pub fn begin_activation_update_preparation(
+        &self,
+        request_id: Uuid,
+        source: &Path,
+        expected_content_fingerprint: &str,
+        expected_predecessor: Option<&VulcanPluginActivation>,
+        permissions: Vec<String>,
+        update_policy: VulcanPluginUpdatePolicy,
+    ) -> VulcanPluginStoreResult<VulcanPluginActivationPreparation> {
+        self.begin_preparation_with_policy(
+            request_id,
+            source,
+            expected_content_fingerprint,
+            expected_predecessor,
+            permissions,
+            Some(update_policy),
+        )
+    }
+
+    /// Share exact allocation and locking for declared legacy preparation or policy-bearing update intent.
+    /// 为声明的旧准备或携带策略的更新意图共用精确分配及锁定。
+    /// The optional policy selects its explicit journal version; all other arguments keep the same authority checks.
+    /// 可选策略选择明确日志版本；其他参数保持相同权威检查。
+    fn begin_preparation_with_policy(
+        &self,
+        request_id: Uuid,
+        source: &Path,
+        expected_content_fingerprint: &str,
+        expected_predecessor: Option<&VulcanPluginActivation>,
+        mut permissions: Vec<String>,
+        update_policy: Option<VulcanPluginUpdatePolicy>,
+    ) -> VulcanPluginStoreResult<VulcanPluginActivationPreparation> {
+        if request_id.is_nil() {
+            return Err(Error::invalid("Activation request identity cannot be nil."));
+        }
+        // Allocate identities in memory only; no package directory or credential account is created.
+        // 仅在内存中分配身份；不创建插件包目录或凭据账户。
+        let generation = self.plan_generation(source, expected_content_fingerprint)?;
+        // This read validates approval only; configuration is later selected from the immutable copy.
+        // 此读取仅校验批准；配置稍后从不可变副本选择。
+        let inspected = crate::inspect_user_plugin_package(source).map_err(Error::invalid)?;
+        if inspected.id != generation.plugin_id
+            || inspected.version.as_deref() != Some(generation.version.as_str())
+            || inspected.content_fingerprint != generation.content_fingerprint
+        {
+            return Err(Error::invalid(
+                "Source changed before preparation intent was recorded.",
+            ));
+        }
+        permissions.sort();
+        if permissions
+            != crate::runtime::plugin_required_permissions(&inspected)
+                .map_err(|error| Error::invalid(error.to_string()))?
+        {
+            return Err(Error::invalid(
+                "Preparation requires exact complete approved permissions.",
+            ));
+        }
+        // Serialize every writer against the actual current selection before allocating durable resources.
+        // 分配持久资源前，按实际当前选择对全部写入者排序。
+        let _namespace = self.namespace_lock(&generation.plugin_id, false)?;
+        self.ensure_no_pending_activation_locked(&generation.plugin_id)?;
+        if self
+            .read_request_locked(&generation.plugin_id, request_id)?
+            .is_some()
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Original activation request already exists.",
+            ));
+        }
+        // Compare the complete authority rather than its revision alone.
+        // 比较完整权威，而非仅比较修订。
+        let predecessor = self.read_activation(&generation.plugin_id)?;
+        if predecessor.as_ref() != expected_predecessor {
+            return Err(Error::new(
+                Code::Conflict,
+                "Preparation predecessor changed before intent publication.",
+            ));
+        }
+        // The one successor is fixed before journal publication and cannot wrap.
+        // 唯一后继在日志发布前固定，不能溢出。
+        let activation_revision = predecessor
+            .as_ref()
+            .map_or(0, |record| record.revision)
+            .checked_add(1)
+            .ok_or_else(|| Error::invalid("Plugin activation revision is exhausted."))?;
+        // Both physical resource identities are recoverable before their first allocation or secure write.
+        // 两个物理资源身份在首次分配或安全写入之前即可恢复。
+        let record = VulcanPluginActivationPreparationRecord {
+            schema_version: if update_policy.is_some() {
+                UPDATE_RECORD_VERSION
+            } else {
+                PREPARATION_RECORD_VERSION
+            },
+            request_id,
+            predecessor,
+            preparation: VulcanPluginActivationPreparationIntent {
+                generation,
+                credential_revision: VulcanPluginCredentialRevision::allocate(),
+                approved_permissions: permissions,
+                activation_revision,
+                update_policy,
+            },
+            phase: Phase::Preparing,
+        };
+        self.transaction_directory(&record.preparation.generation.plugin_id, true)?;
+        // The same actual lock later transfers to the configured transaction without a release gap.
+        // 同一实际锁稍后无释放间隙地转交给已配置事务。
+        let lease = self.transaction_lease(&record.preparation.generation.plugin_id, request_id)?;
+        self.write_preparation_locked(&record)?;
+        self.index_request_locked(&record.preparation.generation.plugin_id, request_id)?;
+        Ok(VulcanPluginActivationPreparation {
+            store_root: self.root.clone(),
+            record,
+            lease: Arc::new(lease),
+        })
+    }
+
     /// Start exact `generation` credential values under the original `preparation`; return a writer retaining that owner.
     /// 在原 `preparation` 下开始精确 `generation` 凭据值；返回保留该所有者的写入者。
     pub fn begin_activation_credential_staging(
@@ -121,88 +244,16 @@ impl VulcanPluginGenerationStore {
         source: &Path,
         expected_content_fingerprint: &str,
         expected_predecessor: Option<&VulcanPluginActivation>,
-        mut permissions: Vec<String>,
+        permissions: Vec<String>,
     ) -> VulcanPluginStoreResult<VulcanPluginActivationPreparation> {
-        if request_id.is_nil() {
-            return Err(Error::invalid("Activation request identity cannot be nil."));
-        }
-        // Allocate identities in memory only; no package directory or credential account is created.
-        // 仅在内存中分配身份；不创建插件包目录或凭据账户。
-        let generation = self.plan_generation(source, expected_content_fingerprint)?;
-        // This read validates approval only; configuration is later selected from the immutable copy.
-        // 此读取仅校验批准；配置稍后从不可变副本选择。
-        let inspected = crate::inspect_user_plugin_package(source).map_err(Error::invalid)?;
-        if inspected.id != generation.plugin_id
-            || inspected.version.as_deref() != Some(generation.version.as_str())
-            || inspected.content_fingerprint != generation.content_fingerprint
-        {
-            return Err(Error::invalid(
-                "Source changed before preparation intent was recorded.",
-            ));
-        }
-        permissions.sort();
-        if permissions
-            != crate::runtime::plugin_required_permissions(&inspected)
-                .map_err(|error| Error::invalid(error.to_string()))?
-        {
-            return Err(Error::invalid(
-                "Preparation requires exact complete approved permissions.",
-            ));
-        }
-        // Serialize every writer against the actual current selection before allocating durable resources.
-        // 分配持久资源前，按实际当前选择对全部写入者排序。
-        let _namespace = self.namespace_lock(&generation.plugin_id, false)?;
-        self.ensure_no_pending_activation_locked(&generation.plugin_id)?;
-        if self
-            .read_request_locked(&generation.plugin_id, request_id)?
-            .is_some()
-        {
-            return Err(Error::new(
-                Code::Conflict,
-                "Original activation request already exists.",
-            ));
-        }
-        // Compare the complete authority rather than its revision alone.
-        // 比较完整权威，而非仅比较修订。
-        let predecessor = self.read_activation(&generation.plugin_id)?;
-        if predecessor.as_ref() != expected_predecessor {
-            return Err(Error::new(
-                Code::Conflict,
-                "Preparation predecessor changed before intent publication.",
-            ));
-        }
-        // The one successor is fixed before journal publication and cannot wrap.
-        // 唯一后继在日志发布前固定，不能溢出。
-        let activation_revision = predecessor
-            .as_ref()
-            .map_or(0, |record| record.revision)
-            .checked_add(1)
-            .ok_or_else(|| Error::invalid("Plugin activation revision is exhausted."))?;
-        // Both physical resource identities are recoverable before their first allocation or secure write.
-        // 两个物理资源身份在首次分配或安全写入之前即可恢复。
-        let record = VulcanPluginActivationPreparationRecord {
-            schema_version: PREPARATION_RECORD_VERSION,
+        self.begin_preparation_with_policy(
             request_id,
-            predecessor,
-            preparation: VulcanPluginActivationPreparationIntent {
-                generation,
-                credential_revision: VulcanPluginCredentialRevision::allocate(),
-                approved_permissions: permissions,
-                activation_revision,
-            },
-            phase: Phase::Preparing,
-        };
-        self.transaction_directory(&record.preparation.generation.plugin_id, true)?;
-        // The same actual lock later transfers to the configured transaction without a release gap.
-        // 同一实际锁稍后无释放间隙地转交给已配置事务。
-        let lease = self.transaction_lease(&record.preparation.generation.plugin_id, request_id)?;
-        self.write_preparation_locked(&record)?;
-        self.index_request_locked(&record.preparation.generation.plugin_id, request_id)?;
-        Ok(VulcanPluginActivationPreparation {
-            store_root: self.root.clone(),
-            record,
-            lease: Arc::new(lease),
-        })
+            source,
+            expected_content_fingerprint,
+            expected_predecessor,
+            permissions,
+            None,
+        )
     }
 
     /// Copy approved `source` into the exact resources held by `preparation`; return the real package lease.
@@ -250,7 +301,7 @@ impl VulcanPluginGenerationStore {
         // The configuration is supplied only after the immutable copy exists and is checked again against that copy.
         // 配置仅在不可变副本存在后提供，并再次按该副本校验。
         let record = VulcanPluginActivationTransactionRecord {
-            schema_version: PREPARATION_RECORD_VERSION,
+            schema_version: preparation.record.schema_version,
             request_id: preparation.record.request_id,
             predecessor: preparation.record.predecessor.clone(),
             target: VulcanPluginActivation {

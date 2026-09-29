@@ -25,9 +25,34 @@ pub struct VulcanPluginActivationPreparationIntent {
     /// Exact successor revision is reserved against the complete original predecessor.
     /// 相对完整原前驱预留的精确后继修订。
     activation_revision: u64,
+    /// Version three owns the original user policy; earlier formats must omit this field.
+    /// 第三版持有原用户策略；较早格式必须省略此字段。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    update_policy: Option<VulcanPluginUpdatePolicy>,
 }
 
 impl VulcanPluginActivationPreparationIntent {
+    /// Borrow the original policy without consulting the candidate manifest or current user settings.
+    /// 借用原策略，不查询候选清单或当前用户设置。
+    pub fn update_policy(&self) -> Option<&VulcanPluginUpdatePolicy> {
+        self.update_policy.as_ref()
+    }
+
+    /// Validate field presence against declared `schema_version`; return an error instead of silently losing policy.
+    /// 按声明 `schema_version` 校验字段存在性；返回错误而非静默丢失策略。
+    pub(super) fn validate_schema(&self, schema_version: u32) -> VulcanPluginStoreResult<()> {
+        match (schema_version, self.update_policy.is_some()) {
+            (PREPARATION_RECORD_VERSION, false) | (UPDATE_RECORD_VERSION, true) => Ok(()),
+            _ => Err(Error::invalid(
+                "Preparation policy does not match its declared schema.",
+            )),
+        }
+    }
+
     /// Return the original planned package identity without claiming a live lease.
     /// 返回原计划插件包身份，不声称存在活动租约。
     pub fn generation(&self) -> &VulcanPluginGenerationIdentity {
@@ -59,8 +84,8 @@ impl VulcanPluginActivationPreparationIntent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VulcanPluginActivationPreparationRecord {
-    /// Explicit second-generation journal schema.
-    /// 明确的第二版日志模式。
+    /// Explicit preparation journal schema determines whether original update policy is required.
+    /// 明确准备日志模式决定是否必须包含原更新策略。
     schema_version: u32,
     /// Canonical original request also names the actual exclusive lock.
     /// 规范原请求同时命名实际排他锁。
@@ -91,6 +116,12 @@ pub enum VulcanPluginActivationRequestRecord {
 }
 
 impl VulcanPluginActivationRequestRecord {
+    /// Borrow the original policy in either preparation or configured stages; older records return none.
+    /// 在准备或已配置阶段借用原策略；旧记录返回空值。
+    pub fn update_policy(&self) -> Option<&VulcanPluginUpdatePolicy> {
+        self.preparation().and_then(|intent| intent.update_policy())
+    }
+
     /// Return the canonical original request UUID for either declared stage.
     /// 返回任一声明阶段的规范原请求 UUID。
     pub fn request_id(&self) -> Uuid {
@@ -216,8 +247,8 @@ struct StoredRequest {
     /// 已配置目标仅在准备完成后存在。
     #[serde(default, deserialize_with = "deserialize_present")]
     target: Option<VulcanPluginActivation>,
-    /// Version two alone carries a frozen early intent.
-    /// 仅第二版携带固定早期意图。
+    /// Version two onward carries a frozen early intent.
+    /// 第二版及后续版本携带固定早期意图。
     #[serde(default, deserialize_with = "deserialize_present")]
     preparation: Option<VulcanPluginActivationPreparationIntent>,
     /// Explicit checkpoint determines whether target absence is valid.
@@ -279,7 +310,7 @@ impl VulcanPluginGenerationStore {
         let wire: StoredRequest = serde_json::from_slice(&bytes)
             .map_err(|_| Error::invalid("Invalid activation request record."))?;
         match (wire.schema_version, wire.target, wire.preparation) {
-            (PREPARATION_RECORD_VERSION, None, Some(preparation)) => {
+            (PREPARATION_RECORD_VERSION | UPDATE_RECORD_VERSION, None, Some(preparation)) => {
                 // Absence of a target is allowed only for the explicitly typed preparation phase.
                 // 仅明确类型化准备阶段允许目标缺失。
                 let record = VulcanPluginActivationPreparationRecord {
@@ -295,7 +326,7 @@ impl VulcanPluginGenerationStore {
                 )))
             }
             (
-                TRANSACTION_RECORD_VERSION | PREPARATION_RECORD_VERSION,
+                TRANSACTION_RECORD_VERSION | PREPARATION_RECORD_VERSION | UPDATE_RECORD_VERSION,
                 Some(target),
                 preparation,
             ) => {
@@ -327,8 +358,10 @@ impl VulcanPluginGenerationStore {
         plugin_id: &str,
         request_id: Uuid,
     ) -> VulcanPluginStoreResult<()> {
-        if record.schema_version != PREPARATION_RECORD_VERSION
-            || record.request_id != request_id
+        if !matches!(
+            record.schema_version,
+            PREPARATION_RECORD_VERSION | UPDATE_RECORD_VERSION
+        ) || record.request_id != request_id
             || !matches!(
                 record.phase,
                 VulcanPluginActivationTransactionPhase::Preparing
@@ -339,6 +372,7 @@ impl VulcanPluginGenerationStore {
                 "Invalid early activation request identity or phase.",
             ));
         }
+        record.preparation.validate_schema(record.schema_version)?;
         Self::validate_preparation_intent(
             &record.preparation,
             record.predecessor.as_ref(),

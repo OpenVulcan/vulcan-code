@@ -17,13 +17,18 @@ pub use preparation::{
     VulcanPluginActivationPreparation, VulcanPluginActivationPreparationIntent,
     VulcanPluginActivationPreparationRecord, VulcanPluginActivationRequestRecord,
 };
+mod update_policy;
+pub use update_policy::VulcanPluginUpdatePolicy;
 
-/// Legacy complete-record and stable request-index format; version two keeps the same index schema.
-/// 旧完整记录及稳定请求索引格式；第二版保持相同索引模式。
+/// Legacy complete-record and stable request-index format; later journals keep the same index schema.
+/// 旧完整记录及稳定请求索引格式；后续日志保持相同索引模式。
 const TRANSACTION_RECORD_VERSION: u32 = 1;
 /// Version two records bind early preparation to the same original request and index.
 /// 第二版记录将早期准备绑定至相同原请求及索引。
 const PREPARATION_RECORD_VERSION: u32 = 2;
+/// Version three requires the original plugin-specific user policy inside the preparation intent.
+/// 第三版要求准备意图内包含原插件专属用户策略。
+const UPDATE_RECORD_VERSION: u32 = 3;
 
 /// Journal envelope contains two bounded selections and one metadata allowance, all derived from existing budgets.
 /// 日志封套容纳两个有界选择及一个元数据额度，全部从既有限制派生。
@@ -81,8 +86,8 @@ pub struct VulcanPluginActivationTransactionRecord {
     /// Complete configured target, including the unique successor activation revision.
     /// 完整配置目标，包含唯一后继激活修订。
     target: VulcanPluginActivation,
-    /// Version two retains its immutable early intent after the complete target becomes available.
-    /// 第二版在完整目标可用之后仍保留不可变早期意图。
+    /// Version two onward retains its immutable early intent after the complete target becomes available.
+    /// 第二版及后续版本在完整目标可用之后仍保留不可变早期意图。
     #[serde(
         default,
         deserialize_with = "preparation::deserialize_present",
@@ -95,6 +100,14 @@ pub struct VulcanPluginActivationTransactionRecord {
 }
 
 impl VulcanPluginActivationTransactionRecord {
+    /// Borrow the frozen update policy; only declared older formats lack this authority.
+    /// 借用固定更新策略；仅声明的旧格式缺少此权威。
+    pub fn update_policy(&self) -> Option<&VulcanPluginUpdatePolicy> {
+        self.preparation
+            .as_ref()
+            .and_then(|intent| intent.update_policy())
+    }
+
     /// Return the original request ID; callers retain it even when a mutation returns an uncertain result.
     /// 返回原请求标识；即使变更返回不确定结果，调用方也保留它。
     pub fn request_id(&self) -> Uuid {

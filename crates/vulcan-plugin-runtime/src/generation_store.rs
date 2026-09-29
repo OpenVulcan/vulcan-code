@@ -21,7 +21,7 @@ pub use transactions::{
     VulcanPluginActivationPreparationRecord, VulcanPluginActivationRequestRecord,
     VulcanPluginActivationTransaction, VulcanPluginActivationTransactionPhase,
     VulcanPluginActivationTransactionRecord, VulcanPluginEffectObservation,
-    VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt,
+    VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt, VulcanPluginUpdatePolicy,
 };
 #[cfg(test)]
 mod tests;
