@@ -12,7 +12,7 @@ export interface LocalPluginUpdateStatus {
   pluginId: string;
   // phase records durable selection progress, not live readiness or resource release.
   // phase 记录持久选择进度，不表示实时就绪或资源释放。
-  phase: "prepared" | "committing" | "published" | "completed" | "aborted";
+  phase: "preparing" | "prepared" | "committing" | "published" | "completed" | "aborted";
   // candidate preserves the generation store's exact snake-case identity contract.
   // candidate 保留代次存储精确下划线命名身份契约。
   candidate: {
@@ -49,7 +49,8 @@ export function parseLocalPluginUpdateStatus(value: unknown, pluginId: string): 
   if (typeof record.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(record.requestId)
     || record.requestId === "00000000-0000-0000-0000-000000000000" || record.pluginId !== pluginId
     || typeof record.activationRevision !== "string" || !/^[1-9][0-9]*$/.test(record.activationRevision)
-    || (record.phase !== "prepared" && record.phase !== "committing" && record.phase !== "published" && record.phase !== "completed" && record.phase !== "aborted")
+    || (record.phase !== "preparing" && record.phase !== "prepared" && record.phase !== "committing" && record.phase !== "published" && record.phase !== "completed" && record.phase !== "aborted")
+    || (record.phase === "preparing" && record.installation !== null)
     || (record.installation !== null && record.installation !== "started" && record.installation !== "succeeded" && record.installation !== "observation_failed")
     || typeof record.candidate !== "object" || record.candidate === null || Array.isArray(record.candidate)) {
     throw new Error("Plugin update status has an invalid identity or phase.");

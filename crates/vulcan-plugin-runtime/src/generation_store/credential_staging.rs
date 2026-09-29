@@ -39,6 +39,9 @@ impl PinnedVulcanPluginCredentials {
 /// One journal schema owns its immutable inventory and explicit progress state.
 /// 单个日志模式持有不可变清单及显式进度状态。
 const CREDENTIAL_RECORD_VERSION: u32 = 1;
+/// Version two durably binds staging writes to one original activation preparation request.
+/// 第二版将暂存写入持久绑定至单个原激活准备请求。
+const ACTIVATION_CREDENTIAL_RECORD_VERSION: u32 = 2;
 
 /// Exact manifest-owned server and secret identifiers; neither component contains a credential value.
 /// 清单所属的精确服务器及秘密标识；两个组件均不含凭据值。
@@ -86,6 +89,14 @@ pub struct VulcanPluginCredentialRecord {
     /// Store validation rejects every unknown schema version before consuming the record.
     /// 存储校验在消费记录前拒绝所有未知模式版本。
     schema_version: u32,
+    /// Version two retains the original parent request; legacy inventories explicitly have no parent.
+    /// 第二版保留原父请求；旧清单明确没有父请求。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_activation_request",
+        skip_serializing_if = "Option::is_none"
+    )]
+    activation_request: Option<uuid::Uuid>,
     /// Exact package that supplied this inventory, including its inspected byte identity.
     /// 提供此清单的精确插件包，包含已检查字节身份。
     package: VulcanPluginGenerationIdentity,
@@ -104,6 +115,11 @@ pub struct VulcanPluginCredentialRecord {
 }
 
 impl VulcanPluginCredentialRecord {
+    /// Return the durable original activation parent, or none for legacy standalone inventories.
+    /// 返回持久原激活父请求，旧独立清单返回空值。
+    pub fn activation_request(&self) -> Option<uuid::Uuid> {
+        self.activation_request
+    }
     /// Borrow the exact package identity that supplied the inventory.
     /// 借用提供清单的精确插件包身份。
     pub fn package(&self) -> &VulcanPluginGenerationIdentity {
@@ -144,6 +160,28 @@ pub struct VulcanPluginCredentialStaging {
     /// Actual exclusive revision lease retained through every backend operation.
     /// 在每次后端操作期间保留的实际排他修订租约。
     _lease: File,
+    /// Real original-request ownership outlives every backend write, including after its foreground owner disappears.
+    /// 实际原请求所有权覆盖每次后端写入，包括其前台所有者消失后。
+    _activation_request_lease: Option<Arc<File>>,
+}
+
+/// Decode a present canonical request UUID from `deserializer`; missing legacy fields alone map to no parent.
+/// 从 `deserializer` 解码存在的规范请求 UUID；仅缺失旧字段映射为无父请求。
+fn deserialize_activation_request<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<uuid::Uuid>, D::Error> {
+    // Explicit null and textual aliases cannot weaken the parent ownership contract.
+    // 显式空值及文本别名不能削弱父所有权契约。
+    let text = String::deserialize(deserializer)?;
+    // Canonical spelling matches the original transaction filename and lock.
+    // 规范拼写匹配原事务文件名及锁。
+    let request_id = uuid::Uuid::parse_str(&text).map_err(serde::de::Error::custom)?;
+    if request_id.is_nil() || request_id.to_string() != text {
+        return Err(serde::de::Error::custom(
+            "Invalid activation credential parent.",
+        ));
+    }
+    Ok(Some(request_id))
 }
 
 /// Secure backend operations address one explicit revision, never legacy or latest-selection storage.

@@ -17,6 +17,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.installSucceeded": "已观察到成功",
     "pluginUpdates.installUncertain": "结果不确定，请核对外部状态",
     "pluginUpdates.prepared": "候选已准备",
+    "pluginUpdates.preparing": "正在准备候选",
     "pluginUpdates.committing": "提交待核对",
     "pluginUpdates.published": "已提交，待完成",
     "pluginUpdates.completed": "已完成",

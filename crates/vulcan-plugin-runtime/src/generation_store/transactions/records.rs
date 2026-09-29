@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TransactionIndex {
-    /// Private index version must match the journal format.
-    /// 私有索引版本必须匹配日志格式。
+    /// Stable index version is independent of the referenced request's preparation stage format.
+    /// 稳定索引版本独立于所引用请求的准备阶段格式。
     schema_version: u32,
     /// Exact namespace must match the containing directory.
     /// 精确命名空间必须匹配所在目录。
@@ -52,6 +52,63 @@ pub(super) fn deserialize_request_id<'de, D: serde::Deserializer<'de>>(
 }
 
 impl VulcanPluginGenerationStore {
+    /// Read the declared index for either preparation or configured activation under the namespace fence.
+    /// 在命名空间屏障下读取准备或已配置激活的声明索引。
+    /// Return the exact validated original record or actual index absence.
+    /// 返回精确已校验原记录或实际索引缺失。
+    pub(super) fn indexed_request_locked(
+        &self,
+        plugin_id: &str,
+    ) -> VulcanPluginStoreResult<Option<VulcanPluginActivationRequestRecord>> {
+        // Resolve only the validated namespace directory; absence never creates storage on a read.
+        // 仅解析已验证命名空间目录；读取时缺失绝不创建存储。
+        let Some(directory) = self.transaction_directory(plugin_id, false)? else {
+            return Ok(None);
+        };
+        // Bounded journal bytes remain private and must not enter decoder diagnostics.
+        // 有界日志字节保持私密，不得进入解码器诊断。
+        let Some(bytes) = files::read_bytes(&directory.join("current"), MAX_RECORD_BYTES)? else {
+            return Ok(None);
+        };
+        // Decode the explicit index rather than selecting a request from directory order.
+        // 解码显式索引，而不按目录顺序选择请求。
+        let index: TransactionIndex = serde_json::from_slice(&bytes)
+            .map_err(|_| Error::invalid("Invalid activation transaction index."))?;
+        if index.schema_version != TRANSACTION_RECORD_VERSION || index.plugin_id != plugin_id {
+            return Err(Error::invalid(
+                "Activation transaction index identity is invalid.",
+            ));
+        }
+        self.read_request_locked(plugin_id, index.request_id)?
+            .ok_or_else(|| Error::invalid("Indexed activation transaction is missing."))
+            .map(Some)
+    }
+
+    /// Index the already durable original `plugin_id` and `request_id`; do not select a request by scanning.
+    /// 索引已经持久化的原 `plugin_id` 及 `request_id`；不通过扫描选择请求。
+    pub(super) fn index_request_locked(
+        &self,
+        plugin_id: &str,
+        request_id: Uuid,
+    ) -> VulcanPluginStoreResult<()> {
+        // Resolve only the validated namespace directory; absence never creates storage on a read.
+        // 仅解析已验证命名空间目录；读取时缺失绝不创建存储。
+        let directory = self
+            .transaction_directory(plugin_id, false)?
+            .ok_or_else(|| Error::invalid("Activation transaction directory disappeared."))?;
+        // Both initial and replacement publication must account for every unfinished original before changing authority.
+        // 初始及替换发布都必须在变更权威之前核对每个未完成原请求。
+        self.check_index_recovery(plugin_id, request_id, &directory)?;
+        files::write_record(
+            &directory.join("current"),
+            &TransactionIndex {
+                schema_version: TRANSACTION_RECORD_VERSION,
+                plugin_id: plugin_id.to_owned(),
+                request_id,
+            },
+        )
+    }
+
     /// Resolve the validated journal directory for `plugin_id`; `create` explicitly permits missing directory creation.
     /// 解析 `plugin_id` 的已验证日志目录；`create` 明确允许创建缺失目录。
     pub(super) fn transaction_directory(
@@ -85,39 +142,27 @@ impl VulcanPluginGenerationStore {
         plugin_id: &str,
         request_id: Uuid,
     ) -> VulcanPluginStoreResult<Option<VulcanPluginActivationTransactionRecord>> {
-        if request_id.is_nil() {
-            return Err(Error::invalid("Activation request identity cannot be nil."));
+        match self.read_request_locked(plugin_id, request_id)? {
+            None => Ok(None),
+            Some(VulcanPluginActivationRequestRecord::Activation(record)) => Ok(Some(record)),
+            Some(VulcanPluginActivationRequestRecord::Preparation(_)) => Err(Error::new(
+                Code::Busy,
+                "Original request has no configured target; inspect its preparation stage.",
+            )),
         }
-        // Resolve only the validated namespace directory; absence never creates storage on a read.
-        // 仅解析已验证命名空间目录；读取时缺失绝不创建存储。
-        let Some(directory) = self.transaction_directory(plugin_id, false)? else {
-            return Ok(None);
-        };
-        // Bounded journal bytes remain private and must not enter decoder diagnostics.
-        // 有界日志字节保持私密，不得进入解码器诊断。
-        let Some(bytes) = files::read_bytes(
-            &directory.join(format!("{request_id}.json")),
-            MAX_TRANSACTION_BYTES,
-        )?
-        else {
-            return Ok(None);
-        };
-        // Redact decoder diagnostics because both selections contain user configuration documents.
-        // 两个选择都包含用户配置文档，因此隐藏解码器诊断。
-        let record: VulcanPluginActivationTransactionRecord = serde_json::from_slice(&bytes)
-            .map_err(|_| Error::invalid("Invalid activation transaction record."))?;
-        Self::validate_transaction_record(&record, plugin_id, request_id)?;
-        Ok(Some(record))
     }
 
     /// Validate `record` against its containing `plugin_id` and `request_id` before both persistence and use.
     /// 在持久保存及使用前，按所在 `plugin_id` 及 `request_id` 校验 `record`。
-    fn validate_transaction_record(
+    pub(super) fn validate_transaction_record(
         record: &VulcanPluginActivationTransactionRecord,
         plugin_id: &str,
         request_id: Uuid,
     ) -> VulcanPluginStoreResult<()> {
-        if record.schema_version != TRANSACTION_RECORD_VERSION
+        if !matches!(
+            record.schema_version,
+            TRANSACTION_RECORD_VERSION | PREPARATION_RECORD_VERSION
+        ) || record.phase == VulcanPluginActivationTransactionPhase::Preparing
             || record.request_id != request_id
             || record.target.schema_version != CONFIGURED_ACTIVATION_VERSION
             || record.target.generation.is_none()
@@ -125,6 +170,17 @@ impl VulcanPluginGenerationStore {
             return Err(Error::invalid(
                 "Activation transaction identity or format is invalid.",
             ));
+        }
+        match (record.schema_version, record.preparation.as_ref()) {
+            (TRANSACTION_RECORD_VERSION, None) => {}
+            (PREPARATION_RECORD_VERSION, Some(intent)) if intent.matches_target(&record.target) => {
+                Self::validate_preparation_intent(intent, record.predecessor.as_ref(), plugin_id)?;
+            }
+            _ => {
+                return Err(Error::invalid(
+                    "Activation target does not preserve its declared preparation intent.",
+                ));
+            }
         }
         for activation in record
             .predecessor
@@ -181,28 +237,14 @@ impl VulcanPluginGenerationStore {
         &self,
         plugin_id: &str,
     ) -> VulcanPluginStoreResult<Option<VulcanPluginActivationTransactionRecord>> {
-        // Resolve only the validated namespace directory; absence never creates storage on a read.
-        // 仅解析已验证命名空间目录；读取时缺失绝不创建存储。
-        let Some(directory) = self.transaction_directory(plugin_id, false)? else {
-            return Ok(None);
-        };
-        // Bounded journal bytes remain private and must not enter decoder diagnostics.
-        // 有界日志字节保持私密，不得进入解码器诊断。
-        let Some(bytes) = files::read_bytes(&directory.join("current"), MAX_RECORD_BYTES)? else {
-            return Ok(None);
-        };
-        // Decode the explicit index rather than selecting a request from directory order.
-        // 解码显式索引，而不按目录顺序选择请求。
-        let index: TransactionIndex = serde_json::from_slice(&bytes)
-            .map_err(|_| Error::invalid("Invalid activation transaction index."))?;
-        if index.schema_version != TRANSACTION_RECORD_VERSION || index.plugin_id != plugin_id {
-            return Err(Error::invalid(
-                "Activation transaction index identity is invalid.",
-            ));
+        match self.indexed_request_locked(plugin_id)? {
+            None => Ok(None),
+            Some(VulcanPluginActivationRequestRecord::Activation(record)) => Ok(Some(record)),
+            Some(VulcanPluginActivationRequestRecord::Preparation(_)) => Err(Error::new(
+                Code::Busy,
+                "Indexed original request is still a preparation record.",
+            )),
         }
-        self.read_transaction_locked(plugin_id, index.request_id)?
-            .ok_or_else(|| Error::invalid("Indexed activation transaction is missing."))
-            .map(Some)
     }
 
     /// Point the namespace at an already durable `record`; a failed write never implies the index remained unchanged.
@@ -211,24 +253,7 @@ impl VulcanPluginGenerationStore {
         &self,
         record: &VulcanPluginActivationTransactionRecord,
     ) -> VulcanPluginStoreResult<()> {
-        // Resolve only the validated namespace directory; absence never creates storage on a read.
-        // 仅解析已验证命名空间目录；读取时缺失绝不创建存储。
-        let directory = self
-            .transaction_directory(&record.target.plugin_id, false)?
-            .ok_or_else(|| Error::invalid("Activation transaction directory disappeared."))?;
-        // Missing-index repair must not replace another unfinished request, including a corrupted later handoff.
-        // 缺失索引修复不能替换其他未完成请求，包括后续损坏的交接。
-        if !files::exists(&directory.join("current"), false)? {
-            self.check_index_recovery(&record.target.plugin_id, record.request_id, &directory)?;
-        }
-        files::write_record(
-            &directory.join("current"),
-            &TransactionIndex {
-                schema_version: TRANSACTION_RECORD_VERSION,
-                plugin_id: record.target.plugin_id.clone(),
-                request_id: record.request_id,
-            },
-        )
+        self.index_request_locked(&record.target.plugin_id, record.request_id)
     }
 
     /// Permit missing-index restoration only when no other unfinished journal exists in the exact `directory`.
@@ -272,9 +297,9 @@ impl VulcanPluginGenerationStore {
             // Validate all other records so a corrupt body cannot silently relinquish ownership.
             // 校验全部其他记录，使损坏正文不能静默放弃所有权。
             let other = self
-                .read_transaction_locked(plugin_id, other_id)?
+                .read_request_locked(plugin_id, other_id)?
                 .ok_or_else(|| Error::invalid("Transaction recovery record disappeared."))?;
-            if other_id != request_id && !other.phase.terminal() {
+            if other_id != request_id && !other.phase().terminal() {
                 return Err(Error::new(
                     Code::Busy,
                     "Another unfinished request prevents transaction index recovery.",
@@ -292,8 +317,8 @@ impl VulcanPluginGenerationStore {
     ) -> VulcanPluginStoreResult<()> {
         self.check_unindexed_transaction_records(plugin_id)?;
         if self
-            .indexed_transaction_locked(plugin_id)?
-            .is_some_and(|record| !record.phase.terminal())
+            .indexed_request_locked(plugin_id)?
+            .is_some_and(|record| !record.phase().terminal())
         {
             return Err(Error::new(
                 Code::Busy,
@@ -310,17 +335,16 @@ impl VulcanPluginGenerationStore {
         identity: &VulcanPluginGenerationIdentity,
     ) -> VulcanPluginStoreResult<()> {
         self.check_unindexed_transaction_records(&identity.plugin_id)?;
-        if let Some(record) = self.indexed_transaction_locked(&identity.plugin_id)?
-            && !record.phase.terminal()
-            && record
-                .predecessor
-                .iter()
-                .chain(std::iter::once(&record.target))
-                .any(|activation| activation.generation.as_ref() == Some(identity))
+        if let Some(record) = self.indexed_request_locked(&identity.plugin_id)?
+            && !record.phase().terminal()
+            && (record.candidate() == Some(identity)
+                || record
+                    .predecessor()
+                    .is_some_and(|activation| activation.generation.as_ref() == Some(identity)))
         {
             return Err(Error::new(
                 Code::Busy,
-                "Package is retained by an unfinished activation transaction.",
+                "Package is retained by an unfinished activation request.",
             ));
         }
         Ok(())
@@ -334,47 +358,54 @@ impl VulcanPluginGenerationStore {
         revision: &VulcanPluginCredentialRevision,
     ) -> VulcanPluginStoreResult<()> {
         self.check_unindexed_transaction_records(plugin_id)?;
-        if let Some(record) = self.indexed_transaction_locked(plugin_id)?
-            && !record.phase.terminal()
-            && record
-                .predecessor
-                .iter()
-                .chain(std::iter::once(&record.target))
-                .any(|activation| activation.credential_revision() == Some(revision))
+        if let Some(record) = self.indexed_request_locked(plugin_id)?
+            && !record.phase().terminal()
+            && (record.credential_revision() == Some(revision)
+                || record
+                    .predecessor()
+                    .is_some_and(|activation| activation.credential_revision() == Some(revision)))
         {
             return Err(Error::new(
                 Code::Busy,
-                "Credentials are retained by an unfinished activation transaction.",
+                "Credentials are retained by an unfinished activation request.",
             ));
         }
         Ok(())
     }
 
-    /// Reject writes and collection when records exist without their index; explicit original-request recovery may repair it.
-    /// 记录存在却缺少索引时拒绝写入及回收；明确的原请求恢复可以修复此情况。
+    /// Reject writes and collection for missing or stale indexes with unfinished originals; only explicit recovery repairs authority.
+    /// 索引缺失或陈旧且存在未完成原请求时拒绝写入及回收；仅明确恢复修复权威。
     fn check_unindexed_transaction_records(&self, plugin_id: &str) -> VulcanPluginStoreResult<()> {
-        // Index absence can be an interrupted begin, but is never permission to guess which request owns authority.
-        // 索引缺失可能是开始操作被中断，但绝不表示允许猜测哪个请求拥有权威。
-        let Some(directory) = self.transaction_directory(plugin_id, false)? else {
-            return Ok(());
-        };
-        if files::exists(&directory.join("current"), false)? {
-            return Ok(());
+        // A failed index replacement may retain an older terminal pointer beside a newer unfinished original.
+        // 索引替换失败可能使较旧终态指针与较新未完成原请求并存。
+        let indexed = self.indexed_request_locked(plugin_id)?;
+        // Enumerating originals establishes exclusion only; it never elects a replacement authority.
+        // 枚举原请求仅建立互斥，不选举替代权威。
+        let requests = self.transaction_ids_locked(plugin_id)?;
+        if indexed.is_none() && !requests.is_empty() {
+            return Err(Error::new(
+                Code::Busy,
+                "Activation transaction index is missing; inspect the original request.",
+            ));
         }
-        // Enumeration establishes only that explicit recovery is needed; it does not select a replacement request.
-        // 枚举仅确认需要明确恢复，不选择替代请求。
-        let entries = std::fs::read_dir(directory)
-            .map_err(|error| Error::io("Inspect unindexed transaction records", error))?;
-        for entry in entries {
-            // Preserve enumeration errors rather than interpreting them as an empty namespace.
-            // 保留枚举错误，而不将其解释为空命名空间。
-            let path = entry
-                .map_err(|error| Error::io("Read unindexed transaction entry", error))?
-                .path();
-            if path.extension() == Some(std::ffi::OsStr::new("json")) {
+        for request_id in requests {
+            if indexed
+                .as_ref()
+                .is_some_and(|record| record.request_id() == request_id)
+            {
+                continue;
+            }
+            // Historical originals remain strict even when a different valid index exists.
+            // 即使存在另一有效索引，历史原请求仍接受严格检查。
+            let record = self
+                .read_request_locked(plugin_id, request_id)?
+                .ok_or_else(|| {
+                    Error::invalid("Unindexed original disappeared during inspection.")
+                })?;
+            if !record.phase().terminal() {
                 return Err(Error::new(
                     Code::Busy,
-                    "Activation transaction index is missing; inspect the original request.",
+                    "An unfinished unindexed activation request requires explicit original recovery.",
                 ));
             }
         }
@@ -412,7 +443,10 @@ impl VulcanPluginGenerationStore {
     /// 在调用方持有命名空间屏障时枚举 `plugin_id` 的规范请求标识。
     /// Return exact filenames without selecting or repairing transaction authority.
     /// 返回精确文件标识，不选择或修复事务权威。
-    fn transaction_ids_locked(&self, plugin_id: &str) -> VulcanPluginStoreResult<BTreeSet<Uuid>> {
+    pub(super) fn transaction_ids_locked(
+        &self,
+        plugin_id: &str,
+    ) -> VulcanPluginStoreResult<BTreeSet<Uuid>> {
         // Missing optional storage remains a read-only empty inventory.
         // 可选存储缺失时保持只读空清单。
         let Some(directory) = self.transaction_directory(plugin_id, false)? else {
@@ -462,7 +496,7 @@ impl VulcanPluginGenerationStore {
     pub fn activation_recovery_records(
         &self,
         plugin_id: &str,
-    ) -> VulcanPluginStoreResult<Vec<VulcanPluginActivationTransactionRecord>> {
+    ) -> VulcanPluginStoreResult<Vec<VulcanPluginActivationRequestRecord>> {
         // Inventory and index validation must describe the same namespace observation.
         // 清单和索引校验必须描述同一次命名空间观察。
         let _namespace = self.namespace_lock(plugin_id, true)?;
@@ -471,7 +505,7 @@ impl VulcanPluginGenerationStore {
         let requests = self.transaction_ids_locked(plugin_id)?;
         // A dangling or corrupt index is an error even when no JSON entries exist.
         // 即使不存在 JSON 条目，悬空或损坏的索引也属于错误。
-        let indexed = self.indexed_transaction_locked(plugin_id)?;
+        let indexed = self.indexed_request_locked(plugin_id)?;
         // Retain only unfinished bodies after validating all historical originals.
         // 校验全部历史原请求后仅保留未完成正文。
         let mut pending = Vec::new();
@@ -479,11 +513,11 @@ impl VulcanPluginGenerationStore {
             // A disappearing original must never be interpreted as completion.
             // 原请求消失绝不能解释为完成。
             let record = self
-                .read_transaction_locked(plugin_id, *request_id)?
+                .read_request_locked(plugin_id, *request_id)?
                 .ok_or_else(|| {
                     Error::invalid("Activation transaction disappeared during inspection.")
                 })?;
-            if !record.phase.terminal() {
+            if !record.phase().terminal() {
                 pending.push(record);
             }
         }
@@ -523,6 +557,20 @@ impl VulcanPluginGenerationStore {
                 {
                     return Err(Error::invalid(
                         "Installation receipt has no valid original transaction.",
+                    ));
+                }
+                // Early intent cannot own installation evidence; configured historical receipts must match their full original.
+                // 早期意图不能拥有安装证据；已配置历史回执必须匹配其完整原请求。
+                let Some(VulcanPluginActivationRequestRecord::Activation(original)) =
+                    self.read_request_locked(plugin_id, request_id)?
+                else {
+                    return Err(Error::invalid(
+                        "Installation receipt belongs to an unconfigured original.",
+                    ));
+                };
+                if self.read_installation_locked(&original)?.is_none() {
+                    return Err(Error::invalid(
+                        "Installation receipt disappeared during recovery inspection.",
                     ));
                 }
             }

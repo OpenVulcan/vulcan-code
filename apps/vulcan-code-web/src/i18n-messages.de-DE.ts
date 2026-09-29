@@ -17,6 +17,7 @@ export const deDETranslations: Record<TranslationKey, string> = {
     "pluginUpdates.installSucceeded": "Erfolg beobachtet",
     "pluginUpdates.installUncertain": "Ergebnis unklar; externen Zustand prüfen",
     "pluginUpdates.prepared": "Kandidat vorbereitet",
+    "pluginUpdates.preparing": "Kandidat wird vorbereitet",
     "pluginUpdates.committing": "Übernahme prüfen",
     "pluginUpdates.published": "Übernommen, Abschluss ausstehend",
     "pluginUpdates.completed": "Abgeschlossen",

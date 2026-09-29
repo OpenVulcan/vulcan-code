@@ -5,9 +5,9 @@ use super::*;
 use crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
 use vulcan_agent_runtime::mcp::{CandidatePluginMcpRuntime, candidate_local_mcp_server_configs};
 use vulcan_plugin_runtime::{
-    VulcanPluginActivationTransaction, VulcanPluginCredentialKey, VulcanPluginCredentialRevision,
-    VulcanPluginCredentialValues, VulcanPluginDescriptor, VulcanPluginGenerationStore,
-    VulcanPluginRuntimeManager, VulcanPluginRuntimeState,
+    VulcanPluginActivationTransaction, VulcanPluginCredentialKey, VulcanPluginCredentialValues,
+    VulcanPluginDescriptor, VulcanPluginGenerationStore, VulcanPluginRuntimeManager,
+    VulcanPluginRuntimeState,
 };
 
 #[cfg(test)]
@@ -27,8 +27,8 @@ pub(crate) struct LocalPluginUpdateStatus {
     /// Durable selection phase; it is not a live-resource or readiness result.
     /// 持久选择阶段；它不是存活资源或就绪结果。
     phase: vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase,
-    /// Immutable target package identity contains no user configuration or secret values.
-    /// 不可变目标插件包身份不包含用户配置或秘密值。
+    /// Planned or prepared immutable package identity contains no user configuration or secret values.
+    /// 计划中或已准备不可变插件包身份不包含用户配置或秘密值。
     candidate: vulcan_plugin_runtime::VulcanPluginGenerationIdentity,
     /// Decimal revision text preserves exact values in JavaScript clients.
     /// 十进制修订文本在 JavaScript 客户端中保留精确值。
@@ -42,20 +42,19 @@ pub(crate) struct LocalPluginUpdateStatus {
 /// 将 store 中单个原记录投影为脱敏状态；拒绝不完整身份，不虚构它们。
 fn status(
     store: &VulcanPluginGenerationStore,
-    record: &vulcan_plugin_runtime::VulcanPluginActivationTransactionRecord,
+    record: &vulcan_plugin_runtime::VulcanPluginActivationRequestRecord,
 ) -> Result<LocalPluginUpdateStatus, String> {
+    // A planned generation identifies resources without claiming that copying or configuration is complete.
+    // 计划代次标识资源，不声称复制或配置已经完成。
+    let candidate = record.candidate().ok_or("原更新请求缺少候选身份。")?;
     Ok(LocalPluginUpdateStatus {
         request_id: record.request_id().to_string(),
-        plugin_id: record.target().plugin_id.clone(),
+        plugin_id: candidate.plugin_id.clone(),
         phase: record.phase(),
-        candidate: record
-            .target()
-            .generation
-            .clone()
-            .ok_or("原更新请求缺少目标代次。")?,
-        activation_revision: record.target().revision.to_string(),
+        candidate: candidate.clone(),
+        activation_revision: record.activation_revision().to_string(),
         installation: store
-            .installation_receipt(&record.target().plugin_id, record.request_id())
+            .installation_receipt(&candidate.plugin_id, record.request_id())
             .map_err(|error| error.to_string())?
             .map(|receipt| receipt.phase()),
     })
@@ -84,7 +83,7 @@ pub(super) fn list(
             // Each exact ID is validated; disappearing or malformed records are explicit failures.
             // 每个精确标识均经过校验；消失或损坏记录为明确失败。
             let record = store
-                .activation_transaction(plugin_id, request_id)
+                .activation_request(plugin_id, request_id)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| String::from("原更新请求在查询期间消失。"))?;
             status(&store, &record)
@@ -151,6 +150,28 @@ pub(super) fn abort(
     let store = VulcanPluginGenerationStore::open_existing(runtime.user_plugin_root())
         .map_err(|error| error.to_string())?
         .ok_or("原更新存储不存在。")?;
+    // Inspect the declared stage once; a concurrent transition must fail its exact stage operation, never fall through.
+    // 一次检查声明阶段；并发转换必须使精确阶段操作失败，绝不改走另一分支。
+    let original = store
+        .activation_request(plugin_id, request_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("原更新请求不存在。")?;
+    if matches!(
+        original,
+        vulcan_plugin_runtime::VulcanPluginActivationRequestRecord::Preparation(_)
+    ) {
+        if !acknowledge_external_effects {
+            return Err(String::from(
+                "准备阶段可能已复制插件包或暂存凭据；必须明确确认放弃不等于撤销这些副作用。",
+            ));
+        }
+        // The core reacquires original ownership and preserves every physical allocation for explicit cleanup.
+        // 核心重新取得原所有权，并保留全部物理分配用于明确清理。
+        let abandoned = store
+            .abort_activation_preparation_request(plugin_id, request_id)
+            .map_err(|error| error.to_string())?;
+        return status(&store, &abandoned);
+    }
     // Explicit acknowledgement permits abandoning corrupt candidates without pretending to undo external effects.
     // 明确确认允许放弃损坏候选，但不假装撤销外部副作用。
     let record = if acknowledge_external_effects {
@@ -177,7 +198,10 @@ pub(super) fn abort(
             .map_err(|error| error.to_string())?;
         transaction.record().clone()
     };
-    status(&store, &record)
+    status(
+        &store,
+        &vulcan_plugin_runtime::VulcanPluginActivationRequestRecord::Activation(record),
+    )
 }
 
 /// Finish the exact already-published request without invoking preparation, readiness, or installation again.
@@ -363,7 +387,7 @@ fn prepare_update(
         // Inspection never selects a replacement authority or starts recovery.
         // 检查绝不选择替代权威或启动恢复。
         let record = store
-            .activation_transaction(&predecessor.id, pending_id)
+            .activation_request(&predecessor.id, pending_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| String::from("原更新记录在检查期间消失。"))?;
         if !matches!(
@@ -390,15 +414,21 @@ fn prepare_update(
             "插件持久选择与当前目录不一致，请先刷新并核对原更新请求。",
         ));
     }
-    // The transaction also checks this revision under its original namespace lock.
-    // 事务还在原命名空间锁内检查此修订。
-    let expected_revision = predecessor
-        .managed_package()
-        .map_or(0, |package| package.activation_revision());
+    // Persist the original request and both physical resource identities before copying or secure-store writes.
+    // 复制或安全存储写入之前，持久保存原请求及两个物理资源身份。
+    let preparation = store
+        .begin_activation_preparation(
+            request_id,
+            source,
+            fingerprint,
+            selected.as_ref(),
+            permissions,
+        )
+        .map_err(|error| error.to_string())?;
     // This handle owns the copied package and is used by every subsequent target decision.
     // 此句柄拥有复制包，并用于后续每个目标决定。
     let generation = store
-        .prepare(source, fingerprint)
+        .prepare_activation_package(&preparation, source)
         .map_err(|error| error.to_string())?;
     // Complete configuration is selected before any callback can observe the candidate.
     // 在任何回调可以观测候选之前，选择完整配置。
@@ -447,29 +477,19 @@ fn prepare_update(
             values.insert(key, value);
         }
     }
-    // A new isolated revision never overwrites the predecessor's operating-system accounts.
-    // 新隔离修订绝不覆盖前驱的操作系统账户。
-    let revision = VulcanPluginCredentialRevision::allocate();
     // Staging owns its original revision until every secure write has been verified.
     // 暂存在每次安全写入均已验证之前拥有原修订。
     let mut staging = store
-        .begin_credential_staging(&generation, revision.clone(), &values)
+        .begin_activation_credential_staging(&preparation, &generation, &values)
         .map_err(|error| error.to_string())?;
     staging
         .write_and_finish(&secrets, &values)
         .map_err(|error| error.to_string())?;
     drop(staging);
-    // The original request binds package, permissions, configuration and credential revision in one durable intent.
-    // 原请求在单个持久意图中绑定插件包、权限、配置及凭据修订。
+    // Bind the complete configured target after validating the immutable copy and exact staged credentials.
+    // 校验不可变副本及精确已暂存凭据之后，绑定完整已配置目标。
     let transaction = store
-        .begin_activation_transaction(
-            request_id,
-            &generation,
-            expected_revision,
-            permissions,
-            revision,
-            configuration,
-        )
+        .finish_activation_preparation(preparation, configuration)
         .map_err(|error| error.to_string())?;
     if transaction.record().predecessor() != selected.as_ref() {
         return Err(format!(

@@ -17,6 +17,7 @@ export const ruRUTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.installSucceeded": "Успех подтверждён",
     "pluginUpdates.installUncertain": "Результат неизвестен; проверьте внешнее состояние",
     "pluginUpdates.prepared": "Кандидат подготовлен",
+    "pluginUpdates.preparing": "Подготовка кандидата",
     "pluginUpdates.committing": "Фиксация требует проверки",
     "pluginUpdates.published": "Зафиксировано, ожидает завершения",
     "pluginUpdates.completed": "Завершено",

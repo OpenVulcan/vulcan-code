@@ -69,6 +69,21 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
+// Preparing requests permit only explicitly acknowledged abandonment, not committed-route resumption.
+// 准备中请求仅允许明确确认的放弃，不允许已提交路由恢复。
+it("shows an early request and abandons only its original identity", async () => {
+  read.mockResolvedValue([{ ...original, phase: "preparing", installation: null }]);
+  await openAndRead();
+  expect(host.textContent).toContain("正在准备候选");
+  expect([...document.querySelectorAll("button")].some((element) => element.textContent === "补齐已提交更新")).toBe(false);
+  await act(async () => button("放弃未发布请求").click());
+  expect(abandon).not.toHaveBeenCalled();
+  read.mockResolvedValue([{ ...original, phase: "aborted", installation: null }]);
+  await act(async () => button("确认").click());
+  expect(abandon).toHaveBeenCalledExactlyOnceWith("fixture", original.requestId, true);
+  expect(resume).not.toHaveBeenCalled();
+});
+
 // Opening is inert; explicit reads preserve the request, while recovery re-reads authoritative completion.
 // 展开静止；明确读取保留请求，而恢复重新读取权威完成状态。
 it("reads only on explicit request and recovers the original committed identity", async () => {

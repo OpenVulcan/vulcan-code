@@ -17,6 +17,7 @@ export const zhTWTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.installSucceeded": "已觀察到成功",
     "pluginUpdates.installUncertain": "結果不確定，請核對外部狀態",
     "pluginUpdates.prepared": "候選已準備",
+    "pluginUpdates.preparing": "正在準備候選",
     "pluginUpdates.committing": "提交待核對",
     "pluginUpdates.published": "已提交，待完成",
     "pluginUpdates.completed": "已完成",

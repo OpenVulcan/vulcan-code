@@ -391,9 +391,12 @@ async fn immutable_service_update_preserves_configuration_without_schema_fallbac
         .expect("new incompatible schema");
     std::fs::write(fixture.source.join("config.defaults.json"), r#"{"mode":7}"#)
         .expect("valid new defaults");
+    // Preserve the original failing UUID so readback never selects a newer request.
+    // 保留原失败 UUID，使回读绝不选择较新请求。
+    let failed_request = uuid::Uuid::new_v4();
     assert!(
         fixture
-            .prepare(uuid::Uuid::new_v4())
+            .prepare(failed_request)
             .err()
             .expect("no default fallback")
             .contains("schema")
@@ -405,6 +408,39 @@ async fn immutable_service_update_preserves_configuration_without_schema_fallbac
             .expect("preserved old document"),
         json!({"mode":"user-value"})
     );
+    // The failed configuration validation must leave the already-copied candidate owned by early intent.
+    // 配置校验失败必须让已复制候选继续归属于早期意图。
+    let records = list(&fixture.runtime, PLUGIN).expect("query original preparation");
+    // Locate evidence by its stable request identity, never by enumeration position.
+    // 按稳定请求身份定位证据，绝不依赖枚举位置。
+    let original = records
+        .iter()
+        .find(|record| record.request_id == failed_request.to_string())
+        .expect("failed original must remain queryable");
+    assert_eq!(original.phase, Phase::Preparing);
+    assert!(original.installation.is_none());
+    assert_eq!(original.candidate.version, "2.0.0");
+    assert!(fixture.prepare(uuid::Uuid::new_v4()).is_err());
+    assert!(fixture.runtime.begin_enabling(PLUGIN).is_err());
+    assert!(abort(&fixture.runtime, PLUGIN, &failed_request.to_string(), false).is_err());
+    // Explicit abandonment preserves the old selection and reports a terminal receipt on the same UUID.
+    // 明确放弃保留旧选择，并在相同 UUID 上报告终态回执。
+    let abandoned = abort(&fixture.runtime, PLUGIN, &failed_request.to_string(), true)
+        .expect("explicitly abandon early original");
+    assert_eq!(abandoned.request_id, failed_request.to_string());
+    assert_eq!(abandoned.phase, Phase::Aborted);
+    assert_eq!(abandoned.candidate, original.candidate);
+    assert_eq!(
+        fixture
+            .runtime
+            .plugin_config(PLUGIN)
+            .expect("old configuration after abandonment"),
+        json!({"mode":"user-value"})
+    );
+    fixture
+        .runtime
+        .begin_enabling(PLUGIN)
+        .expect("terminal original unblocks ordinary lifecycle admission");
 }
 
 /// Already-published recovery only republishes exact routes and confirms the original request without replay.

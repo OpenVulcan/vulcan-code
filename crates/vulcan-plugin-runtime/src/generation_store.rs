@@ -16,7 +16,9 @@ mod files;
 mod operations;
 mod transactions;
 pub use transactions::{
-    VulcanPluginActivationCandidate, VulcanPluginActivationTransaction,
+    VulcanPluginActivationCandidate, VulcanPluginActivationPreparation,
+    VulcanPluginActivationPreparationIntent, VulcanPluginActivationPreparationRecord,
+    VulcanPluginActivationRequestRecord, VulcanPluginActivationTransaction,
     VulcanPluginActivationTransactionPhase, VulcanPluginActivationTransactionRecord,
     VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt,
 };

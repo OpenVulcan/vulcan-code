@@ -664,6 +664,20 @@ impl VulcanPluginRuntimeManager {
         {
             return Err(VulcanPluginRuntimeError::new(diagnostic.clone()));
         }
+        // New unfinished requests created after startup also exclude ordinary enablement and lifecycle side effects.
+        // 启动后新建的未完成请求同样排除普通启用及生命周期副作用。
+        if let Some(store) =
+            crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+            && !store
+                .activation_recovery_records(plugin_id)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+                .is_empty()
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin has an unfinished original activation request.",
+            ));
+        }
         let mut snapshot = (*self.snapshot()).clone();
         let plugin = snapshot.plugins.get_mut(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(

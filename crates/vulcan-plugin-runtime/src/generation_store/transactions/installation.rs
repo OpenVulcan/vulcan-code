@@ -185,15 +185,32 @@ impl VulcanPluginGenerationStore {
         plugin_id: &str,
         request_id: Uuid,
     ) -> VulcanPluginStoreResult<Option<VulcanPluginInstallationReceipt>> {
-        // Reads use the same namespace fence and bounded strict journal decoding.
-        // 读取使用相同命名空间屏障以及有界严格日志解码。
+        // The same original request and namespace fence apply to early and configured stages.
+        // 相同原请求及命名空间屏障适用于早期和已配置阶段。
         let _namespace = self.namespace_lock(plugin_id, true)?;
-        // Only an existing original request may own an installation receipt.
-        // 仅既有原请求可以拥有安装回执。
-        let transaction = self
-            .read_transaction_locked(plugin_id, request_id)?
+        // Only the declared configured stage can legitimately have executed installation.
+        // 仅声明的已配置阶段可能合法执行过安装。
+        let request = self
+            .read_request_locked(plugin_id, request_id)?
             .ok_or_else(|| Error::invalid("Original installation request is missing."))?;
-        self.read_installation_locked(&transaction)
+        match request {
+            VulcanPluginActivationRequestRecord::Activation(transaction) => {
+                self.read_installation_locked(&transaction)
+            }
+            VulcanPluginActivationRequestRecord::Preparation(_) => {
+                // Reject impossible installation evidence rather than silently hiding it from recovery.
+                // 拒绝不可能的安装证据，而非向恢复静默隐藏它。
+                let directory = self
+                    .transaction_directory(plugin_id, false)?
+                    .ok_or_else(|| Error::invalid("Original preparation directory disappeared."))?;
+                if files::exists(&directory.join(format!("{request_id}.install")), false)? {
+                    return Err(Error::invalid(
+                        "Early preparation cannot own an installation receipt.",
+                    ));
+                }
+                Ok(None)
+            }
+        }
     }
 
     /// Reject uncertain or failed installation before publishing transaction; no receipt imposes no callback requirement.
@@ -232,7 +249,7 @@ impl VulcanPluginGenerationStore {
 
     /// Read a bounded strict receipt for transaction under the namespace fence; return actual absence only.
     /// 在命名空间屏障内读取 transaction 的有界严格回执；仅返回实际缺失。
-    fn read_installation_locked(
+    pub(super) fn read_installation_locked(
         &self,
         transaction: &VulcanPluginActivationTransactionRecord,
     ) -> VulcanPluginStoreResult<Option<VulcanPluginInstallationReceipt>> {

@@ -17,6 +17,7 @@ export const koKRTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.installSucceeded": "성공 확인됨",
     "pluginUpdates.installUncertain": "결과 불확실: 외부 상태 확인 필요",
     "pluginUpdates.prepared": "후보 준비됨",
+    "pluginUpdates.preparing": "후보 준비 중",
     "pluginUpdates.committing": "커밋 확인 필요",
     "pluginUpdates.published": "커밋됨, 완료 대기",
     "pluginUpdates.completed": "완료됨",

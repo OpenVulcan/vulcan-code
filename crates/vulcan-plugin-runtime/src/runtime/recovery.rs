@@ -3,8 +3,8 @@
 
 use super::{VulcanPluginRuntimeError, VulcanPluginRuntimeManager};
 use crate::{
-    VulcanPluginActivationTransactionPhase as Phase,
-    VulcanPluginActivationTransactionRecord as Record, VulcanPluginGenerationStore as Store,
+    VulcanPluginActivationRequestRecord as Record, VulcanPluginActivationTransactionPhase as Phase,
+    VulcanPluginGenerationStore as Store,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -121,14 +121,15 @@ impl ActivationRecovery {
             // Only exact originals may resolve obligations, never absence from the pending list.
             // 仅精确原请求可以解除义务，绝不依据待处理清单中的缺失。
             let mut completed = Vec::new();
-            for (request_id, original) in &recovery.originals {
-                match store.activation_transaction(plugin_id, *request_id) {
-                    Ok(Some(current))
-                        if current.target() == original.target()
-                            && current.predecessor() == original.predecessor() =>
-                    {
+            for (request_id, original) in &mut recovery.originals {
+                match store.activation_request(plugin_id, *request_id) {
+                    Ok(Some(current)) if original.preserves_original(&current) => {
                         if matches!(current.phase(), Phase::Completed | Phase::Aborted) {
                             completed.push(*request_id);
+                        } else if original.target().is_none() && current.target().is_some() {
+                            // Freeze the first complete target observed after early intent; later configuration changes are not another promotion.
+                            // 固定早期意图后首次观察到的完整目标；后续配置变化不属于再次晋级。
+                            *original = current;
                         }
                     }
                     Ok(_) => {
@@ -146,10 +147,15 @@ impl ActivationRecovery {
             if recovery.error.is_some() {
                 continue;
             }
-            for request_id in completed {
-                recovery.originals.remove(&request_id);
+            for request_id in &completed {
+                recovery.originals.remove(request_id);
             }
             for record in pending {
+                // An earlier inventory snapshot must not resurrect an original just verified as terminal.
+                // 较早清单快照不能重新加入刚验证为终态的原请求。
+                if completed.contains(&record.request_id()) {
+                    continue;
+                }
                 recovery
                     .originals
                     .entry(record.request_id())
@@ -187,7 +193,7 @@ impl VulcanPluginRuntimeManager {
     /// 返回全局及各插件诊断；许可仅允许发布一个停用原请求。
     pub(super) fn activation_recovery_diagnostics(
         &self,
-        permit: Option<&Record>,
+        permit: Option<&crate::VulcanPluginActivationTransactionRecord>,
     ) -> Result<(Option<String>, BTreeMap<String, String>), VulcanPluginRuntimeError> {
         // Lazy initialization protects callers that do not use the service bootstrap helper.
         // 延迟初始化保护未使用服务启动辅助函数的调用方。
@@ -211,8 +217,7 @@ impl VulcanPluginRuntimeManager {
                             .originals
                             .get(&record.request_id())
                             .is_some_and(|original| {
-                                original.target() == record.target()
-                                    && original.predecessor() == record.predecessor()
+                                original.preserves_original(&Record::Activation(record.clone()))
                             })
                 })
             {

@@ -6,12 +6,20 @@ use uuid::Uuid;
 
 mod installation;
 mod operations;
+mod preparation;
 mod records;
 pub use installation::{VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt};
+pub use preparation::{
+    VulcanPluginActivationPreparation, VulcanPluginActivationPreparationIntent,
+    VulcanPluginActivationPreparationRecord, VulcanPluginActivationRequestRecord,
+};
 
-/// Journal and index format evolve together, independently from package metadata and activation formats.
-/// 日志及索引格式共同演进，独立于插件包元数据及激活格式。
+/// Legacy complete-record and stable request-index format; version two keeps the same index schema.
+/// 旧完整记录及稳定请求索引格式；第二版保持相同索引模式。
 const TRANSACTION_RECORD_VERSION: u32 = 1;
+/// Version two records bind early preparation to the same original request and index.
+/// 第二版记录将早期准备绑定至相同原请求及索引。
+const PREPARATION_RECORD_VERSION: u32 = 2;
 
 /// Journal envelope contains two bounded selections and one metadata allowance, all derived from existing budgets.
 /// 日志封套容纳两个有界选择及一个元数据额度，全部从既有限制派生。
@@ -22,6 +30,9 @@ const MAX_TRANSACTION_BYTES: u64 = MAX_ACTIVATION_BYTES * 2 + MAX_RECORD_BYTES;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VulcanPluginActivationTransactionPhase {
+    /// The original request reserves exact resources before package copying and credential staging.
+    /// 原请求在插件包复制及凭据暂存前预留精确资源。
+    Preparing,
     /// Intent exists, but the host has not requested selection publication.
     /// 意图已存在，但宿主尚未请求发布选择。
     Prepared,
@@ -66,6 +77,14 @@ pub struct VulcanPluginActivationTransactionRecord {
     /// Complete configured target, including the unique successor activation revision.
     /// 完整配置目标，包含唯一后继激活修订。
     target: VulcanPluginActivation,
+    /// Version two retains its immutable early intent after the complete target becomes available.
+    /// 第二版在完整目标可用之后仍保留不可变早期意图。
+    #[serde(
+        default,
+        deserialize_with = "preparation::deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    preparation: Option<VulcanPluginActivationPreparationIntent>,
     /// Durable checkpoint, independent from the host's in-memory readiness objects.
     /// 持久检查点，独立于宿主内存就绪对象。
     phase: VulcanPluginActivationTransactionPhase,

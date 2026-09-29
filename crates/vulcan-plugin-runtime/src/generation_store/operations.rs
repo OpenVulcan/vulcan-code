@@ -15,54 +15,13 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 impl VulcanPluginGenerationStore {
-    /// Read the persisted phase for the exact `identity` without treating it as a live package lease.
-    /// 读取精确 `identity` 的持久阶段，不将其视为存活插件包租约。
-    /// Returns declared state even for an incomplete or collected generation; malformed identities remain errors.
-    /// 即使代次尚未完整或已回收，也返回声明状态；损坏身份仍返回错误。
-    pub fn generation_phase(
-        &self,
-        identity: &VulcanPluginGenerationIdentity,
-    ) -> Result<super::VulcanPluginGenerationPhase> {
-        // The namespace fence coordinates metadata reads with activation and collection.
-        // 命名空间屏障使元数据读取与激活及回收协调。
-        let _namespace = self.namespace_lock(&identity.plugin_id, true)?;
-        self.read_generation(identity)
-            .map(|(_, record)| record.state)
-    }
-
-    /// Open storage below the existing host-selected `user_root`; creates only its private controlled children.
-    /// 在现有宿主选定 `user_root` 下打开存储；仅创建其私有受控子目录。
-    /// Returns a canonical store, rejecting redirected or missing roots without searching alternate paths.
-    /// 返回规范存储；拒绝重定向或缺失根目录，不搜索替代路径。
-    pub fn open(user_root: &Path) -> Result<Self> {
-        if !files::exists(user_root, true)? {
-            return Err(Error::invalid("User plugin root must already exist."));
-        }
-        // All later handles bind this one canonical storage location.
-        // 后续所有句柄均绑定此唯一规范存储位置。
-        let user_root = user_root
-            .canonicalize()
-            .map_err(|error| Error::io("Resolve user plugin root", error))?;
-        // Private layout is independent of distributable package names and files.
-        // 私有布局独立于可分发插件包名称及文件。
-        let root = files::ensure_child(&user_root, STORE_DIRECTORY)?;
-        for directory in ["packages", "active", "locks"] {
-            files::ensure_child(&root, directory)?;
-        }
-        files::sync_directory(&root)?;
-        files::sync_directory(&user_root)?;
-        Ok(Self { root })
-    }
-
-    /// Prepare `source` as a new immutable generation matching the explicitly approved content digest.
-    /// 将 `source` 准备为与明确批准内容摘要匹配的新不可变代次。
-    /// Returns a real shared lease without changing activation, authorization, configuration, or runtime routes.
-    /// 返回实际共享租约，不改变激活、授权、配置或运行时路由。
-    pub fn prepare(
+    /// Inspect `source` and approved digest, returning a fresh identity without copying or allocating directories.
+    /// 检查 `source` 及已批准摘要，返回新身份，不复制或分配目录。
+    pub(in crate::generation_store) fn plan_generation(
         &self,
         source: &Path,
         expected_content_fingerprint: &str,
-    ) -> Result<PinnedVulcanPluginGeneration> {
+    ) -> Result<VulcanPluginGenerationIdentity> {
         self.validate_layout()?;
         if !files::exists(source, true)? {
             return Err(Error::invalid("Generation source is missing."));
@@ -87,6 +46,34 @@ impl VulcanPluginGenerationStore {
             content_fingerprint: original.content_fingerprint.clone(),
         };
         files::validate_identity(&identity)?;
+        Ok(identity)
+    }
+
+    /// Copy `source` into its original reserved `identity`; return actual ownership or retained failure evidence.
+    /// 将 `source` 复制到原预留 `identity`；返回实际所有权或保留失败证据。
+    /// Existing directories are never reused, repaired, or replaced by this operation.
+    /// 此操作绝不复用、修复或替换既有目录。
+    pub(in crate::generation_store) fn prepare_planned_generation(
+        &self,
+        source: &Path,
+        identity: &VulcanPluginGenerationIdentity,
+    ) -> Result<PinnedVulcanPluginGeneration> {
+        self.validate_layout()?;
+        files::validate_identity(identity)?;
+        if !files::exists(source, true)? {
+            return Err(Error::invalid("Generation source is missing."));
+        }
+        // Reinspect this exact approved source before allocating the originally reserved directory.
+        // 分配原预留目录前，重新检查此精确已批准来源。
+        let original = crate::inspect_user_plugin_package(source).map_err(Error::invalid)?;
+        if original.id != identity.plugin_id
+            || original.version.as_deref() != Some(identity.version.as_str())
+            || original.content_fingerprint != identity.content_fingerprint
+        {
+            return Err(Error::invalid(
+                "Source differs from the original reserved generation.",
+            ));
+        }
         // A generation lease is acquired before publishing any completion marker.
         // 在发布任何完成标记前取得代次租约。
         let lease = self.generation_lock(&identity, true)?;
@@ -149,13 +136,67 @@ impl VulcanPluginGenerationStore {
         })?;
         Ok(PinnedVulcanPluginGeneration {
             store_root: self.root.clone(),
-            identity,
+            identity: identity.clone(),
             package_root,
             required_permissions: verified_metadata.required_permissions,
             credential_keys: verified_metadata.credential_keys,
             configuration: verified_metadata.configuration,
             _lease: Arc::new(GenerationLease { _lock: lease }),
         })
+    }
+
+    /// Read the persisted phase for the exact `identity` without treating it as a live package lease.
+    /// 读取精确 `identity` 的持久阶段，不将其视为存活插件包租约。
+    /// Returns declared state even for an incomplete or collected generation; malformed identities remain errors.
+    /// 即使代次尚未完整或已回收，也返回声明状态；损坏身份仍返回错误。
+    pub fn generation_phase(
+        &self,
+        identity: &VulcanPluginGenerationIdentity,
+    ) -> Result<super::VulcanPluginGenerationPhase> {
+        // The namespace fence coordinates metadata reads with activation and collection.
+        // 命名空间屏障使元数据读取与激活及回收协调。
+        let _namespace = self.namespace_lock(&identity.plugin_id, true)?;
+        self.read_generation(identity)
+            .map(|(_, record)| record.state)
+    }
+
+    /// Open storage below the existing host-selected `user_root`; creates only its private controlled children.
+    /// 在现有宿主选定 `user_root` 下打开存储；仅创建其私有受控子目录。
+    /// Returns a canonical store, rejecting redirected or missing roots without searching alternate paths.
+    /// 返回规范存储；拒绝重定向或缺失根目录，不搜索替代路径。
+    pub fn open(user_root: &Path) -> Result<Self> {
+        if !files::exists(user_root, true)? {
+            return Err(Error::invalid("User plugin root must already exist."));
+        }
+        // All later handles bind this one canonical storage location.
+        // 后续所有句柄均绑定此唯一规范存储位置。
+        let user_root = user_root
+            .canonicalize()
+            .map_err(|error| Error::io("Resolve user plugin root", error))?;
+        // Private layout is independent of distributable package names and files.
+        // 私有布局独立于可分发插件包名称及文件。
+        let root = files::ensure_child(&user_root, STORE_DIRECTORY)?;
+        for directory in ["packages", "active", "locks"] {
+            files::ensure_child(&root, directory)?;
+        }
+        files::sync_directory(&root)?;
+        files::sync_directory(&user_root)?;
+        Ok(Self { root })
+    }
+
+    /// Prepare `source` as a new immutable generation matching the explicitly approved content digest.
+    /// 将 `source` 准备为与明确批准内容摘要匹配的新不可变代次。
+    /// Returns a real shared lease without changing activation, authorization, configuration, or runtime routes.
+    /// 返回实际共享租约，不改变激活、授权、配置或运行时路由。
+    pub fn prepare(
+        &self,
+        source: &Path,
+        expected_content_fingerprint: &str,
+    ) -> Result<PinnedVulcanPluginGeneration> {
+        // Legacy callers allocate one fresh identity and use the same immutable copy implementation.
+        // 旧调用方分配一个新身份并使用相同不可变复制实现。
+        let identity = self.plan_generation(source, expected_content_fingerprint)?;
+        self.prepare_planned_generation(source, &identity)
     }
 
     /// Pin a previously prepared `identity`; returns a verified root protected from collection.

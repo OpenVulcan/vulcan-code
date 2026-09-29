@@ -184,6 +184,7 @@ impl VulcanPluginGenerationStore {
                 configuration: Some(configuration),
             },
             phase: Phase::Prepared,
+            preparation: None,
         };
         self.transaction_directory(plugin_id, true)?;
         // The real exclusive request lock survives the short namespace operation.
@@ -227,15 +228,15 @@ impl VulcanPluginGenerationStore {
         let lease = self.transaction_lease(plugin_id, request_id)?;
         // The declared index alone identifies the current request authority.
         // 仅声明索引标识当前请求权威。
-        let indexed = self.indexed_transaction_locked(plugin_id)?;
+        let indexed = self.indexed_request_locked(plugin_id)?;
         // Request identity must match the existing index before publication can proceed.
         // 发布继续前，请求身份必须匹配既有索引。
         let owns_index = indexed
             .as_ref()
-            .is_some_and(|current| current.request_id == request_id);
+            .is_some_and(|current| current.request_id() == request_id);
         if !owns_index
             && (record.phase != Phase::Prepared
-                || indexed.is_some_and(|current| !current.phase.terminal()))
+                || indexed.is_some_and(|current| !current.phase().terminal()))
         {
             return Err(Error::new(
                 Code::Busy,
@@ -406,7 +407,7 @@ impl VulcanPluginGenerationStore {
         let _lease = self.transaction_lease(plugin_id, request_id)?;
         // The declared index alone identifies the current request authority.
         // 仅声明索引标识当前请求权威。
-        let indexed = self.indexed_transaction_locked(plugin_id)?;
+        let indexed = self.indexed_request_locked(plugin_id)?;
         // An already persisted abort is an idempotent receipt, including failure while writing its missing index.
         // 已持久化中止是幂等回执，包括写入缺失索引期间发生失败的情况。
         if record.phase == Phase::Aborted {
@@ -419,7 +420,7 @@ impl VulcanPluginGenerationStore {
         // 发布继续前，请求身份必须匹配既有索引。
         let owns_index = indexed
             .as_ref()
-            .is_some_and(|current| current.request_id == request_id);
+            .is_some_and(|current| current.request_id() == request_id);
         if !matches!(record.phase, Phase::Prepared | Phase::Committing)
             || (!owns_index && record.phase != Phase::Prepared)
             || self.read_activation(plugin_id)? != record.predecessor
@@ -441,7 +442,7 @@ impl VulcanPluginGenerationStore {
 
     /// Acquire the actual exclusive lock for `plugin_id`/`request_id`; it is independent from the short namespace fence.
     /// 取得 `plugin_id`／`request_id` 的实际排他锁；它独立于短时命名空间屏障。
-    fn transaction_lease(
+    pub(super) fn transaction_lease(
         &self,
         plugin_id: &str,
         request_id: Uuid,
@@ -473,7 +474,7 @@ impl VulcanPluginGenerationStore {
 
     /// Revalidate the target in `record` and return its actual package and credential owners under the namespace fence.
     /// 在命名空间屏障内复核 `record` 的目标，并返回实际插件包及凭据所有者。
-    fn pin_transaction_target(
+    pub(super) fn pin_transaction_target(
         &self,
         record: &VulcanPluginActivationTransactionRecord,
     ) -> VulcanPluginStoreResult<(PinnedVulcanPluginGeneration, PinnedVulcanPluginCredentials)>
@@ -509,6 +510,14 @@ impl VulcanPluginGenerationStore {
         // Retain real credential ownership for the same verified package.
         // 为相同已验证插件包保留实际凭据所有权。
         let credentials = self.pin_credentials_locked(&generation, revision)?;
+        if record.preparation.is_some()
+            && credentials.record().activation_request() != Some(record.request_id)
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Staged credentials do not belong to this original preparation.",
+            ));
+        }
         Ok((generation, credentials))
     }
 

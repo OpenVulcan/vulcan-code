@@ -19,6 +19,7 @@ export type TranslationKey =
   | "pluginUpdates.installSucceeded"
   | "pluginUpdates.installUncertain"
   | "pluginUpdates.prepared"
+  | "pluginUpdates.preparing"
   | "pluginUpdates.committing"
   | "pluginUpdates.published"
   | "pluginUpdates.completed"

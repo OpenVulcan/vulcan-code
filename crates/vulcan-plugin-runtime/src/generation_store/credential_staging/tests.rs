@@ -6,6 +6,7 @@ use crate::generation_store::{PinnedVulcanPluginGeneration, VulcanPluginStoreErr
 use std::cell::{Cell, RefCell};
 use std::fs;
 
+mod preparation;
 mod retention;
 
 /// Deterministic secure-backend fixture records actual writes and supports one exact failing key.

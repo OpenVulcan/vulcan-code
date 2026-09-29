@@ -17,6 +17,7 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.installSucceeded": "Success observed",
     "pluginUpdates.installUncertain": "Outcome uncertain; check external state",
     "pluginUpdates.prepared": "Candidate prepared",
+    "pluginUpdates.preparing": "Preparing candidate",
     "pluginUpdates.committing": "Commit needs verification",
     "pluginUpdates.published": "Committed; completion pending",
     "pluginUpdates.completed": "Completed",

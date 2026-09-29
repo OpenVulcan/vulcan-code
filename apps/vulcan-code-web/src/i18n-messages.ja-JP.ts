@@ -17,6 +17,7 @@ export const jaJPTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.installSucceeded": "成功を確認済み",
     "pluginUpdates.installUncertain": "結果不明。外部状態を確認してください",
     "pluginUpdates.prepared": "候補の準備完了",
+    "pluginUpdates.preparing": "候補を準備中",
     "pluginUpdates.committing": "確定状態の確認が必要",
     "pluginUpdates.published": "確定済み、完了待ち",
     "pluginUpdates.completed": "完了",

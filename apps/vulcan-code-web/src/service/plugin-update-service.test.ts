@@ -13,6 +13,15 @@ const status = {
 };
 beforeEach(() => { vi.resetAllMocks(); vi.mocked(hasServiceRuntime).mockReturnValue(true); });
 
+// Early intent preserves the original identity but cannot claim an installation receipt before target readiness.
+// 早期意图保留原身份，但不能在目标就绪之前声称具有安装回执。
+it("accepts preparing identities and rejects premature installation evidence", () => {
+  expect(parseLocalPluginUpdateStatus({ ...status, phase: "preparing", installation: null }, "fixture")).toMatchObject({
+    requestId: status.requestId, phase: "preparing", activationRevision: status.activationRevision,
+  });
+  expect(() => parseLocalPluginUpdateStatus({ ...status, phase: "preparing" }, "fixture")).toThrow();
+});
+
 // Stable original identity passes through all service methods without allocating a new request or rounding a revision.
 // 稳定原身份通过全部服务方法传递，不分配新请求或舍入修订。
 it("uses exact original request parameters and preserves decimal revisions", async () => {

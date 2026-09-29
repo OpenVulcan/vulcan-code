@@ -21,6 +21,7 @@ interface PluginUpdateControlProps {
 // phaseLabels presents durable stages without implying current readiness or successful external cleanup.
 // phaseLabels 展示持久阶段，不暗示当前就绪或外部清理成功。
 const phaseLabels: Record<LocalPluginUpdateStatus["phase"], TranslationKey> = {
+  preparing: "pluginUpdates.preparing",
   prepared: "pluginUpdates.prepared", committing: "pluginUpdates.committing", published: "pluginUpdates.published",
   completed: "pluginUpdates.completed", aborted: "pluginUpdates.aborted",
 };
@@ -191,7 +192,7 @@ function PluginUpdateManagement(props: PluginUpdateControlProps) {
       <div className="flex flex-wrap gap-2">
         {(record.phase === "committing" || record.phase === "published") && <Button type="button" size="sm" disabled={!canWrite}
           onClick={() => void execute("resume", record)}>{t("pluginUpdates.resume")}</Button>}
-        {(record.phase === "prepared" || record.phase === "committing") && <Button type="button" size="sm" variant="outline" disabled={!canWrite}
+        {(record.phase === "preparing" || record.phase === "prepared" || record.phase === "committing") && <Button type="button" size="sm" variant="outline" disabled={!canWrite}
           onClick={() => setConfirmation(record)}>{t("pluginUpdates.abandon")}</Button>}
       </div>
     </article>)}

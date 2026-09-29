@@ -8,6 +8,7 @@ use VulcanPluginStoreErrorCode as Code;
 use uuid::Uuid;
 
 mod candidates;
+mod preparation;
 mod recovery;
 
 /// Build two distinct immutable packages for one namespace and return their separately staged credential identities.

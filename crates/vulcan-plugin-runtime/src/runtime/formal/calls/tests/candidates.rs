@@ -7,7 +7,27 @@
 fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
     // Publish a real predecessor so ordinary and candidate admissions share the same plugin identity.
     // 发布真实前驱，使普通与候选入场共享相同插件身份。
-    let (fixture, store, mut transaction) = candidate_fixture(false, false, true);
+    let (fixture, store, mut initial) = candidate_fixture(false, false, true);
+    // Ordinary lifecycle changes cannot bypass an unfinished request; close fixture preparation before arranging the ordinary probe.
+    // 普通生命周期变更不能绕过未完成请求；安排普通探测前先结束夹具准备。
+    assert!(fixture.manager.begin_draining("hook-plugin").is_err());
+    // Keep the exact already-verified target and resources without retaining original request ownership.
+    // 保留精确已验证目标及资源，不保留原请求所有权。
+    let target = initial.record().target().clone();
+    // The predecessor revision is authoritative and survives the explicit fixture abort unchanged.
+    // 前驱修订具有权威，并在明确夹具中止后保持不变。
+    let predecessor_revision = initial
+        .record()
+        .predecessor()
+        .expect("published predecessor")
+        .revision;
+    // A physical package pin is independent from the original request lock.
+    // 物理插件包固定独立于原请求锁。
+    let package = initial.generation().clone();
+    store
+        .abort_activation_transaction(&mut initial)
+        .expect("finish fixture-only request");
+    drop(initial);
     fixture
         .manager
         .begin_draining("hook-plugin")
@@ -43,6 +63,33 @@ fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
             },
         )
         .expect("register original ordinary probe");
+    // Create the candidate only after the ordinary probe is registered, using exactly the verified target resources.
+    // 仅在普通探测登记后创建候选，精确使用已验证目标资源。
+    let mut transaction = store
+        .begin_activation_transaction(
+            Uuid::new_v4(),
+            &package,
+            predecessor_revision,
+            target
+                .approved_permissions()
+                .expect("target permissions")
+                .to_vec(),
+            target
+                .credential_revision()
+                .expect("target credentials")
+                .clone(),
+            target
+                .configuration()
+                .expect("target configuration")
+                .clone(),
+        )
+        .expect("candidate original after ordinary admission");
+    assert!(
+        fixture
+            .manager
+            .rollback_draining_to_enabling("hook-plugin")
+            .is_err()
+    );
     // Original storage identity selects all candidate records and no published probe.
     // 原存储身份选择全部候选记录，不选择已发布探测。
     let request_id = transaction.record().request_id();
