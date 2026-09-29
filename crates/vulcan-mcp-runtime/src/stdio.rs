@@ -364,8 +364,8 @@ impl McpTransport for StdioTransport {
 
     /// Observes the original rmcp close operation without cancelling it on timeout.
     /// 观测原 rmcp 关闭操作，不因观测超时而取消清理。
-    /// Returns protocol and direct-child close evidence; descendants and diagnostic pipes need their own barriers.
-    /// 返回协议与直接子进程关闭证据；派生进程及诊断管道需要各自屏障。
+    /// Returns protocol and platform process-scope evidence; Unix descendants and actual pipe release remain incomplete.
+    /// 返回协议及平台进程范围证据；Unix 后代和实际管道释放仍待完整接入。
     async fn shutdown(&self) -> Result<(), McpRuntimeError> {
         self.shutdown.wait().await
     }

@@ -9,8 +9,11 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::sync::{oneshot, watch};
 
-/// Sole direct-child grace interval after the protocol writer has been closed.
-/// 协议写入端关闭后，直接子进程唯一宽限时间。
+mod family;
+use family::ChildScope;
+
+/// Sole child-scope grace interval started before closing the protocol writer.
+/// 在关闭协议写入端前启动的子进程范围唯一宽限时间。
 const CHILD_EXIT_GRACE: Duration = Duration::from_secs(3);
 /// Bounds native exit polling and retries without requiring an asynchronous timer driver.
 /// 限制原生退出轮询及重试频率，无需异步计时驱动。
@@ -45,12 +48,12 @@ pub(super) struct ChildPipes {
     pub(super) stderr: ChildStderr,
 }
 
-/// Observes one actual child exit without owning or cancelling the worker.
-/// 观察单个实际子进程退出，不拥有或取消工作线程。
+/// Observes actual platform scope exit without owning or cancelling the worker.
+/// 观察实际平台范围退出，不拥有或取消工作线程。
 #[derive(Clone)]
 pub(super) struct ChildCompletion {
-    /// Success is published only after the child has exited and its process handle was dropped.
-    /// 仅在子进程退出且进程句柄释放后发布成功。
+    /// Success requires platform scope exit and release of its process and containment handles.
+    /// 成功要求平台范围退出，并释放其进程及纳管句柄。
     result: watch::Receiver<Option<Result<(), String>>>,
 }
 
@@ -91,8 +94,8 @@ pub(super) struct ManagedChild {
 impl ManagedChild {
     /// Spawns on a native worker before handing pipes to the asynchronous protocol adapter.
     /// 先在原生工作线程启动，再把管道交给异步协议适配器。
-    /// Command preserves exact arguments, environment and flags; returns the owner and original pipes.
-    /// command 保留精确参数、环境及标志；返回所有者和原管道。
+    /// Command preserves exact arguments and environment, with platform containment flags; returns the owner and original pipes.
+    /// command 保留精确参数及环境，并设置平台纳管标志；返回所有者和原管道。
     pub(super) async fn spawn(command: Command) -> io::Result<(Self, ChildPipes)> {
         // The owner exists before spawn is scheduled, covering cancellation of the first await.
         // 调度启动前所有者已存在，覆盖首次等待的取消。
@@ -169,8 +172,8 @@ impl Drop for ManagedChild {
 
 /// Owns spawn, stop and reap on one native thread; never reports an unconfirmed exit as success.
 /// 在单个原生线程拥有启动、停止和回收；绝不把未确认退出报告为成功。
-/// Command and channels describe one child only; this function returns after spawn failure or actual exit.
-/// command 与通道仅描述一个子进程；本函数在启动失败或实际退出后返回。
+/// Command and channels describe one root and its platform scope; returns after spawn failure or confirmed scope exit.
+/// command 与通道描述一个根进程及其平台范围；启动失败或确认范围退出后返回。
 fn supervise(
     mut command: Command,
     requested: Arc<AtomicU8>,
@@ -178,6 +181,15 @@ fn supervise(
     ready: oneshot::Sender<io::Result<ChildPipes>>,
     result: watch::Sender<Option<Result<(), String>>>,
 ) {
+    // Prepare the platform scope before spawning so configuration errors cannot orphan a child.
+    // 启动前准备平台范围，避免配置错误遗留子进程。
+    let mut family = match family::ChildFamily::prepare(command.as_std_mut()) {
+        Ok(family) => family,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return;
+        }
+    };
     // Standard-library spawning transfers process ownership without registering it with Tokio.
     // 标准库启动移交进程所有权，不向 Tokio 注册该进程。
     let mut child = match command
@@ -195,16 +207,18 @@ fn supervise(
     };
     // A failed pipe handoff still leaves the actual child owned by this thread for cleanup.
     // 管道移交失败后，实际子进程仍由本线程持有并清理。
-    let pipes = match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
-        (Some(stdin), Some(stdout), Some(stderr)) => Ok(ChildPipes {
-            stdin,
-            stdout,
-            stderr,
-        }),
-        _ => Err(io::Error::other(
-            "MCP child is missing a requested stdio pipe.",
-        )),
-    };
+    let pipes = family.attach(&child).and_then(|()| {
+        match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
+            (Some(stdin), Some(stdout), Some(stderr)) => Ok(ChildPipes {
+                stdin,
+                stdout,
+                stderr,
+            }),
+            _ => Err(io::Error::other(
+                "MCP child is missing a requested stdio pipe.",
+            )),
+        }
+    });
     if pipes.is_err() || ready.is_closed() {
         requested.fetch_max(StopRequest::Immediate as u8, Ordering::AcqRel);
     }
@@ -221,27 +235,27 @@ fn supervise(
     // 即使之后重试回收进程，也保留首个实际清理失败。
     let mut failure = None;
     loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                drop(child);
+        match family.exit_confirmed(&mut child) {
+            Ok(true) => {
+                drop((child, family));
                 result.send_replace(Some(failure.map_or(Ok(()), Err)));
                 return;
             }
-            Ok(None) => {}
+            Ok(false) => {}
             Err(error) => {
                 // The retained diagnostic is copied to observers without releasing native ownership.
                 // 向观察者复制保留诊断，不释放原生所有权。
                 let diagnostic = failure
                     .get_or_insert_with(|| {
-                        format!("MCP child exit could not be confirmed: {error}")
+                        format!("MCP child scope exit could not be confirmed: {error}")
                     })
                     .clone();
                 result.send_replace(Some(Err(diagnostic)));
                 requested.fetch_max(StopRequest::Immediate as u8, Ordering::AcqRel);
             }
         }
-        // Read the monotonic request after polling to avoid killing an already reaped child.
-        // 轮询后读取单调请求，避免终止已经回收的子进程。
+        // Read the monotonic request after polling to avoid terminating an already exited scope.
+        // 轮询后读取单调请求，避免终止已经退出的范围。
         let stop = requested.load(Ordering::Acquire);
         if stop != StopRequest::Running as u8 {
             // The native clock survives loss of the caller's runtime and timer driver.
@@ -250,20 +264,22 @@ fn supervise(
             if !termination_sent
                 && (stop == StopRequest::Immediate as u8 || started.elapsed() >= CHILD_EXIT_GRACE)
             {
-                match child.kill() {
+                match family.terminate(&mut child) {
                     Ok(()) => termination_sent = true,
                     Err(error) => {
-                        // A natural exit racing termination is confirmed through the owned child itself.
-                        // 与终止竞争的自然退出通过所持子进程自身确认。
-                        if let Ok(Some(_)) = child.try_wait() {
-                            drop(child);
+                        // A racing natural exit must confirm the whole owned scope, not just its root.
+                        // 竞争中的自然退出必须确认整个持有范围，而非仅其根进程。
+                        if let Ok(true) = family.exit_confirmed(&mut child) {
+                            drop((child, family));
                             result.send_replace(Some(failure.map_or(Ok(()), Err)));
                             return;
                         }
                         // Preserve the first failure while this worker retains and retries the actual process.
                         // 工作线程保留并重试实际进程期间，保留首个失败。
                         let diagnostic = failure
-                            .get_or_insert_with(|| format!("MCP child termination failed: {error}"))
+                            .get_or_insert_with(|| {
+                                format!("MCP child scope termination failed: {error}")
+                            })
                             .clone();
                         result.send_replace(Some(Err(diagnostic)));
                     }

@@ -5,4 +5,10 @@
 mod windows_process_job;
 
 #[cfg(windows)]
+mod windows_suspended_child;
+
+#[cfg(windows)]
 pub use windows_process_job::WindowsKillOnCloseJob;
+
+#[cfg(windows)]
+pub use windows_suspended_child::{configure_suspended_child, resume_suspended_child};

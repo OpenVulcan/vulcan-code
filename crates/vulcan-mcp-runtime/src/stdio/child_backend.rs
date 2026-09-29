@@ -69,8 +69,8 @@ impl Transport<RoleClient> for ManagedChildBackend {
         self.wire.receive().await
     }
 
-    /// Closes protocol output and waits for actual direct-child exit under the same native owner.
-    /// 关闭协议输出，并在同一原生所有者下等待实际直接子进程退出。
+    /// Closes protocol output and waits for actual platform process-scope exit under the same native owner.
+    /// 关闭协议输出，并在同一原生所有者下等待实际平台进程范围退出。
     /// No inputs; preserves both protocol and process cleanup diagnostics on failure.
     /// 无输入；失败时保留协议及进程清理诊断。
     async fn close(&mut self) -> io::Result<()> {
