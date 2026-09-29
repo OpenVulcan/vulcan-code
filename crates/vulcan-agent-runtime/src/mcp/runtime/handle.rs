@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+mod plugin_drain_tests;
+
 mod candidate;
 mod catalog_refresh;
 mod lifecycle_guard;
@@ -56,6 +59,9 @@ fn create_mcp_runtime(
     // Keep a single immutable registry for every task in this runtime.
     // 为此运行时中的每个任务保留唯一不可变注册表。
     let registry = McpServerRegistry::new(servers);
+    // Aggregate original lifecycle and transport ownership without retaining it in control handles.
+    // 聚合原生命周期及传输所有权，不在控制句柄内保留它。
+    let (resources, partition_release) = vulcan_mcp_runtime::McpTransportResources::new(resources);
     // Every task observes the same latched shutdown request.
     // 每个任务观察相同锁存关闭请求。
     let (shutdown_tx, _) = watch::channel(false);
@@ -75,6 +81,7 @@ fn create_mcp_runtime(
         purpose,
         transports: RwLock::new(BTreeMap::new()),
         resource_releases: RwLock::new(BTreeMap::new()),
+        partition_release,
         auth_sessions: AsyncRwLock::new(BTreeMap::new()),
         snapshot: RwLock::new(snapshot),
         retry_counts: RwLock::new(
@@ -164,6 +171,9 @@ struct McpRuntimeInner {
     /// Original non-owning release receipts survive initialization failure and observer cancellation.
     /// 原非拥有释放回执在初始化失败及观察取消后继续存在。
     resource_releases: RwLock<BTreeMap<String, vulcan_mcp_runtime::McpResourceRelease>>,
+    /// Original partition-wide evidence also covers unpublished initialization and lifecycle disposal.
+    /// 原分区级证据同时覆盖尚未发布的初始化及生命周期销毁。
+    partition_release: vulcan_mcp_runtime::McpResourceRelease,
     /// Mutable OAuth-session cache keyed by server identifier for host-driven remote authorization flows.
     /// 以服务器标识为键保存的可变 OAuth 会话缓存，供宿主驱动的远端授权流程复用。
     auth_sessions: AsyncRwLock<BTreeMap<String, Arc<McpOAuthSession>>>,
@@ -350,12 +360,18 @@ impl McpRuntimeHandle {
     /// Resolves the currently active transport for one connected server.
     /// 解析某个已连接服务器当前活动的传输实例。
     fn transport_for_server(&self, server_id: &str) -> Option<Arc<dyn McpTransport>> {
-        self.inner
+        // Keep the read guard through the shutdown check and clone so cleanup cannot release
+        // the original transport between admission and retaining the actual call resource.
+        // 从关闭检查到克隆均保留读锁，避免清理在入场与保留实际调用资源之间释放原传输。
+        let transports = self
+            .inner
             .transports
             .read()
-            .expect("mcp runtime transport map poisoned")
-            .get(server_id)
-            .cloned()
+            .expect("mcp runtime transport map poisoned");
+        if self.shutdown_requested() {
+            return None;
+        }
+        transports.get(server_id).cloned()
     }
 
     /// Resolves one configured server entry by identifier from the immutable registry snapshot.
@@ -543,12 +559,37 @@ impl McpRuntimeHandle {
         *self.inner.shutdown_tx.borrow()
     }
 
-    /// Returns whether every server task has confirmed terminal transport teardown.
-    /// 返回是否每个服务器任务都已确认终止传输拆除。
+    /// Compares original control identity without relying on server names or mutable catalog state.
+    /// 比较原控制身份，不依赖服务器名称或可变目录状态。
+    /// Receives another handle and returns whether both observe the same original instance.
+    /// 接收另一个句柄，返回两者是否观察同一原实例。
+    pub(super) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    /// Returns whether all servers stopped successfully and the original aggregate resources released.
+    /// 返回全部服务器是否成功停止，且原聚合资源是否已经释放。
     pub(super) fn is_fully_stopped(&self) -> bool {
-        self.snapshot().servers.values().all(|server| {
-            server.status == McpRuntimeServerStatus::Stopped && server.last_error.is_none()
-        })
+        self.inner.partition_release.is_released()
+            && self.snapshot().servers.values().all(|server| {
+                server.status == McpRuntimeServerStatus::Stopped && server.last_error.is_none()
+            })
+    }
+
+    /// Waits for protocol teardown and original physical ownership within the caller's total deadline.
+    /// 在调用者总期限内等待协议拆除及原物理所有权释放。
+    /// Errors preserve original state and receipts; observing this future never cancels cleanup.
+    /// 错误保留原状态及回执；观察此 future 绝不取消清理。
+    pub(super) async fn wait_until_drained(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), String> {
+        self.wait_until_stopped(deadline.saturating_duration_since(tokio::time::Instant::now()))
+            .await?;
+        tokio::time::timeout_at(deadline, self.inner.partition_release.wait())
+            .await
+            .map_err(|_| String::from("MCP partition original resources are still draining."))?
+            .map_err(|error| error.to_string())
     }
 
     /// Waits until every enabled server in this partition has completed initialize and atomic tool discovery.
@@ -686,11 +727,11 @@ pub(super) async fn bootstrap_mcp_runtime(
     create_mcp_runtime(servers, resources, McpRuntimePurpose::Managed)
 }
 
-/// Starts an owned partition synchronously with the caller's original resource scope.
-/// 使用调用者原资源范围同步启动所有者分区。
+/// Starts a managed partition synchronously with the caller's original resource scope.
+/// 使用调用者原资源范围同步启动受管分区。
 /// The caller must register the returned handle before releasing its admission lock.
 /// 调用者必须在释放入场锁之前登记返回句柄。
-pub(super) fn start_owned_mcp_runtime(
+pub(super) fn start_managed_mcp_runtime(
     servers: Vec<McpServerConfig>,
     resources: vulcan_mcp_runtime::McpTransportResources,
 ) -> Result<McpRuntimeHandle, String> {
@@ -893,7 +934,7 @@ pub async fn replace_plugin_mcp_runtime_partition(
         ));
     }
     let overview = configured_mcp_registry_overview(servers.clone());
-    let runtime = bootstrap_mcp_runtime(servers).await?;
+    let runtime = current.start_preparing_plugin_partition(plugin_id, servers)?;
     let mut startup_guard = McpRuntimeStartupGuard::new();
     startup_guard.track(&runtime);
     if let Err(error) = runtime
@@ -902,6 +943,7 @@ pub async fn replace_plugin_mcp_runtime_partition(
     {
         return Err(error);
     }
+    current.finish_preparing_plugin_partition(plugin_id, &runtime)?;
     let access = current.with_replaced_plugin_partition(plugin_id, generation, overview, runtime);
     startup_guard.mark_published();
     Ok(access)
@@ -3087,6 +3129,13 @@ mod optional_capability_tests {
             purpose: McpRuntimePurpose::Managed,
             transports: RwLock::new(BTreeMap::new()),
             resource_releases: RwLock::new(BTreeMap::new()),
+            // This synthetic registry starts no native lifecycle and therefore has an empty released scope.
+            // 此合成注册表不启动原生生命周期，因此拥有已释放的空范围。
+            partition_release: {
+                let (resources, released) = vulcan_mcp_runtime::McpTransportResources::new(());
+                drop(resources);
+                released
+            },
             auth_sessions: AsyncRwLock::new(BTreeMap::new()),
             snapshot: RwLock::new(McpRuntimeSnapshot {
                 servers: BTreeMap::new(),

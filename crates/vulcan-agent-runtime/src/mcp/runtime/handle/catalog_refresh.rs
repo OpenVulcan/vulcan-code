@@ -265,6 +265,13 @@ mod tests {
             purpose: McpRuntimePurpose::Managed,
             transports: RwLock::new(BTreeMap::new()),
             resource_releases: RwLock::new(BTreeMap::new()),
+            // This synthetic registry starts no native lifecycle and therefore has an empty released scope.
+            // 此合成注册表不启动原生生命周期，因此拥有已释放的空范围。
+            partition_release: {
+                let (resources, released) = vulcan_mcp_runtime::McpTransportResources::new(());
+                drop(resources);
+                released
+            },
             auth_sessions: tokio::sync::RwLock::new(BTreeMap::new()),
             snapshot: RwLock::new(McpRuntimeSnapshot {
                 servers: BTreeMap::from([(server.id.clone(), snapshot)]),

@@ -7,11 +7,11 @@ use std::io::{BufRead, Write};
 
 /// Shared fixture observation deadline; it bounds tests rather than production policy.
 /// 共享夹具观察期限；它限制测试，不属于生产策略。
-const OBSERVE: Duration = Duration::from_secs(10);
+pub(in crate::mcp::runtime) const OBSERVE: Duration = Duration::from_secs(10);
 
 /// Creates isolated access with no global server partitions.
 /// 创建不包含全局服务器分区的独立访问。
-fn access() -> McpRuntimeAccess {
+pub(in crate::mcp::runtime) fn access() -> McpRuntimeAccess {
     McpRuntimeAccess::new(
         McpRuntimeOverview::new(Vec::new(), Vec::new(), McpRuntimeDiscoveryReport::default()),
         BTreeMap::new(),
@@ -22,7 +22,11 @@ fn access() -> McpRuntimeAccess {
 /// 构造一个精确所有者服务器；其真实子进程锁定给定文件直至退出。
 /// Plugin selects identity, witness selects the OS lock, and ready selects protocol replies or parked initialization.
 /// plugin 选择身份，witness 选择操作系统锁，ready 选择协议回复或驻留初始化。
-fn server(plugin: &str, witness: &std::path::Path, ready: bool) -> McpServerConfig {
+pub(in crate::mcp::runtime) fn server(
+    plugin: &str,
+    witness: &std::path::Path,
+    ready: bool,
+) -> McpServerConfig {
     McpServerConfig {
         source: McpServerSource::Plugin {
             plugin_id: plugin.into(),
@@ -118,7 +122,7 @@ fn owner_resource_child() {
 
 /// Waits for the child-owned file lock; failure never masquerades as a skipped process test.
 /// 等待子进程持有文件锁；失败绝不伪装成跳过的进程测试。
-async fn child_holds(witness: &tempfile::NamedTempFile) {
+pub(in crate::mcp::runtime) async fn child_holds(witness: &tempfile::NamedTempFile) {
     tokio::time::timeout(OBSERVE, async {
         loop {
             match witness.as_file().try_lock() {
@@ -135,7 +139,7 @@ async fn child_holds(witness: &tempfile::NamedTempFile) {
 
 /// Checks actual file ownership after the original drain, independently of runtime status flags.
 /// 在原排空后检查实际文件所有权，独立于运行时状态标志。
-fn child_released(witness: &tempfile::NamedTempFile) {
+pub(in crate::mcp::runtime) fn child_released(witness: &tempfile::NamedTempFile) {
     witness
         .as_file()
         .try_lock()

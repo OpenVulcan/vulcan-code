@@ -600,16 +600,11 @@ pub(super) async fn update(
             .as_ref()
             .map(|bridge| bridge.extension_generation.mcp_runtime())
             .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-        if current_mcp.has_usable_retired_plugin_partitions(&plugin_id) {
-            return Err(String::from(
-                "旧插件 MCP 仍未完成实际排空，保留原更新请求。",
-            ));
-        }
         // Close starts before observing originals, including unpublished or removed owner instances.
         // 观察原实例前关闭启动，包括尚未发布或已经移除的所有者实例。
-        current_mcp.begin_plugin_owner_drain(&plugin_id)?;
+        current_mcp.begin_plugin_mcp_drain(&plugin_id)?;
         current_mcp
-            .wait_plugin_owner_drain(
+            .wait_plugin_mcp_drain(
                 &plugin_id,
                 AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
             )

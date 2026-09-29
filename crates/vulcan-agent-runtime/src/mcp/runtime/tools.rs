@@ -1,7 +1,7 @@
 use super::*;
 
 #[cfg(test)]
-mod owner_drain_tests;
+pub(super) mod owner_drain_tests;
 use crate::mcp::config::runtime_mcp_server_configs;
 use crate::mcp::config::{McpServerSource, McpServerTransportConfig};
 use crate::model::SessionId;
@@ -340,6 +340,9 @@ struct OwnerMcpAdmission {
     /// Every original instance, including simultaneous starts for one exact owner key.
     /// 每个原实例，包括同一精确所有者键的同时启动。
     instances: BTreeMap<McpRuntimeOwnedPartitionKey, Vec<OwnerMcpInstance>>,
+    /// Global starts remain observable after readiness, including ready candidates not yet published by the service.
+    /// 全局启动在就绪后仍可观察，包括服务尚未发布的就绪候选。
+    managed_globals: BTreeMap<String, Vec<McpRuntimeHandle>>,
 }
 
 /// Observes cleanup without retaining any execution lease or host resource bundle.
@@ -367,6 +370,10 @@ impl OwnerMcpAdmission {
         self.instances.retain(|_, instances| {
             instances.retain(|instance| !instance.released.is_released());
             !instances.is_empty()
+        });
+        self.managed_globals.retain(|_, runtimes| {
+            runtimes.retain(|runtime| !runtime.is_fully_stopped());
+            !runtimes.is_empty()
         });
     }
 }
@@ -507,8 +514,8 @@ pub struct McpRuntimeAccess {
     /// Independently replaceable live runtime partitions keyed by stable source identity.
     /// 以稳定来源身份为键、可独立替换的实时运行时分区。
     live_partitions: BTreeMap<String, Arc<McpRuntimePartitionLease>>,
-    /// Retired runtime observations shared by every generation without extending execution leases.
-    /// 每个代次共享的退休运行时观测，不延长执行租约。
+    /// Retired and not-yet-ready global observations shared without extending execution leases.
+    /// 不延长执行租约的共享观测，覆盖已退役及尚未就绪全局实例。
     retired_plugin_partitions: RetiredPluginPartitionRegistry,
     /// Opt-in owner registry shared by every access generation derived from the same bootstrap access.
     /// 由同一引导访问面派生的所有访问代次共享的可选所有者注册表。
@@ -709,6 +716,11 @@ impl McpRuntimeAccess {
         let mut occupied_public_names = BTreeSet::new();
         let mut bindings = Vec::new();
         for (partition_key, lease) in &self.live_partitions {
+            // A captured catalog must not advertise a partition whose admission is closed.
+            // 已捕获的目录不得继续公开准入已关闭的分区。
+            if lease.is_revoked() || lease.runtime.shutdown_requested() {
+                continue;
+            }
             for mut view in lease.runtime.available_tool_views_filtered(allowlist) {
                 let public_name =
                     allocate_unique_public_tool_name(view.id(), &mut occupied_public_names);
@@ -792,7 +804,7 @@ impl McpRuntimeAccess {
         let (resources, released) = vulcan_mcp_runtime::McpTransportResources::new(());
         // Creation validates all servers before spawning and contains no asynchronous gap.
         // 创建在启动前验证全部服务器，且不包含异步间隙。
-        let runtime = super::handle::start_owned_mcp_runtime(servers, resources.clone())?;
+        let runtime = super::handle::start_managed_mcp_runtime(servers, resources.clone())?;
         admission
             .instances
             .entry(key.clone())
@@ -1107,12 +1119,263 @@ impl McpRuntimeAccess {
             .await
     }
 
-    /// Blocks new owner-scoped MCP calls for one plugin and revokes every published owner lease.
-    /// 封锁指定插件的新所有者范围 MCP 调用，并撤销全部已发布的所有者租约。
+    /// Registers an unpublished global start in the shared original-instance observations.
+    /// 将未发布全局启动登记到共享原实例观察中。
+    /// The caller serializes global management operations; identity and runtime select one original.
+    /// 调用方串行化全局管理操作；身份与运行时选择一个原实例。
+    /// Returns an error without granting publication if the observation registry is unavailable.
+    /// 观察注册表不可用时返回错误，不授予发布资格。
+    pub(super) fn start_preparing_plugin_partition(
+        &self,
+        plugin_id: &str,
+        servers: Vec<McpServerConfig>,
+    ) -> Result<McpRuntimeHandle, String> {
+        // Application shutdown, construction and registration share the admission lock.
+        // 应用关闭、构造及登记共享入场锁。
+        let mut admission = self
+            .blocked_owner_plugins
+            .lock()
+            .map_err(|_| String::from("blocked MCP owner plugin registry poisoned"))?;
+        if admission.closed {
+            return Err(String::from("MCP runtime access is globally closed"));
+        }
+        // Acquire observation storage before creating work so registration cannot fail afterwards.
+        // 创建工作前取得观察存储，避免之后登记失败。
+        let mut registry = self
+            .retired_plugin_partitions
+            .lock()
+            .map_err(|_| String::from("retired MCP plugin partition registry poisoned"))?;
+        // Ordinary managed starts carry an empty host bundle through the common constructor.
+        // 普通受管启动通过公共构造器携带空宿主资源包。
+        let (resources, _) = vulcan_mcp_runtime::McpTransportResources::new(());
+        // Both locks remain held until this new original is registered.
+        // 此新原实例登记之前一直持有两把锁。
+        let runtime = super::handle::start_managed_mcp_runtime(servers, resources)?;
+        // Controls do not retain actual execution resources after cancellation.
+        // 取消后控制不会保留实际执行资源。
+        let originals = registry.entry(plugin_id.to_owned()).or_default();
+        originals.retain(|original| !original.is_fully_stopped());
+        originals.push(runtime.clone());
+        // This original survives successful readiness until its actual resources retire.
+        // 此原实例跨成功就绪保留，直至实际资源退役。
+        admission.prune_released();
+        admission
+            .managed_globals
+            .entry(plugin_id.to_owned())
+            .or_default()
+            .push(runtime.clone());
+        Ok(runtime)
+    }
+
+    /// Transfers a successful unpublished global start out of cleanup history under the same registry lock.
+    /// 在同一注册表锁内将成功的未发布全局启动移出清理历史。
+    /// Identity and runtime select the original; shutdown racing readiness must reject publication.
+    /// 身份与运行时选择原实例；关闭与就绪竞争时必须拒绝发布。
+    /// Returns success only while that original remains eligible for publication.
+    /// 仅在此原实例仍可发布时返回成功。
+    pub(super) fn finish_preparing_plugin_partition(
+        &self,
+        plugin_id: &str,
+        runtime: &McpRuntimeHandle,
+    ) -> Result<(), String> {
+        // Drain and publication must observe the same shutdown decision while transferring ownership.
+        // 排空与发布在交接所有权时必须观察相同关闭决策。
+        let mut registry = self
+            .retired_plugin_partitions
+            .lock()
+            .map_err(|_| String::from("retired MCP plugin partition registry poisoned"))?;
+        if runtime.shutdown_requested() {
+            return Err(format!(
+                "Plugin `{plugin_id}` MCP startup was drained before publication"
+            ));
+        }
+        // Successful transfer requires the original registration, never a guessed replacement.
+        // 成功交接要求原登记存在，绝不猜测替代实例。
+        let originals = registry
+            .get_mut(plugin_id)
+            .ok_or_else(|| format!("Plugin `{plugin_id}` MCP startup observation is missing"))?;
+        if !originals
+            .iter()
+            .any(|original| original.same_instance(runtime))
+        {
+            return Err(format!(
+                "Plugin `{plugin_id}` original MCP startup observation is missing"
+            ));
+        }
+        originals.retain(|original| !original.same_instance(runtime));
+        if originals.is_empty() {
+            registry.remove(plugin_id);
+        }
+        Ok(())
+    }
+
+    /// Closes one plugin's owner admission and stops its current and retired global partitions.
+    /// 关闭一个插件的所有者入场，并停止它的当前及已退役全局分区。
+    /// Receives an exact plugin identity; returns failure without erasing original release evidence.
+    /// 接收精确插件身份；失败时不删除原始释放证据。
     ///
     /// Existing bindings retain their lease reference while the runtime observes the shutdown request;
     /// the revoked latch prevents queued calls from starting after this method returns.
     /// 已存在的绑定会在运行时处理关闭请求期间保留租约引用；撤销锁存位会阻止本方法返回后的排队调用启动。
+    pub fn begin_plugin_mcp_drain(&self, plugin_id: &str) -> Result<(), String> {
+        self.begin_plugin_owner_drain(plugin_id)?;
+        // Current and already-retired global instances belong to the same explicit plugin.
+        // 当前及已经退役的全局实例属于同一个明确插件。
+        let prefix = format!("plugin:{plugin_id}:");
+        // Keep ready but unpublished global candidates visible even from the old service access.
+        // 即使从旧服务访问，也保持已就绪但尚未发布全局候选可见。
+        let admission = self
+            .blocked_owner_plugins
+            .lock()
+            .map_err(|_| String::from("blocked MCP owner plugin registry poisoned"))?;
+        // The original receipt must outlive removal of every execution lease and catalog access.
+        // 原回执必须比全部执行租约及目录访问的移除存活更久。
+        let mut retired = self
+            .retired_plugin_partitions
+            .lock()
+            .map_err(|_| String::from("retired MCP plugin partition registry poisoned"))?;
+        // A prior grace timer may already have registered this exact original.
+        // 先前宽限计时器可能已经登记此精确原实例。
+        let originals = retired.entry(plugin_id.to_owned()).or_default();
+        originals.retain(|runtime| !runtime.is_fully_stopped());
+        for (key, lease) in &self.live_partitions {
+            if key.starts_with(&prefix) {
+                lease.revoke();
+                if !originals
+                    .iter()
+                    .any(|runtime| runtime.same_instance(&lease.runtime))
+                {
+                    originals.push(lease.runtime.clone());
+                }
+            }
+        }
+        if let Some(managed) = admission.managed_globals.get(plugin_id) {
+            for runtime in managed {
+                if !originals
+                    .iter()
+                    .any(|original| original.same_instance(runtime))
+                {
+                    originals.push(runtime.clone());
+                }
+            }
+        }
+        for runtime in originals {
+            runtime.shutdown();
+        }
+        Ok(())
+    }
+
+    /// Waits for owned and global originals of this plugin within one shared total budget.
+    /// 在同一总预算内等待此插件的所有者及全局原实例。
+    /// The caller closes admission first; timeout and cancellation retain all unconfirmed originals.
+    /// 调用者先关闭入场；超时及取消保留全部未确认原实例。
+    pub async fn wait_plugin_mcp_drain(
+        &self,
+        plugin_id: &str,
+        maximum_wait: Duration,
+    ) -> Result<(), String> {
+        // One absolute deadline prevents the number of partitions from multiplying the budget.
+        // 一个绝对期限防止分区数量成倍放大预算。
+        let deadline = tokio::time::Instant::now()
+            .checked_add(maximum_wait)
+            .ok_or_else(|| String::from("plugin MCP drain deadline is out of range"))?;
+        self.wait_plugin_owner_drain(
+            plugin_id,
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+        )
+        .await?;
+        // Clone only control observations; real resources remain with their original owners.
+        // 仅克隆控制观察；真实资源仍属于原所有者。
+        let mut originals = self
+            .retired_plugin_partitions
+            .lock()
+            .map_err(|_| String::from("retired MCP plugin partition registry poisoned"))?
+            .get(plugin_id)
+            .cloned()
+            .unwrap_or_default();
+        // Readiness does not discard ownership observations for an unpublished candidate.
+        // 就绪不会丢弃未发布候选的所有权观察。
+        {
+            // Capture under the original admission lock without retaining it across waits.
+            // 在原入场锁内捕获，不跨等待保留锁。
+            let admission = self
+                .blocked_owner_plugins
+                .lock()
+                .map_err(|_| String::from("blocked MCP owner plugin registry poisoned"))?;
+            if let Some(managed) = admission.managed_globals.get(plugin_id) {
+                for runtime in managed {
+                    if !originals
+                        .iter()
+                        .any(|original| original.same_instance(runtime))
+                    {
+                        originals.push(runtime.clone());
+                    }
+                }
+            }
+        }
+        // The live view is authoritative even if a caller only closed the owner gate.
+        // 即使调用者仅关闭所有者闸门，当前视图仍然是权威。
+        let prefix = format!("plugin:{plugin_id}:");
+        for (key, lease) in &self.live_partitions {
+            if key.starts_with(&prefix)
+                && !originals
+                    .iter()
+                    .any(|runtime| runtime.same_instance(&lease.runtime))
+            {
+                originals.push(lease.runtime.clone());
+            }
+        }
+        for runtime in originals {
+            if !runtime.shutdown_requested() {
+                return Err(format!(
+                    "MCP partition for plugin `{plugin_id}` has not entered drain"
+                ));
+            }
+            runtime
+                .wait_until_drained(deadline)
+                .await
+                .map_err(|error| format!("Plugin `{plugin_id}` MCP drain failed: {error}"))?;
+        }
+        // Recheck original observations after asynchronous waiting instead of clearing the whole namespace.
+        // 异步等待后重新检查原观察，而不是清空整个命名空间。
+        if self.has_usable_retired_plugin_partitions(plugin_id) {
+            return Err(format!(
+                "Plugin `{plugin_id}` MCP originals changed during drain"
+            ));
+        }
+        // A later global original must not be missed after waiting on the captured set.
+        // 等待捕获集合之后，不能遗漏更晚出现的全局原实例。
+        {
+            // Retain unresolved originals; successful observations can be pruned independently.
+            // 保留未解决原实例；成功观察可以独立清理。
+            let mut admission = self
+                .blocked_owner_plugins
+                .lock()
+                .map_err(|_| String::from("blocked MCP owner plugin registry poisoned"))?;
+            if admission
+                .managed_globals
+                .get(plugin_id)
+                .is_some_and(|runtimes| runtimes.iter().any(|runtime| !runtime.is_fully_stopped()))
+            {
+                return Err(format!(
+                    "Plugin `{plugin_id}` managed MCP originals changed during drain"
+                ));
+            }
+            admission.prune_released();
+        }
+        // Keep the owner gate and its original receipts valid after the global waits.
+        // 全局等待完成后，继续确认所有者闸门及其原回执有效。
+        self.wait_plugin_owner_drain(
+            plugin_id,
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+        )
+        .await
+    }
+
+    /// Closes owner admission and requests cleanup for every original session-owned instance.
+    /// 关闭所有者入场，并为每个原会话所属实例请求清理。
+    /// Repeated calls preserve original evidence and never reopen admission.
+    /// 重复调用保留原证据，绝不重新开放入场。
     pub fn begin_plugin_owner_drain(&self, plugin_id: &str) -> Result<(), String> {
         if plugin_id.trim().is_empty() {
             return Err(String::from(
@@ -1476,6 +1739,21 @@ impl McpRuntimeAccess {
                 instance.runtime.shutdown();
             }
         }
+        // Ready candidates can still be absent from the service's published access.
+        // 已就绪候选仍可能不在服务发布访问中。
+        for runtime in admission.managed_globals.values().flatten() {
+            runtime.shutdown();
+        }
+        // Global startup originals may not yet belong to this published access.
+        // 原全局启动可能尚未属于此发布访问。
+        let originals = self
+            .retired_plugin_partitions
+            .lock()
+            .expect("retired MCP plugin partition registry poisoned");
+        for runtime in originals.values().flatten() {
+            runtime.shutdown();
+        }
+        drop(originals);
         let guards = std::mem::take(
             &mut *self
                 .owner_replacement_guards
@@ -1568,7 +1846,14 @@ impl McpRuntimeAccess {
                 .expect("retired MCP plugin partition registry poisoned");
             let runtimes = registry.entry(plugin_id.to_string()).or_default();
             runtimes.retain(|runtime| !runtime.is_fully_stopped());
-            runtimes.extend(retired_partitions.iter().map(|lease| lease.runtime.clone()));
+            for lease in &retired_partitions {
+                if !runtimes
+                    .iter()
+                    .any(|runtime| runtime.same_instance(&lease.runtime))
+                {
+                    runtimes.push(lease.runtime.clone());
+                }
+            }
         }
         // The grace timer must not extend a caller's right to execute old-generation tools.
         // 宽限计时器不得延长调用方执行旧代次工具的权利。
@@ -1969,6 +2254,11 @@ impl McpRuntimeToolBinding {
         args: serde_json::Value,
         audience: vulcan_mcp_runtime::McpToolResultAudience,
     ) -> Result<serde_json::Value, String> {
+        if self.runtime.is_revoked() || self.runtime.runtime.shutdown_requested() {
+            return Err(String::from(
+                "mcp_partition_draining: this MCP binding has been revoked",
+            ));
+        }
         if self.runtime.is_owner_scoped() {
             return Err(String::from(
                 "session-owned MCP binding requires invoke_for_owner",
