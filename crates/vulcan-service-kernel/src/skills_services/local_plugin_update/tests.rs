@@ -7,20 +7,86 @@ use vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase as Phase;
 
 /// Stable package identity shared by the fixture's old and new immutable versions.
 /// 夹具旧新不可变版本共用的稳定插件包身份。
-const PLUGIN: &str = "update-fixture";
+pub(in crate::skills_services) const PLUGIN: &str = "update-fixture";
+
+/// Real lifecycle transitions reopen owner admission only after the original drain.
+/// 真实生命周期转换仅在原排空后重新开放所有者入场。
+/// The content-only package uses real service persistence while avoiding network and credentials.
+/// 纯内容插件包使用真实服务持久化，同时不需要网络或凭据。
+#[tokio::test]
+async fn immutable_service_update_owner_drain_survives_enable_disable_cycles() {
+    // The existing fixture supplies the original runtime and isolated policy destination.
+    // 既有夹具提供原运行时及隔离策略目标。
+    let fixture = Fixture::new(false);
+    // Every lifecycle write stays inside this task-local test directory.
+    // 每次生命周期写入均留在此任务局部测试目录内。
+    let destination = fixture.root.path().join("owner-drain-policy.json");
+    PROVIDER_CONFIGURATION_PATH
+        .scope(destination, async {
+            for enabled in [true, false, true, false] {
+                vulcan_plugin_lifecycle::set_vulcan_plugin_enabled(
+                    Arc::clone(&fixture.state),
+                    PLUGIN.to_owned(),
+                    enabled,
+                )
+                .await
+                .expect("real enable/disable transition");
+                // Capture the actual published access after each transition.
+                // 在每次转换后捕获实际发布的访问。
+                let mcp = fixture
+                    .state
+                    .lock()
+                    .expect("service state")
+                    .agent_runtime
+                    .as_ref()
+                    .expect("actual bridge")
+                    .extension_generation
+                    .mcp_runtime();
+                // An empty owned partition exercises admission without launching unrelated processes.
+                // 空所有者分区验证入场，不启动无关进程。
+                let admitted = mcp
+                    .open_owned_stdio_partition(
+                        PLUGIN,
+                        fixture.runtime.snapshot().plugins[PLUGIN].generation,
+                        SessionId::new_v4(),
+                        Vec::new(),
+                    )
+                    .await;
+                if enabled {
+                    admitted
+                        .expect("enabled owner admission")
+                        .shutdown()
+                        .expect("close admitted owner");
+                } else {
+                    assert!(
+                        admitted
+                            .expect_err("disabled owner admission")
+                            .contains("draining")
+                    );
+                    mcp.wait_plugin_owner_drain(
+                        PLUGIN,
+                        AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+                    )
+                    .await
+                    .expect("service observed original cleanup");
+                }
+            }
+        })
+        .await;
+}
 
 /// Owns all mutable package and configuration paths used by the real service coordinator.
 /// 拥有真实服务协调器使用的全部可变插件包及配置路径。
-struct Fixture {
+pub(in crate::skills_services) struct Fixture {
     /// Temporary storage outlives every manager and retained generation used in each test.
     /// 临时存储比每项测试中的所有管理器及保留代次存活更久。
     root: tempfile::TempDir,
     /// The sole original manager is also installed into the service bridge.
     /// 唯一原管理器同时安装到服务桥中。
-    runtime: VulcanPluginRuntimeManager,
+    pub(in crate::skills_services) runtime: VulcanPluginRuntimeManager,
     /// Actual service state owns publication and user-policy projection.
     /// 实际服务状态拥有发布及用户策略投影。
-    state: SharedServiceBridgeState,
+    pub(in crate::skills_services) state: SharedServiceBridgeState,
     /// Mutable input is distinct from the installed predecessor and prepared immutable copy.
     /// 可变输入与已安装前驱及已准备不可变副本分离。
     source: PathBuf,
@@ -71,7 +137,7 @@ impl Fixture {
     /// 构建真实旧格式前驱及不同候选；configuration 选择声明文档覆盖。
     /// Returns isolated service state with an explicitly disabled plugin and no external network connections.
     /// 返回隔离服务状态，含明确停用插件且无外部网络连接。
-    fn new(configuration: bool) -> Self {
+    pub(in crate::skills_services) fn new(configuration: bool) -> Self {
         // All mutable files belong exclusively to this temporary workspace.
         // 全部可变文件仅属于此临时工作区。
         let root = tempfile::tempdir().expect("update workspace");

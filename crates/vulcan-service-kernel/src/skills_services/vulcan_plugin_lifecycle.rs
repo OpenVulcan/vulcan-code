@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod owner_drain_tests;
+
 /// One exact desired lifecycle state selected by the service request.
 /// 服务请求选择的唯一目标生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,7 +273,7 @@ pub(super) async fn set_vulcan_plugin_enabled(
             .await?
         }
         VulcanPluginTargetState::Disabled => {
-            prepare_disable_transition(&state, &runtime, &transition)?;
+            prepare_disable_transition(&state, &runtime, &transition).await?;
             None
         }
     };
@@ -376,6 +379,12 @@ async fn prepare_enable_transition(
             restore_previous_projection(state, runtime, transition, Vec::new()),
         )
     })?;
+    if let Err(error) = wait_plugin_owner_mcp_drain(state, &transition.plugin_id).await {
+        return Err(append_rollback_error(
+            format!("重新启用前所有者 MCP 排空失败：{error}"),
+            restore_previous_projection(state, runtime, transition, vec![error]),
+        ));
+    }
     synchronize_transient_hooks(state, runtime).map_err(|error| {
         append_rollback_error(
             format!("Vulcan Plugin hook 同步失败：{error}"),
@@ -472,7 +481,7 @@ async fn prepare_enable_transition(
 /// 返回值
 /// Returns success only while the plugin remains safely in `Draining`.
 /// 仅当插件安全保持在 `Draining` 状态时返回成功。
-fn prepare_disable_transition(
+async fn prepare_disable_transition(
     state: &SharedServiceBridgeState,
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     transition: &VulcanPluginTransition,
@@ -493,7 +502,7 @@ fn prepare_disable_transition(
         // Restore the gate to the immutable pre-transition policy instead of reopening it blindly.
         // 按不可变的转换前策略恢复闸门，不能无条件重新开放。
         let gate = if transition.previous_enabled {
-            finish_plugin_owner_mcp_drain(state, &transition.plugin_id)
+            finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await
         } else {
             begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
         };
@@ -665,7 +674,7 @@ async fn commit_enable_transition(
     }
     // Reopen owner MCP admission only after the enabled catalog and matching runtime generation are published.
     // 仅在启用目录及其匹配运行时代次发布后重新开放所有者 MCP 准入。
-    if let Err(error) = finish_plugin_owner_mcp_drain(state, &transition.plugin_id) {
+    if let Err(error) = finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await {
         let rollback_result = rollback_finalized_enable_to_policy(
             state,
             runtime,
@@ -705,6 +714,9 @@ async fn commit_disable_transition(
         Ok(report) => report.failures,
         Err(error) => vec![error.to_string()],
     };
+    if let Err(error) = wait_plugin_owner_mcp_drain(state, &transition.plugin_id).await {
+        cleanup_failures.push(format!("插件所有者 MCP 清理失败：{error}"));
+    }
     if let Err(error) = runtime
         .invoke_lifecycle(
             &transition.plugin_id,
@@ -800,7 +812,7 @@ async fn rollback_prepared_transition(
             let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
             let result = restore_previous_projection(state, runtime, transition, cleanup_failures);
             let gate_result = if transition.previous_enabled {
-                finish_plugin_owner_mcp_drain(state, &transition.plugin_id)
+                finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await
             } else {
                 begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
             };
@@ -817,7 +829,7 @@ async fn rollback_prepared_transition(
             // 持久化前尚未执行停用回调，因此只需恢复目录与 Hook。
             let result = restore_previous_projection(state, runtime, transition, Vec::new());
             let gate_result = if transition.previous_enabled {
-                finish_plugin_owner_mcp_drain(state, &transition.plugin_id)
+                finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await
             } else {
                 begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
             };
@@ -871,6 +883,9 @@ async fn rollback_finalized_enable_to_policy(
         Ok(report) => report.failures,
         Err(error) => vec![error.to_string()],
     };
+    if let Err(error) = wait_plugin_owner_mcp_drain(state, &transition.plugin_id).await {
+        cleanup_failures.push(format!("插件所有者 MCP 清理失败：{error}"));
+    }
     if let Err(error) = runtime
         .invoke_lifecycle(
             &transition.plugin_id,
@@ -923,6 +938,26 @@ async fn rollback_disable(
         // A cleanup retry started disabled, so rollback must never run an enable lifecycle.
         // 清理重试开始时就是停用状态，因此回滚绝不能执行启用生命周期。
         return restore_previous_projection(state, runtime, transition, cleanup_failures);
+    }
+    // Never start reverse enable effects while old owner processes remain alive.
+    // 旧所有者进程仍存活时绝不开始反向启用副作用。
+    if let Err(error) = wait_plugin_owner_mcp_drain(state, &transition.plugin_id).await {
+        // Preserve both earlier cleanup evidence and this original resource failure.
+        // 保留先前清理证据及此次原资源失败。
+        let mut failures = cleanup_failures;
+        failures.push(error.clone());
+        return Err(append_rollback_error(
+            format!("停用回滚前所有者 MCP 排空失败：{error}"),
+            // The disabled target is already durable; incomplete cleanup cannot restore enabled hooks.
+            // 停用目标已经持久化；清理不完整不能恢复启用 Hook。
+            finish_transition_and_sync(
+                state,
+                runtime,
+                transition,
+                &transition.target_policy,
+                failures,
+            ),
+        ));
     }
     if finalized {
         // A finalized disable no longer owns a Draining override, so recovery must use the regular Disabled -> Enabling transition.
@@ -1050,7 +1085,7 @@ async fn rollback_disable(
     }
     // Reopen owner MCP admission only after the reverse enable transaction is fully recovered.
     // 仅在反向启用事务完整恢复后重新开放所有者 MCP 准入。
-    finish_plugin_owner_mcp_drain(state, &transition.plugin_id)?;
+    finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await?;
     Ok(())
 }
 
@@ -1133,22 +1168,62 @@ fn begin_plugin_owner_mcp_drain(
     Ok(())
 }
 
-/// Reopens owner-scoped MCP admission after an enabled projection is fully published.
-/// 在启用投影完整发布后重新开放所有者范围 MCP 准入。
-fn finish_plugin_owner_mcp_drain(
+/// Waits for original owner resources with the service drain budget, keeping admission closed.
+/// 使用服务排空预算等待原所有者资源，保持入场关闭。
+/// Receives the service state and plugin identity; reports release failure without removing evidence.
+/// 接收服务状态及插件身份；报告释放失败，不移除证据。
+async fn wait_plugin_owner_mcp_drain(
     state: &SharedServiceBridgeState,
     plugin_id: &str,
 ) -> Result<(), String> {
-    let guard = state
+    // Capture shared access without holding service state across asynchronous cleanup.
+    // 捕获共享访问，不跨异步清理持有服务状态。
+    let mcp_runtime = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
-    let browser_manager = guard.browser_manager.clone();
-    let mcp_runtime = guard
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?
         .agent_runtime
         .as_ref()
-        .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
+        .map(|bridge| bridge.extension_generation.mcp_runtime())
         .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-    drop(guard);
+    mcp_runtime
+        .wait_plugin_owner_drain(
+            plugin_id,
+            AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+        )
+        .await
+}
+
+/// Reopens owner and browser admission only after the original resource scopes have released.
+/// 仅在原资源范围释放之后重新开放所有者及浏览器入场。
+/// Receives the service state and plugin identity; errors retain closed admission.
+/// 接收服务状态及插件身份；发生错误时保持入场关闭。
+async fn finish_plugin_owner_mcp_drain(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+) -> Result<(), String> {
+    // End the synchronous lock scope before awaiting any original resource.
+    // 等待任何原资源之前结束同步锁作用域。
+    let (browser_manager, mcp_runtime) = {
+        // This guard exists only within the synchronous capture scope.
+        // 此锁守卫仅存在于同步捕获作用域内。
+        let guard = state
+            .lock()
+            .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+        // Preserve the exact access whose original resource receipts will be observed.
+        // 保留将要观察其原资源回执的精确访问。
+        let mcp_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .map(|bridge| bridge.extension_generation.mcp_runtime())
+            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        (guard.browser_manager.clone(), mcp_runtime)
+    };
+    mcp_runtime
+        .wait_plugin_owner_drain(
+            plugin_id,
+            AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+        )
+        .await?;
     mcp_runtime.finish_plugin_owner_drain(plugin_id)?;
     if plugin_id == "vulcan-browser" {
         // Publish Core admission only after the exact owner MCP runtime has reopened.

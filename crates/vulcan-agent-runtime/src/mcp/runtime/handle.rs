@@ -110,7 +110,7 @@ const MCP_OPTIONAL_CAPABILITY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(
 /// so a slow or offline server can never add its deadline to the next partition.
 /// 每个插件分区使用各自相同的期限等待，且这些等待并发执行，
 /// 因此慢或离线服务器无法把自己的等待时间叠加到下一个分区。
-const MCP_PARTITION_READINESS_TIMEOUT: Duration = Duration::from_secs(15);
+pub(super) const MCP_PARTITION_READINESS_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Maximum simultaneous transport starts across user, plugin, and browser MCP partitions.
 /// 用户、插件与浏览器 MCP 分区同时启动传输的最大数量。
@@ -537,6 +537,12 @@ impl McpRuntimeHandle {
         request_mcp_runtime_shutdown(&self.inner.shutdown_tx);
     }
 
+    /// Returns the latched shutdown decision, including before terminal resource cleanup.
+    /// 返回锁存的关闭决定，包括终态资源清理之前的阶段。
+    pub(super) fn shutdown_requested(&self) -> bool {
+        *self.inner.shutdown_tx.borrow()
+    }
+
     /// Returns whether every server task has confirmed terminal transport teardown.
     /// 返回是否每个服务器任务都已确认终止传输拆除。
     pub(super) fn is_fully_stopped(&self) -> bool {
@@ -560,6 +566,11 @@ impl McpRuntimeHandle {
     pub(super) async fn wait_until_ready(&self, maximum_wait: Duration) -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + maximum_wait;
         loop {
+            if self.shutdown_requested() {
+                return Err(String::from(
+                    "MCP partition was shut down during readiness.",
+                ));
+            }
             let snapshot = self.snapshot();
             let enabled_servers = snapshot
                 .servers
@@ -672,6 +683,17 @@ pub(super) async fn bootstrap_mcp_runtime(
     // Ordinary managed partitions use the same ownership path without a candidate host bundle.
     // 普通托管分区使用相同所有权路径，不附带候选宿主资源包。
     let (resources, _) = vulcan_mcp_runtime::McpTransportResources::new(());
+    create_mcp_runtime(servers, resources, McpRuntimePurpose::Managed)
+}
+
+/// Starts an owned partition synchronously with the caller's original resource scope.
+/// 使用调用者原资源范围同步启动所有者分区。
+/// The caller must register the returned handle before releasing its admission lock.
+/// 调用者必须在释放入场锁之前登记返回句柄。
+pub(super) fn start_owned_mcp_runtime(
+    servers: Vec<McpServerConfig>,
+    resources: vulcan_mcp_runtime::McpTransportResources,
+) -> Result<McpRuntimeHandle, String> {
     create_mcp_runtime(servers, resources, McpRuntimePurpose::Managed)
 }
 

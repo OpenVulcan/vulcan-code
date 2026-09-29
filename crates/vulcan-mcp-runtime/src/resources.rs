@@ -35,7 +35,7 @@ struct RetainedHostResources {
 /// 观察单次启动的实际资源引用，不持有或取消这些引用。
 /// This proves release only; protocol delivery and cleanup errors retain their own result channels.
 /// 此对象仅证明释放；协议交付及清理错误保留自身结果通道。
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct McpResourceRelease {
     /// Independent observers cannot consume or alter each other's retained result.
     /// 独立观察者不能消费或修改彼此保留的结果。
@@ -88,6 +88,12 @@ impl Drop for RetainedHostResources {
 }
 
 impl McpResourceRelease {
+    /// Returns whether the original resource owner has confirmed release, without retaining it.
+    /// 返回原资源所有者是否已经确认释放，不保留该所有者。
+    pub fn is_released(&self) -> bool {
+        *self.released.borrow()
+    }
+
     /// Waits for final actual release while leaving cleanup entirely with the original owners.
     /// 等待最终实际释放，清理完全由原所有者负责。
     /// No inputs; cancellation stops only this wait, and a missing final publication is explicit failure.

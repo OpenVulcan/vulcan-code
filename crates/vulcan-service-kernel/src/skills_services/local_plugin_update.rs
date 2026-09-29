@@ -11,7 +11,7 @@ use vulcan_plugin_runtime::{
 };
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 /// Sanitized durable status exposes stable recovery identity without configuration documents or credential values.
 /// 脱敏持久状态公开稳定恢复身份，不包含配置文档或凭据值。
@@ -605,6 +605,15 @@ pub(super) async fn update(
                 "旧插件 MCP 仍未完成实际排空，保留原更新请求。",
             ));
         }
+        // Close starts before observing originals, including unpublished or removed owner instances.
+        // 观察原实例前关闭启动，包括尚未发布或已经移除的所有者实例。
+        current_mcp.begin_plugin_owner_drain(&plugin_id)?;
+        current_mcp
+            .wait_plugin_owner_drain(
+                &plugin_id,
+                AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+            )
+            .await?;
         // Prove original Lua calls and sessions retired before admitting candidate installation effects.
         // 在接纳候选安装副作用之前，证明原 Lua 调用及会话已经退役。
         let drained = runtime
