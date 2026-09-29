@@ -2,6 +2,9 @@
 //! 核心服务状态与共享任务辅助能力。
 
 use super::*;
+use vulcan_agent_runtime::agent_runtime::conversation_hooks::{
+    ConversationHookGenerationGuard, VulcanPluginConversationHooks,
+};
 
 /// Shared runtime handles used to execute real conversation turns.
 /// 用于执行真实会话轮次的共享运行时句柄集合。
@@ -59,6 +62,73 @@ pub(crate) struct AgentRuntimeBridge {
     /// Shared VMM hook runtime snapshot used by built-in memory hooks.
     /// 内置记忆 hook 使用的共享 VMM hook 运行时快照。
     pub(crate) vmm_hook_runtime: VmmHookRuntimeHandle,
+}
+
+impl AgentRuntimeBridge {
+    /// Shared drain deadline for retired user and plugin MCP partitions after generation publication.
+    /// 代次发布后退役用户与插件 MCP 分区共用的排空期限。
+    pub(crate) const RETIRED_MCP_PARTITION_DRAIN_TIMEOUT: std::time::Duration =
+        std::time::Duration::from_secs(30);
+
+    /// Prepares a plugin catalog and its handlers under the base hook policy without publishing them.
+    /// 依据基础 Hook 策略准备插件目录及处理器，不发布它们。
+    /// `catalog` and `mcp_runtime` are the candidate resources; returns one complete successor or an error.
+    /// `catalog` 与 `mcp_runtime` 是候选资源；返回完整后继代次或错误。
+    pub(crate) fn prepare_plugin_extension_generation(
+        &self,
+        catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+        mcp_runtime: McpRuntimeAccess,
+    ) -> Result<Arc<ExtensionGeneration>, String> {
+        // Reserve the successor before acquiring or changing any route state.
+        // 在取得或修改任何路由状态前预留后继修订号。
+        let revision = self
+            .extension_generation
+            .revision()
+            .checked_add(1)
+            .ok_or_else(|| String::from("Extension generation revision exhausted."))?;
+        // The base lock supplies host policy; active logical turns are never cloned.
+        // 基础锁提供宿主策略；活动逻辑回合从不克隆。
+        let mut runtime = self
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+        // Preparation retains only candidate plugin handlers and the exact catalog.
+        // 准备过程仅保留候选插件处理器及精确目录。
+        let hooks = VulcanPluginConversationHooks::prepare(
+            runtime.dispatcher_mut(),
+            self.vulcan_plugin_runtime.clone(),
+            catalog,
+        )
+        .map_err(|error| format!("准备会话插件 Hook 代次失败：{error}"))?;
+        Ok(Arc::new(
+            ExtensionGeneration::new_with_plugin_conversation_hooks(
+                revision,
+                Arc::new(hooks),
+                mcp_runtime,
+                self.extension_generation.prompt_skill_catalog(),
+            ),
+        ))
+    }
+
+    /// Locks shared turn state and projects this bridge's captured plugin hook generation.
+    /// 锁定共享回合状态，并投影本桥捕获的插件 Hook 代次。
+    /// Returns a scoped guard; lock or projection failure leaves the base dispatcher unchanged.
+    /// 返回作用域守卫；加锁或投影失败时保持基础调度器不变。
+    pub(crate) fn lock_conversation_hooks(
+        &self,
+    ) -> Result<ConversationHookGenerationGuard<'_>, String> {
+        // Acquire the existing mutex; no independent conversation state is introduced.
+        // 取得现有互斥锁，不引入独立会话状态。
+        let runtime = self
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+        ConversationHookGenerationGuard::new(
+            runtime,
+            self.extension_generation.plugin_conversation_hooks(),
+        )
+        .map_err(|error| format!("投影会话插件 Hook 代次失败：{error}"))
+    }
 }
 
 /// Session-scoped AI capability configuration save request sent by the WebUI composer dialog.

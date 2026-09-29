@@ -253,8 +253,7 @@ where
         // hook_runtime must commit logical-turn ownership before workspace terminal state is published.
         // hook_runtime 必须在工作区终态发布前提交逻辑回合所有权。
         let mut hook_runtime = agent_runtime
-            .conversation_hook_runtime
-            .lock()
+            .lock_conversation_hooks()
             .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
         // Missing process-local ownership requires canonical restoration before consuming any completion effect.
         // 缺失进程内所有权时，必须先规范恢复，之后才能消费任何完成效果。
@@ -303,8 +302,7 @@ where
         // hook_runtime termination is part of the same terminal ownership commit, never best-effort cleanup.
         // hook_runtime 终止属于同一终态所有权提交，绝不是尽力而为的清理。
         let mut hook_runtime = agent_runtime
-            .conversation_hook_runtime
-            .lock()
+            .lock_conversation_hooks()
             .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
         hook_runtime.terminate_turn(
             request.session_id,
@@ -491,8 +489,7 @@ pub(super) fn apply_execution_report_to_memory(
     // Agent-originated work retains internal ownership but cannot consume the user-memory lifecycle.
     // 代理发起工作保留内部归属，但不能消费用户记忆生命周期。
     let observes_user = agent_runtime
-        .conversation_hook_runtime
-        .lock()
+        .lock_conversation_hooks()
         .map_err(|error| format!("Failed to read business observer policy: {error}"))?
         .permits_user_observation(session_id);
     // Both immutable admission and current service readiness are required for terminal VMM work.

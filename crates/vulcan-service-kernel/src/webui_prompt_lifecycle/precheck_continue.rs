@@ -199,8 +199,7 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
     );
     let hook_snapshot_started_at = current_unix_millis_value();
     let precheck_hook_snapshots = agent_runtime
-        .conversation_hook_runtime
-        .lock()
+        .lock_conversation_hooks()
         .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?
         .precheck_hook_snapshots();
     webui_trace(
@@ -1594,7 +1593,7 @@ pub(crate) async fn mark_webui_prompt_preparation_failed(
             "Prompt preparation VMM cleanup failed: {vmm_error}"
         ));
     }
-    match agent_runtime.conversation_hook_runtime.lock() {
+    match agent_runtime.lock_conversation_hooks() {
         Ok(mut hook_runtime) => {
             hook_runtime.terminate_turn(session_id, boundary_commit.owning_project_id, error, 0);
         }

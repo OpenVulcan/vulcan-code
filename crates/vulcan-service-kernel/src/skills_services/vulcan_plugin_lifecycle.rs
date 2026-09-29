@@ -1228,30 +1228,33 @@ pub(super) fn publish_extension_generation(
     catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
     mcp_runtime: McpRuntimeAccess,
 ) -> Result<(), String> {
+    // The service lock publishes catalog, MCP access, and plugin conversation handlers together.
+    // 服务锁共同发布目录、MCP 访问面及插件会话处理器。
     let mut guard = state
         .lock()
         .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+    // This bridge owns the single extension pointer consumed by new executions.
+    // 本桥持有新执行消费的唯一扩展指针。
     let agent_runtime = guard
         .agent_runtime
         .as_mut()
         .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-    // retiredMcpRuntime remains owned by old in-flight ExtensionGeneration arcs until natural release or forced drain expiry.
-    // retiredMcpRuntime 由旧执行中的 ExtensionGeneration Arc 保留，直到自然释放或强制排空到期。
+    // Prepare all fallible handler validation before replacing the published pointer.
+    // 在替换发布指针前完成全部可能失败的处理器校验。
+    let next = agent_runtime.prepare_plugin_extension_generation(catalog, mcp_runtime)?;
+    // Existing generation owners retain the old partitions through their drain interval.
+    // 既有代次所有者在排空期限内保留旧分区。
     let retired_mcp_runtime = agent_runtime.extension_generation.mcp_runtime();
-    let revision = agent_runtime
-        .extension_generation
-        .revision()
-        .saturating_add(1);
-    agent_runtime.extension_generation = Arc::new(ExtensionGeneration::new(
-        revision,
-        Some(catalog),
-        mcp_runtime,
-        agent_runtime.extension_generation.prompt_skill_catalog(),
-    ));
-    retired_mcp_runtime
-        .retire_plugin_partitions_after(plugin_id, std::time::Duration::from_secs(30));
+    agent_runtime.extension_generation = next;
+    retired_mcp_runtime.retire_plugin_partitions_after(
+        plugin_id,
+        AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+    );
     Ok(())
 }
+
+#[cfg(test)]
+mod generation_tests;
 
 /// Finishes one runtime transition from an immutable policy snapshot.
 /// 根据不可变策略快照完成单个运行时转换。

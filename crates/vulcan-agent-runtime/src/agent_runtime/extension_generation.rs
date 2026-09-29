@@ -1,6 +1,7 @@
 //! Immutable plugin and MCP extension generation captured by one execution.
 //! 单次执行捕获的不可变插件与 MCP 扩展代次。
 
+use super::conversation_hooks::VulcanPluginConversationHooks;
 use crate::mcp::McpRuntimeAccess;
 use std::sync::Arc;
 use vulcan_plugin_runtime::VulcanPluginCatalogSnapshot;
@@ -22,6 +23,9 @@ pub struct ExtensionGeneration {
     /// Immutable system-and-user prompt-skill catalog loaded only at startup or explicit refresh.
     /// 仅在启动或显式刷新时加载的不可变系统与用户提示词技能目录。
     prompt_skill_catalog: Option<Arc<PromptSkillCatalog>>,
+    /// Frozen conversation plugin handlers prepared from this exact plugin catalog.
+    /// 从本精确插件目录准备的冻结会话插件处理器。
+    plugin_conversation_hooks: Option<Arc<VulcanPluginConversationHooks>>,
 }
 
 impl ExtensionGeneration {
@@ -48,7 +52,56 @@ impl ExtensionGeneration {
             plugin_catalog,
             mcp_runtime,
             prompt_skill_catalog,
+            plugin_conversation_hooks: None,
         }
+    }
+
+    /// Builds a service generation with the exact catalog owned by `hooks`.
+    /// 使用 `hooks` 持有的精确目录构建服务代次。
+    /// `revision`, `mcp_runtime`, and `prompt_skill_catalog` are the prepared publication resources.
+    /// `revision`、`mcp_runtime` 与 `prompt_skill_catalog` 是准备发布的资源。
+    /// Returns an immutable generation; catalog and conversation handlers cannot be paired independently.
+    /// 返回不可变代次；目录与会话处理器不能被独立配对。
+    pub fn new_with_plugin_conversation_hooks(
+        revision: u64,
+        hooks: Arc<VulcanPluginConversationHooks>,
+        mcp_runtime: McpRuntimeAccess,
+        prompt_skill_catalog: Option<Arc<PromptSkillCatalog>>,
+    ) -> Self {
+        Self {
+            revision,
+            plugin_catalog: Some(hooks.catalog()),
+            mcp_runtime,
+            prompt_skill_catalog,
+            plugin_conversation_hooks: Some(hooks),
+        }
+    }
+
+    /// Prepares a successor with replacement MCP and prompt catalogs while retaining plugin routing.
+    /// 准备替换 MCP 与提示词目录的后继代次，同时保留插件路由。
+    /// Returns the unpublished successor, or an error if the service revision is exhausted.
+    /// 返回尚未发布的后继代次；服务修订号耗尽则返回错误。
+    pub fn republish(
+        &self,
+        mcp_runtime: McpRuntimeAccess,
+        prompt_skill_catalog: Option<Arc<PromptSkillCatalog>>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            revision: self
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| String::from("Extension generation revision exhausted."))?,
+            plugin_catalog: self.plugin_catalog.clone(),
+            mcp_runtime,
+            prompt_skill_catalog,
+            plugin_conversation_hooks: self.plugin_conversation_hooks.clone(),
+        })
+    }
+
+    /// Returns captured plugin handlers, or `None` for explicitly standalone generations.
+    /// 返回捕获的插件处理器；显式独立代次返回 `None`。
+    pub fn plugin_conversation_hooks(&self) -> Option<&VulcanPluginConversationHooks> {
+        self.plugin_conversation_hooks.as_deref()
     }
 
     /// Returns the monotonic extension revision.

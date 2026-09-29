@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[cfg(test)]
+mod tests;
+
 use crate::{
     HookError, HookHandler, HookPoint, HookPointDescriptor, HookRegistration,
     HookRegistrationSnapshot,
@@ -119,12 +122,19 @@ impl HookRegistry {
             )));
         }
 
+        // Reserve an unambiguous insertion sequence before mutating the registry.
+        // 在修改注册表前预留无歧义的插入序号。
+        let next_sequence = self.next_sequence.checked_add(1).ok_or_else(|| {
+            HookError::invalid_registration("hook registration sequence exhausted")
+        })?;
+        // The entry retains the sequence assigned by this registry.
+        // 条目保留本注册表分配的序号。
         let entry = HookEntry {
             registration: registration.clone(),
             handler,
             sequence: self.next_sequence,
         };
-        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.next_sequence = next_sequence;
         self.entries_by_point
             .entry(registration.point.clone())
             .or_default()
@@ -169,6 +179,48 @@ impl HookRegistry {
     /// 返回单个 hook 点位注册的处理器数量。
     pub fn count_for(&self, point: &str) -> usize {
         self.entries_by_point.get(point).map_or(0, Vec::len)
+    }
+
+    /// Projects one registration namespace from `source` without changing either registry.
+    /// 从 `source` 投影一个注册命名空间，不修改任一注册表。
+    /// `prefix` must be nonempty; host point policies and all other registrations stay local.
+    /// `prefix` 必须非空；宿主点位策略与其他注册项保持本地定义。
+    /// Returns a validated registry; equal-priority source entries follow local entries in source insertion order.
+    /// 返回已校验注册表；同优先级来源条目按原插入顺序排在本地条目之后。
+    /// Validation or sequence exhaustion returns an error without publishing a partial projection.
+    /// 校验失败或序号耗尽时返回错误，不发布局部投影。
+    pub fn with_registration_prefix_from(
+        &self,
+        prefix: &str,
+        source: &Self,
+    ) -> Result<Self, HookError> {
+        if prefix.trim().is_empty() {
+            return Err(HookError::invalid_registration(
+                "hook registration prefix cannot be empty",
+            ));
+        }
+        // Stage only registry state; composition must not emit dispatcher lifecycle events.
+        // 仅暂存注册表状态；组合过程不得发送调度器生命周期事件。
+        let mut projected = self.clone();
+        for entries in projected.entries_by_point.values_mut() {
+            entries.retain(|entry| !entry.registration.id.starts_with(prefix));
+        }
+        projected
+            .entries_by_point
+            .retain(|_, entries| !entries.is_empty());
+        // Preserve insertion order across points instead of using map iteration order.
+        // 保持跨点位插入顺序，不使用映射遍历顺序。
+        let mut selected = source
+            .entries_by_point
+            .values()
+            .flatten()
+            .filter(|entry| entry.registration.id.starts_with(prefix))
+            .collect::<Vec<_>>();
+        selected.sort_by_key(|entry| entry.sequence);
+        for entry in selected {
+            projected.register(entry.registration.clone(), Arc::clone(&entry.handler))?;
+        }
+        Ok(projected)
     }
 
     /// Returns read-only registration snapshots for one point or all points.

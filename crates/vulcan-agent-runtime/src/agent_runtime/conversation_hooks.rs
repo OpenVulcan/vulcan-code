@@ -79,6 +79,7 @@ const CONVERSATION_HOOK_DISPATCH_TIMEOUT: Duration = Duration::from_millis(120_0
 mod canonical_inputs;
 mod completion;
 mod helpers;
+mod plugin_generation;
 mod precheck;
 mod profile;
 mod runtime;
@@ -90,6 +91,7 @@ mod types;
 
 pub use completion::{ConversationCompletionOutcome, ConversationCompletionRequest};
 pub(crate) use helpers::host_hook_point_descriptors;
+pub use plugin_generation::{ConversationHookGenerationGuard, VulcanPluginConversationHooks};
 pub use precheck::{ConversationPrecheckOutcome, ConversationPrecheckRequest};
 pub use profile::{ConversationProfileOutcome, ConversationProfileRequest};
 pub use runtime::{ConversationHookRuntime, ConversationPromptHookRequests};

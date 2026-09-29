@@ -77,8 +77,7 @@ pub(super) fn dispatch_queued_pending_prompt_hook(
     }
     let captured = crate::session_business_hook::live_business_hook_state(handle)?;
     let mut hook_runtime = agent_runtime
-        .conversation_hook_runtime
-        .lock()
+        .lock_conversation_hooks()
         .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
     let Some(captured) = captured else {
         return Ok(());

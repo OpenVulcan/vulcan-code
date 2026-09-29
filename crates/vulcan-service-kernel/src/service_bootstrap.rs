@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 use vulcan_agent_runtime::{
     agent_profile::load_agent_profile_catalog,
     agent_runtime::{
-        conversation_hooks::ConversationHookRuntime,
+        conversation_hooks::{ConversationHookRuntime, VulcanPluginConversationHooks},
         extension_generation::ExtensionGeneration,
         question_runtime::QuestionRuntime,
         task_runtime::TaskRuntime,
@@ -1489,6 +1489,14 @@ fn run_service_bootstrap(
     task_runtime
         .replace_subagent_catalog(subagent_catalog.clone())
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
+    // Freeze plugin handlers with their catalog before publishing the first extension generation.
+    // 在发布首个扩展代次前，将插件处理器与其目录一并冻结。
+    let plugin_conversation_hooks = VulcanPluginConversationHooks::prepare(
+        conversation_hook_runtime.dispatcher_mut(),
+        vulcan_plugin_runtime.clone(),
+        Arc::clone(&vulcan_plugin_catalog),
+    )
+    .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error.to_string()))?;
     let agent_runtime = AgentRuntimeBridge {
         provider_configuration: provider_configuration.clone(),
         public_ai_runtime,
@@ -1501,9 +1509,9 @@ fn run_service_bootstrap(
         subagent_catalog: Arc::new(subagent_catalog),
         luaskills_runtime: agent_luaskills_runtime,
         vulcan_plugin_runtime: vulcan_plugin_runtime.clone(),
-        extension_generation: Arc::new(ExtensionGeneration::new(
+        extension_generation: Arc::new(ExtensionGeneration::new_with_plugin_conversation_hooks(
             vulcan_plugin_catalog.revision,
-            Some(Arc::clone(&vulcan_plugin_catalog)),
+            Arc::new(plugin_conversation_hooks),
             agent_mcp_runtime,
             Some(prompt_skill_catalog),
         )),

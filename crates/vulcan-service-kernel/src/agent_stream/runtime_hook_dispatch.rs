@@ -37,8 +37,7 @@ pub(crate) fn dispatch_runtime_event_hook(
     // hook_runtime serializes access to the exact conversation Hook state shared by all event consumers.
     // hook_runtime 串行化所有事件消费者共享的精确会话 Hook 状态访问。
     let hook_runtime = agent_runtime
-        .conversation_hook_runtime
-        .lock()
+        .lock_conversation_hooks()
         .map_err(|error| {
             format!(
                 "failed to lock conversation hook runtime for explicit execution {execution_id} tool event in session {session_id}: {error}"

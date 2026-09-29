@@ -93,8 +93,7 @@ pub(crate) fn synchronize_live_business_hook_inputs(
         return Ok(());
     };
     let mut hook = runtime
-        .conversation_hook_runtime
-        .lock()
+        .lock_conversation_hooks()
         .map_err(|error| format!("Failed to lock business Hook runtime: {error}"))?;
     if hook.has_active_turn(handle.session_id()) {
         hook.restore_business_hook_state(&captured)?;
@@ -140,8 +139,7 @@ pub(crate) fn capture_business_hook_before_dispatch(
     // Capture the real owner; a continuation string must never be used as original user content.
     // 捕获实际所有者；绝不能把续跑字符串用作原始用户正文。
     let mut binding = runtime
-        .conversation_hook_runtime
-        .lock()
+        .lock_conversation_hooks()
         .map_err(|error| format!("Failed to lock business Hook runtime: {error}"))?
         .capture_business_hook_binding(session_id, generation, turn.turn_id, turn.start_seq)?;
     if binding.hook_turn_id != expected_hook_id {

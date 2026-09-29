@@ -485,10 +485,9 @@ pub(crate) fn webui_turn_completion_gate_from_state(
         })?;
     let pending_subagent_count = usize::from(durable_has_pending_collaboration);
     let has_active_hook_turn = agent_runtime
-        .conversation_hook_runtime
-        .lock()
-        .map(|hook_runtime| hook_runtime.has_active_turn(session_id))
-        .unwrap_or(false);
+        .lock_conversation_hooks()
+        .map_err(|error| format!("读取会话 Hook 完成门控失败：{error}"))?
+        .has_active_turn(session_id);
     Ok(WebuiTurnCompletionGate {
         pending_subagent_count,
         has_active_hook_turn,

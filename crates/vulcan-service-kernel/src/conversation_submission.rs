@@ -3061,8 +3061,7 @@ async fn service_start_conversation_execution(
                 )?)
             } else { None };
             let mut hook_runtime = agent_runtime
-                .conversation_hook_runtime
-                .lock()
+                .lock_conversation_hooks()
                 .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
             let begin_input = SharedPromptTurnBeginInput {
                     session_id,

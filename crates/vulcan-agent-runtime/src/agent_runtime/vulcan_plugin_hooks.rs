@@ -24,7 +24,7 @@ use vulcan_tools_manager::{
 
 /// Stable registration prefix reserved for manifest-driven Vulcan Plugin hooks.
 /// 为清单驱动 Vulcan 插件 hook 保留的稳定注册前缀。
-const VULCAN_PLUGIN_HOOK_REGISTRATION_PREFIX: &str = "vulcan-plugin/";
+pub(crate) const VULCAN_PLUGIN_HOOK_REGISTRATION_PREFIX: &str = "vulcan-plugin/";
 
 /// Stable host point names for the generic tool lifecycle.
 /// 通用工具生命周期使用的稳定宿主点位名称。
@@ -467,10 +467,19 @@ fn validate_tool_hook_lifecycle(
 
 /// Registers an explicitly selected set of plugin hooks into a dispatcher.
 /// 将显式选中的插件 Hook 集合注册到调度器。
+/// `dispatcher` supplies point policies, `runtime` validates admission, and `hooks` is the exact selected set.
+/// `dispatcher` 提供点位策略，`runtime` 校验准入，`hooks` 是精确选中集合。
+/// `catalog_owner` retains deferred conversation resources; immediate generic tool dispatch explicitly passes `None`.
+/// `catalog_owner` 保留延后会话资源；即时通用工具派发显式传入 `None`。
+/// Returns success after staged registration or a validation error before replacement.
+/// 暂存注册完成后返回成功，或在替换前返回校验错误。
 fn synchronize_vulcan_plugin_hook_descriptors(
     dispatcher: &mut HookDispatcher,
     runtime: VulcanPluginRuntimeManager,
     hooks: &[VulcanPluginHookDescriptor],
+    // Conversation handlers retain their published catalog; immediate generic tool dispatch has no catalog owner here.
+    // 会话处理器保留已发布目录；即时通用工具派发不在此处持有目录。
+    catalog_owner: Option<Arc<VulcanPluginCatalogSnapshot>>,
 ) -> Result<(), HookError> {
     validate_vulcan_plugin_hooks(dispatcher, hooks)?;
     validate_tool_hook_lifecycle(&runtime, hooks)?;
@@ -506,12 +515,21 @@ fn synchronize_vulcan_plugin_hook_descriptors(
         registration.display_name = hook.manifest.display_name.clone();
         registration.progress_label = hook.manifest.progress_label.clone();
         let hook_runtime = runtime.clone();
+        // Each stored handler independently pins its catalog even after the extension wrapper is released.
+        // 即使扩展包装对象释放，每个已存处理器仍独立固定其目录。
+        let catalog_owner = catalog_owner.clone();
         staged.register(
             registration,
             Arc::new(FnHookHandler::new(move |invocation| {
                 let hook_runtime = hook_runtime.clone();
                 let hook = hook.clone();
+                // An admitted future retains the same ownership until completion or cancellation.
+                // 已准入的异步任务保留相同所有权直至完成或取消。
+                let catalog_owner = catalog_owner.clone();
                 async move {
+                    // Keep the actual package and credential leases alive across the awaited invocation.
+                    // 跨等待调用保留实际包与凭据租约。
+                    let _catalog_owner = catalog_owner;
                     hook_runtime
                         .invoke_hook(&hook, invocation)
                         .await
@@ -578,7 +596,7 @@ async fn dispatch_tool_hook_descriptors(
         ));
     }
     let mut dispatcher = new_host_hook_dispatcher()?;
-    synchronize_vulcan_plugin_hook_descriptors(&mut dispatcher, runtime, &hooks)?;
+    synchronize_vulcan_plugin_hook_descriptors(&mut dispatcher, runtime, &hooks, None)?;
     dispatcher
         .dispatch(HookDispatchRequest::new(
             context,
@@ -1139,25 +1157,7 @@ pub fn synchronize_vulcan_plugin_hooks(
     runtime: VulcanPluginRuntimeManager,
     catalog: &VulcanPluginCatalogSnapshot,
 ) -> Result<(), HookError> {
-    // Service bootstrap owns the long-lived conversation dispatcher. Install the generic points
-    // there before plugin lifecycle validation can enable a declared tool hook.
-    // 服务启动拥有长寿命的会话调度器；在插件生命周期校验启用工具 Hook 前先注册通用点位。
-    for descriptor in generic_tool_hook_point_descriptors() {
-        if dispatcher
-            .registry()
-            .point_descriptor(&descriptor.point)
-            .is_none()
-        {
-            dispatcher.register_point(descriptor)?;
-        }
-    }
-    let enabled_hooks = catalog
-        .enabled_hooks
-        .values()
-        .filter(|hook| !is_generic_tool_hook_point(&hook.manifest.point))
-        .cloned()
-        .collect::<Vec<_>>();
-    synchronize_vulcan_plugin_hook_descriptors(dispatcher, runtime, &enabled_hooks)
+    synchronize_owned_vulcan_plugin_hooks(dispatcher, runtime, Arc::new(catalog.clone()))
 }
 
 /// Validates plugin hook declarations against the host-owned point registry without mutation.
@@ -1194,6 +1194,35 @@ pub fn validate_vulcan_plugin_hooks(
         }
     }
     Ok(())
+}
+
+/// Synchronizes conversation handlers that retain the exact `catalog` owner across dispatcher clones.
+/// 同步跨调度器克隆保留精确 `catalog` 所有者的会话处理器。
+/// `dispatcher` supplies host policies and `runtime` supplies admission authority; returns validation success or error.
+/// `dispatcher` 提供宿主策略，`runtime` 提供准入权威；返回校验成功或错误。
+pub(crate) fn synchronize_owned_vulcan_plugin_hooks(
+    dispatcher: &mut HookDispatcher,
+    runtime: VulcanPluginRuntimeManager,
+    catalog: Arc<VulcanPluginCatalogSnapshot>,
+) -> Result<(), HookError> {
+    for descriptor in generic_tool_hook_point_descriptors() {
+        if dispatcher
+            .registry()
+            .point_descriptor(&descriptor.point)
+            .is_none()
+        {
+            dispatcher.register_point(descriptor)?;
+        }
+    }
+    // Generic tool handlers are prepared by their separate invocation pipeline.
+    // 通用工具处理器由其独立调用流水线准备。
+    let enabled_hooks = catalog
+        .enabled_hooks
+        .values()
+        .filter(|hook| !is_generic_tool_hook_point(&hook.manifest.point))
+        .cloned()
+        .collect::<Vec<_>>();
+    synchronize_vulcan_plugin_hook_descriptors(dispatcher, runtime, &enabled_hooks, Some(catalog))
 }
 
 #[cfg(test)]
@@ -1501,11 +1530,71 @@ lua_runtime:
         synchronize_vulcan_plugin_hooks(&mut dispatcher, manager.clone(), &catalog)
             .expect("resynchronize plugin hook");
         assert_eq!(dispatcher.registry().registration_snapshots(None).len(), 1);
+        // Production capture validates the exact current catalog without changing the live dispatcher.
+        // 生产捕获校验精确当前目录，不修改实时调度器。
+        let retained_catalog = Arc::new((*catalog).clone());
+        // A weak observer proves deferred dispatcher ownership independently of the manager's snapshot.
+        // 弱观察引用独立于管理器快照证明延后调度器的所有权。
+        let catalog_lifetime = Arc::downgrade(&retained_catalog);
+        // Freeze through the production constructor, then retain only a projected dispatcher clone.
+        // 通过生产构造器冻结，随后仅保留投影调度器克隆。
+        let captured =
+            crate::agent_runtime::conversation_hooks::VulcanPluginConversationHooks::prepare(
+                &dispatcher,
+                manager.clone(),
+                Arc::clone(&retained_catalog),
+            )
+            .expect("capture current plugin hook generation");
+        assert!(Arc::ptr_eq(&captured.catalog(), &retained_catalog));
+        assert!(
+            crate::agent_runtime::conversation_hooks::VulcanPluginConversationHooks::prepare(
+                &dispatcher,
+                manager.clone(),
+                Arc::new(invalid_catalog),
+            )
+            .is_err()
+        );
+        // The shared state does not itself own this candidate's frozen handlers.
+        // 共享状态自身不持有此候选的冻结处理器。
+        let conversation =
+            Mutex::new(crate::agent_runtime::conversation_hooks::ConversationHookRuntime::new());
+        // This is the same clone retained by an asynchronously prepared request after unlocking.
+        // 这是异步准备请求解锁后保留的同类克隆。
+        let prepared =
+            crate::agent_runtime::conversation_hooks::ConversationHookGenerationGuard::new(
+                conversation
+                    .lock()
+                    .expect("lock isolated conversation runtime"),
+                Some(&captured),
+            )
+            .expect("project captured conversation handlers")
+            .dispatcher_mut()
+            .clone();
+        drop(captured);
+        drop(retained_catalog);
+        assert!(
+            catalog_lifetime.upgrade().is_some(),
+            "prepared handlers must retain the catalog leases"
+        );
+        drop(prepared);
+        assert!(
+            catalog_lifetime.upgrade().is_none(),
+            "last prepared handler must release catalog ownership"
+        );
         manager
             .begin_draining("hook-plugin")
             .expect("begin plugin draining");
         synchronize_vulcan_plugin_hooks(&mut dispatcher, manager.clone(), &manager.snapshot())
             .expect("remove draining plugin hook");
+        assert!(
+            crate::agent_runtime::conversation_hooks::VulcanPluginConversationHooks::prepare(
+                &dispatcher,
+                manager.clone(),
+                Arc::clone(&catalog),
+            )
+            .is_err(),
+            "captured metadata must not grant new admission after drain"
+        );
         assert!(
             dispatcher
                 .registry()

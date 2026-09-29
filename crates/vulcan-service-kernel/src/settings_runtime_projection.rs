@@ -686,18 +686,14 @@ pub(crate) fn store_provider_and_mcp_configuration_after_change(
         let retired_mcp_runtime = agent_runtime.extension_generation.mcp_runtime();
         // nextGeneration preserves the exact plugin catalog while atomically publishing the new user MCP partition.
         // nextGeneration 保留精确插件目录，同时原子发布新的用户 MCP 分区。
-        let next_generation = Arc::new(ExtensionGeneration::new(
-            agent_runtime
-                .extension_generation
-                .revision()
-                .saturating_add(1),
-            agent_runtime.extension_generation.plugin_catalog(),
+        let next_generation = Arc::new(agent_runtime.extension_generation.republish(
             next_mcp_runtime,
             agent_runtime.extension_generation.prompt_skill_catalog(),
-        ));
+        )?);
         agent_runtime.provider_configuration = provider_configuration.clone();
         agent_runtime.extension_generation = next_generation;
-        retired_mcp_runtime.retire_user_partition_after(std::time::Duration::from_secs(30));
+        retired_mcp_runtime
+            .retire_user_partition_after(AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT);
     }
     refresh_settings_projection_locked(&mut guard, &provider_configuration);
     Ok(guard.workbench.clone())
@@ -720,7 +716,7 @@ pub(crate) async fn refresh_agent_skills_local_state(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    publish_prompt_skill_catalog_generation(&mut guard, prompt_skill_catalog);
+    publish_prompt_skill_catalog_generation(&mut guard, prompt_skill_catalog)?;
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.agent_skills = summary.clone();
@@ -760,7 +756,7 @@ pub(crate) async fn refresh_agent_skills_local_state_if_changed(
     if !agent_skills_catalog_summary_changed(&guard.workbench.agent_skills, &summary) {
         return Ok(None);
     }
-    publish_prompt_skill_catalog_generation(&mut guard, prompt_skill_catalog);
+    publish_prompt_skill_catalog_generation(&mut guard, prompt_skill_catalog)?;
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.agent_skills = summary.clone();
@@ -818,24 +814,22 @@ fn load_agent_skills_runtime_generation(
 ///
 /// # Returns
 /// 返回值
-/// This in-place publication has no return value when no runtime exists yet.
-/// 尚无运行时时，该原地发布不返回任何值。
+/// Returns success after publication or before initialization; revision exhaustion leaves the old generation intact.
+/// 发布后或尚未初始化时返回成功；修订号耗尽时保留旧代次。
 fn publish_prompt_skill_catalog_generation(
     state: &mut ServiceBridgeState,
     prompt_skill_catalog: Arc<vulcan_prompt_skills::PromptSkillCatalog>,
-) {
+) -> Result<(), String> {
+    // An uninitialized service has no execution generation to replace.
+    // 尚未初始化的服务没有需要替换的执行代次。
     let Some(agent_runtime) = state.agent_runtime.as_mut() else {
-        return;
+        return Ok(());
     };
-    agent_runtime.extension_generation = Arc::new(ExtensionGeneration::new(
-        agent_runtime
-            .extension_generation
-            .revision()
-            .saturating_add(1),
-        agent_runtime.extension_generation.plugin_catalog(),
+    agent_runtime.extension_generation = Arc::new(agent_runtime.extension_generation.republish(
         agent_runtime.extension_generation.mcp_runtime(),
         Some(prompt_skill_catalog),
-    ));
+    )?);
+    Ok(())
 }
 
 /// Returns whether two complete Agent Skills domain summaries differ.
@@ -914,6 +908,14 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
         &mcp_server_states,
     );
     if let Some(runtime) = guard.agent_runtime.as_mut() {
+        // Prepare catalog and conversation routing before the first fallible catalog mutation.
+        // 在首次可能失败的目录修改前准备目录与会话路由。
+        // Explicit catalog refresh retains the existing MCP access surface; connection replacement remains lifecycle-owned.
+        // 显式目录刷新保留现有 MCP 访问面；连接替换仍由生命周期流程持有。
+        let next_extension = runtime.prepare_plugin_extension_generation(
+            Arc::clone(&plugin_catalog),
+            runtime.extension_generation.mcp_runtime(),
+        )?;
         runtime
             .task_runtime
             .replace_subagent_catalog(subagent_catalog.clone())
@@ -921,6 +923,7 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
         // subagentCatalog publishes the same immutable generation used by TaskRuntime and subsequent workbench projections.
         // subagentCatalog 发布与 TaskRuntime 及后续工作台投影共同使用的同一不可变代次。
         runtime.subagent_catalog = Arc::new(subagent_catalog);
+        runtime.extension_generation = next_extension;
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
