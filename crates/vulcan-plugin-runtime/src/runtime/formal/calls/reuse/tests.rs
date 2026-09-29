@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::sync::Condvar;
 
 mod budget;
+mod prewarm;
 mod recovery;
 
 /// Two real native callbacks must overlap before either may return.

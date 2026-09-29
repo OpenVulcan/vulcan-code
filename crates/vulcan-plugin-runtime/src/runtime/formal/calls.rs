@@ -5,8 +5,8 @@ use super::*;
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
-    EmbeddedCall, EmbeddedErrorCode, InstanceReuse, ModuleFinalizer, OperationHandle,
-    OperationSnapshot, PluginPoolConfig,
+    EmbeddedCall, EmbeddedErrorCode, EmbeddedPrewarm, InstanceReuse, ModuleFinalizer,
+    OperationContext, OperationHandle, OperationSnapshot, PluginPoolConfig,
 };
 use serde_json::{Map, Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 mod admission;
 mod initialized;
+mod prewarm;
 pub(super) mod reuse;
 
 #[cfg(test)]
@@ -145,6 +146,16 @@ enum CallAdmission {
         /// 已校验清单选择精确工具导出。
         export: String,
     },
+    /// Explicit initialization belongs to the same controller and tool partition as later business.
+    /// 明确初始化属于与后续业务相同的控制器及工具分区。
+    Prewarm {
+        /// The original controller can inspect, cancel and acknowledge this retained initialization.
+        /// 原控制器可以检查、取消及确认此保留初始化。
+        owner_session_id: String,
+        /// Exact reusable tool identity selects the existing module and hygiene contract.
+        /// 精确可复用工具身份选择既有模块及清理契约。
+        tool_id: String,
+    },
     /// Lifecycle admission invokes one host-selected declaration.
     /// 生命周期入场调用一个宿主选择的声明。
     Lifecycle {
@@ -172,7 +183,7 @@ impl CallAdmission {
     /// 返回宿主选择的用途，不读取业务载荷或猜测导出名称。
     fn capacity_purpose(&self) -> VulcanPluginCapacityPurpose {
         match self {
-            Self::Controller { .. } => VulcanPluginCapacityPurpose::ToolCall,
+            Self::Controller { .. } | Self::Prewarm { .. } => VulcanPluginCapacityPurpose::ToolCall,
             Self::Lifecycle { .. } => VulcanPluginCapacityPurpose::Lifecycle,
             Self::Action { .. } => VulcanPluginCapacityPurpose::UiAction,
             Self::Probe => VulcanPluginCapacityPurpose::ActivationProbe,
@@ -185,6 +196,9 @@ impl CallAdmission {
         match self {
             Self::Controller {
                 owner_session_id, ..
+            }
+            | Self::Prewarm {
+                owner_session_id, ..
             } => CallOwner::Controller(owner_session_id.clone()),
             Self::Lifecycle { .. } => CallOwner::Lifecycle,
             Self::Action { .. } => CallOwner::Action,
@@ -192,14 +206,14 @@ impl CallAdmission {
         }
     }
 
-    /// Return the declared business export; probes intentionally have no business function.
-    /// 返回声明业务导出；探测有意不具有业务函数。
+    /// Return the declared business export; probes and prewarming intentionally have no business function.
+    /// 返回声明业务导出；探测及预热有意不具有业务函数。
     fn export(&self) -> Option<&str> {
         match self {
             Self::Controller { export, .. }
             | Self::Lifecycle { export }
             | Self::Action { export, .. } => Some(export),
-            Self::Probe => None,
+            Self::Probe | Self::Prewarm { .. } => None,
         }
     }
 
@@ -259,8 +273,8 @@ pub struct VulcanPluginFormalCallStatus {
     /// An interrupted supervisor requires explicit drain recovery, while actual resources stay owned.
     /// 中断的监督者需要显式排空恢复，真实资源仍保持归属。
     pub requires_cleanup_recovery: bool,
-    /// Successful version-one business projection, including explicit JSON null.
-    /// 成功的版本一业务投影，包含显式 JSON 空值。
+    /// Successful version-one business projection or native prewarm instance result, including explicit JSON null.
+    /// 成功的版本一业务投影或原生预热实例结果，包含显式 JSON 空值。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
     /// Known host or business failure; retained core evidence remains independently queryable.
@@ -801,7 +815,7 @@ impl VulcanPluginRuntimeManager {
         // Reuse is selected only by the exact validated stateless tool entry.
         // 复用仅由精确已校验无状态工具入口选择。
         let reusable = match &input.admission {
-            CallAdmission::Controller { tool_id, .. } => {
+            CallAdmission::Controller { tool_id, .. } | CallAdmission::Prewarm { tool_id, .. } => {
                 let manifest = call.plugin.manifest.as_ref().ok_or_else(|| {
                     VulcanPluginRuntimeError::new("Formal tool manifest is missing.")
                 })?;
@@ -820,6 +834,11 @@ impl VulcanPluginRuntimeManager {
             }
             _ => None,
         };
+        if matches!(input.admission, CallAdmission::Prewarm { .. }) && reusable.is_none() {
+            return Err(VulcanPluginRuntimeError::new(
+                "Explicit prewarming requires a declared reusable tool.",
+            ));
+        }
         let separate = input.admission.separates_initialization();
         let pool = if let Some((tool, reuse)) = reusable {
             self.prepare_reusable_call(owner, call, input, &tool, &reuse)?
@@ -895,7 +914,22 @@ impl VulcanPluginRuntimeManager {
         // Initialization and later business share the same original absolute deadline.
         // 初始化及后续业务共用同一原绝对截止时间。
         let remaining = initialized::remaining(input.deadline)?;
-        if separate {
+        if matches!(input.admission, CallAdmission::Prewarm { .. }) {
+            // The existing borrowed domain owns the new instance after its real initialization is confirmed.
+            // 真实初始化确认后，既有借用域拥有新实例。
+            let operation = owner
+                .host
+                .runtime()
+                .prewarm_instance(
+                    EmbeddedPrewarm {
+                        pool_id: pool,
+                        context: LuaInvocationContext::default(),
+                    },
+                    remaining,
+                )
+                .map_err(core_error)?;
+            call.lock()?.operation = Some(operation);
+        } else if separate {
             // Initialization receives its own core identity without invoking the Action export.
             // 初始化获得自身核心身份，不调用 Action 导出。
             let opening = owner
@@ -1039,8 +1073,8 @@ impl VulcanPluginRuntimeManager {
     }
 }
 
-/// Convert the original core business value and independent finalization outcome to the legacy result shape.
-/// 将原核心业务值及独立关闭结果转换为旧结果形状。
+/// Preserve native prewarm results or convert business and finalization outcomes to the legacy result shape.
+/// 保留原生预热结果，或将业务及关闭结果转换为旧结果形状。
 /// `snapshot` must be terminal; preserve both failure messages without replay or fallback parsing.
 /// `snapshot` 必须为终态；保留两阶段失败消息，不重放或回退解析。
 fn project_result(snapshot: &OperationSnapshot) -> Result<Value, VulcanPluginRuntimeError> {
@@ -1070,9 +1104,18 @@ fn project_result(snapshot: &OperationSnapshot) -> Result<Value, VulcanPluginRun
             Ok(()),
         )
     };
-    let business = business
-        .map_err(core_error)
-        .and_then(|frame| super::super::lease::parse_plugin_result(&json!({"result":frame})));
+    // Only the core's frozen explicit prewarm context selects its native instance result contract.
+    // 仅核心冻结的明确预热上下文选择其原生实例结果契约。
+    let business = business.map_err(core_error).and_then(|frame| {
+        if matches!(
+            &snapshot.context,
+            OperationContext::Module(context) if context.prewarm
+        ) {
+            Ok(frame)
+        } else {
+            super::super::lease::parse_plugin_result(&json!({"result":frame}))
+        }
+    });
     match (business, closing.map_err(core_error)) {
         (Ok(value), Ok(())) => Ok(value),
         (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),

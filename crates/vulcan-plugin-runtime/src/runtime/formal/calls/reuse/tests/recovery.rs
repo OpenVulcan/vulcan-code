@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod prewarm;
+
 /// Current manifest resource floors reject policy changes before either native or persistent state is touched.
 /// 当前清单资源下限在触碰原生或持久状态前拒绝策略变化。
 #[tokio::test]

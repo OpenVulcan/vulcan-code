@@ -308,7 +308,7 @@ pub(super) fn plugin_payload(
 /// 根据工具清单与精确参数对象解析一个有界宿主超时。
 /// tool provides timeout policy and arguments may select its declared limit; returns checked milliseconds or an explicit policy/overflow error.
 /// tool提供超时策略，arguments可选择声明的限值；返回经检查的毫秒值或明确策略/溢出错误。
-fn resolve_host_timeout(
+pub(super) fn resolve_host_timeout(
     tool: &VulcanPluginToolDescriptor,
     arguments: &Map<String, Value>,
 ) -> Result<u64, VulcanPluginRuntimeError> {

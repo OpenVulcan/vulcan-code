@@ -126,7 +126,8 @@ impl Preparation {
                 &self.finalizer,
                 self.admission.export(),
                 match &self.admission {
-                    CallAdmission::Controller { tool_id, .. } => Some(tool_id),
+                    CallAdmission::Controller { tool_id, .. }
+                    | CallAdmission::Prewarm { tool_id, .. } => Some(tool_id),
                     _ => None,
                 },
                 &self.workspace,

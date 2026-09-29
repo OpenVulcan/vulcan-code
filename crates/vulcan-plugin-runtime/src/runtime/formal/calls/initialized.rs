@@ -113,7 +113,9 @@ impl VulcanPluginRuntimeManager {
         input: Preparation,
     ) -> Result<(), VulcanPluginRuntimeError> {
         match input.admission {
-            CallAdmission::Controller { .. } | CallAdmission::Lifecycle { .. } => Ok(()),
+            CallAdmission::Controller { .. }
+            | CallAdmission::Prewarm { .. }
+            | CallAdmission::Lifecycle { .. } => Ok(()),
             CallAdmission::Probe => self.wait_call_initialization(call).await,
             CallAdmission::Action {
                 export,
