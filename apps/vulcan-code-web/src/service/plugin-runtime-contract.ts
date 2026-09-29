@@ -7,7 +7,7 @@ import {
 
 // record validates an object at path and returns its fields without inventing aliases.
 // record 校验 path 处的对象，返回原字段，不猜测别名。
-function record(value: unknown, path: string): Record<string, unknown> {
+export function record(value: unknown, path: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path}: expected object`);
   return value as Record<string, unknown>;
 }
@@ -20,14 +20,14 @@ function exact(value: Record<string, unknown>, keys: string[], path: string): vo
 
 // text validates a required nonempty identity at path and returns the original opaque string.
 // text 校验 path 处的必填非空身份，返回原不透明字符串。
-function text(value: unknown, path: string): string {
+export function text(value: unknown, path: string): string {
   if (typeof value !== "string" || !value.length || value.includes("\0")) throw new Error(`${path}: expected identity`);
   return value;
 }
 
 // optionalDiagnostic validates required nullable diagnostics at path and returns them unchanged.
 // optionalDiagnostic 校验 path 处必填可空诊断，并原样返回。
-function optionalDiagnostic(value: unknown, path: string): string | null {
+export function optionalDiagnostic(value: unknown, path: string): string | null {
   if (value === null || typeof value === "string") return value;
   throw new Error(`${path}: expected string or null`);
 }
@@ -41,7 +41,7 @@ export function capacityCount(value: unknown, path: string): number {
 
 // flag validates a required boolean at path and returns its exact value.
 // flag 校验 path 处必填布尔值并返回精确值。
-function flag(value: unknown, path: string): boolean {
+export function flag(value: unknown, path: string): boolean {
   if (typeof value !== "boolean") throw new Error(`${path}: expected boolean`);
   return value;
 }
@@ -132,7 +132,7 @@ export function parseCapacityReceipt(value: unknown): PluginCapacityReceipt {
 
 // usage validates physical counters and returns the independently sampled native values.
 // usage 校验物理计数并返回独立采样的原生值。
-function usage(value: unknown): PluginVmUsage {
+export function usage(value: unknown): PluginVmUsage {
   // resources is observation only; these counts never become policy defaults.
   // resources 仅为观测；这些计数绝不成为策略默认值。
   const resources = record(value, "resources");

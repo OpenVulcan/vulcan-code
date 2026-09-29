@@ -2,6 +2,101 @@
 //! 真实 SQLite 归属及原生初始化穿过完整服务路由。
 
 use super::*;
+
+/// Compare real RPC serialization against the browser artifact, normalizing only observed opaque identities.
+/// 比较真实 RPC 序列化与浏览器产物，仅规范化观测到的不透明身份。
+/// Inputs are the initial catalog, inert receipt and completed receipt; assertion failure reports contract drift.
+/// 输入为初始目录、未启动回执及完成回执；断言失败报告契约变化。
+fn assert_browser_prewarm_wire_fixture(catalog: &Value, prepared: &Value, completed: &Value) {
+    // Identity replacements preserve every field, optional value and resource counter.
+    // 身份替换保留每个字段、可选值及资源计数。
+    let mut tokens = vec![
+        (
+            prepared["runtimeId"].as_str().expect("runtime"),
+            "runtime-fixture".to_owned(),
+        ),
+        (
+            prepared["ownerSessionId"].as_str().expect("owner"),
+            "00000000-0000-4000-8000-000000000001".to_owned(),
+        ),
+        (
+            prepared["invocationId"].as_str().expect("invocation"),
+            "prewarm-fixture".to_owned(),
+        ),
+        (
+            prepared["workspaceRoot"].as_str().expect("workspace"),
+            "/fixture/workspace".to_owned(),
+        ),
+        (
+            completed["satisfied"]["pool_id"].as_str().expect("pool"),
+            "pool-fixture".to_owned(),
+        ),
+    ];
+    // The ordered operation sequence is retained; each original ID has one stable fixture identity.
+    // 保留有序操作序列；每个原始 ID 具有唯一稳定夹具身份。
+    let operations = completed["completed"]
+        .as_array()
+        .expect("completed operations")
+        .iter()
+        .chain(std::iter::once(&completed["operation"]));
+    for operation in operations {
+        let operation_id = operation["operation_id"]
+            .as_str()
+            .expect("actual native operation");
+        if !tokens.iter().any(|(original, _)| *original == operation_id) {
+            tokens.push((operation_id, format!("operation-{}", tokens.len())));
+        }
+        let revision = operation["context"]["capability_revision"]
+            .as_str()
+            .expect("module capability revision");
+        if !tokens.iter().any(|(original, _)| *original == revision) {
+            tokens.push((revision, "capability-fixture".to_owned()));
+        }
+        // Native authority retains its own canonical path and per-domain revision/partition tokens.
+        // 原生权威保留自身规范路径与每域修订／分区令牌。
+        for (field, replacement) in [
+            ("execution_revision", "execution-fixture"),
+            ("security_partition", "tool:partition-fixture"),
+            ("workspace_root", "/fixture/workspace"),
+        ] {
+            let original = operation["context"]["caller"][field]
+                .as_str()
+                .expect("native caller identity");
+            if !tokens.iter().any(|(value, _)| *value == original) {
+                tokens.push((original, replacement.to_owned()));
+            }
+        }
+    }
+    // Borrow replacement strings only after collecting them to avoid invalidation by vector growth.
+    // 在收集完成后才借用替换字符串，避免向量增长导致失效。
+    let replacements: Vec<_> = tokens
+        .iter()
+        .map(|(original, replacement)| (*original, replacement.as_str()))
+        .collect();
+    let mut actual = json!({"catalog": catalog, "prepared": prepared, "completed": completed});
+    super::normalize_wire_tokens(&mut actual, &replacements);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/vulcan-code-web/src/service/__fixtures__/plugin-prewarm-wire.json");
+    if std::env::var("VULCAN_UPDATE_PLUGIN_PREWARM_WIRE_FIXTURE").as_deref() == Ok("1") {
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&actual).expect("wire JSON")
+            ),
+        )
+        .expect("explicit prewarm fixture regeneration");
+    }
+    let expected: Value = serde_json::from_str(
+        &std::fs::read_to_string(&path)
+            .expect("regenerate this test with VULCAN_UPDATE_PLUGIN_PREWARM_WIRE_FIXTURE=1"),
+    )
+    .expect("browser prewarm wire JSON");
+    assert_eq!(
+        actual, expected,
+        "prewarm RPC contract changed; inspect browser decoding before regenerating"
+    );
+}
 use crate::tests::test_support::TestHostRuntimeRoot;
 
 impl Fixture {
@@ -371,6 +466,7 @@ async fn plugin_prewarm_rpc_uses_indexed_workspace_and_original_receipts() {
     assert_eq!(completed["succeeded"], true);
     assert_eq!(completed["satisfied"]["ready"], 2);
     assert_eq!(completed["satisfied"]["physical"]["resident"], 2);
+    assert_browser_prewarm_wire_fixture(&catalog, &prepared, &completed);
     assert_eq!(
         completed["completed"]
             .as_array()

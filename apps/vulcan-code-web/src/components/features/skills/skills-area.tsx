@@ -6,6 +6,7 @@ import { ContextEngineArea } from "@/components/features/context-engine/context-
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel"
+import { PluginPrewarmControls } from "./plugin-prewarm-controls"
 import {
   findEnabledPluginDetailMount,
   isPluginDetailSubArea,
@@ -45,10 +46,13 @@ export function SkillsArea(props: {
           skills={props.workbench.luaSkills.skills}
         />
       ) : props.activeTab === "plugins" ? (
-        <VulcanPluginsPanel
-          actions={props.skillActions}
-          plugins={props.workbench.plugins}
-        />
+        <>
+          <VulcanPluginsPanel
+            actions={props.skillActions}
+            plugins={props.workbench.plugins}
+          />
+          <PluginPrewarmControls conversations={props.workbench.conversations} selectedConversationId={props.workbench.selectedConversationId} />
+        </>
       ) : props.activeTab === "settings" ? (
         <LuaSkillsSettingsPanel
           actions={props.skillActions}
