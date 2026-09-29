@@ -311,10 +311,9 @@ struct McpRuntimePartitionLease {
     owner_call_gate: Option<Arc<tokio::sync::Mutex<()>>>,
 }
 
-/// Shared weak registry used to reject package removal while retired plugin leases can still execute.
-/// 用于在已退休插件租约仍可执行时拒绝删除包的共享弱引用注册表。
-type RetiredPluginPartitionRegistry =
-    Arc<Mutex<BTreeMap<String, Vec<Weak<McpRuntimePartitionLease>>>>>;
+/// Retains cleanup observations independently of execution leases until successful terminal shutdown.
+/// 独立于执行租约保留清理观测，直至成功完成终态关闭。
+type RetiredPluginPartitionRegistry = Arc<Mutex<BTreeMap<String, Vec<McpRuntimeHandle>>>>;
 
 /// Shared registry for opt-in session-owned stdio MCP leases.
 /// 供可选会话拥有 stdio MCP 租约使用的共享注册表。
@@ -461,8 +460,8 @@ pub struct McpRuntimeAccess {
     /// Independently replaceable live runtime partitions keyed by stable source identity.
     /// 以稳定来源身份为键、可独立替换的实时运行时分区。
     live_partitions: BTreeMap<String, Arc<McpRuntimePartitionLease>>,
-    /// Weak retired-lease registry shared by every generation derived from the same bootstrap access.
-    /// 由同一引导访问面派生的每个代次共享的弱退休租约注册表。
+    /// Retired runtime observations shared by every generation without extending execution leases.
+    /// 每个代次共享的退休运行时观测，不延长执行租约。
     retired_plugin_partitions: RetiredPluginPartitionRegistry,
     /// Opt-in owner registry shared by every access generation derived from the same bootstrap access.
     /// 由同一引导访问面派生的所有访问代次共享的可选所有者注册表。
@@ -1322,22 +1321,37 @@ impl McpRuntimeAccess {
         plugin_id: &str,
         maximum_drain: std::time::Duration,
     ) {
+        // Select the exact source identity once for both cleanup observation and deadline control.
+        // 为清理观测及截止控制一次性选择精确来源身份。
         let partition_prefix = format!("plugin:{plugin_id}:");
-        let retired_leases = self
+        let retired_partitions = self
             .live_partitions
             .iter()
             .filter(|(key, _)| key.starts_with(&partition_prefix))
-            .map(|(_, lease)| Arc::downgrade(lease))
+            .map(|(_, lease)| lease)
             .collect::<Vec<_>>();
-        if retired_leases.is_empty() {
+        if retired_partitions.is_empty() {
             return;
         }
-        self.retired_plugin_partitions
-            .lock()
-            .expect("retired MCP plugin partition registry poisoned")
-            .entry(plugin_id.to_string())
-            .or_default()
-            .extend(retired_leases.iter().cloned());
+        // Keep status alive without keeping the execution lease alive: its Drop still requests shutdown.
+        // 保留状态而不保留执行租约：租约析构仍会请求关闭。
+        {
+            // Prune successful history on every retirement so repeated updates cannot accumulate it.
+            // 每次退役都清理已成功的历史，避免重复更新使历史不断积累。
+            let mut registry = self
+                .retired_plugin_partitions
+                .lock()
+                .expect("retired MCP plugin partition registry poisoned");
+            let runtimes = registry.entry(plugin_id.to_string()).or_default();
+            runtimes.retain(|runtime| !runtime.is_fully_stopped());
+            runtimes.extend(retired_partitions.iter().map(|lease| lease.runtime.clone()));
+        }
+        // The grace timer must not extend a caller's right to execute old-generation tools.
+        // 宽限计时器不得延长调用方执行旧代次工具的权利。
+        let retired_leases = retired_partitions
+            .into_iter()
+            .map(Arc::downgrade)
+            .collect::<Vec<_>>();
         tokio::spawn(async move {
             tokio::time::sleep(maximum_drain).await;
             for weak_lease in retired_leases {
@@ -1348,8 +1362,8 @@ impl McpRuntimeAccess {
         });
     }
 
-    /// Returns whether a retired partition for one plugin still owns a usable runtime lease.
-    /// 返回指定插件的已退休分区是否仍持有可用运行时租约。
+    /// Returns whether a retired plugin partition lacks successful terminal cleanup confirmation.
+    /// 返回已退役插件分区是否仍缺少成功完成终态清理的确认。
     ///
     /// # Parameters
     /// 参数
@@ -1358,25 +1372,23 @@ impl McpRuntimeAccess {
     ///
     /// # Returns
     /// 返回值
-    /// Returns true until all leases are released or their thirty-second forced shutdown has fired.
-    /// 在全部租约释放或其三十秒强制关闭触发前返回 true。
+    /// Returns true while any recorded runtime has pending or failed cleanup, even after its last caller leaves.
+    /// 任一登记运行时清理未完成或失败时返回 true，即使最后调用方已经退出。
     pub fn has_usable_retired_plugin_partitions(&self, plugin_id: &str) -> bool {
+        // Release an observation only after the same runtime confirms successful terminal cleanup.
+        // 仅当同一运行时确认成功完成终态清理后释放其观测。
         let mut registry = self
             .retired_plugin_partitions
             .lock()
             .expect("retired MCP plugin partition registry poisoned");
-        let has_usable_leases = registry.get_mut(plugin_id).is_some_and(|leases| {
-            leases.retain(|weak_lease| {
-                weak_lease
-                    .upgrade()
-                    .is_some_and(|lease| !lease.runtime.is_fully_stopped())
-            });
-            !leases.is_empty()
+        let has_unconfirmed_cleanup = registry.get_mut(plugin_id).is_some_and(|runtimes| {
+            runtimes.retain(|runtime| !runtime.is_fully_stopped());
+            !runtimes.is_empty()
         });
-        if !has_usable_leases {
+        if !has_unconfirmed_cleanup {
             registry.remove(plugin_id);
         }
-        has_usable_leases
+        has_unconfirmed_cleanup
     }
 
     /// Returns the current OAuth status label for one configured MCP server when live runtime state is available.

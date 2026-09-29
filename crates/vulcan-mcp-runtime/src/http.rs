@@ -5,13 +5,13 @@ use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use rmcp::model::{GetPromptResult, Prompt, ReadResourceResult, Resource};
-use rmcp::service::{Peer, RoleClient, RunningService, ServiceExt};
+use rmcp::service::{Peer, RoleClient, ServiceExt};
 use rmcp::transport::{
     StreamableHttpClientTransport,
     streamable_http_client::{StreamableHttpClient, StreamableHttpClientTransportConfig},
 };
 use serde_json::Value;
-use tokio::sync::{Mutex as AsyncMutex, broadcast};
+use tokio::sync::broadcast;
 
 use crate::auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession};
 use crate::error::McpRuntimeError;
@@ -20,6 +20,7 @@ use crate::rmcp_support::{
     EventingClientHandler, call_rmcp_tool, get_rmcp_prompt, list_rmcp_prompts, list_rmcp_resources,
     list_rmcp_tools, read_rmcp_resource, spawn_rmcp_disconnect_watch,
 };
+use crate::shutdown::TransportShutdown;
 use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 
 /// Auth-aware streamable HTTP client that delegates the wire protocol to rmcp's reqwest implementation while resolving live OAuth headers.
@@ -158,9 +159,9 @@ pub struct HttpTransport {
     /// Cloneable rmcp client peer used for schema discovery and calls.
     /// 用于 schema 发现与调用的可克隆 rmcp 客户端 peer。
     peer: Peer<RoleClient>,
-    /// Keeps the rmcp service alive for the lifetime of the transport.
-    /// 在传输生命周期内保持 rmcp 服务存活。
-    service: AsyncMutex<Option<RunningService<RoleClient, Arc<EventingClientHandler>>>>,
+    /// Owns the rmcp service and its single shared close operation.
+    /// 拥有 rmcp 服务及其唯一共享关闭操作。
+    shutdown: TransportShutdown,
     /// Broadcast channel used to surface tool refresh and disconnect events.
     /// 用于对外广播工具刷新与断连事件的广播通道。
     event_sender: broadcast::Sender<McpTransportEvent>,
@@ -212,7 +213,7 @@ impl HttpTransport {
         Ok(Self {
             endpoint,
             peer,
-            service: AsyncMutex::new(Some(service)),
+            shutdown: TransportShutdown::for_service("mcp.shutdown(http)", service),
             event_sender,
             auth_session,
         })
@@ -231,20 +232,10 @@ impl McpTransport for HttpTransport {
 
     /// Gracefully closes the streamable-HTTP rmcp service and waits for cleanup.
     /// 优雅关闭 Streamable HTTP rmcp 服务并等待清理完成。
+    /// Returns the original close result or an observation error without restarting cleanup.
+    /// 返回原关闭结果或观测错误，不重新启动清理。
     async fn shutdown(&self) -> Result<(), McpRuntimeError> {
-        let service = self.service.lock().await.take();
-        let Some(mut service) = service else {
-            return Ok(());
-        };
-        match tokio::time::timeout(std::time::Duration::from_secs(5), service.close()).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(error)) => Err(McpRuntimeError::transport(format!(
-                "mcp.shutdown(http).join: {error}"
-            ))),
-            Err(_) => Err(McpRuntimeError::transport(
-                "mcp.shutdown(http) timed out after 5 seconds",
-            )),
-        }
+        self.shutdown.wait().await
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {

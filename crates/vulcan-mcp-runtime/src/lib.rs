@@ -21,6 +21,7 @@ pub mod http;
 mod http_support;
 pub mod launch;
 mod rmcp_support;
+mod shutdown;
 pub mod sse;
 pub mod stdio;
 pub mod transport;

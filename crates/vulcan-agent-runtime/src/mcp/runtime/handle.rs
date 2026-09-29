@@ -437,10 +437,9 @@ impl McpRuntimeHandle {
     /// Returns whether every server task has confirmed terminal transport teardown.
     /// 返回是否每个服务器任务都已确认终止传输拆除。
     pub(super) fn is_fully_stopped(&self) -> bool {
-        self.snapshot()
-            .servers
-            .values()
-            .all(|server| server.status == McpRuntimeServerStatus::Stopped)
+        self.snapshot().servers.values().all(|server| {
+            server.status == McpRuntimeServerStatus::Stopped && server.last_error.is_none()
+        })
     }
 
     /// Waits until every enabled server in this partition has completed initialize and atomic tool discovery.
@@ -3276,8 +3275,8 @@ mod optional_capability_tests {
             None,
             Vec::new(),
         );
-        // previousGeneration owns the retiring partition and the shared weak-lease registry.
-        // previousGeneration 持有即将退休的分区及共享弱租约注册表。
+        // previousGeneration owns the execution lease and shares independent cleanup observations.
+        // previousGeneration 拥有执行租约并共享独立清理观测。
         let previous_generation = McpRuntimeAccess::new(
             runtime.overview(),
             BTreeMap::from([(String::from("plugin:fixture:1"), runtime.clone())]),
@@ -3288,6 +3287,15 @@ mod optional_capability_tests {
         previous_generation.retire_plugin_partitions_after("fixture", Duration::from_secs(3_600));
 
         assert!(replacement_generation.has_usable_retired_plugin_partitions("fixture"));
+        drop(previous_generation);
+        assert!(
+            *runtime.inner.shutdown_tx.borrow(),
+            "dropping the last execution lease must still request shutdown immediately"
+        );
+        assert!(
+            replacement_generation.has_usable_retired_plugin_partitions("fixture"),
+            "losing execution leases must not erase the pending cleanup state"
+        );
         runtime.shutdown();
         assert!(
             replacement_generation.has_usable_retired_plugin_partitions("fixture"),
@@ -3298,8 +3306,48 @@ mod optional_capability_tests {
             &runtime.inner,
             "fixture:server",
             McpRuntimeServerStatus::Stopped,
+            Some(String::from("actual transport cleanup remains unconfirmed")),
+            Vec::new(),
+        );
+        assert!(
+            replacement_generation.has_usable_retired_plugin_partitions("fixture"),
+            "terminal status with a cleanup error must retain the retired partition"
+        );
+        assert_eq!(
+            runtime
+                .wait_until_stopped(Duration::from_millis(10))
+                .await
+                .expect_err("unconfirmed cleanup must fail the stop barrier"),
+            "actual transport cleanup remains unconfirmed"
+        );
+
+        update_server_status(
+            &runtime.inner,
+            "fixture:server",
+            McpRuntimeServerStatus::Stopped,
             None,
             Vec::new(),
+        );
+        // Retain only a weak observation to prove that later retirement releases completed history.
+        // 仅保留弱观测，证明后续退役会释放已经完成的历史。
+        let completed_runtime = Arc::downgrade(&runtime.inner);
+        drop(runtime);
+        assert!(completed_runtime.upgrade().is_some());
+        // An empty next generation is valid and must still prune the predecessor's completed state.
+        // 下一代次可以没有 MCP 服务器，此时仍须清理前驱的已完成状态。
+        let next_runtime = bootstrap_mcp_runtime(Vec::new())
+            .await
+            .expect("empty next plugin partition");
+        let next_generation = replacement_generation.with_replaced_plugin_partition(
+            "fixture",
+            2,
+            next_runtime.overview(),
+            next_runtime,
+        );
+        next_generation.retire_plugin_partitions_after("fixture", Duration::from_secs(3_600));
+        assert!(
+            completed_runtime.upgrade().is_none(),
+            "repeated updates must release successfully completed runtime history"
         );
         assert!(!replacement_generation.has_usable_retired_plugin_partitions("fixture"));
     }

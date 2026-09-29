@@ -8,13 +8,13 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use rmcp::model::{GetPromptResult, Prompt, ReadResourceResult, Resource};
-use rmcp::service::{Peer, RoleClient, RunningService, ServiceExt};
+use rmcp::service::{Peer, RoleClient, ServiceExt};
 use rmcp::transport::TokioChildProcess;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::process::ChildStderr;
 use tokio::process::Command;
-use tokio::sync::{Mutex as AsyncMutex, broadcast};
+use tokio::sync::broadcast;
 use vulcan_host_tools::{
     output_decode::decode_shell_output_bytes, process_creation::apply_windows_no_window,
 };
@@ -24,6 +24,7 @@ use crate::rmcp_support::{
     EventingClientHandler, call_rmcp_tool, get_rmcp_prompt, list_rmcp_prompts, list_rmcp_resources,
     list_rmcp_tools, read_rmcp_resource, spawn_rmcp_disconnect_watch,
 };
+use crate::shutdown::TransportShutdown;
 use crate::transport::{McpServerIdentity, McpToolSchema, McpTransport, McpTransportEvent};
 
 /// Maximum number of sanitized stderr chunks retained per stdio transport.
@@ -45,9 +46,9 @@ pub struct StdioTransport {
     /// Cloneable rmcp client peer used for schema discovery and calls.
     /// 用于 schema 发现与调用的可克隆 rmcp 客户端 peer。
     peer: Peer<RoleClient>,
-    /// Keeps the rmcp service alive for the lifetime of the transport.
-    /// 在传输生命周期内保持 rmcp 服务存活。
-    service: AsyncMutex<Option<RunningService<RoleClient, Arc<EventingClientHandler>>>>,
+    /// Owns the rmcp service and its single shared close operation.
+    /// 拥有 rmcp 服务及其唯一共享关闭操作。
+    shutdown: TransportShutdown,
     /// Broadcast channel used to surface tool refresh and disconnect events.
     /// 用于对外广播工具刷新与断连事件的广播通道。
     event_sender: broadcast::Sender<McpTransportEvent>,
@@ -120,7 +121,7 @@ impl StdioTransport {
         Ok(Self {
             endpoint,
             peer,
-            service: AsyncMutex::new(Some(service)),
+            shutdown: TransportShutdown::for_service("mcp.shutdown", service),
             event_sender,
             recent_logs,
         })
@@ -361,24 +362,12 @@ impl McpTransport for StdioTransport {
         })
     }
 
-    /// Gracefully closes rmcp, waits for child exit, and lets rmcp force-kill after its bounded grace period.
-    /// 优雅关闭 rmcp、等待子进程退出，并允许 rmcp 在有限宽限期后强制终止。
+    /// Observes the original rmcp close operation without cancelling it on timeout.
+    /// 观测原 rmcp 关闭操作，不因观测超时而取消清理。
+    /// Returns the shared close result; detached backend cleanup still needs independent exit evidence.
+    /// 返回共享关闭结果；后端派生清理仍须独立退出证据。
     async fn shutdown(&self) -> Result<(), McpRuntimeError> {
-        // service is taken exactly once so concurrent shutdown requests cannot race child cleanup.
-        // service 仅被取出一次，避免并发关闭请求竞争子进程清理。
-        let service = self.service.lock().await.take();
-        let Some(mut service) = service else {
-            return Ok(());
-        };
-        match tokio::time::timeout(std::time::Duration::from_secs(5), service.close()).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(error)) => Err(McpRuntimeError::transport(format!(
-                "mcp.shutdown.join: {error}"
-            ))),
-            Err(_) => Err(McpRuntimeError::transport(
-                "mcp.shutdown timed out after 5 seconds",
-            )),
-        }
+        self.shutdown.wait().await
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {

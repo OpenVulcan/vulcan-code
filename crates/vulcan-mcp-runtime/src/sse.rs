@@ -40,6 +40,7 @@ use crate::rmcp_support::{
     build_rmcp_call_tool_request_params, project_rmcp_tool_result,
     rmcp_capabilities_support_prompts, rmcp_capabilities_support_resources, rmcp_tool_to_schema,
 };
+use crate::shutdown::TransportShutdown;
 use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 
 /// Background response channel sender keyed by JSON-RPC request id.
@@ -77,9 +78,9 @@ pub struct SseTransport {
     /// Broadcast channel used to surface tool refresh and disconnect events.
     /// 用于对外广播工具刷新与断连事件的广播通道。
     event_sender: broadcast::Sender<McpTransportEvent>,
-    /// Join handle proving the background listener has observed shutdown and exited.
-    /// 用于证明后台监听器已观察到关闭并退出的 Join Handle。
-    listener_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Shared close operation retaining the listener until its actual completion.
+    /// 保留监听器直至实际结束的共享关闭操作。
+    shutdown: TransportShutdown,
     /// Optional shared host-owned OAuth session reused across reconnects.
     /// 在重连之间复用的可选共享宿主自有 OAuth 会话。
     auth_session: Option<Arc<McpOAuthSession>>,
@@ -122,6 +123,15 @@ impl SseTransport {
             auth_session: auth_session.clone(),
         });
 
+        // The close worker retains the original listener even if its observer goes away.
+        // 即使观察者退出，关闭工作任务仍保留原监听器。
+        let close_token = shutdown_token.clone();
+        let shutdown = TransportShutdown::new("mcp.shutdown(sse)", async move {
+            close_token.cancel();
+            listener_task.await.map_err(|error| {
+                McpRuntimeError::transport(format!("mcp.shutdown(sse).join: {error}"))
+            })
+        });
         let mut transport = Self {
             endpoint: endpoint.into(),
             http_client,
@@ -132,7 +142,7 @@ impl SseTransport {
             next_request_id: AtomicU64::new(1),
             shutdown_token,
             event_sender,
-            listener_task: Mutex::new(Some(listener_task)),
+            shutdown,
             auth_session,
             capabilities: ServerCapabilities::default(),
         };
@@ -322,21 +332,11 @@ impl McpTransport for SseTransport {
 
     /// Cancels the legacy SSE listener and waits for its exact background task to exit.
     /// 取消 legacy SSE 监听器并等待其精确后台任务退出。
+    /// Returns the shared listener result; timeout and cancellation do not discard its join.
+    /// 返回共享监听器结果；超时和取消不丢弃其等待句柄。
     async fn shutdown(&self) -> Result<(), McpRuntimeError> {
         self.shutdown_token.cancel();
-        let listener_task = self.listener_task.lock().await.take();
-        let Some(listener_task) = listener_task else {
-            return Ok(());
-        };
-        match timeout(Duration::from_secs(5), listener_task).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => Err(McpRuntimeError::transport(format!(
-                "mcp.shutdown(sse).join: {error}"
-            ))),
-            Err(_) => Err(McpRuntimeError::transport(
-                "mcp.shutdown(sse) timed out after 5 seconds",
-            )),
-        }
+        self.shutdown.wait().await
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
