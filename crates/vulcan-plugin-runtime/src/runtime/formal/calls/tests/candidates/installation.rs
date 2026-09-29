@@ -4,6 +4,7 @@
 use super::*;
 
 mod environment;
+mod receipts;
 
 /// Installation timeout returns while the original native business still prevents transaction mutation.
 /// 安装超时返回时，原原生业务仍阻止事务变更。
@@ -209,6 +210,10 @@ fn installation_fixture(
     -- Installation consumes the transaction's configuration and the original host event.
     -- 安装消费事务配置及原宿主事件。
     assert(args.event == 'install')
+    -- Record the host request through a real capability so tests observe the exact Lua envelope.
+    -- 通过真实能力记录宿主请求，使测试观测精确 Lua 信封。
+    assert(type(args.request_id) == 'string')
+    vulcan.host.call('vulcan.plugin.ui.invalidate', {{topic='install-request:' .. args.request_id,revision=0}})
     local selected = vulcan.host.call('vulcan.plugin.config.get', {{}})
     assert(selected.label == 'selected-candidate', 'wrong install configuration')
     -- A broad process capability never grants the undeclared process-session subtype.
@@ -330,6 +335,7 @@ fn formal_candidate_install_preserves_original_selection_and_business_result() {
                 .lock()
                 .expect("native effects")
                 .iter()
+                .filter(|event| !event.topic.starts_with("install-request:"))
                 .map(|event| event.topic.clone())
                 .collect::<Vec<_>>();
             assert_eq!(topics, [if fail { "install-failed" } else { "install" }]);
@@ -366,7 +372,7 @@ fn formal_candidate_install_excludes_overlapping_request_work() {
                         .await
                         .expect_err("duplicate live install")
                         .message
-                        .contains("conflicts with retained work")
+                        .contains("already attempted")
                 );
                 assert!(
                     fixture

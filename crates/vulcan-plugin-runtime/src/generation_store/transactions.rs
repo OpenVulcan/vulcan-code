@@ -4,8 +4,10 @@
 use super::*;
 use uuid::Uuid;
 
+mod installation;
 mod operations;
 mod records;
+pub use installation::{VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt};
 
 /// Journal and index format evolve together, independently from package metadata and activation formats.
 /// 日志及索引格式共同演进，独立于插件包元数据及激活格式。

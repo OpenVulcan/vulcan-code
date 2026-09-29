@@ -32,8 +32,10 @@ impl VulcanPluginRuntimeManager {
     /// 使用原生命周期信封及有界观测调用 candidate 声明的安装回调。
     /// Returns the actual callback result after cleanup; absent declarations succeed without executing Lua.
     /// 清理后返回实际回调结果；缺失声明直接成功，不执行 Lua。
-    /// Explicit calls may have external effects; this is neither a durable success receipt nor automatic retry permission.
-    /// 显式调用可能具有外部副作用；此入口不是持久成功回执，也不授予自动重试权限。
+    /// A declared callback records one durable attempt before preparation; repeated requests are rejected even after retirement.
+    /// 声明回调在准备前记录单次持久尝试；即使已经退役也拒绝重复请求。
+    /// Cancellation or uncertain persistence requires querying the original installation receipt, never automatic replay.
+    /// 取消或持久化不确定要求查询原安装回执，绝不自动重放。
     pub async fn install_activation_candidate(
         &self,
         candidate: &VulcanPluginActivationCandidate<'_>,
@@ -97,7 +99,7 @@ impl VulcanPluginRuntimeManager {
         let (admission, arguments) = match install {
             Some(export) => (
                 CallAdmission::CandidateInstall { authority, export },
-                json!({"event":"install","plugin_id":plugin.id}),
+                json!({"event":"install","plugin_id":plugin.id,"request_id":request_id.to_string()}),
             ),
             None => (CallAdmission::CandidateProbe { authority }, json!({})),
         };
@@ -112,15 +114,38 @@ impl VulcanPluginRuntimeManager {
             deadline,
             admission,
         };
-        tokio::time::timeout_at(
+        // The same request admits one durable install attempt, before any preparation or native side effect.
+        // 在任何准备或原生副作用之前，相同请求仅接纳一次持久安装尝试。
+        let installation = if operation == CandidateOperation::Install {
+            Some(
+                candidate
+                    .begin_installation_attempt()
+                    .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        // Retain the observation separately so both runtime errors and deadline expiry are checkpointed.
+        // 单独保留观测，使运行时错误及期限到达均形成检查点。
+        let result = tokio::time::timeout_at(
             tokio::time::Instant::from_std(deadline),
             self.invoke_owned_formal_call(owner, plugin, input),
         )
         .await
         .map_err(|_| VulcanPluginRuntimeError::new(format!(
             "Activation candidate {request_id} timed out; inspect its original calls for actual retirement."
-        )))?
-        .map(|_| ())
+        )))
+        .and_then(|result| result.map(|_| ()));
+        if let Some(installation) = installation {
+            // A failed receipt write stays uncertain, even if the callback already returned successfully.
+            // 即使回调已成功返回，回执写入失败仍保持不确定。
+            installation.finish(result.is_ok()).map_err(|error| {
+                VulcanPluginRuntimeError::new(format!(
+                    "Activation candidate {request_id} installation receipt is uncertain: {error}; inspect the original request."
+                ))
+            })?;
+        }
+        result
     }
 
     /// Query retained candidate calls for request_id in this manager's original parent without starting or replaying work.

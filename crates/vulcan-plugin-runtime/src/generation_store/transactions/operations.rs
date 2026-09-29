@@ -294,6 +294,9 @@ impl VulcanPluginGenerationStore {
                 "Terminal activation requests cannot be committed.",
             ));
         }
+        // A returned timeout or lost observer cannot authorize publication of uncertain installation effects.
+        // 超时返回或观测者丢失不能授权发布不确定安装副作用。
+        self.require_installation_succeeded(&transaction.record)?;
         // Compare the complete current selection with the original transaction authorities.
         // 将完整当前选择与原事务权威比较。
         let current = self.read_activation(&transaction.record.target.plugin_id)?;
@@ -511,7 +514,7 @@ impl VulcanPluginGenerationStore {
 
     /// Compare `transaction` with its exact indexed disk record; caller already retains the namespace fence.
     /// 将 `transaction` 与精确已索引磁盘记录比较；调用方已保留命名空间屏障。
-    fn check_transaction_owner(
+    pub(super) fn check_transaction_owner(
         &self,
         transaction: &VulcanPluginActivationTransaction,
     ) -> VulcanPluginStoreResult<()> {
