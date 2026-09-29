@@ -7,6 +7,7 @@ import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel"
 import { PluginPrewarmControls } from "./plugin-prewarm-controls"
+import { PluginPrewarmPolicyControls } from "./plugin-prewarm-policy-controls"
 import {
   findEnabledPluginDetailMount,
   isPluginDetailSubArea,
@@ -52,6 +53,7 @@ export function SkillsArea(props: {
             plugins={props.workbench.plugins}
           />
           <PluginPrewarmControls conversations={props.workbench.conversations} selectedConversationId={props.workbench.selectedConversationId} />
+          <PluginPrewarmPolicyControls />
         </>
       ) : props.activeTab === "settings" ? (
         <LuaSkillsSettingsPanel
