@@ -73,15 +73,23 @@ pub(super) enum CandidateOperation {
     /// Invoke only the manifest's installation callback under the installation capability scope.
     /// 在安装能力作用域中仅调用清单安装回调。
     Install,
+    /// Invoke the declared enable callback before route publication.
+    /// 路由发布前调用声明的启用回调。
+    Enable,
+    /// Compensate candidate enable through its declared disable callback.
+    /// 通过声明的停用回调补偿候选启用。
+    EnableRollback,
 }
 
 impl CandidateOperation {
-    /// Return this operation's sole native scope; no published business or teardown scope is admitted.
-    /// 返回此操作唯一原生作用域；不接纳已发布业务或拆除作用域。
+    /// Return this operation's sole native scope, including explicitly declared enable compensation.
+    /// 返回此操作唯一原生作用域，包括显式声明的启用补偿。
     pub(super) fn scope(self) -> VulcanPluginBridgeLeaseScope {
         match self {
             Self::Probe => VulcanPluginBridgeLeaseScope::EnablingProbe,
             Self::Install => VulcanPluginBridgeLeaseScope::LifecycleInstall,
+            Self::Enable => VulcanPluginBridgeLeaseScope::LifecycleEnable,
+            Self::EnableRollback => VulcanPluginBridgeLeaseScope::LifecycleEnableRollback,
         }
     }
 }

@@ -381,7 +381,7 @@ fn formal_candidate_install_excludes_overlapping_request_work() {
                         .await
                         .expect_err("probe cannot overlap installation")
                         .message
-                        .contains("conflicts with retained work")
+                        .contains("precede lifecycle")
                 );
                 // Status exposes the original business operation; it never invents an initialization-only receipt.
                 // 状态公开原业务操作；绝不虚构仅初始化回执。
@@ -506,16 +506,21 @@ fn formal_candidate_install_cancelled_observer_retains_transaction() {
 /// Typed candidate authority rejects all other lifecycle and public scopes before native admission.
 /// 类型化候选权威在原生入场前拒绝全部其他生命周期及公开作用域。
 #[test]
-fn formal_candidate_install_authority_cannot_be_reused_as_probe_or_teardown() {
+fn formal_candidate_authority_cannot_cross_operation_scopes() {
     // No VM is needed to verify the exact private authority boundary.
     // 验证精确私有权威边界不需要 VM。
     let (fixture, store, transaction) = installation_fixture(false, false, false);
-    // Both authority kinds derive from the same inspected package, so scope alone must distinguish them.
-    // 两类权威派生自相同已检查插件包，因此必须单独区分作用域。
+    // All authority kinds derive from the same inspected package, so scope alone must distinguish them.
+    // 全部权威种类派生自相同已检查插件包，因此必须单独区分作用域。
     let candidate = store
         .inspect_activation_candidate(&transaction)
         .expect("inspect scope target");
-    for operation in [CandidateOperation::Probe, CandidateOperation::Install] {
+    for operation in [
+        CandidateOperation::Probe,
+        CandidateOperation::Install,
+        CandidateOperation::Enable,
+        CandidateOperation::EnableRollback,
+    ] {
         // Bind only the explicitly selected operation.
         // 仅绑定明确选择的操作。
         let authority = CandidateExecution::new(&fixture.manager.state, &candidate, operation)
@@ -529,6 +534,7 @@ fn formal_candidate_install_authority_cannot_be_reused_as_probe_or_teardown() {
             VulcanPluginBridgeLeaseScope::LifecycleInstall,
             VulcanPluginBridgeLeaseScope::LifecycleUninstall,
             VulcanPluginBridgeLeaseScope::LifecycleEnable,
+            VulcanPluginBridgeLeaseScope::LifecycleEnableRollback,
             VulcanPluginBridgeLeaseScope::LifecycleDisable,
         ] {
             assert_eq!(

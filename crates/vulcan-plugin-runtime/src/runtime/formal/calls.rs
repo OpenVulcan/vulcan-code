@@ -218,14 +218,14 @@ enum CallAdmission {
         /// 宿主从已检查且仍处于准备阶段的事务构造此权威。
         authority: Arc<CandidateExecution>,
     },
-    /// One unpublished installation callback retains its exact target without publishing it.
-    /// 单个未发布安装回调保留精确目标，不发布它。
-    CandidateInstall {
-        /// Exact installation-only transaction authority remains alive through real cleanup.
-        /// 精确仅限安装的事务权威保留至实际清理。
+    /// One unpublished lifecycle callback retains its exact target without publishing it.
+    /// 单个未发布生命周期回调保留精确目标，不发布它。
+    CandidateLifecycle {
+        /// Exact operation-specific transaction authority remains alive through real cleanup.
+        /// 精确操作专属事务权威保留至实际清理。
         authority: Arc<CandidateExecution>,
-        /// Function is selected only from the inspected manifest's installation declaration.
-        /// 函数仅从已检查清单安装声明选择。
+        /// Function is selected only from the inspected manifest's lifecycle declaration.
+        /// 函数仅从已检查清单生命周期声明选择。
         export: String,
     },
 }
@@ -238,7 +238,7 @@ impl CallAdmission {
             Self::Controller { .. } | Self::Prewarm { .. } | Self::PrewarmTarget { .. } => {
                 VulcanPluginCapacityPurpose::ToolCall
             }
-            Self::Lifecycle { .. } | Self::CandidateInstall { .. } => {
+            Self::Lifecycle { .. } | Self::CandidateLifecycle { .. } => {
                 VulcanPluginCapacityPurpose::Lifecycle
             }
             Self::Action { .. } => VulcanPluginCapacityPurpose::UiAction,
@@ -261,7 +261,7 @@ impl CallAdmission {
             Self::PrewarmTarget { request, .. } => {
                 CallOwner::Controller(request.owner_session_id.clone())
             }
-            Self::Lifecycle { .. } | Self::CandidateInstall { .. } => CallOwner::Lifecycle,
+            Self::Lifecycle { .. } | Self::CandidateLifecycle { .. } => CallOwner::Lifecycle,
             Self::Action { .. } => CallOwner::Action,
             Self::Probe | Self::CandidateProbe { .. } => CallOwner::Probe,
         }
@@ -273,7 +273,7 @@ impl CallAdmission {
         match self {
             Self::Controller { export, .. }
             | Self::Lifecycle { export }
-            | Self::CandidateInstall { export, .. }
+            | Self::CandidateLifecycle { export, .. }
             | Self::Action { export, .. } => Some(export),
             Self::Probe
             | Self::CandidateProbe { .. }
@@ -295,7 +295,7 @@ impl CallAdmission {
     /// 仅为显式候选入场借用私有就绪权威。
     fn candidate(&self) -> Option<&Arc<CandidateExecution>> {
         match self {
-            Self::CandidateProbe { authority } | Self::CandidateInstall { authority, .. } => {
+            Self::CandidateProbe { authority } | Self::CandidateLifecycle { authority, .. } => {
                 Some(authority)
             }
             _ => None,

@@ -144,13 +144,38 @@ fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
                     .message
                     .contains("conflicts with retained work")
             );
-            // Public candidate admission must fail at the original retained-history ceiling.
-            // 公开候选入场必须在原保留历史上限处失败。
+            // A journaled installation attempt now prevents later public probe initialization.
+            // 已记录安装尝试现在阻止后续公开探测初始化。
+            assert!(
+                fixture
+                    .manager
+                    .probe_activation_candidate(&candidate)
+                    .await
+                    .expect_err("probe cannot follow lifecycle intent")
+                    .message
+                    .contains("precede lifecycle")
+            );
+            // Exercise the private registry directly to retain independent coverage of its actual history ceiling.
+            // 直接验证私有注册表，保留实际历史上限的独立覆盖。
             let failure = fixture
                 .manager
-                .probe_activation_candidate(&candidate)
-                .await
-                .expect_err("shared parent retention is full");
+                .register_owned_formal_call(
+                    &owner,
+                    authority.plugin.clone(),
+                    Preparation {
+                        workspace: CallWorkspace::LifecycleEnvironment,
+                        arguments: json!({}),
+                        finalizer: None,
+                        scope: VulcanPluginBridgeLeaseScope::EnablingProbe,
+                        security_partition: format!("candidate:hook-plugin:{request_id}"),
+                        deadline,
+                        admission: CallAdmission::CandidateProbe {
+                            authority: Arc::clone(&authority),
+                        },
+                    },
+                )
+                .err()
+                .expect("shared parent retention is full");
             assert!(failure.message.contains("retention capacity"));
             // Only original candidate records are drained, even with an identical plugin namespace.
             // 即使插件命名空间相同，也只排空原候选记录。
@@ -204,6 +229,7 @@ use crate::{
     VulcanPluginStoreErrorCode,
 };
 
+mod effects;
 mod installation;
 
 /// No secret slots are declared; any unexpected backend access makes staging fail explicitly.

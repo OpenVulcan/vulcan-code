@@ -4,10 +4,14 @@
 use super::*;
 use uuid::Uuid;
 
+mod effects;
 mod installation;
 mod operations;
 mod preparation;
 mod records;
+pub use effects::{
+    VulcanPluginActivationEffect, VulcanPluginActivationEffects, VulcanPluginEffectObservation,
+};
 pub use installation::{VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt};
 pub use preparation::{
     VulcanPluginActivationPreparation, VulcanPluginActivationPreparationIntent,

@@ -967,13 +967,27 @@ fn activation_preparation_validates_wire_shape_and_repairs_only_original_index()
             .expect("terminal history")
             .is_empty()
     );
-    // An impossible installation sidecar must remain an error even after the early original is terminal.
-    // 即使早期原请求已为终态，不可能的安装附属回执仍必须保持错误。
-    fs::write(path.with_extension("install"), b"{}").expect("impossible receipt");
-    assert!(store.activation_recovery_records("sample-plugin").is_err());
-    assert!(
-        store
-            .installation_receipt("sample-plugin", request_id)
-            .is_err()
-    );
+    // Each declared effect sidecar is impossible even after the early original becomes terminal.
+    // 即使早期原请求已为终态，每种声明副作用附属回执仍不可能存在。
+    for extension in ["install", "effects"] {
+        // Isolate each corrupted sidecar so neither decoder masks the other one's coverage.
+        // 隔离每个损坏附属文件，使两个解码器不会相互掩盖覆盖。
+        let sidecar = path.with_extension(extension);
+        fs::write(&sidecar, b"{}").expect("impossible receipt");
+        assert!(store.activation_recovery_records("sample-plugin").is_err());
+        if extension == "install" {
+            assert!(
+                store
+                    .installation_receipt("sample-plugin", request_id)
+                    .is_err()
+            );
+        } else {
+            assert!(
+                store
+                    .activation_effects("sample-plugin", request_id)
+                    .is_err()
+            );
+        }
+        fs::remove_file(sidecar).expect("remove only fixture corruption");
+    }
 }

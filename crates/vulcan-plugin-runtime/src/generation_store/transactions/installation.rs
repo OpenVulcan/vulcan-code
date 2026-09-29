@@ -10,21 +10,9 @@ use crate::generation_store::{
 /// 回执格式独立于保持不变的激活日志及其索引。
 const INSTALLATION_RECEIPT_VERSION: u32 = 1;
 
-/// Durable observation of one installation attempt, never a proof of external-effect rollback.
-/// 单次安装尝试的持久观测，绝不是外部副作用已回滚的证明。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum VulcanPluginInstallationPhase {
-    /// Intent was persisted before execution; completion and even actual admission may remain unknown.
-    /// 意图已在执行前持久化；是否完成甚至是否实际入场均可能仍未知。
-    Started,
-    /// The original invocation returned success after its normal resource retirement.
-    /// 原调用在正常资源退役后返回成功。
-    Succeeded,
-    /// Observation returned an error or timeout; actual work or external effects may still remain.
-    /// 观测返回错误或超时；实际工作或外部副作用可能仍存在。
-    ObservationFailed,
-}
+/// Preserve the public installation name and wire format using the shared observation definition.
+/// 使用共享观测定义保留公开安装名称及线格式。
+pub use super::effects::VulcanPluginEffectObservation as VulcanPluginInstallationPhase;
 
 /// Non-secret receipt binds installation evidence to the original immutable transaction identity.
 /// 不含秘密的回执将安装证据绑定至原不可变事务身份。
@@ -156,6 +144,9 @@ impl VulcanPluginActivationCandidate<'_> {
                 "Installation was already attempted; inspect the original receipt instead of replaying it.",
             ));
         }
+        // Probe must be confirmed before installation, and enable/compensation cannot be reordered.
+        // 安装前必须确认探测，启用／补偿不能被重新排序。
+        store.require_effects_before_install(&self.transaction.record)?;
         // Persist a non-secret checkpoint before any module initialization or installation callback.
         // 在任何模块初始化或安装回调之前，持久保存不含秘密的检查点。
         let receipt = VulcanPluginInstallationReceipt {

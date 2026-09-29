@@ -5,6 +5,147 @@ use super::*;
 use crate::tests::provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH;
 use vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase as Phase;
 
+/// Real candidate initialization is projected through service queries and requires explicit abandonment acknowledgement.
+/// 真实候选初始化经服务查询投影，并要求明确放弃确认。
+#[tokio::test]
+async fn immutable_service_update_effects_are_queryable_without_replay() {
+    use luaskills::{LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig};
+    for fail in [false, true] {
+        // The original service fixture isolates policy, storage and all candidate bytes.
+        // 原服务夹具隔离策略、存储及全部候选字节。
+        let fixture = Fixture::new(false);
+        // Attach a real engine to the same service-owned manager; content-only tests keep their original no-engine fixture.
+        // 为同一服务自有管理器附加真实引擎；纯内容测试保持原无引擎夹具。
+        let native_root = vulcan_runtime_assets::native_host_path(
+            &fixture
+                .root
+                .path()
+                .canonicalize()
+                .expect("canonical fixture root"),
+        );
+        // Match the established native integration fixture's bounded compatibility engine.
+        // 匹配既有原生集成夹具的有界兼容引擎。
+        let engine = LuaEngine::new(LuaEngineOptions::new(
+            LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 60,
+            },
+            LuaRuntimeHostOptions::with_runtime_root(native_root),
+        ))
+        .expect("real LuaSkills engine");
+        fixture
+            .runtime
+            .attach_runtime_engine(Arc::new(engine))
+            .expect("attach original manager");
+        std::fs::create_dir_all(fixture.root.path().join("bridge/runtime"))
+            .expect("bridge directory");
+        std::fs::write(fixture.root.path().join("bridge/dependencies.yaml"), "{}\n")
+            .expect("bridge dependencies");
+        std::fs::write(
+            fixture.root.path().join("bridge/runtime/bridge.lua"),
+            include_str!("../../../../../plugin-bridge/vulcan-plugin-bridge/runtime/bridge.lua"),
+        )
+        .expect("authoritative bridge module");
+        std::fs::create_dir_all(fixture.root.path().join("distributions"))
+            .expect("distribution root");
+        std::fs::create_dir_all(fixture.source.join("runtime")).expect("runtime directory");
+        std::fs::write(fixture.source.join("dependencies.yaml"), "{}\n")
+            .expect("bundled dependencies");
+        // Append the exact production Lua declaration before immutable package inspection.
+        // 不可变插件包检查前追加精确生产 Lua 声明。
+        let mut manifest =
+            std::fs::read_to_string(fixture.source.join("plugin.yaml")).expect("manifest");
+        manifest.push_str("execution:\n  dependencies:\n    manifest: dependencies.yaml\n    install_mode: bundled\nlua_runtime:\n  bundle: runtime/plugin.bundle.lua\n  invoke_function: dispatch\n  shutdown_function: shutdown\n  max_active_sessions: 1\n");
+        std::fs::write(fixture.source.join("plugin.yaml"), manifest).expect("Lua declaration");
+        std::fs::write(
+            fixture.source.join("runtime/plugin.bundle.lua"),
+            format!(
+                r#"
+-- Module initialization can fail after entering real Lua; the receipt must retain that attempt.
+-- 模块初始化可能在进入真实 Lua 后失败；回执必须保留该尝试。
+if {fail} then error('private-callback-marker') end
+-- Exports belong to this module instance, without external service dependencies.
+-- 导出属于此模块实例，不依赖外部服务。
+local M = {{}}
+-- No arguments are consumed; return the declared version-one success frame.
+-- 不消费参数；返回声明的版本一成功帧。
+function M.dispatch() return '{{"ok":true,"result":{{}}}}' end
+-- Shutdown uses the same empty success frame and has no external cleanup to perform.
+-- 关闭使用相同空成功帧，且无需执行外部清理。
+M.shutdown = M.dispatch
+return M
+"#
+            ),
+        )
+        .expect("actual Lua bundle");
+        fixture.runtime.initialize_formal_runtime(vulcan_plugin_runtime::VulcanPluginRuntimeSettings::default())
+            .expect("real formal parent");
+        // The service owns one original request before the actual module executes.
+        // 实际模块执行之前，服务拥有单个原请求。
+        let request = uuid::Uuid::new_v4();
+        // Preparation uses the production approval and credential staging path.
+        // 准备使用生产批准及凭据暂存路径。
+        let prepared = fixture.prepare(request).expect("prepared Lua candidate");
+        {
+            // No service response may invent a second candidate identity.
+            // 服务响应不得虚构第二个候选身份。
+            let candidate = prepared
+                .store
+                .inspect_activation_candidate(&prepared.transaction)
+                .expect("candidate");
+            // Preserve native diagnostics if the success fixture fails before its intended result.
+            // 成功夹具在预期结果前失败时保留原生诊断。
+            let result = fixture.runtime.probe_activation_candidate(&candidate).await;
+            if fail {
+                result.expect_err("intentional module initialization failure");
+            } else {
+                result.expect("actual successful candidate initialization");
+            }
+        }
+        drop(prepared);
+        // Queries return only operation/phase; callback diagnostics are intentionally excluded.
+        // 查询仅返回操作／阶段；有意排除回调诊断。
+        let records = list(&fixture.runtime, PLUGIN).expect("durable query");
+        // Stable request identity locates the record independently of ordering.
+        // 稳定请求身份定位记录，独立于排序。
+        let record = records
+            .iter()
+            .find(|record| record.request_id == request.to_string())
+            .expect("original request");
+        assert!(record.installation.is_none());
+        assert_eq!(record.effects.len(), 1);
+        assert_eq!(
+            record.effects[0].operation,
+            vulcan_plugin_runtime::VulcanPluginActivationEffect::Probe
+        );
+        assert_eq!(
+            record.effects[0].phase,
+            if fail {
+                vulcan_plugin_runtime::VulcanPluginEffectObservation::ObservationFailed
+            } else {
+                vulcan_plugin_runtime::VulcanPluginEffectObservation::Succeeded
+            }
+        );
+        assert!(
+            !serde_json::to_string(record)
+                .expect("sanitized output")
+                .contains("private-callback-marker")
+        );
+        assert!(
+            abort(&fixture.runtime, PLUGIN, &request.to_string(), false)
+                .expect_err("acknowledgement is required")
+                .contains("副作用")
+        );
+        // Acknowledged abandonment retains historical evidence instead of claiming external rollback.
+        // 已确认放弃保留历史证据，而非声称外部回滚。
+        let abandoned = abort(&fixture.runtime, PLUGIN, &request.to_string(), true)
+            .expect("explicit abandonment");
+        assert_eq!(abandoned.phase, Phase::Aborted);
+        assert_eq!(abandoned.effects.len(), 1);
+    }
+}
+
 /// Stable package identity shared by the fixture's old and new immutable versions.
 /// 夹具旧新不可变版本共用的稳定插件包身份。
 pub(in crate::skills_services) const PLUGIN: &str = "update-fixture";

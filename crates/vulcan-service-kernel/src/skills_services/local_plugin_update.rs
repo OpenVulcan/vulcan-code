@@ -13,6 +13,18 @@ use vulcan_plugin_runtime::{
 #[cfg(test)]
 pub(super) mod tests;
 
+/// Sanitized operation evidence omits private storage metadata and callback values.
+/// 脱敏操作证据省略私有存储元数据及回调值。
+#[derive(Debug, Serialize)]
+struct LocalPluginUpdateEffect {
+    /// Exact declared operation.
+    /// 精确声明操作。
+    operation: vulcan_plugin_runtime::VulcanPluginActivationEffect,
+    /// Historical observation does not certify current resource retirement.
+    /// 历史观测不证明当前资源退役。
+    phase: vulcan_plugin_runtime::VulcanPluginEffectObservation,
+}
+
 /// Sanitized durable status exposes stable recovery identity without configuration documents or credential values.
 /// 脱敏持久状态公开稳定恢复身份，不包含配置文档或凭据值。
 #[derive(Debug, Serialize)]
@@ -36,6 +48,9 @@ pub(crate) struct LocalPluginUpdateStatus {
     /// Optional durable installation evidence is independent from current native call status.
     /// 可选持久安装证据独立于当前原生调用状态。
     installation: Option<vulcan_plugin_runtime::VulcanPluginInstallationPhase>,
+    /// Attempted probe and lifecycle operations remain independently inspectable.
+    /// 已尝试探测及生命周期操作保持可独立检查。
+    effects: Vec<LocalPluginUpdateEffect>,
 }
 
 /// Project one original record from store into a sanitized status; reject incomplete identities instead of inventing them.
@@ -53,6 +68,17 @@ fn status(
         phase: record.phase(),
         candidate: candidate.clone(),
         activation_revision: record.activation_revision().to_string(),
+        effects: store
+            .activation_effects(&candidate.plugin_id, record.request_id())
+            .map_err(|error| error.to_string())?
+            .map(|receipt| {
+                receipt
+                    .observations()
+                    .into_iter()
+                    .map(|(operation, phase)| LocalPluginUpdateEffect { operation, phase })
+                    .collect()
+            })
+            .unwrap_or_default(),
         installation: store
             .installation_receipt(&candidate.plugin_id, record.request_id())
             .map_err(|error| error.to_string())?
@@ -188,9 +214,13 @@ pub(super) fn abort(
             .installation_receipt(plugin_id, request_id)
             .map_err(|error| error.to_string())?
             .is_some()
+            || store
+                .activation_effects(plugin_id, request_id)
+                .map_err(|error| error.to_string())?
+                .is_some()
         {
             return Err(String::from(
-                "原安装已有副作用尝试；必须先核对外部状态，并明确确认放弃选择不等于撤销副作用。",
+                "原候选已有副作用尝试；必须先核对外部状态，并明确确认放弃选择不等于撤销副作用。",
             ));
         }
         store

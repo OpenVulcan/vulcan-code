@@ -9,9 +9,24 @@ vi.mock("./webui-service-runtime", () => ({ hasServiceRuntime: vi.fn(), serviceC
 const status = {
   requestId: "12345678-1234-4234-8234-123456789abc", pluginId: "fixture", phase: "published",
   candidate: { plugin_id: "fixture", generation_id: "12345678-1234-4234-8234-123456789abd", version: "2.0.0", content_fingerprint: "inspected-fingerprint" },
-  activationRevision: "18446744073709551615", installation: "succeeded",
+  activationRevision: "18446744073709551615", installation: "succeeded", effects: [],
 };
 beforeEach(() => { vi.resetAllMocks(); vi.mocked(hasServiceRuntime).mockReturnValue(true); });
+
+// Candidate observations are exact typed evidence; malformed or duplicated operations cannot authorize recovery.
+// 候选观测为精确类型化证据；损坏或重复操作不能授权恢复。
+it("preserves sanitized candidate observations and rejects malformed evidence", () => {
+  // Extra callback content is excluded from the service projection.
+  // 额外回调内容从服务投影中排除。
+  const effect = { operation: "probe", phase: "started", callback: "private-result" };
+  expect(parseLocalPluginUpdateStatus({ ...status, effects: [effect] }, "fixture").effects)
+    .toEqual([{ operation: "probe", phase: "started" }]);
+  for (const effects of [undefined, null, {}, [null], [{ operation: "install", phase: "succeeded" }],
+    [{ operation: "probe", phase: "unknown" }], [effect, effect]]) {
+    expect(() => parseLocalPluginUpdateStatus({ ...status, effects }, "fixture")).toThrow();
+  }
+  expect(() => parseLocalPluginUpdateStatus({ ...status, phase: "preparing", installation: null, effects: [effect] }, "fixture")).toThrow();
+});
 
 // Early intent preserves the original identity but cannot claim an installation receipt before target readiness.
 // 早期意图保留原身份，但不能在目标就绪之前声称具有安装回执。

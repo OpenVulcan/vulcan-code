@@ -148,6 +148,9 @@ fn formal_candidate_environment_outlives_observer_until_actual_retirement() {
         let (fixture, store, mut transaction) = match operation {
             CandidateOperation::Probe => candidate_fixture(true, false, false),
             CandidateOperation::Install => installation_fixture(true, false, false),
+            CandidateOperation::Enable | CandidateOperation::EnableRollback => {
+                unreachable!("This fixture covers probe and installation only.")
+            }
         };
         executor().block_on(async {
             // This descriptor pins package bytes only, not the request's later environment ownership.

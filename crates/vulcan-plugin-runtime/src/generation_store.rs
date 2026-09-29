@@ -16,10 +16,11 @@ mod files;
 mod operations;
 mod transactions;
 pub use transactions::{
-    VulcanPluginActivationCandidate, VulcanPluginActivationPreparation,
-    VulcanPluginActivationPreparationIntent, VulcanPluginActivationPreparationRecord,
-    VulcanPluginActivationRequestRecord, VulcanPluginActivationTransaction,
-    VulcanPluginActivationTransactionPhase, VulcanPluginActivationTransactionRecord,
+    VulcanPluginActivationCandidate, VulcanPluginActivationEffect, VulcanPluginActivationEffects,
+    VulcanPluginActivationPreparation, VulcanPluginActivationPreparationIntent,
+    VulcanPluginActivationPreparationRecord, VulcanPluginActivationRequestRecord,
+    VulcanPluginActivationTransaction, VulcanPluginActivationTransactionPhase,
+    VulcanPluginActivationTransactionRecord, VulcanPluginEffectObservation,
     VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt,
 };
 #[cfg(test)]

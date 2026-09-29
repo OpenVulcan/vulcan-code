@@ -26,6 +26,12 @@ const phaseLabels: Record<LocalPluginUpdateStatus["phase"], TranslationKey> = {
   completed: "pluginUpdates.completed", aborted: "pluginUpdates.aborted",
 };
 
+// effectLabels distinguishes the exact recorded operation without implying automatic replay.
+// effectLabels 区分精确记录操作，不暗示自动重放。
+const effectLabels: Record<LocalPluginUpdateStatus["effects"][number]["operation"], TranslationKey> = {
+  probe: "pluginUpdates.probe", enable: "pluginUpdates.enable", enable_rollback: "pluginUpdates.enableRollback",
+};
+
 // PluginUpdateControls opens a read-only recovery surface and keeps its original state across collapse.
 // PluginUpdateControls 打开只读恢复界面，并跨折叠保留原状态。
 // Props supply existing service actions; returns controls without any automatic update or recovery.
@@ -189,6 +195,10 @@ function PluginUpdateManagement(props: PluginUpdateControlProps) {
       <p className="break-all">{t("pluginUpdates.request")}: <code>{record.requestId}</code></p>
       <p>{t("pluginUpdates.installation")}: {record.installation === null ? t("pluginUpdates.noReceipt")
         : record.installation === "succeeded" ? t("pluginUpdates.installSucceeded") : t("pluginUpdates.installUncertain")}</p>
+      {record.effects.map((effect) => <p key={effect.operation}>{t(effectLabels[effect.operation])}: {
+        effect.phase === "started" ? t("pluginUpdates.effectStarted")
+          : effect.phase === "succeeded" ? t("pluginUpdates.installSucceeded") : t("pluginUpdates.installUncertain")
+      }</p>)}
       <div className="flex flex-wrap gap-2">
         {(record.phase === "committing" || record.phase === "published") && <Button type="button" size="sm" disabled={!canWrite}
           onClick={() => void execute("resume", record)}>{t("pluginUpdates.resume")}</Button>}

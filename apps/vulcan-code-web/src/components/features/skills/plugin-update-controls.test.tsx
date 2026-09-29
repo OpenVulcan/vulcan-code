@@ -18,7 +18,7 @@ vi.mock("@/i18n", async (importOriginal) => {
 const original: LocalPluginUpdateStatus = {
   requestId: "12345678-1234-4234-8234-123456789abc", pluginId: "fixture", phase: "published",
   candidate: { plugin_id: "fixture", generation_id: "12345678-1234-4234-8234-123456789abd", version: "2.0.0", content_fingerprint: "approved-by-service" },
-  activationRevision: "4", installation: "succeeded",
+  activationRevision: "4", installation: "succeeded", effects: [],
 };
 // Real DOM and service stubs remain isolated per test; no production update or secure-store write is performed.
 // 真实 DOM 及服务替身按测试隔离；不执行生产更新或安全存储写入。
@@ -68,6 +68,22 @@ beforeEach(async () => {
   }} />));
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
+
+// Exact candidate observations are visible without creating any automatic lifecycle or recovery action.
+// 精确候选观测可见，不创建任何自动生命周期或恢复动作。
+it("shows probe, enable and compensation evidence with distinct observations", async () => {
+  read.mockResolvedValue([{ ...original, phase: "prepared", effects: [
+    { operation: "probe", phase: "succeeded" },
+    { operation: "enable", phase: "observation_failed" },
+    { operation: "enable_rollback", phase: "started" },
+  ] }]);
+  await openAndRead();
+  expect(host.textContent).toContain("候选探测: 已观察到成功");
+  expect(host.textContent).toContain("候选启用: 结果不确定，请核对外部状态");
+  expect(host.textContent).toContain("启用补偿: 已记录尝试，完成情况待核对");
+  expect(resume).not.toHaveBeenCalled();
+  expect(abandon).not.toHaveBeenCalled();
+});
 
 // Preparing requests permit only explicitly acknowledged abandonment, not committed-route resumption.
 // 准备中请求仅允许明确确认的放弃，不允许已提交路由恢复。

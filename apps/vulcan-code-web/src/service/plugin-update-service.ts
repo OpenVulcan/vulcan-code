@@ -1,6 +1,17 @@
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import type { LuaSkillsCatalogUpdate } from "@/types";
 
+// LocalPluginUpdateEffect exposes one durable original operation without callback data.
+// LocalPluginUpdateEffect 公开单个持久原操作，不包含回调数据。
+export interface LocalPluginUpdateEffect {
+  // operation selects the exact candidate effect declared by the service.
+  // operation 选择服务声明的精确候选副作用。
+  operation: "probe" | "enable" | "enable_rollback";
+  // phase is historical observation, not evidence that external effects were undone.
+  // phase 为历史观测，不证明外部副作用已撤销。
+  phase: "started" | "succeeded" | "observation_failed";
+}
+
 // LocalPluginUpdateStatus is the sanitized original-request projection owned by the service coordinator.
 // LocalPluginUpdateStatus 是服务协调器持有的脱敏原请求投影。
 export interface LocalPluginUpdateStatus {
@@ -34,7 +45,10 @@ export interface LocalPluginUpdateStatus {
   activationRevision: string;
   // installation is historical observation; null does not prove absence of other external effects.
   // installation 为历史观测；空值不证明其他外部副作用不存在。
-  installation: "started" | "succeeded" | "observation_failed" | null;
+  installation: LocalPluginUpdateEffect["phase"] | null;
+  // effects retains every attempted candidate operation in execution order.
+  // effects 按执行顺序保留每个已尝试候选操作。
+  effects: LocalPluginUpdateEffect[];
 }
 
 // parseLocalPluginUpdateStatus validates the exact service projection against the explicitly queried owner.
@@ -63,10 +77,27 @@ export function parseLocalPluginUpdateStatus(value: unknown, pluginId: string): 
     || typeof candidate.content_fingerprint !== "string" || !candidate.content_fingerprint) {
     throw new Error("Plugin update status has an invalid immutable target.");
   }
+  if (!Array.isArray(record.effects) || (record.phase === "preparing" && record.effects.length !== 0)) {
+    throw new Error("Plugin update status has invalid candidate effects.");
+  }
+  // Validate each declared operation and discard undeclared response fields.
+  // 校验每个声明操作，并丢弃未声明响应字段。
+  const effects: LocalPluginUpdateEffect[] = record.effects.map((value: unknown) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid candidate effect.");
+    // Narrow exact service fields without guessing aliases or missing evidence.
+    // 缩小精确服务字段类型，不猜测别名或缺失证据。
+    const effect = value as Record<string, unknown>;
+    if ((effect.operation !== "probe" && effect.operation !== "enable" && effect.operation !== "enable_rollback")
+      || (effect.phase !== "started" && effect.phase !== "succeeded" && effect.phase !== "observation_failed")) {
+      throw new Error("Invalid candidate effect operation or observation.");
+    }
+    return { operation: effect.operation, phase: effect.phase };
+  });
+  if (new Set(effects.map((effect) => effect.operation)).size !== effects.length) throw new Error("Duplicate candidate effect.");
   return {
     requestId: record.requestId, pluginId, phase: record.phase,
     candidate: { plugin_id: pluginId, generation_id: candidate.generation_id, version: candidate.version, content_fingerprint: candidate.content_fingerprint },
-    activationRevision: record.activationRevision, installation: record.installation,
+    activationRevision: record.activationRevision, installation: record.installation, effects,
   };
 }
 

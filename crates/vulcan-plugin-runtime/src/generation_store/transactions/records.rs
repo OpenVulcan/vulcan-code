@@ -527,50 +527,61 @@ impl VulcanPluginGenerationStore {
             ));
         }
         if let Some(directory) = self.transaction_directory(plugin_id, false)? {
-            // Installation evidence cannot outlive its authoritative original request unnoticed.
-            // 安装证据失去权威原请求后不能被忽略。
+            // Candidate effect evidence cannot outlive its authoritative original request unnoticed.
+            // 候选副作用证据失去权威原请求后不能被忽略。
             let entries = std::fs::read_dir(directory)
-                .map_err(|error| Error::io("Inspect installation receipts", error))?;
+                .map_err(|error| Error::io("Inspect candidate effect receipts", error))?;
             for entry in entries {
                 // Only the declared receipt extension belongs to this inventory.
                 // 仅声明的回执扩展名属于此清单。
                 let path = entry
-                    .map_err(|error| Error::io("Read installation receipt entry", error))?
+                    .map_err(|error| Error::io("Read candidate effect receipt entry", error))?
                     .path();
-                if path.extension() != Some(std::ffi::OsStr::new("install")) {
-                    continue;
-                }
+                // The extension declares which strict decoder owns this sidecar.
+                // 扩展名声明此附属文件归哪个严格解码器所有。
+                let is_installation = match path.extension().and_then(|value| value.to_str()) {
+                    Some("install") => true,
+                    Some("effects") => false,
+                    _ => continue,
+                };
                 // Validate canonical identity before relating the receipt to its original.
                 // 关联回执与原请求之前校验规范身份。
                 let name = path
                     .file_stem()
                     .and_then(|name| name.to_str())
-                    .ok_or_else(|| Error::invalid("Invalid installation receipt filename."))?;
+                    .ok_or_else(|| Error::invalid("Invalid candidate effect receipt filename."))?;
                 // A receipt is meaningful only together with its exact original record.
                 // 回执仅与精确原始记录一起才有意义。
                 let request_id = Uuid::parse_str(name)
-                    .map_err(|_| Error::invalid("Invalid installation receipt filename."))?;
+                    .map_err(|_| Error::invalid("Invalid candidate effect receipt filename."))?;
                 if request_id.is_nil()
                     || request_id.to_string() != name
                     || !files::exists(&path, false)?
                     || !requests.contains(&request_id)
                 {
                     return Err(Error::invalid(
-                        "Installation receipt has no valid original transaction.",
+                        "Candidate effect receipt has no valid original transaction.",
                     ));
                 }
                 // Early intent cannot own installation evidence; configured historical receipts must match their full original.
-                // 早期意图不能拥有安装证据；已配置历史回执必须匹配其完整原请求。
+                // 早期意图不能拥有候选副作用证据；已配置历史回执必须匹配其完整原请求。
                 let Some(VulcanPluginActivationRequestRecord::Activation(original)) =
                     self.read_request_locked(plugin_id, request_id)?
                 else {
                     return Err(Error::invalid(
-                        "Installation receipt belongs to an unconfigured original.",
+                        "Candidate effect receipt belongs to an unconfigured original.",
                     ));
                 };
-                if self.read_installation_locked(&original)?.is_none() {
+                // Both formats retain the same complete original; neither is a replacement pointer.
+                // 两种格式均保留相同完整原请求；均不属于替代指针。
+                let missing = if is_installation {
+                    self.read_installation_locked(&original)?.is_none()
+                } else {
+                    self.read_effects_locked(&original)?.is_none()
+                };
+                if missing {
                     return Err(Error::invalid(
-                        "Installation receipt disappeared during recovery inspection.",
+                        "Candidate effect receipt disappeared during recovery inspection.",
                     ));
                 }
             }

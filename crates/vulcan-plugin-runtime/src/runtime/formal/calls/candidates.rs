@@ -5,6 +5,48 @@ use super::*;
 use crate::VulcanPluginActivationCandidate;
 
 impl VulcanPluginRuntimeManager {
+    /// Invoke candidate's declared enable callback once under the original lifecycle deadline.
+    /// 在原生命周期期限内单次调用 candidate 声明的启用回调。
+    /// Return durable observed completion; the host must coordinate predecessor drain and later route publication.
+    /// 返回持久观测完成结果；宿主必须协调前驱排空及后续路由发布。
+    pub async fn enable_activation_candidate(
+        &self,
+        candidate: &VulcanPluginActivationCandidate<'_>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Use the existing lifecycle budget rather than introducing another timeout authority.
+        // 使用既有生命周期预算，不引入另一个超时权威。
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Candidate enable deadline is out of range.")
+            })?;
+        self.invoke_formal_candidate_operation(candidate, CandidateOperation::Enable, deadline)
+            .await
+    }
+
+    /// Compensate candidate's observed enable through its declared disable callback, without replay.
+    /// 通过声明的停用回调补偿 candidate 已观测启用，不重放。
+    /// Return observed cleanup; any compensation attempt permanently excludes this request from publication.
+    /// 返回观测清理结果；任何补偿尝试均永久禁止发布此请求。
+    pub async fn rollback_activation_candidate_enable(
+        &self,
+        candidate: &VulcanPluginActivationCandidate<'_>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Compensation shares the existing bounded lifecycle observation budget.
+        // 补偿共享既有有界生命周期观测预算。
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Candidate compensation deadline is out of range.")
+            })?;
+        self.invoke_formal_candidate_operation(
+            candidate,
+            CandidateOperation::EnableRollback,
+            deadline,
+        )
+        .await
+    }
+
     /// Initialize candidate's declared Lua module under the existing probe deadline without public publication.
     /// 在既有探测期限内初始化 candidate 声明的 Lua 模块，不进行公开发布。
     /// Success requires tracked initialization and cleanup; timeout may return earlier while actual ownership remains.
@@ -70,17 +112,25 @@ impl VulcanPluginRuntimeManager {
         let Some(lua_runtime) = &manifest.lua_runtime else {
             return Ok(());
         };
-        // Installation is selected from the frozen declaration; callers cannot name an arbitrary export.
-        // 安装从固定声明选择；调用方不能指定任意导出。
-        let install = match operation {
-            CandidateOperation::Probe => None,
+        // Frozen lifecycle declarations are the sole source of exports and events.
+        // 固定生命周期声明是导出及事件的唯一来源。
+        let (event, declaration) = match operation {
+            CandidateOperation::Probe => (None, None),
             CandidateOperation::Install => {
-                let Some(function) = &lua_runtime.lifecycle.install else {
-                    return Ok(());
-                };
-                Some(function.clone())
+                (Some("install"), lua_runtime.lifecycle.install.as_ref())
             }
+            CandidateOperation::Enable => (Some("enable"), lua_runtime.lifecycle.enable.as_ref()),
+            CandidateOperation::EnableRollback => (
+                Some("enable_rollback"),
+                lua_runtime.lifecycle.disable.as_ref(),
+            ),
         };
+        if event.is_some() && declaration.is_none() {
+            return Ok(());
+        }
+        // Own the declaration before moving the private authority into the formal call.
+        // 将私有权威移动至正式调用前，取得声明的所有权。
+        let export = declaration.cloned();
         // Scope is derived from the typed operation and remains fixed through native cleanup.
         // 作用域从类型化操作派生，并在原生清理期间持续固定。
         let scope = operation.scope();
@@ -96,15 +146,15 @@ impl VulcanPluginRuntimeManager {
         let request_id = authority.request_id;
         // The declaration decides the original lifecycle envelope; preparation adds its trusted environment path.
         // 声明决定原生命周期信封；准备过程加入可信环境路径。
-        let (admission, arguments) = match install {
+        let (admission, arguments) = match export {
             Some(export) => (
-                CallAdmission::CandidateInstall { authority, export },
-                json!({"event":"install","plugin_id":plugin.id,"request_id":request_id.to_string()}),
+                CallAdmission::CandidateLifecycle { authority, export },
+                json!({"event":event.expect("declared lifecycle event"),"plugin_id":plugin.id,"request_id":request_id.to_string()}),
             ),
             None => (CallAdmission::CandidateProbe { authority }, json!({})),
         };
-        // Both operations retain original byte accounting, deadlines and actual resource supervision.
-        // 两种操作均保留原字节计量、截止时间及实际资源监督。
+        // All operations retain original byte accounting, deadlines and actual resource supervision.
+        // 全部操作均保留原字节计量、截止时间及实际资源监督。
         let input = Preparation {
             workspace: CallWorkspace::LifecycleEnvironment,
             arguments,
@@ -125,6 +175,19 @@ impl VulcanPluginRuntimeManager {
         } else {
             None
         };
+        // Probe initialization is effectful too; each non-install operation has one original durable intent.
+        // 探测初始化同样可产生副作用；每个非安装操作具有单个原持久意图。
+        let effect = match operation {
+            CandidateOperation::Install => None,
+            CandidateOperation::Probe => Some(crate::VulcanPluginActivationEffect::Probe),
+            CandidateOperation::Enable => Some(crate::VulcanPluginActivationEffect::Enable),
+            CandidateOperation::EnableRollback => {
+                Some(crate::VulcanPluginActivationEffect::EnableRollback)
+            }
+        }
+        .map(|operation| candidate.begin_effect_attempt(operation))
+        .transpose()
+        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
         // Retain the observation separately so both runtime errors and deadline expiry are checkpointed.
         // 单独保留观测，使运行时错误及期限到达均形成检查点。
         let result = tokio::time::timeout_at(
@@ -144,6 +207,13 @@ impl VulcanPluginRuntimeManager {
                     "Activation candidate {request_id} installation receipt is uncertain: {error}; inspect the original request."
                 ))
             })?;
+        }
+        if let Some(effect) = effect {
+            // A lost acknowledgement cannot be reported as a safely repeatable callback.
+            // 丢失确认不能报告为可安全重复的回调。
+            effect.finish(result.is_ok()).map_err(|error| VulcanPluginRuntimeError::new(format!(
+                "Activation candidate {request_id} effect receipt is uncertain: {error}; inspect the original request."
+            )))?;
         }
         result
     }
