@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod environment;
+
 /// Installation timeout returns while the original native business still prevents transaction mutation.
 /// 安装超时返回时，原原生业务仍阻止事务变更。
 #[test]
@@ -114,6 +116,10 @@ fn formal_candidate_install_absent_callback_does_not_create_runtime() {
     // This manager shares only the configured catalog root and deliberately has no formal parent.
     // 此管理器仅共享配置目录根，刻意不具有正式父级。
     let standalone = test_manager(fixture._root.path(), fixture._root.path().join("bundled"));
+    assert!(
+        !standalone.state.plugin_runtime_root.exists(),
+        "no environment before absent callback"
+    );
     executor().block_on(async {
         // Bind the same validated target to the standalone host before checking the absent declaration.
         // 在检查缺失声明前，将相同已校验目标绑定至独立宿主。
@@ -125,6 +131,10 @@ fn formal_candidate_install_absent_callback_does_not_create_runtime() {
             .await
             .expect("absent install succeeds");
     });
+    assert!(
+        !standalone.state.plugin_runtime_root.exists(),
+        "absent callback must create no environment or lease files"
+    );
     assert!(
         standalone
             .formal_runtime_owner()

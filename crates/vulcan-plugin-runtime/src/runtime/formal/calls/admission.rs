@@ -202,6 +202,11 @@ impl VulcanPluginRuntimeManager {
             self.validate_formal_submission(call, input.scope)?;
             drop(publication);
         }
+        // Explicit candidate authority outlives both filesystem preparation and actual native retirement.
+        // 显式候选权威比文件系统准备及实际原生退役均存续更久。
+        if let Some(candidate) = &call.candidate {
+            candidate.retain_execution_environment(&self.state)?;
+        }
         // This uses the same validated copy, dependency install and atomic environment publication as before.
         // 此处使用原有已校验复制、依赖安装及原子环境发布。
         let workspace = crate::runtime::environment::ensure_plugin_execution_environment(

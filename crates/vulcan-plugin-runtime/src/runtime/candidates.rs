@@ -104,9 +104,39 @@ pub(super) struct CandidateExecution {
     /// The original exclusive OS request lock survives until actual work and retained calls are gone.
     /// 原排他系统请求锁保留至实际工作与保留调用全部退出。
     _readiness: Arc<std::fs::File>,
+    /// Lazily acquired environment ownership survives every actual call and native pool reference.
+    /// 延迟取得的环境所有权在每个实际调用及原生池引用期间存续。
+    /// None means filesystem preparation never began; no-callback operations create no lease files.
+    /// None 表示文件系统准备从未开始；无回调操作不创建租约文件。
+    environment: std::sync::Mutex<Option<std::fs::File>>,
 }
 
 impl CandidateExecution {
+    /// Retains the exact manager's execution environment before any candidate filesystem preparation.
+    /// 在任何候选文件系统准备之前，保留精确管理器的执行环境。
+    /// State must own this authority; returns after acquiring or retaining the same actual shared file lock.
+    /// state 必须拥有此权威；取得或保留同一实际共享文件锁后返回。
+    /// Acquisition is lazy and monotonic so absent callbacks have no filesystem effects and clones share ownership.
+    /// 获取为延迟且单向，使缺失回调没有文件系统影响，克隆共享所有权。
+    pub(super) fn retain_execution_environment(
+        &self,
+        state: &VulcanPluginManagerState,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        self.validate(state, &self.plugin, self.operation.scope())?;
+        // Serialize first acquisition; no observer can replace or release an established environment lease.
+        // 串行化首次获取；任何观察者均不能替换或释放已建立的环境租约。
+        let mut environment = self.environment.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Candidate environment ownership lock is poisoned.")
+        })?;
+        if environment.is_none() {
+            *environment = Some(
+                super::environment::retain_plugin_execution_environment(state, &self.plugin.id)
+                    .map_err(VulcanPluginRuntimeError::new)?,
+            );
+        }
+        Ok(())
+    }
+
     /// Bind candidate's exact target and operation to state and return private readiness authority.
     /// 将 candidate 精确目标及 operation 绑定至 state，并返回私有就绪权威。
     /// Reject another user catalog or a bundled namespace; no runtime or public descriptor is created.
@@ -127,6 +157,7 @@ impl CandidateExecution {
             operation,
             manager_id: state.manager_id.clone(),
             _readiness: readiness,
+            environment: std::sync::Mutex::new(None),
         });
         authority.validate(state, &authority.plugin, operation.scope())?;
         Ok(authority)
