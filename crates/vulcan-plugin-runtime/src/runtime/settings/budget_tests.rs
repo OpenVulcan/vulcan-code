@@ -42,6 +42,10 @@ fn plugin_budget_version_one_migration_preserves_user_configuration() {
     original
         .as_object_mut()
         .expect("object")
+        .remove("automaticPrewarm");
+    original
+        .as_object_mut()
+        .expect("object")
         .remove("pluginBudgets");
     original
         .as_object_mut()
@@ -68,6 +72,10 @@ fn plugin_budget_versions_reject_undeclared_fields_and_duplicate_discriminators(
     // Current bytes include pluginBudgets, which version one explicitly cannot contain.
     // 当前字节包含第一版明确不能含有的 pluginBudgets。
     let mut value = serde_json::to_value(VulcanPluginRuntimeSettings::default()).expect("settings");
+    value
+        .as_object_mut()
+        .expect("settings object")
+        .remove("automaticPrewarm");
     value
         .as_object_mut()
         .expect("settings object")

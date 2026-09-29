@@ -8,6 +8,7 @@ mod control;
 mod lifecycle;
 mod management;
 mod policy;
+mod prewarm_policy;
 
 /// Derive one dedicated purpose config from settings and plugin_id; minimum selects its explicit guarantee.
 /// 从 settings 及 plugin_id 派生单个专用用途配置；minimum 选择显式保证。

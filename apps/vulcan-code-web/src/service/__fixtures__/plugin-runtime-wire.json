@@ -131,6 +131,7 @@
     },
     "runtimeId": "runtime-fixture",
     "settings": {
+      "automaticPrewarm": [],
       "capacityBudgets": {
         "control-plugin": {
           "tool_call": {
@@ -163,7 +164,7 @@
         "max_value_bytes": 8388608
       },
       "pluginBudgets": {},
-      "schemaVersion": 3,
+      "schemaVersion": 5,
       "shutdownTimeoutMs": 5000
     }
   }

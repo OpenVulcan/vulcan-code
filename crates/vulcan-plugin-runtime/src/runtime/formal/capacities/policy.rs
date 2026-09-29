@@ -126,6 +126,11 @@ impl VulcanPluginRuntimeManager {
         // One registry protects the transaction and its effective configuration, never physical counters.
         // 单个注册表保护事务及生效配置，绝不保护另建的物理计数。
         let mut registry = owner.capacities.lock().map_err(|_| capacity_lock_error())?;
+        if registry.policy.prewarm_update.is_some() {
+            return Err(VulcanPluginRuntimeError::new(
+                "A prewarm policy receipt is retained; acknowledge it before another policy update.",
+            ));
+        }
         if let Some(record) = &registry.policy.update {
             if record.request == request {
                 return Ok(record.clone());

@@ -4,10 +4,17 @@
 use super::*;
 use luaskills::runtime::embedded::EmbeddedCapacityConfig;
 use std::fs::{File, OpenOptions};
+mod prewarm;
+#[cfg(test)]
+mod prewarm_tests;
+pub use prewarm::{
+    VulcanPluginPrewarmPolicyPhase, VulcanPluginPrewarmPolicyRecord,
+    VulcanPluginPrewarmPolicyStatus, VulcanPluginPrewarmPolicyUpdate,
+};
 
 /// The transaction container has its own format while its settings retain the strict current schema.
 /// 事务容器拥有独立格式，内部设置仍使用严格当前 Schema。
-pub(super) const DOCUMENT_VERSION: u32 = 4;
+pub(super) const DOCUMENT_VERSION: u32 = 6;
 /// Every settings reader and policy writer uses this exact filename.
 /// 全部设置读取器及策略写入器使用此精确文件名。
 pub(in crate::runtime) const SETTINGS_FILE_NAME: &str = "plugin-runtime-settings.json";
@@ -138,8 +145,8 @@ pub struct VulcanPluginCapacityPolicyRecord {
     pub persistence_error: Option<String>,
 }
 
-/// Version-four container commits settings and their one retained transaction in one replacement.
-/// 第四版容器通过一次替换提交设置及其单个保留事务。
+/// Version-six container commits settings and one mutually exclusive policy receipt in one replacement.
+/// 第六版容器通过一次替换提交设置及单个互斥策略回执。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(in crate::runtime) struct PolicyDocument {
@@ -153,6 +160,10 @@ pub(in crate::runtime) struct PolicyDocument {
     /// 显式确认前最多保留一个记录，以限制管理历史。
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub update: Option<VulcanPluginCapacityPolicyRecord>,
+    /// At most one policy kind is retained; explicit null means no automatic-prewarm policy receipt.
+    /// 最多保留一种策略；明确空值表示没有自动预热策略回执。
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub prewarm_update: Option<VulcanPluginPrewarmPolicyRecord>,
 }
 
 impl PolicyDocument {
@@ -166,21 +177,34 @@ impl PolicyDocument {
             schema_version: DOCUMENT_VERSION,
             settings,
             update,
+            prewarm_update: None,
         }
     }
 }
 
-/// Parse version-four bytes strictly; return committed settings and preserved transaction evidence.
-/// 严格解析第四版字节；返回已提交设置及保留事务证据。
+/// Parse current container bytes strictly; return committed settings and preserved transaction evidence.
+/// 严格解析当前容器字节；返回已提交设置及保留事务证据。
 pub(super) fn decode_document(bytes: &str) -> Result<PolicyDocument, String> {
-    // Parse original bytes directly so duplicate nested fields cannot be normalized away.
-    // 直接解析原字节，避免嵌套重复字段被规范化消除。
+    // Decode original nested maps directly so duplicate fields remain visible to strict Serde.
+    // 直接解码原嵌套映射，使重复字段继续对严格 Serde 可见。
     let document: PolicyDocument =
         serde_json::from_str(bytes).map_err(|error| error.to_string())?;
+    validate_document(document)
+}
+
+/// Validate a current or strictly migrated document; return its unchanged committed evidence.
+/// 校验当前或严格迁移的文档；返回其不变的已提交证据。
+pub(super) fn validate_document(document: PolicyDocument) -> Result<PolicyDocument, String> {
     if document.schema_version != DOCUMENT_VERSION {
         return Err("Unsupported runtime policy document version.".into());
     }
     document.settings.validate()?;
+    if document.update.is_some() && document.prewarm_update.is_some() {
+        return Err("Only one policy transaction may be retained in the settings document.".into());
+    }
+    if let Some(record) = &document.prewarm_update {
+        prewarm::validate_record(record, &document.settings)?;
+    }
     if let Some(record) = &document.update {
         if record.persistence_error.is_some() {
             return Err(
@@ -214,12 +238,18 @@ pub(super) fn decode_document(bytes: &str) -> Result<PolicyDocument, String> {
 /// Runtime-owned settings persistence keeps exact bytes and any ambiguous publication candidate.
 /// 运行时拥有的设置持久化保留精确字节及任何发布不确定的候选。
 pub(in crate::runtime) struct PolicyStore {
-    /// Effective settings change only after a successful native policy mutation.
-    /// 生效设置仅在原生策略变更成功后改变。
+    /// Capacity settings follow native acknowledgement; automatic targets follow durable publication acknowledgement.
+    /// 容量设置遵循原生确认；自动目标遵循持久发布确认。
     pub settings: VulcanPluginRuntimeSettings,
     /// One original receipt survives observers and failed persistence attempts.
     /// 单个原回执在观测者消失及持久尝试失败后保留。
     pub update: Option<VulcanPluginCapacityPolicyRecord>,
+    /// Live predecessor changes once per acknowledged automatic policy publication and per attachment.
+    /// 活动前驱在每次已确认自动策略发布及每次附加时改变一次。
+    pub prewarm_revision: String,
+    /// Mutually exclusive original automatic-policy receipt, separate from execution targets.
+    /// 互斥的原自动策略回执，独立于执行目标。
+    pub prewarm_update: Option<VulcanPluginPrewarmPolicyRecord>,
     /// Last disk image accepted under the writer lease, including explicit initial absence.
     /// 写入租约下最后接纳的磁盘映像，包含明确初始缺失。
     persisted: Option<Vec<u8>>,
@@ -233,6 +263,10 @@ pub(in crate::runtime) struct PolicyStore {
     /// 仅测试文件系统故障注入选择一个实际发布边界。
     #[cfg(test)]
     pub fault: Option<(VulcanPluginCapacityPolicyPhase, bool)>,
+    /// Test-only automatic policy publication boundary injection.
+    /// 仅测试自动策略发布边界注入。
+    #[cfg(test)]
+    pub prewarm_fault: Option<(VulcanPluginPrewarmPolicyPhase, bool)>,
 }
 
 impl PolicyStore {
@@ -242,32 +276,32 @@ impl PolicyStore {
         root: &Path,
         settings: &VulcanPluginRuntimeSettings,
     ) -> Result<Self, String> {
-        // Exact raw bytes remain the external-edit comparison authority.
-        // 精确原字节继续作为外部编辑比较权威。
+        // Preserve original bytes as the compare-and-replace authority even after an in-memory version migration.
+        // 即使进行内存版本迁移，也保留原字节作为比较替换权威。
         let persisted = read_image(&root.join(SETTINGS_FILE_NAME))?;
-        // An absent document has no transaction; caller-supplied validated settings remain explicit authority.
-        // 文档缺失时没有事务；调用方提供的已校验设置仍为明确权威。
-        let update = if let Some(bytes) = &persisted {
-            // Decode the actual declared version rather than attempting alternate document shapes.
-            // 解码实际声明版本，不尝试备用文档形状。
+        let (update, prewarm_update) = if let Some(bytes) = &persisted {
             let document = version::decode_container(
                 std::str::from_utf8(bytes).map_err(|error| error.to_string())?,
             )?;
             if document.settings != *settings {
                 return Err("Runtime settings changed between loading and attachment.".into());
             }
-            document.update
+            (document.update, document.prewarm_update)
         } else {
-            None
+            (None, None)
         };
         Ok(Self {
             settings: settings.clone(),
             update,
+            prewarm_update,
+            prewarm_revision: uuid::Uuid::new_v4().to_string(),
             persisted,
             attempted: None,
             lease: None,
             #[cfg(test)]
             fault: None,
+            #[cfg(test)]
+            prewarm_fault: None,
         })
     }
 
@@ -339,10 +373,30 @@ impl PolicyStore {
                 return Err("Injected failure before policy file replacement.".into());
             }
         }
+        // Automatic policy tests use the same actual replacement boundary as capacity policy tests.
+        // 自动策略测试与容量策略测试使用同一实际替换边界。
+        #[cfg(test)]
+        let prewarm_fault = self.prewarm_fault.filter(|(phase, _)| {
+            document
+                .prewarm_update
+                .as_ref()
+                .is_some_and(|record| record.phase == *phase)
+        });
+        #[cfg(test)]
+        if let Some((_, after_publication)) = prewarm_fault {
+            self.prewarm_fault = None;
+            if !after_publication {
+                return Err("Injected failure before prewarm policy replacement.".into());
+            }
+        }
         crate::atomic_file::write_file_atomically(&path, &bytes)?;
         #[cfg(test)]
         if fault.is_some() {
             return Err("Injected failure after policy file replacement.".into());
+        }
+        #[cfg(test)]
+        if prewarm_fault.is_some() {
+            return Err("Injected failure after prewarm policy replacement.".into());
         }
         self.persisted = Some(bytes);
         self.attempted = None;
@@ -357,7 +411,11 @@ mod tests;
 /// 从 deserializer 解码明确存在的可空 T 值；字段缺失仍为错误。
 /// Return the declared value or null without guessing reset, acknowledgement or diagnostic removal.
 /// 返回声明值或空值，不猜测重置、确认或诊断移除。
-fn deserialize_required_nullable<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
+pub(super) fn deserialize_required_nullable<
+    'de,
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error> {
     Option::<T>::deserialize(deserializer)

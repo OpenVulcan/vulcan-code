@@ -52,9 +52,11 @@ pub use process::VulcanPluginMcpStdioLaunchSpec;
 pub use sessions::VulcanPluginInvocationRequest;
 use sessions::plugin_payload;
 pub use settings::{
-    VulcanPluginBudgetSource, VulcanPluginCapacityBudgetSource, VulcanPluginCapacityPolicyPhase,
-    VulcanPluginCapacityPolicyRecord, VulcanPluginCapacityPolicyUpdate,
-    VulcanPluginCapacityPurpose, VulcanPluginRuntimeSettings, load_plugin_runtime_settings,
+    VulcanPluginAutomaticPrewarmRule, VulcanPluginBudgetSource, VulcanPluginCapacityBudgetSource,
+    VulcanPluginCapacityPolicyPhase, VulcanPluginCapacityPolicyRecord,
+    VulcanPluginCapacityPolicyUpdate, VulcanPluginCapacityPurpose, VulcanPluginPrewarmPolicyPhase,
+    VulcanPluginPrewarmPolicyRecord, VulcanPluginPrewarmPolicyStatus,
+    VulcanPluginPrewarmPolicyUpdate, VulcanPluginRuntimeSettings, load_plugin_runtime_settings,
 };
 
 use crate::{VulcanPluginCatalogSnapshot, VulcanPluginHostServices, VulcanPluginRuntimeState};

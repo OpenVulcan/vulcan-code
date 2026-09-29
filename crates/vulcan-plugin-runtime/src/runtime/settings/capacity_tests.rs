@@ -26,6 +26,10 @@ fn capacity_settings_migrate_version_two_without_rewriting() {
     original
         .as_object_mut()
         .expect("object")
+        .remove("automaticPrewarm");
+    original
+        .as_object_mut()
+        .expect("object")
         .remove("capacityBudgets");
     assert_eq!(
         read_unchanged(&serde_json::to_string_pretty(&original).expect("bytes")).expect("migrated"),

@@ -6,7 +6,7 @@ use crate::{VulcanPluginCapacityPolicyPhase as Phase, VulcanPluginCapacityPolicy
 
 /// Build one revision from fixture's exact native snapshot; return a complete smaller queue policy.
 /// 从 fixture 的精确原生快照构建一次修订；返回完整较小队列策略。
-fn update(
+pub(super) fn update(
     fixture: &Fixture,
     purpose: VulcanPluginCapacityPurpose,
 ) -> VulcanPluginCapacityPolicyUpdate {

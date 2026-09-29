@@ -23,19 +23,22 @@
 初始化阶段注册原生能力、显式配置的用途容量及对应插件预算，并创建有界核心工作线程，没有提前执行插件 Lua。
 
 正式预算从宿主状态根下的 `plugin-runtime-settings.json` 读取，权威实现为
-`vulcan-plugin-runtime/src/runtime/settings.rs`。预算对象版本为 `schemaVersion: 3`，顶层字段为
-`schemaVersion`、`parent`、`pluginBudgets`、`capacityBudgets`、`maxCapabilityCallMs`、`shutdownTimeoutMs`；
+`vulcan-plugin-runtime/src/runtime/settings.rs`。预算对象版本为 `schemaVersion: 5`，顶层字段为
+`schemaVersion`、`parent`、`pluginBudgets`、`capacityBudgets`、`automaticPrewarm`、`maxCapabilityCallMs`、`shutdownTimeoutMs`；
 `parent` 直接反序列化上游 `EmbeddedRuntimeConfig` 的字段和命名，不维护宿主复制 Schema。
-除可缺省的 `pluginBudgets` 和 `capacityBudgets` 外，既有文件必须提供完整结构；未知字段、未知版本、非法父级、
-插件或用途限制及非正或不可表示的时长均报错。第一、二版各按原严格结构解码，随后在内存升级至第三版，
-保留父级、时长及第二版插件覆盖原值，仅补入当时不存在的空覆盖表；旧版携带新版字段同样拒绝。
+除可缺省的 `pluginBudgets`、`capacityBudgets` 和默认空集合的 `automaticPrewarm` 外，既有文件必须提供完整结构；
+未知字段、未知版本、非法父级、插件或用途限制及非正或不可表示的时长均报错。
+第一至第三版各按原严格结构解码，随后在内存升级至第五版，保留全部原预算及时间值，
+仅补入当时不存在的空集合；旧版携带新版字段同样拒绝。第四版已用于事务容器，不能解释为裸设置。
 重复版本字段、插件键和用途键报错，
 不会通过中间 JSON 映射消除重复证据。原生能力注册容量另由适配器
 在分配核心线程前验证。文件缺失使用唯一 `Default` 中的内存值，不创建目录、不写回配置。
 这些默认值是当前开发联调起点；完整方案的性能基准、最终默认值冻结和发布验收仍待完成。
 
 父级、插件聚合及执行超时在构造时冻结；用途覆盖通过[显式策略事务](plugin-capacity-policy-transactions.md)修订。
-受管写入使用版本四容器，将完整版本三设置与单个保留事务一起原子发布；老格式继续支持读取。
+受管写入使用版本六容器，将完整版本五设置与互斥的容量／预热策略回执一起原子发布；
+第一至第三版裸设置及第四版容器继续严格读取。自动预热策略的持久控制见
+[自动预热策略事务](plugin-automatic-prewarm-policy.md)，实际自动执行触发仍待接线验收。
 文件外部修改不替换运行中的父级。`formal_runtime_status` 可读取核心身份、生效设置及 `policyUpdate`；
 设置与事务在同一锁下取得，队列、操作及 VM 计数仍为独立实时观测，不是整个父级的跨字段事务快照。
 `request_formal_runtime_close` 仅永久关闭入场并请求取消，`poll_formal_runtime_closed`

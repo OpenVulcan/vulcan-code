@@ -15,7 +15,16 @@ pub(super) fn decode_container(bytes: &str) -> Result<policy::PolicyDocument, St
     // The discriminator is parsed from the original immutable bytes before selecting the strict shape.
     // 在选择严格形状前，从原不可变字节解析判别字段。
     let version = serde_json::from_str::<Version>(bytes).map_err(|error| error.to_string())?;
-    if version.schema_version == policy::DOCUMENT_VERSION {
+    if version.schema_version == 4 {
+        // The historical container owns strict version-three settings, not the current shape.
+        // 历史容器拥有严格第三版设置，不是当前形状。
+        let original: VersionFourDocument =
+            serde_json::from_str(bytes).map_err(|error| error.to_string())?;
+        policy::validate_document(policy::PolicyDocument::new(
+            original.settings.migrate()?,
+            original.update,
+        ))
+    } else if version.schema_version == policy::DOCUMENT_VERSION {
         policy::decode_document(bytes)
     } else {
         Ok(policy::PolicyDocument::new(decode_settings(bytes)?, None))
@@ -76,6 +85,76 @@ struct VersionTwo {
     shutdown_timeout_ms: u64,
 }
 
+/// Version three contains capacity budgets but cannot carry automatic execution intent.
+/// 第三版包含容量预算，但不能携带自动执行意图。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VersionThree {
+    /// Nested legacy documents must explicitly retain the third-version discriminator.
+    /// 嵌套旧文档必须明确保留第三版判别字段。
+    schema_version: u32,
+    /// Exact upstream parent budget, unchanged during migration.
+    /// 精确上游父级预算，迁移时不变。
+    parent: EmbeddedRuntimeConfig,
+    /// Historical unique plugin overrides.
+    /// 历史唯一插件覆盖。
+    #[serde(default, deserialize_with = "budgets::deserialize_unique_budgets")]
+    plugin_budgets: BTreeMap<String, EmbeddedPluginConfig>,
+    /// Historical unique purpose overrides.
+    /// 历史唯一用途覆盖。
+    #[serde(
+        default,
+        deserialize_with = "capacities::deserialize_unique_capacities"
+    )]
+    capacity_budgets: BTreeMap<
+        String,
+        BTreeMap<VulcanPluginCapacityPurpose, luaskills::runtime::embedded::EmbeddedCapacityConfig>,
+    >,
+    /// Original capability deadline.
+    /// 原能力截止预算。
+    max_capability_call_ms: u64,
+    /// Original independent shutdown deadline.
+    /// 原独立关闭截止预算。
+    shutdown_timeout_ms: u64,
+}
+
+impl VersionThree {
+    /// Consume exact legacy fields and return current settings with automatic prewarming explicitly disabled.
+    /// 消费精确旧字段，返回明确关闭自动预热的当前设置。
+    fn migrate(self) -> Result<VulcanPluginRuntimeSettings, String> {
+        if self.schema_version != 3 {
+            return Err("Legacy policy document requires version-three settings.".into());
+        }
+        Ok(VulcanPluginRuntimeSettings {
+            schema_version: SETTINGS_SCHEMA_VERSION,
+            parent: self.parent,
+            plugin_budgets: self.plugin_budgets,
+            capacity_budgets: self.capacity_budgets,
+            automatic_prewarm: Vec::new(),
+            max_capability_call_ms: self.max_capability_call_ms,
+            shutdown_timeout_ms: self.shutdown_timeout_ms,
+        })
+    }
+}
+
+/// The historical fourth-version document retains its exact capacity receipt, including nullable fields.
+/// 历史第四版文档保留精确容量回执，包含可空字段。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VersionFourDocument {
+    /// Root dispatch already selected this precise historical version from original bytes.
+    /// 根分派已从原字节选中此精确历史版本。
+    #[serde(rename = "schemaVersion")]
+    _schema_version: u32,
+    /// Decode the original nested map directly so duplicate fields cannot disappear.
+    /// 直接解码原嵌套映射，防止重复字段消失。
+    settings: VersionThree,
+    /// Missing is invalid; explicit null is the historical empty receipt.
+    /// 缺失无效；明确空值为历史空回执。
+    #[serde(deserialize_with = "policy::deserialize_required_nullable")]
+    update: Option<VulcanPluginCapacityPolicyRecord>,
+}
+
 /// Decode the exact declared version from bytes; upgrade historical versions only in memory.
 /// 从字节解码精确声明版本；仅在内存中升级历史版本。
 /// Returns current-format settings or an explicit error; original input is never rewritten or normalized.
@@ -95,6 +174,7 @@ fn decode_settings(bytes: &str) -> Result<VulcanPluginRuntimeSettings, String> {
                 parent: original.parent,
                 plugin_budgets: BTreeMap::new(),
                 capacity_budgets: BTreeMap::new(),
+                automatic_prewarm: Vec::new(),
                 max_capability_call_ms: original.max_capability_call_ms,
                 shutdown_timeout_ms: original.shutdown_timeout_ms,
             })
@@ -109,10 +189,14 @@ fn decode_settings(bytes: &str) -> Result<VulcanPluginRuntimeSettings, String> {
                 parent: original.parent,
                 plugin_budgets: original.plugin_budgets,
                 capacity_budgets: BTreeMap::new(),
+                automatic_prewarm: Vec::new(),
                 max_capability_call_ms: original.max_capability_call_ms,
                 shutdown_timeout_ms: original.shutdown_timeout_ms,
             })
         }
+        3 => serde_json::from_str::<VersionThree>(bytes)
+            .map_err(|error| error.to_string())?
+            .migrate(),
         SETTINGS_SCHEMA_VERSION => serde_json::from_str(bytes).map_err(|error| error.to_string()),
         unsupported => Err(format!(
             "Unsupported plugin runtime settings version {unsupported}."

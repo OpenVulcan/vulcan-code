@@ -25,7 +25,7 @@ fn request(settings: &VulcanPluginRuntimeSettings) -> VulcanPluginCapacityPolicy
 
 /// Return one prepared durable container without allocating a native runtime.
 /// 返回一个预备持久容器，不分配原生运行时。
-fn prepared(settings: &VulcanPluginRuntimeSettings) -> PolicyDocument {
+pub(super) fn prepared(settings: &VulcanPluginRuntimeSettings) -> PolicyDocument {
     PolicyDocument::new(
         settings.clone(),
         Some(VulcanPluginCapacityPolicyRecord {
@@ -56,8 +56,16 @@ fn policy_document_loads_committed_settings_and_rejects_invalid_checkpoints() {
         settings
     );
     for invalid in [
-        bytes.replacen("\"schemaVersion\":4", "\"schemaVersion\":5", 1),
-        bytes.replacen("\"settings\":{", "\"settings\":{\"schemaVersion\":3,", 1),
+        bytes.replacen(
+            &format!("\"schemaVersion\":{DOCUMENT_VERSION}"),
+            &format!("\"schemaVersion\":{}", DOCUMENT_VERSION + 1),
+            1,
+        ),
+        bytes.replacen(
+            "\"settings\":{",
+            &format!("\"settings\":{{\"schemaVersion\":{SETTINGS_SCHEMA_VERSION},"),
+            1,
+        ),
         bytes.replace("\"phase\":\"prepared\"", "\"phase\":\"applied\""),
         bytes.replace("\"appliedRevision\":null", "\"appliedRevision\":\"2\""),
         bytes.replace("\"phase\":\"prepared\"", "\"phase\":\"committed\""),

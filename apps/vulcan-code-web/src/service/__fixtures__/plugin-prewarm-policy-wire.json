@@ -1,0 +1,38 @@
+{
+  "initial": {
+    "capacityUpdateRetained": false,
+    "revision": "00000000-0000-4000-8000-000000000001",
+    "rules": [],
+    "runtimeId": "runtime-fixture",
+    "update": null
+  },
+  "published": {
+    "capacityUpdateRetained": false,
+    "revision": "00000000-0000-4000-8000-000000000002",
+    "rules": [
+      {
+        "pluginId": "control-plugin",
+        "targetIdle": 1,
+        "toolId": "control_tool"
+      }
+    ],
+    "runtimeId": "runtime-fixture",
+    "update": {
+      "error": null,
+      "phase": "committed",
+      "request": {
+        "expectedRevision": "00000000-0000-4000-8000-000000000001",
+        "rules": [
+          {
+            "pluginId": "control-plugin",
+            "targetIdle": 1,
+            "toolId": "control_tool"
+          }
+        ],
+        "runtimeId": "runtime-fixture",
+        "updateId": "00000000-0000-4000-8000-000000000003"
+      },
+      "resultRevision": "00000000-0000-4000-8000-000000000002"
+    }
+  }
+}

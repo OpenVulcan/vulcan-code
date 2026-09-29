@@ -12,6 +12,7 @@ mod control;
 mod lifecycle;
 mod management;
 mod policy;
+mod prewarm_policy;
 
 pub use control::{VulcanPluginCapacityControlAction, VulcanPluginCapacityControlRequest};
 pub use management::{VulcanPluginCapacityRegistrationRequest, VulcanPluginFormalCapacityCatalog};

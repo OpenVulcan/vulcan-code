@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use vulcan_plugin_runtime::{VulcanPluginCapacityPurpose, VulcanPluginRuntimeSettings};
 
 mod prewarm;
+mod prewarm_policy;
 
 /// Keep isolated disk roots, service state and the sole native owner alive until explicit shutdown.
 /// 保持隔离磁盘根、服务状态及唯一原生所有者存活，直到明确关闭。
