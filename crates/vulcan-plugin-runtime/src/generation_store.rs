@@ -13,9 +13,12 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Private on-disk format shared by generation and activation records.
-/// 代次记录与激活记录共用的私有磁盘格式。
+/// Private generation format and legacy selection format; their existing bytes remain readable.
+/// 私有代次格式及旧选择格式；其既有字节保持可读。
 const RECORD_VERSION: u32 = 1;
+/// Selection format that atomically binds complete approved permissions to its chosen package.
+/// 将完整已批准权限与所选插件包原子绑定的选择格式。
+const AUTHORIZED_ACTIVATION_VERSION: u32 = 2;
 /// Maximum encoded metadata size, checked before writes and before allocating reads.
 /// 编码元数据大小上限，在写入及读取分配前检查。
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
@@ -132,6 +135,34 @@ pub struct VulcanPluginActivation {
     /// 选定不可变代次，或显式停用记录。
     #[serde(deserialize_with = "deserialize_required_generation")]
     pub generation: Option<VulcanPluginGenerationIdentity>,
+    /// Version two owns exact sorted permissions; version one alone reads legacy authorization files.
+    /// 第二版持有精确有序权限；仅第一版读取旧授权文件。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_permissions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    approved_permissions: Option<Vec<String>>,
+}
+
+impl VulcanPluginActivation {
+    /// Return approval frozen in this selection; absence explicitly denotes the legacy file authority.
+    /// 返回此选择中固定的批准权限；缺失明确表示旧文件权威。
+    /// An empty slice approves a zero-permission package, or belongs to a version-two tombstone.
+    /// 空切片批准零权限插件包，或属于第二版停用记录。
+    pub fn approved_permissions(&self) -> Option<&[String]> {
+        self.approved_permissions.as_deref()
+    }
+}
+
+/// Decode an explicitly present permission list; JSON null is never equivalent to a legacy missing field.
+/// 解码明确存在的权限列表；JSON 空值绝不等价于旧格式缺失字段。
+/// The deserializer supplies the field value; return only a complete non-null vector.
+/// 反序列化器提供字段值；仅返回完整非空值向量。
+fn deserialize_present_permissions<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error> {
+    Vec::<String>::deserialize(deserializer).map(Some)
 }
 
 /// Decode a required nullable generation field; missing data must not become a deactivation tombstone.
@@ -201,6 +232,9 @@ pub struct PinnedVulcanPluginGeneration {
     /// Canonical physical package directory, never moved during activation.
     /// 激活过程中从不移动的规范物理插件包目录。
     package_root: PathBuf,
+    /// Complete canonical capability keys derived while verifying this exact physical package.
+    /// 校验此精确物理插件包时派生的完整规范能力键。
+    required_permissions: Vec<String>,
     /// Shared real lock ownership, including all handle clones.
     /// 包含全部句柄克隆的共享实际锁所有权。
     _lease: Arc<GenerationLease>,

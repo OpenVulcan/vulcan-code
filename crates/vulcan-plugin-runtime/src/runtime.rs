@@ -4,6 +4,7 @@
 mod action_status;
 mod actions;
 mod authorization;
+pub(crate) use authorization::plugin_required_permissions;
 mod bridge;
 mod configuration;
 mod drain;

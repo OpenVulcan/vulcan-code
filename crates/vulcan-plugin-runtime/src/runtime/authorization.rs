@@ -181,12 +181,7 @@ pub(super) fn build_permission_preview(
             plugin.id
         ))
     })?;
-    let mut permissions = manifest
-        .permissions
-        .iter()
-        .map(|capability| plugin_permission_key(*capability).to_string())
-        .collect::<Vec<_>>();
-    permissions.sort();
+    let permissions = plugin_required_permissions(plugin)?;
     // mcpServers exposes exact ownership and Secret usage without resolving endpoints or credential values.
     // mcpServers 暴露精确归属与 Secret 使用，但不解析端点或凭据值。
     let mut mcp_servers = manifest
@@ -283,6 +278,29 @@ pub(super) fn build_permission_preview(
     })
 }
 
+/// Derive the complete sorted capability keys from `plugin` using the sole manifest permission mapping.
+/// 通过唯一清单权限映射，从 `plugin` 派生完整有序能力键。
+/// Returns the canonical approval list, or rejects a descriptor without a validated manifest.
+/// 返回规范批准列表，或拒绝不具有已校验清单的描述符。
+pub(crate) fn plugin_required_permissions(
+    plugin: &crate::VulcanPluginDescriptor,
+) -> Result<Vec<String>, VulcanPluginRuntimeError> {
+    // Preview, immutable selection and runtime authorization must compare the same keys.
+    // 预览、不可变选择及运行时授权必须比较相同键。
+    let manifest = plugin.manifest.as_ref().ok_or_else(|| {
+        VulcanPluginRuntimeError::new("Plugin permission inspection requires a valid manifest.")
+    })?;
+    // Ordering has one authority rather than independently normalized stored approvals.
+    // 排序具有唯一权威，不独立规范化存储中的批准权限。
+    let mut permissions = manifest
+        .permissions
+        .iter()
+        .map(|permission| plugin_permission_key(*permission).to_string())
+        .collect::<Vec<_>>();
+    permissions.sort();
+    Ok(permissions)
+}
+
 /// Returns the stable persisted key for one plugin permission.
 /// 返回单个插件权限的稳定持久化键。
 ///
@@ -354,6 +372,17 @@ pub(super) fn plugin_is_authorized(
     if plugin.origin == VulcanPluginPackageOrigin::Bundled {
         return Ok(true);
     }
+    // Invalid catalog placeholders cannot authorize a package or cause a secondary authority lookup.
+    // 无效目录占位条目不能授权插件包，也不能导致查询第二权威。
+    let required = plugin_required_permissions(plugin).map_err(|error| error.message)?;
+    // Version-two selection is the sole approval authority; never consult or repair a legacy sidecar.
+    // 第二版选择是唯一批准权威；绝不查询或修补旧附属文件。
+    if let Some(permissions) = plugin
+        .managed_package()
+        .and_then(crate::VulcanPluginManagedPackage::approved_permissions)
+    {
+        return Ok(permissions == required);
+    }
     let path = plugin_authorization_state_path(state_root, &plugin.id);
     if !path.exists() {
         return Ok(false);
@@ -366,12 +395,11 @@ pub(super) fn plugin_is_authorized(
                 path.display()
             )
         })?;
-    let preview = build_permission_preview(plugin).map_err(|error| error.message)?;
     Ok(record.schema_version == 1
         && record.plugin_id == plugin.id
         && Some(record.version.as_str()) == plugin.version.as_deref()
         && record.content_fingerprint == plugin.content_fingerprint
-        && record.permissions == preview.permissions)
+        && record.permissions == required)
 }
 
 impl VulcanPluginRuntimeManager {
@@ -423,6 +451,14 @@ impl VulcanPluginRuntimeManager {
             return Err(VulcanPluginRuntimeError::new(format!(
                 "Vulcan plugin `{plugin_id}` is bundled and does not accept user authorization records."
             )));
+        }
+        if plugin
+            .managed_package()
+            .is_some_and(|managed| managed.approved_permissions().is_some())
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Managed plugin approval belongs to its activation transaction; legacy authorization writes are not allowed.",
+            ));
         }
         let preview = build_permission_preview(plugin)?;
         approved_permissions.sort();

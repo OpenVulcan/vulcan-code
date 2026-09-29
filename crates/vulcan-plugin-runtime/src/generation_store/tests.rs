@@ -8,6 +8,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
+mod approval;
+
 /// Write a valid content plugin beneath `root` and return its path; `body` distinguishes real package bytes.
 /// 在 `root` 下写入有效内容插件并返回路径；`body` 区分真实插件包字节。
 fn write_package(root: &Path, plugin_id: &str, body: &str) -> PathBuf {

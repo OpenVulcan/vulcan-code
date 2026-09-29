@@ -17,6 +17,9 @@ pub struct VulcanPluginManagedPackage {
     /// Real package ownership retained by every cloned descriptor or explicit generation handle.
     /// 每个克隆描述符或显式代次句柄保留的真实包所有权。
     generation: PinnedVulcanPluginGeneration,
+    /// Approval captured from the same atomic selection, absent only for the legacy format.
+    /// 从同一原子选择捕获的批准权限，仅旧格式缺失。
+    approved_permissions: Option<Vec<String>>,
 }
 
 impl VulcanPluginManagedPackage {
@@ -30,6 +33,12 @@ impl VulcanPluginManagedPackage {
     /// 返回真实代次租约；在目录之外保留文件所有权时必须克隆此句柄。
     pub fn generation(&self) -> &PinnedVulcanPluginGeneration {
         &self.generation
+    }
+
+    /// Return the exact selected approval; absence explicitly retains the version-one sidecar authority.
+    /// 返回精确选定批准权限；缺失明确保留第一版附属文件权威。
+    pub fn approved_permissions(&self) -> Option<&[String]> {
+        self.approved_permissions.as_deref()
     }
 }
 
@@ -177,6 +186,7 @@ fn load_selected_package(
     }
     package.managed_package = Some(VulcanPluginManagedPackage {
         activation_revision: activation.revision,
+        approved_permissions: activation.approved_permissions().map(<[String]>::to_vec),
         generation,
     });
     Ok(ManagedSelection::Package(Box::new(package)))

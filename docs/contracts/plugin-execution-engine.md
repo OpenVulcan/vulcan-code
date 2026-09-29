@@ -38,7 +38,7 @@
 父级、插件聚合及执行超时在构造时冻结；用途覆盖通过[显式策略事务](plugin-capacity-policy-transactions.md)修订。
 受管写入使用版本六容器，将完整版本五设置与互斥的容量／预热策略回执一起原子发布；
 第一至第三版裸设置及第四版容器继续严格读取。自动预热策略的持久控制见
-[自动预热策略事务](plugin-automatic-prewarm-policy.md)，实际自动执行触发仍待接线验收。
+[自动预热策略事务](plugin-automatic-prewarm-policy.md)，实际回合触发已接线并通过本地运行时／服务专项验收；完整浏览器提示提交仍待端到端验收。
 文件外部修改不替换运行中的父级。`formal_runtime_status` 可读取核心身份、生效设置及 `policyUpdate`；
 设置与事务在同一锁下取得，队列、操作及 VM 计数仍为独立实时观测，不是整个父级的跨字段事务快照。
 `request_formal_runtime_close` 仅永久关闭入场并请求取消，`poll_formal_runtime_closed`

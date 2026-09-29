@@ -2,10 +2,11 @@
 //! 显式插件准备、激活 CAS、租约及可恢复字节回收。
 
 use super::{
-    GenerationLease, GenerationRecord, GenerationState, PinnedVulcanPluginGeneration,
-    RECORD_VERSION, STORE_DIRECTORY, VulcanPluginActivation, VulcanPluginActiveGeneration,
-    VulcanPluginGenerationIdentity, VulcanPluginGenerationStore, VulcanPluginStoreError as Error,
-    VulcanPluginStoreErrorCode as Code, VulcanPluginStoreResult as Result, files,
+    AUTHORIZED_ACTIVATION_VERSION, GenerationLease, GenerationRecord, GenerationState,
+    PinnedVulcanPluginGeneration, RECORD_VERSION, STORE_DIRECTORY, VulcanPluginActivation,
+    VulcanPluginActiveGeneration, VulcanPluginGenerationIdentity, VulcanPluginGenerationStore,
+    VulcanPluginStoreError as Error, VulcanPluginStoreErrorCode as Code,
+    VulcanPluginStoreResult as Result, files,
 };
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -113,7 +114,9 @@ impl VulcanPluginGenerationStore {
                 },
             )?;
             files::copy_synced(&original.package_root, &package_root)?;
-            self.verify_package(&package_root, &identity)?;
+            // Permission derivation uses the verified copied package, not the earlier source observation.
+            // 权限派生使用已验证复制包，不使用较早来源观察。
+            let required_permissions = self.verify_package(&package_root, &identity)?;
             files::sync_directory(&generation_root)?;
             files::sync_directory(&plugin_root)?;
             files::sync_directory(&self.root.join("packages"))?;
@@ -124,9 +127,12 @@ impl VulcanPluginGenerationStore {
                     identity: identity.clone(),
                     state: GenerationState::Prepared,
                 },
-            )
+            )?;
+            Ok(required_permissions)
         })();
-        if let Err(error) = prepared {
+        // Keep the verified permission list only when the complete preparation has durably succeeded.
+        // 仅完整准备持久成功时保留已验证权限列表。
+        let required_permissions = prepared.map_err(|error: Error| {
             // Return the original candidate identity instead of forcing the host to parse a path from text.
             // 返回原候选身份，避免宿主从文本解析路径。
             let mut retained = Error::new(
@@ -137,13 +143,14 @@ impl VulcanPluginGenerationStore {
                     generation_root.display()
                 ),
             );
-            retained.retained_generation = Some(Box::new(identity));
-            return Err(retained);
-        }
+            retained.retained_generation = Some(Box::new(identity.clone()));
+            retained
+        })?;
         Ok(PinnedVulcanPluginGeneration {
             store_root: self.root.clone(),
             identity,
             package_root,
+            required_permissions,
             _lease: Arc::new(GenerationLease { _lock: lease }),
         })
     }
@@ -187,6 +194,17 @@ impl VulcanPluginGenerationStore {
             .and_then(|record| record.generation.as_ref())
             .map(|identity| self.pin_locked(identity))
             .transpose()?;
+        if let (Some(approval), Some(package)) = (
+            activation
+                .as_ref()
+                .and_then(VulcanPluginActivation::approved_permissions),
+            generation.as_ref(),
+        ) && approval != package.required_permissions
+        {
+            return Err(Error::invalid(
+                "Selected approval differs from the exact package capability set.",
+            ));
+        }
         Ok(VulcanPluginActiveGeneration {
             activation,
             generation,
@@ -217,6 +235,42 @@ impl VulcanPluginGenerationStore {
             &generation.identity.plugin_id,
             expected_revision,
             Some(generation.identity.clone()),
+            None,
+        )
+    }
+
+    /// Atomically select `generation` and its complete `approved_permissions` at the exact predecessor revision.
+    /// 在精确前驱修订原子选定 `generation` 及其完整 `approved_permissions`。
+    /// Returns a version-two selection; callers must still coordinate credentials, readiness and route publication.
+    /// 返回第二版选择；调用方仍须协调凭据、就绪及路由发布。
+    pub fn activate_authorized(
+        &self,
+        generation: &PinnedVulcanPluginGeneration,
+        expected_revision: u64,
+        mut approved_permissions: Vec<String>,
+    ) -> Result<VulcanPluginActivation> {
+        if generation.store_root != self.root {
+            return Err(Error::invalid(
+                "Generation handle belongs to a different store.",
+            ));
+        }
+        // The original namespace fence orders package verification, approval and selection together.
+        // 原命名空间屏障共同排序插件包校验、批准及选择。
+        let _namespace = self.namespace_lock(&generation.identity.plugin_id, false)?;
+        // Reinspection binds approval to the physical contents still owned by this exact lease.
+        // 重新检查将批准绑定至此精确租约仍持有的物理内容。
+        let verified = self.pin_locked(&generation.identity)?;
+        approved_permissions.sort();
+        if approved_permissions != verified.required_permissions {
+            return Err(Error::invalid(
+                "Activation must approve the complete exact capability set once, without duplicates.",
+            ));
+        }
+        self.replace_activation(
+            &generation.identity.plugin_id,
+            expected_revision,
+            Some(generation.identity.clone()),
+            Some(approved_permissions),
         )
     }
 
@@ -232,7 +286,7 @@ impl VulcanPluginGenerationStore {
         // Use the same fence and revision semantics as activation.
         // 使用与激活相同的屏障及修订语义。
         let _namespace = self.namespace_lock(plugin_id, false)?;
-        self.replace_activation(plugin_id, expected_revision, None)
+        self.replace_activation(plugin_id, expected_revision, None, None)
     }
 
     /// Collect unselected, unpinned package bytes for `identity`; returns false when already collected.
@@ -351,13 +405,28 @@ impl VulcanPluginGenerationStore {
         let record: Option<VulcanPluginActivation> =
             files::read_record(&self.root.join("active").join(format!("{plugin_id}.json")))?;
         if let Some(record) = &record {
-            if record.schema_version != RECORD_VERSION
-                || record.plugin_id != plugin_id
-                || record.revision == 0
-            {
+            if record.plugin_id != plugin_id || record.revision == 0 {
                 return Err(Error::invalid(
                     "Activation metadata has an unknown version or mismatched identity.",
                 ));
+            }
+            match (record.schema_version, &record.approved_permissions) {
+                (RECORD_VERSION, None) => {}
+                (AUTHORIZED_ACTIVATION_VERSION, Some(permissions)) => {
+                    if permissions.windows(2).any(|pair| pair[0] >= pair[1])
+                        || permissions
+                            .iter()
+                            .any(|key| key.is_empty() || key.contains('\0'))
+                        || (record.generation.is_none() && !permissions.is_empty())
+                    {
+                        return Err(Error::invalid("Activation approval is not canonical."));
+                    }
+                }
+                _ => {
+                    return Err(Error::invalid(
+                        "Activation version and approval authority do not agree.",
+                    ));
+                }
             }
             if let Some(identity) = &record.generation {
                 files::validate_identity(identity)?;
@@ -378,6 +447,7 @@ impl VulcanPluginGenerationStore {
         plugin_id: &str,
         expected_revision: u64,
         generation: Option<VulcanPluginGenerationIdentity>,
+        approved_permissions: Option<Vec<String>>,
     ) -> Result<VulcanPluginActivation> {
         // Absence is explicitly the never-published predecessor; tombstones are always retained records.
         // 缺失显式表示从未发布的前驱；停用状态始终保留为记录。
@@ -393,13 +463,34 @@ impl VulcanPluginGenerationStore {
         let revision = expected_revision
             .checked_add(1)
             .ok_or_else(|| Error::invalid("Plugin activation revision is exhausted."))?;
+        // Once promoted, a namespace cannot regain external authorization through legacy selection or removal.
+        // 命名空间提升后，不能通过旧选择或移除重新取得外部授权。
+        let approved_permissions = if current
+            .as_ref()
+            .is_some_and(|record| record.schema_version == AUTHORIZED_ACTIVATION_VERSION)
+            && approved_permissions.is_none()
+        {
+            if generation.is_some() {
+                return Err(Error::invalid(
+                    "Authorized activation cannot downgrade to legacy approval.",
+                ));
+            }
+            Some(Vec::new())
+        } else {
+            approved_permissions
+        };
         // This single record is the storage-level selection authority, not a claim of route readiness.
         // 此单一记录为存储层选择权威，不表示路由已就绪。
         let next = VulcanPluginActivation {
-            schema_version: RECORD_VERSION,
+            schema_version: if approved_permissions.is_some() {
+                AUTHORIZED_ACTIVATION_VERSION
+            } else {
+                RECORD_VERSION
+            },
             plugin_id: plugin_id.to_owned(),
             revision,
             generation,
+            approved_permissions,
         };
         files::write_record(
             &self.root.join("active").join(format!("{plugin_id}.json")),
@@ -461,22 +552,27 @@ impl VulcanPluginGenerationStore {
         // The physical package remains fixed for the complete lifetime of the returned lease.
         // 在返回租约的整个生命周期内，物理插件包保持固定。
         let package_root = generation_root.join(&identity.plugin_id);
-        self.verify_package(&package_root, identity)?;
+        // The same verified manifest supplies approval keys to both publication and subsequent reads.
+        // 同一已验证清单向发布及后续读取提供批准键。
+        let required_permissions = self.verify_package(&package_root, identity)?;
         Ok(PinnedVulcanPluginGeneration {
             store_root: self.root.clone(),
             identity: identity.clone(),
             package_root,
+            required_permissions,
             _lease: Arc::new(GenerationLease { _lock: lease }),
         })
     }
 
     /// Validate `package_root` using the authoritative manifest loader and compare exact immutable contents.
     /// 使用权威清单加载器校验 `package_root`，并比较精确不可变内容。
+    /// Returns canonical permission keys bound to the same verified `identity`.
+    /// 返回绑定至相同已验证 `identity` 的规范权限键。
     fn verify_package(
         &self,
         package_root: &Path,
         identity: &VulcanPluginGenerationIdentity,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         if !files::exists(package_root, true)? {
             return Err(Error::invalid(
                 "Prepared generation package bytes are missing.",
@@ -494,6 +590,7 @@ impl VulcanPluginGenerationStore {
                 "Prepared generation contents changed or do not match their frozen identity.",
             ));
         }
-        Ok(())
+        crate::runtime::plugin_required_permissions(&descriptor)
+            .map_err(|error| Error::invalid(error.to_string()))
     }
 }

@@ -6,6 +6,8 @@ use super::{VulcanPluginLifecycleEvent, VulcanPluginRuntimeState};
 use std::collections::BTreeSet;
 use std::fs;
 
+mod approval;
+
 /// Physical replacement and reactivation invalidate routing even when version and bytes are identical.
 /// 即使版本及字节相同，物理替换及重新激活也会使旧路由失效。
 #[test]
