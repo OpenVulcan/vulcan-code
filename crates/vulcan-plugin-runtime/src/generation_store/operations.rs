@@ -375,6 +375,7 @@ impl VulcanPluginGenerationStore {
         // 先命名空间、后代次锁，是所有所有权变更的共同顺序。
         let _namespace = self.namespace_lock(&identity.plugin_id, false)?;
         files::validate_identity(identity)?;
+        self.check_transaction_package_retention(identity)?;
         // An active generation cannot be collected even when no current process holds a package lease.
         // 即使当前没有进程持有插件租约，也不能回收激活代次。
         let active = self.read_activation(&identity.plugin_id)?;
@@ -493,13 +494,29 @@ impl VulcanPluginGenerationStore {
         // 解码诊断不能回显可能敏感的配置值或未知属性名称。
         let record: VulcanPluginActivation = serde_json::from_slice(&bytes)
             .map_err(|_| Error::invalid("Invalid plugin activation metadata."))?;
+        Self::validate_activation_record(&record, plugin_id, bytes.len() as u64)?;
+        Ok(Some(record))
+    }
+
+    /// Validate `record` for `plugin_id` and its actual `encoded_size`; journals reuse the same format authority.
+    /// 按 `plugin_id` 及实际 `encoded_size` 校验 `record`；事务日志复用相同格式权威。
+    pub(super) fn validate_activation_record(
+        record: &VulcanPluginActivation,
+        plugin_id: &str,
+        encoded_size: u64,
+    ) -> Result<()> {
+        if encoded_size > super::MAX_ACTIVATION_BYTES {
+            return Err(Error::invalid(
+                "Activation metadata exceeds its encoded byte limit.",
+            ));
+        }
         if record.plugin_id != plugin_id || record.revision == 0 {
             return Err(Error::invalid(
                 "Activation metadata has an unknown version or mismatched identity.",
             ));
         }
         if record.schema_version != CONFIGURED_ACTIVATION_VERSION
-            && bytes.len() as u64 > super::MAX_RECORD_BYTES
+            && encoded_size > super::MAX_RECORD_BYTES
         {
             return Err(Error::invalid(
                 "Legacy activation metadata exceeds its encoded byte limit.",
@@ -541,7 +558,7 @@ impl VulcanPluginGenerationStore {
                 ));
             }
         }
-        Ok(Some(record))
+        Ok(())
     }
 
     /// Replace activation under the existing namespace lease; returns a checked monotonic successor.
@@ -555,6 +572,9 @@ impl VulcanPluginGenerationStore {
         credential_revision: Option<VulcanPluginCredentialRevision>,
         configuration: Option<VulcanPluginConfigurationSelection>,
     ) -> Result<VulcanPluginActivation> {
+        // Direct legacy and configured writers cannot bypass an unfinished durable handoff.
+        // 旧格式及配置直接写入者不能绕过尚未完成的持久交接。
+        self.ensure_no_pending_activation_locked(plugin_id)?;
         // Absence is explicitly the never-published predecessor; tombstones are always retained records.
         // 缺失显式表示从未发布的前驱；停用状态始终保留为记录。
         let current = self.read_activation(plugin_id)?;
@@ -630,17 +650,29 @@ impl VulcanPluginGenerationStore {
             credential_revision,
             configuration,
         };
+        self.write_activation(&next)?;
+        Ok(next)
+    }
+
+    /// Publish the prevalidated `next` selection while its caller retains the namespace fence.
+    /// 调用方保留命名空间屏障时发布已预先校验的 `next` 选择。
+    /// Return only after the common atomic writer succeeds; errors require exact record readback.
+    /// 仅在共同原子写入器成功后返回；错误需要精确回读记录。
+    pub(super) fn write_activation(&self, next: &VulcanPluginActivation) -> Result<()> {
         // The selected document shares exactly one atomic publication with all other activation authorities.
         // 所选文档与其他全部激活权威共用唯一原子发布。
-        let path = self.root.join("active").join(format!("{plugin_id}.json"));
+        let path = self
+            .root
+            .join("active")
+            .join(format!("{}.json", next.plugin_id));
         if next.configuration.is_some() {
-            let bytes = serde_json::to_vec(&next)
+            let bytes = serde_json::to_vec(next)
                 .map_err(|_| Error::invalid("Cannot encode configured plugin activation."))?;
             files::write_encoded_record(&path, &bytes, super::MAX_ACTIVATION_BYTES)?;
         } else {
-            files::write_record(&path, &next)?;
+            files::write_record(&path, next)?;
         }
-        Ok(next)
+        Ok(())
     }
 
     /// Read a generation state record and compare every identity field before returning its root.

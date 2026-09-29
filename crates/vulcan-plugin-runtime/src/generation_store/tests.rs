@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 mod approval;
 mod configuration;
 mod credentials;
+mod transactions;
 
 /// Write a valid content plugin beneath `root` and return its path; `body` distinguishes real package bytes.
 /// 在 `root` 下写入有效内容插件并返回路径；`body` 区分真实插件包字节。

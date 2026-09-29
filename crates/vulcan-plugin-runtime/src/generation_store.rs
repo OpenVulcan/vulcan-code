@@ -14,6 +14,11 @@ mod discovery;
 pub use credentials::{VulcanPluginCredentialBinding, VulcanPluginCredentialRevision};
 mod files;
 mod operations;
+mod transactions;
+pub use transactions::{
+    VulcanPluginActivationTransaction, VulcanPluginActivationTransactionPhase,
+    VulcanPluginActivationTransactionRecord,
+};
 #[cfg(test)]
 mod tests;
 

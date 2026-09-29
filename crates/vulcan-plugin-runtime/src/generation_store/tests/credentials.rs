@@ -5,7 +5,7 @@ use super::*;
 
 /// Empty secure backend proves that a package without declared secrets never touches external storage.
 /// 空安全后端证明没有声明秘密的插件包绝不访问外部存储。
-struct EmptyCredentialBackend;
+pub(super) struct EmptyCredentialBackend;
 
 impl VulcanPluginCredentialBackend for EmptyCredentialBackend {
     /// Reject every read because this fixture declares no secret slots.

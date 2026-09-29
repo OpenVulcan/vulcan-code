@@ -77,6 +77,7 @@ impl VulcanPluginGenerationStore {
         // Retain the plugin fence until the durable no-new-readers checkpoint has been published.
         // 插件屏障保留至禁止新读者的持久检查点发布。
         let namespace = self.namespace_lock(plugin_id, false)?;
+        self.check_transaction_credential_retention(plugin_id, revision)?;
         // A copied UUID or a dropped observer cannot release another actual reader's file ownership.
         // 复制 UUID 或释放观察者不能释放其他实际读者的文件所有权。
         let _lease = self.credential_lease(plugin_id, revision, false)?;
