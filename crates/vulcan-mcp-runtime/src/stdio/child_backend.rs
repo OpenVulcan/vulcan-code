@@ -2,23 +2,40 @@
 //! 官方 MCP 分帧与独立监督的实际子进程。
 
 use super::child::ManagedChild;
+use super::native_pipe::{NativePipeReader, NativePipeWriter};
 use super::pipe_completion::PipeCompletion;
 use rmcp::RoleClient;
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport};
 use std::io;
-use std::process::ChildStderr;
-use tokio::process::{ChildStdin, ChildStdout, Command};
+use std::process::{ChildStderr, ChildStdin, ChildStdout};
+use tokio::process::Command;
+
+#[cfg(test)]
+mod tests;
+
+/// The official protocol transport operates on adapters that retain exact native ownership.
+/// 官方协议传输工作于保留精确原生所有权的适配器。
+type NativeProtocolWire =
+    AsyncRwTransport<RoleClient, NativePipeReader<ChildStdout>, NativePipeWriter<ChildStdin>>;
 
 /// Delegates protocol behavior while native ownership survives cancellation and executor loss.
 /// 委托协议行为，同时使原生所有权在取消及执行器丢失后存续。
 pub(super) struct ManagedChildBackend {
     /// The official codec owns the exact transferred protocol pipes.
     /// 官方编解码器拥有精确移交的协议管道。
-    wire: AsyncRwTransport<RoleClient, ChildStdout, ChildStdin>,
+    /// Close takes this value so pending OS operations become the final pipe owners.
+    /// 关闭取走此值，使待完成操作系统操作成为最终管道所有者。
+    wire: Option<NativeProtocolWire>,
     /// Dropping the protocol backend requests cleanup by the independent actual process owner.
     /// 释放协议后端时，请求独立实际进程所有者清理。
     child: ManagedChild,
+    /// Final input-handle release is independent from writer-future completion.
+    /// 最终输入句柄释放独立于写入 future 完成。
+    stdin: PipeCompletion,
+    /// Final output-handle release is independent from reader-future completion.
+    /// 最终输出句柄释放独立于读取 future 完成。
+    stdout: PipeCompletion,
     /// The independent diagnostic worker confirms its actual pipe release after native EOF or failure.
     /// 独立诊断工作线程在原生结束或失败后确认实际管道释放。
     stderr: PipeCompletion,
@@ -35,20 +52,29 @@ impl ManagedChildBackend {
         command: Command,
         capture_stderr: impl FnOnce(ChildStderr) -> io::Result<PipeCompletion> + Send,
     ) -> io::Result<Self> {
-        // Native ownership is established before any fallible pipe conversion.
-        // 任何可能失败的管道转换前，先建立原生所有权。
+        // Fail before spawning when no explicit Tokio runtime can execute protocol operations.
+        // 没有明确 Tokio 运行时可执行协议操作时，在启动进程前失败。
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            io::Error::other(format!(
+                "MCP protocol pipes require a Tokio runtime: {error}"
+            ))
+        })?;
+        // Native process ownership precedes every protocol and diagnostic resource handoff.
+        // 原生进程所有权先于每次协议及诊断资源移交。
         let (child, pipes) = ManagedChild::spawn(command).await?;
         // Each conversion consumes precisely the handle delivered by the original child.
         // 每次转换精确消费原子进程交付的句柄。
-        let stdin = ChildStdin::from_std(pipes.stdin)?;
+        let (stdin, stdin_completion) = NativePipeWriter::new(pipes.stdin, runtime.clone());
         // The official reader keeps framing and compatibility behavior unchanged.
         // 官方读取者保持分帧与兼容行为不变。
-        let stdout = ChildStdout::from_std(pipes.stdout)?;
+        let (stdout, stdout_completion) = NativePipeReader::new(pipes.stdout, runtime);
         // The native diagnostic worker consumes the original handle, without a Tokio I/O wrapper.
         // 原生诊断工作线程消费原句柄，不经过 Tokio 输入输出包装。
         let stderr = capture_stderr(pipes.stderr)?;
         Ok(Self {
-            wire: AsyncRwTransport::new(stdout, stdin),
+            wire: Some(AsyncRwTransport::new(stdout, stdin)),
+            stdin: stdin_completion,
+            stdout: stdout_completion,
             child,
             stderr,
         })
@@ -66,7 +92,18 @@ impl Transport<RoleClient> for ManagedChildBackend {
         &mut self,
         item: TxJsonRpcMessage<RoleClient>,
     ) -> impl Future<Output = io::Result<()>> + Send + 'static {
-        self.wire.send(item)
+        // The official send future retains its own writer slot, preserving existing framing behavior.
+        // 官方发送 future 保留自己的写入槽位，保持既有分帧行为。
+        let send = self.wire.as_mut().map(|wire| wire.send(item));
+        async move {
+            match send {
+                Some(send) => send.await,
+                None => Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "MCP protocol transport is closed.",
+                )),
+            }
+        }
     }
 
     /// Receives one official message or EOF without introducing another protocol parser.
@@ -74,18 +111,27 @@ impl Transport<RoleClient> for ManagedChildBackend {
     /// No inputs; returns the original decoder's next message.
     /// 无输入；返回原解码器的下一消息。
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
-        self.wire.receive().await
+        match self.wire.as_mut() {
+            Some(wire) => wire.receive().await,
+            None => None,
+        }
     }
 
     /// Closes protocol output and waits for actual platform process-scope exit under the same native owner.
     /// 关闭协议输出，并在同一原生所有者下等待实际平台进程范围退出。
-    /// No inputs; successful protocol and process cleanup additionally requires actual stderr release.
-    /// 无输入；协议及进程清理成功后，还必须等待实际标准错误释放。
+    /// No inputs; success requires process-scope exit and the original release receipts for all three pipes.
+    /// 无输入；成功要求进程范围退出及全部三条管道的原释放回执。
     async fn close(&mut self) -> io::Result<()> {
         self.child.start_close();
         // The native grace timer already runs while close waits for a sender holding the writer lock.
         // 关闭等待持有写入锁的发送方期间，原生宽限计时已经运行。
-        let wire = self.wire.close().await;
+        let wire = match self.wire.as_mut() {
+            Some(wire) => wire.close().await,
+            None => Ok(()),
+        };
+        // Release adapter references before awaiting receipts; in-flight operations retain actual handles.
+        // 等待回执前释放适配器引用；在途操作保留实际句柄。
+        drop(self.wire.take());
         // Waiting cannot cancel native ownership; backend destruction escalates the same scope.
         // 等待不能取消原生所有权；后端销毁升级相同范围的停止请求。
         let child = self.child.close().await;
@@ -100,6 +146,8 @@ impl Transport<RoleClient> for ManagedChildBackend {
         }
         // Native reader errors cannot become EOF success; cancelled observers retain the same receipt.
         // 原生读取错误不能变成结束成功；取消观察后仍保留相同回执。
+        self.stdin.wait().await?;
+        self.stdout.wait().await?;
         self.stderr.wait().await
     }
 }

@@ -26,6 +26,7 @@ use crate::transport::{McpServerIdentity, McpToolSchema, McpTransport, McpTransp
 
 mod child;
 mod child_backend;
+mod native_pipe;
 mod pipe_completion;
 use child_backend::ManagedChildBackend;
 use pipe_completion::PipeCompletion;
@@ -106,8 +107,8 @@ impl StdioTransport {
         // This clone moves into the native reader, which outlives the caller's executor when needed.
         // 此克隆移入原生读取者，必要时比调用方执行器存续更久。
         let capture_logs = Arc::clone(&recent_logs);
-        // Process and diagnostic ownership exists before the backend enters protocol initialization.
-        // 后端进入协议初始化前，进程及诊断所有权均已建立。
+        // Process and all three native pipe owners exist before protocol initialization begins.
+        // 协议初始化开始前，进程及三条原生管道的所有者均已建立。
         let transport = ManagedChildBackend::spawn(cmd, move |stderr| {
             spawn_sanitized_stderr_capture(stderr, sensitive_values, capture_logs)
         })
@@ -394,8 +395,8 @@ impl McpTransport for StdioTransport {
 
     /// Observes the original rmcp close operation without cancelling it on timeout.
     /// 观测原 rmcp 关闭操作，不因观测超时而取消清理。
-    /// Returns protocol, process-scope and stderr evidence; Unix descendants and actual protocol-pipe release remain incomplete.
-    /// 返回协议、进程范围及 stderr 证据；Unix 后代和实际协议管道释放仍待完整接入。
+    /// Returns protocol, process-scope and all three actual pipe receipts; Unix descendants remain incomplete.
+    /// 返回协议、进程范围及三条实际管道回执；Unix 后代仍待完整接入。
     async fn shutdown(&self) -> Result<(), McpRuntimeError> {
         self.shutdown.wait().await
     }
