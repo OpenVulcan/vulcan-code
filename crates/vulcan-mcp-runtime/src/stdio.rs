@@ -3,13 +3,11 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use rmcp::model::{GetPromptResult, Prompt, ReadResourceResult, Resource};
 use rmcp::service::{Peer, RoleClient, ServiceExt};
-use rmcp::transport::TokioChildProcess;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::process::ChildStderr;
@@ -26,6 +24,10 @@ use crate::rmcp_support::{
 };
 use crate::shutdown::{TransportShutdown, observe_backend_close};
 use crate::transport::{McpServerIdentity, McpToolSchema, McpTransport, McpTransportEvent};
+
+mod child;
+mod child_backend;
+use child_backend::ManagedChildBackend;
 
 /// Maximum number of sanitized stderr chunks retained per stdio transport.
 /// 每个 stdio 传输保留的最大脱敏 stderr 分片数量。
@@ -94,16 +96,13 @@ impl StdioTransport {
             .collect::<Vec<_>>();
         sensitive_values.sort_by_key(|value| std::cmp::Reverse(value.len()));
         sensitive_values.dedup();
-        let (transport, stderr) = TokioChildProcess::builder(cmd)
-            .stderr(Stdio::piped())
-            .spawn()
+        let (transport, stderr) = ManagedChildBackend::spawn(cmd)
+            .await
             .map_err(|error| McpRuntimeError::transport(format!("mcp.spawn: {error}")))?;
         // recentLogs is shared with the non-blocking stderr capture task and diagnostic readers.
         // recentLogs 与非阻塞 stderr 捕获任务及诊断读取方共享。
         let recent_logs = Arc::new(Mutex::new(VecDeque::new()));
-        if let Some(stderr) = stderr {
-            spawn_sanitized_stderr_capture(stderr, sensitive_values, Arc::clone(&recent_logs));
-        }
+        spawn_sanitized_stderr_capture(stderr, sensitive_values, Arc::clone(&recent_logs));
         // Preserve the actual backend close result independently of the official service join.
         // 独立于官方服务任务等待，保留实际后端关闭结果。
         let (transport, backend_close) = observe_backend_close(transport, "mcp.shutdown");
@@ -325,10 +324,8 @@ fn build_child_command(
     }
     command.envs(env);
     apply_windows_no_window(&mut command);
-    // The command-level drop guard stops a child if initialize is cancelled before rmcp
-    // returns a transport to the runtime owner.
-    // 命令级析构保护在 initialize 返回传输给运行时所有者之前被取消时终止子进程。
-    command.kill_on_drop(true);
+    // ManagedChild transfers this standard command to a native process owner before initialization.
+    // ManagedChild 在初始化前将此标准命令移交给原生进程所有者。
     command
 }
 
@@ -367,8 +364,8 @@ impl McpTransport for StdioTransport {
 
     /// Observes the original rmcp close operation without cancelling it on timeout.
     /// 观测原 rmcp 关闭操作，不因观测超时而取消清理。
-    /// Returns the shared close result; detached backend cleanup still needs independent exit evidence.
-    /// 返回共享关闭结果；后端派生清理仍须独立退出证据。
+    /// Returns protocol and direct-child close evidence; descendants and diagnostic pipes need their own barriers.
+    /// 返回协议与直接子进程关闭证据；派生进程及诊断管道需要各自屏障。
     async fn shutdown(&self) -> Result<(), McpRuntimeError> {
         self.shutdown.wait().await
     }
