@@ -24,7 +24,7 @@ use crate::rmcp_support::{
     EventingClientHandler, call_rmcp_tool, get_rmcp_prompt, list_rmcp_prompts, list_rmcp_resources,
     list_rmcp_tools, read_rmcp_resource, spawn_rmcp_disconnect_watch,
 };
-use crate::shutdown::TransportShutdown;
+use crate::shutdown::{TransportShutdown, observe_backend_close};
 use crate::transport::{McpServerIdentity, McpToolSchema, McpTransport, McpTransportEvent};
 
 /// Maximum number of sanitized stderr chunks retained per stdio transport.
@@ -104,6 +104,9 @@ impl StdioTransport {
         if let Some(stderr) = stderr {
             spawn_sanitized_stderr_capture(stderr, sensitive_values, Arc::clone(&recent_logs));
         }
+        // Preserve the actual backend close result independently of the official service join.
+        // 独立于官方服务任务等待，保留实际后端关闭结果。
+        let (transport, backend_close) = observe_backend_close(transport, "mcp.shutdown");
         let (event_sender, _) = broadcast::channel(32);
         let handler = Arc::new(EventingClientHandler::new(event_sender.clone()));
         let service = handler
@@ -121,7 +124,7 @@ impl StdioTransport {
         Ok(Self {
             endpoint,
             peer,
-            shutdown: TransportShutdown::for_service("mcp.shutdown", service),
+            shutdown: TransportShutdown::for_service("mcp.shutdown", service, backend_close),
             event_sender,
             recent_logs,
         })

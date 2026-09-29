@@ -20,7 +20,7 @@ use crate::rmcp_support::{
     EventingClientHandler, call_rmcp_tool, get_rmcp_prompt, list_rmcp_prompts, list_rmcp_resources,
     list_rmcp_tools, read_rmcp_resource, spawn_rmcp_disconnect_watch,
 };
-use crate::shutdown::TransportShutdown;
+use crate::shutdown::{TransportShutdown, observe_backend_close};
 use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 
 /// Auth-aware streamable HTTP client that delegates the wire protocol to rmcp's reqwest implementation while resolving live OAuth headers.
@@ -201,6 +201,9 @@ impl HttpTransport {
             AuthenticatedStreamableHttpClient::new(auth_session.clone())?,
             config,
         );
+        // Keep transport cleanup failures even when the official service task exits normally.
+        // 官方服务任务正常退出时，仍保留传输清理失败。
+        let (transport, backend_close) = observe_backend_close(transport, "mcp.shutdown(http)");
         let (event_sender, _) = broadcast::channel(32);
         let handler = Arc::new(EventingClientHandler::new(event_sender.clone()));
         let service = handler
@@ -213,7 +216,7 @@ impl HttpTransport {
         Ok(Self {
             endpoint,
             peer,
-            shutdown: TransportShutdown::for_service("mcp.shutdown(http)", service),
+            shutdown: TransportShutdown::for_service("mcp.shutdown(http)", service, backend_close),
             event_sender,
             auth_session,
         })

@@ -13,6 +13,10 @@ use tokio::sync::watch;
 use crate::McpRuntimeError;
 use crate::rmcp_support::EventingClientHandler;
 
+mod backend;
+use backend::BackendCloseReceipt;
+pub(crate) use backend::observe_backend_close;
+
 /// Observation budget shared by all built-in transport close operations.
 /// 所有内建传输关闭操作共用的观测预算。
 const TRANSPORT_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
@@ -83,18 +87,28 @@ impl TransportShutdown {
     /// Retains an rmcp service and closes it once when requested or dropped.
     /// 保留 rmcp 服务，在请求或析构时仅关闭一次。
     ///
-    /// Inputs identify the transport and its connected service; returns its close owner.
-    /// 输入标识传输及其已连接服务；返回该服务的关闭所有者。
+    /// Inputs identify the transport, connected service, and exact backend receipt; returns their close owner.
+    /// 输入标识传输、已连接服务及精确后端回执；返回它们的关闭所有者。
     pub(crate) fn for_service(
         label: &'static str,
         mut service: RunningService<RoleClient, Arc<EventingClientHandler>>,
+        backend_close: BackendCloseReceipt,
     ) -> Self {
         Self::new(label, async move {
-            service
+            // Joining the service alone does not report errors returned by its transport close.
+            // 仅等待服务任务不会报告传输关闭返回的错误。
+            let service_result = service
                 .close()
                 .await
                 .map(|_| ())
-                .map_err(|error| McpRuntimeError::transport(format!("{label}.join: {error}")))
+                .map_err(|error| McpRuntimeError::transport(format!("{label}.join: {error}")));
+            let backend_result = backend_close.wait().await;
+            match (service_result, backend_result) {
+                (Ok(()), result) | (result, Ok(())) => result,
+                (Err(service_error), Err(backend_error)) => Err(McpRuntimeError::transport(
+                    format!("{service_error}; {backend_error}"),
+                )),
+            }
         })
     }
 
@@ -186,3 +200,6 @@ impl Drop for TransportShutdown {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod backend_tests;
