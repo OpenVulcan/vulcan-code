@@ -8,6 +8,98 @@ use crate::generation_store::{
 use VulcanPluginActivationTransactionPhase as Phase;
 
 impl VulcanPluginGenerationStore {
+    /// Inspect transaction's still-prepared target without publishing it or running plugin code.
+    /// 检查 transaction 仍处于准备阶段的目标，不发布它，也不执行插件代码。
+    /// Returns a view borrowing the exclusive owner after checking its store, indexed record, predecessor and pins.
+    /// 在检查存储、已索引记录、前驱及固定资源后，返回借用排他所有者的视图。
+    /// Failed checks never repair records, replace the active selection or authorize ordinary runtime calls.
+    /// 检查失败绝不修复记录、替换有效选择或授权普通运行时调用。
+    ///
+    /// The view must leave use before the same owner can publish.
+    /// 同一所有者发布前，此视图必须不再使用。
+    /// ```compile_fail,E0502
+    /// use vulcan_plugin_runtime::{VulcanPluginActivationTransaction, VulcanPluginGenerationStore};
+    /// // Attempt to commit transaction while its candidate remains borrowed; this must not compile.
+    /// // 在候选仍被借用时尝试提交 transaction；此代码必须无法编译。
+    /// fn commit_borrowed(store: &VulcanPluginGenerationStore, transaction: &mut VulcanPluginActivationTransaction) {
+    ///     // Candidate retains the original immutable transaction borrow.
+    ///     // 候选保留原不可变事务借用。
+    ///     let candidate = store.inspect_activation_candidate(transaction).expect("inspect");
+    ///     store.commit_activation_transaction(transaction).expect("commit");
+    ///     assert_eq!(candidate.package().generation, 0);
+    /// }
+    /// ```
+    pub fn inspect_activation_candidate<'transaction>(
+        &self,
+        transaction: &'transaction VulcanPluginActivationTransaction,
+    ) -> VulcanPluginStoreResult<VulcanPluginActivationCandidate<'transaction>> {
+        // Reject cross-root owners before inspecting or acquiring any foreign namespace lock.
+        // 在检查或获取任何外部命名空间锁前拒绝跨根目录所有者。
+        if transaction.store_root != self.root {
+            return Err(Error::new(
+                Code::Conflict,
+                "Activation candidate belongs to another store.",
+            ));
+        }
+        // Keep the predecessor and complete physical inspection under the same cooperating-writer fence.
+        // 在同一协作写入者屏障内保持前驱及完整物理检查。
+        let _namespace = self.namespace_lock(&transaction.record.target.plugin_id, false)?;
+        self.check_transaction_owner(transaction)?;
+        if transaction.record.phase != Phase::Prepared {
+            return Err(Error::new(
+                Code::Conflict,
+                "Only a prepared activation request may inspect an unpublished candidate.",
+            ));
+        }
+        if self.read_activation(&transaction.record.target.plugin_id)?
+            != transaction.record.predecessor
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Activation candidate predecessor changed.",
+            ));
+        }
+        // Revalidate actual contents, approved permissions, the complete configuration and staged credentials.
+        // 复核实际内容、已批准权限、完整配置及已暂存凭据。
+        let (generation, credentials) = self.pin_transaction_target(&transaction.record)?;
+        // Store construction fixes this exact parent as the user catalog; no alternate root is probed.
+        // 存储构造将此精确父目录固定为用户目录；不探测备用根目录。
+        let catalog_root = self.root.parent().ok_or_else(|| {
+            Error::invalid("Activation candidate store has no user catalog parent.")
+        })?;
+        // Readiness must not inherit a manifest's default-enabled choice.
+        // 就绪检查不得继承清单的默认启用选择。
+        let disabled =
+            std::collections::BTreeSet::from([transaction.record.target.plugin_id.clone()]);
+        // No enabled override may reverse the explicit candidate-only disabled policy.
+        // 不允许启用覆盖反转候选专属的显式停用策略。
+        let enabled = std::collections::BTreeSet::new();
+        // Shared projection gives future readiness code the same authorities as eventual public discovery.
+        // 共享投影为后续就绪代码提供与最终公开发现相同的权威。
+        let mut package = crate::catalog::load_pinned_package(
+            catalog_root,
+            &transaction.record.target,
+            generation,
+            Some(credentials),
+            &disabled,
+            &enabled,
+        )
+        .map_err(Error::invalid)?;
+        if package.availability != crate::VulcanPluginAvailability::Disabled {
+            return Err(Error::invalid(
+                "Activation candidate package is unavailable.",
+            ));
+        }
+        package.origin = crate::VulcanPluginPackageOrigin::UserInstalled;
+        // Inspection is not runtime admission, even for a valid executable manifest.
+        // 即使清单具有有效执行声明，检查也不是运行时入场。
+        package.runtime_execution_available = false;
+        Ok(VulcanPluginActivationCandidate {
+            transaction,
+            package,
+        })
+    }
+
     /// Persist `request_id`'s complete configured successor to `expected_revision` and return its exclusive owner.
     /// 持久保存 `request_id` 相对于 `expected_revision` 的完整配置后继，并返回其排他所有者。
     /// `generation`, exact `permissions`, staged `credentials` and `configuration` define the candidate; readiness is host-owned.

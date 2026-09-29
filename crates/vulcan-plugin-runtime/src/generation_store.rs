@@ -16,8 +16,8 @@ mod files;
 mod operations;
 mod transactions;
 pub use transactions::{
-    VulcanPluginActivationTransaction, VulcanPluginActivationTransactionPhase,
-    VulcanPluginActivationTransactionRecord,
+    VulcanPluginActivationCandidate, VulcanPluginActivationTransaction,
+    VulcanPluginActivationTransactionPhase, VulcanPluginActivationTransactionRecord,
 };
 #[cfg(test)]
 mod tests;

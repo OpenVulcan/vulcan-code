@@ -135,3 +135,33 @@ impl VulcanPluginActivationTransaction {
         &self.credentials
     }
 }
+
+/// Inspected unpublished package borrowing the exclusive transaction owner; this is not an execution grant.
+/// 借用排他事务所有者的已检查未发布插件包；此对象并非执行授权。
+/// The borrow prevents commit or abort through that owner while the candidate view remains in use.
+/// 此借用防止候选视图仍在使用时通过该所有者提交或中止事务。
+#[derive(Debug)]
+pub struct VulcanPluginActivationCandidate<'transaction> {
+    /// The original exclusive owner remains live throughout the borrowed candidate view.
+    /// 原排他所有者在借用候选视图的整个寿命中保持存活。
+    transaction: &'transaction VulcanPluginActivationTransaction,
+    /// Exact target authority retains actual package and credential leases independently of public discovery.
+    /// 精确目标权威独立于公开发现保留实际插件包及凭据租约。
+    package: crate::VulcanPluginDescriptor,
+}
+
+impl VulcanPluginActivationCandidate<'_> {
+    /// Borrow the original prepared request, including its complete predecessor and target.
+    /// 借用原准备请求，包含其完整前驱及目标。
+    pub fn transaction_record(&self) -> &VulcanPluginActivationTransactionRecord {
+        self.transaction.record()
+    }
+
+    /// Borrow the validated disabled package; cloned descriptors retain files but confer no runtime admission.
+    /// 借用已校验且停用的插件包；克隆描述符保留文件，但不授予运行时入场权。
+    /// Generation zero is deliberately unassigned; only the runtime publication owner allocates routing identities.
+    /// 代次零有意保持未分配；仅运行时发布所有者分配路由身份。
+    pub fn package(&self) -> &crate::VulcanPluginDescriptor {
+        &self.package
+    }
+}

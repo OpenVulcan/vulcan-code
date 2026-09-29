@@ -3,6 +3,7 @@
 
 mod generations;
 pub use generations::VulcanPluginManagedPackage;
+pub(crate) use generations::load_pinned_package;
 
 use crate::{
     VULCAN_PLUGIN_HOOK_TOOL_AFTER, VULCAN_PLUGIN_HOOK_TOOL_BEFORE,

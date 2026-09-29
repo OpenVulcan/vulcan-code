@@ -7,6 +7,8 @@ use VulcanPluginActivationTransactionPhase as Phase;
 use VulcanPluginStoreErrorCode as Code;
 use uuid::Uuid;
 
+mod candidates;
+
 /// Build two distinct immutable packages for one namespace and return their separately staged credential identities.
 /// 为同一命名空间构建两个不同不可变插件包，并返回分别暂存的凭据身份。
 fn fixture(

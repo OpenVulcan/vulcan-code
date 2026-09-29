@@ -163,6 +163,64 @@ enum ManagedSelection {
     Package(Box<VulcanPluginDescriptor>),
 }
 
+/// Load the pinned selection under catalog_root using the exact enabled and disabled policies.
+/// 按精确启用及停用策略，在 catalog_root 下加载已固定选择。
+/// Returns one descriptor retaining generation and credentials; both public discovery and candidate inspection use it.
+/// 返回保留 generation 及 credentials 的单个描述符；公开发现及候选检查共同使用此入口。
+pub(crate) fn load_pinned_package(
+    catalog_root: &Path,
+    activation: &crate::VulcanPluginActivation,
+    generation: PinnedVulcanPluginGeneration,
+    credentials: Option<crate::PinnedVulcanPluginCredentials>,
+    disabled_plugin_ids: &BTreeSet<String>,
+    enabled_plugin_ids: &BTreeSet<String>,
+) -> Result<VulcanPluginDescriptor, String> {
+    // Package parsing remains the sole manifest and contribution authority for both selection paths.
+    // 插件包解析仍是两条选择路径共同的唯一清单及贡献权威。
+    let mut package = load_vulcan_plugin_package(
+        catalog_root,
+        generation.package_root(),
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+    );
+    // A snapshot must never combine one persistent selection with another physical package.
+    // 快照绝不能把一个持久选择与另一个物理插件包组合。
+    let identity = generation.identity();
+    if activation.generation.as_ref() != Some(identity)
+        || activation.plugin_id != identity.plugin_id
+        || package.id != identity.plugin_id
+        || package.version.as_deref() != Some(identity.version.as_str())
+        || package.content_fingerprint != identity.content_fingerprint
+    {
+        return Err(String::from(
+            "Managed package descriptor differs from its pinned generation identity.",
+        ));
+    }
+    // Frozen credentials come from this exact selection, never from the currently published revision.
+    // 固定凭据来自此精确选择，绝不来自当前发布修订。
+    let credential_binding = match activation.credential_revision() {
+        Some(revision) => crate::VulcanPluginCredentialBinding::Revision(revision.clone()),
+        None => crate::VulcanPluginCredentialBinding::Legacy,
+    };
+    // All contributions share the same complete selected document and actual credential reader.
+    // 全部贡献共享同一完整选定文档及实际凭据读者。
+    let configuration = activation.configuration().cloned().map(Arc::new);
+    for server in &mut package.mcp_servers {
+        server.credential_binding = credential_binding.clone();
+        server.credential_lease = credentials.clone();
+        server.configuration = configuration.clone();
+    }
+    package.managed_package = Some(VulcanPluginManagedPackage {
+        activation_revision: activation.revision,
+        approved_permissions: activation.approved_permissions().map(<[String]>::to_vec),
+        credential_binding,
+        _credential_lease: credentials,
+        configuration,
+        generation,
+    });
+    Ok(package)
+}
+
 /// Resolves one `plugin_id` under the store fence and applies only the supplied enablement policies.
 /// 在存储屏障内解析一个 `plugin_id`，并仅应用传入的启停策略。
 /// `was_listed` rejects vanished committed records; errors never select a legacy substitute.
@@ -175,13 +233,13 @@ fn load_selected_package(
     disabled_plugin_ids: &BTreeSet<String>,
     enabled_plugin_ids: &BTreeSet<String>,
 ) -> Result<ManagedSelection, String> {
-    // pin_active chooses the record and acquires real ownership before releasing its selection fence.
-    // pin_active 选择记录并取得真实所有权后才释放选择屏障。
+    // Selection and actual ownership are captured under the same storage fence.
+    // 选择及实际所有权在同一存储屏障内捕获。
     let selected = store
         .pin_active(plugin_id)
         .map_err(|error| error.to_string())?;
-    // Absence is permitted only for legacy namespaces never seen in the committed-record enumeration.
-    // 只有从未出现在已提交记录枚举中的旧命名空间才允许缺失。
+    // Absence is permitted only for namespaces never observed as published.
+    // 仅从未被观测为已发布的命名空间允许缺失。
     let Some(activation) = selected.activation else {
         return if was_listed {
             Err(String::from("An enumerated activation record disappeared."))
@@ -189,53 +247,20 @@ fn load_selected_package(
             Ok(ManagedSelection::Unmanaged)
         };
     };
-    // None here is the validated explicit null selection returned by the storage API.
-    // 此处 None 是存储接口返回的已校验显式空选择。
+    // This is the validated explicit tombstone produced by the storage selector.
+    // 这是存储选择器生成的已校验显式停用记录。
     let Some(generation) = selected.generation else {
         return Ok(ManagedSelection::Tombstone);
     };
-    // Existing package validation remains the sole manifest and contribution authority.
-    // 既有包校验继续作为清单及贡献的唯一权威。
-    let mut package = load_vulcan_plugin_package(
+    load_pinned_package(
         catalog_root,
-        generation.package_root(),
+        &activation,
+        generation,
+        selected.credentials,
         disabled_plugin_ids,
         enabled_plugin_ids,
-    );
-    // Compare the descriptor's validated identity and fingerprint with the exact pinned selection.
-    // 将描述符已校验的身份及指纹与精确固定选择比较。
-    let identity = generation.identity();
-    if package.id != identity.plugin_id
-        || package.version.as_deref() != Some(identity.version.as_str())
-        || package.content_fingerprint != identity.content_fingerprint
-    {
-        return Err(String::from(
-            "Managed package descriptor differs from its pinned generation identity.",
-        ));
-    }
-    // Every contribution carries the binding from this exact selection, including later cloned server descriptors.
-    // 每个贡献携带此精确选择的绑定，包括后续克隆的服务器描述符。
-    let credential_binding = match activation.credential_revision() {
-        Some(revision) => crate::VulcanPluginCredentialBinding::Revision(revision.clone()),
-        None => crate::VulcanPluginCredentialBinding::Legacy,
-    };
-    // All cloned contributions share one frozen document rather than duplicating user configuration per server.
-    // 全部克隆贡献共用单个固定文档，不为每个服务器重复用户配置。
-    let configuration = activation.configuration().cloned().map(std::sync::Arc::new);
-    for server in &mut package.mcp_servers {
-        server.credential_binding = credential_binding.clone();
-        server.credential_lease = selected.credentials.clone();
-        server.configuration = configuration.clone();
-    }
-    package.managed_package = Some(VulcanPluginManagedPackage {
-        activation_revision: activation.revision,
-        approved_permissions: activation.approved_permissions().map(<[String]>::to_vec),
-        credential_binding,
-        _credential_lease: selected.credentials,
-        configuration,
-        generation,
-    });
-    Ok(ManagedSelection::Package(Box::new(package)))
+    )
+    .map(|package| ManagedSelection::Package(Box::new(package)))
 }
 
 /// Builds a non-executable diagnostic row using `catalog_root`, not an unverified package target.
