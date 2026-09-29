@@ -477,6 +477,8 @@ VM 仍由同一核心父级计数；该选择保留原每次调用的新 Lua 状
 上游就绪字段的唯一归属是候选 LuaSkills 正式调度器；升级时必须回读上游对应源码及持久化测试。
 核心就绪查询已同步至 C JSON `pool_reusable_status` 及三个 SDK 的类型化池句柄，能力标识为 `reusable_pool_readiness_v1`；均从正式调度器取得同一快照，控制通道不执行 Lua。契约归属为 LuaSkills `EmbeddedReusablePoolSnapshot` 与其生成协议，上游升级时须重新核对。当前仍为本地开发接口，未正式发布；SDK 查询不替代本宿主的精确代次验证及目标流程。
 
+核心初始化名单也已同步至 C JSON `pool_register.initialization_capabilities` 和三个 SDK 的类型化注册，能力标识为 `initialization_capability_policy_v1`。通用上游 API 为兼容明确旧行为，省略或空值继承、空数组全部拒绝；本宿主复用工具从清单显式传入集合，因此清单省略仍按宿主策略全部拒绝。两层默认的归属不同，升级时须同时核对上游 `ModuleCapabilities` 与本宿主清单转换，不能把 SDK 的省略语义移用于插件清单。当前仅通过本地候选库及分发验证，尚未正式发布。
+
 ## 工具固定会话的正式所有权
 
 生产 `sessions.rs` 的开启、调用及关闭路径接入 `runtime/formal/pinned/`。
