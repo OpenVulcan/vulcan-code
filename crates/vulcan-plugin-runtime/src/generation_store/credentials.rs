@@ -66,7 +66,7 @@ pub enum VulcanPluginCredentialBinding {
     /// Existing flat packages and activation formats one/two use their unchanged legacy namespace.
     /// 既有平铺包及第一／二版激活格式使用不变的旧命名空间。
     Legacy,
-    /// A version-three selection explicitly names one isolated credential revision.
-    /// 第三版选择明确指定单个隔离凭据修订。
+    /// A revision-bound selection explicitly names one isolated credential revision.
+    /// 绑定修订的选择明确指定单个隔离凭据修订。
     Revision(VulcanPluginCredentialRevision),
 }

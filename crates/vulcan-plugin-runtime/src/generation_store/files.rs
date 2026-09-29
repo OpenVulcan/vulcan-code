@@ -119,9 +119,9 @@ pub(super) fn lock(path: &Path, shared: bool) -> Result<File> {
     }
 }
 
-/// Read bounded strict JSON metadata from a regular file; returns absence only for a missing entry.
-/// 从普通文件读取有界严格 JSON 元数据；仅条目缺失时返回不存在。
-pub(super) fn read_record<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+/// Read regular-file bytes from `path` within `maximum`; returns absence only for a missing entry.
+/// 在 `maximum` 内读取 `path` 的普通文件字节；仅条目缺失时返回不存在。
+pub(super) fn read_bytes(path: &Path, maximum: u64) -> Result<Option<Vec<u8>>> {
     if !exists(path, false)? {
         return Ok(None);
     }
@@ -132,7 +132,7 @@ pub(super) fn read_record<T: DeserializeOwned>(path: &Path) -> Result<Option<T>>
         .metadata()
         .map_err(|error| Error::io("Inspect generation record", error))?
         .len()
-        > MAX_RECORD_BYTES
+        > maximum
     {
         return Err(Error::invalid(
             "Generation metadata exceeds its encoded byte limit.",
@@ -141,17 +141,26 @@ pub(super) fn read_record<T: DeserializeOwned>(path: &Path) -> Result<Option<T>>
     // This bounded buffer owns the exact record bytes used by the strict decoder.
     // 此有界缓冲持有严格解码器使用的精确记录字节。
     let mut bytes = Vec::new();
-    file.take(MAX_RECORD_BYTES + 1)
+    file.take(maximum + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| Error::io("Read generation record", error))?;
-    if bytes.len() as u64 > MAX_RECORD_BYTES {
+    if bytes.len() as u64 > maximum {
         return Err(Error::invalid(
             "Generation metadata grew beyond its encoded byte limit.",
         ));
     }
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|error| Error::invalid(format!("Invalid generation metadata: {error}")))
+    Ok(Some(bytes))
+}
+
+/// Decode strict metadata from `path` using the original metadata budget; return actual absence or the parsed record.
+/// 使用原元数据预算解码 `path` 的严格元数据；返回实际缺失或已解析记录。
+pub(super) fn read_record<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    read_bytes(path, MAX_RECORD_BYTES)?
+        .map(|bytes| {
+            serde_json::from_slice(&bytes)
+                .map_err(|error| Error::invalid(format!("Invalid generation metadata: {error}")))
+        })
+        .transpose()
 }
 
 /// Atomically write one bounded record using the existing host publication primitive.
@@ -163,12 +172,18 @@ pub(super) fn write_record(path: &Path, record: &impl Serialize) -> Result<()> {
     // 变更前先编码，避免过大元数据部分替换既有记录。
     let bytes = serde_json::to_vec_pretty(record)
         .map_err(|error| Error::invalid(format!("Encode generation metadata: {error}")))?;
-    if bytes.len() as u64 > MAX_RECORD_BYTES {
+    write_encoded_record(path, &bytes, MAX_RECORD_BYTES)
+}
+
+/// Publish pre-encoded `bytes` at `path` within `maximum`; errors require exact readback before further mutation.
+/// 在 `maximum` 内向 `path` 发布预编码 `bytes`；错误要求进一步变更前精确回读。
+pub(super) fn write_encoded_record(path: &Path, bytes: &[u8], maximum: u64) -> Result<()> {
+    if bytes.len() as u64 > maximum {
         return Err(Error::invalid(
             "Generation metadata exceeds its encoded byte limit.",
         ));
     }
-    crate::atomic_file::write_file_atomically(path, &bytes).map_err(|error| {
+    crate::atomic_file::write_file_atomically(path, bytes).map_err(|error| {
         Error::new(
             Code::Storage,
             format!(

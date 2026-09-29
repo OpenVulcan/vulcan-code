@@ -149,6 +149,9 @@ pub struct VulcanPluginMcpServerDescriptor {
     /// Real retention follows standalone descriptor clones, preventing collection during later secret reads.
     /// 实际保留随独立描述符克隆传递，防止后续秘密读取期间被回收。
     pub(crate) credential_lease: Option<crate::PinnedVulcanPluginCredentials>,
+    /// Version-four configuration follows this exact descriptor; absence denotes the legacy live-file authority.
+    /// 第四版配置随此精确描述符保留；缺失表示旧实时文件权威。
+    pub(crate) configuration: Option<std::sync::Arc<crate::VulcanPluginConfigurationSelection>>,
     /// Stable server identifier within the owning plugin.
     /// 所属插件内部稳定的服务器标识。
     pub id: String,
@@ -912,6 +915,7 @@ fn load_vulcan_plugin_package(
             plugin_generation: 0,
             credential_binding: crate::VulcanPluginCredentialBinding::Legacy,
             credential_lease: None,
+            configuration: None,
             id: server.id.clone(),
             name: server.name.clone(),
             manifest: server.clone(),

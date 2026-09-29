@@ -41,7 +41,7 @@ pub(super) fn plugin_config_state_path(state_root: &Path, plugin_id: &str) -> Pa
 /// 返回值
 /// Returns unit when the value satisfies the schema.
 /// 配置值满足 Schema 时返回空值。
-fn validate_plugin_config_value(
+pub(crate) fn validate_plugin_config_value(
     package_root: &Path,
     config: &crate::VulcanPluginConfigManifest,
     value: &Value,
@@ -78,6 +78,18 @@ impl VulcanPluginRuntimeManager {
                 "Vulcan plugin `{plugin_id}` does not declare configuration."
             ))
         })?;
+        // A managed selection is complete; never mix its package schema with a newer mutable legacy document.
+        // 受管选择是完整的；绝不将其插件包模式与更新的可变旧文档混用。
+        if let Some(selection) = plugin
+            .managed_package()
+            .and_then(|managed| managed.configuration())
+        {
+            return selection.value().cloned().ok_or_else(|| {
+                VulcanPluginRuntimeError::new(
+                    "Managed plugin configuration is explicitly undeclared.",
+                )
+            });
+        }
         // executionRoot pins configuration defaults and schema to the authorized package generation.
         // executionRoot 把配置默认值与 Schema 固定到已授权插件包代次。
         let execution_root = plugin_execution_package_root(&self.state, plugin)
@@ -129,6 +141,14 @@ impl VulcanPluginRuntimeManager {
         {
             return Err(VulcanPluginRuntimeError::new(
                 "Plugin configuration generation changed before write.",
+            ));
+        }
+        if current
+            .managed_package()
+            .is_some_and(|managed| managed.configuration().is_some())
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Managed plugin configuration updates require a configured activation transaction.",
             ));
         }
         let manifest = plugin.manifest.as_ref().ok_or_else(|| {
@@ -242,6 +262,23 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         value: Value,
     ) -> Result<bool, VulcanPluginRuntimeError> {
+        // A selected managed document is already initialized regardless of any unrelated legacy state file.
+        // 已选定受管文档已经初始化，与任何无关旧状态文件无关。
+        let snapshot = self.snapshot();
+        if let Some(selection) = snapshot
+            .plugins
+            .get(plugin_id)
+            .and_then(|plugin| plugin.managed_package())
+            .and_then(|managed| managed.configuration())
+        {
+            return if selection.value().is_some() {
+                Ok(false)
+            } else {
+                Err(VulcanPluginRuntimeError::new(
+                    "Managed plugin does not declare configuration.",
+                ))
+            };
+        }
         let state_path = plugin_config_state_path(&self.state.plugin_state_root, plugin_id);
         if state_path.exists() {
             return Ok(false);

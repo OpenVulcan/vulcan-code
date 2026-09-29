@@ -1,7 +1,9 @@
 //! Immutable package generations with explicit activation revisions and actual filesystem leases.
 //! 具有显式激活修订及实际文件系统租约的不可变插件包代次。
 
+mod configuration;
 mod credential_staging;
+pub use configuration::{MAX_PLUGIN_CONFIGURATION_BYTES, VulcanPluginConfigurationSelection};
 mod credentials;
 pub use credential_staging::{
     PinnedVulcanPluginCredentials, VulcanPluginCredentialBackend, VulcanPluginCredentialKey,
@@ -30,6 +32,12 @@ const AUTHORIZED_ACTIVATION_VERSION: u32 = 2;
 /// Selection format binding the package, approval and secure-store credential revision together.
 /// 共同绑定插件包、批准及安全存储凭据修订的选择格式。
 const CREDENTIAL_ACTIVATION_VERSION: u32 = 3;
+/// Selection format binds a complete explicit configuration to the same package, permission and credential choice.
+/// 选择格式将完整显式配置绑定至相同的插件包、权限及凭据选择。
+const CONFIGURED_ACTIVATION_VERSION: u32 = 4;
+/// Configuration-bearing records retain the existing metadata allowance plus the sole configuration value budget.
+/// 携带配置的记录保留既有元数据额度，并加上唯一配置值预算。
+const MAX_ACTIVATION_BYTES: u64 = MAX_RECORD_BYTES + MAX_PLUGIN_CONFIGURATION_BYTES;
 /// Maximum encoded metadata size, checked before writes and before allocating reads.
 /// 编码元数据大小上限，在写入及读取分配前检查。
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
@@ -146,29 +154,37 @@ pub struct VulcanPluginActivation {
     /// 选定不可变代次，或显式停用记录。
     #[serde(deserialize_with = "deserialize_required_generation")]
     pub generation: Option<VulcanPluginGenerationIdentity>,
-    /// Versions two and three own exact sorted permissions; version one alone reads legacy authorization files.
-    /// 第二、三版持有精确有序权限；仅第一版读取旧授权文件。
+    /// Versions two onward own exact sorted permissions; version one alone reads legacy authorization files.
+    /// 第二版及后续版本持有精确有序权限；仅第一版读取旧授权文件。
     #[serde(
         default,
         deserialize_with = "deserialize_present_permissions",
         skip_serializing_if = "Option::is_none"
     )]
     approved_permissions: Option<Vec<String>>,
-    /// Version three names its exact credential revision; earlier versions require this field to be absent.
-    /// 第三版指定精确凭据修订；较早版本要求此字段缺失。
+    /// Versions three onward name an exact credential revision; earlier versions require this field to be absent.
+    /// 第三版及后续版本指定精确凭据修订；较早版本要求此字段缺失。
     #[serde(
         default,
         deserialize_with = "deserialize_present_credential_revision",
         skip_serializing_if = "Option::is_none"
     )]
     credential_revision: Option<VulcanPluginCredentialRevision>,
+    /// Version four owns one explicit configuration selection; absence belongs only to older formats.
+    /// 第四版持有单个显式配置选择；仅旧格式允许缺失。
+    #[serde(
+        default,
+        deserialize_with = "configuration::deserialize_present_selection",
+        skip_serializing_if = "Option::is_none"
+    )]
+    configuration: Option<VulcanPluginConfigurationSelection>,
 }
 
 impl VulcanPluginActivation {
     /// Return approval frozen in this selection; absence explicitly denotes the legacy file authority.
     /// 返回此选择中固定的批准权限；缺失明确表示旧文件权威。
-    /// An empty slice approves a zero-permission package, or belongs to a version-two or version-three tombstone.
-    /// 空切片批准零权限插件包，或属于第二、三版停用记录。
+    /// An empty slice approves a zero-permission package, or belongs to an authorized deactivation tombstone.
+    /// 空切片批准零权限插件包，或属于已授权停用记录。
     pub fn approved_permissions(&self) -> Option<&[String]> {
         self.approved_permissions.as_deref()
     }
@@ -177,6 +193,12 @@ impl VulcanPluginActivation {
     /// 返回声明的凭据修订；存储在使用前按记录版本校验其存在性。
     pub fn credential_revision(&self) -> Option<&VulcanPluginCredentialRevision> {
         self.credential_revision.as_ref()
+    }
+
+    /// Borrow the configuration frozen in this activation; absence explicitly denotes the legacy file authority.
+    /// 借用此激活中固定的配置；缺失明确表示旧文件权威。
+    pub fn configuration(&self) -> Option<&VulcanPluginConfigurationSelection> {
+        self.configuration.as_ref()
     }
 }
 
@@ -263,6 +285,9 @@ struct VerifiedPackageMetadata {
     /// Complete canonical credential inventory from the same descriptor, without any values.
     /// 来自相同描述符的完整规范凭据清单，不含任何值。
     credential_keys: Vec<VulcanPluginCredentialKey>,
+    /// Configuration declaration belongs to the same verified package inspection as permissions and credential keys.
+    /// 配置声明与权限及凭据键属于同一次已验证插件包检查。
+    configuration: Option<crate::VulcanPluginConfigManifest>,
 }
 
 /// Verified package location pinned against cooperating garbage collection across processes.
@@ -284,6 +309,9 @@ pub struct PinnedVulcanPluginGeneration {
     /// Complete declared secret slots derived during the same authoritative package verification.
     /// 在同一次权威插件包校验期间派生的完整声明秘密槽位。
     credential_keys: Vec<VulcanPluginCredentialKey>,
+    /// Exact configuration schema declaration captured from this immutable package.
+    /// 从此不可变插件包捕获的精确配置模式声明。
+    configuration: Option<crate::VulcanPluginConfigManifest>,
     /// Shared real lock ownership, including all handle clones.
     /// 包含全部句柄克隆的共享实际锁所有权。
     _lease: Arc<GenerationLease>,
@@ -321,7 +349,7 @@ pub struct VulcanPluginActiveGeneration {
     /// Real lease for the selected generation, absent only for no selection or a tombstone.
     /// 选定代次的实际租约，仅未选择或停用记录时缺失。
     pub generation: Option<PinnedVulcanPluginGeneration>,
-    /// Actual credential ownership for an active version-three choice; legacy and tombstones have none.
-    /// 第三版有效选择的实际凭据所有权；旧格式和停用记录没有此所有权。
+    /// Actual credential ownership for an active revision-bound choice; legacy and tombstones have none.
+    /// 绑定修订的有效选择的实际凭据所有权；旧格式和停用记录没有此所有权。
     pub credentials: Option<PinnedVulcanPluginCredentials>,
 }

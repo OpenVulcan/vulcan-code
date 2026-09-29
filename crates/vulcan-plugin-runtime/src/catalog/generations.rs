@@ -26,6 +26,9 @@ pub struct VulcanPluginManagedPackage {
     /// Real credential retention remains live even for a managed package without MCP contributions.
     /// 即使受管插件包没有 MCP 贡献，实际凭据保留仍保持有效。
     _credential_lease: Option<crate::PinnedVulcanPluginCredentials>,
+    /// Complete selected configuration shares the same activation revision as every other authority.
+    /// 完整选定配置与其他全部权威共用相同激活修订。
+    configuration: Option<std::sync::Arc<crate::VulcanPluginConfigurationSelection>>,
 }
 
 impl VulcanPluginManagedPackage {
@@ -51,6 +54,20 @@ impl VulcanPluginManagedPackage {
     /// 借用选定凭据权威，不查询其他快照或文件。
     pub fn credential_binding(&self) -> &crate::VulcanPluginCredentialBinding {
         &self.credential_binding
+    }
+
+    /// Borrow the complete frozen configuration authority; None explicitly retains the old file contract.
+    /// 借用完整固定配置权威；None 明确保留旧文件契约。
+    pub fn configuration(&self) -> Option<&crate::VulcanPluginConfigurationSelection> {
+        self.configuration.as_deref()
+    }
+}
+
+impl VulcanPluginMcpServerDescriptor {
+    /// Borrow the descriptor's selected configuration; no manager refresh can replace this historical value.
+    /// 借用描述符的选定配置；管理器刷新不能替换此历史值。
+    pub fn configuration(&self) -> Option<&crate::VulcanPluginConfigurationSelection> {
+        self.configuration.as_deref()
     }
 }
 
@@ -202,15 +219,20 @@ fn load_selected_package(
         Some(revision) => crate::VulcanPluginCredentialBinding::Revision(revision.clone()),
         None => crate::VulcanPluginCredentialBinding::Legacy,
     };
+    // All cloned contributions share one frozen document rather than duplicating user configuration per server.
+    // 全部克隆贡献共用单个固定文档，不为每个服务器重复用户配置。
+    let configuration = activation.configuration().cloned().map(std::sync::Arc::new);
     for server in &mut package.mcp_servers {
         server.credential_binding = credential_binding.clone();
         server.credential_lease = selected.credentials.clone();
+        server.configuration = configuration.clone();
     }
     package.managed_package = Some(VulcanPluginManagedPackage {
         activation_revision: activation.revision,
         approved_permissions: activation.approved_permissions().map(<[String]>::to_vec),
         credential_binding,
         _credential_lease: selected.credentials,
+        configuration,
         generation,
     });
     Ok(ManagedSelection::Package(Box::new(package)))

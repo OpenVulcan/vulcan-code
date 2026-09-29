@@ -9,6 +9,7 @@ use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
 mod approval;
+mod configuration;
 mod credentials;
 
 /// Write a valid content plugin beneath `root` and return its path; `body` distinguishes real package bytes.

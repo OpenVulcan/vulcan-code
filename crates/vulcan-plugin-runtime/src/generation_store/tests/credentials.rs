@@ -43,7 +43,7 @@ impl VulcanPluginCredentialBackend for EmptyCredentialBackend {
 
 /// Persist a genuinely empty staging checkpoint for `package`/`revision`; no secure backend call is permitted.
 /// 为 `package`／`revision` 持久保存确实为空的暂存检查点；不允许安全后端调用。
-fn stage_empty_credentials(
+pub(super) fn stage_empty_credentials(
     store: &VulcanPluginGenerationStore,
     package: &PinnedVulcanPluginGeneration,
     revision: &VulcanPluginCredentialRevision,

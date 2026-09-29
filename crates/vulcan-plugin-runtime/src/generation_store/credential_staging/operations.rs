@@ -22,8 +22,8 @@ impl VulcanPluginGenerationStore {
         package: &PinnedVulcanPluginGeneration,
         revision: &VulcanPluginCredentialRevision,
     ) -> Result<VulcanPluginCredentialRecord> {
-        // The journal is mandatory for version-three selection, not an optional alternate authority.
-        // 第三版选择必须具有日志；它不是可选替代权威。
+        // Every revision-bound selection requires this journal, not an optional alternate authority.
+        // 每个绑定修订的选择必须具有此日志；它不是可选替代权威。
         let record = self
             .read_credential_record_locked(&package.identity.plugin_id, revision)?
             .ok_or_else(|| {

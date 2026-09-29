@@ -7,6 +7,211 @@ use vulcan_plugin_runtime::{
     PinnedVulcanPluginGeneration, VulcanPluginCredentialBackend, VulcanPluginCredentialKey,
     VulcanPluginCredentialValues, VulcanPluginPermissionPreview,
 };
+
+/// Verify managed configuration never mixes a retained remote declaration with a newer selection or legacy file.
+/// 验证受管配置绝不将保留的远端声明与更新选择或旧文件混用。
+#[test]
+fn configuration_selection_mcp_retains_exact_document_after_same_package_update() {
+    // The real manager, immutable store and legacy state are isolated in this temporary root.
+    // 实际管理器、不可变存储及旧状态隔离在此临时根目录中。
+    let temp = tempfile::tempdir().expect("create MCP configuration selection fixture");
+    // Production discovery needs separate bundled and user roots.
+    // 生产发现需要独立的内置及用户根目录。
+    let bundled = temp.path().join("bundled");
+    fs::create_dir(&bundled).expect("create empty configuration bundled root");
+    // The real user root owns the activation record.
+    // 实际用户根目录持有激活记录。
+    let user = temp.path().join("user");
+    fs::create_dir(&user).expect("create configuration user root");
+    // Configuration files belonging to the previous format remain unchanged throughout this test.
+    // 属于旧格式的配置文件在整个测试期间保持不变。
+    let state = temp.path().join("state");
+    fs::create_dir_all(state.join("configured-mcp"))
+        .expect("create legacy configuration directory");
+    fs::write(
+        state.join("configured-mcp/config.json"),
+        r#"{"endpoint":"https://legacy.test/mcp","label":"legacy"}"#,
+    )
+    .expect("write unrelated legacy configuration");
+    // A Lua-free production manager still performs normal configuration and MCP materialization.
+    // 无 Lua 的生产管理器仍执行正常配置及 MCP 物化。
+    let plugins = VulcanPluginRuntimeManager::without_runtime(
+        bundled,
+        user.clone(),
+        temp.path().join("bridge"),
+        temp.path().join("managed"),
+        state.clone(),
+        temp.path().join("runtime"),
+    );
+    // This actual package declares configuration-backed HTTP and SSE fields without secrets.
+    // 此实际插件包声明基于配置的 HTTP 及 SSE 字段，不使用秘密。
+    let source = temp.path().join("source/configured-mcp");
+    fs::create_dir_all(&source).expect("create configured MCP source");
+    fs::write(
+        source.join("plugin.yaml"),
+        r#"schema_version: 1
+id: configured-mcp
+version: 1.0.0
+default_enabled: true
+display:
+  name: Configured MCP
+  capability: Exact selected configuration
+permissions: [network_https, config]
+config:
+  schema_file: schema.json
+  defaults_file: defaults.json
+mcp:
+  servers:
+    - id: http
+      name: HTTP
+      transport:
+        type: http
+        url: {source: config, key: endpoint}
+        headers:
+          X-Label: {source: config, key: label}
+    - id: sse
+      name: SSE
+      transport:
+        type: sse
+        url: {source: config, key: endpoint}
+        headers:
+          X-Label: {source: config, key: label}
+"#,
+    )
+    .expect("write configured MCP manifest");
+    fs::write(source.join("schema.json"), r#"{"type":"object","properties":{"endpoint":{"type":"string"},"label":{"type":"string"}},"required":["endpoint","label"],"additionalProperties":false}"#)
+        .expect("write configured MCP schema");
+    fs::write(
+        source.join("defaults.json"),
+        r#"{"endpoint":"https://default.test/mcp","label":"default"}"#,
+    )
+    .expect("write configured MCP defaults");
+    // Preview supplies the exact production fingerprint and complete capability approval.
+    // 预览提供精确生产指纹及完整能力批准。
+    let preview = plugins
+        .inspect_local_user_plugin(&source)
+        .expect("inspect configured MCP package");
+    // Package and credentials remain constant while the selected configuration changes.
+    // 选定配置变化时，插件包及凭据保持不变。
+    let store = VulcanPluginGenerationStore::open(&user).expect("open configured MCP store");
+    // Physical package identity is shared by both selections.
+    // 两次选择共用物理插件包身份。
+    let generation = store
+        .prepare(&source, &preview.content_fingerprint)
+        .expect("prepare configured MCP package");
+    // A genuinely empty secret inventory still has an exact staged revision.
+    // 确实为空的秘密清单仍具有精确已暂存修订。
+    let revision = VulcanPluginCredentialRevision::allocate();
+    // No secure lookup should occur because both servers use configuration-only sources.
+    // 两个服务器仅使用配置来源，因此不应发生任何安全查找。
+    let secrets = RevisionSecrets {
+        labels: BTreeMap::new(),
+        reads: Mutex::new(Vec::new()),
+    };
+    stage_fixture_credentials(&store, &generation, &preview, &revision, &secrets);
+    // The original document is independent of package defaults and the mutable legacy state file.
+    // 原文档独立于包默认值及可变旧状态文件。
+    let first = serde_json::json!({"endpoint":"https://first.test/mcp","label":"first"});
+    store
+        .activate_configured(
+            &generation,
+            0,
+            preview.permissions.clone(),
+            revision.clone(),
+            vulcan_plugin_runtime::VulcanPluginConfigurationSelection::Document {
+                value: first.clone(),
+            },
+        )
+        .expect("select first MCP configuration");
+    // Detached descriptors must retain the original configuration after their catalog is dropped.
+    // 所属目录释放后，独立描述符必须保留原配置。
+    let original = plugins
+        .refresh_catalog(&Default::default(), &Default::default())
+        .expect("publish first configured catalog");
+    // Only the server declarations are retained across the update.
+    // 更新期间仅保留服务器声明。
+    let servers = original.plugins["configured-mcp"].mcp_servers.clone();
+    assert_eq!(
+        plugins
+            .plugin_config("configured-mcp")
+            .expect("read selected manager config"),
+        first
+    );
+    assert!(
+        !plugins
+            .initialize_plugin_config_if_absent("configured-mcp", serde_json::json!({}))
+            .expect("managed configuration is already initialized")
+    );
+    assert!(
+        plugins
+            .update_plugin_config(
+                "configured-mcp",
+                serde_json::json!({"endpoint":"https://wrong.test/mcp","label":"wrong"})
+            )
+            .is_err()
+    );
+    // The successor selection changes configuration and activation revision atomically.
+    // 后继选择原子改变配置及激活修订。
+    let second = serde_json::json!({"endpoint":"https://second.test/mcp","label":"second"});
+    store
+        .activate_configured(
+            &generation,
+            1,
+            preview.permissions,
+            revision,
+            vulcan_plugin_runtime::VulcanPluginConfigurationSelection::Document {
+                value: second.clone(),
+            },
+        )
+        .expect("select second MCP configuration");
+    plugins
+        .refresh_catalog(&Default::default(), &Default::default())
+        .expect("publish second configured catalog");
+    drop(original);
+    assert_eq!(
+        plugins
+            .plugin_config("configured-mcp")
+            .expect("read second manager config"),
+        second
+    );
+    for (configs, expected) in [
+        (
+            plugin_mcp_server_configs_for_descriptors(&plugins, &servers, &secrets)
+                .expect("materialize detached old config"),
+            "first",
+        ),
+        (
+            plugin_mcp_server_configs(&plugins, &secrets).expect("materialize current config"),
+            "second",
+        ),
+    ] {
+        assert_eq!(configs.len(), 2);
+        for config in configs {
+            match config.transport {
+                McpServerTransportConfig::Http { url, headers, .. }
+                | McpServerTransportConfig::Sse { url, headers, .. } => {
+                    assert_eq!(url, format!("https://{expected}.test/mcp"));
+                    assert_eq!(headers.get("X-Label").map(String::as_str), Some(expected));
+                }
+                McpServerTransportConfig::Stdio { .. } => {
+                    panic!("expected configured remote transports")
+                }
+            }
+        }
+    }
+    assert_eq!(
+        fs::read_to_string(state.join("configured-mcp/config.json"))
+            .expect("read retained legacy bytes"),
+        r#"{"endpoint":"https://legacy.test/mcp","label":"legacy"}"#
+    );
+    assert!(
+        secrets
+            .reads
+            .lock()
+            .expect("inspect configuration-only lookups")
+            .is_empty()
+    );
+}
 use vulcan_plugin_runtime::{VulcanPluginCredentialRevision, VulcanPluginGenerationStore};
 
 impl VulcanPluginCredentialBackend for RevisionSecrets {

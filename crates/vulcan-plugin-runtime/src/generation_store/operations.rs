@@ -2,12 +2,12 @@
 //! 显式插件准备、激活 CAS、租约及可恢复字节回收。
 
 use super::{
-    AUTHORIZED_ACTIVATION_VERSION, CREDENTIAL_ACTIVATION_VERSION, GenerationLease,
-    GenerationRecord, GenerationState, PinnedVulcanPluginGeneration, RECORD_VERSION,
-    STORE_DIRECTORY, VulcanPluginActivation, VulcanPluginActiveGeneration,
-    VulcanPluginCredentialRevision, VulcanPluginGenerationIdentity, VulcanPluginGenerationStore,
-    VulcanPluginStoreError as Error, VulcanPluginStoreErrorCode as Code,
-    VulcanPluginStoreResult as Result, files,
+    AUTHORIZED_ACTIVATION_VERSION, CONFIGURED_ACTIVATION_VERSION, CREDENTIAL_ACTIVATION_VERSION,
+    GenerationLease, GenerationRecord, GenerationState, PinnedVulcanPluginGeneration,
+    RECORD_VERSION, STORE_DIRECTORY, VulcanPluginActivation, VulcanPluginActiveGeneration,
+    VulcanPluginConfigurationSelection, VulcanPluginCredentialRevision,
+    VulcanPluginGenerationIdentity, VulcanPluginGenerationStore, VulcanPluginStoreError as Error,
+    VulcanPluginStoreErrorCode as Code, VulcanPluginStoreResult as Result, files,
 };
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -153,6 +153,7 @@ impl VulcanPluginGenerationStore {
             package_root,
             required_permissions: verified_metadata.required_permissions,
             credential_keys: verified_metadata.credential_keys,
+            configuration: verified_metadata.configuration,
             _lease: Arc::new(GenerationLease { _lock: lease }),
         })
     }
@@ -219,6 +220,14 @@ impl VulcanPluginGenerationStore {
         } else {
             None
         };
+        if let (Some(configuration), Some(package)) = (
+            activation
+                .as_ref()
+                .and_then(VulcanPluginActivation::configuration),
+            generation.as_ref(),
+        ) {
+            package.validate_configuration(configuration)?;
+        }
         Ok(VulcanPluginActiveGeneration {
             activation,
             generation,
@@ -252,6 +261,7 @@ impl VulcanPluginGenerationStore {
             Some(generation.identity.clone()),
             None,
             None,
+            None,
         )
     }
 
@@ -265,7 +275,13 @@ impl VulcanPluginGenerationStore {
         expected_revision: u64,
         approved_permissions: Vec<String>,
     ) -> Result<VulcanPluginActivation> {
-        self.activate_approved_selection(generation, expected_revision, approved_permissions, None)
+        self.activate_approved_selection(
+            generation,
+            expected_revision,
+            approved_permissions,
+            None,
+            None,
+        )
     }
 
     /// Publish one package, complete approval and exact `credential_revision` in the same successor record.
@@ -286,19 +302,21 @@ impl VulcanPluginGenerationStore {
             expected_revision,
             approved_permissions,
             Some(credential_revision),
+            None,
         )
     }
 
-    /// Validate one explicit approval and optional version-three binding under the namespace fence before publication.
-    /// 在命名空间屏障下校验显式批准及可选第三版绑定，再进行发布。
+    /// Validate explicit approval and declared credential/configuration authorities under the namespace fence before publication.
+    /// 在命名空间屏障下校验显式批准及声明的凭据／配置权威，再进行发布。
     /// Inputs name the pinned package, exact predecessor and selected authority; returns the original write outcome.
     /// 输入指定固定插件包、精确前驱及选定权威；返回原写入结果。
-    fn activate_approved_selection(
+    pub(super) fn activate_approved_selection(
         &self,
         generation: &PinnedVulcanPluginGeneration,
         expected_revision: u64,
         mut approved_permissions: Vec<String>,
         credential_revision: Option<VulcanPluginCredentialRevision>,
+        configuration: Option<VulcanPluginConfigurationSelection>,
     ) -> Result<VulcanPluginActivation> {
         if generation.store_root != self.root {
             return Err(Error::invalid(
@@ -320,12 +338,16 @@ impl VulcanPluginGenerationStore {
         if let Some(revision) = &credential_revision {
             self.validate_staged_credentials_locked(&verified, revision)?;
         }
+        if let Some(selection) = &configuration {
+            verified.validate_configuration(selection)?;
+        }
         self.replace_activation(
             &generation.identity.plugin_id,
             expected_revision,
             Some(generation.identity.clone()),
             Some(approved_permissions),
             credential_revision,
+            configuration,
         )
     }
 
@@ -341,7 +363,7 @@ impl VulcanPluginGenerationStore {
         // Use the same fence and revision semantics as activation.
         // 使用与激活相同的屏障及修订语义。
         let _namespace = self.namespace_lock(plugin_id, false)?;
-        self.replace_activation(plugin_id, expected_revision, None, None, None)
+        self.replace_activation(plugin_id, expected_revision, None, None, None, None)
     }
 
     /// Collect unselected, unpinned package bytes for `identity`; returns false when already collected.
@@ -458,49 +480,68 @@ impl VulcanPluginGenerationStore {
         &self,
         plugin_id: &str,
     ) -> Result<Option<VulcanPluginActivation>> {
-        // Record filename and internal namespace must agree before any generation is selected.
-        // 选择任何代次之前，记录文件名与内部命名空间必须一致。
-        let record: Option<VulcanPluginActivation> =
-            files::read_record(&self.root.join("active").join(format!("{plugin_id}.json")))?;
-        if let Some(record) = &record {
-            if record.plugin_id != plugin_id || record.revision == 0 {
+        // Bound the actual input before decoding; older versions retain their original smaller envelope.
+        // 解码前限制实际输入；旧版本保留原来较小的记录封套。
+        let Some(bytes) = files::read_bytes(
+            &self.root.join("active").join(format!("{plugin_id}.json")),
+            super::MAX_ACTIVATION_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        // Decoder diagnostics cannot echo potentially sensitive configuration values or unknown property names.
+        // 解码诊断不能回显可能敏感的配置值或未知属性名称。
+        let record: VulcanPluginActivation = serde_json::from_slice(&bytes)
+            .map_err(|_| Error::invalid("Invalid plugin activation metadata."))?;
+        if record.plugin_id != plugin_id || record.revision == 0 {
+            return Err(Error::invalid(
+                "Activation metadata has an unknown version or mismatched identity.",
+            ));
+        }
+        if record.schema_version != CONFIGURED_ACTIVATION_VERSION
+            && bytes.len() as u64 > super::MAX_RECORD_BYTES
+        {
+            return Err(Error::invalid(
+                "Legacy activation metadata exceeds its encoded byte limit.",
+            ));
+        }
+        match (
+            record.schema_version,
+            &record.approved_permissions,
+            &record.credential_revision,
+            &record.configuration,
+        ) {
+            (RECORD_VERSION, None, None, None) => {}
+            (AUTHORIZED_ACTIVATION_VERSION, Some(permissions), None, None)
+            | (CREDENTIAL_ACTIVATION_VERSION, Some(permissions), Some(_), None)
+            | (CONFIGURED_ACTIVATION_VERSION, Some(permissions), Some(_), Some(_)) => {
+                if permissions.windows(2).any(|pair| pair[0] >= pair[1])
+                    || permissions
+                        .iter()
+                        .any(|key| key.is_empty() || key.contains('\0'))
+                    || (record.generation.is_none() && !permissions.is_empty())
+                {
+                    return Err(Error::invalid("Activation approval is not canonical."));
+                }
+            }
+            _ => {
                 return Err(Error::invalid(
-                    "Activation metadata has an unknown version or mismatched identity.",
+                    "Activation version, approval, credentials and configuration do not agree.",
                 ));
             }
-            match (
-                record.schema_version,
-                &record.approved_permissions,
-                &record.credential_revision,
-            ) {
-                (RECORD_VERSION, None, None) => {}
-                (AUTHORIZED_ACTIVATION_VERSION, Some(permissions), None)
-                | (CREDENTIAL_ACTIVATION_VERSION, Some(permissions), Some(_)) => {
-                    if permissions.windows(2).any(|pair| pair[0] >= pair[1])
-                        || permissions
-                            .iter()
-                            .any(|key| key.is_empty() || key.contains('\0'))
-                        || (record.generation.is_none() && !permissions.is_empty())
-                    {
-                        return Err(Error::invalid("Activation approval is not canonical."));
-                    }
-                }
-                _ => {
-                    return Err(Error::invalid(
-                        "Activation version, approval and credential authority do not agree.",
-                    ));
-                }
-            }
-            if let Some(identity) = &record.generation {
-                files::validate_identity(identity)?;
-                if identity.plugin_id != plugin_id {
-                    return Err(Error::invalid(
-                        "Activation points to a different plugin namespace.",
-                    ));
-                }
+        }
+        if let Some(selection) = &record.configuration {
+            selection.validate_size()?;
+        }
+        if let Some(identity) = &record.generation {
+            files::validate_identity(identity)?;
+            if identity.plugin_id != plugin_id {
+                return Err(Error::invalid(
+                    "Activation points to a different plugin namespace.",
+                ));
             }
         }
-        Ok(record)
+        Ok(Some(record))
     }
 
     /// Replace activation under the existing namespace lease; returns a checked monotonic successor.
@@ -512,6 +553,7 @@ impl VulcanPluginGenerationStore {
         generation: Option<VulcanPluginGenerationIdentity>,
         approved_permissions: Option<Vec<String>>,
         credential_revision: Option<VulcanPluginCredentialRevision>,
+        configuration: Option<VulcanPluginConfigurationSelection>,
     ) -> Result<VulcanPluginActivation> {
         // Absence is explicitly the never-published predecessor; tombstones are always retained records.
         // 缺失显式表示从未发布的前驱；停用状态始终保留为记录。
@@ -546,7 +588,7 @@ impl VulcanPluginGenerationStore {
         // Removal retains the last credential identity for cleanup; an active successor must name its own binding.
         // 移除保留最后凭据身份供清理；活动后继必须指定自身绑定。
         let credential_revision = match (&current, credential_revision) {
-            (Some(original), None) if original.schema_version == CREDENTIAL_ACTIVATION_VERSION => {
+            (Some(original), None) if original.credential_revision.is_some() => {
                 if generation.is_some() {
                     return Err(Error::invalid(
                         "Credential-bound activation cannot downgrade its credential authority.",
@@ -556,10 +598,25 @@ impl VulcanPluginGenerationStore {
             }
             (_, declared) => declared,
         };
+        // Removal retains the original configuration, while an active successor must explicitly name its complete value.
+        // 移除保留原配置，而有效后继必须显式指定其完整值。
+        let configuration = match (&current, configuration) {
+            (Some(original), None) if original.configuration.is_some() => {
+                if generation.is_some() {
+                    return Err(Error::invalid(
+                        "Configuration-bound activation cannot downgrade its configuration authority.",
+                    ));
+                }
+                original.configuration.clone()
+            }
+            (_, declared) => declared,
+        };
         // This single record is the storage-level selection authority, not a claim of route readiness.
         // 此单一记录为存储层选择权威，不表示路由已就绪。
         let next = VulcanPluginActivation {
-            schema_version: if credential_revision.is_some() {
+            schema_version: if configuration.is_some() {
+                CONFIGURED_ACTIVATION_VERSION
+            } else if credential_revision.is_some() {
                 CREDENTIAL_ACTIVATION_VERSION
             } else if approved_permissions.is_some() {
                 AUTHORIZED_ACTIVATION_VERSION
@@ -571,11 +628,18 @@ impl VulcanPluginGenerationStore {
             generation,
             approved_permissions,
             credential_revision,
+            configuration,
         };
-        files::write_record(
-            &self.root.join("active").join(format!("{plugin_id}.json")),
-            &next,
-        )?;
+        // The selected document shares exactly one atomic publication with all other activation authorities.
+        // 所选文档与其他全部激活权威共用唯一原子发布。
+        let path = self.root.join("active").join(format!("{plugin_id}.json"));
+        if next.configuration.is_some() {
+            let bytes = serde_json::to_vec(&next)
+                .map_err(|_| Error::invalid("Cannot encode configured plugin activation."))?;
+            files::write_encoded_record(&path, &bytes, super::MAX_ACTIVATION_BYTES)?;
+        } else {
+            files::write_record(&path, &next)?;
+        }
         Ok(next)
     }
 
@@ -641,6 +705,7 @@ impl VulcanPluginGenerationStore {
             package_root,
             required_permissions: verified_metadata.required_permissions,
             credential_keys: verified_metadata.credential_keys,
+            configuration: verified_metadata.configuration,
             _lease: Arc::new(GenerationLease { _lock: lease }),
         })
     }
@@ -675,6 +740,12 @@ impl VulcanPluginGenerationStore {
             required_permissions: crate::runtime::plugin_required_permissions(&descriptor)
                 .map_err(|error| Error::invalid(error.to_string()))?,
             credential_keys: super::credential_staging::declared_keys(&descriptor),
+            configuration: descriptor
+                .manifest
+                .as_ref()
+                .ok_or_else(|| Error::invalid("Verified package has no manifest."))?
+                .config
+                .clone(),
         })
     }
 }

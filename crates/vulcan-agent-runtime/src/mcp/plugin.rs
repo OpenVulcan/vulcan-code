@@ -213,7 +213,10 @@ fn plugin_mcp_server_config(
     // config is loaded only when this exact server declaration names a Config source.
     // config 仅在当前精确服务器声明使用 Config 来源时加载。
     let config = if transport_uses_plugin_config(&server.manifest.transport) {
-        plugin_server_configuration(plugins, &server.plugin_id)?
+        match server.configuration() {
+            Some(selection) => selection.value().cloned(),
+            None => plugin_server_configuration(plugins, &server.plugin_id)?,
+        }
     } else {
         None
     };
