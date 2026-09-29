@@ -3,6 +3,7 @@
 
 mod discovery;
 mod operations;
+mod retention;
 #[cfg(test)]
 mod tests;
 mod writer;
@@ -13,6 +14,27 @@ use super::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
+use std::sync::Arc;
+
+/// A cloneable real reader lease for one exact staged package/revision, retained until its last owner drops.
+/// 单个精确已暂存插件包／修订的可克隆实际读者租约，保留至最后所有者释放。
+#[derive(Debug, Clone)]
+pub struct PinnedVulcanPluginCredentials {
+    /// Frozen non-secret identity and inventory verified before the shared lease is returned.
+    /// 返回共享租约前已验证的固定非秘密身份及清单。
+    record: VulcanPluginCredentialRecord,
+    /// All clones share the same actual locked file; copying identifiers alone grants no retention.
+    /// 全部克隆共用同一个实际加锁文件；仅复制标识不提供保留。
+    _lease: Arc<File>,
+}
+
+impl PinnedVulcanPluginCredentials {
+    /// Borrow the exact retained inventory; the reference cannot change the revision or its values.
+    /// 借用精确保留清单；此引用不能改变修订或其值。
+    pub fn record(&self) -> &VulcanPluginCredentialRecord {
+        &self.record
+    }
+}
 
 /// One journal schema owns its immutable inventory and explicit progress state.
 /// 单个日志模式持有不可变清单及显式进度状态。
@@ -48,8 +70,8 @@ pub enum VulcanPluginCredentialPhase {
     /// Every declared presence and value was verified before this checkpoint was persisted.
     /// 持久保存此检查点前，已验证每项声明存在性及值。
     Staged,
-    /// Candidate deletion started; only the original cleanup may continue.
-    /// 候选删除已开始；仅能继续原清理。
+    /// Credential deletion started; only the original candidate or retired-revision cleanup may continue.
+    /// 凭据删除已开始；仅能继续原候选或退役修订清理。
     Discarding,
     /// All declared OS entries were confirmed absent; the record prevents identity reuse.
     /// 全部声明 OS 条目已确认为缺失；记录防止身份复用。

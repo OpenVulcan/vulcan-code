@@ -4,8 +4,9 @@
 mod credential_staging;
 mod credentials;
 pub use credential_staging::{
-    VulcanPluginCredentialBackend, VulcanPluginCredentialKey, VulcanPluginCredentialPhase,
-    VulcanPluginCredentialRecord, VulcanPluginCredentialStaging, VulcanPluginCredentialValues,
+    PinnedVulcanPluginCredentials, VulcanPluginCredentialBackend, VulcanPluginCredentialKey,
+    VulcanPluginCredentialPhase, VulcanPluginCredentialRecord, VulcanPluginCredentialStaging,
+    VulcanPluginCredentialValues,
 };
 mod discovery;
 pub use credentials::{VulcanPluginCredentialBinding, VulcanPluginCredentialRevision};
@@ -320,4 +321,7 @@ pub struct VulcanPluginActiveGeneration {
     /// Real lease for the selected generation, absent only for no selection or a tombstone.
     /// 选定代次的实际租约，仅未选择或停用记录时缺失。
     pub generation: Option<PinnedVulcanPluginGeneration>,
+    /// Actual credential ownership for an active version-three choice; legacy and tombstones have none.
+    /// 第三版有效选择的实际凭据所有权；旧格式和停用记录没有此所有权。
+    pub credentials: Option<PinnedVulcanPluginCredentials>,
 }

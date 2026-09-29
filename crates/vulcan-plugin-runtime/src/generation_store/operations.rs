@@ -207,17 +207,22 @@ impl VulcanPluginGenerationStore {
                 "Selected approval differs from the exact package capability set.",
             ));
         }
-        if let (Some(revision), Some(package)) = (
+        // Ownership must be acquired before the same selection fence is released.
+        // 必须在相同选择屏障释放前取得所有权。
+        let credentials = if let (Some(revision), Some(package)) = (
             activation
                 .as_ref()
                 .and_then(VulcanPluginActivation::credential_revision),
             generation.as_ref(),
         ) {
-            self.validate_staged_credentials_locked(package, revision)?;
-        }
+            Some(self.pin_credentials_locked(package, revision)?)
+        } else {
+            None
+        };
         Ok(VulcanPluginActiveGeneration {
             activation,
             generation,
+            credentials,
         })
     }
 

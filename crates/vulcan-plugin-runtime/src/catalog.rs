@@ -146,6 +146,9 @@ pub struct VulcanPluginMcpServerDescriptor {
     /// Exact credential namespace captured with this declaration; old selections explicitly use legacy storage.
     /// 随此声明捕获的精确凭据命名空间；旧选择明确使用旧存储。
     pub credential_binding: crate::VulcanPluginCredentialBinding,
+    /// Real retention follows standalone descriptor clones, preventing collection during later secret reads.
+    /// 实际保留随独立描述符克隆传递，防止后续秘密读取期间被回收。
+    pub(crate) credential_lease: Option<crate::PinnedVulcanPluginCredentials>,
     /// Stable server identifier within the owning plugin.
     /// 所属插件内部稳定的服务器标识。
     pub id: String,
@@ -908,6 +911,7 @@ fn load_vulcan_plugin_package(
             plugin_id: manifest.id.clone(),
             plugin_generation: 0,
             credential_binding: crate::VulcanPluginCredentialBinding::Legacy,
+            credential_lease: None,
             id: server.id.clone(),
             name: server.name.clone(),
             manifest: server.clone(),

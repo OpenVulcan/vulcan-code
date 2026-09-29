@@ -15,13 +15,13 @@ pub(super) const INVENTORY_DIRECTORY: &str = "credentials";
 impl VulcanPluginGenerationStore {
     /// Require a complete durable staging checkpoint for this exact package/revision while the selection fence is held.
     /// 在持有选择屏障期间，要求此精确插件包／修订具有完整持久暂存检查点。
-    /// This rejects preparing or discarded candidates without probing OS values or claiming application readiness.
-    /// 此检查拒绝准备中或已丢弃候选，不探测 OS 值，也不宣称应用就绪。
+    /// Return the verified non-secret record; reject incomplete candidates without probing OS values or claiming readiness.
+    /// 返回已验证非秘密记录；拒绝未完成候选，不探测 OS 值，也不宣称就绪。
     pub(in crate::generation_store) fn validate_staged_credentials_locked(
         &self,
         package: &PinnedVulcanPluginGeneration,
         revision: &VulcanPluginCredentialRevision,
-    ) -> Result<()> {
+    ) -> Result<VulcanPluginCredentialRecord> {
         // The journal is mandatory for version-three selection, not an optional alternate authority.
         // 第三版选择必须具有日志；它不是可选替代权威。
         let record = self
@@ -37,7 +37,7 @@ impl VulcanPluginGenerationStore {
                 "Selected credentials are not fully staged for this exact package identity.",
             ));
         }
-        Ok(())
+        Ok(record)
     }
 
     /// Persist a new inventory for `generation` and `revision`, derived from complete `values`; return its exclusive owner.
@@ -93,7 +93,7 @@ impl VulcanPluginGenerationStore {
         validate_record(&record, &record.package.plugin_id, &record.revision)?;
         // Acquire mutation ownership before publishing the first durable inventory.
         // 发布首份持久清单前取得变更所有权。
-        let lease = self.credential_lease(&record.package.plugin_id, &record.revision)?;
+        let lease = self.credential_lease(&record.package.plugin_id, &record.revision, false)?;
         // Explicit preparation alone creates this optional layout; ordinary reads never repair it.
         // 仅显式准备创建此可选布局；普通读取绝不修补它。
         let root = files::ensure_child(&self.root, INVENTORY_DIRECTORY)?;
@@ -146,7 +146,7 @@ impl VulcanPluginGenerationStore {
         let _namespace = self.namespace_lock(plugin_id, false)?;
         // A live original writer makes recovery busy rather than permitting a second write stream.
         // 存活原写入者使恢复报告繁忙，不允许第二条写入流。
-        let lease = self.credential_lease(plugin_id, revision)?;
+        let lease = self.credential_lease(plugin_id, revision, false)?;
         // Recovery never guesses missing inventory keys from a latest package or global catalog.
         // 恢复绝不从最新插件包或全局目录猜测缺失清单键。
         let record = self
@@ -166,100 +166,33 @@ impl VulcanPluginGenerationStore {
 
     /// Explicitly discard an unfinished candidate using `backend`; returns false for an already completed discard.
     /// 使用 `backend` 显式丢弃未完成候选；已经完成丢弃时返回假。
-    /// Staged or currently referenced revisions cannot use this API; published-revision collection requires later reader ownership integration.
-    /// 已暂存或当前被引用的修订不能使用此接口；已发布修订回收要求后续读者所有权接入。
+    /// Staged or currently referenced revisions cannot use this API; retired revisions use collect_credentials with real reader exclusion.
+    /// 已暂存或当前被引用修订不能使用此接口；退役修订使用具有实际读者互斥的 collect_credentials。
     pub fn discard_credential_staging(
         &self,
         plugin_id: &str,
         revision: &VulcanPluginCredentialRevision,
         backend: &dyn VulcanPluginCredentialBackend,
     ) -> Result<bool> {
-        // The plugin fence protects the decision; the revision lease protects every subsequent backend deletion.
-        // 插件屏障保护决策；修订租约保护后续每次后端删除。
-        let namespace = self.namespace_lock(plugin_id, false)?;
-        // Live preparation must finish or release its actual owner before cleanup can begin.
-        // 存活准备必须完成或释放实际所有者后，清理才能开始。
-        let _lease = self.credential_lease(plugin_id, revision)?;
-        // A tombstone still names a published revision and is not an abandoned preparation.
-        // 停用记录仍指定已发布修订，不是放弃的准备。
-        if self
-            .read_activation(plugin_id)?
-            .as_ref()
-            .and_then(|record| record.credential_revision())
-            == Some(revision)
-        {
-            return Err(Error::invalid(
-                "Referenced credential revisions cannot be discarded as staging candidates.",
-            ));
-        }
-        // The immutable key inventory remains the cleanup authority even after its source package is removed.
-        // 即使来源插件包已移除，不可变键清单仍是清理权威。
-        let mut record = self
-            .read_credential_record_locked(plugin_id, revision)?
-            .ok_or_else(|| Error::invalid("Credential cleanup record is missing."))?;
-        match record.phase {
-            VulcanPluginCredentialPhase::Staged => {
-                return Err(Error::invalid(
-                    "Staged credentials require published-revision retention and collection.",
-                ));
-            }
-            VulcanPluginCredentialPhase::Discarded => return Ok(false),
-            VulcanPluginCredentialPhase::Preparing | VulcanPluginCredentialPhase::Discarding => {}
-        }
-        record.phase = VulcanPluginCredentialPhase::Discarding;
-        self.write_credential_record_locked(&record)?;
-        drop(namespace);
-        for key in &record.keys {
-            backend.delete(plugin_id, revision, key).map_err(|_| Error::new(Code::Storage, "Secure credential candidate deletion failed; the original cleanup inventory is retained."))?;
-            if backend
-                .read(plugin_id, revision, key)
-                .map_err(|_| {
-                    Error::new(
-                        Code::Storage,
-                        "Secure credential deletion verification failed.",
-                    )
-                })?
-                .is_some()
-            {
-                return Err(Error::new(
-                    Code::Storage,
-                    "Secure credential entry still exists after candidate deletion.",
-                ));
-            }
-        }
-        // Do not publish completion if a non-cooperating writer changed the retained journal meanwhile.
-        // 若非协作写入者期间改变保留日志，则不发布完成。
-        let _namespace = self.namespace_lock(plugin_id, false)?;
-        if self
-            .read_credential_record_locked(plugin_id, revision)?
-            .as_ref()
-            != Some(&record)
-        {
-            return Err(Error::new(
-                Code::Conflict,
-                "Credential cleanup record changed; inspect the original revision.",
-            ));
-        }
-        record.phase = VulcanPluginCredentialPhase::Discarded;
-        self.write_credential_record_locked(&record)?;
-        Ok(true)
+        self.cleanup_credentials(plugin_id, revision, backend, false)
     }
 
-    /// Open the original nonblocking exclusive revision lock for validated plugin/revision names.
-    /// 为已校验插件／修订名称打开原非阻塞排他修订锁。
-    /// Callers must already hold the plugin namespace fence; the returned file owns mutation permission.
-    /// 调用方必须已经持有插件命名空间屏障；返回文件持有变更许可。
-    fn credential_lease(
+    /// Open the original nonblocking revision lock for validated names, shared for readers and exclusive for mutation.
+    /// 为已校验名称打开原非阻塞修订锁，读者共享、变更排他。
+    /// Callers must hold the plugin namespace fence; the returned file owns the requested retention.
+    /// 调用方必须持有插件命名空间屏障；返回文件持有所请求的保留。
+    pub(super) fn credential_lease(
         &self,
         plugin_id: &str,
         revision: &VulcanPluginCredentialRevision,
+        shared: bool,
     ) -> Result<File> {
         files::lock(
             &self.root.join("locks").join(format!(
                 "{plugin_id}-credential-{}.lease",
                 revision.as_str()
             )),
-            false,
+            shared,
         )
     }
 

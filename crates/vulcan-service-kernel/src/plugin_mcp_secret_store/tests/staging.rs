@@ -268,6 +268,45 @@ mcp:
                 .is_none()
         );
     }
+    // A real shared reader and its clone retain staged OS entries until their final release.
+    // 实际共享读者及其克隆保留已暂存 OS 条目，直至最后释放。
+    let reader = reopened
+        .pin_credentials(&generation, &first)
+        .expect("pin real staged OS credentials");
+    // A separate wrapper must keep the exact same filesystem retention after the original is dropped.
+    // 原对象释放后，独立包装对象必须保留完全相同的文件系统所有权。
+    let retained = reader.clone();
+    drop(reader);
+    assert_eq!(
+        reopened
+            .collect_credentials(&plugin, &first, &backend)
+            .expect_err("real reader must block OS credential deletion")
+            .code,
+        vulcan_plugin_runtime::VulcanPluginStoreErrorCode::Busy
+    );
+    for (key, expected) in &values {
+        assert_eq!(
+            backend
+                .read(&plugin, &first, key)
+                .expect("verify blocked cleanup preserved OS entries")
+                .as_ref(),
+            expected.as_ref()
+        );
+    }
+    drop(retained);
+    assert!(
+        reopened
+            .collect_credentials(&plugin, &first, &backend)
+            .expect("collect staged OS entries after final reader")
+    );
+    for key in values.keys() {
+        assert!(
+            backend
+                .read(&plugin, &first, key)
+                .expect("verify collected OS entry absence")
+                .is_none()
+        );
+    }
     assert_eq!(
         OsPluginMcpSecretStore
             .read_optional_secret(&plugin, "remote", "first")

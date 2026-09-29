@@ -23,6 +23,9 @@ pub struct VulcanPluginManagedPackage {
     /// Credential selection captured by the same persistent activation revision.
     /// 由相同持久激活修订捕获的凭据选择。
     credential_binding: crate::VulcanPluginCredentialBinding,
+    /// Real credential retention remains live even for a managed package without MCP contributions.
+    /// 即使受管插件包没有 MCP 贡献，实际凭据保留仍保持有效。
+    _credential_lease: Option<crate::PinnedVulcanPluginCredentials>,
 }
 
 impl VulcanPluginManagedPackage {
@@ -201,11 +204,13 @@ fn load_selected_package(
     };
     for server in &mut package.mcp_servers {
         server.credential_binding = credential_binding.clone();
+        server.credential_lease = selected.credentials.clone();
     }
     package.managed_package = Some(VulcanPluginManagedPackage {
         activation_revision: activation.revision,
         approved_permissions: activation.approved_permissions().map(<[String]>::to_vec),
         credential_binding,
+        _credential_lease: selected.credentials,
         generation,
     });
     Ok(ManagedSelection::Package(Box::new(package)))
