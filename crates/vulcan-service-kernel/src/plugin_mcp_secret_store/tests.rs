@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[cfg(windows)]
+mod staging;
+
 /// Verify stable account bytes and tuple separation without opening the user's credential backend.
 /// 验证稳定账户字节及元组隔离，不打开用户凭据后端。
 #[test]

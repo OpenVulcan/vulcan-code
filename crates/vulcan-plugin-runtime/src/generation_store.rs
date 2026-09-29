@@ -1,7 +1,12 @@
 //! Immutable package generations with explicit activation revisions and actual filesystem leases.
 //! 具有显式激活修订及实际文件系统租约的不可变插件包代次。
 
+mod credential_staging;
 mod credentials;
+pub use credential_staging::{
+    VulcanPluginCredentialBackend, VulcanPluginCredentialKey, VulcanPluginCredentialPhase,
+    VulcanPluginCredentialRecord, VulcanPluginCredentialStaging, VulcanPluginCredentialValues,
+};
 mod discovery;
 pub use credentials::{VulcanPluginCredentialBinding, VulcanPluginCredentialRevision};
 mod files;
@@ -248,6 +253,17 @@ struct GenerationLease {
     _lock: File,
 }
 
+/// Metadata derived from one verified package read, shared by preparation and subsequent pins.
+/// 从单次已验证插件包读取派生的元数据，由准备及后续固定共用。
+struct VerifiedPackageMetadata {
+    /// Complete canonical permission keys from that exact verified descriptor.
+    /// 来自该精确已验证描述符的完整规范权限键。
+    required_permissions: Vec<String>,
+    /// Complete canonical credential inventory from the same descriptor, without any values.
+    /// 来自相同描述符的完整规范凭据清单，不含任何值。
+    credential_keys: Vec<VulcanPluginCredentialKey>,
+}
+
 /// Verified package location pinned against cooperating garbage collection across processes.
 /// 已验证插件包位置，阻止跨进程协作回收。
 #[derive(Debug, Clone)]
@@ -264,6 +280,9 @@ pub struct PinnedVulcanPluginGeneration {
     /// Complete canonical capability keys derived while verifying this exact physical package.
     /// 校验此精确物理插件包时派生的完整规范能力键。
     required_permissions: Vec<String>,
+    /// Complete declared secret slots derived during the same authoritative package verification.
+    /// 在同一次权威插件包校验期间派生的完整声明秘密槽位。
+    credential_keys: Vec<VulcanPluginCredentialKey>,
     /// Shared real lock ownership, including all handle clones.
     /// 包含全部句柄克隆的共享实际锁所有权。
     _lease: Arc<GenerationLease>,

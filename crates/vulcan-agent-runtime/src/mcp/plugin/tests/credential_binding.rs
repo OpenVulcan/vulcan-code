@@ -3,7 +3,90 @@
 
 use super::*;
 use std::sync::Mutex;
+use vulcan_plugin_runtime::{
+    PinnedVulcanPluginGeneration, VulcanPluginCredentialBackend, VulcanPluginCredentialKey,
+    VulcanPluginCredentialValues, VulcanPluginPermissionPreview,
+};
 use vulcan_plugin_runtime::{VulcanPluginCredentialRevision, VulcanPluginGenerationStore};
+
+impl VulcanPluginCredentialBackend for RevisionSecrets {
+    /// Read this fixture's already-populated revision through the same exact namespace used by MCP.
+    /// 经 MCP 使用的相同精确命名空间，读取此夹具已填充修订。
+    fn read(
+        &self,
+        plugin: &str,
+        revision: &VulcanPluginCredentialRevision,
+        key: &VulcanPluginCredentialKey,
+    ) -> Result<Option<String>, String> {
+        self.read_secret(
+            plugin,
+            &key.server_id,
+            &key.secret_key,
+            &VulcanPluginCredentialBinding::Revision(revision.clone()),
+        )
+        .map(Some)
+    }
+    /// Reject unexpected writes; this fixture deliberately starts with complete matching values.
+    /// 拒绝非预期写入；此夹具刻意以完整匹配值开始。
+    fn write(
+        &self,
+        _: &str,
+        _: &VulcanPluginCredentialRevision,
+        _: &VulcanPluginCredentialKey,
+        _: &str,
+    ) -> Result<(), String> {
+        Err("Unexpected credential fixture overwrite.".into())
+    }
+    /// Reject deletion because these selected fixture revisions remain retained throughout the test.
+    /// 拒绝删除，因为这些选定夹具修订在测试全程保留。
+    fn delete(
+        &self,
+        _: &str,
+        _: &VulcanPluginCredentialRevision,
+        _: &VulcanPluginCredentialKey,
+    ) -> Result<(), String> {
+        Err("Unexpected credential fixture deletion.".into())
+    }
+}
+
+/// Verify the fixture's populated values and persist the real staging checkpoint for the exact preview and package.
+/// 验证夹具已填充值，并为精确预览及插件包持久保存真实暂存检查点。
+fn stage_fixture_credentials(
+    store: &VulcanPluginGenerationStore,
+    generation: &PinnedVulcanPluginGeneration,
+    preview: &VulcanPluginPermissionPreview,
+    revision: &VulcanPluginCredentialRevision,
+    backend: &RevisionSecrets,
+) {
+    // Every input key comes from the production permission preview rather than a parallel fixture inventory.
+    // 每个输入键均来自生产权限预览，而非平行夹具清单。
+    let values: VulcanPluginCredentialValues = preview
+        .mcp_servers
+        .iter()
+        .flat_map(|server| {
+            server
+                .secret_keys
+                .iter()
+                .map(|secret_key| VulcanPluginCredentialKey {
+                    server_id: server.server_id.clone(),
+                    secret_key: secret_key.clone(),
+                })
+        })
+        .map(|key| {
+            // The same backend provides the expected fixture value and the subsequent staging readback.
+            // 相同后端提供预期夹具值及后续暂存回读。
+            let value =
+                VulcanPluginCredentialBackend::read(backend, &preview.plugin_id, revision, &key)
+                    .expect("read prepopulated revision fixture value");
+            (key, value)
+        })
+        .collect();
+    store
+        .begin_credential_staging(generation, revision.clone(), &values)
+        .expect("prepare real MCP credential inventory")
+        .write_and_finish(backend, &values)
+        .expect("verify prepopulated MCP credential revision");
+}
 
 /// Isolated backend records exact identities and provides distinct values for each explicit revision.
 /// 隔离后端记录精确身份，并为每个显式修订提供不同值。
@@ -221,6 +304,8 @@ fn credential_binding_mcp_materialization_uses_frozen_selection_without_fallback
         labels: BTreeMap::from([(first.clone(), "first"), (second.clone(), "second")]),
         reads: Mutex::new(Vec::new()),
     };
+    stage_fixture_credentials(&store, &generation, &preview, &first, &secrets);
+    stage_fixture_credentials(&store, &generation, &preview, &second, &secrets);
     store
         .activate_with_credentials(&generation, 0, preview.permissions.clone(), first.clone())
         .expect("publish first credentials");

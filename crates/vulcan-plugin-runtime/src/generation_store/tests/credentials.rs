@@ -3,6 +3,65 @@
 
 use super::*;
 
+/// Empty secure backend proves that a package without declared secrets never touches external storage.
+/// 空安全后端证明没有声明秘密的插件包绝不访问外部存储。
+struct EmptyCredentialBackend;
+
+impl VulcanPluginCredentialBackend for EmptyCredentialBackend {
+    /// Reject every read because this fixture declares no secret slots.
+    /// 拒绝每次读取，因为此夹具未声明秘密槽位。
+    fn read(
+        &self,
+        _: &str,
+        _: &VulcanPluginCredentialRevision,
+        _: &VulcanPluginCredentialKey,
+    ) -> Result<Option<String>, String> {
+        Err("Unexpected empty-fixture read.".into())
+    }
+    /// Reject every write because no value belongs to this fixture.
+    /// 拒绝每次写入，因为此夹具不拥有任何值。
+    fn write(
+        &self,
+        _: &str,
+        _: &VulcanPluginCredentialRevision,
+        _: &VulcanPluginCredentialKey,
+        _: &str,
+    ) -> Result<(), String> {
+        Err("Unexpected empty-fixture write.".into())
+    }
+    /// Reject deletion because this fixture owns no external entry.
+    /// 拒绝删除，因为此夹具不拥有外部条目。
+    fn delete(
+        &self,
+        _: &str,
+        _: &VulcanPluginCredentialRevision,
+        _: &VulcanPluginCredentialKey,
+    ) -> Result<(), String> {
+        Err("Unexpected empty-fixture delete.".into())
+    }
+}
+
+/// Persist a genuinely empty staging checkpoint for `package`/`revision`; no secure backend call is permitted.
+/// 为 `package`／`revision` 持久保存确实为空的暂存检查点；不允许安全后端调用。
+fn stage_empty_credentials(
+    store: &VulcanPluginGenerationStore,
+    package: &PinnedVulcanPluginGeneration,
+    revision: &VulcanPluginCredentialRevision,
+) {
+    store
+        .begin_credential_staging(
+            package,
+            revision.clone(),
+            &VulcanPluginCredentialValues::new(),
+        )
+        .expect("prepare empty credential inventory")
+        .write_and_finish(
+            &EmptyCredentialBackend,
+            &VulcanPluginCredentialValues::new(),
+        )
+        .expect("verify empty credential staging");
+}
+
 /// Credential references reject aliases and missing authority before any filesystem or keyring access.
 /// 凭据引用在任何文件系统或凭据库访问前拒绝别名及缺失权威。
 #[test]
@@ -71,6 +130,8 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
     // The successor credential revision is explicitly allocated, never inferred from a global lookup.
     // 后继凭据修订明确分配，绝不从全局查找推断。
     let second = VulcanPluginCredentialRevision::allocate();
+    stage_empty_credentials(&store, &package, &first);
+    stage_empty_credentials(&store, &package, &second);
     // Approval, package and credential reference are captured in one version-three record.
     // 批准、插件包及凭据引用在单个第三版记录中捕获。
     let selected = store
@@ -151,13 +212,12 @@ fn credential_binding_record_rejects_missing_null_and_cross_version_fields() {
             "credential corruption",
         ),
     );
+    // Even a zero-secret package requires an explicit durable staging checkpoint before selection.
+    // 即使零秘密插件包，也要求选择前具有明确持久暂存检查点。
+    let revision = VulcanPluginCredentialRevision::allocate();
+    stage_empty_credentials(&store, &package, &revision);
     store
-        .activate_with_credentials(
-            &package,
-            0,
-            Vec::new(),
-            VulcanPluginCredentialRevision::allocate(),
-        )
+        .activate_with_credentials(&package, 0, Vec::new(), revision)
         .expect("publish credential selection");
     // This single file is the package, approval and credential selection authority.
     // 此单一文件是插件包、批准及凭据选择权威。

@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use vulcan_agent_runtime::mcp::PluginMcpSecretStore;
 use vulcan_plugin_runtime::{VulcanPluginCredentialBinding, VulcanPluginCredentialRevision};
 
+mod staging;
 #[cfg(test)]
 mod tests;
 
