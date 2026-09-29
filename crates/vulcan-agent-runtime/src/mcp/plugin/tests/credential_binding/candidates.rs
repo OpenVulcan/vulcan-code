@@ -109,6 +109,13 @@ fn candidate_mcp_configs_keep_frozen_values_and_original_request() {
         transaction.record().request_id()
     );
     assert_eq!(configs.servers().len(), 3);
+    // The declared conversation browser endpoint still requires its actual owner grant during local validation.
+    // 声明的会话浏览器端点在本地校验期间仍要求实际所有者授权。
+    assert!(
+        crate::mcp::candidate_local_mcp_server_configs(prepared.clone(), &secrets)
+            .expect_err("local checks must not invent conversation authorization")
+            .contains("Core browser endpoint requires a conversation grant.")
+    );
     assert_values(configs.servers(), "second");
     for config in configs.servers() {
         assert!(

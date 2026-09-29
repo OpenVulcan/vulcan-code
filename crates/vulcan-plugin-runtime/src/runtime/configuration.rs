@@ -55,6 +55,67 @@ pub(crate) fn validate_plugin_config_value(
 }
 
 impl VulcanPluginRuntimeManager {
+    /// Select a complete configuration for candidate using the exact predecessor's declared authority.
+    /// 使用精确 predecessor 的声明权威，为 candidate 选择完整配置。
+    /// Existing declarations preserve their document; first declarations use candidate defaults; removed declarations stay absent.
+    /// 既有声明保留其文档；首次声明使用候选默认值；移除声明保持缺失。
+    /// Returns a value validated against the new package without writing state or merging documents.
+    /// 返回按新插件包校验的值，不写入状态或合并文档。
+    pub fn configuration_for_update(
+        &self,
+        candidate: &crate::PinnedVulcanPluginGeneration,
+        predecessor: &crate::VulcanPluginDescriptor,
+    ) -> Result<crate::VulcanPluginConfigurationSelection, VulcanPluginRuntimeError> {
+        if candidate.identity().plugin_id != predecessor.id {
+            return Err(VulcanPluginRuntimeError::new(
+                "Configuration update requires the same plugin identity.",
+            ));
+        }
+        // Inspect only the pinned immutable candidate, never the mutable source supplied earlier.
+        // 仅检查已固定不可变候选，绝不检查较早提供的可变来源。
+        let package = crate::inspect_user_plugin_package(candidate.package_root())
+            .map_err(VulcanPluginRuntimeError::new)?;
+        if package.content_fingerprint != candidate.identity().content_fingerprint {
+            return Err(VulcanPluginRuntimeError::new(
+                "Configuration candidate content changed.",
+            ));
+        }
+        // Both declaration decisions come from validated manifests, not field probing or fallback guesses.
+        // 两个声明决定均来自已校验清单，不通过字段探测或备用猜测。
+        let manifest = package.manifest.as_ref().ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Configuration candidate has no valid manifest.")
+        })?;
+        let Some(config) = &manifest.config else {
+            return Ok(crate::VulcanPluginConfigurationSelection::NotDeclared {});
+        };
+        // The predecessor declaration determines whether preserving a document is meaningful.
+        // 前驱声明决定保留文档是否有意义。
+        let predecessor_manifest = predecessor.manifest.as_ref().ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Configuration predecessor has no valid manifest.")
+        })?;
+        // Newly declared configuration uses this candidate's defaults exactly once, without touching legacy state.
+        // 新声明配置仅使用此候选默认值一次，不触碰旧状态。
+        let value = if predecessor_manifest.config.is_some() {
+            self.plugin_config_for_snapshot(predecessor)?
+        } else {
+            // The package validator remains authoritative for relative paths and reparse-point exclusion.
+            // 插件包校验器继续对相对路径及重解析点排除具有权威。
+            let defaults = canonical_plugin_file(
+                candidate.package_root(),
+                &config.defaults_file,
+                "configuration defaults",
+            )
+            .map_err(VulcanPluginRuntimeError::new)?;
+            read_plugin_json_state(&defaults, "configuration defaults")?
+        };
+        validate_plugin_config_value(candidate.package_root(), config, &value).map_err(|_| {
+            VulcanPluginRuntimeError::new(
+                "Existing configuration does not satisfy the candidate package schema.",
+            )
+        })?;
+        Ok(crate::VulcanPluginConfigurationSelection::Document { value })
+    }
+
     /// Read configuration using the caller's exact retained package descriptor.
     /// 使用调用方保留的精确包描述符读取配置。
     /// Return validated state/defaults without looking up a newer package generation.

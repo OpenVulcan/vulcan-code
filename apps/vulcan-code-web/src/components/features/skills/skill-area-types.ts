@@ -49,6 +49,15 @@ export interface SkillActionProps {
   // Updates one disabled local user plugin through the same exact authorization surface.
   // 通过同一精确授权界面更新单个已停用本地用户插件。
   onUpdateLocalPlugin: (sourcePath: string, contentFingerprint: string, approvedPermissions: string[], allowRegistryDependencies: boolean, initialSecrets: VulcanPluginInitialSecret[]) => Promise<void>
+  // Reads original immutable update requests without starting or replaying work.
+  // 读取原不可变更新请求，不启动或重放工作。
+  onReadLocalPluginUpdates: typeof import("@/service/plugin-update-service").readLocalPluginUpdates
+  // Completes the explicitly identified published request and applies its catalog projection.
+  // 完成明确标识的已发布请求，并应用其目录投影。
+  onResumeLocalPluginUpdate: (pluginId: string, requestId: string) => Promise<void>
+  // Abandons the original unpublished request after explicit external-effect acknowledgement.
+  // 明确确认外部副作用后，放弃原尚未发布请求。
+  onAbortLocalPluginUpdate: typeof import("@/service/plugin-update-service").abortLocalPluginUpdate
   // Uninstalls one disabled user plugin.
   // 卸载单个已停用用户插件。
   onUninstallUserPlugin: (pluginId: string) => Promise<void>

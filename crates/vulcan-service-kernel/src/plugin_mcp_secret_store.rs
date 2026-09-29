@@ -23,6 +23,36 @@ const VERSIONED_PLUGIN_MCP_SECRET_SERVICE: &str = "vulcan-code.plugin-mcp.versio
 pub(crate) struct OsPluginMcpSecretStore;
 
 impl OsPluginMcpSecretStore {
+    /// Read an optional slot from binding's exact namespace for an explicit immutable update.
+    /// 为显式不可变更新，从 binding 的精确命名空间读取可选槽位。
+    /// The plugin/server/key tuple is already declared; absence returns None without probing another revision.
+    /// 插件／服务器／键元组已经声明；缺失返回 None，不探测另一修订。
+    pub(crate) fn read_selected_optional_secret(
+        &self,
+        plugin_id: &str,
+        server_id: &str,
+        secret_key: &str,
+        binding: &VulcanPluginCredentialBinding,
+    ) -> Result<Option<String>, String> {
+        // Namespace selection is explicit and identical to ordinary descriptor-bound execution.
+        // 命名空间选择显式且与普通描述符绑定执行一致。
+        let entry = match binding {
+            VulcanPluginCredentialBinding::Legacy => {
+                plugin_secret_entry(plugin_id, server_id, secret_key)?
+            }
+            VulcanPluginCredentialBinding::Revision(revision) => {
+                versioned_plugin_secret_entry(plugin_id, server_id, secret_key, revision)?
+            }
+        };
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(KeyringError::NoEntry) => Ok(None),
+            Err(_) => Err(String::from(
+                "Failed to read the selected plugin credential securely.",
+            )),
+        }
+    }
+
     /// Reads one exact secret for transactional rollback without treating absence as an error.
     /// 为事务回滚读取单个精确 Secret，且不把不存在视为错误。
     pub(crate) fn read_optional_secret(

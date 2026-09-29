@@ -207,7 +207,8 @@ fn fixture(mode: &str) -> Fixture {
         let prepared = manager
             .prepare_mcp_activation_candidate(&candidate)
             .expect("prepare exact launcher");
-        candidate_global_mcp_server_configs(prepared, &secrets).expect("materialize exact inputs")
+        crate::mcp::candidate_local_mcp_server_configs(prepared, &secrets)
+            .expect("materialize exact local installation inputs")
     };
     Fixture {
         prepared,
@@ -406,6 +407,49 @@ async fn cancelled_candidate_observation_keeps_original_request_until_release() 
         .store
         .abort_activation_transaction(&mut resumed)
         .expect("abort recovered request");
+}
+
+/// The service validation helper distinguishes protocol readiness from actual shutdown and resource release.
+/// 服务校验辅助入口区分协议就绪、实际关闭及资源释放。
+/// No inputs or return; real successful and failed children retain one-attempt semantics and release original ownership.
+/// 无输入与返回值；真实成功及失败子进程保持单次尝试语义，并释放原所有权。
+#[tokio::test]
+async fn candidate_service_validation_requires_ready_shutdown_and_release() {
+    for mode in ["ready", "fail"] {
+        // Each original request gets one real immutable process and selected credential revision.
+        // 每个原请求获得一个真实不可变进程及选定凭据修订。
+        let mut fixture = fixture(mode);
+        // Only the original control admits work and requests shutdown.
+        // 仅原控制接纳工作并请求关闭。
+        let control =
+            CandidatePluginMcpRuntime::start(fixture.prepared).expect("candidate control");
+        // Diagnostic observation retains no actual resource authority.
+        // 诊断观测不保留实际资源权威。
+        let observer = control.observer();
+        // This is the complete helper consumed by the service update coordinator.
+        // 此处为服务更新协调器消费的完整辅助入口。
+        let result = control.validate_and_release().await;
+        assert_eq!(
+            result.is_ok(),
+            mode == "ready",
+            "exact protocol outcome: {result:?}"
+        );
+        if let Err(error) = result {
+            assert!(
+                error.contains("readiness:"),
+                "original failure must remain observable: {error}"
+            );
+        }
+        observer
+            .wait_until_released(OBSERVE)
+            .await
+            .expect("original resources released");
+        assert_started_once(&fixture.marker).await;
+        fixture
+            .store
+            .abort_activation_transaction(&mut fixture.transaction)
+            .expect("actual release permits original abort");
+    }
 }
 
 /// Failed initialization is attempted once and releases authority without hiding its failure state.

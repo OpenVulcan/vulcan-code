@@ -123,6 +123,12 @@ fn credential_binding_windows_secure_store_keeps_legacy_and_revisions_separate()
                 .unwrap(),
             value
         );
+        assert_eq!(
+            backend
+                .read_selected_optional_secret(&plugin, "server", "token", binding)
+                .expect("selected update read"),
+            Some(value.to_owned())
+        );
     }
     versioned_plugin_secret_entry(&plugin, "server", "token", &first)
         .unwrap()
@@ -134,10 +140,21 @@ fn credential_binding_windows_secure_store_keeps_legacy_and_revisions_separate()
                 &plugin,
                 "server",
                 "token",
-                &VulcanPluginCredentialBinding::Revision(first)
+                &VulcanPluginCredentialBinding::Revision(first.clone())
             )
             .expect_err("revision A must not fall back")
             .contains("is not configured")
+    );
+    assert_eq!(
+        backend
+            .read_selected_optional_secret(
+                &plugin,
+                "server",
+                "token",
+                &VulcanPluginCredentialBinding::Revision(first)
+            )
+            .expect("actual selected absence"),
+        None
     );
     assert_eq!(
         backend

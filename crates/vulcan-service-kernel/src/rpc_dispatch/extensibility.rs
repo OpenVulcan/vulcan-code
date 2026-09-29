@@ -17,6 +17,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_inspect_local_plugin",
     "service_install_local_plugin",
     "service_update_local_plugin",
+    "service_local_plugin_update_requests",
+    "service_resume_local_plugin_update",
+    "service_abort_local_plugin_update",
     "service_uninstall_user_plugin",
     "service_set_plugin_mcp_secret",
     "service_delete_plugin_mcp_secret",
@@ -144,6 +147,28 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "approvedPermissions")?,
                 rpc_required_param(params, "allowRegistryDependencies")?,
                 rpc_required_param(params, "initialSecrets")?,
+            )
+            .await,
+        ),
+        "service_local_plugin_update_requests" => rpc_json_result(
+            service_local_plugin_update_requests(state, rpc_required_param(params, "pluginId")?)
+                .await,
+        ),
+        "service_resume_local_plugin_update" => rpc_json_result(
+            service_resume_local_plugin_update(
+                app.clone(),
+                state,
+                rpc_required_param(params, "pluginId")?,
+                rpc_required_param(params, "requestId")?,
+            )
+            .await,
+        ),
+        "service_abort_local_plugin_update" => rpc_json_result(
+            service_abort_local_plugin_update(
+                state,
+                rpc_required_param(params, "pluginId")?,
+                rpc_required_param(params, "requestId")?,
+                rpc_required_param(params, "acknowledgeExternalEffects")?,
             )
             .await,
         ),

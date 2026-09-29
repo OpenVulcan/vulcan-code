@@ -36,6 +36,51 @@ pub struct CandidatePluginMcpObservation {
 }
 
 impl CandidatePluginMcpRuntime {
+    /// Validate this original attempt and await its actual resource release using the host's existing readiness budget.
+    /// 使用宿主既有就绪预算校验此原尝试，并等待其实际资源释放。
+    /// Returns success only after readiness, protocol shutdown and release; cancellation requests original shutdown.
+    /// 仅就绪、协议关闭及释放均完成后返回成功；取消请求原关闭。
+    pub async fn validate_and_release(self) -> Result<(), String> {
+        // The observation carries no resource lease, so waiting cannot retain the authority it is draining.
+        // 观测不携带资源租约，因此等待不能保留正在排空的权威。
+        let observation = self.observer();
+        // Readiness, protocol cleanup and actual release are separate evidence and all must succeed.
+        // 就绪、协议清理及实际释放是独立证据，必须全部成功。
+        let ready = observation
+            .wait_until_ready(MCP_PARTITION_READINESS_TIMEOUT)
+            .await;
+        self.shutdown();
+        // Successful terminal state includes the original transport shutdown barrier.
+        // 成功终态包含原传输关闭屏障。
+        let stopped = observation
+            .runtime
+            .wait_until_stopped(MCP_PARTITION_READINESS_TIMEOUT)
+            .await;
+        // Resource release remains required even if readiness or protocol shutdown failed.
+        // 即使就绪或协议关闭失败，仍要求实际资源释放。
+        let released = observation
+            .wait_until_released(MCP_PARTITION_READINESS_TIMEOUT)
+            .await;
+        // Preserve each failed boundary instead of interpreting local release as protocol success.
+        // 保留每个失败边界，而不将本地释放解释为协议成功。
+        let failures = [
+            ("readiness", ready),
+            ("shutdown", stopped),
+            ("resource release", released),
+        ]
+        .into_iter()
+        .filter_map(|(stage, result)| result.err().map(|error| format!("{stage}: {error}")))
+        .collect::<Vec<_>>();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Candidate MCP validation remains incomplete: {}",
+                failures.join("; ")
+            ))
+        }
+    }
+
     /// Starts one isolated attempt using only a sealed prepared candidate and its frozen definitions.
     /// 仅用密封准备候选及其固定定义启动一次隔离尝试。
     /// Prepared is consumed synchronously; returns control before any cancellable readiness wait.

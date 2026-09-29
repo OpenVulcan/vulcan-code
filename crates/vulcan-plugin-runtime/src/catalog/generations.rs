@@ -32,6 +32,25 @@ pub struct VulcanPluginManagedPackage {
 }
 
 impl VulcanPluginManagedPackage {
+    /// Compare every frozen selection authority against activation, including configuration and credentials.
+    /// 比较所有固定选择权威与 activation，包括配置及凭据。
+    /// Returns false for any mismatch; equal revisions alone never authorize a route handoff.
+    /// 任何不匹配均返回假；仅修订相等绝不授权路由交接。
+    pub fn matches_activation(&self, activation: &crate::VulcanPluginActivation) -> bool {
+        self.activation_revision == activation.revision
+            && self.generation.identity().plugin_id == activation.plugin_id
+            && activation.generation.as_ref() == Some(self.generation.identity())
+            && self.approved_permissions() == activation.approved_permissions()
+            && self.configuration() == activation.configuration()
+            && match (&self.credential_binding, activation.credential_revision()) {
+                (crate::VulcanPluginCredentialBinding::Legacy, None) => true,
+                (crate::VulcanPluginCredentialBinding::Revision(selected), Some(recorded)) => {
+                    selected == recorded
+                }
+                _ => false,
+            }
+    }
+
     /// Returns the exact persistent activation revision observed during selection.
     /// 返回选择时观察到的精确持久激活修订。
     pub fn activation_revision(&self) -> u64 {

@@ -49,8 +49,8 @@ impl PluginMcpMaterializationSource<'_> {
     }
 }
 
-/// Packages global candidate definitions with their original request resource owner.
-/// 将全局候选定义与原请求资源所有者一起封装。
+/// Packages isolated candidate validation definitions with their original request resource owner.
+/// 将隔离候选校验定义与原请求资源所有者一起封装。
 /// This prepared object is not a published partition or an operating-system cleanup receipt.
 /// 此准备对象不是已发布分区，也不是操作系统清理回执。
 #[derive(Debug, Clone)]
@@ -58,8 +58,8 @@ pub struct PreparedPluginMcpConfigs {
     /// Actual package, credentials and request lock retained across every clone.
     /// 每个克隆都保留实际插件包、凭据与请求锁。
     candidate: VulcanPluginPreparedMcpCandidate,
-    /// Exact global definitions with resolved values; conversation scopes require a separate owner grant.
-    /// 具有已解析值的精确全局定义；会话作用域需要独立所有者授权。
+    /// Exact definitions selected by the validation adapter; these inputs grant no conversation business admission.
+    /// 校验适配器选择的精确定义；这些输入不授予会话业务入场。
     servers: Vec<McpServerConfig>,
 }
 
@@ -82,8 +82,8 @@ impl PreparedPluginMcpConfigs {
         &self.candidate
     }
 
-    /// Borrows global definitions without releasing their request resource owner.
-    /// 借用全局定义，不释放其请求资源所有者。
+    /// Borrows isolated validation definitions without releasing their request resource owner.
+    /// 借用隔离校验定义，不释放其请求资源所有者。
     /// No inputs; callers must retain this object throughout all actual readiness work.
     /// 无输入；调用方必须在全部实际就绪工作期间保留此对象。
     pub fn servers(&self) -> &[McpServerConfig] {
@@ -108,6 +108,33 @@ pub fn candidate_global_mcp_server_configs(
         .servers()
         .iter()
         .filter(|server| server.manifest.scope == VulcanPluginMcpScopeManifest::Global)
+        .map(|server| plugin_mcp_server_config(&source, server, secrets, None))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PreparedPluginMcpConfigs { candidate, servers })
+}
+
+/// Materialize the candidate's declared local installation checks without opening remote or public tool routes.
+/// 物化候选声明的本地安装检查，不打开远程或公开工具路由。
+/// Candidate and secrets retain the original authority; returns sealed configurations for local stdio servers.
+/// candidate 及 secrets 保留原权威；返回本地标准输入输出服务器的密封配置。
+pub fn candidate_local_mcp_server_configs(
+    candidate: VulcanPluginPreparedMcpCandidate,
+    secrets: &dyn PluginMcpSecretStore,
+) -> Result<PreparedPluginMcpConfigs, String> {
+    // Local installation uses the same exact candidate materializer as global readiness.
+    // 本地安装使用与全局就绪相同的精确候选物化器。
+    let source = PluginMcpMaterializationSource::Candidate(&candidate);
+    // Transport declaration alone selects local checks, preserving the existing installation contract.
+    // 仅传输声明选择本地检查，保留既有安装契约。
+    let servers = candidate
+        .servers()
+        .iter()
+        .filter(|server| {
+            matches!(
+                server.manifest.transport,
+                VulcanPluginMcpTransportManifest::Stdio { .. }
+            )
+        })
         .map(|server| plugin_mcp_server_config(&source, server, secrets, None))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PreparedPluginMcpConfigs { candidate, servers })

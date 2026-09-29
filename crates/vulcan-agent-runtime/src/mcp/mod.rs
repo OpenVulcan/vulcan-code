@@ -12,8 +12,8 @@ pub use config::{
 };
 pub use plugin::{
     PluginMcpSecretStore, PreparedPluginMcpConfigs, candidate_global_mcp_server_configs,
-    plugin_conversation_mcp_server_config, plugin_mcp_server_configs,
-    plugin_mcp_server_configs_for_descriptors,
+    candidate_local_mcp_server_configs, plugin_conversation_mcp_server_config,
+    plugin_mcp_server_configs, plugin_mcp_server_configs_for_descriptors,
 };
 pub use runtime::{
     CandidatePluginMcpObservation, CandidatePluginMcpRuntime, McpRuntimeAccess,
