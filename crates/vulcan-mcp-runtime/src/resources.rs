@@ -3,6 +3,10 @@
 
 use crate::McpRuntimeError;
 use std::{io, sync::Arc};
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 use tokio::sync::watch;
 
 /// One launch's retained host authority, shared only with its actual resource owners.
@@ -103,17 +107,77 @@ impl McpResourceRelease {
     }
 }
 
-/// Binds one exact native handle to the launch authority that must outlive that handle.
-/// 将单个精确原生句柄绑定到必须比它存续更久的启动权威。
+/// Binds one actual handle, client or response stream to its original launch authority.
+/// 将单个实际句柄、客户端或响应流绑定到其原启动权威。
 /// Rust drops struct fields in declaration order; this order is part of the ownership contract.
 /// Rust 按声明顺序释放结构体字段；此顺序是所有权契约的一部分。
 pub(crate) struct RetainedResource<T> {
-    /// Actual native ownership is released first, including during stack unwinding.
-    /// 实际原生所有权首先释放，栈展开期间也如此。
+    /// Actual wrapped ownership is released first, including during stack unwinding.
+    /// 实际包装所有权首先释放，栈展开期间也如此。
     resource: T,
-    /// Host leases cannot disappear before the actual native handle above.
-    /// 宿主租约不能在上方实际原生句柄之前消失。
+    /// Host leases cannot disappear before the actual resource above.
+    /// 宿主租约不能在上方实际资源之前消失。
     _resources: McpTransportResources,
+}
+
+impl<T> RetainedResource<T> {
+    /// Binds a dependent resource to the same original host authority.
+    /// 将依赖资源绑定到相同原宿主权威。
+    /// Resource is consumed; the returned wrapper may outlive the client that created it.
+    /// 消费 resource；返回包装可以比创建它的客户端存续更久。
+    pub(crate) fn retain<U>(&self, resource: U) -> RetainedResource<U> {
+        self._resources.retain(resource)
+    }
+}
+
+impl<T> AsRef<T> for RetainedResource<T> {
+    /// Borrows the original resource without transferring or cloning its native ownership.
+    /// 借用原资源，不移交或克隆其原生所有权。
+    /// No inputs; the borrow cannot outlive this lease-bound wrapper.
+    /// 无输入；借用不能比此绑定租约的包装存续更久。
+    fn as_ref(&self) -> &T {
+        &self.resource
+    }
+}
+
+impl<T: Clone> Clone for RetainedResource<T> {
+    /// Clones the underlying shared resource together with the same host authority.
+    /// 将底层共享资源与相同宿主权威一起克隆。
+    /// No inputs; returns a new actual owner retaining the original launch scope.
+    /// 无输入；返回保留原启动范围的新实际所有者。
+    fn clone(&self) -> Self {
+        Self {
+            resource: self.resource.clone(),
+            _resources: self._resources.clone(),
+        }
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for RetainedResource<T> {
+    /// Preserves the resource's existing debug view while omitting the opaque host authority.
+    /// 保留资源既有调试视图，同时省略不透明宿主权威。
+    /// Formatter receives only the wrapped resource's existing representation; returns formatting status.
+    /// formatter 仅接收包装资源的既有表示；返回格式化状态。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RetainedResource")
+            .field("resource", &self.resource)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: futures::Stream + Unpin> futures::Stream for RetainedResource<T> {
+    /// Items preserve the original response stream's value and error types.
+    /// 条目保留原响应流的值与错误类型。
+    type Item = T::Item;
+
+    /// Polls the exact response stream while keeping its host authority attached until disposal.
+    /// 轮询精确响应流，将其宿主权威保留至销毁。
+    /// Context registers the observer; returns the original stream item without owning observer lifetime.
+    /// context 注册观察者；返回原流条目，不拥有观察者生命周期。
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().resource).poll_next(context)
+    }
 }
 
 impl<T: io::Read> io::Read for RetainedResource<T> {

@@ -7,6 +7,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(test)]
+mod resource_tests;
+
 /// Stable host-owned MCP transport launch specification.
 /// 宿主自有 MCP 传输启动规格。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,11 +77,16 @@ pub enum McpTransportLaunchSpec {
 }
 
 impl McpTransportLaunchSpec {
-    /// Launch one concrete MCP transport from the host-owned specification.
-    /// 根据宿主自有规格启动一个具体 MCP 传输实例。
-    pub async fn launch(
+    /// Launches the declared transport with resources fixed before any initialization work.
+    /// 使用任何初始化工作前已固定的资源启动声明传输。
+    /// Shared_auth_session optionally reuses OAuth; resources owns the exact frozen host authority.
+    /// shared_auth_session 可复用 OAuth；resources 拥有精确冻结宿主权威。
+    /// Returns the initialized transport; callers retain a separate original release receipt on errors or cancellation.
+    /// 返回已初始化传输；失败或取消时调用方保留独立原释放回执。
+    pub async fn launch_with_resources(
         self,
         shared_auth_session: Option<Arc<McpOAuthSession>>,
+        resources: crate::McpTransportResources,
     ) -> Result<Arc<dyn McpTransport>, McpRuntimeError> {
         match self {
             Self::Stdio {
@@ -90,13 +98,14 @@ impl McpTransportLaunchSpec {
                 inherit_environment,
             } => {
                 let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-                let transport = StdioTransport::spawn(
+                let transport = StdioTransport::spawn_with_resources(
                     endpoint,
                     &program,
                     &arg_refs,
                     cwd.as_deref(),
                     &env,
                     inherit_environment,
+                    resources,
                 )
                 .await?;
                 Ok(Arc::new(transport))
@@ -109,12 +118,13 @@ impl McpTransportLaunchSpec {
                 oauth,
             } => {
                 let auth_session = resolve_auth_session(&uri, oauth, shared_auth_session).await?;
-                let transport = HttpTransport::connect(
+                let transport = HttpTransport::connect_with_resources(
                     endpoint,
                     uri,
                     bearer_token,
                     headers.into_iter().collect::<HashMap<_, _>>(),
                     auth_session,
+                    resources,
                 )
                 .await?;
                 Ok(Arc::new(transport))
@@ -127,17 +137,31 @@ impl McpTransportLaunchSpec {
                 oauth,
             } => {
                 let auth_session = resolve_auth_session(&uri, oauth, shared_auth_session).await?;
-                let transport = SseTransport::connect(
+                let transport = SseTransport::connect_with_resources(
                     endpoint,
                     uri,
                     bearer_token,
                     headers.into_iter().collect::<HashMap<_, _>>(),
                     auth_session,
+                    resources,
                 )
                 .await?;
                 Ok(Arc::new(transport))
             }
         }
+    }
+
+    /// Launch one concrete MCP transport from the host-owned specification.
+    /// 根据宿主自有规格启动一个具体 MCP 传输实例。
+    pub async fn launch(
+        self,
+        shared_auth_session: Option<Arc<McpOAuthSession>>,
+    ) -> Result<Arc<dyn McpTransport>, McpRuntimeError> {
+        // All launch variants use the same resource-aware dispatch with an empty host bundle.
+        // 全部启动变体使用相同资源感知分派及空宿主资源包。
+        let (resources, _) = crate::McpTransportResources::new(());
+        self.launch_with_resources(shared_auth_session, resources)
+            .await
     }
 }
 

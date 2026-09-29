@@ -20,6 +20,8 @@ pub mod error;
 pub mod http;
 mod http_support;
 pub mod launch;
+#[cfg(test)]
+mod remote_test_support;
 mod resources;
 mod rmcp_support;
 mod shutdown;
