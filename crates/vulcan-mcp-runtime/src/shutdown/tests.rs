@@ -300,3 +300,52 @@ fn runtime_shutdown_does_not_fabricate_a_completed_close() {
     );
     assert_eq!(starts.load(Ordering::SeqCst), 1);
 }
+
+/// Lifecycle ownership survives the production observation timeout and receives the actual final result.
+/// 生命周期所有权跨越生产观测超时，并取得真正的最终结果。
+/// No inputs or return value; verifies late success and late failure without restarting cleanup.
+/// 无输入与返回值；验证迟到成功及迟到失败，不重新启动清理。
+#[tokio::test]
+async fn final_close_wait_survives_the_standard_observation_deadline() {
+    for failed in [false, true] {
+        // The gate remains closed throughout the original five-second observation window.
+        // 门控在原五秒观测窗口内始终关闭。
+        let expected = if failed {
+            Err(McpRuntimeError::transport("late cleanup failure"))
+        } else {
+            Ok(())
+        };
+        let controlled = controlled_close(expected);
+        // The runtime-style waiter owns the final result independently of the bounded observer.
+        // 模拟运行时的等待者独立于有界观察者持有最终结果。
+        let lifecycle_owner = Arc::clone(&controlled.operation);
+        let lifecycle = tokio::spawn(async move { lifecycle_owner.wait_until_complete().await });
+        signal(controlled.entered).await;
+        assert!(
+            controlled
+                .operation
+                .wait()
+                .await
+                .expect_err("production observer must time out")
+                .to_string()
+                .contains("cleanup remains pending")
+        );
+        assert!(!lifecycle.is_finished());
+        assert!(controlled.resource.upgrade().is_some());
+        controlled.release.send(()).expect("release actual cleanup");
+        signal(controlled.retired).await;
+        // Final failure is retained instead of being confused with the expired observation window.
+        // 最终失败被保留，不与已经结束的观测窗口混淆。
+        let result = lifecycle.await.expect("lifecycle observer join");
+        if failed {
+            assert_eq!(
+                result.expect_err("late failure").to_string(),
+                "late cleanup failure"
+            );
+        } else {
+            result.expect("late successful close");
+        }
+        assert_eq!(controlled.starts.load(Ordering::SeqCst), 1);
+        assert!(controlled.resource.upgrade().is_none());
+    }
+}

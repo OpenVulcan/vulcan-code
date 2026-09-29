@@ -74,6 +74,16 @@ describe("MCP runtime inspection boundary", () => {
       expect(container.textContent).not.toContain("GLOBAL_SECRET_LOG")
       await click("打开运行诊断")
       expect(diagnostics).toHaveBeenCalledOnce()
+      // A pending close is distinct from completed shutdown and must remain visible during refresh.
+      // 待完成关闭不同于已完成停止，刷新时必须保持明确可见。
+      service.snapshot.mockResolvedValueOnce([{
+        ...previous,
+        state: { ...previous.state, status: "stopping", toolCount: 0, promptCount: 0, resourceCount: 0 },
+        tools: [],
+      }])
+      await click("刷新状态")
+      expect(container.querySelector('[data-status="stopping"]')?.textContent).toBe("停止中")
+      expect(container.querySelector('[data-status="connected"]')).toBeNull()
     } finally { await act(async () => root.unmount()); container.remove() }
   })
 })

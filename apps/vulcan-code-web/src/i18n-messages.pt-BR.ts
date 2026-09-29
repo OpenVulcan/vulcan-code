@@ -4964,6 +4964,7 @@ export const ptBRTranslations: Record<TranslationKey, string> = {
     "settings.mcp.disconnected": "Desconectado",
     "settings.mcp.failed": "Falhou",
     "settings.mcp.stopped": "Parado",
+    "settings.mcp.stopping": "Parando",
     "settings.mcp.servers": "Servidores",
     "settings.mcp.add": "Adicionar",
     "settings.mcp.searchMcp": "Pesquisar MCP",

@@ -370,6 +370,14 @@ impl McpTransport for StdioTransport {
         self.shutdown.wait().await
     }
 
+    /// Waits for the original rmcp close result while the lifecycle owner retains this transport.
+    /// 生命周期所有者保留当前传输期间，等待原 rmcp 关闭结果。
+    /// No inputs; returns terminal close success or failure without an observer timeout.
+    /// 无输入；返回终态关闭成功或失败，不返回观察者超时。
+    async fn shutdown_and_wait(&self) -> Result<(), McpRuntimeError> {
+        self.shutdown.wait_until_complete().await
+    }
+
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
         list_rmcp_tools(&self.peer, "stdio").await
     }

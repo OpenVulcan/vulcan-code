@@ -4964,6 +4964,7 @@ export const jaJPTranslations: Record<TranslationKey, string> = {
     "settings.mcp.disconnected": "切断",
     "settings.mcp.failed": "失敗",
     "settings.mcp.stopped": "停止",
+    "settings.mcp.stopping": "停止中",
     "settings.mcp.servers": "サーバー",
     "settings.mcp.add": "追加",
     "settings.mcp.searchMcp": "MCP を検索",

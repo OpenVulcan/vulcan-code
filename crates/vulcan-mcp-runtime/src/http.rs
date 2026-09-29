@@ -238,6 +238,14 @@ impl McpTransport for HttpTransport {
         self.shutdown.wait().await
     }
 
+    /// Waits for the original HTTP close operation without restarting it after an observer timeout.
+    /// 等待原 HTTP 关闭操作，不在观察者超时后重新启动。
+    /// No inputs; returns its final cleanup result or an explicit worker interruption.
+    /// 无输入；返回最终清理结果或明确的工作任务中断。
+    async fn shutdown_and_wait(&self) -> Result<(), McpRuntimeError> {
+        self.shutdown.wait_until_complete().await
+    }
+
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
         list_rmcp_tools(&self.peer, "http").await
     }

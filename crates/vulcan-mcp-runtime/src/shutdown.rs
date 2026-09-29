@@ -130,37 +130,46 @@ impl TransportShutdown {
         self.wait_for(TRANSPORT_SHUTDOWN_WAIT).await
     }
 
+    /// Requests the original close and waits for its final result without an observation deadline.
+    /// 请求原关闭并等待最终结果，不附加观测截止时间。
+    ///
+    /// No inputs; returns the shared terminal result or an explicit worker interruption.
+    /// 无输入；返回共享终态结果或明确的工作任务中断。
+    /// Runtime owners use this path while their callers keep independent finite observation budgets.
+    /// 运行时所有者使用此路径，调用方保持独立的有限观测预算。
+    pub(crate) async fn wait_until_complete(&self) -> ShutdownResult {
+        self.request();
+        // A private cursor prevents observers from consuming each other's updates.
+        // 独立游标防止观察者消耗彼此的更新。
+        let mut result_rx = self.result_rx.clone();
+        loop {
+            if let Some(result) = result_rx.borrow_and_update().clone() {
+                return result;
+            }
+            result_rx.changed().await.map_err(|_| {
+                McpRuntimeError::transport(format!(
+                    "{} interrupted before close completion",
+                    self.label
+                ))
+            })?;
+        }
+    }
+
     /// Observes the same operation for a caller-selected duration used by bounded tests.
     /// 在有界测试指定的时长内观测同一操作。
     ///
     /// The duration limits this observer only; returns the shared result or observation failure.
     /// 时长仅限制当前观察者；返回共享结果或观测失败。
     async fn wait_for(&self, budget: Duration) -> ShutdownResult {
-        self.request();
-        // A private cursor prevents concurrent observers from consuming each other's updates.
-        // 独立游标防止并发观察者消耗彼此的更新。
-        let mut result_rx = self.result_rx.clone();
-        tokio::time::timeout(budget, async {
-            loop {
-                if let Some(result) = result_rx.borrow_and_update().clone() {
-                    return result;
-                }
-                result_rx.changed().await.map_err(|_| {
-                    McpRuntimeError::transport(format!(
-                        "{} interrupted before close completion",
-                        self.label
-                    ))
-                })?;
-            }
-        })
-        .await
-        .map_err(|_| {
-            McpRuntimeError::transport(format!(
-                "{} observation timed out after {} ms; cleanup remains pending",
-                self.label,
-                budget.as_millis()
-            ))
-        })?
+        tokio::time::timeout(budget, self.wait_until_complete())
+            .await
+            .map_err(|_| {
+                McpRuntimeError::transport(format!(
+                    "{} observation timed out after {} ms; cleanup remains pending",
+                    self.label,
+                    budget.as_millis()
+                ))
+            })?
     }
 }
 

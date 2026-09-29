@@ -1111,7 +1111,9 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                 let demand = match demand {
                     Ok(demand) => demand,
                     Err(error) => {
-                        clear_server_runtime_state(&inner, &server.id, None, Some(error)).await;
+                        if !clear_server_runtime_state(&inner, &server.id, None, Some(error)).await {
+                            return;
+                        }
                         break;
                     }
                 };
@@ -1125,7 +1127,9 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                     ) => result,
                 };
                 if let Err(error) = result {
-                    clear_server_runtime_state(&inner, &server.id, None, Some(error)).await;
+                    if !clear_server_runtime_state(&inner, &server.id, None, Some(error)).await {
+                        return;
+                    }
                     break;
                 }
             }
@@ -1197,8 +1201,7 @@ async fn record_server_failure_and_should_stop(
         .await;
         true
     } else {
-        clear_server_runtime_state(inner, &server.id, unpublished_transport, Some(error)).await;
-        false
+        !clear_server_runtime_state(inner, &server.id, unpublished_transport, Some(error)).await
     }
 }
 
@@ -1695,24 +1698,40 @@ where
 /// `unpublished_transport` retains a just-connected transport that failed before registration, and `error` is the primary diagnostic.
 /// `inner` 持有已注册传输与快照，`server_id` 选择单个服务器，
 /// `unpublished_transport` 保留注册前失败的刚连接传输，`error` 是主要诊断。
+///
+/// Returns whether cleanup succeeded and another connection attempt is permitted.
+/// 返回清理是否成功及是否允许再次尝试连接。
 async fn clear_server_runtime_state(
     inner: &Arc<McpRuntimeInner>,
     server_id: &str,
     unpublished_transport: Option<Arc<dyn McpTransport>>,
     error: Option<String>,
-) {
-    let (recent_logs, shutdown_error) =
-        remove_and_shutdown_server_transport(inner, server_id, unpublished_transport).await;
+) -> bool {
+    // Cleanup must finish before another instance may be started for this server.
+    // 必须完成清理后，才允许为此服务器启动另一实例。
+    let (recent_logs, shutdown_error) = remove_and_shutdown_server_transport(
+        inner,
+        server_id,
+        unpublished_transport,
+        error.clone(),
+    )
+    .await;
+    let cleanup_succeeded = shutdown_error.is_none();
     update_server_status(
         inner,
         server_id,
-        McpRuntimeServerStatus::Disconnected,
+        if cleanup_succeeded {
+            McpRuntimeServerStatus::Disconnected
+        } else {
+            McpRuntimeServerStatus::Failed
+        },
         combine_mcp_runtime_errors(error, shutdown_error),
         Vec::new(),
     );
     update_server_recent_logs(inner, server_id, recent_logs);
     update_server_prompt_count(inner, server_id, 0);
     update_server_resource_count(inner, server_id, 0);
+    cleanup_succeeded
 }
 
 /// Gracefully shuts down one registered transport before publishing the terminal stopped state.
@@ -1738,15 +1757,15 @@ async fn shutdown_server_runtime_state(inner: &Arc<McpRuntimeInner>, server_id: 
 ///
 /// # Returns
 /// 返回值
-/// Returns only after bounded transport teardown and stopped-state publication.
-/// 仅在有限传输拆除及已停止状态发布后返回。
+/// Returns only after final transport teardown and stopped-state publication; callers bound their own observation.
+/// 仅在最终传输拆除及已停止状态发布后返回；调用方限制自身观测期限。
 async fn shutdown_server_runtime_state_with_transport(
     inner: &Arc<McpRuntimeInner>,
     server_id: &str,
     unpublished_transport: Option<Arc<dyn McpTransport>>,
 ) {
     let (recent_logs, shutdown_error) =
-        remove_and_shutdown_server_transport(inner, server_id, unpublished_transport).await;
+        remove_and_shutdown_server_transport(inner, server_id, unpublished_transport, None).await;
     update_server_status(
         inner,
         server_id,
@@ -1779,8 +1798,13 @@ async fn mark_server_failed(
     unpublished_transport: Option<Arc<dyn McpTransport>>,
     error: String,
 ) {
-    let (recent_logs, shutdown_error) =
-        remove_and_shutdown_server_transport(inner, server_id, unpublished_transport).await;
+    let (recent_logs, shutdown_error) = remove_and_shutdown_server_transport(
+        inner,
+        server_id,
+        unpublished_transport,
+        Some(error.clone()),
+    )
+    .await;
     update_server_status(
         inner,
         server_id,
@@ -1795,8 +1819,8 @@ async fn mark_server_failed(
     update_server_resource_count(inner, server_id, 0);
 }
 
-/// Removes one registered or unpublished transport and explicitly waits for its bounded shutdown.
-/// 移除单个已注册或尚未发布的传输，并显式等待其有限关闭过程。
+/// Removes one registered or unpublished transport and waits for its original final shutdown result.
+/// 移除单个已注册或尚未发布的传输，等待其原最终关闭结果。
 ///
 /// # Parameters
 /// 参数
@@ -1804,6 +1828,8 @@ async fn mark_server_failed(
 /// `unpublished_transport` supplies the exact setup candidate when registration never completed.
 /// `inner` 持有传输注册表，`server_id` 选择单个已注册传输，
 /// `unpublished_transport` 在注册未完成时提供精确的初始化候选传输。
+/// `primary_error` preserves the initiating failure while cleanup remains pending.
+/// `primary_error` 在清理尚未完成期间保留触发清理的失败。
 ///
 /// # Returns
 /// 返回值
@@ -1813,29 +1839,40 @@ async fn remove_and_shutdown_server_transport(
     inner: &Arc<McpRuntimeInner>,
     server_id: &str,
     unpublished_transport: Option<Arc<dyn McpTransport>>,
+    primary_error: Option<String>,
 ) -> (Vec<String>, Option<String>) {
-    // transport is removed before awaiting shutdown so no new call can bind to a draining resource.
-    // transport 会在等待关闭前被移除，确保新调用不能绑定到正在排空的资源。
+    // Removing admission first prevents a new tool binding while the exact transport is draining.
+    // 先移除入场，防止精确传输排空期间新增工具绑定。
     let registered_transport = inner
         .transports
         .write()
         .expect("mcp runtime transport map poisoned")
         .remove(server_id);
-    // registered ownership is authoritative; the fallback exists only before initial publication.
-    // 已注册所有权是权威来源；回退值只存在于首次发布之前。
+    // The explicit unpublished instance applies only before registration.
+    // 显式未发布实例仅用于注册之前。
     let transport = registered_transport.or(unpublished_transport);
-    let recent_logs = transport
-        .as_ref()
-        .map(|transport| transport.recent_logs())
-        .unwrap_or_default();
-    let shutdown_error = match transport {
-        Some(transport) => transport
-            .shutdown()
-            .await
-            .err()
-            .map(|error| error.to_string()),
-        None => None,
+    let Some(transport) = transport else {
+        return (Vec::new(), None);
     };
+    update_server_status(
+        inner,
+        server_id,
+        McpRuntimeServerStatus::Stopping,
+        primary_error,
+        Vec::new(),
+    );
+    update_server_prompt_count(inner, server_id, 0);
+    update_server_resource_count(inner, server_id, 0);
+    // The lifecycle task retains the transport beyond every caller's finite observation window.
+    // 生命周期任务在所有调用方的有限观测窗口之后继续保留传输。
+    let shutdown_error = transport
+        .shutdown_and_wait()
+        .await
+        .err()
+        .map(|error| error.to_string());
+    // Read the latest sanitized diagnostics after the cleanup result arrives.
+    // 清理结果到达后读取最新脱敏诊断。
+    let recent_logs = transport.recent_logs();
     (recent_logs, shutdown_error)
 }
 
@@ -2036,6 +2073,9 @@ fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot
         resource_count: 0,
     }
 }
+
+#[cfg(test)]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod optional_capability_tests {
@@ -2891,7 +2931,7 @@ mod optional_capability_tests {
                     event_tx: registered_events,
                 }),
             );
-        remove_and_shutdown_server_transport(&inner, "registered", None).await;
+        remove_and_shutdown_server_transport(&inner, "registered", None, None).await;
         assert_eq!(registered_count.load(Ordering::SeqCst), 1);
         assert!(
             !inner
@@ -2913,7 +2953,7 @@ mod optional_capability_tests {
             shutdown_count: unpublished_count.clone(),
             event_tx: unpublished_events,
         });
-        remove_and_shutdown_server_transport(&inner, "unpublished", Some(unpublished_transport))
+        remove_and_shutdown_server_transport(&inner, "unpublished", Some(unpublished_transport), None)
             .await;
         assert_eq!(unpublished_count.load(Ordering::SeqCst), 1);
     }

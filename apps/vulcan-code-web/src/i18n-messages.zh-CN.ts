@@ -4964,6 +4964,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "settings.mcp.disconnected": "连接断开",
     "settings.mcp.failed": "失败",
     "settings.mcp.stopped": "已停止",
+    "settings.mcp.stopping": "停止中",
     "settings.mcp.servers": "MCP 服务器",
     "settings.mcp.add": "添加",
     "settings.mcp.searchMcp": "搜索 MCP",

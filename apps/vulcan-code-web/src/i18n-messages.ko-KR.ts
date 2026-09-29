@@ -4964,6 +4964,7 @@ export const koKRTranslations: Record<TranslationKey, string> = {
     "settings.mcp.disconnected": "연결 끊김",
     "settings.mcp.failed": "실패",
     "settings.mcp.stopped": "중지됨",
+    "settings.mcp.stopping": "중지 중",
     "settings.mcp.servers": "서버",
     "settings.mcp.add": "추가",
     "settings.mcp.searchMcp": "MCP 검색",

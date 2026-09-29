@@ -143,6 +143,19 @@ pub trait McpTransport: Send + Sync {
         Ok(())
     }
 
+    /// Requests shutdown and waits for the final cleanup result without a caller observation deadline.
+    /// 请求关闭并等待最终清理结果，不附加调用方观测截止时间。
+    ///
+    /// No inputs; returns final success or cleanup failure, never an observation-only timeout.
+    /// 无输入；返回最终成功或清理失败，不能返回仅属于观测方的超时。
+    /// The default preserves custom transports whose shutdown already reports final cleanup.
+    /// 默认实现沿用已经报告最终清理结果的自定义传输关闭接口。
+    /// Implementations with bounded shutdown observations must override this method to await the original operation.
+    /// 关闭观测有界的实现必须覆盖此方法，继续等待原操作。
+    async fn shutdown_and_wait(&self) -> Result<(), McpRuntimeError> {
+        self.shutdown().await
+    }
+
     /// Returns whether the transport supports a host-driven OAuth lifecycle.
     /// 返回当前传输是否支持宿主驱动的 OAuth 生命周期。
     async fn supports_oauth(&self) -> bool {

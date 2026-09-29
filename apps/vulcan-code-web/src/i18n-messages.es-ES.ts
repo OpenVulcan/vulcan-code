@@ -4964,6 +4964,7 @@ export const esESTranslations: Record<TranslationKey, string> = {
     "settings.mcp.disconnected": "Desconectado",
     "settings.mcp.failed": "Error",
     "settings.mcp.stopped": "Detenido",
+    "settings.mcp.stopping": "Deteniendo",
     "settings.mcp.servers": "Servidores",
     "settings.mcp.add": "Añadir",
     "settings.mcp.searchMcp": "Buscar MCP",

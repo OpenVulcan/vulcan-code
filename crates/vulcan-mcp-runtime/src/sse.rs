@@ -339,6 +339,15 @@ impl McpTransport for SseTransport {
         self.shutdown.wait().await
     }
 
+    /// Waits for the exact cancelled SSE listener to finish without discarding its join handle.
+    /// 等待已取消的精确 SSE 监听器结束，不丢弃其等待句柄。
+    /// No inputs; returns the listener's terminal result or explicit interruption.
+    /// 无输入；返回监听器终态结果或明确中断。
+    async fn shutdown_and_wait(&self) -> Result<(), McpRuntimeError> {
+        self.shutdown_token.cancel();
+        self.shutdown.wait_until_complete().await
+    }
+
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
         let request_id = self.next_request_id();
         let request = ListToolsRequest {

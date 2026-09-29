@@ -4964,6 +4964,7 @@ export const ruRUTranslations: Record<TranslationKey, string> = {
     "settings.mcp.disconnected": "Отключено",
     "settings.mcp.failed": "Ошибка",
     "settings.mcp.stopped": "Остановлен",
+    "settings.mcp.stopping": "Остановка",
     "settings.mcp.servers": "Серверы",
     "settings.mcp.add": "Добавить",
     "settings.mcp.searchMcp": "Поиск MCP",

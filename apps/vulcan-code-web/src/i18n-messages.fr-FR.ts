@@ -4964,6 +4964,7 @@ export const frFRTranslations: Record<TranslationKey, string> = {
     "settings.mcp.disconnected": "Déconnecté",
     "settings.mcp.failed": "Échec",
     "settings.mcp.stopped": "Arrêté",
+    "settings.mcp.stopping": "Arrêt en cours",
     "settings.mcp.servers": "Serveurs",
     "settings.mcp.add": "Ajouter",
     "settings.mcp.searchMcp": "Rechercher un MCP",

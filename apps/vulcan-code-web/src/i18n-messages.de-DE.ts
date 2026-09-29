@@ -4964,6 +4964,7 @@ export const deDETranslations: Record<TranslationKey, string> = {
     "settings.mcp.disconnected": "Getrennt",
     "settings.mcp.failed": "Fehlgeschlagen",
     "settings.mcp.stopped": "Angehalten",
+    "settings.mcp.stopping": "Wird angehalten",
     "settings.mcp.servers": "Server",
     "settings.mcp.add": "Hinzufügen",
     "settings.mcp.searchMcp": "MCP durchsuchen",

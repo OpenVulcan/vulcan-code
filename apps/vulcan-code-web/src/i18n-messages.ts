@@ -5106,6 +5106,7 @@ export type TranslationKey =
   | "settings.mcp.disconnected"
   | "settings.mcp.failed"
   | "settings.mcp.stopped"
+  | "settings.mcp.stopping"
   | "settings.mcp.servers"
   | "settings.mcp.add"
   | "settings.mcp.searchMcp"

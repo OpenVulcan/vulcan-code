@@ -299,6 +299,9 @@ fn plugin_mcp_server_summary(
             vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Failed => {
                 String::from("failed")
             }
+            vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Stopping => {
+                String::from("draining")
+            }
             vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Stopped => {
                 String::from("stopped")
             }
