@@ -133,6 +133,12 @@ impl VulcanPluginRuntimeManager {
             // Hold the shared call registry while inspecting or changing retained ownership.
             // 检查或变更保留所有权期间持有共享调用注册表。
             let mut calls = owner.calls.lock().map_err(|_| calls_error())?;
+            // Automatic retries observe the same original intent before any new quota or deadline is retained.
+            // 自动重试在保留任何新配额或截止时间前观测同一原意图。
+            if let Some(original) = prewarm::automatic::original_call(&calls, &input.admission)? {
+                return Ok(original);
+            }
+            prewarm::automatic::validate_admission(owner, &input.admission, &publication)?;
             // Include retained calls, pinned sessions and cached routing in the same checked byte sum.
             // 在同一受检字节总和中包含保留调用、固定会话及缓存路由。
             let total_bytes = calls

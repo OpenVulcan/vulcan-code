@@ -56,7 +56,11 @@ export function parsePluginPrewarmReceipt(value: unknown): PluginPrewarmReceipt 
   // receipt 为唯一宿主台账投影，不是浏览器推断的生命周期状态。
   const receipt = record(value, "prewarm receipt");
   if (!Array.isArray(receipt.completed)) throw new Error("completed: expected array");
+  // Automatic provenance grants observation only; it is never sent back as permission to start work.
+  // 自动来源仅供观测；绝不回传作为启动工作的权限。
+  const automatic = receipt.automatic === undefined ? undefined : record(receipt.automatic, "automatic");
   return { ...owner(receipt), invocationId: text(receipt.invocationId, "invocationId"),
+    ...(automatic === undefined ? {} : { automatic: { triggerId: text(automatic.triggerId, "triggerId"), policyRevision: text(automatic.policyRevision, "policyRevision") } }),
     pluginId: text(receipt.pluginId, "pluginId"), toolId: text(receipt.toolId, "toolId"),
     pluginGeneration: generation(receipt.pluginGeneration), targetIdle: capacityCount(receipt.targetIdle, "targetIdle"),
     workspaceRoot: text(receipt.workspaceRoot, "workspaceRoot"), started: flag(receipt.started, "started"),

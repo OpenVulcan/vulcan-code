@@ -3,6 +3,38 @@
 
 use super::*;
 
+impl ManagedFormalRuntime {
+    /// Check request and origin against the single live policy under publication; return exact authorization errors.
+    /// 在 publication 下对照唯一活动策略检查 request 及 origin；返回精确授权错误。
+    pub(in crate::runtime::formal) fn validate_automatic_prewarm_policy(
+        &self,
+        request: &VulcanPluginPrewarmTargetRequest,
+        origin: &VulcanPluginAutomaticPrewarmOrigin,
+        _publication: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Construction settings and pending candidate rules cannot authorize new initialization.
+        // 构造设置及待确认候选规则不能授权新初始化。
+        let registry = self.capacities.lock().map_err(|_| capacity_lock_error())?;
+        if registry.policy.prewarm_revision != origin.policy_revision
+            || !registry
+                .policy
+                .settings
+                .automatic_prewarm
+                .iter()
+                .any(|rule| {
+                    rule.plugin_id == request.plugin_id
+                        && rule.tool_id == request.tool_id
+                        && rule.target_idle == request.target_idle
+                })
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Automatic prewarm policy changed or does not authorize this exact target.",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl VulcanPluginRuntimeManager {
     /// Observe this native owner's effective automatic policy and retained receipt without changing either.
     /// 观测此原生所有者的生效自动策略及保留回执，不改变任一对象。

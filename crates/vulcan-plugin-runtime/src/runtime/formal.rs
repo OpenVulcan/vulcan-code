@@ -17,7 +17,8 @@ pub use capacities::{
 mod calls;
 pub use calls::reuse::VulcanPluginReusableDomainStatus;
 pub use calls::{
-    VulcanPluginFormalCallStatus, VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus,
+    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginFormalCallStatus,
+    VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus,
 };
 mod pinned;
 pub use pinned::VulcanPluginFormalSessionStatus;

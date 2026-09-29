@@ -128,6 +128,23 @@ it("prepares then starts the exact original receipt without automatic initializa
   expect(host.textContent).toContain("此会话没有保留的预热回执");
 });
 
+// Automatic receipts remain visible and cancellable without authorizing manual replay of a host trigger.
+// 自动回执保持可见及可取消，不授权手动重放宿主触发。
+it("shows automatic provenance while refusing manual startup", async () => {
+  catalog = { ...catalog, targets: [{ ...receipt, automatic: { triggerId: "original-turn", policyRevision: "original-policy" } }] };
+  await openAndRead();
+  expect(host.textContent).toContain("original-turn");
+  expect(host.textContent).toContain("original-policy");
+  expect(button("启动原预热").disabled).toBe(true);
+  expect(button("取消原预热").disabled).toBe(false);
+  await act(async () => button("启动原预热").click());
+  expect(executePluginPrewarmCommand).not.toHaveBeenCalled();
+  await act(async () => button("取消原预热").click());
+  expect(executePluginPrewarmCommand).toHaveBeenLastCalledWith({ kind: "cancel", request: {
+    runtimeId: receipt.runtimeId, ownerSessionId: receipt.ownerSessionId, invocationId: receipt.invocationId,
+  } });
+});
+
 // Unknown preparation survives collapse and read recovery without manufacturing a retry button.
 // 未知准备结果跨折叠及读取恢复保留，不产生重试按钮。
 it("retains a lost preparation for inspection and never automatically repeats it", async () => {

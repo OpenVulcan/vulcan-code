@@ -8,7 +8,10 @@ use super::*;
 pub(in crate::runtime::formal::calls) struct TargetProgress {
     /// Immutable caller selection survives preparation and physical cleanup.
     /// 不可变调用方选择在准备及物理清理后保留。
-    request: VulcanPluginPrewarmTargetRequest,
+    pub(in crate::runtime::formal::calls) request: VulcanPluginPrewarmTargetRequest,
+    /// Original trigger provenance is retained with the same input budget as its target.
+    /// 原触发来源与其目标保留在同一输入预算中。
+    pub(in crate::runtime::formal::calls) automatic: Option<VulcanPluginAutomaticPrewarmOrigin>,
     /// Transfer evidence distinguishes cancellation before startup from actual supervision.
     /// 转移证据区分启动前取消及真实监督。
     pub(in crate::runtime::formal::calls) started: bool,
@@ -30,8 +33,9 @@ impl TargetProgress {
         admission: &CallAdmission,
     ) -> Option<Self> {
         match admission {
-            CallAdmission::PrewarmTarget(request) => Some(Self {
+            CallAdmission::PrewarmTarget { request, automatic } => Some(Self {
                 request: request.clone(),
+                automatic: automatic.clone(),
                 started: false,
                 completed: Vec::new(),
                 attempts: 0,
@@ -49,13 +53,13 @@ impl TargetProgress {
         admission: &CallAdmission,
         limit: usize,
     ) -> Result<usize, VulcanPluginRuntimeError> {
-        let CallAdmission::PrewarmTarget(request) = admission else {
+        let CallAdmission::PrewarmTarget { request, automatic } = admission else {
             return Ok(0);
         };
         // Pending preparation and retained history both own the original request before startup.
         // 启动前，待处理准备及保留历史均拥有原请求。
-        let request_bytes =
-            luaskills::runtime::embedded::json_size(request, limit).map_err(core_error)?;
+        let request_bytes = luaskills::runtime::embedded::json_size(&(request, automatic), limit)
+            .map_err(core_error)?;
         request
             .target_idle
             .checked_mul(std::mem::size_of::<OperationHandle>())
@@ -80,6 +84,7 @@ impl TargetProgress {
     ) -> Result<VulcanPluginPrewarmTargetStatus, VulcanPluginRuntimeError> {
         Ok(VulcanPluginPrewarmTargetStatus {
             request: self.request.clone(),
+            automatic: self.automatic.clone(),
             started: self.started,
             completed: self
                 .completed
@@ -149,6 +154,9 @@ impl VulcanPluginRuntimeManager {
             })?;
         self.validate_formal_submission(call, scope)?;
         self.validate_reusable_submission(owner, call)?;
+        // A policy change fences every later initialization while original native work retains its receipt.
+        // 策略变化隔离每次后续初始化，原原生工作仍保留其回执。
+        automatic::validate_call(owner, call, &_publication)?;
         // Serialize ownership transfer and evidence changes under the original call lock.
         // 在原调用锁下排序归属转移及证据变化。
         let mut state = call.lock()?;

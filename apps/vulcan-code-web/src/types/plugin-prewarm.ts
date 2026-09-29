@@ -73,6 +73,16 @@ export interface PluginPrewarmSnapshot {
 // PluginPrewarmReceipt projects host lifecycle flags; opaque native evidence is display-only.
 // PluginPrewarmReceipt 投影宿主生命周期标志；不透明原生证据仅供展示。
 export interface PluginPrewarmReceipt extends PluginPrewarmPreparation, PluginPrewarmIdentity {
+  // automatic identifies a host-owned lifecycle trigger that management may observe or cancel, but never start.
+  // automatic 标识宿主拥有的生命周期触发；管理端可以观测或取消，但不能启动。
+  automatic?: {
+    // triggerId remains the original host lifecycle identity.
+    // triggerId 保持为原宿主生命周期身份。
+    triggerId: string;
+    // policyRevision is the exact policy authorizing the original target.
+    // policyRevision 为授权原目标的精确策略。
+    policyRevision: string;
+  };
   // workspaceRoot is the host-resolved frozen workspace, never sent back as authority.
   // workspaceRoot 为宿主解析并冻结的工作区，绝不回传作为权威输入。
   workspaceRoot: string;

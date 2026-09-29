@@ -5,12 +5,14 @@ use super::*;
 use luaskills::runtime::embedded::EmbeddedReusablePoolSnapshot;
 use serde::Deserialize;
 
+pub(super) mod automatic;
 mod target;
+pub use automatic::VulcanPluginAutomaticPrewarmOrigin;
 pub(super) use target::TargetProgress;
 
 /// Trusted explicit target selection; every field is frozen before any initialization can run.
 /// 可信明确目标选择；任何初始化运行前冻结全部字段。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VulcanPluginPrewarmTargetRequest {
     /// Observed original parent; a replacement runtime cannot accept this request.
@@ -44,6 +46,10 @@ pub struct VulcanPluginPrewarmTargetStatus {
     /// Original trusted request; no live routing values are substituted.
     /// 原可信请求；不替换为活动路由值。
     pub request: VulcanPluginPrewarmTargetRequest,
+    /// Trusted automatic trigger provenance; manual targets omit this metadata.
+    /// 可信自动触发来源；手动目标省略此元数据。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automatic: Option<VulcanPluginAutomaticPrewarmOrigin>,
     /// True only after the original input was transferred to its one supervisor.
     /// 仅在原输入转移至唯一监督者后为真。
     pub started: bool,
@@ -216,7 +222,10 @@ impl VulcanPluginRuntimeManager {
             }),
             security_partition: format!("tool:{}", request.owner_session_id),
             admission: if target {
-                CallAdmission::PrewarmTarget(request)
+                CallAdmission::PrewarmTarget {
+                    request,
+                    automatic: None,
+                }
             } else {
                 CallAdmission::Prewarm {
                     tool_id: request.tool_id,

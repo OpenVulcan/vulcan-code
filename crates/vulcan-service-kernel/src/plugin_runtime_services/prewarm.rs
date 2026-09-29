@@ -12,8 +12,8 @@ use luaskills::runtime::embedded::{EmbeddedReusablePoolSnapshot, OperationSnapsh
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use vulcan_plugin_runtime::{
-    VulcanPluginFormalCallStatus, VulcanPluginPrewarmTargetRequest, VulcanPluginRuntimeError,
-    VulcanPluginRuntimeManager,
+    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginFormalCallStatus,
+    VulcanPluginPrewarmTargetRequest, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
 };
 
 /// Original runtime and controller select retained work even after the session leaves navigation.
@@ -118,6 +118,10 @@ pub(crate) struct PrewarmReceipt {
     /// Original requested confirmed idle count.
     /// 原始请求的已确认空闲数量。
     target_idle: usize,
+    /// Automatic lifecycle provenance is diagnostic; management cannot restart this host-owned trigger.
+    /// 自动生命周期来源仅供诊断；管理端不能重启此宿主拥有的触发。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    automatic: Option<VulcanPluginAutomaticPrewarmOrigin>,
     /// Whether the original input has been transferred to its supervisor.
     /// 原始输入是否已转移给其监督者。
     started: bool,
@@ -184,6 +188,7 @@ fn receipt(
         owner_session_id: target.request.owner_session_id,
         workspace_root: target.request.workspace_root,
         target_idle: target.request.target_idle,
+        automatic: target.automatic,
         started: target.started,
         retired: status.retired,
         requires_cleanup_recovery: status.requires_cleanup_recovery,
@@ -455,6 +460,11 @@ pub(crate) async fn control(
         match action {
             PrewarmAction::Status => return Ok(Some(original)),
             PrewarmAction::Start => {
+                if original.automatic.is_some() {
+                    return Err(VulcanPluginRuntimeError::new(
+                        "Automatic prewarm initialization must be started by its original host lifecycle trigger.",
+                    ));
+                }
                 manager.start_reusable_tool_prewarm(&request.invocation_id, &owner)?;
             }
             PrewarmAction::Cancel => manager.cancel_formal_call(&request.invocation_id, &owner)?,

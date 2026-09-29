@@ -17,7 +17,10 @@ mod initialized;
 mod prewarm;
 mod registration;
 pub(super) mod reuse;
-pub use prewarm::{VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus};
+pub use prewarm::{
+    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginPrewarmTargetRequest,
+    VulcanPluginPrewarmTargetStatus,
+};
 
 #[cfg(test)]
 mod tests;
@@ -166,7 +169,14 @@ enum CallAdmission {
     },
     /// A bounded initialization target retains its original pool and every admitted operation.
     /// 有界初始化目标保留原池及每个已接纳操作。
-    PrewarmTarget(VulcanPluginPrewarmTargetRequest),
+    PrewarmTarget {
+        /// Original exact target also used by manual prewarming.
+        /// 手动预热也使用的原精确目标。
+        request: VulcanPluginPrewarmTargetRequest,
+        /// Automatic trigger and acknowledged policy identity, absent for manual work.
+        /// 自动触发及已确认策略身份；手动工作为空。
+        automatic: Option<VulcanPluginAutomaticPrewarmOrigin>,
+    },
     /// Lifecycle admission invokes one host-selected declaration.
     /// 生命周期入场调用一个宿主选择的声明。
     Lifecycle {
@@ -194,7 +204,7 @@ impl CallAdmission {
     /// 返回宿主选择的用途，不读取业务载荷或猜测导出名称。
     fn capacity_purpose(&self) -> VulcanPluginCapacityPurpose {
         match self {
-            Self::Controller { .. } | Self::Prewarm { .. } | Self::PrewarmTarget(_) => {
+            Self::Controller { .. } | Self::Prewarm { .. } | Self::PrewarmTarget { .. } => {
                 VulcanPluginCapacityPurpose::ToolCall
             }
             Self::Lifecycle { .. } => VulcanPluginCapacityPurpose::Lifecycle,
@@ -213,7 +223,9 @@ impl CallAdmission {
             | Self::Prewarm {
                 owner_session_id, ..
             } => CallOwner::Controller(owner_session_id.clone()),
-            Self::PrewarmTarget(request) => CallOwner::Controller(request.owner_session_id.clone()),
+            Self::PrewarmTarget { request, .. } => {
+                CallOwner::Controller(request.owner_session_id.clone())
+            }
             Self::Lifecycle { .. } => CallOwner::Lifecycle,
             Self::Action { .. } => CallOwner::Action,
             Self::Probe => CallOwner::Probe,
@@ -227,7 +239,7 @@ impl CallAdmission {
             Self::Controller { export, .. }
             | Self::Lifecycle { export }
             | Self::Action { export, .. } => Some(export),
-            Self::Probe | Self::Prewarm { .. } | Self::PrewarmTarget(_) => None,
+            Self::Probe | Self::Prewarm { .. } | Self::PrewarmTarget { .. } => None,
         }
     }
 
@@ -855,7 +867,10 @@ impl VulcanPluginRuntimeManager {
         let reusable = match &input.admission {
             CallAdmission::Controller { tool_id, .. }
             | CallAdmission::Prewarm { tool_id, .. }
-            | CallAdmission::PrewarmTarget(VulcanPluginPrewarmTargetRequest { tool_id, .. }) => {
+            | CallAdmission::PrewarmTarget {
+                request: VulcanPluginPrewarmTargetRequest { tool_id, .. },
+                ..
+            } => {
                 let manifest = call.plugin.manifest.as_ref().ok_or_else(|| {
                     VulcanPluginRuntimeError::new("Formal tool manifest is missing.")
                 })?;
@@ -876,7 +891,7 @@ impl VulcanPluginRuntimeManager {
         };
         if matches!(
             input.admission,
-            CallAdmission::Prewarm { .. } | CallAdmission::PrewarmTarget(_)
+            CallAdmission::Prewarm { .. } | CallAdmission::PrewarmTarget { .. }
         ) && reusable.is_none()
         {
             return Err(VulcanPluginRuntimeError::new(
@@ -958,7 +973,7 @@ impl VulcanPluginRuntimeManager {
         // Initialization and later business share the same original absolute deadline.
         // 初始化及后续业务共用同一原绝对截止时间。
         let remaining = initialized::remaining(input.deadline)?;
-        if matches!(input.admission, CallAdmission::PrewarmTarget(_)) {
+        if matches!(input.admission, CallAdmission::PrewarmTarget { .. }) {
             // The target supervisor queries this exact borrowed domain before deciding whether initialization is needed.
             // 目标监督者先查询此精确借用域，再决定是否需要初始化。
             self.claim_prewarm_domain(owner, call)?;

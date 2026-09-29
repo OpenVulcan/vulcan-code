@@ -128,10 +128,10 @@ impl Preparation {
                 match &self.admission {
                     CallAdmission::Controller { tool_id, .. }
                     | CallAdmission::Prewarm { tool_id, .. }
-                    | CallAdmission::PrewarmTarget(VulcanPluginPrewarmTargetRequest {
-                        tool_id,
+                    | CallAdmission::PrewarmTarget {
+                        request: VulcanPluginPrewarmTargetRequest { tool_id, .. },
                         ..
-                    }) => Some(tool_id),
+                    } => Some(tool_id),
                     _ => None,
                 },
                 &self.workspace,

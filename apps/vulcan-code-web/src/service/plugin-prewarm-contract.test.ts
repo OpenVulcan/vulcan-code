@@ -2,6 +2,16 @@ import { expect, it } from "vitest";
 import wire from "./__fixtures__/plugin-prewarm-wire.json";
 import { parsePluginPrewarmCatalog, parsePluginPrewarmReceipt } from "./plugin-prewarm-contract";
 
+// Original automatic provenance is retained for inspection; incomplete metadata cannot disguise manual authority.
+// 原自动来源保留供检查；不完整元数据不能伪装为手动权限。
+it("retains exact automatic provenance and rejects malformed identities", () => {
+  const automatic = { triggerId: "original-turn", policyRevision: "original-policy" };
+  expect(parsePluginPrewarmReceipt({ ...wire.prepared, automatic }).automatic).toEqual(automatic);
+  for (const invalid of [null, {}, { triggerId: "" }, { ...automatic, policyRevision: null }]) {
+    expect(() => parsePluginPrewarmReceipt({ ...wire.prepared, automatic: invalid })).toThrow();
+  }
+});
+
 // The fixture is emitted and compared by the real Rust RPC test, not hand-authored browser JSON.
 // 夹具由真实 Rust RPC 测试产出并比较，不是手写浏览器 JSON。
 it("decodes actual preparation and completion without changing native evidence", () => {

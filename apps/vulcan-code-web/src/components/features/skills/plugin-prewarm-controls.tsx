@@ -166,7 +166,7 @@ function PluginPrewarmManagement(props: PrewarmControlsProps) {
         {receipt.error !== null && <p role="alert" className="whitespace-pre-wrap break-all text-destructive">{receipt.error}</p>}
         {receipt.satisfied && <p>{formatMessage(t("pluginPrewarm.historical"), { ready: receipt.satisfied.ready })}</p>}
         <div className="flex flex-wrap gap-2">
-          <Button type="button" size="sm" disabled={!canWrite || !active || receipt.started || receipt.retired || receipt.requiresCleanupRecovery} onClick={() => control("start", receipt)}>{t("pluginPrewarm.start")}</Button>
+          <Button type="button" size="sm" disabled={!canWrite || !active || receipt.automatic !== undefined || receipt.started || receipt.retired || receipt.requiresCleanupRecovery} onClick={() => control("start", receipt)}>{t("pluginPrewarm.start")}</Button>
           <Button type="button" size="sm" variant="outline" disabled={!canWrite || receipt.retired} onClick={() => control("cancel", receipt)}>{t("pluginPrewarm.cancel")}</Button>
           <Button type="button" size="sm" variant="outline" disabled={!canWrite || !receipt.requiresCleanupRecovery} onClick={() => control("recover", receipt)}>{t("pluginPrewarm.recover")}</Button>
           <Button type="button" size="sm" variant="outline" disabled={!canWrite || !receipt.retired || receipt.requiresCleanupRecovery} onClick={() => control("forget", receipt)}>{t("pluginPrewarm.forget")}</Button>

@@ -3,6 +3,7 @@
 
 use super::*;
 
+mod automatic;
 mod initialization;
 mod prewarm;
 

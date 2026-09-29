@@ -116,7 +116,7 @@ impl VulcanPluginRuntimeManager {
             CallAdmission::Controller { .. }
             | CallAdmission::Prewarm { .. }
             | CallAdmission::Lifecycle { .. } => Ok(()),
-            CallAdmission::PrewarmTarget(_) => {
+            CallAdmission::PrewarmTarget { .. } => {
                 self.converge_prewarm_target(owner, call, input.deadline, input.scope)
                     .await
             }

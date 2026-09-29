@@ -7,6 +7,7 @@ use crate::{VulcanPluginHostServices, VulcanPluginUiEventPublisher, VulcanPlugin
 use std::collections::BTreeSet;
 use std::sync::Condvar;
 
+mod automatic;
 mod budget;
 mod prewarm;
 mod recovery;

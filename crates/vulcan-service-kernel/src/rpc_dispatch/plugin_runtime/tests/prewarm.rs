@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod automatic;
+
 /// Compare real RPC serialization against the browser artifact, normalizing only observed opaque identities.
 /// 比较真实 RPC 序列化与浏览器产物，仅规范化观测到的不透明身份。
 /// Inputs are the initial catalog, inert receipt and completed receipt; assertion failure reports contract drift.

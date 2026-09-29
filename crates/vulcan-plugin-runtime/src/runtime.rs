@@ -35,12 +35,13 @@ pub use bridge::{
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
 pub use formal::{
-    VulcanPluginCapacityControlAction, VulcanPluginCapacityControlRequest,
-    VulcanPluginCapacityRegistrationRequest, VulcanPluginFormalCallStatus,
-    VulcanPluginFormalCapacityCatalog, VulcanPluginFormalCapacityStatus,
-    VulcanPluginFormalPluginStatus, VulcanPluginFormalRuntimeStatus,
-    VulcanPluginFormalSessionStatus, VulcanPluginPrewarmTargetRequest,
-    VulcanPluginPrewarmTargetStatus, VulcanPluginReusableDomainStatus,
+    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginCapacityControlAction,
+    VulcanPluginCapacityControlRequest, VulcanPluginCapacityRegistrationRequest,
+    VulcanPluginFormalCallStatus, VulcanPluginFormalCapacityCatalog,
+    VulcanPluginFormalCapacityStatus, VulcanPluginFormalPluginStatus,
+    VulcanPluginFormalRuntimeStatus, VulcanPluginFormalSessionStatus,
+    VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus,
+    VulcanPluginReusableDomainStatus,
 };
 pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
 pub use lifecycle::VulcanPluginLifecycleEvent;
