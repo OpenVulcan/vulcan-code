@@ -64,7 +64,7 @@ impl VulcanPluginRuntimeManager {
         // 声明策略选择此次唯一扫描；不查询备用目录。
         let snapshot =
             self.scan_runtime_catalog(disabled_plugin_ids, enabled_plugin_ids, &registration);
-        self.publish_runtime_catalog(snapshot, &registration)
+        self.publish_runtime_catalog(snapshot, &registration, None)
     }
 
     /// Scan the declared policy sets while publication is excluded; return the unprojected catalog.
@@ -89,12 +89,15 @@ impl VulcanPluginRuntimeManager {
 
     /// Apply live ownership to snapshot and publish it under the caller-held gate; return the immutable projection.
     /// 在调用方持有的门下向 snapshot 应用实时归属并发布；返回不可变投影。
+    /// `recovery_permit` is absent for ordinary publication or borrows the validated disabled handoff original.
+    /// 普通发布的 `recovery_permit` 缺省，否则借用已校验停用交接的原请求。
     fn publish_runtime_catalog(
         &self,
         mut snapshot: VulcanPluginCatalogSnapshot,
         _registration: &std::sync::MutexGuard<'_, ()>,
+        recovery_permit: Option<&crate::VulcanPluginActivationTransactionRecord>,
     ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
-        self.project_runtime_state(&mut snapshot)?;
+        self.project_runtime_state(&mut snapshot, recovery_permit)?;
         // Issue the actual revision only after preceding cleanup projections have completed.
         // 仅在此前清理投影完成后签发实际修订。
         snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
@@ -233,7 +236,7 @@ impl VulcanPluginRuntimeManager {
             })?;
             diagnostics.insert(plugin_id.to_owned(), cleanup_failures);
         }
-        self.publish_runtime_catalog(snapshot, &registration)
+        self.publish_runtime_catalog(snapshot, &registration, None)
     }
 
     /// Probes dependency resolution and Lua module loading without opening a business session.
@@ -433,14 +436,78 @@ impl VulcanPluginRuntimeManager {
         Ok(())
     }
 
+    /// Publish the exact disabled target owned by `transaction` using the supplied explicit policy sets.
+    /// 按提供的明确策略集合发布 `transaction` 持有的精确停用目标。
+    /// Return its catalog only after validating original ownership; retain recovery obligations until route completion.
+    /// 仅在校验原所有权后返回目录；路由完成前保留恢复义务。
+    pub fn refresh_catalog_for_activation_recovery(
+        &self,
+        transaction: &crate::VulcanPluginActivationTransaction,
+        disabled_plugin_ids: &BTreeSet<String>,
+        enabled_plugin_ids: &BTreeSet<String>,
+    ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+        // One publication gate excludes ordinary lifecycle admission throughout validation and projection.
+        // 单个发布门在校验及投影全程排除普通生命周期入场。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        // Borrow the original target; neither a plugin ID nor a UUID alone grants publication.
+        // 借用原始目标；仅插件标识或 UUID 均不授予发布权。
+        let target = transaction.record().target();
+        if !disabled_plugin_ids.contains(&target.plugin_id)
+            || enabled_plugin_ids.contains(&target.plugin_id)
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Recovery publication requires explicit disabled policy.",
+            ));
+        }
+        // Read the existing store, preserving absence as a failure after an observed original request.
+        // 读取既有存储，已观察原请求后将缺失保留为失败。
+        let store = crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Original activation store is missing.")
+            })?;
+        store
+            .validate_published_activation_owner(transaction)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        // A disabled descriptor pins the complete target authority without executing plugin callbacks.
+        // 停用描述符固定完整目标权威，不执行插件回调。
+        let snapshot =
+            self.scan_runtime_catalog(disabled_plugin_ids, enabled_plugin_ids, &registration);
+        if !snapshot
+            .plugins
+            .get(&target.plugin_id)
+            .is_some_and(|plugin| {
+                !plugin.desired_enabled
+                    && plugin.availability == crate::VulcanPluginAvailability::Disabled
+                    && plugin
+                        .managed_package()
+                        .is_some_and(|package| package.matches_activation(target))
+            })
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Original activation target is not a valid disabled catalog entry.",
+            ));
+        }
+        self.publish_runtime_catalog(snapshot, &registration, Some(transaction.record()))
+    }
+
     /// Applies generations, transient lifecycle overrides, active counts, and cleanup diagnostics.
     /// 应用代次、临时生命周期覆盖、活动计数与清理诊断。
     /// Mutates the scanned `snapshot` using this manager's state; returns unit or a lock diagnostic.
     /// 使用本管理器状态修改扫描所得的 `snapshot`；返回空值或锁诊断。
+    /// `recovery_permit` exempts only its exact original from startup gating for this disabled publication.
+    /// `recovery_permit` 仅使精确原请求在此次停用发布中豁免启动门控。
     fn project_runtime_state(
         &self,
         snapshot: &mut VulcanPluginCatalogSnapshot,
+        recovery_permit: Option<&crate::VulcanPluginActivationTransactionRecord>,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Resolve durable startup obligations before taking unrelated runtime state locks.
+        // 获取无关运行时状态锁之前解析持久启动义务。
+        let (recovery_error, recovery_diagnostics) =
+            self.activation_recovery_diagnostics(recovery_permit)?;
         let previous = self.snapshot();
         snapshot.service_epoch = self.state.manager_id.clone();
         let active_counts = self.state.active_session_counts.lock().map_err(|_| {
@@ -552,6 +619,16 @@ impl VulcanPluginRuntimeManager {
                 plugin.runtime_execution_available = false;
                 plugin.diagnostics.push(error.to_string());
             }
+            // Recovery gates every surface while preserving the user's declared enabled policy.
+            // 恢复门控全部暴露面，同时保留用户声明的启用策略。
+            if let Some(diagnostic) = recovery_error
+                .as_ref()
+                .or_else(|| recovery_diagnostics.get(&plugin.id))
+            {
+                plugin.runtime_state = VulcanPluginRuntimeState::Unavailable;
+                plugin.runtime_execution_available = false;
+                plugin.diagnostics.push(diagnostic.clone());
+            }
         }
         rebuild_enabled_surface(snapshot);
         Ok(())
@@ -578,6 +655,15 @@ impl VulcanPluginRuntimeManager {
         let _registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
+        // A disabled recovery publication is not permission to start ordinary lifecycle effects.
+        // 停用恢复发布不表示允许开始普通生命周期副作用。
+        let (recovery_error, recovery_diagnostics) = self.activation_recovery_diagnostics(None)?;
+        if let Some(diagnostic) = recovery_error
+            .as_ref()
+            .or_else(|| recovery_diagnostics.get(plugin_id))
+        {
+            return Err(VulcanPluginRuntimeError::new(diagnostic.clone()));
+        }
         let mut snapshot = (*self.snapshot()).clone();
         let plugin = snapshot.plugins.get_mut(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(

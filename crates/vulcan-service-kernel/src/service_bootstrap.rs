@@ -2054,6 +2054,17 @@ fn prepare_vulcan_plugin_runtime(
             )
         })?,
     );
+    // Capture unfinished original requests before runtime preparation or plugin surface publication.
+    // 运行时准备或插件暴露面发布之前捕获未完成原请求。
+    vulcan_plugin_runtime
+        .initialize_activation_recovery()
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "plugins",
+                "Vulcan Plugins",
+                format!("初始化插件恢复门控失败：{error}"),
+            )
+        })?;
     if let Some(luaskills_runtime) = luaskills_runtime {
         // Read host-owned formal budgets once; missing settings remain memory-only defaults.
         // 一次性读取宿主自有正式预算；缺失设置保持内存默认值。

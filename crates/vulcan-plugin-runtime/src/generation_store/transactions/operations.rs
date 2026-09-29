@@ -532,6 +532,30 @@ impl VulcanPluginGenerationStore {
         Ok(())
     }
 
+    /// Validate `transaction` as the exclusive owner of the exact published activation; return no mutation.
+    /// 校验 `transaction` 为精确已发布激活的排他所有者；不进行变更。
+    pub(crate) fn validate_published_activation_owner(
+        &self,
+        transaction: &VulcanPluginActivationTransaction,
+    ) -> VulcanPluginStoreResult<()> {
+        // Original ownership and target readback share one namespace observation.
+        // 原所有权及目标回读共享同一次命名空间观察。
+        let _namespace = self.namespace_lock(&transaction.record.target.plugin_id, true)?;
+        self.check_transaction_owner(transaction)?;
+        if transaction.record.phase != Phase::Published
+            || self
+                .read_activation(&transaction.record.target.plugin_id)?
+                .as_ref()
+                != Some(&transaction.record.target)
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Recovery publication requires the exact published original activation.",
+            ));
+        }
+        Ok(())
+    }
+
     /// Persist `phase` for the original `transaction`, updating its observation only after confirmed publication.
     /// 为原 `transaction` 持久保存 `phase`，仅在发布确认后更新其观察。
     fn checkpoint_transaction(

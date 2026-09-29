@@ -251,7 +251,8 @@ pub(super) async fn resume_published(
     // No candidate callback is run during this readback-and-route operation.
     // 此回读及路由操作期间不运行候选回调。
     let catalog = runtime
-        .refresh_catalog(
+        .refresh_catalog_for_activation_recovery(
+            &transaction,
             &configuration.luaskills.disabled_vulcan_plugins,
             &configuration.luaskills.enabled_vulcan_plugins,
         )

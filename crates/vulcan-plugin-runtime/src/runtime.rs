@@ -20,6 +20,7 @@ mod lifecycle;
 mod local_files;
 mod persistent;
 mod process;
+mod recovery;
 mod requirements;
 mod sessions;
 mod settings;
@@ -226,6 +227,9 @@ struct VulcanPluginManagerState {
     /// Cleanup warnings retained after a plugin becomes disabled.
     /// 插件停用后保留的清理警告。
     cleanup_diagnostics: Mutex<BTreeMap<String, Vec<String>>>,
+    /// Original startup recovery obligations survive refreshes and missing journal files.
+    /// 原始启动恢复义务在刷新及日志文件缺失后仍保留。
+    activation_recovery: Mutex<Option<recovery::ActivationRecovery>>,
 }
 
 impl Drop for VulcanPluginManagerState {
@@ -390,6 +394,7 @@ impl VulcanPluginRuntimeManager {
                 plugin_generations: Mutex::new(BTreeMap::new()),
                 lifecycle_overrides: Mutex::new(BTreeMap::new()),
                 cleanup_diagnostics: Mutex::new(BTreeMap::new()),
+                activation_recovery: Mutex::new(None),
             }),
         };
         if has_engine {

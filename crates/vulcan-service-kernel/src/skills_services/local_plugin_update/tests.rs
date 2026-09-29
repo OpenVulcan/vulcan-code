@@ -411,42 +411,82 @@ async fn immutable_service_update_preserves_configuration_without_schema_fallbac
 /// 已发布恢复仅重新发布精确路由并确认原请求，不重放。
 #[tokio::test]
 async fn immutable_service_update_recovers_original_published_selection() {
-    // Real staged content requires no artificial callback completion receipt.
-    // 真实暂存内容不需要人工回调完成回执。
-    let fixture = Fixture::new(false);
-    // Prepare and validate through the same production steps used by a normal update.
-    // 经正常更新使用的相同生产步骤准备并校验。
-    let mut prepared = fixture.prepare(uuid::Uuid::new_v4()).expect("prepare");
-    prepared = validate_and_install(&fixture.runtime, prepared)
+    for restart in [false, true] {
+        // Real staged content requires no artificial callback completion receipt.
+        // 真实暂存内容不需要人工回调完成回执。
+        let mut fixture = Fixture::new(false);
+        // Prepare and validate through the same production steps used by a normal update.
+        // 经正常更新使用的相同生产步骤准备并校验。
+        let mut prepared = fixture.prepare(uuid::Uuid::new_v4()).expect("prepare");
+        prepared = validate_and_install(&fixture.runtime, prepared)
+            .await
+            .expect("actual readiness");
+        prepared
+            .store
+            .commit_activation_transaction(&mut prepared.transaction)
+            .expect("publish selection");
+        // These original identifiers survive loss of the foreground service operation.
+        // 这些原身份在前台服务操作丢失后仍存续。
+        let request_id = prepared.transaction.record().request_id();
+        let target = prepared.transaction.record().target().clone();
+        let store = prepared.store.clone();
+        drop(prepared);
+        if restart {
+            // Recreate the production manager against the same disk, preserving the persisted disabled policy.
+            // 对相同磁盘重新创建生产管理器，保留持久停用策略。
+            let restarted = VulcanPluginRuntimeManager::without_runtime(
+                fixture.root.path().join("bundled"),
+                fixture.root.path().join("user"),
+                fixture.root.path().join("bridge"),
+                fixture.root.path().join("distributions"),
+                fixture.root.path().join("state"),
+                fixture.root.path().join("runtime"),
+            );
+            restarted
+                .initialize_activation_recovery()
+                .expect("startup recovery");
+            // The new startup catalog must withhold this target until the original request is resumed.
+            // 新启动目录必须隔离此目标，直到原请求被恢复。
+            let catalog = restarted
+                .refresh_catalog(&BTreeSet::from([PLUGIN.to_owned()]), &BTreeSet::new())
+                .expect("restart catalog");
+            assert_eq!(
+                catalog.plugins[PLUGIN].runtime_state,
+                VulcanPluginRuntimeState::Unavailable
+            );
+            // Replace the actual service-owned manager and extension generation together for this simulated restart.
+            // 为此次模拟重启一起替换实际服务自有管理器及扩展代次。
+            let mut state = fixture.state.lock().expect("service state");
+            // Use the exact bridge already owned by this service fixture.
+            // 使用此服务夹具已持有的精确桥。
+            let bridge = state.agent_runtime.as_mut().expect("service bridge");
+            bridge.vulcan_plugin_runtime = restarted.clone();
+            bridge.extension_generation = bridge
+                .prepare_plugin_extension_generation(
+                    catalog,
+                    bridge.extension_generation.mcp_runtime(),
+                )
+                .expect("restart routes");
+            fixture.runtime = restarted;
+        }
+        resume_published(
+            &ServiceEventEmitter::new(Vec::new()),
+            &fixture.state,
+            PLUGIN,
+            &request_id.to_string(),
+        )
         .await
-        .expect("actual readiness");
-    prepared
-        .store
-        .commit_activation_transaction(&mut prepared.transaction)
-        .expect("publish selection");
-    // These original identifiers survive loss of the foreground service operation.
-    // 这些原身份在前台服务操作丢失后仍存续。
-    let request_id = prepared.transaction.record().request_id();
-    let target = prepared.transaction.record().target().clone();
-    let store = prepared.store.clone();
-    drop(prepared);
-    resume_published(
-        &ServiceEventEmitter::new(Vec::new()),
-        &fixture.state,
-        PLUGIN,
-        &request_id.to_string(),
-    )
-    .await
-    .expect("recover original published request");
-    assert_eq!(
-        store.activation(PLUGIN).expect("original activation"),
-        Some(target)
-    );
-    assert_eq!(
-        list(&fixture.runtime, PLUGIN).expect("original completed request")[0].phase,
-        Phase::Completed
-    );
-    assert!(abort(&fixture.runtime, PLUGIN, &request_id.to_string(), true).is_err());
+        .expect("recover original published request");
+        assert_eq!(
+            store.activation(PLUGIN).expect("original activation"),
+            Some(target)
+        );
+        assert_eq!(
+            list(&fixture.runtime, PLUGIN).expect("original completed request")[0].phase,
+            Phase::Completed
+        );
+        assert!(abort(&fixture.runtime, PLUGIN, &request_id.to_string(), true).is_err());
+    }
 }
 
 /// Newly declared configuration uses inspected defaults, while removal retains the old user file without selecting it.

@@ -81,8 +81,8 @@ pub enum VulcanPluginRuntimeState {
     /// Plugin is not supported on the current target.
     /// 插件不支持当前目标平台。
     UnsupportedPlatform,
-    /// Plugin package or dependency validation failed.
-    /// 插件包或依赖校验失败。
+    /// Plugin validation failed or an original durable activation requires recovery before admission.
+    /// 插件校验失败，或原始持久激活要求恢复后才能入场。
     Unavailable,
 }
 

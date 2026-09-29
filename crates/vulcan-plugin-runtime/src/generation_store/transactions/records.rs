@@ -402,38 +402,46 @@ impl VulcanPluginGenerationStore {
         &self,
         plugin_id: &str,
     ) -> VulcanPluginStoreResult<BTreeSet<Uuid>> {
-        // The namespace fence orders this operation against every selection writer.
-        // 命名空间屏障将此操作与全部选择写入者排序。
+        // Keep one namespace fence while enumerating the exact original request filenames.
+        // 枚举精确原请求文件名期间保持同一命名空间屏障。
         let _namespace = self.namespace_lock(plugin_id, true)?;
-        // Resolve only the validated namespace directory; absence never creates storage on a read.
-        // 仅解析已验证命名空间目录；读取时缺失绝不创建存储。
+        self.transaction_ids_locked(plugin_id)
+    }
+
+    /// Enumerate canonical request IDs for `plugin_id` while the caller holds its namespace fence.
+    /// 在调用方持有命名空间屏障时枚举 `plugin_id` 的规范请求标识。
+    /// Return exact filenames without selecting or repairing transaction authority.
+    /// 返回精确文件标识，不选择或修复事务权威。
+    fn transaction_ids_locked(&self, plugin_id: &str) -> VulcanPluginStoreResult<BTreeSet<Uuid>> {
+        // Missing optional storage remains a read-only empty inventory.
+        // 可选存储缺失时保持只读空清单。
         let Some(directory) = self.transaction_directory(plugin_id, false)? else {
             return Ok(BTreeSet::new());
         };
-        // Read the literal journal entries and preserve any enumeration failure.
-        // 读取字面日志条目，并保留任何枚举错误。
+        // Enumeration failures must not become an empty journal.
+        // 枚举失败不得变成空日志。
         let entries = std::fs::read_dir(directory)
             .map_err(|error| Error::io("Enumerate activation transactions", error))?;
-        // Sorted original identities make discovery deterministic without choosing authority.
-        // 排序原身份使发现确定，但不选择权威。
+        // Stable ordering is for inspection only, never request selection.
+        // 稳定排序仅用于检查，绝不用于选择请求。
         let mut requests = BTreeSet::new();
         for entry in entries {
-            // Use the exact enumerated child path without following alternate locations.
-            // 使用精确枚举子路径，不跟随其他位置。
+            // Inspect literal filenames under the already validated namespace.
+            // 检查已校验命名空间中的字面文件名。
             let path = entry
                 .map_err(|error| Error::io("Read activation transaction entry", error))?
                 .path();
             if path.extension() != Some(std::ffi::OsStr::new("json")) {
                 continue;
             }
-            // Validate the literal filename before interpreting it as a request identity.
-            // 将字面文件名解释为请求身份前先校验它。
+            // Canonical spelling prevents aliases for the original request.
+            // 规范拼写防止原请求出现别名。
             let name = path
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| Error::invalid("Invalid activation transaction filename."))?;
-            // The canonical request identity remains stable across discovery and retries.
-            // 规范请求身份在发现及重试过程中保持稳定。
+            // Nil identifiers are never valid durable request identities.
+            // 空标识绝不是有效的持久请求身份。
             let request_id = Uuid::parse_str(name)
                 .map_err(|_| Error::invalid("Invalid activation transaction filename."))?;
             if request_id.is_nil()
@@ -445,6 +453,81 @@ impl VulcanPluginGenerationStore {
             requests.insert(request_id);
         }
         Ok(requests)
+    }
+
+    /// Inspect original unfinished records for `plugin_id` under one namespace fence.
+    /// 在同一命名空间屏障内检查 `plugin_id` 的原始未完成记录。
+    /// Return validated pending originals; reject damaged indexes and orphan installation receipts.
+    /// 返回已校验的待处理原请求；拒绝损坏索引及孤立安装回执。
+    pub fn activation_recovery_records(
+        &self,
+        plugin_id: &str,
+    ) -> VulcanPluginStoreResult<Vec<VulcanPluginActivationTransactionRecord>> {
+        // Inventory and index validation must describe the same namespace observation.
+        // 清单和索引校验必须描述同一次命名空间观察。
+        let _namespace = self.namespace_lock(plugin_id, true)?;
+        // Exact filenames do not grant recovery ownership.
+        // 精确文件名不授予恢复所有权。
+        let requests = self.transaction_ids_locked(plugin_id)?;
+        // A dangling or corrupt index is an error even when no JSON entries exist.
+        // 即使不存在 JSON 条目，悬空或损坏的索引也属于错误。
+        let indexed = self.indexed_transaction_locked(plugin_id)?;
+        // Retain only unfinished bodies after validating all historical originals.
+        // 校验全部历史原请求后仅保留未完成正文。
+        let mut pending = Vec::new();
+        for request_id in &requests {
+            // A disappearing original must never be interpreted as completion.
+            // 原请求消失绝不能解释为完成。
+            let record = self
+                .read_transaction_locked(plugin_id, *request_id)?
+                .ok_or_else(|| {
+                    Error::invalid("Activation transaction disappeared during inspection.")
+                })?;
+            if !record.phase.terminal() {
+                pending.push(record);
+            }
+        }
+        if indexed.is_none() && !requests.is_empty() && pending.is_empty() {
+            return Err(Error::invalid(
+                "Activation index is missing from a terminal transaction history.",
+            ));
+        }
+        if let Some(directory) = self.transaction_directory(plugin_id, false)? {
+            // Installation evidence cannot outlive its authoritative original request unnoticed.
+            // 安装证据失去权威原请求后不能被忽略。
+            let entries = std::fs::read_dir(directory)
+                .map_err(|error| Error::io("Inspect installation receipts", error))?;
+            for entry in entries {
+                // Only the declared receipt extension belongs to this inventory.
+                // 仅声明的回执扩展名属于此清单。
+                let path = entry
+                    .map_err(|error| Error::io("Read installation receipt entry", error))?
+                    .path();
+                if path.extension() != Some(std::ffi::OsStr::new("install")) {
+                    continue;
+                }
+                // Validate canonical identity before relating the receipt to its original.
+                // 关联回执与原请求之前校验规范身份。
+                let name = path
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| Error::invalid("Invalid installation receipt filename."))?;
+                // A receipt is meaningful only together with its exact original record.
+                // 回执仅与精确原始记录一起才有意义。
+                let request_id = Uuid::parse_str(name)
+                    .map_err(|_| Error::invalid("Invalid installation receipt filename."))?;
+                if request_id.is_nil()
+                    || request_id.to_string() != name
+                    || !files::exists(&path, false)?
+                    || !requests.contains(&request_id)
+                {
+                    return Err(Error::invalid(
+                        "Installation receipt has no valid original transaction.",
+                    ));
+                }
+            }
+        }
+        Ok(pending)
     }
 
     /// Discover journal namespaces without creating storage or replaying unfinished requests during startup.
