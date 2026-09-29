@@ -2,9 +2,10 @@
 //! 显式插件准备、激活 CAS、租约及可恢复字节回收。
 
 use super::{
-    AUTHORIZED_ACTIVATION_VERSION, GenerationLease, GenerationRecord, GenerationState,
-    PinnedVulcanPluginGeneration, RECORD_VERSION, STORE_DIRECTORY, VulcanPluginActivation,
-    VulcanPluginActiveGeneration, VulcanPluginGenerationIdentity, VulcanPluginGenerationStore,
+    AUTHORIZED_ACTIVATION_VERSION, CREDENTIAL_ACTIVATION_VERSION, GenerationLease,
+    GenerationRecord, GenerationState, PinnedVulcanPluginGeneration, RECORD_VERSION,
+    STORE_DIRECTORY, VulcanPluginActivation, VulcanPluginActiveGeneration,
+    VulcanPluginCredentialRevision, VulcanPluginGenerationIdentity, VulcanPluginGenerationStore,
     VulcanPluginStoreError as Error, VulcanPluginStoreErrorCode as Code,
     VulcanPluginStoreResult as Result, files,
 };
@@ -236,6 +237,7 @@ impl VulcanPluginGenerationStore {
             expected_revision,
             Some(generation.identity.clone()),
             None,
+            None,
         )
     }
 
@@ -247,7 +249,42 @@ impl VulcanPluginGenerationStore {
         &self,
         generation: &PinnedVulcanPluginGeneration,
         expected_revision: u64,
+        approved_permissions: Vec<String>,
+    ) -> Result<VulcanPluginActivation> {
+        self.activate_approved_selection(generation, expected_revision, approved_permissions, None)
+    }
+
+    /// Publish one package, complete approval and exact `credential_revision` in the same successor record.
+    /// 在同一后继记录发布单个插件包、完整批准及精确 `credential_revision`。
+    /// `generation` owns verified bytes and `expected_revision` freezes the predecessor; returns the version-three selection.
+    /// `generation` 持有已验证字节，`expected_revision` 固定前驱；返回第三版选择。
+    /// The host must first finish secure staging and readiness; this primitive never copies or reads secret values.
+    /// 宿主必须先完成安全暂存及就绪；此基础组件绝不复制或读取秘密值。
+    pub fn activate_with_credentials(
+        &self,
+        generation: &PinnedVulcanPluginGeneration,
+        expected_revision: u64,
+        approved_permissions: Vec<String>,
+        credential_revision: VulcanPluginCredentialRevision,
+    ) -> Result<VulcanPluginActivation> {
+        self.activate_approved_selection(
+            generation,
+            expected_revision,
+            approved_permissions,
+            Some(credential_revision),
+        )
+    }
+
+    /// Validate one explicit approval and optional version-three binding under the namespace fence before publication.
+    /// 在命名空间屏障下校验显式批准及可选第三版绑定，再进行发布。
+    /// Inputs name the pinned package, exact predecessor and selected authority; returns the original write outcome.
+    /// 输入指定固定插件包、精确前驱及选定权威；返回原写入结果。
+    fn activate_approved_selection(
+        &self,
+        generation: &PinnedVulcanPluginGeneration,
+        expected_revision: u64,
         mut approved_permissions: Vec<String>,
+        credential_revision: Option<VulcanPluginCredentialRevision>,
     ) -> Result<VulcanPluginActivation> {
         if generation.store_root != self.root {
             return Err(Error::invalid(
@@ -271,6 +308,7 @@ impl VulcanPluginGenerationStore {
             expected_revision,
             Some(generation.identity.clone()),
             Some(approved_permissions),
+            credential_revision,
         )
     }
 
@@ -286,7 +324,7 @@ impl VulcanPluginGenerationStore {
         // Use the same fence and revision semantics as activation.
         // 使用与激活相同的屏障及修订语义。
         let _namespace = self.namespace_lock(plugin_id, false)?;
-        self.replace_activation(plugin_id, expected_revision, None, None)
+        self.replace_activation(plugin_id, expected_revision, None, None, None)
     }
 
     /// Collect unselected, unpinned package bytes for `identity`; returns false when already collected.
@@ -410,9 +448,14 @@ impl VulcanPluginGenerationStore {
                     "Activation metadata has an unknown version or mismatched identity.",
                 ));
             }
-            match (record.schema_version, &record.approved_permissions) {
-                (RECORD_VERSION, None) => {}
-                (AUTHORIZED_ACTIVATION_VERSION, Some(permissions)) => {
+            match (
+                record.schema_version,
+                &record.approved_permissions,
+                &record.credential_revision,
+            ) {
+                (RECORD_VERSION, None, None) => {}
+                (AUTHORIZED_ACTIVATION_VERSION, Some(permissions), None)
+                | (CREDENTIAL_ACTIVATION_VERSION, Some(permissions), Some(_)) => {
                     if permissions.windows(2).any(|pair| pair[0] >= pair[1])
                         || permissions
                             .iter()
@@ -424,7 +467,7 @@ impl VulcanPluginGenerationStore {
                 }
                 _ => {
                     return Err(Error::invalid(
-                        "Activation version and approval authority do not agree.",
+                        "Activation version, approval and credential authority do not agree.",
                     ));
                 }
             }
@@ -448,6 +491,7 @@ impl VulcanPluginGenerationStore {
         expected_revision: u64,
         generation: Option<VulcanPluginGenerationIdentity>,
         approved_permissions: Option<Vec<String>>,
+        credential_revision: Option<VulcanPluginCredentialRevision>,
     ) -> Result<VulcanPluginActivation> {
         // Absence is explicitly the never-published predecessor; tombstones are always retained records.
         // 缺失显式表示从未发布的前驱；停用状态始终保留为记录。
@@ -467,7 +511,7 @@ impl VulcanPluginGenerationStore {
         // 命名空间提升后，不能通过旧选择或移除重新取得外部授权。
         let approved_permissions = if current
             .as_ref()
-            .is_some_and(|record| record.schema_version == AUTHORIZED_ACTIVATION_VERSION)
+            .is_some_and(|record| record.approved_permissions.is_some())
             && approved_permissions.is_none()
         {
             if generation.is_some() {
@@ -479,10 +523,25 @@ impl VulcanPluginGenerationStore {
         } else {
             approved_permissions
         };
+        // Removal retains the last credential identity for cleanup; an active successor must name its own binding.
+        // 移除保留最后凭据身份供清理；活动后继必须指定自身绑定。
+        let credential_revision = match (&current, credential_revision) {
+            (Some(original), None) if original.schema_version == CREDENTIAL_ACTIVATION_VERSION => {
+                if generation.is_some() {
+                    return Err(Error::invalid(
+                        "Credential-bound activation cannot downgrade its credential authority.",
+                    ));
+                }
+                original.credential_revision.clone()
+            }
+            (_, declared) => declared,
+        };
         // This single record is the storage-level selection authority, not a claim of route readiness.
         // 此单一记录为存储层选择权威，不表示路由已就绪。
         let next = VulcanPluginActivation {
-            schema_version: if approved_permissions.is_some() {
+            schema_version: if credential_revision.is_some() {
+                CREDENTIAL_ACTIVATION_VERSION
+            } else if approved_permissions.is_some() {
                 AUTHORIZED_ACTIVATION_VERSION
             } else {
                 RECORD_VERSION
@@ -491,6 +550,7 @@ impl VulcanPluginGenerationStore {
             revision,
             generation,
             approved_permissions,
+            credential_revision,
         };
         files::write_record(
             &self.root.join("active").join(format!("{plugin_id}.json")),

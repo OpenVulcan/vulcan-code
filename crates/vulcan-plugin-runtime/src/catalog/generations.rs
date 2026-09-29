@@ -20,6 +20,9 @@ pub struct VulcanPluginManagedPackage {
     /// Approval captured from the same atomic selection, absent only for the legacy format.
     /// 从同一原子选择捕获的批准权限，仅旧格式缺失。
     approved_permissions: Option<Vec<String>>,
+    /// Credential selection captured by the same persistent activation revision.
+    /// 由相同持久激活修订捕获的凭据选择。
+    credential_binding: crate::VulcanPluginCredentialBinding,
 }
 
 impl VulcanPluginManagedPackage {
@@ -39,6 +42,12 @@ impl VulcanPluginManagedPackage {
     /// 返回精确选定批准权限；缺失明确保留第一版附属文件权威。
     pub fn approved_permissions(&self) -> Option<&[String]> {
         self.approved_permissions.as_deref()
+    }
+
+    /// Borrow the selected credential authority without consulting another snapshot or file.
+    /// 借用选定凭据权威，不查询其他快照或文件。
+    pub fn credential_binding(&self) -> &crate::VulcanPluginCredentialBinding {
+        &self.credential_binding
     }
 }
 
@@ -184,9 +193,19 @@ fn load_selected_package(
             "Managed package descriptor differs from its pinned generation identity.",
         ));
     }
+    // Every contribution carries the binding from this exact selection, including later cloned server descriptors.
+    // 每个贡献携带此精确选择的绑定，包括后续克隆的服务器描述符。
+    let credential_binding = match activation.credential_revision() {
+        Some(revision) => crate::VulcanPluginCredentialBinding::Revision(revision.clone()),
+        None => crate::VulcanPluginCredentialBinding::Legacy,
+    };
+    for server in &mut package.mcp_servers {
+        server.credential_binding = credential_binding.clone();
+    }
     package.managed_package = Some(VulcanPluginManagedPackage {
         activation_revision: activation.revision,
         approved_permissions: activation.approved_permissions().map(<[String]>::to_vec),
+        credential_binding,
         generation,
     });
     Ok(ManagedSelection::Package(Box::new(package)))

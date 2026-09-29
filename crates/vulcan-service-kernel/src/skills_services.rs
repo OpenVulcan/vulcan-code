@@ -933,6 +933,11 @@ async fn mutate_plugin_mcp_secret(
                 "插件 MCP Server `{plugin_id}:{server_id}` 未声明 Secret 键 `{secret_key}`。"
             ));
         }
+        // A versioned selection must not report success after writing an unrelated legacy credential.
+        // 版本化选择不得在写入无关旧凭据后报告成功。
+        if matches!(server.credential_binding, vulcan_plugin_runtime::VulcanPluginCredentialBinding::Revision(_)) {
+            return Err(String::from("Versioned plugin credentials require a credential revision transaction."));
+        }
         let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
         let previous_value =
             secret_store.read_optional_secret(&plugin_id, &server_id, &secret_key)?;
