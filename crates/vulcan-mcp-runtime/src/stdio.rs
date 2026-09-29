@@ -32,6 +32,8 @@ use child_backend::ManagedChildBackend;
 use pipe_completion::PipeCompletion;
 
 #[cfg(test)]
+mod resource_tests;
+#[cfg(test)]
 mod stderr_tests;
 
 /// Maximum number of sanitized stderr chunks retained per stdio transport.
@@ -65,6 +67,92 @@ pub struct StdioTransport {
 }
 
 impl StdioTransport {
+    /// Spawns with host authority retained by the actual process and each native pipe.
+    /// 启动时由实际进程及每条原生管道保留宿主权威。
+    /// Endpoint identifies diagnostics; program, args, cwd, env and inherit_environment define the exact launch.
+    /// endpoint 标识诊断；program、args、cwd、env 及 inherit_environment 定义精确启动。
+    /// Resources is consumed before native work starts; its original receipt survives cancellation of initialization.
+    /// 原生工作开始前消费 resources；初始化取消后，其原回执继续存续。
+    /// Returns a connected transport or the original launch or handshake error; errors alone do not prove release.
+    /// 返回已连接传输或原启动及握手错误；错误本身不能证明释放。
+    pub async fn spawn_with_resources(
+        endpoint: impl Into<String>,
+        program: impl AsRef<std::ffi::OsStr>,
+        args: &[&str],
+        cwd: Option<&Path>,
+        env: &BTreeMap<String, String>,
+        inherit_environment: bool,
+        resources: crate::McpTransportResources,
+    ) -> Result<Self, McpRuntimeError> {
+        // Own the diagnostic label independently of borrowed launch arguments.
+        // 独立于借用启动参数，持有诊断标签。
+        let endpoint = endpoint.into();
+        // Preserve the exact native executable identity across initialization awaits.
+        // 跨初始化等待保留精确原生可执行文件身份。
+        let program = program.as_ref().to_owned();
+        // Owned arguments preserve the caller's declared ordering and values.
+        // 自有参数保留调用方声明的顺序及值。
+        let argv: Vec<String> = args.iter().map(|value| (*value).to_string()).collect();
+        // The existing builder remains the sole command normalization authority.
+        // 既有构造器保持命令规范化的唯一权威。
+        let cmd = build_child_command(&program, &argv, cwd, env, inherit_environment);
+        // sensitiveValues contains only exact injected values and is consumed solely by the stderr redactor.
+        // sensitiveValues 仅包含精确注入值，并且只由 stderr 脱敏器消费。
+        let mut sensitive_values = argv
+            .iter()
+            .chain(env.values())
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        sensitive_values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        sensitive_values.dedup();
+        // The native diagnostic owner shares only sanitized bounded output with observers.
+        // 原生诊断所有者仅向观察者共享有界脱敏输出。
+        let recent_logs = Arc::new(Mutex::new(VecDeque::new()));
+        // This clone moves into the native reader, which outlives the caller's executor when needed.
+        // 此克隆移入原生读取者，必要时比调用方执行器存续更久。
+        let capture_logs = Arc::clone(&recent_logs);
+        // Process and all three native pipe owners exist before protocol initialization begins.
+        // 协议初始化开始前，进程及三条原生管道的所有者均已建立。
+        let transport = ManagedChildBackend::spawn_with_resources(cmd, resources, move |stderr| {
+            spawn_sanitized_stderr_capture(stderr, sensitive_values, capture_logs)
+        })
+        .await
+        .map_err(|error| McpRuntimeError::transport(format!("mcp.spawn: {error}")))?;
+        // Preserve the actual backend close result independently of the official service join.
+        // 独立于官方服务任务等待，保留实际后端关闭结果。
+        let (transport, backend_close) = observe_backend_close(transport, "mcp.shutdown");
+        // Bounded events belong to this transport's existing public notification channel.
+        // 有界事件属于此传输既有公开通知通道。
+        let (event_sender, _) = broadcast::channel(32);
+        // The official service receives the existing host event handler.
+        // 官方服务接收既有宿主事件处理器。
+        let handler = Arc::new(EventingClientHandler::new(event_sender.clone()));
+        // Initialization may be cancelled while actual native owners retain host leases.
+        // 初始化可以取消，同时实际原生所有者保留宿主租约。
+        let service = handler
+            .serve(transport)
+            .await
+            .map_err(|error| McpRuntimeError::transport(format!("mcp.connect: {error}")))?;
+        // The connected peer exposes protocol operations without taking native ownership.
+        // 已连接对端暴露协议操作，不接管原生所有权。
+        let peer = service.peer().clone();
+        spawn_rmcp_disconnect_watch(
+            endpoint.clone(),
+            "stdio",
+            peer.clone(),
+            event_sender.clone(),
+        );
+
+        Ok(Self {
+            endpoint,
+            peer,
+            shutdown: TransportShutdown::for_service("mcp.shutdown", service, backend_close),
+            event_sender,
+            recent_logs,
+        })
+    }
+
     /// Spawn one child program and connect over stdio.
     /// 启动一个子进程程序并通过 stdio 建立连接。
     ///
@@ -87,57 +175,19 @@ impl StdioTransport {
         env: &BTreeMap<String, String>,
         inherit_environment: bool,
     ) -> Result<Self, McpRuntimeError> {
-        let endpoint = endpoint.into();
-        let program = program.as_ref().to_owned();
-        let argv: Vec<String> = args.iter().map(|value| (*value).to_string()).collect();
-        let cmd = build_child_command(&program, &argv, cwd, env, inherit_environment);
-        // sensitiveValues contains only exact injected values and is consumed solely by the stderr redactor.
-        // sensitiveValues 仅包含精确注入值，并且只由 stderr 脱敏器消费。
-        let mut sensitive_values = argv
-            .iter()
-            .chain(env.values())
-            .filter(|value| !value.is_empty())
-            .cloned()
-            .collect::<Vec<_>>();
-        sensitive_values.sort_by_key(|value| std::cmp::Reverse(value.len()));
-        sensitive_values.dedup();
-        // The native diagnostic owner shares only sanitized bounded output with observers.
-        // 原生诊断所有者仅向观察者共享有界脱敏输出。
-        let recent_logs = Arc::new(Mutex::new(VecDeque::new()));
-        // This clone moves into the native reader, which outlives the caller's executor when needed.
-        // 此克隆移入原生读取者，必要时比调用方执行器存续更久。
-        let capture_logs = Arc::clone(&recent_logs);
-        // Process and all three native pipe owners exist before protocol initialization begins.
-        // 协议初始化开始前，进程及三条原生管道的所有者均已建立。
-        let transport = ManagedChildBackend::spawn(cmd, move |stderr| {
-            spawn_sanitized_stderr_capture(stderr, sensitive_values, capture_logs)
-        })
-        .await
-        .map_err(|error| McpRuntimeError::transport(format!("mcp.spawn: {error}")))?;
-        // Preserve the actual backend close result independently of the official service join.
-        // 独立于官方服务任务等待，保留实际后端关闭结果。
-        let (transport, backend_close) = observe_backend_close(transport, "mcp.shutdown");
-        let (event_sender, _) = broadcast::channel(32);
-        let handler = Arc::new(EventingClientHandler::new(event_sender.clone()));
-        let service = handler
-            .serve(transport)
-            .await
-            .map_err(|error| McpRuntimeError::transport(format!("mcp.connect: {error}")))?;
-        let peer = service.peer().clone();
-        spawn_rmcp_disconnect_watch(
-            endpoint.clone(),
-            "stdio",
-            peer.clone(),
-            event_sender.clone(),
-        );
-
-        Ok(Self {
+        // Ordinary launches follow the same actual resource ownership without plugin-specific leases.
+        // 普通启动遵循相同实际资源所有权，不携带插件专用租约。
+        let (resources, _) = crate::McpTransportResources::new(());
+        Self::spawn_with_resources(
             endpoint,
-            peer,
-            shutdown: TransportShutdown::for_service("mcp.shutdown", service, backend_close),
-            event_sender,
-            recent_logs,
-        })
+            program,
+            args,
+            cwd,
+            env,
+            inherit_environment,
+            resources,
+        )
+        .await
     }
 }
 

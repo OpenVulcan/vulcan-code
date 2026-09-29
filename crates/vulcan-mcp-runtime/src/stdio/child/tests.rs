@@ -308,6 +308,7 @@ async fn fixture_with_entry(
         stdin,
         stdout,
         stderr,
+        resources: _resources,
     } = pipes;
     // A line stream cannot consume any protocol output from the test harness.
     // 行流不会消费测试框架的任何协议输出。

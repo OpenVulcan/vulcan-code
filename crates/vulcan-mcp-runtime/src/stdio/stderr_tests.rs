@@ -192,6 +192,7 @@ async fn native_stderr_observer_cancellation_preserves_capture() {
             mut stdin,
             stdout,
             stderr,
+            resources: _resources,
         },
     ) = ManagedChild::spawn(fixture_command(lease.path()))
         .await
@@ -260,6 +261,7 @@ fn native_stderr_reads_after_originating_executor_shutdown() {
             mut stdin,
             stdout,
             stderr,
+            resources: _resources,
         },
     ) = runtime
         .block_on(ManagedChild::spawn(fixture_command(lease.path())))

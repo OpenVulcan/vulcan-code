@@ -20,6 +20,7 @@ pub mod error;
 pub mod http;
 mod http_support;
 pub mod launch;
+mod resources;
 mod rmcp_support;
 mod shutdown;
 pub mod sse;
@@ -30,6 +31,7 @@ pub use auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession, McpTransportOAu
 pub use error::McpRuntimeError;
 pub use http::HttpTransport;
 pub use launch::McpTransportLaunchSpec;
+pub use resources::{McpResourceRelease, McpTransportResources};
 pub use rmcp::model::{GetPromptResult, Prompt, PromptArgument, ReadResourceResult, Resource};
 pub use sse::SseTransport;
 pub use stdio::StdioTransport;

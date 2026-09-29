@@ -46,6 +46,11 @@ pub(super) struct ChildPipes {
     /// Diagnostic output remains separate from protocol messages.
     /// 诊断输出与协议消息保持分离。
     pub(super) stderr: ChildStderr,
+    /// Handoff retains host authority until all original pipes reach their actual owners.
+    /// 移交期间保留宿主权威，直至全部原管道到达实际所有者。
+    /// Keep this field after the handles so a cancelled handoff releases actual pipes first.
+    /// 此字段须位于句柄之后，使取消移交时先释放实际管道。
+    pub(super) resources: crate::McpTransportResources,
 }
 
 /// Observes actual platform scope exit without owning or cancelling the worker.
@@ -92,11 +97,16 @@ pub(super) struct ManagedChild {
 }
 
 impl ManagedChild {
-    /// Spawns on a native worker before handing pipes to the asynchronous protocol adapter.
-    /// 先在原生工作线程启动，再把管道交给异步协议适配器。
-    /// Command preserves exact arguments and environment, with platform containment flags; returns the owner and original pipes.
-    /// command 保留精确参数及环境，并设置平台纳管标志；返回所有者和原管道。
-    pub(super) async fn spawn(command: Command) -> io::Result<(Self, ChildPipes)> {
+    /// Transfers host leases into native supervision before spawning or awaiting pipe handoff.
+    /// 启动或等待管道移交前，将宿主租约移交给原生监督。
+    /// Command is the exact launch authority; resources retain approved host leases until actual release.
+    /// command 是精确启动权威；resources 保留已批准宿主租约直至实际释放。
+    /// Returns process control and owned pipes; cancellation retains native cleanup and its leases.
+    /// 返回进程控制及自有管道；取消后保留原生清理及其租约。
+    pub(super) async fn spawn_with_resources(
+        command: Command,
+        resources: crate::McpTransportResources,
+    ) -> io::Result<(Self, ChildPipes)> {
         // The owner exists before spawn is scheduled, covering cancellation of the first await.
         // 调度启动前所有者已存在，覆盖首次等待的取消。
         let requested = Arc::new(AtomicU8::new(StopRequest::Running as u8));
@@ -120,13 +130,27 @@ impl ManagedChild {
         };
         std::thread::Builder::new()
             .name(String::from("mcp-child-owner"))
-            .spawn(move || supervise(command, requested, wake_receiver, ready, result))?;
+            .spawn(move || {
+                supervise(command, requested, wake_receiver, ready, result, resources)
+            })?;
         // No detached Tokio cleanup is needed when this future is cancelled.
         // 此 future 取消时无需派生 Tokio 清理。
         let pipes = ready_receiver.await.map_err(|_| {
             io::Error::other("MCP child supervisor ended before publishing child pipes.")
         })??;
         Ok((owner, pipes))
+    }
+
+    /// Spawns on a native worker before handing pipes to the asynchronous protocol adapter.
+    /// 先在原生工作线程启动，再把管道交给异步协议适配器。
+    /// Command preserves exact arguments and environment, with platform containment flags; returns the owner and original pipes.
+    /// command 保留精确参数及环境，并设置平台纳管标志；返回所有者和原管道。
+    #[cfg(test)]
+    pub(super) async fn spawn(command: Command) -> io::Result<(Self, ChildPipes)> {
+        // Ordinary fixture launches carry no external host lease but follow the same ownership path.
+        // 普通夹具启动不携带外部宿主租约，但遵循相同所有权路径。
+        let (resources, _) = crate::McpTransportResources::new(());
+        Self::spawn_with_resources(command, resources).await
     }
 
     /// Requests graceful exit once and waits on the original independent completion receipt.
@@ -180,6 +204,7 @@ fn supervise(
     wake: mpsc::Receiver<()>,
     ready: oneshot::Sender<io::Result<ChildPipes>>,
     result: watch::Sender<Option<Result<(), String>>>,
+    resources: crate::McpTransportResources,
 ) {
     // Prepare the platform scope before spawning so configuration errors cannot orphan a child.
     // 启动前准备平台范围，避免配置错误遗留子进程。
@@ -213,6 +238,7 @@ fn supervise(
                 stdin,
                 stdout,
                 stderr,
+                resources: resources.clone(),
             }),
             _ => Err(io::Error::other(
                 "MCP child is missing a requested stdio pipe.",
@@ -238,6 +264,7 @@ fn supervise(
         match family.exit_confirmed(&mut child) {
             Ok(true) => {
                 drop((child, family));
+                drop(resources);
                 result.send_replace(Some(failure.map_or(Ok(()), Err)));
                 return;
             }
@@ -271,6 +298,7 @@ fn supervise(
                         // 竞争中的自然退出必须确认整个持有范围，而非仅其根进程。
                         if let Ok(true) = family.exit_confirmed(&mut child) {
                             drop((child, family));
+                            drop(resources);
                             result.send_replace(Some(failure.map_or(Ok(()), Err)));
                             return;
                         }

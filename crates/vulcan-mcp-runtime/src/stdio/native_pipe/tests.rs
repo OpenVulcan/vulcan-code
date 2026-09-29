@@ -104,7 +104,7 @@ fn locked_file(bytes: &[u8]) -> (tempfile::NamedTempFile, File) {
 /// Reader retains its pending operation; entered is sent by the real gated native callback.
 /// reader 保留待完成操作；entered 由真实受屏障控制的原生回调发送。
 async fn enter_then_cancel_read(
-    reader: &mut NativePipeReader<GatedReader>,
+    reader: &mut NativePipeReader<impl Read + Send + 'static>,
     entered: tokio::sync::oneshot::Receiver<()>,
 ) {
     // A larger first destination exercises preservation when the replacement read is smaller.
@@ -190,6 +190,12 @@ fn in_flight_read_survives_adapter_and_executor_loss() {
     let (path, file) = locked_file(b"still owned");
     // Limit blocking concurrency so the test cannot create an unbounded worker set.
     // 限制阻塞并发，使测试不能创建无界工作线程集合。
+    // A separate real file represents the host's candidate package or environment lease.
+    // 独立真实文件代表宿主的候选插件包或环境租约。
+    let (host_path, host_file) = locked_file(&[]);
+    // The original receipt must not retain the lease it observes.
+    // 原回执不得保留其观察的租约。
+    let (resources, host_release) = crate::McpTransportResources::new(host_file);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .max_blocking_threads(1)
@@ -204,18 +210,23 @@ fn in_flight_read_survives_adapter_and_executor_loss() {
     // The adapter consumes the original resource and returns only an independent release observer.
     // 适配器消费原资源，仅返回独立释放观察者。
     let (mut reader, completion) = NativePipeReader::new(
-        GatedReader {
+        resources.retain(GatedReader {
             file,
             entered: Some(entered),
             release: gate,
-        },
+        }),
         runtime.handle().clone(),
     );
+    drop(resources);
     runtime.block_on(enter_then_cancel_read(&mut reader, entry));
     drop(reader);
     runtime.shutdown_timeout(Duration::from_millis(10));
     assert!(matches!(
         path.as_file().try_lock(),
+        Err(TryLockError::WouldBlock)
+    ));
+    assert!(matches!(
+        host_path.as_file().try_lock(),
         Err(TryLockError::WouldBlock)
     ));
     // A second runtime may observe cleanup but cannot perform the original native read.
@@ -225,6 +236,11 @@ fn in_flight_read_survives_adapter_and_executor_loss() {
         .build()
         .expect("read observer");
     observer.block_on(async {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), host_release.wait())
+                .await
+                .is_err()
+        );
         assert!(
             tokio::time::timeout(Duration::from_millis(10), completion.wait())
                 .await
@@ -237,7 +253,15 @@ fn in_flight_read_survives_adapter_and_executor_loss() {
             .await
             .expect("actual read release deadline")
             .expect("actual read release");
+        host_release
+            .wait()
+            .await
+            .expect("actual host resources released after I/O");
     });
+    host_path
+        .as_file()
+        .try_lock()
+        .expect("host lease released after actual native owner");
     path.as_file()
         .try_lock()
         .expect("last native owner released real lock");
@@ -254,6 +278,12 @@ fn in_flight_write_survives_adapter_and_executor_loss() {
     let (path, file) = locked_file(&[]);
     // The one-worker runtime is deliberately destroyed while the writer is blocked.
     // 单工作线程运行时刻意在写入者阻塞时销毁。
+    // A separate real file represents the host's candidate package or environment lease.
+    // 独立真实文件代表宿主的候选插件包或环境租约。
+    let (host_path, host_file) = locked_file(&[]);
+    // The original receipt must not retain the lease it observes.
+    // 原回执不得保留其观察的租约。
+    let (resources, host_release) = crate::McpTransportResources::new(host_file);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .max_blocking_threads(1)
@@ -268,13 +298,14 @@ fn in_flight_write_survives_adapter_and_executor_loss() {
     // The real write-only operation is wrapped by the production writer adapter.
     // 实际写入操作由生产写入适配器包装。
     let (mut writer, completion) = NativePipeWriter::new(
-        GatedWriter {
+        resources.retain(GatedWriter {
             file,
             entered: Some(entered),
             release: gate,
-        },
+        }),
         runtime.handle().clone(),
     );
+    drop(resources);
     runtime.block_on(async {
         writer
             .write_all(b"late native output")
@@ -296,6 +327,10 @@ fn in_flight_write_survives_adapter_and_executor_loss() {
         path.as_file().try_lock(),
         Err(TryLockError::WouldBlock)
     ));
+    assert!(matches!(
+        host_path.as_file().try_lock(),
+        Err(TryLockError::WouldBlock)
+    ));
     // The independent observer cannot release the worker's original file ownership.
     // 独立观察者不能释放工作线程原文件所有权。
     let observer = tokio::runtime::Builder::new_current_thread()
@@ -303,6 +338,11 @@ fn in_flight_write_survives_adapter_and_executor_loss() {
         .build()
         .expect("write observer");
     observer.block_on(async {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), host_release.wait())
+                .await
+                .is_err()
+        );
         assert!(
             tokio::time::timeout(Duration::from_millis(10), completion.wait())
                 .await
@@ -315,7 +355,15 @@ fn in_flight_write_survives_adapter_and_executor_loss() {
             .await
             .expect("actual write release deadline")
             .expect("actual write release");
+        host_release
+            .wait()
+            .await
+            .expect("actual host resources released after I/O");
     });
+    host_path
+        .as_file()
+        .try_lock()
+        .expect("host lease released after actual native owner");
     path.as_file().try_lock().expect("writer OS lock released");
     // Release our own verification lock before reading through a different handle on Windows.
     // 在 Windows 上经另一个句柄读取前，释放我们自己的验证锁。
