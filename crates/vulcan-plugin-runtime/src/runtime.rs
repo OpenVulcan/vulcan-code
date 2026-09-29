@@ -35,7 +35,8 @@ pub use bridge::{
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
 pub use formal::{
-    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginCapacityControlAction,
+    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginAutomaticPrewarmPermit,
+    VulcanPluginAutomaticPrewarmTrigger, VulcanPluginCapacityControlAction,
     VulcanPluginCapacityControlRequest, VulcanPluginCapacityRegistrationRequest,
     VulcanPluginFormalCallStatus, VulcanPluginFormalCapacityCatalog,
     VulcanPluginFormalCapacityStatus, VulcanPluginFormalPluginStatus,

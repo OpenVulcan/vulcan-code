@@ -707,8 +707,8 @@ fn run_service_bootstrap(
         plugin_runtime_started_at,
         format!("plugins={}", vulcan_plugin_catalog.plugins.len()),
     );
-    // pluginPrewarmTask overlaps the cold System VM creation cost with independent MCP initialization.
-    // pluginPrewarmTask 将冷启动 System VM 的创建成本与独立的 MCP 初始化并行重叠。
+    // pluginPrewarmTask prepares enabled formal Hook instances alongside independent MCP initialization.
+    // pluginPrewarmTask 与独立 MCP 初始化并行准备已启用正式 Hook 实例。
     let plugin_prewarm_runtime = vulcan_plugin_runtime.clone();
     let plugin_prewarm_task = runtime.spawn(async move {
         // prewarmStarted measures only plugin work and excludes later MCP join delay.

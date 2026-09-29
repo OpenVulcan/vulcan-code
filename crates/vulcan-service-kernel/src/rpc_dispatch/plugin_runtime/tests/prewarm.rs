@@ -41,7 +41,19 @@ fn assert_browser_prewarm_wire_fixture(catalog: &Value, prepared: &Value, comple
         .expect("completed operations")
         .iter()
         .chain(std::iter::once(&completed["operation"]));
+    // VM identities come from a process-wide allocator and must not depend on which test ran first.
+    // VM 身份来自进程级分配器，不能依赖先运行了哪个测试。
+    let mut instance_tokens = BTreeMap::new();
     for operation in operations {
+        let instance_id = operation["value"]["instance_id"]
+            .as_str()
+            .expect("successful native prewarm instance");
+        if !instance_tokens.contains_key(instance_id) {
+            instance_tokens.insert(
+                instance_id,
+                format!("embedded-vm:{}", instance_tokens.len() + 1),
+            );
+        }
         let operation_id = operation["operation_id"]
             .as_str()
             .expect("actual native operation");
@@ -69,6 +81,9 @@ fn assert_browser_prewarm_wire_fixture(catalog: &Value, prepared: &Value, comple
             }
         }
     }
+    // Append instance mappings after operation mappings so existing opaque operation labels remain stable.
+    // 在操作映射之后追加实例映射，保持既有不透明操作标签稳定。
+    tokens.extend(instance_tokens);
     // Borrow replacement strings only after collecting them to avoid invalidation by vector growth.
     // 在收集完成后才借用替换字符串，避免向量增长导致失效。
     let replacements: Vec<_> = tokens

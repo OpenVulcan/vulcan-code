@@ -253,6 +253,7 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         child_maintenance_stops: BTreeMap::new(),
         terminal_pre_intent_repairs: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        automatic_plugin_prewarm: BTreeMap::new(),
         session_runtime_registry: Default::default(),
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
         project_resource_catalog_registry: Default::default(),

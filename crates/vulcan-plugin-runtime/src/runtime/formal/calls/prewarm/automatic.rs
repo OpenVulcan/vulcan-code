@@ -3,6 +3,22 @@
 
 use super::*;
 
+mod permission;
+pub use permission::{VulcanPluginAutomaticPrewarmPermit, VulcanPluginAutomaticPrewarmTrigger};
+
+/// Original wire provenance and its unforgeable in-process lifecycle permission travel together.
+/// 原线协议来源与不可伪造的进程内生命周期权限共同传递。
+#[derive(Clone, Serialize)]
+pub(in crate::runtime::formal::calls) struct AutomaticAdmission {
+    /// Original trigger and policy identities remain queryable after permission revocation.
+    /// 原触发及策略身份在权限撤销后保持可查询。
+    pub(in crate::runtime::formal::calls) origin: VulcanPluginAutomaticPrewarmOrigin,
+    /// A wire field cannot manufacture this host-owned authorization.
+    /// 线协议字段不能制造此宿主自有授权。
+    #[serde(skip)]
+    pub(in crate::runtime::formal::calls) permit: VulcanPluginAutomaticPrewarmPermit,
+}
+
 /// Trusted host provenance identifies a lifecycle trigger and the exact policy that authorized its target.
 /// 可信宿主来源标识生命周期触发及授权该目标的精确策略。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +41,7 @@ impl VulcanPluginRuntimeManager {
         &self,
         request: VulcanPluginPrewarmTargetRequest,
         origin: VulcanPluginAutomaticPrewarmOrigin,
+        permit: VulcanPluginAutomaticPrewarmPermit,
     ) -> Result<VulcanPluginFormalCallStatus, VulcanPluginRuntimeError> {
         for identity in [&origin.trigger_id, &origin.policy_revision] {
             if identity.is_empty() || identity.contains('\0') {
@@ -49,7 +66,10 @@ impl VulcanPluginRuntimeManager {
                 &calls,
                 &CallAdmission::PrewarmTarget {
                     request: request.clone(),
-                    automatic: Some(origin.clone()),
+                    automatic: Some(AutomaticAdmission {
+                        origin: origin.clone(),
+                        permit: permit.clone(),
+                    }),
                 },
             )? {
                 return original.status();
@@ -59,7 +79,7 @@ impl VulcanPluginRuntimeManager {
         let CallAdmission::PrewarmTarget { automatic, .. } = &mut input.admission else {
             unreachable!("target input builder always returns target admission");
         };
-        *automatic = Some(origin);
+        *automatic = Some(AutomaticAdmission { origin, permit });
         self.register_owned_formal_call(&owner, plugin, input)?
             .status()
     }
@@ -85,11 +105,21 @@ pub(in crate::runtime::formal::calls) fn original_call(
         let Some(target) = &state.prewarm else {
             continue;
         };
-        if target.automatic.as_ref() == Some(origin)
+        if target
+            .automatic
+            .as_ref()
+            .is_some_and(|original| original.origin == origin.origin)
             && target.request.owner_session_id == request.owner_session_id
             && target.request.tool_id == request.tool_id
         {
-            if target.request != *request {
+            if target.request != *request
+                || !target
+                    .automatic
+                    .as_ref()
+                    .expect("matched automatic origin")
+                    .permit
+                    .same_owner(&origin.permit)
+            {
                 return Err(VulcanPluginRuntimeError::new(
                     "Automatic prewarm trigger already belongs to another target.",
                 ));
@@ -106,15 +136,16 @@ pub(in crate::runtime::formal::calls) fn validate_admission(
     owner: &ManagedFormalRuntime,
     admission: &CallAdmission,
     publication: &std::sync::MutexGuard<'_, ()>,
-) -> Result<(), VulcanPluginRuntimeError> {
+) -> Result<Option<VulcanPluginAutomaticPrewarmPermit>, VulcanPluginRuntimeError> {
     if let CallAdmission::PrewarmTarget {
         request,
         automatic: Some(origin),
     } = admission
     {
-        owner.validate_automatic_prewarm_policy(request, origin, publication)?;
+        owner.validate_automatic_prewarm_policy(request, &origin.origin, publication)?;
+        return Ok(Some(origin.permit.clone()));
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Validate a retained call's automatic provenance before any additional initialization; return exact policy errors.
@@ -123,12 +154,26 @@ pub(in crate::runtime::formal::calls) fn validate_call(
     owner: &ManagedFormalRuntime,
     call: &FormalCall,
     publication: &std::sync::MutexGuard<'_, ()>,
-) -> Result<(), VulcanPluginRuntimeError> {
+) -> Result<Option<VulcanPluginAutomaticPrewarmPermit>, VulcanPluginRuntimeError> {
     let state = call.lock()?;
     if let Some(target) = &state.prewarm
         && let Some(origin) = &target.automatic
     {
-        owner.validate_automatic_prewarm_policy(&target.request, origin, publication)?;
+        owner.validate_automatic_prewarm_policy(&target.request, &origin.origin, publication)?;
+        return Ok(Some(origin.permit.clone()));
     }
-    Ok(())
+    Ok(None)
+}
+
+/// Observe lifecycle revocation before waiting for an in-flight initializer; return lookup failures explicitly.
+/// 等待在途初始化之前观测生命周期撤销；明确返回查找失败。
+pub(in crate::runtime::formal::calls) fn is_closed(
+    call: &FormalCall,
+) -> Result<bool, VulcanPluginRuntimeError> {
+    Ok(call
+        .lock()?
+        .prewarm
+        .as_ref()
+        .and_then(|target| target.automatic.as_ref())
+        .is_some_and(|automatic| automatic.permit.is_closed()))
 }

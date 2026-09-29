@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod permission;
+
 impl Fixture {
     /// Publish target as the exact rule, or disable with None; return a fresh trigger bound to its acknowledged revision.
     /// 将 target 发布为精确规则，或使用 None 关闭；返回绑定已确认修订的新触发。
@@ -49,6 +51,9 @@ async fn hot_reuse_automatic_trigger_is_atomic_and_preserves_original_deadline()
     // The real package has one idle slot and a policy explicitly enabling that slot.
     // 真实包具有一个空闲槽，策略明确启用该槽。
     let fixture = Fixture::new(10_000, 100);
+    // The original lifecycle owner stays alive for this test.
+    // 原生命周期所有者在本测试期间保持活动。
+    let trigger = VulcanPluginAutomaticPrewarmTrigger::default();
     let origin = fixture.automatic_policy(Some(1));
     let request = fixture.target(1);
     // Four callers fit the repository's shared validation concurrency budget.
@@ -62,7 +67,11 @@ async fn hot_reuse_automatic_trigger_is_atomic_and_preserves_original_deadline()
                     barrier.wait();
                     fixture
                         .manager
-                        .prepare_automatic_tool_prewarm(request.clone(), origin.clone())
+                        .prepare_automatic_tool_prewarm(
+                            request.clone(),
+                            origin.clone(),
+                            trigger.permit(),
+                        )
                         .expect("concurrent first preparation")
                 })
             })
@@ -96,7 +105,7 @@ async fn hot_reuse_automatic_trigger_is_atomic_and_preserves_original_deadline()
     assert_eq!(
         fixture
             .manager
-            .prepare_automatic_tool_prewarm(request.clone(), origin.clone())
+            .prepare_automatic_tool_prewarm(request.clone(), origin.clone(), trigger.permit())
             .expect("repeat")
             .invocation_id,
         prepared.invocation_id
@@ -140,7 +149,7 @@ async fn hot_reuse_automatic_trigger_is_atomic_and_preserves_original_deadline()
     assert!(
         fixture
             .manager
-            .prepare_automatic_tool_prewarm(conflicting, origin.clone())
+            .prepare_automatic_tool_prewarm(conflicting, origin.clone(), trigger.permit())
             .is_err()
     );
     fixture
@@ -185,7 +194,7 @@ async fn hot_reuse_automatic_trigger_is_atomic_and_preserves_original_deadline()
     assert_eq!(
         fixture
             .manager
-            .prepare_automatic_tool_prewarm(request, origin)
+            .prepare_automatic_tool_prewarm(request, origin, trigger.permit())
             .expect("historical original")
             .invocation_id,
         prepared.invocation_id
@@ -202,6 +211,9 @@ async fn hot_reuse_automatic_trigger_is_atomic_and_preserves_original_deadline()
 #[tokio::test]
 async fn hot_reuse_automatic_policy_and_metadata_are_checked_before_initialization() {
     let fixture = Fixture::new(10_000, 100);
+    // The original lifecycle owner stays alive for this test.
+    // 原生命周期所有者在本测试期间保持活动。
+    let trigger = VulcanPluginAutomaticPrewarmTrigger::default();
     fixture.target_capacity(2);
     let current = fixture
         .manager
@@ -214,14 +226,14 @@ async fn hot_reuse_automatic_policy_and_metadata_are_checked_before_initializati
     assert!(
         fixture
             .manager
-            .prepare_automatic_tool_prewarm(fixture.target(1), disabled)
+            .prepare_automatic_tool_prewarm(fixture.target(1), disabled, trigger.permit())
             .is_err()
     );
     let origin = fixture.automatic_policy(Some(1));
     assert!(
         fixture
             .manager
-            .prepare_automatic_tool_prewarm(fixture.target(2), origin.clone())
+            .prepare_automatic_tool_prewarm(fixture.target(2), origin.clone(), trigger.permit())
             .is_err()
     );
     // Origin bytes participate in the same finite input budget as the original target and retained handles.
@@ -231,7 +243,7 @@ async fn hot_reuse_automatic_policy_and_metadata_are_checked_before_initializati
     assert!(
         fixture
             .manager
-            .prepare_automatic_tool_prewarm(fixture.target(1), oversized)
+            .prepare_automatic_tool_prewarm(fixture.target(1), oversized, trigger.permit())
             .is_err()
     );
     assert!(
@@ -243,7 +255,7 @@ async fn hot_reuse_automatic_policy_and_metadata_are_checked_before_initializati
     );
     let original = fixture
         .manager
-        .prepare_automatic_tool_prewarm(fixture.target(1), origin.clone())
+        .prepare_automatic_tool_prewarm(fixture.target(1), origin.clone(), trigger.permit())
         .expect("prepare under original policy");
     fixture.automatic_policy(None);
     fixture
@@ -272,7 +284,7 @@ async fn hot_reuse_automatic_policy_and_metadata_are_checked_before_initializati
     assert_eq!(
         fixture
             .manager
-            .prepare_automatic_tool_prewarm(fixture.target(1), origin.clone())
+            .prepare_automatic_tool_prewarm(fixture.target(1), origin.clone(), trigger.permit())
             .expect("observe original revoked target")
             .invocation_id,
         original.invocation_id
@@ -284,7 +296,7 @@ async fn hot_reuse_automatic_policy_and_metadata_are_checked_before_initializati
     assert!(
         fixture
             .manager
-            .prepare_automatic_tool_prewarm(fixture.target(1), origin)
+            .prepare_automatic_tool_prewarm(fixture.target(1), origin, trigger.permit())
             .is_err()
     );
     fixture.close().await;

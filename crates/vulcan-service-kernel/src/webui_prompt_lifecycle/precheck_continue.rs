@@ -1032,6 +1032,17 @@ pub(crate) fn spawn_webui_prompt_prepare_continue_task(
         // Cancellation and completion both release the preparation owner.
         // 取消与完成都会释放准备所有者。
         let _dispatch_owner = dispatch_owner;
+        // The accepted turn, not navigation or policy publication, owns one cancellable prewarm batch.
+        // 已接纳回合拥有单个可取消预热批次，导航及策略发布不拥有触发。
+        if let Err(error) = crate::plugin_runtime_services::automatic_prewarm::spawn_for_turn(
+            &state,
+            agent_runtime.vulcan_plugin_runtime.clone(),
+            session_id,
+            &preparation_turn_id,
+            expected_kernel_generation,
+        ) {
+            tracing::warn!("[plugin-prewarm] session={session_id} trigger rejected: {error}");
+        }
         let preparation_started_at = current_unix_millis_value();
         webui_trace(
             "prompt_prepare_task_run_start",

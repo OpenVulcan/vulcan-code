@@ -7,7 +7,10 @@ use serde::Deserialize;
 
 pub(super) mod automatic;
 mod target;
-pub use automatic::VulcanPluginAutomaticPrewarmOrigin;
+pub use automatic::{
+    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginAutomaticPrewarmPermit,
+    VulcanPluginAutomaticPrewarmTrigger,
+};
 pub(super) use target::TargetProgress;
 
 /// Trusted explicit target selection; every field is frozen before any initialization can run.

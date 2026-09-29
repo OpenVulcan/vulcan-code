@@ -396,6 +396,7 @@ pub(crate) fn test_service_state_with_parent_session(
         child_maintenance_stops: BTreeMap::new(),
         terminal_pre_intent_repairs: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        automatic_plugin_prewarm: BTreeMap::new(),
         session_runtime_registry: Default::default(),
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
         project_resource_catalog_registry: Default::default(),

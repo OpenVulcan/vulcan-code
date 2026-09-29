@@ -138,7 +138,14 @@ impl VulcanPluginRuntimeManager {
             if let Some(original) = prewarm::automatic::original_call(&calls, &input.admission)? {
                 return Ok(original);
             }
-            prewarm::automatic::validate_admission(owner, &input.admission, &publication)?;
+            let lifecycle_permission =
+                prewarm::automatic::validate_admission(owner, &input.admission, &publication)?;
+            // Keep revocation excluded until the original inert receipt is visible in the registry.
+            // 原未启动回执在注册表可见前，持续排除权限撤销。
+            let _lifecycle_admission = lifecycle_permission
+                .as_ref()
+                .map(VulcanPluginAutomaticPrewarmPermit::admit)
+                .transpose()?;
             // Include retained calls, pinned sessions and cached routing in the same checked byte sum.
             // 在同一受检字节总和中包含保留调用、固定会话及缓存路由。
             let total_bytes = calls

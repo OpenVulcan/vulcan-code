@@ -11,7 +11,7 @@ pub(in crate::runtime::formal::calls) struct TargetProgress {
     pub(in crate::runtime::formal::calls) request: VulcanPluginPrewarmTargetRequest,
     /// Original trigger provenance is retained with the same input budget as its target.
     /// 原触发来源与其目标保留在同一输入预算中。
-    pub(in crate::runtime::formal::calls) automatic: Option<VulcanPluginAutomaticPrewarmOrigin>,
+    pub(in crate::runtime::formal::calls) automatic: Option<automatic::AutomaticAdmission>,
     /// Transfer evidence distinguishes cancellation before startup from actual supervision.
     /// 转移证据区分启动前取消及真实监督。
     pub(in crate::runtime::formal::calls) started: bool,
@@ -65,6 +65,13 @@ impl TargetProgress {
             .checked_mul(std::mem::size_of::<OperationHandle>())
             .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
             .and_then(|bytes| {
+                bytes.checked_add(
+                    automatic
+                        .as_ref()
+                        .map_or(0, |value| value.permit.retained_bytes()),
+                )
+            })
+            .and_then(|bytes| {
                 request_bytes
                     .checked_mul(2)
                     .and_then(|requests| bytes.checked_add(requests))
@@ -84,7 +91,7 @@ impl TargetProgress {
     ) -> Result<VulcanPluginPrewarmTargetStatus, VulcanPluginRuntimeError> {
         Ok(VulcanPluginPrewarmTargetStatus {
             request: self.request.clone(),
-            automatic: self.automatic.clone(),
+            automatic: self.automatic.as_ref().map(|value| value.origin.clone()),
             started: self.started,
             completed: self
                 .completed
@@ -133,6 +140,11 @@ impl VulcanPluginRuntimeManager {
                 "Prewarm target was cancelled.",
             ));
         }
+        if automatic::is_closed(call)? {
+            return Err(VulcanPluginRuntimeError::new(
+                "Automatic prewarm lifecycle is closed.",
+            ));
+        }
         initialized::remaining(deadline)?;
         // Preserve the last handle until it is terminal and its outcome has been checked.
         // 在终结并检查结果前保留最后句柄。
@@ -156,7 +168,13 @@ impl VulcanPluginRuntimeManager {
         self.validate_reusable_submission(owner, call)?;
         // A policy change fences every later initialization while original native work retains its receipt.
         // 策略变化隔离每次后续初始化，原原生工作仍保留其回执。
-        automatic::validate_call(owner, call, &_publication)?;
+        let permission = automatic::validate_call(owner, call, &_publication)?;
+        // Keep the short lifecycle gate until native enqueue returns; callbacks run outside this boundary.
+        // 保留短生命周期门直至原生入队返回；回调在此边界之外运行。
+        let _admission = permission
+            .as_ref()
+            .map(VulcanPluginAutomaticPrewarmPermit::admit)
+            .transpose()?;
         // Serialize ownership transfer and evidence changes under the original call lock.
         // 在原调用锁下排序归属转移及证据变化。
         let mut state = call.lock()?;

@@ -4,6 +4,8 @@
 use super::*;
 use vulcan_plugin_runtime::{VulcanPluginAutomaticPrewarmOrigin, VulcanPluginPrewarmTargetRequest};
 
+mod lifecycle;
+
 /// Real target provenance crosses RPC; manual startup is refused and original cancellation remains available.
 /// 真实目标来源跨越 RPC；拒绝手动启动，同时保留原取消能力。
 #[tokio::test]
@@ -19,6 +21,9 @@ async fn plugin_automatic_prewarm_receipt_retains_origin_and_rejects_manual_star
     fixture.state.lock().expect("state").controller_runtime =
         Some(storage.attached_host_runtime_handle().await);
     let generation = fixture.enable_prewarm();
+    // Keep the trusted lifecycle permission alive for this projection-only test.
+    // 为此仅验证投影的测试保留可信生命周期权限。
+    let trigger = vulcan_plugin_runtime::VulcanPluginAutomaticPrewarmTrigger::default();
     let policy = fixture
         .rpc("service_plugin_prewarm_policy_status", json!({}))
         .await
@@ -49,6 +54,7 @@ async fn plugin_automatic_prewarm_receipt_retains_origin_and_rejects_manual_star
                 target_idle: 1,
             },
             origin.clone(),
+            trigger.permit(),
         )
         .expect("trusted automatic preparation");
     let identity = json!({"runtimeId": policy["runtimeId"], "ownerSessionId": owner.to_string(), "invocationId": prepared.invocation_id});

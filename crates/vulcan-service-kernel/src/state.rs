@@ -500,6 +500,9 @@ pub struct ServiceBridgeState {
     /// Session runtime kernels keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的会话运行时内核。
     pub(crate) session_runtime_kernels: BTreeMap<SessionId, SessionRuntimeKernel>,
+    /// One latest prewarm lifecycle owner per known session, retained after receipt acknowledgement.
+    /// 每个已知会话保留一个最近预热生命周期所有者，在回执确认后仍保留。
+    pub(crate) automatic_plugin_prewarm: BTreeMap<SessionId, crate::plugin_runtime_services::automatic_prewarm::AutomaticPrewarmTurn>,
     /// Unique V1 mutable session owners keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的唯一 V1 可变会话所有者。
     pub(crate) session_runtime_registry:

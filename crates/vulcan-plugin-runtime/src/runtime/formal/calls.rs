@@ -18,7 +18,8 @@ mod prewarm;
 mod registration;
 pub(super) mod reuse;
 pub use prewarm::{
-    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginPrewarmTargetRequest,
+    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginAutomaticPrewarmPermit,
+    VulcanPluginAutomaticPrewarmTrigger, VulcanPluginPrewarmTargetRequest,
     VulcanPluginPrewarmTargetStatus,
 };
 
@@ -175,7 +176,7 @@ enum CallAdmission {
         request: VulcanPluginPrewarmTargetRequest,
         /// Automatic trigger and acknowledged policy identity, absent for manual work.
         /// 自动触发及已确认策略身份；手动工作为空。
-        automatic: Option<VulcanPluginAutomaticPrewarmOrigin>,
+        automatic: Option<prewarm::automatic::AutomaticAdmission>,
     },
     /// Lifecycle admission invokes one host-selected declaration.
     /// 生命周期入场调用一个宿主选择的声明。

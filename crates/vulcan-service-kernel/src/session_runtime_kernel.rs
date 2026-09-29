@@ -352,6 +352,9 @@ fn start_webui_session_kernel_turn_with_admission(
                 error.message
             )
         })?;
+    // Successful replacement revokes prior initialization; failed admission leaves the old owner untouched.
+    // 成功替换撤销先前初始化；入场失败保持旧所有者不变。
+    crate::plugin_runtime_services::automatic_prewarm::close(state, session_id);
     webui_trace(
         "session_kernel_turn_started",
         format!(
@@ -383,6 +386,9 @@ pub(crate) fn finish_webui_session_kernel_turn(
         return;
     };
     let finished = kernel.finish_turn(status, current_unix_millis_u64());
+    // Completed and failed turns cannot keep initializing in the background.
+    // 已完成及失败回合不能继续在后台初始化。
+    crate::plugin_runtime_services::automatic_prewarm::close(state, session_id);
     if let Some(turn) = finished {
         webui_trace(
             "session_kernel_turn_finished",
@@ -414,6 +420,9 @@ pub(crate) fn stop_webui_session_kernel_generation(
     session_id: SessionId,
 ) -> bool {
     let notify_wait_agent = webui_session_wait_agent_is_waiting(state, session_id);
+    // Close native admission at the same locked boundary that stops the authoritative kernel generation.
+    // 在停止权威内核代际的同一个锁定边界关闭原生入场。
+    crate::plugin_runtime_services::automatic_prewarm::close(state, session_id);
     let Some(kernel) = state.session_runtime_kernels.get_mut(&session_id) else {
         return false;
     };

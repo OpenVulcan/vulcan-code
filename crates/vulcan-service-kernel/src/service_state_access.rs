@@ -404,7 +404,22 @@ pub(crate) async fn drain_vulcan_plugin_sessions_for_owners(
     state: &SharedServiceBridgeState,
     owner_session_ids: &[SessionId],
 ) -> Vec<String> {
-    let Ok(runtime) = service_vulcan_plugin_runtime(state) else {
+    // Revoke every accepted automatic trigger before drain can observe an empty original call registry.
+    // 在排空可能观测到空原调用表之前，撤销每个已接纳自动触发。
+    let runtime = {
+        let mut service = match state.lock() {
+            Ok(service) => service,
+            Err(error) => return vec![format!("Failed to lock plugin drain ownership: {error}")],
+        };
+        for owner in owner_session_ids {
+            crate::plugin_runtime_services::automatic_prewarm::close(&mut service, *owner);
+        }
+        service
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.vulcan_plugin_runtime.clone())
+    };
+    let Some(runtime) = runtime else {
         return Vec::new();
     };
     let mut failures = Vec::new();
