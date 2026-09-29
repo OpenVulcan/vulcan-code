@@ -248,7 +248,7 @@ pub(super) fn resolve_plugin_process_spec(
 /// 返回值
 /// Returns a Shell-free executable, fixed arguments, contained working directory, and host environment.
 /// 返回不使用 Shell 的可执行文件、固定参数、受约束工作目录与宿主环境。
-fn resolve_plugin_mcp_stdio_launcher(
+pub(super) fn resolve_plugin_mcp_stdio_launcher(
     state: &VulcanPluginManagerState,
     plugin: &crate::VulcanPluginDescriptor,
     manifest: &VulcanPluginManifest,

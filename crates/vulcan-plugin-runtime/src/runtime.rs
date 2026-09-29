@@ -7,6 +7,7 @@ mod authorization;
 pub(crate) use authorization::plugin_required_permissions;
 mod bridge;
 mod candidates;
+pub use candidates::VulcanPluginPreparedMcpCandidate;
 mod configuration;
 pub(crate) use configuration::validate_plugin_config_value;
 mod drain;

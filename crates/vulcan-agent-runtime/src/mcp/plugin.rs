@@ -13,6 +13,10 @@ use vulcan_plugin_runtime::{
     VulcanPluginValueSourceManifest,
 };
 
+mod candidates;
+use candidates::PluginMcpMaterializationSource;
+pub use candidates::{PreparedPluginMcpConfigs, candidate_global_mcp_server_configs};
+
 /// Host boundary for reading one plugin-scoped secret without exposing storage details to plugins.
 /// 用于读取单个插件作用域 Secret 且不向插件暴露存储细节的宿主边界。
 pub trait PluginMcpSecretStore: Send + Sync {
@@ -109,7 +113,14 @@ pub fn plugin_mcp_server_configs_for_descriptors(
     servers
         .iter()
         .filter(|server| server.manifest.scope == VulcanPluginMcpScopeManifest::Global)
-        .map(|server| plugin_mcp_server_config(plugins, server, secrets, None))
+        .map(|server| {
+            plugin_mcp_server_config(
+                &PluginMcpMaterializationSource::Published(plugins),
+                server,
+                secrets,
+                None,
+            )
+        })
         .collect()
 }
 
@@ -153,7 +164,12 @@ pub fn plugin_conversation_mcp_server_config(
         ));
     }
     validate_core_browser_endpoint(core_browser_endpoint)?;
-    plugin_mcp_server_config(plugins, server, secrets, Some(core_browser_endpoint))
+    plugin_mcp_server_config(
+        &PluginMcpMaterializationSource::Published(plugins),
+        server,
+        secrets,
+        Some(core_browser_endpoint),
+    )
 }
 
 /// Accepts only the exact loopback browser-level WebSocket capability returned by Core.
@@ -198,8 +214,12 @@ fn validate_core_browser_endpoint(endpoint: &str) -> Result<(), String> {
 
 /// Materializes one validated plugin MCP descriptor without admitting alternate field sources.
 /// 物化单个已校验插件 MCP 描述符，且不接纳替代字段来源。
+/// The source fixes launcher and legacy-read authority, while the descriptor owns configuration and credentials.
+/// 来源固定启动器及旧配置读取权威，描述符持有配置与凭据。
+/// Returns one exact runtime definition; the optional endpoint is only an explicit conversation owner grant.
+/// 返回单个精确运行时定义；可选端点仅用于显式会话所有者授权。
 fn plugin_mcp_server_config(
-    plugins: &VulcanPluginRuntimeManager,
+    source: &PluginMcpMaterializationSource<'_>,
     server: &VulcanPluginMcpServerDescriptor,
     secrets: &dyn PluginMcpSecretStore,
     core_browser_endpoint: Option<&str>,
@@ -215,16 +235,14 @@ fn plugin_mcp_server_config(
     let config = if transport_uses_plugin_config(&server.manifest.transport) {
         match server.configuration() {
             Some(selection) => selection.value().cloned(),
-            None => plugin_server_configuration(plugins, &server.plugin_id)?,
+            None => source.legacy_configuration(&server.plugin_id)?,
         }
     } else {
         None
     };
     let transport = match &server.manifest.transport {
         VulcanPluginMcpTransportManifest::Stdio { args, env, .. } => {
-            let launcher = plugins
-                .resolve_mcp_stdio_launcher_descriptor(server)
-                .map_err(|error| error.to_string())?;
+            let launcher = source.stdio_launcher(server)?;
             let mut resolved_args = launcher.base_args;
             resolved_args.extend(
                 args.iter()

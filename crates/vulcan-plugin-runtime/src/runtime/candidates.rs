@@ -4,6 +4,65 @@
 use super::*;
 use crate::{VulcanPluginActivationCandidate, VulcanPluginDescriptor, VulcanPluginPackageOrigin};
 
+mod mcp;
+pub use mcp::VulcanPluginPreparedMcpCandidate;
+
+/// Retains the original request only after confirming its catalog and unpublished package authority.
+/// 确认目录及未发布插件包权威后，才保留原请求。
+/// The state and inspected candidate must share one user root; returns the original exclusive file owner.
+/// 状态与已检查候选必须共用单个用户根；返回原排他文件所有者。
+fn retain_candidate_readiness(
+    state: &VulcanPluginManagerState,
+    candidate: &VulcanPluginActivationCandidate<'_>,
+) -> Result<Arc<std::fs::File>, VulcanPluginRuntimeError> {
+    // Canonical spelling is fixed by the owning store, never inferred from another installed package.
+    // 规范拼写由所属存储固定，绝不从另一已安装插件包推断。
+    let user_root = state.user_plugin_root.canonicalize().map_err(|error| {
+        VulcanPluginRuntimeError::new(format!("Failed to resolve candidate user catalog: {error}"))
+    })?;
+    if user_root != candidate.catalog_root() {
+        return Err(VulcanPluginRuntimeError::new(
+            "Activation candidate belongs to another user catalog.",
+        ));
+    }
+    // A prepared view never grants a published generation or enabled execution.
+    // 准备视图从不授予已发布代次或启用执行。
+    let plugin = candidate.package();
+    if plugin.generation != 0 || plugin.runtime_state != VulcanPluginRuntimeState::Disabled {
+        return Err(VulcanPluginRuntimeError::new(
+            "Activation candidate is not an unpublished disabled package.",
+        ));
+    }
+    validate_candidate_namespace(state, &plugin.id)?;
+    Ok(candidate.retain_readiness())
+}
+
+/// Rejects a user candidate that would shadow the manager's authoritative bundled namespace.
+/// 拒绝会覆盖管理器权威内置命名空间的用户候选。
+/// The state supplies current precedence and plugin_id is exact; returns validation without publishing.
+/// 状态提供当前优先级，plugin_id 为精确身份；返回校验结果，不执行发布。
+fn validate_candidate_namespace(
+    state: &VulcanPluginManagerState,
+    plugin_id: &str,
+) -> Result<(), VulcanPluginRuntimeError> {
+    // Recheck current bundled precedence even when an earlier candidate view remains retained.
+    // 即使先前候选视图仍被保留，也复核当前内置优先级。
+    let catalog = state
+        .snapshot
+        .read()
+        .map_err(|_| VulcanPluginRuntimeError::new("Plugin catalog lock is poisoned."))?;
+    if catalog
+        .plugins
+        .get(plugin_id)
+        .is_some_and(|published| published.origin == VulcanPluginPackageOrigin::Bundled)
+    {
+        return Err(VulcanPluginRuntimeError::new(
+            "An activation candidate cannot shadow a bundled plugin.",
+        ));
+    }
+    Ok(())
+}
+
 /// The host chooses one exact unpublished operation; permissions cannot be widened by Lua arguments.
 /// 宿主选择单个精确未发布操作；Lua 参数不能扩大权限。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,26 +116,17 @@ impl CandidateExecution {
         candidate: &VulcanPluginActivationCandidate<'_>,
         operation: CandidateOperation,
     ) -> Result<Arc<Self>, VulcanPluginRuntimeError> {
-        // Canonical spelling is fixed by the owning store and compared with the actual configured user root.
-        // 规范拼写由所属存储固定，并与实际配置的用户根目录比较。
-        let user_root = state.user_plugin_root.canonicalize().map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Failed to resolve candidate user catalog: {error}"
-            ))
-        })?;
-        if user_root != candidate.catalog_root() {
-            return Err(VulcanPluginRuntimeError::new(
-                "Activation candidate belongs to another user catalog.",
-            ));
-        }
-        // Ownership of the original exclusive lease travels with private execution, including detached cleanup.
-        // 原排他租约所有权随私有执行传递，包含分离清理。
+        // Native calls and MCP preparation share the same original request and catalog checks.
+        // 原生调用与 MCP 准备共用相同原请求及目录校验。
+        let readiness = retain_candidate_readiness(state, candidate)?;
+        // Operation-specific authority still belongs exclusively to this formal runtime manager.
+        // 操作专属权威仍仅属于此正式运行时管理器。
         let authority = Arc::new(Self {
             plugin: candidate.package().clone(),
             request_id: candidate.transaction_record().request_id(),
             operation,
             manager_id: state.manager_id.clone(),
-            _readiness: candidate.retain_readiness(),
+            _readiness: readiness,
         });
         authority.validate(state, &authority.plugin, operation.scope())?;
         Ok(authority)
@@ -104,21 +154,8 @@ impl CandidateExecution {
                 "Candidate authority does not match this exact operation.",
             ));
         }
-        // Bundled precedence remains authoritative even if a catalog refresh occurs during preparation.
-        // 即使准备期间目录刷新，内置优先级仍具有权威。
-        let catalog = state
-            .snapshot
-            .read()
-            .map_err(|_| VulcanPluginRuntimeError::new("Plugin catalog lock is poisoned."))?;
-        if catalog
-            .plugins
-            .get(&plugin.id)
-            .is_some_and(|published| published.origin == VulcanPluginPackageOrigin::Bundled)
-        {
-            return Err(VulcanPluginRuntimeError::new(
-                "An activation candidate cannot shadow a bundled plugin.",
-            ));
-        }
-        Ok(())
+        // Current bundled precedence remains authoritative at every native admission.
+        // 每次原生入场时，当前内置优先级仍具有权威。
+        validate_candidate_namespace(state, &plugin.id)
     }
 }

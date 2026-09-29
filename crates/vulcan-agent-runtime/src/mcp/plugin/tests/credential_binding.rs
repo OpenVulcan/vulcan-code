@@ -8,6 +8,8 @@ use vulcan_plugin_runtime::{
     VulcanPluginCredentialValues, VulcanPluginPermissionPreview,
 };
 
+mod candidates;
+
 /// Verify managed configuration never mixes a retained remote declaration with a newer selection or legacy file.
 /// 验证受管配置绝不将保留的远端声明与更新选择或旧文件混用。
 #[test]

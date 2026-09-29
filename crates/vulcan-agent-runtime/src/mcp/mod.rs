@@ -11,7 +11,8 @@ pub use config::{
     McpTransportKind, runtime_mcp_server_configs,
 };
 pub use plugin::{
-    PluginMcpSecretStore, plugin_conversation_mcp_server_config, plugin_mcp_server_configs,
+    PluginMcpSecretStore, PreparedPluginMcpConfigs, candidate_global_mcp_server_configs,
+    plugin_conversation_mcp_server_config, plugin_mcp_server_configs,
     plugin_mcp_server_configs_for_descriptors,
 };
 pub use runtime::{
