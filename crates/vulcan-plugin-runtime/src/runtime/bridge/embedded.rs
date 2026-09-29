@@ -12,6 +12,7 @@ use luaskills::runtime::embedded::{
     EffectState, EmbeddedError, EmbeddedErrorCode, EmbeddedResult, EmbeddedRuntime,
     EmbeddedRuntimeConfig, ModuleDefinition, ModuleResourceOwner, PluginPoolConfig,
 };
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -237,7 +238,7 @@ impl VulcanPluginEmbeddedHost {
         policy: PluginPoolConfig,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> EmbeddedResult<String> {
-        self.register_pool_with_capacity(None, definition, policy, scope, None)
+        self.register_pool_with_capacity(None, definition, policy, scope, None, None)
     }
 
     /// Register definition and policy in scope as a member of the exact capacity_id; return the native pool identity.
@@ -251,7 +252,7 @@ impl VulcanPluginEmbeddedHost {
         policy: PluginPoolConfig,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> EmbeddedResult<String> {
-        self.register_pool_with_capacity(Some(capacity_id), definition, policy, scope, None)
+        self.register_pool_with_capacity(Some(capacity_id), definition, policy, scope, None, None)
     }
 
     /// Register trusted `definition` and `policy` under an exact live catalog `scope`.
@@ -262,6 +263,8 @@ impl VulcanPluginEmbeddedHost {
     /// 返回核心池 ID；宿主必须先注册插件聚合预算。
     /// capacity_id explicitly selects exact membership; None preserves independent placement.
     /// capacity_id 显式选择精确成员关系；None 保留独立归属。
+    /// initialization_capabilities freezes a manifest-derived narrowing, independent of ordinary business grants.
+    /// initialization_capabilities 冻结从清单派生的收窄集合，独立于普通业务授权。
     fn register_pool_with_capacity(
         &self,
         capacity_id: Option<&str>,
@@ -269,6 +272,7 @@ impl VulcanPluginEmbeddedHost {
         policy: PluginPoolConfig,
         scope: VulcanPluginBridgeLeaseScope,
         capability_snapshot: Option<CapabilitySnapshot>,
+        initialization_capabilities: Option<BTreeSet<String>>,
     ) -> EmbeddedResult<String> {
         // Upgrading the manager protects the short registration operation only.
         // 升级管理器仅保护此短注册操作。
@@ -363,6 +367,12 @@ impl VulcanPluginEmbeddedHost {
         // Bind exactly what compatibility validation observed; the core must never reread a newer snapshot.
         // 精确绑定兼容性检查所观测内容；核心绝不能重新读取更新快照。
         let binding = ModuleCapabilities::new(snapshot, permissions, revision.clone())?;
+        // Initialization uses the same immutable registration authority, narrowed before any VM exists.
+        // 初始化使用相同不可变注册权威，在任何 VM 存在前完成收窄。
+        let binding = match initialization_capabilities {
+            Some(names) => binding.with_initialization_capabilities(names)?,
+            None => binding,
+        };
         // Actual core pool ownership pins the descriptor, not historical host handles.
         // 真实核心池所有权固定描述符，历史宿主句柄不固定它。
         let domain = Arc::new(ExecutionAuthority {

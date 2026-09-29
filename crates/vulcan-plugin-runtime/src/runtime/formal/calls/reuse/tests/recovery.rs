@@ -3,6 +3,7 @@
 
 use super::*;
 
+mod initialization;
 mod prewarm;
 
 /// Current manifest resource floors reject policy changes before either native or persistent state is touched.
@@ -430,6 +431,17 @@ impl RecoveryFixture {
             serde_yaml::from_str(&std::fs::read_to_string(&path).expect("manifest"))
                 .expect("manifest mapping");
         manifest["permissions"] = json!(["config", "ui_host_context"]);
+        if initialization {
+            // Explicitly authorize the fixture's real initialization barrier without broadening business grants.
+            // 显式授权夹具的真实初始化屏障，不扩大业务授权。
+            manifest["lua_runtime"]["tools"]
+                .as_array_mut()
+                .expect("tools")
+                .iter_mut()
+                .find(|tool| tool["id"] == "idle_ping")
+                .expect("ping tool")["execution"]["reusable"]["initialization_capabilities"] =
+                json!(["vulcan.plugin.ui.invalidate"]);
+        }
         std::fs::write(&path, serde_yaml::to_string(&manifest).expect("encode")).expect("write");
         // Instrument exact known functions before catalog publication, never substitute a mock VM.
         // 在目录发布前对精确已知函数插桩，绝不替换为模拟 VM。

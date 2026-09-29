@@ -33,6 +33,27 @@ pub(super) fn validate(
     snapshot: &CapabilitySnapshot,
     permissions: &CapabilityPermissions,
 ) -> EmbeddedResult<()> {
+    if !scope.is_cleanup() {
+        // Initialization declarations cannot create grants, including during activation before any pool is registered.
+        // 初始化声明不能创建授权，包括在登记任何池之前的激活阶段。
+        for name in manifest
+            .lua_runtime
+            .iter()
+            .flat_map(|runtime| &runtime.tools)
+            .filter_map(|tool| tool.execution.reusable.as_ref())
+            .flat_map(|reuse| &reuse.initialization_capabilities)
+        {
+            if !snapshot.has(name, permissions)? {
+                return Err(error(
+                    EmbeddedErrorCode::PermissionDenied,
+                    format!(
+                        "Plugin `{}` initialization capability `{name}` is unavailable or unauthorized.",
+                        manifest.id
+                    ),
+                ));
+            }
+        }
+    }
     // Missing declarations explicitly retain the legacy contract; cleanup cannot resurrect business authority.
     // 缺少声明明确保留旧契约；清理不能恢复业务权威。
     let Some(required) = manifest
@@ -85,12 +106,7 @@ impl VulcanPluginEmbeddedHost {
         manifest: &VulcanPluginManifest,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> EmbeddedResult<()> {
-        if scope.is_cleanup()
-            || manifest
-                .runtime_requirements
-                .as_ref()
-                .is_none_or(|required| required.host_capabilities.is_empty())
-        {
+        if scope.is_cleanup() {
             return Ok(());
         }
         // Current registered membership is authoritative only for this activation observation.

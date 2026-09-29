@@ -1297,6 +1297,17 @@ pub(crate) fn validate_manifest_identity(
             for function in [&reuse.before_call, &reuse.after_call, &reuse.reuse_check] {
                 validate_lua_identifier(function, "tool reuse callback")?;
             }
+            // Names remain exact identities; duplicate or empty entries cannot disguise a broader policy.
+            // 名称保持精确身份；重复或空条目不能掩盖更宽策略。
+            let mut initialization = BTreeSet::new();
+            for name in &reuse.initialization_capabilities {
+                if name.trim().is_empty() || name.contains('\0') || !initialization.insert(name) {
+                    return Err(format!(
+                        "Tool `{}` initialization capabilities must be nonempty distinct names without NUL.",
+                        tool.id
+                    ));
+                }
+            }
             // Hygiene cannot alias a business export or another cleanup phase.
             // 清理不能与业务导出或其他清理阶段共用名称。
             let hygiene = [&reuse.before_call, &reuse.after_call, &reuse.reuse_check];

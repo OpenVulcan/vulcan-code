@@ -138,6 +138,12 @@ fn manifest_authoring_schema_rejects_invalid_structure_and_version_combinations(
         ("before_call", json!("bad.name")),
         ("after_call", json!("")),
         ("reuse_check", json!("check\n")),
+        ("initialization_capabilities", Value::Null),
+        ("initialization_capabilities", json!([""])),
+        (
+            "initialization_capabilities",
+            json!(["duplicate", "duplicate"]),
+        ),
     ] {
         // Find the real tool identity so fixture reordering cannot invalidate the assertion.
         // 查找真实工具身份，避免夹具重排使断言失效。

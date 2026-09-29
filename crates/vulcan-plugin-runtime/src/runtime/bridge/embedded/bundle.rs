@@ -341,6 +341,7 @@ impl VulcanPluginEmbeddedHost {
             request.policy,
             request.scope,
             capability_snapshot,
+            reusable.map(|reuse| reuse.initialization_capabilities.iter().cloned().collect()),
         )
     }
 }

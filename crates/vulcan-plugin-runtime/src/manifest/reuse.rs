@@ -33,6 +33,13 @@ pub enum VulcanPluginToolOrdering {
     "then": {"properties": {"max_running_calls": {"const": 1}}}
 }])))]
 pub struct VulcanPluginReusableToolManifest {
+    /// Exact host callbacks allowed while this reusable module source initializes; omission denies all.
+    /// 此可复用模块源码初始化时允许的精确宿主回调；省略时全部拒绝。
+    /// These names narrow existing plugin grants and never authorize additional business capabilities.
+    /// 这些名称收窄既有插件授权，绝不授权额外业务能力。
+    #[serde(default)]
+    #[cfg_attr(feature = "manifest-schema", schemars(inner(length(min = 1)), extend("uniqueItems" = true)))]
+    pub initialization_capabilities: Vec<String>,
     /// Declared module function called with this invocation's envelope before business; must return true.
     /// 在业务前使用本次调用信封调用的模块声明函数；必须返回 true。
     #[cfg_attr(
