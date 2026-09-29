@@ -2,6 +2,11 @@ use super::*;
 
 mod catalog_refresh;
 
+#[cfg(test)]
+mod release_barrier_tests;
+#[cfg(test)]
+mod remote_release_tests;
+
 /// Host-owned timeout for optional MCP prompt and resource discovery requests.
 /// MCP 可选 prompt 与 resource 发现请求使用的宿主持有超时。
 const MCP_OPTIONAL_CAPABILITY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -61,6 +66,9 @@ struct McpRuntimeInner {
     /// Mutable transport map keyed by server identifier.
     /// 以服务器标识为键保存的可变传输映射。
     transports: RwLock<BTreeMap<String, Arc<dyn McpTransport>>>,
+    /// Original non-owning release receipts survive initialization failure and observer cancellation.
+    /// 原非拥有释放回执在初始化失败及观察取消后继续存在。
+    resource_releases: RwLock<BTreeMap<String, vulcan_mcp_runtime::McpResourceRelease>>,
     /// Mutable OAuth-session cache keyed by server identifier for host-driven remote authorization flows.
     /// 以服务器标识为键保存的可变 OAuth 会话缓存，供宿主驱动的远端授权流程复用。
     auth_sessions: AsyncRwLock<BTreeMap<String, Arc<McpOAuthSession>>>,
@@ -566,6 +574,14 @@ fn request_mcp_runtime_shutdown(shutdown_tx: &watch::Sender<bool>) {
 pub(super) async fn bootstrap_mcp_runtime(
     servers: Vec<McpServerConfig>,
 ) -> Result<McpRuntimeHandle, String> {
+    // A server identifier has exactly one lifecycle writer and one current launch receipt.
+    // 服务器标识仅有一个生命周期写入者及一个当前启动回执。
+    let mut server_ids = BTreeSet::new();
+    for server in &servers {
+        if !server_ids.insert(&server.id) {
+            return Err(format!("Duplicate MCP server identifier `{}`.", server.id));
+        }
+    }
     let registry = McpServerRegistry::new(servers);
     let (shutdown_tx, _) = watch::channel(false);
     let snapshot = McpRuntimeSnapshot {
@@ -578,6 +594,7 @@ pub(super) async fn bootstrap_mcp_runtime(
     let inner = Arc::new(McpRuntimeInner {
         registry: registry.clone(),
         transports: RwLock::new(BTreeMap::new()),
+        resource_releases: RwLock::new(BTreeMap::new()),
         auth_sessions: AsyncRwLock::new(BTreeMap::new()),
         snapshot: RwLock::new(snapshot),
         retry_counts: RwLock::new(
@@ -992,17 +1009,25 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                 }
             };
 
+            // Register evidence before initialization can create any actual process or remote work.
+            // 初始化可能创建任何实际进程或远程工作前，先登记证据。
+            let (resources, release) = vulcan_mcp_runtime::McpTransportResources::new(());
+            inner
+                .resource_releases
+                .write()
+                .expect("MCP launch release map poisoned")
+                .insert(server.id.clone(), release);
+            // Leave the select before cleanup so the cancelled launch future drops all of its references.
+            // 清理前先离开选择表达式，使已取消启动 future 释放其全部引用。
             let transport_result = tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    shutdown_server_runtime_state(&inner, &server.id).await;
-                    break;
-                }
+                _ = shutdown_rx.changed() => None,
                 result = async {
                     tokio::time::timeout(
                         Duration::from_secs(15),
                         inner.registry.spawn_transport(
                             &server.id,
                             auth_session.as_ref().cloned().flatten(),
+                            resources,
                         ),
                     )
                     .await
@@ -1012,11 +1037,15 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                             server.name
                         )
                     })?
-                } => result,
+                } => Some(result),
             };
             let transport = match transport_result {
-                Ok(transport) => transport,
-                Err(error) => {
+                None => {
+                    shutdown_server_runtime_state(&inner, &server.id).await;
+                    break;
+                }
+                Some(Ok(transport)) => transport,
+                Some(Err(error)) => {
                     let should_stop = record_server_failure_and_should_stop(
                         &inner,
                         &server,
@@ -1046,24 +1075,26 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
             // tools/list and explicitly close that exact candidate before returning.
             // 工具发现仍持有尚未发布的传输，因此关闭必须中断 tools/list 并在返回前明确关闭该候选者。
             let discovery_result = tokio::select! {
-                _ = shutdown_rx.changed() => {
+                _ = shutdown_rx.changed() => None,
+                result = discover_server_tools_with_events(&inner, &server, transport.clone()) => Some(result),
+            };
+            let mut event_rx = match discovery_result {
+                None => {
                     shutdown_server_runtime_state_with_transport(
                         &inner,
                         &server.id,
-                        Some(transport.clone()),
-                    ).await;
+                        Some(transport),
+                    )
+                    .await;
                     return;
                 }
-                result = discover_server_tools_with_events(&inner, &server, transport.clone()) => result,
-            };
-            let mut event_rx = match discovery_result {
-                Ok(receiver) => receiver,
-                Err(error) => {
+                Some(Ok(receiver)) => receiver,
+                Some(Err(error)) => {
                     let should_stop = record_server_failure_and_should_stop(
                         &inner,
                         &server,
                         &mut consecutive_failures,
-                        Some(transport.clone()),
+                        Some(transport),
                         error,
                     )
                     .await;
@@ -1086,15 +1117,17 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
             drop(startup_permit);
 
             let mut optional_state = catalog_refresh::OptionalCapabilityState::default();
-            tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    shutdown_server_runtime_state(&inner, &server.id).await;
-                    return;
-                }
+            let stopping = tokio::select! {
+                _ = shutdown_rx.changed() => true,
                 _ = catalog_refresh::refresh_optional(
                     &inner, &server, transport.as_ref(), &mut optional_state,
                     catalog_refresh::CatalogRefreshDemand::OPTIONAL,
-                ) => {}
+                ) => false,
+            };
+            if stopping {
+                shutdown_server_runtime_state_with_transport(&inner, &server.id, Some(transport))
+                    .await;
+                return;
             }
 
             // Each connection owns its observation state; reconnect starts a fresh capability generation.
@@ -1102,32 +1135,53 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
             let connected_at = tokio::time::Instant::now();
             loop {
                 let demand = tokio::select! {
-                    _ = shutdown_rx.changed() => {
-                        shutdown_server_runtime_state(&inner, &server.id).await;
-                        return;
-                    }
-                    result = catalog_refresh::receive_demand(&mut event_rx, &server.name) => result,
+                    _ = shutdown_rx.changed() => None,
+                    result = catalog_refresh::receive_demand(&mut event_rx, &server.name) => Some(result),
                 };
                 let demand = match demand {
-                    Ok(demand) => demand,
-                    Err(error) => {
-                        if !clear_server_runtime_state(&inner, &server.id, None, Some(error)).await {
+                    None => {
+                        shutdown_server_runtime_state_with_transport(
+                            &inner,
+                            &server.id,
+                            Some(transport),
+                        )
+                        .await;
+                        return;
+                    }
+                    Some(Ok(demand)) => demand,
+                    Some(Err(error)) => {
+                        if !clear_server_runtime_state(
+                            &inner,
+                            &server.id,
+                            Some(transport),
+                            Some(error),
+                        )
+                        .await
+                        {
                             return;
                         }
                         break;
                     }
                 };
                 let result = tokio::select! {
-                    _ = shutdown_rx.changed() => {
-                        shutdown_server_runtime_state(&inner, &server.id).await;
-                        return;
-                    }
+                    _ = shutdown_rx.changed() => None,
                     result = catalog_refresh::refresh_catalog(
                         &inner, &server, transport.clone(), &mut optional_state, demand,
-                    ) => result,
+                    ) => Some(result),
+                };
+                let Some(result) = result else {
+                    shutdown_server_runtime_state_with_transport(
+                        &inner,
+                        &server.id,
+                        Some(transport),
+                    )
+                    .await;
+                    return;
                 };
                 if let Err(error) = result {
-                    if !clear_server_runtime_state(&inner, &server.id, None, Some(error)).await {
+                    if !clear_server_runtime_state(&inner, &server.id, Some(transport), Some(error))
+                        .await
+                    {
                         return;
                     }
                     break;
@@ -1851,9 +1905,17 @@ async fn remove_and_shutdown_server_transport(
     // The explicit unpublished instance applies only before registration.
     // 显式未发布实例仅用于注册之前。
     let transport = registered_transport.or(unpublished_transport);
-    let Some(transport) = transport else {
+    // The independent receipt exists even when initialization never returned a transport.
+    // 即使初始化从未返回传输，独立回执仍存在。
+    let release = inner
+        .resource_releases
+        .read()
+        .expect("MCP launch release map poisoned")
+        .get(server_id)
+        .cloned();
+    if transport.is_none() && release.is_none() {
         return (Vec::new(), None);
-    };
+    }
     update_server_status(
         inner,
         server_id,
@@ -1863,17 +1925,38 @@ async fn remove_and_shutdown_server_transport(
     );
     update_server_prompt_count(inner, server_id, 0);
     update_server_resource_count(inner, server_id, 0);
-    // The lifecycle task retains the transport beyond every caller's finite observation window.
-    // 生命周期任务在所有调用方的有限观测窗口之后继续保留传输。
-    let shutdown_error = transport
-        .shutdown_and_wait()
-        .await
-        .err()
-        .map(|error| error.to_string());
-    // Read the latest sanitized diagnostics after the cleanup result arrives.
-    // 清理结果到达后读取最新脱敏诊断。
-    let recent_logs = transport.recent_logs();
-    (recent_logs, shutdown_error)
+    // Close errors remain errors; they never grant permission to reclaim still-owned resources.
+    // 关闭错误仍是错误，绝不授予回收仍在使用资源的许可。
+    let recent_logs = if let Some(transport) = transport {
+        let shutdown_error = transport
+            .shutdown_and_wait()
+            .await
+            .err()
+            .map(|error| error.to_string());
+        let recent_logs = transport.recent_logs();
+        // In particular, SSE retains its client in Self; waiting before dropping this Arc would deadlock.
+        // 特别是 SSE 在自身保留客户端；释放此 Arc 前等待会死锁。
+        drop(transport);
+        if shutdown_error.is_some() {
+            return (recent_logs, shutdown_error);
+        }
+        recent_logs
+    } else {
+        Vec::new()
+    };
+    if let Some(release) = release {
+        if let Err(error) = release.wait().await {
+            return (recent_logs, Some(error.to_string()));
+        }
+        // Only this server's lifecycle writer starts attempts, always after its previous cleanup.
+        // 仅此服务器生命周期写入者启动尝试，且始终在前次清理之后。
+        inner
+            .resource_releases
+            .write()
+            .expect("MCP launch release map poisoned")
+            .remove(server_id);
+    }
+    (recent_logs, None)
 }
 
 /// Combines one primary lifecycle error with a later transport shutdown failure without losing either cause.
@@ -2898,6 +2981,7 @@ mod optional_capability_tests {
         Arc::new(McpRuntimeInner {
             registry: McpServerRegistry::new(Vec::new()),
             transports: RwLock::new(BTreeMap::new()),
+            resource_releases: RwLock::new(BTreeMap::new()),
             auth_sessions: AsyncRwLock::new(BTreeMap::new()),
             snapshot: RwLock::new(McpRuntimeSnapshot {
                 servers: BTreeMap::new(),
@@ -2953,8 +3037,13 @@ mod optional_capability_tests {
             shutdown_count: unpublished_count.clone(),
             event_tx: unpublished_events,
         });
-        remove_and_shutdown_server_transport(&inner, "unpublished", Some(unpublished_transport), None)
-            .await;
+        remove_and_shutdown_server_transport(
+            &inner,
+            "unpublished",
+            Some(unpublished_transport),
+            None,
+        )
+        .await;
         assert_eq!(unpublished_count.load(Ordering::SeqCst), 1);
     }
 

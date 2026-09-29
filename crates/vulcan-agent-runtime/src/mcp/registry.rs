@@ -90,10 +90,15 @@ impl McpServerRegistry {
 
     /// Spawns one MCP transport from the stored server entry.
     /// 根据存储的服务器条目启动一个 MCP 传输实例。
+    /// Server_id selects the exact declaration; auth_session supplies OAuth, resources owns its frozen host authority.
+    /// server_id 选择精确声明；auth_session 提供 OAuth，resources 拥有其冻结宿主权威。
+    /// Returns an initialized transport or the sanitized launch error; the caller keeps the independent release receipt.
+    /// 返回已初始化传输或脱敏启动错误；调用方保留独立释放回执。
     pub(crate) async fn spawn_transport(
         &self,
         server_id: &str,
         auth_session: Option<Arc<McpOAuthSession>>,
+        resources: vulcan_mcp_runtime::McpTransportResources,
     ) -> Result<Arc<dyn McpTransport>, String> {
         let server = self
             .server_by_id(server_id)
@@ -105,7 +110,7 @@ impl McpServerRegistry {
 
         let launch_spec = server.launch_spec()?;
         launch_spec
-            .launch(auth_session)
+            .launch_with_resources(auth_session, resources)
             .await
             .map_err(|error| server.launch_error_text(error))
     }

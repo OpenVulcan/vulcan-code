@@ -262,6 +262,7 @@ mod tests {
         let inner = Arc::new(McpRuntimeInner {
             registry: McpServerRegistry::new(vec![server.clone()]),
             transports: RwLock::new(BTreeMap::new()),
+            resource_releases: RwLock::new(BTreeMap::new()),
             auth_sessions: tokio::sync::RwLock::new(BTreeMap::new()),
             snapshot: RwLock::new(McpRuntimeSnapshot {
                 servers: BTreeMap::from([(server.id.clone(), snapshot)]),
