@@ -21,6 +21,12 @@ pub(super) struct InitializedCall {
     session_forgotten: bool,
 }
 impl InitializedCall {
+    /// Borrow the original initialization observer while retained; absence means its exact cleanup checkpoint completed.
+    /// 保留期间借用原初始化观察者；缺失表示其精确清理检查点已完成。
+    pub(super) fn initialization_operation(&self) -> Option<&OperationHandle> {
+        self.initialization.as_ref()
+    }
+
     /// Keep the exact opening receipt; neither identity is synthesized by the host.
     /// 保留精确开启回执；两个身份均不由宿主合成。
     pub(super) fn new(session_id: String, initialization: OperationHandle) -> Self {
@@ -120,7 +126,9 @@ impl VulcanPluginRuntimeManager {
                 self.converge_prewarm_target(owner, call, input.deadline, input.scope)
                     .await
             }
-            CallAdmission::Probe => self.wait_call_initialization(call).await,
+            CallAdmission::Probe | CallAdmission::CandidateProbe { .. } => {
+                self.wait_call_initialization(call).await
+            }
             CallAdmission::Action {
                 export,
                 mut execution,

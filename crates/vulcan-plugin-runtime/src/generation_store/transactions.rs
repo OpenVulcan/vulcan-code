@@ -105,9 +105,9 @@ pub struct VulcanPluginActivationTransaction {
     /// Last confirmed record must still match disk before each mutation.
     /// 每次变更前，最后确认的记录仍须与磁盘匹配。
     record: VulcanPluginActivationTransactionRecord,
-    /// Actual exclusive filesystem ownership remains held across host readiness operations.
-    /// 实际排他文件系统所有权在宿主就绪操作期间持续持有。
-    _lease: File,
+    /// Actual exclusive request ownership is shared with real readiness workers, without another lock namespace.
+    /// 实际排他请求所有权与真实就绪工作者共享，不创建另一锁命名空间。
+    _lease: Arc<File>,
     /// Target package ownership is retained while host callbacks inspect the candidate.
     /// 宿主回调检查候选期间保留目标插件包所有权。
     generation: PinnedVulcanPluginGeneration,
@@ -148,9 +148,27 @@ pub struct VulcanPluginActivationCandidate<'transaction> {
     /// Exact target authority retains actual package and credential leases independently of public discovery.
     /// 精确目标权威独立于公开发现保留实际插件包及凭据租约。
     package: crate::VulcanPluginDescriptor,
+    /// The exact validated user catalog binds candidate admission to its owning host manager.
+    /// 精确已校验用户目录将候选入场绑定至所属宿主管理器。
+    catalog_root: PathBuf,
+    /// Shared ownership of the original exclusive request lock survives every actual readiness worker.
+    /// 原排他请求锁的共享所有权在每个实际就绪工作者期间存续。
+    readiness: Arc<File>,
 }
 
 impl VulcanPluginActivationCandidate<'_> {
+    /// Borrow the validated user catalog root for exact manager ownership checks.
+    /// 借用已校验用户目录根，用于精确管理器归属检查。
+    pub(crate) fn catalog_root(&self) -> &Path {
+        &self.catalog_root
+    }
+
+    /// Clone original request lock ownership for a tracked call or native pool; identity alone does not retain it.
+    /// 为受跟踪调用或原生池克隆原请求锁所有权；仅身份不能保留它。
+    pub(crate) fn retain_readiness(&self) -> Arc<File> {
+        Arc::clone(&self.readiness)
+    }
+
     /// Borrow the original prepared request, including its complete predecessor and target.
     /// 借用原准备请求，包含其完整前驱及目标。
     pub fn transaction_record(&self) -> &VulcanPluginActivationTransactionRecord {

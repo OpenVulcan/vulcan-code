@@ -94,9 +94,14 @@ impl VulcanPluginGenerationStore {
         // Inspection is not runtime admission, even for a valid executable manifest.
         // 即使清单具有有效执行声明，检查也不是运行时入场。
         package.runtime_execution_available = false;
+        // Retain the original exclusive request lock, so even an older cooperating reader cannot recover unfinished work.
+        // 保留原排他请求锁，因此即使较旧协作读者也不能恢复未完成工作。
+        let readiness = Arc::clone(&transaction._lease);
         Ok(VulcanPluginActivationCandidate {
             transaction,
             package,
+            catalog_root: catalog_root.to_path_buf(),
+            readiness,
         })
     }
 
@@ -189,7 +194,7 @@ impl VulcanPluginGenerationStore {
         Ok(VulcanPluginActivationTransaction {
             store_root: self.root.clone(),
             record,
-            _lease: lease,
+            _lease: Arc::new(lease),
             generation: verified,
             credentials: credential_lease,
         })
@@ -263,7 +268,7 @@ impl VulcanPluginGenerationStore {
         Ok(VulcanPluginActivationTransaction {
             store_root: self.root.clone(),
             record,
-            _lease: lease,
+            _lease: Arc::new(lease),
             generation,
             credentials,
         })
@@ -281,6 +286,9 @@ impl VulcanPluginGenerationStore {
         // 命名空间屏障将此操作与全部选择写入者排序。
         let _namespace = self.namespace_lock(&transaction.record.target.plugin_id, false)?;
         self.check_transaction_owner(transaction)?;
+        // A lost observer cannot publish while the original readiness execution still owns real resources.
+        // 原就绪执行仍拥有实际资源时，丢失观测者不能导致发布。
+        Self::require_readiness_retired(transaction)?;
         if transaction.record.phase.terminal() {
             return Err(Error::invalid(
                 "Terminal activation requests cannot be committed.",
@@ -354,6 +362,9 @@ impl VulcanPluginGenerationStore {
         // 命名空间屏障将此操作与全部选择写入者排序。
         let _namespace = self.namespace_lock(&transaction.record.target.plugin_id, false)?;
         self.check_transaction_owner(transaction)?;
+        // Explicit abort must wait for actual readiness retirement, not merely a returned timeout.
+        // 明确中止必须等待实际就绪退役，而不只是超时返回。
+        Self::require_readiness_retired(transaction)?;
         if !matches!(
             transaction.record.phase,
             Phase::Prepared | Phase::Committing
@@ -439,6 +450,22 @@ impl VulcanPluginGenerationStore {
                 .join(format!("{plugin_id}.transaction.{request_id}.lock")),
             false,
         )
+    }
+
+    /// Require transaction to be the sole owner of its original request lock before mutation.
+    /// 变更前要求 transaction 为原请求锁的唯一所有者。
+    /// The caller's exclusive mutable borrow excludes new views; another readiness clone already raises this count.
+    /// 调用方排他可变借用排除新视图；其他就绪克隆已经使此计数增加。
+    fn require_readiness_retired(
+        transaction: &mut VulcanPluginActivationTransaction,
+    ) -> VulcanPluginStoreResult<()> {
+        if Arc::strong_count(&transaction._lease) != 1 {
+            return Err(Error::new(
+                Code::Busy,
+                "Activation readiness still owns the original request; inspect and drain its original calls.",
+            ));
+        }
+        Ok(())
     }
 
     /// Revalidate the target in `record` and return its actual package and credential owners under the namespace fence.

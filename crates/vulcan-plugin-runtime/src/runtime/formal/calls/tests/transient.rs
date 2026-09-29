@@ -67,7 +67,7 @@ impl Fixture {
     /// 标志选择真实阻塞初始化及变更语义；timeout 为清单预算。
     /// Returns the same production manager with the exact revised catalog published.
     /// 返回已发布精确修订目录的同一生产管理器。
-    fn transient(block_initialization: bool, mutation: bool, timeout: u64) -> Self {
+    pub(super) fn transient(block_initialization: bool, mutation: bool, timeout: u64) -> Self {
         // Retain the existing real services, declared native binary and bounded parent history.
         // 保留既有真实服务、声明原生二进制及有界父级历史。
         let fixture = Self::new();

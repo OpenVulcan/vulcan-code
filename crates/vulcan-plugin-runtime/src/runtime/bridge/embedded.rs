@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::VulcanPluginDescriptor;
+use crate::runtime::candidates::CandidateExecution;
 use luaskills::runtime::embedded::capabilities::{
     CapabilityDescriptor, CapabilityEffects, CapabilityExecution, CapabilityIdempotency,
     CapabilityInvocation, CapabilityOutcome, CapabilityPermissions, CapabilityRegistrationRequest,
@@ -103,6 +104,67 @@ struct ExecutionAuthority {
     /// Exact draining generation granted by the manager; zero means no transition grant.
     /// 管理器授予的精确排空代次；零表示没有转换授权。
     closing_generation: AtomicU64,
+    /// Only explicitly admitted unpublished probes carry this real transaction readiness owner.
+    /// 仅明确接纳的未发布探测携带此实际事务就绪所有者。
+    candidate: Option<Arc<CandidateExecution>>,
+}
+
+/// Host-selected lifecycle scope and optional private candidate authority form one pool admission.
+/// 宿主选择的生命周期作用域与可选私有候选权威构成单个池入场。
+struct PoolAdmission {
+    /// Published routes require their current lifecycle state; candidates accept only probe scope.
+    /// 已发布路由要求其当前生命周期状态；候选仅接受探测作用域。
+    scope: VulcanPluginBridgeLeaseScope,
+    /// Absence explicitly chooses ordinary published authority.
+    /// 缺失明确选择普通已发布权威。
+    candidate: Option<Arc<CandidateExecution>>,
+}
+
+impl PoolAdmission {
+    /// Construct ordinary published admission for scope without creating any candidate authorization.
+    /// 为 scope 构造普通已发布入场，不创建任何候选授权。
+    fn published(scope: VulcanPluginBridgeLeaseScope) -> Self {
+        Self {
+            scope,
+            candidate: None,
+        }
+    }
+}
+
+/// Resolve plugin_id under admission's exact authority; candidate resolution never changes the public catalog.
+/// 按 admission 精确权威解析 plugin_id；候选解析绝不改变公开目录。
+/// Returns a descriptor with real leases or an explicit ownership error before any executable source is read.
+/// 在读取任何可执行源码前返回具有实际租约的描述符，或明确归属错误。
+fn admitted_plugin(
+    state: &VulcanPluginManagerState,
+    plugin_id: &str,
+    admission: &PoolAdmission,
+) -> EmbeddedResult<VulcanPluginDescriptor> {
+    if let Some(candidate) = &admission.candidate {
+        if candidate.plugin.id != plugin_id {
+            return Err(error(
+                EmbeddedErrorCode::StaleGeneration,
+                "Candidate plugin identity differs from pool admission.",
+            ));
+        }
+        candidate
+            .validate(state, &candidate.plugin, admission.scope)
+            .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
+        return Ok(candidate.plugin.clone());
+    }
+    state
+        .snapshot
+        .read()
+        .map_err(|_| internal("Plugin catalog lock is poisoned."))?
+        .plugins
+        .get(plugin_id)
+        .cloned()
+        .ok_or_else(|| {
+            error(
+                EmbeddedErrorCode::StaleGeneration,
+                "Plugin is no longer installed.",
+            )
+        })
 }
 
 impl VulcanPluginEmbeddedHost {
@@ -238,7 +300,14 @@ impl VulcanPluginEmbeddedHost {
         policy: PluginPoolConfig,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> EmbeddedResult<String> {
-        self.register_pool_with_capacity(None, definition, policy, scope, None, None)
+        self.register_pool_with_capacity(
+            None,
+            definition,
+            policy,
+            PoolAdmission::published(scope),
+            None,
+            None,
+        )
     }
 
     /// Register definition and policy in scope as a member of the exact capacity_id; return the native pool identity.
@@ -252,11 +321,18 @@ impl VulcanPluginEmbeddedHost {
         policy: PluginPoolConfig,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> EmbeddedResult<String> {
-        self.register_pool_with_capacity(Some(capacity_id), definition, policy, scope, None, None)
+        self.register_pool_with_capacity(
+            Some(capacity_id),
+            definition,
+            policy,
+            PoolAdmission::published(scope),
+            None,
+            None,
+        )
     }
 
-    /// Register trusted `definition` and `policy` under an exact live catalog `scope`.
-    /// 在精确实时目录 `scope` 下注册可信 `definition` 及 `policy`。
+    /// Register trusted `definition` and `policy` under the exact published or candidate `admission`.
+    /// 在精确已发布或候选 `admission` 下注册可信 `definition` 及 `policy`。
     /// Identity, generation, dependencies and package root must match the retained catalog entry.
     /// 身份、代次、依赖及包根必须匹配保留的目录条目。
     /// Returns a core pool ID; the host must first register the plugin's aggregate budget.
@@ -270,10 +346,13 @@ impl VulcanPluginEmbeddedHost {
         capacity_id: Option<&str>,
         definition: ModuleDefinition,
         policy: PluginPoolConfig,
-        scope: VulcanPluginBridgeLeaseScope,
+        admission: PoolAdmission,
         capability_snapshot: Option<CapabilitySnapshot>,
         initialization_capabilities: Option<BTreeSet<String>>,
     ) -> EmbeddedResult<String> {
+        // Scope and candidate ownership were selected together by the trusted host route.
+        // 作用域及候选所有权由可信宿主路由共同选择。
+        let scope = admission.scope;
         // Upgrading the manager protects the short registration operation only.
         // 升级管理器仅保护此短注册操作。
         let state = self
@@ -281,21 +360,9 @@ impl VulcanPluginEmbeddedHost {
             .manager
             .upgrade()
             .ok_or_else(|| error(EmbeddedErrorCode::Closed, "Plugin manager is closed."))?;
-        // Resolve one complete frozen catalog descriptor before deriving permissions.
-        // 在派生权限前解析一个完整冻结的目录描述符。
-        let plugin = state
-            .snapshot
-            .read()
-            .map_err(|_| internal("Plugin catalog lock is poisoned."))?
-            .plugins
-            .get(&definition.plugin_id)
-            .cloned()
-            .ok_or_else(|| {
-                error(
-                    EmbeddedErrorCode::StaleGeneration,
-                    "Plugin is no longer installed.",
-                )
-            })?;
+        // Resolve the complete descriptor from the route's explicit authority before deriving permissions.
+        // 在派生权限前，从路由显式权威解析完整描述符。
+        let plugin = admitted_plugin(&state, &definition.plugin_id, &admission)?;
         // Exact dependencies come from the validated manifest, never a caller fallback.
         // 精确依赖来自已校验清单，绝不使用调用方回退值。
         let manifest = plugin.manifest.as_ref().ok_or_else(|| {
@@ -304,7 +371,7 @@ impl VulcanPluginEmbeddedHost {
                 "Plugin has no valid manifest.",
             )
         })?;
-        if plugin.runtime_state != scope.required_runtime_state() {
+        if admission.candidate.is_none() && plugin.runtime_state != scope.required_runtime_state() {
             return Err(error(
                 EmbeddedErrorCode::PermissionDenied,
                 "Plugin lifecycle state does not authorize pool registration.",
@@ -383,6 +450,7 @@ impl VulcanPluginEmbeddedHost {
             workspace_declaration,
             security_partition: definition.security_partition.clone(),
             closing_generation: AtomicU64::new(0),
+            candidate: admission.candidate,
         });
         // Catalog publication cannot race the final authority check and pool registration.
         // 目录发布不能与最终权威检查及池注册竞争。
@@ -528,6 +596,26 @@ fn validate_current(
     finalizing: bool,
     capability: Option<&str>,
 ) -> EmbeddedResult<()> {
+    if let Some(candidate) = &domain.candidate {
+        candidate
+            .validate(state, &domain.plugin, domain.scope)
+            .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
+        // The exact prepared manifest owns candidate permissions while original request ownership excludes withdrawal.
+        // 原请求所有权排除事务撤回期间，精确准备清单拥有候选权限。
+        let manifest = domain.plugin.manifest.as_ref().ok_or_else(|| {
+            error(
+                EmbeddedErrorCode::PermissionDenied,
+                "Candidate manifest is unavailable.",
+            )
+        })?;
+        if capability.is_some_and(|name| !permitted(name, &manifest.permissions)) {
+            return Err(error(
+                EmbeddedErrorCode::PermissionDenied,
+                "Candidate manifest does not authorize this native capability.",
+            ));
+        }
+        return Ok(());
+    }
     // One immutable snapshot binds the package and lifecycle transition to the same observation.
     // 单个不可变快照将包与生命周期转换绑定至同一次观测。
     let snapshot = state

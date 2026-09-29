@@ -4,6 +4,25 @@
 use super::*;
 
 impl VulcanPluginRuntimeManager {
+    /// Validate plugin and scope against the explicit candidate authority or the ordinary published catalog.
+    /// 按显式候选权威或普通已发布目录校验 plugin 及 scope。
+    /// Candidate selection is host-only and keeps the existing resource and capability requirement checks.
+    /// 候选选择仅由宿主持有，并保留既有资源及能力要求检查。
+    pub(super) fn validate_formal_authority(
+        &self,
+        plugin: &VulcanPluginDescriptor,
+        scope: VulcanPluginBridgeLeaseScope,
+        candidate: Option<&CandidateExecution>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        match candidate {
+            Some(authority) => {
+                authority.validate(&self.state, plugin, scope)?;
+                self.validate_plugin_requirements_in_scope(plugin, scope)
+            }
+            None => self.validate_formal_plugin(plugin, scope),
+        }
+    }
+
     /// Validate plugin's exact generation and scope against one live catalog; return the authoritative admission result.
     /// 针对单份实时目录校验 plugin 的精确代次及 scope；返回权威入场结果。
     fn validate_formal_plugin(
@@ -30,8 +49,8 @@ impl VulcanPluginRuntimeManager {
         Ok(())
     }
 
-    /// Check one frozen call against the current catalog under the caller's publication gate.
-    /// 在调用方持有的发布门下，对照当前目录检查单个冻结调用。
+    /// Check one frozen call against its explicit published or candidate authority under the caller's publication gate.
+    /// 在调用方持有的发布门下，对照显式已发布或候选权威检查单个冻结调用。
     /// Scope is host-selected; returns explicit generation or cancellation failures before submission.
     /// 作用域由宿主选择；在提交前返回明确代次或取消失败。
     pub(super) fn validate_formal_submission(
@@ -39,7 +58,7 @@ impl VulcanPluginRuntimeManager {
         call: &FormalCall,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        self.validate_formal_plugin(&call.plugin, scope)?;
+        self.validate_formal_authority(&call.plugin, scope, call.candidate.as_deref())?;
         if call.cancelled.load(Ordering::Acquire) {
             return Err(VulcanPluginRuntimeError::new(
                 "Formal invocation cancelled before submission.",
@@ -178,21 +197,9 @@ impl VulcanPluginRuntimeManager {
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
-            // Read one immutable catalog observation for this decision.
-            // 为此次决策读取单个不可变目录观测。
-            let snapshot = self.snapshot();
-            // Use the exact currently published plugin descriptor.
-            // 使用当前发布的精确插件描述符。
-            let current = snapshot.plugins.get(&call.plugin.id).ok_or_else(|| {
-                VulcanPluginRuntimeError::new("Plugin disappeared before lifecycle preparation.")
-            })?;
-            if current.generation != call.plugin.generation
-                || current.runtime_state != input.scope.required_runtime_state()
-            {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Plugin generation or lifecycle changed before environment preparation.",
-                ));
-            }
+            // Candidate and published preparation use their explicitly selected authority and original cancellation.
+            // 候选及已发布准备使用各自显式选择的权威及原取消状态。
+            self.validate_formal_submission(call, input.scope)?;
             drop(publication);
         }
         // This uses the same validated copy, dependency install and atomic environment publication as before.

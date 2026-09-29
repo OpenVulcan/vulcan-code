@@ -6,6 +6,7 @@ mod actions;
 mod authorization;
 pub(crate) use authorization::plugin_required_permissions;
 mod bridge;
+mod candidates;
 mod configuration;
 pub(crate) use configuration::validate_plugin_config_value;
 mod drain;

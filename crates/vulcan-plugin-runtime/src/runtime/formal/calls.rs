@@ -2,6 +2,7 @@
 //! 单次工具、生命周期、瞬时 Action 及探测执行的有界宿主所有权。
 
 use super::*;
+use crate::runtime::candidates::CandidateExecution;
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
@@ -13,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 mod admission;
+mod candidates;
 mod initialized;
 mod prewarm;
 mod registration;
@@ -68,6 +70,9 @@ pub(super) struct FormalCall {
     /// Frozen descriptor pins the original managed package generation.
     /// 冻结描述符固定原受管包代次。
     plugin: VulcanPluginDescriptor,
+    /// Private readiness authority is absent for every published route and retained through actual cleanup.
+    /// 每条已发布路由均无私有就绪权威；候选权威保留至实际清理。
+    candidate: Option<Arc<CandidateExecution>>,
     /// Typed ownership prevents internal records from masquerading as controller calls.
     /// 类型化归属防止内部记录冒充控制器调用。
     ownership: CallOwner,
@@ -198,6 +203,13 @@ enum CallAdmission {
     /// A probe requires only the declared module's successful initialization.
     /// 探测仅要求声明模块成功初始化。
     Probe,
+    /// Initialization of one unpublished target holds the original transaction's real readiness lease.
+    /// 单个未发布目标的初始化持有原事务的实际就绪租约。
+    CandidateProbe {
+        /// The host constructed this authority from an inspected, still-prepared transaction.
+        /// 宿主从已检查且仍处于准备阶段的事务构造此权威。
+        authority: Arc<CandidateExecution>,
+    },
 }
 
 impl CallAdmission {
@@ -210,7 +222,9 @@ impl CallAdmission {
             }
             Self::Lifecycle { .. } => VulcanPluginCapacityPurpose::Lifecycle,
             Self::Action { .. } => VulcanPluginCapacityPurpose::UiAction,
-            Self::Probe => VulcanPluginCapacityPurpose::ActivationProbe,
+            Self::Probe | Self::CandidateProbe { .. } => {
+                VulcanPluginCapacityPurpose::ActivationProbe
+            }
         }
     }
 
@@ -229,7 +243,7 @@ impl CallAdmission {
             }
             Self::Lifecycle { .. } => CallOwner::Lifecycle,
             Self::Action { .. } => CallOwner::Action,
-            Self::Probe => CallOwner::Probe,
+            Self::Probe | Self::CandidateProbe { .. } => CallOwner::Probe,
         }
     }
 
@@ -240,14 +254,29 @@ impl CallAdmission {
             Self::Controller { export, .. }
             | Self::Lifecycle { export }
             | Self::Action { export, .. } => Some(export),
-            Self::Probe | Self::Prewarm { .. } | Self::PrewarmTarget { .. } => None,
+            Self::Probe
+            | Self::CandidateProbe { .. }
+            | Self::Prewarm { .. }
+            | Self::PrewarmTarget { .. } => None,
         }
     }
 
     /// Return whether initialization must be a distinct, tracked core operation.
     /// 返回初始化是否必须成为独立且受跟踪的核心操作。
     fn separates_initialization(&self) -> bool {
-        matches!(self, Self::Action { .. } | Self::Probe)
+        matches!(
+            self,
+            Self::Action { .. } | Self::Probe | Self::CandidateProbe { .. }
+        )
+    }
+
+    /// Borrow private readiness authority only for the explicit candidate probe admission.
+    /// 仅为显式候选探测入场借用私有就绪权威。
+    fn candidate(&self) -> Option<&Arc<CandidateExecution>> {
+        match self {
+            Self::CandidateProbe { authority } => Some(authority),
+            _ => None,
+        }
     }
 }
 
@@ -295,9 +324,13 @@ pub struct VulcanPluginFormalCallStatus {
     /// Original routing generation never follows a later catalog refresh.
     /// 原路由代次绝不跟随后续目录刷新。
     pub plugin_generation: u64,
-    /// Core status is absent only before operation publication or when preparation failed.
-    /// 仅操作发布前或准备失败时缺少核心状态。
+    /// Business or prewarm operation status; initialization-only probes have no business operation.
+    /// 业务或预热操作状态；仅初始化探测没有业务操作。
     pub operation: Option<OperationSnapshot>,
+    /// Actual temporary-session initialization remains queryable while its original core observer is retained.
+    /// 保留原核心观察者期间，可以查询实际临时会话初始化。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initialization: Option<OperationSnapshot>,
     /// True only after request cleanup and exclusive pool retirement or completed reusable borrow release.
     /// 仅在请求清理完成，以及独占池退役或已完成复用借用释放后为真。
     pub retired: bool,
@@ -404,6 +437,13 @@ impl FormalCall {
             operation: state
                 .operation
                 .as_ref()
+                .map(OperationHandle::snapshot)
+                .transpose()
+                .map_err(core_error)?,
+            initialization: state
+                .initialized
+                .as_ref()
+                .and_then(|session| session.initialization_operation())
                 .map(OperationHandle::snapshot)
                 .transpose()
                 .map_err(core_error)?,
@@ -542,6 +582,18 @@ impl VulcanPluginRuntimeManager {
             })
             .cloned()
             .collect();
+        self.drain_selected_formal_calls(&owner, calls).await
+    }
+
+    /// Drain the exact retained calls using owner's existing finite shutdown budget; returns original cleanup evidence.
+    /// 使用 owner 既有有限关闭预算排空精确保留 calls；返回原清理证据。
+    /// Selection belongs to the caller, so candidate cancellation cannot widen into ordinary plugin work.
+    /// 选择属于调用方，因此候选取消不能扩展至普通插件工作。
+    pub(super) async fn drain_selected_formal_calls(
+        &self,
+        owner: &Arc<ManagedFormalRuntime>,
+        calls: Vec<Arc<FormalCall>>,
+    ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(owner.settings.shutdown_timeout_ms))
             .ok_or_else(|| {
@@ -554,7 +606,7 @@ impl VulcanPluginRuntimeManager {
         let mut report = VulcanPluginDrainReport::default();
         for call in calls {
             loop {
-                self.resume_formal_cleanup(&owner, &call)?;
+                self.resume_formal_cleanup(owner, &call)?;
                 let (retired, supervised, cleanup_error) = {
                     let state = call.lock()?;
                     (state.retired, state.supervised, state.cleanup_error.clone())
@@ -581,7 +633,7 @@ impl VulcanPluginRuntimeManager {
                 tokio::time::sleep(OBSERVATION_INTERVAL).await;
             }
         }
-        self.reap_internal_calls(&owner)?;
+        self.reap_internal_calls(owner)?;
         Ok(report)
     }
 
@@ -929,7 +981,7 @@ impl VulcanPluginRuntimeManager {
             // 在记录任何实际初始化或业务操作前登记原 bundle。
             let pool = owner
                 .host
-                .register_bundle_pool_in_capacity(
+                .register_call_bundle_pool_in_capacity(
                     &capacity.capacity_id,
                     VulcanPluginBundlePoolRequest {
                         plugin_id: call.plugin.id.clone(),
@@ -955,6 +1007,7 @@ impl VulcanPluginRuntimeManager {
                         },
                         finalizer: input.finalizer.take(),
                     },
+                    call.candidate.clone(),
                 )
                 .map_err(core_error)?;
             call.lock()?.pool = Some(pool.clone());

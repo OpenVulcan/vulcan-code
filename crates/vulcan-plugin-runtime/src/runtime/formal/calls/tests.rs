@@ -3,6 +3,7 @@
 
 use super::*;
 
+mod candidates;
 mod transient;
 use crate::runtime::tests::{test_manager, write_hook_package};
 use crate::{

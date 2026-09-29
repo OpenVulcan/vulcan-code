@@ -100,21 +100,13 @@ impl VulcanPluginRuntimeManager {
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
-            // Read one immutable catalog observation for this decision.
-            // 为此次决策读取单个不可变目录观测。
-            let snapshot = self.snapshot();
-            // Use the exact currently published plugin descriptor.
-            // 使用当前发布的精确插件描述符。
-            let current = snapshot.plugins.get(&plugin.id).ok_or_else(|| {
-                VulcanPluginRuntimeError::new("Plugin disappeared before formal admission.")
-            })?;
-            if current.generation != plugin.generation
-                || current.runtime_state != input.scope.required_runtime_state()
-            {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Plugin generation or lifecycle changed before formal admission.",
-                ));
-            }
+            // Explicit candidate authority never consults another catalog incarnation for its target.
+            // 显式候选权威绝不查询其他目录实例来取得目标。
+            self.validate_formal_authority(
+                &plugin,
+                input.scope,
+                input.admission.candidate().map(Arc::as_ref),
+            )?;
             if Instant::now() >= input.deadline {
                 return Err(VulcanPluginRuntimeError::new(
                     "Formal invocation deadline expired before admission.",
@@ -190,6 +182,7 @@ impl VulcanPluginRuntimeManager {
             let call = Arc::new(FormalCall {
                 id: Uuid::new_v4().to_string(),
                 plugin,
+                candidate: input.admission.candidate().cloned(),
                 ownership,
                 input_bytes: AtomicUsize::new(input_bytes),
                 cancelled: AtomicBool::new(false),

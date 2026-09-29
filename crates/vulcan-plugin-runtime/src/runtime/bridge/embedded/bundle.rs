@@ -48,7 +48,7 @@ impl VulcanPluginEmbeddedHost {
         &self,
         request: VulcanPluginBundlePoolRequest,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(None, request, None, None)
+        self.register_bundle_pool_with_capacity(None, request, None, None, None)
     }
 
     /// Register request's real bundle in exact capacity_id and return its native member pool identity.
@@ -60,7 +60,7 @@ impl VulcanPluginEmbeddedHost {
         capacity_id: &str,
         request: VulcanPluginBundlePoolRequest,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None)
+        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, None)
     }
 
     /// Register the exact reusable tool in capacity_id; request must match its declared policy and shutdown.
@@ -73,7 +73,13 @@ impl VulcanPluginEmbeddedHost {
         request: VulcanPluginBundlePoolRequest,
         tool_id: &str,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(Some(capacity_id), request, Some(tool_id), None)
+        self.register_bundle_pool_with_capacity(
+            Some(capacity_id),
+            request,
+            Some(tool_id),
+            None,
+            None,
+        )
     }
 
     /// Register tool_id in capacity_id with the exact snapshot already used to choose its reusable domain.
@@ -92,7 +98,27 @@ impl VulcanPluginEmbeddedHost {
             request,
             Some(tool_id),
             Some(snapshot),
+            None,
         )
+    }
+
+    /// Register one tracked call in capacity_id, retaining candidate ownership only for explicit unpublished probes.
+    /// 在 capacity_id 中注册单个受跟踪调用，仅为显式未发布探测保留候选所有权。
+    /// request keeps the original manifest and policy; returns its actual core pool without publishing a catalog.
+    /// request 保留原清单及策略；返回实际核心池，不发布目录。
+    pub(in crate::runtime) fn register_call_bundle_pool_in_capacity(
+        &self,
+        capacity_id: &str,
+        request: VulcanPluginBundlePoolRequest,
+        candidate: Option<Arc<CandidateExecution>>,
+    ) -> EmbeddedResult<String> {
+        if candidate.is_some() && request.finalizer.is_some() {
+            return Err(error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Candidate probes cannot select a business finalizer.",
+            ));
+        }
+        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, candidate)
     }
 
     /// Load the manifest-selected bundle and fixed restricted loader for `request`.
@@ -109,7 +135,14 @@ impl VulcanPluginEmbeddedHost {
         request: VulcanPluginBundlePoolRequest,
         reusable_tool: Option<&str>,
         capability_snapshot: Option<CapabilitySnapshot>,
+        candidate: Option<Arc<CandidateExecution>>,
     ) -> EmbeddedResult<String> {
+        // Candidate provenance is explicit and cannot be selected by the package ID or generation string.
+        // 候选来源为显式值，不能由插件包标识或代次字符串选择。
+        let admission = PoolAdmission {
+            scope: request.scope,
+            candidate,
+        };
         // Keep the owning manager alive during exact descriptor and file resolution.
         // 在精确描述符及文件解析期间保持所属管理器存活。
         let state = self
@@ -117,28 +150,18 @@ impl VulcanPluginEmbeddedHost {
             .manager
             .upgrade()
             .ok_or_else(|| error(EmbeddedErrorCode::Closed, "Plugin manager is closed."))?;
-        // The cloned descriptor retains the actual immutable package while its source is read.
-        // 克隆描述符在读取源码期间保留真实不可变包。
-        let plugin = state
-            .snapshot
-            .read()
-            .map_err(|_| internal("Plugin catalog lock is poisoned."))?
-            .plugins
-            .get(&request.plugin_id)
-            .cloned()
-            .ok_or_else(|| {
-                error(
-                    EmbeddedErrorCode::StaleGeneration,
-                    "Plugin is no longer installed.",
-                )
-            })?;
+        // Exact candidate or published provenance retains the physical package before reading source.
+        // 精确候选或已发布来源在读取源码前保留物理插件包。
+        let plugin = admitted_plugin(&state, &request.plugin_id, &admission)?;
         if plugin.generation != request.plugin_generation {
             return Err(error(
                 EmbeddedErrorCode::StaleGeneration,
                 "Plugin changed before bundle preparation.",
             ));
         }
-        if plugin.runtime_state != request.scope.required_runtime_state() {
+        if admission.candidate.is_none()
+            && plugin.runtime_state != request.scope.required_runtime_state()
+        {
             return Err(error(
                 EmbeddedErrorCode::PermissionDenied,
                 "Plugin lifecycle does not authorize bundle preparation.",
@@ -339,7 +362,7 @@ impl VulcanPluginEmbeddedHost {
                 exports,
             },
             request.policy,
-            request.scope,
+            admission,
             capability_snapshot,
             reusable.map(|reuse| reuse.initialization_capabilities.iter().cloned().collect()),
         )
