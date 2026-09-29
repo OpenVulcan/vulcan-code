@@ -66,6 +66,9 @@ struct Domain {
     /// Every attached call retains its borrow until terminal request cleanup.
     /// 每个附加调用保留借用，直到终态请求清理。
     borrowers: usize,
+    /// At most one explicit target may initialize this exact domain at a time.
+    /// 同时至多一个明确目标可以初始化此精确域。
+    prewarm_owner: Option<String>,
     /// Closing rejects all new borrows, including while original registration is still running.
     /// 关闭拒绝全部新借用，包括原注册仍在运行时。
     closing: bool,
@@ -187,6 +190,42 @@ impl Drop for RegistrationGuard<'_> {
 }
 
 impl VulcanPluginRuntimeManager {
+    /// Claim the existing borrowed domain for call; reject a different target without changing its ownership.
+    /// 为 call 声明既有借用域；拒绝不同目标，不改变其归属。
+    /// Owner supplies the sole domain registry; ordinary business remains admitted by the native scheduler.
+    /// owner 提供唯一域注册表；普通业务继续由原生调度器接纳。
+    pub(super) fn claim_prewarm_domain(
+        &self,
+        owner: &ManagedFormalRuntime,
+        call: &FormalCall,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Capture the exact borrowed domain ID before locking its registry.
+        // 在锁定注册表前捕获精确借用域标识。
+        let id = call.lock()?.reusable_domain.clone().ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Prewarm target has no reusable domain.")
+        })?;
+        // Serialize the target claim with other borrowers and domain cleanup.
+        // 将目标声明与其他借用者及域清理排序。
+        let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
+        // The existing domain retains the sole target claim until borrow cleanup.
+        // 既有域保留唯一目标声明，直到借用清理。
+        let domain = registry
+            .domains
+            .get_mut(&id)
+            .ok_or_else(|| VulcanPluginRuntimeError::new("Prewarm target domain was not found."))?;
+        if domain
+            .prewarm_owner
+            .as_deref()
+            .is_some_and(|id| id != call.id)
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Another prewarm target owns this domain.",
+            ));
+        }
+        domain.prewarm_owner = Some(call.id.clone());
+        Ok(())
+    }
+
     /// Capture the current private configuration identity for plugin, with no persistent writes or public digest.
     /// 捕获 plugin 当前私有配置身份，不持久写入，不公开摘要。
     /// Returns None only for an explicitly absent manifest configuration declaration.
@@ -411,6 +450,7 @@ impl VulcanPluginRuntimeManager {
                     pending_finalizations: false,
                     preparing: true,
                     borrowers: 1,
+                    prewarm_owner: None,
                     closing: false,
                     idle_since: Instant::now(),
                     idle_ttl: Duration::from_millis(reuse.idle_ttl_ms),
@@ -536,6 +576,9 @@ impl VulcanPluginRuntimeManager {
             VulcanPluginRuntimeError::new("Reusable domain borrow ownership is inconsistent.")
         })?;
         domain.idle_since = Instant::now();
+        if domain.prewarm_owner.as_deref() == Some(call.id.as_str()) {
+            domain.prewarm_owner = None;
+        }
         let mut state = call.lock()?;
         state.reusable_domain = None;
         state.pool = None;

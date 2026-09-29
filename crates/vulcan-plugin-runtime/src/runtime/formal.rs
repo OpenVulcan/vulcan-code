@@ -15,8 +15,10 @@ pub use capacities::{
 };
 
 mod calls;
-pub use calls::VulcanPluginFormalCallStatus;
 pub use calls::reuse::VulcanPluginReusableDomainStatus;
+pub use calls::{
+    VulcanPluginFormalCallStatus, VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus,
+};
 mod pinned;
 pub use pinned::VulcanPluginFormalSessionStatus;
 pub(super) use pinned::deadline as operation_deadline;
@@ -213,6 +215,7 @@ impl VulcanPluginRuntimeManager {
                 .runtime()
                 .request_close()
                 .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+            self.retire_pending_formal_calls(&owner)?;
         }
         Ok(())
     }

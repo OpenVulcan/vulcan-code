@@ -113,21 +113,25 @@ impl Preparation {
     /// 按父级值及队列预算计量精确保留输入。
     /// Ownership and settings are authoritative; returns checked serialized bytes without allocating JSON text.
     /// 归属及设置为权威；返回受检序列化字节数，不分配 JSON 文本。
-    fn input_bytes(
+    pub(super) fn input_bytes(
         &self,
         ownership: &CallOwner,
         settings: &VulcanPluginRuntimeSettings,
     ) -> Result<usize, VulcanPluginRuntimeError> {
         luaskills::runtime::embedded::json_size(&self.arguments, settings.parent.max_value_bytes)
             .map_err(core_error)?;
-        luaskills::runtime::embedded::json_size(
+        let bytes = luaskills::runtime::embedded::json_size(
             &(
                 &self.arguments,
                 &self.finalizer,
                 self.admission.export(),
                 match &self.admission {
                     CallAdmission::Controller { tool_id, .. }
-                    | CallAdmission::Prewarm { tool_id, .. } => Some(tool_id),
+                    | CallAdmission::Prewarm { tool_id, .. }
+                    | CallAdmission::PrewarmTarget(VulcanPluginPrewarmTargetRequest {
+                        tool_id,
+                        ..
+                    }) => Some(tool_id),
                     _ => None,
                 },
                 &self.workspace,
@@ -137,7 +141,21 @@ impl Preparation {
             ),
             settings.parent.max_queued_bytes,
         )
-        .map_err(core_error)
+        .map_err(core_error)?;
+        // Reserve the bounded handle array before any target operations can be admitted.
+        // 接纳任何目标操作前预留有界句柄数组。
+        let retained = prewarm::TargetProgress::retained_bytes(
+            &self.admission,
+            settings.parent.max_queued_bytes,
+        )?;
+        bytes
+            .checked_add(retained)
+            .filter(|bytes| *bytes <= settings.parent.max_queued_bytes)
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new(
+                    "Prewarm target metadata exceeds the retained input budget.",
+                )
+            })
     }
 }
 
@@ -254,162 +272,16 @@ impl VulcanPluginRuntimeManager {
                 "Formal invocation requires a Tokio runtime: {error}"
             ))
         })?;
-        self.ensure_reuse_observer(&owner);
-        self.reap_internal_calls(&owner)?;
-        // Retained ownership is derived once from the same intent used for initialization and business.
-        // 保留归属从用于初始化及业务的同一意图一次性派生。
-        let ownership = input.admission.ownership();
-        // Hold Action capacity before any worker can be queued, even if its observer disappears.
-        // 在任何工作者排队前持有 Action 容量，即使其观测者消失。
-        let action_work = match &input.admission {
-            CallAdmission::Action { execution, .. } => {
-                execution.record.check()?;
-                Some(crate::runtime::action_status::ActionWorkGuard::new(
-                    Arc::clone(&execution.record),
-                    None,
-                )?)
-            }
-            _ => None,
-        };
-        // Count all retained source-selection metadata and both envelopes before publishing ownership.
-        // 发布所有权前计入全部保留的源码选择元数据及两个信封。
-        let input_bytes = input.input_bytes(&ownership, &owner.settings)?;
-        // The same publication gate orders lifecycle transitions, quota reservation and exact submission.
-        // 同一发布门排序生命周期转换、配额预留及精确提交。
-        let call = {
-            // Serialize this authority check with catalog publication.
-            // 将此次权威检查与目录发布排序。
-            let publication = self.state.session_registration_gate.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
-            })?;
-            // Read one immutable catalog observation for this decision.
-            // 为此次决策读取单个不可变目录观测。
-            let snapshot = self.snapshot();
-            // Use the exact currently published plugin descriptor.
-            // 使用当前发布的精确插件描述符。
-            let current = snapshot.plugins.get(&plugin.id).ok_or_else(|| {
-                VulcanPluginRuntimeError::new("Plugin disappeared before formal admission.")
-            })?;
-            if current.generation != plugin.generation
-                || current.runtime_state != input.scope.required_runtime_state()
-            {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Plugin generation or lifecycle changed before formal admission.",
-                ));
-            }
-            if Instant::now() >= input.deadline {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Formal invocation deadline expired before admission.",
-                ));
-            }
-            // Read execution policy from the frozen admitted plugin manifest.
-            // 从冻结的已接纳插件清单读取执行策略。
-            let manifest = plugin
-                .manifest
-                .as_ref()
-                .ok_or_else(|| VulcanPluginRuntimeError::new("Plugin has no valid manifest."))?;
-            // The manifest remains the sole source of the plugin's active-session limit.
-            // 清单仍是插件活动会话上限的唯一来源。
-            let maximum =
-                super::super::super::lease::required_lua_runtime(manifest)?.max_active_sessions;
-            // Hold the shared call registry while inspecting or changing retained ownership.
-            // 检查或变更保留所有权期间持有共享调用注册表。
-            let mut calls = owner.calls.lock().map_err(|_| calls_error())?;
-            // Include retained calls, pinned sessions and cached routing in the same checked byte sum.
-            // 在同一受检字节总和中包含保留调用、固定会话及缓存路由。
-            let total_bytes = calls
-                .values()
-                .map(|call| call.input_bytes.load(Ordering::Acquire))
-                .chain(
-                    owner
-                        .pinned
-                        .lock()
-                        .map_err(|_| calls_error())?
-                        .values()
-                        .map(|session| session.input_bytes),
-                )
-                .chain(std::iter::once(
-                    owner
-                        .reusable
-                        .lock()
-                        .map_err(|_| calls_error())?
-                        .retained_input_bytes()?,
-                ))
-                .try_fold(input_bytes, usize::checked_add);
-            if total_bytes.is_none_or(|bytes| bytes > owner.settings.parent.max_queued_bytes) {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Formal invocation input byte capacity is exhausted.",
-                ));
-            }
-            if calls.len() >= owner.settings.parent.max_operations {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Formal invocation retention capacity is exhausted; inspect and acknowledge retained calls.",
-                ));
-            }
-            if owner.host.runtime().usage().map_err(core_error)?.closing {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Formal plugin runtime is closing.",
-                ));
-            }
-            if !matches!(ownership, CallOwner::Probe) {
-                self.reserve_session_slot_locked(&plugin.id, maximum, &publication)?;
-            }
-            // Keep the exact invocation record independently of its observer.
-            // 独立于观测者保留精确调用记录。
-            let call = Arc::new(FormalCall {
-                id: Uuid::new_v4().to_string(),
-                plugin,
-                ownership,
-                input_bytes: AtomicUsize::new(input_bytes),
-                cancelled: AtomicBool::new(false),
-                acknowledged: AtomicBool::new(false),
-                state: Mutex::new(CallState {
-                    action_work,
-                    supervised: true,
-                    ..CallState::default()
-                }),
-            });
-            calls.insert(call.id.clone(), Arc::clone(&call));
-            call
-        };
-        // Both guards exist before spawning so discarding an unpolled task preserves recovery evidence.
-        // 两个守卫在派发前存在，丢弃未轮询任务时仍保留恢复证据。
+        // Preserve ordinary observation cancellation while sharing exact registration with management requests.
+        // 保留普通观测取消，同时与管理请求共享精确注册。
+        let call = self.register_owned_formal_call(&owner, plugin, input)?;
+        // The observer exists before scheduling the original request.
+        // 观测者在调度原请求前存在。
         let mut observation = ObservationGuard {
             call: Arc::clone(&call),
             completed: false,
         };
-        // This guard records interruption without releasing actual work.
-        // 此守卫记录中断，不释放实际工作。
-        let supervision = SupervisionGuard {
-            call: Arc::clone(&call),
-            completed: false,
-        };
-        // Retain the original manager identity for the operation being observed.
-        // 为被观测操作保留原管理器身份。
-        let manager = self.clone();
-        // The supervisor retains the same formal parent throughout cleanup.
-        // 监督者在整个清理期间保留同一正式父级。
-        let supervisor_owner = Arc::clone(&owner);
-        // The supervisor observes the original invocation rather than recreating it.
-        // 监督者观测原调用，不重新创建调用。
-        let supervisor_call = Arc::clone(&call);
-        tokio::spawn(async move {
-            // This guard records interruption without releasing actual work.
-            // 此守卫记录中断，不释放实际工作。
-            let mut supervision = supervision;
-            manager
-                .supervise_formal_call(Arc::clone(&supervisor_owner), supervisor_call, input)
-                .await;
-            supervision.completed = true;
-            // If the waiter was dropped, completion itself reclaims only physically retired internal calls.
-            // 等待方已被丢弃时，完成处理自身仅回收物理退役的内部调用。
-            if let Err(error) = manager.reap_internal_calls(&supervisor_owner) {
-                // A diagnostic-lock failure cannot turn incomplete cleanup into successful retirement.
-                // 诊断锁失败不能把未完成清理变成成功退役。
-                let _ =
-                    manager.record_cleanup_failure(&supervision.call.plugin.id, error.to_string());
-            }
-        });
+        self.start_registered_formal_call(&owner, &call)?;
         loop {
             // Clone completed evidence under the short lock before acknowledgement.
             // 确认之前在短锁下克隆完成证据。

@@ -39,7 +39,8 @@ pub use formal::{
     VulcanPluginCapacityRegistrationRequest, VulcanPluginFormalCallStatus,
     VulcanPluginFormalCapacityCatalog, VulcanPluginFormalCapacityStatus,
     VulcanPluginFormalPluginStatus, VulcanPluginFormalRuntimeStatus,
-    VulcanPluginFormalSessionStatus, VulcanPluginReusableDomainStatus,
+    VulcanPluginFormalSessionStatus, VulcanPluginPrewarmTargetRequest,
+    VulcanPluginPrewarmTargetStatus, VulcanPluginReusableDomainStatus,
 };
 pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
 pub use lifecycle::VulcanPluginLifecycleEvent;

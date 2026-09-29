@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 mod admission;
 mod initialized;
 mod prewarm;
+mod registration;
 pub(super) mod reuse;
+pub use prewarm::{VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus};
 
 #[cfg(test)]
 mod tests;
@@ -83,6 +85,12 @@ pub(super) struct FormalCall {
 /// 单个宿主调用的可变控制证据，独立于观测者寿命。
 #[derive(Default)]
 struct CallState {
+    /// Original registered input waits for exactly one explicit scheduling transfer.
+    /// 原已登记输入等待恰好一次明确调度转移。
+    pending: Option<Preparation>,
+    /// Target ownership retains completed operations separately from the current active operation.
+    /// 目标归属将已完成操作与当前活动操作分别保留。
+    prewarm: Option<prewarm::TargetProgress>,
     /// Pool identity precedes submission and lasts until exclusive retirement or completed reusable borrow release.
     /// 池身份先于提交，并保留至独占退役或已完成复用借用释放。
     pool: Option<String>,
@@ -156,6 +164,9 @@ enum CallAdmission {
         /// 精确可复用工具身份选择既有模块及清理契约。
         tool_id: String,
     },
+    /// A bounded initialization target retains its original pool and every admitted operation.
+    /// 有界初始化目标保留原池及每个已接纳操作。
+    PrewarmTarget(VulcanPluginPrewarmTargetRequest),
     /// Lifecycle admission invokes one host-selected declaration.
     /// 生命周期入场调用一个宿主选择的声明。
     Lifecycle {
@@ -183,7 +194,9 @@ impl CallAdmission {
     /// 返回宿主选择的用途，不读取业务载荷或猜测导出名称。
     fn capacity_purpose(&self) -> VulcanPluginCapacityPurpose {
         match self {
-            Self::Controller { .. } | Self::Prewarm { .. } => VulcanPluginCapacityPurpose::ToolCall,
+            Self::Controller { .. } | Self::Prewarm { .. } | Self::PrewarmTarget(_) => {
+                VulcanPluginCapacityPurpose::ToolCall
+            }
             Self::Lifecycle { .. } => VulcanPluginCapacityPurpose::Lifecycle,
             Self::Action { .. } => VulcanPluginCapacityPurpose::UiAction,
             Self::Probe => VulcanPluginCapacityPurpose::ActivationProbe,
@@ -200,6 +213,7 @@ impl CallAdmission {
             | Self::Prewarm {
                 owner_session_id, ..
             } => CallOwner::Controller(owner_session_id.clone()),
+            Self::PrewarmTarget(request) => CallOwner::Controller(request.owner_session_id.clone()),
             Self::Lifecycle { .. } => CallOwner::Lifecycle,
             Self::Action { .. } => CallOwner::Action,
             Self::Probe => CallOwner::Probe,
@@ -213,7 +227,7 @@ impl CallAdmission {
             Self::Controller { export, .. }
             | Self::Lifecycle { export }
             | Self::Action { export, .. } => Some(export),
-            Self::Probe | Self::Prewarm { .. } => None,
+            Self::Probe | Self::Prewarm { .. } | Self::PrewarmTarget(_) => None,
         }
     }
 
@@ -255,6 +269,10 @@ struct Preparation {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VulcanPluginFormalCallStatus {
+    /// Explicit target receipt remains queryable before startup and through partial or completed initialization.
+    /// 明确目标回执在启动前及部分或完整初始化期间保持可查询。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prewarm: Option<VulcanPluginPrewarmTargetStatus>,
     /// Stable host identity accepted by query, cancellation and forgetting.
     /// 查询、取消及遗忘接受的稳定宿主身份。
     pub invocation_id: String,
@@ -362,6 +380,11 @@ impl FormalCall {
     fn status(&self) -> Result<VulcanPluginFormalCallStatus, VulcanPluginRuntimeError> {
         let state = self.lock()?;
         Ok(VulcanPluginFormalCallStatus {
+            prewarm: state
+                .prewarm
+                .as_ref()
+                .map(prewarm::TargetProgress::status)
+                .transpose()?,
             invocation_id: self.id.clone(),
             plugin_id: self.plugin.id.clone(),
             plugin_generation: self.plugin.generation,
@@ -372,7 +395,9 @@ impl FormalCall {
                 .transpose()
                 .map_err(core_error)?,
             retired: state.retired,
-            requires_cleanup_recovery: !state.supervised && !state.retired,
+            requires_cleanup_recovery: state.pending.is_none()
+                && !state.supervised
+                && !state.retired,
             value: state
                 .result
                 .as_ref()
@@ -511,6 +536,7 @@ impl VulcanPluginRuntimeManager {
             })?;
         for call in &calls {
             call.cancelled.store(true, Ordering::Release);
+            self.retire_unstarted_formal_call(call)?;
         }
         let mut report = VulcanPluginDrainReport::default();
         for call in calls {
@@ -644,6 +670,7 @@ impl VulcanPluginRuntimeManager {
         let owner = self.required_formal_owner()?;
         let call = owned_call(&owner, id, owner_session_id)?;
         call.cancelled.store(true, Ordering::Release);
+        self.retire_unstarted_formal_call(&call)?;
         Ok(())
     }
 
@@ -676,11 +703,21 @@ impl VulcanPluginRuntimeManager {
                 VulcanPluginRuntimeError::new("Owned formal invocation was not found.")
             })?;
         {
-            let state = call.lock()?;
+            let mut state = call.lock()?;
             if !state.retired || state.supervised || state.result.is_none() {
                 return Err(VulcanPluginRuntimeError::new(
                     "Formal invocation cleanup has not completed.",
                 ));
+            }
+            if let Some(target) = &mut state.prewarm {
+                while let Some(operation) = target.completed.last() {
+                    owner
+                        .host
+                        .runtime()
+                        .forget_operation(operation.id())
+                        .map_err(core_error)?;
+                    target.completed.pop();
+                }
             }
             if let Some(operation) = &state.operation {
                 owner
@@ -688,6 +725,7 @@ impl VulcanPluginRuntimeManager {
                     .runtime()
                     .forget_operation(operation.id())
                     .map_err(core_error)?;
+                state.operation = None;
             }
         }
         calls.remove(id);
@@ -815,7 +853,9 @@ impl VulcanPluginRuntimeManager {
         // Reuse is selected only by the exact validated stateless tool entry.
         // 复用仅由精确已校验无状态工具入口选择。
         let reusable = match &input.admission {
-            CallAdmission::Controller { tool_id, .. } | CallAdmission::Prewarm { tool_id, .. } => {
+            CallAdmission::Controller { tool_id, .. }
+            | CallAdmission::Prewarm { tool_id, .. }
+            | CallAdmission::PrewarmTarget(VulcanPluginPrewarmTargetRequest { tool_id, .. }) => {
                 let manifest = call.plugin.manifest.as_ref().ok_or_else(|| {
                     VulcanPluginRuntimeError::new("Formal tool manifest is missing.")
                 })?;
@@ -834,7 +874,11 @@ impl VulcanPluginRuntimeManager {
             }
             _ => None,
         };
-        if matches!(input.admission, CallAdmission::Prewarm { .. }) && reusable.is_none() {
+        if matches!(
+            input.admission,
+            CallAdmission::Prewarm { .. } | CallAdmission::PrewarmTarget(_)
+        ) && reusable.is_none()
+        {
             return Err(VulcanPluginRuntimeError::new(
                 "Explicit prewarming requires a declared reusable tool.",
             ));
@@ -914,7 +958,11 @@ impl VulcanPluginRuntimeManager {
         // Initialization and later business share the same original absolute deadline.
         // 初始化及后续业务共用同一原绝对截止时间。
         let remaining = initialized::remaining(input.deadline)?;
-        if matches!(input.admission, CallAdmission::Prewarm { .. }) {
+        if matches!(input.admission, CallAdmission::PrewarmTarget(_)) {
+            // The target supervisor queries this exact borrowed domain before deciding whether initialization is needed.
+            // 目标监督者先查询此精确借用域，再决定是否需要初始化。
+            self.claim_prewarm_domain(owner, call)?;
+        } else if matches!(input.admission, CallAdmission::Prewarm { .. }) {
             // The existing borrowed domain owns the new instance after its real initialization is confirmed.
             // 真实初始化确认后，既有借用域拥有新实例。
             let operation = owner
@@ -1028,14 +1076,27 @@ impl VulcanPluginRuntimeManager {
                 )?;
             }
             project_result(&terminal)
+        } else if call.lock()?.prewarm.is_some() {
+            preparation
+                .clone()
+                .and_then(|()| self.prewarm_target_result(call))
         } else if matches!(call.ownership, CallOwner::Probe) {
-            preparation.map(|()| Value::Bool(true))
+            preparation.clone().map(|()| Value::Bool(true))
         } else {
-            preparation.and_then(|()| {
+            preparation.clone().and_then(|()| {
                 Err(VulcanPluginRuntimeError::new(
                     "Formal submission produced no operation identity.",
                 ))
             })
+        };
+        // Target completion preserves preparation failures even when the last successful initialization still has an operation.
+        // 即使最后成功初始化仍有操作，目标完成也保留准备失败。
+        let result = if call.lock()?.prewarm.is_some() {
+            preparation
+                .and(result)
+                .and_then(|_| self.prewarm_target_result(call))
+        } else {
+            result
         };
         if let Some(work) = &call.lock()?.action_work {
             work.record().phase("cleanup");

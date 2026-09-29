@@ -2,6 +2,197 @@
 //! 既有控制器及模块归属下的明确可复用工具初始化。
 
 use super::*;
+use luaskills::runtime::embedded::EmbeddedReusablePoolSnapshot;
+use serde::Deserialize;
+
+mod target;
+pub(super) use target::TargetProgress;
+
+/// Trusted explicit target selection; every field is frozen before any initialization can run.
+/// 可信明确目标选择；任何初始化运行前冻结全部字段。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VulcanPluginPrewarmTargetRequest {
+    /// Observed original parent; a replacement runtime cannot accept this request.
+    /// 已观测原父级；替代运行时不能接受此请求。
+    pub runtime_id: String,
+    /// Exact enabled plugin owning the selected tool.
+    /// 拥有所选工具的精确已启用插件。
+    pub plugin_id: String,
+    /// Exact enabled catalog tool identifier.
+    /// 精确已启用目录工具标识。
+    pub tool_id: String,
+    /// Observed plugin-local routing generation.
+    /// 已观测插件内路由代次。
+    pub plugin_generation: u64,
+    /// Trusted controller owning this receipt and its later business partition.
+    /// 拥有此回执及其后续业务分区的可信控制器。
+    pub owner_session_id: String,
+    /// Workspace authorized by the host, never selected by plugin arguments.
+    /// 宿主授权工作区，绝不由插件参数选择。
+    pub workspace_root: PathBuf,
+    /// Desired confirmed idle count at one observation; zero never initializes a VM.
+    /// 单次观测期望的已确认空闲数；零绝不初始化 VM。
+    pub target_idle: usize,
+}
+
+/// Original target and bounded operation history retained until explicit acknowledgement.
+/// 原目标及有界操作历史，保留至显式确认。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VulcanPluginPrewarmTargetStatus {
+    /// Original trusted request; no live routing values are substituted.
+    /// 原可信请求；不替换为活动路由值。
+    pub request: VulcanPluginPrewarmTargetRequest,
+    /// True only after the original input was transferred to its one supervisor.
+    /// 仅在原输入转移至唯一监督者后为真。
+    pub started: bool,
+    /// Earlier confirmed operations; the current operation stays in the enclosing call status.
+    /// 先前已确认操作；当前操作继续位于外层调用状态。
+    pub completed: Vec<OperationSnapshot>,
+    /// Scheduler observation that satisfied the target, not a permanent residency guarantee.
+    /// 满足目标的调度器观测，不是永久驻留保证。
+    pub satisfied: Option<EmbeddedReusablePoolSnapshot>,
+}
+
+impl VulcanPluginRuntimeManager {
+    /// Register request and input budgets without running Lua or spawning work; return a queryable receipt.
+    /// 登记 request 及输入预算，不运行 Lua 或启动工作；返回可查询回执。
+    /// Repeating preparation creates another inert receipt; start only the selected original invocation ID.
+    /// 重复准备会创建另一份未启动回执；仅启动选定的原调用标识。
+    pub fn prepare_reusable_tool_prewarm(
+        &self,
+        request: VulcanPluginPrewarmTargetRequest,
+    ) -> Result<VulcanPluginFormalCallStatus, VulcanPluginRuntimeError> {
+        // Parent identity must be checked before retaining any controller work.
+        // 保留任何控制器工作前必须检查父级身份。
+        let owner = self.required_formal_owner()?;
+        let (plugin, input) = self.reusable_prewarm_input(&owner, request, true)?;
+        self.register_owned_formal_call(&owner, plugin, input)?
+            .status()
+    }
+
+    /// Start the existing id owned by owner_session_id exactly once; return its current evidence.
+    /// 将 owner_session_id 拥有的既有 id 启动恰好一次；返回当前证据。
+    /// Unknown or forgotten IDs fail and never recreate initialization.
+    /// 未知或已遗忘标识失败，绝不重新创建初始化。
+    pub fn start_reusable_tool_prewarm(
+        &self,
+        id: &str,
+        owner_session_id: &str,
+    ) -> Result<VulcanPluginFormalCallStatus, VulcanPluginRuntimeError> {
+        // Exact registry ownership prevents a retry from changing the target or execution domain.
+        // 精确注册表归属防止重试改变目标或执行域。
+        let owner = self.required_formal_owner()?;
+        // Resolve only the retained invocation owned by the trusted controller.
+        // 仅解析可信控制器拥有的保留调用。
+        let call = owned_call(&owner, id, owner_session_id)?;
+        if call.lock()?.prewarm.is_none() {
+            return Err(VulcanPluginRuntimeError::new(
+                "Formal invocation is not a prewarm target.",
+            ));
+        }
+        self.start_registered_formal_call(&owner, &call)?;
+        call.status()
+    }
+
+    /// Resolve request against one enabled catalog and owner; target selects bounded convergence or one addition.
+    /// 按单个已启用目录及 owner 解析 request；target 选择有界收敛或单次增加。
+    /// Return the original descriptor and deadline-bearing preparation, without creating a VM.
+    /// 返回原描述符及携带截止时间的准备输入，不创建 VM。
+    fn reusable_prewarm_input(
+        &self,
+        owner: &ManagedFormalRuntime,
+        request: VulcanPluginPrewarmTargetRequest,
+        target: bool,
+    ) -> Result<(VulcanPluginDescriptor, Preparation), VulcanPluginRuntimeError> {
+        if owner.host.runtime().id() != request.runtime_id {
+            return Err(VulcanPluginRuntimeError::new(
+                "Prewarm runtime identity changed before admission.",
+            ));
+        }
+        if request.owner_session_id.trim().is_empty() {
+            return Err(VulcanPluginRuntimeError::new(
+                "Explicit prewarming requires a controller owner.",
+            ));
+        }
+        // This snapshot owns both the declaration and plugin-local generation.
+        // 此快照同时拥有声明及插件内代次。
+        let snapshot = self.snapshot();
+        // Resolve the declared tool from the same immutable enabled catalog.
+        // 从同一不可变已启用目录解析声明工具。
+        let tool = snapshot
+            .enabled_tools
+            .get(&request.tool_id)
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Reusable prewarm tool is not enabled.")
+            })?;
+        if tool.plugin_id != request.plugin_id
+            || tool.plugin_generation != request.plugin_generation
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Reusable prewarm plugin identity or generation changed before admission.",
+            ));
+        }
+        // The validated manifest is the sole source of the tool's resident ceiling.
+        // 已校验清单是工具常驻上限的唯一来源。
+        let reuse = tool.manifest.execution.reusable.as_ref().ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Explicit prewarming requires a declared reusable tool.")
+        })?;
+        if target && request.target_idle > reuse.max_resident_vms {
+            return Err(VulcanPluginRuntimeError::new(
+                "Prewarm target exceeds the declared resident limit.",
+            ));
+        }
+        // The ordinary tool resolver remains the sole default and grace authority.
+        // 普通工具解析器仍是唯一默认值及宽限权威。
+        let timeout_ms = crate::runtime::sessions::resolve_host_timeout(tool, &Map::new())?;
+        // Retain one absolute deadline across preparation, queueing and all initialization attempts.
+        // 在准备、排队及全部初始化尝试期间保留一个绝对截止时间。
+        let deadline = super::super::pinned::deadline(timeout_ms)?;
+        // Pin the descriptor belonging to this exact enabled tool observation.
+        // 固定属于此精确已启用工具观测的描述符。
+        let plugin = snapshot
+            .plugins
+            .get(&tool.plugin_id)
+            .cloned()
+            .ok_or_else(|| VulcanPluginRuntimeError::new("Reusable prewarm plugin is missing."))?;
+        // Keep the original package's validated finalizer declaration.
+        // 保留原包已校验的关闭器声明。
+        let manifest = plugin.manifest.as_ref().ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Reusable prewarm manifest is missing.")
+        })?;
+        // Use the sole Lua runtime declaration without probing substitute exports.
+        // 使用唯一 Lua 运行时声明，不探测替代导出。
+        let runtime = crate::runtime::lease::required_lua_runtime(manifest)?;
+        // The original finalizer is required even when no business export ever runs.
+        // 即使业务导出从未运行，仍要求原关闭器。
+        let input = Preparation {
+            workspace: CallWorkspace::Provided(request.workspace_root.clone()),
+            arguments: Value::Null,
+            finalizer: Some(ModuleFinalizer {
+                export: runtime.shutdown_function.clone(),
+                arguments: self.formal_envelope(
+                    plugin_payload("shutdown", Map::new())?,
+                    owner.settings.shutdown_timeout_ms,
+                )?,
+                timeout_ms: owner.settings.shutdown_timeout_ms,
+            }),
+            security_partition: format!("tool:{}", request.owner_session_id),
+            admission: if target {
+                CallAdmission::PrewarmTarget(request)
+            } else {
+                CallAdmission::Prewarm {
+                    tool_id: request.tool_id,
+                    owner_session_id: request.owner_session_id,
+                }
+            },
+            scope: VulcanPluginBridgeLeaseScope::Enabled,
+            deadline,
+        };
+        Ok((plugin, input))
+    }
+}
 
 impl VulcanPluginRuntimeManager {
     /// Initialize one additional VM for plugin_id and its published tool_id at exactly plugin_generation.
@@ -20,76 +211,21 @@ impl VulcanPluginRuntimeManager {
         owner_session_id: String,
         workspace_root: PathBuf,
     ) -> Result<Value, VulcanPluginRuntimeError> {
-        if owner_session_id.trim().is_empty() {
-            return Err(VulcanPluginRuntimeError::new(
-                "Explicit prewarming requires a controller owner.",
-            ));
-        }
-        // One published snapshot owns both the selected tool declaration and its exact package generation.
-        // 单个已发布快照同时拥有所选工具声明及其精确包代次。
-        let snapshot = self.snapshot();
-        // Tool IDs resolve only through the enabled catalog; callers cannot supply replacement declarations.
-        // 工具标识仅通过已启用目录解析；调用方不能提供替代声明。
-        let tool = snapshot.enabled_tools.get(tool_id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Reusable prewarm tool is not enabled.")
-        })?;
-        // Generation counters are per plugin, so equal numbers cannot authorize a tool transferred to another plugin.
-        // 代次计数按插件独立维护，因此相同数值不能授权已转移至另一插件的工具。
-        if tool.plugin_id != plugin_id || tool.plugin_generation != plugin_generation {
-            return Err(VulcanPluginRuntimeError::new(
-                "Reusable prewarm plugin identity or generation changed before admission.",
-            ));
-        }
-        if tool.manifest.execution.reusable.is_none() {
-            return Err(VulcanPluginRuntimeError::new(
-                "Explicit prewarming requires a declared reusable tool.",
-            ));
-        }
-        // The shared resolver supplies the declared default and grace; prewarming has no business timeout argument.
-        // 共享解析器提供声明默认值及宽限；预热没有业务超时参数。
-        let timeout_ms = crate::runtime::sessions::resolve_host_timeout(tool, &Map::new())?;
-        // One absolute deadline covers host preparation, core queueing and actual initialization.
-        // 单个绝对截止时间覆盖宿主准备、核心排队及真实初始化。
-        let deadline = super::super::pinned::deadline(timeout_ms)?;
-        // Retain the exact attached parent, never create a separate scheduler for prewarming.
-        // 保留精确附加父级，绝不为预热创建独立调度器。
+        // Share exact admission validation with retained targets without changing one-addition semantics.
+        // 与保留目标共享精确入场校验，不改变单次增加语义。
         let owner = self.required_formal_owner()?;
-        // Resolve only the package named by the same trusted tool snapshot.
-        // 仅解析同一可信工具快照指定的包。
-        let plugin = snapshot
-            .plugins
-            .get(&tool.plugin_id)
-            .cloned()
-            .ok_or_else(|| VulcanPluginRuntimeError::new("Reusable prewarm plugin is missing."))?;
-        // The original manifest owns the independent finalizer even when business never executes.
-        // 即使业务从未执行，原清单仍拥有独立关闭器。
-        let manifest = plugin.manifest.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Reusable prewarm manifest is missing.")
-        })?;
-        // Reuse the authoritative Lua declaration without probing exports or substituting a function.
-        // 复用权威 Lua 声明，不探测导出或替换函数。
-        let runtime = crate::runtime::lease::required_lua_runtime(manifest)?;
-        // Native prewarming has no business envelope; the existing retained input budget still counts all routing and cleanup data.
-        // 原生预热没有业务信封；既有保留输入预算仍计入全部路由及清理数据。
-        let input = Preparation {
-            workspace: CallWorkspace::Provided(workspace_root),
-            arguments: Value::Null,
-            finalizer: Some(ModuleFinalizer {
-                export: runtime.shutdown_function.clone(),
-                arguments: self.formal_envelope(
-                    plugin_payload("shutdown", Map::new())?,
-                    owner.settings.shutdown_timeout_ms,
-                )?,
-                timeout_ms: owner.settings.shutdown_timeout_ms,
-            }),
-            admission: CallAdmission::Prewarm {
-                tool_id: tool.id.clone(),
-                owner_session_id: owner_session_id.clone(),
-            },
-            scope: VulcanPluginBridgeLeaseScope::Enabled,
-            security_partition: format!("tool:{owner_session_id}"),
-            deadline,
+        // This request selects the original attached parent and trusted controller workspace.
+        // 此请求选择原附加父级及可信控制器工作区。
+        let request = VulcanPluginPrewarmTargetRequest {
+            runtime_id: owner.host.runtime().id().to_owned(),
+            plugin_id: plugin_id.to_owned(),
+            tool_id: tool_id.to_owned(),
+            plugin_generation,
+            owner_session_id,
+            workspace_root,
+            target_idle: 1,
         };
+        let (plugin, input) = self.reusable_prewarm_input(&owner, request, false)?;
         self.invoke_owned_formal_call(owner, plugin, input).await
     }
 }
