@@ -58,6 +58,12 @@ fn hot_reuse_target_executor_loss_and_missing_executor_preserve_receipt() {
         .start_reusable_tool_prewarm(&prepared.invocation_id, "owner")
         .expect("start or observe original target");
     assert!(interrupted.requires_cleanup_recovery);
+    assert!(
+        manager
+            .recover_reusable_tool_prewarm_cleanup(&prepared.invocation_id, "owner")
+            .is_err(),
+        "missing executor must preserve the interrupted cleanup owner"
+    );
     assert_eq!(
         interrupted
             .operation
@@ -72,28 +78,35 @@ fn hot_reuse_target_executor_loss_and_missing_executor_preserve_receipt() {
         .build()
         .expect("create test executor");
     replacement.block_on(async {
-        // Retain original work ownership while testing bounded drain or parent shutdown.
-        // 测试有界排空或父级关闭时保留原工作归属。
+        assert!(
+            manager
+                .recover_reusable_tool_prewarm_cleanup(&prepared.invocation_id, "another-owner")
+                .is_err(),
+            "another controller cannot resume original cleanup"
+        );
+        manager
+            .cancel_formal_call(&prepared.invocation_id, "owner")
+            .expect("cancel original target");
+        // Explicit recovery transfers only cleanup while the native callback still owns the VM.
+        // 原生回调仍拥有 VM 时，明确恢复仅转移清理。
         let pending = manager
-            .drain_owner_sessions("owner")
-            .await
-            .expect("drain original controller work");
-        assert!(!pending.failures.is_empty());
+            .recover_reusable_tool_prewarm_cleanup(&prepared.invocation_id, "owner")
+            .expect("recover original cleanup");
+        assert!(!pending.retired);
         recovery.events.release();
         // Bound observation with the shared fixture timeout without completing native work artificially.
         // 用共享夹具超时约束观测，不人为完成原生工作。
         let deadline = Instant::now() + WAIT;
         while !manager
-            .drain_owner_sessions("owner")
-            .await
-            .expect("drain original controller work")
-            .failures
-            .is_empty()
+            .recover_reusable_tool_prewarm_cleanup(&prepared.invocation_id, "owner")
+            .expect("observe or resume original cleanup")
+            .retired
         {
             assert!(
                 Instant::now() < deadline,
                 "original cleanup did not complete"
             );
+            tokio::task::yield_now().await;
         }
         // Retirement preserves the original operation and explicit interrupted-target failure.
         // 退役保留原操作及明确目标中断失败。

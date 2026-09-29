@@ -451,7 +451,9 @@ VM 仍由同一核心父级计数；该选择保留原每次调用的新 Lua 状
 调用方应通过 `formal_calls` 找回原控制器回执，选择明确的原 `invocationId` 后再启动。
 
 `start_reusable_tool_prewarm(invocationId, ownerSessionId)` 仅转移原输入一次。重复启动返回原记录，
-已遗忘身份明确失败；监督者中断后也不重启收敛，须通过既有排空入口恢复原清理。
+已遗忘身份明确失败；监督者中断后也不重启收敛，可通过
+`recover_reusable_tool_prewarm_cleanup(invocationId, ownerSessionId)` 或既有排空入口恢复原清理。
+恢复接口只处理原预热回执；中断清理需要可用执行器，活动或已退役回执仅返回当前证据。
 尚未启动的首次请求需要执行器；已转移或退役回执的重复观测不依赖进入执行器。
 准备与启动间的等待也占用原工具截止时间。未启动请求的取消及父级关闭归还活动槽，保留失败回执至明确遗忘。
 
@@ -472,12 +474,46 @@ VM 仍由同一核心父级计数；该选择保留原每次调用的新 Lua 状
 此类失败必须保留在原域并显式确认，不能以物理常驻数为零宣称全部关闭完成，
 也不能给旧代次借用新包权限。本地六项目标测试覆盖真实实例、零目标、重复启动、准备取消／关闭、
 输入及操作预算、控制器隔离、部分成功、同域冲突、源码切换及执行器丢失。
-初始化回调名单已接通核心 Rust 与本宿主复用域，自动预热策略、RPC／WebUI、完整更新事务和跨平台长稳仍待后续交付。
+初始化回调名单已接通核心 Rust 与本宿主复用域，目标管理 RPC 见下节；
+自动预热策略、WebUI、完整更新事务和跨平台长稳仍待后续交付。
 
 上游就绪字段的唯一归属是候选 LuaSkills 正式调度器；升级时必须回读上游对应源码及持久化测试。
 核心就绪查询已同步至 C JSON `pool_reusable_status` 及三个 SDK 的类型化池句柄，能力标识为 `reusable_pool_readiness_v1`；均从正式调度器取得同一快照，控制通道不执行 Lua。契约归属为 LuaSkills `EmbeddedReusablePoolSnapshot` 与其生成协议，上游升级时须重新核对。当前仍为本地开发接口，未正式发布；SDK 查询不替代本宿主的精确代次验证及目标流程。
 
 核心初始化名单也已同步至 C JSON `pool_register.initialization_capabilities` 和三个 SDK 的类型化注册，能力标识为 `initialization_capability_policy_v1`。通用上游 API 为兼容明确旧行为，省略或空值继承、空数组全部拒绝；本宿主复用工具从清单显式传入集合，因此清单省略仍按宿主策略全部拒绝。两层默认的归属不同，升级时须同时核对上游 `ModuleCapabilities` 与本宿主清单转换，不能把 SDK 的省略语义移用于插件清单。当前仅通过本地候选库及分发验证，尚未正式发布。
+
+### 预热管理 RPC
+
+已认证宿主服务提供以下精确方法，不从插件业务 Action 进入：
+
+| 方法 | 参数与结果 |
+| --- | --- |
+| `service_plugin_prewarm_targets` | `runtimeId`、`ownerSessionId`；返回同父级的已启用复用工具声明及该控制器原预热回执 |
+| `service_prepare_plugin_prewarm` | `request` 对象包含 `runtimeId`、`ownerSessionId`、`pluginId`、`toolId`、`pluginGeneration`、`targetIdle`；返回未启动原回执 |
+| `service_plugin_prewarm_status` | `runtimeId`、`ownerSessionId`、`invocationId`；读取原回执 |
+| `service_start_plugin_prewarm` | 同一原回执参数；至多一次启动原输入 |
+| `service_cancel_plugin_prewarm` | 同一原回执参数；请求取消并返回当前证据 |
+| `service_recover_plugin_prewarm_cleanup` | 同一原回执参数；仅恢复原清理并返回当前证据 |
+| `service_forget_plugin_prewarm` | 同一原回执参数；完整退役后确认，成功返回空值 |
+
+参数必须为具名对象，未知字段、位置数组、非 UUID 会话以及数字形式的插件代次被拒绝。
+`pluginGeneration` 在声明、请求与回执中使用规范十进制字符串，精确覆盖上游 `u64`。
+准备和启动先从 SQLite 会话索引确认会话存在与项目身份，再从宿主保留的活动会话／项目投影，
+调用普通插件工具准备共用的 `workspace_path_for_session` 取得执行工作区，不接收客户端 `workspaceRoot`。
+会话存储定位器的 `project_directory` 是持久化目录，不能用于此执行用途。明确声明的项目必须存在且与索引一致；
+合法无项目会话遵守共用解析器的既有无项目策略，不能用缺失会话或悬空项目触发该分支。
+它们共同持有服务外层准入与存储生命周期门至真实阻塞提交结束；前者与整个会话删除事务互斥，
+覆盖其在存储加锁之前的插件排空。HTTP 观测者离开不会释放已接纳阻塞任务的这些守卫。
+新初始化要求会话仍在活动投影中，索引与活动项目共同验证范围；当前导航选择不参与路径推断，对话运行时无需提前加载。
+查询、取消、恢复清理和遗忘只核对原父级及控制器归属，因此会话不再可定位后仍能处理保留证据。
+
+回执投影包含原身份、宿主解析的工作区、目标数、是否已启动、真实退役、清理恢复需求、成功或错误，
+以及当前原生 `operation`、先前 `completed`、历史 `satisfied`。后三项直接来自核心原证据，
+字段命名遵从各自上游类型，不从物理空闲推断成功，也不建立第二套任务状态。
+准备不具备幂等创建语义；未知 HTTP 结果应先列出原会话回执，不自动重提准备。
+启动、查询和清理始终使用选中的原 `invocationId`；工具、代次及工作区变化不能令原任务转投新身份。
+工具原截止时间包含准备后等待，管理界面不能通过重试启动延长它。
+本节接口是本地候选功能，WebUI 与自动持久策略仍须后续接入，不意味着正式版本已发布。
 
 ## 工具固定会话的正式所有权
 

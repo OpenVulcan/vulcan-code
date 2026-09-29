@@ -9,6 +9,8 @@ use vulcan_plugin_runtime::{
     VulcanPluginCapacityRegistrationRequest, VulcanPluginRuntimeManager,
 };
 
+mod prewarm;
+
 /// Exact wire names have one domain owner; plugin business actions do not dispatch these methods.
 /// 精确线协议名称仅有一个领域所有者；插件业务 Action 不分发这些方法。
 #[cfg(test)]
@@ -23,6 +25,13 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_resume_plugin_capacity_policy_update",
     "service_cancel_plugin_capacity_policy_update",
     "service_forget_plugin_capacity_policy_update",
+    "service_plugin_prewarm_targets",
+    "service_prepare_plugin_prewarm",
+    "service_plugin_prewarm_status",
+    "service_start_plugin_prewarm",
+    "service_cancel_plugin_prewarm",
+    "service_recover_plugin_prewarm_cleanup",
+    "service_forget_plugin_prewarm",
 ];
 
 /// Empty reads reject accidental mutation parameters instead of silently ignoring them.
@@ -211,7 +220,7 @@ pub(super) async fn dispatch(
                 .await,
             )
         }
-        _ => return Ok(ServiceRpcDispatch::Unknown),
+        _ => return prewarm::dispatch(state, method, params).await,
     };
     Ok(ServiceRpcDispatch::Handled(result))
 }

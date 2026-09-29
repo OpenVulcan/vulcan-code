@@ -4,6 +4,8 @@
 use crate::{SharedServiceBridgeState, service_vulcan_plugin_runtime};
 use vulcan_plugin_runtime::{VulcanPluginRuntimeError, VulcanPluginRuntimeManager};
 
+pub(crate) mod prewarm;
+
 /// Run operation against state's exact manager on the blocking executor; return its original result.
 /// 在阻塞执行器上针对 state 的精确管理器运行 operation；返回其原始结果。
 /// HTTP observer cancellation does not undo an accepted native or persistent mutation; receipts remain queryable.

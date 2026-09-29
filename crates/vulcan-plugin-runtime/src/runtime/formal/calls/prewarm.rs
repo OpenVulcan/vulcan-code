@@ -96,6 +96,42 @@ impl VulcanPluginRuntimeManager {
         call.status()
     }
 
+    /// Resume only retained cleanup for id under its original owner_session_id; never replay initialization.
+    /// 仅在原 owner_session_id 下恢复 id 的保留清理；绝不重放初始化。
+    /// Returns current original evidence; active or already retired receipts remain unchanged.
+    /// 返回当前原始证据；活动或已经退役的回执保持不变。
+    pub fn recover_reusable_tool_prewarm_cleanup(
+        &self,
+        id: &str,
+        owner_session_id: &str,
+    ) -> Result<VulcanPluginFormalCallStatus, VulcanPluginRuntimeError> {
+        // Resolve the existing owner and exact controller receipt before inspecting its target kind.
+        // 在检查目标类型前解析既有所有者及精确控制器回执。
+        let owner = self.required_formal_owner()?;
+        // Recovery cannot create or replace the retained invocation.
+        // 恢复不能创建或替换保留调用。
+        let call = owned_call(&owner, id, owner_session_id)?;
+        // Capture only original supervision evidence, not inferred VM idleness.
+        // 仅捕获原监督证据，不推断 VM 空闲状态。
+        let status = call.status()?;
+        if status.prewarm.is_none() {
+            return Err(VulcanPluginRuntimeError::new(
+                "Formal invocation is not a prewarm target.",
+            ));
+        }
+        if status.requires_cleanup_recovery {
+            // Reject missing executor before the cleanup helper transfers supervision ownership.
+            // 在清理帮助函数转移监督归属前拒绝缺失执行器。
+            tokio::runtime::Handle::try_current().map_err(|error| {
+                VulcanPluginRuntimeError::new(format!(
+                    "Prewarm cleanup requires an executor: {error}"
+                ))
+            })?;
+            self.resume_formal_cleanup(&owner, &call)?;
+        }
+        call.status()
+    }
+
     /// Resolve request against one enabled catalog and owner; target selects bounded convergence or one addition.
     /// 按单个已启用目录及 owner 解析 request；target 选择有界收敛或单次增加。
     /// Return the original descriptor and deadline-bearing preparation, without creating a VM.
