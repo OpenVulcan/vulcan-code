@@ -1,6 +1,96 @@
 //! Real transaction locks and immutable packages exercise unpublished MCP preparation.
 //! 通过真实事务锁与不可变插件包验证未发布 MCP 准备。
 
+/// Keeps actual prepared launch files alive against both production cleanup entry points.
+/// 对两条生产清理入口保留实际准备启动文件。
+/// No inputs; asserts shared ownership across clones and independent managers until final release.
+/// 无输入；断言克隆与独立管理器之间的共享所有权直至最后释放。
+#[test]
+fn prepared_mcp_candidate_blocks_environment_reclamation_until_last_owner() {
+    // Use the current host declaration without executing its inert fixture binary.
+    // 使用当前宿主声明，不执行其惰性夹具二进制。
+    let fixture = fixture(
+        Some(crate::runtime::process::current_plugin_target_triple().expect("host platform")),
+        false,
+    );
+    // The inspected view supplies the unchanged original request authority.
+    // 已检查视图提供未改变的原请求权威。
+    let candidate = fixture
+        .store
+        .inspect_activation_candidate(&fixture.transaction)
+        .expect("inspect candidate authority");
+    // Preparation owns the actual environment lease before resolving its launch files.
+    // 准备在解析启动文件前拥有实际环境租约。
+    let prepared = fixture
+        .manager
+        .prepare_mcp_activation_candidate(&candidate)
+        .expect("prepare candidate environment");
+    // Keep the clone after releasing the foreground prepared object.
+    // 释放前台准备对象后保留克隆。
+    let retained = prepared.clone();
+    // This path must remain usable throughout the shared owner's lifetime.
+    // 此路径必须在共享所有者存续期间始终可用。
+    let program = prepared
+        .stdio_launcher("local")
+        .expect("local launcher")
+        .program
+        .clone();
+    // The cleanup identity comes from the exact inspected package.
+    // 清理身份来自精确已检查插件包。
+    let plugin = candidate.package();
+    // A separate manager proves filesystem exclusion rather than local manager bookkeeping.
+    // 独立管理器证明文件系统互斥，而非本地管理器记账。
+    let cleanup_manager = manager(fixture._temp.path());
+    drop(prepared);
+    assert!(
+        crate::runtime::environment::remove_plugin_execution_environment_generation(
+            &cleanup_manager.state,
+            &plugin.id,
+            plugin.version.as_deref().expect("validated version"),
+            &plugin.content_fingerprint,
+        )
+        .is_err(),
+        "live candidate environment must reject targeted deletion"
+    );
+    assert!(
+        program.is_file(),
+        "failed cleanup must preserve exact launch bytes"
+    );
+    assert!(
+        crate::runtime::environment::remove_obsolete_plugin_execution_environments(
+            &cleanup_manager.state,
+            &plugin.id,
+            "2.0.0",
+            "new-generation",
+        )
+        .is_err(),
+        "whole-version cleanup must respect the same owner"
+    );
+    assert!(program.is_file());
+    drop(retained);
+    crate::runtime::environment::remove_obsolete_plugin_execution_environments(
+        &cleanup_manager.state,
+        &plugin.id,
+        "2.0.0",
+        "new-generation",
+    )
+    .expect("final owner release permits reclamation");
+    assert!(!program.exists());
+    // A later preparation must use the permanent same lock identity after environment recreation.
+    // 环境重新创建后的准备必须使用永久的同一锁身份。
+    let reopened = fixture
+        .manager
+        .prepare_mcp_activation_candidate(&candidate)
+        .expect("recreate released environment");
+    assert!(
+        reopened
+            .stdio_launcher("local")
+            .expect("recreated launcher")
+            .program
+            .is_file()
+    );
+}
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -437,6 +527,15 @@ fn failed_mcp_launcher_preparation_releases_original_request() {
             .manager
             .prepare_mcp_activation_candidate(&candidate)
             .expect_err("existing environment has no valid completion marker");
+        // Failure must also release the new environment owner while the original transaction remains held.
+        // 原事务仍被持有时，失败也必须释放新增环境所有者。
+        crate::runtime::environment::remove_plugin_execution_environment_generation(
+            &fixture.manager.state,
+            &plugin.id,
+            plugin.version.as_deref().expect("version"),
+            &plugin.content_fingerprint,
+        )
+        .expect("failed preparation released execution environment lease");
     }
     drop(fixture.transaction);
     // A distinct reacquisition proves the failed materializer retained no hidden exclusive owner.

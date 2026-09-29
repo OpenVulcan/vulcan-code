@@ -901,6 +901,19 @@ impl VulcanPluginRuntimeManager {
             .iter()
             .map(|path| read_optional_plugin_state_file(path).map(|bytes| (path.clone(), bytes)))
             .collect::<Result<Vec<_>, _>>()?;
+        // Keep uninstall outside all live environment use before any package or configuration mutation.
+        // 在任何插件包或配置变更前，使卸载避开全部存续环境使用。
+        let _environment_cleanup = if self.state.plugin_runtime_root.exists() {
+            Some(
+                super::environment::lock_plugin_execution_environment_cleanup(
+                    &self.state,
+                    plugin_id,
+                )
+                .map_err(VulcanPluginRuntimeError::new)?,
+            )
+        } else {
+            None
+        };
         // runtime_directory is canonicalized before any recursive removal authority is granted.
         // runtime_directory 在授予递归移除权限前完成规范化。
         let runtime_directory = self.state.plugin_runtime_root.join(plugin_id);

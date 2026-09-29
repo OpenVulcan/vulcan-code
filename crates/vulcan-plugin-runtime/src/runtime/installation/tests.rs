@@ -417,6 +417,28 @@ fn user_plugin_install_environment_and_uninstall_are_transactional() {
             .join(".vulcan-plugin-environment.json")
             .is_file()
     );
+    // A prepared resource owner must block uninstall before package and state mutations begin.
+    // 准备资源所有者必须在插件包及状态变更开始前阻止卸载。
+    let environment_owner = crate::runtime::environment::retain_plugin_execution_environment(
+        &manager.state,
+        "local-plugin",
+    )
+    .expect("retain execution environment");
+    manager
+        .uninstall_user_plugin("local-plugin")
+        .expect_err("live environment blocks uninstall");
+    assert!(runtime_root.join("user_plugins/local-plugin").is_dir());
+    assert!(
+        runtime_root
+            .join("plugin_state/local-plugin/authorization.json")
+            .is_file()
+    );
+    assert!(
+        environment
+            .join(".vulcan-plugin-environment.json")
+            .is_file()
+    );
+    drop(environment_owner);
     manager
         .uninstall_user_plugin("local-plugin")
         .expect("uninstall local user plugin");

@@ -20,6 +20,10 @@ use std::process::Command;
 use uuid::Uuid;
 use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 
+mod leases;
+pub(super) use leases::lock_plugin_execution_environment_cleanup;
+pub(super) use leases::retain_plugin_execution_environment;
+
 /// Windows creation flag that prevents a console window for a child process.
 /// 防止子进程创建控制台窗口的 Windows 创建标志。
 #[cfg(windows)]
@@ -125,6 +129,9 @@ pub(super) fn ensure_plugin_execution_environment(
         .version
         .as_deref()
         .ok_or_else(|| format!("Vulcan plugin `{}` has no validated version.", plugin.id))?;
+    // Keep builders and their staging directories outside every cleanup's exclusive interval.
+    // 让构建者及其暂存目录避开所有清理的排他区间。
+    let _environment = retain_plugin_execution_environment(state, &plugin.id)?;
     fs::create_dir_all(&state.plugin_runtime_root).map_err(|error| {
         format!(
             "Failed to create Vulcan plugin runtime root `{}`: {error}",
@@ -400,6 +407,12 @@ pub(super) fn remove_plugin_execution_environment_generation(
     version: &str,
     fingerprint: &str,
 ) -> Result<(), String> {
+    // Absence is a no-op; an existing root must be exclusively owned before inspecting descendants.
+    // 根缺失时无需处理；根存在时须先排他持有再检查下级目录。
+    if !state.plugin_runtime_root.exists() {
+        return Ok(());
+    }
+    let _cleanup = lock_plugin_execution_environment_cleanup(state, plugin_id)?;
     let environment = state
         .plugin_runtime_root
         .join(plugin_id)
@@ -484,6 +497,12 @@ pub(super) fn remove_obsolete_plugin_execution_environments(
     current_version: &str,
     current_fingerprint: &str,
 ) -> Result<(), String> {
+    // Absence is a no-op; an existing root must be exclusively owned before inspecting descendants.
+    // 根缺失时无需处理；根存在时须先排他持有再检查下级目录。
+    if !state.plugin_runtime_root.exists() {
+        return Ok(());
+    }
+    let _cleanup = lock_plugin_execution_environment_cleanup(state, plugin_id)?;
     let plugin_root = state.plugin_runtime_root.join(plugin_id);
     if !plugin_root.exists() {
         return Ok(());

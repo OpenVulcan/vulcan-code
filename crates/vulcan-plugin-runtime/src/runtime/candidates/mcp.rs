@@ -39,6 +39,9 @@ struct PreparedCandidateMcpResources {
     /// Original exclusive request ownership survives every clone of this prepared candidate.
     /// 原排他请求所有权在此准备候选的每个克隆期间存续。
     _readiness: Arc<std::fs::File>,
+    /// Stdio candidates retain the actual execution-copy lease before any launcher is prepared.
+    /// 标准输入输出候选在任何启动器准备前保留实际执行副本租约。
+    _environment: Option<std::fs::File>,
 }
 
 impl fmt::Debug for VulcanPluginPreparedMcpCandidate {
@@ -119,6 +122,24 @@ impl VulcanPluginRuntimeManager {
         // Only stdio declarations need a filesystem launcher; remote declarations remain unchanged.
         // 仅标准输入输出声明需要文件系统启动器；远端声明保持不变。
         let mut stdio_launchers = BTreeMap::new();
+        // Remote-only candidates need no local execution copy or filesystem lease.
+        // 纯远端候选无需本地执行副本或文件系统租约。
+        let environment = if plugin.mcp_servers.iter().any(|server| {
+            matches!(
+                server.manifest.transport,
+                VulcanPluginMcpTransportManifest::Stdio { .. }
+            )
+        }) {
+            Some(
+                super::super::environment::retain_plugin_execution_environment(
+                    &self.state,
+                    &plugin.id,
+                )
+                .map_err(VulcanPluginRuntimeError::new)?,
+            )
+        } else {
+            None
+        };
         for server in &plugin.mcp_servers {
             if let VulcanPluginMcpTransportManifest::Stdio { launcher, .. } =
                 &server.manifest.transport
@@ -139,6 +160,7 @@ impl VulcanPluginRuntimeManager {
                 request_id: candidate.transaction_record().request_id(),
                 stdio_launchers,
                 _readiness: readiness,
+                _environment: environment,
             }),
         })
     }
