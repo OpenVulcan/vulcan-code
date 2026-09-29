@@ -54,8 +54,12 @@ fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
             .expect("inspect candidate");
         // All private call authority derives from that exact view.
         // 全部私有调用权威从该精确视图派生。
-        let authority = CandidateExecution::new(&fixture.manager.state, &candidate)
-            .expect("candidate authority");
+        let authority = CandidateExecution::new(
+            &fixture.manager.state,
+            &candidate,
+            CandidateOperation::Probe,
+        )
+        .expect("candidate authority");
         for _ in 1..owner.settings.parent.max_operations {
             // Register genuine inert preparation; each receipt consumes real parent history.
             // 登记真实惰性准备；每个回执消耗实际父级历史容量。
@@ -82,6 +86,17 @@ fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
             call.acknowledged.store(true, Ordering::Release);
         }
         executor().block_on(async {
+            // Retained probes also prevent an installation from entering the same request.
+            // 保留探测同样阻止安装进入相同请求。
+            assert!(
+                fixture
+                    .manager
+                    .install_activation_candidate(&candidate)
+                    .await
+                    .expect_err("install cannot overlap retained probes")
+                    .message
+                    .contains("conflicts with retained work")
+            );
             // Public candidate admission must fail at the original retained-history ceiling.
             // 公开候选入场必须在原保留历史上限处失败。
             let failure = fixture
@@ -94,7 +109,7 @@ fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
             // 即使插件命名空间相同，也只排空原候选记录。
             let report = fixture
                 .manager
-                .drain_activation_candidate_probes(request_id)
+                .drain_activation_candidate_calls(request_id)
                 .await
                 .expect("drain original candidate records");
             assert!(report.failures.is_empty());
@@ -142,6 +157,8 @@ use crate::{
     VulcanPluginStoreErrorCode,
 };
 
+mod installation;
+
 /// No secret slots are declared; any unexpected backend access makes staging fail explicitly.
 /// 未声明秘密槽位；任何意外后端访问都会使暂存明确失败。
 struct NoSecrets;
@@ -184,7 +201,7 @@ impl VulcanPluginCredentialBackend for NoSecrets {
 /// 在 fixture 实际用户根目录下准备 source，并返回真正未发布的配置事务。
 /// publish_predecessor selects an update whose prior configuration intentionally differs from the candidate.
 /// publish_predecessor 选择前驱配置刻意不同于候选的更新。
-fn transaction_for(
+pub(super) fn transaction_for(
     fixture: &Fixture,
     source: &Path,
     publish_predecessor: bool,
@@ -548,7 +565,7 @@ fn formal_candidate_probe_cancellation_retains_original_request_ownership() {
         // 另一请求的排空不能声称拥有此实际操作。
         let unrelated = fixture
             .manager
-            .drain_activation_candidate_probes(Uuid::new_v4())
+            .drain_activation_candidate_calls(Uuid::new_v4())
             .await
             .expect("different request drain");
         assert_eq!(unrelated.closed_formal_calls, 0);
@@ -576,7 +593,7 @@ fn formal_candidate_probe_cancellation_retains_original_request_ownership() {
         fixture.events.release();
         fixture
             .manager
-            .drain_activation_candidate_probes(request_id)
+            .drain_activation_candidate_calls(request_id)
             .await
             .expect("finish original cleanup");
         authority_retired(&authority).await;
@@ -614,7 +631,7 @@ fn formal_candidate_probe_deadline_preserves_native_ownership() {
         // 运行精确生产实现，保留其原宿主回执。
         let result = fixture
             .manager
-            .invoke_formal_candidate_probe(&candidate, deadline)
+            .invoke_formal_candidate_operation(&candidate, CandidateOperation::Probe, deadline)
             .await;
         assert!(fixture.events.entered.load(Ordering::Acquire));
         assert!(
@@ -661,7 +678,7 @@ fn formal_candidate_probe_deadline_preserves_native_ownership() {
             WAIT,
             fixture
                 .manager
-                .drain_activation_candidate_probes(transaction.record().request_id()),
+                .drain_activation_candidate_calls(transaction.record().request_id()),
         )
         .await
         .expect("finite candidate drain observation")
@@ -679,7 +696,7 @@ fn formal_candidate_probe_deadline_preserves_native_ownership() {
         fixture.events.release();
         fixture
             .manager
-            .drain_activation_candidate_probes(transaction.record().request_id())
+            .drain_activation_candidate_calls(transaction.record().request_id())
             .await
             .expect("drain timed original call");
         authority_retired(&authority).await;

@@ -102,8 +102,8 @@ impl VulcanPluginEmbeddedHost {
         )
     }
 
-    /// Register one tracked call in capacity_id, retaining candidate ownership only for explicit unpublished probes.
-    /// 在 capacity_id 中注册单个受跟踪调用，仅为显式未发布探测保留候选所有权。
+    /// Register one tracked call in capacity_id, retaining candidate ownership only for explicit unpublished operations.
+    /// 在 capacity_id 中注册单个受跟踪调用，仅为显式未发布操作保留候选所有权。
     /// request keeps the original manifest and policy; returns its actual core pool without publishing a catalog.
     /// request 保留原清单及策略；返回实际核心池，不发布目录。
     pub(in crate::runtime) fn register_call_bundle_pool_in_capacity(
@@ -115,7 +115,7 @@ impl VulcanPluginEmbeddedHost {
         if candidate.is_some() && request.finalizer.is_some() {
             return Err(error(
                 EmbeddedErrorCode::InvalidArgument,
-                "Candidate probes cannot select a business finalizer.",
+                "Candidate operations cannot select a business finalizer.",
             ));
         }
         self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, candidate)

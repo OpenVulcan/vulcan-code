@@ -104,16 +104,16 @@ struct ExecutionAuthority {
     /// Exact draining generation granted by the manager; zero means no transition grant.
     /// 管理器授予的精确排空代次；零表示没有转换授权。
     closing_generation: AtomicU64,
-    /// Only explicitly admitted unpublished probes carry this real transaction readiness owner.
-    /// 仅明确接纳的未发布探测携带此实际事务就绪所有者。
+    /// Only explicitly admitted unpublished operations carry this real transaction readiness owner.
+    /// 仅明确接纳的未发布操作携带此实际事务就绪所有者。
     candidate: Option<Arc<CandidateExecution>>,
 }
 
 /// Host-selected lifecycle scope and optional private candidate authority form one pool admission.
 /// 宿主选择的生命周期作用域与可选私有候选权威构成单个池入场。
 struct PoolAdmission {
-    /// Published routes require their current lifecycle state; candidates accept only probe scope.
-    /// 已发布路由要求其当前生命周期状态；候选仅接受探测作用域。
+    /// Published routes require current lifecycle state; candidates require their exact operation scope.
+    /// 已发布路由要求当前生命周期状态；候选要求精确操作作用域。
     scope: VulcanPluginBridgeLeaseScope,
     /// Absence explicitly chooses ordinary published authority.
     /// 缺失明确选择普通已发布权威。

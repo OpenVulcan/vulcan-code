@@ -24,51 +24,93 @@ impl VulcanPluginRuntimeManager {
             .ok_or_else(|| {
                 VulcanPluginRuntimeError::new("Candidate probe deadline is out of range.")
             })?;
-        self.invoke_formal_candidate_probe(candidate, deadline)
+        self.invoke_formal_candidate_operation(candidate, CandidateOperation::Probe, deadline)
             .await
     }
 
-    /// Run candidate under the original absolute deadline; return the existing tracked call's result.
-    /// 在原绝对 deadline 下运行 candidate；返回既有受跟踪调用的结果。
-    pub(super) async fn invoke_formal_candidate_probe(
+    /// Invoke candidate's declared install callback with the original lifecycle envelope and bounded observation.
+    /// 使用原生命周期信封及有界观测调用 candidate 声明的安装回调。
+    /// Returns the actual callback result after cleanup; absent declarations succeed without executing Lua.
+    /// 清理后返回实际回调结果；缺失声明直接成功，不执行 Lua。
+    /// Explicit calls may have external effects; this is neither a durable success receipt nor automatic retry permission.
+    /// 显式调用可能具有外部副作用；此入口不是持久成功回执，也不授予自动重试权限。
+    pub async fn install_activation_candidate(
         &self,
         candidate: &VulcanPluginActivationCandidate<'_>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Lifecycle preparation and execution share the existing lifecycle budget from API entry.
+        // 从 API 入口起，生命周期准备与执行共享既有生命周期预算。
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Candidate installation deadline is out of range.")
+            })?;
+        self.invoke_formal_candidate_operation(candidate, CandidateOperation::Install, deadline)
+            .await
+    }
+
+    /// Run candidate's exact operation under the original deadline; return its tracked result without replay.
+    /// 在原 deadline 下运行 candidate 精确 operation；返回受跟踪结果，不重放。
+    pub(super) async fn invoke_formal_candidate_operation(
+        &self,
+        candidate: &VulcanPluginActivationCandidate<'_>,
+        operation: CandidateOperation,
         deadline: Instant,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        // Only an actual inspected transaction can create this private execution authority.
-        // 只有实际已检查事务可以创建此私有执行权威。
-        let authority = CandidateExecution::new(&self.state, candidate)?;
-        // Validated content-only packages have no module initialization to run.
-        // 已校验纯内容插件包没有需要运行的模块初始化。
+        // Only an inspected transaction can create the operation's exact unpublished authority.
+        // 只有已检查事务可以创建操作的精确未发布权威。
+        let authority = CandidateExecution::new(&self.state, candidate, operation)?;
+        // Preserve the existing no-callback contract for content-only packages.
+        // 为纯内容插件包保留既有无回调契约。
         let manifest = authority.plugin.manifest.as_ref().ok_or_else(|| {
             VulcanPluginRuntimeError::new("Activation candidate has no valid manifest.")
         })?;
-        if !manifest.has_lua_runtime() {
+        let Some(lua_runtime) = &manifest.lua_runtime else {
             return Ok(());
-        }
-        self.validate_plugin_requirements_in_scope(
-            &authority.plugin,
-            VulcanPluginBridgeLeaseScope::EnablingProbe,
-        )?;
-        // This is the already attached parent; candidate validation cannot create another scheduler.
-        // 此对象为已经附加的父级；候选校验不能创建另一个调度器。
+        };
+        // Installation is selected from the frozen declaration; callers cannot name an arbitrary export.
+        // 安装从固定声明选择；调用方不能指定任意导出。
+        let install = match operation {
+            CandidateOperation::Probe => None,
+            CandidateOperation::Install => {
+                let Some(function) = &lua_runtime.lifecycle.install else {
+                    return Ok(());
+                };
+                Some(function.clone())
+            }
+        };
+        // Scope is derived from the typed operation and remains fixed through native cleanup.
+        // 作用域从类型化操作派生，并在原生清理期间持续固定。
+        let scope = operation.scope();
+        self.validate_plugin_requirements_in_scope(&authority.plugin, scope)?;
+        // This is the existing parent; candidate work cannot allocate a replacement scheduler.
+        // 此对象为既有父级；候选工作不能分配替代调度器。
         let owner = self.required_formal_owner()?;
-        // The frozen descriptor is retained independently of any public catalog observation.
-        // 固定描述符独立于任何公开目录观测保留。
+        // The target remains independent from all public catalog observations.
+        // 目标持续独立于全部公开目录观测。
         let plugin = authority.plugin.clone();
-        // Retain the original request identity for timeout diagnostics after admission consumes its authority.
-        // 在入场消费权威后仍为超时诊断保留原请求身份。
+        // Timeout diagnostics retain the exact original durable request.
+        // 超时诊断保留精确原持久请求。
         let request_id = authority.request_id;
-        // Candidate work receives the existing preparation, byte accounting and cancellation supervision.
-        // 候选工作使用既有准备、字节计量及取消监督。
+        // The declaration decides the original lifecycle envelope; preparation adds its trusted environment path.
+        // 声明决定原生命周期信封；准备过程加入可信环境路径。
+        let (admission, arguments) = match install {
+            Some(export) => (
+                CallAdmission::CandidateInstall { authority, export },
+                json!({"event":"install","plugin_id":plugin.id}),
+            ),
+            None => (CallAdmission::CandidateProbe { authority }, json!({})),
+        };
+        // Both operations retain original byte accounting, deadlines and actual resource supervision.
+        // 两种操作均保留原字节计量、截止时间及实际资源监督。
         let input = Preparation {
             workspace: CallWorkspace::LifecycleEnvironment,
-            arguments: json!({}),
+            arguments,
             finalizer: None,
-            scope: VulcanPluginBridgeLeaseScope::EnablingProbe,
-            security_partition: format!("candidate:{}:{}", plugin.id, authority.request_id),
+            scope,
+            security_partition: format!("candidate:{}:{request_id}:{}", plugin.id, scope.as_str()),
             deadline,
-            admission: CallAdmission::CandidateProbe { authority },
+            admission,
         };
         tokio::time::timeout_at(
             tokio::time::Instant::from_std(deadline),
@@ -76,7 +118,7 @@ impl VulcanPluginRuntimeManager {
         )
         .await
         .map_err(|_| VulcanPluginRuntimeError::new(format!(
-            "Activation candidate probe {request_id} timed out; inspect its original calls for actual retirement."
+            "Activation candidate {request_id} timed out; inspect its original calls for actual retirement."
         )))?
         .map(|_| ())
     }
@@ -108,11 +150,11 @@ impl VulcanPluginRuntimeManager {
             .collect()
     }
 
-    /// Cancel and drain currently admitted candidate probes for request_id, leaving ordinary plugin calls untouched.
-    /// 取消并排空 request_id 当前已接纳候选探测，保持普通插件调用不变。
+    /// Cancel and drain currently admitted candidate calls for request_id, leaving ordinary plugin calls untouched.
+    /// 取消并排空 request_id 当前已接纳候选调用，保持普通插件调用不变。
     /// Returns exact original-call cleanup evidence; unfinished work continues to fence storage mutation.
     /// 返回精确原调用清理证据；未完成工作继续阻止存储变更。
-    pub async fn drain_activation_candidate_probes(
+    pub async fn drain_activation_candidate_calls(
         &self,
         request_id: Uuid,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {

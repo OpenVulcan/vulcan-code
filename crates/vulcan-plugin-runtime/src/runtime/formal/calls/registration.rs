@@ -24,7 +24,10 @@ impl VulcanPluginRuntimeManager {
         if state.pending.is_none() || state.supervised {
             return Ok(());
         }
-        if !matches!(call.ownership, CallOwner::Probe) {
+        if call
+            .ownership
+            .retains_published_slot(call.candidate.is_some())
+        {
             self.release_session_slot_with_publication(&call.plugin.id, &publication)?;
         }
         state.pending.take();
@@ -125,6 +128,21 @@ impl VulcanPluginRuntimeManager {
             // Hold the shared call registry while inspecting or changing retained ownership.
             // 检查或变更保留所有权期间持有共享调用注册表。
             let mut calls = owner.calls.lock().map_err(|_| calls_error())?;
+            // Installation effects cannot overlap any retained work for the same durable request.
+            // 安装副作用不能与同一持久请求的任何保留工作重叠。
+            if let Some(candidate) = input.admission.candidate()
+                && calls.values().any(|call| {
+                    call.candidate.as_ref().is_some_and(|original| {
+                        original.request_id == candidate.request_id
+                            && (original.operation == CandidateOperation::Install
+                                || candidate.operation == CandidateOperation::Install)
+                    })
+                })
+            {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Activation candidate installation conflicts with retained work for the original request.",
+                ));
+            }
             // Automatic retries observe the same original intent before any new quota or deadline is retained.
             // 自动重试在保留任何新配额或截止时间前观测同一原意图。
             if let Some(original) = prewarm::automatic::original_call(&calls, &input.admission)? {
@@ -174,7 +192,7 @@ impl VulcanPluginRuntimeManager {
                     "Formal plugin runtime is closing.",
                 ));
             }
-            if !matches!(ownership, CallOwner::Probe) {
+            if ownership.retains_published_slot(input.admission.candidate().is_some()) {
                 self.reserve_session_slot_locked(&plugin.id, maximum, &publication)?;
             }
             // Keep the exact invocation record independently of its observer.

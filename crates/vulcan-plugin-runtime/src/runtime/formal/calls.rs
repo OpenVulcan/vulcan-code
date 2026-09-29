@@ -2,7 +2,7 @@
 //! 单次工具、生命周期、瞬时 Action 及探测执行的有界宿主所有权。
 
 use super::*;
-use crate::runtime::candidates::CandidateExecution;
+use crate::runtime::candidates::{CandidateExecution, CandidateOperation};
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
@@ -47,6 +47,14 @@ enum CallOwner {
 }
 
 impl CallOwner {
+    /// Return whether admission must retain a published catalog session slot for this owner.
+    /// 返回入场是否必须为此所有者保留已发布目录会话槽位。
+    /// Unpublished work has no public row; original parent, plugin and purpose budgets still apply.
+    /// 未发布工作没有公开行；原父级、插件及用途预算仍然生效。
+    fn retains_published_slot(&self, unpublished: bool) -> bool {
+        !unpublished && !matches!(self, Self::Probe)
+    }
+
     /// Return the exact controller ID, or none for internal host calls.
     /// 返回精确控制器标识；宿主内部调用返回空值。
     fn controller_id(&self) -> Option<&str> {
@@ -210,6 +218,16 @@ enum CallAdmission {
         /// 宿主从已检查且仍处于准备阶段的事务构造此权威。
         authority: Arc<CandidateExecution>,
     },
+    /// One unpublished installation callback retains its exact target without publishing it.
+    /// 单个未发布安装回调保留精确目标，不发布它。
+    CandidateInstall {
+        /// Exact installation-only transaction authority remains alive through real cleanup.
+        /// 精确仅限安装的事务权威保留至实际清理。
+        authority: Arc<CandidateExecution>,
+        /// Function is selected only from the inspected manifest's installation declaration.
+        /// 函数仅从已检查清单安装声明选择。
+        export: String,
+    },
 }
 
 impl CallAdmission {
@@ -220,7 +238,9 @@ impl CallAdmission {
             Self::Controller { .. } | Self::Prewarm { .. } | Self::PrewarmTarget { .. } => {
                 VulcanPluginCapacityPurpose::ToolCall
             }
-            Self::Lifecycle { .. } => VulcanPluginCapacityPurpose::Lifecycle,
+            Self::Lifecycle { .. } | Self::CandidateInstall { .. } => {
+                VulcanPluginCapacityPurpose::Lifecycle
+            }
             Self::Action { .. } => VulcanPluginCapacityPurpose::UiAction,
             Self::Probe | Self::CandidateProbe { .. } => {
                 VulcanPluginCapacityPurpose::ActivationProbe
@@ -241,7 +261,7 @@ impl CallAdmission {
             Self::PrewarmTarget { request, .. } => {
                 CallOwner::Controller(request.owner_session_id.clone())
             }
-            Self::Lifecycle { .. } => CallOwner::Lifecycle,
+            Self::Lifecycle { .. } | Self::CandidateInstall { .. } => CallOwner::Lifecycle,
             Self::Action { .. } => CallOwner::Action,
             Self::Probe | Self::CandidateProbe { .. } => CallOwner::Probe,
         }
@@ -253,6 +273,7 @@ impl CallAdmission {
         match self {
             Self::Controller { export, .. }
             | Self::Lifecycle { export }
+            | Self::CandidateInstall { export, .. }
             | Self::Action { export, .. } => Some(export),
             Self::Probe
             | Self::CandidateProbe { .. }
@@ -270,11 +291,13 @@ impl CallAdmission {
         )
     }
 
-    /// Borrow private readiness authority only for the explicit candidate probe admission.
-    /// 仅为显式候选探测入场借用私有就绪权威。
+    /// Borrow private readiness authority only for an explicit candidate admission.
+    /// 仅为显式候选入场借用私有就绪权威。
     fn candidate(&self) -> Option<&Arc<CandidateExecution>> {
         match self {
-            Self::CandidateProbe { authority } => Some(authority),
+            Self::CandidateProbe { authority } | Self::CandidateInstall { authority, .. } => {
+                Some(authority)
+            }
             _ => None,
         }
     }
@@ -1191,7 +1214,10 @@ impl VulcanPluginRuntimeManager {
                 }
             }
         }
-        if !matches!(call.ownership, CallOwner::Probe) {
+        if call
+            .ownership
+            .retains_published_slot(call.candidate.is_some())
+        {
             self.release_session_slot_checked(&call.plugin.id)?;
         }
         // Physical Action capacity outlives every core session, request scope and pool checkpoint.

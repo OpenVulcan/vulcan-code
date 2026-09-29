@@ -24,8 +24,10 @@ use std::path::{Path, PathBuf};
 
 /// Resolve validated process arguments against the caller's exact retained plugin and workspace.
 /// 针对调用方保留的精确插件及工作区解析已校验进程参数。
-/// Return the original launch specification; intersect its permissions with current authorization only.
-/// 返回原启动规格；仅将其权限与当前授权取交集。
+/// Return the original launch specification; candidate carries exact transaction authorization when present.
+/// 返回原启动规格；candidate 存在时携带精确事务授权。
+/// Published calls continue to intersect their original permissions with current grants.
+/// 已发布调用继续将原权限与当前授权取交集。
 /// Current catalog data cannot replace original executable declarations, package paths or environment identity.
 /// 当前目录数据不能替换原可执行声明、包路径或环境身份。
 pub(super) fn resolve_plugin_process_for_snapshot(
@@ -33,6 +35,7 @@ pub(super) fn resolve_plugin_process_for_snapshot(
     plugin: &crate::VulcanPluginDescriptor,
     workspace_root: &Path,
     payload: &Map<String, Value>,
+    candidate: Option<&super::candidates::CandidateExecution>,
 ) -> Result<Value, String> {
     // The package ID, process declarations and dependency environment share one frozen owner.
     // 包 ID、进程声明及依赖环境共用一个冻结所有者。
@@ -54,23 +57,33 @@ pub(super) fn resolve_plugin_process_for_snapshot(
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` has no valid manifest."))?;
     // Permission withdrawal applies to the exact process subtype and session mode as well as its broad capability.
     // 权限撤回除宽泛能力外，也适用于精确进程子类型及会话模式。
-    let current_permissions = {
-        // Read authorization only; all executable and environment fields keep their original owner.
-        // 仅读取授权；全部可执行及环境字段保留原所有者。
-        let snapshot = state
-            .snapshot
-            .read()
-            .map_err(|_| "Plugin catalog lock is poisoned.".to_string())?;
-        let current = snapshot
-            .plugins
-            .get(plugin_id)
-            .ok_or_else(|| "Plugin is no longer installed.".to_string())?;
-        current
-            .manifest
-            .as_ref()
-            .ok_or_else(|| "Plugin current manifest is unavailable.".to_string())?
-            .permissions
-            .clone()
+    let current_permissions = match candidate {
+        Some(authority) => {
+            // The retained request lock freezes the approved target; a published predecessor is not its permission source.
+            // 保留的请求锁固定已批准目标；已发布前驱不是其权限来源。
+            authority
+                .validate(state, plugin, authority.operation.scope())
+                .map_err(|failure| failure.message)?;
+            manifest.permissions.clone()
+        }
+        None => {
+            // Ordinary calls continue to intersect their original declaration with live permission withdrawal.
+            // 普通调用继续将原声明与实时权限撤回取交集。
+            let snapshot = state
+                .snapshot
+                .read()
+                .map_err(|_| "Plugin catalog lock is poisoned.".to_string())?;
+            let current = snapshot
+                .plugins
+                .get(plugin_id)
+                .ok_or_else(|| "Plugin is no longer installed.".to_string())?;
+            current
+                .manifest
+                .as_ref()
+                .ok_or_else(|| "Plugin current manifest is unavailable.".to_string())?
+                .permissions
+                .clone()
+        }
     };
     // Require both the original declaration and current grant for one exact permission.
     // 对单个精确权限同时要求原声明及当前授权。
@@ -220,7 +233,7 @@ pub(super) fn resolve_plugin_process_spec(
             scope.as_str()
         ));
     }
-    resolve_plugin_process_for_snapshot(state, &plugin, &workspace, payload)
+    resolve_plugin_process_for_snapshot(state, &plugin, &workspace, payload, None)
 }
 
 /// Resolves one plugin MCP stdio launcher into an exact managed process specification.
