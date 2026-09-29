@@ -9,6 +9,101 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// 真实远程生命周期夹具共用的一项有界期限。
 const REMOTE_OBSERVE: Duration = Duration::from_secs(5);
 
+/// Executor loss releases the registry's actual SSE client even when diagnostic state is retained.
+/// 即使诊断状态被保留，执行器丢失仍释放注册表的实际 SSE 客户端。
+/// No inputs or return; a real OS file lease and a second executor observe final aggregate release.
+/// 无输入与返回值；真实操作系统文件租约及第二执行器观察最终聚合释放。
+#[test]
+fn lost_executor_revokes_actual_sse_owner_from_retained_diagnostics() {
+    // A separately opened actual file detects resource ownership independently of runtime snapshots.
+    // 单独打开的实际文件独立于运行时快照检测资源所有权。
+    let witness = tempfile::NamedTempFile::new().expect("SSE authority witness");
+    // This exclusive owner moves through the exact lifecycle and real HTTP client.
+    // 此排他所有者经精确生命周期移入真实 HTTP 客户端。
+    let lease = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(witness.path())
+        .expect("actual SSE host lease");
+    lease.lock().expect("exclusive host lease");
+    // Aggregate ownership is not retained by the release observer.
+    // 聚合所有权不由释放观察者保留。
+    let (resources, release) = vulcan_mcp_runtime::McpTransportResources::new(lease);
+    // The first executor owns the original production connection and the loopback fixture.
+    // 第一执行器拥有原生产连接及回环夹具。
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("original remote executor");
+    // Keep historical state after all tasks belonging to its original executor are disposed.
+    // 原执行器的全部任务销毁后，仍保留历史状态。
+    let (runtime, fixture) = executor.block_on(async {
+        // Use the real legacy initialize and tools/list exchange.
+        // 使用真实旧式初始化及工具发现交互。
+        let fixture = LegacyServer::start().await;
+        // This isolated declaration uses the same candidate intent without pretending to be a plugin package.
+        // 此隔离声明使用相同候选用途，不冒充插件包。
+        let configuration = McpServerConfig {
+            source: crate::mcp::config::McpServerSource::UserConfigured,
+            id: "lost-executor-sse".into(),
+            name: "Lost executor SSE".into(),
+            enabled: true,
+            transport: crate::mcp::config::McpServerTransportConfig::Sse {
+                url: fixture.uri.clone(),
+                bearer_token: None,
+                headers: BTreeMap::new(),
+                headers_from_env: BTreeMap::new(),
+                oauth: None,
+            },
+        };
+        // The exact supplied authority follows the actual registered transport.
+        // 精确传入权威跟随实际注册传输。
+        let runtime = create_mcp_runtime(
+            vec![configuration],
+            resources,
+            McpRuntimePurpose::CandidateReadiness,
+        )
+        .expect("remote lifecycle");
+        runtime
+            .wait_until_ready(REMOTE_OBSERVE)
+            .await
+            .expect("real SSE readiness");
+        (runtime, fixture)
+    });
+    assert!(matches!(
+        witness.as_file().try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+    drop(executor);
+    drop(fixture);
+    // A different executor queries the original receipt while runtime diagnostics still exist.
+    // 不同执行器在运行时诊断仍存在时查询原回执。
+    let recovery = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("remote recovery executor");
+    // Store the result so cleanup still drops retained foreground state on a regression.
+    // 保存结果，使回归发生时清理仍销毁保留的前台状态。
+    let released =
+        recovery.block_on(async { tokio::time::timeout(REMOTE_OBSERVE, release.wait()).await });
+    // The original state must retain abnormal failure rather than stale connected readiness.
+    // 原状态必须保留异常失败，而非过期的已连接就绪。
+    let states = runtime.server_states();
+    drop(runtime);
+    released
+        .expect("actual SSE client released after executor loss")
+        .expect("aggregate release evidence");
+    assert!(
+        states
+            .iter()
+            .all(|state| state.status == McpRuntimeServerStatus::Failed)
+    );
+    witness
+        .as_file()
+        .try_lock()
+        .expect("real host authority was released");
+}
+
 /// Owns the actual listener and every accepted fixture connection.
 /// 拥有实际监听器及全部已接受夹具连接。
 struct LegacyServer {

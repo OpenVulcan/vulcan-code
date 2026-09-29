@@ -146,7 +146,8 @@ pub(super) async fn refresh_optional(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        McpRuntimeServerStatus, McpRuntimeSnapshot, McpServerRegistry, initial_server_snapshot,
+        McpRuntimePurpose, McpRuntimeServerStatus, McpRuntimeSnapshot, McpServerRegistry,
+        initial_server_snapshot,
     };
     use super::*;
     use std::collections::BTreeMap;
@@ -261,6 +262,7 @@ mod tests {
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
         let inner = Arc::new(McpRuntimeInner {
             registry: McpServerRegistry::new(vec![server.clone()]),
+            purpose: McpRuntimePurpose::Managed,
             transports: RwLock::new(BTreeMap::new()),
             resource_releases: RwLock::new(BTreeMap::new()),
             auth_sessions: tokio::sync::RwLock::new(BTreeMap::new()),

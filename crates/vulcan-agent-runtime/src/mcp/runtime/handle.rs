@@ -1,6 +1,98 @@
 use super::*;
 
+mod candidate;
 mod catalog_refresh;
+mod lifecycle_guard;
+pub use candidate::{CandidatePluginMcpObservation, CandidatePluginMcpRuntime};
+
+/// Explicit runtime intent controls retries without inferring authority from generation numbers.
+/// 显式运行时用途控制重试，不从代次数值推断权威。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum McpRuntimePurpose {
+    /// Published managed connections retain the ordinary bounded restart policy.
+    /// 已发布托管连接保留普通有限重启策略。
+    Managed,
+    /// Unpublished readiness runs once and never automatically replays initialization.
+    /// 未发布就绪仅运行一次，绝不自动重放初始化。
+    CandidateReadiness,
+}
+
+impl McpRuntimePurpose {
+    /// Returns the sole attempt bound for this explicitly declared runtime purpose.
+    /// 返回此明确声明运行时用途的唯一尝试边界。
+    /// No inputs; managed attempts retain the existing bound and candidates are single-shot.
+    /// 无输入；托管尝试保留原上限，候选仅单次尝试。
+    fn maximum_attempts(self) -> u8 {
+        match self {
+            Self::Managed => 5,
+            Self::CandidateReadiness => 1,
+        }
+    }
+}
+
+/// Creates one source-neutral runtime whose actual lifecycle tasks retain the supplied launch scope.
+/// 创建实际生命周期任务保留给定启动范围的中立运行时。
+/// Servers are immutable inputs, resources retains their host authority, and purpose fixes retry behavior.
+/// servers 为不可变输入，resources 保留其宿主权威，purpose 固定重试行为。
+/// Returns control state without retaining resources in historical snapshots; errors precede any task spawn.
+/// 返回不在历史快照中保留资源的控制状态；错误发生在任何任务启动前。
+fn create_mcp_runtime(
+    servers: Vec<McpServerConfig>,
+    resources: vulcan_mcp_runtime::McpTransportResources,
+    purpose: McpRuntimePurpose,
+) -> Result<McpRuntimeHandle, String> {
+    // Reject construction without an active runtime before spawning any lifecycle task.
+    // 在启动任何生命周期任务前拒绝没有活动执行器的构造。
+    tokio::runtime::Handle::try_current()
+        .map_err(|_| String::from("MCP runtime creation requires an active Tokio runtime."))?;
+    // A server identifier has exactly one lifecycle writer and one current launch receipt.
+    // 服务器标识仅有一个生命周期写入者及一个当前启动回执。
+    let mut server_ids = BTreeSet::new();
+    for server in &servers {
+        if !server_ids.insert(&server.id) {
+            return Err(format!("Duplicate MCP server identifier `{}`.", server.id));
+        }
+    }
+    // Keep a single immutable registry for every task in this runtime.
+    // 为此运行时中的每个任务保留唯一不可变注册表。
+    let registry = McpServerRegistry::new(servers);
+    // Every task observes the same latched shutdown request.
+    // 每个任务观察相同锁存关闭请求。
+    let (shutdown_tx, _) = watch::channel(false);
+    // Initialize diagnostic state without storing candidate authority in history.
+    // 初始化诊断状态，不在历史中存储候选权威。
+    let snapshot = McpRuntimeSnapshot {
+        servers: registry
+            .servers()
+            .iter()
+            .map(|server| (server.id.clone(), initial_server_snapshot(server)))
+            .collect(),
+    };
+    // Shared control contains independent receipts rather than owning aggregate resources.
+    // 共享控制包含独立回执，不拥有聚合资源。
+    let inner = Arc::new(McpRuntimeInner {
+        registry: registry.clone(),
+        purpose,
+        transports: RwLock::new(BTreeMap::new()),
+        resource_releases: RwLock::new(BTreeMap::new()),
+        auth_sessions: AsyncRwLock::new(BTreeMap::new()),
+        snapshot: RwLock::new(snapshot),
+        retry_counts: RwLock::new(
+            registry
+                .servers()
+                .iter()
+                .map(|server| (server.id.clone(), 0))
+                .collect(),
+        ),
+        shutdown_tx,
+    });
+
+    for server in registry.enabled_servers() {
+        spawn_server_runtime_task(inner.clone(), server.clone(), resources.clone());
+    }
+
+    Ok(McpRuntimeHandle { inner })
+}
 
 #[cfg(test)]
 mod release_barrier_tests;
@@ -60,6 +152,9 @@ impl std::fmt::Debug for McpRuntimeHandle {
 /// Shared mutable state behind one long-lived MCP runtime handle.
 /// 单个长期 MCP 运行时句柄背后的共享可变状态。
 struct McpRuntimeInner {
+    /// Explicit admission intent fixes whether this exact instance may restart.
+    /// 显式入场用途固定此精确实例是否允许重启。
+    purpose: McpRuntimePurpose,
     /// Runtime registry containing the configured MCP server set.
     /// 包含已配置 MCP 服务器集合的运行时注册表。
     registry: McpServerRegistry,
@@ -574,44 +669,10 @@ fn request_mcp_runtime_shutdown(shutdown_tx: &watch::Sender<bool>) {
 pub(super) async fn bootstrap_mcp_runtime(
     servers: Vec<McpServerConfig>,
 ) -> Result<McpRuntimeHandle, String> {
-    // A server identifier has exactly one lifecycle writer and one current launch receipt.
-    // 服务器标识仅有一个生命周期写入者及一个当前启动回执。
-    let mut server_ids = BTreeSet::new();
-    for server in &servers {
-        if !server_ids.insert(&server.id) {
-            return Err(format!("Duplicate MCP server identifier `{}`.", server.id));
-        }
-    }
-    let registry = McpServerRegistry::new(servers);
-    let (shutdown_tx, _) = watch::channel(false);
-    let snapshot = McpRuntimeSnapshot {
-        servers: registry
-            .servers()
-            .iter()
-            .map(|server| (server.id.clone(), initial_server_snapshot(server)))
-            .collect(),
-    };
-    let inner = Arc::new(McpRuntimeInner {
-        registry: registry.clone(),
-        transports: RwLock::new(BTreeMap::new()),
-        resource_releases: RwLock::new(BTreeMap::new()),
-        auth_sessions: AsyncRwLock::new(BTreeMap::new()),
-        snapshot: RwLock::new(snapshot),
-        retry_counts: RwLock::new(
-            registry
-                .servers()
-                .iter()
-                .map(|server| (server.id.clone(), 0))
-                .collect(),
-        ),
-        shutdown_tx,
-    });
-
-    for server in registry.enabled_servers() {
-        spawn_server_runtime_task(inner.clone(), server.clone());
-    }
-
-    Ok(McpRuntimeHandle { inner })
+    // Ordinary managed partitions use the same ownership path without a candidate host bundle.
+    // 普通托管分区使用相同所有权路径，不附带候选宿主资源包。
+    let (resources, _) = vulcan_mcp_runtime::McpTransportResources::new(());
+    create_mcp_runtime(servers, resources, McpRuntimePurpose::Managed)
 }
 
 /// Owns unpublished MCP runtimes until their access generation is published.
@@ -927,13 +988,29 @@ async fn build_server_auth_session(
 /// `inner` 持有共享注册表、快照、传输、认证缓存与关闭锁存状态。
 /// `server` is the exact enabled server whose connection lifecycle this task owns.
 /// `server` 是本任务持有连接生命周期的精确已启用服务器。
+/// `launch_resources` retains the original authority until this task and all its actual work end.
+/// `launch_resources` 保留原权威，直至此任务及其全部实际工作结束。
 ///
 /// # Returns
 /// 返回值
 /// Returns no handle; the long-lived task exits through the shared latched shutdown state or terminal setup failure.
 /// 不返回句柄；长期任务通过共享锁存关闭状态或终止性初始化失败退出。
-fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfig) {
+fn spawn_server_runtime_task(
+    inner: Arc<McpRuntimeInner>,
+    server: McpServerConfig,
+    launch_resources: vulcan_mcp_runtime::McpTransportResources,
+) {
+    // Construct before spawn so even an unpolled cancelled task owns admission disposal.
+    // 在启动前构造，使未轮询的已取消任务也拥有入场销毁责任。
+    let admission = lifecycle_guard::retain_lifecycle_admission(
+        inner.clone(),
+        &server,
+        launch_resources.clone(),
+    );
     tokio::spawn(async move {
+        // Keep disposal protection until every local future and transport reference is gone.
+        // 保留销毁保护，直至全部本地 future 及传输引用消失。
+        let _admission = admission;
         let mut shutdown_rx = inner.shutdown_tx.subscribe();
         // consecutiveFailures gates automatic restart so a permanently invalid server cannot spin forever.
         // consecutiveFailures 限制自动重启，避免永久无效的服务器无限循环。
@@ -1011,7 +1088,8 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
 
             // Register evidence before initialization can create any actual process or remote work.
             // 初始化可能创建任何实际进程或远程工作前，先登记证据。
-            let (resources, release) = vulcan_mcp_runtime::McpTransportResources::new(());
+            let (resources, release) =
+                vulcan_mcp_runtime::McpTransportResources::new(launch_resources.clone());
             inner
                 .resource_releases
                 .write()
@@ -1188,19 +1266,22 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                 }
             }
 
-            if connected_at.elapsed() >= Duration::from_secs(60) {
+            if inner.purpose == McpRuntimePurpose::Managed
+                && connected_at.elapsed() >= Duration::from_secs(60)
+            {
                 consecutive_failures = 0;
             }
             consecutive_failures = consecutive_failures.saturating_add(1);
             update_server_retry_count(&inner, &server.id, consecutive_failures);
-            if consecutive_failures >= 5 {
+            if consecutive_failures >= inner.purpose.maximum_attempts() {
                 mark_server_failed(
                     &inner,
                     &server.id,
                     None,
                     format!(
-                        "MCP server `{}` exhausted 5 consecutive automatic connection attempts.",
-                        server.name
+                        "MCP server `{}` exhausted {} permitted connection attempt(s).",
+                        server.name,
+                        inner.purpose.maximum_attempts()
                     ),
                 )
                 .await;
@@ -1219,8 +1300,8 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
     });
 }
 
-/// Records one startup or discovery failure and transitions the server to terminal Failed after five consecutive attempts.
-/// 记录一次启动或发现失败，并在连续五次尝试失败后将服务器转换为终止性 Failed 状态。
+/// Records startup or discovery failure and stops at the explicitly declared runtime attempt bound.
+/// 记录启动或发现失败，并在明确声明的运行时尝试上限处停止。
 ///
 /// # Parameters
 /// 参数
@@ -1242,14 +1323,15 @@ async fn record_server_failure_and_should_stop(
 ) -> bool {
     *consecutive_failures = consecutive_failures.saturating_add(1);
     update_server_retry_count(inner, &server.id, *consecutive_failures);
-    if *consecutive_failures >= 5 {
+    if *consecutive_failures >= inner.purpose.maximum_attempts() {
         mark_server_failed(
             inner,
             &server.id,
             unpublished_transport,
             format!(
-                "MCP server `{}` exhausted 5 consecutive automatic connection attempts. Last error: {error}",
-                server.name
+                "MCP server `{}` exhausted {} permitted connection attempt(s). Last error: {error}",
+                server.name,
+                inner.purpose.maximum_attempts()
             ),
         )
         .await;
@@ -2980,6 +3062,7 @@ mod optional_capability_tests {
         let (shutdown_tx, _) = watch::channel(false);
         Arc::new(McpRuntimeInner {
             registry: McpServerRegistry::new(Vec::new()),
+            purpose: McpRuntimePurpose::Managed,
             transports: RwLock::new(BTreeMap::new()),
             resource_releases: RwLock::new(BTreeMap::new()),
             auth_sessions: AsyncRwLock::new(BTreeMap::new()),

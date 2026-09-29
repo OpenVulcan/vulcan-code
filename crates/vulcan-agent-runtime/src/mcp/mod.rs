@@ -16,7 +16,8 @@ pub use plugin::{
     plugin_mcp_server_configs_for_descriptors,
 };
 pub use runtime::{
-    McpRuntimeAccess, McpRuntimeDiscoveryReport, McpRuntimeOverview, McpRuntimeOwnedPartitionKey,
+    CandidatePluginMcpObservation, CandidatePluginMcpRuntime, McpRuntimeAccess,
+    McpRuntimeDiscoveryReport, McpRuntimeOverview, McpRuntimeOwnedPartitionKey,
     McpRuntimeOwnedStdioPartition, McpRuntimeServerState, McpRuntimeServerStatus,
     McpRuntimeToolAllowlist, McpRuntimeToolBinding, bootstrap_mcp_runtime_access,
     configured_mcp_runtime_access, remove_plugin_mcp_runtime_partition,

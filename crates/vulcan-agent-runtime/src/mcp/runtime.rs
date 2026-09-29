@@ -32,9 +32,9 @@ pub use diagnostics::{
     McpRuntimeServerStatus, McpRuntimeToolAllowlist, McpRuntimeToolInspection,
 };
 pub use handle::{
-    bootstrap_mcp_runtime_access, remove_plugin_mcp_runtime_partition,
-    replace_plugin_mcp_runtime_partition, replace_user_mcp_runtime_partition,
-    validate_plugin_mcp_runtime_partition,
+    CandidatePluginMcpObservation, CandidatePluginMcpRuntime, bootstrap_mcp_runtime_access,
+    remove_plugin_mcp_runtime_partition, replace_plugin_mcp_runtime_partition,
+    replace_user_mcp_runtime_partition, validate_plugin_mcp_runtime_partition,
 };
 pub use tools::{
     McpRuntimeAccess, McpRuntimeOwnedPartitionKey, McpRuntimeOwnedStdioPartition,

@@ -64,6 +64,16 @@ pub struct PreparedPluginMcpConfigs {
 }
 
 impl PreparedPluginMcpConfigs {
+    /// Transfers the sealed original authority and its materialized definitions together.
+    /// 将密封原权威与其物化定义一起移交。
+    /// No inputs; consuming this object prevents callers from pairing an arbitrary configuration with its owner.
+    /// 无输入；消费此对象，防止调用方将任意配置与其所有者配对。
+    pub(in crate::mcp) fn into_runtime_inputs(
+        self,
+    ) -> (VulcanPluginPreparedMcpCandidate, Vec<McpServerConfig>) {
+        (self.candidate, self.servers)
+    }
+
     /// Borrows the original candidate authority for transfer to actual runtime resource ownership.
     /// 借用原候选权威，供实际运行时资源所有权接管。
     /// No inputs; copying identifiers or server configurations cannot replace retaining this owner.
