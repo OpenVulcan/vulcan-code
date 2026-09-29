@@ -9,8 +9,10 @@ mod installation;
 mod operations;
 mod preparation;
 mod records;
+pub(crate) use effects::EffectAttempt;
 pub use effects::{
     VulcanPluginActivationEffect, VulcanPluginActivationEffects, VulcanPluginEffectObservation,
+    VulcanPluginPredecessorDrainIdentity,
 };
 pub use installation::{VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt};
 pub use preparation::{

@@ -51,6 +51,49 @@ impl VulcanPluginDrainReport {
 }
 
 impl VulcanPluginRuntimeManager {
+    /// Test all tracked physical retirement owners while registration is excluded.
+    /// 排除注册时检查全部受跟踪物理退役所有者。
+    /// plugin_id selects one namespace; registration proves publication exclusion; true means work remains.
+    /// plugin_id 选择命名空间；registration 证明发布互斥；true 表示仍有工作。
+    pub(super) fn has_unretired_plugin_resources_locked(
+        &self,
+        plugin_id: &str,
+        _registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<bool, VulcanPluginRuntimeError> {
+        if let Some(owner) = self.formal_runtime_owner()?
+            && owner.has_retiring_capacities(plugin_id)?
+        {
+            return Ok(true);
+        }
+        // Probe preparation has no legacy session quota, but still retains real cleanup ownership.
+        // 探测准备不占旧会话配额，但仍保留真实清理所有权。
+        let has_formal_calls = self.has_unretired_formal_calls(plugin_id)?;
+        let has_hook_runtime =
+            self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::Hook)?;
+        let has_ui_action_runtime =
+            self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::UiAction)?;
+        let has_active_count = self
+            .state
+            .active_session_counts
+            .lock()
+            .map_err(|_| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
+            })?
+            .get(plugin_id)
+            .copied()
+            .unwrap_or_default()
+            > 0;
+        if self.has_reusable_domains(plugin_id)?
+            || has_formal_calls
+            || has_hook_runtime
+            || has_ui_action_runtime
+            || has_active_count
+        {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// Closes every retained session owned by one draining plugin.
     /// 关闭一个正在排空的插件所拥有的全部保留会话。
     ///
@@ -80,7 +123,7 @@ impl VulcanPluginRuntimeManager {
     /// 即使等待报告的调用方取消，也继续完成插件排空。
     /// The plugin identity selects retained resources; returns the exact cleanup report.
     /// 插件身份选择保留资源；返回精确清理报告。
-    async fn drain_plugin_sessions_owned(
+    pub(super) async fn drain_plugin_sessions_owned(
         &self,
         plugin_id: &str,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
@@ -241,35 +284,7 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         _registration: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        if let Some(owner) = self.formal_runtime_owner()?
-            && owner.has_retiring_capacities(plugin_id)?
-        {
-            return Ok(());
-        }
-        // Probe preparation has no legacy session quota, but still retains real cleanup ownership.
-        // 探测准备不占旧会话配额，但仍保留真实清理所有权。
-        let has_formal_calls = self.has_unretired_formal_calls(plugin_id)?;
-        let has_hook_runtime =
-            self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::Hook)?;
-        let has_ui_action_runtime =
-            self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::UiAction)?;
-        let has_active_count = self
-            .state
-            .active_session_counts
-            .lock()
-            .map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
-            })?
-            .get(plugin_id)
-            .copied()
-            .unwrap_or_default()
-            > 0;
-        if self.has_reusable_domains(plugin_id)?
-            || has_formal_calls
-            || has_hook_runtime
-            || has_ui_action_runtime
-            || has_active_count
-        {
+        if self.has_unretired_plugin_resources_locked(plugin_id, _registration)? {
             return Ok(());
         }
         let removed_diagnostics = self

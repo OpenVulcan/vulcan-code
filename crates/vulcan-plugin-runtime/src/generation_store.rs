@@ -15,13 +15,15 @@ pub use credentials::{VulcanPluginCredentialBinding, VulcanPluginCredentialRevis
 mod files;
 mod operations;
 mod transactions;
+pub(crate) use transactions::EffectAttempt;
 pub use transactions::{
     VulcanPluginActivationCandidate, VulcanPluginActivationEffect, VulcanPluginActivationEffects,
     VulcanPluginActivationPreparation, VulcanPluginActivationPreparationIntent,
     VulcanPluginActivationPreparationRecord, VulcanPluginActivationRequestRecord,
     VulcanPluginActivationTransaction, VulcanPluginActivationTransactionPhase,
     VulcanPluginActivationTransactionRecord, VulcanPluginEffectObservation,
-    VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt, VulcanPluginUpdatePolicy,
+    VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt,
+    VulcanPluginPredecessorDrainIdentity, VulcanPluginUpdatePolicy,
 };
 #[cfg(test)]
 mod tests;

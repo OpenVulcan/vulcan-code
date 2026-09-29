@@ -73,11 +73,13 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 // 精确候选观测可见，不创建任何自动生命周期或恢复动作。
 it("shows probe, enable and compensation evidence with distinct observations", async () => {
   read.mockResolvedValue([{ ...original, phase: "prepared", effects: [
+    { operation: "drain_predecessor_lua", phase: "succeeded" },
     { operation: "probe", phase: "succeeded" },
     { operation: "enable", phase: "observation_failed" },
     { operation: "enable_rollback", phase: "started" },
   ] }]);
   await openAndRead();
+  expect(host.textContent).toContain("旧 Lua 实例退役: 已观察到成功");
   expect(host.textContent).toContain("候选探测: 已观察到成功");
   expect(host.textContent).toContain("候选启用: 结果不确定，请核对外部状态");
   expect(host.textContent).toContain("启用补偿: 已记录尝试，完成情况待核对");

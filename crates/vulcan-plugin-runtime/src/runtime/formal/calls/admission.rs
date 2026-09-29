@@ -19,7 +19,14 @@ impl VulcanPluginRuntimeManager {
                 authority.validate(&self.state, plugin, scope)?;
                 self.validate_plugin_requirements_in_scope(plugin, scope)
             }
-            None => self.validate_formal_plugin(plugin, scope),
+            None => {
+                crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
+                    &self.state,
+                    &plugin.id,
+                    scope,
+                )?;
+                self.validate_formal_plugin(plugin, scope)
+            }
         }
     }
 

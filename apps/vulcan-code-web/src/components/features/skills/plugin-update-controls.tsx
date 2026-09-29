@@ -29,6 +29,7 @@ const phaseLabels: Record<LocalPluginUpdateStatus["phase"], TranslationKey> = {
 // effectLabels distinguishes the exact recorded operation without implying automatic replay.
 // effectLabels 区分精确记录操作，不暗示自动重放。
 const effectLabels: Record<LocalPluginUpdateStatus["effects"][number]["operation"], TranslationKey> = {
+  drain_predecessor_lua: "pluginUpdates.drainPredecessorLua",
   probe: "pluginUpdates.probe", enable: "pluginUpdates.enable", enable_rollback: "pluginUpdates.enableRollback",
 };
 

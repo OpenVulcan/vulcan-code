@@ -6,7 +6,7 @@ import type { LuaSkillsCatalogUpdate } from "@/types";
 export interface LocalPluginUpdateEffect {
   // operation selects the exact candidate effect declared by the service.
   // operation 选择服务声明的精确候选副作用。
-  operation: "probe" | "enable" | "enable_rollback";
+  operation: "drain_predecessor_lua" | "probe" | "enable" | "enable_rollback";
   // phase is historical observation, not evidence that external effects were undone.
   // phase 为历史观测，不证明外部副作用已撤销。
   phase: "started" | "succeeded" | "observation_failed";
@@ -87,7 +87,7 @@ export function parseLocalPluginUpdateStatus(value: unknown, pluginId: string): 
     // Narrow exact service fields without guessing aliases or missing evidence.
     // 缩小精确服务字段类型，不猜测别名或缺失证据。
     const effect = value as Record<string, unknown>;
-    if ((effect.operation !== "probe" && effect.operation !== "enable" && effect.operation !== "enable_rollback")
+    if ((effect.operation !== "drain_predecessor_lua" && effect.operation !== "probe" && effect.operation !== "enable" && effect.operation !== "enable_rollback")
       || (effect.phase !== "started" && effect.phase !== "succeeded" && effect.phase !== "observation_failed")) {
       throw new Error("Invalid candidate effect operation or observation.");
     }

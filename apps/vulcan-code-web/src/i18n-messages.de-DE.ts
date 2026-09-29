@@ -15,6 +15,7 @@ export const deDETranslations: Record<TranslationKey, string> = {
     "pluginUpdates.probe": "Kandidatenprüfung",
     "pluginUpdates.enable": "Kandidat aktivieren",
     "pluginUpdates.enableRollback": "Aktivierung kompensieren",
+    "pluginUpdates.drainPredecessorLua": "Vorherige Lua-Instanz beenden",
     "pluginUpdates.effectStarted": "Versuch erfasst; Abschluss muss geprüft werden",
     "pluginUpdates.installation": "Installationsbeleg",
     "pluginUpdates.noReceipt": "Kein Installationsaufruf protokolliert",

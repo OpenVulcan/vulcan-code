@@ -21,6 +21,8 @@ it("preserves sanitized candidate observations and rejects malformed evidence", 
   const effect = { operation: "probe", phase: "started", callback: "private-result" };
   expect(parseLocalPluginUpdateStatus({ ...status, effects: [effect] }, "fixture").effects)
     .toEqual([{ operation: "probe", phase: "started" }]);
+  expect(parseLocalPluginUpdateStatus({ ...status, effects: [{ operation: "drain_predecessor_lua", phase: "started" }] }, "fixture").effects)
+    .toEqual([{ operation: "drain_predecessor_lua", phase: "started" }]);
   for (const effects of [undefined, null, {}, [null], [{ operation: "install", phase: "succeeded" }],
     [{ operation: "probe", phase: "unknown" }], [effect, effect]]) {
     expect(() => parseLocalPluginUpdateStatus({ ...status, effects }, "fixture")).toThrow();

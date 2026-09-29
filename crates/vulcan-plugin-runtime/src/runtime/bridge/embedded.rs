@@ -104,6 +104,9 @@ struct ExecutionAuthority {
     /// Exact draining generation granted by the manager; zero means no transition grant.
     /// 管理器授予的精确排空代次；零表示没有转换授权。
     closing_generation: AtomicU64,
+    /// Actual core ownership retains the original update after observers or the manager disappear.
+    /// 观察者或管理器消失后，实际核心所有权仍保留原更新。
+    update_drain: Mutex<Option<Arc<crate::runtime::update_drain::UpdateDrainAuthority>>>,
     /// Only explicitly admitted unpublished operations carry this real transaction readiness owner.
     /// 仅明确接纳的未发布操作携带此实际事务就绪所有者。
     candidate: Option<Arc<CandidateExecution>>,
@@ -168,14 +171,49 @@ fn admitted_plugin(
 }
 
 impl VulcanPluginEmbeddedHost {
-    /// Grant only existing enabled domains from `plugin` access during `transition_generation` finalization.
-    /// 仅授权 `plugin` 的既有启用域在 `transition_generation` 的关闭阶段访问能力。
-    /// The manager must hold its publication gate; returns an error if the authority registry is unavailable.
-    /// 管理器必须持有发布门；权威注册表不可用时返回错误。
-    pub(crate) fn authorize_draining(
+    /// Check actual core owners retaining update; true means physical execution has not retired.
+    /// 检查保留 update 的实际核心所有者；true 表示物理执行尚未退役。
+    /// The caller excludes registration; this method neither closes pools nor upgrades manager ownership.
+    /// 调用方排除注册；此方法不关闭池，也不升级管理器所有权。
+    pub(in crate::runtime) fn retains_predecessor_drain(
+        &self,
+        update: &Arc<crate::runtime::update_drain::UpdateDrainAuthority>,
+    ) -> EmbeddedResult<bool> {
+        // Weak domain entries outlive logical session receipts without pinning completed workers.
+        // 弱域条目寿命超过逻辑会话回执，但不会固定已完成工作者。
+        let domains = self
+            .authority
+            .domains
+            .lock()
+            .map_err(|_| internal("Plugin authority lock is poisoned."))?;
+        for entry in domains.values() {
+            // Only the original actual core domain can keep this request busy.
+            // 仅原实际核心域可以使此请求持续忙碌。
+            let Some(domain) = entry.upgrade() else {
+                continue;
+            };
+            if domain
+                .update_drain
+                .lock()
+                .map_err(|_| internal("Predecessor drain ownership lock is poisoned."))?
+                .as_ref()
+                .is_some_and(|retained| Arc::ptr_eq(retained, update))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Grant finalization and retain an optional concrete update owner in each matching original core domain.
+    /// 为每个匹配原核心域授予关闭权限，并保留可选具体更新所有者。
+    /// The caller holds publication exclusion; return only after all live original domains receive the same authority.
+    /// 调用方持有发布互斥；仅全部活动原域取得相同权威后返回。
+    pub(in crate::runtime) fn authorize_draining_with_update(
         &self,
         plugin: &VulcanPluginDescriptor,
         transition_generation: u64,
+        update: Option<&Arc<crate::runtime::update_drain::UpdateDrainAuthority>>,
     ) -> EmbeddedResult<()> {
         // A strictly newer generation prevents an old grant from becoming a future transition credential.
         // 严格更新的代次防止旧授权成为未来转换的凭据。
@@ -202,12 +240,41 @@ impl VulcanPluginEmbeddedHost {
                 && domain.plugin.content_fingerprint == plugin.content_fingerprint
                 && domain.plugin.package_root == plugin.package_root
             {
+                if let Some(update) = update {
+                    // Attach to actual core domain ownership before changing its finalizer grant.
+                    // 改变关闭授权之前附加至实际核心域所有权。
+                    let mut retained = domain
+                        .update_drain
+                        .lock()
+                        .map_err(|_| internal("Predecessor drain ownership lock is poisoned."))?;
+                    if retained
+                        .as_ref()
+                        .is_some_and(|original| !Arc::ptr_eq(original, update))
+                    {
+                        return Err(error(
+                            EmbeddedErrorCode::StaleGeneration,
+                            "Another update owns predecessor execution.",
+                        ));
+                    }
+                    *retained = Some(Arc::clone(update));
+                }
                 domain
                     .closing_generation
                     .store(transition_generation, Ordering::Release);
             }
         }
         Ok(())
+    }
+    /// Grant only existing enabled domains from `plugin` access during `transition_generation` finalization.
+    /// 仅授权 `plugin` 的既有启用域在 `transition_generation` 的关闭阶段访问能力。
+    /// The manager must hold its publication gate; returns an error if the authority registry is unavailable.
+    /// 管理器必须持有发布门；权威注册表不可用时返回错误。
+    pub(crate) fn authorize_draining(
+        &self,
+        plugin: &VulcanPluginDescriptor,
+        transition_generation: u64,
+    ) -> EmbeddedResult<()> {
+        self.authorize_draining_with_update(plugin, transition_generation, None)
     }
 
     /// Construct a runtime for `manager` with explicit parent and per-capability time budgets.
@@ -450,6 +517,7 @@ impl VulcanPluginEmbeddedHost {
             workspace_declaration,
             security_partition: definition.security_partition.clone(),
             closing_generation: AtomicU64::new(0),
+            update_drain: Mutex::new(None),
             candidate: admission.candidate,
         });
         // Catalog publication cannot race the final authority check and pool registration.
@@ -458,6 +526,16 @@ impl VulcanPluginEmbeddedHost {
             .session_registration_gate
             .lock()
             .map_err(|_| internal("Plugin publication gate is poisoned."))?;
+        // Direct native registration must not create an unowned lifecycle callback during an original update.
+        // 直接原生注册不得在原更新期间创建无原请求归属的生命周期回调。
+        if domain.candidate.is_none() {
+            crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
+                &state,
+                &domain.plugin.id,
+                scope,
+            )
+            .map_err(|failure| error(EmbeddedErrorCode::PermissionDenied, failure.message))?;
+        }
         validate_current(&state, &domain, false, None)?;
         {
             // Prune dead entries and reserve one bounded identity before core publication.

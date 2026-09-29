@@ -38,6 +38,166 @@ pub enum VulcanPluginLifecycleEvent {
 }
 
 impl VulcanPluginRuntimeManager {
+    /// Share the existing publication gate and transition rules with a concrete original update owner.
+    /// 与具体原更新所有者共用既有发布门及转换规则。
+    /// Optional update carries the frozen catalog and real candidate ownership; returns retained authority only for that path.
+    /// 可选 update 携带固定目录及真实候选所有权；仅该路径返回保留权威。
+    pub(super) fn begin_lifecycle_transition_with_update(
+        &self,
+        plugin_id: &str,
+        runtime_state: VulcanPluginRuntimeState,
+        allowed_source_states: &[VulcanPluginRuntimeState],
+        update: Option<(
+            &crate::VulcanPluginActivationCandidate<'_>,
+            &VulcanPluginCatalogSnapshot,
+        )>,
+    ) -> Result<Option<Arc<super::update_drain::UpdateDrainAuthority>>, VulcanPluginRuntimeError>
+    {
+        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        // A disabled recovery publication is not permission to start ordinary lifecycle effects.
+        // 停用恢复发布不表示允许开始普通生命周期副作用。
+        let (recovery_error, recovery_diagnostics) = self.activation_recovery_diagnostics(None)?;
+        if let Some(diagnostic) = recovery_error
+            .as_ref()
+            .or_else(|| recovery_diagnostics.get(plugin_id))
+        {
+            return Err(VulcanPluginRuntimeError::new(diagnostic.clone()));
+        }
+        // New unfinished requests created after startup also exclude ordinary enablement and lifecycle side effects.
+        // 启动后新建的未完成请求同样排除普通启用及生命周期副作用。
+        if let Some(store) =
+            crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+        {
+            // A concrete owned original is the only exception; every other pending request still excludes transition.
+            // 具体自有原请求是唯一例外；其他任何待完成请求仍排除转换。
+            let pending = store
+                .activation_recovery_records(plugin_id)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+            let allowed = match (update, pending.as_slice()) {
+                (None, []) => true,
+                (
+                    Some((candidate, _)),
+                    [crate::VulcanPluginActivationRequestRecord::Activation(original)],
+                ) => original == candidate.transaction_record(),
+                _ => false,
+            };
+            if !allowed {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Plugin has an unfinished original activation request.",
+                ));
+            }
+        }
+        let mut snapshot = (*self.snapshot()).clone();
+        let plugin = snapshot.plugins.get_mut(plugin_id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new(format!(
+                "Vulcan Plugin `{plugin_id}` was not discovered."
+            ))
+        })?;
+        if let Some((candidate, expected)) = update {
+            super::update_drain::validate_predecessor(&self.state, candidate, expected, plugin)?;
+            if runtime_state != VulcanPluginRuntimeState::Draining {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Update authority only permits predecessor draining.",
+                ));
+            }
+        }
+        if !allowed_source_states.contains(&plugin.runtime_state) {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Vulcan Plugin `{plugin_id}` cannot enter state `{runtime_state:?}` from state `{:?}`.",
+                plugin.runtime_state
+            )));
+        }
+        if !matches!(
+            plugin.availability,
+            VulcanPluginAvailability::Enabled | VulcanPluginAvailability::Disabled
+        ) {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Vulcan Plugin `{plugin_id}` cannot enter a lifecycle transition while unavailable."
+            )));
+        }
+        // Check requirements before changing generations, allocating guarantees, or publishing Enabling.
+        // 在变更代次、分配保证或发布启用中状态前检查必需条件。
+        if runtime_state == VulcanPluginRuntimeState::Enabling {
+            self.validate_plugin_requirements(plugin)?;
+        }
+        // Re-establish all configured guarantees before callbacks or the Enabling catalog can observe activation.
+        // 在回调或启用中目录可观测启用之前，重新建立全部配置保证。
+        if runtime_state == VulcanPluginRuntimeState::Enabling
+            && let Some(owner) = self.formal_runtime_owner()?
+            && let Err(error) = owner.prepare_plugin_capacities(plugin_id, &_registration)
+        {
+            if owner.has_retiring_capacities(plugin_id)? {
+                self.record_cleanup_failure_locked(plugin_id, error.to_string(), &_registration)?;
+            }
+            return Err(error);
+        }
+        let (generation, update_authority) = {
+            let mut generations = self.state.plugin_generations.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin generation lock is poisoned.")
+            })?;
+            let generation = generations.entry(plugin_id.to_owned()).or_insert(1);
+            let successor = generation.checked_add(1).ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin generation is exhausted.")
+            })?;
+            // Persist update intent before issuing the new generation or granting any old finalizer.
+            // 签发新代次或授权任何旧关闭函数之前，持久保存更新意图。
+            let update_authority = match update {
+                Some((candidate, _)) => Some(super::update_drain::UpdateDrainAuthority::begin(
+                    &self.state,
+                    candidate,
+                    plugin,
+                    successor,
+                )?),
+                None => None,
+            };
+            *generation = successor;
+            (successor, update_authority)
+        };
+        // Grant only existing formal domains while publication is excluded; the grant needs the new snapshot to work.
+        // 在排除发布竞争时仅授权既有正式域；授权必须匹配新快照才生效。
+        if runtime_state == VulcanPluginRuntimeState::Draining
+            && let Some(owner) = self.formal_runtime_owner()?
+        {
+            match update_authority.as_ref() {
+                Some(authority) => {
+                    owner
+                        .host
+                        .authorize_draining_with_update(plugin, generation, Some(authority))
+                }
+                None => owner.host.authorize_draining(plugin, generation),
+            }
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        }
+        self.state
+            .lifecycle_overrides
+            .lock()
+            .map_err(|_| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin lifecycle lock is poisoned.")
+            })?
+            .insert(plugin_id.to_owned(), runtime_state);
+        plugin.runtime_state = runtime_state;
+        plugin.generation = generation;
+        for tool in &mut plugin.tools {
+            tool.plugin_generation = generation;
+        }
+        for hook in &mut plugin.hooks {
+            hook.plugin_generation = generation;
+        }
+        for server in &mut plugin.mcp_servers {
+            server.plugin_generation = generation;
+        }
+        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
+        rebuild_enabled_surface(&mut snapshot);
+        let mut guard = self.state.snapshot.write().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
+        })?;
+        *guard = Arc::new(snapshot);
+        Ok(update_authority)
+    }
+
     /// Atomically replaces the catalog snapshot after a full package scan.
     /// 在完整扫描插件包后原子替换目录快照。
     ///
@@ -206,6 +366,20 @@ impl VulcanPluginRuntimeManager {
         let registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
+        // Ordinary completion cannot remove an update-owned admission barrier.
+        // 普通完成不得移除更新所有的入场屏障。
+        if let Some(store) =
+            crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+            && !store
+                .activation_recovery_records(plugin_id)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+                .is_empty()
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin has an unfinished original activation request.",
+            ));
+        }
         self.state
             .lifecycle_overrides
             .lock()
@@ -652,113 +826,13 @@ impl VulcanPluginRuntimeManager {
         runtime_state: VulcanPluginRuntimeState,
         allowed_source_states: &[VulcanPluginRuntimeState],
     ) -> Result<(), VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
-        })?;
-        // A disabled recovery publication is not permission to start ordinary lifecycle effects.
-        // 停用恢复发布不表示允许开始普通生命周期副作用。
-        let (recovery_error, recovery_diagnostics) = self.activation_recovery_diagnostics(None)?;
-        if let Some(diagnostic) = recovery_error
-            .as_ref()
-            .or_else(|| recovery_diagnostics.get(plugin_id))
-        {
-            return Err(VulcanPluginRuntimeError::new(diagnostic.clone()));
-        }
-        // New unfinished requests created after startup also exclude ordinary enablement and lifecycle side effects.
-        // 启动后新建的未完成请求同样排除普通启用及生命周期副作用。
-        if let Some(store) =
-            crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
-                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
-            && !store
-                .activation_recovery_records(plugin_id)
-                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
-                .is_empty()
-        {
-            return Err(VulcanPluginRuntimeError::new(
-                "Plugin has an unfinished original activation request.",
-            ));
-        }
-        let mut snapshot = (*self.snapshot()).clone();
-        let plugin = snapshot.plugins.get_mut(plugin_id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{plugin_id}` was not discovered."
-            ))
-        })?;
-        if !allowed_source_states.contains(&plugin.runtime_state) {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{plugin_id}` cannot enter state `{runtime_state:?}` from state `{:?}`.",
-                plugin.runtime_state
-            )));
-        }
-        if !matches!(
-            plugin.availability,
-            VulcanPluginAvailability::Enabled | VulcanPluginAvailability::Disabled
-        ) {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{plugin_id}` cannot enter a lifecycle transition while unavailable."
-            )));
-        }
-        // Check requirements before changing generations, allocating guarantees, or publishing Enabling.
-        // 在变更代次、分配保证或发布启用中状态前检查必需条件。
-        if runtime_state == VulcanPluginRuntimeState::Enabling {
-            self.validate_plugin_requirements(plugin)?;
-        }
-        // Re-establish all configured guarantees before callbacks or the Enabling catalog can observe activation.
-        // 在回调或启用中目录可观测启用之前，重新建立全部配置保证。
-        if runtime_state == VulcanPluginRuntimeState::Enabling
-            && let Some(owner) = self.formal_runtime_owner()?
-            && let Err(error) = owner.prepare_plugin_capacities(plugin_id, &_registration)
-        {
-            if owner.has_retiring_capacities(plugin_id)? {
-                self.record_cleanup_failure_locked(plugin_id, error.to_string(), &_registration)?;
-            }
-            return Err(error);
-        }
-        let generation = {
-            let mut generations = self.state.plugin_generations.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin generation lock is poisoned.")
-            })?;
-            let generation = generations.entry(plugin_id.to_owned()).or_insert(1);
-            *generation = generation.checked_add(1).ok_or_else(|| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin generation is exhausted.")
-            })?;
-            *generation
-        };
-        // Grant only existing formal domains while publication is excluded; the grant needs the new snapshot to work.
-        // 在排除发布竞争时仅授权既有正式域；授权必须匹配新快照才生效。
-        if runtime_state == VulcanPluginRuntimeState::Draining
-            && let Some(owner) = self.formal_runtime_owner()?
-        {
-            owner
-                .host
-                .authorize_draining(plugin, generation)
-                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        }
-        self.state
-            .lifecycle_overrides
-            .lock()
-            .map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin lifecycle lock is poisoned.")
-            })?
-            .insert(plugin_id.to_owned(), runtime_state);
-        plugin.runtime_state = runtime_state;
-        plugin.generation = generation;
-        for tool in &mut plugin.tools {
-            tool.plugin_generation = generation;
-        }
-        for hook in &mut plugin.hooks {
-            hook.plugin_generation = generation;
-        }
-        for server in &mut plugin.mcp_servers {
-            server.plugin_generation = generation;
-        }
-        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        rebuild_enabled_surface(&mut snapshot);
-        let mut guard = self.state.snapshot.write().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
-        })?;
-        *guard = Arc::new(snapshot);
-        Ok(())
+        self.begin_lifecycle_transition_with_update(
+            plugin_id,
+            runtime_state,
+            allowed_source_states,
+            None,
+        )
+        .map(|_| ())
     }
 }
 

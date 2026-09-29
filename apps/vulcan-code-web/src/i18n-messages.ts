@@ -17,6 +17,7 @@ export type TranslationKey =
   | "pluginUpdates.probe"
   | "pluginUpdates.enable"
   | "pluginUpdates.enableRollback"
+  | "pluginUpdates.drainPredecessorLua"
   | "pluginUpdates.effectStarted"
   | "pluginUpdates.installation"
   | "pluginUpdates.noReceipt"

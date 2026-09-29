@@ -231,6 +231,7 @@ use crate::{
 
 mod effects;
 mod installation;
+mod predecessor;
 
 /// No secret slots are declared; any unexpected backend access makes staging fail explicitly.
 /// 未声明秘密槽位；任何意外后端访问都会使暂存明确失败。

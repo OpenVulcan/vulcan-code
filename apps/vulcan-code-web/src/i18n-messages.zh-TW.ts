@@ -15,6 +15,7 @@ export const zhTWTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.probe": "候選探測",
     "pluginUpdates.enable": "候選啟用",
     "pluginUpdates.enableRollback": "啟用補償",
+    "pluginUpdates.drainPredecessorLua": "舊 Lua 執行個體退役",
     "pluginUpdates.effectStarted": "已記錄嘗試，完成情況待核對",
     "pluginUpdates.installation": "安裝回執",
     "pluginUpdates.noReceipt": "未記錄安裝呼叫",

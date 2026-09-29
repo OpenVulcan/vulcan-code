@@ -11,7 +11,7 @@ pub use mcp::VulcanPluginPreparedMcpCandidate;
 /// 确认目录及未发布插件包权威后，才保留原请求。
 /// The state and inspected candidate must share one user root; returns the original exclusive file owner.
 /// 状态与已检查候选必须共用单个用户根；返回原排他文件所有者。
-fn retain_candidate_readiness(
+pub(super) fn retain_candidate_readiness(
     state: &VulcanPluginManagerState,
     candidate: &VulcanPluginActivationCandidate<'_>,
 ) -> Result<Arc<std::fs::File>, VulcanPluginRuntimeError> {

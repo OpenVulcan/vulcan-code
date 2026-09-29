@@ -6,6 +6,9 @@ use crate::generation_store::{
     VulcanPluginStoreError as Error, VulcanPluginStoreErrorCode as Code,
 };
 
+mod predecessor;
+pub use predecessor::VulcanPluginPredecessorDrainIdentity;
+
 /// Exact sidecar format; original activation records and their index remain unchanged.
 /// 精确附属文件格式；原激活记录及其索引保持不变。
 const EFFECTS_VERSION: u32 = 1;
@@ -31,6 +34,9 @@ pub enum VulcanPluginEffectObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VulcanPluginActivationEffect {
+    /// Close predecessor Lua admission and retire its exact original execution resources.
+    /// 关闭前驱 Lua 入场，并退役其精确原执行资源。
+    DrainPredecessorLua,
     /// Execute candidate module initialization.
     /// 执行候选模块初始化。
     Probe,
@@ -60,6 +66,22 @@ pub struct VulcanPluginActivationEffects {
     /// Exact successor revision from the original transaction.
     /// 来自原事务的精确后继修订。
     target_revision: u64,
+    /// Original host transition identity exists exactly when predecessor Lua drain was attempted.
+    /// 仅尝试前驱 Lua 排空时存在原宿主转换身份。
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "preparation::deserialize_present"
+    )]
+    predecessor_drain_identity: Option<VulcanPluginPredecessorDrainIdentity>,
+    /// Drain evidence precedes candidate execution and is distinct from MCP retirement.
+    /// 排空证据先于候选执行，并与 MCP 退役区分。
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "preparation::deserialize_present"
+    )]
+    predecessor_lua_drain: Option<VulcanPluginEffectObservation>,
     /// Absent means never attempted; explicit null is invalid.
     /// 缺失表示从未尝试；显式空值无效。
     #[serde(
@@ -87,6 +109,12 @@ pub struct VulcanPluginActivationEffects {
 }
 
 impl VulcanPluginActivationEffects {
+    /// Borrow the exact original transition identity; its presence alone does not certify actual retirement.
+    /// 借用精确原转换身份；仅其存在不证明实际退役。
+    pub fn predecessor_drain_identity(&self) -> Option<&VulcanPluginPredecessorDrainIdentity> {
+        self.predecessor_drain_identity.as_ref()
+    }
+
     /// Return attempted operations in execution order, without exposing private revision encoding.
     /// 按执行顺序返回已尝试操作，不暴露私有修订编码。
     pub fn observations(
@@ -94,6 +122,7 @@ impl VulcanPluginActivationEffects {
     ) -> Vec<(VulcanPluginActivationEffect, VulcanPluginEffectObservation)> {
         use VulcanPluginActivationEffect as Effect;
         [
+            (Effect::DrainPredecessorLua, self.predecessor_lua_drain),
             (Effect::Probe, self.probe),
             (Effect::Enable, self.enable),
             (Effect::EnableRollback, self.enable_rollback),
@@ -110,6 +139,7 @@ impl VulcanPluginActivationEffects {
         operation: VulcanPluginActivationEffect,
     ) -> &mut Option<VulcanPluginEffectObservation> {
         match operation {
+            VulcanPluginActivationEffect::DrainPredecessorLua => &mut self.predecessor_lua_drain,
             VulcanPluginActivationEffect::Probe => &mut self.probe,
             VulcanPluginActivationEffect::Enable => &mut self.enable,
             VulcanPluginActivationEffect::EnableRollback => &mut self.enable_rollback,
@@ -138,35 +168,57 @@ pub(crate) struct EffectAttempt {
 }
 
 impl EffectAttempt {
-    /// Persist succeeded for this exact attempt; return an error if identity or evidence changed.
-    /// 为此精确尝试持久保存 succeeded；身份或证据改变时返回错误。
-    /// No diagnostics or callback results enter the durable non-secret record.
-    /// 诊断或回调结果不进入持久无秘密记录。
-    pub(crate) fn finish(self, succeeded: bool) -> VulcanPluginStoreResult<()> {
-        // Serialize observation with selection and recovery writes.
-        // 使观测与选择和恢复写入串行。
+    /// Record succeeded for this owned attempt; identical durable completion may be acknowledged again after an I/O error.
+    /// 为此自有尝试记录 succeeded；I/O 错误后可再次确认相同的持久完成。
+    /// Return the write result without releasing ownership or repeating any plugin operation.
+    /// 返回写入结果，不释放所有权或重复任何插件操作。
+    pub(crate) fn record_observation(&self, succeeded: bool) -> VulcanPluginStoreResult<()> {
+        // Freeze the requested terminal evidence before comparing either possible atomic-write outcome.
+        // 比较两种可能的原子写入结果之前固定所请求的终态证据。
+        let mut completed = self.receipt.clone();
+        *completed.observation_mut(self.operation) = Some(if succeeded {
+            VulcanPluginEffectObservation::Succeeded
+        } else {
+            VulcanPluginEffectObservation::ObservationFailed
+        });
+        // The request lock and namespace together exclude another observer or recovery writer.
+        // 请求锁与命名空间共同排除另一观察者或恢复写入方。
         let _namespace = self.store.namespace_lock(&self.receipt.plugin_id, false)?;
         if self
             .store
             .read_transaction_locked(&self.receipt.plugin_id, self.receipt.request_id)?
             .as_ref()
             != Some(&self.transaction)
-            || self.store.read_effects_locked(&self.transaction)?.as_ref() != Some(&self.receipt)
         {
+            return Err(Error::new(
+                Code::Conflict,
+                "Original candidate effect identity changed.",
+            ));
+        }
+        // Atomic replacement may have completed before a flush error reached its caller.
+        // 原子替换可能在刷新错误到达调用方之前已经完成。
+        let current = self.store.read_effects_locked(&self.transaction)?;
+        if current.as_ref() == Some(&completed) {
+            return self
+                .store
+                .write_effects_locked(&self.transaction, &completed);
+        }
+        if current.as_ref() != Some(&self.receipt) {
             return Err(Error::new(
                 Code::Conflict,
                 "Original candidate effect evidence changed.",
             ));
         }
-        // The sole observer advances its own operation, never allocates a retry.
-        // 唯一观察者推进自身操作，绝不分配重试。
-        let mut receipt = self.receipt;
-        *receipt.observation_mut(self.operation) = Some(if succeeded {
-            VulcanPluginEffectObservation::Succeeded
-        } else {
-            VulcanPluginEffectObservation::ObservationFailed
-        });
-        self.store.write_effects_locked(&self.transaction, &receipt)
+        self.store
+            .write_effects_locked(&self.transaction, &completed)
+    }
+
+    /// Persist succeeded for this exact attempt; return an error if identity or evidence changed.
+    /// 为此精确尝试持久保存 succeeded；身份或证据改变时返回错误。
+    /// No diagnostics or callback results enter the durable non-secret record.
+    /// 诊断或回调结果不进入持久无秘密记录。
+    pub(crate) fn finish(self, succeeded: bool) -> VulcanPluginStoreResult<()> {
+        self.record_observation(succeeded)
     }
 }
 
@@ -179,6 +231,11 @@ impl VulcanPluginActivationCandidate<'_> {
         &self,
         operation: VulcanPluginActivationEffect,
     ) -> VulcanPluginStoreResult<EffectAttempt> {
+        if operation == VulcanPluginActivationEffect::DrainPredecessorLua {
+            return Err(Error::invalid(
+                "Predecessor drain requires exact host transition authority.",
+            ));
+        }
         // All paths derive from the borrowed original, never from user-controlled callback input.
         // 全部路径从借用原请求派生，绝不来自用户控制的回调输入。
         let store = VulcanPluginGenerationStore {
@@ -206,6 +263,8 @@ impl VulcanPluginActivationCandidate<'_> {
                 plugin_id: self.transaction.record.target.plugin_id.clone(),
                 request_id: self.transaction.record.request_id,
                 target_revision: self.transaction.record.target.revision,
+                predecessor_drain_identity: None,
+                predecessor_lua_drain: None,
                 probe: None,
                 enable: None,
                 enable_rollback: None,
@@ -216,12 +275,26 @@ impl VulcanPluginActivationCandidate<'_> {
                 "Candidate effect was already attempted; inspect the original request instead of replaying it.",
             ));
         }
+        if receipt
+            .predecessor_lua_drain
+            .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Predecessor Lua resources have not confirmed retirement.",
+            ));
+        }
         // Installation remains authoritative in its existing receipt, not duplicated here.
         // 安装在既有回执中保持权威，不在此复制。
         let installation = store.read_installation_locked(&self.transaction.record)?;
         use VulcanPluginActivationEffect as Effect;
         use VulcanPluginEffectObservation as Observation;
         match operation {
+            Effect::DrainPredecessorLua => {
+                return Err(Error::invalid(
+                    "Predecessor drain is not candidate execution.",
+                ));
+            }
             Effect::Probe => {
                 if installation.is_some()
                     || receipt.enable.is_some()
@@ -322,8 +395,11 @@ impl VulcanPluginGenerationStore {
     ) -> VulcanPluginStoreResult<()> {
         if let Some(receipt) = self.read_effects_locked(transaction)?
             && (receipt
-                .probe
+                .predecessor_lua_drain
                 .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
+                || receipt
+                    .probe
+                    .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
                 || receipt.enable.is_some()
                 || receipt.enable_rollback.is_some())
         {
@@ -398,6 +474,7 @@ impl VulcanPluginGenerationStore {
                 "Candidate effect identity, format or ordering is invalid.",
             ));
         }
+        receipt.validate_predecessor_drain(transaction)?;
         Ok(())
     }
 

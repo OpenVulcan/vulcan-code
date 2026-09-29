@@ -20,16 +20,26 @@ pub(super) fn validate_identity(identity: &VulcanPluginGenerationIdentity) -> Re
     // 规范 UUID 文本排除路径遍历、别名及同一目录的其他编码。
     let uuid = Uuid::parse_str(&identity.generation_id)
         .map_err(|_| Error::invalid("Invalid package generation UUID."))?;
-    if uuid.to_string() != identity.generation_id
-        || identity.version.is_empty()
-        || identity.content_fingerprint.len() != 64
-        || !identity
-            .content_fingerprint
+    if uuid.to_string() != identity.generation_id || identity.version.is_empty() {
+        return Err(Error::invalid(
+            "Package generation identity is not canonical.",
+        ));
+    }
+    validate_content_fingerprint(&identity.content_fingerprint)
+}
+
+/// Validate canonical SHA-256 content spelling shared by package and predecessor identities.
+/// 校验插件包及前驱身份共用的规范 SHA-256 内容拼写。
+/// The fingerprint must match the existing package digest contract; return no filesystem access.
+/// fingerprint 必须匹配既有插件包摘要契约；不执行文件系统访问。
+pub(super) fn validate_content_fingerprint(fingerprint: &str) -> Result<()> {
+    if fingerprint.len() != 64
+        || !fingerprint
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(Error::invalid(
-            "Package generation identity is not canonical.",
+            "Package content fingerprint is not canonical.",
         ));
     }
     Ok(())

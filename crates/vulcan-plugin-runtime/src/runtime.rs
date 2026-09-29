@@ -11,6 +11,8 @@ pub use candidates::VulcanPluginPreparedMcpCandidate;
 mod configuration;
 pub(crate) use configuration::validate_plugin_config_value;
 mod drain;
+mod update_drain;
+pub use update_drain::VulcanPluginPredecessorDrain;
 mod environment;
 mod execution;
 mod formal;
@@ -224,6 +226,9 @@ struct VulcanPluginManagerState {
     /// Transient lifecycle overrides keyed by plugin identifier.
     /// 以插件标识为键的临时生命周期覆盖。
     lifecycle_overrides: Mutex<BTreeMap<String, VulcanPluginRuntimeState>>,
+    /// Original update owners remain retained through failed or interrupted predecessor retirement.
+    /// 原更新所有者跨失败或中断的前驱退役保持保留。
+    update_drains: Mutex<BTreeMap<String, Arc<update_drain::UpdateDrainAuthority>>>,
     /// Cleanup warnings retained after a plugin becomes disabled.
     /// 插件停用后保留的清理警告。
     cleanup_diagnostics: Mutex<BTreeMap<String, Vec<String>>>,
@@ -393,6 +398,7 @@ impl VulcanPluginRuntimeManager {
                 action_records: Mutex::new(BTreeMap::new()),
                 plugin_generations: Mutex::new(BTreeMap::new()),
                 lifecycle_overrides: Mutex::new(BTreeMap::new()),
+                update_drains: Mutex::new(BTreeMap::new()),
                 cleanup_diagnostics: Mutex::new(BTreeMap::new()),
                 activation_recovery: Mutex::new(None),
             }),

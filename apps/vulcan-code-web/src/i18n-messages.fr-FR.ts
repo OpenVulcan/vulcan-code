@@ -15,6 +15,7 @@ export const frFRTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.probe": "Vérification du candidat",
     "pluginUpdates.enable": "Activation du candidat",
     "pluginUpdates.enableRollback": "Compensation de l’activation",
+    "pluginUpdates.drainPredecessorLua": "Arrêt de l’ancienne instance Lua",
     "pluginUpdates.effectStarted": "Tentative enregistrée ; achèvement à vérifier",
     "pluginUpdates.installation": "Reçu d’installation",
     "pluginUpdates.noReceipt": "Aucun appel d’installation enregistré",
