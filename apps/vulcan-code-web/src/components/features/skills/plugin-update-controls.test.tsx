@@ -77,14 +77,16 @@ it("shows probe, enable and compensation evidence with distinct observations", a
     { operation: "disable_predecessor", phase: "succeeded" },
     { operation: "probe", phase: "succeeded" },
     { operation: "enable", phase: "observation_failed" },
-    { operation: "enable_rollback", phase: "started" },
+    { operation: "enable_rollback", phase: "succeeded" },
+    { operation: "restore_predecessor", phase: "started" },
   ] }]);
   await openAndRead();
   expect(host.textContent).toContain("旧 Lua 实例退役: 已观察到成功");
   expect(host.textContent).toContain("旧插件停用回调: 已观察到成功");
   expect(host.textContent).toContain("候选探测: 已观察到成功");
   expect(host.textContent).toContain("候选启用: 结果不确定，请核对外部状态");
-  expect(host.textContent).toContain("启用补偿: 已记录尝试，完成情况待核对");
+  expect(host.textContent).toContain("启用补偿: 已观察到成功");
+  expect(host.textContent).toContain("旧插件恢复回调: 已记录尝试，完成情况待核对");
   expect(resume).not.toHaveBeenCalled();
   expect(abandon).not.toHaveBeenCalled();
 });

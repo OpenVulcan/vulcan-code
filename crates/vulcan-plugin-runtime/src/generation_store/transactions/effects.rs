@@ -49,6 +49,9 @@ pub enum VulcanPluginActivationEffect {
     /// Execute the declared disable callback to compensate candidate enable.
     /// 执行声明的停用回调以补偿候选启用。
     EnableRollback,
+    /// Restore the old package's enable callback; any attempt excludes publishing this original target.
+    /// 恢复旧包启用回调；任何尝试均排除此原目标发布。
+    RestorePredecessor,
 }
 
 /// Strict non-secret observations bind all candidate effects to their original selection.
@@ -117,6 +120,14 @@ pub struct VulcanPluginActivationEffects {
         deserialize_with = "preparation::deserialize_present"
     )]
     enable_rollback: Option<VulcanPluginEffectObservation>,
+    /// Old restore is independent from target compensation and never resets earlier failed evidence.
+    /// 旧恢复独立于目标补偿，绝不重置先前失败证据。
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "preparation::deserialize_present"
+    )]
+    predecessor_restore: Option<VulcanPluginEffectObservation>,
 }
 
 impl VulcanPluginActivationEffects {
@@ -138,6 +149,7 @@ impl VulcanPluginActivationEffects {
             (Effect::Probe, self.probe),
             (Effect::Enable, self.enable),
             (Effect::EnableRollback, self.enable_rollback),
+            (Effect::RestorePredecessor, self.predecessor_restore),
         ]
         .into_iter()
         .filter_map(|(operation, phase)| phase.map(|phase| (operation, phase)))
@@ -156,6 +168,7 @@ impl VulcanPluginActivationEffects {
             VulcanPluginActivationEffect::Probe => &mut self.probe,
             VulcanPluginActivationEffect::Enable => &mut self.enable,
             VulcanPluginActivationEffect::EnableRollback => &mut self.enable_rollback,
+            VulcanPluginActivationEffect::RestorePredecessor => &mut self.predecessor_restore,
         }
     }
 }
@@ -282,6 +295,7 @@ impl VulcanPluginActivationCandidate<'_> {
                 probe: None,
                 enable: None,
                 enable_rollback: None,
+                predecessor_restore: None,
             });
         if receipt.observation_mut(operation).is_some() {
             return Err(Error::new(
@@ -298,11 +312,20 @@ impl VulcanPluginActivationCandidate<'_> {
                 "Predecessor Lua resources have not confirmed retirement.",
             ));
         }
+        // Any old restore attempt permanently excludes this original target from further effects.
+        // 任何旧恢复尝试均永久排除此原目标的后续副作用。
+        if receipt.predecessor_restore.is_some() {
+            return Err(Error::new(
+                Code::Conflict,
+                "Original predecessor restore was attempted; this target is no longer admissible.",
+            ));
+        }
         // Installation remains authoritative in its existing receipt, not duplicated here.
         // 安装在既有回执中保持权威，不在此复制。
-        if receipt
-            .predecessor_disable
-            .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
+        if operation != VulcanPluginActivationEffect::RestorePredecessor
+            && receipt
+                .predecessor_disable
+                .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
         {
             return Err(Error::new(
                 Code::Conflict,
@@ -313,6 +336,18 @@ impl VulcanPluginActivationCandidate<'_> {
         use VulcanPluginActivationEffect as Effect;
         use VulcanPluginEffectObservation as Observation;
         match operation {
+            Effect::RestorePredecessor => {
+                receipt.require_observed_predecessor_restore()?;
+                if installation
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.phase() == Observation::Started)
+                {
+                    return Err(Error::new(
+                        Code::Conflict,
+                        "Predecessor restore cannot follow an unobserved installation attempt.",
+                    ));
+                }
+            }
             Effect::DisablePredecessor => {
                 if receipt.predecessor_lua_drain != Some(Observation::Succeeded)
                     || installation.is_some()
@@ -439,6 +474,7 @@ impl VulcanPluginGenerationStore {
                 || receipt
                     .probe
                     .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
+                || receipt.predecessor_restore.is_some()
                 || receipt.enable.is_some()
                 || receipt.enable_rollback.is_some())
         {
@@ -459,7 +495,8 @@ impl VulcanPluginGenerationStore {
         transaction: &VulcanPluginActivationTransactionRecord,
     ) -> VulcanPluginStoreResult<()> {
         if let Some(receipt) = self.read_effects_locked(transaction)?
-            && (receipt.enable_rollback.is_some()
+            && (receipt.predecessor_restore.is_some()
+                || receipt.enable_rollback.is_some()
                 || receipt
                     .observations()
                     .iter()
@@ -534,6 +571,20 @@ impl VulcanPluginGenerationStore {
         let receipt = serde_json::from_slice(&bytes)
             .map_err(|_| Error::invalid("Invalid candidate effect receipt."))?;
         Self::validate_effects(transaction, &receipt)?;
+        // Cross-sidecar ordering is checked on every read, including terminal history and startup inspection.
+        // 每次读取均检查跨附属文件顺序，包括终态历史及启动检查。
+        if receipt.predecessor_restore.is_some()
+            && self
+                .read_installation_locked(transaction)?
+                .as_ref()
+                .is_some_and(|installation| {
+                    installation.phase() == VulcanPluginEffectObservation::Started
+                })
+        {
+            return Err(Error::invalid(
+                "Predecessor restore follows an unobserved installation attempt.",
+            ));
+        }
         Ok(Some(receipt))
     }
 

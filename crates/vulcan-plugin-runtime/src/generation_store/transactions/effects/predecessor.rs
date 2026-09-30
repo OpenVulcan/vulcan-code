@@ -26,6 +26,25 @@ pub struct VulcanPluginPredecessorDrainIdentity {
 }
 
 impl VulcanPluginActivationEffects {
+    /// Check earlier observations before old restore; return an error for unknown work or unconfirmed target compensation.
+    /// 在旧恢复前检查先前观测；未知工作或未确认目标补偿返回错误。
+    /// The restore field is excluded so its own Started receipt remains valid for recovery inspection.
+    /// 排除恢复字段本身，使其 Started 回执保持可供恢复检查。
+    pub(super) fn require_observed_predecessor_restore(&self) -> VulcanPluginStoreResult<()> {
+        use VulcanPluginEffectObservation as Observation;
+        if self.predecessor_lua_drain != Some(Observation::Succeeded)
+            || self.predecessor_disable == Some(Observation::Started)
+            || self.probe == Some(Observation::Started)
+            || (self.enable.is_some() && self.enable_rollback != Some(Observation::Succeeded))
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Predecessor restore requires observed prior work and confirmed target enable compensation.",
+            ));
+        }
+        Ok(())
+    }
+
     /// Check predecessor identity and causal ordering against the original transaction; return no execution grant.
     /// 按原事务检查前驱身份及因果顺序；不授予执行权。
     pub(super) fn validate_predecessor_drain(
@@ -35,7 +54,11 @@ impl VulcanPluginActivationEffects {
         // Identity and phase are one declaration; neither may silently disappear independently.
         // 身份及阶段属于同一声明；二者均不得独立静默消失。
         let identity = match (&self.predecessor_drain_identity, self.predecessor_lua_drain) {
-            (None, None) if self.predecessor_disable.is_none() => return Ok(()),
+            (None, None)
+                if self.predecessor_disable.is_none() && self.predecessor_restore.is_none() =>
+            {
+                return Ok(());
+            }
             (Some(identity), Some(_)) => identity,
             _ => {
                 return Err(Error::invalid(
@@ -78,7 +101,8 @@ impl VulcanPluginActivationEffects {
             }
         }
         if self.predecessor_lua_drain != Some(VulcanPluginEffectObservation::Succeeded)
-            && (self.predecessor_disable.is_some()
+            && (self.predecessor_restore.is_some()
+                || self.predecessor_disable.is_some()
                 || self.probe.is_some()
                 || self.enable.is_some()
                 || self.enable_rollback.is_some())
@@ -95,6 +119,9 @@ impl VulcanPluginActivationEffects {
             return Err(Error::invalid(
                 "Candidate execution precedes confirmed predecessor disable.",
             ));
+        }
+        if self.predecessor_restore.is_some() {
+            self.require_observed_predecessor_restore()?;
         }
         Ok(())
     }
@@ -193,6 +220,7 @@ impl VulcanPluginActivationCandidate<'_> {
             probe: None,
             enable: None,
             enable_rollback: None,
+            predecessor_restore: None,
         };
         store.write_effects_locked(&self.transaction.record, &receipt)?;
         drop(namespace);

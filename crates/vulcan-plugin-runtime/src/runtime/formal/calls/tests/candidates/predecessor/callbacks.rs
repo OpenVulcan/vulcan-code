@@ -3,6 +3,34 @@
 
 use super::*;
 
+/// Retain the deliberate target failure used to detect accidental old-package dispatch.
+/// 保留用于检测意外旧包分发的刻意目标失败。
+const WRONG_PREDECESSOR_TARGET: &str = r#"
+-- New bytes remain private while the old callback runs.
+-- 旧回调运行时，新字节保持私有。
+local M = {}
+-- Reject any accidental old callback dispatch; no arguments or successful result are accepted.
+-- 拒绝任何意外旧回调分发；不接受参数或成功返回值。
+function M.dispatch() error('target must not run as predecessor') end
+M.shutdown, M.shutdown_hooks, M.on_precheck, M.ui_action, M.on_lifecycle = M.dispatch, M.dispatch, M.dispatch, M.dispatch, M.dispatch
+return M
+"#;
+
+/// Build block/declared/fail's old fixture with the deliberately distinct default target; return its original owners.
+/// 用刻意不同的默认目标构建 block／declared／fail 指定的旧夹具；返回原所有者。
+pub(super) fn callback_fixture(
+    block: bool,
+    declared: bool,
+    fail: bool,
+) -> (
+    Fixture,
+    VulcanPluginGenerationStore,
+    VulcanPluginActivationTransaction,
+    crate::VulcanPluginPredecessorDrain,
+) {
+    callback_fixture_with_target(block, declared, fail, WRONG_PREDECESSOR_TARGET)
+}
+
 /// An observed old business failure stays distinct from native retirement and cannot authorize target effects.
 /// 已观测旧业务失败与原生退役保持区分，不能授权目标副作用。
 #[test]
@@ -91,12 +119,15 @@ fn formal_predecessor_callback_business_failure_blocks_target_and_replay() {
 
 /// Construct distinct old and new packages; optionally block or omit the old disable callback.
 /// 构造不同的新旧插件包；可选择阻塞或省略旧停用回调。
+/// fail selects observed old disable failure; target_bundle supplies the exact future immutable target bytes.
+/// fail 选择可观测旧停用失败；target_bundle 提供未来不可变目标的精确字节。
 /// Return the real fixture, store, original transaction and completed Lua drain handle.
 /// 返回真实夹具、存储、原事务及已完成 Lua 排空句柄。
-fn callback_fixture(
+pub(super) fn callback_fixture_with_target(
     block: bool,
     declared: bool,
     fail: bool,
+    target_bundle: &str,
 ) -> (
     Fixture,
     VulcanPluginGenerationStore,
@@ -164,18 +195,10 @@ fn callback_fixture(
     store
         .abort_activation_request("hook-plugin", initial_id)
         .expect("finish unused request");
-    // Target exports deliberately fail if mistaken for the old callback.
-    // 如果目标导出被误作旧回调，会刻意失败。
-    std::fs::write(source.join("runtime/plugin.bundle.lua"), r#"
--- New bytes remain private while the old callback runs.
--- 旧回调运行时，新字节保持私有。
-local M = {}
--- Reject any accidental old callback dispatch; no arguments or successful result are accepted.
--- 拒绝任何意外旧回调分发；不接受参数或成功返回值。
-function M.dispatch() error('target must not run as predecessor') end
-M.shutdown, M.shutdown_hooks, M.on_precheck, M.ui_action, M.on_lifecycle = M.dispatch, M.dispatch, M.dispatch, M.dispatch, M.dispatch
-return M
-"#).expect("distinct private target");
+    // Write the caller's exact target bytes before immutable preparation.
+    // 在不可变准备前写入调用方精确目标字节。
+    std::fs::write(source.join("runtime/plugin.bundle.lua"), target_bundle)
+        .expect("distinct private target");
     // Capture the still-enabled old catalog before creating the policy-bearing update.
     // 在创建携带策略更新之前捕获仍启用旧目录。
     let original = fixture.manager.snapshot();
@@ -232,9 +255,13 @@ fn formal_predecessor_callback_uses_old_configuration_and_original_uuid() {
         .expect("candidate");
     // Old execution cannot be widened into target enable or retargeted to private candidate bytes.
     // 旧执行不能扩权为目标启用或重定向至私有候选字节。
-    let authority =
-        ActivationExecution::predecessor_disable(&fixture.manager.state, &candidate, &drain)
-            .expect("exact old authority");
+    let authority = ActivationExecution::predecessor(
+        &fixture.manager.state,
+        &candidate,
+        &drain,
+        crate::runtime::candidates::PredecessorOperation::Disable,
+    )
+    .expect("exact old authority");
     assert!(
         authority
             .validate(
@@ -257,8 +284,13 @@ fn formal_predecessor_callback_uses_old_configuration_and_original_uuid() {
     // 另一真实管理器不能接纳此宿主签发转换或其原存储。
     let foreign = Fixture::new();
     assert!(
-        ActivationExecution::predecessor_disable(&foreign.manager.state, &candidate, &drain)
-            .is_err()
+        ActivationExecution::predecessor(
+            &foreign.manager.state,
+            &candidate,
+            &drain,
+            crate::runtime::candidates::PredecessorOperation::Disable
+        )
+        .is_err()
     );
     drop(authority);
     executor().block_on(async {

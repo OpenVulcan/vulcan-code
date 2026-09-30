@@ -17,6 +17,7 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.enableRollback": "Enable compensation",
     "pluginUpdates.drainPredecessorLua": "Previous Lua instance retirement",
     "pluginUpdates.disablePredecessor": "Previous plugin disable callback",
+    "pluginUpdates.restorePredecessor": "Previous plugin restore callback",
     "pluginUpdates.effectStarted": "Attempt recorded; completion requires verification",
     "pluginUpdates.installation": "Installation receipt",
     "pluginUpdates.noReceipt": "No installation call recorded",

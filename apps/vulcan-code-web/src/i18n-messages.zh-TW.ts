@@ -17,6 +17,7 @@ export const zhTWTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.enableRollback": "啟用補償",
     "pluginUpdates.drainPredecessorLua": "舊 Lua 執行個體退役",
     "pluginUpdates.disablePredecessor": "舊外掛停用回呼",
+    "pluginUpdates.restorePredecessor": "舊外掛恢復回呼",
     "pluginUpdates.effectStarted": "已記錄嘗試，完成情況待核對",
     "pluginUpdates.installation": "安裝回執",
     "pluginUpdates.noReceipt": "未記錄安裝呼叫",

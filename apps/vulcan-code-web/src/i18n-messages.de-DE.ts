@@ -17,6 +17,7 @@ export const deDETranslations: Record<TranslationKey, string> = {
     "pluginUpdates.enableRollback": "Aktivierung kompensieren",
     "pluginUpdates.drainPredecessorLua": "Vorherige Lua-Instanz beenden",
     "pluginUpdates.disablePredecessor": "Deaktivierungs-Callback des vorherigen Plugins",
+    "pluginUpdates.restorePredecessor": "Wiederherstellungs-Callback des vorherigen Plugins",
     "pluginUpdates.effectStarted": "Versuch erfasst; Abschluss muss geprüft werden",
     "pluginUpdates.installation": "Installationsbeleg",
     "pluginUpdates.noReceipt": "Kein Installationsaufruf protokolliert",

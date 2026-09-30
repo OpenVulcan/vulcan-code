@@ -2,9 +2,96 @@
 //! 原前驱回调复用正式调用所有权，并在原生退役期间保留精确请求。
 
 use super::*;
+use crate::runtime::candidates::PredecessorOperation;
 use crate::{VulcanPluginActivationCandidate, VulcanPluginPredecessorDrain};
 
+/// Return the checked lifecycle deadline shared by old disable and restore; reject clock overflow.
+/// 返回旧停用及恢复共用的受检生命周期截止时间；拒绝时钟溢出。
+fn predecessor_callback_deadline() -> Result<Instant, VulcanPluginRuntimeError> {
+    Instant::now()
+        .checked_add(Duration::from_millis(
+            crate::runtime::VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
+        ))
+        .ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Predecessor callback deadline is out of range.")
+        })
+}
+
 impl VulcanPluginRuntimeManager {
+    /// Require request_id's tracked calls and actual native domains to retire before old restore intent.
+    /// 在旧恢复意图之前，要求 request_id 的受跟踪调用及实际原生域退役。
+    /// Return an explicit retention error under the publication gate; do not consume the single restore attempt.
+    /// 在发布门内返回明确保留错误；不消耗单次恢复尝试。
+    fn require_predecessor_restore_retirement(
+        &self,
+        request_id: Uuid,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // The normal registration gate orders this check with both old and target admission.
+        // 普通注册门将此检查与旧包及目标入场排序。
+        let _publication =
+            self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+            })?;
+        // Reuse the existing parent and retained-call registry.
+        // 复用既有父级及保留调用注册表。
+        let owner = self.required_formal_owner()?;
+        if owner
+            .calls
+            .lock()
+            .map_err(|_| calls_error())?
+            .values()
+            .any(|call| {
+                call.activation
+                    .as_ref()
+                    .is_some_and(|authority| authority.request_id == request_id)
+            })
+            || owner
+                .host
+                .retains_activation_request(request_id)
+                .map_err(core_error)?
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Predecessor restore requires actual retirement of retained original execution.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Restore drain's original enable declaration using candidate's unchanged original request.
+    /// 使用 candidate 未变原请求恢复 drain 的原启用声明。
+    /// Return callback evidence only; routes remain closed, and a declared restore attempt excludes this target.
+    /// 仅返回回调证据；路由保持关闭，声明的恢复尝试排除此目标。
+    pub async fn restore_activation_predecessor(
+        &self,
+        candidate: &VulcanPluginActivationCandidate<'_>,
+        drain: &VulcanPluginPredecessorDrain,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        self.invoke_formal_predecessor_operation(
+            candidate,
+            drain,
+            PredecessorOperation::Restore,
+            predecessor_callback_deadline()?,
+        )
+        .await
+    }
+
+    /// Execute candidate's original old disable under drain and deadline; return the existing formal observation.
+    /// 在 drain 及 deadline 下执行 candidate 原旧停用；返回既有正式观测。
+    pub(super) async fn invoke_formal_predecessor_disable(
+        &self,
+        candidate: &VulcanPluginActivationCandidate<'_>,
+        drain: &VulcanPluginPredecessorDrain,
+        deadline: Instant,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        self.invoke_formal_predecessor_operation(
+            candidate,
+            drain,
+            PredecessorOperation::Disable,
+            deadline,
+        )
+        .await
+    }
+
     /// Invoke only drain's frozen old disable callback under candidate's actual original request ownership.
     /// 仅在 candidate 实际原请求所有权下调用 drain 固定旧停用回调。
     /// Return after observed invocation and cleanup; no callback means no effect receipt or execution environment.
@@ -14,46 +101,48 @@ impl VulcanPluginRuntimeManager {
         candidate: &VulcanPluginActivationCandidate<'_>,
         drain: &VulcanPluginPredecessorDrain,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        // The normal lifecycle budget includes preparation, initialization and callback execution.
-        // 普通生命周期预算包含准备、初始化及回调执行。
-        let deadline = Instant::now()
-            .checked_add(Duration::from_millis(
-                crate::runtime::VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
-            ))
-            .ok_or_else(|| {
-                VulcanPluginRuntimeError::new("Predecessor callback deadline is out of range.")
-            })?;
-        self.invoke_formal_predecessor_disable(candidate, drain, deadline)
+        self.invoke_formal_predecessor_disable(candidate, drain, predecessor_callback_deadline()?)
             .await
     }
 
-    /// Execute one original disable before deadline; preserve normal supervision and a durable one-attempt receipt.
-    /// 在 deadline 前执行单个原停用；保留普通监督及持久单次尝试回执。
+    /// Execute one typed original operation before deadline; preserve supervision and a durable one-attempt receipt.
+    /// 在 deadline 前执行单个类型化原操作；保留监督及持久单次尝试回执。
     /// Candidate and drain must denote the same prepared original; errors never make this callback replayable.
     /// candidate 与 drain 必须指向相同准备原请求；错误绝不使此回调可重放。
-    pub(super) async fn invoke_formal_predecessor_disable(
+    pub(super) async fn invoke_formal_predecessor_operation(
         &self,
         candidate: &VulcanPluginActivationCandidate<'_>,
         drain: &VulcanPluginPredecessorDrain,
+        operation: PredecessorOperation,
         deadline: Instant,
     ) -> Result<(), VulcanPluginRuntimeError> {
         // The completed original drain, not current target metadata, fixes the old package and native scope.
         // 已完成原排空固定旧包及原生作用域，而非当前目标元数据。
-        let authority = ActivationExecution::predecessor_disable(&self.state, candidate, drain)?;
+        let authority = ActivationExecution::predecessor(&self.state, candidate, drain, operation)?;
         // Read only the original package's declaration; the new package may have entirely different exports.
         // 仅读取原包声明；新包可能具有完全不同的导出。
         let manifest = authority.plugin.manifest.as_ref().ok_or_else(|| {
             VulcanPluginRuntimeError::new("Original predecessor manifest is unavailable.")
         })?;
-        // Missing old Lua or disable declaration is an explicit no-effect branch.
-        // 缺少旧 Lua 或停用声明是显式无副作用分支。
-        let Some(export) = manifest
-            .lua_runtime
-            .as_ref()
-            .and_then(|runtime| runtime.lifecycle.disable.clone())
-        else {
+        // Each old operation consumes only its own original declaration and compatible lifecycle event.
+        // 每个旧操作仅消费各自原声明及兼容生命周期事件。
+        let (event, export) = match (operation, manifest.lua_runtime.as_ref()) {
+            (PredecessorOperation::Disable, Some(runtime)) => {
+                ("disable", runtime.lifecycle.disable.clone())
+            }
+            (PredecessorOperation::Restore, Some(runtime)) => {
+                ("enable", runtime.lifecycle.enable.clone())
+            }
+            (_, None) => return Ok(()),
+        };
+        // An absent original declaration has no callback, environment or effect receipt.
+        // 原声明缺失时无回调、环境或副作用回执。
+        let Some(export) = export else {
             return Ok(());
         };
+        if operation == PredecessorOperation::Restore {
+            self.require_predecessor_restore_retirement(authority.request_id)?;
+        }
         // Exact scope remains fixed through module initialization and native cleanup.
         // 精确作用域在模块初始化及原生清理期间保持固定。
         let scope = authority.operation.scope();
@@ -71,17 +160,21 @@ impl VulcanPluginRuntimeManager {
         // 既有生命周期执行消费单个显式导出，绝不添加工具或 Hook 关闭函数。
         let input = Preparation {
             workspace: CallWorkspace::LifecycleEnvironment,
-            arguments: json!({"event":"disable","plugin_id":plugin.id,"request_id":request_id.to_string()}),
+            arguments: json!({"event":event,"plugin_id":plugin.id,"request_id":request_id.to_string()}),
             finalizer: None,
             scope,
-            security_partition: format!("predecessor:{}:{request_id}:disable", plugin.id),
+            security_partition: format!(
+                "predecessor:{}:{request_id}:{}",
+                plugin.id,
+                scope.as_str()
+            ),
             deadline,
             admission: CallAdmission::ActivationLifecycle { authority, export },
         };
         // Persist the old callback attempt before environment writes or any Lua initialization.
         // 环境写入或任何 Lua 初始化之前持久保存旧回调尝试。
         let effect = candidate
-            .begin_effect_attempt(crate::VulcanPluginActivationEffect::DisablePredecessor)
+            .begin_effect_attempt(operation.effect())
             .map_err(|failure| VulcanPluginRuntimeError::new(failure.to_string()))?;
         // Native work keeps the original request lock independently from this finite observation.
         // 原生工作独立于此有限观测保留原请求锁。

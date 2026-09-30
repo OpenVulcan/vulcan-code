@@ -17,6 +17,7 @@ export const frFRTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.enableRollback": "Compensation de l’activation",
     "pluginUpdates.drainPredecessorLua": "Arrêt de l’ancienne instance Lua",
     "pluginUpdates.disablePredecessor": "Rappel de désactivation de l’ancien plugin",
+    "pluginUpdates.restorePredecessor": "Rappel de restauration de l’ancien plugin",
     "pluginUpdates.effectStarted": "Tentative enregistrée ; achèvement à vérifier",
     "pluginUpdates.installation": "Reçu d’installation",
     "pluginUpdates.noReceipt": "Aucun appel d’installation enregistré",

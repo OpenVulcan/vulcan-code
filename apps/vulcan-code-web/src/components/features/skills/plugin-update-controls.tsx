@@ -31,6 +31,7 @@ const phaseLabels: Record<LocalPluginUpdateStatus["phase"], TranslationKey> = {
 const effectLabels: Record<LocalPluginUpdateStatus["effects"][number]["operation"], TranslationKey> = {
   drain_predecessor_lua: "pluginUpdates.drainPredecessorLua",
   disable_predecessor: "pluginUpdates.disablePredecessor",
+  restore_predecessor: "pluginUpdates.restorePredecessor",
   probe: "pluginUpdates.probe", enable: "pluginUpdates.enable", enable_rollback: "pluginUpdates.enableRollback",
 };
 

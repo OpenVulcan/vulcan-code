@@ -171,6 +171,29 @@ fn admitted_plugin(
 }
 
 impl VulcanPluginEmbeddedHost {
+    /// Inspect actual weak domains for request_id; return true while any original activation execution survives.
+    /// 检查 request_id 的实际弱域；任何原激活执行仍存续时返回 true。
+    /// Logical call removal cannot substitute for physical native retirement.
+    /// 逻辑调用移除不能替代物理原生退役。
+    pub(in crate::runtime) fn retains_activation_request(
+        &self,
+        request_id: uuid::Uuid,
+    ) -> EmbeddedResult<bool> {
+        // Upgrade only during observation, without introducing another retained-owner registry.
+        // 仅在观测期间升级引用，不引入另一份保留所有者注册表。
+        let domains = self
+            .authority
+            .domains
+            .lock()
+            .map_err(|_| internal("Plugin authority lock is poisoned."))?;
+        Ok(domains.values().filter_map(Weak::upgrade).any(|domain| {
+            domain
+                .activation
+                .as_ref()
+                .is_some_and(|activation| activation.request_id == request_id)
+        }))
+    }
+
     /// Check actual core owners retaining update; true means physical execution has not retired.
     /// 检查保留 update 的实际核心所有者；true 表示物理执行尚未退役。
     /// The caller excludes registration; this method neither closes pools nor upgrades manager ownership.

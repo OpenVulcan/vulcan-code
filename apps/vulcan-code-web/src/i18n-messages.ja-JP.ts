@@ -17,6 +17,7 @@ export const jaJPTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.enableRollback": "有効化の補償",
     "pluginUpdates.drainPredecessorLua": "旧 Lua インスタンスの終了",
     "pluginUpdates.disablePredecessor": "旧プラグインの無効化コールバック",
+    "pluginUpdates.restorePredecessor": "旧プラグインの復元コールバック",
     "pluginUpdates.effectStarted": "試行を記録済み。完了状態の確認が必要です",
     "pluginUpdates.installation": "インストール記録",
     "pluginUpdates.noReceipt": "インストール呼び出しの記録なし",

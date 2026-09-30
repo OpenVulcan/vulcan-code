@@ -3,6 +3,7 @@
 
 use super::*;
 mod callbacks;
+mod restore;
 
 /// Prepare the exact target configuration while preserving the original predecessor and request lock.
 /// 准备精确目标配置，同时保留原前驱及请求锁。

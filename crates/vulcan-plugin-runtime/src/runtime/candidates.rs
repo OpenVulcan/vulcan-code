@@ -94,16 +94,55 @@ impl CandidateOperation {
     }
 }
 
-/// Explicit execution provenance fixes either one private target operation or the old-version disable callback.
-/// 显式执行来源固定单个私有目标操作或旧版本停用回调。
+/// Host-selected old-package lifecycle operation fixes its native scope and durable effect.
+/// 宿主选择的旧包生命周期操作固定其原生作用域及持久副作用。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PredecessorOperation {
+    /// Disable the old package before any target effect.
+    /// 在任何目标副作用之前停用旧包。
+    Disable,
+    /// Restore only the old package after observed effects and confirmed target compensation.
+    /// 在副作用已观测且目标补偿已确认后，仅恢复旧包。
+    Restore,
+}
+
+impl PredecessorOperation {
+    /// Return the sole native scope; restore uses the original enable declaration.
+    /// 返回唯一原生作用域；恢复使用原启用声明。
+    pub(super) fn scope(self) -> VulcanPluginBridgeLeaseScope {
+        match self {
+            Self::Disable => VulcanPluginBridgeLeaseScope::LifecycleDisable,
+            Self::Restore => VulcanPluginBridgeLeaseScope::LifecycleEnable,
+        }
+    }
+
+    /// Return this operation's original-request receipt field, independently of the Lua event spelling.
+    /// 返回此操作的原请求回执字段，独立于 Lua 事件拼写。
+    pub(super) fn effect(self) -> crate::VulcanPluginActivationEffect {
+        match self {
+            Self::Disable => crate::VulcanPluginActivationEffect::DisablePredecessor,
+            Self::Restore => crate::VulcanPluginActivationEffect::RestorePredecessor,
+        }
+    }
+}
+
+/// Explicit provenance fixes one private target operation or one exact old-package callback.
+/// 显式来源固定单个私有目标操作或单个精确旧包回调。
 #[derive(Clone)]
 pub(super) enum ActivationOperation {
     /// The prepared target never acquires a public routing generation.
     /// 准备目标绝不取得公开路由代次。
     Candidate(CandidateOperation),
-    /// Old execution uses the exact completed predecessor drain identity.
-    /// 旧执行使用精确已完成前驱排空身份。
-    PredecessorDisable(crate::VulcanPluginPredecessorDrainIdentity),
+    /// Old execution uses one typed operation and its exact completed drain identity.
+    /// 旧执行使用单个类型化操作及其精确已完成排空身份。
+    Predecessor {
+        /// Only the operation chooses native lifecycle scope.
+        /// 仅操作选择原生生命周期作用域。
+        operation: PredecessorOperation,
+        /// The actual old package and current closed routing must match this identity.
+        /// 实际旧包及当前关闭路由必须匹配此身份。
+        identity: crate::VulcanPluginPredecessorDrainIdentity,
+    },
 }
 
 impl ActivationOperation {
@@ -112,7 +151,7 @@ impl ActivationOperation {
     pub(super) fn scope(&self) -> VulcanPluginBridgeLeaseScope {
         match self {
             Self::Candidate(operation) => operation.scope(),
-            Self::PredecessorDisable(_) => VulcanPluginBridgeLeaseScope::LifecycleDisable,
+            Self::Predecessor { operation, .. } => operation.scope(),
         }
     }
 
@@ -155,14 +194,15 @@ pub(super) struct ActivationExecution {
 }
 
 impl ActivationExecution {
-    /// Retain candidate's original lock while selecting only drain's frozen old package for disable.
-    /// 保留 candidate 原锁，同时仅选择 drain 固定旧包用于停用。
+    /// Retain candidate's original lock while selecting drain's frozen old package for operation.
+    /// 保留 candidate 原锁，同时选择 drain 固定旧包用于 operation。
     /// state owns both identities; return authority only after confirmed old Lua retirement.
     /// state 拥有两个身份；仅在确认旧 Lua 退役后返回权威。
-    pub(super) fn predecessor_disable(
+    pub(super) fn predecessor(
         state: &VulcanPluginManagerState,
         candidate: &VulcanPluginActivationCandidate<'_>,
         drain: &crate::VulcanPluginPredecessorDrain,
+        operation: PredecessorOperation,
     ) -> Result<Arc<Self>, VulcanPluginRuntimeError> {
         // The same actual original lease protects both old and target package operations.
         // 相同实际原租约保护旧包及目标包操作。
@@ -175,7 +215,10 @@ impl ActivationExecution {
         let authority = Arc::new(Self {
             plugin,
             request_id: candidate.transaction_record().request_id(),
-            operation: ActivationOperation::PredecessorDisable(drain.identity().clone()),
+            operation: ActivationOperation::Predecessor {
+                operation,
+                identity: drain.identity().clone(),
+            },
             manager_id: state.manager_id.clone(),
             _readiness: readiness,
             environment: std::sync::Mutex::new(None),
@@ -269,7 +312,7 @@ impl ActivationExecution {
                 }
                 validate_candidate_namespace(state, &plugin.id)
             }
-            ActivationOperation::PredecessorDisable(identity) => {
+            ActivationOperation::Predecessor { identity, .. } => {
                 super::update_drain::validate_predecessor_callback_current(state, plugin, identity)
             }
         }
