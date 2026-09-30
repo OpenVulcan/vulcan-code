@@ -644,13 +644,17 @@ async fn persist_update_policy(
 
 /// Validate and install the original prepared target, preserving public state and durable callback evidence.
 /// 校验并安装原准备目标，保留公开状态及持久回调证据。
-/// Returns the original prepared owner after actual candidate resources retire; errors retain durable inspection evidence.
-/// 实际候选资源退役后返回原准备所有者；错误保留持久检查证据。
+/// Runtime and prepared supply the exact manager and owned original request; normal results return both owner and outcome.
+/// runtime 及 prepared 提供精确管理器与自有原请求；正常结果同时返回所有者与执行结果。
+/// Only a lost blocking worker returns an outer error; callers must inspect evidence before any compensation.
+/// 仅阻塞工作线程丢失返回外层错误；调用方必须先检查证据，再决定任何补偿。
 async fn validate_and_install(
     runtime: &VulcanPluginRuntimeManager,
     prepared: PreparedLocalPluginUpdate,
-) -> Result<PreparedLocalPluginUpdate, String> {
-    {
+) -> Result<(PreparedLocalPluginUpdate, Result<(), String>), String> {
+    // Return the original owner even when borrowed inspection or the Lua probe reports a normal error.
+    // 即使借用检查或 Lua 探测返回正常错误，也返回原所有者。
+    let probe = async {
         // The exact borrowed view fences publication during the original Lua probe.
         // 精确借用视图在原 Lua 探测期间阻止发布。
         let candidate = prepared
@@ -660,7 +664,11 @@ async fn validate_and_install(
         runtime
             .probe_activation_candidate(&candidate)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    if let Err(error) = probe {
+        return Ok((prepared, Err(error)));
     }
     // Move actual ownership, not a borrowed path, into the blocking preparation worker.
     // 将实际所有权而非借用路径移入阻塞准备工作线程。
@@ -669,29 +677,33 @@ async fn validate_and_install(
     // 即使观察者取消，依赖准备或安全读取仍运行时也不能释放请求。
     let (prepared, configs) =
         run_extension_management_blocking("prepare immutable candidate MCP", move || {
-            // Reinspect the same owned transaction; never select a newer public catalog entry.
-            // 重新检查同一自有事务；绝不选择更新的公开目录条目。
-            let candidate = prepared
-                .store
-                .inspect_activation_candidate(&prepared.transaction)
-                .map_err(|error| error.to_string())?;
-            // This original owner retains package, environment and credentials across blocking work.
-            // 此原所有者在阻塞工作期间保留插件包、环境及凭据。
-            let mcp_candidate = preparing_runtime
-                .prepare_mcp_activation_candidate(&candidate)
-                .map_err(|error| error.to_string())?;
-            // Secure-store materialization also runs outside the asynchronous executor thread.
-            // 安全存储物化也在异步执行器线程之外运行。
-            let configs =
-                candidate_local_mcp_server_configs(mcp_candidate, &OsPluginMcpSecretStore)?;
-            drop(candidate);
+            // Normal preparation failures return alongside the owner; worker loss remains an outer error.
+            // 正常准备失败与所有者一起返回；工作线程丢失仍为外层错误。
+            let configs = (|| {
+                // Reinspect the same owned transaction; never select a newer public catalog entry.
+                // 重新检查同一自有事务；绝不选择更新的公开目录条目。
+                let candidate = prepared
+                    .store
+                    .inspect_activation_candidate(&prepared.transaction)
+                    .map_err(|error| error.to_string())?;
+                // This original owner retains package, environment and credentials across blocking work.
+                // 此原所有者在阻塞工作期间保留插件包、环境及凭据。
+                let mcp_candidate = preparing_runtime
+                    .prepare_mcp_activation_candidate(&candidate)
+                    .map_err(|error| error.to_string())?;
+                // Secure-store materialization also runs outside the asynchronous executor thread.
+                // 安全存储物化也在异步执行器线程之外运行。
+                candidate_local_mcp_server_configs(mcp_candidate, &OsPluginMcpSecretStore)
+            })();
             Ok((prepared, configs))
         })
         .await?;
-    CandidatePluginMcpRuntime::start(configs)?
-        .validate_and_release()
-        .await?;
-    {
+    // Readiness and installation failures retain the exact owner for the caller's controlled compensation.
+    // 就绪及安装失败为调用方受控补偿保留精确所有者。
+    let validation = async {
+        CandidatePluginMcpRuntime::start(configs?)?
+            .validate_and_release()
+            .await?;
         // Installation consumes the same original authority after actual MCP shutdown and release.
         // 实际 MCP 关闭及释放后，安装消费同一原权威。
         let candidate = prepared
@@ -701,9 +713,10 @@ async fn validate_and_install(
         runtime
             .install_activation_candidate(&candidate)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.to_string())
     }
-    Ok(prepared)
+    .await;
+    Ok((prepared, validation))
 }
 
 /// Execute the existing disabled-plugin update through immutable preparation and the original durable selection.
@@ -786,7 +799,11 @@ pub(super) async fn update(
             ));
         }
         persist_update_policy(state, &prepared).await?;
-        prepared = validate_and_install(&runtime, prepared).await?;
+        // Preserve the returned original authority before examining the normal validation outcome.
+        // 检查正常验证结果前，保留返回的原权威。
+        let (validated, validation) = validate_and_install(&runtime, prepared).await?;
+        prepared = validated;
+        validation?;
         // Keep the existing configuration writer excluded through selection commit and route publication.
         // 在选择提交及路由发布期间，持续排除既有配置写入器。
         let policy_publication =

@@ -5,6 +5,160 @@ use super::*;
 use crate::tests::provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH;
 use vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase as Phase;
 
+/// Normal failures before, inside and after the blocking worker return the actual original request lock.
+/// 阻塞工作线程之前、之中与之后的正常失败返回实际原请求锁。
+/// No inputs or return value; assertions use production package inspection, MCP startup and disk ownership.
+/// 无输入与返回值；断言使用生产插件包检查、MCP 启动及磁盘所有权。
+#[tokio::test]
+async fn immutable_service_update_validation_failure_retains_original_owner() {
+    for failure in ["package", "environment", "readiness"] {
+        // Each failure has its own complete production service and immutable request.
+        // 每种失败拥有独立完整生产服务及不可变请求。
+        let fixture = Fixture::new(false);
+        if failure != "package" {
+            // Inert bytes deliberately cannot start an MCP process on any supported host.
+            // 惰性字节在任何支持的宿主上均无法启动 MCP 进程。
+            std::fs::write(
+                fixture.source.join("server.bin"),
+                b"invalid executable fixture",
+            )
+            .expect("inert executable");
+            // All declared platforms select the same contained fixture without guessing the current target.
+            // 全部声明平台选择同一受目录约束夹具，不猜测当前目标。
+            let mut manifest =
+                std::fs::read_to_string(fixture.source.join("plugin.yaml")).expect("manifest");
+            manifest.push_str(
+                "permissions: [process_binary, process_session]\nexecution:\n  native_binaries:\n    - id: server\n      targets:\n        x86_64-pc-windows-msvc: server.bin\n        aarch64-pc-windows-msvc: server.bin\n        x86_64-unknown-linux-gnu: server.bin\n        aarch64-unknown-linux-gnu: server.bin\n        x86_64-apple-darwin: server.bin\n        aarch64-apple-darwin: server.bin\nmcp:\n  servers:\n    - id: local\n      name: Local validation fixture\n      transport:\n        type: stdio\n        launcher: {type: native_binary, binary_id: server}\n",
+            );
+            std::fs::write(fixture.source.join("plugin.yaml"), manifest)
+                .expect("native MCP declaration");
+        }
+        // The exact allocated UUID remains authoritative after every normal validation failure.
+        // 每次正常验证失败后，精确已分配 UUID 仍具有权威。
+        let request_id = uuid::Uuid::new_v4();
+        // The production path retains the original configuration, credentials and immutable package.
+        // 生产路径保留原配置、凭据及不可变插件包。
+        let prepared = fixture.prepare(request_id).expect("prepared original");
+        // Open an independent store to prove operating-system exclusion rather than wrapper identity.
+        // 打开独立存储，证明操作系统互斥而非包装器身份。
+        let observer =
+            VulcanPluginGenerationStore::open_existing(fixture.runtime.user_plugin_root())
+                .expect("open observer")
+                .expect("existing store");
+        {
+            // Inspection obtains the sole immutable target location and execution-cache identity.
+            // 检查取得唯一不可变目标位置及执行缓存身份。
+            let candidate = prepared
+                .store
+                .inspect_activation_candidate(&prepared.transaction)
+                .expect("candidate before intentional failure");
+            // Metadata belongs to this exact prepared request, never to latest public discovery.
+            // 元数据属于此精确准备请求，绝不来自最新公开发现。
+            let package = candidate.package();
+            match failure {
+                "package" => {
+                    std::fs::write(
+                        package.package_root.join("skills/review-helper/SKILL.md"),
+                        "corrupted immutable package",
+                    )
+                    .expect("package corruption");
+                }
+                "environment" => {
+                    // A real incomplete cache forces the blocking preparation path to fail validation.
+                    // 真实不完整缓存迫使阻塞准备路径校验失败。
+                    let cache = fixture
+                        .root
+                        .path()
+                        .join("runtime")
+                        .join(&package.id)
+                        .join(package.version.as_deref().expect("version"))
+                        .join(&package.content_fingerprint);
+                    std::fs::create_dir_all(cache).expect("incomplete cache");
+                }
+                "readiness" => {}
+                _ => unreachable!("explicit failure scenario"),
+            }
+        }
+        // Publication must remain at the original generation throughout validation and error return.
+        // 验证及错误返回期间，发布必须保持原代次。
+        let original_catalog = fixture.runtime.snapshot();
+        // Outer success certifies that the real worker returned the actual owner, not that validation succeeded.
+        // 外层成功证明真实工作线程返回实际所有者，不表示验证成功。
+        let (prepared, validation) = validate_and_install(&fixture.runtime, prepared)
+            .await
+            .expect("normal failure returns owner");
+        // Preserve the actual failure diagnostic without pretending a callback completed.
+        // 保留实际失败诊断，不假装回调已经完成。
+        let error = validation.expect_err("intentional normal validation failure");
+        assert!(!error.is_empty(), "{failure}: missing failure diagnostic");
+        match failure {
+            "package" => assert!(error.contains("SKILL.md"), "{error}"),
+            "environment" => assert!(
+                error.starts_with("Failed to read Vulcan plugin environment marker"),
+                "{error}"
+            ),
+            "readiness" => assert!(
+                error.starts_with("Candidate MCP validation remains incomplete:"),
+                "{error}"
+            ),
+            _ => unreachable!("explicit failure scenario"),
+        }
+        assert_eq!(prepared.transaction.record().request_id(), request_id);
+        assert_eq!(prepared.transaction.record().phase(), Phase::Prepared);
+        assert!(Arc::ptr_eq(&original_catalog, &fixture.runtime.snapshot()));
+        assert_eq!(observer.activation(PLUGIN).expect("selection"), None);
+        assert!(
+            observer
+                .installation_receipt(PLUGIN, request_id)
+                .expect("installation inspection")
+                .is_none()
+        );
+        assert!(
+            matches!(
+                observer.resume_activation_transaction(PLUGIN, request_id),
+                Err(error) if error.code == vulcan_plugin_runtime::VulcanPluginStoreErrorCode::Busy
+            ),
+            "{failure}: original owner must still hold the actual request lock"
+        );
+        drop(prepared);
+        // Actual resource retirement precedes success; poll the existing disk authority after owner release.
+        // 实际资源退役先于成功；释放所有者后轮询既有磁盘权威。
+        let resumed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match observer.resume_activation_transaction(PLUGIN, request_id) {
+                    Ok(owner) => break Some(owner),
+                    Err(error)
+                        if error.code
+                            == vulcan_plugin_runtime::VulcanPluginStoreErrorCode::Busy =>
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(error)
+                        if failure == "package"
+                            && error.code
+                                == vulcan_plugin_runtime::VulcanPluginStoreErrorCode::Invalid =>
+                    {
+                        // Acquiring the released request lock does not authorize a corrupted package.
+                        // 取得已释放请求锁不授权损坏插件包。
+                        break None;
+                    }
+                    Err(error) => {
+                        panic!("{failure}: original ownership inspection failed: {error}")
+                    }
+                }
+            }
+        })
+        .await
+        .expect("actual owners retire");
+        if let Some(resumed) = resumed {
+            assert_eq!(resumed.record().request_id(), request_id);
+            assert_eq!(resumed.record().phase(), Phase::Prepared);
+        } else {
+            assert_eq!(failure, "package");
+        }
+    }
+}
+
 /// Recovery waits for the actual configuration writer and rejects a policy change before publishing any routes.
 /// 恢复等待实际配置写入器，并在发布任何路由前拒绝策略变化。
 #[tokio::test]
@@ -15,9 +169,11 @@ async fn immutable_service_update_policy_recovery_serializes_with_user_edits() {
     // Preparation and readiness use the same production path as normal updates.
     // 准备及就绪使用与正常更新相同的生产路径。
     let mut prepared = fixture.prepare(uuid::Uuid::new_v4()).expect("prepare");
-    prepared = validate_and_install(&fixture.runtime, prepared)
+    let (validated, validation) = validate_and_install(&fixture.runtime, prepared)
         .await
-        .expect("readiness");
+        .expect("readiness worker");
+    prepared = validated;
+    validation.expect("readiness");
     prepared
         .store
         .commit_activation_transaction(&mut prepared.transaction)
@@ -888,9 +1044,11 @@ async fn immutable_service_update_recovers_original_published_selection() {
         // Prepare and validate through the same production steps used by a normal update.
         // 经正常更新使用的相同生产步骤准备并校验。
         let mut prepared = fixture.prepare(uuid::Uuid::new_v4()).expect("prepare");
-        prepared = validate_and_install(&fixture.runtime, prepared)
+        let (validated, validation) = validate_and_install(&fixture.runtime, prepared)
             .await
-            .expect("actual readiness");
+            .expect("actual readiness worker");
+        prepared = validated;
+        validation.expect("actual readiness");
         prepared
             .store
             .commit_activation_transaction(&mut prepared.transaction)
