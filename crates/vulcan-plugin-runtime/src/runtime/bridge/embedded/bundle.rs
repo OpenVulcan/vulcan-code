@@ -48,7 +48,14 @@ impl VulcanPluginEmbeddedHost {
         &self,
         request: VulcanPluginBundlePoolRequest,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(None, request, None, None, None)
+        self.register_bundle_pool_with_capacity(
+            None,
+            request,
+            None,
+            None,
+            ExecutionSource::Published,
+        )
+        .map(|pool| pool.id)
     }
 
     /// Register request's real bundle in exact capacity_id and return its native member pool identity.
@@ -60,7 +67,14 @@ impl VulcanPluginEmbeddedHost {
         capacity_id: &str,
         request: VulcanPluginBundlePoolRequest,
     ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, None)
+        self.register_bundle_pool_with_capacity(
+            Some(capacity_id),
+            request,
+            None,
+            None,
+            ExecutionSource::Published,
+        )
+        .map(|pool| pool.id)
     }
 
     /// Register the exact reusable tool in capacity_id; request must match its declared policy and shutdown.
@@ -78,8 +92,9 @@ impl VulcanPluginEmbeddedHost {
             request,
             Some(tool_id),
             None,
-            None,
+            ExecutionSource::Published,
         )
+        .map(|pool| pool.id)
     }
 
     /// Register tool_id in capacity_id with the exact snapshot already used to choose its reusable domain.
@@ -98,8 +113,9 @@ impl VulcanPluginEmbeddedHost {
             request,
             Some(tool_id),
             Some(snapshot),
-            None,
+            ExecutionSource::Published,
         )
+        .map(|pool| pool.id)
     }
 
     /// Register one tracked call in capacity_id, retaining original ownership only for explicit activation operations.
@@ -118,7 +134,48 @@ impl VulcanPluginEmbeddedHost {
                 "Activation operations cannot select a business finalizer.",
             ));
         }
-        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, activation)
+        // Existing transient operation restrictions stay independent of private persistent Hook admission.
+        // 既有瞬态操作限制保持独立于私有持久 Hook 入场。
+        let source = match activation {
+            Some(authority) => ExecutionSource::ActivationOperation(authority),
+            None => ExecutionSource::Published,
+        };
+        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, source)
+            .map(|pool| pool.id)
+    }
+
+    /// Register only the original selected target Hook and return its same pool plus a restricted weak transfer handle.
+    /// 仅注册原已选目标 Hook，并返回相同池及受限弱转交句柄。
+    /// authority fixes the full selection; request must use Session policy and the manifest's Hook finalizer only.
+    /// authority 固定完整选择；request 必须使用 Session 策略及清单 Hook 关闭器。
+    pub(in crate::runtime) fn register_private_target_hook_bundle_pool_in_capacity(
+        &self,
+        capacity_id: &str,
+        request: VulcanPluginBundlePoolRequest,
+        authority: Arc<ActivationTargetHookAuthority>,
+    ) -> EmbeddedResult<PrivateTargetHookHandoff> {
+        if request.scope != VulcanPluginBridgeLeaseScope::Enabled
+            || request.policy.reuse != luaskills::runtime::embedded::InstanceReuse::Session
+            || request.policy.max_resident_vms != 1
+            || request.policy.max_running_calls != 1
+            || !request.policy.serial
+        {
+            return Err(error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Private target Hook requires its fixed single-session policy.",
+            ));
+        }
+        let registered = self.register_bundle_pool_with_capacity(
+            Some(capacity_id),
+            request,
+            None,
+            None,
+            ExecutionSource::PrivateTargetHook(authority),
+        )?;
+        Ok(PrivateTargetHookHandoff {
+            pool_id: registered.id,
+            domain: Arc::downgrade(&registered.domain),
+        })
     }
 
     /// Load the manifest-selected bundle and fixed restricted loader for `request`.
@@ -135,13 +192,13 @@ impl VulcanPluginEmbeddedHost {
         request: VulcanPluginBundlePoolRequest,
         reusable_tool: Option<&str>,
         capability_snapshot: Option<CapabilitySnapshot>,
-        activation: Option<Arc<ActivationExecution>>,
-    ) -> EmbeddedResult<String> {
+        source: ExecutionSource,
+    ) -> EmbeddedResult<RegisteredPool> {
         // Activation provenance is explicit and cannot be selected by the package ID or generation string.
         // 激活来源为显式值，不能由插件包标识或代次字符串选择。
         let admission = PoolAdmission {
             scope: request.scope,
-            activation,
+            source,
         };
         // Keep the owning manager alive during exact descriptor and file resolution.
         // 在精确描述符及文件解析期间保持所属管理器存活。
@@ -159,7 +216,7 @@ impl VulcanPluginEmbeddedHost {
                 "Plugin changed before bundle preparation.",
             ));
         }
-        if admission.activation.is_none()
+        if matches!(admission.source, ExecutionSource::Published)
             && plugin.runtime_state != request.scope.required_runtime_state()
         {
             return Err(error(
@@ -179,6 +236,20 @@ impl VulcanPluginEmbeddedHost {
         // 这是现有工具及 Hook 分发使用的同一已校验 Lua 契约。
         let runtime = required_lua_runtime(manifest)
             .map_err(|failure| error(EmbeddedErrorCode::InvalidArgument, failure.message))?;
+        // The private target cannot borrow the tool finalizer even when its export is valid in this bundle.
+        // 即使工具关闭器导出在此 bundle 中有效，私有目标也不能借用它。
+        if matches!(admission.source, ExecutionSource::PrivateTargetHook(_))
+            && request
+                .finalizer
+                .as_ref()
+                .map(|finalizer| finalizer.export.as_str())
+                != runtime.hook_shutdown_function.as_deref()
+        {
+            return Err(error(
+                EmbeddedErrorCode::InvalidArgument,
+                "Private target Hook finalizer differs from its exact manifest declaration.",
+            ));
+        }
         // Resolve hygiene exclusively from the validated manifest, never from request-supplied Lua.
         // 仅从已校验清单解析清理契约，绝不接受请求提供的 Lua。
         let reusable = reusable_tool

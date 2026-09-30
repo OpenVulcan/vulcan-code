@@ -27,6 +27,11 @@ pub(super) use pinned::deadline as operation_deadline;
 mod instances;
 #[cfg(test)]
 pub(super) use instances::PersistentRuntime;
+pub use instances::{
+    VulcanPluginActivationTargetCompletion, VulcanPluginActivationTargetHandoffParticipant,
+    VulcanPluginActivationTargetRegistration, VulcanPluginMcpTargetHandoffEvidence,
+    VulcanPluginNativeMcpHandoffAdapter,
+};
 
 /// Manager-owned formal runtime and the exact settings frozen at construction.
 /// 管理器持有的正式运行时及构造时冻结的精确设置。

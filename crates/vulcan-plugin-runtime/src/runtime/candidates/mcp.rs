@@ -168,3 +168,9 @@ impl VulcanPluginRuntimeManager {
 
 #[cfg(test)]
 mod tests;
+
+mod target;
+pub use target::{
+    VulcanPluginMcpTargetHandoffGuard, VulcanPluginMcpTargetStartGuard,
+    VulcanPluginPreparedMcpTarget, VulcanPluginRegisteredNativeMcpHostAuthority,
+};

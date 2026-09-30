@@ -296,10 +296,13 @@ pub struct McpRuntimeOwnedStdioPartition {
 
 /// Reference-counted ownership boundary for one independently replaceable MCP runtime partition.
 /// 单个可独立替换 MCP 运行时分区的引用计数所有权边界。
-struct McpRuntimePartitionLease {
+pub(super) struct McpRuntimePartitionLease {
+    /// Opaque identity belongs to this actual lease and survives every binding/access clone.
+    /// 不透明身份属于此实际租约，并在每个绑定／访问克隆期间保持一致。
+    pub(super) instance_id: uuid::Uuid,
     /// Live runtime retained until the last generation or in-flight tool binding releases the partition.
     /// 保留到最后一个代次或执行中工具绑定释放分区为止的实时运行时。
-    runtime: McpRuntimeHandle,
+    pub(super) runtime: McpRuntimeHandle,
     /// Optional owner scope that turns this lease into a session-owned execution capability.
     /// 可选的所有者范围，用于把该租约变成会话拥有的执行能力。
     owner_key: Option<McpRuntimeOwnedPartitionKey>,
@@ -316,7 +319,8 @@ struct McpRuntimePartitionLease {
 
 /// Retains cleanup observations independently of execution leases until successful terminal shutdown.
 /// 独立于执行租约保留清理观测，直至成功完成终态关闭。
-type RetiredPluginPartitionRegistry = Arc<Mutex<BTreeMap<String, Vec<McpRuntimeHandle>>>>;
+pub(super) type RetiredPluginPartitionRegistry =
+    Arc<Mutex<BTreeMap<String, Vec<McpRuntimeHandle>>>>;
 
 /// Shared registry for opt-in session-owned stdio MCP leases.
 /// 供可选会话拥有 stdio MCP 租约使用的共享注册表。
@@ -325,24 +329,24 @@ type OwnedStdioPartitionRegistry =
 
 /// Shared plugin gate that rejects new owner-scoped MCP work while a plugin is draining.
 /// 在插件排空期间拒绝新的所有者范围 MCP 工作的共享插件闸门。
-type BlockedOwnerPluginRegistry = Arc<Mutex<OwnerMcpAdmission>>;
+pub(super) type BlockedOwnerPluginRegistry = Arc<Mutex<OwnerMcpAdmission>>;
 
 /// Owns admission and original startup observations under the same synchronous lock.
 /// 在同一同步锁内持有入场及原启动观察。
 #[derive(Debug, Default)]
-struct OwnerMcpAdmission {
+pub(super) struct OwnerMcpAdmission {
     /// Plugin identities whose owner admission remains closed.
     /// 所有者入场保持关闭的插件身份。
     blocked: BTreeSet<String>,
     /// Irreversible shutdown shared by old and current access generations.
     /// 新旧访问代次共享的不可逆关闭状态。
-    closed: bool,
+    pub(super) closed: bool,
     /// Every original instance, including simultaneous starts for one exact owner key.
     /// 每个原实例，包括同一精确所有者键的同时启动。
     instances: BTreeMap<McpRuntimeOwnedPartitionKey, Vec<OwnerMcpInstance>>,
     /// Global starts remain observable after readiness, including ready candidates not yet published by the service.
     /// 全局启动在就绪后仍可观察，包括服务尚未发布的就绪候选。
-    managed_globals: BTreeMap<String, Vec<McpRuntimeHandle>>,
+    pub(super) managed_globals: BTreeMap<String, Vec<McpRuntimeHandle>>,
 }
 
 /// Observes cleanup without retaining any execution lease or host resource bundle.
@@ -403,8 +407,9 @@ impl Drop for McpRuntimePartitionLease {
 impl McpRuntimePartitionLease {
     /// Wraps one newly booted runtime in a shared lifecycle lease.
     /// 将一个新引导的运行时包装为共享生命周期租约。
-    fn new(runtime: McpRuntimeHandle) -> Self {
+    pub(super) fn new(runtime: McpRuntimeHandle) -> Self {
         Self {
+            instance_id: uuid::Uuid::new_v4(),
             runtime,
             owner_key: None,
             revoked: AtomicBool::new(false),
@@ -421,6 +426,7 @@ impl McpRuntimePartitionLease {
         ordered_calls: bool,
     ) -> Self {
         Self {
+            instance_id: uuid::Uuid::new_v4(),
             runtime,
             owner_key: Some(owner_key),
             revoked: AtomicBool::new(false),
@@ -443,7 +449,7 @@ impl McpRuntimePartitionLease {
 
     /// Returns whether this lease has been revoked or otherwise invalidated.
     /// 返回该租约是否已撤销或以其他方式失效。
-    fn is_revoked(&self) -> bool {
+    pub(super) fn is_revoked(&self) -> bool {
         self.revoked.load(Ordering::Acquire)
     }
 
@@ -516,13 +522,13 @@ pub struct McpRuntimeAccess {
     live_partitions: BTreeMap<String, Arc<McpRuntimePartitionLease>>,
     /// Retired and not-yet-ready global observations shared without extending execution leases.
     /// 不延长执行租约的共享观测，覆盖已退役及尚未就绪全局实例。
-    retired_plugin_partitions: RetiredPluginPartitionRegistry,
+    pub(super) retired_plugin_partitions: RetiredPluginPartitionRegistry,
     /// Opt-in owner registry shared by every access generation derived from the same bootstrap access.
     /// 由同一引导访问面派生的所有访问代次共享的可选所有者注册表。
     owned_stdio_partitions: OwnedStdioPartitionRegistry,
     /// Shared lifecycle gate retained across published extension generations.
     /// 在已发布扩展代次之间持续共享的生命周期闸门。
-    blocked_owner_plugins: BlockedOwnerPluginRegistry,
+    pub(super) blocked_owner_plugins: BlockedOwnerPluginRegistry,
     /// Plugin-lifecycle guards shared across every access generation and revoked on drain.
     /// 跨所有访问代次共享并在插件排空时撤销的插件生命周期闸门。
     owner_replacement_guards: OwnerReplacementGuardRegistry,
@@ -646,6 +652,38 @@ impl McpRuntimeAccess {
         Self::from_shared_partitions(
             configured_overview,
             live_partitions,
+            Arc::clone(&self.retired_plugin_partitions),
+            Arc::clone(&self.owned_stdio_partitions),
+            Arc::clone(&self.blocked_owner_plugins),
+            Arc::clone(&self.owner_replacement_guards),
+        )
+    }
+
+    /// Replace only this target partition with its same prepared actual lease using the caller's current access.
+    /// 使用调用方当前访问，仅将此目标分区替换为其相同已准备实际租约。
+    /// Inputs fix exact plugin and generation; return a new access retaining every unrelated partition.
+    /// 输入固定精确插件及代次；返回保留全部无关分区的新访问。
+    pub(super) fn with_prepared_target_lease(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        lease: Arc<McpRuntimePartitionLease>,
+    ) -> Self {
+        // Preserve original lease identity, including its closed gate, rather than wrapping a replacement.
+        // 保留原租约身份及其关闭业务门，不包装替代租约。
+        let prefix = format!("plugin:{plugin_id}:");
+        // Derive from actual current partitions so unrelated concurrent user/plugin updates survive.
+        // 从实际当前分区派生，使无关并发用户／插件更新保持存在。
+        let mut live = self.live_partitions.clone();
+        live.retain(|key, _| !key.starts_with(&prefix));
+        live.insert(format!("{prefix}{generation}"), lease);
+        // Overview comes from the same actual runtimes, without another frozen catalog.
+        // 概览来自相同实际运行时，不创建另一冻结目录。
+        let overview =
+            merge_mcp_runtime_overviews(live.values().map(|lease| lease.runtime.overview()));
+        Self::from_shared_partitions(
+            overview,
+            live,
             Arc::clone(&self.retired_plugin_partitions),
             Arc::clone(&self.owned_stdio_partitions),
             Arc::clone(&self.blocked_owner_plugins),
@@ -1130,6 +1168,23 @@ impl McpRuntimeAccess {
         plugin_id: &str,
         servers: Vec<McpServerConfig>,
     ) -> Result<McpRuntimeHandle, String> {
+        // Ordinary starts transfer an empty resource bundle through the exact shared admission path.
+        // 普通启动通过精确共享入场路径移交空资源包。
+        let (resources, _) = vulcan_mcp_runtime::McpTransportResources::new(());
+        self.start_preparing_plugin_partition_with_resources(plugin_id, servers, resources, false)
+    }
+
+    /// Register one actual start with resources before waiting; target_preparation keeps business closed.
+    /// 等待前登记带资源的单个实际启动；target_preparation 保持业务关闭。
+    /// plugin_id and servers are exact inputs; return the original observed runtime or a pre-spawn error.
+    /// plugin_id 及 servers 为精确输入；返回原已观察运行时或启动前错误。
+    pub(super) fn start_preparing_plugin_partition_with_resources(
+        &self,
+        plugin_id: &str,
+        servers: Vec<McpServerConfig>,
+        resources: vulcan_mcp_runtime::McpTransportResources,
+        target_preparation: bool,
+    ) -> Result<McpRuntimeHandle, String> {
         // Application shutdown, construction and registration share the admission lock.
         // 应用关闭、构造及登记共享入场锁。
         let mut admission = self
@@ -1147,10 +1202,13 @@ impl McpRuntimeAccess {
             .map_err(|_| String::from("retired MCP plugin partition registry poisoned"))?;
         // Ordinary managed starts carry an empty host bundle through the common constructor.
         // 普通受管启动通过公共构造器携带空宿主资源包。
-        let (resources, _) = vulcan_mcp_runtime::McpTransportResources::new(());
         // Both locks remain held until this new original is registered.
         // 此新原实例登记之前一直持有两把锁。
-        let runtime = super::handle::start_managed_mcp_runtime(servers, resources)?;
+        let runtime = if target_preparation {
+            super::handle::start_target_mcp_runtime(servers, resources)?
+        } else {
+            super::handle::start_managed_mcp_runtime(servers, resources)?
+        };
         // Controls do not retain actual execution resources after cancellation.
         // 取消后控制不会保留实际执行资源。
         let originals = registry.entry(plugin_id.to_owned()).or_default();
@@ -2135,7 +2193,7 @@ fn merge_mcp_runtime_overviews(
 impl McpRuntimeToolBinding {
     /// Builds one MCP runtime tool binding from one host-facing tool view and one live runtime handle.
     /// 根据一份宿主侧工具视图与一份实时运行时句柄构建单个 MCP 运行时工具绑定。
-    fn new(
+    pub(super) fn new(
         view: McpRuntimeToolView,
         runtime: Arc<McpRuntimePartitionLease>,
         partition_key: String,

@@ -7,7 +7,110 @@ use crate::generation_store::{
 };
 use VulcanPluginActivationTransactionPhase as Phase;
 
+/// Test-only scoped observation loss never changes persisted bytes or subsequent canonical reads.
+/// 仅测试的作用域观测丢失绝不更改持久字节或后续规范读取。
+#[cfg(test)]
+mod completion_observation_fault {
+    use super::*;
+
+    std::thread_local! {
+        /// One original root/request on this thread may lose its next successful completion observation.
+        /// 此线程单个原根目录／请求可丢失下一次成功完成观测。
+        static ARMED: std::cell::RefCell<Option<(PathBuf, Uuid)>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Scope resets unconsumed faults on the same test thread, including assertion unwinding.
+    /// 作用域在相同测试线程重置未消费故障，包括断言展开。
+    pub(super) struct Scope {
+        /// Exact original store and request exclude other tests and unrelated transactions.
+        /// 精确原存储及请求排除其他测试与无关事务。
+        key: (PathBuf, Uuid),
+        /// Thread affinity prevents moving cleanup to another thread-local slot.
+        /// 线程绑定防止将清理移动至另一线程局部槽。
+        _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+    }
+
+    impl Drop for Scope {
+        /// Clear only this scope's still-armed original fault; no inputs, I/O or persisted mutation.
+        /// 仅清除此作用域仍已启用原故障；无输入、I/O 或持久变更。
+        fn drop(&mut self) {
+            ARMED.with(|armed| {
+                // Retain other scoped identities rather than clearing an unrelated fault.
+                // 保留其他作用域身份，不清除无关故障。
+                let mut armed = armed.borrow_mut();
+                if armed.as_ref() == Some(&self.key) {
+                    armed.take();
+                }
+            });
+        }
+    }
+
+    /// Arm one exact original completion; return its non-Send cleanup scope and reject overlapping scopes.
+    /// 启用单个精确原完成；返回不可跨线程清理作用域，并拒绝重叠作用域。
+    pub(super) fn arm(root: &Path, request: Uuid) -> Scope {
+        // Use the existing store identity without opening another owner or assigning a request UUID.
+        // 使用既有存储身份，不打开另一所有者或分配请求 UUID。
+        let key = (root.to_path_buf(), request);
+        ARMED.with(|armed| {
+            // A test must explicitly retire its previous scoped fault before arming another.
+            // 测试必须在启用另一故障之前明确退役先前作用域故障。
+            let mut armed = armed.borrow_mut();
+            assert!(
+                armed.is_none(),
+                "completion observation fault scope overlaps"
+            );
+            *armed = Some(key.clone());
+        });
+        Scope {
+            key,
+            _thread: std::marker::PhantomData,
+        }
+    }
+
+    /// Consume only after the exact original Completed write succeeded, leaving actual bytes intact.
+    /// 仅在精确原 Completed 写入成功之后消费，保持实际字节不变。
+    pub(super) fn consume(root: &Path, request: Uuid, written: bool) -> bool {
+        ARMED.with(|armed| {
+            // Failed real writes never pretend that Completed bytes were persisted.
+            // 真实写入失败绝不假称已持久保存 Completed 字节。
+            let mut armed = armed.borrow_mut();
+            if written
+                && armed
+                    .as_ref()
+                    .is_some_and(|(original, id)| original == root && *id == request)
+            {
+                armed.take();
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Return unavailable only for this immediate indexed readback; later canonical reads execute normally.
+    /// 仅为此次即时索引回读返回不可用；后续规范读取正常执行。
+    pub(super) fn immediate_readback<T>(
+        lost: bool,
+        read: impl FnOnce() -> VulcanPluginStoreResult<T>,
+    ) -> VulcanPluginStoreResult<T> {
+        if lost {
+            Err(Error::new(
+                Code::Storage,
+                "Controlled loss of immediate Completed indexed readback.",
+            ))
+        } else {
+            read()
+        }
+    }
+}
+
 impl VulcanPluginGenerationStore {
+    /// Arm a test-only original post-write observation loss; returned scope resets it without production controls.
+    /// 启用仅测试的原写入后观测丢失；返回作用域负责重置，不提供生产开关。
+    #[cfg(test)]
+    pub(crate) fn lose_target_completion_observation_once(&self, request: Uuid) -> impl Drop {
+        completion_observation_fault::arm(&self.root, request)
+    }
     /// Inspect transaction's still-prepared target without publishing it or running plugin code.
     /// 检查 transaction 仍处于准备阶段的目标，不发布它，也不执行插件代码。
     /// Returns a view borrowing the exclusive owner after checking its store, indexed record, predecessor and pins.
@@ -345,6 +448,16 @@ impl VulcanPluginGenerationStore {
         // 命名空间屏障将此操作与全部选择写入者排序。
         let _namespace = self.namespace_lock(&transaction.record.target.plugin_id, false)?;
         self.check_transaction_owner(transaction)?;
+        // A private target attempt requires atomic transfer of its same live owners before journal completion.
+        // 私有目标尝试要求在日志完成之前原子转交其相同存活所有者。
+        if self.read_target_hook_locked(&transaction.record)?.is_some()
+            || self.read_target_mcp_locked(&transaction.record)?.is_some()
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Private target completion requires the combined original resource handoff.",
+            ));
+        }
         if transaction.record.phase != Phase::Published
             || self
                 .read_activation(&transaction.record.target.plugin_id)?
@@ -357,6 +470,85 @@ impl VulcanPluginGenerationStore {
             ));
         }
         self.checkpoint_transaction(transaction, Phase::Completed)
+    }
+
+    /// Complete the original target handoff and reconcile uncertain writes against its exact completed record.
+    /// 完成原目标交接，并按精确完成记录核对不确定写入。
+    /// transaction retains the original file; only an identical indexed Completed target confirms transfer.
+    /// transaction 保留原文件；仅完全相同且已索引的 Completed 目标确认转交。
+    /// Return confirmed completion or retain the previous observation without replaying any initialization.
+    /// 返回已确认完成，或保留先前观察，不重放任何初始化。
+    pub(crate) fn complete_activation_target_handoff_owned(
+        &self,
+        transaction: &mut VulcanPluginActivationTransaction,
+        expected_hook: Option<(u64, &str, &str, &str)>,
+        expected_mcp: Option<&crate::VulcanPluginMcpTargetHandoffEvidence>,
+    ) -> VulcanPluginStoreResult<()> {
+        // One namespace fence spans the write and its exact uncertain-outcome readback.
+        // 单个命名空间屏障覆盖写入及其精确不确定结果回读。
+        let _namespace = self.namespace_lock(&transaction.record.target.plugin_id, false)?;
+        self.require_target_hook_success_locked(&transaction.record, expected_hook)?;
+        self.require_target_mcp_ready_locked(&transaction.record, expected_mcp)?;
+        // Derive the sole admissible receipt from the original full record before any mutation.
+        // 在任何变更前从原完整记录派生唯一可接受回执。
+        let mut completed = transaction.record.clone();
+        completed.phase = Phase::Completed;
+        if self.read_activation(&completed.target.plugin_id)?.as_ref() != Some(&completed.target) {
+            return Err(Error::new(
+                Code::Conflict,
+                "Original target changed before completion.",
+            ));
+        }
+        if self
+            .indexed_transaction_locked(&completed.target.plugin_id)?
+            .as_ref()
+            == Some(&completed)
+        {
+            transaction.record = completed;
+            return Ok(());
+        }
+        self.check_transaction_owner(transaction)?;
+        if transaction.record.phase != Phase::Published {
+            return Err(Error::new(
+                Code::Conflict,
+                "Only the exact published original can complete.",
+            ));
+        }
+        // Readback can confirm an atomic replacement even when the writer reported an I/O failure.
+        // 即使写入器报告 I/O 失败，回读仍可确认原子替换。
+        // The real writer always executes before any test-only observation loss can activate.
+        // 真实写入器始终在任何仅测试观测丢失可启用之前执行。
+        let write_result = self.write_transaction_locked(&completed);
+        #[cfg(test)]
+        let observation_lost = completion_observation_fault::consume(
+            &self.root,
+            completed.request_id,
+            write_result.is_ok(),
+        );
+        #[cfg(test)]
+        let write_result = if observation_lost {
+            Err(Error::new(
+                Code::Storage,
+                "Controlled loss of successful Completed write observation.",
+            ))
+        } else {
+            write_result
+        };
+        if let Err(write_error) = write_result {
+            // Only this immediate indexed observation may be unavailable; canonical request inspection remains unchanged.
+            // 仅此次即时索引观测可不可用；规范请求检查保持不变。
+            let read = || self.indexed_transaction_locked(&completed.target.plugin_id);
+            #[cfg(test)]
+            let readback =
+                completion_observation_fault::immediate_readback(observation_lost, read)?;
+            #[cfg(not(test))]
+            let readback = read()?;
+            if readback.as_ref() != Some(&completed) {
+                return Err(write_error);
+            }
+        }
+        transaction.record = completed;
+        Ok(())
     }
 
     /// Abandon `transaction` only while its original predecessor is unchanged; published choices never auto-rollback.
@@ -463,7 +655,7 @@ impl VulcanPluginGenerationStore {
     /// 变更前要求 transaction 为原请求锁的唯一所有者。
     /// The caller's exclusive mutable borrow excludes new views; another readiness clone already raises this count.
     /// 调用方排他可变借用排除新视图；其他就绪克隆已经使此计数增加。
-    fn require_readiness_retired(
+    pub(super) fn require_readiness_retired(
         transaction: &mut VulcanPluginActivationTransaction,
     ) -> VulcanPluginStoreResult<()> {
         if Arc::strong_count(&transaction._lease) != 1 {
@@ -567,6 +759,38 @@ impl VulcanPluginGenerationStore {
         }
         // Revalidate actual immutable contents, full configuration and original-bound credentials before handoff.
         // 在交接前重新校验实际不可变内容、完整配置及绑定原请求的凭据。
+        let _target = self.pin_transaction_target(&transaction.record)?;
+        Ok(())
+    }
+
+    /// Validate the retained original target before transfer, including exact Completed readback after uncertainty.
+    /// 转交前校验保留原目标，包括不确定结果后的精确 Completed 回读。
+    /// transaction must retain Published observation; returns only after pinning its full actual target again.
+    /// transaction 必须保留 Published 观察；再次固定其完整实际目标后才返回。
+    pub(crate) fn validate_published_target_handoff_owner(
+        &self,
+        transaction: &VulcanPluginActivationTransaction,
+    ) -> VulcanPluginStoreResult<()> {
+        // Only these two exact records belong to the still-retained original handoff.
+        // 仅这两个精确记录属于仍被保留的原交接。
+        let _namespace = self.namespace_lock(&transaction.record.target.plugin_id, true)?;
+        let mut completed = transaction.record.clone();
+        completed.phase = Phase::Completed;
+        let indexed = self.indexed_transaction_locked(&transaction.record.target.plugin_id)?;
+        if transaction.store_root != self.root
+            || transaction.record.phase != Phase::Published
+            || (indexed.as_ref() != Some(&transaction.record)
+                && indexed.as_ref() != Some(&completed))
+            || self
+                .read_activation(&transaction.record.target.plugin_id)?
+                .as_ref()
+                != Some(&transaction.record.target)
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Original published target handoff ownership changed.",
+            ));
+        }
         let _target = self.pin_transaction_target(&transaction.record)?;
         Ok(())
     }

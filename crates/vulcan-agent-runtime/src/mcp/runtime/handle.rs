@@ -7,6 +7,7 @@ mod candidate;
 mod catalog_refresh;
 mod lifecycle_guard;
 pub use candidate::{CandidatePluginMcpObservation, CandidatePluginMcpRuntime};
+pub use candidate::{TargetPluginMcpHandoffGuard, TargetPluginMcpRuntime};
 
 /// Explicit runtime intent controls retries without inferring authority from generation numbers.
 /// 显式运行时用途控制重试，不从代次数值推断权威。
@@ -18,6 +19,24 @@ enum McpRuntimePurpose {
     /// Unpublished readiness runs once and never automatically replays initialization.
     /// 未发布就绪仅运行一次，绝不自动重放初始化。
     CandidateReadiness,
+    /// Actual selected target prepares once with business admission closed until confirmed handoff.
+    /// 实际已选目标仅准备一次，业务入场在确认交接前保持关闭。
+    TargetPreparation,
+}
+
+/// Business admission for one actual target instance; a closed instance can never reopen.
+/// 单个实际目标实例的业务入场；关闭实例绝不能重新开放。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum McpBusinessGate {
+    /// Internal readiness may run while business access remains unavailable.
+    /// 内部就绪可运行，但业务访问保持不可用。
+    Preparing,
+    /// Confirmed handoff grants access to the same original transport.
+    /// 确认交接授权访问同一个原传输。
+    Open,
+    /// Cancellation, failed publication or drain permanently closes this original instance.
+    /// 取消、发布失败或排空永久关闭此原实例。
+    Closed,
 }
 
 impl McpRuntimePurpose {
@@ -28,7 +47,7 @@ impl McpRuntimePurpose {
     fn maximum_attempts(self) -> u8 {
         match self {
             Self::Managed => 5,
-            Self::CandidateReadiness => 1,
+            Self::CandidateReadiness | Self::TargetPreparation => 1,
         }
     }
 }
@@ -77,8 +96,14 @@ fn create_mcp_runtime(
     // Shared control contains independent receipts rather than owning aggregate resources.
     // 共享控制包含独立回执，不拥有聚合资源。
     let inner = Arc::new(McpRuntimeInner {
+        instance_id: uuid::Uuid::new_v4(),
         registry: registry.clone(),
         purpose,
+        business_gate: RwLock::new(if purpose == McpRuntimePurpose::TargetPreparation {
+            McpBusinessGate::Preparing
+        } else {
+            McpBusinessGate::Open
+        }),
         transports: RwLock::new(BTreeMap::new()),
         resource_releases: RwLock::new(BTreeMap::new()),
         partition_release,
@@ -159,6 +184,12 @@ impl std::fmt::Debug for McpRuntimeHandle {
 /// Shared mutable state behind one long-lived MCP runtime handle.
 /// 单个长期 MCP 运行时句柄背后的共享可变状态。
 struct McpRuntimeInner {
+    /// Opaque identity is allocated once for this actual resource owner, independently of the original request UUID.
+    /// 不透明身份仅为此实际资源所有者分配一次，独立于原请求 UUID。
+    instance_id: uuid::Uuid,
+    /// Same-instance business admission is independent from irreversible shutdown and lease revocation.
+    /// 同实例业务入场独立于不可逆关闭及租约撤销。
+    business_gate: RwLock<McpBusinessGate>,
     /// Explicit admission intent fixes whether this exact instance may restart.
     /// 显式入场用途固定此精确实例是否允许重启。
     purpose: McpRuntimePurpose,
@@ -360,9 +391,18 @@ impl McpRuntimeHandle {
     /// Resolves the currently active transport for one connected server.
     /// 解析某个已连接服务器当前活动的传输实例。
     fn transport_for_server(&self, server_id: &str) -> Option<Arc<dyn McpTransport>> {
-        // Keep the read guard through the shutdown check and clone so cleanup cannot release
-        // the original transport between admission and retaining the actual call resource.
-        // 从关闭检查到克隆均保留读锁，避免清理在入场与保留实际调用资源之间释放原传输。
+        // Retain admission through the actual clone, so closure cannot race transport acquisition.
+        // 实际克隆期间保留入场锁，避免关闭与传输获取竞争。
+        let business = self
+            .inner
+            .business_gate
+            .read()
+            .expect("mcp business gate poisoned");
+        if *business != McpBusinessGate::Open {
+            return None;
+        }
+        // Keep transport registration locked until this call retains its actual resource.
+        // 保持传输登记锁，直至此调用保留其实际资源。
         let transports = self
             .inner
             .transports
@@ -417,6 +457,16 @@ impl McpRuntimeHandle {
         &self,
         allowlist: &McpRuntimeToolAllowlist,
     ) -> Vec<McpRuntimeToolView> {
+        // A prepared catalog is diagnostic only until this original instance is admitted.
+        // 此原实例准入前，准备目录仅供诊断。
+        let business = self
+            .inner
+            .business_gate
+            .read()
+            .expect("mcp business gate poisoned");
+        if *business != McpBusinessGate::Open || self.shutdown_requested() {
+            return Vec::new();
+        }
         self.snapshot().filtered_tool_views(allowlist)
     }
 
@@ -550,6 +600,14 @@ impl McpRuntimeHandle {
     /// Returns no value; the shutdown state is latched for current and future server-task receivers.
     /// 不返回值；关闭状态会为当前及未来服务器任务接收端锁存。
     pub(super) fn shutdown(&self) {
+        // Closing admission precedes the latched stop signal for this same actual transport.
+        // 此相同实际传输先关闭入场，再锁存停止信号。
+        let mut business = self
+            .inner
+            .business_gate
+            .write()
+            .expect("mcp business gate poisoned");
+        *business = McpBusinessGate::Closed;
         request_mcp_runtime_shutdown(&self.inner.shutdown_tx);
     }
 
@@ -736,6 +794,17 @@ pub(super) fn start_managed_mcp_runtime(
     resources: vulcan_mcp_runtime::McpTransportResources,
 ) -> Result<McpRuntimeHandle, String> {
     create_mcp_runtime(servers, resources, McpRuntimePurpose::Managed)
+}
+
+/// Start one actual selected target with its resource bundle and closed business admission.
+/// 启动带资源包及关闭业务入场的单个实际已选目标。
+/// servers and resources are sealed upstream inputs; return the same single-shot lifecycle handle.
+/// servers 及 resources 为上游密封输入；返回相同单次生命周期句柄。
+pub(super) fn start_target_mcp_runtime(
+    servers: Vec<McpServerConfig>,
+    resources: vulcan_mcp_runtime::McpTransportResources,
+) -> Result<McpRuntimeHandle, String> {
+    create_mcp_runtime(servers, resources, McpRuntimePurpose::TargetPreparation)
 }
 
 /// Owns unpublished MCP runtimes until their access generation is published.
@@ -3125,8 +3194,10 @@ mod optional_capability_tests {
     fn empty_runtime_inner() -> Arc<McpRuntimeInner> {
         let (shutdown_tx, _) = watch::channel(false);
         Arc::new(McpRuntimeInner {
+            instance_id: uuid::Uuid::new_v4(),
             registry: McpServerRegistry::new(Vec::new()),
             purpose: McpRuntimePurpose::Managed,
+            business_gate: RwLock::new(McpBusinessGate::Open),
             transports: RwLock::new(BTreeMap::new()),
             resource_releases: RwLock::new(BTreeMap::new()),
             // This synthetic registry starts no native lifecycle and therefore has an empty released scope.

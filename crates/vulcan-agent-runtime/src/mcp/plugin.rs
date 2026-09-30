@@ -16,8 +16,8 @@ use vulcan_plugin_runtime::{
 mod candidates;
 use candidates::PluginMcpMaterializationSource;
 pub use candidates::{
-    PreparedPluginMcpConfigs, candidate_global_mcp_server_configs,
-    candidate_local_mcp_server_configs,
+    PreparedPluginMcpConfigs, PreparedTargetPluginMcpConfigs, candidate_global_mcp_server_configs,
+    candidate_local_mcp_server_configs, target_global_mcp_server_configs,
 };
 
 /// Host boundary for reading one plugin-scoped secret without exposing storage details to plugins.

@@ -58,6 +58,11 @@ impl VulcanPluginRuntimeManager {
         // Retain the original persistent instance across preparation and observation.
         // 跨准备及观测保留原持久实例。
         let runtime = if let Some(runtime) = existing {
+            if runtime.lock()?.private_target.is_some() {
+                return Err(instance_error(
+                    "Private target Hook has not transferred to ordinary business.",
+                ));
+            }
             if runtime.plugin.generation != generation {
                 runtime.closing.store(true, Ordering::Release);
                 self.start_instance_monitor(&owner, &runtime)?;
@@ -133,32 +138,7 @@ impl VulcanPluginRuntimeManager {
             // Create the guard before spawning to cover cancellation before execution.
             // 在派发前创建守卫，以覆盖执行前取消。
             let preparation = PersistentPreparation(Arc::clone(&runtime));
-            self.start_instance_monitor(&owner, &runtime)?;
-            // Keep the manager alive for the bounded preparation or synchronous monitor step.
-            // 为有界准备或同步监控步骤保持管理器存活。
-            let manager = self.clone();
-            // Bind blocking preparation to the same formal parent.
-            // 将阻塞准备绑定至同一个正式父级。
-            let retained_owner = Arc::clone(&owner);
-            // Bind preparation results to the already-published persistent record.
-            // 将准备结果绑定至已经发布的持久记录。
-            let retained_runtime = Arc::clone(&runtime);
-            tokio::task::spawn_blocking(move || {
-                // The guard records interruption unless this closure publishes its result.
-                // 除非此闭包发布结果，否则守卫记录中断。
-                let _preparation = preparation;
-                // Preserve the exact preparation outcome for both waiter and later cleanup.
-                // 为等待者及后续清理保留精确准备结果。
-                let result =
-                    manager.prepare_formal_instance(&retained_owner, &retained_runtime, expires);
-                if result.is_err() {
-                    retained_runtime.closing.store(true, Ordering::Release);
-                }
-                if let Ok(mut state) = retained_runtime.lock() {
-                    state.prepared = Some(result);
-                    state.preparing = false;
-                }
-            });
+            self.spawn_instance_preparation(&owner, &runtime, preparation, expires)?;
             runtime
         };
         loop {
@@ -209,7 +189,7 @@ impl VulcanPluginRuntimeManager {
 
     /// Prepare runtime on owner within expires; return after recording core identities, without waiting for Lua.
     /// 在 expires 内于 owner 上准备 runtime；记录核心身份后返回，不等待 Lua。
-    fn prepare_formal_instance(
+    pub(super) fn prepare_formal_instance(
         &self,
         owner: &ManagedFormalRuntime,
         runtime: &PersistentRuntime,
@@ -218,6 +198,12 @@ impl VulcanPluginRuntimeManager {
         remaining(expires)?;
         if runtime.closing.load(Ordering::Acquire) {
             return Err(instance_error("persistent cancelled before preparation."));
+        }
+        // Capture the explicit private origin before any filesystem materialization begins.
+        // 在任何文件系统物化开始前捕获显式私有来源。
+        let private_target = runtime.lock()?.private_target.clone();
+        if let Some(authority) = &private_target {
+            authority.retain_environment(&self.state)?;
         }
         // Freeze the existing manifest and its authoritative execution package.
         // 冻结现有清单及其权威执行包。
@@ -247,10 +233,7 @@ impl VulcanPluginRuntimeManager {
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
-            self.ensure_current_persistent_generation(
-                &runtime.plugin.id,
-                runtime.plugin.generation,
-            )?;
+            self.validate_persistent_preparation(runtime, private_target.as_ref())?;
             owner.admit_capacity_member(
                 &runtime.plugin.id,
                 match runtime.kind {
@@ -277,42 +260,59 @@ impl VulcanPluginRuntimeManager {
         };
         // Register the original execution domain before admitting its fixed session.
         // 接纳固定会话之前注册原执行域。
-        let pool = owner
-            .host
-            .register_bundle_pool_in_capacity(
-                &capacity.capacity_id,
-                VulcanPluginBundlePoolRequest {
-                    plugin_id: runtime.plugin.id.clone(),
-                    plugin_generation: runtime.plugin.generation,
-                    workspace_root: workspace.clone(),
-                    security_partition: format!(
-                        "{}:{}:{}",
-                        runtime.kind.label(),
-                        runtime.plugin.id,
-                        runtime.plugin.generation
-                    ),
-                    scope: VulcanPluginBridgeLeaseScope::Enabled,
-                    policy: PluginPoolConfig {
-                        kind: capacity.config.resources.kind,
-                        min_resident_vms: 0,
-                        max_resident_vms: 1,
-                        max_running_calls: 1,
-                        max_queued_calls: capacity.config.max_queued_calls,
-                        reuse: InstanceReuse::Session,
-                        serial: true,
-                        backend: VULCAN_PLUGIN_EXECUTION_BACKEND,
-                        idle_ttl_ms: None,
-                        max_uses: None,
-                    },
-                    finalizer,
-                },
-            )
-            .map_err(core_error)?;
+        let request = VulcanPluginBundlePoolRequest {
+            plugin_id: runtime.plugin.id.clone(),
+            plugin_generation: runtime.plugin.generation,
+            workspace_root: workspace.clone(),
+            security_partition: format!(
+                "{}:{}:{}",
+                runtime.kind.label(),
+                runtime.plugin.id,
+                runtime.plugin.generation
+            ),
+            scope: VulcanPluginBridgeLeaseScope::Enabled,
+            policy: PluginPoolConfig {
+                kind: capacity.config.resources.kind,
+                min_resident_vms: 0,
+                max_resident_vms: 1,
+                max_running_calls: 1,
+                max_queued_calls: capacity.config.max_queued_calls,
+                reuse: InstanceReuse::Session,
+                serial: true,
+                backend: VULCAN_PLUGIN_EXECUTION_BACKEND,
+                idle_ttl_ms: None,
+                max_uses: None,
+            },
+            finalizer,
+        };
+        // Both registrations share the exact bundle/schema/capability path; only authority provenance differs.
+        // 两种注册共享精确 bundle／Schema／能力路径；仅权威来源不同。
+        let (pool, handoff) = match private_target.as_ref() {
+            Some(authority) => {
+                let handoff = owner
+                    .host
+                    .register_private_target_hook_bundle_pool_in_capacity(
+                        &capacity.capacity_id,
+                        request,
+                        Arc::clone(authority),
+                    )
+                    .map_err(core_error)?;
+                (handoff.pool_id.clone(), Some(handoff))
+            }
+            None => (
+                owner
+                    .host
+                    .register_bundle_pool_in_capacity(&capacity.capacity_id, request)
+                    .map_err(core_error)?,
+                None,
+            ),
+        };
         {
             // Keep the exact lifecycle evidence within this synchronous lock scope.
             // 在当前同步锁作用域内保留精确生命周期证据。
             let mut state = runtime.lock()?;
             state.pool = Some(pool.clone());
+            state.target_handoff = handoff;
             state.workspace = Some(workspace);
         }
         // Order this state transition against catalog generation publication.
@@ -322,7 +322,7 @@ impl VulcanPluginRuntimeManager {
             .session_registration_gate
             .lock()
             .map_err(|_| instance_error("Plugin publication gate is poisoned."))?;
-        self.ensure_current_persistent_generation(&runtime.plugin.id, runtime.plugin.generation)?;
+        self.validate_persistent_preparation(runtime, private_target.as_ref())?;
         if runtime.closing.load(Ordering::Acquire) {
             return Err(instance_error(
                 "persistent cancelled before core admission.",
@@ -338,8 +338,18 @@ impl VulcanPluginRuntimeManager {
         // Keep the exact lifecycle evidence within this synchronous lock scope.
         // 在当前同步锁作用域内保留精确生命周期证据。
         let mut state = runtime.lock()?;
-        state.session = Some(opening.session_id);
-        state.initialization = Some(opening.operation);
+        state.session = Some(opening.session_id.clone());
+        state.initialization = Some(opening.operation.clone());
+        if let Some(attempt) = &mut state.target_attempt {
+            // Preserve actual core identities in memory before any fallible durable binding work.
+            // 在任何可失败持久绑定工作之前，在内存中保留实际核心身份。
+            if let Err(error) =
+                attempt.bind_core(&pool, &opening.session_id, opening.operation.id())
+            {
+                state.target_receipt_error = Some(error.to_string());
+                return Err(instance_error(&error.to_string()));
+            }
+        }
         Ok(())
     }
 

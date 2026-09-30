@@ -7,12 +7,19 @@ mod authorization;
 pub(crate) use authorization::plugin_required_permissions;
 mod bridge;
 mod candidates;
-pub use candidates::VulcanPluginPreparedMcpCandidate;
+pub use candidates::{
+    VulcanPluginMcpTargetHandoffGuard, VulcanPluginMcpTargetStartGuard,
+    VulcanPluginPreparedMcpCandidate, VulcanPluginPreparedMcpTarget,
+    VulcanPluginRegisteredNativeMcpHostAuthority,
+};
 mod configuration;
 pub(crate) use configuration::validate_plugin_config_value;
 mod drain;
 mod update_drain;
-pub use update_drain::VulcanPluginPredecessorDrain;
+pub use update_drain::{
+    VulcanPluginPredecessorDrain, VulcanPluginPredecessorRestoration,
+    VulcanPluginPredecessorRestorationFailure, VulcanPluginPredecessorRestoreEvidence,
+};
 mod environment;
 mod execution;
 mod formal;
@@ -42,17 +49,19 @@ pub use bridge::{
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
 pub use formal::{
-    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginAutomaticPrewarmPermit,
-    VulcanPluginAutomaticPrewarmTrigger, VulcanPluginCapacityControlAction,
-    VulcanPluginCapacityControlRequest, VulcanPluginCapacityRegistrationRequest,
-    VulcanPluginFormalCallStatus, VulcanPluginFormalCapacityCatalog,
-    VulcanPluginFormalCapacityStatus, VulcanPluginFormalPluginStatus,
-    VulcanPluginFormalRuntimeStatus, VulcanPluginFormalSessionStatus,
-    VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus,
-    VulcanPluginReusableDomainStatus,
+    VulcanPluginActivationTargetCompletion, VulcanPluginActivationTargetHandoffParticipant,
+    VulcanPluginActivationTargetRegistration, VulcanPluginAutomaticPrewarmOrigin,
+    VulcanPluginAutomaticPrewarmPermit, VulcanPluginAutomaticPrewarmTrigger,
+    VulcanPluginCapacityControlAction, VulcanPluginCapacityControlRequest,
+    VulcanPluginCapacityRegistrationRequest, VulcanPluginFormalCallStatus,
+    VulcanPluginFormalCapacityCatalog, VulcanPluginFormalCapacityStatus,
+    VulcanPluginFormalPluginStatus, VulcanPluginFormalRuntimeStatus,
+    VulcanPluginFormalSessionStatus, VulcanPluginMcpTargetHandoffEvidence,
+    VulcanPluginNativeMcpHandoffAdapter, VulcanPluginPrewarmTargetRequest,
+    VulcanPluginPrewarmTargetStatus, VulcanPluginReusableDomainStatus,
 };
 pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
-pub use lifecycle::VulcanPluginLifecycleEvent;
+pub use lifecycle::{VulcanPluginActivationTargetPublication, VulcanPluginLifecycleEvent};
 use local_files::{
     canonical_plugin_file, copy_plugin_directory_tree, read_plugin_json_state,
     write_plugin_json_record,

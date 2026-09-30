@@ -1,8 +1,8 @@
 //! Real selected targets exercise closed staging and exact original route handoff.
 //! 真实已选目标验证关闭暂存及精确原路由交接。
 
-use super::callbacks::callback_fixture_with_target;
 use super::*;
+mod target_hooks;
 
 /// Handoff revision exhaustion cannot wrap identity, mutate the closed catalog or invoke the publisher.
 /// 交接修订耗尽不能回绕身份、变更关闭目录或调用发布器。
@@ -101,6 +101,9 @@ const TARGET: &str = r#"
 -- Verify the exact selected target configuration through a real native callback.
 -- 通过真实原生回调校验精确已选目标配置。
 assert(vulcan.host.call('vulcan.plugin.config.get', {}).label == 'new-selected')
+-- Native initialization evidence distinguishes persistent reuse from a new VM.
+-- 原生初始化证据区分持久复用及新 VM。
+vulcan.host.call('vulcan.plugin.ui.invalidate', {topic='target-init',revision=0})
 -- One module owns all declared exports.
 -- 单个模块拥有全部声明导出。
 local M = {}
@@ -110,6 +113,13 @@ function M.dispatch() return '{"ok":true,"result":{}}' end
 -- Fixed Hook, UI and cleanup exports have no external effects.
 -- 固定 Hook、界面及清理导出没有外部副作用。
 M.on_precheck, M.ui_action, M.shutdown, M.shutdown_hooks = M.dispatch, M.dispatch, M.dispatch, M.dispatch
+-- The original VM retains its call count; return the version-one business frame.
+-- 原 VM 保留调用次数；返回版本一业务帧。
+local hook_count = 0
+function M.on_precheck()
+    hook_count = hook_count + 1
+    return string.format('{"ok":true,"result":{"count":%d}}', hook_count)
+end
 -- args contains the exact original request and event; return success after one native event.
 -- args 包含精确原请求及事件；在单个原生事件之后返回成功。
 function M.on_lifecycle(args)
@@ -177,10 +187,46 @@ fn published_enabled_target() -> (
     VulcanPluginGenerationStore,
     VulcanPluginActivationTransaction,
 ) {
+    published_enabled_target_hooks(true)
+}
+
+/// Publish the same exact enabled update with a real presence or absence of target Hook declarations.
+/// 发布相同精确启用更新，目标 Hook 声明真实存在或缺失。
+/// target_hooks changes source before production preparation; returns actual original Published ownership.
+/// target_hooks 在生产准备前改变来源；返回实际原 Published 所有权。
+fn published_enabled_target_hooks(
+    target_hooks: bool,
+) -> (
+    Fixture,
+    VulcanPluginGenerationStore,
+    VulcanPluginActivationTransaction,
+) {
+    published_enabled_target_surfaces(target_hooks, false)
+}
+
+/// Publish real source Hook/MCP declarations through all original effects, without creating any private target resource.
+/// 经全部原副作用发布真实来源 Hook／MCP 声明，不创建任何私有目标资源。
+/// Flags select actual unapproved source surfaces; returned transaction owns the real Published selection.
+/// 标志选择实际未批准来源暴露面；返回事务拥有真实 Published 选择。
+fn published_enabled_target_surfaces(
+    target_hooks: bool,
+    target_mcp: bool,
+) -> (
+    Fixture,
+    VulcanPluginGenerationStore,
+    VulcanPluginActivationTransaction,
+) {
     // All source bytes and original selected configuration are frozen by the existing production fixture.
     // 全部来源字节及原选定配置由既有生产夹具固定。
     let (fixture, store, mut transaction, drain) =
-        callback_fixture_with_target(false, true, false, TARGET);
+        super::callbacks::callback_fixture_with_target_surfaces(
+            false,
+            true,
+            false,
+            TARGET,
+            target_hooks,
+            target_mcp,
+        );
     assert!(
         fixture
             .manager
@@ -361,7 +407,7 @@ fn formal_target_handoff_publication_requires_exact_closed_original() {
     let mut published = None;
     // Registration exclusion spans the synchronous publisher and actual manager replacement.
     // 注册互斥跨越同步发布器及实际管理器替换。
-    let final_catalog = fixture
+    let final_publication = fixture
         .manager
         .publish_activation_target_handoff(&transaction, &staged, |catalog| {
             assert!(Arc::ptr_eq(&catalog, &fixture.manager.snapshot()));
@@ -392,6 +438,9 @@ fn formal_target_handoff_publication_requires_exact_closed_original() {
             Ok(())
         })
         .expect("exact complete-extension callback");
+    // Inspect the successful publisher through its explicit read-only catalog accessor.
+    // 通过成功发布器的显式只读目录访问器检查它。
+    let final_catalog = Arc::clone(final_publication.catalog());
     assert!(Arc::ptr_eq(
         published.as_ref().expect("publisher output"),
         &final_catalog

@@ -13,6 +13,7 @@ use std::path::Path;
 pub(super) fn execute(
     state: &Arc<VulcanPluginManagerState>,
     domain: &ExecutionAuthority,
+    source: &ExecutionSource,
     workspace: &Path,
     name: &str,
     invocation: &CapabilityInvocation,
@@ -28,26 +29,38 @@ pub(super) fn execute(
             .as_object()
             .ok_or_else(|| internal("Native capability arguments are not an object."))?;
         match name {
-            VULCAN_PLUGIN_PROCESS_RESOLVE_TOOL => {
-                Ok(effect(state, domain, name, invocation, deadline, || {
+            VULCAN_PLUGIN_PROCESS_RESOLVE_TOOL => Ok(effect(
+                state,
+                domain,
+                source,
+                name,
+                invocation,
+                deadline,
+                || {
                     super::super::super::process::resolve_plugin_process_for_snapshot(
                         state,
                         &domain.plugin,
                         workspace,
                         arguments,
-                        domain.activation.as_deref(),
+                        source.activation(),
                     )
-                }))
-            }
-            VULCAN_PLUGIN_CONFIG_GET_TOOL => {
-                Ok(effect(state, domain, name, invocation, deadline, || {
+                },
+            )),
+            VULCAN_PLUGIN_CONFIG_GET_TOOL => Ok(effect(
+                state,
+                domain,
+                source,
+                name,
+                invocation,
+                deadline,
+                || {
                     VulcanPluginRuntimeManager {
                         state: Arc::clone(state),
                     }
                     .plugin_config_for_snapshot(&domain.plugin)
                     .map_err(|failure| failure.message)
-                }))
-            }
+                },
+            )),
             VULCAN_PLUGIN_CONFIG_UPDATE_TOOL => {
                 // A complete replacement document is required by the existing configuration contract.
                 // 现有配置契约要求提供完整替换文档。
@@ -57,13 +70,21 @@ pub(super) fn execute(
                         "Plugin configuration update requires field `value`.",
                     )
                 })?;
-                Ok(effect(state, domain, name, invocation, deadline, || {
-                    VulcanPluginRuntimeManager {
-                        state: Arc::clone(state),
-                    }
-                    .update_plugin_config_for_snapshot(&domain.plugin, value)
-                    .map_err(|failure| failure.message)
-                }))
+                Ok(effect(
+                    state,
+                    domain,
+                    source,
+                    name,
+                    invocation,
+                    deadline,
+                    || {
+                        VulcanPluginRuntimeManager {
+                            state: Arc::clone(state),
+                        }
+                        .update_plugin_config_for_snapshot(&domain.plugin, value)
+                        .map_err(|failure| failure.message)
+                    },
+                ))
             }
             VULCAN_PLUGIN_UI_INVALIDATE_TOOL => {
                 // Topic and revision are business data; the plugin channel is host-owned.
@@ -96,14 +117,22 @@ pub(super) fn execute(
                             "Plugin UI publisher is unavailable.",
                         )
                     })?;
-                Ok(effect(state, domain, name, invocation, deadline, || {
-                    publisher.publish(VulcanPluginUiInvalidation {
-                        plugin_id: domain.plugin.id.clone(),
-                        topic: topic.to_string(),
-                        revision,
-                    })?;
-                    Ok(json!({"published":true}))
-                }))
+                Ok(effect(
+                    state,
+                    domain,
+                    source,
+                    name,
+                    invocation,
+                    deadline,
+                    || {
+                        publisher.publish(VulcanPluginUiInvalidation {
+                            plugin_id: domain.plugin.id.clone(),
+                            topic: topic.to_string(),
+                            revision,
+                        })?;
+                        Ok(json!({"published":true}))
+                    },
+                ))
             }
             _ => {
                 if let Some(operation) = plugin_storage_operation(name) {
@@ -121,14 +150,22 @@ pub(super) fn execute(
                                 "Plugin storage service is unavailable.",
                             )
                         })?;
-                    return Ok(effect(state, domain, name, invocation, deadline, || {
-                        storage.execute(VulcanPluginStorageRequest {
-                            deadline: Some(deadline),
-                            plugin_id: domain.plugin.id.clone(),
-                            operation,
-                            payload: Value::Object(arguments.clone()),
-                        })
-                    }));
+                    return Ok(effect(
+                        state,
+                        domain,
+                        source,
+                        name,
+                        invocation,
+                        deadline,
+                        || {
+                            storage.execute(VulcanPluginStorageRequest {
+                                deadline: Some(deadline),
+                                plugin_id: domain.plugin.id.clone(),
+                                operation,
+                                payload: Value::Object(arguments.clone()),
+                            })
+                        },
+                    ));
                 }
                 if let Some(operation) = plugin_vldb_operation(name) {
                     // The logical binding service receives trusted identity separately from its payload.
@@ -145,14 +182,22 @@ pub(super) fn execute(
                                 "Plugin VLDB service is unavailable.",
                             )
                         })?;
-                    return Ok(effect(state, domain, name, invocation, deadline, || {
-                        vldb.execute(VulcanPluginVldbRequest {
-                            deadline: Some(deadline),
-                            plugin_id: domain.plugin.id.clone(),
-                            operation,
-                            payload: Value::Object(arguments.clone()),
-                        })
-                    }));
+                    return Ok(effect(
+                        state,
+                        domain,
+                        source,
+                        name,
+                        invocation,
+                        deadline,
+                        || {
+                            vldb.execute(VulcanPluginVldbRequest {
+                                deadline: Some(deadline),
+                                plugin_id: domain.plugin.id.clone(),
+                                operation,
+                                payload: Value::Object(arguments.clone()),
+                            })
+                        },
+                    ));
                 }
                 Err(internal(
                     "Native capability has no registered implementation.",
@@ -178,8 +223,9 @@ pub(super) fn execute(
 /// Opaque service results carry unknown effects even when their business result succeeds.
 /// 即使业务结果成功，不透明服务结果仍携带未知副作用状态。
 fn effect(
-    state: &VulcanPluginManagerState,
+    state: &Arc<VulcanPluginManagerState>,
     domain: &ExecutionAuthority,
+    source: &ExecutionSource,
     name: &str,
     invocation: &CapabilityInvocation,
     deadline: Instant,
@@ -191,7 +237,7 @@ fn effect(
             effects: EffectState::NotStarted,
         };
     }
-    if let Err(failure) = validate_invocation_current(state, domain, name, invocation) {
+    if let Err(failure) = validate_invocation_source(state, domain, source, name, invocation) {
         return CapabilityOutcome {
             result: Err(failure),
             effects: EffectState::NotStarted,

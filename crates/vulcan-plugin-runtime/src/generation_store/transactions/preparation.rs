@@ -321,6 +321,13 @@ impl VulcanPluginGenerationStore {
                     phase: wire.phase,
                 };
                 Self::validate_preparation_record(&record, plugin_id, request_id)?;
+                if files::exists(&directory.join(format!("{request_id}.target-hook")), false)?
+                    || files::exists(&directory.join(format!("{request_id}.target-mcp")), false)?
+                {
+                    return Err(Error::invalid(
+                        "Early preparation cannot own a target Hook initialization receipt.",
+                    ));
+                }
                 Ok(Some(VulcanPluginActivationRequestRecord::Preparation(
                     record,
                 )))
@@ -341,6 +348,10 @@ impl VulcanPluginGenerationStore {
                     phase: wire.phase,
                 };
                 Self::validate_transaction_record(&record, plugin_id, request_id)?;
+                // Original request inspection rejects invalid associated initialization evidence without repairing it.
+                // 原请求检查拒绝无效关联初始化证据，不修复其内容。
+                self.read_target_hook_locked(&record)?;
+                self.read_target_mcp_locked(&record)?;
                 Ok(Some(VulcanPluginActivationRequestRecord::Activation(
                     record,
                 )))

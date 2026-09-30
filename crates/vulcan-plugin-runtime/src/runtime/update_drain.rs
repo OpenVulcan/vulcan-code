@@ -14,6 +14,12 @@ use std::sync::{
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
+pub(super) mod restoration;
+pub use restoration::{
+    VulcanPluginPredecessorRestoration, VulcanPluginPredecessorRestorationFailure,
+    VulcanPluginPredecessorRestoreEvidence,
+};
+
 /// Validate frozen plugin and identity against the same manager's still-draining old catalog.
 /// 按相同管理器仍处于排空中的旧目录校验固定 plugin 及 identity。
 /// No publication or capability widening occurs; returns only an exact original callback grant.

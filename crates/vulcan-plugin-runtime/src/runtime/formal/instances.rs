@@ -11,11 +11,20 @@ use luaskills::runtime::embedded::{
 };
 use luaskills::{LuaInvocationContext, RuntimeRequestContext};
 use serde_json::{Value, json};
+use std::sync::Weak;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 mod admission;
 mod control;
+mod handoff;
+mod target_hooks;
+use handoff::NoTargetHandoffAdapter;
+pub use handoff::{
+    VulcanPluginActivationTargetCompletion, VulcanPluginActivationTargetHandoffParticipant,
+    VulcanPluginActivationTargetRegistration, VulcanPluginMcpTargetHandoffEvidence,
+    VulcanPluginNativeMcpHandoffAdapter,
+};
 #[cfg(test)]
 mod tests;
 
@@ -43,6 +52,21 @@ pub(in crate::runtime) struct PersistentRuntime {
 /// 精确检查点允许恢复，且不会重放初始化。
 #[derive(Default)]
 struct PersistentState {
+    /// Explicit private origin prevents ordinary routes from reusing an untransferred selected target.
+    /// 显式私有来源阻止普通路由复用未转交的已选目标。
+    private_target: Option<Arc<crate::runtime::candidates::ActivationTargetHookAuthority>>,
+    /// The sole original initialization attempt owns durable no-replay evidence until transfer or retirement.
+    /// 唯一原初始化尝试拥有持久禁止重放证据，直至转交或退役。
+    target_attempt: Option<crate::generation_store::TargetHookInitializationAttempt>,
+    /// An uncertain receipt observation closes transfer admission while physical cleanup remains available.
+    /// 不确定回执观测关闭转交入场，同时保持物理清理可用。
+    target_receipt_error: Option<String>,
+    /// Weak handoff addresses the original actual core domain rather than creating another VM.
+    /// 弱交接指向原实际核心域，不创建另一 VM。
+    target_handoff: Option<crate::runtime::bridge::PrivateTargetHookHandoff>,
+    /// Only successful synchronous complete-extension publication records this exact final catalog.
+    /// 仅成功同步完整扩展发布记录此精确最终目录。
+    target_catalog: Option<Weak<crate::VulcanPluginCatalogSnapshot>>,
     /// The initiating action owns preparation until real initialization finishes.
     /// 发起 Action 持有准备，直至实际初始化完成。
     preparation_action: Option<crate::runtime::action_status::ActionWorkGuard>,

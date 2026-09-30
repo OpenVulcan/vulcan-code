@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::VulcanPluginDescriptor;
-use crate::runtime::candidates::ActivationExecution;
+use crate::runtime::candidates::{ActivationExecution, ActivationTargetHookAuthority};
 use luaskills::runtime::embedded::capabilities::{
     CapabilityDescriptor, CapabilityEffects, CapabilityExecution, CapabilityIdempotency,
     CapabilityInvocation, CapabilityOutcome, CapabilityPermissions, CapabilityRegistrationRequest,
@@ -109,7 +109,119 @@ struct ExecutionAuthority {
     update_drain: Mutex<Option<Arc<crate::runtime::update_drain::UpdateDrainAuthority>>>,
     /// Only explicitly admitted unpublished operations carry this real transaction readiness owner.
     /// 仅明确接纳的未发布操作携带此实际事务就绪所有者。
-    activation: Option<Arc<ActivationExecution>>,
+    source: Mutex<ExecutionSource>,
+    /// Physical environment retention is independent from transferable transaction authorization.
+    /// 物理环境保留独立于可转交的事务授权。
+    _environment: Option<std::fs::File>,
+    /// Filled once from actual core registration before any session can initialize.
+    /// 在任何会话初始化前，仅从实际核心注册填写一次。
+    pool_id: std::sync::OnceLock<String>,
+}
+
+/// One captured source stays authoritative through both native admission and the effect boundary.
+/// 单个捕获来源在原生入场及副作用边界两处均保持权威。
+#[derive(Clone)]
+enum ExecutionSource {
+    /// Current published lifecycle and live manifest withdrawal authorize ordinary execution.
+    /// 当前已发布生命周期及实时清单撤回授权普通执行。
+    Published,
+    /// Exact existing candidate or predecessor operations retain their original authority.
+    /// 精确既有候选或前驱操作保留原权威。
+    ActivationOperation(Arc<ActivationExecution>),
+    /// Only original target initialization and its declared Hook finalizer may invoke native services.
+    /// 仅原目标初始化及其声明 Hook 关闭器可以调用原生服务。
+    PrivateTargetHook(Arc<ActivationTargetHookAuthority>),
+}
+
+impl ExecutionSource {
+    /// Return the existing operation authority only for its explicit variant; all other sources remain distinct.
+    /// 仅对显式变体返回既有操作权威；其他来源保持独立。
+    fn activation(&self) -> Option<&ActivationExecution> {
+        match self {
+            Self::ActivationOperation(authority) => Some(authority),
+            _ => None,
+        }
+    }
+}
+
+/// Restricted weak handle addresses the same original core pool and domain without extending physical ownership.
+/// 受限弱句柄指向相同原核心池及域，不延长物理所有权。
+pub(in crate::runtime) struct PrivateTargetHookHandoff {
+    /// Core-issued pool identity is immutable throughout transfer.
+    /// 核心签发池身份在转交全程保持不变。
+    pub(in crate::runtime) pool_id: String,
+    /// Only the actual core resource owner retains this domain strongly.
+    /// 仅实际核心资源所有者强持有此域。
+    domain: Weak<ExecutionAuthority>,
+}
+
+/// Prepared transfer retains the source guard until durable completion; applying it performs no I/O.
+/// 已准备转交保留来源守卫至持久完成；应用时不执行 I/O。
+pub(in crate::runtime) struct PrivateTargetHookTransfer<'a> {
+    /// Caller retains the exact original domain while this short transfer guard exists.
+    /// 此短转交守卫存在期间，调用方保留精确原域。
+    source: std::sync::MutexGuard<'a, ExecutionSource>,
+}
+
+impl PrivateTargetHookTransfer<'_> {
+    /// Replace only the authorization source after confirmed completion, releasing its original request owner.
+    /// 已确认完成后仅替换授权来源，释放其原请求所有者。
+    pub(in crate::runtime) fn publish(mut self) {
+        *self.source = ExecutionSource::Published;
+    }
+}
+
+impl PrivateTargetHookHandoff {
+    /// Upgrade the exact physical domain; returns an error rather than creating another pool.
+    /// 升级精确物理域；返回错误，绝不创建另一个池。
+    pub(in crate::runtime) fn retain_domain(&self) -> EmbeddedResult<PrivateTargetHookDomain> {
+        Ok(PrivateTargetHookDomain(self.domain.upgrade().ok_or_else(
+            || {
+                error(
+                    EmbeddedErrorCode::Closed,
+                    "Original target Hook domain has retired.",
+                )
+            },
+        )?))
+    }
+}
+
+/// Temporary exact domain retention permits prevalidated source transfer without exposing native registration.
+/// 临时精确域保留允许预校验来源转交，不暴露原生注册。
+pub(in crate::runtime) struct PrivateTargetHookDomain(Arc<ExecutionAuthority>);
+
+impl PrivateTargetHookDomain {
+    /// Lock only this original source after matching authority; return a guard for a later infallible publish.
+    /// 匹配权威后仅锁定此原来源；返回供后续不可失败发布使用的守卫。
+    pub(in crate::runtime) fn prepare_transfer(
+        &self,
+        authority: &Arc<ActivationTargetHookAuthority>,
+    ) -> EmbeddedResult<PrivateTargetHookTransfer<'_>> {
+        let source = self
+            .0
+            .source
+            .lock()
+            .map_err(|_| internal("Plugin execution source lock is poisoned."))?;
+        if !matches!(&*source, ExecutionSource::PrivateTargetHook(original) if Arc::ptr_eq(original, authority))
+        {
+            return Err(error(
+                EmbeddedErrorCode::StaleGeneration,
+                "Target Hook source differs from its original authority.",
+            ));
+        }
+        Ok(PrivateTargetHookTransfer { source })
+    }
+}
+
+/// Internal registration result retains the actual domain only until the host records its weak handoff.
+/// 内部注册结果仅在宿主记录弱交接前保留实际域。
+struct RegisteredPool {
+    /// Actual core-issued identity, never a host-generated replacement.
+    /// 实际核心签发身份，绝非宿主生成替代值。
+    id: String,
+    /// Exact resource owner installed in that core pool.
+    /// 安装于该核心池的精确资源所有者。
+    domain: Arc<ExecutionAuthority>,
 }
 
 /// Host-selected lifecycle scope and optional private activation authority form one pool admission.
@@ -120,7 +232,7 @@ struct PoolAdmission {
     scope: VulcanPluginBridgeLeaseScope,
     /// Absence explicitly chooses ordinary published authority.
     /// 缺失明确选择普通已发布权威。
-    activation: Option<Arc<ActivationExecution>>,
+    source: ExecutionSource,
 }
 
 impl PoolAdmission {
@@ -129,7 +241,7 @@ impl PoolAdmission {
     fn published(scope: VulcanPluginBridgeLeaseScope) -> Self {
         Self {
             scope,
-            activation: None,
+            source: ExecutionSource::Published,
         }
     }
 }
@@ -143,7 +255,21 @@ fn admitted_plugin(
     plugin_id: &str,
     admission: &PoolAdmission,
 ) -> EmbeddedResult<VulcanPluginDescriptor> {
-    if let Some(activation) = &admission.activation {
+    if let ExecutionSource::PrivateTargetHook(authority) = &admission.source {
+        if authority.plugin.id != plugin_id
+            || admission.scope != VulcanPluginBridgeLeaseScope::Enabled
+        {
+            return Err(error(
+                EmbeddedErrorCode::StaleGeneration,
+                "Private target Hook pool identity differs from its authority.",
+            ));
+        }
+        authority
+            .validate(state, &authority.plugin)
+            .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
+        return Ok(authority.plugin.clone());
+    }
+    if let ExecutionSource::ActivationOperation(activation) = &admission.source {
         if activation.plugin.id != plugin_id {
             return Err(error(
                 EmbeddedErrorCode::StaleGeneration,
@@ -171,6 +297,19 @@ fn admitted_plugin(
 }
 
 impl VulcanPluginEmbeddedHost {
+    /// Observe the actual domain pointer for pool_id in tests without extending its physical resource lifetime.
+    /// 测试中观测 pool_id 实际域指针，不延长其物理资源寿命。
+    #[cfg(test)]
+    pub(in crate::runtime) fn target_test_domain_identity(&self, pool_id: &str) -> usize {
+        let domains = self.authority.domains.lock().expect("test domains");
+        let domain = domains
+            .values()
+            .filter_map(Weak::upgrade)
+            .find(|domain| domain.pool_id.get().is_some_and(|id| id == pool_id))
+            .expect("original test pool domain");
+        Arc::as_ptr(&domain) as usize
+    }
+
     /// Inspect actual weak domains for request_id; return true while any original activation execution survives.
     /// 检查 request_id 的实际弱域；任何原激活执行仍存续时返回 true。
     /// Logical call removal cannot substitute for physical native retirement.
@@ -186,12 +325,22 @@ impl VulcanPluginEmbeddedHost {
             .domains
             .lock()
             .map_err(|_| internal("Plugin authority lock is poisoned."))?;
-        Ok(domains.values().filter_map(Weak::upgrade).any(|domain| {
-            domain
-                .activation
-                .as_ref()
-                .is_some_and(|activation| activation.request_id == request_id)
-        }))
+        for domain in domains.values().filter_map(Weak::upgrade) {
+            let source = domain
+                .source
+                .lock()
+                .map_err(|_| internal("Plugin execution source lock is poisoned."))?;
+            if match &*source {
+                ExecutionSource::ActivationOperation(authority) => {
+                    authority.request_id == request_id
+                }
+                ExecutionSource::PrivateTargetHook(authority) => authority.request_id == request_id,
+                ExecutionSource::Published => false,
+            } {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Check actual core owners retaining update; true means physical execution has not retired.
@@ -398,6 +547,7 @@ impl VulcanPluginEmbeddedHost {
             None,
             None,
         )
+        .map(|pool| pool.id)
     }
 
     /// Register definition and policy in scope as a member of the exact capacity_id; return the native pool identity.
@@ -419,6 +569,7 @@ impl VulcanPluginEmbeddedHost {
             None,
             None,
         )
+        .map(|pool| pool.id)
     }
 
     /// Register trusted `definition` and `policy` under the exact published or activation `admission`.
@@ -439,7 +590,7 @@ impl VulcanPluginEmbeddedHost {
         admission: PoolAdmission,
         capability_snapshot: Option<CapabilitySnapshot>,
         initialization_capabilities: Option<BTreeSet<String>>,
-    ) -> EmbeddedResult<String> {
+    ) -> EmbeddedResult<RegisteredPool> {
         // Scope and activation ownership were selected together by the trusted host route.
         // 作用域及激活所有权由可信宿主路由共同选择。
         let scope = admission.scope;
@@ -461,7 +612,8 @@ impl VulcanPluginEmbeddedHost {
                 "Plugin has no valid manifest.",
             )
         })?;
-        if admission.activation.is_none() && plugin.runtime_state != scope.required_runtime_state()
+        if matches!(admission.source, ExecutionSource::Published)
+            && plugin.runtime_state != scope.required_runtime_state()
         {
             return Err(error(
                 EmbeddedErrorCode::PermissionDenied,
@@ -533,6 +685,14 @@ impl VulcanPluginEmbeddedHost {
         };
         // Actual core pool ownership pins the descriptor, not historical host handles.
         // 真实核心池所有权固定描述符，历史宿主句柄不固定它。
+        let environment = match &admission.source {
+            ExecutionSource::PrivateTargetHook(authority) => Some(
+                authority
+                    .take_environment()
+                    .map_err(|failure| internal(&failure.message))?,
+            ),
+            _ => None,
+        };
         let domain = Arc::new(ExecutionAuthority {
             plugin,
             generation: definition.generation.clone(),
@@ -542,7 +702,9 @@ impl VulcanPluginEmbeddedHost {
             security_partition: definition.security_partition.clone(),
             closing_generation: AtomicU64::new(0),
             update_drain: Mutex::new(None),
-            activation: admission.activation,
+            source: Mutex::new(admission.source),
+            _environment: environment,
+            pool_id: std::sync::OnceLock::new(),
         });
         // Catalog publication cannot race the final authority check and pool registration.
         // 目录发布不能与最终权威检查及池注册竞争。
@@ -552,7 +714,12 @@ impl VulcanPluginEmbeddedHost {
             .map_err(|_| internal("Plugin publication gate is poisoned."))?;
         // Direct native registration must not create an unowned lifecycle callback during an original update.
         // 直接原生注册不得在原更新期间创建无原请求归属的生命周期回调。
-        if domain.activation.is_none() {
+        let source = domain
+            .source
+            .lock()
+            .map_err(|_| internal("Plugin execution source lock is poisoned."))?
+            .clone();
+        if matches!(source, ExecutionSource::Published) {
             crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
                 &state,
                 &domain.plugin.id,
@@ -560,7 +727,7 @@ impl VulcanPluginEmbeddedHost {
             )
             .map_err(|failure| error(EmbeddedErrorCode::PermissionDenied, failure.message))?;
         }
-        validate_current(&state, &domain, false, None)?;
+        validate_current_source(&state, &domain, &source, false, None)?;
         {
             // Prune dead entries and reserve one bounded identity before core publication.
             // 在核心发布前清除死亡条目并预留一个有界身份。
@@ -584,7 +751,7 @@ impl VulcanPluginEmbeddedHost {
             definition,
             policy,
             binding,
-            Some(ModuleResourceOwner::new(domain)),
+            Some(ModuleResourceOwner::new(Arc::clone(&domain))),
             capacity_id,
         );
         if registered.is_err() {
@@ -596,7 +763,15 @@ impl VulcanPluginEmbeddedHost {
                 .map_err(|_| internal("Plugin authority lock is poisoned."))?
                 .remove(&revision);
         }
-        registered
+        registered.map(|id| {
+            // Initialization cannot begin until the caller receives this already-bound pool.
+            // 调用方收到此已绑定池前，初始化不能开始。
+            domain
+                .pool_id
+                .set(id.clone())
+                .expect("new original domain has no pool identity");
+            RegisteredPool { id, domain }
+        })
     }
 }
 
@@ -642,7 +817,14 @@ impl HostAuthority {
                 .manager
                 .upgrade()
                 .ok_or_else(|| error(EmbeddedErrorCode::Closed, "Plugin manager is closed."))?;
-            validate_invocation_current(&state, &domain, name, invocation)?;
+            // Capture provenance once; a concurrent handoff cannot change this invocation's second check.
+            // 仅捕获一次来源；并发交接不能改变此调用的第二次校验。
+            let source = domain
+                .source
+                .lock()
+                .map_err(|_| internal("Plugin execution source lock is poisoned."))?
+                .clone();
+            validate_invocation_source(&state, &domain, &source, name, invocation)?;
             // Correlated calls require their exact admitted operation; absent correlation uses the module declaration.
             // 带关联调用要求精确已入场操作；无关联调用使用模块声明。
             let scope = self.workspace(&domain, invocation)?;
@@ -660,16 +842,17 @@ impl HostAuthority {
                     )
                 })?;
             invocation.authorize()?;
-            Ok((state, domain, scope, deadline))
+            Ok((state, domain, source, scope, deadline))
         })();
         match admitted {
-            Ok((state, domain, scope, deadline)) => {
+            Ok((state, domain, source, scope, deadline)) => {
                 // Correlation was authenticated before attributing native execution time.
                 // 原生执行计时归属前已认证关联。
                 let _timer = crate::runtime::action_status::HostCallTimer::for_record(scope.action);
                 dispatch::execute(
                     &state,
                     &domain,
+                    &source,
                     &scope.workspace,
                     name,
                     invocation,
@@ -692,13 +875,33 @@ impl HostAuthority {
 /// capability 在注册时缺省；调用要求精确能力的当前权限。
 /// The catalog read lock ends before any external service or Lua code executes.
 /// 目录读锁在任何外部服务或 Lua 代码执行前结束。
-fn validate_current(
+/// Validate the captured source against state; source remains fixed across one native invocation.
+/// 针对 state 校验已捕获来源；来源在单次原生调用中保持固定。
+fn validate_current_source(
     state: &VulcanPluginManagerState,
     domain: &ExecutionAuthority,
+    source: &ExecutionSource,
     finalizing: bool,
     capability: Option<&str>,
 ) -> EmbeddedResult<()> {
-    if let Some(activation) = &domain.activation {
+    if let ExecutionSource::PrivateTargetHook(authority) = source {
+        authority
+            .validate(state, &domain.plugin)
+            .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
+        let manifest = domain
+            .plugin
+            .manifest
+            .as_ref()
+            .ok_or_else(|| internal("Private target Hook manifest is unavailable."))?;
+        if capability.is_some_and(|name| !permitted(name, &manifest.permissions)) {
+            return Err(error(
+                EmbeddedErrorCode::PermissionDenied,
+                "Private target Hook manifest does not authorize this capability.",
+            ));
+        }
+        return Ok(());
+    }
+    if let ExecutionSource::ActivationOperation(activation) = source {
         activation
             .validate(state, &domain.plugin, domain.scope)
             .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
@@ -793,15 +996,51 @@ fn validate_current(
 /// name 选择当前授权必须保持有效的固定原生能力。
 /// Returns the original identity failure; this never substitutes for `invocation.authorize()`.
 /// 返回原始身份失败；这绝不替代 `invocation.authorize()`。
-fn validate_invocation_current(
-    state: &VulcanPluginManagerState,
+/// Require the captured private source to match actual core initialization or declared finalization evidence.
+/// 要求已捕获私有来源匹配实际核心初始化或声明关闭证据。
+/// state and domain identify one original pool; name and invocation retain all live permission and budget checks.
+/// state 与 domain 标识单个原池；name 及 invocation 保留全部实时权限与预算校验。
+fn validate_invocation_source(
+    state: &Arc<VulcanPluginManagerState>,
     domain: &ExecutionAuthority,
+    source: &ExecutionSource,
     name: &str,
     invocation: &CapabilityInvocation,
 ) -> EmbeddedResult<()> {
-    validate_current(
+    if let ExecutionSource::PrivateTargetHook(_) = source {
+        let owner = VulcanPluginRuntimeManager {
+            state: Arc::clone(state),
+        }
+        .formal_runtime_owner()
+        .map_err(|failure| internal(&failure.message))?
+        .ok_or_else(|| internal("Formal plugin runtime is missing."))?;
+        let session_id = invocation.caller.session_id.as_ref().ok_or_else(|| {
+            error(
+                EmbeddedErrorCode::PermissionDenied,
+                "Private target Hook requires its actual fixed session.",
+            )
+        })?;
+        let session = owner.host.runtime().session(session_id)?;
+        let finalizing = invocation.budget.is_finalization()?;
+        if domain.pool_id.get() != Some(&session.pool_id)
+            || session.active_operation.as_ref() != Some(&invocation.caller.operation_id)
+            || (finalizing
+                && (session.phase != luaskills::runtime::embedded::EmbeddedSessionPhase::Closing
+                    || session.finalization_operation.as_ref()
+                        != Some(&invocation.caller.operation_id)))
+            || (!finalizing
+                && session.phase != luaskills::runtime::embedded::EmbeddedSessionPhase::Opening)
+        {
+            return Err(error(
+                EmbeddedErrorCode::PermissionDenied,
+                "Private target Hook permits only actual initialization and declared finalization.",
+            ));
+        }
+    }
+    validate_current_source(
         state,
         domain,
+        source,
         invocation.budget.is_finalization()?,
         Some(name),
     )

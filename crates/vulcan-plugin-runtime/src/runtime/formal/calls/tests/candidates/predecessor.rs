@@ -4,6 +4,7 @@
 use super::*;
 mod callbacks;
 mod publication;
+mod restoration_boundary;
 mod restore;
 
 /// Prepare the exact target configuration while preserving the original predecessor and request lock.

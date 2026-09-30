@@ -134,6 +134,47 @@ pub(super) fn callback_fixture_with_target(
     VulcanPluginActivationTransaction,
     crate::VulcanPluginPredecessorDrain,
 ) {
+    callback_fixture_with_target_hooks(block, declared, fail, target_bundle, true)
+}
+
+/// Build the same real original fixture while explicitly selecting whether the target declares any Hook.
+/// 构建相同真实原夹具，同时明确选择目标是否声明 Hook。
+/// Parameters retain the existing callback controls; target_hooks changes only unapproved target manifest bytes.
+/// 参数保留既有回调控制；target_hooks 仅改变未批准目标清单字节。
+/// Return the actual original transaction and drain after production inspection of the final target manifest.
+/// 生产检查最终目标清单后返回实际原事务及排空。
+pub(super) fn callback_fixture_with_target_hooks(
+    block: bool,
+    declared: bool,
+    fail: bool,
+    target_bundle: &str,
+    target_hooks: bool,
+) -> (
+    Fixture,
+    VulcanPluginGenerationStore,
+    VulcanPluginActivationTransaction,
+    crate::VulcanPluginPredecessorDrain,
+) {
+    callback_fixture_with_target_surfaces(block, declared, fail, target_bundle, target_hooks, false)
+}
+
+/// Prepare actual source manifest Hook/MCP surfaces before immutable inspection; return original production owners.
+/// 在不可变检查之前准备实际来源清单 Hook／MCP 暴露面；返回原生产所有者。
+/// Callback controls remain unchanged; target_mcp adds one declared global HTTP server without starting transport.
+/// 回调控制保持不变；target_mcp 添加单个声明全局 HTTP 服务器，不启动传输。
+pub(super) fn callback_fixture_with_target_surfaces(
+    block: bool,
+    declared: bool,
+    fail: bool,
+    target_bundle: &str,
+    target_hooks: bool,
+    target_mcp: bool,
+) -> (
+    Fixture,
+    VulcanPluginGenerationStore,
+    VulcanPluginActivationTransaction,
+    crate::VulcanPluginPredecessorDrain,
+) {
     // The original real lifecycle fixture supplies native services and declared process resolution.
     // 原真实生命周期夹具提供原生服务及声明进程解析。
     let fixture = Fixture::new();
@@ -199,6 +240,42 @@ pub(super) fn callback_fixture_with_target(
     // 在不可变准备前写入调用方精确目标字节。
     std::fs::write(source.join("runtime/plugin.bundle.lua"), target_bundle)
         .expect("distinct private target");
+    if !target_hooks {
+        // Edit the parsed unique manifest field before any immutable target preparation or approval.
+        // 在任何不可变目标准备或批准之前编辑已解析唯一清单字段。
+        let path = source.join("plugin.yaml");
+        let mut manifest: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).expect("actual target manifest"))
+                .expect("parse target manifest");
+        manifest["lua_runtime"]["hooks"] = serde_yaml::Value::Sequence(Vec::new());
+        std::fs::write(
+            path,
+            serde_yaml::to_string(&manifest).expect("serialize actual no-Hook manifest"),
+        )
+        .expect("write actual no-Hook target");
+    }
+    if target_mcp {
+        // Replace only the declared MCP manifest field before approval; no catalog descriptor is fabricated.
+        // 批准之前仅替换声明 MCP 清单字段；不伪造目录描述符。
+        let path = source.join("plugin.yaml");
+        // Parse the actual fixture source before inserting its typed transport declaration.
+        // 插入类型化传输声明之前，解析实际夹具来源。
+        let mut manifest: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).expect("actual target source"))
+                .expect("parse actual target source");
+        // Remote MCP explicitly requests its required grant before production inspection derives approved permissions.
+        // 远程 MCP 在生产检查派生已批准权限之前，明确请求所需授权。
+        manifest["permissions"]
+            .as_sequence_mut()
+            .expect("actual declared permissions")
+            .push(serde_yaml::Value::String("network_https".into()));
+        manifest.as_mapping_mut().expect("manifest mapping").insert(serde_yaml::Value::String("mcp".into()), serde_yaml::from_str("servers:\n  - id: target-http\n    name: Target HTTP\n    scope: global\n    transport:\n      type: http\n      url: {source: literal, value: 'https://127.0.0.1:1/mcp'}\n").expect("typed global MCP declaration"));
+        std::fs::write(
+            path,
+            serde_yaml::to_string(&manifest).expect("actual declared target bytes"),
+        )
+        .expect("write actual MCP target");
+    }
     // Capture the still-enabled old catalog before creating the policy-bearing update.
     // 在创建携带策略更新之前捕获仍启用旧目录。
     let original = fixture.manager.snapshot();

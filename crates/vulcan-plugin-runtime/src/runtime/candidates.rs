@@ -5,7 +5,13 @@ use super::*;
 use crate::{VulcanPluginActivationCandidate, VulcanPluginDescriptor, VulcanPluginPackageOrigin};
 
 mod mcp;
-pub use mcp::VulcanPluginPreparedMcpCandidate;
+pub use mcp::{
+    VulcanPluginMcpTargetHandoffGuard, VulcanPluginMcpTargetStartGuard,
+    VulcanPluginPreparedMcpCandidate, VulcanPluginPreparedMcpTarget,
+    VulcanPluginRegisteredNativeMcpHostAuthority,
+};
+mod target_hooks;
+pub(in crate::runtime) use target_hooks::ActivationTargetHookAuthority;
 
 /// Retains the original request only after confirming its catalog and unpublished package authority.
 /// 确认目录及未发布插件包权威后，才保留原请求。

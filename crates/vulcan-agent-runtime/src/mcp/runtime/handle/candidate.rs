@@ -5,6 +5,9 @@ use super::*;
 use crate::mcp::PreparedPluginMcpConfigs;
 use vulcan_mcp_runtime::{McpResourceRelease, McpTransportResources};
 
+mod target;
+pub use target::{TargetPluginMcpHandoffGuard, TargetPluginMcpRuntime};
+
 /// Controls one unpublished readiness run without exposing business-tool admission.
 /// 控制单次未发布就绪运行，不暴露业务工具入场。
 /// Dropping control requests shutdown; observations remain usable until actual owners release.

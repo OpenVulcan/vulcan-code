@@ -16,6 +16,8 @@ mod files;
 mod operations;
 mod transactions;
 pub(crate) use transactions::EffectAttempt;
+pub(crate) use transactions::{TargetHookInitializationAttempt, TargetHookInitializationOwner};
+pub(crate) use transactions::{TargetMcpInitializationAttempt, TargetMcpInitializationOwner};
 pub use transactions::{
     VulcanPluginActivationCandidate, VulcanPluginActivationEffect, VulcanPluginActivationEffects,
     VulcanPluginActivationPreparation, VulcanPluginActivationPreparationIntent,
@@ -23,7 +25,9 @@ pub use transactions::{
     VulcanPluginActivationTransaction, VulcanPluginActivationTransactionPhase,
     VulcanPluginActivationTransactionRecord, VulcanPluginEffectObservation,
     VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt,
-    VulcanPluginPredecessorDrainIdentity, VulcanPluginUpdatePolicy,
+    VulcanPluginPredecessorDrainIdentity, VulcanPluginTargetHookInitializationPhase,
+    VulcanPluginTargetHookInitializationReceipt, VulcanPluginTargetMcpInitializationPhase,
+    VulcanPluginTargetMcpInitializationReceipt, VulcanPluginUpdatePolicy,
 };
 #[cfg(test)]
 mod tests;

@@ -16,7 +16,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+mod predecessor_restore;
 mod update_publication;
+pub use update_publication::VulcanPluginActivationTargetPublication;
 
 /// Host-owned plugin lifecycle event that may invoke one manifest callback.
 /// 可调用清单回调的宿主自有插件生命周期事件。

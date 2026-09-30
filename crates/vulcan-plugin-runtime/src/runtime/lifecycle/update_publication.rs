@@ -3,6 +3,9 @@
 
 use super::*;
 
+mod publication;
+pub use publication::VulcanPluginActivationTargetPublication;
+
 impl VulcanPluginRuntimeManager {
     /// Reserve a monotonic handoff revision from the sole manager catalog counter without wrapping.
     /// 从唯一管理器目录计数器预留单调交接修订，不发生回绕。
@@ -135,18 +138,18 @@ impl VulcanPluginRuntimeManager {
 
     /// Publish matching enabled runtime and extension catalogs under the existing registration exclusion.
     /// 在既有注册互斥下发布匹配的启用运行时及扩展目录。
-    /// transaction owns the original request; staged is the exact current Arc returned by target staging.
-    /// transaction 拥有原请求；staged 是目标暂存返回的精确当前 Arc。
+    /// transaction owns the original request; staged is the exact current closed catalog, including later namespace refreshes.
+    /// transaction 拥有原请求；staged 是精确当前关闭目录，包含随后其他命名空间的刷新。
     /// publisher synchronously replaces the complete extension pointer; it must not reenter runtime admission.
     /// publisher 同步替换完整扩展指针；不得重新进入运行时入场。
-    /// Returns the enabled catalog; the caller still owns MCP reopening and durable original completion.
-    /// 返回启用目录；调用方仍拥有 MCP 重开及原请求持久完成。
+    /// Returns sealed full publication evidence with its exact closed/final Arcs; original completion still gates business.
+    /// 返回具有精确关闭／最终 Arc 的封闭完整发布凭据；原请求完成仍门控业务。
     pub fn publish_activation_target_handoff(
         &self,
         transaction: &crate::VulcanPluginActivationTransaction,
         staged: &Arc<VulcanPluginCatalogSnapshot>,
         publisher: impl FnOnce(Arc<VulcanPluginCatalogSnapshot>) -> Result<(), String>,
-    ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+    ) -> Result<VulcanPluginActivationTargetPublication, VulcanPluginRuntimeError> {
         // No business registration can cross the synchronous complete-extension handoff.
         // 任何业务注册均不能越过同步完整扩展交接。
         let _registration =
@@ -184,6 +187,13 @@ impl VulcanPluginRuntimeManager {
         self.validate_plugin_requirements(plugin)?;
         // Build the final complete surface without issuing another routing generation.
         // 构建最终完整暴露面，不签发另一运行代次。
+        // Reserve the original persistent publication evidence before invoking any external publisher.
+        // 在调用任何外部发布器前预留原持久发布证据。
+        let private_hook = self.activation_target_hook_for_publication(transaction)?;
+        let private_publication = private_hook
+            .as_ref()
+            .map(|runtime| runtime.target_publication_guard())
+            .transpose()?;
         let mut next = (**staged).clone();
         next.plugins
             .get_mut(&target.plugin_id)
@@ -194,6 +204,10 @@ impl VulcanPluginRuntimeManager {
         // The publisher receives exactly the provisional catalog installed into the manager.
         // 发布器接收已临时安装到管理器的精确目录。
         let next = Arc::new(next);
+        // Prepare the exact original publication witness before invoking the synchronous full publisher.
+        // 调用同步完整发布器之前，准备精确原发布凭据。
+        let publication =
+            VulcanPluginActivationTargetPublication::new(self, transaction, staged, &next);
         // Host Hook validation reads the current manager; publish its exact provisional catalog while business stays fenced.
         // 宿主 Hook 校验读取当前管理器；业务仍被隔离时发布其精确临时目录。
         self.state
@@ -226,9 +240,12 @@ impl VulcanPluginRuntimeManager {
             })? = Arc::clone(staged);
             return Err(VulcanPluginRuntimeError::new(publication_error));
         }
+        if let Some(publication) = private_publication {
+            publication.published(&next);
+        }
         // The selected-target disk fence still denies business until this original request completes.
         // 已选目标磁盘屏障仍拒绝业务，直至此原请求完成。
-        Ok(next)
+        Ok(publication)
     }
 
     /// Validate actual ownership, complete selected target and the frozen enabled update intent.
@@ -246,9 +263,30 @@ impl VulcanPluginRuntimeManager {
             .ok_or_else(|| {
                 VulcanPluginRuntimeError::new("Original activation store is missing.")
             })?;
-        store
-            .validate_published_activation_owner(transaction)
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        // A retained initialized original permits exact Completed readback recovery without a new VM or init.
+        // 保留的已初始化原实例允许精确 Completed 回读恢复，不创建新 VM 或初始化。
+        // An explicitly empty Hook declaration has no private VM owner to transfer or replay.
+        // 显式空 Hook 声明没有需要转交或重放的私有 VM 所有者。
+        let no_hooks = self
+            .snapshot()
+            .plugins
+            .get(&transaction.record().target().plugin_id)
+            .is_some_and(|plugin| {
+                plugin.hooks.is_empty()
+                    && plugin.managed_package().is_some_and(|package| {
+                        package.matches_activation(transaction.record().target())
+                    })
+            });
+        if no_hooks
+            || self
+                .activation_target_hook_for_publication(transaction)?
+                .is_some()
+        {
+            store.validate_published_target_handoff_owner(transaction)
+        } else {
+            store.validate_published_activation_owner(transaction)
+        }
+        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
         if !transaction
             .record()
             .update_policy()

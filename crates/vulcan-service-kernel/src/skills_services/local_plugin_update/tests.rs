@@ -1044,7 +1044,7 @@ async fn immutable_service_update_target_handoff_publishes_real_extension_genera
     ));
     // The synchronous handoff invokes the actual complete service publisher with the exact final catalog.
     // 同步交接以精确最终目录调用实际完整服务发布器。
-    let final_catalog = fixture
+    let publication = fixture
         .runtime
         .publish_activation_target_handoff(&transaction, &staged, |catalog| {
             assert_eq!(transaction.record().request_id(), request_id);
@@ -1057,6 +1057,9 @@ async fn immutable_service_update_target_handoff_publishes_real_extension_genera
             )
         })
         .expect("real complete service extension publication");
+    // Read the exact successful full publisher catalog without fabricating completion evidence.
+    // 读取精确成功完整发布器目录，不虚构完成证据。
+    let final_catalog = Arc::clone(publication.catalog());
     // New executions capture the single replaced extension; retained executions still own the predecessor Arc.
     // 新执行捕获单个已替换扩展；保留执行仍拥有前驱 Arc。
     let final_extension = Arc::clone(
@@ -1136,8 +1139,9 @@ async fn immutable_service_update_target_handoff_publishes_real_extension_genera
             .contains("unfinished original activation request")
     );
     assert!(Arc::ptr_eq(&final_catalog, &fixture.runtime.snapshot()));
-    store
-        .complete_activation_transaction(&mut transaction)
+    fixture
+        .runtime
+        .complete_activation_target_handoff(&mut transaction, &publication)
         .expect("actual original handoff completion");
     assert_eq!(transaction.record().request_id(), request_id);
     assert_eq!(transaction.record().phase(), Phase::Completed);

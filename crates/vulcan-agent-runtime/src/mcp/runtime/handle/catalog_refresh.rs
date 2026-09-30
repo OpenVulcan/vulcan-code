@@ -146,8 +146,8 @@ pub(super) async fn refresh_optional(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        McpRuntimePurpose, McpRuntimeServerStatus, McpRuntimeSnapshot, McpServerRegistry,
-        initial_server_snapshot,
+        McpBusinessGate, McpRuntimePurpose, McpRuntimeServerStatus, McpRuntimeSnapshot,
+        McpServerRegistry, initial_server_snapshot,
     };
     use super::*;
     use std::collections::BTreeMap;
@@ -261,8 +261,10 @@ mod tests {
         snapshot.status = McpRuntimeServerStatus::Connected;
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
         let inner = Arc::new(McpRuntimeInner {
+            instance_id: uuid::Uuid::new_v4(),
             registry: McpServerRegistry::new(vec![server.clone()]),
             purpose: McpRuntimePurpose::Managed,
+            business_gate: RwLock::new(McpBusinessGate::Open),
             transports: RwLock::new(BTreeMap::new()),
             resource_releases: RwLock::new(BTreeMap::new()),
             // This synthetic registry starts no native lifecycle and therefore has an empty released scope.

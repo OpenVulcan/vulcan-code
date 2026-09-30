@@ -145,6 +145,12 @@ impl VulcanPluginRuntimeManager {
         if state.preparing {
             return Ok(false);
         }
+        // Durable observation failure closes transfer while cleanup continues for the actual original resources.
+        // 持久观测失败关闭转交，同时继续清理实际原资源。
+        if let Err(error) = self.observe_target_hook_initialization(owner, &mut state) {
+            state.target_receipt_error = Some(error.to_string());
+            runtime.closing.store(true, Ordering::Release);
+        }
         if let Some(initialization) = &state.initialization
             && initialization
                 .snapshot()
@@ -256,6 +262,12 @@ impl VulcanPluginRuntimeManager {
         }
         state.preparation_action.take();
         state.retired = true;
+        // Release private original-request preparation ownership only after the actual core pool is forgotten.
+        // 仅在实际核心池已遗忘后释放私有原请求准备所有权。
+        state.private_target.take();
+        state.target_attempt.take();
+        state.target_handoff.take();
+        state.target_catalog.take();
         Ok(true)
     }
 

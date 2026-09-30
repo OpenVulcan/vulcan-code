@@ -2,7 +2,9 @@
 //! 物化候选 MCP 输入，同时保留其原未发布权威。
 
 use super::*;
-use vulcan_plugin_runtime::{VulcanPluginMcpStdioLaunchSpec, VulcanPluginPreparedMcpCandidate};
+use vulcan_plugin_runtime::{
+    VulcanPluginMcpStdioLaunchSpec, VulcanPluginPreparedMcpCandidate, VulcanPluginPreparedMcpTarget,
+};
 
 /// A declared source controls launcher resolution and legacy configuration eligibility.
 /// 声明来源控制启动器解析及旧配置读取资格。
@@ -13,6 +15,9 @@ pub(super) enum PluginMcpMaterializationSource<'a> {
     /// Candidate declarations use only the prepared request's frozen launchers and selections.
     /// 候选声明仅使用准备请求的固定启动器及选择。
     Candidate(&'a VulcanPluginPreparedMcpCandidate),
+    /// Actual selected target retains exact immutable selections and already checked launchers.
+    /// 实际已选目标保留精确不可变选择及已检查启动器。
+    Target(&'a VulcanPluginPreparedMcpTarget),
 }
 
 impl PluginMcpMaterializationSource<'_> {
@@ -32,6 +37,10 @@ impl PluginMcpMaterializationSource<'_> {
                 .stdio_launcher(&server.id)
                 .cloned()
                 .map_err(|error| error.to_string()),
+            Self::Target(target) => target
+                .stdio_launcher(&server.id)
+                .cloned()
+                .map_err(|error| error.to_string()),
         }
     }
 
@@ -42,8 +51,8 @@ impl PluginMcpMaterializationSource<'_> {
     pub(super) fn legacy_configuration(&self, plugin_id: &str) -> Result<Option<Value>, String> {
         match self {
             Self::Published(plugins) => plugin_server_configuration(plugins, plugin_id),
-            Self::Candidate(_) => Err(String::from(
-                "Activation candidate is missing its frozen configuration selection.",
+            Self::Candidate(_) | Self::Target(_) => Err(String::from(
+                "Prepared activation authority is missing its frozen configuration selection.",
             )),
         }
     }
@@ -138,4 +147,55 @@ pub fn candidate_local_mcp_server_configs(
         .map(|server| plugin_mcp_server_config(&source, server, secrets, None))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PreparedPluginMcpConfigs { candidate, servers })
+}
+
+/// Sealed actual target definitions retain the complete resource authority until transport retirement.
+/// 密封实际目标定义保留完整资源权威，直至传输退役。
+#[derive(Debug)]
+pub struct PreparedTargetPluginMcpConfigs {
+    /// Original selected resource owner cannot be substituted with candidate generation zero.
+    /// 原已选资源所有者不能替换为候选零代次。
+    target: VulcanPluginPreparedMcpTarget,
+    /// Exact global definitions never detach from their owning selection.
+    /// 精确全局定义绝不脱离所属选择。
+    servers: Vec<McpServerConfig>,
+}
+
+impl PreparedTargetPluginMcpConfigs {
+    /// Consume this sealed pair; no input and no arbitrary owner/config combination.
+    /// 消费此密封组合；无输入，不允许任意所有者／配置组合。
+    pub(in crate::mcp) fn into_runtime_inputs(
+        self,
+    ) -> (VulcanPluginPreparedMcpTarget, Vec<McpServerConfig>) {
+        (self.target, self.servers)
+    }
+    /// Borrow the exact resource authority; no input and no ownership transfer.
+    /// 借用精确资源权威；无输入，不转交所有权。
+    pub fn target(&self) -> &VulcanPluginPreparedMcpTarget {
+        &self.target
+    }
+}
+
+/// Materialize actual target global declarations from the same retained selection and credential binding.
+/// 从同一保留选择及凭据绑定物化实际目标全局声明。
+/// target fixes every launcher and value source; secrets reads only its declared revision.
+/// target 固定全部启动器及值来源；secrets 仅读取其声明修订。
+/// Return sealed inputs for actual target preparation, without granting business admission.
+/// 返回实际目标准备的密封输入，不授予业务入场。
+pub fn target_global_mcp_server_configs(
+    target: VulcanPluginPreparedMcpTarget,
+    secrets: &dyn PluginMcpSecretStore,
+) -> Result<PreparedTargetPluginMcpConfigs, String> {
+    // Read exact descriptor selections rather than a latest public manager catalog.
+    // 读取精确描述符选择，而非管理器最新公开目录。
+    let source = PluginMcpMaterializationSource::Target(&target);
+    // Scope is declared by the same full target manifest.
+    // 作用域由同一完整目标清单声明。
+    let servers = target
+        .servers()
+        .iter()
+        .filter(|server| server.manifest.scope == VulcanPluginMcpScopeManifest::Global)
+        .map(|server| plugin_mcp_server_config(&source, server, secrets, None))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PreparedTargetPluginMcpConfigs { target, servers })
 }

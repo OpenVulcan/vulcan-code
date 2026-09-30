@@ -7,8 +7,11 @@ use uuid::Uuid;
 mod effects;
 mod installation;
 mod operations;
+mod predecessor_abort;
 mod preparation;
 mod records;
+mod target_hooks;
+mod target_mcp;
 pub(crate) use effects::EffectAttempt;
 pub use effects::{
     VulcanPluginActivationEffect, VulcanPluginActivationEffects, VulcanPluginEffectObservation,
@@ -18,6 +21,14 @@ pub use installation::{VulcanPluginInstallationPhase, VulcanPluginInstallationRe
 pub use preparation::{
     VulcanPluginActivationPreparation, VulcanPluginActivationPreparationIntent,
     VulcanPluginActivationPreparationRecord, VulcanPluginActivationRequestRecord,
+};
+pub(crate) use target_hooks::{TargetHookInitializationAttempt, TargetHookInitializationOwner};
+pub use target_hooks::{
+    VulcanPluginTargetHookInitializationPhase, VulcanPluginTargetHookInitializationReceipt,
+};
+pub(crate) use target_mcp::{TargetMcpInitializationAttempt, TargetMcpInitializationOwner};
+pub use target_mcp::{
+    VulcanPluginTargetMcpInitializationPhase, VulcanPluginTargetMcpInitializationReceipt,
 };
 mod update_policy;
 pub use update_policy::VulcanPluginUpdatePolicy;
@@ -35,6 +46,9 @@ const UPDATE_RECORD_VERSION: u32 = 3;
 /// Journal envelope contains two bounded selections and one metadata allowance, all derived from existing budgets.
 /// 日志封套容纳两个有界选择及一个元数据额度，全部从既有限制派生。
 const MAX_TRANSACTION_BYTES: u64 = MAX_ACTIVATION_BYTES * 2 + MAX_RECORD_BYTES;
+/// Every target initialization receipt contains one complete selection and the same sole metadata allowance.
+/// 每个目标初始化回执包含单个完整选择及相同唯一元数据额度。
+const MAX_TARGET_INITIALIZATION_RECEIPT_BYTES: u64 = MAX_ACTIVATION_BYTES + MAX_RECORD_BYTES;
 
 /// Exact durable checkpoint of one host-controlled activation request; no phase implies a callback was replayed.
 /// 宿主控制的单次激活请求的精确持久检查点；任何阶段都不表示回调已被重放。
@@ -157,6 +171,14 @@ pub struct VulcanPluginActivationTransaction {
 }
 
 impl VulcanPluginActivationTransaction {
+    /// Retain the same exclusive original file for validated published target resources; never reopen its lock.
+    /// 为已校验的已发布目标资源保留相同原排他文件；绝不重开其锁。
+    /// The caller must first validate full published ownership; returns actual shared ownership, not an identity token.
+    /// 调用方必须先校验完整已发布所有权；返回实际共享所有权，而非身份令牌。
+    pub(crate) fn retain_published_target_owner(&self) -> Arc<File> {
+        Arc::clone(&self._lease)
+    }
+
     /// Borrow the last confirmed journal checkpoint; query disk after any failed mutation.
     /// 借用最后确认的日志检查点；任何变更失败后查询磁盘。
     pub fn record(&self) -> &VulcanPluginActivationTransactionRecord {
