@@ -6,9 +6,11 @@
 // 语言列表与匹配规则与 `apps/vulcan-code-web/src/i18n-locales.ts` 中持有它们的 `SUPPORTED_LOCALES`、
 // `matchLocaleTag` 保持一致；一个桌面测试保证列表一致。
 
-/** One language supported by the desktop shell. */
+/** One language supported by the desktop shell.
+ * 桌面壳支持的一种语言。
+ */
 export type DesktopLocale =
-  | 'en-US' | 'zh-CN' | 'zh-TW' | 'ja-JP' | 'ko-KR' | 'es-ES' | 'fr-FR' | 'de-DE' | 'pt-BR' | 'ru-RU';
+  | 'en-US' | 'zh-CN' | 'zh-TW' | 'zh-HK' | 'ja-JP' | 'ko-KR' | 'es-ES' | 'fr-FR' | 'de-DE' | 'pt-BR' | 'ru-RU';
 
 /** Every piece of desktop-shell text; `{name}` placeholders are filled by `formatDesktopText`. */
 export interface DesktopText {
@@ -71,7 +73,9 @@ export interface DesktopText {
   closeAll: string;
 }
 
-/** Desktop-shell text for every supported language. */
+/** Desktop-shell text for every supported language.
+ * 每种受支持语言的桌面壳文本。
+ */
 export const DESKTOP_TEXT: Readonly<Record<DesktopLocale, DesktopText>> = {
   'en-US': {
     startupTitle: 'Vulcan Code is starting',
@@ -133,6 +137,29 @@ export const DESKTOP_TEXT: Readonly<Record<DesktopLocale, DesktopText>> = {
     closeBrowserTitle: '關閉內建瀏覽器',
     closeBrowserMessage: '目前有 {count} 個開啟中的頁面，要全部關閉嗎？',
     closeBrowserDetail: '全部關閉會釋放這些網頁佔用的資源，然後關閉內建瀏覽器分頁。',
+    cancel: '取消',
+    closeAll: '全部關閉',
+  },
+  // Hong Kong Traditional Chinese uses local desktop terminology and retains the English placeholders.
+  // 香港繁体中文采用当地桌面术语，并保留英文占位符。
+  'zh-HK': {
+    startupTitle: 'Vulcan Code 啟動中',
+    closeWindow: '關閉窗口',
+    preparing: '正在準備…',
+    startupFailed: '啟動失敗',
+    checkingInstance: '正在檢查已在運行的服務…',
+    reusingInstance: '已連接至運行中的服務（程序 {pid}）。',
+    startingService: '正在啟動背景服務…',
+    awaitingReady: '正在等待服務就緒…',
+    serviceReady: '服務已就緒（程序 {pid}）。',
+    launchFailed: '無法啟動背景服務：{error}',
+    exitedBeforeReady: '服務程序在就緒前退出，退出碼 {code}。',
+    serviceUnavailable: '背景服務尚未可用，目前狀態：{status}。',
+    readyTimeout: '服務未在 {seconds} 秒內發佈就緒探索文檔：{path}',
+    workbenchLoadFailed: '無法載入工作台 {url}：{error}',
+    closeBrowserTitle: '關閉內置瀏覽器',
+    closeBrowserMessage: '目前有 {count} 個已開啟的頁面，是否全部關閉？',
+    closeBrowserDetail: '全部關閉會釋放這些網頁佔用的資源，然後關閉內置瀏覽器標籤頁。',
     cancel: '取消',
     closeAll: '全部關閉',
   },
@@ -296,15 +323,24 @@ export function normalizeDesktopLocale(value: string | null | undefined): Deskto
   return value && Object.hasOwn(DESKTOP_TEXT, value) ? value as DesktopLocale : null;
 }
 
-/** Maps one BCP 47 tag onto the closest supported locale, or `null` for an unsupported language. */
+/** Maps one device language tag by explicit Chinese script and region, or by a supported language.
+ * 根据中文的显式书写系统与地区，或其他受支持语言，映射设备语言标签。
+ * @param tag BCP 47 device language tag; underscores are accepted as subtag separators.
+ * @param tag BCP 47 设备语言标签；允许下划线作为子标签分隔符。
+ * @returns The closest supported desktop locale, or `null` for an unsupported language.
+ * @returns 最接近的受支持桌面语言；不受支持的语言返回 `null`。
+ */
 export function matchDesktopLocaleTag(tag: string): DesktopLocale | null {
   const subtags = tag.trim().replace(/_/g, '-').toLowerCase().split('-').filter(Boolean);
   const language = subtags[0];
   if (!language) return null;
   if (language === 'zh') {
-    if (subtags.includes('hant')) return 'zh-TW';
+    // Hong Kong selects its own Traditional catalog; other Traditional regions retain Taiwan's catalog.
+    // 香港选择专属繁体目录；其他繁体地区继续使用台湾目录。
+    const traditionalLocale = subtags.includes('hk') ? 'zh-HK' : 'zh-TW';
+    if (subtags.includes('hant')) return traditionalLocale;
     if (subtags.includes('hans')) return 'zh-CN';
-    return subtags.some((subtag) => TRADITIONAL_CHINESE_REGIONS.has(subtag)) ? 'zh-TW' : 'zh-CN';
+    return subtags.some((subtag) => TRADITIONAL_CHINESE_REGIONS.has(subtag)) ? traditionalLocale : 'zh-CN';
   }
   const locales = Object.keys(DESKTOP_TEXT) as DesktopLocale[];
   return locales.find((locale) => locale.toLowerCase() === subtags.join('-'))
