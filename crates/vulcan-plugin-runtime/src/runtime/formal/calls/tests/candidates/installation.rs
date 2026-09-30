@@ -58,7 +58,7 @@ fn formal_candidate_install_deadline_preserves_actual_business_ownership() {
             let original = calls
                 .values()
                 .find_map(|call| {
-                    call.candidate.as_ref().filter(|authority| {
+                    call.activation.as_ref().filter(|authority| {
                         authority.request_id == transaction.record().request_id()
                     })
                 })
@@ -523,7 +523,7 @@ fn formal_candidate_authority_cannot_cross_operation_scopes() {
     ] {
         // Bind only the explicitly selected operation.
         // 仅绑定明确选择的操作。
-        let authority = CandidateExecution::new(&fixture.manager.state, &candidate, operation)
+        let authority = ActivationExecution::new(&fixture.manager.state, &candidate, operation)
             .expect("typed authority");
         authority
             .validate(&fixture.manager.state, &authority.plugin, operation.scope())

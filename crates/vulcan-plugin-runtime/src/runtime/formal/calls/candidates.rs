@@ -103,7 +103,7 @@ impl VulcanPluginRuntimeManager {
     ) -> Result<(), VulcanPluginRuntimeError> {
         // Only an inspected transaction can create the operation's exact unpublished authority.
         // 只有已检查事务可以创建操作的精确未发布权威。
-        let authority = CandidateExecution::new(&self.state, candidate, operation)?;
+        let authority = ActivationExecution::new(&self.state, candidate, operation)?;
         // Preserve the existing no-callback contract for content-only packages.
         // 为纯内容插件包保留既有无回调契约。
         let manifest = authority.plugin.manifest.as_ref().ok_or_else(|| {
@@ -148,7 +148,7 @@ impl VulcanPluginRuntimeManager {
         // 声明决定原生命周期信封；准备过程加入可信环境路径。
         let (admission, arguments) = match export {
             Some(export) => (
-                CallAdmission::CandidateLifecycle { authority, export },
+                CallAdmission::ActivationLifecycle { authority, export },
                 json!({"event":event.expect("declared lifecycle event"),"plugin_id":plugin.id,"request_id":request_id.to_string()}),
             ),
             None => (CallAdmission::CandidateProbe { authority }, json!({})),
@@ -237,9 +237,9 @@ impl VulcanPluginRuntimeManager {
             .map_err(|_| calls_error())?
             .values()
             .filter(|call| {
-                call.candidate
-                    .as_ref()
-                    .is_some_and(|authority| authority.request_id == request_id)
+                call.activation.as_ref().is_some_and(|authority| {
+                    authority.request_id == request_id && authority.operation.is_candidate()
+                })
             })
             .map(|call| call.status())
             .collect()
@@ -275,9 +275,9 @@ impl VulcanPluginRuntimeManager {
                 .map_err(|_| calls_error())?
                 .values()
                 .filter(|call| {
-                    call.candidate
-                        .as_ref()
-                        .is_some_and(|authority| authority.request_id == request_id)
+                    call.activation.as_ref().is_some_and(|authority| {
+                        authority.request_id == request_id && authority.operation.is_candidate()
+                    })
                 })
                 .cloned()
                 .collect();

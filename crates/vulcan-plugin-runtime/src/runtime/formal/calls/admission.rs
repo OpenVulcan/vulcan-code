@@ -4,17 +4,17 @@
 use super::*;
 
 impl VulcanPluginRuntimeManager {
-    /// Validate plugin and scope against the explicit candidate authority or the ordinary published catalog.
-    /// 按显式候选权威或普通已发布目录校验 plugin 及 scope。
-    /// Candidate selection is host-only and keeps the existing resource and capability requirement checks.
-    /// 候选选择仅由宿主持有，并保留既有资源及能力要求检查。
+    /// Validate plugin and scope against the explicit activation authority or the ordinary published catalog.
+    /// 按显式激活权威或普通已发布目录校验 plugin 及 scope。
+    /// Activation selection is host-only and keeps the existing resource and capability requirement checks.
+    /// 激活选择仅由宿主持有，并保留既有资源及能力要求检查。
     pub(super) fn validate_formal_authority(
         &self,
         plugin: &VulcanPluginDescriptor,
         scope: VulcanPluginBridgeLeaseScope,
-        candidate: Option<&CandidateExecution>,
+        activation: Option<&ActivationExecution>,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        match candidate {
+        match activation {
             Some(authority) => {
                 authority.validate(&self.state, plugin, scope)?;
                 self.validate_plugin_requirements_in_scope(plugin, scope)
@@ -56,8 +56,8 @@ impl VulcanPluginRuntimeManager {
         Ok(())
     }
 
-    /// Check one frozen call against its explicit published or candidate authority under the caller's publication gate.
-    /// 在调用方持有的发布门下，对照显式已发布或候选权威检查单个冻结调用。
+    /// Check one frozen call against its explicit published or activation authority under the caller's publication gate.
+    /// 在调用方持有的发布门下，对照显式已发布或激活权威检查单个冻结调用。
     /// Scope is host-selected; returns explicit generation or cancellation failures before submission.
     /// 作用域由宿主选择；在提交前返回明确代次或取消失败。
     pub(super) fn validate_formal_submission(
@@ -65,7 +65,7 @@ impl VulcanPluginRuntimeManager {
         call: &FormalCall,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        self.validate_formal_authority(&call.plugin, scope, call.candidate.as_deref())?;
+        self.validate_formal_authority(&call.plugin, scope, call.activation.as_deref())?;
         if call.cancelled.load(Ordering::Acquire) {
             return Err(VulcanPluginRuntimeError::new(
                 "Formal invocation cancelled before submission.",
@@ -204,15 +204,15 @@ impl VulcanPluginRuntimeManager {
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
-            // Candidate and published preparation use their explicitly selected authority and original cancellation.
-            // 候选及已发布准备使用各自显式选择的权威及原取消状态。
+            // Activation and published preparation use their explicitly selected authority and original cancellation.
+            // 激活及已发布准备使用各自显式选择的权威及原取消状态。
             self.validate_formal_submission(call, input.scope)?;
             drop(publication);
         }
-        // Explicit candidate authority outlives both filesystem preparation and actual native retirement.
-        // 显式候选权威比文件系统准备及实际原生退役均存续更久。
-        if let Some(candidate) = &call.candidate {
-            candidate.retain_execution_environment(&self.state)?;
+        // Explicit activation authority outlives both filesystem preparation and actual native retirement.
+        // 显式激活权威比文件系统准备及实际原生退役均存续更久。
+        if let Some(activation) = &call.activation {
+            activation.retain_execution_environment(&self.state)?;
         }
         // This uses the same validated copy, dependency install and atomic environment publication as before.
         // 此处使用原有已校验复制、依赖安装及原子环境发布。

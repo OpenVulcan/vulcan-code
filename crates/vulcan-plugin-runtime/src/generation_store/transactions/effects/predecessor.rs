@@ -35,7 +35,7 @@ impl VulcanPluginActivationEffects {
         // Identity and phase are one declaration; neither may silently disappear independently.
         // 身份及阶段属于同一声明；二者均不得独立静默消失。
         let identity = match (&self.predecessor_drain_identity, self.predecessor_lua_drain) {
-            (None, None) => return Ok(()),
+            (None, None) if self.predecessor_disable.is_none() => return Ok(()),
             (Some(identity), Some(_)) => identity,
             _ => {
                 return Err(Error::invalid(
@@ -78,10 +78,22 @@ impl VulcanPluginActivationEffects {
             }
         }
         if self.predecessor_lua_drain != Some(VulcanPluginEffectObservation::Succeeded)
-            && (self.probe.is_some() || self.enable.is_some() || self.enable_rollback.is_some())
+            && (self.predecessor_disable.is_some()
+                || self.probe.is_some()
+                || self.enable.is_some()
+                || self.enable_rollback.is_some())
         {
             return Err(Error::invalid(
                 "Candidate execution precedes predecessor Lua retirement.",
+            ));
+        }
+        if self
+            .predecessor_disable
+            .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
+            && (self.probe.is_some() || self.enable.is_some() || self.enable_rollback.is_some())
+        {
+            return Err(Error::invalid(
+                "Candidate execution precedes confirmed predecessor disable.",
             ));
         }
         Ok(())
@@ -177,6 +189,7 @@ impl VulcanPluginActivationCandidate<'_> {
             target_revision: self.transaction.record.target.revision,
             predecessor_drain_identity: Some(identity),
             predecessor_lua_drain: Some(VulcanPluginEffectObservation::Started),
+            predecessor_disable: None,
             probe: None,
             enable: None,
             enable_rollback: None,

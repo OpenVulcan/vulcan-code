@@ -30,6 +30,7 @@ const phaseLabels: Record<LocalPluginUpdateStatus["phase"], TranslationKey> = {
 // effectLabels 区分精确记录操作，不暗示自动重放。
 const effectLabels: Record<LocalPluginUpdateStatus["effects"][number]["operation"], TranslationKey> = {
   drain_predecessor_lua: "pluginUpdates.drainPredecessorLua",
+  disable_predecessor: "pluginUpdates.disablePredecessor",
   probe: "pluginUpdates.probe", enable: "pluginUpdates.enable", enable_rollback: "pluginUpdates.enableRollback",
 };
 

@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 
 /// Resolve validated process arguments against the caller's exact retained plugin and workspace.
 /// 针对调用方保留的精确插件及工作区解析已校验进程参数。
-/// Return the original launch specification; candidate carries exact transaction authorization when present.
-/// 返回原启动规格；candidate 存在时携带精确事务授权。
+/// Return the original launch specification; activation carries exact transaction authorization when present.
+/// 返回原启动规格；activation 存在时携带精确事务授权。
 /// Published calls continue to intersect their original permissions with current grants.
 /// 已发布调用继续将原权限与当前授权取交集。
 /// Current catalog data cannot replace original executable declarations, package paths or environment identity.
@@ -35,7 +35,7 @@ pub(super) fn resolve_plugin_process_for_snapshot(
     plugin: &crate::VulcanPluginDescriptor,
     workspace_root: &Path,
     payload: &Map<String, Value>,
-    candidate: Option<&super::candidates::CandidateExecution>,
+    activation: Option<&super::candidates::ActivationExecution>,
 ) -> Result<Value, String> {
     // The package ID, process declarations and dependency environment share one frozen owner.
     // 包 ID、进程声明及依赖环境共用一个冻结所有者。
@@ -57,10 +57,10 @@ pub(super) fn resolve_plugin_process_for_snapshot(
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` has no valid manifest."))?;
     // Permission withdrawal applies to the exact process subtype and session mode as well as its broad capability.
     // 权限撤回除宽泛能力外，也适用于精确进程子类型及会话模式。
-    let current_permissions = match candidate {
+    let current_permissions = match activation {
         Some(authority) => {
-            // The retained request lock freezes the approved target; a published predecessor is not its permission source.
-            // 保留的请求锁固定已批准目标；已发布前驱不是其权限来源。
+            // The original request fixes the operation package; old and target callbacks use their own manifest grants.
+            // 原请求固定操作插件包；旧包及目标回调使用各自清单授权。
             authority
                 .validate(state, plugin, authority.operation.scope())
                 .map_err(|failure| failure.message)?;
@@ -1080,17 +1080,17 @@ impl VulcanPluginRuntimeManager {
         self.resolve_mcp_stdio_launcher_descriptor(server)
     }
 
-    /// Resolves the exact process launcher for one validated candidate stdio MCP descriptor before publication.
+    /// Resolves the exact process launcher for one validated activation stdio MCP descriptor before publication.
     /// 在发布前为一个已校验的候选 stdio MCP 描述符解析精确进程启动器。
     ///
     /// # Parameters
     /// 参数
-    /// `server` is the immutable descriptor from the candidate catalog and must match the installed package generation.
+    /// `server` is the immutable descriptor from the activation catalog and must match the installed package generation.
     /// `server` 是候选目录中的不可变描述符，且必须匹配已安装包代次。
     ///
     /// # Returns
     /// 返回值
-    /// Returns a contained Shell-free launch specification without requiring the candidate server to be enabled already.
+    /// Returns a contained Shell-free launch specification without requiring the activation server to be enabled already.
     /// 返回一份受目录约束且不使用 Shell 的启动规格，不要求候选服务器已经启用。
     pub fn resolve_mcp_stdio_launcher_descriptor(
         &self,

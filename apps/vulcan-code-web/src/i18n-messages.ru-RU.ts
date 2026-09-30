@@ -16,6 +16,7 @@ export const ruRUTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.enable": "Включение кандидата",
     "pluginUpdates.enableRollback": "Компенсация включения",
     "pluginUpdates.drainPredecessorLua": "Завершение предыдущего экземпляра Lua",
+    "pluginUpdates.disablePredecessor": "Обработчик отключения предыдущего плагина",
     "pluginUpdates.effectStarted": "Попытка записана; завершение требует проверки",
     "pluginUpdates.installation": "Квитанция установки",
     "pluginUpdates.noReceipt": "Вызов установки не записан",

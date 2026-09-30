@@ -94,20 +94,55 @@ impl CandidateOperation {
     }
 }
 
-/// Exact host-only candidate authority shared by its tracked call and actual native pool.
-/// 由受跟踪调用及实际原生池共享的精确宿主专属候选权威。
-pub(super) struct CandidateExecution {
-    /// Frozen target carries its selected configuration, credentials, permissions and real package lease.
-    /// 固定目标携带选定配置、凭据、权限及实际插件包租约。
+/// Explicit execution provenance fixes either one private target operation or the old-version disable callback.
+/// 显式执行来源固定单个私有目标操作或旧版本停用回调。
+#[derive(Clone)]
+pub(super) enum ActivationOperation {
+    /// The prepared target never acquires a public routing generation.
+    /// 准备目标绝不取得公开路由代次。
+    Candidate(CandidateOperation),
+    /// Old execution uses the exact completed predecessor drain identity.
+    /// 旧执行使用精确已完成前驱排空身份。
+    PredecessorDisable(crate::VulcanPluginPredecessorDrainIdentity),
+}
+
+impl ActivationOperation {
+    /// Return the sole native scope for this explicit operation.
+    /// 返回此显式操作唯一的原生作用域。
+    pub(super) fn scope(&self) -> VulcanPluginBridgeLeaseScope {
+        match self {
+            Self::Candidate(operation) => operation.scope(),
+            Self::PredecessorDisable(_) => VulcanPluginBridgeLeaseScope::LifecycleDisable,
+        }
+    }
+
+    /// Return true only for candidate work, preserving original candidate-query boundaries.
+    /// 仅对候选工作返回 true，保留原候选查询边界。
+    pub(super) fn is_candidate(&self) -> bool {
+        matches!(self, Self::Candidate(_))
+    }
+
+    /// Return true only for private initialization that may share the original probe admission.
+    /// 仅对可共享原探测入场的私有初始化返回 true。
+    pub(super) fn is_candidate_probe(&self) -> bool {
+        matches!(self, Self::Candidate(CandidateOperation::Probe))
+    }
+}
+
+/// Exact original-request execution authority shared by tracked calls and actual native pools.
+/// 由受跟踪调用及实际原生池共享的精确原请求执行权威。
+pub(super) struct ActivationExecution {
+    /// Frozen operation package carries its configuration, credentials, permissions and real lease.
+    /// 固定操作插件包携带其配置、凭据、权限及实际租约。
     pub(super) plugin: VulcanPluginDescriptor,
     /// Original durable request selects the isolation partition without becoming an execution receipt.
     /// 原持久请求选择隔离分区，但不充当执行回执。
     pub(super) request_id: Uuid,
     /// The operation fixes its native scope for the entire original call and actual pool lifetime.
     /// 操作在整个原调用及实际池寿命内固定原生作用域。
-    pub(super) operation: CandidateOperation,
-    /// Only this manager may register or invoke the candidate's native services.
-    /// 仅此管理器可以注册或调用候选原生服务。
+    pub(super) operation: ActivationOperation,
+    /// Only this manager may register or invoke native services for the original operation.
+    /// 仅此管理器可以为原操作注册或调用原生服务。
     manager_id: String,
     /// The original exclusive OS request lock survives until actual work and retained calls are gone.
     /// 原排他系统请求锁保留至实际工作与保留调用全部退出。
@@ -119,9 +154,38 @@ pub(super) struct CandidateExecution {
     environment: std::sync::Mutex<Option<std::fs::File>>,
 }
 
-impl CandidateExecution {
-    /// Retains the exact manager's execution environment before any candidate filesystem preparation.
-    /// 在任何候选文件系统准备之前，保留精确管理器的执行环境。
+impl ActivationExecution {
+    /// Retain candidate's original lock while selecting only drain's frozen old package for disable.
+    /// 保留 candidate 原锁，同时仅选择 drain 固定旧包用于停用。
+    /// state owns both identities; return authority only after confirmed old Lua retirement.
+    /// state 拥有两个身份；仅在确认旧 Lua 退役后返回权威。
+    pub(super) fn predecessor_disable(
+        state: &VulcanPluginManagerState,
+        candidate: &VulcanPluginActivationCandidate<'_>,
+        drain: &crate::VulcanPluginPredecessorDrain,
+    ) -> Result<Arc<Self>, VulcanPluginRuntimeError> {
+        // The same actual original lease protects both old and target package operations.
+        // 相同实际原租约保护旧包及目标包操作。
+        let readiness = retain_candidate_readiness(state, candidate)?;
+        // A completed handle supplies exact old identity, not a new public catalog selection.
+        // 已完成句柄提供精确旧身份，而非新的公开目录选择。
+        let plugin = drain.predecessor_for_callback(state, candidate)?;
+        // Operation identity cannot be chosen from Lua arguments or an arbitrary scope.
+        // 操作身份不能从 Lua 参数或任意作用域选择。
+        let authority = Arc::new(Self {
+            plugin,
+            request_id: candidate.transaction_record().request_id(),
+            operation: ActivationOperation::PredecessorDisable(drain.identity().clone()),
+            manager_id: state.manager_id.clone(),
+            _readiness: readiness,
+            environment: std::sync::Mutex::new(None),
+        });
+        authority.validate(state, &authority.plugin, authority.operation.scope())?;
+        Ok(authority)
+    }
+
+    /// Retains the exact manager's execution environment before original-operation filesystem preparation.
+    /// 在原操作文件系统准备之前，保留精确管理器的执行环境。
     /// State must own this authority; returns after acquiring or retaining the same actual shared file lock.
     /// state 必须拥有此权威；取得或保留同一实际共享文件锁后返回。
     /// Acquisition is lazy and monotonic so absent callbacks have no filesystem effects and clones share ownership.
@@ -134,7 +198,7 @@ impl CandidateExecution {
         // Serialize first acquisition; no observer can replace or release an established environment lease.
         // 串行化首次获取；任何观察者均不能替换或释放已建立的环境租约。
         let mut environment = self.environment.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Candidate environment ownership lock is poisoned.")
+            VulcanPluginRuntimeError::new("Activation environment ownership lock is poisoned.")
         })?;
         if environment.is_none() {
             *environment = Some(
@@ -162,7 +226,7 @@ impl CandidateExecution {
         let authority = Arc::new(Self {
             plugin: candidate.package().clone(),
             request_id: candidate.transaction_record().request_id(),
-            operation,
+            operation: ActivationOperation::Candidate(operation),
             manager_id: state.manager_id.clone(),
             _readiness: readiness,
             environment: std::sync::Mutex::new(None),
@@ -186,15 +250,28 @@ impl CandidateExecution {
             || plugin.id != self.plugin.id
             || plugin.package_root != self.plugin.package_root
             || plugin.content_fingerprint != self.plugin.content_fingerprint
-            || plugin.generation != 0
-            || plugin.runtime_state != VulcanPluginRuntimeState::Disabled
+            || plugin.version != self.plugin.version
+            || plugin.generation != self.plugin.generation
+            || plugin.runtime_state != self.plugin.runtime_state
         {
             return Err(VulcanPluginRuntimeError::new(
-                "Candidate authority does not match this exact operation.",
+                "Activation authority does not match this exact operation.",
             ));
         }
-        // Current bundled precedence remains authoritative at every native admission.
-        // 每次原生入场时，当前内置优先级仍具有权威。
-        validate_candidate_namespace(state, &plugin.id)
+        match &self.operation {
+            ActivationOperation::Candidate(_) => {
+                if plugin.generation != 0
+                    || plugin.runtime_state != VulcanPluginRuntimeState::Disabled
+                {
+                    return Err(VulcanPluginRuntimeError::new(
+                        "Candidate authority is not unpublished.",
+                    ));
+                }
+                validate_candidate_namespace(state, &plugin.id)
+            }
+            ActivationOperation::PredecessorDisable(identity) => {
+                super::update_drain::validate_predecessor_callback_current(state, plugin, identity)
+            }
+        }
     }
 }

@@ -14,6 +14,45 @@ use std::sync::{
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
+/// Validate frozen plugin and identity against the same manager's still-draining old catalog.
+/// 按相同管理器仍处于排空中的旧目录校验固定 plugin 及 identity。
+/// No publication or capability widening occurs; returns only an exact original callback grant.
+/// 不执行发布或能力扩权；仅返回精确原回调授权。
+pub(super) fn validate_predecessor_callback_current(
+    state: &VulcanPluginManagerState,
+    plugin: &VulcanPluginDescriptor,
+    identity: &VulcanPluginPredecessorDrainIdentity,
+) -> Result<(), VulcanPluginRuntimeError> {
+    // Current routing stays closed while the frozen old descriptor supplies its configuration and credentials.
+    // 固定旧描述符提供配置及凭据时，当前路由保持关闭。
+    let snapshot = state
+        .snapshot
+        .read()
+        .map_err(|_| error("Plugin catalog lock is poisoned."))?;
+    // The old package must remain selected through its explicit disable callback.
+    // 旧包必须在显式停用回调期间保持选中。
+    let current = snapshot
+        .plugins
+        .get(&plugin.id)
+        .ok_or_else(|| error("Original predecessor is no longer installed."))?;
+    if identity.service_epoch != state.manager_id
+        || plugin.origin != VulcanPluginPackageOrigin::UserInstalled
+        || current.origin != plugin.origin
+        || plugin.generation != identity.predecessor_generation
+        || plugin.runtime_state != VulcanPluginRuntimeState::Enabled
+        || current.generation != identity.draining_generation
+        || current.runtime_state != VulcanPluginRuntimeState::Draining
+        || plugin.package_root != current.package_root
+        || plugin.version != current.version
+        || plugin.version.as_deref() != Some(identity.version.as_str())
+        || plugin.content_fingerprint != identity.content_fingerprint
+        || current.content_fingerprint != identity.content_fingerprint
+    {
+        return Err(error("Original predecessor callback authority changed."));
+    }
+    Ok(())
+}
+
 /// Exclude ordinary lifecycle admission while an original request remains unfinished.
 /// 原请求未完成时排除普通生命周期入场。
 /// state and plugin_id select the actual store; enabled business uses its existing catalog gate; return a precise conflict.
@@ -62,6 +101,51 @@ impl std::fmt::Debug for VulcanPluginPredecessorDrain {
 }
 
 impl VulcanPluginPredecessorDrain {
+    /// Return the original package for candidate only after actual and durable Lua retirement agree.
+    /// 仅在实际及持久 Lua 退役一致后，为 candidate 返回原包。
+    /// state must own this handle; mismatched requests, epochs or live ownership are explicit errors.
+    /// state 必须拥有此句柄；请求、实例不匹配或所有权仍存活均为显式错误。
+    pub(super) fn predecessor_for_callback(
+        &self,
+        state: &VulcanPluginManagerState,
+        candidate: &VulcanPluginActivationCandidate<'_>,
+    ) -> Result<VulcanPluginDescriptor, VulcanPluginRuntimeError> {
+        if self.authority.identity.service_epoch != state.manager_id
+            || &self.authority.original != candidate.transaction_record()
+            || self
+                .authority
+                .attempt
+                .lock()
+                .map_err(|_| error("Predecessor drain observation lock is poisoned."))?
+                .is_some()
+        {
+            return Err(error(
+                "Predecessor callback requires its own completed original Lua drain.",
+            ));
+        }
+        // Read-only disk evidence is additional proof; it never recreates the retired in-memory owner.
+        // 只读磁盘证据为额外证明；它绝不重建已退役内存所有者。
+        let store = crate::VulcanPluginGenerationStore::open_existing(&state.user_plugin_root)
+            .map_err(|failure| error(failure.to_string()))?
+            .ok_or_else(|| error("Original update store is missing."))?;
+        // The original identity and successful resource checkpoint must remain unchanged.
+        // 原身份及成功资源检查点必须保持未变。
+        let effects = store
+            .activation_effects(&self.authority.predecessor.id, self.request_id())
+            .map_err(|failure| error(failure.to_string()))?
+            .ok_or_else(|| error("Original predecessor drain evidence is missing."))?;
+        if effects.predecessor_drain_identity() != Some(self.identity())
+            || !effects.observations().contains(&(
+                crate::VulcanPluginActivationEffect::DrainPredecessorLua,
+                crate::VulcanPluginEffectObservation::Succeeded,
+            ))
+        {
+            return Err(error("Predecessor Lua retirement is not confirmed."));
+        }
+        validate_predecessor_callback_current(state, &self.authority.predecessor, self.identity())?;
+        Ok(self.authority.predecessor.clone())
+    }
+
     /// Return the original request UUID retained by this handle.
     /// 返回此句柄保留的原请求 UUID。
     pub fn request_id(&self) -> Uuid {

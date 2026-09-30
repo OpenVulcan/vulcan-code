@@ -18,6 +18,7 @@ export type TranslationKey =
   | "pluginUpdates.enable"
   | "pluginUpdates.enableRollback"
   | "pluginUpdates.drainPredecessorLua"
+  | "pluginUpdates.disablePredecessor"
   | "pluginUpdates.effectStarted"
   | "pluginUpdates.installation"
   | "pluginUpdates.noReceipt"

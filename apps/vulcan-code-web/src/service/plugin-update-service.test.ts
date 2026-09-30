@@ -23,6 +23,8 @@ it("preserves sanitized candidate observations and rejects malformed evidence", 
     .toEqual([{ operation: "probe", phase: "started" }]);
   expect(parseLocalPluginUpdateStatus({ ...status, effects: [{ operation: "drain_predecessor_lua", phase: "started" }] }, "fixture").effects)
     .toEqual([{ operation: "drain_predecessor_lua", phase: "started" }]);
+  expect(parseLocalPluginUpdateStatus({ ...status, effects: [{ operation: "disable_predecessor", phase: "observation_failed" }] }, "fixture").effects)
+    .toEqual([{ operation: "disable_predecessor", phase: "observation_failed" }]);
   for (const effects of [undefined, null, {}, [null], [{ operation: "install", phase: "succeeded" }],
     [{ operation: "probe", phase: "unknown" }], [effect, effect]]) {
     expect(() => parseLocalPluginUpdateStatus({ ...status, effects }, "fixture")).toThrow();

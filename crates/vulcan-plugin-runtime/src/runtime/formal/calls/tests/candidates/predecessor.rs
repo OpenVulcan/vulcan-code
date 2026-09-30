@@ -2,6 +2,71 @@
 //! 使用真实目录、文件锁及原生执行验证原更新授权。
 
 use super::*;
+mod callbacks;
+
+/// Prepare the exact target configuration while preserving the original predecessor and request lock.
+/// 准备精确目标配置，同时保留原前驱及请求锁。
+/// fixture and store own real files; configuration is the explicit target selection returned in the transaction.
+/// fixture 与 store 拥有真实文件；configuration 为事务返回的显式目标选择。
+fn prepare_configured(
+    fixture: &Fixture,
+    store: &VulcanPluginGenerationStore,
+    configuration: VulcanPluginConfigurationSelection,
+) -> VulcanPluginActivationTransaction {
+    // Read the existing source and authoritative current selection before allocating the update.
+    // 分配更新之前读取既有来源及权威当前选择。
+    let source = fixture._root.path().join("source/hook-plugin");
+    // Production inspection fixes the actual source digest and required grants.
+    // 生产检查固定实际来源摘要及所需授权。
+    let inspected = crate::inspect_user_plugin_package(&source).expect("inspect original source");
+    // The baseline uses the actual predecessor manifest, never the target's new defaults.
+    // 基线使用实际前驱清单，绝不使用目标新默认值。
+    let previous = fixture.manager.snapshot();
+    // The managed store owns the complete predecessor selection.
+    // 受管存储拥有完整前驱选择。
+    let selected = store.activation("hook-plugin").expect("original selection");
+    // Freeze one original before any new physical copy.
+    // 任何新物理复制之前固定单个原请求。
+    let preparation = store
+        .begin_activation_update_preparation(
+            Uuid::new_v4(),
+            &source,
+            &inspected.content_fingerprint,
+            selected.as_ref(),
+            crate::runtime::plugin_required_permissions(&inspected).expect("actual grants"),
+            VulcanPluginUpdatePolicy {
+                explicitly_enabled: false,
+                explicitly_disabled: false,
+                predecessor_default_enabled: previous.plugins["hook-plugin"]
+                    .manifest
+                    .as_ref()
+                    .expect("manifest")
+                    .default_enabled,
+            },
+        )
+        .expect("original update");
+    // Real package preparation and original-bound empty credential staging precede promotion.
+    // 真实包准备及绑定原请求的空凭据暂存先于晋级。
+    let package = store
+        .prepare_activation_package(&preparation, &source)
+        .expect("copy target");
+    // The empty backend rejects unexpected secret use.
+    // 空后端拒绝意外秘密使用。
+    let mut writer = store
+        .begin_activation_credential_staging(
+            &preparation,
+            &package,
+            &VulcanPluginCredentialValues::new(),
+        )
+        .expect("staging");
+    writer
+        .write_and_finish(&NoSecrets, &VulcanPluginCredentialValues::new())
+        .expect("finish staging");
+    drop(writer);
+    store
+        .finish_activation_preparation(preparation, configuration)
+        .expect("promote original")
+}
 use crate::{
     VulcanPluginActivationEffect as Effect, VulcanPluginEffectObservation as Observation,
     VulcanPluginUpdatePolicy,
@@ -346,62 +411,11 @@ fn prepare(
     fixture: &Fixture,
     store: &VulcanPluginGenerationStore,
 ) -> VulcanPluginActivationTransaction {
-    // Read the existing source and authoritative current selection before allocating the update.
-    // 分配更新之前读取既有来源及权威当前选择。
-    let source = fixture._root.path().join("source/hook-plugin");
-    // Production inspection fixes the actual source digest and required grants.
-    // 生产检查固定实际来源摘要及所需授权。
-    let inspected = crate::inspect_user_plugin_package(&source).expect("inspect original source");
-    // The baseline uses the actual predecessor manifest, never the target's new defaults.
-    // 基线使用实际前驱清单，绝不使用目标新默认值。
-    let previous = fixture.manager.snapshot();
-    // The managed store owns the complete predecessor selection.
-    // 受管存储拥有完整前驱选择。
-    let selected = store.activation("hook-plugin").expect("original selection");
-    // Freeze one original before any new physical copy.
-    // 任何新物理复制之前固定单个原请求。
-    let preparation = store
-        .begin_activation_update_preparation(
-            Uuid::new_v4(),
-            &source,
-            &inspected.content_fingerprint,
-            selected.as_ref(),
-            crate::runtime::plugin_required_permissions(&inspected).expect("actual grants"),
-            VulcanPluginUpdatePolicy {
-                explicitly_enabled: false,
-                explicitly_disabled: false,
-                predecessor_default_enabled: previous.plugins["hook-plugin"]
-                    .manifest
-                    .as_ref()
-                    .expect("manifest")
-                    .default_enabled,
-            },
-        )
-        .expect("original update");
-    // Real package preparation and original-bound empty credential staging precede promotion.
-    // 真实包准备及绑定原请求的空凭据暂存先于晋级。
-    let package = store
-        .prepare_activation_package(&preparation, &source)
-        .expect("copy target");
-    // The empty backend rejects unexpected secret use.
-    // 空后端拒绝意外秘密使用。
-    let mut writer = store
-        .begin_activation_credential_staging(
-            &preparation,
-            &package,
-            &VulcanPluginCredentialValues::new(),
-        )
-        .expect("staging");
-    writer
-        .write_and_finish(&NoSecrets, &VulcanPluginCredentialValues::new())
-        .expect("finish staging");
-    drop(writer);
-    store
-        .finish_activation_preparation(
-            preparation,
-            VulcanPluginConfigurationSelection::NotDeclared {},
-        )
-        .expect("promote original")
+    prepare_configured(
+        fixture,
+        store,
+        VulcanPluginConfigurationSelection::NotDeclared {},
+    )
 }
 
 /// Exact original ownership changes only the predecessor and records retirement without publishing the candidate.

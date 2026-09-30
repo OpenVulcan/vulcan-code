@@ -35,7 +35,7 @@ pub(super) fn execute(
                         &domain.plugin,
                         workspace,
                         arguments,
-                        domain.candidate.as_deref(),
+                        domain.activation.as_deref(),
                     )
                 }))
             }

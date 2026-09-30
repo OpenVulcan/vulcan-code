@@ -29,14 +29,17 @@ pub enum VulcanPluginEffectObservation {
     ObservationFailed,
 }
 
-/// Non-install candidate operation; installation retains its existing authoritative receipt.
-/// 非安装候选操作；安装保留其既有权威回执。
+/// Original-request operation outside installation, which retains its existing authoritative receipt.
+/// 安装之外的原请求操作；安装保留其既有权威回执。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VulcanPluginActivationEffect {
     /// Close predecessor Lua admission and retire its exact original execution resources.
     /// 关闭前驱 Lua 入场，并退役其精确原执行资源。
     DrainPredecessorLua,
+    /// Execute the frozen old package's disable callback after its previous Lua resources retire.
+    /// 先前 Lua 资源退役后执行固定旧包的停用回调。
+    DisablePredecessor,
     /// Execute candidate module initialization.
     /// 执行候选模块初始化。
     Probe,
@@ -82,6 +85,14 @@ pub struct VulcanPluginActivationEffects {
         deserialize_with = "preparation::deserialize_present"
     )]
     predecessor_lua_drain: Option<VulcanPluginEffectObservation>,
+    /// Old disable belongs to the original request and cannot be inferred from resource retirement.
+    /// 旧停用属于原请求，不能从资源退役推断。
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "preparation::deserialize_present"
+    )]
+    predecessor_disable: Option<VulcanPluginEffectObservation>,
     /// Absent means never attempted; explicit null is invalid.
     /// 缺失表示从未尝试；显式空值无效。
     #[serde(
@@ -123,6 +134,7 @@ impl VulcanPluginActivationEffects {
         use VulcanPluginActivationEffect as Effect;
         [
             (Effect::DrainPredecessorLua, self.predecessor_lua_drain),
+            (Effect::DisablePredecessor, self.predecessor_disable),
             (Effect::Probe, self.probe),
             (Effect::Enable, self.enable),
             (Effect::EnableRollback, self.enable_rollback),
@@ -140,6 +152,7 @@ impl VulcanPluginActivationEffects {
     ) -> &mut Option<VulcanPluginEffectObservation> {
         match operation {
             VulcanPluginActivationEffect::DrainPredecessorLua => &mut self.predecessor_lua_drain,
+            VulcanPluginActivationEffect::DisablePredecessor => &mut self.predecessor_disable,
             VulcanPluginActivationEffect::Probe => &mut self.probe,
             VulcanPluginActivationEffect::Enable => &mut self.enable,
             VulcanPluginActivationEffect::EnableRollback => &mut self.enable_rollback,
@@ -265,6 +278,7 @@ impl VulcanPluginActivationCandidate<'_> {
                 target_revision: self.transaction.record.target.revision,
                 predecessor_drain_identity: None,
                 predecessor_lua_drain: None,
+                predecessor_disable: None,
                 probe: None,
                 enable: None,
                 enable_rollback: None,
@@ -286,10 +300,32 @@ impl VulcanPluginActivationCandidate<'_> {
         }
         // Installation remains authoritative in its existing receipt, not duplicated here.
         // 安装在既有回执中保持权威，不在此复制。
+        if receipt
+            .predecessor_disable
+            .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Original predecessor disable has not confirmed success.",
+            ));
+        }
         let installation = store.read_installation_locked(&self.transaction.record)?;
         use VulcanPluginActivationEffect as Effect;
         use VulcanPluginEffectObservation as Observation;
         match operation {
+            Effect::DisablePredecessor => {
+                if receipt.predecessor_lua_drain != Some(Observation::Succeeded)
+                    || installation.is_some()
+                    || receipt.probe.is_some()
+                    || receipt.enable.is_some()
+                    || receipt.enable_rollback.is_some()
+                {
+                    return Err(Error::new(
+                        Code::Conflict,
+                        "Predecessor disable requires confirmed original Lua retirement before candidate effects.",
+                    ));
+                }
+            }
             Effect::DrainPredecessorLua => {
                 return Err(Error::invalid(
                     "Predecessor drain is not candidate execution.",
@@ -397,6 +433,9 @@ impl VulcanPluginGenerationStore {
             && (receipt
                 .predecessor_lua_drain
                 .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
+                || receipt
+                    .predecessor_disable
+                    .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)
                 || receipt
                     .probe
                     .is_some_and(|phase| phase != VulcanPluginEffectObservation::Succeeded)

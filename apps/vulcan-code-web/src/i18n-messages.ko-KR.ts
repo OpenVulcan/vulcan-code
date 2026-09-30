@@ -16,6 +16,7 @@ export const koKRTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.enable": "후보 활성화",
     "pluginUpdates.enableRollback": "활성화 보상",
     "pluginUpdates.drainPredecessorLua": "이전 Lua 인스턴스 종료",
+    "pluginUpdates.disablePredecessor": "이전 플러그인 비활성화 콜백",
     "pluginUpdates.effectStarted": "시도 기록됨; 완료 여부 확인 필요",
     "pluginUpdates.installation": "설치 기록",
     "pluginUpdates.noReceipt": "기록된 설치 호출 없음",

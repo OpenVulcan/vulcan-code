@@ -101,7 +101,7 @@ fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
             .expect("inspect candidate");
         // All private call authority derives from that exact view.
         // 全部私有调用权威从该精确视图派生。
-        let authority = CandidateExecution::new(
+        let authority = ActivationExecution::new(
             &fixture.manager.state,
             &candidate,
             CandidateOperation::Probe,
@@ -434,7 +434,7 @@ fn candidate_fixture(
 
 /// Wait until original authority has no actual call, preparation or native pool owner; returns only after real retirement.
 /// 等待原权威不再具有实际调用、准备或原生池所有者；仅在真实退役后返回。
-async fn authority_retired(authority: &std::sync::Weak<CandidateExecution>) {
+async fn authority_retired(authority: &std::sync::Weak<ActivationExecution>) {
     tokio::time::timeout(WAIT, async {
         while authority.strong_count() != 0 {
             tokio::task::yield_now().await;
@@ -585,7 +585,7 @@ fn formal_candidate_probe_cancellation_retains_original_request_ownership() {
                     .is_some()
             );
             Arc::downgrade(
-                call.candidate
+                call.activation
                     .as_ref()
                     .expect("explicit candidate authority"),
             )
@@ -727,9 +727,9 @@ fn formal_candidate_probe_deadline_preserves_native_ownership() {
             // 按私有权威解析候选，绝不按会变化的注册表位置解析。
             let call = calls
                 .values()
-                .find(|call| call.candidate.is_some())
+                .find(|call| call.activation.is_some())
                 .expect("original candidate call retained");
-            Arc::downgrade(call.candidate.as_ref().expect("candidate readiness owner"))
+            Arc::downgrade(call.activation.as_ref().expect("candidate readiness owner"))
         };
         drop(candidate);
         assert_eq!(

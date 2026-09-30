@@ -227,7 +227,7 @@ fn formal_candidate_environment_outlives_observer_until_actual_retirement() {
                 // The original formal call is still executing or initializing in its actual pool.
                 // 原正式调用仍在其实际池中执行或初始化。
                 let call = fixture.admitted().await;
-                Arc::downgrade(call.candidate.as_ref().expect("original native candidate"))
+                Arc::downgrade(call.activation.as_ref().expect("original native candidate"))
             };
             fixture.events.release();
             fixture

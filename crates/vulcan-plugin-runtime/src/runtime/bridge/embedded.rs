@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::VulcanPluginDescriptor;
-use crate::runtime::candidates::CandidateExecution;
+use crate::runtime::candidates::ActivationExecution;
 use luaskills::runtime::embedded::capabilities::{
     CapabilityDescriptor, CapabilityEffects, CapabilityExecution, CapabilityIdempotency,
     CapabilityInvocation, CapabilityOutcome, CapabilityPermissions, CapabilityRegistrationRequest,
@@ -109,33 +109,33 @@ struct ExecutionAuthority {
     update_drain: Mutex<Option<Arc<crate::runtime::update_drain::UpdateDrainAuthority>>>,
     /// Only explicitly admitted unpublished operations carry this real transaction readiness owner.
     /// 仅明确接纳的未发布操作携带此实际事务就绪所有者。
-    candidate: Option<Arc<CandidateExecution>>,
+    activation: Option<Arc<ActivationExecution>>,
 }
 
-/// Host-selected lifecycle scope and optional private candidate authority form one pool admission.
-/// 宿主选择的生命周期作用域与可选私有候选权威构成单个池入场。
+/// Host-selected lifecycle scope and optional private activation authority form one pool admission.
+/// 宿主选择的生命周期作用域与可选原请求权威构成单个池入场。
 struct PoolAdmission {
-    /// Published routes require current lifecycle state; candidates require their exact operation scope.
-    /// 已发布路由要求当前生命周期状态；候选要求精确操作作用域。
+    /// Published routes require current lifecycle state; activation calls require their exact operation scope.
+    /// 已发布路由要求当前生命周期状态；激活调用要求精确操作作用域。
     scope: VulcanPluginBridgeLeaseScope,
     /// Absence explicitly chooses ordinary published authority.
     /// 缺失明确选择普通已发布权威。
-    candidate: Option<Arc<CandidateExecution>>,
+    activation: Option<Arc<ActivationExecution>>,
 }
 
 impl PoolAdmission {
-    /// Construct ordinary published admission for scope without creating any candidate authorization.
-    /// 为 scope 构造普通已发布入场，不创建任何候选授权。
+    /// Construct ordinary published admission for scope without creating any activation authorization.
+    /// 为 scope 构造普通已发布入场，不创建任何激活授权。
     fn published(scope: VulcanPluginBridgeLeaseScope) -> Self {
         Self {
             scope,
-            candidate: None,
+            activation: None,
         }
     }
 }
 
-/// Resolve plugin_id under admission's exact authority; candidate resolution never changes the public catalog.
-/// 按 admission 精确权威解析 plugin_id；候选解析绝不改变公开目录。
+/// Resolve plugin_id under admission's exact authority; activation resolution never changes the public catalog.
+/// 按 admission 精确权威解析 plugin_id；激活解析绝不改变公开目录。
 /// Returns a descriptor with real leases or an explicit ownership error before any executable source is read.
 /// 在读取任何可执行源码前返回具有实际租约的描述符，或明确归属错误。
 fn admitted_plugin(
@@ -143,17 +143,17 @@ fn admitted_plugin(
     plugin_id: &str,
     admission: &PoolAdmission,
 ) -> EmbeddedResult<VulcanPluginDescriptor> {
-    if let Some(candidate) = &admission.candidate {
-        if candidate.plugin.id != plugin_id {
+    if let Some(activation) = &admission.activation {
+        if activation.plugin.id != plugin_id {
             return Err(error(
                 EmbeddedErrorCode::StaleGeneration,
-                "Candidate plugin identity differs from pool admission.",
+                "Activation plugin identity differs from pool admission.",
             ));
         }
-        candidate
-            .validate(state, &candidate.plugin, admission.scope)
+        activation
+            .validate(state, &activation.plugin, admission.scope)
             .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
-        return Ok(candidate.plugin.clone());
+        return Ok(activation.plugin.clone());
     }
     state
         .snapshot
@@ -398,8 +398,8 @@ impl VulcanPluginEmbeddedHost {
         )
     }
 
-    /// Register trusted `definition` and `policy` under the exact published or candidate `admission`.
-    /// 在精确已发布或候选 `admission` 下注册可信 `definition` 及 `policy`。
+    /// Register trusted `definition` and `policy` under the exact published or activation `admission`.
+    /// 在精确已发布或激活 `admission` 下注册可信 `definition` 及 `policy`。
     /// Identity, generation, dependencies and package root must match the retained catalog entry.
     /// 身份、代次、依赖及包根必须匹配保留的目录条目。
     /// Returns a core pool ID; the host must first register the plugin's aggregate budget.
@@ -417,8 +417,8 @@ impl VulcanPluginEmbeddedHost {
         capability_snapshot: Option<CapabilitySnapshot>,
         initialization_capabilities: Option<BTreeSet<String>>,
     ) -> EmbeddedResult<String> {
-        // Scope and candidate ownership were selected together by the trusted host route.
-        // 作用域及候选所有权由可信宿主路由共同选择。
+        // Scope and activation ownership were selected together by the trusted host route.
+        // 作用域及激活所有权由可信宿主路由共同选择。
         let scope = admission.scope;
         // Upgrading the manager protects the short registration operation only.
         // 升级管理器仅保护此短注册操作。
@@ -438,7 +438,8 @@ impl VulcanPluginEmbeddedHost {
                 "Plugin has no valid manifest.",
             )
         })?;
-        if admission.candidate.is_none() && plugin.runtime_state != scope.required_runtime_state() {
+        if admission.activation.is_none() && plugin.runtime_state != scope.required_runtime_state()
+        {
             return Err(error(
                 EmbeddedErrorCode::PermissionDenied,
                 "Plugin lifecycle state does not authorize pool registration.",
@@ -518,7 +519,7 @@ impl VulcanPluginEmbeddedHost {
             security_partition: definition.security_partition.clone(),
             closing_generation: AtomicU64::new(0),
             update_drain: Mutex::new(None),
-            candidate: admission.candidate,
+            activation: admission.activation,
         });
         // Catalog publication cannot race the final authority check and pool registration.
         // 目录发布不能与最终权威检查及池注册竞争。
@@ -528,7 +529,7 @@ impl VulcanPluginEmbeddedHost {
             .map_err(|_| internal("Plugin publication gate is poisoned."))?;
         // Direct native registration must not create an unowned lifecycle callback during an original update.
         // 直接原生注册不得在原更新期间创建无原请求归属的生命周期回调。
-        if domain.candidate.is_none() {
+        if domain.activation.is_none() {
             crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
                 &state,
                 &domain.plugin.id,
@@ -674,22 +675,22 @@ fn validate_current(
     finalizing: bool,
     capability: Option<&str>,
 ) -> EmbeddedResult<()> {
-    if let Some(candidate) = &domain.candidate {
-        candidate
+    if let Some(activation) = &domain.activation {
+        activation
             .validate(state, &domain.plugin, domain.scope)
             .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
-        // The exact prepared manifest owns candidate permissions while original request ownership excludes withdrawal.
-        // 原请求所有权排除事务撤回期间，精确准备清单拥有候选权限。
+        // The frozen operation manifest owns native permissions while original request ownership excludes withdrawal.
+        // 原请求所有权排除事务撤回期间，固定操作清单拥有原生权限。
         let manifest = domain.plugin.manifest.as_ref().ok_or_else(|| {
             error(
                 EmbeddedErrorCode::PermissionDenied,
-                "Candidate manifest is unavailable.",
+                "Activation operation manifest is unavailable.",
             )
         })?;
         if capability.is_some_and(|name| !permitted(name, &manifest.permissions)) {
             return Err(error(
                 EmbeddedErrorCode::PermissionDenied,
-                "Candidate manifest does not authorize this native capability.",
+                "Activation operation manifest does not authorize this native capability.",
             ));
         }
         return Ok(());

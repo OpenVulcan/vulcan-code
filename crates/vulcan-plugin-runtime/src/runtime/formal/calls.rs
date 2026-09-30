@@ -2,7 +2,7 @@
 //! 单次工具、生命周期、瞬时 Action 及探测执行的有界宿主所有权。
 
 use super::*;
-use crate::runtime::candidates::{CandidateExecution, CandidateOperation};
+use crate::runtime::candidates::{ActivationExecution, CandidateOperation};
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 mod admission;
 mod candidates;
 mod initialized;
+mod predecessor;
 mod prewarm;
 mod registration;
 pub(super) mod reuse;
@@ -78,9 +79,9 @@ pub(super) struct FormalCall {
     /// Frozen descriptor pins the original managed package generation.
     /// 冻结描述符固定原受管包代次。
     plugin: VulcanPluginDescriptor,
-    /// Private readiness authority is absent for every published route and retained through actual cleanup.
-    /// 每条已发布路由均无私有就绪权威；候选权威保留至实际清理。
-    candidate: Option<Arc<CandidateExecution>>,
+    /// Ordinary published routes lack original-request authority; activation calls retain it through actual cleanup.
+    /// 普通已发布路由无原请求权威；激活调用将其保留至实际清理。
+    activation: Option<Arc<ActivationExecution>>,
     /// Typed ownership prevents internal records from masquerading as controller calls.
     /// 类型化归属防止内部记录冒充控制器调用。
     ownership: CallOwner,
@@ -216,14 +217,14 @@ enum CallAdmission {
     CandidateProbe {
         /// The host constructed this authority from an inspected, still-prepared transaction.
         /// 宿主从已检查且仍处于准备阶段的事务构造此权威。
-        authority: Arc<CandidateExecution>,
+        authority: Arc<ActivationExecution>,
     },
-    /// One unpublished lifecycle callback retains its exact target without publishing it.
-    /// 单个未发布生命周期回调保留精确目标，不发布它。
-    CandidateLifecycle {
+    /// One original-request lifecycle callback retains its exact old or target package without publishing routing.
+    /// 单个原请求生命周期回调保留精确旧包或目标包，不发布路由。
+    ActivationLifecycle {
         /// Exact operation-specific transaction authority remains alive through real cleanup.
         /// 精确操作专属事务权威保留至实际清理。
-        authority: Arc<CandidateExecution>,
+        authority: Arc<ActivationExecution>,
         /// Function is selected only from the inspected manifest's lifecycle declaration.
         /// 函数仅从已检查清单生命周期声明选择。
         export: String,
@@ -238,7 +239,7 @@ impl CallAdmission {
             Self::Controller { .. } | Self::Prewarm { .. } | Self::PrewarmTarget { .. } => {
                 VulcanPluginCapacityPurpose::ToolCall
             }
-            Self::Lifecycle { .. } | Self::CandidateLifecycle { .. } => {
+            Self::Lifecycle { .. } | Self::ActivationLifecycle { .. } => {
                 VulcanPluginCapacityPurpose::Lifecycle
             }
             Self::Action { .. } => VulcanPluginCapacityPurpose::UiAction,
@@ -261,7 +262,7 @@ impl CallAdmission {
             Self::PrewarmTarget { request, .. } => {
                 CallOwner::Controller(request.owner_session_id.clone())
             }
-            Self::Lifecycle { .. } | Self::CandidateLifecycle { .. } => CallOwner::Lifecycle,
+            Self::Lifecycle { .. } | Self::ActivationLifecycle { .. } => CallOwner::Lifecycle,
             Self::Action { .. } => CallOwner::Action,
             Self::Probe | Self::CandidateProbe { .. } => CallOwner::Probe,
         }
@@ -273,7 +274,7 @@ impl CallAdmission {
         match self {
             Self::Controller { export, .. }
             | Self::Lifecycle { export }
-            | Self::CandidateLifecycle { export, .. }
+            | Self::ActivationLifecycle { export, .. }
             | Self::Action { export, .. } => Some(export),
             Self::Probe
             | Self::CandidateProbe { .. }
@@ -291,11 +292,11 @@ impl CallAdmission {
         )
     }
 
-    /// Borrow private readiness authority only for an explicit candidate admission.
-    /// 仅为显式候选入场借用私有就绪权威。
-    fn candidate(&self) -> Option<&Arc<CandidateExecution>> {
+    /// Borrow original-request authority only for explicit activation admission.
+    /// 仅为显式激活入场借用原请求权威。
+    fn activation(&self) -> Option<&Arc<ActivationExecution>> {
         match self {
-            Self::CandidateProbe { authority } | Self::CandidateLifecycle { authority, .. } => {
+            Self::CandidateProbe { authority } | Self::ActivationLifecycle { authority, .. } => {
                 Some(authority)
             }
             _ => None,
@@ -610,7 +611,7 @@ impl VulcanPluginRuntimeManager {
 
     /// Drain the exact retained calls using owner's existing finite shutdown budget; returns original cleanup evidence.
     /// 使用 owner 既有有限关闭预算排空精确保留 calls；返回原清理证据。
-    /// Selection belongs to the caller, so candidate cancellation cannot widen into ordinary plugin work.
+    /// Selection belongs to the caller, so activation cancellation cannot widen into ordinary plugin work.
     /// 选择属于调用方，因此候选取消不能扩展至普通插件工作。
     pub(super) async fn drain_selected_formal_calls(
         &self,
@@ -1030,7 +1031,7 @@ impl VulcanPluginRuntimeManager {
                         },
                         finalizer: input.finalizer.take(),
                     },
-                    call.candidate.clone(),
+                    call.activation.clone(),
                 )
                 .map_err(core_error)?;
             call.lock()?.pool = Some(pool.clone());
@@ -1216,7 +1217,7 @@ impl VulcanPluginRuntimeManager {
         }
         if call
             .ownership
-            .retains_published_slot(call.candidate.is_some())
+            .retains_published_slot(call.activation.is_some())
         {
             self.release_session_slot_checked(&call.plugin.id)?;
         }

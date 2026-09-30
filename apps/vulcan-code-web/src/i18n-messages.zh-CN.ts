@@ -16,6 +16,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.enable": "候选启用",
     "pluginUpdates.enableRollback": "启用补偿",
     "pluginUpdates.drainPredecessorLua": "旧 Lua 实例退役",
+    "pluginUpdates.disablePredecessor": "旧插件停用回调",
     "pluginUpdates.effectStarted": "已记录尝试，完成情况待核对",
     "pluginUpdates.installation": "安装回执",
     "pluginUpdates.noReceipt": "未记录安装调用",

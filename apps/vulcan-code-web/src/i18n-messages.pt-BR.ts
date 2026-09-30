@@ -16,6 +16,7 @@ export const ptBRTranslations: Record<TranslationKey, string> = {
     "pluginUpdates.enable": "Ativação do candidato",
     "pluginUpdates.enableRollback": "Compensação da ativação",
     "pluginUpdates.drainPredecessorLua": "Encerramento da instância Lua anterior",
+    "pluginUpdates.disablePredecessor": "Callback de desativação do plugin anterior",
     "pluginUpdates.effectStarted": "Tentativa registrada; conclusão requer verificação",
     "pluginUpdates.installation": "Recibo de instalação",
     "pluginUpdates.noReceipt": "Nenhuma chamada de instalação registrada",

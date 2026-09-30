@@ -102,23 +102,23 @@ impl VulcanPluginEmbeddedHost {
         )
     }
 
-    /// Register one tracked call in capacity_id, retaining candidate ownership only for explicit unpublished operations.
-    /// 在 capacity_id 中注册单个受跟踪调用，仅为显式未发布操作保留候选所有权。
+    /// Register one tracked call in capacity_id, retaining original ownership only for explicit activation operations.
+    /// 在 capacity_id 中注册单个受跟踪调用，仅为显式激活操作保留原所有权。
     /// request keeps the original manifest and policy; returns its actual core pool without publishing a catalog.
     /// request 保留原清单及策略；返回实际核心池，不发布目录。
     pub(in crate::runtime) fn register_call_bundle_pool_in_capacity(
         &self,
         capacity_id: &str,
         request: VulcanPluginBundlePoolRequest,
-        candidate: Option<Arc<CandidateExecution>>,
+        activation: Option<Arc<ActivationExecution>>,
     ) -> EmbeddedResult<String> {
-        if candidate.is_some() && request.finalizer.is_some() {
+        if activation.is_some() && request.finalizer.is_some() {
             return Err(error(
                 EmbeddedErrorCode::InvalidArgument,
-                "Candidate operations cannot select a business finalizer.",
+                "Activation operations cannot select a business finalizer.",
             ));
         }
-        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, candidate)
+        self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, activation)
     }
 
     /// Load the manifest-selected bundle and fixed restricted loader for `request`.
@@ -135,13 +135,13 @@ impl VulcanPluginEmbeddedHost {
         request: VulcanPluginBundlePoolRequest,
         reusable_tool: Option<&str>,
         capability_snapshot: Option<CapabilitySnapshot>,
-        candidate: Option<Arc<CandidateExecution>>,
+        activation: Option<Arc<ActivationExecution>>,
     ) -> EmbeddedResult<String> {
-        // Candidate provenance is explicit and cannot be selected by the package ID or generation string.
-        // 候选来源为显式值，不能由插件包标识或代次字符串选择。
+        // Activation provenance is explicit and cannot be selected by the package ID or generation string.
+        // 激活来源为显式值，不能由插件包标识或代次字符串选择。
         let admission = PoolAdmission {
             scope: request.scope,
-            candidate,
+            activation,
         };
         // Keep the owning manager alive during exact descriptor and file resolution.
         // 在精确描述符及文件解析期间保持所属管理器存活。
@@ -150,8 +150,8 @@ impl VulcanPluginEmbeddedHost {
             .manager
             .upgrade()
             .ok_or_else(|| error(EmbeddedErrorCode::Closed, "Plugin manager is closed."))?;
-        // Exact candidate or published provenance retains the physical package before reading source.
-        // 精确候选或已发布来源在读取源码前保留物理插件包。
+        // Exact activation or published provenance retains the physical package before reading source.
+        // 精确激活或已发布来源在读取源码前保留物理插件包。
         let plugin = admitted_plugin(&state, &request.plugin_id, &admission)?;
         if plugin.generation != request.plugin_generation {
             return Err(error(
@@ -159,7 +159,7 @@ impl VulcanPluginEmbeddedHost {
                 "Plugin changed before bundle preparation.",
             ));
         }
-        if admission.candidate.is_none()
+        if admission.activation.is_none()
             && plugin.runtime_state != request.scope.required_runtime_state()
         {
             return Err(error(

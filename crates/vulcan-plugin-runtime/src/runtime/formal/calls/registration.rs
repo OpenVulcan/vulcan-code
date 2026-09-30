@@ -26,7 +26,7 @@ impl VulcanPluginRuntimeManager {
         }
         if call
             .ownership
-            .retains_published_slot(call.candidate.is_some())
+            .retains_published_slot(call.activation.is_some())
         {
             self.release_session_slot_with_publication(&call.plugin.id, &publication)?;
         }
@@ -103,12 +103,12 @@ impl VulcanPluginRuntimeManager {
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
-            // Explicit candidate authority never consults another catalog incarnation for its target.
-            // 显式候选权威绝不查询其他目录实例来取得目标。
+            // Explicit activation authority selects its frozen operation package under the publication gate.
+            // 显式激活权威在发布门内选择其固定操作插件包。
             self.validate_formal_authority(
                 &plugin,
                 input.scope,
-                input.admission.candidate().map(Arc::as_ref),
+                input.admission.activation().map(Arc::as_ref),
             )?;
             if Instant::now() >= input.deadline {
                 return Err(VulcanPluginRuntimeError::new(
@@ -130,17 +130,17 @@ impl VulcanPluginRuntimeManager {
             let mut calls = owner.calls.lock().map_err(|_| calls_error())?;
             // Lifecycle effects cannot overlap any retained work for the same durable request.
             // 生命周期副作用不能与同一持久请求的任何保留工作重叠。
-            if let Some(candidate) = input.admission.candidate()
+            if let Some(activation) = input.admission.activation()
                 && calls.values().any(|call| {
-                    call.candidate.as_ref().is_some_and(|original| {
-                        original.request_id == candidate.request_id
-                            && (original.operation != CandidateOperation::Probe
-                                || candidate.operation != CandidateOperation::Probe)
+                    call.activation.as_ref().is_some_and(|original| {
+                        original.request_id == activation.request_id
+                            && (!original.operation.is_candidate_probe()
+                                || !activation.operation.is_candidate_probe())
                     })
                 })
             {
                 return Err(VulcanPluginRuntimeError::new(
-                    "Activation candidate lifecycle conflicts with retained work for the original request.",
+                    "Activation lifecycle conflicts with retained work for the original request.",
                 ));
             }
             // Automatic retries observe the same original intent before any new quota or deadline is retained.
@@ -192,7 +192,7 @@ impl VulcanPluginRuntimeManager {
                     "Formal plugin runtime is closing.",
                 ));
             }
-            if ownership.retains_published_slot(input.admission.candidate().is_some()) {
+            if ownership.retains_published_slot(input.admission.activation().is_some()) {
                 self.reserve_session_slot_locked(&plugin.id, maximum, &publication)?;
             }
             // Keep the exact invocation record independently of its observer.
@@ -200,7 +200,7 @@ impl VulcanPluginRuntimeManager {
             let call = Arc::new(FormalCall {
                 id: Uuid::new_v4().to_string(),
                 plugin,
-                candidate: input.admission.candidate().cloned(),
+                activation: input.admission.activation().cloned(),
                 ownership,
                 input_bytes: AtomicUsize::new(input_bytes),
                 cancelled: AtomicBool::new(false),
