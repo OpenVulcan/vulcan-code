@@ -16,6 +16,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+mod update_publication;
+
 /// Host-owned plugin lifecycle event that may invoke one manifest callback.
 /// 可调用清单回调的宿主自有插件生命周期事件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,6 +558,13 @@ impl VulcanPluginRuntimeManager {
         &self,
         tool: &VulcanPluginToolDescriptor,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Published identity alone cannot admit business before the original target handoff completes.
+        // 仅发布身份不能在原目标交接完成前接纳业务。
+        crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
+            &self.state,
+            &tool.plugin_id,
+            crate::VulcanPluginBridgeLeaseScope::Enabled,
+        )?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(&tool.plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(
@@ -582,6 +591,13 @@ impl VulcanPluginRuntimeManager {
         &self,
         hook: &VulcanPluginHookDescriptor,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Published identity alone cannot admit business before the original target handoff completes.
+        // 仅发布身份不能在原目标交接完成前接纳业务。
+        crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
+            &self.state,
+            &hook.plugin_id,
+            crate::VulcanPluginBridgeLeaseScope::Enabled,
+        )?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(&hook.plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(

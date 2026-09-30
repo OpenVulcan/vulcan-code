@@ -289,6 +289,13 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         generation: u64,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Published identity alone cannot admit business before the original target handoff completes.
+        // 仅发布身份不能在原目标交接完成前接纳业务。
+        crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
+            &self.state,
+            plugin_id,
+            crate::VulcanPluginBridgeLeaseScope::Enabled,
+        )?;
         if self
             .snapshot()
             .plugins

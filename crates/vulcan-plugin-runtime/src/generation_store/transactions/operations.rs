@@ -565,6 +565,9 @@ impl VulcanPluginGenerationStore {
                 "Recovery publication requires the exact published original activation.",
             ));
         }
+        // Revalidate actual immutable contents, full configuration and original-bound credentials before handoff.
+        // 在交接前重新校验实际不可变内容、完整配置及绑定原请求的凭据。
+        let _target = self.pin_transaction_target(&transaction.record)?;
         Ok(())
     }
 

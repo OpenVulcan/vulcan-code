@@ -718,6 +718,14 @@ fn validate_current(
         }
         return Ok(());
     }
+    // Ordinary native admission follows the same selected-target handoff fence as formal calls.
+    // 普通原生入场遵循与正式调用相同的已选目标交接屏障。
+    crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
+        state,
+        &domain.plugin.id,
+        domain.scope,
+    )
+    .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
     // One immutable snapshot binds the package and lifecycle transition to the same observation.
     // 单个不可变快照将包与生命周期转换绑定至同一次观测。
     let snapshot = state

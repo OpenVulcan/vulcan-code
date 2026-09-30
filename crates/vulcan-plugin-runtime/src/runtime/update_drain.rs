@@ -55,23 +55,44 @@ pub(super) fn validate_predecessor_callback_current(
 
 /// Exclude ordinary lifecycle admission while an original request remains unfinished.
 /// 原请求未完成时排除普通生命周期入场。
-/// state and plugin_id select the actual store; enabled business uses its existing catalog gate; return a precise conflict.
-/// state 与 plugin_id 选择实际存储；启用业务使用既有目录门控；返回精确冲突。
+/// state and plugin_id select the actual store; scope separates old business from a selected unfinished target.
+/// state 与 plugin_id 选择实际存储；scope 区分旧业务与已选中但未完成的目标。
+/// Returns a precise conflict for pending lifecycle effects or target business before full handoff.
+/// 对待完成生命周期副作用或完整交接前的目标业务返回精确冲突。
 pub(super) fn validate_ordinary_lifecycle_admission(
     state: &VulcanPluginManagerState,
     plugin_id: &str,
     scope: crate::VulcanPluginBridgeLeaseScope,
 ) -> Result<(), VulcanPluginRuntimeError> {
+    // Current disk selection, not discovery state alone, fences a committed target awaiting full handoff.
+    // 当前磁盘选择而非仅发现状态，隔离等待完整交接的已提交目标。
+    let Some(store) = crate::VulcanPluginGenerationStore::open_existing(&state.user_plugin_root)
+        .map_err(|failure| error(failure.to_string()))?
+    else {
+        return Ok(());
+    };
+    // Inspect all original obligations without choosing a latest request or allocating execution authority.
+    // 检查全部原义务，不选择最新请求，也不分配执行权威。
+    let pending = store
+        .activation_recovery_records(plugin_id)
+        .map_err(|failure| error(failure.to_string()))?;
     if scope == crate::VulcanPluginBridgeLeaseScope::Enabled {
+        // Preparation may leave the exact old selection serving business until explicit predecessor closure.
+        // 准备可使精确旧选择继续提供业务，直到明确关闭前驱。
+        let selected = store
+            .activation(plugin_id)
+            .map_err(|failure| error(failure.to_string()))?;
+        if pending.iter().any(|record| {
+            matches!(record, crate::VulcanPluginActivationRequestRecord::Activation(original)
+                if selected.as_ref() == Some(original.target()))
+        }) {
+            return Err(error(
+                "Selected activation target is awaiting its original route handoff.",
+            ));
+        }
         return Ok(());
     }
-    if let Some(store) = crate::VulcanPluginGenerationStore::open_existing(&state.user_plugin_root)
-        .map_err(|failure| error(failure.to_string()))?
-        && !store
-            .activation_recovery_records(plugin_id)
-            .map_err(|failure| error(failure.to_string()))?
-            .is_empty()
-    {
+    if !pending.is_empty() {
         return Err(error(
             "Plugin has an unfinished original activation request.",
         ));
