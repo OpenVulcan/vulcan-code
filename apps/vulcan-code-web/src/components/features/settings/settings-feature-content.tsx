@@ -22,7 +22,7 @@ import {
 import { ProviderManagementArea } from "@/components/features/settings/provider-management-settings";
 import { ContextBasicsSettingsArea } from "@/components/features/settings/context-basics-settings";
 import { AiCapabilitiesSettingsArea } from "@/components/features/settings/ai-capabilities-settings";
-import { SettingsPage, type SettingsPageWidth } from "@/components/features/settings/settings-layout";
+import { SettingsPage } from "@/components/features/settings/settings-layout";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
@@ -33,7 +33,6 @@ import {
   normalizeSettingsSubArea,
   settingsSubAreaProviderToolCapability,
 } from "@/components/features/settings/settings-navigation";
-import { useI18n } from "@/i18n";
 import type {
   SettingsSubAreaId,
   StartupSnapshot,
@@ -73,29 +72,14 @@ export interface SettingsFeatureContentProps {
   onOpenDiagnostics?: () => void;
 }
 
-// SETTINGS_PAGE_WIDTHS gives forms a readable measure and lets tables and master-detail pages use the full pane.
-// SETTINGS_PAGE_WIDTHS 让表单保持易读宽度，表格与主从页面使用整个面板。
-const SETTINGS_PAGE_WIDTHS: Partial<Record<SettingsSubAreaId, SettingsPageWidth>> = {
-  "context-basics": "narrow",
-  notifications: "narrow",
-  "git-commit": "narrow",
-  "about-licenses": "narrow",
-  "credential-management": "wide",
-  "model-list": "wide",
-  "runtime-diagnostics": "wide",
-  "visual-lab": "wide",
-};
-
-// SettingsFeatureContent frames every settings page with the shared page header; navigation stays in the sidebar.
-// SettingsFeatureContent 用共享页头包裹每个设置页面；导航保留在侧栏。
+// SettingsFeatureContent frames every settings page; the feature header shows its title and navigation stays in the sidebar.
+// SettingsFeatureContent 包裹每个设置页面；功能页头显示其标题，导航保留在侧栏。
 export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
-  const { t } = useI18n();
   const current = normalizeSettingsSubArea(props.activeSettingsSubArea);
-  const summary = activeSettingsHeaderSummary(props.activeSettingsSubArea, t);
   return (
     // The key replays the page enter transition on navigation and resets page-local state.
     // key 使切换页面时重放进入动效，并重置页面内部状态。
-    <SettingsPage description={summary.detail} key={current} title={summary.title} width={SETTINGS_PAGE_WIDTHS[current] ?? "medium"}>
+    <SettingsPage key={current}>
       <SettingsRoutedPage {...props} />
     </SettingsPage>
   );

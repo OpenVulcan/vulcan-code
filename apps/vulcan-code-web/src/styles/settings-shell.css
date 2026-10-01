@@ -17,31 +17,6 @@
   margin: 0 auto;
   animation: vcn-page-enter var(--vcn-duration-slow) var(--vcn-ease-out);
 }
-.settings-page[data-width="narrow"] { max-width: 808px; }
-.settings-page[data-width="medium"] { max-width: 1008px; }
-.settings-page-header {
-  display: flex;
-  flex-shrink: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 22px 24px 16px;
-}
-.settings-page-heading { min-width: 0; }
-.settings-page-heading h1 {
-  margin: 0;
-  color: var(--foreground);
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 26px;
-}
-.settings-page-heading p {
-  margin: 4px 0 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-md);
-  line-height: 20px;
-}
-.settings-page-actions { display: flex; flex-shrink: 0; align-items: center; gap: 8px; }
 .settings-page-body {
   display: flex;
   flex: 1 1 auto;
@@ -49,7 +24,7 @@
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 0 24px 24px;
+  padding: 20px 24px 24px;
 }
 /* Routed pages fill the body; pages that own a scroll viewport keep it, others scroll with the body. */
 /* 路由页面填满正文；自带滚动视口的页面保留自身滚动，其余随正文滚动。 */
@@ -63,8 +38,8 @@
   border: 1px solid var(--border);
   border-radius: var(--vcn-radius-lg);
 }
-/* Visual Lab keeps its intro copy but the frame already shows the page title. */
-/* 视觉实验室保留介绍文案，但页面标题已由框架显示。 */
+/* Visual Lab keeps its intro copy but the feature header already shows the page title. */
+/* 视觉实验室保留介绍文案，但页面标题已由功能页头显示。 */
 .settings-page-body .visual-lab-intro > h2 { display: none; }
 
 /* AI capabilities: one row per capability, editing happens in the drawer. */
@@ -146,8 +121,7 @@
 /* Narrow panes tighten the frame gutter and fold capability rows onto two lines. */
 /* 窄面板收紧框架留白，并将能力行折为两行。 */
 @container settings-shell (max-width: 760px) {
-  .settings-page-header { padding: 16px 12px 12px; }
-  .settings-page-body { padding: 0 12px 16px; }
+  .settings-page-body { padding: 14px 12px 16px; }
   .ai-capability-row { grid-template-columns: 32px minmax(0, 1fr) auto; }
   .ai-capability-target { grid-column: 2 / -1; grid-row: 2; }
   .ai-capability-status { display: none; }

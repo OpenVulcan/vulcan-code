@@ -1,5 +1,5 @@
 import * as React from "react"
-import { AlertTriangle, ArchiveRestore, DatabaseZap, RefreshCw, ShieldCheck, Sparkles, Trash2 } from "lucide-react"
+import { AlertTriangle, ArchiveRestore, Clock, DatabaseZap, Fingerprint, RefreshCw, ShieldCheck, Sparkles, Trash2 } from "lucide-react"
 
 import {
   AlertDialog,
@@ -11,12 +11,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
 import { VmmNativeCleanupPreview } from "./vmm-native-cleanup-preview"
 import { VmmNativeLexicalIndex } from "./vmm-native-lexical-index"
@@ -395,7 +395,7 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
         <CardHeader><CardTitle>{t("memory.maintenance.recycleBin")}</CardTitle><CardDescription>{t("memory.maintenance.recycleDescription")}</CardDescription></CardHeader>
         <CardContent className="space-y-4">
           <div className="max-w-sm space-y-2"><Label htmlFor="memory-recycle-project-filter">{t("memory.maintenance.projectFilter")}</Label><Select disabled={controlsBusy} onValueChange={(filter) => void changeProjectFilter(filter)} value={projectFilter}><SelectTrigger id="memory-recycle-project-filter"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t("memory.maintenance.allProjects")}</SelectItem>{catalog?.projects.map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name} · {project.tag}</SelectItem>)}</SelectContent></Select></div>
-          {recycleBin?.batches.length ? <div className="space-y-3">{recycleBin.batches.map((batch) => <RecycleBatchCard batch={batch} busy={controlsBusy} key={batch.batchId} onRunAction={onRunAction} onConfirm={(action, trigger) => { recycleTrigger.current = trigger; setError(null); setConfirmation({ action, batch, storageVersion: recycleBin.storageVersion }) }} projectName={projectNames.get(batch.projectId) ?? `#${batch.projectId}`} />)}</div> : <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">{recycleBin !== null ? t("memory.maintenance.emptyRecycleBin") : error ? t("memory.maintenance.invalidResponse") : t("memory.common.loading")}</div>}
+          {recycleBin?.batches.length ? <TooltipProvider><ol className="vmm-recycle-list" aria-label={t("memory.maintenance.recycleBin")}>{recycleBin.batches.map((batch) => <RecycleBatchCard batch={batch} busy={controlsBusy} key={batch.batchId} onRunAction={onRunAction} onConfirm={(action, trigger) => { recycleTrigger.current = trigger; setError(null); setConfirmation({ action, batch, storageVersion: recycleBin.storageVersion }) }} projectName={projectNames.get(batch.projectId) ?? `#${batch.projectId}`} />)}</ol></TooltipProvider> : <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">{recycleBin !== null ? t("memory.maintenance.emptyRecycleBin") : error ? t("memory.maintenance.invalidResponse") : t("memory.common.loading")}</div>}
         </CardContent>
       </Card>
 
@@ -435,27 +435,59 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="flex min-w-0 items-baseline justify-between gap-3 border-b py-2"><p className="min-w-0 text-xs text-muted-foreground">{label}</p><p className="shrink-0 text-sm font-medium tabular-nums">{value}</p></div>
 }
 
-// RecycleBatchCard renders one recoverable batch and its guarded actions.
-// RecycleBatchCard 渲染一个可恢复批次及其受保护动作。
+// RecycleBatchCard renders one recoverable batch as a list row: identity and contents on the left, guarded actions on the right.
+// Storage identifiers stay behind a marker tooltip; only non-empty record families are listed.
+// RecycleBatchCard 将一个可恢复批次渲染为列表行：左侧为身份与内容，右侧为受保护动作。
+// 存储标识收进标记的提示中；只列出非空的记录类别。
 function RecycleBatchCard({ batch, busy, onConfirm, projectName, onRunAction }: { batch: VmmNativeRecycleBatchSummary; busy: boolean; onConfirm: (action: "restore" | "purge", trigger: HTMLButtonElement) => void; projectName: string; onRunAction: VmmNativeMaintenancePageProps["onRunAction"] }) {
   const { t, locale } = useI18n()
-  return <div className="rounded-lg border p-4">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><div className="flex flex-wrap items-center gap-2"><span className="min-w-0 break-all font-medium">{projectName}</span><Badge variant="outline">{retentionReasonLabel(batch.reason, t)}</Badge></div><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{batch.batchId}</p></div>
-      <div className="flex flex-wrap gap-2">
-        <VmmNativeRecycleRecords batch={batch} busy={busy} onRunAction={onRunAction} />
-        <Button disabled={busy} onClick={(event) => onConfirm("restore", event.currentTarget)} size="sm" type="button" variant="outline"><ArchiveRestore className="size-3.5" aria-hidden="true" />{t("memory.maintenance.restore")}</Button>
-        <Button disabled={busy} onClick={(event) => onConfirm("purge", event.currentTarget)} size="sm" type="button" variant="destructive"><Trash2 className="size-3.5" aria-hidden="true" />{t("memory.maintenance.purge")}</Button>
+  const separator = t("global.labelSeparator")
+  const counts = ([
+    ["memory.maintenance.turns", batch.turnCount],
+    ["memory.maintenance.memories", batch.memoryCount],
+    ["memory.maintenance.profiles", batch.profileNodeCount],
+    ["memory.maintenance.evidence", batch.contextEvidenceCount],
+  ] as const).filter(([, count]) => count > 0)
+  const expiresAt = formatTimestamp(batch.expiresAtUnixMs, "-", locale)
+  return <li className="vmm-recycle-batch">
+    <div className="vmm-recycle-batch-main">
+      <div className="vmm-recycle-batch-title">
+        <span className="vmm-recycle-batch-name" title={projectName}>{projectName}</span>
+        <span className="vmm-recycle-batch-reason">{retentionReasonLabel(batch.reason, t)}</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button aria-label={`${t("memory.maintenance.batchId")}${separator}${batch.batchId}`} className="vmm-recycle-batch-marker" type="button"><Fingerprint className="size-3.5" aria-hidden="true" /></button>
+          </TooltipTrigger>
+          <TooltipContent className="flex-col items-start" side="top">
+            <span>{t("memory.maintenance.batchId")}</span>
+            <span className="font-mono">{batch.batchId}</span>
+            <span>{t("memory.maintenance.recycledAt")}{separator}{formatTimestamp(batch.recycledAtUnixMs, "-", locale)}</span>
+          </TooltipContent>
+        </Tooltip>
+      </div>
+      <div className="vmm-recycle-batch-meta">
+        {counts.length > 0
+          ? counts.map(([label, count]) => <span key={label}>{t(label)} <strong>{count}</strong></span>)
+          : <span>{t("memory.maintenance.emptyBatch")}</span>}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="vmm-recycle-batch-expiry" tabIndex={0}><Clock className="size-3.5" aria-hidden="true" /><span className="sr-only">{t("memory.maintenance.expiresAt")}{separator}</span>{expiresAt}</span>
+          </TooltipTrigger>
+          <TooltipContent side="top">{t("memory.maintenance.expiresAt")}</TooltipContent>
+        </Tooltip>
       </div>
     </div>
-    <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4"><span>{t("memory.maintenance.turns")}: {batch.turnCount}</span><span>{t("memory.maintenance.memories")}: {batch.memoryCount}</span><span>{t("memory.maintenance.profiles")}: {batch.profileNodeCount}</span><span>{t("memory.maintenance.evidence")}: {batch.contextEvidenceCount}</span></div>
-    {batch.manualSelection ? <details className="mt-3 text-sm">
-      <summary className="cursor-pointer">{t("memory.maintenance.manualSources")} ({batch.manualSelection.ids.length})</summary>
+    <div className="vmm-recycle-batch-actions">
+      <VmmNativeRecycleRecords batch={batch} busy={busy} onRunAction={onRunAction} />
+      <Button disabled={busy} onClick={(event) => onConfirm("restore", event.currentTarget)} size="sm" type="button" variant="outline"><ArchiveRestore className="size-3.5" aria-hidden="true" />{t("memory.maintenance.restore")}</Button>
+      <Button disabled={busy} onClick={(event) => onConfirm("purge", event.currentTarget)} size="sm" type="button" variant="destructive"><Trash2 className="size-3.5" aria-hidden="true" />{t("memory.maintenance.purge")}</Button>
+    </div>
+    {batch.manualSelection ? <details className="vmm-recycle-batch-sources">
+      <summary>{t("memory.maintenance.manualSources")} ({batch.manualSelection.ids.length})</summary>
       <p className="mt-2 text-xs text-muted-foreground">{t(batch.manualSelection.kind === "sessions" ? "memory.removal.sessionEffect" : "memory.removal.turnEffect")}</p>
       <ul className="mt-2 max-h-40 overflow-y-auto">{batch.manualSelection.ids.map((id) => <li className="break-all font-mono text-xs" key={id}>{id}</li>)}</ul>
     </details> : null}
-    <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><AlertTriangle className="size-3.5" aria-hidden="true" /><span>{t("memory.maintenance.expiresAt")}: {formatTimestamp(batch.expiresAtUnixMs, "-", locale)}</span></div>
-  </div>
+  </li>
 }
 
 // retentionReasonLabel localizes one closed Core retention reason token.

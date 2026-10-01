@@ -123,9 +123,8 @@
 .settings-empty-state,
 .feature-content > * { animation: vcn-fade-in var(--vcn-duration-base) var(--vcn-ease-out); }
 
-/* Settings pages assemble top-down: header first, then each section a beat later, capped so long pages never feel slow. */
-/* 设置页自上而下依次出现：先标题，再逐个分区稍后进入；设置上限，长页面也不会显得拖沓。 */
-.settings-page-header,
+/* Settings pages assemble top-down: each section a beat after the previous, capped so long pages never feel slow. */
+/* 设置页自上而下依次出现：逐个分区稍后进入；设置上限，长页面也不会显得拖沓。 */
 .settings-page-body > * { animation: vcn-page-enter var(--vcn-duration-slow) var(--vcn-ease-out) both; }
 .settings-page-body > :nth-child(1) { animation-delay: calc(var(--vcn-stagger) * 1); }
 .settings-page-body > :nth-child(2) { animation-delay: calc(var(--vcn-stagger) * 2); }
