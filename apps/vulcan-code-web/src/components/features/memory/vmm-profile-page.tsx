@@ -7,7 +7,6 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
-import { Badge } from "@/components/ui/badge"
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
 import {
@@ -51,7 +50,13 @@ interface ProfileNodeView {
   content: string
   priority: string
   level: string
+  // Typed project profile date, shown as provided by the memory service.
+  // 强类型项目画像日期，按记忆服务提供的原样显示。
   date: string
+  // Native effective time, formatted at render time so it follows the current locale.
+  // 原生生效时间，在渲染时格式化以跟随当前语言。
+  effectiveAtUnixMs?: number | null
+  expiresAtUnixMs?: number | null
   state?: VmmNativeProfileRecordSummary["effectiveState"]
   storedState?: VmmNativeProfileRecordSummary["storedState"]
   activeForInjection?: boolean
@@ -374,7 +379,7 @@ function VmmProfilePage({
         : { ...identityPayload, target: effectiveTarget })
       if (generation !== readGeneration.current) return
       if (isNative && nodesResult?.data.kind === "native_profile_records") {
-        setNodes(nativeProfileNodes(nodesResult.data.value.nodes, locale))
+        setNodes(nativeProfileNodes(nodesResult.data.value.nodes))
         setNativeStateCounts(nodesResult.data.value.counts)
       } else if (!isNative && nodesResult?.data.kind === "profile_nodes") {
         setNodes(projectProfileNodes(nodesResult.data.value.nodes))
@@ -394,7 +399,7 @@ function VmmProfilePage({
       setReadError(error instanceof Error ? error.message : String(error))
       setReadState("failed")
     }
-  }, [effectiveTarget, isNative, loadCatalog, locale, onRunAction, profileCatalogReady, selectedProjectRef, selectedTargetRef, selectedUserRef, snapshot.experienceState.deployment, t])
+  }, [effectiveTarget, isNative, loadCatalog, onRunAction, profileCatalogReady, selectedProjectRef, selectedTargetRef, selectedUserRef, snapshot.experienceState.deployment, t])
 
   React.useEffect(() => {
     if (busy || !profileCatalogReady || !selectedTargetRef) {
@@ -577,69 +582,11 @@ function VmmProfilePage({
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="vmm-profile-list">
+        <ol className="vmm-profile-list" aria-label={t("memory.profile.title")}>
           {nodes.map((node, index) => (
-            <Card key={`${node.content}-${index}`}>
-              <CardContent className="space-y-3 pt-5">
-                <p className="whitespace-pre-wrap text-sm">{node.content}</p>
-                <div className="flex flex-wrap gap-2">
-                  {node.state ? (
-                    <Badge variant={node.state === "active" ? "secondary" : "outline"}>
-                      {t(nativeProfileStateKey(node.state))}
-                    </Badge>
-                  ) : null}
-                  {node.activeForInjection === false ? (
-                    <Badge variant="outline">{t("memory.profile.notInjected")}</Badge>
-                  ) : null}
-                  {node.priority ? (
-                    <Badge variant="secondary">
-                      {t("memory.profile.priority")}{t("global.labelSeparator")}{node.priority}
-                    </Badge>
-                  ) : null}
-                  {node.level ? (
-                    <Badge variant="outline">
-                      {t("memory.profile.level")}{t("global.labelSeparator")}{node.level}
-                    </Badge>
-                  ) : null}
-                  {node.date ? <span className="text-xs text-muted-foreground">{node.date}</span> : null}
-                </div>
-                {node.sourceKind ? (
-                  <div className="space-y-1 text-xs text-muted-foreground">
-                    <p>
-                      {t("memory.profile.source")}{t("global.labelSeparator")}
-                      {t(nativeProfileSourceKey(node.sourceKind))}
-                      {node.sourceId ? ` · ${node.sourceId}` : ""}
-                    </p>
-                    {node.sourceTurnIds?.length ? (
-                      <p>
-                        {t("memory.profile.sourceTurns")}{t("global.labelSeparator")}
-                        {node.sourceTurnIds.map((turnId) => `#${turnId}`).join(", ")}
-                      </p>
-                    ) : null}
-                    {node.statusReason ? (
-                      <p>
-                        {t("memory.profile.statusReason")}{t("global.labelSeparator")}
-                        {node.statusReason}
-                      </p>
-                    ) : null}
-                    {node.updatedAtUnixMs != null ? (
-                      <p>
-                        {t("memory.profile.updatedAt")}{t("global.labelSeparator")}
-                        {formatDateTime(node.updatedAtUnixMs, locale)}
-                      </p>
-                    ) : null}
-                    {node.storedState && node.state && node.storedState !== node.state ? (
-                      <p>
-                        {t("memory.profile.storedState")}{t("global.labelSeparator")}
-                        {t(nativeProfileStateKey(node.storedState))}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
+            <ProfileNodeItem key={`${node.content}-${index}`} locale={locale} node={node} />
           ))}
-        </div>
+        </ol>
       )}
 
       <Dialog open={correctionOpen} onOpenChange={(open) => { if (!busy) setCorrectionOpen(open) }}>
@@ -700,6 +647,96 @@ function VmmProfilePage({
   )
 }
 
+// ProfileNodeFact is one labelled provenance or timing value of a profile node.
+// ProfileNodeFact 是画像节点的一项带标签的来源或时间信息。
+interface ProfileNodeFact {
+  label: string
+  value: React.ReactNode
+}
+
+// ProfileNodeItem renders one profile node as a structured record: state and weight, the statement, then labelled facts.
+// ProfileNodeItem 将单个画像节点渲染为结构化记录：状态与权重、陈述内容，以及带标签的信息。
+function ProfileNodeItem({ locale, node }: { locale: string; node: ProfileNodeView }) {
+  const { t } = useI18n()
+  const separator = t("global.labelSeparator")
+  const levelKey = profileLevelKey(node.level)
+  const facts: ProfileNodeFact[] = []
+  if (node.sourceKind) {
+    facts.push({
+      label: t("memory.profile.source"),
+      value: (
+        <>
+          {t(nativeProfileSourceKey(node.sourceKind))}
+          {node.sourceId ? <code className="vmm-profile-node-ref">{node.sourceId}</code> : null}
+        </>
+      ),
+    })
+  }
+  if (node.sourceTurnIds?.length) {
+    facts.push({ label: t("memory.profile.sourceTurns"), value: node.sourceTurnIds.map((turnId) => `#${turnId}`).join(", ") })
+  }
+  const effectiveAt = node.effectiveAtUnixMs == null ? null : formatDateTime(node.effectiveAtUnixMs, locale)
+  if (effectiveAt) {
+    facts.push({ label: t("memory.profile.effectiveAt"), value: effectiveAt })
+  } else if (node.date) {
+    facts.push({ label: t("memory.profile.date"), value: node.date })
+  }
+  const expiresAt = node.expiresAtUnixMs == null ? null : formatDateTime(node.expiresAtUnixMs, locale)
+  if (expiresAt) {
+    facts.push({ label: t("memory.profile.expiresAt"), value: expiresAt })
+  }
+  const updatedAt = node.updatedAtUnixMs == null ? null : formatDateTime(node.updatedAtUnixMs, locale)
+  if (updatedAt) {
+    facts.push({ label: t("memory.profile.updatedAt"), value: updatedAt })
+  }
+  if (node.storedState && node.state && node.storedState !== node.state) {
+    facts.push({ label: t("memory.profile.storedState"), value: t(nativeProfileStateKey(node.storedState)) })
+  }
+  if (node.statusReason) {
+    facts.push({ label: t("memory.profile.statusReason"), value: node.statusReason })
+  }
+  return (
+    <li className="vmm-profile-node" data-state={node.state}>
+      <div className="vmm-profile-node-head">
+        {node.state ? (
+          <span className="vmm-profile-node-state">
+            <span className="vmm-profile-node-dot" aria-hidden="true" />
+            {t(nativeProfileStateKey(node.state))}
+          </span>
+        ) : null}
+        {node.activeForInjection === false ? (
+          <span className="vmm-profile-node-tag">{t("memory.profile.notInjected")}</span>
+        ) : null}
+        {node.priority || node.level ? (
+          <span className="vmm-profile-node-weights">
+            {node.priority ? (
+              <span className="vmm-profile-node-tag">
+                {t("memory.profile.priority")}{separator}<strong>{node.priority}</strong>
+              </span>
+            ) : null}
+            {node.level ? (
+              <span className="vmm-profile-node-tag">
+                {t("memory.profile.level")}{separator}<strong>{levelKey ? t(levelKey) : node.level}</strong>
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+      </div>
+      <p className="vmm-profile-node-content">{node.content}</p>
+      {facts.length > 0 ? (
+        <dl className="vmm-profile-node-facts">
+          {facts.map((fact) => (
+            <div key={fact.label}>
+              <dt>{fact.label}</dt>
+              <dd>{fact.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </li>
+  )
+}
+
 // ProfileStateMetricProps defines one compact native profile-state counter.
 // ProfileStateMetricProps 定义一个紧凑的原生画像状态计数器。
 interface ProfileStateMetricProps {
@@ -733,6 +770,18 @@ function nativeProfileStateKey(
   }
 }
 
+// profileLevelKey maps a known profile level token to localized user text; unknown service tokens stay verbatim.
+// profileLevelKey 将已知画像层级标记映射为本地化用户文本；未知服务标记保持原样。
+function profileLevelKey(level: string) {
+  switch (level) {
+    case "transient": return "memory.profile.levelTransient" as const
+    case "situational": return "memory.profile.levelSituational" as const
+    case "stable": return "memory.profile.levelStable" as const
+    case "persistent": return "memory.profile.levelPersistent" as const
+    default: return null
+  }
+}
+
 // nativeProfileSourceKey maps one closed native provenance token to localized user text.
 // nativeProfileSourceKey 将一个封闭的原生来源标记映射为本地化用户文本。
 function nativeProfileSourceKey(sourceKind: VmmNativeProfileRecordSummary["sourceKind"]) {
@@ -746,16 +795,16 @@ function nativeProfileSourceKey(sourceKind: VmmNativeProfileRecordSummary["sourc
 
 // nativeProfileNodes converts native all-state records into detailed profile cards.
 // nativeProfileNodes 将原生全状态记录转换为详细画像卡片。
-function nativeProfileNodes(nodes: VmmNativeProfileRecordSummary[], locale: string): ProfileNodeView[] {
+function nativeProfileNodes(nodes: VmmNativeProfileRecordSummary[]): ProfileNodeView[] {
   return nodes
     .filter((node) => node.content.trim().length > 0)
     .map((node) => ({
       content: node.content,
       priority: String(node.priority),
       level: node.level,
-      date: node.effectiveDateAtUnixMs == null
-        ? ""
-        : formatDateTime(node.effectiveDateAtUnixMs, locale) ?? "",
+      date: "",
+      effectiveAtUnixMs: node.effectiveDateAtUnixMs,
+      expiresAtUnixMs: node.expiresAtUnixMs,
       state: node.effectiveState,
       storedState: node.storedState,
       activeForInjection: node.activeForInjection,

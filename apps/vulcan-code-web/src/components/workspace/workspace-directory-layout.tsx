@@ -8,9 +8,10 @@ const ACTIVE_TAB_ROW_SELECTOR = '.workspace-tool-panel-menu-row.active, .vmm-nav
 // WorkspaceDirectoryLayoutProps separates persistent navigation from the flexible content pane.
 // WorkspaceDirectoryLayoutProps 将固定导航与弹性内容面板分离。
 interface WorkspaceDirectoryLayoutProps {
-  // navigation contains the existing capability-filtered menu and its exact selection callbacks.
-  // navigation 包含现有能力过滤菜单及其精确选择回调。
-  navigation: ReactNode;
+  // navigation contains the existing capability-filtered menu and its exact selection callbacks;
+  // omit it when the menu lives in the navigation panel beside the rail.
+  // navigation 包含现有能力过滤菜单及其精确选择回调；菜单位于轨道旁导航面板时省略。
+  navigation?: ReactNode;
   // children is the unrestricted page body.
   // children 是不限宽的页面正文。
   children: ReactNode;
@@ -27,16 +28,18 @@ interface WorkspaceDirectoryLayoutProps {
 // Parameters: navigation, children and optional content styling. Returns the two-pane page shell.
 // 参数：导航、正文及可选正文样式。返回双面板页面外壳。
 export function WorkspaceDirectoryLayout(props: WorkspaceDirectoryLayoutProps) {
-  const navigationMode = props.navigationMode ?? "column";
+  const navigationMode = props.navigation === undefined ? "none" : props.navigationMode ?? "column";
   const navigationRef = useRef<HTMLDivElement>(null);
   const indicatorRef = useRef<HTMLSpanElement>(null);
   useSlidingTabIndicator(navigationRef, indicatorRef, navigationMode === "tabs");
   return <div className="workspace-directory">
     <div className="workspace-directory-layout" data-navigation-mode={navigationMode}>
-      <div className="workspace-directory-navigation" ref={navigationRef}>
-        {props.navigation}
-        {navigationMode === "tabs" ? <span aria-hidden className="workspace-directory-tab-indicator" ref={indicatorRef} /> : null}
-      </div>
+      {navigationMode === "none" ? null : (
+        <div className="workspace-directory-navigation" ref={navigationRef}>
+          {props.navigation}
+          {navigationMode === "tabs" ? <span aria-hidden className="workspace-directory-tab-indicator" ref={indicatorRef} /> : null}
+        </div>
+      )}
       <div className={cn("workspace-directory-content", props.contentClassName)}>{props.children}</div>
     </div>
   </div>;

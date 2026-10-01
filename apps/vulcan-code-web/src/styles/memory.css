@@ -91,9 +91,27 @@
 .vmm-profile-counts [data-slot="card-content"] { display: flex; flex-wrap: wrap; gap: 16px; }
 .vmm-profile-counts [data-slot="card-content"] > div { border: 0; background: transparent; padding: 0; display: flex; gap: 8px; align-items: baseline; }
 .vmm-profile-counts [data-slot="card-content"] > div > p { margin: 0; font-size: var(--vcn-font-size-md); }
-.vmm-profile-list { display: flex; flex-direction: column; gap: 0; }
-.vmm-profile-list > [data-slot="card"] { border-radius: 0; border-width: 0 0 1px; }
-.vmm-profile-list [data-slot="card-content"] { padding: 18px 4px; }
+/* Profile nodes are structured records: a state and weight row, the statement, then labelled provenance facts. */
+/* 画像节点是结构化记录：状态与权重行、陈述内容，以及带标签的来源信息。 */
+.vmm-profile-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.vmm-profile-node { --vmm-profile-node-tone: var(--vcn-content-success); display: grid; min-width: 0; gap: 10px; border: 1px solid var(--border); border-radius: var(--vcn-radius-lg); background: var(--card); padding: 14px 16px; }
+.vmm-profile-node[data-state="pending"] { --vmm-profile-node-tone: var(--vcn-content-warning); }
+.vmm-profile-node[data-state="scheduled"] { --vmm-profile-node-tone: var(--vcn-content-info); }
+.vmm-profile-node:is([data-state="inactive"], [data-state="expired"]) { --vmm-profile-node-tone: var(--muted-foreground); }
+.vmm-profile-node:is([data-state="inactive"], [data-state="expired"]) .vmm-profile-node-content { color: var(--muted-foreground); }
+.vmm-profile-node-head { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: var(--vcn-font-size-sm); }
+.vmm-profile-node-head:empty { display: none; }
+.vmm-profile-node-state { display: inline-flex; align-items: center; gap: 7px; color: var(--vmm-profile-node-tone); font-weight: 600; }
+.vmm-profile-node-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: var(--vcn-radius-pill); background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
+.vmm-profile-node-weights { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.vmm-profile-node-tag { display: inline-flex; min-height: 22px; align-items: center; border-radius: var(--vcn-radius-pill); background: var(--vcn-fill-subtle); padding: 0 9px; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); white-space: nowrap; }
+.vmm-profile-node-tag strong { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
+.vmm-profile-node-content { margin: 0; color: var(--foreground); font-size: var(--vcn-font-size-md); line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
+.vmm-profile-node-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 20px; margin: 0; border-top: 1px dashed var(--border); padding-top: 10px; }
+.vmm-profile-node-facts > div { min-width: 0; }
+.vmm-profile-node-facts dt { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
+.vmm-profile-node-facts dd { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 2px 0 0; color: var(--foreground); font-size: var(--vcn-font-size-sm); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vmm-profile-node-ref { color: var(--muted-foreground); font-family: var(--font-mono); font-size: var(--vcn-font-size-xs); }
 /* Target selection is a compact form section, with readable picker width independent of identity text. */
 /* 目标选择是紧凑表单分区，选择器的可读宽度独立于身份文本。 */
 .vmm-profile-target { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding-block: 12px; border-bottom: 1px solid var(--border); }

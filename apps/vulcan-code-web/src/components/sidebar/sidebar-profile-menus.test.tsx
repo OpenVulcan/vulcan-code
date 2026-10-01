@@ -18,24 +18,17 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
-it("removes clipped header actions in collapsed mode and keeps the real user-menu settings action keyboard reachable", async () => {
-  const select = vi.fn();
+it("keeps the panel header a plain title and the rail user menu's settings action keyboard reachable", async () => {
   const settings = vi.fn();
-  // render updates the actual sidebar preference and returns after its context commits.
-  // render 更新真实侧栏偏好，在上下文提交后返回。
-  async function render(open: boolean) {
-    await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><SidebarProvider open={open}>
-      <SidebarBrandMenu activeArea="settings" currentLabel="设置" onSelectArea={select} />
-      <SidebarUserMenu onOpenSettings={settings} />
-    </SidebarProvider></TooltipProvider></I18nProvider>));
-  }
-  await render(true);
-  const back = host.querySelector<HTMLButtonElement>('.sidebar-brand-settings-button')!;
-  await act(async () => back.click());
-  expect(select).toHaveBeenCalledExactlyOnceWith("chat");
-  await render(false);
-  expect(host.querySelector('.sidebar-brand-settings-button')).toBeNull();
-  const trigger = host.querySelector<HTMLButtonElement>('.sidebar-user-button')!;
+  await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><SidebarProvider>
+    <SidebarBrandMenu currentLabel="设置" />
+    <SidebarUserMenu onOpenSettings={settings} />
+  </SidebarProvider></TooltipProvider></I18nProvider>));
+  // Area switching now lives on the activity rail, so the panel header carries no buttons.
+  // 区域切换已移至活动轨道，面板标题不再包含按钮。
+  expect(host.querySelector(".sidebar-brand-static")?.textContent).toContain("设置");
+  expect(host.querySelector(".sidebar-brand-static button")).toBeNull();
+  const trigger = host.querySelector<HTMLButtonElement>(".sidebar-user-button")!;
   await act(async () => { trigger.focus(); trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
   const menu = document.querySelector('[role="menu"]')!;
   expect(menu).not.toBeNull();

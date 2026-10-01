@@ -36,14 +36,12 @@ export function WorkspaceMemorySettings(props: {
     memoryActions,
     workbench,
   } = props;
-  // First-use content navigation exposes setup until a backend is configured.
-  // 首次使用时，在后端配置完成前将内容入口导向配置总览。
-  const activeSubArea = props.activeSubArea === "content" && workbench.vmmMemory.experienceState.deployment === "disabled" ? "overview" : props.activeSubArea;
+  const activeSubArea = effectiveMemorySubArea(props.activeSubArea, workbench);
 
+  // The section menu lives in the navigation panel beside the rail (MemoryWorkspaceNavigation).
+  // 分区菜单位于轨道旁的导航面板中（MemoryWorkspaceNavigation）。
   return (
-    <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body" navigation={
-      <MemoryWorkspaceNavigation activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} />
-    }>
+    <WorkspaceDirectoryLayout contentClassName="vmm-workspace-body">
       <MemoryServiceTabs activeSubArea={activeSubArea} onSelectSubArea={props.onSelectSubArea} workbench={workbench} />
       <React.Suspense fallback={null}>
         <LazyMemoryArea
@@ -76,10 +74,21 @@ interface MemoryNavigationProps {
 // serviceSections 将连接、运行状态与推理归组，不改变后端 ID。
 const serviceSections = ["inference", "overview", "advanced"];
 
-// MemoryWorkspaceNavigation renders fixed task navigation. Props own selection; returns the navigation.
-// MemoryWorkspaceNavigation 渲染固定任务导航。props 持有选择状态；返回导航。
-function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
+// effectiveMemorySubArea sends first-use content navigation to setup until a backend is configured.
+// effectiveMemorySubArea 在后端配置完成前，将首次使用时的内容入口导向配置总览。
+// Parameters: the requested section and the snapshot. Returns the section actually shown.
+// 参数：请求的分区与快照。返回实际显示的分区。
+function effectiveMemorySubArea(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot): MemorySubAreaId {
+  return subArea === "content" && workbench.vmmMemory.experienceState.deployment === "disabled" ? "overview" : subArea;
+}
+
+// MemoryWorkspaceNavigation renders fixed task navigation for the panel beside the rail. Props own selection; returns the navigation.
+// MemoryWorkspaceNavigation 为轨道旁面板渲染固定任务导航。props 持有选择状态；返回导航。
+export function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
   const { t } = useI18n();
+  // activeSubArea mirrors the section the page actually shows, so first-use redirects stay highlighted.
+  // activeSubArea 与页面实际显示的分区一致，使首次使用的重定向保持高亮。
+  const activeSubArea = effectiveMemorySubArea(props.activeSubArea, props.workbench);
   // rows preserves capability filtering from the service snapshot.
   // rows 保留服务快照的能力过滤。
   const rows = memoryMenuRows(props.workbench, t);
@@ -102,7 +111,7 @@ function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
         if (!row) return null;
         // active also highlights the parent when a service subpage is selected.
         // active 在服务子页面被选中时也高亮其父入口。
-        const active = id === "service" ? serviceSections.includes(props.activeSubArea) : props.activeSubArea === id;
+        const active = id === "service" ? serviceSections.includes(activeSubArea) : activeSubArea === id;
         return <button key={id} type="button" className="vmm-nav-row" aria-current={active ? "page" : undefined}
           onClick={() => props.onSelectSubArea(row.id)}>
           {row.icon}<span>{id === "service" ? t("memory.workspace.service") : row.label}</span>

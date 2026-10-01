@@ -8,9 +8,9 @@ import { Sidebar, SidebarProvider, SidebarTrigger, useSidebarNavigation } from "
 
 // createNavigationFixture mounts actual drawer primitives with a controlled desktop preference.
 // createNavigationFixture 使用受控桌面偏好挂载真实抽屉组件。
-// Parameters: width is the initial viewport width. Returns DOM handles and action spies.
-// 参数：width 为初始视口宽度。返回 DOM 句柄及动作记录器。
-async function createNavigationFixture(width: number) {
+// Parameters: width is the initial viewport width; collapsible selects the desktop collapse mode. Returns DOM handles and action spies.
+// 参数：width 为初始视口宽度；collapsible 选择桌面折叠模式。返回 DOM 句柄及动作记录器。
+async function createNavigationFixture(width: number, collapsible = true) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true)
   window.innerWidth = width
   // changed and selected track persistence and exact destination identity independently.
@@ -32,7 +32,7 @@ async function createNavigationFixture(width: number) {
   const root = createRoot(host)
   await act(async () => root.render(
     <I18nProvider initialLocale="zh-CN">
-      <SidebarProvider open onOpenChange={changed}>
+      <SidebarProvider collapsible={collapsible} open onOpenChange={changed}>
         <Sidebar><Destination /></Sidebar>
         <SidebarTrigger />
       </SidebarProvider>
@@ -74,5 +74,24 @@ it("dismisses phone navigation with Escape and keeps desktop toggling controlled
     await act(async () => { window.innerWidth = 1200; window.dispatchEvent(new Event("resize")) })
     await act(async () => view.host.querySelector<HTMLButtonElement>('[aria-label="切换侧栏"]')!.click())
     expect(view.changed).toHaveBeenCalledExactlyOnceWith(false)
+  } finally { await act(async () => view.root.unmount()); view.host.remove() }
+})
+
+it("keeps a non-collapsible panel open on desktop while the phone drawer still opens", async () => {
+  // view mounts a panel that, like feature menus and settings, never collapses on desktop.
+  // view 挂载一个与功能菜单、设置相同、在桌面上永不折叠的面板。
+  const view = await createNavigationFixture(1200, false)
+  try {
+    const trigger = () => view.host.querySelector<HTMLButtonElement>('[aria-label="切换侧栏"]')!
+    expect(view.host.querySelector('[data-slot="sidebar-wrapper"]')?.getAttribute("data-panel-collapsible")).toBe("false")
+    await act(async () => trigger().click())
+    expect(view.changed).not.toHaveBeenCalled()
+    expect(view.host.querySelector('[data-slot="sidebar"]')?.getAttribute("data-state")).toBe("expanded")
+    // Phones keep the drawer, because it is the only way to reach the panel there.
+    // 手机保留抽屉，因为那是到达面板的唯一途径。
+    await act(async () => { window.innerWidth = 390; window.dispatchEvent(new Event("resize")) })
+    await act(async () => trigger().click())
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(view.changed).not.toHaveBeenCalled()
   } finally { await act(async () => view.root.unmount()); view.host.remove() }
 })

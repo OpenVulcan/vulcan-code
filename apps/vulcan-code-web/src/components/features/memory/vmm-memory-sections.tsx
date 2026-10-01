@@ -1,6 +1,6 @@
 import type * as React from "react"
+import { MemoryBrainIcon } from "@/components/shell/memory-brain-icon"
 import {
-  BrainCircuit,
   Database,
   FileCode2,
   FolderTree,
@@ -80,7 +80,7 @@ export function localizedVmmManagementSection(
 // vmmSectionIcon 将产品级记忆分区映射为共享侧栏图标。
 export function vmmSectionIcon(sectionId: string): React.ReactNode {
   if (sectionId === "overview") {
-    return <BrainCircuit size={16} />
+    return <MemoryBrainIcon size={16} />
   }
   if (sectionId === "inference") {
     return <Database size={16} />

@@ -1,21 +1,20 @@
 import * as React from "react"
 import {
-  BrainCircuit,
+  Bot,
   Globe2,
   BookMarked,
   ChartNoAxesCombined,
   ChevronDown,
   Hammer,
-  Network,
   PanelTopOpen,
   Puzzle,
   Route,
   ScanSearch,
-  Undo2,
   Settings,
 } from "lucide-react"
 
 import { formatSkillText } from "@/components/features/featureText"
+import { MemoryBrainIcon } from "@/components/shell/memory-brain-icon"
 import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections"
 import type { SkillSubAreaId } from "@/components/features/skills/skill-area-types"
 import {
@@ -31,22 +30,16 @@ import {
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
   useSidebarNavigation,
 } from "@/components/ui/sidebar"
-import {
-  SidebarBrandMenu,
-  SidebarUserMenu,
-} from "@/components/sidebar/sidebar-profile-menus"
+import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus"
 import { useI18n } from "@/i18n"
-import { CollapsedFeatureMenu } from "@/components/project/project-sidebar-menus"
 import type {
   FeatureAreaSummary,
   MainAreaId,
@@ -82,9 +75,9 @@ function FeatureSidebar(props: {
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
-  // Selects one top-level application area from the sidebar brand menu.
-  // 从侧栏品牌菜单选择一个顶层应用区域。
-  onSelectArea: (area: MainAreaId) => void
+  // Activity rail rendered beside the panel; it stays visible when the panel collapses.
+  // 渲染在面板旁的活动轨道；面板折叠时轨道仍保持可见。
+  rail: React.ReactNode
   // Whether the sidebar brand content should be a native window drag region.
   // 侧栏品牌内容是否作为原生窗口拖动区域。
   titlebarDragRegion?: boolean
@@ -96,9 +89,6 @@ function FeatureSidebar(props: {
   workbench: WorkbenchSnapshot
 }) {
   const { t } = useI18n()
-  // sidebarState places the collapsed settings return action directly above the user menu.
-  // sidebarState 将折叠态设置返回动作放到用户菜单正上方。
-  const { state: sidebarState } = useSidebar()
   // navigate preserves each destination action and closes phone navigation.
   // navigate 保留各导航动作并关闭手机导航。
   const navigate = useSidebarNavigation();
@@ -106,12 +96,10 @@ function FeatureSidebar(props: {
   const headerLabel = props.activeArea === "settings" ? t("settings.systemSettings") : feature?.label ?? t("sidebar.console")
 
   return (
-    <Sidebar collapsible="icon" variant="inset">
+    <Sidebar collapsible="offcanvas" rail={props.rail} variant="inset">
       <SidebarHeader>
         <SidebarBrandMenu
-          activeArea={props.activeArea}
           currentLabel={headerLabel}
-          onSelectArea={navigate(props.onSelectArea)}
           titlebarDragRegion={props.titlebarDragRegion}
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         />
@@ -133,25 +121,6 @@ function FeatureSidebar(props: {
           />
         )}
       </SidebarContent>
-      <SidebarFooter>
-        {props.activeArea === "settings" && sidebarState === "collapsed" ? (
-          <SidebarMenu>
-            {/* The collapsed return shortcut stays immediately above the user menu. */}
-            {/* 折叠态返回快捷入口紧贴用户菜单上方。 */}
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                aria-label={t("settings.backToWorkspace")}
-                className="workspace-sidebar-feature-button settings-back-menu-row"
-                onClick={() => navigate(props.onSelectArea)("chat")}
-                tooltip={t("settings.backToWorkspace")}
-              >
-                <Undo2 size={16} />
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        ) : null}
-        <SidebarUserMenu onOpenSettings={() => navigate(props.onSelectArea)("settings")} />
-      </SidebarFooter>
     </Sidebar>
   )
 }
@@ -247,9 +216,6 @@ function SettingsSidebarMenu(props: {
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
 }) {
   const { t } = useI18n()
-  // sidebarState keeps settings category flyouts synchronized with the sidebar mode.
-  // sidebarState 让设置分类悬浮菜单与侧栏模式保持同步。
-  const { state: sidebarState } = useSidebar()
   const groups = settingsSubAreaGroups(t)
   return (
     <SidebarGroup className="settings-tree-section">
@@ -260,7 +226,6 @@ function SettingsSidebarMenu(props: {
             group={group}
             key={group.id}
             onSelectSettingsSubArea={props.onSelectSettingsSubArea}
-            sidebarState={sidebarState}
           />
         ))}
       </SidebarMenu>
@@ -280,51 +245,27 @@ function SettingsSidebarGroupRow(props: {
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
-  // Current sidebar collapsed or expanded state.
-  // 当前侧栏展开或折叠状态。
-  sidebarState: ReturnType<typeof useSidebar>["state"]
 }) {
-  // isSidebarCollapsed selects hover flyout behavior without replacing the row structure.
-  // isSidebarCollapsed 在不替换行结构的情况下选择悬浮菜单行为。
-  const isSidebarCollapsed = props.sidebarState === "collapsed"
   // The category arrow controls disclosure rather than unexpectedly navigating to its first page.
   // 分类箭头控制展开收起，不再意外跳转到分类中的第一页。
   const [groupExpanded, setGroupExpanded] = React.useState(true)
-  // containsActivePage lights the collapsed category tile, since its selected leaf is hidden in the flyout.
-  // containsActivePage 点亮折叠后的分类图标，因为选中的子页面此时收在悬浮菜单中。
-  const containsActivePage = props.group.items.some((area) => area.id === normalizeSettingsSubArea(props.activeSettingsSubArea))
-  // settingsFolderButton keeps one stable category trigger for expanded and collapsed animation.
-  // settingsFolderButton 为展开与折叠动画保留同一个稳定的目录触发入口。
-  const settingsFolderButton = (
-    <SidebarMenuButton
-      aria-expanded={isSidebarCollapsed ? undefined : groupExpanded}
-      aria-label={isSidebarCollapsed ? props.group.label : undefined}
-      className={`project-folder-button settings-folder-button ${isSidebarCollapsed ? "collapsed-project-button settings-collapsed-button" : ""} ${isSidebarCollapsed && containsActivePage ? "project-folder-active" : ""}`}
-      onClick={() => { if (!isSidebarCollapsed) setGroupExpanded((expanded) => !expanded) }}
-      tooltip={isSidebarCollapsed ? undefined : props.group.label}
-    >
-      {props.group.icon}
-      <span className="vcn-sidebar-label project-folder-label">
-        <strong>{props.group.label}</strong>
-      </span>
-      <span className="project-folder-arrow" aria-hidden="true">
-        <ChevronDown className={groupExpanded ? undefined : "-rotate-90"} size={14} />
-      </span>
-    </SidebarMenuButton>
-  )
-
   return (
     <SidebarMenuItem className="project-tree-item settings-tree-item">
       <div className="project-folder-row settings-folder-row">
-        {isSidebarCollapsed ? (
-          <CollapsedSettingsGroupMenu
-            activeSettingsSubArea={props.activeSettingsSubArea}
-            group={props.group}
-            onSelectSettingsSubArea={props.onSelectSettingsSubArea}
-          >
-            {settingsFolderButton}
-          </CollapsedSettingsGroupMenu>
-        ) : settingsFolderButton}
+        <SidebarMenuButton
+          aria-expanded={groupExpanded}
+          className="project-folder-button settings-folder-button"
+          onClick={() => setGroupExpanded((expanded) => !expanded)}
+          tooltip={props.group.label}
+        >
+          {props.group.icon}
+          <span className="vcn-sidebar-label project-folder-label">
+            <strong>{props.group.label}</strong>
+          </span>
+          <span className="project-folder-arrow" aria-hidden="true">
+            <ChevronDown className={groupExpanded ? undefined : "-rotate-90"} size={14} />
+          </span>
+        </SidebarMenuButton>
       </div>
       {groupExpanded ? <SidebarMenu className="project-conversation-list settings-subarea-list">
         {props.group.items.map((area) => (
@@ -346,41 +287,6 @@ function SettingsSidebarGroupRow(props: {
   )
 }
 
-// CollapsedSettingsGroupMenu opens the category pages on hover or focus, matching the collapsed chat sidebar.
-// CollapsedSettingsGroupMenu 在悬停或聚焦时展开分类页面，与折叠的会话侧栏一致。
-function CollapsedSettingsGroupMenu(props: {
-  // Trigger row reused from the expanded settings category.
-  // 复用展开设置目录入口的触发行。
-  children: React.ReactNode
-  // Selected settings sub page.
-  // 当前设置二级页面。
-  activeSettingsSubArea: SettingsSubAreaId
-  // Settings category group.
-  // 设置分类分组。
-  group: SettingsSubAreaGroup
-  // Updates the selected settings sub page.
-  // 更新设置二级页面选择。
-  onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
-}) {
-  const current = normalizeSettingsSubArea(props.activeSettingsSubArea)
-  return (
-    <CollapsedFeatureMenu
-      flyoutClassName="settings-collapsed-flyout"
-      items={props.group.items.map((area) => ({
-        id: area.id,
-        icon: area.icon,
-        label: area.label,
-        active: current === area.id,
-        onSelect: () => props.onSelectSettingsSubArea(area.id),
-      }))}
-      label={props.group.label}
-      title={props.group.label}
-    >
-      {props.children}
-    </CollapsedFeatureMenu>
-  )
-}
-
 // VmmScope identifies the active VMM configuration scope.
 // VmmScope 标识当前 VMM 配置作用域。
 
@@ -394,8 +300,8 @@ const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   browser: <Globe2 size={17} />,
   "agent-skills": <Hammer size={17} />,
   skills: <Puzzle size={17} />,
-  agents: <Network size={17} />,
-  memory: <BrainCircuit size={17} />,
+  agents: <Bot size={17} />,
+  memory: <MemoryBrainIcon size={17} />,
   knowledge: <BookMarked size={17} />,
   settings: <Settings size={17} />,
 }
@@ -449,7 +355,7 @@ function featureSidebarRows(
   }
   if (activeArea === "agents") {
     return [
-      { id: "agents-catalog", label: t("area.agents"), detail: formatSkillText(t("agents.header.detail"), { count: workbench.subagentCatalog.definitions.length, total: workbench.subagentCatalog.definitions.length, enabled: workbench.subagentCatalog.definitions.filter((definition) => definition.enabled).length, warnings: workbench.subagentCatalog.errors.length }), icon: <Network size={16} /> },
+      { id: "agents-catalog", label: t("area.agents"), detail: formatSkillText(t("agents.header.detail"), { count: workbench.subagentCatalog.definitions.length, total: workbench.subagentCatalog.definitions.length, enabled: workbench.subagentCatalog.definitions.filter((definition) => definition.enabled).length, warnings: workbench.subagentCatalog.errors.length }), icon: <Bot size={16} /> },
     ]
   }
   if (activeArea === "memory") {
@@ -505,4 +411,4 @@ function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
   }
   return null
 }
-export { FeatureSidebar, areaIconMap, primaryFeatureAreas }
+export { FeatureSidebar, areaIconMap, pluginDetailMountIcon, primaryFeatureAreas }

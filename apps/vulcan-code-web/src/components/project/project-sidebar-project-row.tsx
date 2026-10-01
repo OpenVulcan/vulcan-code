@@ -18,10 +18,7 @@ import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 
 import { ProjectIcon } from "./project-icons";
-import {
-  CollapsedProjectMenu,
-  ProjectContextMenu,
-} from "./project-sidebar-menus";
+import { ProjectContextMenu } from "./project-sidebar-menus";
 import { useVerticalSortableItem } from "./project-sidebar-sortable";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
@@ -46,9 +43,6 @@ export function SortableProjectRow(props: {
   // Whether this project owns the project-level floating tools.
   // 当前项目是否持有项目级浮动工具。
   isActiveProject: boolean;
-  // Current sidebar collapsed or expanded state.
-  // 当前侧栏的折叠或展开状态。
-  sidebarState: "collapsed" | "expanded";
   // Currently selected conversation id.
   // 当前选中的会话标识。
   selectedConversationId: string | null;
@@ -92,30 +86,23 @@ export function SortableProjectRow(props: {
   const visibleConversations = hasConversationOverflow && !props.isConversationListExpanded
     ? props.conversations.slice(0, conversationPreviewLimit)
     : props.conversations;
-  const isSidebarCollapsed = props.sidebarState === "collapsed";
   const conversationOverflowLabel = props.isConversationListExpanded
     ? t("projectRow.collapseConversations")
     : t("projectRow.showMoreConversations");
   const projectFolderButton = (
     <SidebarMenuButton
-      aria-expanded={isSidebarCollapsed ? undefined : props.isOpen}
-      aria-label={isSidebarCollapsed ? t("projectRow.conversationMenuAria").replace("{project}", props.project.name) : undefined}
+      aria-expanded={props.isOpen}
       className={cn(
         "project-folder-button",
-        isSidebarCollapsed && "collapsed-project-button",
         props.isActiveProject && "project-folder-active",
       )}
-      onClick={(event) => {
+      onClick={() => {
         props.onSelectProject(props.project.id);
-        if (isSidebarCollapsed) {
-          event.preventDefault();
-          return;
-        }
         props.onToggleOpen(props.project.id);
       }}
-      tooltip={isSidebarCollapsed ? undefined : `${props.project.name}\n${props.project.path}`}
+      tooltip={`${props.project.name}\n${props.project.path}`}
     >
-      <ProjectIcon isOpen={props.isOpen && !isSidebarCollapsed} project={props.project} size={16} />
+      <ProjectIcon isOpen={props.isOpen} project={props.project} size={16} />
       <span className="vcn-sidebar-label project-folder-label">
         <strong>{props.project.name}</strong>
         {showOriginalFolderName ? <small>{folderName}</small> : null}
@@ -134,36 +121,22 @@ export function SortableProjectRow(props: {
       <div
         className={cn("project-folder-row", sortable.isDragging && "drag-source-row")}
       >
-        {!isSidebarCollapsed && (
-          <Button
-            ref={sortable.setActivatorNodeRef}
-            {...sortable.attributes}
-            {...sortable.listeners}
-            aria-label={reorderLabel}
-            title={reorderLabel}
-            className="project-reorder-handle"
-            variant="ghost"
-            size="icon-xs"
-            type="button"
-          >
-            <GripVertical aria-hidden="true" />
-          </Button>
-        )}
-        {isSidebarCollapsed ? (
-          <CollapsedProjectMenu
-            conversations={props.conversations}
-            onCreateConversation={props.onCreateConversation}
-            onSelectConversation={props.onSelectConversation}
-            project={props.project}
-            selectedConversationId={props.selectedConversationId}
-          >
-            {projectFolderButton}
-          </CollapsedProjectMenu>
-        ) : (
-          <ProjectContextMenu project={props.project} onAction={props.onProjectMenuAction}>
-            {projectFolderButton}
-          </ProjectContextMenu>
-        )}
+        <Button
+          ref={sortable.setActivatorNodeRef}
+          {...sortable.attributes}
+          {...sortable.listeners}
+          aria-label={reorderLabel}
+          title={reorderLabel}
+          className="project-reorder-handle"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+        >
+          <GripVertical aria-hidden="true" />
+        </Button>
+        <ProjectContextMenu project={props.project} onAction={props.onProjectMenuAction}>
+          {projectFolderButton}
+        </ProjectContextMenu>
         <SidebarMenuAction
           aria-label={t("projectRow.createConversationAria").replace("{project}", props.project.name)}
           className="project-create-conversation"

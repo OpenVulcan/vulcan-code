@@ -29,9 +29,12 @@ import {
 } from "@/components/workspace/workspace-skills-settings";
 import {
   memorySubAreaMeta,
+  MemoryWorkspaceNavigation,
   WorkspaceMemorySettings,
 } from "@/components/workspace/workspace-memory-settings";
-import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
+import { WorkspaceFeaturePanel } from "@/components/workspace/workspace-feature-panel";
+import { SidebarInset, SidebarProvider, useSidebar, useSidebarNavigation } from "@/components/ui/sidebar";
+import { navigationColumnWidth, navigationShellStyle } from "@/components/shell/navigation-layout";
 import {
   Tooltip,
   TooltipContent,
@@ -103,7 +106,11 @@ import {
   type WorkspaceProjectGitRepositoryState,
   type WorkspaceProjectGitStateMap,
 } from "@/components/workspace/workspace-shell/git-summary";
-import type { WorkspaceShellProps } from "@/components/workspace/workspace-shell/types";
+import {
+  WORKSPACE_FEATURE_AREAS,
+  workspaceViewHasNavigationPanel,
+  type WorkspaceShellProps,
+} from "@/components/workspace/workspace-shell/types";
 export type { WorkspaceMainView } from "@/components/workspace/workspace-shell/types";
 
 // LazyAgentsArea keeps the independent agent editor outside the console-first chunk.
@@ -130,10 +137,18 @@ function selectEventWindowOwnerSessionId(snapshot: ConversationEventWindowContro
 }
 
 export function WorkspaceShell(props: WorkspaceShellProps) {
+  // hasPanel is false for views that show the rail alone, so the panel can never be opened or measured there.
+  // hasPanel 对只显示轨道的视图为 false，使该处面板既不能打开也不参与宽度计算。
+  const hasPanel = workspaceViewHasNavigationPanel(props.mainView);
+  // Only the session panel collapses; feature menus stay beside the rail like the settings tree.
+  // 只有会话面板可折叠；功能菜单与设置树一样始终位于轨道旁。
+  const collapsible = props.mainView === "chat";
   return (
     <SidebarProvider
       className="console-shell"
-      open={props.sidebarOpen}
+      collapsible={collapsible}
+      style={navigationShellStyle()}
+      open={hasPanel && (!collapsible || props.sidebarOpen)}
       onOpenChange={props.onSidebarOpenChange}
     >
       <WorkspaceShellContent {...props} />
@@ -172,9 +187,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // Shared semantic state can make the floating panel visible without Git, terminals, or agents.
   // 共享语义状态可独立于 Git、终端或智能体使浮动面板可见。
   const semanticNodeVisible = useVceProjectVisibility();
-  // sidebar controls the left project tree that can collapse automatically.
-  // sidebar 控制可自动折叠的左侧项目树。
+  // sidebar controls the left navigation panel (project tree or feature menu) that can collapse automatically.
+  // sidebar 控制可自动折叠的左侧导航面板（项目树或功能菜单）。
   const sidebar = useSidebar();
+  // navigate closes the phone drawer after a feature menu selection.
+  // navigate 在选择功能菜单项后关闭手机抽屉。
+  const navigate = useSidebarNavigation();
   // t translates shared workspace chrome labels.
   // t 翻译共享工作区外壳标签。
   const { locale, t } = useI18n();
@@ -569,9 +587,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const openRightContextPanel = React.useCallback(() => {
     notifyConversationLayoutWillChange();
     const width = shellRef.current?.getBoundingClientRect().width ?? 0;
-    const expandedLeftWidth = 288;
-    const collapsedLeftWidth = 46;
-    const leftWidth = sidebar.isMobile ? 0 : sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
+    const leftWidth = navigationColumnWidth(sidebar.isMobile, sidebar.open);
     setRightPanelFloating(width > 0 && width - leftWidth - WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
       - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH < WORKSPACE_CONVERSATION_RESERVED_WIDTH);
     setRightPanelOpen(true);
@@ -1430,9 +1446,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       // 只有初次布局或实际缩窄可以自动折叠；普通重绘不能覆盖用户手动重新展开的选择。
       const canAutoCollapse = previousWidth === null || width < previousWidth - 1;
       previousShellWidthRef.current = width;
-      const expandedLeftWidth = 288;
-      const collapsedLeftWidth = 46;
-      const leftWidth = sidebar.isMobile ? 0 : sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
+      const leftWidth = navigationColumnWidth(sidebar.isMobile, sidebar.open);
       const dockedPanelFits = width - leftWidth - WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
         - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH >= WORKSPACE_CONVERSATION_RESERVED_WIDTH;
       const shouldFloatRightPanel = effectiveRightPanelOpen && !dockedPanelFits;
@@ -1462,7 +1476,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       if (leftAutoCollapsed && !sidebar.open) {
         const restoredRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH : 0;
         const restoredShellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH : 0;
-        const restoredMainWidth = width - expandedLeftWidth - restoredRightWidth - restoredShellGaps;
+        const restoredMainWidth = width - navigationColumnWidth(false, true) - restoredRightWidth - restoredShellGaps;
         if (restoredMainWidth >= 800) {
           notifyConversationLayoutWillChange();
           sidebar.setOpen(true);
@@ -1475,17 +1489,46 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     return () => observer.disconnect();
   }, [effectiveRightPanelOpen, leftAutoCollapsed, notifyConversationLayoutWillChange, rightPanelFloating, sidebar]);
 
+  // featureNavigation is the menu a feature page shows in the panel beside the rail, replacing the project tree.
+  // featureNavigation 是功能页显示在轨道旁面板中的菜单，用于替换项目树。
+  const featureNavigation: React.ReactNode | null = props.mainView === "skills" ? (
+    <PluginWorkspaceMenu
+      activeSubArea={props.activeSkillSubArea}
+      onSelectSubArea={navigate(props.onSelectSkillSubArea)}
+      workbench={props.workbench}
+    />
+  ) : props.mainView === "agent-skills" ? (
+    <React.Suspense fallback={null}>
+      <LazyAgentSkillCategoryMenu
+        selectedCategoryId={selectedAgentSkillCategoryId}
+        onSelectCategory={navigate(setSelectedAgentSkillCategoryId)}
+        workbench={props.workbench}
+      />
+    </React.Suspense>
+  ) : props.mainView === "agents" ? (
+    <React.Suspense fallback={null}>
+      <LazyAgentCategoryMenu
+        selectedCategoryId={selectedAgentCategoryId}
+        onSelectCategory={navigate(setSelectedAgentCategoryId)}
+        workbench={props.workbench}
+      />
+    </React.Suspense>
+  ) : props.mainView === "memory" ? (
+    <MemoryWorkspaceNavigation
+      activeSubArea={props.activeMemorySubArea}
+      onSelectSubArea={navigate(props.onSelectMemorySubArea)}
+      workbench={props.workbench}
+    />
+  ) : null;
+  // featureArea names the feature page that owns the panel, when one does.
+  // featureArea 在功能页持有面板时给出其名称。
+  const featureArea = WORKSPACE_FEATURE_AREAS.find((area) => area.id === props.mainView);
+
   // pageDescriptor registers page-specific title, actions, content, and adaptive side panels.
   // pageDescriptor 注册页面专用标题、按钮、内容与自适应侧边面板。
   const pageDescriptor: WorkspacePageDescriptor = props.mainView === "skills" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog" navigation={
-        <PluginWorkspaceMenu
-          activeSubArea={props.activeSkillSubArea}
-          onSelectSubArea={props.onSelectSkillSubArea}
-          workbench={props.workbench}
-        />
-      }>
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
         <WorkspaceSkillsSettings
           activeSubArea={props.activeSkillSubArea}
           luaInstallDialogOpen={luaInstallDialogOpen}
@@ -1500,15 +1543,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     title: t("workspaceShell.skillsTitle"),
   } : props.mainView === "agent-skills" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog" navigation={
-        <React.Suspense fallback={null}>
-          <LazyAgentSkillCategoryMenu
-            selectedCategoryId={selectedAgentSkillCategoryId}
-            onSelectCategory={setSelectedAgentSkillCategoryId}
-            workbench={props.workbench}
-          />
-        </React.Suspense>
-      }>
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
         <React.Suspense fallback={null}>
           <LazyAgentSkillsArea
             actions={props.agentSkillActions}
@@ -1524,15 +1559,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     title: t("area.agentSkills"),
   } : props.mainView === "agents" ? {
     content: (
-      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog" navigation={
-        <React.Suspense fallback={null}>
-          <LazyAgentCategoryMenu
-            selectedCategoryId={selectedAgentCategoryId}
-            onSelectCategory={setSelectedAgentCategoryId}
-            workbench={props.workbench}
-          />
-        </React.Suspense>
-      }>
+      <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
         <React.Suspense fallback={null}>
           <LazyAgentsArea
             actions={props.agentActions}
@@ -1684,7 +1711,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
 
   return (
     <div className={`workspace-panel-shell${props.mainView === "memory" ? " vmm-workspace-host" : ""}`} ref={shellRef}>
-      <ProjectSidebar
+      {featureArea ? (
+        <WorkspaceFeaturePanel
+          navigation={workspaceViewHasNavigationPanel(featureArea.id) ? featureNavigation : null}
+          rail={props.rail}
+          title={t(featureArea.label)}
+          titlebarDragRegion={props.titlebarDragRegion}
+          onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+        />
+      ) : <ProjectSidebar
         activeProjectId={sidebarActiveProjectId}
         projects={props.workbench.projects}
         conversations={props.workbench.conversations}
@@ -1694,25 +1729,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={props.onCreateConversation}
         onCreateProject={props.onCreateProject}
-        onOpenSkills={props.onOpenSkills}
-        onOpenAgentSkills={props.onOpenAgentSkills}
-        onOpenAgents={props.onOpenAgents}
-        onOpenMemory={props.onOpenMemory}
-        onOpenKnowledge={props.onOpenKnowledge}
-        onSelectArea={props.onSelectArea}
+        rail={props.rail}
         titlebarDragRegion={props.titlebarDragRegion}
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
-        memoryActive={props.mainView === "memory"}
-        knowledgeActive={props.mainView === "knowledge"}
-        agentsActive={props.mainView === "agents"}
-        skillsActive={props.mainView === "skills"}
-        agentSkillsActive={props.mainView === "agent-skills"}
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}
         onReorderProjects={props.onReorderProjects}
         onSelectProject={props.onSelectProject}
         onSelectConversation={props.onSelectConversation}
-      />
+      />}
       <SidebarInset className="workspace-inset">
         <WorkspaceResizableBody
           aiBrowserAvailable={aiBrowserAvailable}

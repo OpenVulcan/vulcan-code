@@ -33,7 +33,8 @@
 }
 
 .vcn-mobile-navigation[data-slot="sheet-content"] {
-  width: min(320px, calc(100vw - 40px));
+  --vcn-mobile-panel-width: 320px;
+  width: min(var(--vcn-mobile-panel-width), calc(100vw - 40px));
   max-width: none;
   gap: 0;
   padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
@@ -48,6 +49,31 @@
 
 .vcn-mobile-navigation .vcn-sidebar-header {
   padding-top: 48px;
+}
+
+/* The phone drawer shows the rail and its panel side by side; the rail adds its own width to the panel width. */
+/* 手机抽屉并排显示轨道与面板；轨道在面板宽度之外加上自身宽度。 */
+.vcn-mobile-navigation.with-activity-rail[data-slot="sheet-content"] {
+  width: auto;
+  max-width: calc(100vw - 40px);
+  flex-direction: row;
+}
+
+.vcn-mobile-navigation.with-activity-rail > .vcn-sidebar {
+  width: var(--vcn-mobile-panel-width);
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.vcn-mobile-navigation.with-activity-rail > .activity-rail {
+  height: 100%;
+  border-right: 1px solid var(--sidebar-border, var(--border));
+}
+
+.vcn-mobile-navigation.with-activity-rail .activity-rail-brand {
+  height: auto;
+  padding-top: 48px;
+  padding-bottom: 10px;
 }
 
 /* Form layouts respond to available content width, including a resized desktop side pane. */

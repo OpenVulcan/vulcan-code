@@ -100,13 +100,6 @@ html[data-vulcan-host="electron"] [data-tauri-drag-region] [role="menuitem"] {
   border-radius: var(--vcn-radius-sm);
 }
 
-.sidebar-brand-mark {
-  flex: 0 0 24px;
-  font-size: var(--vcn-font-size-lg);
-  line-height: 1;
-  transition: width 180ms ease, height 180ms ease, transform 180ms ease;
-}
-
 .brand strong {
   display: block;
   overflow: hidden;
@@ -535,8 +528,9 @@ html[data-vulcan-host="electron"] [data-tauri-drag-region] [role="menuitem"] {
 }
 
 .console-shell {
-  --console-sidebar-width: clamp(220px, 19vw, 288px);
-  --console-sidebar-icon-width: 46px;
+  /* The maximum width comes from navigation-layout.ts through --console-sidebar-max-width. */
+  /* 最大宽度经 --console-sidebar-max-width 由 navigation-layout.ts 提供。 */
+  --console-sidebar-width: clamp(208px, 18vw, var(--console-sidebar-max-width));
   min-width: 0;
   min-height: 0;
   height: 100%;

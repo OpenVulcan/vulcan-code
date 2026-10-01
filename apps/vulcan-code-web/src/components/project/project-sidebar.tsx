@@ -16,47 +16,35 @@ import {
 } from "@dnd-kit/sortable";
 import {
   Boxes,
-  Bot,
-  BrainCircuit,
-  BookMarked,
   Folder,
   FolderPlus,
-  Hammer,
   Pin,
-  Puzzle,
-  Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
   useSidebarNavigation,
 } from "@/components/ui/sidebar";
-import {
-  SidebarBrandMenu,
-  SidebarUserMenu,
-} from "@/components/sidebar/sidebar-profile-menus";
+import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
-import type { ConversationSummary, MainAreaId, ProjectSummary } from "@/types";
+import type { ConversationSummary, ProjectSummary } from "@/types";
 import { ConversationTreeRow } from "./project-sidebar-conversation-row";
-import { CollapsedFeatureMenu } from "./project-sidebar-menus";
 import { SortableProjectRow } from "./project-sidebar-project-row";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
 export type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
-// ProjectSidebar renders projects and conversations.
-// ProjectSidebar 渲染项目与会话。
-export function ProjectSidebar(props: {
+// ProjectSessionTreeProps describes the session tree shared by the session panel and the rail's session flyout.
+// ProjectSessionTreeProps 描述会话面板与轨道会话浮层共用的会话树。
+export type ProjectSessionTreeProps = {
   projects: ProjectSummary[];
   conversations: ConversationSummary[];
   expandedProjectIds?: string[];
@@ -68,45 +56,6 @@ export function ProjectSidebar(props: {
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   onCreateConversation: (project: ProjectSummary) => void;
   onCreateProject: () => void;
-  // Opens the skills feature area from the workbench sidebar.
-  // 从工作台侧栏打开技能功能区。
-  onOpenSkills: () => void;
-  // Opens the prompt skills feature area from the workbench sidebar.
-  // 从工作台侧栏打开提示词技能功能区。
-  onOpenAgentSkills: () => void;
-  // Opens the agents feature area from the workbench sidebar.
-  // 从工作台侧栏打开智能体功能区。
-  onOpenAgents: () => void;
-  // Opens the memory feature area from the workbench sidebar.
-  // 从工作台侧栏打开记忆功能区。
-  onOpenMemory: () => void;
-  // Opens the knowledge library management area from the workbench sidebar.
-  // 从工作台侧栏打开知识库管理区域。
-  onOpenKnowledge: () => void;
-  // Selects one top-level application area from the sidebar brand menu.
-  // 从侧栏品牌菜单选择一个顶层应用区域。
-  onSelectArea: (area: MainAreaId) => void;
-  // Whether the sidebar brand content should be a native window drag region.
-  // 侧栏品牌内容是否作为原生窗口拖动区域。
-  titlebarDragRegion?: boolean;
-  // Handles title bar double-click maximize or restore behavior.
-  // 处理标题栏双击最大化或还原行为。
-  onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
-  // Whether the embedded skills settings view is currently active.
-  // 内嵌技能设置视图当前是否激活。
-  skillsActive: boolean;
-  // Whether the prompt skills management view is currently active.
-  // 提示词技能管理视图当前是否激活。
-  agentSkillsActive: boolean;
-  // Whether the embedded agents settings view is currently active.
-  // 内嵌智能体设置视图当前是否激活。
-  agentsActive: boolean;
-  // Whether the embedded memory settings view is currently active.
-  // 内嵌记忆设置视图当前是否激活。
-  memoryActive: boolean;
-  // Whether the embedded knowledge library management view is currently active.
-  // 内嵌知识库管理视图当前是否激活。
-  knowledgeActive: boolean;
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
@@ -114,13 +63,47 @@ export function ProjectSidebar(props: {
   // 选择一个项目且不选择会话。
   onSelectProject: (projectId: string) => void;
   onSelectConversation: (conversationId: string) => void;
+};
+
+// ProjectSidebar renders the session panel: the brand strip above the shared session tree.
+// ProjectSidebar 渲染会话面板：品牌条及其下方的共用会话树。
+export function ProjectSidebar(props: ProjectSessionTreeProps & {
+  // Always-visible activity rail rendered beside this panel.
+  // 渲染在此面板旁、始终可见的活动轨道。
+  rail: React.ReactNode;
+  // Whether the sidebar brand content should be a native window drag region.
+  // 侧栏品牌内容是否作为原生窗口拖动区域。
+  titlebarDragRegion?: boolean;
+  // Handles title bar double-click maximize or restore behavior.
+  // 处理标题栏双击最大化或还原行为。
+  onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
+  const { t } = useI18n();
+  const { rail, titlebarDragRegion, onTitlebarDoubleClick, ...treeProps } = props;
+  return (
+    <Sidebar collapsible="offcanvas" rail={rail} variant="inset">
+      <SidebarHeader>
+        <SidebarBrandMenu
+          currentLabel={t("sidebar.console")}
+          titlebarDragRegion={titlebarDragRegion}
+          onTitlebarDoubleClick={onTitlebarDoubleClick}
+        />
+      </SidebarHeader>
+      <SidebarContent>
+        <ProjectSessionTree {...treeProps} />
+      </SidebarContent>
+    </Sidebar>
+  );
+}
+
+// ProjectSessionTree renders pinned conversations, projects, and their conversations with the panel's own rows,
+// icons and expansion, so every surface that lists sessions looks and behaves the same.
+// ProjectSessionTree 使用面板自身的行、图标与展开状态渲染置顶会话、项目及其会话，
+// 使所有列出会话的界面外观与行为一致。
+export function ProjectSessionTree(props: ProjectSessionTreeProps) {
   // t translates stable sidebar labels while project names remain user data.
   // t 翻译稳定侧栏标签，项目名称仍保留为用户数据。
   const { t, locale } = useI18n();
-  // sidebarState selects the expanded tree interaction or the collapsed project pop menu.
-  // sidebarState 选择展开树交互或折叠项目弹出菜单交互。
-  const { state: sidebarState } = useSidebar();
   // navigate preserves each destination action and closes phone navigation.
   // navigate 保留各导航动作并关闭手机导航。
   const navigate = useSidebarNavigation();
@@ -185,21 +168,6 @@ export function ProjectSidebar(props: {
   const pinnedConversations = React.useMemo(() => {
     return props.conversations.filter((conversation) => props.pinnedConversationIds.has(conversation.id));
   }, [props.conversations, props.pinnedConversationIds]);
-  // pinnedProjects mirrors the WebUI task tree section split.
-  // pinnedProjects 对齐 WebUI 任务树中的置顶分区拆分。
-  const pinnedProjects = React.useMemo(() => props.projects.filter((project) => project.pinned), [props.projects]);
-  // regularProjects keeps non-pinned projects in their service-provided order.
-  // regularProjects 保留普通项目在服务端快照中的原始顺序。
-  const regularProjects = React.useMemo(() => props.projects.filter((project) => !project.pinned), [props.projects]);
-  // featureSurfaceActive tracks whether the global sidebar selection is a non-chat feature page.
-  // featureSurfaceActive 跟踪全局侧栏选择是否处于非会话功能页面。
-  const featureSurfaceActive = props.skillsActive || props.agentSkillsActive || props.agentsActive || props.memoryActive || props.knowledgeActive;
-  // visibleProjectRows keeps pinned projects inline while the sidebar is expanded.
-  // visibleProjectRows 在侧栏展开时将置顶项目保留在常规项目列表内。
-  const visibleProjectRows = sidebarState === "collapsed" ? regularProjects : props.projects;
-  // visiblePinnedProjects exposes project pin state only in collapsed icon navigation.
-  // visiblePinnedProjects 仅在折叠图标导航中暴露项目置顶状态。
-  const visiblePinnedProjects = sidebarState === "collapsed" ? pinnedProjects : [];
   // nowMs refreshes relative time labels without touching hover or confirmation state.
   // nowMs 刷新相对时间标签且不触碰悬停或确认状态。
   const [nowMs, setNowMs] = React.useState(() => Date.now());
@@ -283,7 +251,7 @@ export function ProjectSidebar(props: {
     return (
       <SortableProjectRow
         conversations={projectConversations}
-        hasSelectedConversation={!featureSurfaceActive && props.selectedConversationId ? projectConversationIds.has(props.selectedConversationId) : false}
+        hasSelectedConversation={props.selectedConversationId ? projectConversationIds.has(props.selectedConversationId) : false}
         isActiveProject={props.activeProjectId === project.id}
         isOpen={openProjectIds.has(project.id)}
         isConversationListExpanded={expandedConversationProjectIds.has(project.id)}
@@ -299,7 +267,6 @@ export function ProjectSidebar(props: {
         onToggleOpen={toggleProjectOpen}
         project={project}
         selectedConversationId={props.selectedConversationId}
-        sidebarState={sidebarState}
       />
     );
   });
@@ -325,7 +292,7 @@ export function ProjectSidebar(props: {
       compactPinned={compactPinned}
       conversation={conversation}
       isPinned={props.pinnedConversationIds.has(conversation.id)}
-      isSelected={!featureSurfaceActive && props.selectedConversationId === conversation.id}
+      isSelected={props.selectedConversationId === conversation.id}
       key={conversation.id}
       locale={locale}
       nowMs={nowMs}
@@ -334,103 +301,14 @@ export function ProjectSidebar(props: {
       project={conversation.projectId ? projectsById.get(conversation.projectId) : undefined}
     />
   );
-  const collapsedFeatureMenuItems = [
-    { id: "skills", label: t("area.skills"), icon: <Puzzle size={16} />, active: props.skillsActive, onSelect: navigate(props.onOpenSkills) },
-    { id: "agent-skills", label: t("area.agentSkills"), icon: <Hammer size={16} />, active: props.agentSkillsActive, onSelect: navigate(props.onOpenAgentSkills) },
-    { id: "agents", label: t("area.agents"), icon: <Bot size={16} />, active: props.agentsActive, onSelect: navigate(props.onOpenAgents) },
-    { id: "memory", label: t("area.memory"), icon: <BrainCircuit size={16} />, active: props.memoryActive, onSelect: navigate(props.onOpenMemory) },
-    { id: "knowledge", label: t("area.knowledge"), icon: <BookMarked size={16} />, active: props.knowledgeActive, onSelect: navigate(props.onOpenKnowledge) },
-  ];
 
   return (
-    <Sidebar className={cn(activeProjectDragId && "project-drag-active")} collapsible="icon" variant="inset">
-      <SidebarHeader>
-        <SidebarBrandMenu
-          activeArea={props.agentSkillsActive ? "agent-skills" : props.agentsActive ? "agents" : props.skillsActive ? "skills" : props.memoryActive ? "memory" : props.knowledgeActive ? "knowledge" : "chat"}
-          currentLabel={props.agentSkillsActive ? t("area.agentSkills") : props.agentsActive ? t("area.agents") : props.skillsActive ? t("area.skills") : props.memoryActive ? t("area.memory") : props.knowledgeActive ? t("area.knowledge") : t("sidebar.console")}
-          onSelectArea={navigate(props.onSelectArea)}
-          titlebarDragRegion={props.titlebarDragRegion}
-          onTitlebarDoubleClick={props.onTitlebarDoubleClick}
-        />
-        {sidebarState === "collapsed" ? (
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <CollapsedFeatureMenu items={collapsedFeatureMenuItems} label={t("area.skills")}>
-                <SidebarMenuButton
-                  active={featureSurfaceActive}
-                  aria-label={t("area.skills")}
-                  className="workspace-sidebar-feature-button collapsed-feature-menu-button"
-                >
-                  <Puzzle size={16} />
-                </SidebarMenuButton>
-              </CollapsedFeatureMenu>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        ) : <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              active={props.skillsActive}
-              className="workspace-sidebar-feature-button"
-              onClick={navigate(props.onOpenSkills)}
-              tooltip={t("area.skills")}
-            >
-              <Puzzle size={16} />
-              <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.skills")}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              active={props.agentSkillsActive}
-              className="workspace-sidebar-feature-button"
-              onClick={navigate(props.onOpenAgentSkills)}
-              tooltip={t("area.agentSkills")}
-            >
-              <Hammer size={16} />
-              <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.agentSkills")}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              active={props.agentsActive}
-              className="workspace-sidebar-feature-button"
-              onClick={navigate(props.onOpenAgents)}
-              tooltip={t("area.agents")}
-            >
-              <Bot size={16} />
-              <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.agents")}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              active={props.memoryActive}
-              className="workspace-sidebar-feature-button"
-              onClick={navigate(props.onOpenMemory)}
-              tooltip={t("area.memory")}
-            >
-              <BrainCircuit size={16} />
-              <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.memory")}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              active={props.knowledgeActive}
-              className="workspace-sidebar-feature-button"
-              onClick={navigate(props.onOpenKnowledge)}
-              tooltip={t("area.knowledge")}
-            >
-              <BookMarked size={16} />
-              <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.knowledge")}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>}
-      </SidebarHeader>
-      <SidebarContent>
-        {pinnedConversations.length > 0 || visiblePinnedProjects.length > 0 ? (
+    <div className={cn("project-session-tree", activeProjectDragId && "project-drag-active")}>
+        {pinnedConversations.length > 0 ? (
           <SidebarGroup className="project-section pinned-project-section">
             {renderProjectGroupLabel(t("sidebar.pinned"), <Pin size={15} />)}
             <SidebarMenu className="pinned-tree-list">
               {pinnedConversations.map((conversation) => renderConversationRow(conversation, true))}
-              {visiblePinnedProjects.length > 0 ? renderSortableProjectSection(visiblePinnedProjects) : null}
             </SidebarMenu>
           </SidebarGroup>
         ) : null}
@@ -449,7 +327,7 @@ export function ProjectSidebar(props: {
               </Button>
             ))}
             <SidebarMenu>
-              {renderSortableProjectSection(visibleProjectRows)}
+              {renderSortableProjectSection(props.projects)}
               {props.projects.length === 0 ? (
                 <SidebarMenuItem>
                   {/* WorkbenchApp mounts this sidebar only after the authoritative snapshot exists. */}
@@ -473,27 +351,7 @@ export function ProjectSidebar(props: {
             </SidebarMenu>
           </SidebarGroup>
         ) : null}
-      </SidebarContent>
-      <SidebarFooter>
-        {sidebarState === "collapsed" ? (
-          <SidebarMenu>
-            {/* The collapsed settings shortcut stays immediately above the user menu. */}
-            {/* 折叠态设置快捷入口紧贴用户菜单上方。 */}
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                aria-label={t("area.settings")}
-                className="workspace-sidebar-feature-button"
-                onClick={() => navigate(props.onSelectArea)("settings")}
-                tooltip={t("area.settings")}
-              >
-                <Settings size={16} />
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        ) : null}
-        <SidebarUserMenu onOpenSettings={() => navigate(props.onSelectArea)("settings")} />
-      </SidebarFooter>
-    </Sidebar>
+    </div>
   );
 }
 

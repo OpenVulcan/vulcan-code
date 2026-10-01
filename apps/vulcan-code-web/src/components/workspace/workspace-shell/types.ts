@@ -1,3 +1,4 @@
+import type * as React from "react";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type {
   ComposerSlashCommandResult,
@@ -24,7 +25,6 @@ import type {
   ComposerSlashCommandSummary,
   ContextCompactionWindowNodeId,
   ConversationSummary,
-  MainAreaId,
   PendingPromptSummary,
   ProjectSummary,
   ProviderModelSecondaryRouteSelection,
@@ -36,11 +36,36 @@ import type {
   WorkspaceFileFilterOptions,
   WorkspaceFileReadResponse,
 } from "@/types";
+import type { TranslationKey } from "@/i18n";
 import type { NotificationPresentationContext } from "@/notifications/types";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 // WorkspaceMainView identifies the active main surface inside the workbench.
 // WorkspaceMainView 标识工作台内部当前激活的主内容界面。
 export type WorkspaceMainView = "chat" | "agent-skills" | "skills" | "agents" | "memory" | "knowledge";
+
+// WorkspaceFeatureView is every workbench view other than the conversation surface.
+// WorkspaceFeatureView 是会话界面以外的所有工作台视图。
+export type WorkspaceFeatureView = Exclude<WorkspaceMainView, "chat">;
+
+// WORKSPACE_FEATURE_AREAS is the single ordered list of feature views and their names, shared by the rail and panel headers.
+// WORKSPACE_FEATURE_AREAS 是功能视图及其名称的唯一有序列表，由活动轨道与面板标题共用。
+export const WORKSPACE_FEATURE_AREAS: ReadonlyArray<{ id: WorkspaceFeatureView; label: TranslationKey }> = [
+  { id: "skills", label: "area.skills" },
+  { id: "agent-skills", label: "area.agentSkills" },
+  { id: "agents", label: "area.agents" },
+  { id: "memory", label: "area.memory" },
+  { id: "knowledge", label: "area.knowledge" },
+];
+
+// workspaceViewHasNavigationPanel reports whether a workbench view owns a panel beside the rail.
+// Knowledge selects libraries inside its own page, so it shows the rail alone.
+// workspaceViewHasNavigationPanel 返回工作台视图是否在轨道旁拥有导航面板。
+// 知识库在页面内部选择资料库，因此只显示轨道。
+// Parameters: view is the workbench main view. Returns true when a panel is rendered.
+// 参数：view 为工作台主视图。渲染面板时返回 true。
+export function workspaceViewHasNavigationPanel(view: WorkspaceMainView): boolean {
+  return view !== "knowledge";
+}
 
 // WorkspaceShellProps contains the visible workspace layout state and injected service edges.
 // WorkspaceShellProps 包含可见工作区布局状态和注入的服务边界。
@@ -54,11 +79,11 @@ export interface WorkspaceShellProps {
   // Active main surface inside the workbench.
   // 工作台内部当前激活的主内容界面。
   mainView: WorkspaceMainView;
-  // Shared navigation sidebar open state.
-  // 共享导航侧栏展开状态。
+  // Session panel open state; feature views ignore it because their menus never collapse.
+  // 会话面板展开状态；功能视图忽略它，因为其菜单不会折叠。
   sidebarOpen: boolean;
-  // Updates the shared navigation sidebar open state.
-  // 更新共享导航侧栏展开状态。
+  // Updates the session panel open state.
+  // 更新会话面板展开状态。
   onSidebarOpenChange: (open: boolean) => void;
   // Selected embedded skills sub page.
   // 当前选中的内嵌技能子页面。
@@ -113,27 +138,18 @@ export interface WorkspaceShellProps {
   // Opens the create-project flow.
   // 打开创建项目流程。
   onCreateProject: () => void;
-  // Opens the skills feature area from the workbench sidebar.
-  // 从工作台侧栏打开技能功能区。
-  onOpenSkills: () => void;
-  // Opens the prompt skills feature area from the workbench sidebar.
-  // 从工作台侧栏打开提示词技能功能区。
-  onOpenAgentSkills: () => void;
-  // Opens the agents feature area from the workbench sidebar.
-  // 从工作台侧栏打开智能体功能区。
-  onOpenAgents: () => void;
-  // Opens the memory feature area from the workbench sidebar.
-  // 从工作台侧栏打开记忆功能区。
+  // Opens the memory feature area from conversation prompts.
+  // 从会话提示中打开记忆功能区。
   onOpenMemory: () => void;
   // Opens credential management from the VMM first-run prerequisite flow.
   // 从 VMM 首次配置前置流程打开凭据管理。
   onOpenCredentialManagement: () => void;
-  // Opens the knowledge library management area from the workbench sidebar.
-  // 从工作台侧栏打开知识库管理区域。
+  // Opens the knowledge library management area from conversation prompts.
+  // 从会话提示中打开知识库管理区域。
   onOpenKnowledge: () => void;
-  // Selects one top-level application area from the sidebar brand menu.
-  // 从侧栏品牌菜单选择一个顶层应用区域。
-  onSelectArea: (area: MainAreaId) => void;
+  // Activity rail rendered beside the session panel; it stays visible when the panel collapses.
+  // 渲染在会话面板旁的活动轨道；面板折叠时轨道仍保持可见。
+  rail: React.ReactNode;
   // Updates the selected embedded skills sub page.
   // 更新当前选中的内嵌技能子页面。
   onSelectSkillSubArea: (subArea: SkillSubAreaId) => void;

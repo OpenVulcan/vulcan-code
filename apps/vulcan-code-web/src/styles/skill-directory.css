@@ -504,20 +504,14 @@
 }
 
 .lua-settings-page-body {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   background: var(--background);
 }
 
-.lua-settings-toolbar h3,
 .lua-settings-section h4 {
   margin: 0;
 }
 
-.lua-settings-toolbar h3 {
-  font-size: var(--vcn-font-size-xl);
-}
-
-.lua-settings-toolbar p,
 .lua-settings-section > p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
@@ -525,25 +519,11 @@
   line-height: 1.5;
 }
 
-.lua-settings-restart-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  border: 1px solid color-mix(in srgb, var(--vcn-content-warning) 44%, var(--border));
-  border-radius: var(--vcn-radius-pill);
-  background: var(--vcn-status-warning-background);
-  color: var(--vcn-content-warning);
-  padding: 0 10px;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 650;
-  white-space: nowrap;
-}
-
 .lua-settings-content {
   min-width: 0;
   display: grid;
   gap: 12px;
-  padding: 0 14px 18px;
+  padding: 14px 14px 18px;
 }
 
 .lua-settings-section {
@@ -738,9 +718,6 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .lua-settings-toolbar .agent-catalog-toolbar-heading {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 .skill-card {

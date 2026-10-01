@@ -14,6 +14,9 @@
   height: 100%;
   min-height: 0;
 }
+/* Pages whose menu lives in the panel beside the rail give the whole width to their content. */
+/* 菜单位于轨道旁面板的页面将全部宽度交给正文。 */
+.workspace-directory-layout[data-navigation-mode="none"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .workspace-directory-navigation {
   min-width: 0;
   min-height: 0;
@@ -32,7 +35,9 @@
   font-weight: 500;
 }
 .vmm-nav-group + .vmm-nav-group { margin-top: 22px; }
-.workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
+/* Row rules below also style the same feature menus when they sit in the panel beside the rail. */
+/* 以下菜单行规则同样作用于位于轨道旁面板中的同一功能菜单。 */
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -50,44 +55,44 @@
   font-weight: 400;
   line-height: 20px;
 }
-.workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
   background: var(--muted);
   color: var(--foreground);
 }
-.workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
   background: var(--accent);
   color: var(--accent-foreground);
   box-shadow: inset 2px 0 var(--ring);
   font-weight: 600;
 }
-.workspace-directory-navigation button:focus-visible {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) button:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
   border-radius: var(--vcn-radius-md);
 }
-.workspace-directory-navigation svg { width: 16px; height: 16px; flex-shrink: 0; }
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) svg { width: 16px; height: 16px; flex-shrink: 0; }
 /* Provider labels share the directory width; counts stay aligned without truncating icons. */
 /* 供应商标签共用目录宽度；数量保持对齐，不挤压图标。 */
-.workspace-directory-navigation .settings-directory-label {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) .settings-directory-label {
   min-width: 0;
   flex: 1;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.workspace-directory-navigation .workspace-tool-panel-menu-row > small {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) .workspace-tool-panel-menu-row > small {
   margin-left: auto;
   flex-shrink: 0;
   font-size: var(--vcn-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
-.workspace-directory-navigation .agent-category-floating-row {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) .agent-category-floating-row {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
 }
-.workspace-directory-navigation .agent-skill-category-floating-row { padding: 0; }
-.workspace-directory-navigation .agent-skill-category-floating-main { min-height: 40px; padding: 8px 10px; gap: 10px; }
-.workspace-directory-navigation strong {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) .agent-skill-category-floating-row { padding: 0; }
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) .agent-skill-category-floating-main { min-height: 40px; padding: 8px 10px; gap: 10px; }
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav) strong {
   min-width: 22px;
   height: 20px;
   border-radius: var(--vcn-radius-sm);
@@ -97,6 +102,48 @@
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
+/* Feature menus in the panel beside the rail use the session rows' geometry instead of the in-page directory size. */
+/* 轨道旁面板中的功能菜单使用会话行的尺寸，而非页内目录尺寸。 */
+.workspace-feature-panel-nav {
+  padding: 2px 10px 12px;
+}
+
+.workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
+  min-height: 36px;
+  height: auto;
+  margin: 1px 0;
+  padding: 8px;
+  border: 1px solid transparent;
+  color: var(--sidebar-foreground);
+}
+
+.workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+
+.workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row, .vmm-nav-row) > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-feature-panel-nav .agent-skill-category-floating-row {
+  padding: 0;
+}
+
+.workspace-feature-panel-nav .agent-skill-category-floating-main {
+  min-height: 34px;
+  padding: 7px 8px;
+  gap: 9px;
+}
+
+.workspace-feature-panel-nav :is(.workspace-directory-heading, .vmm-nav-heading) {
+  padding: 8px 8px 6px;
+  font-size: var(--vcn-font-size-xs);
+}
+
 .workspace-directory-content {
   width: 100%;
   max-width: none;

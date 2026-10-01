@@ -682,25 +682,6 @@
   text-overflow: ellipsis;
 }
 
-.settings-collapsed-button {
-  cursor: default;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .settings-tree-list {
-  gap: 3px;
-}
-
-.settings-collapsed-flyout .collapsed-project-flyout-item {
-  min-height: 32px;
-}
-
-.settings-collapsed-flyout .collapsed-project-flyout-item > svg {
-  flex: 0 0 auto;
-  width: 15px;
-  height: 15px;
-  color: var(--muted-foreground);
-}
-
 .settings-detail-panel {
   min-height: 0;
   overflow: auto;

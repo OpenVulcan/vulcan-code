@@ -4,6 +4,13 @@ import * as React from "react"
 import { Select as SelectPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import {
+  FLOATING_MOTION_CLASS_NAME,
+  FLOATING_SURFACE_CLASS_NAME,
+  MENU_CHECKABLE_ITEM_CLASS_NAME,
+  MENU_CONTENT_PADDING_CLASS_NAME,
+  MENU_LABEL_CLASS_NAME,
+} from "@/components/ui/floating-surface"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
 function Select({
@@ -19,7 +26,7 @@ function SelectGroup({
   return (
     <SelectPrimitive.Group
       data-slot="select-group"
-      className={cn("scroll-my-1 p-1", className)}
+      className={cn("scroll-my-1", className)}
       {...props}
     />
   )
@@ -96,7 +103,7 @@ function SelectContent({
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
         data-slot="select-content"
-        className={cn("relative z-50 max-h-(--radix-select-content-available-height) min-w-36 origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className)}
+        className={cn("relative z-50 max-h-(--radix-select-content-available-height) min-w-36 origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto", FLOATING_SURFACE_CLASS_NAME, FLOATING_MOTION_CLASS_NAME, className)}
         position="popper"
         side={preferredSide}
         align="start"
@@ -108,7 +115,7 @@ function SelectContent({
         <SelectScrollUpButton />
         <SelectPrimitive.Viewport
           data-position="popper"
-          className="w-full min-w-(--radix-select-trigger-width)"
+          className={cn("w-full min-w-(--radix-select-trigger-width)", MENU_CONTENT_PADDING_CLASS_NAME)}
         >
           {children}
         </SelectPrimitive.Viewport>
@@ -125,7 +132,7 @@ function SelectLabel({
   return (
     <SelectPrimitive.Label
       data-slot="select-label"
-      className={cn("px-1.5 py-1 text-xs text-muted-foreground", className)}
+      className={cn(MENU_LABEL_CLASS_NAME, className)}
       {...props}
     />
   )
@@ -140,7 +147,8 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none transition-colors duration-(--vcn-duration-instant) focus:bg-(--vcn-fill-hover) focus:text-foreground data-[state=checked]:font-medium data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        MENU_CHECKABLE_ITEM_CLASS_NAME,
+        "w-full *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
         className
       )}
       {...props}

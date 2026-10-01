@@ -27,11 +27,15 @@ function readMobileSidebarViewport(): boolean {
 function SidebarProvider({
   children,
   className,
+  collapsible = true,
   defaultOpen = true,
   open,
   onOpenChange,
   ...props
 }: React.ComponentProps<"div"> & {
+  // Whether the desktop panel may be collapsed; when false, desktop open requests are ignored and the trigger is hidden.
+  // 桌面面板是否允许折叠；为 false 时忽略桌面展开状态变更请求，并隐藏触发按钮。
+  collapsible?: boolean
   // Initial open state for the sidebar.
   // 侧栏初始展开状态。
   defaultOpen?: boolean
@@ -77,11 +81,14 @@ function SidebarProvider({
       setMobileOpen(nextOpen)
       return
     }
+    if (!collapsible) {
+      return
+    }
     if (!isControlled) {
       setUncontrolledOpen(nextOpen)
     }
     onOpenChange?.(nextOpen)
-  }, [isControlled, isMobile, onOpenChange])
+  }, [collapsible, isControlled, isMobile, onOpenChange])
   const toggleSidebar = React.useCallback(() => setOpen(!currentOpen), [currentOpen, setOpen])
   const state = isMobile || currentOpen ? "expanded" : "collapsed"
   const value = React.useMemo<SidebarContextValue>(
@@ -95,6 +102,7 @@ function SidebarProvider({
         className={cn("vcn-sidebar-wrapper group/sidebar-wrapper", className)}
         data-state={state}
         data-mobile={isMobile}
+        data-panel-collapsible={collapsible}
         data-slot="sidebar-wrapper"
         ref={wrapperRef}
         {...props}
@@ -110,13 +118,21 @@ function SidebarProvider({
 function Sidebar({
   children,
   className,
-  collapsible = "icon",
+  collapsible = "offcanvas",
+  panel = true,
+  rail,
   variant = "inset",
   ...props
 }: React.ComponentProps<"aside"> & {
-  // Collapse behavior used by CSS data attributes.
-  // CSS data 属性使用的折叠行为。
-  collapsible?: "icon" | "offcanvas" | "none"
+  // Collapse behavior used by CSS data attributes; offcanvas hides the whole panel beside the rail.
+  // CSS data 属性使用的折叠行为；offcanvas 会把整个面板隐藏在导航轨道旁。
+  collapsible?: "offcanvas" | "none"
+  // Whether a panel exists beside the rail; false renders the rail alone on every viewport.
+  // 轨道旁是否存在面板；false 时在所有视口只渲染轨道。
+  panel?: boolean
+  // Always-visible activity rail rendered before the collapsible panel and inside the phone drawer.
+  // 始终可见的活动轨道，渲染在可折叠面板之前，手机抽屉中同样包含它。
+  rail?: React.ReactNode
   // Sidebar visual variant.
   // 侧栏视觉变体。
   variant?: "sidebar" | "inset"
@@ -129,28 +145,42 @@ function Sidebar({
   if (isMobile && collapsible !== "none") {
     return (
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="left" className="vcn-mobile-navigation" aria-describedby={undefined} onCloseAutoFocus={(event) => { event.preventDefault(); focusTrigger() }}>
+        <SheetContent side="left" className={cn("vcn-mobile-navigation", rail ? "with-activity-rail" : undefined)} aria-describedby={undefined} onCloseAutoFocus={(event) => { event.preventDefault(); focusTrigger() }}>
           <SheetTitle className="sr-only">{t("sidebar.console")}</SheetTitle>
-          <aside className={cn("vcn-sidebar", className)} data-slot="sidebar" data-state="expanded" data-side="left" data-variant={variant} {...props}>
-            {children}
-          </aside>
+          {rail}
+          {panel ? (
+            <aside className={cn("vcn-sidebar", className)} data-slot="sidebar" data-state="expanded" data-side="left" data-variant={variant} {...props}>
+              {children}
+            </aside>
+          ) : null}
         </SheetContent>
       </Sheet>
     )
   }
 
+  // hidden removes an offcanvas panel from keyboard and accessibility navigation while it is collapsed.
+  // hidden 在 offcanvas 面板折叠期间将其移出键盘与无障碍导航。
+  const hidden = state === "collapsed" && collapsible === "offcanvas"
+  if (!panel) {
+    return <>{rail}</>
+  }
   return (
-    <aside
-      className={cn("vcn-sidebar", className)}
-      data-collapsible={state === "collapsed" ? collapsible : ""}
-      data-side="left"
-      data-slot="sidebar"
-      data-state={state}
-      data-variant={variant}
-      {...props}
-    >
-      {children}
-    </aside>
+    <>
+      {rail}
+      <aside
+        aria-hidden={hidden || undefined}
+        className={cn("vcn-sidebar", className)}
+        data-collapsible={state === "collapsed" ? collapsible : ""}
+        data-side="left"
+        data-slot="sidebar"
+        data-state={state}
+        data-variant={variant}
+        inert={hidden || undefined}
+        {...props}
+      >
+        {children}
+      </aside>
+    </>
   )
 }
 

@@ -10,11 +10,6 @@
   user-select: none;
 }
 
-.vcn-sidebar[data-collapsible="icon"] {
-  width: var(--console-sidebar-icon-width);
-  min-width: var(--console-sidebar-icon-width);
-}
-
 .vcn-sidebar-header {
   display: flex;
   flex-direction: column;
@@ -81,30 +76,6 @@
   color: var(--foreground);
 }
 
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-group-label {
-  /* Hidden section actions must also leave keyboard navigation and the accessibility tree. */
-  /* 已隐藏的分组操作也必须退出键盘导航及无障碍树。 */
-  visibility: hidden;
-  height: 0;
-  opacity: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  transform: translateX(-4px);
-  pointer-events: none;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .project-group-label-main {
-  justify-content: center;
-  gap: 0;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .project-group-label-text,
-.vcn-sidebar[data-collapsible="icon"] .project-add-button {
-  width: 0;
-  opacity: 0;
-  transform: translateX(-4px);
-}
-
 .vcn-sidebar-menu {
   display: grid;
   gap: 3px;
@@ -156,46 +127,14 @@
   color: var(--sidebar-accent-foreground);
 }
 
-.vcn-sidebar.project-drag-active .vcn-sidebar-menu-button:hover,
-.vcn-sidebar.project-drag-active .vcn-sidebar-menu-button:focus-visible {
+.project-session-tree.project-drag-active .vcn-sidebar-menu-button:hover,
+.project-session-tree.project-drag-active .vcn-sidebar-menu-button:focus-visible {
   background: transparent;
   color: inherit;
 }
 
 .vcn-sidebar-menu-button.muted {
   opacity: 0.68;
-}
-
-.workspace-sidebar-feature-button {
-  --workspace-sidebar-feature-active-bg: color-mix(in srgb, var(--sidebar-accent) 68%, var(--foreground) 9%);
-  height: 30px;
-  max-height: 30px;
-  min-height: 30px;
-  margin-top: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  font-weight: 400;
-  transition: width 180ms ease, min-width 180ms ease, height 180ms ease, max-height 180ms ease, min-height 180ms ease, background 120ms ease, border-color 120ms ease, color 120ms ease, padding 180ms ease;
-}
-
-.workspace-sidebar-feature-button > svg {
-  flex: 0 0 auto;
-  transition: width 180ms ease, height 180ms ease, transform 180ms ease;
-}
-
-.workspace-sidebar-feature-label {
-  overflow: hidden;
-  font-size: var(--vcn-font-size-md);
-  font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-sidebar-feature-button.active,
-.workspace-sidebar-feature-button.active:hover,
-.workspace-sidebar-feature-button.active:focus-visible {
-  background: var(--workspace-sidebar-feature-active-bg);
-  color: var(--sidebar-accent-foreground);
 }
 
 .sidebar-profile-button {
@@ -227,7 +166,6 @@
   pointer-events: none;
 }
 
-.sidebar-brand-button .sidebar-brand-mark,
 .sidebar-user-avatar {
   flex: 0 0 auto;
   width: 30px;
@@ -244,17 +182,6 @@
   transition: width 180ms ease, height 180ms ease, transform 180ms ease;
 }
 
-.sidebar-brand-logo {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  /* The inline symbol has no tile padding, so inset it to match the 15px wordmark weight. */
-  /* 内联图标没有底板留白，内缩后与 15px 字标的视觉重量一致。 */
-  padding: 3px;
-  color: var(--sidebar-foreground);
-  transition: width 180ms ease, height 180ms ease, transform 180ms ease;
-}
-
 .sidebar-user-avatar {
   background: color-mix(in srgb, var(--sidebar-accent) 82%, var(--foreground) 12%);
   color: var(--sidebar-accent-foreground);
@@ -264,35 +191,6 @@
   flex: 1 1 auto;
   text-align: left;
   line-height: 1.1;
-}
-
-.sidebar-profile-chevron {
-  flex: 0 0 auto;
-  margin-left: auto;
-  color: var(--muted-foreground);
-}
-
-.sidebar-brand-settings-button {
-  width: 26px;
-  height: 26px;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  border: 0;
-  border-radius: var(--vcn-radius-md);
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
-  transition: width 180ms ease, height 180ms ease, opacity 160ms ease, transform 180ms ease, background 120ms ease, color 120ms ease;
-}
-
-.sidebar-brand-settings-button:hover,
-.sidebar-brand-settings-button:focus-visible {
-  background: var(--sidebar-accent);
-  color: var(--sidebar-accent-foreground);
-  outline: none;
 }
 
 .sidebar-profile-menu {
@@ -338,117 +236,6 @@
   font-size: var(--vcn-font-size-sm);
 }
 
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button {
-  width: 34px;
-  min-height: 34px;
-  justify-content: flex-start;
-  padding: 7px;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-header,
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-footer {
-  padding-right: 6px;
-  padding-left: 6px;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .sidebar-profile-button {
-  width: 34px;
-  height: 34px;
-  max-height: 34px;
-  min-height: 34px;
-  padding: 2px;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .sidebar-brand-button .sidebar-brand-mark,
-.vcn-sidebar[data-collapsible="icon"] .sidebar-brand-logo,
-.vcn-sidebar[data-collapsible="icon"] .sidebar-user-avatar {
-  width: 30px;
-  height: 30px;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .sidebar-brand-drag-region {
-  flex: 0 0 auto;
-  min-width: 30px;
-  justify-content: center;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .sidebar-profile-chevron {
-  display: none;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .sidebar-brand-settings-button {
-  visibility: hidden;
-  width: 0;
-  height: 0;
-  margin-left: 0;
-  opacity: 0;
-  transform: translateX(-4px) scale(0.84);
-  pointer-events: none;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active,
-.vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active {
-  background: color-mix(in srgb, var(--sidebar-accent) 72%, var(--foreground) 8%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--sidebar-accent-foreground) 18%, transparent),
-    0 0 10px color-mix(in srgb, var(--sidebar-accent) 44%, transparent);
-  color: var(--sidebar-accent-foreground);
-}
-
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active:hover,
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active:focus-visible,
-.vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active:hover,
-.vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active:focus-visible {
-  background: color-mix(in srgb, var(--sidebar-accent) 72%, var(--foreground) 8%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--sidebar-accent-foreground) 18%, transparent),
-    0 0 10px color-mix(in srgb, var(--sidebar-accent) 44%, transparent);
-}
-
-.vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button.active,
-.vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button.active:hover,
-.vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button.active:focus-visible {
-  background: var(--workspace-sidebar-feature-active-bg);
-  box-shadow: none;
-  color: var(--sidebar-accent-foreground);
-}
-
-.vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  max-height: 34px;
-  min-height: 34px;
-  margin-inline: 0;
-  /* (34px button - 18px icon) / 2 keeps the glyph centred without changing the flex layout. */
-  /* （34px 按钮 - 18px 图标）/ 2，在不改变弹性布局的前提下让图标居中。 */
-  padding: 0 8px;
-}
-
-/* Collapsed icons stay at a readable 18px; the 34px hit area comes from the button, not an inflated glyph. */
-/* 折叠态图标保持 18px 可读尺寸；34px 点击热区由按钮提供，而不是放大图形本身。 */
-.vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button > svg {
-  width: 18px;
-  height: 18px;
-  transform: translateX(0) scale(1);
-}
-
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-static-item {
-  width: 34px;
-  min-height: 34px;
-  justify-content: center;
-  padding: 0 8px;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-static-item > svg {
-  width: 18px;
-  height: 18px;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-content {
-  overflow-x: hidden;
-}
-
 .vcn-sidebar-menu-action {
   position: absolute;
   top: 50%;
@@ -479,9 +266,9 @@
   opacity: 1;
 }
 
-.vcn-sidebar.project-drag-active .vcn-sidebar-menu-action.show-on-hover,
-.vcn-sidebar.project-drag-active .project-folder-row:hover > .vcn-sidebar-menu-action.show-on-hover,
-.vcn-sidebar.project-drag-active .vcn-sidebar-menu-action.show-on-hover:focus-visible {
+.project-session-tree.project-drag-active .vcn-sidebar-menu-action.show-on-hover,
+.project-session-tree.project-drag-active .project-folder-row:hover > .vcn-sidebar-menu-action.show-on-hover,
+.project-session-tree.project-drag-active .vcn-sidebar-menu-action.show-on-hover:focus-visible {
   opacity: 0;
   pointer-events: none;
 }
@@ -520,4 +307,345 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A collapsed panel leaves the layout entirely; the activity rail beside it stays as the visible navigation. */
+/* 折叠的面板完全退出布局，旁边的活动轨道作为可见导航保留。 */
+.vcn-sidebar[data-collapsible="offcanvas"] {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* The width comes from navigation-layout.ts through --activity-rail-width. */
+/* 宽度经 --activity-rail-width 由 navigation-layout.ts 提供。 */
+.activity-rail {
+  flex: 0 0 var(--activity-rail-width);
+  width: var(--activity-rail-width);
+  min-width: var(--activity-rail-width);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--activity-rail);
+  color: var(--sidebar-foreground);
+  user-select: none;
+}
+
+/* Matches the title bar height so the logo sits on the same line as the panel title strip and page header. */
+/* 与标题栏高度一致，使标志与面板标题条、页面标题位于同一行。 */
+.activity-rail-brand {
+  flex: 0 0 auto;
+  width: 100%;
+  height: var(--vcn-titlebar-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.activity-rail-brand[data-tauri-drag-region] > * {
+  pointer-events: none;
+}
+
+.activity-rail-logo {
+  width: 24px;
+  height: 24px;
+  color: var(--sidebar-foreground);
+}
+
+.activity-rail-section {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.activity-rail-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0 10px;
+}
+
+.activity-rail-divider {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--sidebar-border, var(--border));
+}
+
+.activity-rail-button {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--vcn-radius-md);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.activity-rail-button > svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.activity-rail-button:hover,
+.activity-rail-button:focus-visible,
+.activity-rail-button[data-state="open"] {
+  background: var(--activity-rail-accent);
+  color: var(--sidebar-accent-foreground);
+  outline: none;
+}
+
+.activity-rail-button.active,
+.activity-rail-button.active:hover,
+.activity-rail-button.active:focus-visible {
+  background: var(--vcn-selected-tile);
+  box-shadow: inset 0 0 0 1px var(--vcn-selected-ring), var(--vcn-selected-tile-glow);
+  color: var(--vcn-selected-icon);
+}
+
+.activity-rail-button:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.activity-rail-flyout-anchor {
+  display: inline-flex;
+}
+
+/* The session flyout is a floating copy of the session panel beside the rail. It starts below the brand strip so the
+   logo stays uncovered, keeps one gap from the rail and the window bottom, follows the navigation panel width source, and
+   hosts the panel's own session tree. */
+/* 会话浮层是轨道旁浮动的会话面板副本。它从品牌条下方开始，使 Logo 不被遮挡；与轨道和窗口底部保持同一间距，
+   沿用导航面板的宽度来源，并承载面板自身的会话树。 */
+.activity-rail-flyout {
+  --activity-rail-flyout-gap: 8px;
+  position: fixed;
+  top: var(--vcn-titlebar-height);
+  bottom: var(--activity-rail-flyout-gap);
+  z-index: 60;
+  display: flex;
+  width: var(--console-sidebar-width);
+  flex-direction: column;
+  margin-left: var(--activity-rail-flyout-gap);
+  overflow: hidden;
+  border: 1px solid var(--vcn-floating-ring);
+  border-radius: var(--vcn-radius-lg);
+  background: var(--vcn-surface-panel);
+  box-shadow: var(--vcn-shadow-floating);
+  color: var(--sidebar-foreground);
+  animation: activity-rail-flyout-in var(--vcn-duration-fast) var(--vcn-ease-out);
+}
+
+@supports (backdrop-filter: blur(1px)) {
+  .activity-rail-flyout {
+    background: var(--vcn-surface-panel-glass);
+    backdrop-filter: blur(24px) saturate(150%);
+  }
+}
+
+@keyframes activity-rail-flyout-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-rail-flyout {
+    animation: none;
+  }
+}
+
+.activity-rail-flyout-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px 2px;
+}
+
+.activity-rail-flyout-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-lg);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The body scrolls like the panel content and uses the same inset, so the shared tree lays out exactly as in the panel. */
+/* 主体与面板内容一样滚动并使用相同内边距，使共用会话树的布局与面板完全一致。 */
+.activity-rail-flyout-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 6px 10px;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 16%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.activity-rail-flyout-footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--vcn-floating-ring);
+  padding: 6px;
+}
+
+.activity-rail-flyout-item {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--vcn-radius-md);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 6px 8px;
+  text-align: left;
+  transition: background-color var(--vcn-duration-fast) var(--vcn-ease-out);
+}
+
+.activity-rail-flyout-item:hover,
+.activity-rail-flyout-item:focus-visible {
+  background: var(--vcn-fill-hover);
+  outline: none;
+}
+
+.activity-rail-flyout-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--muted-foreground);
+}
+
+.activity-rail-flyout-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-rail-menu {
+  min-width: 220px;
+}
+
+.activity-rail-menu-item > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted-foreground);
+}
+
+.activity-rail-menu-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 500;
+}
+
+/* Only the session panel collapses, so other desktop headers have nothing to toggle; phones keep it to open the drawer. */
+/* 只有会话面板可折叠，其他桌面标题栏无可切换对象；手机保留它用于打开抽屉。 */
+.vcn-sidebar-wrapper[data-panel-collapsible="false"][data-mobile="false"] .console-header-main > :is(.vcn-sidebar-trigger, .console-header-separator) {
+  display: none;
+}
+
+/* Desktop frame: the rail and the panel title strip share one rail-coloured L-shaped frame, and the panel body below
+   becomes its own card with a rounded top-left corner. The phone drawer is portaled outside the wrapper and keeps its flat panel. */
+/* 桌面框架：轨道与面板标题条共用一个轨道色 L 形框架，下方的面板主体成为独立卡片并带圆角左上角。
+   手机抽屉渲染在外层之外，保持平铺面板。 */
+.vcn-sidebar-wrapper[data-mobile="false"] {
+  background: var(--activity-rail);
+}
+
+.vcn-sidebar-wrapper[data-mobile="false"] .vcn-sidebar {
+  position: relative;
+  isolation: isolate;
+  background: transparent;
+}
+
+.vcn-sidebar-wrapper[data-mobile="false"] .vcn-sidebar::before {
+  content: "";
+  position: absolute;
+  inset: var(--vcn-titlebar-height) 0 0 0;
+  z-index: -1;
+  border-top: 1px solid var(--sidebar-border, var(--border));
+  border-left: 1px solid var(--sidebar-border, var(--border));
+  border-top-left-radius: var(--vcn-radius-lg);
+  background: var(--sidebar);
+}
+
+.vcn-sidebar-wrapper[data-mobile="false"] .vcn-sidebar > .vcn-sidebar-header {
+  flex: 0 0 var(--vcn-titlebar-height);
+  justify-content: center;
+  padding: 0 12px 0 6px;
+}
+
+.vcn-sidebar-wrapper[data-mobile="false"] .vcn-sidebar > .vcn-sidebar-header .sidebar-profile-button {
+  min-height: 0;
+  padding: 0;
+}
+
+.vcn-sidebar-wrapper[data-mobile="false"] .vcn-sidebar > .vcn-sidebar-content {
+  padding-top: 6px;
+}
+
+/* Beside an open panel the page card's lower-left corner meets the panel card, so only its top corner stays rounded. */
+/* 面板展开时页面卡片左下角紧贴面板卡片，因此只保留顶部圆角。 */
+.vcn-sidebar-wrapper[data-mobile="false"] .vcn-sidebar[data-state="expanded"] + .vcn-sidebar-inset {
+  border-bottom-left-radius: 0;
+}
+
+/* One-line brand strip: the wordmark is vertically centred with the rail logo and the area name sits at the right edge. */
+/* 单行品牌条：字标与轨道标志垂直居中对齐，区域名称位于右侧。 */
+.sidebar-brand-label {
+  max-width: none;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar-brand-label > small {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* The wordmark is sized to the 24px logo: its cap height sits on the symbol's centre band, the tight tracking echoes
+   the symbol's solid geometry, and the lighter "Code" keeps the two words readable without a space. */
+/* 字标按 24px 标志定尺寸：大写高度落在标志中段，紧凑字距呼应标志的实心几何形，
+   较轻的「Code」使两个词在无空格时仍易于区分。 */
+.vcn-sidebar-label strong.sidebar-brand-wordmark {
+  flex: 0 0 auto;
+  font-family: var(--font-heading);
+  font-size: var(--vcn-font-size-xl);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.035em;
+  font-kerning: normal;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sidebar-brand-wordmark-accent {
+  margin-left: 0.04em;
+  color: var(--primary);
+  font-weight: 560;
 }
