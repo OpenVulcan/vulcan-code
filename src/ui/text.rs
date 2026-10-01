@@ -1,0 +1,300 @@
+// Text layout helpers: width-aware wrapping, truncation, shimmer and spinners.
+// 文本布局辅助：按显示宽度换行、截断、微光效果与旋转指示器。
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Clear, Widget};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use super::theme::mix;
+
+pub fn width_of(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+/// Clears a popup's area. A wide character that starts just left of `area` would otherwise spill
+/// into its first column and hide the popup's left border, so that character is blanked too.
+/// 清空浮层区域。起始于 `area` 左侧紧邻列的宽字符会溢入其首列并遮住浮层左边框，因此一并置空。
+pub fn clear_area(area: Rect, buf: &mut Buffer) {
+    Clear.render(area, buf);
+    let Some(left) = area.x.checked_sub(1) else {
+        return;
+    };
+    for y in area.top()..area.bottom() {
+        if let Some(cell) = buf.cell_mut((left, y))
+            && width_of(cell.symbol()) > 1
+        {
+            cell.set_symbol(" ");
+        }
+    }
+}
+
+/// Truncates to `max` display columns, appending `…` when cut.
+/// 截断到 `max` 显示列，被截断时追加 `…`。
+pub fn truncate(text: &str, max: usize) -> String {
+    if width_of(text) <= max {
+        return text.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w > max.saturating_sub(1) {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    out
+}
+
+/// Pads `text` with spaces to exactly `width` columns (truncating when longer).
+/// 用空格将 `text` 补齐到恰好 `width` 列（过长时截断）。
+pub fn fit(text: &str, width: usize) -> String {
+    let cut = truncate(text, width);
+    let pad = width.saturating_sub(width_of(&cut));
+    format!("{cut}{}", " ".repeat(pad))
+}
+
+struct Token {
+    text: String,
+    style: Style,
+    width: usize,
+    space: bool,
+    newline: bool,
+}
+
+fn tokenize(spans: &[Span<'_>]) -> Vec<Token> {
+    let mut tokens: Vec<Token> = Vec::new();
+    for span in spans {
+        for ch in span.content.chars() {
+            if ch == '\n' {
+                tokens.push(Token {
+                    text: String::new(),
+                    style: span.style,
+                    width: 0,
+                    space: false,
+                    newline: true,
+                });
+                continue;
+            }
+            let w = ch.width().unwrap_or(0);
+            let space = ch == ' ' || ch == '\t';
+            let ch = if ch == '\t' { ' ' } else { ch };
+            let joinable = w == 1
+                && tokens.last().is_some_and(|last| {
+                    !last.newline
+                        && last.space == space
+                        && last.style == span.style
+                        && last.width > 0
+                        && last
+                            .text
+                            .chars()
+                            .last()
+                            .is_some_and(|c| c.width() == Some(1))
+                });
+            if joinable {
+                let last = tokens.last_mut().expect("checked above");
+                last.text.push(ch);
+                last.width += w;
+            } else {
+                tokens.push(Token {
+                    text: ch.to_string(),
+                    style: span.style,
+                    width: w,
+                    space,
+                    newline: false,
+                });
+            }
+        }
+    }
+    tokens
+}
+
+/// Wraps styled spans to `width` columns. `first` prefixes the first line and `rest` every
+/// continuation line (both count toward the width).
+/// 将带样式的片段按 `width` 列换行。`first` 作为首行前缀，`rest` 作为后续行前缀（均计入宽度）。
+pub fn wrap(
+    spans: &[Span<'_>],
+    width: usize,
+    first: &[Span<'static>],
+    rest: &[Span<'static>],
+) -> Vec<Line<'static>> {
+    let mut builder = LineBuilder::new(width, first, rest);
+    for token in tokenize(spans) {
+        if token.newline {
+            builder.flush();
+            continue;
+        }
+        if token.space && !builder.has_content {
+            continue;
+        }
+        if builder.used + token.width > builder.limit && builder.has_content {
+            builder.flush();
+            if token.space {
+                continue;
+            }
+        }
+        if builder.used + token.width > builder.limit {
+            // A single token wider than the line: hard-split by characters.
+            // 单个词宽于整行：按字符硬切分。
+            for ch in token.text.chars() {
+                let w = ch.width().unwrap_or(0);
+                if builder.used + w > builder.limit && builder.has_content {
+                    builder.flush();
+                }
+                builder.push(ch.to_string(), token.style, w);
+            }
+            continue;
+        }
+        builder.push(token.text, token.style, token.width);
+    }
+    builder.finish()
+}
+
+struct LineBuilder<'p> {
+    width: usize,
+    rest: &'p [Span<'static>],
+    lines: Vec<Line<'static>>,
+    current: Vec<Span<'static>>,
+    prefix_len: usize,
+    used: usize,
+    limit: usize,
+    has_content: bool,
+}
+
+impl<'p> LineBuilder<'p> {
+    fn new(width: usize, first: &[Span<'static>], rest: &'p [Span<'static>]) -> Self {
+        let used = first.iter().map(|s| width_of(&s.content)).sum::<usize>();
+        LineBuilder {
+            width,
+            rest,
+            lines: Vec::new(),
+            current: first.to_vec(),
+            prefix_len: first.len(),
+            used,
+            limit: width.max(used + 1),
+            has_content: false,
+        }
+    }
+
+    fn push(&mut self, text: String, style: Style, width: usize) {
+        self.used += width;
+        self.has_content = true;
+        let own_spans = self.current.len() > self.prefix_len;
+        match self.current.last_mut() {
+            Some(last) if own_spans && last.style == style => {
+                last.content.to_mut().push_str(&text);
+            }
+            _ => self.current.push(Span::styled(text, style)),
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.current.len() > self.prefix_len
+            && let Some(last) = self.current.last_mut()
+        {
+            let trimmed = last.content.trim_end().to_string();
+            *last.content.to_mut() = trimmed;
+        }
+        self.lines
+            .push(Line::from(std::mem::take(&mut self.current)));
+        self.current = self.rest.to_vec();
+        self.prefix_len = self.rest.len();
+        self.used = self.rest.iter().map(|s| width_of(&s.content)).sum();
+        self.limit = self.width.max(self.used + 1);
+        self.has_content = false;
+    }
+
+    fn finish(mut self) -> Vec<Line<'static>> {
+        if self.has_content || self.lines.is_empty() {
+            self.flush();
+        }
+        self.lines
+    }
+}
+
+/// Per-character shimmer: a bright band sweeps across `text` as `phase` advances.
+/// 逐字符微光：随 `phase` 推进，一条亮带扫过 `text`。
+pub fn shimmer(text: &str, base: Color, highlight: Color, phase: f32) -> Vec<Span<'static>> {
+    let count = text.chars().count().max(1) as f32;
+    let span = count + 8.0;
+    let center = (phase * 14.0) % span - 4.0;
+    text.chars()
+        .enumerate()
+        .map(|(i, ch)| {
+            let distance = (i as f32 - center).abs();
+            let intensity = (1.0 - distance / 3.5).clamp(0.0, 1.0);
+            Span::styled(
+                ch.to_string(),
+                Style::new().fg(mix(highlight, base, intensity)),
+            )
+        })
+        .collect()
+}
+
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+pub fn spinner(phase: f32) -> &'static str {
+    SPINNER[((phase * 12.0) as usize) % SPINNER.len()]
+}
+
+/// Formats a token count as `950`, `12.4k`, `1.2M`.
+/// 将 token 数格式化为 `950`、`12.4k`、`1.2M`。
+pub fn compact_count(value: u64) -> String {
+    match value {
+        0..=999 => value.to_string(),
+        1_000..=999_999 => format!("{:.1}k", value as f64 / 1_000.0),
+        _ => format!("{:.1}M", value as f64 / 1_000_000.0),
+    }
+}
+
+/// Formats a duration in milliseconds as `850ms`, `12s`, `3m 05s`.
+/// 将毫秒时长格式化为 `850ms`、`12s`、`3m 05s`。
+pub fn compact_duration(ms: u64) -> String {
+    match ms {
+        0..=999 => format!("{ms}ms"),
+        1_000..=59_999 => format!("{:.0}s", ms as f64 / 1000.0),
+        _ => format!("{}m {:02}s", ms / 60_000, (ms / 1000) % 60),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_of(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn wraps_words_and_cjk_within_width() {
+        let spans = [Span::raw("hello world 你好世界 again")];
+        let lines = wrap(&spans, 10, &[], &[]);
+        for line in &lines {
+            assert!(width_of(&text_of(line)) <= 10, "{:?}", text_of(line));
+        }
+        let joined: String = lines.iter().map(text_of).collect::<Vec<_>>().join("|");
+        assert_eq!(joined, "hello|world 你好|世界 again");
+    }
+
+    #[test]
+    fn continuation_lines_use_rest_prefix() {
+        let spans = [Span::raw("aaa bbb ccc")];
+        let lines = wrap(&spans, 6, &[Span::raw("> ")], &[Span::raw("  ")]);
+        let texts: Vec<String> = lines.iter().map(text_of).collect();
+        assert_eq!(texts, vec!["> aaa", "  bbb", "  ccc"]);
+    }
+
+    #[test]
+    fn truncates_by_display_width() {
+        assert_eq!(truncate("你好世界", 5), "你好…");
+        assert_eq!(fit("ab", 4), "ab  ");
+    }
+}

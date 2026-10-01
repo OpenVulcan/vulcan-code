@@ -1,0 +1,1007 @@
+// Application state and the reducer that folds backend facts into it.
+// 应用状态，以及将后端事实折叠进状态的 reducer。
+//
+// Views read `App` and never talk to the backend. Input handling (`input/`) turns keys and clicks
+// into state changes and backend `Command`s; `apply` turns `BackendEvent`s into state. This keeps
+// the mock and the future service backend interchangeable.
+// 视图只读取 `App`，从不直接访问后端。输入处理（`input/`）把按键与点击转换为状态变化与后端 `Command`；
+// `apply` 把 `BackendEvent` 转换为状态。由此模拟后端与未来的服务后端可以互换。
+
+pub mod action;
+pub mod ask;
+pub mod commands;
+pub mod composer;
+pub mod history;
+pub mod hit;
+pub mod input;
+pub mod insight;
+pub mod menus;
+pub mod overlay;
+pub mod pages;
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::{Duration, Instant};
+
+use ratatui_textarea::{TextArea, WrapMode};
+
+use crate::backend::{
+    BackendEvent, BackendHandle, Command, ConnectionState, GitBusy, GitNotice, Notice,
+};
+use crate::model::*;
+use crate::tr;
+use crate::ui::theme::Theme;
+
+use ask::AskState;
+use hit::HitMap;
+use overlay::Overlay;
+use pages::{Area, PageId, PageState};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Sidebar,
+    Transcript,
+    Ask,
+    Composer,
+    Panel,
+    /// Navigation column of a system area.
+    /// 系统区域的导航列。
+    AreaNav,
+    /// Page body of a system area.
+    /// 系统区域的页面主体。
+    AreaPage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PanelTab {
+    Changes,
+    Progress,
+    Terminal,
+    /// Memory injected into this conversation: dynamic TTL items and the static profile.
+    /// 注入本会话的记忆：动态 TTL 条目与静态画像。
+    Memory,
+    /// Context usage, goal and lifetime usage of the main session and its subagents.
+    /// 上下文用量、目标，以及主会话与子代理的生命周期用量。
+    Stats,
+    Agents,
+}
+
+impl PanelTab {
+    pub const ALL: [PanelTab; 6] = [
+        PanelTab::Changes,
+        PanelTab::Progress,
+        PanelTab::Terminal,
+        PanelTab::Memory,
+        PanelTab::Stats,
+        PanelTab::Agents,
+    ];
+
+    /// Tabs whose content is a free-scrolling list with a selectable cursor row.
+    /// 内容为可自由滚动、带可选光标行列表的标签页。
+    pub fn scrolls(self) -> bool {
+        matches!(self, PanelTab::Memory | PanelTab::Stats | PanelTab::Agents)
+    }
+}
+
+/// Client-only view state of the scrolling panel tabs.
+/// 可滚动面板标签页的纯客户端视图状态。
+#[derive(Debug, Default)]
+pub struct PanelView {
+    /// Memory tab shows the static profile instead of dynamic injections.
+    /// 记忆页显示静态画像而非动态注入。
+    pub memory_static: bool,
+    /// Selected row per tab (memory items, agents); stats has no cursor.
+    /// 每个标签页选中的行（记忆条目、代理）；统计页没有光标。
+    pub cursor: HashMap<PanelTab, usize>,
+    pub scroll: HashMap<PanelTab, usize>,
+    /// The wheel moved the list away from the cursor; keyboard movement re-attaches it.
+    /// 滚轮使列表脱离光标；键盘移动会重新跟随。
+    pub free_scroll: bool,
+}
+
+impl PanelView {
+    pub fn cursor(&self, tab: PanelTab) -> usize {
+        self.cursor.get(&tab).copied().unwrap_or(0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SidebarRow {
+    PinnedHeader,
+    Project(String),
+    Unlinked,
+    Conversation(ConversationId),
+}
+
+impl SidebarRow {
+    /// Headers of fixed sections cannot hold the cursor.
+    /// 固定分区的标题不能持有光标。
+    pub fn selectable(&self) -> bool {
+        !matches!(self, SidebarRow::PinnedHeader | SidebarRow::Unlinked)
+    }
+}
+
+/// How the project sidebar is shown; toggled at runtime, never persisted.
+/// 项目侧栏的显示方式；运行时切换，不持久化。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarMode {
+    /// Full list of projects and conversations.
+    /// 完整的项目与会话列表。
+    Expanded,
+    /// A narrow rail of buttons and project initials; the full list opens as a drawer on focus.
+    /// 由按钮与项目首字母组成的窄栏；获得焦点时以抽屉形式打开完整列表。
+    Rail,
+}
+
+/// Snapshot taken when a run starts, so the session bar can show what this turn has used so far.
+/// 运行开始时的快照，使会话栏能显示本轮到目前为止的用量。
+#[derive(Debug, Clone, Copy)]
+pub struct TurnBase {
+    pub started: Instant,
+    /// Lifetime usage (main session and subagents) before the turn.
+    /// 本轮之前的生命周期用量（主会话与子代理）。
+    pub usage: UsageBucket,
+    /// Highest event seq before the turn; later events belong to it.
+    /// 本轮之前的最大事件 seq；之后的事件属于本轮。
+    pub seq: u64,
+}
+
+/// Usage of the turn in progress.
+/// 进行中轮次的用量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveTurn {
+    pub elapsed_ms: u64,
+    /// Usage of the requests that finished during this turn.
+    /// 本轮中已结束请求的用量。
+    pub usage: UsageBucket,
+    /// Rough token estimate of text still streaming, not yet reported by the provider.
+    /// 仍在流式输出、提供方尚未报告的文本的粗略 token 估算。
+    pub streaming: u64,
+}
+
+/// Rough token count of streamed text (about four bytes per token), for display only.
+/// 流式文本的粗略 token 数（约每 4 字节一个 token），仅用于显示。
+pub fn estimate_tokens(text: &str) -> u64 {
+    (text.len() as u64).div_ceil(4)
+}
+
+/// Where the live thinking box floats; toggled at runtime, never persisted.
+/// 实时思考框的位置；运行时切换，不持久化。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingPlacement {
+    Float,
+    Docked,
+}
+
+/// Per-conversation client state.
+/// 每个会话的客户端状态。
+pub struct SessionState {
+    pub events: Vec<ConversationEvent>,
+    pub pending_question: Option<PendingQuestion>,
+    pub prompts: Vec<PendingPrompt>,
+    pub usage: ContextUsage,
+    pub todo: Vec<TodoItem>,
+    pub agents: Vec<AgentInfo>,
+    pub insight: SessionInsight,
+    pub mode: ExecutionMode,
+    /// Blocks whose default fold state the user flipped, keyed by event seq.
+    /// 用户翻转过默认折叠状态的块，以事件 seq 为键。
+    pub toggled: HashSet<u64>,
+    /// Lines scrolled up from the bottom; 0 follows the stream.
+    /// 从底部向上滚动的行数；0 表示跟随流式输出。
+    pub scroll_from_bottom: usize,
+    pub selected: Option<u64>,
+    /// Reasoning blocks that just completed, for the fade-out of the thinking box.
+    /// 刚完成的思考块，用于思考框淡出。
+    pub reasoning_settled: Option<(u64, Instant)>,
+    pub hydrated: bool,
+    /// Expands every folded block (thinking, tools) at once for reading back through history.
+    /// 一次展开所有折叠块（思考、工具），便于回看历史。
+    pub reveal: bool,
+    /// Set while a run is active; see [`TurnBase`].
+    /// 运行进行中时设置；见 [`TurnBase`]。
+    pub turn_base: Option<TurnBase>,
+}
+
+impl SessionState {
+    fn new() -> Self {
+        SessionState {
+            events: Vec::new(),
+            pending_question: None,
+            prompts: Vec::new(),
+            usage: ContextUsage::default(),
+            todo: Vec::new(),
+            agents: Vec::new(),
+            insight: SessionInsight::default(),
+            mode: ExecutionMode::Build,
+            toggled: HashSet::new(),
+            scroll_from_bottom: 0,
+            selected: None,
+            reasoning_settled: None,
+            hydrated: false,
+            reveal: false,
+            turn_base: None,
+        }
+    }
+
+    fn upsert(&mut self, event: ConversationEvent) {
+        match self.events.binary_search_by_key(&event.seq, |e| e.seq) {
+            Ok(index) => {
+                let was_streaming = matches!(
+                    self.events[index].body,
+                    EventBody::AssistantReasoning {
+                        status: StreamStatus::Streaming,
+                        ..
+                    }
+                );
+                let now_settled = matches!(
+                    event.body,
+                    EventBody::AssistantReasoning {
+                        status: StreamStatus::Completed | StreamStatus::Interrupted,
+                        ..
+                    }
+                );
+                if was_streaming && now_settled {
+                    self.reasoning_settled = Some((event.seq, Instant::now()));
+                }
+                self.events[index] = event;
+            }
+            Err(index) => self.events.insert(index, event),
+        }
+    }
+
+    fn append(&mut self, seq: u64, text: &str) {
+        if let Ok(index) = self.events.binary_search_by_key(&seq, |e| e.seq) {
+            match &mut self.events[index].body {
+                EventBody::AssistantReasoning { text: body, .. }
+                | EventBody::AssistantText { text: body, .. } => body.push_str(text),
+                _ => {}
+            }
+        }
+    }
+
+    /// Lifetime usage of the main session plus every subagent.
+    /// 主会话加上所有子代理的生命周期用量。
+    pub fn lifetime_total(&self) -> UsageBucket {
+        let mut total = self.insight.lifetime.main;
+        total.add(&self.insight.lifetime.children_total());
+        total
+    }
+
+    /// Usage of the run in progress: finished requests since the run started plus an estimate
+    /// of the text still streaming.
+    /// 进行中运行的用量：自运行开始以来已结束的请求，加上仍在流式输出文本的估算。
+    pub fn live_turn(&self, now: Instant) -> Option<LiveTurn> {
+        let base = self.turn_base?;
+        let total = self.lifetime_total();
+        let usage = UsageBucket {
+            requests: total.requests.saturating_sub(base.usage.requests),
+            tool_calls: total.tool_calls.saturating_sub(base.usage.tool_calls),
+            input: total.input.saturating_sub(base.usage.input),
+            cache_read: total.cache_read.saturating_sub(base.usage.cache_read),
+            output: total.output.saturating_sub(base.usage.output),
+            ..UsageBucket::default()
+        };
+        let streaming = self
+            .events
+            .iter()
+            .filter(|e| e.seq > base.seq)
+            .map(|e| match &e.body {
+                EventBody::AssistantReasoning {
+                    text,
+                    status: StreamStatus::Streaming,
+                    ..
+                }
+                | EventBody::AssistantText {
+                    text,
+                    status: StreamStatus::Streaming,
+                    ..
+                } => estimate_tokens(text),
+                _ => 0,
+            })
+            .sum();
+        Some(LiveTurn {
+            elapsed_ms: now.saturating_duration_since(base.started).as_millis() as u64,
+            usage,
+            streaming,
+        })
+    }
+
+    /// The most recent finished turn: `(duration_ms, total_tokens, requests)`.
+    /// 最近一次结束的轮次：`(耗时毫秒, token 合计, 请求数)`。
+    pub fn last_turn(&self) -> Option<(u64, u64, u32)> {
+        self.events.iter().rev().find_map(|e| match e.body {
+            EventBody::TurnStats {
+                duration_ms,
+                total_tokens,
+                requests,
+                ..
+            } => Some((duration_ms, total_tokens, requests)),
+            _ => None,
+        })
+    }
+
+    /// Starts or clears the turn snapshot when the run phase changes.
+    /// 运行阶段变化时建立或清除本轮快照。
+    fn phase_changed(&mut self, was_active: bool, active: bool) {
+        if active && !was_active {
+            self.turn_base = Some(TurnBase {
+                started: Instant::now(),
+                usage: self.lifetime_total(),
+                seq: self.events.last().map_or(0, |e| e.seq),
+            });
+        } else if !active {
+            self.turn_base = None;
+        }
+    }
+
+    /// The reasoning block currently streaming, if any.
+    /// 当前正在流式输出的思考块（如有）。
+    pub fn live_reasoning(&self) -> Option<&ConversationEvent> {
+        self.events.iter().rev().find(|e| {
+            matches!(
+                e.body,
+                EventBody::AssistantReasoning {
+                    status: StreamStatus::Streaming,
+                    ..
+                }
+            )
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub severity: Severity,
+    pub message: String,
+    pub until: Instant,
+}
+
+/// Git side state mirrored from the backend.
+/// 从后端镜像的 Git 侧状态。
+#[derive(Default)]
+pub struct GitView {
+    pub snapshot: Option<GitSnapshot>,
+    pub cursor: usize,
+    pub busy: Option<GitBusy>,
+    pub branches: Vec<GitBranch>,
+    pub diffs: HashMap<String, FileDiff>,
+}
+
+impl GitView {
+    /// Files in panel order: staged first, then unstaged.
+    /// 面板顺序的文件：先暂存区，再未暂存。
+    pub fn ordered_files(&self) -> Vec<&GitFile> {
+        let Some(snapshot) = &self.snapshot else {
+            return Vec::new();
+        };
+        let mut files: Vec<&GitFile> = snapshot.files.iter().filter(|f| f.staged).collect();
+        files.extend(snapshot.files.iter().filter(|f| !f.staged));
+        files
+    }
+}
+
+pub struct App {
+    pub theme: Theme,
+    pub backend: BackendHandle,
+    pub connection: ConnectionState,
+    pub started: Instant,
+    pub now: Instant,
+    pub projects: Vec<Project>,
+    pub conversations: Vec<ConversationSummary>,
+    pub models: Vec<ModelInfo>,
+    pub model_id: String,
+    pub effort: ReasoningEffort,
+    pub base_url: String,
+    pub selected: Option<ConversationId>,
+    pub sessions: HashMap<ConversationId, SessionState>,
+    pub focus: Focus,
+    pub sidebar: SidebarMode,
+    pub panel_visible: bool,
+    pub panel_tab: PanelTab,
+    pub panel: PanelView,
+    pub sidebar_cursor: Option<SidebarRow>,
+    pub sidebar_scroll: usize,
+    /// The wheel moved the sidebar away from the cursor; keyboard movement re-attaches it.
+    /// 滚轮使侧栏脱离光标；键盘移动会重新跟随。
+    pub sidebar_free_scroll: bool,
+    pub collapsed_projects: HashSet<String>,
+    pub terminal_cursor: usize,
+    pub composer: TextArea<'static>,
+    /// Long pastes collapsed into tokens of the composer; see `composer.rs`.
+    /// 折叠为输入框标记的长粘贴；见 `composer.rs`。
+    pub pastes: Vec<composer::PastedText>,
+    /// Numbers the paste tokens of the current draft.
+    /// 为当前草稿的粘贴标记编号。
+    pub paste_serial: usize,
+    pub ask: AskState,
+    pub git: GitView,
+    pub command_sessions: Vec<CommandSession>,
+    pub overlay: Option<Overlay>,
+    pub toasts: Vec<Toast>,
+    pub thinking_placement: ThinkingPlacement,
+    pub quit_armed_until: Option<Instant>,
+    pub should_quit: bool,
+    pub hits: HitMap,
+    pub locale_explicit: bool,
+    /// Active top-level area; everything except `Chat` shows a navigation column and a page.
+    /// 当前顶层区域；除 `Chat` 外都显示导航列与页面。
+    pub area: Area,
+    /// Selected page index per area.
+    /// 每个区域选中的页面序号。
+    pub nav: HashMap<Area, usize>,
+    pub pages: HashMap<PageId, PageState>,
+    pub system: Option<SystemSnapshot>,
+    /// Unsaved values of draft pages, keyed by setting key.
+    /// 草稿页面的未保存值，以设置键为键。
+    pub drafts: BTreeMap<String, SettingValue>,
+    /// Knowledge library shown on the library details page; `None` means the first one.
+    /// 知识库详情页显示的知识库；`None` 表示第一个。
+    pub library: Option<String>,
+    /// Files attached to the next prompt.
+    /// 附加到下一条提示的文件。
+    pub attachments: Vec<String>,
+    /// Last left click `(time, column, row)`, for double clicks and menu anchoring.
+    /// 最近一次左键点击 `(时间, 列, 行)`，用于双击与菜单定位。
+    pub last_click: Option<(Instant, u16, u16)>,
+}
+
+impl App {
+    pub fn new(backend: BackendHandle, theme: Theme, locale_explicit: bool) -> Self {
+        let now = Instant::now();
+        App {
+            theme,
+            backend,
+            connection: ConnectionState::Connecting,
+            started: now,
+            now,
+            projects: Vec::new(),
+            conversations: Vec::new(),
+            models: Vec::new(),
+            model_id: String::new(),
+            effort: ReasoningEffort::High,
+            base_url: String::new(),
+            selected: None,
+            sessions: HashMap::new(),
+            focus: Focus::Composer,
+            sidebar: SidebarMode::Expanded,
+            panel_visible: true,
+            panel_tab: PanelTab::Changes,
+            panel: PanelView::default(),
+            sidebar_cursor: None,
+            sidebar_scroll: 0,
+            sidebar_free_scroll: false,
+            collapsed_projects: HashSet::new(),
+            terminal_cursor: 0,
+            composer: new_composer(),
+            pastes: Vec::new(),
+            paste_serial: 0,
+            ask: AskState::default(),
+            git: GitView::default(),
+            command_sessions: Vec::new(),
+            overlay: None,
+            toasts: Vec::new(),
+            thinking_placement: ThinkingPlacement::Float,
+            quit_armed_until: None,
+            should_quit: false,
+            hits: HitMap::default(),
+            locale_explicit,
+            area: Area::Chat,
+            nav: HashMap::new(),
+            pages: HashMap::new(),
+            system: None,
+            drafts: BTreeMap::new(),
+            library: None,
+            attachments: Vec::new(),
+            last_click: None,
+        }
+    }
+
+    /// Switches the top-level area and moves focus into it.
+    /// 切换顶层区域并将焦点移入。
+    pub fn set_area(&mut self, area: Area) {
+        self.area = area;
+        self.focus = match area {
+            Area::Chat => Focus::Composer,
+            _ => Focus::AreaNav,
+        };
+    }
+
+    /// The page shown in the current system area.
+    /// 当前系统区域显示的页面。
+    pub fn current_page(&self) -> Option<PageId> {
+        let pages = self.area.pages();
+        let index = self.nav.get(&self.area).copied().unwrap_or(0);
+        pages.get(index.min(pages.len().saturating_sub(1))).copied()
+    }
+
+    pub fn page_state(&self, page: PageId) -> PageState {
+        self.pages.get(&page).cloned().unwrap_or_default()
+    }
+
+    pub fn page_state_mut(&mut self, page: PageId) -> &mut PageState {
+        self.pages.entry(page).or_default()
+    }
+
+    /// Closes the top overlay; the inspector returns to the history list it came from.
+    /// 关闭顶层浮层；检视器返回其来源的历史列表。
+    pub fn close_overlay(&mut self) {
+        self.overlay = match self.overlay.take() {
+            Some(Overlay::Inspector(inspector)) => inspector.back.map(|h| Overlay::History(*h)),
+            _ => None,
+        };
+    }
+
+    /// Screen position of a click in the last half second, where a context menu should open.
+    /// 最近半秒内的点击位置，即上下文菜单应出现之处。
+    pub fn menu_anchor(&self) -> Option<(u16, u16)> {
+        self.last_click
+            .filter(|(at, _, _)| at.elapsed() < Duration::from_millis(500))
+            .map(|(_, x, y)| (x, y))
+    }
+
+    /// Seconds since start, driving shimmer and spinners.
+    /// 自启动以来的秒数，驱动微光与旋转指示器。
+    pub fn phase(&self) -> f32 {
+        self.now.duration_since(self.started).as_secs_f32()
+    }
+
+    pub fn session(&self) -> Option<&SessionState> {
+        self.selected.as_ref().and_then(|id| self.sessions.get(id))
+    }
+
+    pub fn session_mut(&mut self) -> Option<&mut SessionState> {
+        let id = self.selected.clone()?;
+        Some(self.sessions.entry(id).or_insert_with(SessionState::new))
+    }
+
+    pub fn conversation(&self) -> Option<&ConversationSummary> {
+        let id = self.selected.as_ref()?;
+        self.conversations.iter().find(|c| &c.id == id)
+    }
+
+    pub fn project_of(&self, conversation: &ConversationSummary) -> Option<&Project> {
+        let id = conversation.project_id.as_ref()?;
+        self.projects.iter().find(|p| &p.id == id)
+    }
+
+    pub fn model(&self) -> Option<&ModelInfo> {
+        self.models.iter().find(|m| m.id == self.model_id)
+    }
+
+    pub fn run_phase(&self) -> RunPhase {
+        self.conversation().map_or(RunPhase::Idle, |c| c.run_phase)
+    }
+
+    pub fn mode(&self) -> ExecutionMode {
+        self.session().map_or(ExecutionMode::Build, |s| s.mode)
+    }
+
+    /// True while something on screen animates, so the loop keeps redrawing.
+    /// 屏幕上有动画时为真，使主循环持续重绘。
+    pub fn animating(&self) -> bool {
+        self.connection != ConnectionState::Connected
+            || self.conversations.iter().any(|c| c.run_phase.is_active())
+            || !self.toasts.is_empty()
+            || self.git.busy.is_some()
+            || self.system_busy()
+            || matches!(&self.overlay, Some(Overlay::Folder(picker)) if picker.loading)
+            || self
+                .session()
+                .and_then(|s| s.reasoning_settled)
+                .is_some_and(|(_, at)| {
+                    at.elapsed() < Duration::from_millis(crate::ui::thinking::FADE_MS)
+                })
+    }
+
+    /// A system job, service transition or MCP start is in progress.
+    /// 系统任务、服务状态切换或 MCP 启动正在进行。
+    fn system_busy(&self) -> bool {
+        let Some(system) = &self.system else {
+            return false;
+        };
+        let running = |job: &Job| !job.done;
+        system.memory.status.is_transition()
+            || system.memory.searching
+            || system.memory.jobs.iter().any(running)
+            || system
+                .knowledge
+                .iter()
+                .filter_map(|k| k.job.as_ref())
+                .any(running)
+            || system
+                .index
+                .iter()
+                .filter_map(|i| i.job.as_ref())
+                .any(running)
+            || system.mcp_servers.iter().any(|s| s.status.is_transition())
+    }
+
+    pub fn toast(&mut self, severity: Severity, message: impl Into<String>) {
+        self.toasts.push(Toast {
+            severity,
+            message: message.into(),
+            until: Instant::now() + Duration::from_millis(3200),
+        });
+        if self.toasts.len() > 3 {
+            self.toasts.remove(0);
+        }
+    }
+
+    pub fn tick(&mut self, now: Instant) {
+        self.now = now;
+        self.toasts.retain(|t| t.until > now);
+        if self.quit_armed_until.is_some_and(|until| until <= now) {
+            self.quit_armed_until = None;
+        }
+    }
+
+    /// Folds one backend fact into the state.
+    /// 将一条后端事实折叠进状态。
+    pub fn apply(&mut self, event: BackendEvent) {
+        match event {
+            BackendEvent::Connection(state) => self.connection = state,
+            BackendEvent::Workbench(snapshot) => {
+                self.projects = snapshot.projects;
+                self.conversations = snapshot.conversations;
+                self.models = snapshot.models;
+                self.model_id = snapshot.selected_model_id;
+                self.base_url = snapshot.base_url;
+                if let Some(locale) = snapshot.ui_locale.as_deref()
+                    && !self.locale_explicit
+                {
+                    crate::i18n::set_active_locale(crate::i18n::resolve_locale(None, Some(locale)));
+                    if self.composer_is_empty() {
+                        self.reset_composer();
+                    }
+                }
+                self.selected = snapshot.selected_conversation_id;
+                self.sidebar_cursor = self.selected.clone().map(SidebarRow::Conversation);
+            }
+            BackendEvent::ConversationSummary(summary) => {
+                let was_active = self
+                    .conversations
+                    .iter()
+                    .find(|c| c.id == summary.id)
+                    .is_some_and(|c| c.run_phase.is_active());
+                let active = summary.run_phase.is_active();
+                let id = summary.id.clone();
+                match self.conversations.iter_mut().find(|c| c.id == summary.id) {
+                    Some(row) => *row = summary,
+                    None => self.conversations.insert(0, summary),
+                }
+                if let Some(session) = self.sessions.get_mut(&id) {
+                    session.phase_changed(was_active, active);
+                }
+            }
+            BackendEvent::ConversationHydrated {
+                conversation_id,
+                events,
+            } => {
+                let session = self.session_for(&conversation_id);
+                session.events = events;
+                session.events.sort_by_key(|e| e.seq);
+                session.hydrated = true;
+            }
+            BackendEvent::EventUpsert {
+                conversation_id,
+                event,
+            } => self.session_for(&conversation_id).upsert(event),
+            BackendEvent::TextAppend {
+                conversation_id,
+                seq,
+                text,
+            } => self.session_for(&conversation_id).append(seq, &text),
+            BackendEvent::RunPhase {
+                conversation_id,
+                phase,
+            } => {
+                if let Some(row) = self
+                    .conversations
+                    .iter_mut()
+                    .find(|c| c.id == conversation_id)
+                {
+                    let was_active = row.run_phase.is_active();
+                    row.run_phase = phase;
+                    if let Some(session) = self.sessions.get_mut(&conversation_id) {
+                        session.phase_changed(was_active, phase.is_active());
+                    }
+                }
+            }
+            BackendEvent::PendingQuestion {
+                conversation_id,
+                question,
+            } => {
+                let arrived = question.is_some();
+                let is_selected = self.selected.as_deref() == Some(conversation_id.as_str());
+                self.session_for(&conversation_id).pending_question = question;
+                if is_selected {
+                    self.ask = AskState::default();
+                    if arrived && self.focus == Focus::Composer && self.composer_is_empty() {
+                        self.focus = Focus::Ask;
+                    } else if !arrived && self.focus == Focus::Ask {
+                        self.focus = Focus::Composer;
+                    }
+                }
+            }
+            BackendEvent::PendingPrompts {
+                conversation_id,
+                prompts,
+            } => self.session_for(&conversation_id).prompts = prompts,
+            BackendEvent::ContextUsage {
+                conversation_id,
+                usage,
+            } => self.session_for(&conversation_id).usage = usage,
+            BackendEvent::Todo {
+                conversation_id,
+                items,
+            } => self.session_for(&conversation_id).todo = items,
+            BackendEvent::PlanMode {
+                conversation_id,
+                mode,
+            } => self.session_for(&conversation_id).mode = mode,
+            BackendEvent::CommandSessions(sessions) => {
+                self.command_sessions = sessions;
+                self.terminal_cursor = self
+                    .terminal_cursor
+                    .min(self.command_sessions.len().saturating_sub(1));
+            }
+            BackendEvent::Agents {
+                conversation_id,
+                agents,
+            } => self.session_for(&conversation_id).agents = agents,
+            BackendEvent::SessionInsight {
+                conversation_id,
+                insight,
+            } => self.session_for(&conversation_id).insight = *insight,
+            BackendEvent::Git(snapshot) => {
+                self.git.diffs.clear();
+                self.git.snapshot = Some(snapshot);
+                let len = self.git.ordered_files().len();
+                self.git.cursor = self.git.cursor.min(len.saturating_sub(1));
+                self.request_visible_diff();
+            }
+            BackendEvent::GitDiff(diff) => {
+                self.git.diffs.insert(diff.path.clone(), diff);
+            }
+            BackendEvent::GitBranches(branches) => {
+                self.git.branches = branches;
+                input::refresh_branch_picker(self);
+            }
+            BackendEvent::CommitMessage { text, done } => {
+                let mut commit_now = None;
+                if let Some(Overlay::Commit(dialog)) = &mut self.overlay {
+                    if !text.is_empty() {
+                        dialog.message.insert_str(&text);
+                    }
+                    if done {
+                        dialog.field = overlay::CommitField::Message;
+                        commit_now = dialog.commit_after_generate.take();
+                    }
+                }
+                if let Some(push) = commit_now {
+                    input::submit_commit(self, push);
+                }
+            }
+            BackendEvent::GitBusy(busy) => self.git.busy = busy,
+            BackendEvent::GitNotice(notice) => {
+                let message = match notice {
+                    GitNotice::Committed => tr!("gitCommitDialog.actionDone"),
+                    GitNotice::Pushed => tr!("gitCommitDialog.pushDone"),
+                    GitNotice::Switched(name) => tr!("gitBranchMenu.switched", name = name),
+                    GitNotice::Created(name) => tr!("gitBranchCreate.created", name = name),
+                };
+                if matches!(self.overlay, Some(Overlay::Commit(_))) {
+                    self.overlay = None;
+                }
+                self.toast(Severity::Info, message);
+            }
+            BackendEvent::Toast { severity, message } => self.toast(severity, message),
+            BackendEvent::Projects(projects) => {
+                self.projects = projects;
+                self.fix_sidebar_cursor();
+            }
+            BackendEvent::ConversationRemoved(id) => {
+                self.conversations.retain(|c| c.id != id);
+                self.sessions.remove(&id);
+                if self.selected.as_ref() == Some(&id) {
+                    self.selected = None;
+                    self.ask = AskState::default();
+                    if let Some(next) = self.conversations.first().map(|c| c.id.clone()) {
+                        self.select_conversation(next);
+                    }
+                }
+                self.fix_sidebar_cursor();
+            }
+            BackendEvent::Directory(listing) => {
+                if let Some(Overlay::Folder(picker)) = &mut self.overlay {
+                    picker.cursor = 0;
+                    picker.scroll = 0;
+                    picker.loading = false;
+                    picker.listing = Some(listing);
+                }
+            }
+            BackendEvent::System(snapshot) => self.system = Some(*snapshot),
+            BackendEvent::Notice(notice) => self.notice(notice),
+        }
+    }
+
+    fn notice(&mut self, notice: Notice) {
+        let (severity, message) = match notice {
+            Notice::ProjectAdded(name) => {
+                (Severity::Info, tr!("tui.notice.projectAdded", name = name))
+            }
+            Notice::ProjectRemoved(name) => (
+                Severity::Info,
+                tr!("tui.notice.projectRemoved", name = name),
+            ),
+            Notice::Archived(title) => (Severity::Info, tr!("tui.notice.archived", title = title)),
+            Notice::ArchivedCount(count) => (
+                Severity::Info,
+                tr!("tui.notice.archivedCount", count = count),
+            ),
+            Notice::Restored(title) => (Severity::Info, tr!("tui.notice.restored", title = title)),
+            Notice::Deleted => (Severity::Info, tr!("tui.notice.deleted")),
+            Notice::Renamed => (Severity::Info, tr!("tui.notice.renamed")),
+            Notice::SettingsSaved => (Severity::Info, tr!("tui.notice.settingsSaved")),
+            Notice::CredentialAdded => (Severity::Info, tr!("tui.notice.credentialAdded")),
+            Notice::CredentialTested { ok: true } => {
+                (Severity::Info, tr!("tui.notice.credentialOk"))
+            }
+            Notice::CredentialTested { ok: false } => {
+                (Severity::Error, tr!("tui.notice.credentialFailed"))
+            }
+            Notice::NotificationSent => (Severity::Info, tr!("tui.notice.notificationSent")),
+            Notice::LogsCleaned => (Severity::Info, tr!("tui.notice.logsCleaned")),
+            Notice::MemoryUpdated => (Severity::Info, tr!("tui.notice.memoryUpdated")),
+            Notice::JobStarted(name) => (Severity::Info, tr!("tui.notice.jobStarted", name = name)),
+            Notice::JobFinished(name) => {
+                (Severity::Info, tr!("tui.notice.jobFinished", name = name))
+            }
+            Notice::MemorySuppressed => (Severity::Info, tr!("workspaceMemory.suppressedNotice")),
+            Notice::MemoryDeleted => (Severity::Info, tr!("workspaceMemory.deletedNotice")),
+            Notice::Goal(status) => (
+                Severity::Info,
+                match status {
+                    None => tr!("conversation.goalNotice.cleared"),
+                    Some(GoalStatus::Active) => tr!("conversation.goalNotice.resumed"),
+                    Some(GoalStatus::Paused) => tr!("conversation.goalNotice.paused"),
+                    Some(GoalStatus::Blocked) => tr!("conversation.goalNotice.blocked"),
+                    Some(GoalStatus::Completed) => tr!("conversation.goalNotice.completed"),
+                    Some(GoalStatus::BudgetLimited) => {
+                        tr!("conversation.goalNotice.budgetExhausted")
+                    }
+                    Some(GoalStatus::UsageLimited) => tr!("conversation.goalNotice.usageLimited"),
+                },
+            ),
+            Notice::AgentStopped(name) => {
+                (Severity::Info, tr!("tui.notice.agentStopped", name = name))
+            }
+            Notice::AgentClosed(name) => {
+                (Severity::Info, tr!("tui.notice.agentClosed", name = name))
+            }
+            Notice::Done(name) => (Severity::Info, tr!("tui.notice.done", name = name)),
+        };
+        self.toast(severity, message);
+    }
+
+    /// Keeps the sidebar cursor on an existing, selectable row.
+    /// 使侧栏光标保持在存在且可选的行上。
+    pub fn fix_sidebar_cursor(&mut self) {
+        let rows = self.sidebar_rows();
+        if self
+            .sidebar_cursor
+            .as_ref()
+            .is_some_and(|c| rows.contains(c))
+        {
+            return;
+        }
+        self.sidebar_cursor = self
+            .selected
+            .clone()
+            .map(SidebarRow::Conversation)
+            .filter(|r| rows.contains(r))
+            .or_else(|| rows.into_iter().find(SidebarRow::selectable));
+    }
+
+    fn session_for(&mut self, conversation_id: &str) -> &mut SessionState {
+        self.sessions
+            .entry(conversation_id.to_string())
+            .or_insert_with(SessionState::new)
+    }
+
+    pub fn composer_is_empty(&self) -> bool {
+        self.composer.lines().iter().all(|l| l.trim().is_empty())
+    }
+
+    pub fn composer_text(&self) -> String {
+        self.composer.lines().join("\n")
+    }
+
+    pub fn reset_composer(&mut self) {
+        self.composer = new_composer();
+        self.pastes.clear();
+        self.paste_serial = 0;
+    }
+
+    /// Asks the backend for the diff of the file under the Git cursor when it is not cached.
+    /// 当 Git 光标所在文件的 diff 未缓存时向后端请求。
+    pub fn request_visible_diff(&mut self) {
+        let path = match &self.overlay {
+            Some(Overlay::Diff(view)) => self
+                .git
+                .ordered_files()
+                .get(view.file_index)
+                .map(|f| f.path.clone()),
+            _ => None,
+        };
+        if let Some(path) = path
+            && !self.git.diffs.contains_key(&path)
+        {
+            self.backend.send(Command::GitLoadDiff { path });
+        }
+    }
+
+    /// Sidebar rows: pinned conversations, then projects (pinned first) each followed by its
+    /// conversations unless collapsed, then conversations without a project.
+    /// 侧栏行：置顶会话；然后是项目（置顶优先），未折叠时后接其会话；最后是无项目的会话。
+    pub fn sidebar_rows(&self) -> Vec<SidebarRow> {
+        let mut rows = Vec::new();
+        let pinned: Vec<SidebarRow> = self
+            .conversations
+            .iter()
+            .filter(|c| c.pinned)
+            .map(|c| SidebarRow::Conversation(c.id.clone()))
+            .collect();
+        if !pinned.is_empty() {
+            rows.push(SidebarRow::PinnedHeader);
+            rows.extend(pinned);
+        }
+        let mut projects: Vec<&Project> = self.projects.iter().collect();
+        projects.sort_by_key(|p| !p.pinned);
+        for project in projects {
+            rows.push(SidebarRow::Project(project.id.clone()));
+            if self.collapsed_projects.contains(&project.id) {
+                continue;
+            }
+            rows.extend(
+                self.conversations
+                    .iter()
+                    .filter(|c| !c.pinned && c.project_id.as_ref() == Some(&project.id))
+                    .map(|c| SidebarRow::Conversation(c.id.clone())),
+            );
+        }
+        let unlinked: Vec<SidebarRow> = self
+            .conversations
+            .iter()
+            .filter(|c| {
+                !c.pinned
+                    && c.project_id
+                        .as_ref()
+                        .is_none_or(|id| !self.projects.iter().any(|p| &p.id == id))
+            })
+            .map(|c| SidebarRow::Conversation(c.id.clone()))
+            .collect();
+        if !unlinked.is_empty() {
+            rows.push(SidebarRow::Unlinked);
+            rows.extend(unlinked);
+        }
+        rows
+    }
+
+    pub fn select_conversation(&mut self, id: ConversationId) {
+        if self.selected.as_ref() == Some(&id) {
+            return;
+        }
+        self.selected = Some(id.clone());
+        self.sidebar_cursor = Some(SidebarRow::Conversation(id.clone()));
+        self.ask = AskState::default();
+        self.backend.send(Command::SelectConversation(id));
+    }
+}
+
+pub fn new_composer() -> TextArea<'static> {
+    let mut composer = TextArea::default();
+    composer.set_wrap_mode(WrapMode::WordOrGlyph);
+    composer.set_placeholder_text(tr!("composer.placeholder", shortcut = "Enter"));
+    composer
+}

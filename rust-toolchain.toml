@@ -1,0 +1,6 @@
+# Pin the toolchain to the same channel as vulcan-code so both repositories resolve Cargo identically.
+# 固定与 vulcan-code 相同的工具链，使两个仓库的 Cargo 解析行为一致。
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

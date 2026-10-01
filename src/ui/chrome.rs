@@ -1,0 +1,471 @@
+// Window chrome: splash screen, header with area tabs, status bar with buttons, and toasts.
+// 窗口框架：启动画面、带区域标签的标题栏、带按钮的状态栏与提示。
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Widget;
+
+use super::brand::Logo;
+use super::text::{compact_count, shimmer, spinner, truncate, width_of};
+use super::theme::{Theme, mix};
+use super::transcript::severity_icon;
+use crate::app::action::{self, UiAction};
+use crate::app::commands::AppCommand;
+use crate::app::hit::Target;
+use crate::app::pages::Area;
+use crate::app::{App, Focus};
+use crate::backend::ConnectionState;
+use crate::tr;
+
+/// Full-screen splash shown until the first workbench snapshot arrives.
+/// 首个工作台快照到达前显示的全屏启动画面。
+pub fn splash(app: &App, area: Rect, buf: &mut Buffer) {
+    let theme = &app.theme;
+    buf.set_style(area, theme.base());
+    let phase = app.phase();
+    // Square tile: `cols` columns by `cols / 2` rows; leave room for the wordmark and status.
+    // 方形图块：`cols` 列 × `cols / 2` 行；为字标与状态留出空间。
+    let cols = (area.width / 3)
+        .min(area.height.saturating_sub(7) * 2)
+        .clamp(8, 36);
+    let logo = Logo::new(cols);
+    let total = logo.rows() + 6;
+    let top = area.y + area.height.saturating_sub(total) / 2;
+    let left = area.x + area.width.saturating_sub(logo.cols) / 2;
+    let glow = 0.5 + 0.5 * (phase * 2.2).sin();
+    logo.render(
+        Rect {
+            x: left,
+            y: top,
+            width: logo.cols,
+            height: logo.rows(),
+        },
+        buf,
+        theme.bg,
+        glow,
+    );
+
+    let center = |w: usize| area.x + area.width.saturating_sub(w as u16) / 2;
+    let y = top + logo.rows() + 1;
+    let wordmark = Line::from(vec![
+        Span::styled("V U L C A N  ", theme.strong()),
+        Span::styled(
+            "C O D E",
+            Style::new().fg(theme.primary).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let w = wordmark.width();
+    wordmark.render(
+        Rect {
+            x: center(w),
+            y,
+            width: (w as u16).min(area.width),
+            height: 1,
+        },
+        buf,
+    );
+    let status = tr!("startup.connectingService");
+    let mut spans = vec![Span::styled(
+        format!("{} ", spinner(phase)),
+        theme.primary_text(),
+    )];
+    spans.extend(shimmer(&status, theme.muted_fg, theme.fg, phase));
+    let w = width_of(&status) + 2;
+    Line::from(spans).render(
+        Rect {
+            x: center(w),
+            y: y + 2,
+            width: (w as u16).min(area.width),
+            height: 1,
+        },
+        buf,
+    );
+    if app.backend.is_mock {
+        let badge = format!(" {} ", tr!("tui.mock.badge"));
+        buf.set_string(
+            center(width_of(&badge)),
+            y + 4,
+            &badge,
+            Style::new().fg(theme.warning),
+        );
+    }
+}
+
+/// Header: wordmark, area tabs (or the current area with a switcher when narrow), Git branch and
+/// connection state.
+/// 标题栏：字标、区域标签（过窄时显示当前区域与切换按钮）、Git 分支与连接状态。
+pub fn header(app: &App, area: Rect, buf: &mut Buffer) {
+    let theme = &app.theme;
+    let bg = theme.sidebar;
+    buf.set_style(area, Style::new().bg(bg).fg(theme.sidebar_fg));
+
+    let mut right = Vec::new();
+    if let Some(snapshot) = &app.git.snapshot {
+        right.push(Span::styled(
+            format!("⎇ {}", snapshot.branch),
+            Style::new().fg(theme.teal),
+        ));
+        if snapshot.ahead > 0 {
+            right.push(Span::styled(
+                format!(" ↑{}", snapshot.ahead),
+                Style::new().fg(theme.success),
+            ));
+        }
+        right.push(Span::raw("  "));
+    }
+    let (dot, label, color) = match app.connection {
+        ConnectionState::Connected => ("●", app.backend.label.clone(), theme.success),
+        ConnectionState::Connecting => (
+            spinner(app.phase()),
+            tr!("tui.connection.connecting"),
+            theme.warning,
+        ),
+        ConnectionState::Reconnecting => (
+            spinner(app.phase()),
+            tr!("tui.connection.reconnecting"),
+            theme.warning,
+        ),
+    };
+    right.push(Span::styled(format!("{dot} "), Style::new().fg(color)));
+    right.push(Span::styled(label, theme.muted_text()));
+    if app.backend.is_mock {
+        right.push(Span::raw(" "));
+        right.push(Span::styled(
+            format!(" {} ", tr!("tui.mock.badge")),
+            Style::new().fg(theme.primary_fg).bg(theme.warning),
+        ));
+    }
+    right.push(Span::raw(" "));
+    let right_line = Line::from(right);
+    let right_width = right_line.width() as u16;
+    if right_width < area.width {
+        right_line.render(
+            Rect {
+                x: area.right() - right_width,
+                width: right_width,
+                ..area
+            },
+            buf,
+        );
+    }
+
+    let brand = Line::from(vec![
+        Span::styled(" Vulcan", theme.strong()),
+        Span::styled(
+            " Code ",
+            Style::new().fg(theme.primary).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let brand_width = brand.width() as u16;
+    brand.render(
+        Rect {
+            width: brand_width.min(area.width),
+            ..area
+        },
+        buf,
+    );
+
+    let mut x = area.x + brand_width + 1;
+    let limit = area.right().saturating_sub(right_width + 1);
+    let tabs: Vec<(Area, String)> = Area::ALL
+        .iter()
+        .map(|a| (*a, format!(" {} ", a.label())))
+        .collect();
+    let tabs_width: u16 = tabs.iter().map(|(_, t)| width_of(t) as u16 + 1).sum();
+    if x + tabs_width <= limit {
+        for (tab_area, text) in tabs {
+            let w = width_of(&text) as u16;
+            let style = if tab_area == app.area {
+                Style::new()
+                    .fg(theme.primary_fg)
+                    .bg(theme.primary)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+                    .fg(theme.sidebar_fg)
+                    .bg(mix(theme.accent, bg, 0.5))
+            };
+            let rect = Rect {
+                x,
+                width: w,
+                ..area
+            };
+            buf.set_string(x, area.y, &text, style);
+            app.hits.add(rect, Target::AreaTab(tab_area));
+            x += w + 1;
+        }
+    } else {
+        // Narrow: the current area plus a switcher that opens the area picker.
+        // 窄屏：当前区域加一个打开区域选择器的切换按钮。
+        let text = format!(" {} ▾ F2 ", app.area.label());
+        let text = truncate(&text, limit.saturating_sub(x) as usize);
+        let w = width_of(&text) as u16;
+        buf.set_string(
+            x,
+            area.y,
+            &text,
+            Style::new().fg(theme.primary_fg).bg(theme.primary),
+        );
+        app.hits.add(
+            Rect {
+                x,
+                width: w,
+                ..area
+            },
+            Target::Do(UiAction::OpenAreaPicker),
+        );
+    }
+}
+
+fn focus_hint(app: &App) -> String {
+    match app.focus {
+        Focus::Composer => tr!("tui.hint.composer"),
+        Focus::Transcript => tr!("tui.hint.transcript"),
+        Focus::Sidebar => tr!("tui.hint.sidebar"),
+        Focus::Panel => tr!("tui.hint.panel"),
+        Focus::Ask => tr!("tui.hint.ask"),
+        Focus::AreaNav => tr!("tui.hint.nav"),
+        Focus::AreaPage => tr!("tui.hint.page"),
+    }
+}
+
+/// Status bar: focus badge and key hints on the left; context usage and buttons on the right.
+/// 状态栏：左侧为焦点标记与按键提示；右侧为上下文用量与按钮。
+/// Cells of the compact context gauge shown in the status bar and the session bar.
+/// 状态栏与会话栏中紧凑上下文进度条的格数。
+const GAUGE_CELLS: usize = 5;
+
+/// Compact context gauge `▰▰▱▱▱` colored by usage.
+/// 按用量着色的紧凑上下文进度条 `▰▰▱▱▱`。
+pub fn usage_gauge(theme: &Theme, percent: u8) -> Vec<Span<'static>> {
+    let filled = (percent as usize * GAUGE_CELLS)
+        .div_ceil(100)
+        .min(GAUGE_CELLS);
+    vec![
+        Span::styled(
+            "▰".repeat(filled),
+            Style::new().fg(theme.usage_color(percent)),
+        ),
+        Span::styled(
+            "▱".repeat(GAUGE_CELLS - filled),
+            Style::new().fg(theme.border),
+        ),
+    ]
+}
+
+/// Bottom status bar. `show_usage` adds the context gauge, left out while the session bar above
+/// the composer already shows it.
+/// 底部状态栏。`show_usage` 时显示上下文进度条；输入框上方的会话栏已显示时省略。
+pub fn status_bar(app: &App, area: Rect, buf: &mut Buffer, show_usage: bool) {
+    let theme = &app.theme;
+    let bg = theme.sidebar;
+    buf.set_style(area, Style::new().bg(bg).fg(theme.muted_fg));
+    let focus_name = match app.focus {
+        Focus::Composer => tr!("composer.aria.input"),
+        Focus::Transcript => tr!("area.chat"),
+        Focus::Sidebar => tr!("sidebar.projects"),
+        Focus::Panel => tr!("tui.panel.title"),
+        Focus::Ask => tr!("tui.focus.ask"),
+        Focus::AreaNav => tr!("tui.focus.nav"),
+        Focus::AreaPage => app.area.label(),
+    };
+
+    // Buttons, right to left: palette, help, areas, theme, language.
+    // 按钮（从右到左）：命令面板、帮助、区域、主题、语言。
+    let key_style = Style::new().fg(theme.fg).bg(theme.accent);
+    let buttons: Vec<(String, Style, UiAction)> = vec![
+        (
+            format!(" {} ", action::locale_mark()),
+            key_style,
+            UiAction::OpenLanguagePicker,
+        ),
+        (
+            " ◐ ".to_string(),
+            key_style,
+            UiAction::App(AppCommand::ToggleTheme),
+        ),
+        (
+            format!(" F2 {} ", tr!("tui.area.short")),
+            key_style,
+            UiAction::OpenAreaPicker,
+        ),
+        (
+            format!(" F1 {} ", tr!("tui.help.short")),
+            key_style,
+            UiAction::App(AppCommand::Help),
+        ),
+        (
+            " Ctrl+P ".to_string(),
+            key_style,
+            UiAction::App(AppCommand::Palette),
+        ),
+    ];
+    let mut x = area.right();
+    x = x.saturating_sub(1);
+    for (text, style, action) in buttons.into_iter().rev() {
+        let w = width_of(&text) as u16;
+        if x < area.x + w + 20 {
+            break;
+        }
+        x -= w;
+        buf.set_string(x, area.y, &text, style);
+        app.hits.add(
+            Rect {
+                x,
+                y: area.y,
+                width: w,
+                height: 1,
+            },
+            Target::Do(action),
+        );
+        x = x.saturating_sub(1);
+    }
+
+    let mut usage_spans = Vec::new();
+    if let Some(session) = app.session()
+        && app.area == Area::Chat
+        && show_usage
+    {
+        let usage = session.usage;
+        if usage.max_tokens > 0 {
+            let percent = usage.percent();
+            usage_spans.extend(usage_gauge(theme, percent));
+            usage_spans.push(Span::styled(
+                format!(" {percent}% · {} ", compact_count(usage.used_tokens)),
+                theme.muted_text(),
+            ));
+        }
+    }
+    let usage = Line::from(usage_spans);
+    let usage_width = usage.width() as u16;
+    if usage_width > 0 && x > area.x + usage_width + 20 {
+        x -= usage_width;
+        usage.render(
+            Rect {
+                x,
+                y: area.y,
+                width: usage_width,
+                height: 1,
+            },
+            buf,
+        );
+    }
+
+    let mut left = vec![
+        Span::styled(
+            format!(" {focus_name} "),
+            Style::new()
+                .fg(theme.primary_fg)
+                .bg(theme.primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ];
+    if app.quit_armed_until.is_some() {
+        left.push(Span::styled(
+            tr!("tui.quit.confirm"),
+            Style::new().fg(theme.warning),
+        ));
+    } else {
+        let used: usize = left.iter().map(|s| width_of(&s.content)).sum();
+        let room = (x.saturating_sub(area.x + 1) as usize).saturating_sub(used + 1);
+        left.push(Span::styled(
+            truncate(&focus_hint(app), room),
+            Style::new().fg(mix(theme.muted_fg, bg, 0.85)),
+        ));
+    }
+    Line::from(left).render(
+        Rect {
+            width: x.saturating_sub(area.x + 1),
+            ..area
+        },
+        buf,
+    );
+}
+
+/// Transient notices stacked at the top-right corner.
+/// 堆叠在右上角的短暂提示。
+pub fn toasts(app: &App, area: Rect, buf: &mut Buffer) {
+    let theme = &app.theme;
+    let max_width = (area.width / 2).clamp(20, 56) as usize;
+    for (i, toast) in app.toasts.iter().rev().enumerate() {
+        let (icon, color) = severity_icon(theme, toast.severity);
+        let text = truncate(&toast.message, max_width.saturating_sub(5));
+        let width = (width_of(&text) + 5) as u16;
+        let y = area.y + 1 + i as u16;
+        if y >= area.bottom() || width > area.width {
+            break;
+        }
+        let rect = Rect {
+            x: area.right() - width - 1,
+            y,
+            width,
+            height: 1,
+        };
+        super::text::clear_area(rect, buf);
+        Line::from(vec![
+            Span::styled("▌", Style::new().fg(color)),
+            Span::styled(format!("{icon} "), Style::new().fg(color)),
+            Span::styled(format!("{text}  "), Style::new().fg(theme.fg)),
+        ])
+        .style(Style::new().bg(theme.popover))
+        .render(rect, buf);
+    }
+}
+
+/// A clickable chip `label` at `(x, y)`; returns its width. Shared by pages, dialogs and panels.
+/// 在 `(x, y)` 处绘制可点击的按钮 `label` 并返回其宽度。页面、对话框与面板共用。
+pub fn button(
+    app: &App,
+    buf: &mut Buffer,
+    x: u16,
+    y: u16,
+    label: &str,
+    style: Style,
+    action: UiAction,
+) -> u16 {
+    let text = format!(" {label} ");
+    let w = width_of(&text) as u16;
+    buf.set_string(x, y, &text, style);
+    app.hits.add(
+        Rect {
+            x,
+            y,
+            width: w,
+            height: 1,
+        },
+        Target::Do(action),
+    );
+    w
+}
+
+/// Button styles: primary (filled accent), normal (subtle), danger.
+/// 按钮样式：主要（强调色填充）、普通（低调）、危险。
+pub fn button_style(app: &App, kind: ButtonKind, bg: Color) -> Style {
+    let theme = &app.theme;
+    match kind {
+        ButtonKind::Primary => Style::new()
+            .fg(theme.primary_fg)
+            .bg(theme.primary)
+            .add_modifier(Modifier::BOLD),
+        ButtonKind::Normal => Style::new().fg(theme.fg).bg(mix(theme.accent, bg, 0.9)),
+        ButtonKind::Danger => Style::new()
+            .fg(theme.primary_fg)
+            .bg(theme.danger)
+            .add_modifier(Modifier::BOLD),
+        ButtonKind::Focused => Style::new()
+            .fg(theme.fg)
+            .bg(mix(theme.primary, bg, 0.35))
+            .add_modifier(Modifier::BOLD),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonKind {
+    Primary,
+    Normal,
+    Danger,
+    Focused,
+}

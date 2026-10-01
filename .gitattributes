@@ -1,0 +1,3 @@
+# Generated catalogs are compared byte-for-byte by `vulcan-tui-i18n sync --check`.
+# 生成的语言目录会被 `vulcan-tui-i18n sync --check` 逐字节比较。
+* text=auto eol=lf
