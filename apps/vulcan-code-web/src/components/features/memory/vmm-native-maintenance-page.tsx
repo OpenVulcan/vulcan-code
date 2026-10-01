@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
+import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -326,10 +327,17 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 className="text-lg font-semibold">{t("memory.maintenance.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.maintenance.description")}</p></div>
-        <div className="flex flex-wrap gap-2"><Button ref={cleanupTrigger} disabled={controlsBusy || status?.running} onClick={() => void previewCleanup()} type="button"><Sparkles className="size-4" aria-hidden="true" />{t("memory.maintenance.previewCleanup")}</Button><Button disabled={controlsBusy} onClick={() => void loadPage()} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button></div>
-      </div>
+      <PageTabs
+        actions={<>
+          <Button ref={cleanupTrigger} disabled={controlsBusy || status?.running} onClick={() => void previewCleanup()} size="sm" type="button"><Sparkles className="size-4" aria-hidden="true" />{t("memory.maintenance.previewCleanup")}</Button>
+          <Button disabled={controlsBusy} onClick={() => void loadPage()} size="sm" type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
+        </>}
+        ariaLabel={t("memory.maintenance.title")}
+        className="vmm-page-tabs"
+        onValueChange={setMaintenanceView}
+        options={([["recycle", "memory.maintenance.recycleBin"], ["cleanup", "memory.workspace.cleanup"], ["index", "memory.workspace.index"]] as const).map(([value, label]) => ({ label: t(label), value }))}
+        value={maintenanceView}
+      />
       {error ? <p className="settings-error-text text-sm">{error}</p> : null}
       {vectorStatus && (!vectorStatus.configured || vectorStatus.rebuildRequiredMemoryCount > 0) ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3" role="alert">
@@ -346,9 +354,6 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
         </div>
       ) : null}
 
-      <div className="vmm-section-tabs">
-        {([['recycle','memory.maintenance.recycleBin'],['cleanup','memory.workspace.cleanup'],['index','memory.workspace.index']] as const).map(([id,label]) => <button key={id} type="button" aria-pressed={maintenanceView === id} onClick={() => setMaintenanceView(id)}>{t(label)}</button>)}
-      </div>
       <div hidden={maintenanceView !== "cleanup"}><Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="size-4" aria-hidden="true" />{t("memory.maintenance.status")}</CardTitle><CardDescription>{t("memory.maintenance.statusDescription")}</CardDescription></CardHeader>
         <CardContent className="space-y-4">

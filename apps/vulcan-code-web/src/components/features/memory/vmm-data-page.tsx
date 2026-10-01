@@ -499,12 +499,8 @@ export function VmmDataPage(props: VmmDataPageProps) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("memory.data.title")}</h2>
-          <p className="text-sm text-muted-foreground">{t("memory.data.description")}</p>
-        </div>
-        <div className="flex items-center gap-2">
+      <div className="vmm-page-toolbar">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant={capabilities ? "default" : "destructive"}>{capabilities ? t("memory.data.managementReady") : t("memory.data.managementUnavailable")}</Badge>
           {capabilities ? <Badge variant="outline">{capabilities.protocol_version} · {capabilities.storage_mode}</Badge> : null}
           {capabilities?.full_text_index_status ? <Badge variant="outline">{t("memory.data.fullTextIndex")}: {capabilities.full_text_index_status}</Badge> : null}

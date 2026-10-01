@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/accordion"
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
+import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import {
   Card,
   CardContent,
@@ -25,7 +26,6 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
@@ -341,9 +341,6 @@ function VmmProfilePage({
   ])
 
   const effectiveTarget = vmmProfileEffectiveTarget(snapshot.experienceState.deployment, target)
-  const profileDescription = t(isNative
-    ? "memory.profile.nativeDescription"
-    : "memory.profile.description")
   // usesFixedNativeUser distinguishes the host-owned user profile from selectable external users.
   // usesFixedNativeUser 区分宿主持有的固定用户画像与可选择的外置用户。
   const usesFixedNativeUser = vmmProfileUsesFixedNativeUser(
@@ -464,52 +461,44 @@ function VmmProfilePage({
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("memory.profile.title")}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            {profileDescription}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-        <Button disabled={busy || readState === "loading" || !profileCatalogReady || !selectedTargetRef} onClick={() => setCorrectionOpen(true)}>{t("memory.profile.instruction")}</Button>
-        <Button
-          disabled={busy || readState === "loading"}
-          onClick={() => void refreshProfile()}
-          type="button"
-          variant="outline"
-        >
-          <RefreshCw className="size-4" aria-hidden="true" />
-          {t("memory.profile.refresh")}
-        </Button></div>
-      </div>
+      {/* The profile target is the page's primary view switch, so it uses the shared page tab strip.
+          画像目标是本页的主视图切换，因此使用共享页面标签条。 */}
+      <PageTabs
+        actions={<>
+          <Button disabled={busy || readState === "loading" || !profileCatalogReady || !selectedTargetRef} onClick={() => setCorrectionOpen(true)} size="sm">{t("memory.profile.instruction")}</Button>
+          <Button
+            disabled={busy || readState === "loading"}
+            onClick={() => void refreshProfile()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <RefreshCw className="size-4" aria-hidden="true" />
+            {t("memory.profile.refresh")}
+          </Button>
+        </>}
+        ariaLabel={t("memory.profile.target")}
+        className="vmm-page-tabs"
+        onValueChange={(value) => {
+          setTarget(value)
+          setNodes([])
+          setNativeStateCounts(null)
+          setBundlePreview("")
+          setBundleModeError(false)
+        }}
+        options={(["user", "project"] as const).map((value) => ({
+          disabled: busy || readState === "loading" || !profileCatalogReady,
+          label: value === "user" ? t("memory.profile.user") : t("memory.profile.project"),
+          value,
+        }))}
+        value={target}
+      />
 
       {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
       {readError ? <p role="alert" className="text-sm text-destructive">{readError}</p> : null}
       {!profileCatalogReady && readState === "idle" ? <p role="status" className="text-sm text-muted-foreground">{t("memory.profile.createAnAvailableMemory")}</p> : null}
 
       <section className="vmm-profile-target" aria-label={t("memory.profile.target")}>
-          <RadioGroup
-            className="flex flex-wrap gap-3"
-            disabled={busy || readState === "loading" || !profileCatalogReady}
-            onValueChange={(value) => {
-              setTarget(value as "user" | "project")
-              setNodes([])
-              setNativeStateCounts(null)
-              setBundlePreview("")
-              setBundleModeError(false)
-            }}
-            value={target}
-          >
-            <label className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2">
-              <RadioGroupItem value="user" />
-              <span className="text-sm font-medium">{t("memory.profile.user")}</span>
-            </label>
-            <label className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2">
-              <RadioGroupItem value="project" />
-              <span className="text-sm font-medium">{t("memory.profile.project")}</span>
-            </label>
-          </RadioGroup>
           {usesFixedNativeUser ? (
             <div className="vmm-profile-identity space-y-1">
               <p className="text-sm font-medium">{t("memory.profile.nativeUserName")}</p>

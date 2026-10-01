@@ -311,10 +311,15 @@
 
 /* A collapsed panel leaves the layout entirely; the activity rail beside it stays as the visible navigation. */
 /* 折叠的面板完全退出布局，旁边的活动轨道作为可见导航保留。 */
+/* Desktop hosts collect window drag regions without overflow clipping, so the clipped brand strip would still swallow
+   clicks on the header sidebar toggle; visibility removes it from that hit area as well. */
+/* 桌面宿主收集窗口拖动区域时不考虑溢出裁剪，被裁剪的品牌条仍会吞掉标题栏侧栏切换按钮的点击；visibility 使其同样
+   退出该命中区域。 */
 .vcn-sidebar[data-collapsible="offcanvas"] {
   width: 0;
   min-width: 0;
   overflow: hidden;
+  visibility: hidden;
 }
 
 /* The width comes from navigation-layout.ts through --activity-rail-width. */

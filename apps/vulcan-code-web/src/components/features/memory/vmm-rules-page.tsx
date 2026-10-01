@@ -56,26 +56,21 @@ function VmmRulesPage({
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("memory.rules.title")}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            {t("memory.rules.description")}
-          </p>
+      {/* The edit scope and the apply action share one toolbar row, so the save target stays beside its scope.
+          编辑范围与应用操作共用一行工具栏，使保存目标始终紧邻其范围。 */}
+      <div className="vmm-scope-toolbar">
+        <div className="vmm-scope-field">
+          <Label>{t("memory.workspace.editScope")}</Label>
+          <Select disabled={busy} value={scope === "global" ? "global" : `project:${projectId}`} onValueChange={(value) => onSelectScope(value === "global" ? "global" : "project", value === "global" ? null : value.slice("project:".length))}>
+            <SelectTrigger className="w-full sm:w-80" aria-label={t("memory.workspace.editScope")}><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="global">{t("memory.rules.allProjects")}</SelectItem>{projects.map((project) => <SelectItem key={project.projectId} value={`project:${project.projectId}`}>{project.name}</SelectItem>)}</SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{t("memory.workspace.scopeHint")}</p>
         </div>
         <Button disabled={busy || !draftReady || !numbersValid} onClick={() => void onApply(scope, scope === "project" ? projectId : null, draft)} type="button">
           <Save className="size-4" aria-hidden="true" />
           {t("memory.rules.applySettings")}
         </Button>
-      </div>
-
-      <div className="space-y-2">
-        <Label>{t("memory.workspace.editScope")}</Label>
-        <Select disabled={busy} value={scope === "global" ? "global" : `project:${projectId}`} onValueChange={(value) => onSelectScope(value === "global" ? "global" : "project", value === "global" ? null : value.slice("project:".length))}>
-          <SelectTrigger className="w-full sm:w-80" aria-label={t("memory.workspace.editScope")}><SelectValue /></SelectTrigger>
-          <SelectContent><SelectItem value="global">{t("memory.rules.allProjects")}</SelectItem>{projects.map((project) => <SelectItem key={project.projectId} value={`project:${project.projectId}`}>{project.name}</SelectItem>)}</SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">{t("memory.workspace.scopeHint")}</p>
       </div>
       {notice ? (
         <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">

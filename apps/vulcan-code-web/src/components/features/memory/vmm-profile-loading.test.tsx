@@ -41,7 +41,7 @@ it("loads a native profile independently of shared feedback and exposes read fai
     failure = "profile"
     await act(async () => refresh())
     expect(container.textContent).toContain("画像读取失败")
-    expect([...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')].every((radio) => !radio.disabled)).toBe(true)
+    expect([...container.querySelectorAll<HTMLButtonElement>(".page-tabs nav button")].every((tab) => !tab.disabled)).toBe(true)
     expect(container.querySelector('[data-slot="empty"]')).toBeNull()
     failure = null
     await act(async () => refresh())

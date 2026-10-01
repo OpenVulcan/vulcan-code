@@ -440,20 +440,9 @@ export function createPluginPanel(sdk) {
     // stats 在成功接收本地聚合前保持缺失。
     const stats = usage?.localStats ?? null;
 
+    // The host header already names this page, so the panel opens directly with its content.
+    // 宿主标题栏已显示本页名称，因此面板直接从内容开始。
     return h("section", { style: PANEL_STYLE },
-      h("header", null,
-        h("div", null,
-          h("div", { style: ROW_STYLE },
-            h("h2", { style: { fontSize: "18px", fontWeight: 650, margin: 0 } }, text("title", "Context7 documentation")),
-            h(HelpTooltip, { ariaLabel: text("aboutTitle", "What is Context7?"), content: h("div", { style: { display: "grid", gap: "8px", maxWidth: "360px" } },
-              h("strong", null, text("aboutTitle", "What is Context7?")),
-              h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("aboutDescription", "Context7 retrieves current, version-aware library documentation for coding agents and supplies relevant excerpts directly to the active task.")),
-              h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("allowanceDescription", "Anonymous mode provides 200 requests. A free API key provides 1,000 requests and account usage visibility in the official dashboard.")),
-            ) }),
-          ),
-          h("p", { style: { ...MUTED_STYLE, margin: "4px 0 0" } }, text("subtitle", "Configure authentication and inspect request quota and local usage.")),
-        ),
-      ),
       error ? h("div", { role: "alert", style: CARD_STYLE },
         h("div", { style: { ...ROW_STYLE, justifyContent: "space-between" } },
           h("strong", { style: { color: "var(--destructive)", fontSize: "13px" } }, text("loadError", "Context7 data could not be loaded.")),
@@ -464,6 +453,11 @@ export function createPluginPanel(sdk) {
           h("pre", { style: { margin: "8px 0 0", maxHeight: "160px", overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, error)),
       ) : null,
       h("nav", { style: ROW_STYLE, "aria-label": text("quickLinks", "Quick links") },
+          h(HelpTooltip, { ariaLabel: text("aboutTitle", "What is Context7?"), content: h("div", { style: { display: "grid", gap: "8px", maxWidth: "360px" } },
+            h("strong", null, text("aboutTitle", "What is Context7?")),
+            h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("aboutDescription", "Context7 retrieves current, version-aware library documentation for coding agents and supplies relevant excerpts directly to the active task.")),
+            h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("allowanceDescription", "Anonymous mode provides 200 requests. A free API key provides 1,000 requests and account usage visibility in the official dashboard.")),
+          ) }),
           h("span", { style: MUTED_STYLE }, text("quickLinks", "Quick links")),
           officialLink(CONTEXT7_DASHBOARD_URL, text("dashboardLink", "Context7 dashboard")),
           officialLink(CONTEXT7_API_KEY_DOCS_URL, text("apiKeyDocsLink", "Get a free API key")),

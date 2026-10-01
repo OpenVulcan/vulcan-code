@@ -253,13 +253,7 @@ function VmmIdentityProjectPage({
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("memory.identity.title")}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            {t("memory.identity.description")}
-          </p>
-        </div>
+      <div className="vmm-page-toolbar">
         <Button disabled={busy} onClick={() => void refreshCatalog()} type="button" variant="outline">
           <RefreshCw className="size-4" aria-hidden="true" />
           {t("memory.identity.refresh")}

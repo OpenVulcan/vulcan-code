@@ -13,7 +13,6 @@ messages:
   actionFailed: Action failed
   errorDetails: Error details
   navigationLabel: RTK Settings
-  title: RTK command routing
   hookBadge: Declarative hooks
   loadingSettings: Loading settings
   availability.ready: RTK available
@@ -27,7 +26,6 @@ messages:
   enabled: Enabled
   disabled: Disabled
   densityTitle: High-density command context
-  densityDescription: RTK compresses noisy test, build, search, and Git output so the AI can retain more useful analysis. Unmatched or failed rewrites fall back to the original command.
   enableRouting: Enable RTK routing
   enableRoutingHelp: Rewrite supported shell_command calls through the bundled RTK binary.
   gitContext: Use RTK for commit generation

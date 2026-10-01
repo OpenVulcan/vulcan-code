@@ -73,7 +73,7 @@ it("navigates from the workspace warning to the vector rebuild preview", async (
     const repairButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("前往向量重建"))!
     await act(async () => repairButton.click())
     const indexTab = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "向量与检索索引")!
-    expect(indexTab.getAttribute("aria-pressed")).toBe("true")
+    expect(indexTab.getAttribute("aria-current")).toBe("page")
     expect(container.textContent).toContain("预检向量重建")
     expect(onRunVmmAction.mock.calls.some(([request]) => request.action === "native_vector_rebuild_preview")).toBe(false)
   } finally {

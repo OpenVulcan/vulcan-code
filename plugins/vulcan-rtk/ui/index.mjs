@@ -53,6 +53,9 @@ export function createPluginPanel(sdk) {
   // StatusPill is the shared Vulcan lifecycle status component.
   // StatusPill 是 Vulcan 共享生命周期状态组件。
   const StatusPill = sdk.components.StatusPill;
+  // PageTabs is the shared Vulcan page tab strip; the host header already names this page.
+  // PageTabs 是 Vulcan 共享页面标签条；宿主标题栏已显示本页名称。
+  const PageTabs = sdk.components.PageTabs;
   // HelpTooltip is the shared host-rendered contextual-help component.
   // HelpTooltip 是宿主共享渲染的上下文帮助组件。
   const HelpTooltip = sdk.components.HelpTooltip;
@@ -565,39 +568,31 @@ export function createPluginPanel(sdk) {
     const byCommand = Array.isArray(statistics?.byCommand) ? statistics.byCommand : [];
 
     return React.createElement("section", { className: "settings-detail-panel plugin-statistics-layout plugin-panel-rtk" },
-      React.createElement("div", { className: "plugin-statistics-header" },
-        React.createElement("div", { className: "rtk-page-heading" },
-          React.createElement("div", { className: "rtk-page-title-row" },
-            React.createElement("strong", null, text("title", "RTK command routing")),
-            React.createElement("div", { className: "rtk-compliance-tags" },
-              React.createElement(StatusPill, {
-                status: settings ? "ready" : "warning",
-                label: settingsLoading ? text("loadingSettings", "Loading settings") : settings ? text("availability.ready", "RTK available") : text("availability.unavailable", "RTK unavailable"),
-              }),
-              React.createElement(PluginMetadataLink, {
-                ariaLabel: text("compliance.githubAria", "Open the RTK GitHub repository"),
-                href: RTK_REPOSITORY_URL,
-                icon: "github",
-                label: "rtk-ai/rtk",
-                onActivate: () => void openRepository(),
-              }),
-              React.createElement(PluginMetadataLink, {
-                ariaLabel: text("compliance.licenseAria", "Open the Apache-2.0 license"),
-                icon: "license",
-                label: "Apache-2.0",
-                onActivate: () => void openLicense(),
-              }),
-            ),
-          ),
-          React.createElement("p", null, text("densityDescription", "RTK compresses noisy test, build, search, and Git output so the AI can retain more useful analysis. Unmatched or failed rewrites fall back to the original command.")),
+      React.createElement(PageTabs, {
+        ariaLabel: text("sections.label", "RTK sections"),
+        value: section,
+        onValueChange: setSection,
+        options: ["settings", "routes", "statistics"].map((value) => ({ value, label: text(`sections.${value}`, value) })),
+        actions: React.createElement("div", { className: "rtk-compliance-tags" },
+          React.createElement(StatusPill, {
+            status: settings ? "ready" : "warning",
+            label: settingsLoading ? text("loadingSettings", "Loading settings") : settings ? text("availability.ready", "RTK available") : text("availability.unavailable", "RTK unavailable"),
+          }),
+          React.createElement(PluginMetadataLink, {
+            ariaLabel: text("compliance.githubAria", "Open the RTK GitHub repository"),
+            href: RTK_REPOSITORY_URL,
+            icon: "github",
+            label: "rtk-ai/rtk",
+            onActivate: () => void openRepository(),
+          }),
+          React.createElement(PluginMetadataLink, {
+            ariaLabel: text("compliance.licenseAria", "Open the Apache-2.0 license"),
+            icon: "license",
+            label: "Apache-2.0",
+            onActivate: () => void openLicense(),
+          }),
         ),
-      ),
-      React.createElement("nav", { className: "plugin-control-navigation", "aria-label": text("sections.label", "RTK sections") },
-        ...["settings", "routes", "statistics"].map((value) => React.createElement(Button, {
-          key: value, type: "button", size: "sm", variant: section === value ? "secondary" : "ghost",
-          "aria-pressed": section === value, onClick: () => setSection(value),
-        }, text(`sections.${value}`, value))),
-      ),
+      }),
       React.createElement("div", { className: "settings-form-grid" },
         React.createElement("article", { className: "settings-card rtk-routing-config", hidden: section !== "settings" },
           settings ? React.createElement("div", { className: "rtk-routing-option-row" },

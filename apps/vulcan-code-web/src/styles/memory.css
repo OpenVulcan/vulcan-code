@@ -37,13 +37,21 @@
 .vmm-workspace-body { container: memory-body / inline-size; }
 .vmm-workspace-body .vmm-memory-page { overflow: visible; scrollbar-gutter: auto; }
 .vmm-workspace-body .vmm-memory-shell { min-height: 0; }
-.vmm-section-tabs { display: flex; flex-wrap: wrap; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
-.vmm-section-tabs button { padding: 8px 0 10px; border-bottom: 2px solid transparent; color: var(--muted-foreground); font-size: var(--vcn-font-size-md); }
-.vmm-section-tabs button[aria-pressed="true"] { border-color: var(--foreground); color: var(--foreground); font-weight: 600; }
-/* Pending groups retain their place while exposing their unavailable state.
-   待加载分组保留位置，同时明确显示当前不可用状态。 */
-.vmm-section-tabs button:disabled { cursor: not-allowed; opacity: 0.5; }
-.vmm-section-tabs button:focus-visible, .vmm-nav-row:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Memory pages open with the shared page tab strip; the feature header above already names the page. */
+/* 记忆页面以共享页面标签条开头；上方功能页头已显示页面名称。 */
+.vmm-page-tabs { margin-bottom: 4px; }
+.vmm-workspace-body > .vmm-page-tabs { margin-bottom: 20px; }
+/* Pages without tabs keep their commands in one trailing toolbar instead of a heading row. */
+/* 无标签的页面将命令放在一条尾部工具栏中，而非标题行。 */
+.vmm-page-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+/* A scope picker and its apply action share one row; the field keeps its hint directly below. */
+/* 范围选择与其应用操作共用一行；字段提示紧贴其下方。 */
+.vmm-scope-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; }
+.vmm-scope-field { display: grid; min-width: 0; gap: 8px; }
+/* A compact label-and-control pair placed inside a tab row's trailing actions. */
+/* 放在标签行尾部操作区内的紧凑标签与控件组合。 */
+.vmm-inline-field { display: flex; min-width: 0; align-items: center; gap: 8px; white-space: nowrap; }
+.vmm-nav-row:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 /* Let the selected session own the workspace while its hidden list retains browsing state. */
 /* 让选中会话独占工作区，同时隐藏的列表保留浏览状态。 */

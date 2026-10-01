@@ -60,11 +60,16 @@ async function mount(invoke, strict = false) {
   const SelectControl = ({ ariaLabel, value, options, onValueChange, disabled }) => React.createElement("select", {
     "aria-label": ariaLabel, value, disabled, onChange: (event) => onValueChange(event.currentTarget.value),
   }, options.map((option) => React.createElement("option", { key: option.value, value: option.value }, option.label)));
+  // PageTabs keeps each tab a native button whose text is the exact label, plus the trailing actions.
+  // PageTabs 使每个标签保持为文本即精确标签的原生按钮，并保留尾部操作。
+  const PageTabs = ({ ariaLabel, options, onValueChange, actions }) => React.createElement("div", null, React.createElement("nav", { "aria-label": ariaLabel },
+    ...options.map((option) => React.createElement("button", { key: option.value, type: "button", disabled: option.disabled, onClick: () => onValueChange(option.value) }, option.label))),
+    actions);
   // sdk supplies only the formally used host surface.
   // sdk 仅提供正式使用的宿主接口。
   const sdk = {
     React, locale: "en-US", invoke: client.invoke, t: (key, fallback) => fallback,
-    components: { Badge: plain, Button, StatusPill: plain, MetricCard: plain,
+    components: { Badge: plain, Button, StatusPill: plain, PageTabs, MetricCard: plain,
       SelectControl, ActivityHeatmap, ActivityHeatmapLegend: plain,
       TimeSeriesLineChart: plain, ChartLegend: plain, EmptyState: plain, ErrorState: plain,
       HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }),

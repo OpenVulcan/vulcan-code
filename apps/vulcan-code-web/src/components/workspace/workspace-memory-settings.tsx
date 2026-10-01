@@ -1,5 +1,5 @@
 import * as React from "react";
-import { WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
+import { PageTabs, WorkspaceDirectoryLayout } from "@/components/workspace/workspace-directory-layout";
 import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections";
 import type { MemoryActionProps } from "@/components/features/memory/use-memory-area-controller";
 import { useI18n } from "@/i18n";
@@ -126,10 +126,13 @@ export function MemoryWorkspaceNavigation(props: MemoryNavigationProps) {
 function MemoryServiceTabs(props: MemoryNavigationProps) {
   const { t } = useI18n();
   if (!serviceSections.includes(props.activeSubArea)) return null;
-  return <div className="vmm-section-tabs" aria-label={t("memory.workspace.service")}>
-    {memoryMenuRows(props.workbench, t).filter((row) => serviceSections.includes(row.id)).map((row) =>
-      <button key={row.id} type="button" aria-pressed={props.activeSubArea === row.id} onClick={() => props.onSelectSubArea(row.id)}>{row.label}</button>)}
-  </div>;
+  return <PageTabs
+    ariaLabel={t("memory.workspace.service")}
+    className="vmm-page-tabs"
+    onValueChange={props.onSelectSubArea}
+    options={memoryMenuRows(props.workbench, t).filter((row) => serviceSections.includes(row.id)).map((row) => ({ label: row.label, value: row.id }))}
+    value={props.activeSubArea}
+  />;
 }
 
 // memoryMenuRows builds embedded memory menu rows from the snapshot.
@@ -142,12 +145,15 @@ function memoryMenuRows(workbench: WorkbenchSnapshot, t: ReturnType<typeof useI1
   }));
 }
 
-// memorySubAreaMeta returns the compact label and detail for one embedded memory page.
-// memorySubAreaMeta 返回单个内嵌记忆页面的紧凑标签与详情。
+// memorySubAreaMeta returns the header title and description for one embedded memory page.
+// Service subpages share the "models and services" title because their own names are the page tabs.
+// memorySubAreaMeta 返回单个内嵌记忆页面的标题栏标题与说明。
+// 服务子页面共用“模型与服务”标题，因为其各自名称已作为页内标签显示。
 export function memorySubAreaMeta(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): { detail: string; label: string } {
-  const row = memoryMenuRows(workbench, t).find((item) => item.id === subArea);
+  const visibleSubArea = effectiveMemorySubArea(subArea, workbench);
+  const row = memoryMenuRows(workbench, t).find((item) => item.id === visibleSubArea);
   return {
     detail: row?.detail ?? t("area.memory.description"),
-    label: row?.label ?? t("workspaceToolPanel.status"),
+    label: serviceSections.includes(visibleSubArea) ? t("memory.workspace.service") : row?.label ?? t("workspaceToolPanel.status"),
   };
 }

@@ -3,6 +3,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { RefreshCw, RotateCcw, Save } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -104,15 +105,18 @@ interface VmmNativeRuntimePolicyProps {
   // Executes one action and returns the typed host response or a reported failure.
   // 执行一个动作，返回强类型宿主响应或已报告的失败。
   onRunAction: (action: string, payload?: Record<string, unknown>) => Promise<VmmMemoryActionResult | null>
+  // leading is one sibling page placed first in the same tab strip, so the rules page needs no nested tabs.
+  // leading 是放在同一标签条首位的同级页面，使规则页无需嵌套标签。
+  leading?: { label: React.ReactNode; content: React.ReactNode }
 }
 
 // VmmNativeRuntimePolicy renders effective global defaults and saves only explicit user edits.
 // VmmNativeRuntimePolicy 渲染有效全局默认策略，并仅保存显式用户编辑。
-export function VmmNativeRuntimePolicy({ busy, onRunAction }: VmmNativeRuntimePolicyProps) {
+export function VmmNativeRuntimePolicy({ busy, onRunAction, leading }: VmmNativeRuntimePolicyProps) {
   const { t } = useI18n()
   // policyTab controls visibility only; all loaded drafts retain their ownership.
   // policyTab 仅控制可见性；已加载草稿均保留其归属。
-  const [policyTab, setPolicyTab] = React.useState("recall")
+  const [policyTab, setPolicyTab] = React.useState(leading ? "leading" : "recall")
   const [policy, setPolicy] = React.useState<VmmNativeRuntimePolicySummary | null>(null)
   const [draft, setDraft] = React.useState<RecallDraft | null>(null)
   const [pending, setPending] = React.useState(false)
@@ -177,11 +181,19 @@ export function VmmNativeRuntimePolicy({ busy, onRunAction }: VmmNativeRuntimePo
   const disabled = busy || pending
 
   return <>
-    <div className="vmm-section-tabs">
-      {/* Keep every group discoverable without leaving the only recovery surface before data arrives.
-          保留全部分组入口，在数据到达前避免离开唯一可重试的区域。 */}
-      {([['recall', 'memory.workspace.recallPolicy'], ['text', 'memory.workspace.textPolicy'], ['profile', 'memory.workspace.profilePolicy'], ['retrieval', 'memory.workspace.rankingPolicy'], ['retention', 'memory.workspace.retentionPolicy']] as const).map(([id, label]) => <button key={id} type="button" disabled={!policy && id !== "recall"} aria-pressed={policyTab === id} onClick={() => setPolicyTab(id)}>{t(label)}</button>)}
-    </div>
+    {/* Keep every group discoverable without leaving the only recovery surface before data arrives.
+        保留全部分组入口，在数据到达前避免离开唯一可重试的区域。 */}
+    <PageTabs
+      ariaLabel={leading ? t("memory.rules.title") : t("memory.workspace.globalPolicy")}
+      className="vmm-page-tabs"
+      onValueChange={setPolicyTab}
+      options={[
+        ...(leading ? [{ label: leading.label, value: "leading" }] : []),
+        ...([["recall", "memory.workspace.recallPolicy"], ["text", "memory.workspace.textPolicy"], ["profile", "memory.workspace.profilePolicy"], ["retrieval", "memory.workspace.rankingPolicy"], ["retention", "memory.workspace.retentionPolicy"]] as const).map(([value, label]) => ({ disabled: !policy && value !== "recall", label: t(label), value })),
+      ]}
+      value={policyTab}
+    />
+    {leading ? <div hidden={policyTab !== "leading"}>{leading.content}</div> : null}
     <div hidden={policyTab !== "recall"}><Card className="w-full min-w-0">
     <CardHeader>
       <CardTitle>{t("memory.policy.title")}</CardTitle>

@@ -3,8 +3,6 @@ capability: Current, version-aware library documentation for coding agents
 messages:
   errorDetails: Error details
   navigationLabel: Context7
-  title: Context7 documentation
-  subtitle: Configure authentication and inspect request quota and local usage.
   aboutTitle: What is Context7?
   aboutDescription: Context7 retrieves current, version-aware library documentation for coding agents and supplies relevant content directly to the active task, reducing incorrect API usage caused by stale model knowledge.
   allowanceDescription: Anonymous mode provides 200 requests without an API key. Registering and configuring a free API key provides 1,000 requests and account usage visibility in the official dashboard.

@@ -145,9 +145,6 @@ export function MemoryArea(props: {
   onSelectSection: (section: MemorySubAreaId) => void
 }) {
   const { t } = useI18n()
-  // rulesView separates enablement drafts from native runtime policies.
-  // rulesView 区分启用草稿与原生运行策略。
-  const [rulesView, setRulesView] = React.useState<"basic" | "runtime">("basic")
   // activeSection falls back to overview when stale navigation references an unavailable page.
   // activeSection 在旧导航引用不可用页面时回退到总览。
   const activeSection = props.activeSection === "content" && props.snapshot.experienceState.deployment === "disabled" ? "overview" : vmmVisibleSection(props.activeSection)
@@ -444,34 +441,34 @@ export function MemoryArea(props: {
   }
 
   if (activeSection === "rules") {
+    // rulesPage is the enablement editor shared by the native tab strip and the external deployment page.
+    // rulesPage 是原生标签条与外部部署页面共用的启用设置编辑器。
+    const rulesPage = (
+      <VmmRulesPage
+        busy={operationBusy}
+        draft={controller.scope === "global" ? globalDraft : controller.projectDraft}
+        draftReady={controller.scope === "global" || controller.projectDraftReady}
+        scope={controller.scope}
+        projectId={controller.projectId}
+        onSelectScope={(scope, projectId) => {
+          controller.selectScope(scope)
+          if (scope === "project" && projectId) void controller.selectProject(projectId)
+        }}
+        notice={notice}
+        onApply={applyDraft}
+        onChange={controller.setActiveDraft}
+        projects={props.snapshot.projectScopes}
+      />
+    )
     return (
       <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
-            {nativeDeployment ? <div className="vmm-section-tabs">
-              <button type="button" aria-pressed={rulesView === "basic"} onClick={() => setRulesView("basic")}>{t("memory.workspace.basic")}</button>
-              <button type="button" aria-pressed={rulesView === "runtime"} onClick={() => setRulesView("runtime")}>{t("memory.workspace.globalPolicy")}</button>
-            </div> : null}
-            <div hidden={nativeDeployment && rulesView !== "basic"}>
-            <VmmRulesPage
-              busy={operationBusy}
-              draft={controller.scope === "global" ? globalDraft : controller.projectDraft}
-              draftReady={controller.scope === "global" || controller.projectDraftReady}
-              scope={controller.scope}
-              projectId={controller.projectId}
-              onSelectScope={(scope, projectId) => {
-                controller.selectScope(scope)
-                if (scope === "project" && projectId) void controller.selectProject(projectId)
-              }}
-              notice={notice}
-              onApply={applyDraft}
-              onChange={controller.setActiveDraft}
-              projects={props.snapshot.projectScopes}
-            />
-            </div>
-            {nativeDeployment ? <div hidden={rulesView !== "runtime"}>
-              <VmmNativeRuntimePolicy busy={operationBusy} onRunAction={runAction} />
-            </div> : null}
+            {/* Native rules share one flat tab strip: enablement first, then each runtime policy group.
+                原生规则共用一条平铺标签条：先启用设置，再列出各运行策略分组。 */}
+            {nativeDeployment
+              ? <VmmNativeRuntimePolicy busy={operationBusy} leading={{ label: t("memory.workspace.basic"), content: rulesPage }} onRunAction={runAction} />
+              : rulesPage}
           </main>
         </div>
       </section>
@@ -500,20 +497,18 @@ export function MemoryArea(props: {
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
             {nativeDeployment ? (
-              <>
-                <VmmNativeVectorHealthAlert
+              <VmmContentPage
+                banner={<VmmNativeVectorHealthAlert
                   onRunAction={props.actions.onRunVmmAction}
                   onOpenRepair={openVectorRepair}
                   onOpenEmbeddingSettings={() => props.onSelectSection("inference")}
-                />
-                <VmmContentPage
-                  busy={operationBusy}
-                  notice={notice}
-                  onRunAction={runAction}
-                  result={result}
-                  snapshot={props.snapshot}
-                />
-              </>
+                />}
+                busy={operationBusy}
+                notice={notice}
+                onRunAction={runAction}
+                result={result}
+                snapshot={props.snapshot}
+              />
             ) : (
               <VmmDataPage
                 busy={operationBusy}

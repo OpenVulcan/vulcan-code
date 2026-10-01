@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import {
   Card,
   CardContent,
@@ -89,6 +90,9 @@ interface VmmContentPageProps {
     action: string,
     payload?: Record<string, unknown>,
   ) => Promise<VmmMemoryActionResult | null>
+  // banner is page-level status shown directly below the tab strip, never above it.
+  // banner 是紧接在标签条下方显示的页面级状态，绝不放在标签条上方。
+  banner?: React.ReactNode
 }
 
 // VmmContentPage renders natural-language memory search and guarded maintenance.
@@ -99,6 +103,7 @@ function VmmContentPage({
   result,
   onRunAction,
   notice = "",
+  banner,
 }: VmmContentPageProps) {
   const { t } = useI18n()
   // contentMode separates physical browsing from the host recall scope.
@@ -197,26 +202,26 @@ function VmmContentPage({
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("memory.content.title")}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            {t(snapshot.experienceState.deployment === "native"
-              ? "memory.content.nativeDescription"
-              : "memory.content.description")}
-          </p>
-        </div>
-        <Button
+      <PageTabs
+        actions={<Button
           disabled={busy || !canWriteMemory}
           onClick={() => setWriteOpen(true)}
+          size="sm"
           title={!canWriteMemory ? t("memory.content.sessionRequired") : undefined}
           type="button"
           variant="outline"
         >
           <Plus className="size-4" aria-hidden="true" />
           {t("memory.content.add")}
-        </Button>
-      </div>
+        </Button>}
+        ariaLabel={t("memory.content.title")}
+        className="vmm-page-tabs"
+        onValueChange={setContentMode}
+        options={[{ label: t("memory.workspace.browse"), value: "browse" }, { label: t("memory.workspace.search"), value: "search" }]}
+        value={contentMode}
+      />
+
+      {banner}
 
       {writeOpen && !canWriteMemory ? (
         <Alert>
@@ -226,10 +231,6 @@ function VmmContentPage({
         </Alert>
       ) : null}
 
-      <div className="vmm-section-tabs">
-        <button type="button" aria-pressed={contentMode === "browse"} onClick={() => setContentMode("browse")}>{t("memory.workspace.browse")}</button>
-        <button type="button" aria-pressed={contentMode === "search"} onClick={() => setContentMode("search")}>{t("memory.workspace.search")}</button>
-      </div>
       <div hidden={contentMode !== "browse"}>
       {snapshot.experienceState.deployment === "native" ? (
         <VmmNativeSessionBrowser

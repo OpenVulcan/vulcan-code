@@ -3,8 +3,6 @@ capability: 为编码智能体提供最新且支持版本定位的库文档
 messages:
   errorDetails: 查看错误详情
   navigationLabel: Context7
-  title: Context7 文档服务
-  subtitle: 配置鉴权方式，并查看请求配额与本地用量。
   aboutTitle: Context7 是什么？
   aboutDescription: Context7 会按库和版本为编码智能体检索最新文档，并把与当前任务相关的内容直接提供给智能体，减少因模型知识过时而使用错误 API 的情况。
   allowanceDescription: 未配置 API Key 时使用匿名模式，可调用 200 次；注册并配置免费的 API Key 后，可调用 1000 次，并能在官方控制台查看账户用量。

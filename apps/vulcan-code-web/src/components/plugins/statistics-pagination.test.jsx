@@ -11,6 +11,7 @@ const components = {
   Button: ({ children, onClick, disabled, type, ...rest }) => h("button", { onClick, disabled, type, "aria-pressed": rest["aria-pressed"] }, children),
   Badge: ({ children }) => h("span", null, children),
   StatusPill: ({ label }) => h("span", null, label),
+  PageTabs: ({ ariaLabel, options, onValueChange, actions }) => h("div", null, h("nav", { "aria-label": ariaLabel }, ...options.map((option) => h("button", { key: option.value, type: "button", disabled: option.disabled, onClick: () => onValueChange(option.value) }, option.label))), actions),
   EmptyState: ({ title }) => h("span", null, title),
   ErrorState: ({ title }) => h("span", null, title),
   SelectControl: ({ options, value, onValueChange }) => h("select", { value, onChange: (event) => onValueChange(event.target.value) }, options.map((option) => h("option", { key: option.value, value: option.value }, option.label))),

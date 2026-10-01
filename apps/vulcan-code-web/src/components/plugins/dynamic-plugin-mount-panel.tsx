@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { StatusPill } from "@/components/shared/status";
+import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 import {
   ActivityHeatmap,
   ActivityHeatmapLegend,
@@ -98,6 +99,9 @@ interface PluginUiSdk {
     // Shared Vulcan status component.
     // Vulcan 共享状态组件。
     StatusPill: typeof StatusPill;
+    // Shared Vulcan page tab strip with trailing page actions.
+    // Vulcan 共享页面标签条，含尾部页面操作。
+    PageTabs: typeof PageTabs;
     // Shared host contextual-help tooltip.
     // 共享宿主上下文帮助 Tooltip。
     HelpTooltip: typeof HelpTooltip;
@@ -292,6 +296,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       DialogTitle,
       DialogDescription,
       StatusPill,
+      PageTabs,
       HelpTooltip,
       MetricCard,
       PluginMetadataLink,

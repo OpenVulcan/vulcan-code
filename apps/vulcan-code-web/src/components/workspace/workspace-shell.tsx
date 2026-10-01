@@ -1538,9 +1538,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         />
       </WorkspaceDirectoryLayout>
     ),
-    detail: `${skillSubAreaLabel(props.activeSkillSubArea, props.workbench, locale, t)} · ${skillHeaderSummary.detail}`,
+    // Like settings and memory, the header names the active sub page; the rail already names the area.
+    // 与设置和记忆一致，标题栏显示当前子页面名称；侧栏图标已标明所在区域。
+    detail: skillHeaderSummary.detail,
     headerActions: skillHeaderActions,
-    title: t("workspaceShell.skillsTitle"),
+    title: skillSubAreaLabel(props.activeSkillSubArea, props.workbench, locale, t),
   } : props.mainView === "agent-skills" ? {
     content: (
       <WorkspaceDirectoryLayout contentClassName="workspace-directory-catalog">
@@ -1583,9 +1585,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         workbench={props.workbench}
       />
     ),
-    detail: `${memoryHeaderMeta.label} · ${memoryHeaderMeta.detail}`,
+    // The header carries the page title and description; memory pages have no in-page heading.
+    // 标题栏承载页面标题与说明；记忆页面内不再有独立标题。
+    detail: memoryHeaderMeta.detail,
     headerActions: null,
-    title: t("workspaceShell.memoryTitle"),
+    title: memoryHeaderMeta.label,
 
   } : props.mainView === "knowledge" ? {
     content: <React.Suspense fallback={null}><LazyKnowledgeBaseArea /></React.Suspense>,

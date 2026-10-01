@@ -3,6 +3,7 @@ import { BrainCircuit, Database, Eye, RefreshCw } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Empty,
@@ -536,9 +537,12 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
 
         {records ? (
           <>
-            <div className="vmm-section-tabs">
-              {([['turns','memory.nativeRecords.turns',records.turns.length],['memories','memory.nativeRecords.memories',records.memories.length],['profiles','memory.nativeRecords.profileNodes',records.profileNodes.length]] as const).map(([id,label,count]) => <button key={id} type="button" aria-pressed={recordView === id} onClick={() => setRecordView(id)}>{t(label)} <span className="tabular-nums text-muted-foreground">{count}</span></button>)}
-            </div>
+            <PageTabs
+              ariaLabel={t("memory.workspace.recordInfo")}
+              onValueChange={setRecordView}
+              options={([["turns", "memory.nativeRecords.turns", records.turns.length], ["memories", "memory.nativeRecords.memories", records.memories.length], ["profiles", "memory.nativeRecords.profileNodes", records.profileNodes.length]] as const).map(([value, label, count]) => ({ count, label: t(label), value }))}
+              value={recordView}
+            />
             {recordTotal > 30 ? <div className="flex items-center justify-between gap-2 text-sm"><span>{recordPage * 30 + 1}–{Math.min((recordPage + 1) * 30, recordTotal)} / {recordTotal}</span><div className="flex gap-2"><Button type="button" variant="outline" disabled={effectiveBusy || recordPage === 0} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage - 1 })) }}>{t("memory.sessionList.previous")}</Button><Button type="button" variant="outline" disabled={effectiveBusy || (recordPage + 1) * 30 >= recordTotal} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage + 1 })) }}>{t("memory.sessionList.next")}</Button></div></div> : null}
             <section hidden={recordView !== "turns"} className="space-y-3">
               <h3 className="text-sm font-medium">
