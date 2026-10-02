@@ -68,3 +68,7 @@ target
 # Vendored protoc provisioned by make init-system; required by lance-encoding via lancedb.
 # 由 make init-system 取得的随仓库 protoc；lancedb 经 lance-encoding 需要它。
 .cargo/protoc/
+
+# Local Claude Code session state (launch configs, settings).
+# 本地 Claude Code 会话状态（启动配置、设置）。
+/.claude/
