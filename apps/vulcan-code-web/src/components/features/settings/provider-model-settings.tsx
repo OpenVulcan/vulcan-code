@@ -29,6 +29,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useI18n } from "@/i18n"
 import {
@@ -325,10 +326,12 @@ export function ModelListSettingsArea() {
               <small>{group.models.size}</small>
             </button>
           ))}
+          {/* Provider groups stream in with the live model catalog. / 供应商分组随实时模型目录流式载入。 */}
+          {!snapshot && !error ? <StreamPlaceholder decorative shape="rows" count={6} /> : null}
         </WorkspaceDirectoryMenu>}>
         {error ? <p className="settings-muted-line settings-error-text">{error}</p> : null}
         {!snapshot && error ? <Button onClick={() => setLoadAttempt((value) => value + 1)} type="button" variant="outline">{t("settings.modelExperience.retryLoad")}</Button> : !snapshot ? (
-          <p className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
+          <StreamPlaceholder className="rounded-xl border p-1.5" fill label={t("settings.models.loadingCatalog")} shape="rows" />
         ) : (
           <section className="settings-model-list-pane" aria-label={t("settings.models.liveModels")}>
             <div className="settings-model-pane-header">

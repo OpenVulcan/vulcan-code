@@ -43,7 +43,7 @@ async function mount(invoke, strict = false, factory = null) {
     actions);
   const createPanel = factory ?? (await import(`./index.mjs?test=${++moduleId}`)).createPluginPanel;
   const sdk = { React, invoke: client.invoke, locale: "en-US", formatNumber: String, t: (_key, fallback) => fallback,
-    components: { Button, Badge: plain, StatusPill: plain, PageTabs, HelpTooltip: plain, PluginMetadataLink: Metadata, TextDocumentDialog: plain } };
+    components: { Button, Badge: plain, StatusPill: plain, PageTabs, HelpTooltip: plain, PluginMetadataLink: Metadata, TextDocumentDialog: plain, StreamPlaceholder: plain } };
   const root = require("react-dom/client").createRoot(document.getElementById("root"));
   await React.act(async () => root.render(React.createElement(strict ? React.StrictMode : React.Fragment, null, React.createElement(createPanel(sdk)))));
   return { container: document.getElementById("root"), factory: createPanel, close: async () => {

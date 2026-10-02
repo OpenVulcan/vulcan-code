@@ -149,6 +149,9 @@ export function createPluginPanel(sdk) {
   // ErrorState is the shared host error-state component.
   // ErrorState 是共享宿主错误状态组件。
   const ErrorState = sdk.components.ErrorState;
+  // StreamPlaceholder is the shared host loading silhouette shown in place of loading sentences.
+  // StreamPlaceholder 是共享宿主加载轮廓，用于代替加载文案。
+  const StreamPlaceholder = sdk.components.StreamPlaceholder;
   // HelpTooltip renders structured details in the host portal, outside table clipping.
   // HelpTooltip 在宿主门户中渲染结构化详情，避免表格裁切。
   const HelpTooltip = sdk.components.HelpTooltip;
@@ -1217,10 +1220,10 @@ export function createPluginPanel(sdk) {
           onValueChange: (value) => { setSortOrder(value); setDailyOffset(0); setRecentOffset(0); } }),
       ),
       notice ? h("p", { className: "plugin-statistics-privacy" }, notice) : null,
-      !dashboard && !error && section !== "pricing" ? h(EmptyState, {
-        title: text("status.loading", "Loading system statistics"),
-        description: text("loading.description", "Reading the authoritative host statistics database."),
-      }) : null,
+      !dashboard && !error && section !== "pricing" ? h(React.Fragment, null,
+        h(StreamPlaceholder, { label: text("status.loading", "Loading system statistics"), shape: "tiles", count: 4 }),
+        h(StreamPlaceholder, { decorative: true, fill: true, shape: "rows" }),
+      ) : null,
       dashboard || pricingSettings ? h(React.Fragment, null,
         h("div", { className: "plugin-statistics-summary-grid", hidden: section !== "overview" || !dashboard },
           h(MetricCard, {
@@ -1323,7 +1326,7 @@ export function createPluginPanel(sdk) {
             if (!open && !settingsBusyRef.current) setSelectedPricingModel("");
           } }, h(sdk.components.DialogContent, { scrollMode: "body-scroll", className: "plugin-statistics-price-dialog" },
           h("section", { className: "plugin-statistics-price-editor", "aria-label": text("pricing.editor", "Model price editor") },
-            pricingSettings === null ? h("p", { role: "status" }, text("pricing.loading", "Loading model prices"))
+            pricingSettings === null ? h(StreamPlaceholder, { label: text("pricing.loading", "Loading model prices"), shape: "fields", count: 4 })
               : !selectedPricingModel ? h("p", { className: "plugin-statistics-privacy", role: "status" }, text("pricing.chooseModel", "Select a model in the table below to edit its prices."))
                 : h(React.Fragment, null,
                   h("div", { className: "plugin-statistics-section-header" },
@@ -1356,7 +1359,8 @@ export function createPluginPanel(sdk) {
             settingsError ? h("p", { role: "alert" }, settingsError) : null,
           ))),
           h("p", { className: "plugin-statistics-privacy" }, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage."), pricingDirectory ? ` · ${currencyAmount("", pricingDirectory.currency).trim()}` : ""),
-          pricingDirectoryLoading ? h("p", { role: "status", className: "plugin-statistics-table-feedback" }, text("pricing.loading", "Loading model prices")) : null,
+          pricingDirectoryLoading && !pricingDirectory ? h(StreamPlaceholder, { label: text("pricing.loading", "Loading model prices"), shape: "rows", count: 8 })
+            : pricingDirectoryLoading ? h("p", { role: "status", className: "plugin-statistics-table-feedback" }, text("pricing.loading", "Loading model prices")) : null,
           pricingDirectoryError ? h("div", { role: "alert", className: "plugin-statistics-table-feedback" }, text("pricing.loadError", "Unable to load model prices"),
             h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => setPricingRetry((revision) => revision + 1) }, text("error.retry", "Retry")),
             h("details", null, h("summary", null, text("error.details", "Error details")), h("pre", { className: "plugin-control-error-details" }, pricingDirectoryError))) : null,

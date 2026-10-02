@@ -14,6 +14,7 @@ const components = {
   PageTabs: ({ ariaLabel, options, onValueChange, actions }) => h("div", null, h("nav", { "aria-label": ariaLabel }, ...options.map((option) => h("button", { key: option.value, type: "button", disabled: option.disabled, onClick: () => onValueChange(option.value) }, option.label))), actions),
   EmptyState: ({ title }) => h("span", null, title),
   ErrorState: ({ title }) => h("span", null, title),
+  StreamPlaceholder: ({ label }) => (label ? h("span", { role: "status" }, label) : null),
   SelectControl: ({ options, value, onValueChange }) => h("select", { value, onChange: (event) => onValueChange(event.target.value) }, options.map((option) => h("option", { key: option.value, value: option.value }, option.label))),
   Dialog: () => null,
   MetricCard: () => null,

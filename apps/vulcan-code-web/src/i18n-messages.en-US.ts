@@ -5453,7 +5453,6 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "Collapse to pill",
     "settings.credentials.expand": "Expand credential categories",
     "settings.credentials.connecting": "Connecting to the public AI runtime",
-    "settings.credentials.connectingDescription": "After startup, models are fetched live from credentials; the local model cache is not read.",
     "settings.credentials.emptyProvider": "No credential has been added for this provider",
     "settings.credentials.emptyProviderDescription": "Use the Add credential button above to create the first account for this provider.",
     "settings.credentials.emptyAll": "No model account has been added",

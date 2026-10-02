@@ -5453,7 +5453,6 @@ export const ruRUTranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "Свернуть в плашку",
     "settings.credentials.expand": "Развернуть категории учётных данных",
     "settings.credentials.connecting": "Подключение к публичной среде выполнения ИИ",
-    "settings.credentials.connectingDescription": "После запуска модели загружаются напрямую по учётным данным; локальный кэш моделей не используется.",
     "settings.credentials.emptyProvider": "Для этого провайдера не добавлены учётные данные",
     "settings.credentials.emptyProviderDescription": "Нажмите кнопку «Добавить учётные данные» выше, чтобы создать первую учётную запись этого провайдера.",
     "settings.credentials.emptyAll": "Учётные записи моделей не добавлены",

@@ -3880,7 +3880,6 @@ export type TranslationKey =
   | "settings.credentials.collapse"
   | "settings.credentials.expand"
   | "settings.credentials.connecting"
-  | "settings.credentials.connectingDescription"
   | "settings.credentials.emptyProvider"
   | "settings.credentials.emptyProviderDescription"
   | "settings.credentials.emptyAll"

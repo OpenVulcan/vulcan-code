@@ -41,7 +41,7 @@ async function mount(invoke) {
   // sdk supplies no network, credentials or real event bus.
   // sdk 不提供网络、凭据或真实事件总线。
   const sdk = { React, locale: "en-US", invoke, t: (_key, fallback) => fallback, formatNumber: String,
-    components: { Badge: plain, Button, MetricCard: plain, SelectControl, ErrorState: plain, EmptyState: plain,
+    components: { Badge: plain, Button, MetricCard: plain, SelectControl, ErrorState: plain, EmptyState: plain, StreamPlaceholder: plain,
       HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }) },
     events: { subscribe: (_name, callback) => { eventHandler = callback; return () => { eventHandler = () => {}; }; } },
     notifications: { success: (message) => notifications.push(message), error: (message) => notifications.push(message) },

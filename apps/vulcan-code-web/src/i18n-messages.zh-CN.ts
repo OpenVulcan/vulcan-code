@@ -5453,7 +5453,6 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "收起为胶囊",
     "settings.credentials.expand": "展开凭据分类",
     "settings.credentials.connecting": "正在连接公共 AI 运行时",
-    "settings.credentials.connectingDescription": "启动后会从各凭据实时获取模型，不读取本地模型缓存。",
     "settings.credentials.emptyProvider": "尚未添加该供应商的凭据",
     "settings.credentials.emptyProviderDescription": "使用上方“添加凭据”按钮，为当前供应商创建第一个账号。",
     "settings.credentials.emptyAll": "尚未添加模型账号",

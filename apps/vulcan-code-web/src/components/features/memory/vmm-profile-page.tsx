@@ -562,7 +562,7 @@ function VmmProfilePage({
         </Card>
       ) : null}
 
-      {readState === "loading" ? <StreamPlaceholder label={t("memory.resources.loading")} shape="rows" count={4} /> : nodes.length === 0 && readState !== "ready" ? null : nodes.length === 0 ? (
+      {readState === "loading" ? <StreamPlaceholder fill label={t("memory.resources.loading")} shape="rows" count={4} /> : nodes.length === 0 && readState !== "ready" ? null : nodes.length === 0 ? (
         <Empty className="min-h-48" variant="outlined">
           <EmptyHeader>
             <EmptyMedia variant="icon"><BrainCircuit className="size-5" /></EmptyMedia>

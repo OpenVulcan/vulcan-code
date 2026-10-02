@@ -5453,7 +5453,6 @@ export const koKRTranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "알약 모양으로 접기",
     "settings.credentials.expand": "자격 증명 분류 펼치기",
     "settings.credentials.connecting": "공용 AI 런타임에 연결하는 중",
-    "settings.credentials.connectingDescription": "시작 후 모델은 각 자격 증명에서 실시간으로 가져오며, 로컬 모델 캐시는 읽지 않습니다.",
     "settings.credentials.emptyProvider": "이 공급자에 추가된 자격 증명이 없습니다",
     "settings.credentials.emptyProviderDescription": "위의 \"자격 증명 추가\" 버튼을 사용해 이 공급자의 첫 계정을 만드세요.",
     "settings.credentials.emptyAll": "추가된 모델 계정이 없습니다",

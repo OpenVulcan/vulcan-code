@@ -339,7 +339,7 @@ function NativeSessionList({ busy, snapshot, onRunAction, onCheckUpdates = check
       </div> : null}
       {updatesAvailable ? <p role="status" className="text-sm text-muted-foreground">{t("memory.workspace.updatesAvailable")}</p> : null}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-      {loading ? <StreamPlaceholder label={t("memory.sessionList.loading")} shape="rows" count={5} /> : null}
+      {loading ? <StreamPlaceholder fill label={t("memory.sessionList.loading")} shape="rows" count={5} /> : null}
       {!loading && catalog?.projects.length === 0 ? <p>{t("memory.nativeRecords.noProjects")}</p> : null}
       {page && query ? <>
         <div className="flex flex-wrap items-center gap-3 text-sm">

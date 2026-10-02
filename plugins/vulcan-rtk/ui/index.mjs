@@ -65,6 +65,9 @@ export function createPluginPanel(sdk) {
   // TextDocumentDialog is the shared host read-only text document dialog.
   // TextDocumentDialog 是宿主共享的只读文本文档浮动框。
   const TextDocumentDialog = sdk.components.TextDocumentDialog;
+  // StreamPlaceholder is the shared host loading silhouette shown in place of loading sentences.
+  // StreamPlaceholder 是共享宿主加载轮廓，用于代替加载文案。
+  const StreamPlaceholder = sdk.components.StreamPlaceholder;
   // text resolves one plugin-owned locale key and retains a safe English source fallback.
   // text 解析一个插件自有语言键，并保留安全的英语源码回退。
   const text = (key, fallback) => sdk.t(key, fallback);
@@ -617,7 +620,7 @@ export function createPluginPanel(sdk) {
               ),
               React.createElement(HelpTooltip, { ariaLabel: text("disableTelemetryHelp", "RTK telemetry description"), content: text("disableTelemetryHelp", "Inject RTK_TELEMETRY_DISABLED=1 into rewrite and proxied command processes."), delayMs: 500 }),
             ),
-          ) : null,
+          ) : settingsLoading ? React.createElement(StreamPlaceholder, { label: text("loadingSettings", "Loading settings"), shape: "fields", count: 3 }) : null,
         ),
         React.createElement("article", { className: "settings-card rtk-gain-panel", hidden: section !== "statistics" },
           React.createElement("div", { className: "rtk-gain-header" },
@@ -636,6 +639,9 @@ export function createPluginPanel(sdk) {
             React.createElement("div", { className: "plugin-control-navigation" }, ...["daily", "weekly", "monthly"].map((view) => React.createElement(Button, { size: "sm", variant: statisticsView === view ? "secondary" : "ghost", "aria-pressed": statisticsView === view, key: view, onClick: () => setStatisticsView(view), type: "button" }, text(`stats.${view}`, view)))),
             React.createElement(RtkGainChart, { points: chartPoints }),
             React.createElement(RtkCommandTable, { rows: byCommand }),
+          ) : !statistics && !statisticsError ? React.createElement(React.Fragment, null,
+            React.createElement(StreamPlaceholder, { label: text("stats.loading", "Loading"), shape: "tiles", count: 4 }),
+            React.createElement(StreamPlaceholder, { decorative: true, fill: true, shape: "rows" }),
           ) : React.createElement("div", { className: "rtk-gain-empty" }, statistics?.error ?? text("stats.unavailableHelp", "Statistics are currently unavailable.")),
         ),
         React.createElement("article", { className: "settings-card", hidden: section !== "routes" },

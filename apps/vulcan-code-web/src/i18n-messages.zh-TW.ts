@@ -5453,7 +5453,6 @@ export const zhTWTranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "收合為膠囊",
     "settings.credentials.expand": "展開憑證分類",
     "settings.credentials.connecting": "正在連線公共 AI 執行階段",
-    "settings.credentials.connectingDescription": "啟動後會從各憑證即時取得模型，不讀取本機模型快取。",
     "settings.credentials.emptyProvider": "尚未新增此供應商的憑證",
     "settings.credentials.emptyProviderDescription": "使用上方「新增憑證」按鈕，為目前供應商建立第一個帳號。",
     "settings.credentials.emptyAll": "尚未新增模型帳號",

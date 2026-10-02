@@ -70,6 +70,7 @@
   padding: 0 8px;
 }
 .vcn-stream-placeholder-copy,
+.vcn-stream-placeholder-card,
 .vcn-stream-placeholder-field,
 .vcn-stream-placeholder-tile {
   min-width: 0;
@@ -77,6 +78,22 @@
   gap: 6px;
 }
 .vcn-stream-placeholder-copy .vcn-shimmer:last-child { max-width: 70%; }
+/* Cards imitate one bordered record per row: an identity line with an icon, then a short body. */
+/* 卡片模仿每行一条带边框的记录：带图标的身份行，下方是简短正文。 */
+.vcn-stream-placeholder[data-shape="cards"] { gap: 12px; }
+.vcn-stream-placeholder-card {
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-lg);
+  background: var(--card);
+  padding: 14px 16px;
+}
+.vcn-stream-placeholder-card-head {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
 .vcn-stream-placeholder-tile {
   gap: 8px;
   border-radius: var(--vcn-radius-md);
@@ -88,6 +105,13 @@
 .vcn-stream-placeholder > :nth-child(n + 4) { opacity: 0.82; }
 .vcn-stream-placeholder > :nth-child(n + 5) { opacity: 0.64; }
 .vcn-stream-placeholder > :nth-child(n + 6) { opacity: 0.46; }
+/* A filling silhouette reaches the bottom of its viewport, so it fades out as a whole instead of by fixed row steps. */
+/* 填充式轮廓延伸到视口底部，因此整体渐隐，而不是按固定行数分级变淡。 */
+.vcn-stream-placeholder[data-fill="true"] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 45%, transparent);
+  mask-image: linear-gradient(to bottom, #000 45%, transparent);
+}
+.vcn-stream-placeholder[data-fill="true"] > * { opacity: 1; }
 .vcn-stream-inline {
   width: 9em;
   max-width: 100%;

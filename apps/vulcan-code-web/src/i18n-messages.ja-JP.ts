@@ -5453,7 +5453,6 @@ export const jaJPTranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "ピル表示に折りたたむ",
     "settings.credentials.expand": "認証情報のカテゴリを展開",
     "settings.credentials.connecting": "公開 AI ランタイムに接続中",
-    "settings.credentials.connectingDescription": "起動後、モデルは各認証情報からリアルタイムに取得されます。ローカルのモデルキャッシュは読み込みません。",
     "settings.credentials.emptyProvider": "このプロバイダーの認証情報はまだ追加されていません",
     "settings.credentials.emptyProviderDescription": "上の「認証情報を追加」ボタンから、このプロバイダーの最初のアカウントを作成してください。",
     "settings.credentials.emptyAll": "モデルアカウントはまだ追加されていません",

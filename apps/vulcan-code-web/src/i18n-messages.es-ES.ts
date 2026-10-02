@@ -5453,7 +5453,6 @@ export const esESTranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "Contraer en píldora",
     "settings.credentials.expand": "Expandir categorías de credenciales",
     "settings.credentials.connecting": "Conectando con el runtime público de IA",
-    "settings.credentials.connectingDescription": "Tras el inicio, los modelos se obtienen en directo de las credenciales; no se lee la caché local de modelos.",
     "settings.credentials.emptyProvider": "No se ha añadido ninguna credencial para este proveedor",
     "settings.credentials.emptyProviderDescription": "Usa el botón «Añadir credencial» de arriba para crear la primera cuenta de este proveedor.",
     "settings.credentials.emptyAll": "No se ha añadido ninguna cuenta de modelo",

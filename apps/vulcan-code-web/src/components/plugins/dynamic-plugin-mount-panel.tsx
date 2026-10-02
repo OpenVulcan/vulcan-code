@@ -108,6 +108,9 @@ interface PluginUiSdk {
     // Shared host KPI card component.
     // 共享宿主 KPI 卡片组件。
     MetricCard: typeof MetricCard;
+    // Shared host streaming loading silhouette; plugins show it instead of a "Loading…" sentence.
+    // 共享宿主流式加载轮廓；插件用它代替「正在加载…」文案。
+    StreamPlaceholder: typeof StreamPlaceholder;
     // Shared host compact actionable metadata tag.
     // 共享宿主紧凑可操作元数据标签。
     PluginMetadataLink: typeof PluginMetadataLink;
@@ -299,6 +302,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       PageTabs,
       HelpTooltip,
       MetricCard,
+      StreamPlaceholder,
       PluginMetadataLink,
       SelectControl,
       TextDocumentDialog,
@@ -402,7 +406,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     </div>;
   }
   if (Panel === null) {
-    return <StreamPlaceholder className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />;
+    return <StreamPlaceholder fill className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />;
   }
   return <Panel />;
 }

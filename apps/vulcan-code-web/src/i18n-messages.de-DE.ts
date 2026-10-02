@@ -5453,7 +5453,6 @@ export const deDETranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "Zu Pille einklappen",
     "settings.credentials.expand": "Kategorien der Zugangsdaten ausklappen",
     "settings.credentials.connecting": "Verbindung zur öffentlichen KI-Laufzeit wird hergestellt",
-    "settings.credentials.connectingDescription": "Nach dem Start werden Modelle live über die Zugangsdaten abgerufen; der lokale Modellcache wird nicht gelesen.",
     "settings.credentials.emptyProvider": "Für diesen Anbieter wurden keine Zugangsdaten hinzugefügt",
     "settings.credentials.emptyProviderDescription": "Verwenden Sie die Schaltfläche „Zugangsdaten hinzufügen“ oben, um das erste Konto für diesen Anbieter anzulegen.",
     "settings.credentials.emptyAll": "Es wurde kein Modellkonto hinzugefügt",

@@ -76,7 +76,7 @@ export function VmmNativeRecycleRecords({ batch, busy, onRunAction }: RecycleRec
           <Button type="button" variant="outline" disabled={busy || pending} onClick={() => void load(kind, 0, null)}>{t("memory.recycleRecords.reload")}</Button>
           {page ? <span className="text-sm text-muted-foreground">{t("memory.recycleRecords.total").replace("{count}", String(page.total))}</span> : null}
         </div>
-        {pending ? <StreamPlaceholder label={t("memory.resources.loading")} shape="rows" count={4} /> : null}
+        {pending ? <StreamPlaceholder fill label={t("memory.resources.loading")} shape="rows" count={4} /> : null}
         {error ? <p role="alert" className="text-sm text-destructive">{t("memory.recycleRecords.failed")}</p> : null}
         {page?.records.length === 0 ? <p className="rounded border border-dashed p-5 text-muted-foreground">{t("memory.recycleRecords.empty")}</p> : null}
         {page?.records.map((record) => <RecycleRecord key={recordKey(record)} record={record} />)}

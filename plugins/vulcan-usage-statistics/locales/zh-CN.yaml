@@ -124,7 +124,6 @@ messages:
   consumer.label: 消费者
   consumer.all: 全部消费者
   error.title: 无法读取系统统计
-  loading.description: 正在查询权威系统统计数据库。
   summary.requests: 真实调用
   summary.requestsDetail: 包含重试与失败
   summary.successRate: 成功率

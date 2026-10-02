@@ -69,7 +69,7 @@ async function mount(invoke, strict = false) {
   // sdk 仅提供正式使用的宿主接口。
   const sdk = {
     React, locale: "en-US", invoke: client.invoke, t: (key, fallback) => fallback,
-    components: { Badge: plain, Button, StatusPill: plain, PageTabs, MetricCard: plain,
+    components: { Badge: plain, Button, StatusPill: plain, PageTabs, MetricCard: plain, StreamPlaceholder: plain,
       SelectControl, ActivityHeatmap, ActivityHeatmapLegend: plain,
       TimeSeriesLineChart: plain, ChartLegend: plain, EmptyState: plain, ErrorState: plain,
       HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }),

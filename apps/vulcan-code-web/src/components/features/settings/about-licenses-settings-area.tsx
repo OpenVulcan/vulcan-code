@@ -151,7 +151,7 @@ export function AboutLicensesSettingsArea(props: {
         <Button variant="outline" onClick={() => setReload((value) => value + 1)}><RefreshCw size={14} />{t("settings.licenses.reload")}</Button>
       </div>
       {catalogError ? <div role="alert" className="settings-license-error"><strong>{t("settings.licenses.loadError")}</strong><p>{catalogError}</p></div>
-        : !catalog ? <StreamPlaceholder label={t("settings.licenses.loading")} shape="rows" count={6} />
+        : !catalog ? <StreamPlaceholder fill label={t("settings.licenses.loading")} shape="rows" count={6} />
         : filteredGroups.length === 0 ? <p role="status">{t("settings.licenses.emptySearch")}</p>
         : <div className="settings-license-browser">
           <nav className="settings-license-directory" aria-label={t("settings.licenses.types")}>
@@ -206,7 +206,7 @@ export function AboutLicensesSettingsArea(props: {
               {body?.sectionId === requestedSectionId && body.revision === revision
                 ? body.error ? <div role="alert" className="settings-license-error"><p>{body.error}</p><Button variant="outline" onClick={() => setBodyRetry((value) => value + 1)}>{t("settings.licenses.retry")}</Button></div>
                   : <pre className="settings-license-body" tabIndex={0}>{body.text}</pre>
-                : <p role="status">{t("settings.licenses.loadingBody")}</p>}
+                : <StreamPlaceholder className="p-1" label={t("settings.licenses.loadingBody")} count={12} />}
                 </DialogContent>
               </Dialog>
             </>}

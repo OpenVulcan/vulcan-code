@@ -5453,7 +5453,6 @@ export const ptBRTranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "Recolher em pílula",
     "settings.credentials.expand": "Expandir categorias de credenciais",
     "settings.credentials.connecting": "Conectando ao runtime público de IA",
-    "settings.credentials.connectingDescription": "Após a inicialização, os modelos são obtidos ao vivo a partir das credenciais; o cache local de modelos não é lido.",
     "settings.credentials.emptyProvider": "Nenhuma credencial foi adicionada para este provedor",
     "settings.credentials.emptyProviderDescription": "Use o botão “Adicionar credencial” acima para criar a primeira conta deste provedor.",
     "settings.credentials.emptyAll": "Nenhuma conta de modelo foi adicionada",

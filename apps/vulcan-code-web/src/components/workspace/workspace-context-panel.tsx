@@ -18,6 +18,7 @@ import {
 import type { ConversationScrollSnapshot } from "@/components/conversation/chat-area-scroll";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -1102,10 +1103,7 @@ function WorkspaceSubagentPanel(args: {
         onScrollStateChange={subagentScrollController.handleScroll}
       />
       {transcriptOwner.loading && transcriptOwner.snapshot.events.length === 0 ? (
-        <div className="workspace-subagent-loading" role="status" aria-live="polite">
-          <Bot size={18} />
-          <span>{t("conversation.subagent.loadingTranscript")}</span>
-        </div>
+        <StreamPlaceholder className="pointer-events-none absolute inset-0 p-5" fill label={t("conversation.subagent.loadingTranscript")} />
       ) : null}
       {transcriptOwner.error && !transcriptHasEvents ? (
         <div className="workspace-subagent-loading" role="alert">
@@ -1270,9 +1268,7 @@ function subagentWorkspacePath(workbench: WorkbenchSnapshot, parentConversationI
 function WorkspaceReviewPanelLoading() {
   const { t } = useI18n();
   return (
-    <div className="context-panel-loading-state">
-      <span>{t("workspaceContext.loadingReviewPanel")}</span>
-    </div>
+    <StreamPlaceholder className="w-full min-w-0 p-3" fill label={t("workspaceContext.loadingReviewPanel")} shape="rows" />
   );
 }
 
@@ -1281,8 +1277,6 @@ function WorkspaceReviewPanelLoading() {
 function WorkspaceFilesPanelLoading() {
   const { t } = useI18n();
   return (
-    <div className="context-panel-loading-state">
-      <span>{t("workspaceContext.loadingFilesPanel")}</span>
-    </div>
+    <StreamPlaceholder className="w-full min-w-0 p-3" fill label={t("workspaceContext.loadingFilesPanel")} shape="rows" />
   );
 }

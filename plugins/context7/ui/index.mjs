@@ -108,9 +108,9 @@ export function createPluginPanel(sdk) {
   // SelectControl is the shared host-themed select component.
   // SelectControl 是共享宿主主题下拉组件。
   const SelectControl = sdk.components.SelectControl;
-  // EmptyState is the shared host empty presentation.
-  // EmptyState 是共享宿主空状态展示组件。
-  const EmptyState = sdk.components.EmptyState;
+  // StreamPlaceholder is the shared host loading silhouette shown in place of loading sentences.
+  // StreamPlaceholder 是共享宿主加载轮廓，用于代替加载文案。
+  const StreamPlaceholder = sdk.components.StreamPlaceholder;
   // HelpTooltip keeps secondary explanations available without collapsible sections.
   // HelpTooltip 保留次要说明入口，不再使用折叠区块。
   const HelpTooltip = sdk.components.HelpTooltip;
@@ -421,7 +421,7 @@ export function createPluginPanel(sdk) {
     }
 
     if (loading && !config) {
-      return h("div", { style: PANEL_STYLE }, h(EmptyState, { title: text("loading", "Loading Context7 settings…") }));
+      return h("div", { style: PANEL_STYLE }, h(StreamPlaceholder, { fill: true, label: text("loading", "Loading Context7 settings…"), shape: "cards" }));
     }
 
     // validationMessage maps the exact credential validation state to localized text.

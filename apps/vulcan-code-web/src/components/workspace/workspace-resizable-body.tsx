@@ -490,7 +490,7 @@ export function WorkspaceResizableBody(props: {
       {props.children}
       {workspaceMainPluginMounts.length > 0 ? (
         <div className="workspace-plugin-main-mounts">
-          <React.Suspense fallback={<StreamPlaceholder className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
+          <React.Suspense fallback={<StreamPlaceholder fill className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
             {workspaceMainPluginMounts.map(({ plugin, mount }) => (
               <DynamicPluginMountPanel
                 key={`${plugin.id}:${mount.id}`}
@@ -578,7 +578,7 @@ export function WorkspaceResizableBody(props: {
             id="workspaceContext"
             inert={!rightPanelTransition.visible}
           >
-            <React.Suspense fallback={<StreamPlaceholder className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
+            <React.Suspense fallback={<StreamPlaceholder fill className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
             <WorkspaceContextPanel
               aiBrowserAvailable={props.aiBrowserAvailable && Boolean(aiBrowserMount)}
               localBrowserAvailable={props.localBrowserAvailable}
@@ -628,7 +628,7 @@ export function WorkspaceResizableBody(props: {
             </React.Suspense>
             {otherPluginMounts.length > 0 ? (
               <div className="conversation-plugin-right-mounts">
-                <React.Suspense fallback={<StreamPlaceholder className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
+                <React.Suspense fallback={<StreamPlaceholder fill className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />}>
                   {otherPluginMounts.map(({ plugin, mount }) => (
                     <DynamicPluginMountPanel
                       key={`${plugin.id}:${mount.id}:${props.selectedConversationId ?? "none"}`}

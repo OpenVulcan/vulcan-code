@@ -5453,7 +5453,6 @@ export const frFRTranslations: Record<TranslationKey, string> = {
     "settings.credentials.collapse": "Réduire en pastille",
     "settings.credentials.expand": "Développer les catégories d’identifiants",
     "settings.credentials.connecting": "Connexion à l’environnement d’exécution IA public",
-    "settings.credentials.connectingDescription": "Après le démarrage, les modèles sont récupérés en direct depuis les identifiants ; le cache local des modèles n’est pas lu.",
     "settings.credentials.emptyProvider": "Aucun identifiant n’a été ajouté pour ce fournisseur",
     "settings.credentials.emptyProviderDescription": "Utilisez le bouton « Ajouter un identifiant » ci-dessus pour créer le premier compte de ce fournisseur.",
     "settings.credentials.emptyAll": "Aucun compte de modèle n’a été ajouté",
