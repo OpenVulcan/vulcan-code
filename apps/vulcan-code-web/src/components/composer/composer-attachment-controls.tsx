@@ -5,9 +5,9 @@ import { setConversationToolCollapseOverride, useToolCollapsePreference } from "
 import { setConversationThinkingPopupOverride, useThinkingDisplayPreference } from "@/components/conversation/thinking-display-preferences";
 import { composerAttachmentMedia } from "./composer-attachment-media";
 import { VceComposerMenu } from "@/components/features/code-context/vce-project-controls";
+import { MemoryBrainIcon } from "@/components/shell/memory-brain-icon";
 import { composerAttachmentIdentity } from "@/service/composer-attachment-reference";
 import {
-  BrainCircuit,
   CircleAlert,
   FileText,
   Image as ImageIcon,
@@ -18,6 +18,7 @@ import {
   Plus,
   RotateCcw,
   Settings,
+  Sparkles,
   Target,
   Video,
   Workflow,
@@ -262,7 +263,9 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
         </DropdownMenuSub>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
-            <BrainCircuit size={15} />
+            {/* Same sparkle as the conversation's thinking trigger. */}
+            {/* 与对话中思考入口相同的闪光星形图标。 */}
+            <Sparkles size={15} />
             <span>{t("composer.thinkingProcess")}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="composer-thinking-menu">
@@ -283,7 +286,9 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
         {props.vmmAvailable || props.onOpenMemorySettings ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
-              <BrainCircuit size={15} />
+              {/* Same brain as the memory area in the activity rail. */}
+              {/* 与活动栏记忆区域相同的大脑图标。 */}
+              <MemoryBrainIcon size={15} />
               <span>{t("composer.vmmMemory")}</span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="composer-thinking-menu">
