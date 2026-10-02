@@ -19,7 +19,7 @@ use vulcan_agent_runtime::{
         vulcan_plugin_hooks::synchronize_vulcan_plugin_hooks,
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
-    mcp::{bootstrap_mcp_runtime_access, plugin_mcp_server_configs, runtime_mcp_server_configs},
+    mcp::runtime_mcp_server_configs,
     runtime_assets,
     tooling::CommandSessionRuntime,
 };
@@ -41,6 +41,7 @@ use super::{
 };
 
 mod error;
+pub(crate) mod mcp_startup;
 mod startup_snapshot;
 mod startup_updates;
 
@@ -702,6 +703,9 @@ fn run_service_bootstrap(
         runtime.handle().clone(),
         event_emitter.clone(),
     )?;
+    // Register the original native host once before any plugin native bootstrap or later update reservation.
+    // 在任何插件原生引导或随后更新预留之前，仅注册一次原原生宿主。
+    let vulcan_plugin_native_mcp_host = vulcan_plugin_runtime.register_native_mcp_host_adapter();
     trace_bootstrap_stage(
         "plugin_catalog_prepare",
         plugin_runtime_started_at,
@@ -977,7 +981,7 @@ fn run_service_bootstrap(
             )
         },
     );
-    let mut mcp_server_configs =
+    let mcp_server_configs =
         runtime_mcp_server_configs(&provider_configuration).map_err(|error| {
             ServiceBootstrapError::new(
                 "mcp",
@@ -985,23 +989,35 @@ fn run_service_bootstrap(
                 format!("Agent MCP Runtime 配置无效：{error}"),
             )
         })?;
+    // Materialize explicit source contracts before any original native task can start.
+    // 在任何原原生任务可能启动之前，物化明确来源契约。
     let plugin_secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-    mcp_server_configs.extend(
-        plugin_mcp_server_configs(&vulcan_plugin_runtime, &plugin_secret_store).map_err(
-            |error| {
-                ServiceBootstrapError::new(
-                    "mcp",
-                    "Plugin MCP Runtime",
-                    format!("插件 MCP Runtime 配置无效：{error}"),
-                )
-            },
-        )?,
-    );
+    // Full fixed managed selections enter the sealed producer; declared legacy sources keep their original factory.
+    // 完整固定受管选择进入密封生产者；已声明旧来源保留原工厂。
+    let plugin_mcp_plan = mcp_startup::PluginMcpBootstrapPlan::prepare(
+        &vulcan_plugin_runtime,
+        &vulcan_plugin_catalog,
+        &vulcan_plugin_native_mcp_host,
+        &plugin_secret_store,
+    )
+    .map_err(|error| {
+        ServiceBootstrapError::new(
+            "mcp",
+            "Plugin MCP Runtime",
+            format!("插件 MCP Runtime 配置无效：{error}"),
+        )
+    })?;
     // mcp_started_at measures the single Agent MCP runtime bootstrap and its catalog projection.
     // mcp_started_at 测量唯一的 Agent MCP 运行时引导及其目录投影。
     let mcp_started_at = start_bootstrap_stage("mcp");
-    let agent_mcp_runtime = runtime
-        .block_on(bootstrap_mcp_runtime_access(mcp_server_configs))
+    // Original startup ownership stays armed across readiness, full native publication and later service assembly.
+    // 原启动所有权跨就绪、完整原生发布及随后服务装配保持启用。
+    let pending_mcp_bootstrap = runtime
+        .block_on(plugin_mcp_plan.start(
+            &vulcan_plugin_runtime,
+            &vulcan_plugin_native_mcp_host,
+            mcp_server_configs,
+        ))
         .map_err(|error| {
             ServiceBootstrapError::new(
                 "mcp",
@@ -1009,31 +1025,9 @@ fn run_service_bootstrap(
                 format!("Agent MCP Runtime 初始化失败：{error}"),
             )
         })?;
-    // mcp_catalog is projected from the single Agent MCP runtime, so the WebUI, settings, and AI
-    // tool catalog always share one generation and one set of child processes.
-    // mcp_catalog 从唯一的 Agent MCP 运行时投影，使 WebUI、设置与 AI 工具目录
-    // 始终共享同一代次与同一组子进程。
-    let mcp_catalog =
-        vulcan_service_runtime::mcp_bridge::mcp_runtime_catalog_from_access(&agent_mcp_runtime);
-    trace_bootstrap_stage(
-        "mcp",
-        mcp_started_at,
-        format!(
-            "configured={} connected={} tools={}",
-            mcp_catalog.configured_server_count,
-            mcp_catalog.connected_server_count,
-            mcp_catalog.tool_count
-        ),
-    );
-    logs.push(format!(
-        "[webui-service] mcp ready: servers={}/{} connected={} tools={} prompts={} resources={}",
-        mcp_catalog.enabled_server_count,
-        mcp_catalog.configured_server_count,
-        mcp_catalog.connected_server_count,
-        mcp_catalog.tool_count,
-        mcp_catalog.prompt_count,
-        mcp_catalog.resource_count
-    ));
+    // The initial unpublished bridge shares all original admission and cleanup registries.
+    // 首次未发布桥共享全部原入场及清理注册表。
+    let agent_mcp_runtime = pending_mcp_bootstrap.access();
     let vmm_hook_runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
     let mut conversation_hook_runtime = ConversationHookRuntime::new();
     register_builtin_vmm_hooks(
@@ -1497,7 +1491,7 @@ fn run_service_bootstrap(
         Arc::clone(&vulcan_plugin_catalog),
     )
     .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error.to_string()))?;
-    let agent_runtime = AgentRuntimeBridge {
+    let mut agent_runtime = AgentRuntimeBridge {
         provider_configuration: provider_configuration.clone(),
         public_ai_runtime,
         configured_inference_service,
@@ -1509,6 +1503,7 @@ fn run_service_bootstrap(
         subagent_catalog: Arc::new(subagent_catalog),
         luaskills_runtime: agent_luaskills_runtime,
         vulcan_plugin_runtime: vulcan_plugin_runtime.clone(),
+        vulcan_plugin_native_mcp_host,
         extension_generation: Arc::new(ExtensionGeneration::new_with_plugin_conversation_hooks(
             vulcan_plugin_catalog.revision,
             Arc::new(plugin_conversation_hooks),
@@ -1521,6 +1516,41 @@ fn run_service_bootstrap(
         conversation_hook_runtime: Arc::new(Mutex::new(conversation_hook_runtime)),
         vmm_hook_runtime,
     };
+    // Exclusive unpublished bridge ownership precedes every source and native publication guard.
+    // 排他未发布桥所有权先于每个来源及原生发布守卫。
+    let pending_mcp_bootstrap = pending_mcp_bootstrap
+        .publish(&mut agent_runtime, &vulcan_plugin_catalog)
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "mcp",
+                "Plugin MCP Runtime",
+                format!("插件 MCP 完整发布失败：{error}"),
+            )
+        })?;
+    // Project only after the actual full slot owns every original partition and its business gate is open.
+    // 仅在实际完整槽拥有每个原分区且其业务门开放之后投影。
+    let mcp_catalog = vulcan_service_runtime::mcp_bridge::mcp_runtime_catalog_from_access(
+        &agent_runtime.extension_generation.mcp_runtime(),
+    );
+    trace_bootstrap_stage(
+        "mcp",
+        mcp_started_at,
+        format!(
+            "configured={} connected={} tools={}",
+            mcp_catalog.configured_server_count,
+            mcp_catalog.connected_server_count,
+            mcp_catalog.tool_count,
+        ),
+    );
+    logs.push(format!(
+        "[webui-service] mcp ready: servers={}/{} connected={} tools={} prompts={} resources={}",
+        mcp_catalog.enabled_server_count,
+        mcp_catalog.configured_server_count,
+        mcp_catalog.connected_server_count,
+        mcp_catalog.tool_count,
+        mcp_catalog.prompt_count,
+        mcp_catalog.resource_count,
+    ));
     vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(true)
         .map_err(|error| {
             ServiceBootstrapError::new(
@@ -1859,6 +1889,9 @@ fn run_service_bootstrap(
         }
         guard.host_database_providers = Some(pending_host_database_providers.commit());
         guard.startup = startup.clone();
+        // Only this actual final readiness commit disarms cleanup of all original native startup work.
+        // 仅此实际最终就绪提交解除全部原原生启动工作的清理。
+        pending_mcp_bootstrap.commit();
     }
     pending_luaskills_callbacks.commit();
     mark_webui_service_discovery_ready(state);

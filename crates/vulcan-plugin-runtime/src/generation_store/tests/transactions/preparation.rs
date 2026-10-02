@@ -8,6 +8,12 @@ use crate::{
 };
 use std::collections::BTreeSet;
 
+mod abort;
+mod inspection;
+mod package_cleanup;
+mod package_inspection;
+mod promotion;
+mod reservation;
 mod update_policy;
 
 /// An abandoned reservation cannot be recycled through standalone staging after a newer request replaces the index.

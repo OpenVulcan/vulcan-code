@@ -14,6 +14,61 @@ impl VulcanPluginCredentialStaging {
         &self.record
     }
 
+    /// Read this retained owner's actual inventory; return only exact Preparing, its unique Staged successor, or same Staged.
+    /// 读取此保留所有者实际清单；仅返回精确 Preparing、其唯一 Staged 后继或相同 Staged。
+    /// No backend operation, checkpoint write or revision/request File reopening occurs; errors preserve the original owner.
+    /// 不发生后端操作、检查点写入或修订／请求 File 重开；错误保留原所有者。
+    pub fn reconcile_owned(&mut self) -> Result<VulcanPluginCredentialRecord> {
+        if !matches!(
+            self.record.phase,
+            VulcanPluginCredentialPhase::Preparing | VulcanPluginCredentialPhase::Staged
+        ) {
+            return Err(Error::new(
+                Code::Conflict,
+                "Owned credential reconciliation requires the original Preparing or Staged inventory.",
+            ));
+        }
+        super::operations::validate_record(
+            &self.record,
+            &self.record.package.plugin_id,
+            &self.record.revision,
+        )
+        .map_err(super::reservation::owned_record_error)?;
+        // This short observation fence never reopens the already retained exclusive revision or parent request File.
+        // 此短观察屏障绝不重新打开已保留排他修订或父请求 File。
+        let _namespace = self
+            .store
+            .namespace_lock(&self.record.package.plugin_id, true)?;
+        #[cfg(test)]
+        super::reservation::observation_before_readback(&self.store.root, &self.record)?;
+        // The actual full record is authoritative; malformed replacements are conflicts, while I/O remains Storage.
+        // 实际完整记录具有权威性；格式损坏替换属于冲突，而 I/O 保持 Storage。
+        let actual = self
+            .store
+            .read_credential_record_locked(&self.record.package.plugin_id, &self.record.revision)
+            .map_err(super::reservation::owned_record_error)?
+            .ok_or_else(|| {
+                Error::new(
+                    Code::Conflict,
+                    "Original owned credential inventory disappeared.",
+                )
+            })?;
+        // Preparing has exactly one permitted successor, changing only the declared durable phase.
+        // Preparing 仅有一个允许后继，只改变声明持久阶段。
+        let mut staged = self.record.clone();
+        staged.phase = VulcanPluginCredentialPhase::Staged;
+        if actual != self.record
+            && !(self.record.phase == VulcanPluginCredentialPhase::Preparing && actual == staged)
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Owned credential inventory differs from its exact original record or unique Staged successor.",
+            ));
+        }
+        self.record = actual.clone();
+        Ok(actual)
+    }
+
     /// Stage complete `values` through `backend` using this original lease; return the durably verified journal.
     /// 使用此原租约经 `backend` 暂存完整 `values`；返回持久已验证日志。
     /// Existing differing values are never overwritten; backend failures retain Preparing and never imply rollback.
@@ -97,6 +152,8 @@ impl VulcanPluginCredentialStaging {
         let mut staged = self.record.clone();
         staged.phase = VulcanPluginCredentialPhase::Staged;
         self.store.write_credential_record_locked(&staged)?;
+        #[cfg(test)]
+        super::reservation::observation_after_write(&self.store.root, &staged)?;
         self.record = staged.clone();
         Ok(staged)
     }

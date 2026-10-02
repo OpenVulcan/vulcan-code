@@ -58,7 +58,7 @@ fn formal_candidate_install_deadline_preserves_actual_business_ownership() {
             let original = calls
                 .values()
                 .find_map(|call| {
-                    call.activation.as_ref().filter(|authority| {
+                    call.source.activation().filter(|authority| {
                         authority.request_id == transaction.record().request_id()
                     })
                 })

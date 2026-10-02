@@ -5,6 +5,9 @@ use super::*;
 use crate::mcp::PreparedPluginMcpConfigs;
 use vulcan_mcp_runtime::{McpResourceRelease, McpTransportResources};
 
+mod predecessor;
+mod prepared;
+pub use predecessor::{PredecessorPluginMcpHandoffGuard, PredecessorPluginMcpRuntime};
 mod target;
 pub use target::{TargetPluginMcpHandoffGuard, TargetPluginMcpRuntime};
 
@@ -44,6 +47,16 @@ impl CandidatePluginMcpRuntime {
     /// Returns success only after readiness, protocol shutdown and release; cancellation requests original shutdown.
     /// 仅就绪、协议关闭及释放均完成后返回成功；取消请求原关闭。
     pub async fn validate_and_release(self) -> Result<(), String> {
+        self.validate_and_release_retained().await
+    }
+
+    /// Validate and release the original attempt while its service-owned controller remains retained.
+    /// 校验并释放原尝试，同时保留其服务自有控制对象。
+    /// No inputs; returns success only after readiness, protocol shutdown and actual resource release.
+    /// 无输入；仅在就绪、协议关闭及实际资源释放后返回成功。
+    /// Cancelling this borrowed wait preserves original control; its owner must explicitly finish shutdown and release.
+    /// 取消此借用等待保留原控制；其所有者须明确完成关闭及释放。
+    pub async fn validate_and_release_retained(&self) -> Result<(), String> {
         // The observation carries no resource lease, so waiting cannot retain the authority it is draining.
         // 观测不携带资源租约，因此等待不能保留正在排空的权威。
         let observation = self.observer();

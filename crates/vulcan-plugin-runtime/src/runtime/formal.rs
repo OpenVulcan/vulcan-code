@@ -19,7 +19,8 @@ pub use calls::reuse::VulcanPluginReusableDomainStatus;
 pub use calls::{
     VulcanPluginAutomaticPrewarmOrigin, VulcanPluginAutomaticPrewarmPermit,
     VulcanPluginAutomaticPrewarmTrigger, VulcanPluginFormalCallStatus,
-    VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus,
+    VulcanPluginLegacyLifecycleCall, VulcanPluginPrewarmTargetRequest,
+    VulcanPluginPrewarmTargetStatus,
 };
 mod pinned;
 pub use pinned::VulcanPluginFormalSessionStatus;
@@ -28,9 +29,12 @@ mod instances;
 #[cfg(test)]
 pub(super) use instances::PersistentRuntime;
 pub use instances::{
-    VulcanPluginActivationTargetCompletion, VulcanPluginActivationTargetHandoffParticipant,
-    VulcanPluginActivationTargetRegistration, VulcanPluginMcpTargetHandoffEvidence,
-    VulcanPluginNativeMcpHandoffAdapter,
+    VulcanPluginActivationPredecessorCompletion,
+    VulcanPluginActivationPredecessorHandoffParticipant,
+    VulcanPluginActivationPredecessorRegistration, VulcanPluginActivationTargetCompletion,
+    VulcanPluginActivationTargetHandoffParticipant, VulcanPluginActivationTargetRegistration,
+    VulcanPluginMcpPredecessorHandoffEvidence, VulcanPluginMcpTargetHandoffEvidence,
+    VulcanPluginNativeMcpHandoffAdapter, VulcanPluginNativeMcpPredecessorHandoffAdapter,
 };
 
 /// Manager-owned formal runtime and the exact settings frozen at construction.
@@ -213,15 +217,24 @@ impl VulcanPluginRuntimeManager {
     /// 没有运行时即没有工作；已附加所有者继续可供后续观测。
     pub fn request_formal_runtime_close(&self) -> Result<(), VulcanPluginRuntimeError> {
         if let Some(owner) = self.formal_runtime_owner()? {
-            self.close_reusable_domains(None, None, true)?;
-            owner.cancel_calls()?;
-            owner.cancel_pinned()?;
-            owner.cancel_instances()?;
-            owner
-                .host
-                .runtime()
-                .request_close()
-                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+            {
+                // Serialize permanent closure with registration and same-owner transfer; no callback or drain wait runs here.
+                // 将永久关闭与注册及同所有者转交串行化；此处不执行回调或排空等待。
+                let _registration = self.state.session_registration_gate.lock().map_err(|_| {
+                    VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+                })?;
+                self.close_reusable_domains(None, None, true)?;
+                owner.cancel_calls()?;
+                owner.cancel_pinned()?;
+                owner.cancel_instances()?;
+                owner
+                    .host
+                    .runtime()
+                    .request_close()
+                    .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+            }
+            // Pending retirement acquires the same registration gate itself, after permanent closure has been recorded.
+            // 永久关闭记录之后，待处理退役自行取得相同注册门。
             self.retire_pending_formal_calls(&owner)?;
         }
         Ok(())

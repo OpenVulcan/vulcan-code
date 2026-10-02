@@ -4,7 +4,7 @@
 use super::*;
 use crate::generation_store::{
     PinnedVulcanPluginGeneration, VulcanPluginStoreError as Error,
-    VulcanPluginStoreErrorCode as Code, VulcanPluginStoreResult as Result, files,
+    VulcanPluginStoreResult as Result, files,
 };
 use std::path::PathBuf;
 
@@ -24,95 +24,12 @@ impl VulcanPluginGenerationStore {
         values: &VulcanPluginCredentialValues,
         preparation: Option<&crate::VulcanPluginActivationPreparation>,
     ) -> Result<VulcanPluginCredentialStaging> {
-        if generation.store_root != self.root {
-            return Err(Error::invalid(
-                "Credential candidate belongs to another generation store.",
-            ));
-        }
-        // Recheck the actual package under the same namespace fence used by publication and cleanup.
-        // 在发布及清理使用的相同命名空间屏障下，重新检查实际插件包。
-        let _namespace = self.namespace_lock(&generation.identity.plugin_id, false)?;
-        if self
-            .read_activation(&generation.identity.plugin_id)?
-            .as_ref()
-            .and_then(|record| record.credential_revision())
-            == Some(&revision)
-        {
-            return Err(Error::new(
-                Code::Conflict,
-                "A referenced credential revision cannot become a new staging candidate.",
-            ));
-        }
-        // Parent ownership is acquired before any inventory or backend write can become visible.
-        // 在任何清单或后端写入可见之前取得父所有权。
-        let activation_request_lease = match preparation {
-            Some(preparation) => Some(self.retain_preparation_credentials(
-                preparation,
-                &generation.identity,
-                &revision,
-            )?),
-            None => {
-                self.require_unreserved_credential_revision(
-                    &generation.identity.plugin_id,
-                    &revision,
-                )?;
-                None
-            }
-        };
-        // The pinned copy prevents cooperating package collection during inventory derivation.
-        // 固定副本防止清单派生期间发生协作式插件包回收。
-        let verified = self.pin_locked(&generation.identity)?;
-        // Inventory and permissions share one verified package observation without an additional scan.
-        // 清单及权限共用单次已验证插件包观察，无需额外扫描。
-        let keys = verified.credential_keys;
-        if values.keys().ne(keys.iter()) || values.values().flatten().any(String::is_empty) {
-            return Err(Error::invalid(
-                "Credential values must name every declared slot exactly; configured values cannot be empty.",
-            ));
-        }
-        // All persisted fields are identifiers or presence flags; values never enter serialization.
-        // 全部持久字段均为标识或存在性声明；值绝不进入序列化。
-        let record = VulcanPluginCredentialRecord {
-            schema_version: if preparation.is_some() {
-                ACTIVATION_CREDENTIAL_RECORD_VERSION
-            } else {
-                CREDENTIAL_RECORD_VERSION
-            },
-            activation_request: preparation.map(|original| original.request_id()),
-            package: generation.identity.clone(),
-            revision,
-            keys,
-            configured_keys: configured_keys(values).into_iter().collect(),
-            phase: VulcanPluginCredentialPhase::Preparing,
-        };
-        validate_record(&record, &record.package.plugin_id, &record.revision)?;
-        // Acquire mutation ownership before publishing the first durable inventory.
-        // 发布首份持久清单前取得变更所有权。
-        let lease = self.credential_lease(&record.package.plugin_id, &record.revision, false)?;
-        // Explicit preparation alone creates this optional layout; ordinary reads never repair it.
-        // 仅显式准备创建此可选布局；普通读取绝不修补它。
-        let root = files::ensure_child(&self.root, INVENTORY_DIRECTORY)?;
-        // One validated plugin component contains all of its immutable revision records.
-        // 单个已校验插件组件包含其全部不可变修订记录。
-        let directory = files::ensure_child(&root, &record.package.plugin_id)?;
-        // Existing final records are never reused, including discarded tombstones.
-        // 既有最终记录绝不复用，包括已丢弃的停用记录。
-        let path = directory.join(format!("{}.json", record.revision.as_str()));
-        if files::exists(&path, false)? {
-            return Err(Error::new(
-                Code::Conflict,
-                "Credential revision already has a durable inventory; inspect that original revision.",
-            ));
-        }
-        files::sync_directory(&root)?;
-        files::sync_directory(&self.root)?;
-        files::write_record(&path, &record)?;
-        Ok(VulcanPluginCredentialStaging {
-            store: self.clone(),
-            record,
-            _lease: lease,
-            _activation_request_lease: activation_request_lease,
-        })
+        // The compatibility API shares the sole actual first writer and preserves its original files.
+        // 兼容 API 共用唯一实际首次写入器，并保留其原文件。
+        let mut reservation =
+            self.reserve_owned_credential_staging(generation, revision, values, preparation)?;
+        self.publish_owned_credential_staging_retained(&mut reservation, preparation)?;
+        self.confirmed_credential_staging_reservation(reservation)
     }
 
     /// Require a complete durable staging checkpoint for this exact package/revision while the selection fence is held.
@@ -261,7 +178,7 @@ impl VulcanPluginGenerationStore {
 
     /// Read and validate one canonical journal while the caller holds its plugin namespace fence.
     /// 在调用方持有插件命名空间屏障期间，读取并校验单个规范日志。
-    pub(super) fn read_credential_record_locked(
+    pub(in crate::generation_store) fn read_credential_record_locked(
         &self,
         plugin_id: &str,
         revision: &VulcanPluginCredentialRevision,
@@ -288,6 +205,13 @@ impl VulcanPluginGenerationStore {
         record: &VulcanPluginCredentialRecord,
     ) -> Result<()> {
         validate_record(record, &record.package.plugin_id, &record.revision)?;
+        // Every first writer reserves the largest actual cleanup checkpoint before publishing a journal or admitting secure writes.
+        // 每个首写入者在发布日志或准入安全写入之前预留最大实际清理检查点。
+        files::validate_record_phase_capacity(
+            record,
+            &record.phase,
+            &VulcanPluginCredentialPhase::ENCODED_PHASES,
+        )?;
         // Mutation cannot silently recreate lost inventory layout.
         // 变更不能静默重建丢失清单布局。
         let directory = self
@@ -302,7 +226,7 @@ impl VulcanPluginGenerationStore {
 
 /// Validate exact record identity and canonical complete/subset inventories; returns no secret-bearing diagnostics.
 /// 校验精确记录身份及规范完整／子集清单；不返回包含秘密的诊断。
-fn validate_record(
+pub(super) fn validate_record(
     record: &VulcanPluginCredentialRecord,
     plugin_id: &str,
     revision: &VulcanPluginCredentialRevision,

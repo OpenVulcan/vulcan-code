@@ -14,6 +14,54 @@ use vulcan_service_api::ProjectSummary;
 use vulcan_workbench_model::{SessionId, TaskProjectSummary};
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 mod configuration_io;
+#[cfg(test)]
+mod plugin_native_host_tests;
+
+/// Exclude ordinary Full/catalog replacement while an original update retains its actual publication identity.
+/// 原更新保留其实际发布身份时，排除普通 Full／目录替换。
+/// service is already locked; original_request is None for ordinary writers and the exact UUID for its owning publisher.
+/// service 已加锁；普通写入器的 original_request 为 None，自有发布器为精确 UUID。
+/// Return the registry's admission result using only its map and atomic facts, without resource locks or asynchronous waiting.
+/// 仅使用注册表映射及原子事实返回其准入结果，不获取资源锁或异步等待。
+pub(crate) fn require_plugin_update_full_publication_admission(
+    service: &ServiceBridgeState,
+    original_request: Option<uuid::Uuid>,
+) -> Result<(), String> {
+    service
+        .pending_local_plugin_updates
+        .require_full_publication(original_request)?;
+    // Removal coordination checks actual retained map entries without asynchronous resource locks.
+    // 移除协调检查实际保留映射条目，不取得异步资源锁。
+    service
+        .pending_local_plugin_uninstalls
+        .require_full_publication(original_request)
+}
+
+/// Require open shutdown admission before publishing or starting another plugin management operation.
+/// 在发布或启动新的插件管理操作之前，要求关闭准入保持开放。
+/// state is the actual service state already protected by its publication mutex; no additional service lock is acquired.
+/// state 是已受发布互斥锁保护的实际服务状态；不额外获取服务锁。
+/// Returns success only when drain, irreversible teardown, failed recovery and root-registry shutdown admission are all open.
+/// 仅在排空、不可逆拆除、失败恢复及根注册表关闭准入均开放时返回成功。
+pub(crate) fn require_plugin_publication_shutdown_admission(
+    state: &ServiceBridgeState,
+) -> Result<(), String> {
+    if state.service_lifecycle_state.shutdown_drain_active
+        || state.service_lifecycle_state.shutdown_recovery_blocked
+        || state
+            .service_lifecycle_state
+            .last_recovery_failure
+            .is_some()
+        || state
+            .session_runtime_registry
+            .shutdown_admission_is_closed()
+    {
+        return Err(String::from(
+            "服务正在关闭或关闭恢复已被阻止，不能发布插件扩展代次。",
+        ));
+    }
+    Ok(())
+}
 
 /// Serializes every global Provider configuration transaction across service request families.
 /// 串行化跨服务请求族的全部全局 Provider 配置事务。
@@ -348,6 +396,42 @@ pub(crate) fn service_vulcan_plugin_runtime(
         .as_ref()
         .map(|runtime| runtime.vulcan_plugin_runtime.clone())
         .ok_or_else(|| String::from("Vulcan Plugin runtime is not initialized."))
+}
+
+/// Clone the actual current manager and its first native host registration under one service-state lock.
+/// 在单次服务状态锁内克隆实际当前管理器及其首次原生宿主注册。
+/// state owns the immutable pair; return that same lineage or reject an inconsistent replacement before effects.
+/// state 持有不可变配对；返回该相同谱系，或在副作用前拒绝不一致替换。
+pub(crate) fn service_vulcan_plugin_native_mcp_host(
+    state: &SharedServiceBridgeState,
+) -> Result<
+    (
+        vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+        vulcan_plugin_runtime::VulcanPluginRegisteredNativeMcpHostAuthority,
+    ),
+    String,
+> {
+    // Both values come from the same actual bridge, rather than two independently read service generations.
+    // 两个值来自同一实际桥，而非两个独立读取的服务代次。
+    let service = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // Missing bootstrap is an explicit error and cannot authorize another registration.
+    // 引导缺失为明确错误，不能授权另一次注册。
+    let bridge = service
+        .agent_runtime
+        .as_ref()
+        .ok_or_else(|| String::from("Vulcan Plugin native host is not initialized."))?;
+    if !bridge
+        .vulcan_plugin_native_mcp_host
+        .matches_manager(&bridge.vulcan_plugin_runtime)
+    {
+        return Err(String::from("服务插件管理器与原生宿主签发者不一致。"));
+    }
+    Ok((
+        bridge.vulcan_plugin_runtime.clone(),
+        bridge.vulcan_plugin_native_mcp_host.clone(),
+    ))
 }
 
 /// Atomically synchronizes the current Vulcan Plugin hook surface into the retained dispatcher.

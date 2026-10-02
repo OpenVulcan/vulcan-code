@@ -235,7 +235,7 @@ mod predecessor;
 
 /// No secret slots are declared; any unexpected backend access makes staging fail explicitly.
 /// 未声明秘密槽位；任何意外后端访问都会使暂存明确失败。
-struct NoSecrets;
+pub(super) struct NoSecrets;
 
 impl VulcanPluginCredentialBackend for NoSecrets {
     /// Reject reading a secret for this empty inventory; returns the fixture error.
@@ -585,8 +585,8 @@ fn formal_candidate_probe_cancellation_retains_original_request_ownership() {
                     .is_some()
             );
             Arc::downgrade(
-                call.activation
-                    .as_ref()
+                call.source
+                    .activation()
                     .expect("explicit candidate authority"),
             )
         };
@@ -727,9 +727,9 @@ fn formal_candidate_probe_deadline_preserves_native_ownership() {
             // 按私有权威解析候选，绝不按会变化的注册表位置解析。
             let call = calls
                 .values()
-                .find(|call| call.activation.is_some())
+                .find(|call| call.source.activation().is_some())
                 .expect("original candidate call retained");
-            Arc::downgrade(call.activation.as_ref().expect("candidate readiness owner"))
+            Arc::downgrade(call.source.activation().expect("candidate readiness owner"))
         };
         drop(candidate);
         assert_eq!(

@@ -234,7 +234,10 @@ fn formal_stateless_production_route_preserves_fresh_state_and_envelopes() {
                 .is_empty()
         );
         assert_eq!(
-            fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
+            fixture
+                .manager
+                .active_session_count("idle-plugin")
+                .expect("actual live reservation count"),
             0
         );
         assert_eq!(
@@ -325,7 +328,10 @@ fn formal_stateless_abandonment_stays_owned_through_actual_drain() {
         assert_eq!(report.closed_formal_calls, 0);
         assert_eq!(report.failures.len(), 1);
         assert_eq!(
-            fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
+            fixture
+                .manager
+                .active_session_count("idle-plugin")
+                .expect("actual live reservation count"),
             1
         );
         assert_eq!(
@@ -355,7 +361,10 @@ fn formal_stateless_abandonment_stays_owned_through_actual_drain() {
                 .is_ok()
         );
         assert_eq!(
-            fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
+            fixture
+                .manager
+                .active_session_count("idle-plugin")
+                .expect("actual live reservation count"),
             0
         );
         let retry = fixture
@@ -366,7 +375,11 @@ fn formal_stateless_abandonment_stays_owned_through_actual_drain() {
         assert_eq!(retry.closed_formal_calls, 1);
         assert!(retry.failures.is_empty(), "{retry:?}");
         assert!(
-            fixture.manager.snapshot().plugins["idle-plugin"]
+            fixture
+                .manager
+                .observe_catalog(&fixture.manager.snapshot())
+                .expect("actual completed drain cleanup projection")
+                .plugins["idle-plugin"]
                 .diagnostics
                 .iter()
                 .all(|message| !message.contains("has not physically retired")),
@@ -621,9 +634,24 @@ fn formal_stateless_accounting_failure_does_not_claim_retirement() {
             .expect("retained call");
         assert!(!status.retired);
         assert!(status.requires_cleanup_recovery);
+        assert!(
+            fixture
+                .manager
+                .active_session_count("idle-plugin")
+                .expect_err("actual poisoned accounting must not yield a live count")
+                .message
+                .contains("counter lock is poisoned")
+        );
+        // Inspect only the fixture-injected poisoned guard to prove its real original reservation was not released.
+        // 仅检查夹具注入的中毒守卫，证明其真实原预留没有释放。
         assert_eq!(
-            fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
-            1
+            counts
+                .lock()
+                .expect_err("actual injected accounting poison")
+                .into_inner()
+                .get("idle-plugin")
+                .copied(),
+            Some(1)
         );
         assert_eq!(
             fixture
@@ -652,7 +680,10 @@ fn formal_stateless_accounting_failure_does_not_claim_retirement() {
         assert_eq!(report.closed_formal_calls, 1);
         assert!(report.failures.is_empty(), "{report:?}");
         assert_eq!(
-            fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
+            fixture
+                .manager
+                .active_session_count("idle-plugin")
+                .expect("actual live reservation count"),
             0
         );
         fixture

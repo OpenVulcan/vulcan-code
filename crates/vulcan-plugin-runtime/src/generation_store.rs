@@ -8,26 +8,36 @@ mod credentials;
 pub use credential_staging::{
     PinnedVulcanPluginCredentials, VulcanPluginCredentialBackend, VulcanPluginCredentialKey,
     VulcanPluginCredentialPhase, VulcanPluginCredentialRecord, VulcanPluginCredentialStaging,
-    VulcanPluginCredentialValues,
+    VulcanPluginCredentialStagingReservation, VulcanPluginCredentialValues,
 };
+mod deactivation;
 mod discovery;
 pub use credentials::{VulcanPluginCredentialBinding, VulcanPluginCredentialRevision};
+pub use deactivation::{VulcanPluginDeactivationObservation, VulcanPluginDeactivationReservation};
 mod files;
+mod legacy_mutation;
+pub use legacy_mutation::VulcanPluginLegacyMutationGuard;
 mod operations;
+mod published_dispatch;
+pub(crate) use published_dispatch::PublishedDispatchFence;
 mod transactions;
 pub(crate) use transactions::EffectAttempt;
+pub(crate) use transactions::{PredecessorHandoffReservation, PredecessorHandoffTransferAuthority};
 pub(crate) use transactions::{TargetHookInitializationAttempt, TargetHookInitializationOwner};
 pub(crate) use transactions::{TargetMcpInitializationAttempt, TargetMcpInitializationOwner};
 pub use transactions::{
     VulcanPluginActivationCandidate, VulcanPluginActivationEffect, VulcanPluginActivationEffects,
-    VulcanPluginActivationPreparation, VulcanPluginActivationPreparationIntent,
-    VulcanPluginActivationPreparationRecord, VulcanPluginActivationRequestRecord,
+    VulcanPluginActivationPreparation, VulcanPluginActivationPreparationInspection,
+    VulcanPluginActivationPreparationIntent, VulcanPluginActivationPreparationRecord,
+    VulcanPluginActivationPreparationReservation, VulcanPluginActivationRequestRecord,
     VulcanPluginActivationTransaction, VulcanPluginActivationTransactionPhase,
     VulcanPluginActivationTransactionRecord, VulcanPluginEffectObservation,
     VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt,
-    VulcanPluginPredecessorDrainIdentity, VulcanPluginTargetHookInitializationPhase,
-    VulcanPluginTargetHookInitializationReceipt, VulcanPluginTargetMcpInitializationPhase,
-    VulcanPluginTargetMcpInitializationReceipt, VulcanPluginUpdatePolicy,
+    VulcanPluginPredecessorDrainIdentity, VulcanPluginPredecessorHandoffPhase,
+    VulcanPluginPredecessorHandoffRecord, VulcanPluginPreparationPackageCleanupObservation,
+    VulcanPluginTargetHookInitializationPhase, VulcanPluginTargetHookInitializationReceipt,
+    VulcanPluginTargetMcpInitializationPhase, VulcanPluginTargetMcpInitializationReceipt,
+    VulcanPluginUpdatePolicy,
 };
 #[cfg(test)]
 mod tests;
@@ -280,6 +290,17 @@ pub enum VulcanPluginGenerationPhase {
     /// Package bytes are removed; identity and lock tombstones remain retained.
     /// 插件包字节已删除；仍保留身份及锁记录。
     Collected,
+}
+
+impl VulcanPluginGenerationPhase {
+    /// Sole declared phase list derives encoded checkpoint growth; it grants neither collection nor phase-transition authority.
+    /// 唯一声明阶段列表推导编码检查点增长；不授予回收或阶段转换权威。
+    const ENCODED_PHASES: [Self; 4] = [
+        Self::Preparing,
+        Self::Prepared,
+        Self::Collecting,
+        Self::Collected,
+    ];
 }
 
 /// Actual shared filesystem lease held until the last cloned package owner is dropped.

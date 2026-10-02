@@ -6,7 +6,16 @@ use crate::generation_store::{
     VulcanPluginStoreError as Error, VulcanPluginStoreErrorCode as Code,
 };
 
+mod abort;
+mod inspection;
 mod operations;
+mod package_cleanup;
+mod package_inspection;
+mod promotion;
+mod reservation;
+pub use inspection::VulcanPluginActivationPreparationInspection;
+pub use package_cleanup::VulcanPluginPreparationPackageCleanupObservation;
+pub use reservation::VulcanPluginActivationPreparationReservation;
 
 /// Immutable identities approved before any package copy or secure-store staging begins.
 /// 在任何插件包复制或安全存储暂存开始前批准的不可变身份。
@@ -106,6 +115,12 @@ pub struct VulcanPluginActivationPreparationRecord {
 /// Typed original request projection keeps preparation separate from an actual configured activation.
 /// 类型化原请求投影将准备与实际已配置激活区分。
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Preserve the existing public by-value request payload instead of changing its Rust construction contract for size alone.
+// 保留既有公开按值请求载荷，不仅为大小改变其 Rust 构造契约。
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The public request variants retain their existing by-value Rust payload contract."
+)]
 pub enum VulcanPluginActivationRequestRecord {
     /// No complete activation target exists yet.
     /// 尚不存在完整激活目标。

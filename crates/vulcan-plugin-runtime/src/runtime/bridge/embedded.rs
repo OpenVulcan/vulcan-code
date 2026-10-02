@@ -3,7 +3,9 @@
 
 use super::*;
 use crate::VulcanPluginDescriptor;
-use crate::runtime::candidates::{ActivationExecution, ActivationTargetHookAuthority};
+use crate::runtime::candidates::ActivationExecution;
+use crate::runtime::legacy_lifecycle::{CallExecutionSource, LegacyLifecycleExecution};
+use crate::runtime::private_hooks::PrivateHookOrigin;
 use luaskills::runtime::embedded::capabilities::{
     CapabilityDescriptor, CapabilityEffects, CapabilityExecution, CapabilityIdempotency,
     CapabilityInvocation, CapabilityOutcome, CapabilityPermissions, CapabilityRegistrationRequest,
@@ -128,25 +130,17 @@ enum ExecutionSource {
     /// Exact existing candidate or predecessor operations retain their original authority.
     /// 精确既有候选或前驱操作保留原权威。
     ActivationOperation(Arc<ActivationExecution>),
+    /// The original disabled-user mutation guard owns this install or uninstall execution.
+    /// 原已停用用户插件变更守卫拥有此次安装或卸载执行。
+    LegacyLifecycle(Arc<LegacyLifecycleExecution>),
     /// Only original target initialization and its declared Hook finalizer may invoke native services.
     /// 仅原目标初始化及其声明 Hook 关闭器可以调用原生服务。
-    PrivateTargetHook(Arc<ActivationTargetHookAuthority>),
-}
-
-impl ExecutionSource {
-    /// Return the existing operation authority only for its explicit variant; all other sources remain distinct.
-    /// 仅对显式变体返回既有操作权威；其他来源保持独立。
-    fn activation(&self) -> Option<&ActivationExecution> {
-        match self {
-            Self::ActivationOperation(authority) => Some(authority),
-            _ => None,
-        }
-    }
+    PrivateHook(PrivateHookOrigin),
 }
 
 /// Restricted weak handle addresses the same original core pool and domain without extending physical ownership.
 /// 受限弱句柄指向相同原核心池及域，不延长物理所有权。
-pub(in crate::runtime) struct PrivateTargetHookHandoff {
+pub(in crate::runtime) struct PrivateHookHandoff {
     /// Core-issued pool identity is immutable throughout transfer.
     /// 核心签发池身份在转交全程保持不变。
     pub(in crate::runtime) pool_id: String,
@@ -157,13 +151,13 @@ pub(in crate::runtime) struct PrivateTargetHookHandoff {
 
 /// Prepared transfer retains the source guard until durable completion; applying it performs no I/O.
 /// 已准备转交保留来源守卫至持久完成；应用时不执行 I/O。
-pub(in crate::runtime) struct PrivateTargetHookTransfer<'a> {
+pub(in crate::runtime) struct PrivateHookTransfer<'a> {
     /// Caller retains the exact original domain while this short transfer guard exists.
     /// 此短转交守卫存在期间，调用方保留精确原域。
     source: std::sync::MutexGuard<'a, ExecutionSource>,
 }
 
-impl PrivateTargetHookTransfer<'_> {
+impl PrivateHookTransfer<'_> {
     /// Replace only the authorization source after confirmed completion, releasing its original request owner.
     /// 已确认完成后仅替换授权来源，释放其原请求所有者。
     pub(in crate::runtime) fn publish(mut self) {
@@ -171,11 +165,11 @@ impl PrivateTargetHookTransfer<'_> {
     }
 }
 
-impl PrivateTargetHookHandoff {
+impl PrivateHookHandoff {
     /// Upgrade the exact physical domain; returns an error rather than creating another pool.
     /// 升级精确物理域；返回错误，绝不创建另一个池。
-    pub(in crate::runtime) fn retain_domain(&self) -> EmbeddedResult<PrivateTargetHookDomain> {
-        Ok(PrivateTargetHookDomain(self.domain.upgrade().ok_or_else(
+    pub(in crate::runtime) fn retain_domain(&self) -> EmbeddedResult<PrivateHookDomain> {
+        Ok(PrivateHookDomain(self.domain.upgrade().ok_or_else(
             || {
                 error(
                     EmbeddedErrorCode::Closed,
@@ -188,28 +182,28 @@ impl PrivateTargetHookHandoff {
 
 /// Temporary exact domain retention permits prevalidated source transfer without exposing native registration.
 /// 临时精确域保留允许预校验来源转交，不暴露原生注册。
-pub(in crate::runtime) struct PrivateTargetHookDomain(Arc<ExecutionAuthority>);
+pub(in crate::runtime) struct PrivateHookDomain(Arc<ExecutionAuthority>);
 
-impl PrivateTargetHookDomain {
+impl PrivateHookDomain {
     /// Lock only this original source after matching authority; return a guard for a later infallible publish.
     /// 匹配权威后仅锁定此原来源；返回供后续不可失败发布使用的守卫。
     pub(in crate::runtime) fn prepare_transfer(
         &self,
-        authority: &Arc<ActivationTargetHookAuthority>,
-    ) -> EmbeddedResult<PrivateTargetHookTransfer<'_>> {
+        authority: &PrivateHookOrigin,
+    ) -> EmbeddedResult<PrivateHookTransfer<'_>> {
         let source = self
             .0
             .source
             .lock()
             .map_err(|_| internal("Plugin execution source lock is poisoned."))?;
-        if !matches!(&*source, ExecutionSource::PrivateTargetHook(original) if Arc::ptr_eq(original, authority))
+        if !matches!(&*source, ExecutionSource::PrivateHook(original) if original.same_allocation(authority))
         {
             return Err(error(
                 EmbeddedErrorCode::StaleGeneration,
                 "Target Hook source differs from its original authority.",
             ));
         }
-        Ok(PrivateTargetHookTransfer { source })
+        Ok(PrivateHookTransfer { source })
     }
 }
 
@@ -224,14 +218,14 @@ struct RegisteredPool {
     domain: Arc<ExecutionAuthority>,
 }
 
-/// Host-selected lifecycle scope and optional private activation authority form one pool admission.
-/// 宿主选择的生命周期作用域与可选原请求权威构成单个池入场。
+/// Host-selected lifecycle scope and explicit source authority form one pool admission.
+/// 宿主选择的生命周期作用域与显式来源权威构成单个池入场。
 struct PoolAdmission {
     /// Published routes require current lifecycle state; activation calls require their exact operation scope.
     /// 已发布路由要求当前生命周期状态；激活调用要求精确操作作用域。
     scope: VulcanPluginBridgeLeaseScope,
-    /// Absence explicitly chooses ordinary published authority.
-    /// 缺失明确选择普通已发布权威。
+    /// The captured variant selects exactly one published or original private authority.
+    /// 捕获变体精确选择单个已发布或原私有权威。
     source: ExecutionSource,
 }
 
@@ -251,12 +245,12 @@ impl PoolAdmission {
 /// Returns a descriptor with real leases or an explicit ownership error before any executable source is read.
 /// 在读取任何可执行源码前返回具有实际租约的描述符，或明确归属错误。
 fn admitted_plugin(
-    state: &VulcanPluginManagerState,
+    state: &Arc<VulcanPluginManagerState>,
     plugin_id: &str,
     admission: &PoolAdmission,
 ) -> EmbeddedResult<VulcanPluginDescriptor> {
-    if let ExecutionSource::PrivateTargetHook(authority) = &admission.source {
-        if authority.plugin.id != plugin_id
+    if let ExecutionSource::PrivateHook(authority) = &admission.source {
+        if authority.plugin().id != plugin_id
             || admission.scope != VulcanPluginBridgeLeaseScope::Enabled
         {
             return Err(error(
@@ -265,9 +259,9 @@ fn admitted_plugin(
             ));
         }
         authority
-            .validate(state, &authority.plugin)
+            .validate(state, authority.plugin())
             .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
-        return Ok(authority.plugin.clone());
+        return Ok(authority.plugin().clone());
     }
     if let ExecutionSource::ActivationOperation(activation) = &admission.source {
         if activation.plugin.id != plugin_id {
@@ -280,6 +274,20 @@ fn admitted_plugin(
             .validate(state, &activation.plugin, admission.scope)
             .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
         return Ok(activation.plugin.clone());
+    }
+    if let ExecutionSource::LegacyLifecycle(authority) = &admission.source {
+        if authority.plugin().id != plugin_id {
+            return Err(error(
+                EmbeddedErrorCode::StaleGeneration,
+                "Legacy lifecycle plugin identity differs from pool admission.",
+            ));
+        }
+        // Validate the original manager, guard and disabled descriptor before reading any source.
+        // 在读取任何源码前校验原管理器、守卫及已停用描述符。
+        authority
+            .validate(state, authority.plugin(), admission.scope)
+            .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
+        return Ok(authority.plugin().clone());
     }
     state
         .snapshot
@@ -334,8 +342,8 @@ impl VulcanPluginEmbeddedHost {
                 ExecutionSource::ActivationOperation(authority) => {
                     authority.request_id == request_id
                 }
-                ExecutionSource::PrivateTargetHook(authority) => authority.request_id == request_id,
-                ExecutionSource::Published => false,
+                ExecutionSource::PrivateHook(authority) => authority.request_id() == request_id,
+                ExecutionSource::Published | ExecutionSource::LegacyLifecycle(_) => false,
             } {
                 return Ok(true);
             }
@@ -686,7 +694,12 @@ impl VulcanPluginEmbeddedHost {
         // Actual core pool ownership pins the descriptor, not historical host handles.
         // 真实核心池所有权固定描述符，历史宿主句柄不固定它。
         let environment = match &admission.source {
-            ExecutionSource::PrivateTargetHook(authority) => Some(
+            ExecutionSource::LegacyLifecycle(authority) => Some(
+                authority
+                    .take_environment()
+                    .map_err(|failure| internal(&failure.message))?,
+            ),
+            ExecutionSource::PrivateHook(authority) => Some(
                 authority
                     .take_environment()
                     .map_err(|failure| internal(&failure.message))?,
@@ -878,13 +891,13 @@ impl HostAuthority {
 /// Validate the captured source against state; source remains fixed across one native invocation.
 /// 针对 state 校验已捕获来源；来源在单次原生调用中保持固定。
 fn validate_current_source(
-    state: &VulcanPluginManagerState,
+    state: &Arc<VulcanPluginManagerState>,
     domain: &ExecutionAuthority,
     source: &ExecutionSource,
     finalizing: bool,
     capability: Option<&str>,
 ) -> EmbeddedResult<()> {
-    if let ExecutionSource::PrivateTargetHook(authority) = source {
+    if let ExecutionSource::PrivateHook(authority) = source {
         authority
             .validate(state, &domain.plugin)
             .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
@@ -917,6 +930,26 @@ fn validate_current_source(
             return Err(error(
                 EmbeddedErrorCode::PermissionDenied,
                 "Activation operation manifest does not authorize this native capability.",
+            ));
+        }
+        return Ok(());
+    }
+    if let ExecutionSource::LegacyLifecycle(authority) = source {
+        authority
+            .validate(state, &domain.plugin, domain.scope)
+            .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
+        // Original guard ownership fixes both descriptor identity and native permission authority.
+        // 原守卫所有权同时固定描述符身份及原生权限权威。
+        let manifest = domain.plugin.manifest.as_ref().ok_or_else(|| {
+            error(
+                EmbeddedErrorCode::PermissionDenied,
+                "Legacy lifecycle manifest is unavailable.",
+            )
+        })?;
+        if capability.is_some_and(|name| !permitted(name, &manifest.permissions)) {
+            return Err(error(
+                EmbeddedErrorCode::PermissionDenied,
+                "Legacy lifecycle manifest does not authorize this native capability.",
             ));
         }
         return Ok(());
@@ -1007,7 +1040,7 @@ fn validate_invocation_source(
     name: &str,
     invocation: &CapabilityInvocation,
 ) -> EmbeddedResult<()> {
-    if let ExecutionSource::PrivateTargetHook(_) = source {
+    if let ExecutionSource::PrivateHook(_) = source {
         let owner = VulcanPluginRuntimeManager {
             state: Arc::clone(state),
         }
@@ -1093,3 +1126,7 @@ fn internal(message: &str) -> EmbeddedError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "embedded/legacy_lifecycle_tests.rs"]
+mod legacy_lifecycle_tests;

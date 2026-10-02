@@ -131,17 +131,20 @@ pub(super) async fn service_save_mcp_server_configuration(
     )
     .await
     .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
-    if let Err(error) =
-        configuration_transaction.persist(&next_configuration, "保存 MCP 服务器失败")
-    {
-        next_mcp_runtime.shutdown_user_partition();
-        return Err(error);
-    }
-    let workbench = store_provider_and_mcp_configuration_after_change(
+    // Ownership validation, persistence and Full replacement share one actual service lock after preparation finishes.
+    // 准备完成后，所有权校验、持久化及 Full 替换共享单个实际服务锁。
+    let workbench = match store_provider_and_mcp_configuration_after_change_with_persistence(
         &state,
         next_configuration,
-        next_mcp_runtime,
-    )?;
+        next_mcp_runtime.clone(),
+        |configuration| configuration_transaction.persist(configuration, "保存 MCP 服务器失败"),
+    ) {
+        Ok(workbench) => workbench,
+        Err(error) => {
+            next_mcp_runtime.shutdown_user_partition();
+            return Err(error);
+        }
+    };
     // Release the global configuration transaction only after the rebuilt runtime is stored.
     // 仅在重建运行时完成回存后释放全局配置事务。
     drop(configuration_transaction);
@@ -172,17 +175,20 @@ pub(super) async fn service_remove_mcp_server_configuration(
     )
     .await
     .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
-    if let Err(error) =
-        configuration_transaction.persist(&next_configuration, "移除 MCP 服务器失败")
-    {
-        next_mcp_runtime.shutdown_user_partition();
-        return Err(error);
-    }
-    let workbench = store_provider_and_mcp_configuration_after_change(
+    // Reject an update's retained Full before durable removal, without leaving a validation-to-persistence pin window.
+    // 持久移除前拒绝更新保留 Full，不留下校验到持久化之间的固定窗口。
+    let workbench = match store_provider_and_mcp_configuration_after_change_with_persistence(
         &state,
         next_configuration,
-        next_mcp_runtime,
-    )?;
+        next_mcp_runtime.clone(),
+        |configuration| configuration_transaction.persist(configuration, "移除 MCP 服务器失败"),
+    ) {
+        Ok(workbench) => workbench,
+        Err(error) => {
+            next_mcp_runtime.shutdown_user_partition();
+            return Err(error);
+        }
+    };
     // Release the global configuration transaction only after the rebuilt runtime is stored.
     // 仅在重建运行时完成回存后释放全局配置事务。
     drop(configuration_transaction);

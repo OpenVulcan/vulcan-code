@@ -1,0 +1,25 @@
+# Standalone consumer manifest template expanded only in an explicit run directory.
+# 仅在显式运行目录展开的独立消费者清单模板。
+[package]
+name = "plugin-runtime-validation-old"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[[bin]]
+name = "plugin-runtime-validation-old"
+path = "main.rs"
+
+[dependencies]
+vulcan-plugin-runtime = { path = "@MAIN_ROOT@/crates/vulcan-plugin-runtime" }
+vulcan-runtime-assets = { path = "@MAIN_ROOT@/crates/vulcan-runtime-assets" }
+luaskills = "=0.5.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
+
+[patch.crates-io]
+lance-bitpacking = { path = "@MAIN_ROOT@/vendor/lance-bitpacking" }

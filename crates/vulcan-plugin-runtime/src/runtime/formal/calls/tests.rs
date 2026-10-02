@@ -4,6 +4,9 @@
 use super::*;
 
 mod candidates;
+mod completion;
+mod deactivation;
+mod legacy;
 mod transient;
 use crate::runtime::tests::{test_manager, write_hook_package};
 use crate::{
@@ -12,6 +15,154 @@ use crate::{
 };
 use std::collections::BTreeSet;
 use std::sync::Condvar;
+
+/// Exercise the real private projection with typed terminal evidence, without claiming native execution or authority.
+/// 使用类型化终态证据验证真实私有投影，不声称原生执行或运行时权威。
+/// No parameters; verify owned results, missing evidence precedence, independent parsing and ordered dual errors.
+/// 无参数；验证拥有结果、缺失证据优先级、独立解析及双错误顺序。
+#[test]
+fn formal_result_projection_preserves_owned_values_and_independent_failures() {
+    use luaskills::runtime::embedded::capabilities::CapabilityCaller;
+    use luaskills::runtime::embedded::{
+        EffectState, EmbeddedError, ModuleOperationContext, OperationFinalization, OperationPhase,
+    };
+
+    // Build only projection inputs from the actual public snapshot shape; no operation is registered or retired.
+    // 仅依据实际公开快照形状构造投影输入；不登记或退役任何操作。
+    let snapshot_for = |value, error, finalization| OperationSnapshot {
+        finalization,
+        context: OperationContext::Unbound,
+        host_effects: vec![],
+        operation_id: "projection-contract".to_owned(),
+        phase: OperationPhase::Succeeded,
+        cancellation_requested: false,
+        effects: EffectState::NotApplicable,
+        value,
+        error,
+    };
+    // Keep a complete structured business value whose returned ownership must outlive its original string frame.
+    // 保留完整结构化业务值，返回值的拥有权必须长于其原始字符串帧。
+    let expected = json!({"nested":[{"payload":"x".repeat(8192)},null],"flag":true});
+    // The ordinary path receives a string frame and produces the same complete business subtree.
+    // 普通路径接收字符串帧并产出相同完整业务子树。
+    let frame = Value::String(json!({"ok":true,"result":expected}).to_string());
+    // This typed snapshot owns the frame independently from every projected result.
+    // 此类型化快照独立于每个投影结果持有原始帧。
+    let ordinary = snapshot_for(Some(frame.clone()), None, None);
+    assert_eq!(
+        project_result(&ordinary).expect("ordinary complete result"),
+        expected
+    );
+    assert_eq!(ordinary.value.as_ref(), Some(&frame));
+
+    // A successful closing payload is deliberately not a business string frame and must be discarded unchanged.
+    // 成功关闭载荷刻意不是业务字符串帧，必须按原契约直接丢弃。
+    let mut finalized = snapshot_for(
+        None,
+        None,
+        Some(OperationFinalization {
+            export: "shutdown".to_owned(),
+            business: OperationOutcome::Succeeded {
+                value: frame.clone(),
+            },
+            business_effect_count: 0,
+            outcome: Some(OperationOutcome::Succeeded {
+                value: json!({"closing_payload":[null,1,"unused"]}),
+            }),
+        }),
+    );
+    assert_eq!(
+        project_result(&finalized).expect("finalized complete result"),
+        expected
+    );
+    // Mutate only the projection fixture; native lifecycle invariants remain covered by the integration tests.
+    // 仅变更投影夹具；原生生命周期不变量继续由集成测试覆盖。
+    let finalization = finalized.finalization.as_mut().expect("typed finalization");
+    finalization.business = OperationOutcome::Succeeded {
+        value: Value::Bool(false),
+    };
+    finalization.outcome = None;
+    assert_eq!(
+        project_result(&finalized)
+            .expect_err("missing closing evidence precedes parsing")
+            .message,
+        "Terminal finalization has no outcome."
+    );
+
+    // Preserve exact structured core diagnostics while combining them after business parsing.
+    // 在业务解析之后合并错误，同时保留精确结构化核心诊断。
+    let closing_error = EmbeddedError::new(EmbeddedErrorCode::Internal, "closing-contract-marker");
+    finalized
+        .finalization
+        .as_mut()
+        .expect("typed finalization")
+        .outcome = Some(OperationOutcome::Failed {
+        error: closing_error.clone(),
+    });
+    assert_eq!(
+        project_result(&finalized)
+            .expect_err("closing failure cannot skip business parsing")
+            .message,
+        format!("Vulcan Plugin runtime eval returned no JSON frame.; {closing_error}")
+    );
+    // Core business and closing failures retain their original order, independently from frame decoding.
+    // 核心业务及关闭失败保持原顺序，独立于帧解码。
+    let business_error =
+        EmbeddedError::new(EmbeddedErrorCode::Internal, "business-contract-marker");
+    finalized
+        .finalization
+        .as_mut()
+        .expect("typed finalization")
+        .business = OperationOutcome::Failed {
+        error: business_error.clone(),
+    };
+    assert_eq!(
+        project_result(&finalized)
+            .expect_err("both original stage errors")
+            .message,
+        format!("{business_error}; {closing_error}")
+    );
+    // Missing or contradictory ordinary evidence cannot be interpreted as JSON null or a successful frame.
+    // 缺失或矛盾的普通证据不能被解释为JSON空值或成功帧。
+    for inconsistent in [
+        snapshot_for(None, None, None),
+        snapshot_for(Some(frame), Some(business_error), None),
+    ] {
+        assert_eq!(
+            project_result(&inconsistent)
+                .expect_err("inconsistent ordinary evidence")
+                .message,
+            "Terminal operation has inconsistent result evidence."
+        );
+    }
+
+    // Only an explicit typed prewarm context bypasses business-frame parsing and returns an owned native value.
+    // 仅明确类型化预热上下文跳过业务帧解析，并返回拥有的原生值。
+    let mut prewarm = snapshot_for(Some(expected.clone()), None, None);
+    prewarm.context = OperationContext::Module(Box::new(ModuleOperationContext {
+        prewarm: true,
+        finalization_instance_id: None,
+        pool_id: "projection-contract-pool".to_owned(),
+        caller: CapabilityCaller {
+            runtime_id: "projection-contract-runtime".to_owned(),
+            plugin_id: "projection-contract-plugin".to_owned(),
+            package_generation: "projection-contract-generation".to_owned(),
+            execution_revision: "projection-contract-revision".to_owned(),
+            security_partition: "projection-contract-partition".to_owned(),
+            operation_id: prewarm.operation_id.clone(),
+            request_id: None,
+            session_id: None,
+            workspace_root: None,
+        },
+        capability_revision: "projection-contract-capabilities".to_owned(),
+        export: None,
+    }));
+    // Dropping the original snapshot proves the public return contract still owns its complete value.
+    // 丢弃原始快照，证明公开返回契约仍拥有其完整值。
+    let owned = project_result(&prewarm).expect("native prewarm value");
+    drop(prewarm);
+    assert_eq!(owned, expected);
+}
 
 /// Bounded test observation budget, shared by all controlled waits.
 /// 有界测试观测预算，由全部受控等待共享。
@@ -263,7 +414,9 @@ return M
         .await
         .expect("physically completed lifecycle history reclaimed");
         assert_eq!(
-            self.manager.snapshot().plugins["hook-plugin"].active_session_count,
+            self.manager
+                .active_session_count("hook-plugin")
+                .expect("actual live reservation count"),
             0
         );
         assert_eq!(
@@ -460,7 +613,10 @@ fn formal_lifecycle_interruption_retains_actual_identity_and_capacity() {
             "native work must still own capacity"
         );
         assert_eq!(
-            fixture.manager.snapshot().plugins["hook-plugin"].active_session_count,
+            fixture
+                .manager
+                .active_session_count("hook-plugin")
+                .expect("actual live reservation count"),
             1
         );
         assert!(!original.lock().expect("retained state").retired);

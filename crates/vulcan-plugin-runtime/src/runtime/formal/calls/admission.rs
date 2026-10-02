@@ -4,6 +4,76 @@
 use super::*;
 
 impl VulcanPluginRuntimeManager {
+    /// Exclude existing ordinary lifecycle originals before routing is reserved under `registration`.
+    /// 在 `registration` 内预留路由之前，排除既有普通生命周期原实例。
+    /// Returns a conflict for every retained Published Lifecycle until actual acknowledgement removes its map entry.
+    /// 直至实际确认移除映射条目之前，为每个保留已发布生命周期返回冲突。
+    /// Controllers and original Activation/Legacy executions keep their independent existing admission contracts.
+    /// 控制器及原激活／旧格式执行保持各自独立既有准入契约。
+    pub(in crate::runtime) fn require_no_published_lifecycle_for_routing(
+        &self,
+        _registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Clone the existing parent Arc and release attachment ownership before inspecting its sole call map.
+        // 克隆既有父级 Arc，并在检查其唯一调用映射之前释放附加锁。
+        let Some(owner) = self.formal_runtime_owner()? else {
+            return Ok(());
+        };
+        // The existing registration order is publication gate followed by this same actual registry lock.
+        // 既有登记顺序为发布门之后取得此相同实际注册表锁。
+        let calls = owner.calls.lock().map_err(|_| calls_error())?;
+        if let Some(original) = calls.values().find(|call| {
+            matches!(&call.ownership, CallOwner::Lifecycle)
+                && matches!(&call.source, CallExecutionSource::Published)
+        }) {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Plugin routing requires acknowledgement of retained Published lifecycle `{}` for plugin `{}`.",
+                original.id, original.plugin.id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Acknowledge only the exact original internal record under its existing registry lock.
+    /// 在既有注册表锁下仅确认精确原内部记录。
+    /// owner and original identify retained actual ownership; return its saved business result or retain the unchanged slot on error.
+    /// owner 及 original 标识保留实际所有权；返回保存业务结果，错误时保留未变更槽位。
+    pub(super) fn acknowledge_original_internal_call(
+        &self,
+        owner: &ManagedFormalRuntime,
+        original: &Arc<FormalCall>,
+    ) -> Result<Result<Value, VulcanPluginRuntimeError>, VulcanPluginRuntimeError> {
+        // Keep identity verification and successful removal in the same registry critical section.
+        // 在同一注册表临界区内保持身份核验及成功移除。
+        let mut calls = owner.calls.lock().map_err(|_| calls_error())?;
+        // Resolve only the original retained slot, without inspecting unrelated acknowledged records.
+        // 仅解析原保留槽位，不检查无关已确认记录。
+        let registered = calls.get(&original.id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Original internal invocation is not retained.")
+        })?;
+        if !Arc::ptr_eq(registered, original)
+            || matches!(registered.ownership, CallOwner::Controller(_))
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Original internal invocation ownership does not match.",
+            ));
+        }
+        // The sole retirement predicate and core forget remain shared with ordinary housekeeping.
+        // 唯一退役判定及核心遗忘继续与普通维护共享。
+        let state = registered.lock()?;
+        // No acknowledgement is published before the actual operation checkpoint succeeds.
+        // 实际操作检查点成功前不发布任何确认。
+        let result = forget_retired_call_operation(owner, &state)?.ok_or_else(|| {
+            VulcanPluginRuntimeError::new(
+                "Original internal invocation has not physically retired.",
+            )
+        })?;
+        drop(state);
+        registered.acknowledged.store(true, Ordering::Release);
+        calls.remove(&original.id);
+        Ok(result)
+    }
+
     /// Validate plugin and scope against the explicit activation authority or the ordinary published catalog.
     /// 按显式激活权威或普通已发布目录校验 plugin 及 scope。
     /// Activation selection is host-only and keeps the existing resource and capability requirement checks.
@@ -12,14 +82,18 @@ impl VulcanPluginRuntimeManager {
         &self,
         plugin: &VulcanPluginDescriptor,
         scope: VulcanPluginBridgeLeaseScope,
-        activation: Option<&ActivationExecution>,
+        source: &CallExecutionSource,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        match activation {
-            Some(authority) => {
+        match source {
+            CallExecutionSource::Activation(authority) => {
                 authority.validate(&self.state, plugin, scope)?;
                 self.validate_plugin_requirements_in_scope(plugin, scope)
             }
-            None => {
+            CallExecutionSource::LegacyLifecycle(authority) => {
+                authority.validate(&self.state, plugin, scope)?;
+                self.validate_plugin_requirements_in_scope(plugin, scope)
+            }
+            CallExecutionSource::Published => {
                 crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
                     &self.state,
                     &plugin.id,
@@ -65,7 +139,7 @@ impl VulcanPluginRuntimeManager {
         call: &FormalCall,
         scope: VulcanPluginBridgeLeaseScope,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        self.validate_formal_authority(&call.plugin, scope, call.activation.as_deref())?;
+        self.validate_formal_authority(&call.plugin, scope, &call.source)?;
         if call.cancelled.load(Ordering::Acquire) {
             return Err(VulcanPluginRuntimeError::new(
                 "Formal invocation cancelled before submission.",
@@ -211,8 +285,14 @@ impl VulcanPluginRuntimeManager {
         }
         // Explicit activation authority outlives both filesystem preparation and actual native retirement.
         // 显式激活权威比文件系统准备及实际原生退役均存续更久。
-        if let Some(activation) = &call.activation {
-            activation.retain_execution_environment(&self.state)?;
+        match &call.source {
+            CallExecutionSource::Activation(authority) => {
+                authority.retain_execution_environment(&self.state)?
+            }
+            CallExecutionSource::LegacyLifecycle(authority) => {
+                authority.retain_execution_environment(&self.state)?
+            }
+            CallExecutionSource::Published => {}
         }
         // This uses the same validated copy, dependency install and atomic environment publication as before.
         // 此处使用原有已校验复制、依赖安装及原子环境发布。
@@ -257,6 +337,7 @@ impl VulcanPluginRuntimeManager {
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
+            self.require_routing_publication_locked(&publication, None)?;
             self.validate_formal_plugin(&plugin, scope)?;
             if owner.has_retiring_capacities(&plugin.id)? {
                 owner.prepare_plugin_capacities(&plugin.id, &publication)?;
@@ -302,9 +383,21 @@ impl VulcanPluginRuntimeManager {
         };
         self.start_registered_formal_call(&owner, &call)?;
         loop {
+            // Create the original notification before checking evidence so a concurrent completion cannot be lost.
+            // 在检查证据之前创建原通知，避免丢失并发完成。
+            let finished = call.finished.notified();
             // Clone completed evidence under the short lock before acknowledgement.
             // 确认之前在短锁下克隆完成证据。
-            let observed = call.lock()?.result.clone();
+            let observed = {
+                // Only the original guard's ended supervision allows immediate acknowledgement and reclamation.
+                // 仅原守卫已结束的监督允许立即确认与回收。
+                let state = call.lock()?;
+                if state.supervised {
+                    None
+                } else {
+                    state.result.clone()
+                }
+            };
             if let Some(result) = observed {
                 observation.completed = true;
                 call.acknowledged.store(true, Ordering::Release);
@@ -324,7 +417,7 @@ impl VulcanPluginRuntimeManager {
                     ))
                 });
             }
-            tokio::time::sleep(OBSERVATION_INTERVAL).await;
+            finished.await;
         }
     }
 
@@ -356,19 +449,38 @@ impl VulcanPluginRuntimeManager {
             // Inspect the original physical-retirement and supervision checkpoints.
             // 检查原物理退役及监督检查点。
             let state = call.lock()?;
-            if !state.retired || state.supervised || state.preparing || state.result.is_none() {
+            if forget_retired_call_operation(owner, &state)?.is_none() {
                 continue;
-            }
-            if let Some(operation) = &state.operation {
-                owner
-                    .host
-                    .runtime()
-                    .forget_operation(operation.id())
-                    .map_err(core_error)?;
             }
             drop(state);
             calls.remove(&id);
         }
         Ok(())
     }
+}
+
+/// Perform the sole actual operation acknowledgement after the shared physical-retirement predicate.
+/// 在共享物理退役判定后执行唯一实际操作确认。
+/// owner supplies the actual core and state holds original evidence; returns None while unretired, saved result after success, or a retaining error.
+/// owner 提供实际核心，state 持有原证据；未退役返回 None，成功返回保存结果，失败返回保留错误。
+fn forget_retired_call_operation(
+    owner: &ManagedFormalRuntime,
+    state: &CallState,
+) -> Result<Option<Result<Value, VulcanPluginRuntimeError>>, VulcanPluginRuntimeError> {
+    if !state.can_acknowledge_retirement() {
+        return Ok(None);
+    }
+    if let Some(operation) = &state.operation {
+        owner
+            .host
+            .runtime()
+            .forget_operation(operation.id())
+            .map_err(core_error)?;
+    }
+    Ok(Some(
+        state
+            .result
+            .clone()
+            .expect("retirement predicate requires a result"),
+    ))
 }

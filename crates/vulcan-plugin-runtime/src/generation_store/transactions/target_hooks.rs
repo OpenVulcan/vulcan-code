@@ -345,16 +345,14 @@ impl TargetHookInitializationAttempt {
             .owner
             .store
             .write_target_hook_locked(&self.owner.transaction, &receipt)
-        {
-            if self
+            && self
                 .owner
                 .store
                 .read_target_hook_locked(&self.owner.transaction)?
                 .as_ref()
                 != Some(&receipt)
-            {
-                return Err(error);
-            }
+        {
+            return Err(error);
         }
         self.receipt = receipt;
         Ok(())

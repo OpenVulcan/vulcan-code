@@ -373,7 +373,10 @@ async fn bundled_prepared_debug_session_uses_real_sidecar_and_releases_resources
             .is_empty()
     );
     assert_eq!(
-        fixture.manager.snapshot().plugins["vulcan-debug-runtime"].active_session_count,
+        fixture
+            .manager
+            .active_session_count("vulcan-debug-runtime")
+            .expect("actual live reservation count"),
         0
     );
     assert_eq!(

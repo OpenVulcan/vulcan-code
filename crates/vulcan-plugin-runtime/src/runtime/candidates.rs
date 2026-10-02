@@ -6,9 +6,14 @@ use crate::{VulcanPluginActivationCandidate, VulcanPluginDescriptor, VulcanPlugi
 
 mod mcp;
 pub use mcp::{
+    VulcanPluginMcpPredecessorControl, VulcanPluginMcpPredecessorHandoffGuard,
+    VulcanPluginMcpPredecessorStartGuard, VulcanPluginMcpTargetControl,
     VulcanPluginMcpTargetHandoffGuard, VulcanPluginMcpTargetStartGuard,
-    VulcanPluginPreparedMcpCandidate, VulcanPluginPreparedMcpTarget,
-    VulcanPluginRegisteredNativeMcpHostAuthority,
+    VulcanPluginPredecessorMcpProfile, VulcanPluginPreparedMcpCandidate,
+    VulcanPluginPreparedMcpPredecessor, VulcanPluginPreparedMcpTarget,
+    VulcanPluginPreparedPublishedMcp, VulcanPluginPublishedMcpProfile,
+    VulcanPluginPublishedMcpStartGuard, VulcanPluginRegisteredNativeMcpHostAuthority,
+    VulcanPluginTargetMcpProfile,
 };
 mod target_hooks;
 pub(in crate::runtime) use target_hooks::ActivationTargetHookAuthority;
@@ -21,6 +26,18 @@ pub(super) fn retain_candidate_readiness(
     state: &VulcanPluginManagerState,
     candidate: &VulcanPluginActivationCandidate<'_>,
 ) -> Result<Arc<std::fs::File>, VulcanPluginRuntimeError> {
+    validate_candidate_owner(state, candidate)?;
+    Ok(candidate.retain_readiness())
+}
+
+/// Validate the same inspected candidate's manager root and unpublished namespace without retaining a File.
+/// 校验同一已检查候选的管理器根及未发布命名空间，不保留文件。
+/// `state` and `candidate` are actual originals; returns unit or an explicit ownership conflict.
+/// `state` 及 `candidate` 为实际原实例；返回空值或明确归属冲突。
+pub(super) fn validate_candidate_owner(
+    state: &VulcanPluginManagerState,
+    candidate: &VulcanPluginActivationCandidate<'_>,
+) -> Result<(), VulcanPluginRuntimeError> {
     // Canonical spelling is fixed by the owning store, never inferred from another installed package.
     // 规范拼写由所属存储固定，绝不从另一已安装插件包推断。
     let user_root = state.user_plugin_root.canonicalize().map_err(|error| {
@@ -40,7 +57,7 @@ pub(super) fn retain_candidate_readiness(
         ));
     }
     validate_candidate_namespace(state, &plugin.id)?;
-    Ok(candidate.retain_readiness())
+    Ok(())
 }
 
 /// Rejects a user candidate that would shadow the manager's authoritative bundled namespace.

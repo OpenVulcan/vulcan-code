@@ -122,6 +122,43 @@ impl VulcanPluginRuntimeManager {
         Ok(())
     }
 
+    /// Reclaim original terminal operation evidence acknowledged by its observer under the caller's state lock.
+    /// 在调用方的 state 锁下回收已由其观察者确认的原终态操作证据。
+    /// owner retains the exact Core parent; state is this persistent instance's exclusive evidence record.
+    /// owner 保留精确 Core 父级；state 为此持久实例的独占证据记录。
+    /// Return success after forgetting eligible records, or propagate the original snapshot or forgetting error.
+    /// 遗忘符合条件的记录后返回成功，否则传递原快照或遗忘错误。
+    pub(super) fn reclaim_acknowledged_persistent_operations(
+        &self,
+        owner: &ManagedFormalRuntime,
+        state: &mut PersistentState,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Acknowledgement never substitutes for actual termination or releases still-owned work.
+        // 确认绝不替代实际终止，也不释放仍被拥有的工作。
+        let mut consumed = Vec::new();
+        for (id, operation) in &state.operations {
+            if operation.acknowledged.load(Ordering::Acquire)
+                && operation
+                    .handle
+                    .snapshot()
+                    .map_err(core_error)?
+                    .phase
+                    .is_terminal()
+            {
+                consumed.push(id.clone());
+            }
+        }
+        for id in consumed {
+            owner
+                .host
+                .runtime()
+                .forget_operation(&id)
+                .map_err(core_error)?;
+            state.operations.remove(&id);
+        }
+        Ok(())
+    }
+
     /// Advance runtime's physical cleanup on owner; return true only after every recorded resource retires.
     /// 在 owner 上推进 runtime 的物理清理；仅在每项记录资源退役后返回真值。
     fn advance_instance(
@@ -162,27 +199,7 @@ impl VulcanPluginRuntimeManager {
         }
         // Reclaim completed acknowledged calls while the persistent instance remains open.
         // 持久实例仍开启时回收已完成且已确认的调用。
-        let mut consumed = Vec::new();
-        for (id, operation) in &state.operations {
-            if operation.acknowledged.load(Ordering::Acquire)
-                && operation
-                    .handle
-                    .snapshot()
-                    .map_err(core_error)?
-                    .phase
-                    .is_terminal()
-            {
-                consumed.push(id.clone());
-            }
-        }
-        for id in consumed {
-            owner
-                .host
-                .runtime()
-                .forget_operation(&id)
-                .map_err(core_error)?;
-            state.operations.remove(&id);
-        }
+        self.reclaim_acknowledged_persistent_operations(owner, &mut state)?;
         owner.host.reap_workspace_requests().map_err(core_error)?;
         if let Some(id) = state.session.clone()
             && !state.session_forgotten
@@ -264,10 +281,10 @@ impl VulcanPluginRuntimeManager {
         state.retired = true;
         // Release private original-request preparation ownership only after the actual core pool is forgotten.
         // 仅在实际核心池已遗忘后释放私有原请求准备所有权。
-        state.private_target.take();
+        state.private_origin.take();
         state.target_attempt.take();
-        state.target_handoff.take();
-        state.target_catalog.take();
+        state.private_handoff.take();
+        state.private_catalog.take();
         Ok(true)
     }
 

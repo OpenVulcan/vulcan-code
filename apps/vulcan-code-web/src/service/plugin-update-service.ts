@@ -21,9 +21,12 @@ export interface LocalPluginUpdateStatus {
   // pluginId is the exact queried namespace.
   // pluginId 为精确查询命名空间。
   pluginId: string;
-  // phase records durable selection progress, not live readiness or resource release.
-  // phase 记录持久选择进度，不表示实时就绪或资源释放。
-  phase: "preparing" | "prepared" | "committing" | "published" | "completed" | "aborted";
+  // phase records durable selection progress; null means the live service owner has no journal yet.
+  // phase 记录持久选择进度；空值表示存活服务所有者尚无日志。
+  phase: "preparing" | "prepared" | "committing" | "published" | "completed" | "aborted" | null;
+  // hasServiceOwner preserves the service's live ownership observation independently from durable phase.
+  // hasServiceOwner 独立于持久阶段保留服务的实时所有权观察。
+  hasServiceOwner: boolean;
   // candidate preserves the generation store's exact snake-case identity contract.
   // candidate 保留代次存储精确下划线命名身份契约。
   candidate: {
@@ -63,8 +66,9 @@ export function parseLocalPluginUpdateStatus(value: unknown, pluginId: string): 
   if (typeof record.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(record.requestId)
     || record.requestId === "00000000-0000-0000-0000-000000000000" || record.pluginId !== pluginId
     || typeof record.activationRevision !== "string" || !/^[1-9][0-9]*$/.test(record.activationRevision)
-    || (record.phase !== "preparing" && record.phase !== "prepared" && record.phase !== "committing" && record.phase !== "published" && record.phase !== "completed" && record.phase !== "aborted")
-    || (record.phase === "preparing" && record.installation !== null)
+    || typeof record.hasServiceOwner !== "boolean" || (record.phase === null && !record.hasServiceOwner)
+    || (record.phase !== null && record.phase !== "preparing" && record.phase !== "prepared" && record.phase !== "committing" && record.phase !== "published" && record.phase !== "completed" && record.phase !== "aborted")
+    || ((record.phase === null || record.phase === "preparing") && record.installation !== null)
     || (record.installation !== null && record.installation !== "started" && record.installation !== "succeeded" && record.installation !== "observation_failed")
     || typeof record.candidate !== "object" || record.candidate === null || Array.isArray(record.candidate)) {
     throw new Error("Plugin update status has an invalid identity or phase.");
@@ -77,7 +81,7 @@ export function parseLocalPluginUpdateStatus(value: unknown, pluginId: string): 
     || typeof candidate.content_fingerprint !== "string" || !candidate.content_fingerprint) {
     throw new Error("Plugin update status has an invalid immutable target.");
   }
-  if (!Array.isArray(record.effects) || (record.phase === "preparing" && record.effects.length !== 0)) {
+  if (!Array.isArray(record.effects) || ((record.phase === null || record.phase === "preparing") && record.effects.length !== 0)) {
     throw new Error("Plugin update status has invalid candidate effects.");
   }
   // Validate each declared operation and discard undeclared response fields.
@@ -95,7 +99,7 @@ export function parseLocalPluginUpdateStatus(value: unknown, pluginId: string): 
   });
   if (new Set(effects.map((effect) => effect.operation)).size !== effects.length) throw new Error("Duplicate candidate effect.");
   return {
-    requestId: record.requestId, pluginId, phase: record.phase,
+    requestId: record.requestId, pluginId, phase: record.phase, hasServiceOwner: record.hasServiceOwner,
     candidate: { plugin_id: pluginId, generation_id: candidate.generation_id, version: candidate.version, content_fingerprint: candidate.content_fingerprint },
     activationRevision: record.activationRevision, installation: record.installation, effects,
   };
@@ -118,8 +122,8 @@ export async function readLocalPluginUpdates(pluginId: string): Promise<LocalPlu
   return records;
 }
 
-// resumeLocalPluginUpdate completes an already-committed original request; no callback or installation is replayed.
-// resumeLocalPluginUpdate 完成已提交的原请求；不重放回调或安装。
+// resumeLocalPluginUpdate continues the retained service-owned request or completes its committed original route.
+// resumeLocalPluginUpdate 继续保留的服务自有请求，或补齐已提交原路由。
 // Exact pluginId/requestId identify the request; returns the service's revisioned catalog update.
 // 精确 pluginId/requestId 标识请求；返回服务带修订的目录更新。
 export async function resumeLocalPluginUpdate(pluginId: string, requestId: string): Promise<LuaSkillsCatalogUpdate> {

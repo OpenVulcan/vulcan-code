@@ -3,8 +3,67 @@
 
 use super::*;
 
+mod target_publication;
+pub(super) use target_publication::{
+    TargetPluginExtensionPublication, publish_activation_target_plugin_extension_generation,
+};
+mod predecessor_publication;
+pub(super) use predecessor_publication::{
+    PredecessorPluginExtensionPublication,
+    publish_activation_predecessor_plugin_extension_generation,
+};
+
 #[cfg(test)]
 mod owner_drain_tests;
+
+/// Publish one original native control under the real service slot lock, preserving its first host issuer.
+/// 在真实服务槽锁内发布单个原原生控制，保留其首次宿主签发者。
+/// state owns the actual bridge, native is its ready original, and catalog is that original source snapshot.
+/// state 持有实际桥，native 为其就绪原实例，catalog 为该原来源快照。
+/// Returns the actual full commit witness; shutdown or source errors precede the pointer write and do not replay initialization.
+/// 返回实际完整提交见证；关闭或来源错误先于指针写入，且不重播初始化。
+#[cfg(test)]
+pub(super) fn publish_native_published_plugin_extension_generation(
+    state: &SharedServiceBridgeState,
+    native: &vulcan_agent_runtime::mcp::PublishedPluginMcpRuntime,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+) -> Result<
+    Arc<vulcan_agent_runtime::agent_runtime::extension_generation::ExtensionGeneration>,
+    String,
+> {
+    // Acquire service ownership before source and native guards to avoid native-to-service lock inversion.
+    // 在来源及原生守卫之前取得服务所有权，避免原生到服务的锁反序。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+    crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
+    crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
+    // Ordinary native publication cannot admit another installation's private manager descriptor.
+    // 普通原生发布不能准入另一安装的私有管理器描述符。
+    let current_catalog = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
+    guard
+        .pending_local_plugin_installs
+        .require_catalog_publication(current_catalog.as_deref(), &catalog)?;
+    // This actual bridge contains the sole full slot consumed by new executions.
+    // 此实际桥包含新执行消费的唯一完整槽。
+    let bridge = guard
+        .agent_runtime
+        .as_mut()
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    // The same original prepared lease transfers without allocation of a replacement runtime or issuer.
+    // 同一原已准备租约转交，不分配替代运行时或签发者。
+    let (committed, displaced) =
+        bridge.publish_native_plugin_extension_generation(native, catalog)?;
+    drop(guard);
+    displaced.retire_plugin_partitions_after(
+        native.observer().identity().0,
+        AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+    );
+    Ok(committed)
+}
 
 /// One exact desired lifecycle state selected by the service request.
 /// 服务请求选择的唯一目标生命周期状态。
@@ -119,6 +178,16 @@ pub(super) async fn set_vulcan_plugin_enabled(
     if stable_plugin_id.is_empty() {
         return Err(String::from("Vulcan 插件标识不能为空。"));
     }
+    {
+        // Core refresh also replaces the exact catalog Arc, so reject before any lifecycle or policy mutation begins.
+        // 核心刷新也替换精确目录 Arc，因此在任何生命周期或策略变更开始前拒绝。
+        let guard = state
+            .lock()
+            .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+        crate::service_state_access::require_plugin_update_full_publication_admission(
+            &guard, None,
+        )?;
+    }
     // management_guard serializes catalog, lifecycle, persistence, and hook ownership transfer.
     // management_guard 串行化目录、生命周期、持久化与 Hook 所有权交接。
     // provider_configuration is the immutable rollback baseline for this transaction.
@@ -157,6 +226,11 @@ pub(super) async fn set_vulcan_plugin_enabled(
     // target converts the transport boolean once so later branches carry domain meaning.
     // target 仅转换一次传输布尔值，使后续分支携带领域语义。
     let target = VulcanPluginTargetState::from_enabled(enabled);
+    // requires_cleanup_retry observes retained cleanup independently from immutable routing.
+    // requires_cleanup_retry 独立于不可变路由观测保留清理。
+    let requires_cleanup_retry = runtime
+        .has_cleanup_diagnostics(&stable_plugin_id)
+        .map_err(|error| error.to_string())?;
     // already_settled excludes cleanup-warning states that require an explicit retry.
     // already_settled 排除需要显式重试的清理告警状态。
     let already_settled = matches!(
@@ -168,11 +242,7 @@ pub(super) async fn set_vulcan_plugin_enabled(
             VulcanPluginTargetState::Disabled,
             vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
         )
-    );
-    // requires_cleanup_retry identifies retained resources from an earlier disable attempt.
-    // requires_cleanup_retry 标识早期停用尝试遗留的资源。
-    let requires_cleanup_retry = current_plugin.runtime_state
-        == vulcan_plugin_runtime::VulcanPluginRuntimeState::DisabledWithCleanupWarning;
+    ) && !requires_cleanup_retry;
     if !matches!(
         current_plugin.availability,
         vulcan_plugin_runtime::VulcanPluginAvailability::Enabled
@@ -1505,25 +1575,174 @@ pub(super) fn publish_extension_generation(
     catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
     mcp_runtime: McpRuntimeAccess,
 ) -> Result<(), String> {
+    publish_extension_generation_with_current_mcp(state, plugin_id, catalog, |_| Ok(mcp_runtime))
+}
+
+/// Publish the retained Legacy replacement and confirm its secret owner adjacent to the actual full write.
+/// 发布保留旧格式替换，并在实际完整写入相邻处确认其秘密所有者。
+/// State owns the real slot; catalog and resources belong to the same original credential request.
+/// state 持有真实槽；catalog 及 resources 属于相同原凭据请求。
+/// Returns after confirmation; preparation errors preserve the current pointer and its original native owners.
+/// 确认后返回；准备错误保留当前指针及其原原生所有者。
+pub(super) fn publish_legacy_secret_extension_generation(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    resources: &mut legacy_secret_owner::LegacySecretMutationResources,
+) -> Result<(), String> {
+    // Actual service ownership precedes all native guards in the established publication lock order.
+    // 实际服务所有权按既定发布锁序先于全部原生守卫。
+    let mut guard = state.lock().map_err(|error| error.to_string())?;
+    crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
+    crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
+    // This actual bridge owns the only full slot used by subsequent executions.
+    // 此实际桥持有后续执行使用的唯一完整槽。
+    let bridge = guard
+        .agent_runtime
+        .as_mut()
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    // Preserve the current original through adjacent confirmation, including concurrent unrelated updates.
+    // 跨相邻确认保留当前原值，包括并发无关更新。
+    let expected = Arc::clone(&bridge.extension_generation);
+    // The actual current full pointer supplies the complete catalog; a pre-readiness snapshot cannot overwrite later routes.
+    // 实际当前完整指针提供完整目录；就绪前快照不能覆盖后续路由。
+    let current_catalog = expected.plugin_catalog().ok_or_else(|| {
+        String::from("Legacy publication requires the actual current plugin catalog.")
+    })?;
+    // The captured route must still be enabled in the same manager incarnation and monotonic plugin generation.
+    // 捕获路由须在相同管理器实例及单调插件代次中仍保持启用。
+    let original = catalog.plugins.get(plugin_id).ok_or_else(|| {
+        String::from("Legacy publication original plugin is absent from its captured catalog.")
+    })?;
+    if current_catalog.service_epoch != catalog.service_epoch
+        || original.generation == 0
+        || original.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled
+        || !current_catalog
+            .plugins
+            .get(plugin_id)
+            .is_some_and(|current| {
+                current.generation == original.generation
+                    && current.runtime_state
+                        == vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled
+            })
+    {
+        return Err(String::from(
+            "Legacy publication original plugin routing changed during readiness.",
+        ));
+    }
+    // Merge actual current partitions instead of using a pre-readiness frozen access.
+    // 合并实际当前分区，而非使用就绪前冻结访问。
+    let current = expected.mcp_runtime();
+    // Disjoint borrows keep physical ownership in the original service slot through confirmation.
+    // 不相交借用跨确认使物理所有权保持在原服务槽中。
+    let legacy_secret_owner::LegacySecretMutationResources { native, phase, .. } = resources;
+    // Empty global declarations require removal and have no candidate native work.
+    // 空全局声明要求移除，且没有候选原生工作。
+    let access = match native.as_ref() {
+        Some(native) => native.publication_access(&current)?,
+        None => remove_plugin_mcp_runtime_partition(&current, plugin_id),
+    };
+    // Hook and catalog preparation complete before native guard acquisition or full-pointer mutation.
+    // Hook 及目录准备在原生守卫获取或完整指针修改之前完成。
+    let next = bridge.prepare_plugin_extension_generation(current_catalog, access)?;
+    match native.as_ref() {
+        Some(native) => {
+            native.publish_prepared(&mut bridge.extension_generation, &expected, next, || {
+                *phase = LegacySecretMutationPhase::Committed;
+            })?
+        }
+        None => {
+            vulcan_agent_runtime::agent_runtime::extension_generation::ExtensionGeneration::publish_prepared(
+                &mut bridge.extension_generation, &expected, next, |_| { *phase = LegacySecretMutationPhase::Committed; },
+            )?;
+        }
+    }
+    // Retire displaced native owners only after actual confirmation and native guard release.
+    // 仅实际确认及原生守卫释放后退役被替换原生所有者。
+    drop(guard);
+    current.retire_plugin_partitions_after(
+        plugin_id,
+        AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+    );
+    Ok(())
+}
+
+/// Publish a disabled plugin while preserving every other partition from the actual current service generation.
+/// 发布停用插件，同时保留实际当前服务代次中的全部其他分区。
+/// state owns the sole pointer; plugin_id selects only the removed partition; catalog is the exact disabled snapshot.
+/// state 持有唯一指针；plugin_id 仅选择要移除的分区；catalog 是精确停用快照。
+/// Returns confirmed replacement or an explicit error before replacement, including shutdown admission rejection.
+/// 返回已确认替换，或替换前的明确错误，包括关闭准入拒绝。
+pub(super) fn publish_disabled_plugin_extension_generation(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+) -> Result<(), String> {
+    publish_extension_generation_with_current_mcp(state, plugin_id, catalog, |current| {
+        Ok(remove_plugin_mcp_runtime_partition(current, plugin_id))
+    })
+}
+
+/// Prepare and replace the complete extension using its current MCP surface under the sole service publication lock.
+/// 在唯一服务发布锁内，使用当前 MCP 暴露面准备并替换完整扩展。
+/// state owns the pointer; plugin_id identifies retired leases; catalog supplies exact routes; prepare_mcp merges current partitions.
+/// state 持有指针；plugin_id 标识退休租约；catalog 提供精确路由；prepare_mcp 合并当前分区。
+/// The synchronous closure must not await, reenter service state, or execute plugin business.
+/// 同步闭包不得等待、重入服务状态或执行插件业务。
+/// Returns success after one pointer replacement; any preparation or shutdown error preserves the original pointer.
+/// 单次指针替换后返回成功；任何准备或关闭错误均保留原指针。
+pub(super) fn publish_extension_generation_with_current_mcp(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    prepare_mcp: impl FnOnce(&McpRuntimeAccess) -> Result<McpRuntimeAccess, String>,
+) -> Result<(), String> {
     // The service lock publishes catalog, MCP access, and plugin conversation handlers together.
     // 服务锁共同发布目录、MCP 访问面及插件会话处理器。
     let mut guard = state
         .lock()
         .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+    // Check shutdown admission under the same lock that replaces the extension pointer.
+    // 在替换扩展指针的同一锁内检查关闭准入。
+    crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
+    crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
+    // Generic lifecycle publication preserves every retained original's actual full visibility and generation.
+    // 通用生命周期发布保留每个保留原实例的实际完整可见性及代次。
+    let current_catalog = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
+    guard
+        .pending_local_plugin_installs
+        .require_catalog_publication(current_catalog.as_deref(), &catalog)?;
     // This bridge owns the single extension pointer consumed by new executions.
     // 本桥持有新执行消费的唯一扩展指针。
     let agent_runtime = guard
         .agent_runtime
         .as_mut()
         .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-    // Prepare all fallible handler validation before replacing the published pointer.
-    // 在替换发布指针前完成全部可能失败的处理器校验。
+    // Capture the actual original extension only after acquiring its publication lock.
+    // 仅在取得其发布锁后捕获实际原扩展。
+    let expected = Arc::clone(&agent_runtime.extension_generation);
+    // The actual original extension also keeps displaced resources alive until adjacent confirmation completes.
+    // 实际原扩展也使被替换资源存续，直至相邻确认完成。
+    let current_mcp = expected.mcp_runtime();
+    // The caller replaces only its own partition while preserving unrelated current owners.
+    // 调用方仅替换自己的分区，同时保留当前无关所有者。
+    let mcp_runtime = prepare_mcp(&current_mcp)?;
+    // Validate all handlers before replacing the complete published pointer.
+    // 替换完整已发布指针前校验全部处理器。
     let next = agent_runtime.prepare_plugin_extension_generation(catalog, mcp_runtime)?;
-    // Existing generation owners retain the old partitions through their drain interval.
-    // 既有代次所有者在排空期限内保留旧分区。
-    let retired_mcp_runtime = agent_runtime.extension_generation.mcp_runtime();
-    agent_runtime.extension_generation = next;
-    retired_mcp_runtime.retire_plugin_partitions_after(
+    vulcan_agent_runtime::agent_runtime::extension_generation::ExtensionGeneration::publish_prepared(
+        &mut agent_runtime.extension_generation,
+        &expected,
+        next,
+        |_| {},
+    )?;
+    // Retirement can acquire native observation locks only after leaving the sole service publication lock.
+    // 仅离开唯一服务发布锁之后，退休才可取得原生观察锁。
+    drop(guard);
+    current_mcp.retire_plugin_partitions_after(
         plugin_id,
         AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
     );
@@ -1531,7 +1750,7 @@ pub(super) fn publish_extension_generation(
 }
 
 #[cfg(test)]
-mod generation_tests;
+pub(in crate::skills_services) mod generation_tests;
 
 /// Finishes one runtime transition from an immutable policy snapshot.
 /// 根据不可变策略快照完成单个运行时转换。

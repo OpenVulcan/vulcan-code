@@ -1,7 +1,7 @@
 //! Production persistent ownership spans preparation, fixed Lua state and physical retirement.
 //! 生产持久所有权覆盖准备、固定 Lua 状态及物理退役。
 
-use super::calls::{OBSERVATION_INTERVAL, core_error};
+use super::calls::{OBSERVATION_INTERVAL, core_error, observe_terminal};
 use super::pinned::{deadline, project_business, project_closing, remaining};
 use super::*;
 use crate::{VulcanPluginDescriptor, VulcanPluginHookDescriptor};
@@ -18,12 +18,17 @@ use std::time::Instant;
 mod admission;
 mod control;
 mod handoff;
+mod predecessor_handoff;
+mod predecessor_hooks;
 mod target_hooks;
-use handoff::NoTargetHandoffAdapter;
+use handoff::{NoPredecessorHandoffAdapter, NoTargetHandoffAdapter};
 pub use handoff::{
-    VulcanPluginActivationTargetCompletion, VulcanPluginActivationTargetHandoffParticipant,
-    VulcanPluginActivationTargetRegistration, VulcanPluginMcpTargetHandoffEvidence,
-    VulcanPluginNativeMcpHandoffAdapter,
+    VulcanPluginActivationPredecessorCompletion,
+    VulcanPluginActivationPredecessorHandoffParticipant,
+    VulcanPluginActivationPredecessorRegistration, VulcanPluginActivationTargetCompletion,
+    VulcanPluginActivationTargetHandoffParticipant, VulcanPluginActivationTargetRegistration,
+    VulcanPluginMcpPredecessorHandoffEvidence, VulcanPluginMcpTargetHandoffEvidence,
+    VulcanPluginNativeMcpHandoffAdapter, VulcanPluginNativeMcpPredecessorHandoffAdapter,
 };
 #[cfg(test)]
 mod tests;
@@ -52,9 +57,12 @@ pub(in crate::runtime) struct PersistentRuntime {
 /// 精确检查点允许恢复，且不会重放初始化。
 #[derive(Default)]
 struct PersistentState {
-    /// Explicit private origin prevents ordinary routes from reusing an untransferred selected target.
-    /// 显式私有来源阻止普通路由复用未转交的已选目标。
-    private_target: Option<Arc<crate::runtime::candidates::ActivationTargetHookAuthority>>,
+    /// This instance owns one independent compiled output schema slot; state only transfers its Arc.
+    /// 此实例拥有一个独立的已编译输出 Schema 槽；state 只转交其 Arc。
+    output_schema_cache: Arc<Mutex<Option<PersistentOutputSchema>>>,
+    /// Explicit mutually exclusive origin prevents ordinary routes from reusing any untransferred private Hook.
+    /// 显式互斥来源阻止普通路由复用任何未转交私有 Hook。
+    private_origin: Option<crate::runtime::private_hooks::PrivateHookOrigin>,
     /// The sole original initialization attempt owns durable no-replay evidence until transfer or retirement.
     /// 唯一原初始化尝试拥有持久禁止重放证据，直至转交或退役。
     target_attempt: Option<crate::generation_store::TargetHookInitializationAttempt>,
@@ -63,10 +71,10 @@ struct PersistentState {
     target_receipt_error: Option<String>,
     /// Weak handoff addresses the original actual core domain rather than creating another VM.
     /// 弱交接指向原实际核心域，不创建另一 VM。
-    target_handoff: Option<crate::runtime::bridge::PrivateTargetHookHandoff>,
+    private_handoff: Option<crate::runtime::bridge::PrivateHookHandoff>,
     /// Only successful synchronous complete-extension publication records this exact final catalog.
     /// 仅成功同步完整扩展发布记录此精确最终目录。
-    target_catalog: Option<Weak<crate::VulcanPluginCatalogSnapshot>>,
+    private_catalog: Option<Weak<crate::VulcanPluginCatalogSnapshot>>,
     /// The initiating action owns preparation until real initialization finishes.
     /// 发起 Action 持有准备，直至实际初始化完成。
     preparation_action: Option<crate::runtime::action_status::ActionWorkGuard>,
@@ -112,6 +120,20 @@ struct PersistentState {
     /// Failed cleanup remains visible until an explicit retry.
     /// 清理失败保持可见至显式重试。
     cleanup_error: Option<String>,
+}
+
+/// One exact parsed declaration and canonical path own the compiled validator for this instance.
+/// 一个精确解析声明与规范路径拥有此实例的已编译校验器。
+struct PersistentOutputSchema {
+    /// The current checked canonical package file identifies the declaration.
+    /// 当前经过检查的规范包文件标识声明。
+    path: PathBuf,
+    /// Freshly parsed file contents must match exactly before reuse.
+    /// 重新解析的文件内容必须精确匹配后才能复用。
+    schema: Value,
+    /// Each caller retains its exact validator independently of concurrent slot replacement.
+    /// 每个调用方独立保留其精确校验器，不受并发槽替换影响。
+    validator: Arc<jsonschema::Validator>,
 }
 
 /// Acknowledgement is independent from cancellation and actual termination.
@@ -185,6 +207,50 @@ impl Drop for PersistentMonitor {
 }
 
 impl PersistentRuntime {
+    /// Reuse or compile the validator for the freshly read UI output declaration.
+    /// 复用或编译刚读取的 UI 输出声明校验器。
+    /// path is already checked, schema is parsed from that file; return its exact validator or the original error.
+    /// path 已经过检查，schema 从该文件解析；返回其精确校验器或原错误。
+    /// Compilation and validation never hold lifecycle or cache locks; no old declaration substitutes for a failure.
+    /// 编译与校验绝不持有生命周期锁或缓存锁；旧声明不会替代失败。
+    pub(in crate::runtime) fn ui_output_schema_validator(
+        &self,
+        path: PathBuf,
+        schema: Value,
+    ) -> Result<Arc<jsonschema::Validator>, VulcanPluginRuntimeError> {
+        // Clone only the instance-local cache owner under the short lifecycle lock.
+        // 在短生命周期锁下仅克隆实例本地缓存所有者。
+        let cache = Arc::clone(&self.lock()?.output_schema_cache);
+        {
+            // Compare fresh evidence while retaining the validator for this call alone.
+            // 比较新证据，并仅为此调用保留校验器。
+            let slot = cache
+                .lock()
+                .map_err(|_| instance_error("persistent output schema cache is poisoned."))?;
+            if let Some(compiled) = slot.as_ref()
+                && compiled.path == path
+                && compiled.schema == schema
+            {
+                return Ok(Arc::clone(&compiled.validator));
+            }
+        }
+        // A miss compiles the actual current declaration without any runtime or cache lock.
+        // 未命中时，在不持有运行时锁或缓存锁的情况下编译实际当前声明。
+        let validator = Arc::new(
+            crate::catalog::compile_json_schema(&schema, "action output")
+                .map_err(VulcanPluginRuntimeError::new)?,
+        );
+        *cache
+            .lock()
+            .map_err(|_| instance_error("persistent output schema cache is poisoned."))? =
+            Some(PersistentOutputSchema {
+                path,
+                schema,
+                validator: Arc::clone(&validator),
+            });
+        Ok(validator)
+    }
+
     /// Return the exact state guard or an explicit poison error.
     /// 返回精确状态守卫或明确中毒错误。
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, PersistentState>, VulcanPluginRuntimeError> {

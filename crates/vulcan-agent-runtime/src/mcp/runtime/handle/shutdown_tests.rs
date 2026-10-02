@@ -218,6 +218,9 @@ async fn final_cleanup_updates_original_state_after_observers_leave() {
             // The lifecycle worker is independent of all front-end observation futures.
             // 生命周期工作任务独立于全部前台观测任务。
             let fixture = fixture(registered).await;
+            // The actual partition request closes admission before the independent original cleanup worker starts.
+            // 独立原清理工作者开始之前，实际分区请求先关闭入场。
+            fixture.runtime.shutdown();
             // Retirement keeps cleanup observable even after the last old execution view disappears.
             // 最后一个旧执行视图消失后，退役登记仍保持清理可观测。
             let previous_generation = McpRuntimeAccess::new(

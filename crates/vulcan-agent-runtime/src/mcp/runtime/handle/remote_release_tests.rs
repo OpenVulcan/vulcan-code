@@ -86,6 +86,10 @@ fn lost_executor_revokes_actual_sse_owner_from_retained_diagnostics() {
     // 保存结果，使回归发生时清理仍销毁保留的前台状态。
     let released =
         recovery.block_on(async { tokio::time::timeout(REMOTE_OBSERVE, release.wait()).await });
+    // Actual physical disposal after executor loss cannot manufacture successful original cleanup.
+    // 执行器丢失后，实际物理销毁不能制造成功原清理。
+    let fully_stopped = runtime.is_fully_stopped();
+    let drain_result = recovery.block_on(runtime.wait_until_drained(tokio::time::Instant::now()));
     // The original state must retain abnormal failure rather than stale connected readiness.
     // 原状态必须保留异常失败，而非过期的已连接就绪。
     let states = runtime.server_states();
@@ -93,6 +97,14 @@ fn lost_executor_revokes_actual_sse_owner_from_retained_diagnostics() {
     released
         .expect("actual SSE client released after executor loss")
         .expect("aggregate release evidence");
+    assert!(
+        !fully_stopped,
+        "executor loss must retain negative cleanup authority"
+    );
+    assert!(
+        drain_result.is_err(),
+        "physical release must not promote the lost original cleanup operation"
+    );
     assert!(
         states
             .iter()

@@ -3,13 +3,16 @@
 
 use super::*;
 use crate::mcp::{CandidatePluginMcpRuntime, McpRuntimeServerStatus, PreparedPluginMcpConfigs};
+
+pub(in crate::mcp) mod published_fixture;
+mod retained_validation;
 use std::path::PathBuf;
 use std::time::Duration;
-use vulcan_plugin_runtime::VulcanPluginActivationTransaction;
+use vulcan_plugin_runtime::{VulcanPluginActivationTransaction, VulcanPluginMcpScopeManifest};
 
 /// One bounded observation deadline shared by this real-process fixture.
 /// 此真实进程夹具共用的一项有限观察期限。
-const OBSERVE: Duration = Duration::from_secs(10);
+pub(in crate::mcp) const OBSERVE: Duration = Duration::from_secs(10);
 
 /// Owns an actual published predecessor and one separately prepared immutable request.
 /// 拥有实际已发布前驱及一个单独准备的不可变请求。
@@ -39,6 +42,14 @@ struct Fixture {
 /// Mode selects actual protocol behavior; returns production-prepared immutable inputs.
 /// mode 选择实际协议行为；返回经生产路径准备的不可变输入。
 fn fixture(mode: &str) -> Fixture {
+    fixture_with_scope(mode, VulcanPluginMcpScopeManifest::Global)
+}
+
+/// Build the same actual native fixture with its explicit manifest scope fixed before package selection.
+/// 在插件包选定之前固定显式清单作用域，构建同一实际原生夹具。
+/// mode selects protocol behavior and scope selects the genuine declaration lifecycle; returns actual immutable inputs.
+/// mode 选择协议行为，scope 选择真实声明生命周期；返回实际不可变输入。
+fn fixture_with_scope(mode: &str, scope: VulcanPluginMcpScopeManifest) -> Fixture {
     // Only this temporary store and its exact copied executable participate in the test.
     // 仅此临时存储及其精确复制的可执行文件参与测试。
     let temp = tempfile::tempdir().expect("candidate runtime fixture");
@@ -98,11 +109,25 @@ fn fixture(mode: &str) -> Fixture {
         serde_json::json!({"schema_file":"schema.json","defaults_file":"defaults.json"});
     manifest["execution"]["dependencies"] =
         serde_json::json!({"manifest":"dependencies.yaml","install_mode":"bundled"});
+    // The actual conversation contract requires one Core-owned endpoint, while global declarations prohibit it.
+    // 实际会话契约要求单个 Core 自有端点，全局声明则禁止它。
+    let arguments = match scope {
+        VulcanPluginMcpScopeManifest::Global => {
+            serde_json::json!([{"source":"literal","value":"server.mjs"}])
+        }
+        VulcanPluginMcpScopeManifest::Conversation => serde_json::json!([
+            {"source":"literal","value":"server.mjs"}, {"source":"core_browser_endpoint"}
+        ]),
+    };
     manifest["mcp"]["servers"] = serde_json::json!([{
         "id":"local", "name":"Exact candidate",
+        "scope": match scope {
+            VulcanPluginMcpScopeManifest::Global => "global",
+            VulcanPluginMcpScopeManifest::Conversation => "conversation",
+        },
         "transport":{
             "type":"stdio", "launcher":{"type":"native_binary","binary_id":"server"},
-            "args":[{"source":"literal","value":"server.mjs"}],
+            "args":arguments,
             "env":{
                 "CANDIDATE_LABEL":{"source":"config","key":"label"},
                 "CANDIDATE_MARKER":{"source":"config","key":"marker"},
@@ -207,8 +232,18 @@ fn fixture(mode: &str) -> Fixture {
         let prepared = manager
             .prepare_mcp_activation_candidate(&candidate)
             .expect("prepare exact launcher");
-        crate::mcp::candidate_local_mcp_server_configs(prepared, &secrets)
-            .expect("materialize exact local installation inputs")
+        match scope {
+            VulcanPluginMcpScopeManifest::Global => {
+                crate::mcp::candidate_local_mcp_server_configs(prepared, &secrets)
+                    .expect("materialize exact local installation inputs")
+            }
+            // This unused conversation request is observed only through its genuinely empty global declarations.
+            // 此未使用会话请求仅通过其真实空全局声明观察。
+            VulcanPluginMcpScopeManifest::Conversation => {
+                crate::mcp::candidate_global_mcp_server_configs(prepared, &secrets)
+                    .expect("materialize empty global candidate without issuing a browser grant")
+            }
+        }
     };
     Fixture {
         prepared,
@@ -220,11 +255,11 @@ fn fixture(mode: &str) -> Fixture {
     }
 }
 
-/// Waits for a real process marker and verifies exactly one start with frozen selected inputs.
-/// 等待真实进程标记，并验证仅一次启动且使用固定选定输入。
-/// Marker is the actual child output path; returns only after complete valid JSON is readable.
-/// marker 为实际子进程输出路径；仅在完整有效 JSON 可读后返回。
-async fn assert_started_once(marker: &std::path::Path) {
+/// Read complete original child records within the shared finite observation budget.
+/// 在共享有限观察预算内读取完整原子进程记录。
+/// marker is the actual producer output path; return only genuine newline-completed startup values.
+/// marker 为实际生产者输出路径；仅返回真实换行完成的启动值。
+pub(in crate::mcp) async fn recorded_starts(marker: &std::path::Path) -> Vec<Value> {
     // The newline is the child writer's completion delimiter, so partial file writes remain pending.
     // 换行是子进程写入者的完成分隔符，因此部分文件写入保持等待。
     let bytes = tokio::time::timeout(OBSERVE, async {
@@ -244,10 +279,20 @@ async fn assert_started_once(marker: &std::path::Path) {
     .expect("actual child start");
     // Multiple complete records would reveal an unauthorized automatic restart.
     // 多条完整记录会揭示未经授权的自动重启。
-    let starts: Vec<Value> = bytes
+    bytes
         .lines()
         .map(|line| serde_json::from_str(line).expect("startup JSON"))
-        .collect();
+        .collect()
+}
+
+/// Verify one actual candidate start has the request's exact private configuration and credentials.
+/// 验证单个实际候选启动具有请求精确私有配置及凭据。
+/// marker is the same real child output path; no fabricated process receipt is accepted.
+/// marker 为同一真实子进程输出路径；不接受伪造进程回执。
+async fn assert_started_once(marker: &std::path::Path) {
+    // Reuse the unique bounded producer readback before checking the candidate-specific values.
+    // 检查候选专属值之前，复用唯一有界生产者读回。
+    let starts = recorded_starts(marker).await;
     assert_eq!(
         starts.len(),
         1,

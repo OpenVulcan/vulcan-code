@@ -8,9 +8,14 @@ pub(crate) use authorization::plugin_required_permissions;
 mod bridge;
 mod candidates;
 pub use candidates::{
+    VulcanPluginMcpPredecessorControl, VulcanPluginMcpPredecessorHandoffGuard,
+    VulcanPluginMcpPredecessorStartGuard, VulcanPluginMcpTargetControl,
     VulcanPluginMcpTargetHandoffGuard, VulcanPluginMcpTargetStartGuard,
-    VulcanPluginPreparedMcpCandidate, VulcanPluginPreparedMcpTarget,
-    VulcanPluginRegisteredNativeMcpHostAuthority,
+    VulcanPluginPredecessorMcpProfile, VulcanPluginPreparedMcpCandidate,
+    VulcanPluginPreparedMcpPredecessor, VulcanPluginPreparedMcpTarget,
+    VulcanPluginPreparedPublishedMcp, VulcanPluginPublishedMcpProfile,
+    VulcanPluginPublishedMcpStartGuard, VulcanPluginRegisteredNativeMcpHostAuthority,
+    VulcanPluginTargetMcpProfile,
 };
 mod configuration;
 pub(crate) use configuration::validate_plugin_config_value;
@@ -18,18 +23,24 @@ mod drain;
 mod update_drain;
 pub use update_drain::{
     VulcanPluginPredecessorDrain, VulcanPluginPredecessorRestoration,
-    VulcanPluginPredecessorRestorationFailure, VulcanPluginPredecessorRestoreEvidence,
+    VulcanPluginPredecessorRestorationFailure, VulcanPluginPredecessorRestorationSource,
+    VulcanPluginPredecessorRestoreEvidence,
 };
 mod environment;
 mod execution;
 mod formal;
 mod installation;
 mod lease;
+mod legacy_lifecycle;
+pub use legacy_lifecycle::VulcanPluginLegacyLifecycleEvent;
 mod lifecycle;
 mod local_files;
 mod persistent;
+mod private_hooks;
 mod process;
 mod recovery;
+mod routing;
+pub use routing::VulcanPluginRoutingReservation;
 mod requirements;
 mod sessions;
 mod settings;
@@ -49,19 +60,30 @@ pub use bridge::{
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
 pub use formal::{
-    VulcanPluginActivationTargetCompletion, VulcanPluginActivationTargetHandoffParticipant,
-    VulcanPluginActivationTargetRegistration, VulcanPluginAutomaticPrewarmOrigin,
-    VulcanPluginAutomaticPrewarmPermit, VulcanPluginAutomaticPrewarmTrigger,
-    VulcanPluginCapacityControlAction, VulcanPluginCapacityControlRequest,
-    VulcanPluginCapacityRegistrationRequest, VulcanPluginFormalCallStatus,
-    VulcanPluginFormalCapacityCatalog, VulcanPluginFormalCapacityStatus,
-    VulcanPluginFormalPluginStatus, VulcanPluginFormalRuntimeStatus,
-    VulcanPluginFormalSessionStatus, VulcanPluginMcpTargetHandoffEvidence,
-    VulcanPluginNativeMcpHandoffAdapter, VulcanPluginPrewarmTargetRequest,
+    VulcanPluginActivationPredecessorCompletion,
+    VulcanPluginActivationPredecessorHandoffParticipant,
+    VulcanPluginActivationPredecessorRegistration, VulcanPluginActivationTargetCompletion,
+    VulcanPluginActivationTargetHandoffParticipant, VulcanPluginActivationTargetRegistration,
+    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginAutomaticPrewarmPermit,
+    VulcanPluginAutomaticPrewarmTrigger, VulcanPluginCapacityControlAction,
+    VulcanPluginCapacityControlRequest, VulcanPluginCapacityRegistrationRequest,
+    VulcanPluginFormalCallStatus, VulcanPluginFormalCapacityCatalog,
+    VulcanPluginFormalCapacityStatus, VulcanPluginFormalPluginStatus,
+    VulcanPluginFormalRuntimeStatus, VulcanPluginFormalSessionStatus,
+    VulcanPluginLegacyLifecycleCall, VulcanPluginMcpPredecessorHandoffEvidence,
+    VulcanPluginMcpTargetHandoffEvidence, VulcanPluginNativeMcpHandoffAdapter,
+    VulcanPluginNativeMcpPredecessorHandoffAdapter, VulcanPluginPrewarmTargetRequest,
     VulcanPluginPrewarmTargetStatus, VulcanPluginReusableDomainStatus,
 };
-pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
-pub use lifecycle::{VulcanPluginActivationTargetPublication, VulcanPluginLifecycleEvent};
+pub use installation::{
+    VulcanPluginDeactivationStateObservation, VulcanPluginDeactivationStateReservation,
+    VulcanPluginInstallationResult, VulcanPluginInstallationTransaction,
+    VulcanPluginLegacyUninstallationObservation, VulcanPluginLegacyUninstallationReservation,
+};
+pub use lifecycle::{
+    VulcanPluginActivationPredecessorPublication, VulcanPluginActivationTargetPublication,
+    VulcanPluginLifecycleEvent,
+};
 use local_files::{
     canonical_plugin_file, copy_plugin_directory_tree, read_plugin_json_state,
     write_plugin_json_record,
@@ -199,6 +221,9 @@ struct VulcanPluginManagerState {
     /// User-owned root containing plugin configuration, authorization, and install records.
     /// 包含插件配置、授权与安装记录的用户状态根目录。
     plugin_state_root: PathBuf,
+    /// One manager-local slot reuses compilation only for freshly read nonmanaged configuration schemas.
+    /// 单个管理器本地槽仅为刚读取的非受管配置 Schema 复用编译结果。
+    configuration_schema_cache: Mutex<Option<configuration::CompiledConfigurationSchema>>,
     /// User-owned root containing isolated plugin dependency environments.
     /// 包含隔离插件依赖环境的用户自有根目录。
     plugin_runtime_root: PathBuf,
@@ -217,6 +242,9 @@ struct VulcanPluginManagerState {
     /// Short gate that orders catalog generation publication against final session registration.
     /// 对目录代次发布与最终会话注册进行排序的短同步门。
     session_registration_gate: Mutex<()>,
+    /// One weak actual-original reservation coordinates routing without owning execution or a File.
+    /// 单个实际原请求弱预留协调路由，不拥有执行权或文件。
+    routing_reservation: Mutex<std::sync::Weak<routing::RoutingReservationInner>>,
     /// Active session counts keyed by plugin identifier.
     /// 以插件标识为键的活动会话计数。
     active_session_counts: Mutex<BTreeMap<String, usize>>,
@@ -395,12 +423,14 @@ impl VulcanPluginRuntimeManager {
                 bridge_package_root,
                 managed_runtime_distribution_root,
                 plugin_state_root,
+                configuration_schema_cache: Mutex::default(),
                 plugin_runtime_root,
                 host_services: RwLock::new(VulcanPluginHostServices::default()),
                 snapshot: RwLock::new(snapshot),
                 next_revision: AtomicU64::new(1),
                 next_request_id: AtomicU64::new(1),
                 session_registration_gate: Mutex::new(()),
+                routing_reservation: Mutex::new(std::sync::Weak::new()),
                 active_session_counts: Mutex::new(BTreeMap::new()),
                 persistent_runtime_gates: Mutex::new(BTreeMap::new()),
                 action_admissions: Mutex::new(BTreeMap::new()),

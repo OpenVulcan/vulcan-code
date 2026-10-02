@@ -11,7 +11,9 @@ impl VulcanPluginRuntimeManager {
     /// 从唯一管理器目录计数器预留单调交接修订，不发生回绕。
     /// No inputs; returns the reserved revision or exhaustion before any publisher executes.
     /// 无输入；返回预留修订，或在任何发布器执行前报告耗尽。
-    fn reserve_activation_catalog_revision(&self) -> Result<u64, VulcanPluginRuntimeError> {
+    pub(super) fn reserve_activation_catalog_revision(
+        &self,
+    ) -> Result<u64, VulcanPluginRuntimeError> {
         self.state
             .next_revision
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |revision| {
@@ -38,6 +40,10 @@ impl VulcanPluginRuntimeManager {
             self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
+        self.require_routing_publication_locked(
+            &registration,
+            Some(crate::runtime::routing::ActivationRoutingOriginal::Transaction(transaction)),
+        )?;
         self.enabled_activation_publication_store(transaction)?;
         // The original target is the sole package and namespace authority.
         // 原目标是唯一插件包及命名空间权威。
@@ -156,6 +162,10 @@ impl VulcanPluginRuntimeManager {
             self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
+        self.require_routing_publication_locked(
+            &_registration,
+            Some(crate::runtime::routing::ActivationRoutingOriginal::Transaction(transaction)),
+        )?;
         self.enabled_activation_publication_store(transaction)?;
         // Arc identity rejects stale preparation even if revision fields were copied.
         // 即使复制修订字段，Arc 身份仍拒绝陈旧准备。
@@ -192,7 +202,7 @@ impl VulcanPluginRuntimeManager {
         let private_hook = self.activation_target_hook_for_publication(transaction)?;
         let private_publication = private_hook
             .as_ref()
-            .map(|runtime| runtime.target_publication_guard())
+            .map(|runtime| runtime.private_publication_guard())
             .transpose()?;
         let mut next = (**staged).clone();
         next.plugins

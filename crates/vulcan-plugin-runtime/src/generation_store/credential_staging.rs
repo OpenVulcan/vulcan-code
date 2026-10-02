@@ -3,6 +3,8 @@
 
 mod discovery;
 mod operations;
+mod reservation;
+pub use reservation::VulcanPluginCredentialStagingReservation;
 mod retention;
 #[cfg(test)]
 mod tests;
@@ -79,6 +81,17 @@ pub enum VulcanPluginCredentialPhase {
     /// All declared OS entries were confirmed absent; the record prevents identity reuse.
     /// 全部声明 OS 条目已确认为缺失；记录防止身份复用。
     Discarded,
+}
+
+impl VulcanPluginCredentialPhase {
+    /// Sole declared phase list reserves durable cleanup growth without creating alternative credential ownership.
+    /// 唯一声明阶段列表预留持久清理增长，不创建替代凭据所有权。
+    pub(in crate::generation_store) const ENCODED_PHASES: [Self; 4] = [
+        Self::Preparing,
+        Self::Staged,
+        Self::Discarding,
+        Self::Discarded,
+    ];
 }
 
 /// Strict non-secret journal snapshot; returning it does not grant a mutation lease.

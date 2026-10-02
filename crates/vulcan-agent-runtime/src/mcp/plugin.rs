@@ -14,11 +14,14 @@ use vulcan_plugin_runtime::{
 };
 
 mod candidates;
+mod published;
 use candidates::PluginMcpMaterializationSource;
 pub use candidates::{
-    PreparedPluginMcpConfigs, PreparedTargetPluginMcpConfigs, candidate_global_mcp_server_configs,
-    candidate_local_mcp_server_configs, target_global_mcp_server_configs,
+    PreparedPluginMcpConfigs, PreparedPredecessorPluginMcpConfigs, PreparedTargetPluginMcpConfigs,
+    candidate_global_mcp_server_configs, candidate_local_mcp_server_configs,
+    predecessor_global_mcp_server_configs, target_global_mcp_server_configs,
 };
+pub use published::{PreparedPublishedPluginMcpConfigs, published_global_mcp_server_configs};
 
 /// Host boundary for reading one plugin-scoped secret without exposing storage details to plugins.
 /// 用于读取单个插件作用域 Secret 且不向插件暴露存储细节的宿主边界。
@@ -585,12 +588,12 @@ fn resolve_oauth(
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::mcp) mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
 
-    mod credential_binding;
+    pub(in crate::mcp) mod credential_binding;
 
     /// In-memory Secret Store fixture that exposes only exact namespaced values.
     /// 仅暴露精确命名空间值的内存 Secret Store 夹具。

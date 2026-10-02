@@ -118,27 +118,32 @@ impl VulcanPluginEmbeddedHost {
         .map(|pool| pool.id)
     }
 
-    /// Register one tracked call in capacity_id, retaining original ownership only for explicit activation operations.
-    /// 在 capacity_id 中注册单个受跟踪调用，仅为显式激活操作保留原所有权。
+    /// Register one tracked call in capacity_id, retaining its explicitly selected original source authority.
+    /// 在 capacity_id 中注册单个受跟踪调用，保留其显式选择的原来源权威。
     /// request keeps the original manifest and policy; returns its actual core pool without publishing a catalog.
     /// request 保留原清单及策略；返回实际核心池，不发布目录。
     pub(in crate::runtime) fn register_call_bundle_pool_in_capacity(
         &self,
         capacity_id: &str,
         request: VulcanPluginBundlePoolRequest,
-        activation: Option<Arc<ActivationExecution>>,
+        source: CallExecutionSource,
     ) -> EmbeddedResult<String> {
-        if activation.is_some() && request.finalizer.is_some() {
+        if source.is_private() && request.finalizer.is_some() {
             return Err(error(
                 EmbeddedErrorCode::InvalidArgument,
-                "Activation operations cannot select a business finalizer.",
+                "Private call operations cannot select a business finalizer.",
             ));
         }
         // Existing transient operation restrictions stay independent of private persistent Hook admission.
         // 既有瞬态操作限制保持独立于私有持久 Hook 入场。
-        let source = match activation {
-            Some(authority) => ExecutionSource::ActivationOperation(authority),
-            None => ExecutionSource::Published,
+        let source = match source {
+            CallExecutionSource::Published => ExecutionSource::Published,
+            CallExecutionSource::Activation(authority) => {
+                ExecutionSource::ActivationOperation(authority)
+            }
+            CallExecutionSource::LegacyLifecycle(authority) => {
+                ExecutionSource::LegacyLifecycle(authority)
+            }
         };
         self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, source)
             .map(|pool| pool.id)
@@ -148,12 +153,12 @@ impl VulcanPluginEmbeddedHost {
     /// 仅注册原已选目标 Hook，并返回相同池及受限弱转交句柄。
     /// authority fixes the full selection; request must use Session policy and the manifest's Hook finalizer only.
     /// authority 固定完整选择；request 必须使用 Session 策略及清单 Hook 关闭器。
-    pub(in crate::runtime) fn register_private_target_hook_bundle_pool_in_capacity(
+    pub(in crate::runtime) fn register_private_hook_bundle_pool_in_capacity(
         &self,
         capacity_id: &str,
         request: VulcanPluginBundlePoolRequest,
-        authority: Arc<ActivationTargetHookAuthority>,
-    ) -> EmbeddedResult<PrivateTargetHookHandoff> {
+        authority: PrivateHookOrigin,
+    ) -> EmbeddedResult<PrivateHookHandoff> {
         if request.scope != VulcanPluginBridgeLeaseScope::Enabled
             || request.policy.reuse != luaskills::runtime::embedded::InstanceReuse::Session
             || request.policy.max_resident_vms != 1
@@ -170,9 +175,9 @@ impl VulcanPluginEmbeddedHost {
             request,
             None,
             None,
-            ExecutionSource::PrivateTargetHook(authority),
+            ExecutionSource::PrivateHook(authority),
         )?;
-        Ok(PrivateTargetHookHandoff {
+        Ok(PrivateHookHandoff {
             pool_id: registered.id,
             domain: Arc::downgrade(&registered.domain),
         })
@@ -238,7 +243,7 @@ impl VulcanPluginEmbeddedHost {
             .map_err(|failure| error(EmbeddedErrorCode::InvalidArgument, failure.message))?;
         // The private target cannot borrow the tool finalizer even when its export is valid in this bundle.
         // 即使工具关闭器导出在此 bundle 中有效，私有目标也不能借用它。
-        if matches!(admission.source, ExecutionSource::PrivateTargetHook(_))
+        if matches!(admission.source, ExecutionSource::PrivateHook(_))
             && request
                 .finalizer
                 .as_ref()

@@ -20,7 +20,7 @@ interface PluginUpdateControlProps {
 
 // phaseLabels presents durable stages without implying current readiness or successful external cleanup.
 // phaseLabels 展示持久阶段，不暗示当前就绪或外部清理成功。
-const phaseLabels: Record<LocalPluginUpdateStatus["phase"], TranslationKey> = {
+const phaseLabels: Record<NonNullable<LocalPluginUpdateStatus["phase"]>, TranslationKey> = {
   preparing: "pluginUpdates.preparing",
   prepared: "pluginUpdates.prepared", committing: "pluginUpdates.committing", published: "pluginUpdates.published",
   completed: "pluginUpdates.completed", aborted: "pluginUpdates.aborted",
@@ -174,6 +174,9 @@ function PluginUpdateManagement(props: PluginUpdateControlProps) {
   // Only a matching successful observation enables explicit mutations; durable phase alone never proves live readiness.
   // 仅匹配成功观测启用明确变更；持久阶段本身绝不证明实时就绪。
   const canWrite = fresh && busy === null && unconfirmed === null && observation?.pluginId === pluginId.trim();
+  // An already aborted owned request confirms cleanup only; its original external-effect decision is not repeated.
+  // 已放弃且仍有所有者的请求仅确认清理；不重复其原外部副作用决定。
+  const cleanupConfirmation = confirmation !== null && confirmation.phase === "aborted" && confirmation.hasServiceOwner;
   return <div className="space-y-3 text-sm">
     <p className="text-muted-foreground">{t("pluginUpdates.description")}</p>
     <div className="flex flex-wrap items-end gap-2">
@@ -194,7 +197,8 @@ function PluginUpdateManagement(props: PluginUpdateControlProps) {
     {!fresh && observation && <p role="status">{t("pluginUpdates.stale")}</p>}
     {fresh && observation?.records.length === 0 && <p role="status">{t("pluginUpdates.empty")}</p>}
     {observation?.records.map((record) => <article key={record.requestId} className="space-y-2 rounded-md border p-3">
-      <p className="font-medium">{record.pluginId} · {record.candidate.version} · {t(phaseLabels[record.phase])}</p>
+      <p className="font-medium">{record.pluginId} · {record.candidate.version} · {record.phase === null
+        ? t("pluginUpdates.reservingPreparation") : t(phaseLabels[record.phase])}</p>
       <p className="break-all">{t("pluginUpdates.request")}: <code>{record.requestId}</code></p>
       <p>{t("pluginUpdates.installation")}: {record.installation === null ? t("pluginUpdates.noReceipt")
         : record.installation === "succeeded" ? t("pluginUpdates.installSucceeded") : t("pluginUpdates.installUncertain")}</p>
@@ -203,17 +207,21 @@ function PluginUpdateManagement(props: PluginUpdateControlProps) {
           : effect.phase === "succeeded" ? t("pluginUpdates.installSucceeded") : t("pluginUpdates.installUncertain")
       }</p>)}
       <div className="flex flex-wrap gap-2">
-        {(record.phase === "committing" || record.phase === "published") && <Button type="button" size="sm" disabled={!canWrite}
-          onClick={() => void execute("resume", record)}>{t("pluginUpdates.resume")}</Button>}
-        {(record.phase === "preparing" || record.phase === "prepared" || record.phase === "committing") && <Button type="button" size="sm" variant="outline" disabled={!canWrite}
-          onClick={() => setConfirmation(record)}>{t("pluginUpdates.abandon")}</Button>}
+        {(((record.phase === null || record.phase === "preparing") && record.hasServiceOwner)
+          || record.phase === "committing" || record.phase === "published"
+          || (record.phase === "completed" && record.hasServiceOwner)) && <Button type="button" size="sm" disabled={!canWrite}
+          onClick={() => void execute("resume", record)}>{record.phase === "completed" ? t("pluginUpdates.finishCleanup") : record.phase === null || record.phase === "preparing"
+            ? t("pluginUpdates.resumePreparation") : t("pluginUpdates.resume")}</Button>}
+        {((record.phase === null && record.hasServiceOwner) || record.phase === "preparing" || record.phase === "prepared" || record.phase === "committing"
+          || (record.phase === "aborted" && record.hasServiceOwner)) && <Button type="button" size="sm" variant="outline" disabled={!canWrite}
+          onClick={() => setConfirmation(record)}>{record.phase === "aborted" ? t("pluginUpdates.finishCleanup") : t("pluginUpdates.abandon")}</Button>}
       </div>
     </article>)}
     <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !busyRef.current) setConfirmation(null); }}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t("pluginUpdates.abandon")}</AlertDialogTitle>
-          <AlertDialogDescription>{t("pluginUpdates.abandonWarning")}</AlertDialogDescription>
+          <AlertDialogTitle>{cleanupConfirmation ? t("pluginUpdates.finishCleanup") : t("pluginUpdates.abandon")}</AlertDialogTitle>
+          <AlertDialogDescription>{cleanupConfirmation ? t("pluginUpdates.cleanupWarning") : t("pluginUpdates.abandonWarning")}</AlertDialogDescription>
         </AlertDialogHeader>
         {confirmation && <p className="break-all text-sm">{confirmation.pluginId} / {confirmation.requestId}</p>}
         <AlertDialogFooter>

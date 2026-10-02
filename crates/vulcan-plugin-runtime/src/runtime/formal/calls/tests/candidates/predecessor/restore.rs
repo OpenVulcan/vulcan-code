@@ -470,14 +470,14 @@ fn formal_predecessor_restore_checks_actual_domains_before_consuming_attempt() {
             let call = calls
                 .values()
                 .find(|call| {
-                    call.activation
-                        .as_ref()
+                    call.source
+                        .activation()
                         .is_some_and(|authority| authority.request_id == drain.request_id())
                 })
                 .expect("retained old call");
             (
                 call.id.clone(),
-                Arc::downgrade(call.activation.as_ref().expect("actual original authority")),
+                Arc::downgrade(call.source.activation().expect("actual original authority")),
             )
         };
         fixture

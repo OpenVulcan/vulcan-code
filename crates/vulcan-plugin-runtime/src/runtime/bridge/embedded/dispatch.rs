@@ -42,7 +42,27 @@ pub(super) fn execute(
                         &domain.plugin,
                         workspace,
                         arguments,
-                        source.activation(),
+                        match source {
+                            ExecutionSource::Published => {
+                                super::super::super::process::ProcessPermissionSource::Published
+                            }
+                            ExecutionSource::PrivateHook(authority) => {
+                                super::super::super::process::ProcessPermissionSource::PrivateHook(
+                                    authority,
+                                )
+                            }
+                            ExecutionSource::ActivationOperation(authority) => {
+                                super::super::super::process::ProcessPermissionSource::Activation(
+                                    authority,
+                                )
+                            }
+                            ExecutionSource::LegacyLifecycle(authority) => {
+                                super::super::super::process::ProcessPermissionSource::LegacyLifecycle {
+                                    authority,
+                                    scope: domain.scope,
+                                }
+                            }
+                        },
                     )
                 },
             )),
@@ -78,10 +98,25 @@ pub(super) fn execute(
                     invocation,
                     deadline,
                     || {
-                        VulcanPluginRuntimeManager {
+                        // Every source keeps the existing atomic writer while legacy calls lend their original guard.
+                        // 每个来源保留既有原子写入者，同时旧生命周期调用借出原守卫。
+                        let manager = VulcanPluginRuntimeManager {
                             state: Arc::clone(state),
+                        };
+                        match source {
+                            ExecutionSource::LegacyLifecycle(authority) => manager
+                                .update_legacy_lifecycle_plugin_config_for_snapshot(
+                                    &domain.plugin,
+                                    value,
+                                    authority,
+                                    domain.scope,
+                                ),
+                            ExecutionSource::Published
+                            | ExecutionSource::ActivationOperation(_)
+                            | ExecutionSource::PrivateHook(_) => {
+                                manager.update_plugin_config_for_snapshot(&domain.plugin, value)
+                            }
                         }
-                        .update_plugin_config_for_snapshot(&domain.plugin, value)
                         .map_err(|failure| failure.message)
                     },
                 ))

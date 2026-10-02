@@ -4,6 +4,7 @@
 use super::*;
 mod mcp_receipts;
 mod namespaces;
+mod native_sources;
 mod receipts;
 
 /// Read actual committed initialization events; fixture owns the real native publisher and returns the count.

@@ -21,21 +21,46 @@ use luaskills::{
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Exact permission authority borrowed only for the duration of one process specification resolution.
+/// 仅在单次进程规格解析期间借用的精确权限权威。
+pub(super) enum ProcessPermissionSource<'a> {
+    /// Live published grants intersect the retained declaration.
+    /// 实时已发布授权与保留声明取交集。
+    Published,
+    /// The existing original activation fixes its own operation scope and manifest permissions.
+    /// 既有原激活固定其操作作用域及清单权限。
+    Activation(&'a super::candidates::ActivationExecution),
+    /// The selected private target Hook retains its exact unpublished manifest permissions.
+    /// 已选私有目标 Hook 保留其精确未发布清单权限。
+    PrivateHook(&'a super::private_hooks::PrivateHookOrigin),
+    /// The original disabled-user guard fixes this lifecycle declaration and scope.
+    /// 原已停用用户守卫固定此生命周期声明及作用域。
+    LegacyLifecycle {
+        /// Actual retained authority validates the same manager and complete descriptor.
+        /// 实际保留权威校验同一管理器及完整描述符。
+        authority: &'a super::legacy_lifecycle::LegacyLifecycleExecution,
+        /// The admitted lifecycle event is never inferred from business input.
+        /// 已接纳生命周期事件绝不从业务输入推断。
+        scope: VulcanPluginBridgeLeaseScope,
+    },
+}
 
 /// Resolve validated process arguments against the caller's exact retained plugin and workspace.
 /// 针对调用方保留的精确插件及工作区解析已校验进程参数。
-/// Return the original launch specification; activation carries exact transaction authorization when present.
-/// 返回原启动规格；activation 存在时携带精确事务授权。
+/// Return the original launch specification using the explicitly selected permission source.
+/// 使用显式选择的权限来源返回原启动规格。
 /// Published calls continue to intersect their original permissions with current grants.
 /// 已发布调用继续将原权限与当前授权取交集。
 /// Current catalog data cannot replace original executable declarations, package paths or environment identity.
 /// 当前目录数据不能替换原可执行声明、包路径或环境身份。
 pub(super) fn resolve_plugin_process_for_snapshot(
-    state: &VulcanPluginManagerState,
+    state: &Arc<VulcanPluginManagerState>,
     plugin: &crate::VulcanPluginDescriptor,
     workspace_root: &Path,
     payload: &Map<String, Value>,
-    activation: Option<&super::candidates::ActivationExecution>,
+    source: ProcessPermissionSource<'_>,
 ) -> Result<Value, String> {
     // The package ID, process declarations and dependency environment share one frozen owner.
     // 包 ID、进程声明及依赖环境共用一个冻结所有者。
@@ -57,8 +82,8 @@ pub(super) fn resolve_plugin_process_for_snapshot(
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` has no valid manifest."))?;
     // Permission withdrawal applies to the exact process subtype and session mode as well as its broad capability.
     // 权限撤回除宽泛能力外，也适用于精确进程子类型及会话模式。
-    let current_permissions = match activation {
-        Some(authority) => {
+    let current_permissions = match source {
+        ProcessPermissionSource::Activation(authority) => {
             // The original request fixes the operation package; old and target callbacks use their own manifest grants.
             // 原请求固定操作插件包；旧包及目标回调使用各自清单授权。
             authority
@@ -66,7 +91,23 @@ pub(super) fn resolve_plugin_process_for_snapshot(
                 .map_err(|failure| failure.message)?;
             manifest.permissions.clone()
         }
-        None => {
+        ProcessPermissionSource::LegacyLifecycle { authority, scope } => {
+            // Validate the actual original guard before consulting the frozen process permissions.
+            // 查询冻结进程权限之前校验实际原守卫。
+            authority
+                .validate(state, plugin, scope)
+                .map_err(|failure| failure.message)?;
+            manifest.permissions.clone()
+        }
+        ProcessPermissionSource::PrivateHook(authority) => {
+            // Target initialization cannot borrow the predecessor's published permission list.
+            // 目标初始化不能借用前驱的已发布权限列表。
+            authority
+                .validate(state, plugin)
+                .map_err(|failure| failure.message)?;
+            manifest.permissions.clone()
+        }
+        ProcessPermissionSource::Published => {
             // Ordinary calls continue to intersect their original declaration with live permission withdrawal.
             // 普通调用继续将原声明与实时权限撤回取交集。
             let snapshot = state
@@ -192,7 +233,7 @@ pub struct VulcanPluginMcpStdioLaunchSpec {
 /// Returns a contained executable specification or an explicit policy error.
 /// 返回受目录边界约束的可执行规范或显式策略错误。
 pub(super) fn resolve_plugin_process_spec(
-    state: &VulcanPluginManagerState,
+    state: &Arc<VulcanPluginManagerState>,
     request_args: &Value,
 ) -> Result<Value, String> {
     // The compatibility envelope is accepted only from the legacy trusted bridge.
@@ -233,7 +274,13 @@ pub(super) fn resolve_plugin_process_spec(
             scope.as_str()
         ));
     }
-    resolve_plugin_process_for_snapshot(state, &plugin, &workspace, payload, None)
+    resolve_plugin_process_for_snapshot(
+        state,
+        &plugin,
+        &workspace,
+        payload,
+        ProcessPermissionSource::Published,
+    )
 }
 
 /// Resolves one plugin MCP stdio launcher into an exact managed process specification.

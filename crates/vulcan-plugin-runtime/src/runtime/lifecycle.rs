@@ -16,7 +16,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+mod predecessor_publication;
 mod predecessor_restore;
+pub use predecessor_publication::VulcanPluginActivationPredecessorPublication;
 mod update_publication;
 pub use update_publication::VulcanPluginActivationTargetPublication;
 
@@ -60,6 +62,12 @@ impl VulcanPluginRuntimeManager {
         let _registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
+        self.require_routing_publication_locked(
+            &_registration,
+            update.map(|(candidate, _)| {
+                super::routing::ActivationRoutingOriginal::Candidate(candidate)
+            }),
+        )?;
         // A disabled recovery publication is not permission to start ordinary lifecycle effects.
         // 停用恢复发布不表示允许开始普通生命周期副作用。
         let (recovery_error, recovery_diagnostics) = self.activation_recovery_diagnostics(None)?;
@@ -108,10 +116,16 @@ impl VulcanPluginRuntimeManager {
                 ));
             }
         }
-        if !allowed_source_states.contains(&plugin.runtime_state) {
+        // Actual retained cleanup permits the existing explicit retry without changing the frozen routing source.
+        // 实际保留清理允许既有明确重试，不改变冻结路由来源。
+        let observed_source_state = observed_runtime_state(
+            plugin.runtime_state,
+            self.has_cleanup_diagnostics(plugin_id)?,
+        );
+        if !allowed_source_states.contains(&observed_source_state) {
             return Err(VulcanPluginRuntimeError::new(format!(
                 "Vulcan Plugin `{plugin_id}` cannot enter state `{runtime_state:?}` from state `{:?}`.",
-                plugin.runtime_state
+                observed_source_state
             )));
         }
         if !matches!(
@@ -224,11 +238,109 @@ impl VulcanPluginRuntimeManager {
         let registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
+        self.require_routing_publication_locked(&registration, None)?;
         // The declared policy selects this one scan; no alternate catalog is consulted.
         // 声明策略选择此次唯一扫描；不查询备用目录。
         let snapshot =
             self.scan_runtime_catalog(disabled_plugin_ids, enabled_plugin_ids, &registration);
         self.publish_runtime_catalog(snapshot, &registration, None)
+    }
+
+    /// Refresh the declared catalog through one retained original Legacy namespace owner.
+    /// 通过单个保留原旧格式命名空间所有者刷新声明目录。
+    /// Policy sets select the projection; plugin_id and mutation must identify this manager's same original guard.
+    /// 策略集合选择投影；plugin_id 及 mutation 必须标识此管理器同一原屏障。
+    /// Returns the actual published manager snapshot without reacquiring the guarded plugin namespace.
+    /// 返回实际已发布管理器快照，不重新获取已屏障插件命名空间。
+    pub fn refresh_catalog_with_legacy_mutation(
+        &self,
+        disabled_plugin_ids: &BTreeSet<String>,
+        enabled_plugin_ids: &BTreeSet<String>,
+        plugin_id: &str,
+        mutation: &crate::VulcanPluginLegacyMutationGuard,
+    ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+        // Reuse the existing publication gate and projection, with only the exact guarded scan changed.
+        // 复用既有发布门及投影，仅改变精确已屏障扫描。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin catalog gate is poisoned.")
+        })?;
+        self.require_routing_namespace_retired_locked(&registration, mutation)?;
+        // Validate literal root ownership before asking the catalog reader to borrow its original pin.
+        // 要求目录读取器借用原固定之前，校验字面根所有权。
+        mutation
+            .validate_user_root(&self.state.user_plugin_root, plugin_id)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        // The revision is issued by the same sole publisher after runtime projection.
+        // 修订在运行时投影之后由相同唯一发布器签发。
+        let revision = self.state.next_revision.load(Ordering::Relaxed);
+        // Guarded catalog loading remains the existing authoritative package-selection implementation.
+        // 已屏障目录加载保持使用既有权威插件包选择实现。
+        let snapshot = crate::catalog::load_vulcan_plugin_catalog_with_legacy_mutation(
+            &self.state.vulcan_plugin_root,
+            &self.state.user_plugin_root,
+            disabled_plugin_ids,
+            enabled_plugin_ids,
+            revision,
+            plugin_id,
+            mutation,
+        )
+        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        self.publish_runtime_catalog(
+            snapshot,
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::LegacyMutation(
+                mutation,
+            )),
+        )
+    }
+
+    /// Refresh this manager's catalog through the same original removal File after exact tombstone publication.
+    /// 在精确停用记录发布之后，通过同一原移除文件刷新此管理器目录。
+    /// Policy sets select the projection; original must belong to the actual user root and remain retained.
+    /// 策略集合选择投影；original 必须属于实际用户根并保持保留。
+    /// Returns the manager snapshot; service Full publication, credentials, package GC and terminal receipts remain separate obligations.
+    /// 返回管理器快照；服务完整发布、凭据、包回收及终态回执仍为独立义务。
+    pub fn refresh_catalog_with_deactivation(
+        &self,
+        disabled_plugin_ids: &BTreeSet<String>,
+        enabled_plugin_ids: &BTreeSet<String>,
+        original: &crate::VulcanPluginDeactivationReservation,
+    ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+        // Reuse the same sole manager publisher while the original namespace remains held throughout actual readback.
+        // 复用同一唯一管理器发布器，同时原命名空间跨实际回读全程保持持有。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin catalog gate is poisoned.")
+        })?;
+        self.require_routing_publication_locked(
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::Deactivation(
+                original,
+            )),
+        )?;
+        original
+            .require_no_lifecycle_borrowers()
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        // Candidate revision is issued only by the common publisher after successful runtime projection.
+        // 候选修订仅在运行时投影成功后由公共发布器签发。
+        let revision = self.state.next_revision.load(Ordering::Relaxed);
+        // The explicit original source accepts only its exact admitted tombstone; there is no ordinary scan fallback.
+        // 明确原来源仅接受精确已准入停用记录；不存在普通扫描备用路径。
+        let snapshot = crate::catalog::load_vulcan_plugin_catalog_with_deactivation(
+            &self.state.vulcan_plugin_root,
+            &self.state.user_plugin_root,
+            disabled_plugin_ids,
+            enabled_plugin_ids,
+            revision,
+            original,
+        )
+        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        self.publish_runtime_catalog(
+            snapshot,
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::Deactivation(
+                original,
+            )),
+        )
     }
 
     /// Scan the declared policy sets while publication is excluded; return the unprojected catalog.
@@ -239,8 +351,8 @@ impl VulcanPluginRuntimeManager {
         enabled_plugin_ids: &BTreeSet<String>,
         _registration: &std::sync::MutexGuard<'_, ()>,
     ) -> VulcanPluginCatalogSnapshot {
-        // This candidate revision is not issued until publication; cleanup may publish a diagnostic in between.
-        // 此候选修订在发布前不签发；其间清理可能发布诊断。
+        // This candidate routing revision is not issued until successful publication.
+        // 此候选路由修订仅在成功发布时签发。
         let revision = self.state.next_revision.load(Ordering::Relaxed);
         load_vulcan_plugin_catalog(
             &self.state.vulcan_plugin_root,
@@ -253,17 +365,26 @@ impl VulcanPluginRuntimeManager {
 
     /// Apply live ownership to snapshot and publish it under the caller-held gate; return the immutable projection.
     /// 在调用方持有的门下向 snapshot 应用实时归属并发布；返回不可变投影。
-    /// `recovery_permit` is absent for ordinary publication or borrows the validated disabled handoff original.
-    /// 普通发布的 `recovery_permit` 缺省，否则借用已校验停用交接的原请求。
+    /// `original` is absent for ordinary publication or borrows the actual validated original owner.
+    /// 普通发布的 `original` 缺省，否则借用实际已校验原所有者。
     fn publish_runtime_catalog(
         &self,
         mut snapshot: VulcanPluginCatalogSnapshot,
         _registration: &std::sync::MutexGuard<'_, ()>,
-        recovery_permit: Option<&crate::VulcanPluginActivationTransactionRecord>,
+        original: Option<super::routing::ActivationRoutingOriginal<'_>>,
     ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+        // Only an actual transaction can supply the recovery projection's full original record.
+        // 仅实际事务能够提供恢复投影的完整原记录。
+        let recovery_permit = match &original {
+            Some(super::routing::ActivationRoutingOriginal::Transaction(transaction)) => {
+                Some((*transaction).record())
+            }
+            _ => None,
+        };
+        self.require_routing_publication_locked(_registration, original)?;
         self.project_runtime_state(&mut snapshot, recovery_permit)?;
-        // Issue the actual revision only after preceding cleanup projections have completed.
-        // 仅在此前清理投影完成后签发实际修订。
+        // Issue the routing revision only after the authoritative routing projection succeeds.
+        // 仅在权威路由投影成功后签发路由修订。
         snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
         // Readers retain this exact published value independently of future changes.
         // 读取方独立于未来变化保留此精确发布值。
@@ -370,6 +491,7 @@ impl VulcanPluginRuntimeManager {
         let registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
+        self.require_routing_publication_locked(&registration, None)?;
         // Ordinary completion cannot remove an update-owned admission barrier.
         // 普通完成不得移除更新所有的入场屏障。
         if let Some(store) =
@@ -478,6 +600,49 @@ impl VulcanPluginRuntimeManager {
             .read()
             .map(|snapshot| Arc::clone(&snapshot))
             .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()))
+    }
+
+    /// Project live counts and cleanup onto the explicitly supplied routing catalog without publishing it.
+    /// 将实时计数及清理投影到明确传入的路由目录，不发布该目录。
+    /// `catalog` is the actual current or service-published routing value; returns a display-only owned value or a lock error.
+    /// `catalog` 为实际当前或服务已发布路由值；返回仅用于展示的自有值或锁错误。
+    /// The routing revision is preserved; this value must never replace a Full, Source, or prepared routing Arc.
+    /// 保留路由修订；此值绝不能替换 Full、Source 或已准备路由 Arc。
+    pub fn observe_catalog(
+        &self,
+        catalog: &VulcanPluginCatalogSnapshot,
+    ) -> Result<VulcanPluginCatalogSnapshot, VulcanPluginRuntimeError> {
+        // One gate makes both actual maps coherent while leaving immutable routing ownership untouched.
+        // 同一登记门使两个实际映射保持一致，同时不触碰不可变路由归属。
+        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        // Read the sole counters; no projection cache becomes another accounting authority.
+        // 读取唯一计数器；不让投影缓存成为另一记账权威。
+        let counts = self.state.active_session_counts.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
+        })?;
+        // Retain cleanup evidence from its unique live map, including failures after catalog publication.
+        // 从唯一实时映射保留清理证据，包含目录发布后的失败。
+        let diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
+        })?;
+        // This plain value has no publication identity and retains the supplied routing revision.
+        // 此普通值没有发布身份，并保留传入路由修订。
+        let mut observed = catalog.clone();
+        for plugin in observed.plugins.values_mut() {
+            plugin.active_session_count = counts.get(&plugin.id).copied().unwrap_or_default();
+            if let Some(entries) = diagnostics.get(&plugin.id) {
+                plugin.runtime_state =
+                    observed_runtime_state(plugin.runtime_state, !entries.is_empty());
+                for diagnostic in entries {
+                    if !plugin.diagnostics.contains(diagnostic) {
+                        plugin.diagnostics.push(diagnostic.clone());
+                    }
+                }
+            }
+        }
+        Ok(observed)
     }
 
     /// Invokes one optional manifest-declared lifecycle callback through the owned formal runtime.
@@ -643,6 +808,12 @@ impl VulcanPluginRuntimeManager {
         let registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
+        self.require_routing_publication_locked(
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::Transaction(
+                transaction,
+            )),
+        )?;
         // Borrow the original target; neither a plugin ID nor a UUID alone grants publication.
         // 借用原始目标；仅插件标识或 UUID 均不授予发布权。
         let target = transaction.record().target();
@@ -682,11 +853,17 @@ impl VulcanPluginRuntimeManager {
                 "Original activation target is not a valid disabled catalog entry.",
             ));
         }
-        self.publish_runtime_catalog(snapshot, &registration, Some(transaction.record()))
+        self.publish_runtime_catalog(
+            snapshot,
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::Transaction(
+                transaction,
+            )),
+        )
     }
 
-    /// Applies generations, transient lifecycle overrides, active counts, and cleanup diagnostics.
-    /// 应用代次、临时生命周期覆盖、活动计数与清理诊断。
+    /// Apply generations and transient lifecycle overrides without live observation overlays.
+    /// 应用代次及临时生命周期覆盖，不混入实时观测。
     /// Mutates the scanned `snapshot` using this manager's state; returns unit or a lock diagnostic.
     /// 使用本管理器状态修改扫描所得的 `snapshot`；返回空值或锁诊断。
     /// `recovery_permit` exempts only its exact original from startup gating for this disabled publication.
@@ -702,14 +879,8 @@ impl VulcanPluginRuntimeManager {
             self.activation_recovery_diagnostics(recovery_permit)?;
         let previous = self.snapshot();
         snapshot.service_epoch = self.state.manager_id.clone();
-        let active_counts = self.state.active_session_counts.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
-        })?;
         let overrides = self.state.lifecycle_overrides.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin lifecycle lock is poisoned.")
-        })?;
-        let cleanup_diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
         })?;
         let mut generations = self.state.plugin_generations.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin generation lock is poisoned.")
@@ -770,7 +941,6 @@ impl VulcanPluginRuntimeManager {
                 })?;
             }
             plugin.generation = *generation;
-            plugin.active_session_count = active_counts.get(&plugin.id).copied().unwrap_or(0);
             for tool in &mut plugin.tools {
                 tool.plugin_generation = *generation;
             }
@@ -782,10 +952,6 @@ impl VulcanPluginRuntimeManager {
             }
             if let Some(runtime_state) = overrides.get(&plugin.id).copied() {
                 plugin.runtime_state = runtime_state;
-            } else if plugin.runtime_state == VulcanPluginRuntimeState::Disabled
-                && cleanup_diagnostics.contains_key(&plugin.id)
-            {
-                plugin.runtime_state = VulcanPluginRuntimeState::DisabledWithCleanupWarning;
             }
             if plugin.origin == VulcanPluginPackageOrigin::UserInstalled {
                 match plugin_is_authorized(&self.state.plugin_state_root, plugin) {
@@ -801,9 +967,6 @@ impl VulcanPluginRuntimeManager {
                         plugin.diagnostics.push(error);
                     }
                 }
-            }
-            if let Some(diagnostics) = cleanup_diagnostics.get(&plugin.id) {
-                plugin.diagnostics.extend(diagnostics.iter().cloned());
             }
             // Resource requirements gate the complete plugin surface before any activation is published.
             // 在任何激活发布前，资源必需条件门控插件的完整暴露面。
@@ -851,6 +1014,23 @@ impl VulcanPluginRuntimeManager {
             None,
         )
         .map(|_| ())
+    }
+}
+
+/// Observe cleanup warning state independently from the immutable routing descriptor.
+/// 独立于不可变路由描述符观测清理告警状态。
+/// `routing_state` is the actual lifecycle state and `has_cleanup` comes from its sole live map.
+/// `routing_state` 为实际生命周期状态，`has_cleanup` 来自其唯一实时映射。
+/// Returns a warning only for Disabled with real retained cleanup; all other lifecycle states remain exact.
+/// 仅对存在真实保留清理的停用状态返回告警；其他全部生命周期状态保持精确。
+fn observed_runtime_state(
+    routing_state: VulcanPluginRuntimeState,
+    has_cleanup: bool,
+) -> VulcanPluginRuntimeState {
+    if routing_state == VulcanPluginRuntimeState::Disabled && has_cleanup {
+        VulcanPluginRuntimeState::DisabledWithCleanupWarning
+    } else {
+        routing_state
     }
 }
 

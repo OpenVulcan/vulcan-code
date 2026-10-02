@@ -27,17 +27,17 @@ impl VulcanPluginRuntimeManager {
             self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin registration gate is poisoned.")
             })?;
+        self.require_routing_publication_locked(
+            &registration,
+            Some(crate::runtime::routing::ActivationRoutingOriginal::Transaction(transaction)),
+        )?;
         // All three immutable original authorities must match; phase alone never grants old restoration.
         // 三个不可变原权威必须全部匹配；仅阶段不能授予旧恢复。
         let original = restoration.original();
         // Borrow the mutable owner's last confirmed disk observation without cloning readiness ownership.
         // 借用可变所有者最后确认磁盘观测，不克隆就绪所有权。
         let record = transaction.record();
-        if record.request_id() != original.request_id()
-            || record.predecessor() != original.predecessor()
-            || record.target() != original.target()
-            || record.update_policy() != original.update_policy()
-        {
+        if !record.matches_predecessor_restoration_original(original) {
             return Err(VulcanPluginRuntimeError::new(
                 "Predecessor restoration belongs to another original transaction.",
             ));
@@ -116,11 +116,6 @@ impl VulcanPluginRuntimeManager {
             ));
         }
         self.validate_plugin_requirements(predecessor)?;
-        // The live counter registry is authoritative after retirement; the previous closed snapshot may still contain old counts.
-        // 退役后的活动计数注册表具有权威；先前关闭快照仍可能保留旧计数。
-        let active_counts = self.state.active_session_counts.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Plugin session counter lock is poisoned.")
-        })?;
         // Prepare every allocation, checked generation and lock before abort can cross the durable boundary.
         // 在中止跨越持久边界之前准备全部分配、受检代次及锁。
         let mut generations =
@@ -172,9 +167,6 @@ impl VulcanPluginRuntimeManager {
         // Cloning the actual old descriptor shares its immutable package, configuration and credential pins.
         // 克隆实际旧描述符共享其不可变包、配置及凭据固定句柄。
         let mut old = predecessor.clone();
-        // An absent live counter means no active session under the existing registry contract used by project_runtime_state.
-        // 按 project_runtime_state 使用的既有注册表契约，活动计数缺失表示没有活动会话。
-        old.active_session_count = active_counts.get(&old.id).copied().unwrap_or(0);
         old.runtime_state = VulcanPluginRuntimeState::Enabling;
         old.generation = successor;
         for tool in &mut old.tools {

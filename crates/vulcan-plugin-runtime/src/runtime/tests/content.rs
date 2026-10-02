@@ -119,7 +119,9 @@ fn content_plugin_operates_without_lua_runtime_or_execution_environment() {
     );
     assert!(!plugin_runtime_root.exists());
     assert_eq!(
-        manager.snapshot().plugins["content-plugin"].active_session_count,
+        manager
+            .active_session_count("content-plugin")
+            .expect("actual live reservation count"),
         0
     );
 }

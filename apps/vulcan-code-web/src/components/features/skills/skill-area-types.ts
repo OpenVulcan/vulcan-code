@@ -58,6 +58,24 @@ export interface SkillActionProps {
   // Abandons the original unpublished request after explicit external-effect acknowledgement.
   // 明确确认外部副作用后，放弃原尚未发布请求。
   onAbortLocalPluginUpdate: typeof import("@/service/plugin-update-service").abortLocalPluginUpdate
+  // Reads actual retained installation originals, including unpublished plugin identities.
+  // 读取实际保留安装原实例，包括尚未发布插件身份。
+  onReadPluginInstallRequests: typeof import("@/service/plugin-install-recovery-service").readPluginInstallRequests
+  // Recovers the exact installation UUID; acknowledgement never bypasses physical retirement.
+  // 恢复精确安装 UUID；确认绝不绕过物理退役。
+  onRecoverPluginInstallRequest: typeof import("@/service/plugin-install-recovery-service").recoverPluginInstallRequest
+  // Reads non-secret original credential mutation identities and phases.
+  // 读取无秘密原凭据变更身份及阶段。
+  onReadPluginSecretMutations: typeof import("@/service/plugin-secret-recovery-service").readPluginSecretMutations
+  // Restores or completes only the service-owned original credential mutation UUID.
+  // 仅恢复或完成服务持有的原凭据变更 UUID。
+  onRecoverPluginSecretMutation: typeof import("@/service/plugin-secret-recovery-service").recoverPluginSecretMutation
+  // Reads every retained uninstall, including originals hidden from the current catalog.
+  // 读取所有保留卸载，包括当前目录中已隐藏的原实例。
+  onReadPluginUninstallRequests: typeof import("@/service/plugin-uninstall-recovery-service").readPluginUninstallRequests
+  // Continues only the exact uninstall UUID and applies its committed catalog after success.
+  // 仅继续精确卸载 UUID，并在成功后应用其已提交目录。
+  onResumePluginUninstallRequest: (pluginId: string, requestId: string, acknowledgeExternalEffects: boolean) => Promise<void>
   // Uninstalls one disabled user plugin.
   // 卸载单个已停用用户插件。
   onUninstallUserPlugin: (pluginId: string) => Promise<void>

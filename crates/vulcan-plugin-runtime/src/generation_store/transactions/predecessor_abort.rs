@@ -7,6 +7,118 @@ use crate::generation_store::{
 };
 use VulcanPluginActivationTransactionPhase as Phase;
 
+impl VulcanPluginGenerationStore {
+    /// Arm request's test-only loss after a real Aborted write; return same-thread RAII cleanup.
+    /// 启用 request 真实 Aborted 写入后的仅测试丢失；返回同线程 RAII 清理。
+    #[cfg(test)]
+    pub(crate) fn lose_predecessor_abort_observation_once(&self, request: Uuid) -> impl Drop {
+        abort_observation_fault::arm(&self.root, request)
+    }
+
+    /// Abort transaction under its exact original record and reconcile uncertain writes with indexed Aborted readback.
+    /// 在精确 original 记录下中止 transaction，并以已索引 Aborted 回读核对不确定写入。
+    /// Original full authority, unchanged predecessor and exclusive request readiness are required before any confirmation.
+    /// 任何确认前均要求完整原权威、未变前驱及排他请求就绪状态。
+    /// Return confirmed abort; unknown outcomes preserve transaction's old observation without new requests or callbacks.
+    /// 返回已确认中止；未知结果保留 transaction 旧观测，不创建新请求或调用回调。
+    pub(crate) fn abort_activation_predecessor_restoration_owned(
+        &self,
+        transaction: &mut VulcanPluginActivationTransaction,
+        original: &VulcanPluginActivationTransactionRecord,
+    ) -> VulcanPluginStoreResult<()> {
+        // Reject cross-store ownership before opening a namespace in the wrong configured root.
+        // 在错误配置根打开命名空间之前拒绝跨存储所有权。
+        if transaction.store_root != self.root {
+            return Err(Error::new(
+                Code::Conflict,
+                "Original predecessor abort belongs to another store.",
+            ));
+        }
+        // Full record equality includes schema and immutable preparation, not only matching UUID or target bytes.
+        // 完整记录相等包含模式及不可变准备，不仅是 UUID 或目标字节匹配。
+        if !transaction
+            .record
+            .matches_predecessor_restoration_original(original)
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Original predecessor abort authority changed.",
+            ));
+        }
+        // One existing namespace fence spans selected predecessor, indexed receipt, write and immediate readback.
+        // 单个既有命名空间屏障覆盖选定前驱、索引回执、写入及即时回读。
+        let _namespace = self.namespace_lock(&original.target.plugin_id, false)?;
+        // Reuse the sole readiness retirement contract, including when disk already contains Aborted.
+        // 复用唯一就绪退役契约，包括磁盘已有 Aborted 的情况。
+        Self::require_readiness_retired(transaction)?;
+        if self.read_activation(&original.target.plugin_id)? != original.predecessor {
+            return Err(Error::new(
+                Code::Conflict,
+                "Original predecessor changed before abort confirmation.",
+            ));
+        }
+        // Derive the sole acceptable terminal image from the frozen full original before touching memory or disk.
+        // 触及内存或磁盘前，从固定完整原记录派生唯一可接受终态映像。
+        let mut aborted = original.clone();
+        aborted.phase = Phase::Aborted;
+        if self
+            .indexed_transaction_locked(&original.target.plugin_id)?
+            .as_ref()
+            == Some(&aborted)
+        {
+            transaction.record = aborted;
+            return Ok(());
+        }
+        self.check_transaction_owner(transaction)?;
+        if !matches!(
+            transaction.record.phase,
+            Phase::Prepared | Phase::Committing
+        ) {
+            return Err(Error::new(
+                Code::Conflict,
+                "Only the unchanged unpublished original can abort.",
+            ));
+        }
+        // Actual atomic replacement runs once; a post-rename synchronization error does not prove absence.
+        // 实际原子替换执行一次；重命名后的同步错误不证明写入未发生。
+        let write_result = self.write_transaction_locked(&aborted);
+        #[cfg(test)]
+        // Fault injection activates only after these exact real bytes were successfully published.
+        // 仅在这些精确真实字节成功发布后启用故障注入。
+        let observation_lost =
+            abort_observation_fault::consume(&self.root, aborted.request_id, write_result.is_ok());
+        #[cfg(test)]
+        // Lose the local result while leaving real persisted Aborted bytes untouched.
+        // 丢失局部结果，同时保持真实持久 Aborted 字节不变。
+        let write_result = if observation_lost {
+            Err(Error::new(
+                Code::Storage,
+                "Controlled loss of successful Aborted write observation.",
+            ))
+        } else {
+            write_result
+        };
+        if let Err(write_error) = write_result {
+            // Read exactly the indexed original in the same namespace; canonical public queries remain unaffected.
+            // 在相同命名空间读取精确已索引原请求；规范公开查询保持不受影响。
+            let read = || self.indexed_transaction_locked(&original.target.plugin_id);
+            #[cfg(test)]
+            // Only this immediate observation can be lost, enabling later same-owner confirmation.
+            // 仅此即时观测可丢失，使稍后相同所有者仍可确认。
+            let readback = abort_observation_fault::immediate_readback(observation_lost, read)?;
+            #[cfg(not(test))]
+            // Production uncertain writes use the real exact indexed readback without injected controls.
+            // 生产不确定写入使用真实精确索引回读，不提供注入开关。
+            let readback = read()?;
+            if readback.as_ref() != Some(&aborted) {
+                return Err(write_error);
+            }
+        }
+        transaction.record = aborted;
+        Ok(())
+    }
+}
+
 /// Test-only scoped observation loss preserves real Aborted bytes and all canonical inspection paths.
 /// 仅测试的作用域观测丢失保留真实 Aborted 字节及全部规范检查路径。
 #[cfg(test)]
@@ -101,122 +213,5 @@ mod abort_observation_fault {
         } else {
             read()
         }
-    }
-}
-
-impl VulcanPluginGenerationStore {
-    /// Arm request's test-only loss after a real Aborted write; return same-thread RAII cleanup.
-    /// 启用 request 真实 Aborted 写入后的仅测试丢失；返回同线程 RAII 清理。
-    #[cfg(test)]
-    pub(crate) fn lose_predecessor_abort_observation_once(&self, request: Uuid) -> impl Drop {
-        abort_observation_fault::arm(&self.root, request)
-    }
-
-    /// Abort transaction under its exact original record and reconcile uncertain writes with indexed Aborted readback.
-    /// 在精确 original 记录下中止 transaction，并以已索引 Aborted 回读核对不确定写入。
-    /// Original full authority, unchanged predecessor and exclusive request readiness are required before any confirmation.
-    /// 任何确认前均要求完整原权威、未变前驱及排他请求就绪状态。
-    /// Return confirmed abort; unknown outcomes preserve transaction's old observation without new requests or callbacks.
-    /// 返回已确认中止；未知结果保留 transaction 旧观测，不创建新请求或调用回调。
-    pub(crate) fn abort_activation_predecessor_restoration_owned(
-        &self,
-        transaction: &mut VulcanPluginActivationTransaction,
-        original: &VulcanPluginActivationTransactionRecord,
-    ) -> VulcanPluginStoreResult<()> {
-        // Reject cross-store ownership before opening a namespace in the wrong configured root.
-        // 在错误配置根打开命名空间之前拒绝跨存储所有权。
-        if transaction.store_root != self.root {
-            return Err(Error::new(
-                Code::Conflict,
-                "Original predecessor abort belongs to another store.",
-            ));
-        }
-        // Full record equality includes schema and immutable preparation, not only matching UUID or target bytes.
-        // 完整记录相等包含模式及不可变准备，不仅是 UUID 或目标字节匹配。
-        let mut expected_owner = original.clone();
-        expected_owner.phase = transaction.record.phase;
-        if expected_owner != transaction.record
-            || !matches!(original.phase, Phase::Prepared | Phase::Committing)
-            || !matches!(
-                transaction.record.phase,
-                Phase::Prepared | Phase::Committing | Phase::Aborted
-            )
-        {
-            return Err(Error::new(
-                Code::Conflict,
-                "Original predecessor abort authority changed.",
-            ));
-        }
-        // One existing namespace fence spans selected predecessor, indexed receipt, write and immediate readback.
-        // 单个既有命名空间屏障覆盖选定前驱、索引回执、写入及即时回读。
-        let _namespace = self.namespace_lock(&original.target.plugin_id, false)?;
-        // Reuse the sole readiness retirement contract, including when disk already contains Aborted.
-        // 复用唯一就绪退役契约，包括磁盘已有 Aborted 的情况。
-        Self::require_readiness_retired(transaction)?;
-        if self.read_activation(&original.target.plugin_id)? != original.predecessor {
-            return Err(Error::new(
-                Code::Conflict,
-                "Original predecessor changed before abort confirmation.",
-            ));
-        }
-        // Derive the sole acceptable terminal image from the frozen full original before touching memory or disk.
-        // 触及内存或磁盘前，从固定完整原记录派生唯一可接受终态映像。
-        let mut aborted = original.clone();
-        aborted.phase = Phase::Aborted;
-        if self
-            .indexed_transaction_locked(&original.target.plugin_id)?
-            .as_ref()
-            == Some(&aborted)
-        {
-            transaction.record = aborted;
-            return Ok(());
-        }
-        self.check_transaction_owner(transaction)?;
-        if !matches!(
-            transaction.record.phase,
-            Phase::Prepared | Phase::Committing
-        ) {
-            return Err(Error::new(
-                Code::Conflict,
-                "Only the unchanged unpublished original can abort.",
-            ));
-        }
-        // Actual atomic replacement runs once; a post-rename synchronization error does not prove absence.
-        // 实际原子替换执行一次；重命名后的同步错误不证明写入未发生。
-        let write_result = self.write_transaction_locked(&aborted);
-        #[cfg(test)]
-        // Fault injection activates only after these exact real bytes were successfully published.
-        // 仅在这些精确真实字节成功发布后启用故障注入。
-        let observation_lost =
-            abort_observation_fault::consume(&self.root, aborted.request_id, write_result.is_ok());
-        #[cfg(test)]
-        // Lose the local result while leaving real persisted Aborted bytes untouched.
-        // 丢失局部结果，同时保持真实持久 Aborted 字节不变。
-        let write_result = if observation_lost {
-            Err(Error::new(
-                Code::Storage,
-                "Controlled loss of successful Aborted write observation.",
-            ))
-        } else {
-            write_result
-        };
-        if let Err(write_error) = write_result {
-            // Read exactly the indexed original in the same namespace; canonical public queries remain unaffected.
-            // 在相同命名空间读取精确已索引原请求；规范公开查询保持不受影响。
-            let read = || self.indexed_transaction_locked(&original.target.plugin_id);
-            #[cfg(test)]
-            // Only this immediate observation can be lost, enabling later same-owner confirmation.
-            // 仅此即时观测可丢失，使稍后相同所有者仍可确认。
-            let readback = abort_observation_fault::immediate_readback(observation_lost, read)?;
-            #[cfg(not(test))]
-            // Production uncertain writes use the real exact indexed readback without injected controls.
-            // 生产不确定写入使用真实精确索引回读，不提供注入开关。
-            let readback = read()?;
-            if readback.as_ref() != Some(&aborted) {
-                return Err(write_error);
-            }
-        }
-        transaction.record = aborted;
-        Ok(())
     }
 }

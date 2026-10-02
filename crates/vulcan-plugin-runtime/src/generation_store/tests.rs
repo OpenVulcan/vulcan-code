@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 mod approval;
 mod configuration;
 mod credentials;
+mod deactivation;
 mod transactions;
 
 /// Write a valid content plugin beneath `root` and return its path; `body` distinguishes real package bytes.

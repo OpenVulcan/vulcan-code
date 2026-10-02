@@ -410,9 +410,24 @@ fn formal_pinned_accounting_failure_preserves_recoverable_owner() {
             .expect("failed release evidence");
         assert!(!status.retired);
         assert!(status.requires_cleanup_recovery);
+        assert!(
+            fixture
+                .manager
+                .active_session_count("idle-plugin")
+                .expect_err("actual poisoned accounting must not yield a live count")
+                .message
+                .contains("counter lock is poisoned")
+        );
+        // Inspect only the fixture-injected poisoned guard to prove its real original reservation was not released.
+        // 仅检查夹具注入的中毒守卫，证明其真实原预留没有释放。
         assert_eq!(
-            fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
-            1
+            counts
+                .lock()
+                .expect_err("actual injected accounting poison")
+                .into_inner()
+                .get("idle-plugin")
+                .copied(),
+            Some(1)
         );
         assert_eq!(
             fixture
@@ -436,7 +451,10 @@ fn formal_pinned_accounting_failure_preserves_recoverable_owner() {
         assert_eq!(report.closed_sessions, 1);
         assert!(report.failures.is_empty(), "{report:?}");
         assert_eq!(
-            fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
+            fixture
+                .manager
+                .active_session_count("idle-plugin")
+                .expect("actual live reservation count"),
             0
         );
         fixture
@@ -534,7 +552,10 @@ fn formal_pinned_production_route_preserves_state_owner_and_shutdown() {
                 .is_empty()
         );
         assert_eq!(
-            fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
+            fixture
+                .manager
+                .active_session_count("idle-plugin")
+                .expect("actual live reservation count"),
             0
         );
         assert_eq!(
@@ -582,7 +603,10 @@ fn formal_pinned_abandonment_and_competing_drain_keep_actual_owner() {
             assert!(!report.failures.is_empty());
         }
         assert_eq!(
-            fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
+            fixture
+                .manager
+                .active_session_count("idle-plugin")
+                .expect("actual live reservation count"),
             1
         );
         assert!(

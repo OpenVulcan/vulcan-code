@@ -58,7 +58,7 @@ impl VulcanPluginRuntimeManager {
         // Retain the original persistent instance across preparation and observation.
         // 跨准备及观测保留原持久实例。
         let runtime = if let Some(runtime) = existing {
-            if runtime.lock()?.private_target.is_some() {
+            if runtime.lock()?.private_origin.is_some() {
                 return Err(instance_error(
                     "Private target Hook has not transferred to ordinary business.",
                 ));
@@ -201,8 +201,8 @@ impl VulcanPluginRuntimeManager {
         }
         // Capture the explicit private origin before any filesystem materialization begins.
         // 在任何文件系统物化开始前捕获显式私有来源。
-        let private_target = runtime.lock()?.private_target.clone();
-        if let Some(authority) = &private_target {
+        let private_origin = runtime.lock()?.private_origin.clone();
+        if let Some(authority) = &private_origin {
             authority.retain_environment(&self.state)?;
         }
         // Freeze the existing manifest and its authoritative execution package.
@@ -233,7 +233,7 @@ impl VulcanPluginRuntimeManager {
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
-            self.validate_persistent_preparation(runtime, private_target.as_ref())?;
+            self.validate_persistent_preparation(runtime, private_origin.as_ref())?;
             owner.admit_capacity_member(
                 &runtime.plugin.id,
                 match runtime.kind {
@@ -287,14 +287,14 @@ impl VulcanPluginRuntimeManager {
         };
         // Both registrations share the exact bundle/schema/capability path; only authority provenance differs.
         // 两种注册共享精确 bundle／Schema／能力路径；仅权威来源不同。
-        let (pool, handoff) = match private_target.as_ref() {
+        let (pool, handoff) = match private_origin.as_ref() {
             Some(authority) => {
                 let handoff = owner
                     .host
-                    .register_private_target_hook_bundle_pool_in_capacity(
+                    .register_private_hook_bundle_pool_in_capacity(
                         &capacity.capacity_id,
                         request,
-                        Arc::clone(authority),
+                        authority.clone(),
                     )
                     .map_err(core_error)?;
                 (handoff.pool_id.clone(), Some(handoff))
@@ -312,7 +312,7 @@ impl VulcanPluginRuntimeManager {
             // 在当前同步锁作用域内保留精确生命周期证据。
             let mut state = runtime.lock()?;
             state.pool = Some(pool.clone());
-            state.target_handoff = handoff;
+            state.private_handoff = handoff;
             state.workspace = Some(workspace);
         }
         // Order this state transition against catalog generation publication.
@@ -322,7 +322,7 @@ impl VulcanPluginRuntimeManager {
             .session_registration_gate
             .lock()
             .map_err(|_| instance_error("Plugin publication gate is poisoned."))?;
-        self.validate_persistent_preparation(runtime, private_target.as_ref())?;
+        self.validate_persistent_preparation(runtime, private_origin.as_ref())?;
         if runtime.closing.load(Ordering::Acquire) {
             return Err(instance_error(
                 "persistent cancelled before core admission.",
@@ -519,6 +519,9 @@ impl VulcanPluginRuntimeManager {
                     "UI Action instance is closing or has a different purpose.",
                 ));
             }
+            // Eligible prior evidence must leave before new admission, independently of the monitor's next tick.
+            // 符合条件的先前证据必须在新入场前释放，不依赖监控器下一次节拍。
+            self.reclaim_acknowledged_persistent_operations(&owner, &mut state)?;
             // Cancellation closes atomically before submission can produce any business effects.
             // 提交可能产生任何业务副作用之前，原子关闭取消。
             execution.record.start()?;
@@ -594,10 +597,10 @@ impl VulcanPluginRuntimeManager {
                 delivered: false,
             }
         };
+        // Preserve an already-terminal fast path before starting finite asynchronous observation.
+        // 在开始有限异步观测前保留已终态快速路径。
+        let mut snapshot = observation.handle.snapshot().map_err(core_error)?;
         loop {
-            // Read actual core or catalog evidence, without inferring a replacement identity.
-            // 读取真实核心或目录证据，不推断替代身份。
-            let snapshot = observation.handle.snapshot().map_err(core_error)?;
             if snapshot.phase.is_terminal() {
                 observation.delivered = true;
                 owner.host.reap_workspace_requests().map_err(core_error)?;
@@ -608,7 +611,9 @@ impl VulcanPluginRuntimeManager {
                     "Plugin action timed out; actual work and capacity remain retained. Do not replay mutations.",
                 ));
             }
-            tokio::time::sleep(OBSERVATION_INTERVAL).await;
+            // Observe the original terminal signal directly, preserving deadlines, cancellation ownership and actual work.
+            // 直接观测原终态通知，保留截止时间、取消所有权及实际工作。
+            snapshot = observe_terminal(&observation.handle).await?;
         }
     }
 }

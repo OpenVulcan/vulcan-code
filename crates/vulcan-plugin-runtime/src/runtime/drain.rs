@@ -4,10 +4,7 @@
 use super::{
     VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
 };
-use crate::VulcanPluginRuntimeState;
 use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 /// Reports completed plugin cleanup and retained failures after drain attempts.
 /// 报告排空尝试中完成的插件清理与保留的失败。
@@ -72,17 +69,7 @@ impl VulcanPluginRuntimeManager {
             self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::Hook)?;
         let has_ui_action_runtime =
             self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::UiAction)?;
-        let has_active_count = self
-            .state
-            .active_session_counts
-            .lock()
-            .map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
-            })?
-            .get(plugin_id)
-            .copied()
-            .unwrap_or_default()
-            > 0;
+        let has_active_count = self.active_session_count(plugin_id)? > 0;
         if self.has_reusable_domains(plugin_id)?
             || has_formal_calls
             || has_hook_runtime
@@ -192,8 +179,8 @@ impl VulcanPluginRuntimeManager {
 
     /// Retains one cleanup diagnostic so UI and later refreshes cannot hide leaked resources.
     /// 保留一条清理诊断，确保界面与后续刷新不会隐藏泄漏资源。
-    /// plugin_id selects the owner and diagnostic is retained without duplication; returns publication status.
-    /// plugin_id选择所有者，不重复保留diagnostic；返回发布状态。
+    /// plugin_id selects the owner and diagnostic is retained without duplication; returns accounting status.
+    /// plugin_id选择所有者，不重复保留diagnostic；返回记账状态。
     pub(super) fn record_cleanup_failure(
         &self,
         plugin_id: &str,
@@ -207,13 +194,13 @@ impl VulcanPluginRuntimeManager {
         self.record_cleanup_failure_locked(plugin_id, diagnostic, &registration)
     }
 
-    /// Retain diagnostic for plugin_id under an existing publication guard; return after its live projection is updated.
-    /// 在既有发布守卫下为 plugin_id 保留 diagnostic；更新实时投影后返回。
+    /// Retain diagnostic for plugin_id under an existing publication guard; return after its unique live map is updated.
+    /// 在既有发布守卫下为 plugin_id 保留 diagnostic；更新唯一实时映射后返回。
     pub(super) fn record_cleanup_failure_locked(
         &self,
         plugin_id: &str,
         diagnostic: String,
-        registration: &std::sync::MutexGuard<'_, ()>,
+        _registration: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<(), VulcanPluginRuntimeError> {
         let mut diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
@@ -222,43 +209,18 @@ impl VulcanPluginRuntimeManager {
         if !plugin_diagnostics.contains(&diagnostic) {
             plugin_diagnostics.push(diagnostic);
         }
-        drop(diagnostics);
-        self.publish_cleanup_diagnostics(plugin_id, registration)
+        Ok(())
     }
 
-    /// Publishes newly recorded cleanup failures without waiting for a later catalog refresh.
-    /// 无需等待后续目录刷新即可发布新记录的清理失败。
-    /// plugin_id selects the immutable catalog projection to update; returns unit or a lock diagnostic.
-    /// plugin_id选择要更新的不可变目录投影；返回空值或锁诊断。
-    fn publish_cleanup_diagnostics(
+    /// Observe unresolved cleanup without acquiring the registration gate again.
+    /// 观测未解决清理，不再次获取登记门。
+    /// `plugin_id` selects the live namespace; returns whether diagnostics remain or an explicit lock error.
+    /// `plugin_id` 选择实时命名空间；返回是否残留诊断或明确锁错误。
+    pub fn has_cleanup_diagnostics(
         &self,
         plugin_id: &str,
-        _registration: &std::sync::MutexGuard<'_, ()>,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let cleanup_diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
-        })?;
-        let Some(plugin_diagnostics) = cleanup_diagnostics.get(plugin_id) else {
-            return Ok(());
-        };
-        let mut snapshot = (*self.snapshot()).clone();
-        let Some(plugin) = snapshot.plugins.get_mut(plugin_id) else {
-            return Ok(());
-        };
-        if plugin.runtime_state == VulcanPluginRuntimeState::Disabled {
-            plugin.runtime_state = VulcanPluginRuntimeState::DisabledWithCleanupWarning;
-        }
-        for diagnostic in plugin_diagnostics {
-            if !plugin.diagnostics.contains(diagnostic) {
-                plugin.diagnostics.push(diagnostic.clone());
-            }
-        }
-        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        let mut guard = self.state.snapshot.write().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
-        })?;
-        *guard = Arc::new(snapshot);
-        Ok(())
+    ) -> Result<bool, VulcanPluginRuntimeError> {
+        self.state.has_cleanup_diagnostics(plugin_id)
     }
 
     /// Clears stale cleanup diagnostics only after every resource owned by one plugin is gone.
@@ -277,8 +239,8 @@ impl VulcanPluginRuntimeManager {
 
     /// Clear resolved diagnostics for plugin_id while the caller holds publication; retain explicit unfinished capacity retirement.
     /// 调用方持有发布门时清除 plugin_id 已解决诊断；保留明确未完成容量回收。
-    /// Return success after projection, or a precise ownership error without claiming cleanup completion.
-    /// 投影后返回成功；或返回精确归属错误而不宣称清理完成。
+    /// Return success after the live map update, or a precise ownership error without claiming cleanup completion.
+    /// 实时映射更新后返回成功；或返回精确归属错误而不宣称清理完成。
     pub(super) fn clear_cleanup_diagnostics_locked(
         &self,
         plugin_id: &str,
@@ -287,34 +249,36 @@ impl VulcanPluginRuntimeManager {
         if self.has_unretired_plugin_resources_locked(plugin_id, _registration)? {
             return Ok(());
         }
-        let removed_diagnostics = self
-            .state
+        self.state
             .cleanup_diagnostics
             .lock()
             .map_err(|_| {
                 VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
             })?
-            .remove(plugin_id)
-            .unwrap_or_default();
-        if removed_diagnostics.is_empty() {
-            return Ok(());
-        }
-        let mut snapshot = (*self.snapshot()).clone();
-        let Some(plugin) = snapshot.plugins.get_mut(plugin_id) else {
-            return Ok(());
-        };
-        plugin
-            .diagnostics
-            .retain(|diagnostic| !removed_diagnostics.contains(diagnostic));
-        if plugin.runtime_state == VulcanPluginRuntimeState::DisabledWithCleanupWarning {
-            plugin.runtime_state = VulcanPluginRuntimeState::Disabled;
-        }
-        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        let mut guard = self.state.snapshot.write().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
-        })?;
-        *guard = Arc::new(snapshot);
+            .remove(plugin_id);
         Ok(())
+    }
+}
+
+impl super::VulcanPluginManagerState {
+    /// Inspect the unique cleanup map without acquiring publication or changing routing identity.
+    /// 检查唯一清理映射，不获取发布门或改变路由身份。
+    /// `plugin_id` selects the namespace; returns true for retained diagnostics or a poisoned-lock error.
+    /// `plugin_id` 选择命名空间；保留诊断返回真，锁污染返回错误。
+    pub(super) fn has_cleanup_diagnostics(
+        &self,
+        plugin_id: &str,
+    ) -> Result<bool, VulcanPluginRuntimeError> {
+        self.cleanup_diagnostics
+            .lock()
+            .map(|diagnostics| {
+                diagnostics
+                    .get(plugin_id)
+                    .is_some_and(|entries| !entries.is_empty())
+            })
+            .map_err(|_| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
+            })
     }
 }
 

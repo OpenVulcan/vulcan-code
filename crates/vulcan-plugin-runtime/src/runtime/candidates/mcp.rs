@@ -110,6 +110,17 @@ impl VulcanPluginRuntimeManager {
         &self,
         candidate: &VulcanPluginActivationCandidate<'_>,
     ) -> Result<VulcanPluginPreparedMcpCandidate, VulcanPluginRuntimeError> {
+        {
+            // Same-original coordination precedes launcher filesystem preparation without granting execution.
+            // 同原实例协调先于启动器文件系统准备，不授予执行权。
+            let registration = self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+            })?;
+            self.require_routing_publication_locked(
+                &registration,
+                Some(crate::runtime::routing::ActivationRoutingOriginal::Candidate(candidate)),
+            )?;
+        }
         // Retain before filesystem preparation so cancellation of an outer observer cannot unlock live work.
         // 文件系统准备前先保留，使外层观察者取消不能解除实际工作的锁。
         let readiness = retain_candidate_readiness(&self.state, candidate)?;
@@ -171,6 +182,20 @@ mod tests;
 
 mod target;
 pub use target::{
-    VulcanPluginMcpTargetHandoffGuard, VulcanPluginMcpTargetStartGuard,
-    VulcanPluginPreparedMcpTarget, VulcanPluginRegisteredNativeMcpHostAuthority,
+    VulcanPluginMcpTargetControl, VulcanPluginMcpTargetHandoffGuard,
+    VulcanPluginMcpTargetStartGuard, VulcanPluginPreparedMcpTarget,
+    VulcanPluginRegisteredNativeMcpHostAuthority, VulcanPluginTargetMcpProfile,
+};
+
+mod published;
+pub use published::{
+    VulcanPluginPreparedPublishedMcp, VulcanPluginPublishedMcpProfile,
+    VulcanPluginPublishedMcpStartGuard,
+};
+
+mod predecessor;
+pub use predecessor::{
+    VulcanPluginMcpPredecessorControl, VulcanPluginMcpPredecessorHandoffGuard,
+    VulcanPluginMcpPredecessorStartGuard, VulcanPluginPredecessorMcpProfile,
+    VulcanPluginPreparedMcpPredecessor,
 };

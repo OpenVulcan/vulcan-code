@@ -442,7 +442,10 @@ async fn hot_reuse_target_unstarted_cancel_close_and_stale_identity_are_inert() 
         0
     );
     assert_eq!(
-        fixture.manager.snapshot().plugins["idle-plugin"].active_session_count,
+        fixture
+            .manager
+            .active_session_count("idle-plugin")
+            .expect("actual live reservation count"),
         0
     );
 }

@@ -1,8 +1,8 @@
 //! Real transaction locks and immutable packages exercise unpublished MCP preparation.
 //! 通过真实事务锁与不可变插件包验证未发布 MCP 准备。
 
-/// Keeps actual prepared launch files alive against both production cleanup entry points.
-/// 对两条生产清理入口保留实际准备启动文件。
+/// Keeps actual prepared launch files alive against the current targeted production cleanup.
+/// 对现行定向生产清理保留实际准备启动文件。
 /// No inputs; asserts shared ownership across clones and independent managers until final release.
 /// 无输入；断言克隆与独立管理器之间的共享所有权直至最后释放。
 #[test]
@@ -56,23 +56,12 @@ fn prepared_mcp_candidate_blocks_environment_reclamation_until_last_owner() {
         program.is_file(),
         "failed cleanup must preserve exact launch bytes"
     );
-    assert!(
-        crate::runtime::environment::remove_obsolete_plugin_execution_environments(
-            &cleanup_manager.state,
-            &plugin.id,
-            "2.0.0",
-            "new-generation",
-        )
-        .is_err(),
-        "whole-version cleanup must respect the same owner"
-    );
-    assert!(program.is_file());
     drop(retained);
-    crate::runtime::environment::remove_obsolete_plugin_execution_environments(
+    crate::runtime::environment::remove_plugin_execution_environment_generation(
         &cleanup_manager.state,
         &plugin.id,
-        "2.0.0",
-        "new-generation",
+        plugin.version.as_deref().expect("validated version"),
+        &plugin.content_fingerprint,
     )
     .expect("final owner release permits reclamation");
     assert!(!program.exists());

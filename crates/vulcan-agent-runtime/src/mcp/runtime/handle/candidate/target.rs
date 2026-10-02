@@ -1,19 +1,18 @@
 //! Selected target preparation retains the same actual MCP lease through closed publication and confirmed opening.
 //! 已选目标准备在关闭发布及确认开放期间保留同一实际 MCP 租约。
 
+use super::prepared::{
+    PreparedPluginMcpLeaseOwnership, PreparedPluginMcpRuntime, PreparedPluginMcpTransferGuard,
+};
 use super::*;
 use crate::mcp::PreparedTargetPluginMcpConfigs;
-use std::sync::{
-    MutexGuard, RwLockReadGuard, RwLockWriteGuard,
-    atomic::{AtomicBool, Ordering},
-};
 use vulcan_plugin_runtime::{
     VulcanPluginActivationTargetCompletion, VulcanPluginActivationTargetHandoffParticipant,
     VulcanPluginActivationTargetRegistration, VulcanPluginActivationTransaction,
-    VulcanPluginCatalogSnapshot, VulcanPluginMcpTargetHandoffEvidence,
-    VulcanPluginMcpTargetHandoffGuard, VulcanPluginNativeMcpHandoffAdapter,
-    VulcanPluginPreparedMcpTarget, VulcanPluginRegisteredNativeMcpHostAuthority,
-    VulcanPluginRuntimeManager,
+    VulcanPluginCatalogSnapshot, VulcanPluginMcpTargetControl,
+    VulcanPluginMcpTargetHandoffEvidence, VulcanPluginMcpTargetHandoffGuard,
+    VulcanPluginNativeMcpHandoffAdapter, VulcanPluginRegisteredNativeMcpHostAuthority,
+    VulcanPluginRuntimeManager, VulcanPluginTargetMcpProfile,
 };
 
 #[cfg(test)]
@@ -28,21 +27,15 @@ pub struct TargetPluginMcpRuntime {
     /// Explicit registered host authorization remains bound to the original source issuer.
     /// 显式注册宿主授权保持绑定至原来源签发者。
     authority: VulcanPluginRegisteredNativeMcpHostAuthority,
-    /// Same actual lease is used by both prepared and published bindings.
-    /// 准备及已发布绑定均使用相同实际租约。
-    lease: Arc<McpRuntimePartitionLease>,
+    /// Shared mechanical preparation owns the same actual lease, observation and access lineage.
+    /// 共享机械准备拥有同一实际租约、观察及访问谱系。
+    prepared: PreparedPluginMcpRuntime,
     /// Control retains exact owner only until completion; observers retain no resource authority.
     /// 控制仅保留精确所有者至完成；观察者不保留资源权威。
-    target: VulcanPluginPreparedMcpTarget,
-    /// Original registration belongs to this shared access lineage.
-    /// 原登记属于此共享访问谱系。
-    access: McpRuntimeAccess,
-    /// Independent aggregate release evidence survives cancellation.
-    /// 独立聚合释放证据跨取消存续。
-    observation: CandidatePluginMcpObservation,
-    /// Confirmed completion prevents control destruction from shutting down the now-published same lease.
-    /// 确认完成避免控制析构关闭现已发布的相同租约。
-    published: AtomicBool,
+    target: VulcanPluginMcpTargetControl,
+    /// Pure source matches the same original profile consumed by every actual launch input Arc.
+    /// 纯来源匹配每个实际启动输入 Arc 消费的同一原画像。
+    profile: VulcanPluginTargetMcpProfile,
 }
 
 /// Short combined handoff participant holds admission, exact target ownership and actual business gate together.
@@ -51,30 +44,12 @@ pub struct TargetPluginMcpHandoffGuard<'a> {
     /// Actual registration borrow prevents escape from the manager's GAT completion scope.
     /// 实际注册借用防止逃逸管理器的 GAT 完成作用域。
     _registration: &'a VulcanPluginActivationTargetRegistration<'a>,
-    /// Same original target runtime owns publication state.
-    /// 相同原目标运行时拥有发布状态。
-    target: &'a TargetPluginMcpRuntime,
-    /// Global drain and shutdown cannot replace the actual original while confirmation runs.
-    /// 确认期间全局排空及关闭不能替换实际原实例。
-    _admission: MutexGuard<'a, OwnerMcpAdmission>,
-    /// Pending original observations remain locked until same-instance transfer is confirmed.
-    /// 相同实例转交确认前，待处理原观察保持锁定。
-    pending: MutexGuard<'a, BTreeMap<String, Vec<McpRuntimeHandle>>>,
-    /// Exact original request is released only after durable combined completion confirmation.
-    /// 仅持久组合完成确认后释放精确原请求。
+    /// Release this exact source owner before native mechanical guards, preserving source-to-business drop order.
+    /// 在原生机械守卫前释放此精确来源所有者，保持来源至业务的销毁顺序。
     owner: VulcanPluginMcpTargetHandoffGuard<'a>,
-    /// Write guard closes transport acquisition through the entire completion boundary.
-    /// 写守卫在整个完成边界内关闭传输获取。
-    business: RwLockWriteGuard<'a, McpBusinessGate>,
-    /// Actual registered transports cannot be removed or replaced across durable completion.
-    /// 持久完成期间不能移除或替换实际已登记传输。
-    _transports: RwLockReadGuard<'a, BTreeMap<String, Arc<dyn McpTransport>>>,
-    /// Same ready snapshot remains fixed until the completion participant is released.
-    /// 完成参与者释放前固定相同就绪快照。
-    _snapshot: RwLockReadGuard<'a, McpRuntimeSnapshot>,
-    /// Unconfirmed outcomes retain Preparing business closure for same-instance recovery.
-    /// 未确认结果保留 Preparing 业务关闭，以供相同实例恢复。
-    confirmed: bool,
+    /// Common native guards retain the same actual lease last and confer no target completion authorization.
+    /// 共用原生守卫最后保留相同实际租约，不授予目标完成授权。
+    transfer: PreparedPluginMcpTransferGuard<'a>,
 }
 
 impl TargetPluginMcpRuntime {
@@ -93,7 +68,15 @@ impl TargetPluginMcpRuntime {
     ) -> Result<Self, String> {
         // Transfer owner and definitions together; never accept detached arbitrary configurations.
         // 一起转交所有者及定义；绝不接受脱离所有者的任意配置。
-        let (target, servers) = prepared.into_runtime_inputs();
+        let (prepared, servers) = prepared.into_runtime_inputs();
+        // Logical completion control has no reverse link to the actual physical preparation.
+        // 逻辑完成控制没有返回实际物理准备的反向链接。
+        let target = prepared.control();
+        // Bind the original pure source before any persistent attempt or actual native dispatch.
+        // 在任何持久尝试或实际原生派发前绑定原纯来源。
+        let profile = target
+            .host_profile(authority)
+            .map_err(|error| error.to_string())?;
         // Every definition must match the actual nonzero route of the retained target.
         // 每份定义必须匹配保留目标的实际非零路由。
         if servers.iter().any(|server| {
@@ -109,7 +92,7 @@ impl TargetPluginMcpRuntime {
         }
         // Actual transport resources retain all package, configuration, credentials and OS environment ownership.
         // 实际传输资源保留全部包、配置、凭据及操作系统环境所有权。
-        let (resources, release) = McpTransportResources::new(target.clone());
+        let (resources, release) = McpTransportResources::new(prepared);
         // Exact current stage remains fenced until original task registration and dispatch finish.
         // 原任务登记及派发完成前，精确当前暂存保持屏障保护。
         let mut start = target
@@ -117,15 +100,15 @@ impl TargetPluginMcpRuntime {
             .map_err(|error| error.to_string())?;
         // Register before spawn waits so old/current access can drain even an unpublished ready target.
         // 在启动等待前登记，使新旧访问均可排空尚未发布的就绪目标。
-        let runtime = current.start_preparing_plugin_partition_with_resources(
+        let lease = current.start_target_plugin_partition(
             target.plugin_id(),
             servers,
             resources,
-            true,
+            profile.clone(),
         )?;
-        // Allocate one actual lease before releasing the short registration fence.
-        // 释放短时注册屏障前分配单个实际租约。
-        let lease = Arc::new(McpRuntimePartitionLease::new(runtime.clone()));
+        // Both original controls and this sole actual lease were registered before native dispatch.
+        // 原控制及此唯一实际租约均在原生派发前登记。
+        let runtime = lease.runtime.clone();
         // Registered host attests nonces from the actual registered runtime and lease for this exact source and route.
         // 已注册宿主证明来自此精确来源及路由的实际已登记运行时和租约的随机标识。
         if let Err(error) =
@@ -145,24 +128,57 @@ impl TargetPluginMcpRuntime {
         };
         Ok(Self {
             authority: authority.clone(),
-            lease,
+            prepared: PreparedPluginMcpRuntime::new(current, lease, observation),
             target,
-            access: current.clone(),
-            observation,
-            published: AtomicBool::new(false),
+            profile,
         })
+    }
+
+    /// Clone original pure source identity without retaining unfinished request or physical resources.
+    /// 克隆原纯来源身份，不保留未完成请求或物理资源。
+    /// No inputs; return the source fixed before this actual target's native dispatch, not an execution receipt.
+    /// 无输入；返回此实际目标原生派发前固定的来源，不返回执行回执。
+    pub fn profile(&self) -> VulcanPluginTargetMcpProfile {
+        self.profile.clone()
+    }
+
+    /// Verify server_id's actual connected target consumed expected before launch without exposing its inputs.
+    /// 不暴露输入，校验 server_id 实际已连接目标在启动前消费了 expected。
+    /// Return success only for the same original input Arc, native transport, eligible inputs and live release.
+    /// 仅相同原输入 Arc、原生传输、合格输入及存续释放均成立时返回成功。
+    pub fn verify_source(
+        &self,
+        server_id: &str,
+        expected: &VulcanPluginTargetMcpProfile,
+    ) -> Result<(), String> {
+        self.prepared
+            .observation
+            .runtime
+            .with_connected_target_launch_inputs(server_id, expected, |_, _| ())
+            .map_err(|error| format!("Target MCP launch source is unavailable: {error:?}."))
     }
 
     /// Clone original diagnostics and release observation; no input and no retained resource authority.
     /// 克隆原诊断及释放观察；无输入，不保留资源权威。
     pub fn observer(&self) -> CandidatePluginMcpObservation {
-        self.observation.clone()
+        self.prepared.observation.clone()
     }
 
     /// Copy opaque identities of the actual original runtime and lease; no input or replacement allocation.
     /// 复制实际原运行时及租约的不透明身份；无输入，不分配替代所有者。
     pub fn actual_instance_ids(&self) -> (uuid::Uuid, uuid::Uuid) {
-        (self.lease.runtime.inner.instance_id, self.lease.instance_id)
+        (
+            self.prepared.observation.runtime.inner.instance_id,
+            self.prepared.partition_lease_instance_id,
+        )
+    }
+
+    /// Observe this original target using the sole native readiness budget without copying a host-side timeout.
+    /// 使用唯一原生就绪预算观测此原目标，不复制宿主侧超时。
+    /// No inputs; returns actual persisted readiness or the same explicit failure as wait_until_ready.
+    /// 无输入；返回实际持久就绪，或与 wait_until_ready 相同的明确失败。
+    pub async fn wait_until_ready_default(&self) -> Result<(), String> {
+        self.wait_until_ready(MCP_PARTITION_READINESS_TIMEOUT).await
     }
 
     /// Observe the actual original readiness and persist its result before any completion participant can be prepared.
@@ -172,10 +188,24 @@ impl TargetPluginMcpRuntime {
     pub async fn wait_until_ready(&self, maximum_wait: Duration) -> Result<(), String> {
         // Network and initialization complete without any registration or completion lock.
         // 网络及初始化在不持有任何注册或完成锁时结束。
-        let ready = self.observation.wait_until_ready(maximum_wait).await;
+        let ready = self
+            .prepared
+            .observation
+            .wait_until_ready(maximum_wait)
+            .await;
         // Published observations inspect the same live instance without resurrecting its transferred source writer.
         // 已发布观测检查相同实时实例，不复活其已转交来源写入者。
-        if self.published.load(Ordering::Acquire) {
+        // Never hold ownership across the preceding await; completion and source writes serialize from here.
+        // 绝不跨前述 await 持有所有权；完成及来源写入从此处开始串行化。
+        let ownership = self
+            .prepared
+            .lease
+            .lock()
+            .map_err(|_| String::from("Target MCP ownership is poisoned."))?;
+        if matches!(
+            *ownership,
+            PreparedPluginMcpLeaseOwnership::Published { .. }
+        ) {
             return ready;
         }
         // Registered host observes the same actual original task; only its real protocol readiness supplies success.
@@ -184,24 +214,20 @@ impl TargetPluginMcpRuntime {
             .target
             .finish_transport_observation(&self.authority, ready.is_ok())
             .map_err(|error| error.to_string());
-        // A concurrent handoff holds source until it publishes this latch; missing writer after transfer cannot cancel business.
-        // 并发交接持有来源直至发布此锁存位；转交后的写入者缺失不能取消业务。
-        if self.published.load(Ordering::Acquire) {
-            return ready;
-        }
         if ready.is_err() || stored.is_err() {
-            // Recheck transfer under the same write gate so an observation failure cannot race confirmed opening.
-            // 在相同写门内重新检查转交，防止观测失败与已确认开放竞争。
+            // Ownership remains Preparing throughout this guarded failure handling; confirmed opening cannot race it.
+            // 此受保护失败处理全程所有权保持 Preparing；确认开放不能与其竞争。
             let mut business = self
-                .lease
+                .prepared
+                .observation
                 .runtime
                 .inner
                 .business_gate
                 .write()
                 .expect("mcp business gate poisoned");
-            if !self.published.load(Ordering::Acquire) && *business == McpBusinessGate::Preparing {
+            if *business == McpBusinessGate::Preparing {
                 *business = McpBusinessGate::Closed;
-                request_mcp_runtime_shutdown(&self.lease.runtime.inner.shutdown_tx);
+                request_mcp_runtime_shutdown(&self.prepared.observation.runtime.inner.shutdown_tx);
             }
         }
         match (ready, stored) {
@@ -213,69 +239,31 @@ impl TargetPluginMcpRuntime {
         }
     }
 
-    /// Build handlers from the actual readiness snapshot while its same lease still rejects invocation.
-    /// 从实际就绪快照构建处理器，同时其相同租约仍拒绝调用。
-    /// allowlist filters exact original views; return bindings for the one full extension publisher.
-    /// allowlist 过滤精确原视图；返回供唯一完整扩展发布者使用的绑定。
+    /// Build handlers from the same preparing lease; allowlist filters views and the target supplies its exact route.
+    /// 从同一准备租约构建处理器；allowlist 过滤视图，目标提供其精确路由。
+    /// Return closed bindings for the sole extension publisher without granting completion authority.
+    /// 返回供唯一扩展发布者使用的关闭绑定，不授予完成权限。
     pub fn prepared_tool_bindings_filtered(
         &self,
         allowlist: &McpRuntimeToolAllowlist,
     ) -> Result<Vec<McpRuntimeToolBinding>, String> {
-        // This read gate permits catalog construction only for an original preparing instance.
-        // 此读门仅允许原准备实例构建目录。
-        let business = self
-            .lease
-            .runtime
-            .inner
-            .business_gate
-            .read()
-            .map_err(|_| String::from("Target MCP business gate is poisoned."))?;
-        if *business != McpBusinessGate::Preparing
-            || self.lease.is_revoked()
-            || self.lease.runtime.shutdown_requested()
-        {
-            return Err(String::from("Target MCP preparation is closed."));
-        }
-        // Derive views from the same actual snapshot; this is no independent shadow catalog.
-        // 从相同实际快照派生视图；这不是独立影子目录。
-        let views = self.lease.runtime.snapshot().filtered_tool_views(allowlist);
-        Ok(views
-            .into_iter()
-            .map(|view| {
-                McpRuntimeToolBinding::new(
-                    view,
-                    Arc::clone(&self.lease),
-                    format!(
-                        "plugin:{}:{}",
-                        self.target.plugin_id(),
-                        self.target.generation()
-                    ),
-                )
-            })
-            .collect())
+        self.prepared.prepared_tool_bindings_filtered(
+            allowlist,
+            self.target.plugin_id(),
+            self.target.generation(),
+        )
     }
 
-    /// Create publication access from the current service access while preserving the exact prepared lease.
-    /// 从当前服务访问创建发布访问，并保留精确已准备租约。
-    /// current must share original admission lineage; return only the changed target partition.
-    /// current 必须共享原入场谱系；仅返回变更目标分区的访问。
+    /// Create publication access preserving the same prepared lease and original access lineage.
+    /// 创建发布访问，保留同一已准备租约及原访问谱系。
+    /// current must share the original lineage; return only the exact target partition change or an error.
+    /// current 必须共享原谱系；仅返回精确目标分区变更或错误。
     pub fn publication_access(
         &self,
         current: &McpRuntimeAccess,
     ) -> Result<McpRuntimeAccess, String> {
-        if !Arc::ptr_eq(
-            &self.access.blocked_owner_plugins,
-            &current.blocked_owner_plugins,
-        ) {
-            return Err(String::from(
-                "Target MCP publication belongs to another access lineage.",
-            ));
-        }
-        Ok(current.with_prepared_target_lease(
-            self.target.plugin_id(),
-            self.target.generation(),
-            Arc::clone(&self.lease),
-        ))
+        self.prepared
+            .publication_access(current, self.target.plugin_id(), self.target.generation())
     }
 
     /// Validate every fallible original owner, ready state and actual lease check before the combined Completed write.
@@ -305,121 +293,39 @@ impl TargetPluginMcpRuntime {
                 "Target MCP completion registration belongs to another manager.",
             ));
         }
-        // Original observations and shutdown share this same admission lock.
-        // 原观察及关闭共享此相同入场锁。
-        let admission = self
-            .access
-            .blocked_owner_plugins
-            .lock()
-            .map_err(|_| String::from("Target MCP admission is poisoned."))?;
-        if admission.closed
-            || !admission
-                .managed_globals
-                .get(self.target.plugin_id())
-                .is_some_and(|instances| {
-                    instances
-                        .iter()
-                        .any(|runtime| runtime.same_instance(&self.lease.runtime))
+        // Acquire the original native locks mechanically after proving this exact manager's registration.
+        // 证明此精确管理器注册之后，机械获取原生原锁。
+        let transfer = self.prepared.prepare_transfer(self.target.plugin_id())?;
+        // Target source validation remains explicit here and receives the same guarded actual transport/input pair.
+        // 目标来源校验在此保持显式，并接收相同受守卫保护的实际传输／输入对。
+        transfer.validate_actual_inputs(|transport, actual| {
+            actual
+                .with_target_source(transport, &self.profile, |_, _| ())
+                .map_err(|error| {
+                    format!("Target MCP original launch source is unavailable during handoff: {error:?}.")
                 })
-        {
-            return Err(String::from(
-                "Target MCP original startup registration changed.",
-            ));
-        }
-        // Lock original pending observations before the business gate in the same order as plugin drain.
-        // 按插件排空相同顺序，在业务门前锁定原待处理观察。
-        let pending = self
-            .access
-            .retired_plugin_partitions
-            .lock()
-            .map_err(|_| String::from("Target MCP pending observations are poisoned."))?;
-        if !pending
-            .get(self.target.plugin_id())
-            .is_some_and(|instances| {
-                instances
-                    .iter()
-                    .any(|runtime| runtime.same_instance(&self.lease.runtime))
-            })
-        {
-            return Err(String::from(
-                "Target MCP original pending observation changed.",
-            ));
-        }
-        // Same lease's actual gate cannot be revoked or shut down between validation and confirmation.
-        // 校验与确认之间，相同租约实际业务门不能被撤销或关闭。
-        let business = self
-            .lease
-            .runtime
-            .inner
-            .business_gate
-            .write()
-            .map_err(|_| String::from("Target MCP business gate is poisoned."))?;
-        // Lock actual transport ownership before diagnostics, matching lifecycle map removal and status publication.
-        // 在诊断前锁定实际传输所有权，与生命周期映射移除及状态发布顺序一致。
-        let transports = self
-            .lease
-            .runtime
-            .inner
-            .transports
-            .read()
-            .map_err(|_| String::from("Target MCP actual transports are poisoned."))?;
-        // Readiness cannot turn into a stale observation while the Completed writer holds this participant.
-        // Completed 写入者持有此参与者期间，就绪不能转为过期观测。
-        let snapshot = self
-            .lease
-            .runtime
-            .inner
-            .snapshot
-            .read()
-            .map_err(|_| String::from("Target MCP readiness snapshot is poisoned."))?;
-        if *business != McpBusinessGate::Preparing
-            || self.lease.is_revoked()
-            || self.lease.runtime.shutdown_requested()
-            || self
-                .lease
-                .runtime
-                .inner
-                .registry
-                .enabled_servers()
-                .into_iter()
-                .any(|server| {
-                    !transports.contains_key(&server.id)
-                        || snapshot
-                            .servers
-                            .get(&server.id)
-                            .is_none_or(|state| state.status != McpRuntimeServerStatus::Connected)
-                })
-        {
-            return Err(String::from(
-                "Target MCP original lease is not ready for handoff.",
-            ));
-        }
-        // The same manager registration token and actual admission, pending, business, transport and Ready guards
-        // 相同管理器注册令牌及实际入场、待处理、业务、传输和 Ready 守卫
-        // remain held across this source guard, with UUIDs from these exact original actual runtime and lease owners.
-        // 跨此来源守卫保持持有，UUID 来自这些精确原实际运行时及租约所有者。
+        })?;
+        // Read both nonces from retained actual native owners, never from diagnostic copies.
+        // 从保留的实际原生所有者读取两个随机标识，绝不从诊断副本读取。
+        let (runtime_instance_id, partition_lease_instance_id) = transfer.actual_instance_ids();
+        // The same registration and all native locks remain held while the exact Target authority validates completion.
+        // 精确目标权威校验完成期间，相同注册及全部原生锁保持持有。
         let owner = self
             .target
             .prepare_handoff(
                 manager,
                 transaction,
                 final_catalog,
-                self.lease.runtime.inner.instance_id,
-                self.lease.instance_id,
+                runtime_instance_id,
+                partition_lease_instance_id,
                 &self.authority,
                 registration,
             )
             .map_err(|error| error.to_string())?;
         Ok(TargetPluginMcpHandoffGuard {
             _registration: registration,
-            target: self,
-            _admission: admission,
-            pending,
             owner,
-            business,
-            _transports: transports,
-            _snapshot: snapshot,
-            confirmed: false,
+            transfer,
         })
     }
 }
@@ -454,18 +360,6 @@ impl VulcanPluginNativeMcpHandoffAdapter for TargetPluginMcpRuntime {
     }
 }
 
-impl Drop for TargetPluginMcpRuntime {
-    /// Abandoning unconfirmed control stops the same original; published ownership follows its actual lease.
-    /// 放弃未确认控制停止相同原实例；已发布所有权跟随其实际租约。
-    /// No input or result; asynchronous retirement remains observable separately.
-    /// 无输入及结果；异步退役仍可单独观察。
-    fn drop(&mut self) {
-        if !self.published.load(Ordering::Acquire) {
-            self.lease.runtime.shutdown();
-        }
-    }
-}
-
 // This participant retains actual source, admission, transport and Ready guards inside its borrowed registration scope.
 // 此参与者在其借用注册作用域内保留实际来源、入场、传输及 Ready 守卫。
 impl VulcanPluginActivationTargetHandoffParticipant for TargetPluginMcpHandoffGuard<'_> {
@@ -484,26 +378,8 @@ impl VulcanPluginActivationTargetHandoffParticipant for TargetPluginMcpHandoffGu
         if !self.owner.confirm_completed(confirmation) {
             return;
         }
-        // The same observed original leaves pending cleanup history while managed lifecycle observation survives.
-        // 相同已观察原实例离开待处理清理历史，受管生命周期观察仍存续。
-        self.pending
-            .get_mut(self.target.target.plugin_id())
-            .expect("validated original pending observation")
-            .retain(|runtime| !runtime.same_instance(&self.target.lease.runtime));
-        *self.business = McpBusinessGate::Open;
-        self.target.published.store(true, Ordering::Release);
-        self.confirmed = true;
-    }
-}
-
-impl Drop for TargetPluginMcpHandoffGuard<'_> {
-    /// Unconfirmed completion keeps this same original preparing and retains source/task authority for exact recovery.
-    /// 未确认完成保持相同原实例准备中，并保留来源／任务权威以供精确恢复。
-    /// No input or result; explicit control cancellation or drain alone requests permanent shutdown.
-    /// 无输入及结果；仅显式控制取消或排空请求永久关闭。
-    fn drop(&mut self) {
-        if !self.confirmed {
-            *self.business = McpBusinessGate::Preparing;
-        }
+        // Only this source-specific sealed witness permits the shared infallible actual transfer.
+        // 仅此特定来源封闭见证允许共享无失败实际转交。
+        self.transfer.confirm_after_source();
     }
 }

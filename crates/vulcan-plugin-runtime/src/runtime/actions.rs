@@ -272,12 +272,22 @@ impl VulcanPluginRuntimeManager {
                     &mut execution,
                 )
                 .await?;
-            validate_plugin_action_value(
-                &execution_root,
-                action.output_schema_file.as_deref(),
-                &result,
-                "action output",
-            )?;
+            if let Some(schema_file) = action.output_schema_file.as_deref() {
+                // Every call still checks the actual package path and reads the current regular JSON file.
+                // 每次调用仍检查实际包路径，并读取当前普通 JSON 文件。
+                let schema_path =
+                    canonical_plugin_file(&execution_root, schema_file, "action output")
+                        .map_err(VulcanPluginRuntimeError::new)?;
+                // Parsed contents are the authority; generation identity never substitutes for current file evidence.
+                // 解析内容为权威；代次身份绝不替代当前文件证据。
+                let schema = read_plugin_json_state(&schema_path, "action output")?;
+                // This instance's sole slot saves compilation only and preserves the exact declaration for this result.
+                // 此实例的唯一槽仅节省编译，并为此结果保留精确声明。
+                let validator = runtime.ui_output_schema_validator(schema_path, schema)?;
+                validator.validate(&result).map_err(|error| {
+                    VulcanPluginRuntimeError::new(format!("Invalid action output: {error}"))
+                })?;
+            }
             return Ok(result);
         }
         // The formal call owns its private initialization, sole business operation and physical retirement.

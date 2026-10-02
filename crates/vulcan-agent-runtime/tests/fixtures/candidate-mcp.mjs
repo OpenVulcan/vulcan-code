@@ -32,7 +32,26 @@ async function answer(request) {
       serverInfo: { name: selectedInputs.label, version: '1.0.0' },
     };
   }
-  if (request.method === 'tools/list') return { tools: [] };
+  if (request.method === 'tools/list') {
+    return {
+      tools: mode === 'ready_with_tool' ? [{
+        name: 'original_process',
+        description: 'Return the actual original process identifier and the supplied message.',
+        inputSchema: {
+          type: 'object', properties: { message: { type: 'string' } },
+          required: ['message'], additionalProperties: false,
+        },
+      }] : [],
+    };
+  }
+  if (mode === 'ready_with_tool' && request.method === 'tools/call') {
+    if (request.params.name !== 'original_process') throw new Error('Unexpected declared tool.');
+    return {
+      content: [{ type: 'text', text: JSON.stringify({
+        pid: process.pid, message: request.params.arguments.message,
+      }) }],
+    };
+  }
   throw new Error(`Unexpected candidate request: ${request.method}`);
 }
 

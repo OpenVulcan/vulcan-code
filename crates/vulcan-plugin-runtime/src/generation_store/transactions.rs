@@ -7,7 +7,9 @@ use uuid::Uuid;
 mod effects;
 mod installation;
 mod operations;
+mod owned_reconciliation;
 mod predecessor_abort;
+mod predecessor_handoff;
 mod preparation;
 mod records;
 mod target_hooks;
@@ -18,9 +20,17 @@ pub use effects::{
     VulcanPluginPredecessorDrainIdentity,
 };
 pub use installation::{VulcanPluginInstallationPhase, VulcanPluginInstallationReceipt};
+pub(crate) use predecessor_handoff::{
+    PredecessorHandoffReservation, PredecessorHandoffTransferAuthority,
+};
+pub use predecessor_handoff::{
+    VulcanPluginPredecessorHandoffPhase, VulcanPluginPredecessorHandoffRecord,
+};
 pub use preparation::{
-    VulcanPluginActivationPreparation, VulcanPluginActivationPreparationIntent,
-    VulcanPluginActivationPreparationRecord, VulcanPluginActivationRequestRecord,
+    VulcanPluginActivationPreparation, VulcanPluginActivationPreparationInspection,
+    VulcanPluginActivationPreparationIntent, VulcanPluginActivationPreparationRecord,
+    VulcanPluginActivationPreparationReservation, VulcanPluginActivationRequestRecord,
+    VulcanPluginPreparationPackageCleanupObservation,
 };
 pub(crate) use target_hooks::{TargetHookInitializationAttempt, TargetHookInitializationOwner};
 pub use target_hooks::{
@@ -116,6 +126,45 @@ pub struct VulcanPluginActivationTransactionRecord {
 }
 
 impl VulcanPluginActivationTransactionRecord {
+    /// Compare the entire immutable original body for routing coordination without granting any phase permission.
+    /// 比较完整不可变原请求正文用于路由协调，不授予任何阶段权限。
+    /// `original` is the retained configured body; returns false for any schema, request, selection or preparation change.
+    /// `original` 为保留已配置正文；模式、请求、选择或准备变化均返回假。
+    pub(crate) fn matches_routing_original(&self, original: &Self) -> bool {
+        self.schema_version == original.schema_version
+            && self.request_id == original.request_id
+            && self.predecessor == original.predecessor
+            && self.target == original.target
+            && self.preparation == original.preparation
+    }
+    /// Compare the complete frozen `original`, permitting only its declared prepublication restoration successors.
+    /// 比较完整固定 `original`，仅允许其明确发布前恢复后继阶段。
+    /// Return false for reversed phases, changed schema or any immutable preparation/selection field.
+    /// 对逆向阶段、模式变化或任何不可变准备及选择字段变化返回假。
+    pub(crate) fn matches_predecessor_restoration_original(&self, original: &Self) -> bool {
+        // These explicit edges are the sole phase variation allowed by the original abort/restoration contract.
+        // 这些明确边是原中止及恢复契约允许的唯一阶段变化。
+        let permitted = match original.phase {
+            VulcanPluginActivationTransactionPhase::Prepared => matches!(
+                self.phase,
+                VulcanPluginActivationTransactionPhase::Prepared
+                    | VulcanPluginActivationTransactionPhase::Committing
+                    | VulcanPluginActivationTransactionPhase::Aborted
+            ),
+            VulcanPluginActivationTransactionPhase::Committing => matches!(
+                self.phase,
+                VulcanPluginActivationTransactionPhase::Committing
+                    | VulcanPluginActivationTransactionPhase::Aborted
+            ),
+            _ => false,
+        };
+        // Retain every immutable field, including the entire preparation intent rather than policy alone.
+        // 保留每个不可变字段，包括整个准备意图，而非仅保留策略。
+        let mut expected = original.clone();
+        expected.phase = self.phase;
+        permitted && *self == expected
+    }
+
     /// Borrow the frozen update policy; only declared older formats lack this authority.
     /// 借用固定更新策略；仅声明的旧格式缺少此权威。
     pub fn update_policy(&self) -> Option<&VulcanPluginUpdatePolicy> {
@@ -171,6 +220,13 @@ pub struct VulcanPluginActivationTransaction {
 }
 
 impl VulcanPluginActivationTransaction {
+    /// Observe the actual existing request File allocation without retaining or reopening physical ownership.
+    /// 观测实际既有请求文件分配，不保留或重开物理所有权。
+    /// Returns a weak coordination identity; all execution and durable phase validation remain separate.
+    /// 返回弱协调身份；全部执行及持久阶段校验保持独立。
+    pub(crate) fn routing_request_lease(&self) -> std::sync::Weak<File> {
+        Arc::downgrade(&self._lease)
+    }
     /// Retain the same exclusive original file for validated published target resources; never reopen its lock.
     /// 为已校验的已发布目标资源保留相同原排他文件；绝不重开其锁。
     /// The caller must first validate full published ownership; returns actual shared ownership, not an identity token.
@@ -219,6 +275,13 @@ pub struct VulcanPluginActivationCandidate<'transaction> {
 }
 
 impl VulcanPluginActivationCandidate<'_> {
+    /// Observe this inspected candidate's actual borrowed transaction File for routing coordination only.
+    /// 仅为路由协调观测此已检查候选实际借用事务文件。
+    /// Returns the original weak allocation; a record or UUID cannot manufacture this candidate identity.
+    /// 返回原弱分配；记录或 UUID 不能制造此候选身份。
+    pub(crate) fn routing_request_lease(&self) -> std::sync::Weak<File> {
+        self.transaction.routing_request_lease()
+    }
     /// Borrow the validated user catalog root for exact manager ownership checks.
     /// 借用已校验用户目录根，用于精确管理器归属检查。
     pub(crate) fn catalog_root(&self) -> &Path {

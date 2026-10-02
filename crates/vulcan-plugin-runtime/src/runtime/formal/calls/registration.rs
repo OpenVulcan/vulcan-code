@@ -26,7 +26,7 @@ impl VulcanPluginRuntimeManager {
         }
         if call
             .ownership
-            .retains_published_slot(call.activation.is_some())
+            .retains_published_slot(call.source.is_private())
         {
             self.release_session_slot_with_publication(&call.plugin.id, &publication)?;
         }
@@ -36,6 +36,10 @@ impl VulcanPluginRuntimeManager {
         state.result = Some(Err(VulcanPluginRuntimeError::new(
             "Formal invocation cancelled before startup.",
         )));
+        // This unstarted path has no supervisor; publish its existing retirement before notifying observers.
+        // 此未启动路径没有监督者；先发布既有退役事实，再通知观测者。
+        drop(state);
+        call.finished.notify_waiters();
         Ok(())
     }
 
@@ -77,6 +81,9 @@ impl VulcanPluginRuntimeManager {
         // Retained ownership is derived once from the same intent used for initialization and business.
         // 保留归属从用于初始化及业务的同一意图一次性派生。
         let ownership = input.admission.ownership();
+        // Derive the unique execution source once before registration.
+        // 注册前一次性派生唯一执行来源。
+        let source = input.admission.source();
         // Hold Action capacity before any worker can be queued, even if its observer disappears.
         // 在任何工作者排队前持有 Action 容量，即使其观测者消失。
         let action_work = match &input.admission {
@@ -103,13 +110,28 @@ impl VulcanPluginRuntimeManager {
             let publication = self.state.session_registration_gate.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
             })?;
+            // Ordinary lifecycle effects must not start after another original reserves immutable routing.
+            // 另一原请求预留不可变路由之后，普通生命周期副作用不得启动。
+            // Business registration and its live counters remain available under the same unchanged routes.
+            // 业务注册及其实时计数在相同未变路由内保持可用。
+            match &input.admission {
+                CallAdmission::Lifecycle { .. } => {
+                    self.require_routing_publication_locked(&publication, None)?
+                }
+                CallAdmission::LegacyLifecycle { authority, .. } => self
+                    .require_routing_publication_locked(
+                        &publication,
+                        Some(
+                            crate::runtime::routing::ActivationRoutingOriginal::LegacyMutation(
+                                authority.mutation_guard(),
+                            ),
+                        ),
+                    )?,
+                _ => {}
+            }
             // Explicit activation authority selects its frozen operation package under the publication gate.
             // 显式激活权威在发布门内选择其固定操作插件包。
-            self.validate_formal_authority(
-                &plugin,
-                input.scope,
-                input.admission.activation().map(Arc::as_ref),
-            )?;
+            self.validate_formal_authority(&plugin, input.scope, &source)?;
             if Instant::now() >= input.deadline {
                 return Err(VulcanPluginRuntimeError::new(
                     "Formal invocation deadline expired before admission.",
@@ -132,7 +154,7 @@ impl VulcanPluginRuntimeManager {
             // 生命周期副作用不能与同一持久请求的任何保留工作重叠。
             if let Some(activation) = input.admission.activation()
                 && calls.values().any(|call| {
-                    call.activation.as_ref().is_some_and(|original| {
+                    call.source.activation().is_some_and(|original| {
                         original.request_id == activation.request_id
                             && (!original.operation.is_candidate_probe()
                                 || !activation.operation.is_candidate_probe())
@@ -141,6 +163,20 @@ impl VulcanPluginRuntimeManager {
             {
                 return Err(VulcanPluginRuntimeError::new(
                     "Activation lifecycle conflicts with retained work for the original request.",
+                ));
+            }
+            // The same original guard cannot own overlapping lifecycle effects.
+            // 同一原护栏不能拥有重叠生命周期副作用。
+            if let CallExecutionSource::LegacyLifecycle(authority) = &source
+                && calls.values().any(|call| match &call.source {
+                    CallExecutionSource::LegacyLifecycle(original) => {
+                        original.same_guard(authority)
+                    }
+                    CallExecutionSource::Published | CallExecutionSource::Activation(_) => false,
+                })
+            {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Legacy lifecycle conflicts with retained work for the original guard.",
                 ));
             }
             // Automatic retries observe the same original intent before any new quota or deadline is retained.
@@ -192,7 +228,7 @@ impl VulcanPluginRuntimeManager {
                     "Formal plugin runtime is closing.",
                 ));
             }
-            if ownership.retains_published_slot(input.admission.activation().is_some()) {
+            if ownership.retains_published_slot(source.is_private()) {
                 self.reserve_session_slot_locked(&plugin.id, maximum, &publication)?;
             }
             // Keep the exact invocation record independently of its observer.
@@ -200,11 +236,12 @@ impl VulcanPluginRuntimeManager {
             let call = Arc::new(FormalCall {
                 id: Uuid::new_v4().to_string(),
                 plugin,
-                activation: input.admission.activation().cloned(),
+                source,
                 ownership,
                 input_bytes: AtomicUsize::new(input_bytes),
                 cancelled: AtomicBool::new(false),
                 acknowledged: AtomicBool::new(false),
+                finished: tokio::sync::Notify::new(),
                 state: Mutex::new(CallState {
                     action_work,
                     pending: Some(input),
@@ -240,6 +277,40 @@ impl VulcanPluginRuntimeManager {
             ))
         })?;
         self.ensure_reuse_observer(owner);
+        // A retained legacy callback may start only under its same actual routing original.
+        // 保留旧格式回调仅可在相同实际路由原实例内启动。
+        // Reject before consuming the original pending input, so recovery cannot lose or replay it.
+        // 消费原待处理输入之前拒绝，使恢复不能丢失或重放原输入。
+        let lifecycle_registration =
+            if let CallExecutionSource::LegacyLifecycle(authority) = &call.source {
+                // Keep the gate through pending transfer without adding another physical namespace borrower.
+                // 跨待处理转移保持持门，不添加另一物理命名空间借用者。
+                let registration = self.state.session_registration_gate.lock().map_err(|_| {
+                    VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+                })?;
+                self.require_routing_publication_locked(
+                    &registration,
+                    Some(
+                        crate::runtime::routing::ActivationRoutingOriginal::LegacyMutation(
+                            authority.mutation_guard(),
+                        ),
+                    ),
+                )?;
+                authority.validate(&self.state, &call.plugin, authority.event().scope())?;
+                Some(registration)
+            } else if matches!(&call.ownership, CallOwner::Lifecycle)
+                && matches!(&call.source, CallExecutionSource::Published)
+            {
+                // The same ordinary-effect policy applies before consuming an already-registered input.
+                // 消费已登记输入之前，适用相同普通效果策略。
+                let registration = self.state.session_registration_gate.lock().map_err(|_| {
+                    VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+                })?;
+                self.require_routing_publication_locked(&registration, None)?;
+                Some(registration)
+            } else {
+                None
+            };
         // Taking the original input and publishing supervision form one short atomic ownership transfer.
         // 取走原输入与发布监督状态构成单个短原子归属转移。
         let input = {
@@ -255,6 +326,7 @@ impl VulcanPluginRuntimeManager {
             }
             input
         };
+        drop(lifecycle_registration);
         // This guard records interruption without releasing actual work.
         // 此守卫记录中断，不释放实际工作。
         let supervision = SupervisionGuard {
@@ -275,16 +347,23 @@ impl VulcanPluginRuntimeManager {
             // 此守卫记录中断，不释放实际工作。
             let mut supervision = supervision;
             manager
-                .supervise_formal_call(Arc::clone(&supervisor_owner), supervisor_call, input)
+                .supervise_formal_call(
+                    Arc::clone(&supervisor_owner),
+                    Arc::clone(&supervisor_call),
+                    input,
+                )
                 .await;
             supervision.completed = true;
+            // Wake only after the original supervisor ends, then reap cancelled observers' real retired records.
+            // 仅在原监督者结束后唤醒，再回收已取消观测者的真实退役记录。
+            drop(supervision);
             // If the waiter was dropped, completion itself reclaims only physically retired internal calls.
             // 等待方已被丢弃时，完成处理自身仅回收物理退役的内部调用。
             if let Err(error) = manager.reap_internal_calls(&supervisor_owner) {
                 // A diagnostic-lock failure cannot turn incomplete cleanup into successful retirement.
                 // 诊断锁失败不能把未完成清理变成成功退役。
                 let _ =
-                    manager.record_cleanup_failure(&supervision.call.plugin.id, error.to_string());
+                    manager.record_cleanup_failure(&supervisor_call.plugin.id, error.to_string());
             }
         });
 

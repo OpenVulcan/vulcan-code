@@ -399,6 +399,12 @@ pub(crate) fn test_service_state_with_parent_session(
         automatic_plugin_prewarm: BTreeMap::new(),
         session_runtime_registry: Default::default(),
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
+        pending_local_plugin_updates: Arc::new(Default::default()),
+        pending_legacy_secret_mutations: Arc::new(Default::default()),
+        pending_local_plugin_installs: Arc::new(Default::default()),
+        // Actual original removal resources survive executor failures.
+        // 实际原移除资源跨执行器失败存续。
+        pending_local_plugin_uninstalls: Arc::new(Default::default()),
         project_resource_catalog_registry: Default::default(),
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
@@ -654,6 +660,9 @@ pub(crate) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
     let internal_ai_port = Arc::new(crate::internal_ai::ConfiguredInferenceHostAiPort::new(
         Arc::clone(&configured_inference_service),
     ));
+    // One genuine first registration remains paired with this isolated manager in every bridge clone.
+    // 每个桥克隆中，一次真实首次注册保持配对至此隔离管理器。
+    let vulcan_plugin_native_mcp_host = vulcan_plugin_runtime.register_native_mcp_host_adapter();
     AgentRuntimeBridge {
         provider_configuration,
         public_ai_runtime,
@@ -666,6 +675,7 @@ pub(crate) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
         subagent_catalog: Arc::new(vulcan_task_session::SubagentCatalog::default()),
         luaskills_runtime: None,
         vulcan_plugin_runtime,
+        vulcan_plugin_native_mcp_host,
         extension_generation,
         task_runtime: Arc::new(TaskRuntime::new()),
         question_runtime: Arc::new(QuestionRuntime::new()),

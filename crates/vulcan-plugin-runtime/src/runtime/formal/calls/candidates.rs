@@ -101,6 +101,17 @@ impl VulcanPluginRuntimeManager {
         operation: CandidateOperation,
         deadline: Instant,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        {
+            // Inspect the actual borrowed original before any candidate lifecycle attempt or native preparation.
+            // 在任何候选生命周期尝试或原生准备之前检查实际借用原实例。
+            let registration = self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+            })?;
+            self.require_routing_publication_locked(
+                &registration,
+                Some(crate::runtime::routing::ActivationRoutingOriginal::Candidate(candidate)),
+            )?;
+        }
         // Only an inspected transaction can create the operation's exact unpublished authority.
         // 只有已检查事务可以创建操作的精确未发布权威。
         let authority = ActivationExecution::new(&self.state, candidate, operation)?;
@@ -237,7 +248,7 @@ impl VulcanPluginRuntimeManager {
             .map_err(|_| calls_error())?
             .values()
             .filter(|call| {
-                call.activation.as_ref().is_some_and(|authority| {
+                call.source.activation().is_some_and(|authority| {
                     authority.request_id == request_id && authority.operation.is_candidate()
                 })
             })
@@ -275,7 +286,7 @@ impl VulcanPluginRuntimeManager {
                 .map_err(|_| calls_error())?
                 .values()
                 .filter(|call| {
-                    call.activation.as_ref().is_some_and(|authority| {
+                    call.source.activation().is_some_and(|authority| {
                         authority.request_id == request_id && authority.operation.is_candidate()
                     })
                 })

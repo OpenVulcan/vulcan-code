@@ -264,8 +264,8 @@ async fn immutable_service_update_owner_drain_failure_cannot_restore_enabled_pro
     .await
     .expect_err("open gate must reject drain observation");
     assert!(error.contains("not closed"), "{error}");
-    // Retain the returned catalog while inspecting its exact plugin projection.
-    // 检查精确插件投影时保留返回目录。
+    // Retain the immutable routing catalog independently from cleanup observations.
+    // 保留不可变路由目录，与清理观察结果分开核对。
     let catalog = fixture.runtime.snapshot();
     // Select by stable identity rather than catalog ordering.
     // 按稳定身份选择，不依赖目录顺序。
@@ -274,8 +274,28 @@ async fn immutable_service_update_owner_drain_failure_cannot_restore_enabled_pro
         .get(PLUGIN)
         .expect("original fixture plugin");
     assert!(!plugin.desired_enabled);
+    assert_eq!(plugin.runtime_state, VulcanPluginRuntimeState::Disabled);
+    assert!(
+        fixture
+            .runtime
+            .has_cleanup_diagnostics(PLUGIN)
+            .expect("actual cleanup diagnostics")
+    );
+    // Project the actual diagnostics for UI observation without replacing the routing catalog.
+    // 从实际诊断生成界面观察投影，不替换路由目录。
+    let observed = fixture
+        .runtime
+        .observe_catalog(&catalog)
+        .expect("actual cleanup observation");
+    // Select the observed plugin by the same stable identity.
+    // 按同一稳定身份选择观察投影中的插件。
+    let observed_plugin = observed
+        .plugins
+        .get(PLUGIN)
+        .expect("observed fixture plugin");
+    assert!(!observed_plugin.desired_enabled);
     assert_eq!(
-        plugin.runtime_state,
+        observed_plugin.runtime_state,
         VulcanPluginRuntimeState::DisabledWithCleanupWarning
     );
 }

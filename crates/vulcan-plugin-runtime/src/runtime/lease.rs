@@ -28,18 +28,17 @@ pub(super) fn required_lua_runtime(
     })
 }
 
-/// Decode the original version-one plugin JSON frame in the host result wrapper.
-/// 解码宿主结果封装中的原版本一插件 JSON 帧。
-/// The response contains the exact exported frame; return its business value or protocol/plugin error.
-/// response 包含精确导出帧；返回业务值或协议及插件错误。
-pub(super) fn parse_plugin_result(response: &Value) -> Result<Value, VulcanPluginRuntimeError> {
-    let frame = response
-        .get("result")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin runtime eval returned no JSON frame.")
-        })?;
-    let plugin: Value = serde_json::from_str(frame).map_err(|error| {
+/// Decode the borrowed original version-one exported JSON frame without an intermediate host wrapper.
+/// 借用原版本一导出 JSON 帧直接解码，不创建中间宿主封装。
+/// frame is the exact Core result; return its business subtree or the unchanged protocol/plugin error.
+/// frame 是精确核心结果；返回业务子树或原协议及插件错误。
+pub(super) fn parse_plugin_result(frame: &Value) -> Result<Value, VulcanPluginRuntimeError> {
+    let frame = frame.as_str().ok_or_else(|| {
+        VulcanPluginRuntimeError::new("Vulcan Plugin runtime eval returned no JSON frame.")
+    })?;
+    // Own the parsed frame so its business subtree can be transferred without a deep copy.
+    // 持有解析后的帧，以便直接转移业务子树，避免深复制。
+    let mut plugin: Value = serde_json::from_str(frame).map_err(|error| {
         VulcanPluginRuntimeError::new(format!(
             "Failed to decode Vulcan Plugin JSON frame: {error}"
         ))
@@ -53,7 +52,10 @@ pub(super) fn parse_plugin_result(response: &Value) -> Result<Value, VulcanPlugi
             "Vulcan Plugin request failed: {message}"
         )));
     }
-    Ok(plugin.get("result").cloned().unwrap_or(Value::Null))
+    Ok(plugin
+        .get_mut("result")
+        .map(Value::take)
+        .unwrap_or(Value::Null))
 }
 
 /// Renders one structured or scalar runtime error without losing upstream detail.

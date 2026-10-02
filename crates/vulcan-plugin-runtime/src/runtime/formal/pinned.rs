@@ -266,7 +266,7 @@ pub(super) fn project_business(
     snapshot: &OperationSnapshot,
 ) -> Result<Value, VulcanPluginRuntimeError> {
     let frame = core_result(snapshot)?;
-    super::super::lease::parse_plugin_result(&json!({"result":frame}))
+    super::super::lease::parse_plugin_result(frame)
 }
 
 /// Read the independent closing frame instead of the lifecycle operation's null business baseline.
@@ -283,14 +283,14 @@ pub(super) fn project_closing(
         .ok_or_else(|| VulcanPluginRuntimeError::new("Session closing outcome is not confirmed."))?
         .result()
         .map_err(core_error)?;
-    super::super::lease::parse_plugin_result(&json!({"result":result}))
+    super::super::lease::parse_plugin_result(&result)
 }
 
-/// Decode an already-terminal core result, retaining explicit null and rejecting inconsistent evidence.
-/// 解码已终态核心结果，保留明确空值并拒绝矛盾证据。
-fn core_result(snapshot: &OperationSnapshot) -> Result<Value, VulcanPluginRuntimeError> {
+/// Borrow the result owned by `snapshot`, retaining explicit null and rejecting nonterminal or inconsistent evidence.
+/// 借用 `snapshot` 持有的结果，保留明确空值并拒绝非终态或矛盾证据。
+fn core_result(snapshot: &OperationSnapshot) -> Result<&Value, VulcanPluginRuntimeError> {
     match (&snapshot.value, &snapshot.error) {
-        (Some(value), None) if snapshot.phase.is_terminal() => Ok(value.clone()),
+        (Some(value), None) if snapshot.phase.is_terminal() => Ok(value),
         (None, Some(error)) if snapshot.phase.is_terminal() => Err(core_error(error.clone())),
         _ => Err(VulcanPluginRuntimeError::new(
             "Terminal session operation has inconsistent result evidence.",

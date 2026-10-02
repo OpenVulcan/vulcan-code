@@ -81,7 +81,12 @@ async fn formal_capacity_lifecycle_disable_and_reenable_preserve_callback_order(
         )
         .expect("finish disable");
     assert_eq!(
-        stopped.plugins["hook-plugin"].runtime_state,
+        fixture
+            .manager
+            .observe_catalog(&stopped)
+            .expect("actual disabled cleanup observation")
+            .plugins["hook-plugin"]
+            .runtime_state,
         VulcanPluginRuntimeState::DisabledWithCleanupWarning
     );
     for purpose in [
@@ -139,9 +144,20 @@ async fn formal_capacity_lifecycle_disable_and_reenable_preserve_callback_order(
         VulcanPluginRuntimeState::Enabled
     );
     assert!(
-        enabled.plugins["hook-plugin"].diagnostics.is_empty(),
+        fixture
+            .manager
+            .observe_catalog(&enabled)
+            .expect("actual recovered cleanup observation")
+            .plugins["hook-plugin"]
+            .diagnostics
+            .is_empty(),
         "{:?}",
-        enabled.plugins["hook-plugin"].diagnostics
+        fixture
+            .manager
+            .observe_catalog(&enabled)
+            .expect("actual recovered cleanup observation")
+            .plugins["hook-plugin"]
+            .diagnostics
     );
     assert_eq!(
         enabled.revision.checked_add(1),
@@ -317,7 +333,12 @@ async fn formal_capacity_lifecycle_retained_member_blocks_reactivation_and_diagn
         )
         .expect("publish cleanup warning");
     assert_eq!(
-        disabled.plugins["hook-plugin"].runtime_state,
+        fixture
+            .manager
+            .observe_catalog(&disabled)
+            .expect("actual unfinished capacity cleanup observation")
+            .plugins["hook-plugin"]
+            .runtime_state,
         VulcanPluginRuntimeState::DisabledWithCleanupWarning
     );
     // Preflight rejects the whole release before closing an otherwise healthy original capacity.
@@ -356,7 +377,12 @@ async fn formal_capacity_lifecycle_retained_member_blocks_reactivation_and_diagn
         .clear_cleanup_diagnostics_if_fully_drained("hook-plugin")
         .expect("attempt diagnostic acknowledgement");
     assert_eq!(
-        fixture.manager.snapshot().plugins["hook-plugin"].runtime_state,
+        fixture
+            .manager
+            .observe_catalog(&fixture.manager.snapshot())
+            .expect("actual retained capacity cleanup observation")
+            .plugins["hook-plugin"]
+            .runtime_state,
         VulcanPluginRuntimeState::DisabledWithCleanupWarning
     );
     fixture
@@ -385,7 +411,11 @@ async fn formal_capacity_lifecycle_retained_member_blocks_reactivation_and_diagn
         )
         .expect("publish recovery");
     assert!(
-        fixture.manager.snapshot().plugins["hook-plugin"]
+        fixture
+            .manager
+            .observe_catalog(&fixture.manager.snapshot())
+            .expect("actual completed capacity cleanup observation")
+            .plugins["hook-plugin"]
             .diagnostics
             .is_empty()
     );
@@ -574,7 +604,12 @@ async fn formal_capacity_lifecycle_uninstall_releases_callback_owner() {
     );
     assert!(retained_package.is_dir());
     assert_eq!(
-        fixture.manager.snapshot().plugins["local-plugin"].runtime_state,
+        fixture
+            .manager
+            .observe_catalog(&fixture.manager.snapshot())
+            .expect("actual refused uninstall cleanup observation")
+            .plugins["local-plugin"]
+            .runtime_state,
         VulcanPluginRuntimeState::DisabledWithCleanupWarning
     );
     fixture
@@ -582,7 +617,12 @@ async fn formal_capacity_lifecycle_uninstall_releases_callback_owner() {
         .clear_cleanup_diagnostics_if_fully_drained("local-plugin")
         .expect("preserve pending retirement warning");
     assert_eq!(
-        fixture.manager.snapshot().plugins["local-plugin"].runtime_state,
+        fixture
+            .manager
+            .observe_catalog(&fixture.manager.snapshot())
+            .expect("actual retained uninstall cleanup observation")
+            .plugins["local-plugin"]
+            .runtime_state,
         VulcanPluginRuntimeState::DisabledWithCleanupWarning
     );
     drop(preparing);

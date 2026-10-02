@@ -32,6 +32,14 @@ struct NativeMcpHostIssuer {
 }
 
 impl VulcanPluginRegisteredNativeMcpHostAuthority {
+    /// Compare other with this exact private issuer, without exporting manager or resource authority.
+    /// 比较 other 是否为此精确私有签发者，不导出管理器或资源权威。
+    /// Return true only for clones of the same registration; repeated registration remains distinct.
+    /// 仅同次注册的克隆返回真；重复注册仍为不同签发者。
+    pub fn same_issuer(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.issuer, &other.issuer)
+    }
+
     /// Compare the actual manager state; return false for another or retired manager without new authorization.
     /// 比较实际管理器状态；其他或已退役管理器返回假值，不产生新授权。
     pub fn matches_manager(&self, manager: &VulcanPluginRuntimeManager) -> bool {
@@ -54,24 +62,12 @@ pub struct VulcanPluginPreparedMcpTarget {
 /// One original target resource owner never reselects inputs from public discovery.
 /// 单个原目标资源所有者绝不从公开发现重选输入。
 struct PreparedTargetMcpResources {
-    /// Original source fixes the explicitly registered native host issuer, not arbitrary raw proof values.
-    /// 原来源固定显式注册原生宿主签发者，而非任意裸证明值。
-    issuer: Arc<NativeMcpHostIssuer>,
-    /// Full original selection includes configuration, permission and credential revisions.
-    /// 完整原选择包含配置、权限及凭据修订。
-    target: VulcanPluginActivation,
+    /// The same original control coordinates completion without owning these physical resources.
+    /// 相同原控制协调完成，不拥有这些物理资源。
+    control: VulcanPluginMcpTargetControl,
     /// Exact actual descriptor retains package and credential pins.
     /// 精确实际描述符保留插件包及凭据固定句柄。
     plugin: VulcanPluginDescriptor,
-    /// Original durable request identity is diagnostic and does not replace its file lock.
-    /// 原持久请求身份用于诊断，不替代其文件锁。
-    request_id: Uuid,
-    /// Only the creating manager may validate this target authority.
-    /// 仅创建管理器可校验此目标权威。
-    manager_id: String,
-    /// Same original lock Arc can be released at confirmed handoff while transport resources remain owned.
-    /// 确认交接时可释放同一原锁 Arc，传输资源仍保持自有。
-    source: Mutex<TargetMcpSourceState>,
     /// Exact resolved launchers belong to this selected target.
     /// 精确已解析启动器属于此已选目标。
     stdio_launchers: BTreeMap<String, VulcanPluginMcpStdioLaunchSpec>,
@@ -80,11 +76,77 @@ struct PreparedTargetMcpResources {
     _environment: Option<std::fs::File>,
 }
 
+/// Original completion control retains request authority until confirmation, then only historical identity.
+/// 原完成控制在确认前保留请求权威，确认后仅保留历史身份。
+/// Cloning preserves the unfinished request and closed catalog, but never the physical preparation object or environment File.
+/// 克隆保留未完成请求及关闭目录，但绝不保留物理准备对象或环境 File。
+#[derive(Clone)]
+pub struct VulcanPluginMcpTargetControl {
+    /// Shared original state has no link back to physical preparation resources.
+    /// 共享原状态没有返回物理准备资源的链接。
+    inner: Arc<TargetMcpControlValues>,
+}
+
+/// Pure target source has no request File, physical pin, execution owner or reverse link to completion control.
+/// 纯目标来源不具有请求 File、物理固定、执行所有者或指向完成控制的反向链接。
+/// Native producers must bind it before dispatch and independently prove the same actual input and transport.
+/// 原生生产者必须在派发前绑定它，并独立证明同一实际输入及传输。
+#[derive(Clone)]
+pub struct VulcanPluginTargetMcpProfile {
+    /// Shared original source identity contains only immutable values and the weak manager issuer.
+    /// 共享原来源身份仅包含不可变值及弱管理器签发者。
+    inner: Arc<TargetMcpProfileValues>,
+}
+
+/// Frozen source values are neither serialized nor formatted, and grant no startup or restoration on their own.
+/// 固定来源值不序列化或格式化，自身不授予启动或恢复。
+struct TargetMcpProfileValues {
+    /// Original source fixes the explicitly registered native host issuer, not arbitrary raw proof values.
+    /// 原来源固定显式注册原生宿主签发者，而非任意裸证明值。
+    issuer: Arc<NativeMcpHostIssuer>,
+    /// Full original selection includes configuration, permission and credential revisions.
+    /// 完整原选择包含配置、权限及凭据修订。
+    target: VulcanPluginActivation,
+    /// Original non-secret plugin identity does not retain a full descriptor.
+    /// 原非秘密插件身份不保留完整描述符。
+    plugin_id: String,
+    /// Original route generation is diagnostic and never replaces source evidence.
+    /// 原路由代次用于诊断，绝不替代来源证据。
+    generation: u64,
+    /// Original durable request identity is diagnostic and does not replace its file lock.
+    /// 原持久请求身份用于诊断，不替代其文件锁。
+    request_id: Uuid,
+    /// Only the creating manager may validate this target authority.
+    /// 仅创建管理器可校验此目标权威。
+    manager_id: String,
+}
+
+impl VulcanPluginTargetMcpProfile {
+    /// Compare other with this original opaque allocation; equal request or configuration values are insufficient.
+    /// 比较 other 是否为此原不透明分配；相等请求或配置值不足以成立。
+    /// Return true only for clones of this same source without exposing its protected values.
+    /// 仅此同一来源的克隆返回真，不暴露其受保护值。
+    pub fn same_source(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+/// Logical completion control holds pure identity separately from unfinished strong request authority.
+/// 逻辑完成控制将纯身份与未完成强请求权威分开持有。
+struct TargetMcpControlValues {
+    /// This same source is fixed once before native dispatch and never points back to the control.
+    /// 此同一来源在原生派发前仅固定一次，绝不指回控制。
+    profile: VulcanPluginTargetMcpProfile,
+    /// Same original lock Arc can be released at confirmed handoff while transport resources remain owned.
+    /// 确认交接时可释放同一原锁 Arc，传输资源仍保持自有。
+    source: Mutex<TargetMcpSourceState>,
+}
+
 /// The sole source state holds original request authority and persistent actual-attempt evidence together.
 /// 唯一来源状态共同持有原请求权威及持久实际尝试证据。
 struct TargetMcpSourceState {
-    /// Actual owner retains the exact closed catalog until confirmed transfer or true resource retirement.
-    /// 实际所有者保留精确关闭目录，直至确认转交或真实资源退役。
+    /// Original control retains the exact closed catalog until confirmed transfer or its last source owner drops.
+    /// 原控制保留精确关闭目录，直至确认转交或最后一个来源所有者销毁。
     staged: Option<Arc<VulcanPluginCatalogSnapshot>>,
     /// Same actual original request retention can end at confirmed handoff.
     /// 相同实际原请求保留可在确认交接时结束。
@@ -131,14 +193,71 @@ impl fmt::Debug for VulcanPluginPreparedMcpTarget {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("VulcanPluginPreparedMcpTarget")
-            .field("plugin_id", &self.inner.plugin.id)
-            .field("request_id", &self.inner.request_id)
-            .field("generation", &self.inner.plugin.generation)
+            .field("plugin_id", &self.plugin_id())
+            .field("request_id", &self.request_id())
+            .field("generation", &self.generation())
             .finish_non_exhaustive()
     }
 }
 
 impl VulcanPluginPreparedMcpTarget {
+    /// Clone this exact original control without extending physical preparation ownership.
+    /// 克隆此精确原控制，不延长物理准备所有权。
+    /// No inputs; the returned control retains the original request and closed stage only until confirmed completion.
+    /// 无输入；返回控制仅在确认完成前保留原请求及关闭暂存。
+    pub fn control(&self) -> VulcanPluginMcpTargetControl {
+        self.inner.control.clone()
+    }
+
+    /// Borrow original server declarations; no input and no latest-selection lookup.
+    /// 借用原服务器声明；无输入，不查询最新选择。
+    pub fn servers(&self) -> &[VulcanPluginMcpServerDescriptor] {
+        &self.inner.plugin.mcp_servers
+    }
+
+    /// Borrow the resolved launcher for server_id; return an explicit error for undeclared stdio IDs.
+    /// 借用 server_id 已解析启动器；未声明的标准输入输出标识返回明确错误。
+    pub fn stdio_launcher(
+        &self,
+        server_id: &str,
+    ) -> Result<&VulcanPluginMcpStdioLaunchSpec, VulcanPluginRuntimeError> {
+        self.inner.stdio_launchers.get(server_id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new("Selected target has no prepared stdio launcher.")
+        })
+    }
+}
+
+impl std::ops::Deref for VulcanPluginPreparedMcpTarget {
+    /// Preserve original control operations without a second state or reverse physical ownership link.
+    /// 保留原控制操作，不增加第二份状态或反向物理所有权链接。
+    type Target = VulcanPluginMcpTargetControl;
+
+    /// Borrow this preparation's sole original control; no inputs or resource transfer.
+    /// 借用此准备的唯一原控制；无输入或资源转交。
+    fn deref(&self) -> &Self::Target {
+        &self.inner.control
+    }
+}
+
+impl VulcanPluginMcpTargetControl {
+    /// Clone the original pure source for authority without sharing unfinished request or physical ownership.
+    /// 为 authority 克隆原纯来源，不共享未完成请求或物理所有权。
+    /// Return the same profile only for its actual registered issuer; foreign or retired issuers are rejected.
+    /// 仅其实际注册签发者返回同一画像；拒绝外来或已退役签发者。
+    pub fn host_profile(
+        &self,
+        authority: &VulcanPluginRegisteredNativeMcpHostAuthority,
+    ) -> Result<VulcanPluginTargetMcpProfile, VulcanPluginRuntimeError> {
+        if !Arc::ptr_eq(&authority.issuer, &self.inner.profile.inner.issuer)
+            || authority.issuer.manager.upgrade().is_none()
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Target MCP source requires its original live registered host.",
+            ));
+        }
+        Ok(self.inner.profile.clone())
+    }
+
     /// Validate first dispatch against the original transaction and exact current staged Arc under registration.
     /// 在注册门内按原事务及精确当前暂存 Arc 校验首次派发。
     /// manager and transaction are original owners; returned guard must end before network/readiness waiting.
@@ -152,7 +271,7 @@ impl VulcanPluginPreparedMcpTarget {
         authority: &VulcanPluginRegisteredNativeMcpHostAuthority,
     ) -> Result<VulcanPluginMcpTargetStartGuard<'a>, VulcanPluginRuntimeError> {
         if !authority.matches_manager(manager)
-            || !Arc::ptr_eq(&authority.issuer, &self.inner.issuer)
+            || !Arc::ptr_eq(&authority.issuer, &self.inner.profile.inner.issuer)
         {
             return Err(VulcanPluginRuntimeError::new(
                 "Target MCP startup requires its original registered native host.",
@@ -185,9 +304,9 @@ impl VulcanPluginPreparedMcpTarget {
             .read()
             .map_err(|_| VulcanPluginRuntimeError::new("Target MCP catalog is poisoned."))?;
         if !Arc::ptr_eq(&current, &staged)
-            || manager.state.manager_id != self.inner.manager_id
+            || manager.state.manager_id != self.inner.profile.inner.manager_id
             || transaction.record().request_id() != self.request_id()
-            || transaction.record().target() != &self.inner.target
+            || transaction.record().target() != &self.inner.profile.inner.target
         {
             return Err(VulcanPluginRuntimeError::new(
                 "Original MCP target stage changed before dispatch.",
@@ -222,7 +341,7 @@ impl VulcanPluginPreparedMcpTarget {
         // 此来源锁结束后派发才取得后端入场，消除与交接的反向等待。
         drop(source);
         Ok(VulcanPluginMcpTargetStartGuard {
-            issuer: &self.inner.issuer,
+            issuer: &self.inner.profile.inner.issuer,
             _registration: registration,
             source: &self.inner.source,
         })
@@ -230,32 +349,17 @@ impl VulcanPluginPreparedMcpTarget {
     /// Borrow the exact plugin identity; no input and no resource transfer.
     /// 借用精确插件身份；无输入，不转交资源。
     pub fn plugin_id(&self) -> &str {
-        &self.inner.plugin.id
+        &self.inner.profile.inner.plugin_id
     }
     /// Copy the original request identity; no input and no new lease acquisition.
     /// 复制原请求身份；无输入，不获取新租约。
     pub fn request_id(&self) -> Uuid {
-        self.inner.request_id
+        self.inner.profile.inner.request_id
     }
     /// Return the actual nonzero route generation; no input and no route mutation.
     /// 返回实际非零路由代次；无输入，不变更路由。
     pub fn generation(&self) -> u64 {
-        self.inner.plugin.generation
-    }
-    /// Borrow original server declarations; no input and no latest-selection lookup.
-    /// 借用原服务器声明；无输入，不查询最新选择。
-    pub fn servers(&self) -> &[VulcanPluginMcpServerDescriptor] {
-        &self.inner.plugin.mcp_servers
-    }
-    /// Borrow the resolved launcher for server_id; return an explicit error for undeclared stdio IDs.
-    /// 借用 server_id 已解析启动器；未声明的标准输入输出标识返回明确错误。
-    pub fn stdio_launcher(
-        &self,
-        server_id: &str,
-    ) -> Result<&VulcanPluginMcpStdioLaunchSpec, VulcanPluginRuntimeError> {
-        self.inner.stdio_launchers.get(server_id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Selected target has no prepared stdio launcher.")
-        })
+        self.inner.profile.inner.generation
     }
     /// Validate original transaction, full selected manifest and exact current final Arc before retaining its transfer guard.
     /// 保留转交守卫前校验原事务、完整已选清单及精确当前最终 Arc。
@@ -281,6 +385,12 @@ impl VulcanPluginPreparedMcpTarget {
     ///     target.prepare_handoff(manager, transaction, catalog, runtime, lease).unwrap();
     /// }
     /// ```
+    // All existing inputs bind one atomic handoff authorization, including the original registration guard's lifetime.
+    // 全部既有输入绑定单个原子转交授权，包括原注册守卫的生命周期。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The public handoff validates the original manager, transaction, catalog, two instance identities, issuer and registration guard together."
+    )]
     pub fn prepare_handoff<'a>(
         &'a self,
         manager: &VulcanPluginRuntimeManager,
@@ -292,7 +402,7 @@ impl VulcanPluginPreparedMcpTarget {
         registration: &'a VulcanPluginActivationTargetRegistration<'a>,
     ) -> Result<VulcanPluginMcpTargetHandoffGuard<'a>, VulcanPluginRuntimeError> {
         if !authority.matches_manager(manager)
-            || !Arc::ptr_eq(&authority.issuer, &self.inner.issuer)
+            || !Arc::ptr_eq(&authority.issuer, &self.inner.profile.inner.issuer)
             || !registration.matches_manager(manager)
         {
             return Err(VulcanPluginRuntimeError::new(
@@ -320,15 +430,15 @@ impl VulcanPluginPreparedMcpTarget {
             .plugins
             .get(self.plugin_id())
             .ok_or_else(|| VulcanPluginRuntimeError::new("Final MCP target is missing."))?;
-        if self.inner.manager_id != manager.state.manager_id
+        if self.inner.profile.inner.manager_id != manager.state.manager_id
             || !Arc::ptr_eq(&current, final_catalog)
             || transaction.record().request_id() != self.request_id()
-            || transaction.record().target() != &self.inner.target
+            || transaction.record().target() != &self.inner.profile.inner.target
             || plugin.generation != self.generation()
             || plugin.runtime_state != VulcanPluginRuntimeState::Enabled
             || !plugin
                 .managed_package()
-                .is_some_and(|package| package.matches_activation(&self.inner.target))
+                .is_some_and(|package| package.matches_activation(&self.inner.profile.inner.target))
         {
             return Err(VulcanPluginRuntimeError::new(
                 "Original MCP target handoff authority changed.",
@@ -396,7 +506,7 @@ impl VulcanPluginPreparedMcpTarget {
         authority: &VulcanPluginRegisteredNativeMcpHostAuthority,
         succeeded: bool,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        if !Arc::ptr_eq(&authority.issuer, &self.inner.issuer)
+        if !Arc::ptr_eq(&authority.issuer, &self.inner.profile.inner.issuer)
             || authority.issuer.manager.upgrade().is_none()
         {
             return Err(VulcanPluginRuntimeError::new(
@@ -610,19 +720,35 @@ impl VulcanPluginRuntimeManager {
                 stdio_launchers.insert(server.id.clone(), resolved);
             }
         }
-        Ok(VulcanPluginPreparedMcpTarget {
-            inner: Arc::new(PreparedTargetMcpResources {
+        // Pure source is allocated once and never holds the unfinished request, catalog or physical preparation.
+        // 纯来源仅分配一次，绝不持有未完成请求、目录或物理准备。
+        let profile = VulcanPluginTargetMcpProfile {
+            inner: Arc::new(TargetMcpProfileValues {
                 issuer: Arc::clone(&authority.issuer),
                 target,
-                plugin,
+                plugin_id: plugin.id.clone(),
+                generation: plugin.generation,
                 request_id: transaction.record().request_id(),
                 manager_id: self.state.manager_id.clone(),
+            }),
+        };
+        // Control owns only the original unfinished source; native preparation owns package and environment pins.
+        // 控制仅拥有原未完成来源；原生准备拥有插件包及环境固定句柄。
+        let control = VulcanPluginMcpTargetControl {
+            inner: Arc::new(TargetMcpControlValues {
+                profile,
                 source: Mutex::new(TargetMcpSourceState {
                     staged: Some(Arc::clone(staged)),
                     request: Some(transaction.retain_published_target_owner()),
                     initialization: Some(initialization),
                     attempt: None,
                 }),
+            }),
+        };
+        Ok(VulcanPluginPreparedMcpTarget {
+            inner: Arc::new(PreparedTargetMcpResources {
+                control,
+                plugin,
                 stdio_launchers,
                 _environment: environment,
             }),

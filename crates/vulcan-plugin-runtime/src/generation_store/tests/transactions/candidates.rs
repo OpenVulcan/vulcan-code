@@ -352,6 +352,9 @@ fn candidate_inspection_rejects_committing_published_completed_and_aborted_reque
             .code,
         Code::Conflict
     );
+    // Release the actual confirmed original request before a different UUID may replace its current index.
+    // 另一 UUID 替换当前索引之前，释放实际已确认原请求。
+    drop(resumed);
     // A successor with the same package tests phase authority independently from content identity.
     // 使用同包后继，独立于内容身份检查阶段权威。
     let mut successor = store

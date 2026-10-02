@@ -3,6 +3,7 @@
 
 use super::*;
 mod callbacks;
+mod private_owner;
 mod publication;
 mod restoration_boundary;
 mod restore;

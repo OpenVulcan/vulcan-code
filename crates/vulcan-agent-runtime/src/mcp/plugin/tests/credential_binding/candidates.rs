@@ -5,7 +5,7 @@ use super::*;
 use crate::mcp::candidate_global_mcp_server_configs;
 use vulcan_plugin_runtime::{VulcanPluginConfigurationSelection, VulcanPluginStoreErrorCode};
 
-mod runtime;
+pub(in crate::mcp) mod runtime;
 
 /// Every candidate transport reads its selected values, keeps the request lock, and fails without revision fallback.
 /// 每个候选传输读取选定值、保留请求锁，并在失败时禁止修订回退。

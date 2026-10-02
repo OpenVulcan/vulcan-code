@@ -148,7 +148,7 @@ fn formal_candidate_effects_enable_timeout_retains_native_authority() {
         // Capture only a weak handle to the original executing authority.
         // 仅捕获原执行权威的弱句柄。
         let call = fixture.admitted().await;
-        Arc::downgrade(call.activation.as_ref().expect("original enable authority"))
+        Arc::downgrade(call.source.activation().expect("original enable authority"))
     });
     assert_eq!(
         store
@@ -516,7 +516,7 @@ fn formal_candidate_effects_probe_interruption_is_durable() {
             // Preserve weak identity before releasing the controlled native worker.
             // 释放受控原生工作者前保留弱身份。
             let call = fixture.admitted().await;
-            Arc::downgrade(call.activation.as_ref().expect("original candidate authority"))
+            Arc::downgrade(call.source.activation().expect("original candidate authority"))
         });
         assert_eq!(
             store

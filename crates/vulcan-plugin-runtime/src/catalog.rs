@@ -477,16 +477,17 @@ pub fn load_vulcan_plugin_catalog(
     enabled_plugin_ids: &BTreeSet<String>,
     revision: u64,
 ) -> VulcanPluginCatalogSnapshot {
-    let mut bundled = discover_plugin_root_catalog(
+    // Root discovery remains independent from the shared precedence and surface rebuilding primitive.
+    // 根发现保持独立于共享优先级及表面重建原语。
+    let bundled = discover_plugin_root_catalog(
         bundled_root,
         disabled_plugin_ids,
         enabled_plugin_ids,
         revision,
     );
-    for plugin in bundled.plugins.values_mut() {
-        plugin.origin = VulcanPluginPackageOrigin::Bundled;
-    }
-    let mut user = user_root.map_or_else(
+    // Explicit absence of a user root preserves the ordinary empty user projection.
+    // 用户根显式缺失保留普通空用户投影。
+    let user = user_root.map_or_else(
         || {
             let mut snapshot = VulcanPluginCatalogSnapshot::empty(bundled.root.clone());
             snapshot.revision = revision;
@@ -501,6 +502,93 @@ pub fn load_vulcan_plugin_catalog(
             )
         },
     );
+    merge_catalog_roots(bundled, user, user_root)
+}
+
+/// Load both real roots while one explicit user plugin retains its actual legacy namespace owner.
+/// 一个显式用户插件保留实际旧格式命名空间所有者期间，加载两个真实根。
+/// Root/policy/revision parameters preserve ordinary ordering; plugin_id and guard identify the sole held namespace.
+/// 根／策略／修订参数保留普通顺序；plugin_id 和 guard 标识唯一被持有命名空间。
+/// Return the shared merged snapshot or the original classified guard/target failure, without ordinary-read fallback.
+/// 返回共享合并快照或原带类别守卫／目标失败，不使用普通读取备用路径。
+pub(crate) fn load_vulcan_plugin_catalog_with_legacy_mutation(
+    bundled_root: &Path,
+    user_root: &Path,
+    disabled_plugin_ids: &BTreeSet<String>,
+    enabled_plugin_ids: &BTreeSet<String>,
+    revision: u64,
+    plugin_id: &str,
+    guard: &crate::VulcanPluginLegacyMutationGuard,
+) -> crate::VulcanPluginStoreResult<VulcanPluginCatalogSnapshot> {
+    // Target validation completes before any successful snapshot can conceal the guarded selection error.
+    // 任何成功快照可能隐藏守卫选择错误之前，目标校验完成。
+    let user = generations::load_user_catalog_with_legacy_mutation(
+        user_root,
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+        revision,
+        plugin_id,
+        guard,
+    )?;
+    // Bundled discovery retains its existing precedence, diagnostics and ordinary physical source.
+    // 内置发现保留既有优先级、诊断及普通物理来源。
+    let bundled = discover_plugin_root_catalog(
+        bundled_root,
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+        revision,
+    );
+    Ok(merge_catalog_roots(bundled, user, Some(user_root)))
+}
+
+/// Load both actual roots through the original managed-removal owner without reopening its namespace.
+/// 通过原受管移除所有者加载两个实际根，不重开其命名空间。
+/// Roots/policies/revision retain ordinary semantics; original authorizes only its exact already-published tombstone.
+/// 根／策略／修订保留普通语义；original 仅授权其精确已发布停用记录。
+/// Returns the shared complete projection or a classified original failure, never an ordinary target read fallback.
+/// 返回共享完整投影或带类别原失败，绝不使用普通目标读取备用路径。
+pub(crate) fn load_vulcan_plugin_catalog_with_deactivation(
+    bundled_root: &Path,
+    user_root: &Path,
+    disabled_plugin_ids: &BTreeSet<String>,
+    enabled_plugin_ids: &BTreeSet<String>,
+    revision: u64,
+    original: &crate::VulcanPluginDeactivationReservation,
+) -> crate::VulcanPluginStoreResult<VulcanPluginCatalogSnapshot> {
+    // The target is validated before bundled discovery can conceal an original selection conflict.
+    // 目标在内置发现可能隐藏原选择冲突之前被校验。
+    let user = generations::load_user_catalog_with_deactivation(
+        user_root,
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+        revision,
+        original,
+    )?;
+    // Keep the existing bundled precedence and sole merged contribution builder.
+    // 保持既有内置优先顺序及唯一合并贡献构建器。
+    let bundled = discover_plugin_root_catalog(
+        bundled_root,
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+        revision,
+    );
+    Ok(merge_catalog_roots(bundled, user, Some(user_root)))
+}
+
+/// Merge already discovered roots with the sole bundled-first precedence and rebuild every contribution surface.
+/// 使用唯一内置优先顺序合并已发现根，并重建每份贡献表面。
+/// Inputs retain real selected leases; user_root supplies only the ordinary projected root, not selection authority.
+/// 输入保留真实选定租约；user_root 仅提供普通投影根，而非选择权威。
+/// Return the complete catalog with unchanged shadowing diagnostics and origin assignments.
+/// 返回完整目录，保留未变遮蔽诊断及来源赋值。
+fn merge_catalog_roots(
+    mut bundled: VulcanPluginCatalogSnapshot,
+    mut user: VulcanPluginCatalogSnapshot,
+    user_root: Option<&Path>,
+) -> VulcanPluginCatalogSnapshot {
+    for plugin in bundled.plugins.values_mut() {
+        plugin.origin = VulcanPluginPackageOrigin::Bundled;
+    }
     for plugin in user.plugins.values_mut() {
         plugin.origin = VulcanPluginPackageOrigin::UserInstalled;
     }
@@ -2389,12 +2477,22 @@ pub(crate) fn validate_json_schema_instance(
     instance: &Value,
     label: &str,
 ) -> Result<(), String> {
-    reject_external_schema_references(schema)?;
-    let validator = jsonschema::validator_for(schema)
-        .map_err(|error| format!("Invalid {label} JSON Schema: {error}"))?;
-    validator
+    compile_json_schema(schema, label)?
         .validate(instance)
         .map_err(|error| format!("Invalid {label}: {error}"))
+}
+
+/// Compile the exact self-contained schema with the existing validator settings.
+/// 使用既有校验器设置编译精确的自包含 Schema。
+/// schema owns the declaration and label identifies compilation errors; return its validator or the original error.
+/// schema 持有声明，label 标识编译错误；返回其校验器或原错误。
+pub(crate) fn compile_json_schema(
+    schema: &Value,
+    label: &str,
+) -> Result<jsonschema::Validator, String> {
+    reject_external_schema_references(schema)?;
+    jsonschema::validator_for(schema)
+        .map_err(|error| format!("Invalid {label} JSON Schema: {error}"))
 }
 
 /// Rejects external JSON Schema references while preserving reference-shaped annotation data.

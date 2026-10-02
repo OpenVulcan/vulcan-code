@@ -29,6 +29,43 @@ pub struct ExtensionGeneration {
 }
 
 impl ExtensionGeneration {
+    /// Replace one original full extension pointer and record its same-instance commit in the adjacent tail.
+    /// 替换单个原完整扩展指针，并在相邻尾段记录其同实例提交。
+    /// slot is the host's actual publication slot, expected is its captured original, and next is its complete successor.
+    /// slot 为宿主实际发布槽，expected 为捕获的原值，next 为其完整后继。
+    /// on_commit must be an infallible synchronous ownership transfer without I/O, waits or plugin callbacks.
+    /// on_commit 须为不可失败的同步所有权转交，不执行输入输出、等待或插件回调。
+    /// Returns the actual committed Arc; pointer or revision conflicts fail before either mutation or confirmation.
+    /// 返回实际已提交 Arc；指针或修订冲突在修改及确认之前失败。
+    pub fn publish_prepared(
+        slot: &mut Arc<Self>,
+        expected: &Arc<Self>,
+        next: Arc<Self>,
+        on_commit: impl FnOnce(&Arc<Self>),
+    ) -> Result<Arc<Self>, String> {
+        if !Arc::ptr_eq(slot, expected) {
+            return Err(String::from(
+                "The original extension publication pointer changed.",
+            ));
+        }
+        // The actual original pointer supplies the sole successor revision used by this replacement.
+        // 此替换使用的唯一后继修订由实际原指针提供。
+        let revision = expected
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| String::from("Extension generation revision exhausted."))?;
+        if next.revision != revision {
+            return Err(String::from(
+                "The prepared extension revision is not the original successor.",
+            ));
+        }
+        // All fallible checks precede this single write; expected keeps the displaced resources alive through confirmation.
+        // 全部可失败校验先于此单次写入；expected 使被替换资源跨确认存续。
+        *slot = Arc::clone(&next);
+        on_commit(&next);
+        Ok(next)
+    }
+
     /// Builds one immutable extension generation from an already prepared catalog and MCP access surface.
     /// 根据已经准备好的目录与 MCP 访问面构建一个不可变扩展代次。
     ///

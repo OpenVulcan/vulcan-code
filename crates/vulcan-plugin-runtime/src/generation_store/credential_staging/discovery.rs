@@ -59,6 +59,18 @@ impl VulcanPluginGenerationStore {
         // This is the same namespace lock used when a first inventory or final checkpoint is published.
         // 此命名空间锁与首份清单或最终检查点发布时使用的相同。
         let _namespace = self.namespace_lock(plugin_id, true)?;
+        self.credential_revisions_locked(plugin_id)
+    }
+
+    /// Enumerate the same canonical journal filenames while an actual caller already retains this plugin namespace.
+    /// 实际调用方已保留此插件命名空间期间，枚举相同规范日志文件名。
+    /// plugin_id is validated by that retained fence; returns exact final revision IDs without reacquiring a lock or accessing secrets.
+    /// plugin_id 由保留屏障校验；返回精确最终修订标识，不重新取得锁或访问秘密。
+    pub(in crate::generation_store) fn credential_revisions_locked(
+        &self,
+        plugin_id: &str,
+    ) -> Result<BTreeSet<VulcanPluginCredentialRevision>> {
+        self.validate_layout()?;
         // Absence is permitted only for an optional inventory directory that has not been created.
         // 仅尚未创建的可选清单目录允许缺失。
         let Some(directory) = self.credential_directory(plugin_id)? else {
@@ -76,6 +88,17 @@ impl VulcanPluginGenerationStore {
                 .map_err(|error| Error::io("Read credential revision entry", error))?
                 .path();
             if path.extension() != Some(std::ffi::OsStr::new("json")) {
+                // Case aliases are real journals on case-insensitive filesystems and must never disappear from a complete census.
+                // 大小写别名在大小写不敏感文件系统上为实际日志，绝不能从完整清单中消失。
+                if path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+                {
+                    return Err(Error::invalid(
+                        "Credential revision filename has a noncanonical JSON extension.",
+                    ));
+                }
                 continue;
             }
             if !files::exists(&path, false)? {

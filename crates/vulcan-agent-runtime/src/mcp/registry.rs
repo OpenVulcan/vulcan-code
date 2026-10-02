@@ -4,7 +4,11 @@
 use crate::mcp::config::McpServerConfig;
 use crate::mcp::runtime::{McpRuntimeDiscoveryReport, McpRuntimeOverview};
 use std::sync::Arc;
-use vulcan_mcp_runtime::{McpOAuthSession, McpTransport};
+use vulcan_mcp_runtime::McpOAuthSession;
+
+mod launch_inputs;
+pub(crate) use launch_inputs::{McpActualLaunchInputLease, McpPluginLaunchSource};
+pub(crate) use launch_inputs::{McpLaunchInputCaptureError, McpLaunchedTransport};
 
 /// Runtime registry of configured MCP servers.
 /// 已配置 MCP 服务器的运行时注册表。
@@ -99,7 +103,8 @@ impl McpServerRegistry {
         server_id: &str,
         auth_session: Option<Arc<McpOAuthSession>>,
         resources: vulcan_mcp_runtime::McpTransportResources,
-    ) -> Result<Arc<dyn McpTransport>, String> {
+        source: launch_inputs::McpPluginLaunchSource,
+    ) -> Result<McpLaunchedTransport, String> {
         let server = self
             .server_by_id(server_id)
             .ok_or_else(|| format!("未找到 MCP 服务器 `{server_id}`。"))?;
@@ -109,8 +114,7 @@ impl McpServerRegistry {
         }
 
         let launch_spec = server.launch_spec()?;
-        launch_spec
-            .launch_with_resources(auth_session, resources)
+        McpLaunchedTransport::launch(launch_spec, auth_session, resources, source)
             .await
             .map_err(|error| server.launch_error_text(error))
     }

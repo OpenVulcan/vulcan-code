@@ -52,7 +52,10 @@ fn lifecycle_rollback_preserves_cleanup_diagnostic_for_active_session() {
             )
             .expect("finish rollback fixture transition");
         assert!(
-            rolled_back.plugins["idle-plugin"]
+            manager
+                .observe_catalog(&rolled_back)
+                .expect("actual retained rollback diagnostic projection")
+                .plugins["idle-plugin"]
                 .diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic == "rollback cleanup fixture")
@@ -64,7 +67,10 @@ fn lifecycle_rollback_preserves_cleanup_diagnostic_for_active_session() {
             .expect("drain rollback fixture session");
         assert_eq!(report.closed_sessions, 1);
         assert!(
-            !manager.snapshot().plugins["idle-plugin"]
+            !manager
+                .observe_catalog(&manager.snapshot())
+                .expect("actual completed rollback diagnostic projection")
+                .plugins["idle-plugin"]
                 .diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic == "rollback cleanup fixture")

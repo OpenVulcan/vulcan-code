@@ -3,11 +3,14 @@
 
 use super::*;
 use crate::runtime::candidates::{ActivationExecution, CandidateOperation};
+use crate::runtime::legacy_lifecycle::{
+    CallExecutionSource, LegacyLifecycleExecution, VulcanPluginLegacyLifecycleEvent,
+};
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
     EmbeddedCall, EmbeddedErrorCode, EmbeddedPrewarm, InstanceReuse, ModuleFinalizer,
-    OperationContext, OperationHandle, OperationSnapshot, PluginPoolConfig,
+    OperationContext, OperationHandle, OperationOutcome, OperationSnapshot, PluginPoolConfig,
 };
 use serde_json::{Map, Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,6 +19,8 @@ use std::time::{Duration, Instant};
 mod admission;
 mod candidates;
 mod initialized;
+mod legacy;
+pub use legacy::VulcanPluginLegacyLifecycleCall;
 mod predecessor;
 mod prewarm;
 mod registration;
@@ -66,9 +71,24 @@ impl CallOwner {
     }
 }
 
-/// One control observation interval; polling never occupies a waiting OS thread.
-/// 唯一控制观测间隔；轮询不会占用等待中的系统线程。
+/// One control observation interval, also bounding direct asynchronous terminal observation.
+/// 唯一控制观测间隔，同时限制直接异步终态观测。
 pub(super) const OBSERVATION_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Observe `operation` until its real terminal signal or the existing observation interval expires.
+/// 观测 `operation`，直至真实终态通知到达或既有观测间隔到期。
+/// Return the original terminal snapshot or a fresh current snapshot; timeout never cancels or retires work.
+/// 返回原终态快照或新的当前快照；观测超时绝不取消或退役工作。
+pub(super) async fn observe_terminal(
+    operation: &OperationHandle,
+) -> Result<OperationSnapshot, VulcanPluginRuntimeError> {
+    // Keep timers at the asynchronous host boundary while the core owns actual completion.
+    // 将计时器保留在异步宿主边界，实际完成仍由核心拥有。
+    match tokio::time::timeout(OBSERVATION_INTERVAL, operation.wait_terminal()).await {
+        Ok(snapshot) => snapshot.map_err(core_error),
+        Err(_) => operation.snapshot().map_err(core_error),
+    }
+}
 
 /// One exact admitted host invocation; metadata never owns another VM scheduler.
 /// 单个精确已接纳宿主调用；元数据绝不拥有另一个 VM 调度器。
@@ -79,9 +99,9 @@ pub(super) struct FormalCall {
     /// Frozen descriptor pins the original managed package generation.
     /// 冻结描述符固定原受管包代次。
     plugin: VulcanPluginDescriptor,
-    /// Ordinary published routes lack original-request authority; activation calls retain it through actual cleanup.
-    /// 普通已发布路由无原请求权威；激活调用将其保留至实际清理。
-    activation: Option<Arc<ActivationExecution>>,
+    /// One explicit source retains private request or namespace authority through actual cleanup.
+    /// 单个显式来源在实际清理期间保留私有请求或命名空间权威。
+    source: CallExecutionSource,
     /// Typed ownership prevents internal records from masquerading as controller calls.
     /// 类型化归属防止内部记录冒充控制器调用。
     ownership: CallOwner,
@@ -94,6 +114,9 @@ pub(super) struct FormalCall {
     /// Internal results may be reclaimed only after the caller leaves and resources really retire.
     /// 内部结果仅在调用方离开且资源真实退役后可以回收。
     acknowledged: AtomicBool,
+    /// Wake existing observers only after original supervision ends; notification owns no execution or retirement.
+    /// 仅在原监督结束后唤醒既有观测者；通知不拥有执行或退役。
+    finished: tokio::sync::Notify,
     /// Short state lock protects identity publication and cleanup evidence only.
     /// 短状态锁仅保护身份发布及清理证据。
     state: Mutex<CallState>,
@@ -139,6 +162,14 @@ struct CallState {
     /// Closing failures remain distinct from business failures in drain diagnostics.
     /// 排空诊断中的关闭失败与业务失败保持区分。
     cleanup_error: Option<String>,
+}
+
+impl CallState {
+    /// Reuse the sole acknowledgement predicate after actual physical retirement.
+    /// 实际物理退役后复用唯一确认判定。
+    fn can_acknowledge_retirement(&self) -> bool {
+        self.retired && !self.supervised && !self.preparing && self.result.is_some()
+    }
 }
 
 /// Workspace preparation is explicit; lifecycle environment creation belongs to the registered worker.
@@ -219,6 +250,16 @@ enum CallAdmission {
         /// 宿主从已检查且仍处于准备阶段的事务构造此权威。
         authority: Arc<ActivationExecution>,
     },
+    /// Original namespace authority selects one flat user lifecycle callback.
+    /// 原命名空间权威选择单个平铺用户生命周期回调。
+    LegacyLifecycle {
+        /// Original guard is retained by this exact execution authority.
+        /// 原护栏由此精确执行权威保留。
+        authority: Arc<LegacyLifecycleExecution>,
+        /// Export comes exclusively from the original manifest.
+        /// 导出仅来自原清单。
+        export: String,
+    },
     /// One original-request lifecycle callback retains its exact old or target package without publishing routing.
     /// 单个原请求生命周期回调保留精确旧包或目标包，不发布路由。
     ActivationLifecycle {
@@ -239,9 +280,9 @@ impl CallAdmission {
             Self::Controller { .. } | Self::Prewarm { .. } | Self::PrewarmTarget { .. } => {
                 VulcanPluginCapacityPurpose::ToolCall
             }
-            Self::Lifecycle { .. } | Self::ActivationLifecycle { .. } => {
-                VulcanPluginCapacityPurpose::Lifecycle
-            }
+            Self::Lifecycle { .. }
+            | Self::ActivationLifecycle { .. }
+            | Self::LegacyLifecycle { .. } => VulcanPluginCapacityPurpose::Lifecycle,
             Self::Action { .. } => VulcanPluginCapacityPurpose::UiAction,
             Self::Probe | Self::CandidateProbe { .. } => {
                 VulcanPluginCapacityPurpose::ActivationProbe
@@ -262,7 +303,9 @@ impl CallAdmission {
             Self::PrewarmTarget { request, .. } => {
                 CallOwner::Controller(request.owner_session_id.clone())
             }
-            Self::Lifecycle { .. } | Self::ActivationLifecycle { .. } => CallOwner::Lifecycle,
+            Self::Lifecycle { .. }
+            | Self::ActivationLifecycle { .. }
+            | Self::LegacyLifecycle { .. } => CallOwner::Lifecycle,
             Self::Action { .. } => CallOwner::Action,
             Self::Probe | Self::CandidateProbe { .. } => CallOwner::Probe,
         }
@@ -275,6 +318,7 @@ impl CallAdmission {
             Self::Controller { export, .. }
             | Self::Lifecycle { export }
             | Self::ActivationLifecycle { export, .. }
+            | Self::LegacyLifecycle { export, .. }
             | Self::Action { export, .. } => Some(export),
             Self::Probe
             | Self::CandidateProbe { .. }
@@ -290,6 +334,20 @@ impl CallAdmission {
             self,
             Self::Action { .. } | Self::Probe | Self::CandidateProbe { .. }
         )
+    }
+
+    /// Derive one execution source from the original admitted intent.
+    /// 从原接纳意图派生单个执行来源。
+    fn source(&self) -> CallExecutionSource {
+        match self {
+            Self::CandidateProbe { authority } | Self::ActivationLifecycle { authority, .. } => {
+                CallExecutionSource::Activation(Arc::clone(authority))
+            }
+            Self::LegacyLifecycle { authority, .. } => {
+                CallExecutionSource::LegacyLifecycle(Arc::clone(authority))
+            }
+            _ => CallExecutionSource::Published,
+        }
     }
 
     /// Borrow original-request authority only for explicit activation admission.
@@ -396,14 +454,17 @@ impl Drop for SupervisionGuard {
     /// Publish interruption only when completion was not recorded; retained identities enable explicit recovery.
     /// 仅在未记录完成时发布中断；保留身份用于显式恢复。
     fn drop(&mut self) {
-        if !self.completed
-            && let Ok(mut state) = self.call.lock()
-        {
+        if let Ok(mut state) = self.call.lock() {
             state.supervised = false;
-            state.result = Some(Err(VulcanPluginRuntimeError::new(
-                "Formal supervision was interrupted; inspect and drain the retained invocation.",
-            )));
+            if !self.completed {
+                state.result = Some(Err(VulcanPluginRuntimeError::new(
+                    "Formal supervision was interrupted; inspect and drain the retained invocation.",
+                )));
+            }
         }
+        // Release the evidence lock before waking; poison must also wake observers to expose the actual lock error.
+        // 唤醒前释放证据锁；中毒也必须唤醒观测者以暴露真实锁错误。
+        self.call.finished.notify_waiters();
     }
 }
 
@@ -572,10 +633,12 @@ impl VulcanPluginRuntimeManager {
                 .finish_formal_call(&retry_owner, &retry_call, previous.map(|_| ()))
                 .await;
             if let Ok(mut state) = retry_call.lock() {
-                state.supervised = false;
                 state.result = Some(result);
             }
             supervision.completed = true;
+            // End the original supervision before acknowledgement-based reclamation, including cancelled observers.
+            // 在按确认回收之前结束原监督，包含已取消观测者。
+            drop(supervision);
             if let Err(error) = manager.reap_internal_calls(&retry_owner) {
                 let _ = manager.record_cleanup_failure(&retry_call.plugin.id, error.to_string());
             }
@@ -885,7 +948,6 @@ impl VulcanPluginRuntimeManager {
         // 退役始终跟随原身份，包含失败或取消的初始化。
         let result = self.finish_formal_call(&owner, &call, preparation).await;
         if let Ok(mut state) = call.lock() {
-            state.supervised = false;
             state.result = Some(result);
         }
     }
@@ -1031,7 +1093,7 @@ impl VulcanPluginRuntimeManager {
                         },
                         finalizer: input.finalizer.take(),
                     },
-                    call.activation.clone(),
+                    call.source.clone(),
                 )
                 .map_err(core_error)?;
             call.lock()?.pool = Some(pool.clone());
@@ -1154,7 +1216,12 @@ impl VulcanPluginRuntimeManager {
                 if snapshot.phase.is_terminal() {
                     break snapshot;
                 }
-                tokio::time::sleep(OBSERVATION_INTERVAL).await;
+                // Await the same original operation directly, retaining finite cancellation checks without a blocking task.
+                // 直接等待同一原操作，保留有限取消检查且不创建阻塞任务。
+                let observed = observe_terminal(&operation).await?;
+                if observed.phase.is_terminal() {
+                    break observed;
+                }
             };
             if let Some(finalization) = &terminal.finalization
                 && let Some(Err(error)) = finalization
@@ -1217,9 +1284,14 @@ impl VulcanPluginRuntimeManager {
         }
         if call
             .ownership
-            .retains_published_slot(call.activation.is_some())
+            .retains_published_slot(call.source.is_private())
         {
             self.release_session_slot_checked(&call.plugin.id)?;
+        }
+        // Failed preparation can retain a lease that never reached an actual pool.
+        // 准备失败可能保留从未进入实际池的租约。
+        if let CallExecutionSource::LegacyLifecycle(authority) = &call.source {
+            authority.retire_prepared_environment()?;
         }
         // Physical Action capacity outlives every core session, request scope and pool checkpoint.
         // 物理 Action 容量比全部核心会话、请求作用域及池检查点存活更久。
@@ -1235,22 +1307,25 @@ impl VulcanPluginRuntimeManager {
 /// `snapshot` must be terminal; preserve both failure messages without replay or fallback parsing.
 /// `snapshot` 必须为终态；保留两阶段失败消息，不重放或回退解析。
 fn project_result(snapshot: &OperationSnapshot) -> Result<Value, VulcanPluginRuntimeError> {
+    // Borrow retained business frames synchronously; successful closing values carry no projected payload.
+    // 同步借用保留的业务帧；成功关闭值不携带需要投影的载荷。
     let (business, closing) = if let Some(finalization) = &snapshot.finalization {
         (
-            finalization.business.result(),
-            finalization
-                .outcome
-                .as_ref()
-                .ok_or_else(|| {
-                    VulcanPluginRuntimeError::new("Terminal finalization has no outcome.")
-                })?
-                .result()
-                .map(|_| ()),
+            match &finalization.business {
+                OperationOutcome::Succeeded { value } => Ok(value),
+                OperationOutcome::Failed { error } => Err(error.clone()),
+            },
+            match finalization.outcome.as_ref().ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Terminal finalization has no outcome.")
+            })? {
+                OperationOutcome::Succeeded { .. } => Ok(()),
+                OperationOutcome::Failed { error } => Err(error.clone()),
+            },
         )
     } else {
         (
             match (&snapshot.value, &snapshot.error) {
-                (Some(value), None) => Ok(value.clone()),
+                (Some(value), None) => Ok(value),
                 (None, Some(error)) => Err(error.clone()),
                 _ => {
                     return Err(VulcanPluginRuntimeError::new(
@@ -1268,9 +1343,9 @@ fn project_result(snapshot: &OperationSnapshot) -> Result<Value, VulcanPluginRun
             &snapshot.context,
             OperationContext::Module(context) if context.prewarm
         ) {
-            Ok(frame)
+            Ok(frame.clone())
         } else {
-            super::super::lease::parse_plugin_result(&json!({"result":frame}))
+            super::super::lease::parse_plugin_result(frame)
         }
     });
     match (business, closing.map_err(core_error)) {

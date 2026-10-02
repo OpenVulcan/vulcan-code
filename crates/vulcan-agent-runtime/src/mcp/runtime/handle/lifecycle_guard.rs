@@ -31,7 +31,17 @@ impl Drop for LifecycleAdmissionGuard {
             .write()
             .expect("mcp runtime transport map poisoned")
             .remove(&self.server_id);
+        // The actual allocation remains the original negative observation identity even after disposal.
+        // 销毁后，实际分配仍为原负向观察身份。
+        let original_transport = transport.as_ref().map(Arc::downgrade);
         drop(transport);
+        // Abnormal task disposal must also revoke the exact successful launch-input capture record.
+        // 异常任务销毁还必须撤销精确成功启动输入捕获记录。
+        self.inner
+            .launch_inputs
+            .write()
+            .expect("MCP actual launch input map poisoned")
+            .remove(&self.server_id);
         // A previously published terminal result must survive ordinary task disposal unchanged.
         // 已发布终止结果必须在普通任务销毁期间保持不变。
         let terminal = self
@@ -48,6 +58,27 @@ impl Drop for LifecycleAdmissionGuard {
                 )
             });
         if !terminal {
+            // Executor loss cannot inherit an earlier operation's success merely because physical disposal finishes.
+            // 执行器丢失不能仅因物理销毁完成，就继承前一操作的成功。
+            let original_release = self
+                .inner
+                .resource_releases
+                .read()
+                .expect("MCP launch release map poisoned")
+                .get(&self.server_id)
+                .cloned();
+            self.inner
+                .cleanup_observations
+                .write()
+                .expect("MCP actual cleanup observation map poisoned")
+                .insert(
+                    self.server_id.clone(),
+                    McpActualCleanupObservation::failed(
+                        original_transport,
+                        original_release,
+                        String::from("MCP lifecycle task ended without confirming shutdown."),
+                    ),
+                );
             update_server_status(
                 &self.inner,
                 &self.server_id,

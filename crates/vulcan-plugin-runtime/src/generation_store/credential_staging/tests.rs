@@ -7,6 +7,8 @@ use std::cell::{Cell, RefCell};
 use std::fs;
 
 mod preparation;
+mod removal_inventory;
+mod reservation;
 mod retention;
 
 /// Deterministic secure-backend fixture records actual writes and supports one exact failing key.

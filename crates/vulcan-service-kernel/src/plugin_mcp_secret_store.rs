@@ -6,6 +6,8 @@ use sha2::{Digest, Sha256};
 use vulcan_agent_runtime::mcp::PluginMcpSecretStore;
 use vulcan_plugin_runtime::{VulcanPluginCredentialBinding, VulcanPluginCredentialRevision};
 
+#[cfg(all(test, windows))]
+pub(crate) mod legacy_write_observation;
 mod staging;
 #[cfg(test)]
 mod tests;
@@ -34,6 +36,8 @@ impl OsPluginMcpSecretStore {
         secret_key: &str,
         binding: &VulcanPluginCredentialBinding,
     ) -> Result<Option<String>, String> {
+        #[cfg(all(test, windows))]
+        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
         // Namespace selection is explicit and identical to ordinary descriptor-bound execution.
         // 命名空间选择显式且与普通描述符绑定执行一致。
         let entry = match binding {
@@ -61,6 +65,8 @@ impl OsPluginMcpSecretStore {
         server_id: &str,
         secret_key: &str,
     ) -> Result<Option<String>, String> {
+        #[cfg(all(test, windows))]
+        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
         match plugin_secret_entry(plugin_id, server_id, secret_key)?.get_password() {
             Ok(value) => Ok(Some(value)),
             Err(KeyringError::NoEntry) => Ok(None),
@@ -89,12 +95,17 @@ impl OsPluginMcpSecretStore {
         secret_key: &str,
         value: &str,
     ) -> Result<(), String> {
+        #[cfg(all(test, windows))]
+        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
         if value.is_empty() {
             return Err(String::from("Plugin MCP secret value must not be empty."));
         }
         plugin_secret_entry(plugin_id, server_id, secret_key)?
             .set_password(value)
-            .map_err(|_| String::from("Failed to store the plugin MCP secret securely."))
+            .map_err(|_| String::from("Failed to store the plugin MCP secret securely."))?;
+        #[cfg(all(test, windows))]
+        legacy_write_observation::after_successful_write(plugin_id, server_id, secret_key, value)?;
+        Ok(())
     }
 
     /// Deletes one exact plugin-scoped MCP secret.
@@ -115,6 +126,8 @@ impl OsPluginMcpSecretStore {
         server_id: &str,
         secret_key: &str,
     ) -> Result<(), String> {
+        #[cfg(all(test, windows))]
+        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
         match plugin_secret_entry(plugin_id, server_id, secret_key)?.delete_credential() {
             Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
             Err(_) => Err(String::from(
@@ -134,6 +147,8 @@ impl PluginMcpSecretStore for OsPluginMcpSecretStore {
         secret_key: &str,
         binding: &VulcanPluginCredentialBinding,
     ) -> Result<String, String> {
+        #[cfg(all(test, windows))]
+        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
         // Select exactly once from the descriptor's declared namespace; missing values never fall back.
         // 从描述符声明命名空间精确选择一次；缺失值绝不回退。
         let entry = match binding {

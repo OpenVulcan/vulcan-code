@@ -33,6 +33,9 @@ async fn original_resource_receipt_gates_unpublished_shutdown() {
         .write()
         .expect("release map")
         .insert(server.id.clone(), release);
+    // Real cleanup is observed only after the same original partition explicitly closes admission.
+    // 仅在相同原分区显式关闭入场后，观察真实清理。
+    runtime.shutdown();
     let inner = runtime.inner.clone();
     let server_id = server.id.clone();
     let cleanup =

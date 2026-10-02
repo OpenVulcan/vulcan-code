@@ -14,6 +14,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Actual outcomes from the sole marked-generation collection primitive.
+/// 唯一有标记代际回收原语的实际结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GenerationCollectionOutcome {
+    /// This invocation completed deletion, sync and the actual Collected writer.
+    /// 此次调用完成删除、同步及实际 Collected 写入。
+    CollectedNow,
+    /// Strict metadata already states Collected and actual package bytes are absent.
+    /// 严格元数据已声明 Collected，且实际插件包字节缺失。
+    AlreadyCollected,
+}
+
 impl VulcanPluginGenerationStore {
     /// Inspect `source` and approved digest, returning a fresh identity without copying or allocating directories.
     /// 检查 `source` 及已批准摘要，返回新身份，不复制或分配目录。
@@ -76,7 +88,7 @@ impl VulcanPluginGenerationStore {
         }
         // A generation lease is acquired before publishing any completion marker.
         // 在发布任何完成标记前取得代次租约。
-        let lease = self.generation_lock(&identity, true)?;
+        let lease = self.generation_lock(identity, true)?;
         // Only unique generation directories are allocated; existing package bytes are never overwritten.
         // 仅分配唯一代次目录；从不覆盖既有插件包字节。
         let plugin_root = files::ensure_child(&self.root.join("packages"), &identity.plugin_id)?;
@@ -91,6 +103,11 @@ impl VulcanPluginGenerationStore {
         // Retain incomplete files after failure so repair cannot confuse them with a prepared generation.
         // 失败后保留不完整文件，避免修复将其与已准备代次混淆。
         let prepared = (|| {
+            #[cfg(test)]
+            self.observe_package_preparation_checkpoint_for_test(
+                identity,
+                super::VulcanPluginGenerationPhase::Preparing,
+            )?;
             // Persist identity before any package copy so interrupted preparation has an explicit cleanup owner.
             // 复制任何插件内容前持久保存身份，使被中断准备具有显式清理所有者。
             files::write_record(
@@ -104,7 +121,7 @@ impl VulcanPluginGenerationStore {
             files::copy_synced(&original.package_root, &package_root)?;
             // Permission and credential derivation use the verified copied package, not the earlier source observation.
             // 权限及凭据派生使用已验证复制包，不使用较早来源观察。
-            let verified_metadata = self.verify_package(&package_root, &identity)?;
+            let verified_metadata = self.verify_package(&package_root, identity)?;
             files::sync_directory(&generation_root)?;
             files::sync_directory(&plugin_root)?;
             files::sync_directory(&self.root.join("packages"))?;
@@ -115,6 +132,11 @@ impl VulcanPluginGenerationStore {
                     identity: identity.clone(),
                     state: GenerationState::Prepared,
                 },
+            )?;
+            #[cfg(test)]
+            self.observe_package_preparation_checkpoint_for_test(
+                identity,
+                super::VulcanPluginGenerationPhase::Prepared,
             )?;
             Ok(verified_metadata)
         })();
@@ -228,6 +250,19 @@ impl VulcanPluginGenerationStore {
         // The namespace fence remains held through acquiring the selected shared generation lease.
         // 命名空间屏障持续持有至所选共享代次租约取得。
         let _namespace = self.namespace_lock(plugin_id, true)?;
+        self.pin_active_locked(plugin_id)
+    }
+
+    /// Pin the exact selected activation for `plugin_id` under the caller's already retained namespace fence.
+    /// 在调用方已保留命名空间屏障内，固定 `plugin_id` 的精确已选激活。
+    /// Return full activation and actual package/credential leases after all existing approval and configuration checks.
+    /// 全部既有批准及配置检查后，返回完整激活及实际插件包、凭据租约。
+    /// A guard caller must validate its complete original before entering; this helper never opens another namespace File.
+    /// 守卫调用方进入前须校验完整原请求；此辅助方法绝不另开命名空间 File。
+    pub(super) fn pin_active_locked(
+        &self,
+        plugin_id: &str,
+    ) -> Result<VulcanPluginActiveGeneration> {
         // The exact on-disk choice is the sole source of generation selection.
         // 精确磁盘选择是代次选择的唯一来源。
         let activation = self.read_activation(plugin_id)?;
@@ -415,6 +450,20 @@ impl VulcanPluginGenerationStore {
         // Namespace first, then generation lock is the common ordering for all ownership changes.
         // 先命名空间、后代次锁，是所有所有权变更的共同顺序。
         let _namespace = self.namespace_lock(&identity.plugin_id, false)?;
+        // The same exclusive generation guard spans the sole deletion primitive.
+        // 同一排他代际守卫覆盖唯一删除原语。
+        let _generation = self.lock_generation_for_collection_locked(identity)?;
+        Ok(self.collect_generation_locked(identity)? == GenerationCollectionOutcome::CollectedNow)
+    }
+
+    /// Validate exact identity retention and selected-package exclusion under the caller-held namespace.
+    /// 在调用方持有命名空间内校验精确身份保留及已选插件包排除。
+    /// Return unit without allocating a generation lock, permitting strictly read-only missing-directory observation.
+    /// 不分配代际锁便返回空值，允许严格只读缺失目录观察。
+    pub(in crate::generation_store) fn check_generation_collection_admission_locked(
+        &self,
+        identity: &VulcanPluginGenerationIdentity,
+    ) -> Result<()> {
         files::validate_identity(identity)?;
         self.check_transaction_package_retention(identity)?;
         // An active generation cannot be collected even when no current process holds a package lease.
@@ -430,12 +479,51 @@ impl VulcanPluginGenerationStore {
                 "Selected plugin generation cannot be collected.",
             ));
         }
+        Ok(())
+    }
+
+    /// Retain the actual exclusive generation File after common retention and selection checks.
+    /// 在共同保留及选择检查后保留实际排他代际 File。
+    /// Return the guard to retain through deletion, synchronization and final readback.
+    /// 返回须跨删除、同步及最终回读保留的守卫。
+    pub(in crate::generation_store) fn lock_generation_for_collection_locked(
+        &self,
+        identity: &VulcanPluginGenerationIdentity,
+    ) -> Result<File> {
+        self.check_generation_collection_admission_locked(identity)?;
         // Every process and cloned pin must release before this real exclusive lock can succeed.
         // 此实际排他锁成功前，每个进程及克隆固定句柄均须释放。
-        let _generation = self.generation_lock(identity, false)?;
+        self.generation_lock(identity, false)
+    }
+
+    /// Collect the exact generation using strict existing metadata under caller-held namespace and generation guards.
+    /// 在调用方持有命名空间及代际守卫下，使用严格既有元数据回收精确代际。
+    /// Return a completed Collected transition or already Collected evidence; missing or malformed markers remain errors.
+    /// 返回已完成 Collected 转换或已 Collected 证据；缺失、损坏标记仍属于错误。
+    pub(in crate::generation_store) fn collect_generation_locked(
+        &self,
+        identity: &VulcanPluginGenerationIdentity,
+    ) -> Result<GenerationCollectionOutcome> {
+        self.collect_generation_observed_locked(identity, |_| Ok(()), |_| {})
+    }
+
+    /// Collect through the sole producer while validating full actual records and recording acknowledged phase checkpoints.
+    /// 通过唯一生产者回收，同时验证完整实际记录并记录已确认阶段检查点。
+    /// identity fixes the physical namespace; validate rejects regressions and observe retains nonfallible same-original evidence.
+    /// identity 固定物理命名空间；validate 拒绝回退，observe 保留不可失败同原实例证据。
+    /// Returns actual current/prior collection; caller keeps the same physical namespace/generation exclusion throughout.
+    /// 返回实际当前／先前回收；调用方全程保持相同物理命名空间／代次互斥。
+    pub(in crate::generation_store) fn collect_generation_observed_locked(
+        &self,
+        identity: &VulcanPluginGenerationIdentity,
+        validate: impl Fn(&GenerationRecord) -> Result<()>,
+        observe: impl Fn(GenerationState),
+    ) -> Result<GenerationCollectionOutcome> {
         // Keep the identity marker even after content reclamation, including interrupted cleanup.
         // 内容回收后仍保留身份标记，包括被中断的清理。
         let (generation_root, mut record) = self.read_generation(identity)?;
+        validate(&record)?;
+        observe(record.state);
         // Only this identity-derived package child may be removed.
         // 仅可删除由此身份派生的插件包子目录。
         let package_root = generation_root.join(&identity.plugin_id);
@@ -445,7 +533,7 @@ impl VulcanPluginGenerationStore {
                     "Collected generation unexpectedly contains package bytes.",
                 ));
             }
-            return Ok(false);
+            return Ok(GenerationCollectionOutcome::AlreadyCollected);
         }
         if record.state != GenerationState::Collecting {
             if record.state == GenerationState::Prepared {
@@ -453,6 +541,7 @@ impl VulcanPluginGenerationStore {
             }
             record.state = GenerationState::Collecting;
             files::write_record(&generation_root.join("generation.json"), &record)?;
+            observe(record.state);
         }
         if files::exists(&package_root, true)? {
             fs::remove_dir_all(&package_root).map_err(|error| {
@@ -461,11 +550,19 @@ impl VulcanPluginGenerationStore {
                     error,
                 )
             })?;
+            #[cfg(test)]
+            self.observe_package_collection_checkpoint_for_test(
+                identity,
+                GenerationState::Collecting,
+            )?;
         }
         files::sync_directory(&generation_root)?;
         record.state = GenerationState::Collected;
         files::write_record(&generation_root.join("generation.json"), &record)?;
-        Ok(true)
+        observe(record.state);
+        #[cfg(test)]
+        self.observe_package_collection_checkpoint_for_test(identity, GenerationState::Collected)?;
+        Ok(GenerationCollectionOutcome::CollectedNow)
     }
 
     /// Validate every fixed layout directory before dereferencing controlled descendants.
@@ -625,6 +722,38 @@ impl VulcanPluginGenerationStore {
                 "Plugin activation revision changed; inspect the current record.",
             ));
         }
+        // Freeze the same complete successor before its sole actual publication.
+        // 在唯一实际发布之前固定相同完整后继。
+        let next = self.plan_activation_successor(
+            plugin_id,
+            current.as_ref(),
+            generation,
+            approved_permissions,
+            credential_revision,
+            configuration,
+        )?;
+        self.write_activation(&next)?;
+        Ok(next)
+    }
+
+    /// Derive one complete successor from the exact original without filesystem effects or allocating another revision later.
+    /// 从精确原记录派生单个完整后继，不产生文件系统效果或随后分配另一修订。
+    /// plugin_id and original identify the namespace; remaining arguments declare the exact next selection and bindings.
+    /// plugin_id 及 original 标识命名空间；其余参数声明精确下一选择及绑定。
+    /// Returns the sole checked successor, retaining original cleanup identities for an explicit removal.
+    /// 返回唯一经检查后继，为明确移除保留原清理身份。
+    pub(in crate::generation_store) fn plan_activation_successor(
+        &self,
+        plugin_id: &str,
+        original: Option<&VulcanPluginActivation>,
+        generation: Option<VulcanPluginGenerationIdentity>,
+        approved_permissions: Option<Vec<String>>,
+        credential_revision: Option<VulcanPluginCredentialRevision>,
+        configuration: Option<VulcanPluginConfigurationSelection>,
+    ) -> Result<VulcanPluginActivation> {
+        // The original validated selection is the only source of the next monotonic revision.
+        // 原已校验选择是下一单调修订的唯一来源。
+        let expected_revision = original.map_or(0, |record| record.revision);
         // Check overflow before writing; revision zero is never recycled.
         // 写入前检查溢出；从不复用修订零。
         let revision = expected_revision
@@ -632,8 +761,7 @@ impl VulcanPluginGenerationStore {
             .ok_or_else(|| Error::invalid("Plugin activation revision is exhausted."))?;
         // Once promoted, a namespace cannot regain external authorization through legacy selection or removal.
         // 命名空间提升后，不能通过旧选择或移除重新取得外部授权。
-        let approved_permissions = if current
-            .as_ref()
+        let approved_permissions = if original
             .is_some_and(|record| record.approved_permissions.is_some())
             && approved_permissions.is_none()
         {
@@ -648,7 +776,7 @@ impl VulcanPluginGenerationStore {
         };
         // Removal retains the last credential identity for cleanup; an active successor must name its own binding.
         // 移除保留最后凭据身份供清理；活动后继必须指定自身绑定。
-        let credential_revision = match (&current, credential_revision) {
+        let credential_revision = match (original, credential_revision) {
             (Some(original), None) if original.credential_revision.is_some() => {
                 if generation.is_some() {
                     return Err(Error::invalid(
@@ -661,7 +789,7 @@ impl VulcanPluginGenerationStore {
         };
         // Removal retains the original configuration, while an active successor must explicitly name its complete value.
         // 移除保留原配置，而有效后继必须显式指定其完整值。
-        let configuration = match (&current, configuration) {
+        let configuration = match (original, configuration) {
             (Some(original), None) if original.configuration.is_some() => {
                 if generation.is_some() {
                     return Err(Error::invalid(
@@ -691,7 +819,6 @@ impl VulcanPluginGenerationStore {
             credential_revision,
             configuration,
         };
-        self.write_activation(&next)?;
         Ok(next)
     }
 
@@ -718,20 +845,53 @@ impl VulcanPluginGenerationStore {
 
     /// Read a generation state record and compare every identity field before returning its root.
     /// 读取代次状态记录，返回其根目录前比较全部身份字段。
-    fn read_generation(
+    pub(in crate::generation_store) fn read_generation(
         &self,
         identity: &VulcanPluginGenerationIdentity,
     ) -> Result<(PathBuf, GenerationRecord)> {
         files::validate_identity(identity)?;
+        // Existing selected readers and removal enumeration share the sole canonical marker reader.
+        // 既有已选读取者及移除枚举共享唯一规范标记读取器。
+        let (generation_root, record) =
+            self.read_generation_directory_locked(&identity.plugin_id, &identity.generation_id)?;
+        if record.identity != *identity {
+            return Err(Error::invalid(
+                "Package generation record does not match the exact requested identity.",
+            ));
+        }
+        Ok((generation_root, record))
+    }
+
+    /// Read one canonical generation directory's actual marker under the caller's retained namespace without guessing identity fields.
+    /// 在调用方保留命名空间内读取单个规范代次目录的实际标记，不猜测身份字段。
+    /// plugin_id/generation_id are exact directory names; returns the validated complete producer record and ordinary root.
+    /// plugin_id／generation_id 为精确目录名；返回已验证完整生产者记录及普通根。
+    pub(in crate::generation_store) fn read_generation_directory_locked(
+        &self,
+        plugin_id: &str,
+        generation_id: &str,
+    ) -> Result<(PathBuf, GenerationRecord)> {
+        crate::catalog::validate_identifier(plugin_id, "generation plugin id")
+            .map_err(Error::invalid)?;
+        // Canonical UUID text is checked before any directory is dereferenced.
+        // 解引用任何目录之前检查规范 UUID 文本。
+        let uuid = uuid::Uuid::parse_str(generation_id)
+            .map_err(|_| Error::invalid("Invalid package generation UUID."))?;
+        if uuid.to_string() != generation_id {
+            return Err(Error::invalid(
+                "Package generation directory name is not canonical.",
+            ));
+        }
+        self.validate_layout()?;
         // Inspect each identity-derived component before opening metadata or package contents.
         // 打开元数据或插件内容前检查每个身份派生组件。
-        let plugin_root = self.root.join("packages").join(&identity.plugin_id);
+        let plugin_root = self.root.join("packages").join(plugin_id);
         if !files::exists(&plugin_root, true)? {
             return Err(Error::invalid("Plugin generation namespace is missing."));
         }
         // The generation root contains metadata beside, never inside, distributable package bytes.
         // 代次根目录在可分发插件字节旁保存元数据，不将其写入插件包。
-        let generation_root = plugin_root.join(&identity.generation_id);
+        let generation_root = plugin_root.join(generation_id);
         if !files::exists(&generation_root, true)? {
             return Err(Error::invalid("Plugin generation directory is missing."));
         }
@@ -741,7 +901,11 @@ impl VulcanPluginGenerationStore {
             files::read_record(&generation_root.join("generation.json"))?.ok_or_else(|| {
                 Error::invalid("Package generation has no valid identity state record.")
             })?;
-        if record.schema_version != RECORD_VERSION || record.identity != *identity {
+        files::validate_identity(&record.identity)?;
+        if record.schema_version != RECORD_VERSION
+            || record.identity.plugin_id != plugin_id
+            || record.identity.generation_id != generation_id
+        {
             return Err(Error::invalid(
                 "Package generation record does not match the exact requested identity.",
             ));

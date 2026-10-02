@@ -17,7 +17,7 @@ use uuid::Uuid;
 pub(super) mod restoration;
 pub use restoration::{
     VulcanPluginPredecessorRestoration, VulcanPluginPredecessorRestorationFailure,
-    VulcanPluginPredecessorRestoreEvidence,
+    VulcanPluginPredecessorRestorationSource, VulcanPluginPredecessorRestoreEvidence,
 };
 
 /// Validate frozen plugin and identity against the same manager's still-draining old catalog.
@@ -77,6 +77,13 @@ pub(super) fn validate_ordinary_lifecycle_admission(
     else {
         return Ok(());
     };
+    // A terminal original request still fences ordinary work until its actual predecessor handoff releases ownership.
+    // 原请求进入终态后，其实际前驱交接释放所有权之前仍隔离普通工作。
+    validate_ordinary_handoff_admission(
+        store
+            .predecessor_handoff_blocks_admission(plugin_id)
+            .map_err(|failure| error(failure.to_string()))?,
+    )?;
     // Inspect all original obligations without choosing a latest request or allocating execution authority.
     // 检查全部原义务，不选择最新请求，也不分配执行权威。
     let pending = store
@@ -88,9 +95,41 @@ pub(super) fn validate_ordinary_lifecycle_admission(
         let selected = store
             .activation(plugin_id)
             .map_err(|failure| error(failure.to_string()))?;
+        return validate_ordinary_pending_admission(scope, selected.as_ref(), &pending);
+    }
+    validate_ordinary_pending_admission(scope, None, &pending)
+}
+
+/// Apply the original handoff admission rule to blocked, an actual store observation.
+/// 将原交接入场规则应用至 blocked，此值为实际存储观测。
+/// Return the original conflict while Pending or actual transfer ownership still excludes ordinary work.
+/// Pending 或实际转交所有权仍排除普通工作时，返回原冲突。
+pub(super) fn validate_ordinary_handoff_admission(
+    blocked: bool,
+) -> Result<(), VulcanPluginRuntimeError> {
+    if blocked {
+        return Err(error(
+            "Plugin predecessor restoration is awaiting its original private route handoff.",
+        ));
+    }
+    Ok(())
+}
+
+/// Apply the sole ordinary scope rule to selected and the complete original pending inventory.
+/// 对 selected 及完整原待处理清单应用唯一普通作用域规则。
+/// Enabled uses the actual selection; other scopes reject all pending originals without using selected.
+/// Enabled 使用实际选择；其他作用域不使用 selected，拒绝全部待处理原请求。
+/// Return the unchanged conflict; preparing another target may leave the selected old business admitted.
+/// 返回未改变的冲突；准备另一个目标可使已选旧业务继续入场。
+pub(super) fn validate_ordinary_pending_admission(
+    scope: crate::VulcanPluginBridgeLeaseScope,
+    selected: Option<&crate::VulcanPluginActivation>,
+    pending: &[crate::VulcanPluginActivationRequestRecord],
+) -> Result<(), VulcanPluginRuntimeError> {
+    if scope == crate::VulcanPluginBridgeLeaseScope::Enabled {
         if pending.iter().any(|record| {
             matches!(record, crate::VulcanPluginActivationRequestRecord::Activation(original)
-                if selected.as_ref() == Some(original.target()))
+                if selected == Some(original.target()))
         }) {
             return Err(error(
                 "Selected activation target is awaiting its original route handoff.",

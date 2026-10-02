@@ -8,8 +8,6 @@ use crate::{
 };
 use serde_json::{Map, Value};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 /// One model tool invocation projected into the generic plugin runtime.
 /// 投影到通用插件运行时的单次模型工具调用。
@@ -166,13 +164,13 @@ impl VulcanPluginRuntimeManager {
 
     /// Reserve `plugin_id` below `maximum` while the caller retains this manager's publication gate.
     /// 调用方保留此管理器发布门时，在 `maximum` 以内预留 `plugin_id`。
-    /// `publication` proves the caller-held gate; return success only after count projection is published.
-    /// `publication` 表示调用方持有的门；仅在计数投影发布后返回成功。
+    /// `publication` proves the caller-held gate; return success after updating the sole live counter.
+    /// `publication` 表示调用方持有的门；更新唯一实时计数后返回成功。
     pub(crate) fn reserve_session_slot_locked(
         &self,
         plugin_id: &str,
         maximum: usize,
-        publication: &std::sync::MutexGuard<'_, ()>,
+        _publication: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<(), VulcanPluginRuntimeError> {
         let mut counts = self.state.active_session_counts.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
@@ -184,15 +182,14 @@ impl VulcanPluginRuntimeManager {
             )));
         }
         let active_count = count + 1;
-        self.publish_active_session_count(plugin_id, active_count, publication)?;
         counts.insert(plugin_id.to_owned(), active_count);
         Ok(())
     }
 
-    /// Release one known reservation for `plugin_id`, reporting metadata failures without changing its count.
-    /// 释放 `plugin_id` 的一个已知预留；元数据失败时报告错误且不改变计数。
-    /// Returns success only after the reduced count is published; missing ownership is an invariant error.
-    /// 仅在发布减少后的计数后返回成功；缺失所有权是不变量错误。
+    /// Release one known reservation for `plugin_id`, reporting accounting failures without changing its count.
+    /// 释放 `plugin_id` 的一个已知预留；记账失败时报告错误且不改变计数。
+    /// Returns success after reducing the sole live counter; missing ownership is an invariant error.
+    /// 减少唯一实时计数后返回成功；缺失所有权是不变量错误。
     pub(crate) fn release_session_slot_checked(
         &self,
         plugin_id: &str,
@@ -212,7 +209,7 @@ impl VulcanPluginRuntimeManager {
     pub(crate) fn release_session_slot_with_publication(
         &self,
         plugin_id: &str,
-        publication: &std::sync::MutexGuard<'_, ()>,
+        _publication: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<(), VulcanPluginRuntimeError> {
         let mut counts = self.state.active_session_counts.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
@@ -225,7 +222,6 @@ impl VulcanPluginRuntimeManager {
                     "Vulcan Plugin active session reservation is missing.",
                 )
             })?;
-        self.publish_active_session_count(plugin_id, active_count, publication)?;
         if active_count == 0 {
             counts.remove(plugin_id);
         } else {
@@ -234,29 +230,30 @@ impl VulcanPluginRuntimeManager {
         Ok(())
     }
 
-    /// Publishes one active-session count without changing plugin lifecycle generation.
-    /// 发布单个活动会话计数，同时不改变插件生命周期代次。
-    /// plugin_id selects the projection and active_session_count is authoritative; returns publication status without advancing generation.
-    /// plugin_id选择投影，active_session_count是权威计数；返回发布状态，不推进代次。
-    /// The supplied publication guard prevents nested acquisition and orders count changes with catalog changes.
-    /// 传入发布守卫防止嵌套获取，并将计数变化与目录变化排序。
-    fn publish_active_session_count(
+    /// Read the sole live reservation count without acquiring the registration gate again.
+    /// 读取唯一实时预留计数，不再次获取登记门。
+    /// `plugin_id` selects the namespace; returns its count or an explicit poisoned-lock error.
+    /// `plugin_id` 选择命名空间；返回其计数或明确锁污染错误。
+    pub fn active_session_count(&self, plugin_id: &str) -> Result<usize, VulcanPluginRuntimeError> {
+        self.state.active_session_count(plugin_id)
+    }
+}
+
+impl super::VulcanPluginManagerState {
+    /// Read actual reservations from their unique map while preserving the caller's lock scope.
+    /// 从唯一映射读取实际预留，保持调用方锁作用域。
+    /// `plugin_id` selects the namespace; absence means zero, and poisoned accounting fails explicitly.
+    /// `plugin_id` 选择命名空间；缺失表示零，记账锁污染明确失败。
+    pub(super) fn active_session_count(
         &self,
         plugin_id: &str,
-        active_session_count: usize,
-        _publication: &std::sync::MutexGuard<'_, ()>,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let mut snapshot = (*self.snapshot()).clone();
-        let Some(plugin) = snapshot.plugins.get_mut(plugin_id) else {
-            return Ok(());
-        };
-        plugin.active_session_count = active_session_count;
-        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        let mut guard = self.state.snapshot.write().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
-        })?;
-        *guard = Arc::new(snapshot);
-        Ok(())
+    ) -> Result<usize, VulcanPluginRuntimeError> {
+        self.active_session_counts
+            .lock()
+            .map(|counts| counts.get(plugin_id).copied().unwrap_or_default())
+            .map_err(|_| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
+            })
     }
 }
 

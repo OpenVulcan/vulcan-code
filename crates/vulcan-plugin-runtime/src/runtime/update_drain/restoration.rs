@@ -7,6 +7,10 @@ use crate::{
     VulcanPluginGenerationStore,
 };
 
+mod private_owner;
+mod source;
+pub use source::VulcanPluginPredecessorRestorationSource;
+
 /// Exact old callback evidence, derived only from its actual immutable declaration and receipt.
 /// 精确旧回调证据，仅从其实际不可变声明及回执派生。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +36,13 @@ pub struct VulcanPluginPredecessorRestoration {
     /// Exact closed Arc is retained for future full publisher preparation, without reopening any surface.
     /// 保留精确关闭 Arc，供未来完整发布器准备，不重开任何暴露面。
     pub(in crate::runtime) staged: Option<Arc<VulcanPluginCatalogSnapshot>>,
+    /// The same typed actual reservation survives unknown Pending writes without a strong manager reference.
+    /// 相同类型化实际预留权跨未知 Pending 写入存活，不保留强管理器引用。
+    pub(in crate::runtime) private_owner:
+        Option<Arc<private_owner::PredecessorRestorationPrivateOwner>>,
+    /// One physical source shares the existing private owner; retries never mint replacement restoration authority.
+    /// 单个物理来源共用既有私有所有者；重试绝不签发替代恢复权威。
+    pub(in crate::runtime) source: Option<Arc<VulcanPluginPredecessorRestorationSource>>,
 }
 
 impl VulcanPluginPredecessorRestoration {
@@ -117,6 +128,8 @@ impl VulcanPluginRuntimeManager {
                 drain,
                 evidence,
                 staged: None,
+                private_owner: None,
+                source: None,
             }),
             Err(error) => Err(VulcanPluginPredecessorRestorationFailure { error, drain }),
         }

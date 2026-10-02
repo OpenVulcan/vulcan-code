@@ -231,19 +231,21 @@ async fn plugin_mcp_drain_observes_global_resources_and_preserves_other_partitio
     // 此用户配置服务器仅改变明确来源权威。
     let mut user_server = server("user", user.path(), true);
     user_server.source = McpServerSource::UserConfigured;
-    // The user runtime starts asynchronously and is observed via its own exact handle.
-    // 用户运行时异步启动，并通过其自身精确句柄观察。
-    let user_runtime = bootstrap_mcp_runtime(vec![user_server])
-        .await
-        .expect("user runtime");
+    // The production replacement registers this actual user original before native dispatch.
+    // 生产替换在原生派发前登记此实际用户原实例。
+    let user_lease = current
+        .start_user_partition(vec![user_server])
+        .expect("registered user replacement");
+    // This observation refers to the exact published user execution owner.
+    // 此观察指向精确已发布用户执行所有者。
+    let user_runtime = user_lease.runtime.clone();
+    // Publish the sole registered execution lease while keeping only the independent control for observation.
+    // 发布唯一已登记执行租约，同时仅保留独立控制用于观察。
+    let current = current.with_replaced_user_partition(user_runtime.overview(), user_lease);
     user_runtime
         .wait_until_ready(OBSERVE)
         .await
         .expect("ready user");
-    // Publish this precise user handle so teardown can be observed independently.
-    // 发布此精确用户句柄，使拆除可被独立观察。
-    let current =
-        current.with_replaced_user_partition(user_runtime.overview(), user_runtime.clone());
     child_holds(&first).await;
     child_holds(&second).await;
     child_holds(&other).await;

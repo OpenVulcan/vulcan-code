@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 /// Build an MCP package with an optional real configuration declaration; return its exact staged package and credentials.
 /// 构建可选声明真实配置的 MCP 插件包；返回其精确已暂存插件包及凭据。
-fn fixture(
+pub(super) fn fixture(
     root: &Path,
     configuration: bool,
 ) -> (

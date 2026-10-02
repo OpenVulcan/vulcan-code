@@ -41,8 +41,8 @@ impl VulcanPluginRuntimeManager {
             .map_err(|_| calls_error())?
             .values()
             .any(|call| {
-                call.activation
-                    .as_ref()
+                call.source
+                    .activation()
                     .is_some_and(|authority| authority.request_id == request_id)
             })
             || owner
@@ -116,6 +116,17 @@ impl VulcanPluginRuntimeManager {
         operation: PredecessorOperation,
         deadline: Instant,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        {
+            // The same real candidate coordinates old lifecycle attempts without replacing their existing drain authority.
+            // 相同真实候选协调旧生命周期尝试，不替换其既有排空权威。
+            let registration = self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+            })?;
+            self.require_routing_publication_locked(
+                &registration,
+                Some(crate::runtime::routing::ActivationRoutingOriginal::Candidate(candidate)),
+            )?;
+        }
         // The completed original drain, not current target metadata, fixes the old package and native scope.
         // 已完成原排空固定旧包及原生作用域，而非当前目标元数据。
         let authority = ActivationExecution::predecessor(&self.state, candidate, drain, operation)?;
@@ -207,7 +218,7 @@ impl VulcanPluginRuntimeManager {
             .map_err(|_| calls_error())?
             .values()
             .filter(|call| {
-                call.activation.as_ref().is_some_and(|authority| {
+                call.source.activation().is_some_and(|authority| {
                     authority.request_id == request_id && !authority.operation.is_candidate()
                 })
             })
@@ -245,7 +256,7 @@ impl VulcanPluginRuntimeManager {
                 .map_err(|_| calls_error())?
                 .values()
                 .filter(|call| {
-                    call.activation.as_ref().is_some_and(|authority| {
+                    call.source.activation().is_some_and(|authority| {
                         authority.request_id == request_id && !authority.operation.is_candidate()
                     })
                 })

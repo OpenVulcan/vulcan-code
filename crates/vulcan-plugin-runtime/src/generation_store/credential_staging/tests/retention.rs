@@ -6,6 +6,8 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod deactivation;
+
 /// Finish one fixture revision and release its actual writer before returning its immutable identity.
 /// 完成单个夹具修订并释放实际写入者，然后返回其不可变身份。
 fn stage(

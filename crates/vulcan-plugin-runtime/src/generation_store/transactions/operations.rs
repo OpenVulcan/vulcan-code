@@ -7,103 +7,6 @@ use crate::generation_store::{
 };
 use VulcanPluginActivationTransactionPhase as Phase;
 
-/// Test-only scoped observation loss never changes persisted bytes or subsequent canonical reads.
-/// 仅测试的作用域观测丢失绝不更改持久字节或后续规范读取。
-#[cfg(test)]
-mod completion_observation_fault {
-    use super::*;
-
-    std::thread_local! {
-        /// One original root/request on this thread may lose its next successful completion observation.
-        /// 此线程单个原根目录／请求可丢失下一次成功完成观测。
-        static ARMED: std::cell::RefCell<Option<(PathBuf, Uuid)>> = const { std::cell::RefCell::new(None) };
-    }
-
-    /// Scope resets unconsumed faults on the same test thread, including assertion unwinding.
-    /// 作用域在相同测试线程重置未消费故障，包括断言展开。
-    pub(super) struct Scope {
-        /// Exact original store and request exclude other tests and unrelated transactions.
-        /// 精确原存储及请求排除其他测试与无关事务。
-        key: (PathBuf, Uuid),
-        /// Thread affinity prevents moving cleanup to another thread-local slot.
-        /// 线程绑定防止将清理移动至另一线程局部槽。
-        _thread: std::marker::PhantomData<std::rc::Rc<()>>,
-    }
-
-    impl Drop for Scope {
-        /// Clear only this scope's still-armed original fault; no inputs, I/O or persisted mutation.
-        /// 仅清除此作用域仍已启用原故障；无输入、I/O 或持久变更。
-        fn drop(&mut self) {
-            ARMED.with(|armed| {
-                // Retain other scoped identities rather than clearing an unrelated fault.
-                // 保留其他作用域身份，不清除无关故障。
-                let mut armed = armed.borrow_mut();
-                if armed.as_ref() == Some(&self.key) {
-                    armed.take();
-                }
-            });
-        }
-    }
-
-    /// Arm one exact original completion; return its non-Send cleanup scope and reject overlapping scopes.
-    /// 启用单个精确原完成；返回不可跨线程清理作用域，并拒绝重叠作用域。
-    pub(super) fn arm(root: &Path, request: Uuid) -> Scope {
-        // Use the existing store identity without opening another owner or assigning a request UUID.
-        // 使用既有存储身份，不打开另一所有者或分配请求 UUID。
-        let key = (root.to_path_buf(), request);
-        ARMED.with(|armed| {
-            // A test must explicitly retire its previous scoped fault before arming another.
-            // 测试必须在启用另一故障之前明确退役先前作用域故障。
-            let mut armed = armed.borrow_mut();
-            assert!(
-                armed.is_none(),
-                "completion observation fault scope overlaps"
-            );
-            *armed = Some(key.clone());
-        });
-        Scope {
-            key,
-            _thread: std::marker::PhantomData,
-        }
-    }
-
-    /// Consume only after the exact original Completed write succeeded, leaving actual bytes intact.
-    /// 仅在精确原 Completed 写入成功之后消费，保持实际字节不变。
-    pub(super) fn consume(root: &Path, request: Uuid, written: bool) -> bool {
-        ARMED.with(|armed| {
-            // Failed real writes never pretend that Completed bytes were persisted.
-            // 真实写入失败绝不假称已持久保存 Completed 字节。
-            let mut armed = armed.borrow_mut();
-            if written
-                && armed
-                    .as_ref()
-                    .is_some_and(|(original, id)| original == root && *id == request)
-            {
-                armed.take();
-                true
-            } else {
-                false
-            }
-        })
-    }
-
-    /// Return unavailable only for this immediate indexed readback; later canonical reads execute normally.
-    /// 仅为此次即时索引回读返回不可用；后续规范读取正常执行。
-    pub(super) fn immediate_readback<T>(
-        lost: bool,
-        read: impl FnOnce() -> VulcanPluginStoreResult<T>,
-    ) -> VulcanPluginStoreResult<T> {
-        if lost {
-            Err(Error::new(
-                Code::Storage,
-                "Controlled loss of immediate Completed indexed readback.",
-            ))
-        } else {
-            read()
-        }
-    }
-}
-
 impl VulcanPluginGenerationStore {
     /// Arm a test-only original post-write observation loss; returned scope resets it without production controls.
     /// 启用仅测试的原写入后观测丢失；返回作用域负责重置，不提供生产开关。
@@ -316,6 +219,9 @@ impl VulcanPluginGenerationStore {
         // The namespace fence orders this operation against every selection writer.
         // 命名空间屏障将此操作与全部选择写入者排序。
         let _namespace = self.namespace_lock(plugin_id, false)?;
+        // Public resumption cannot replace a still-owned original private predecessor instance with a new file owner.
+        // 公开恢复不能以新文件所有者替换仍自有的原私有前驱实例。
+        self.ensure_no_predecessor_handoff_locked(plugin_id)?;
         // Retain the exact original durable request rather than reconstructing its intent.
         // 保留精确原持久请求，而不重建其意图。
         let record = self
@@ -592,6 +498,9 @@ impl VulcanPluginGenerationStore {
         // Cancellation takes the same locks but intentionally does not require a valid candidate package.
         // 取消取得相同锁，但明确不要求候选插件包仍有效。
         let _namespace = self.namespace_lock(plugin_id, false)?;
+        // Public abort cannot clear the original resource reservation, including an already persisted Aborted receipt.
+        // 公开中止不能清除原资源保留权，包括已持久化的 Aborted 回执。
+        self.ensure_no_predecessor_handoff_locked(plugin_id)?;
         // Retain the exact original durable request rather than reconstructing its intent.
         // 保留精确原持久请求，而不重建其意图。
         let mut record = self
@@ -642,13 +551,50 @@ impl VulcanPluginGenerationStore {
         plugin_id: &str,
         request_id: Uuid,
     ) -> VulcanPluginStoreResult<File> {
-        files::lock(
-            &self
-                .root
-                .join("locks")
-                .join(format!("{plugin_id}.transaction.{request_id}.lock")),
-            false,
-        )
+        files::lock(&self.transaction_lease_path(plugin_id, request_id), false)
+    }
+
+    /// Resolve the sole original request lease path for exact `plugin_id` and `request_id`, without opening it.
+    /// 为精确 `plugin_id`、`request_id` 解析唯一原请求租约路径，不打开文件。
+    pub(in crate::generation_store) fn transaction_lease_path(
+        &self,
+        plugin_id: &str,
+        request_id: Uuid,
+    ) -> PathBuf {
+        self.root
+            .join("locks")
+            .join(format!("{plugin_id}.transaction.{request_id}.lock"))
+    }
+
+    /// Inspect an existing terminal original lease under the caller's namespace fence; never create a replacement file.
+    /// 在调用方命名空间屏障下检查既有终态原租约；绝不创建替换文件。
+    /// Returns true for an actual still-live owner, false after real retirement, and an error for missing or invalid storage.
+    /// 实际所有者仍存活返回 true，真实退役后返回 false，存储缺失或无效返回错误。
+    pub(super) fn terminal_transaction_owner_is_live_locked(
+        &self,
+        plugin_id: &str,
+        request_id: Uuid,
+    ) -> VulcanPluginStoreResult<bool> {
+        // Both original acquisition and read-only retirement observation derive this path from the same definition.
+        // 原取得与只读退役观测都从相同定义派生此路径。
+        let path = self.transaction_lease_path(plugin_id, request_id);
+        if !files::exists(&path, false)? {
+            return Err(Error::invalid(
+                "Terminal original activation lease file disappeared.",
+            ));
+        }
+        // Read-only opening cannot truncate, create or repair a missing original physical owner.
+        // 只读打开不能截断、创建或修复缺失原物理所有者。
+        let file = File::open(&path)
+            .map_err(|error| Error::io("Open terminal activation owner lease", error))?;
+        files::exists(&path, false)?;
+        match file.try_lock() {
+            Ok(()) => Ok(false),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+            Err(std::fs::TryLockError::Error(error)) => {
+                Err(Error::io("Inspect terminal activation owner lease", error))
+            }
+        }
     }
 
     /// Require transaction to be the sole owner of its original request lock before mutation.
@@ -807,7 +753,108 @@ impl VulcanPluginGenerationStore {
         let mut next = transaction.record.clone();
         next.phase = phase;
         self.write_transaction_locked(&next)?;
+        // Lose test observation only after the real original checkpoint was successfully written.
+        // 仅在真实原检查点成功写入之后丢失测试观测。
+        #[cfg(test)]
+        super::owned_reconciliation::checkpoint_observation_after_write(&self.root, &next)?;
         transaction.record = next;
         Ok(())
+    }
+}
+
+/// Test-only scoped observation loss never changes persisted bytes or subsequent canonical reads.
+/// 仅测试的作用域观测丢失绝不更改持久字节或后续规范读取。
+#[cfg(test)]
+mod completion_observation_fault {
+    use super::*;
+
+    std::thread_local! {
+        /// One original root/request on this thread may lose its next successful completion observation.
+        /// 此线程单个原根目录／请求可丢失下一次成功完成观测。
+        static ARMED: std::cell::RefCell<Option<(PathBuf, Uuid)>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Scope resets unconsumed faults on the same test thread, including assertion unwinding.
+    /// 作用域在相同测试线程重置未消费故障，包括断言展开。
+    pub(super) struct Scope {
+        /// Exact original store and request exclude other tests and unrelated transactions.
+        /// 精确原存储及请求排除其他测试与无关事务。
+        key: (PathBuf, Uuid),
+        /// Thread affinity prevents moving cleanup to another thread-local slot.
+        /// 线程绑定防止将清理移动至另一线程局部槽。
+        _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+    }
+
+    impl Drop for Scope {
+        /// Clear only this scope's still-armed original fault; no inputs, I/O or persisted mutation.
+        /// 仅清除此作用域仍已启用原故障；无输入、I/O 或持久变更。
+        fn drop(&mut self) {
+            ARMED.with(|armed| {
+                // Retain other scoped identities rather than clearing an unrelated fault.
+                // 保留其他作用域身份，不清除无关故障。
+                let mut armed = armed.borrow_mut();
+                if armed.as_ref() == Some(&self.key) {
+                    armed.take();
+                }
+            });
+        }
+    }
+
+    /// Arm one exact original completion; return its non-Send cleanup scope and reject overlapping scopes.
+    /// 启用单个精确原完成；返回不可跨线程清理作用域，并拒绝重叠作用域。
+    pub(super) fn arm(root: &Path, request: Uuid) -> Scope {
+        // Use the existing store identity without opening another owner or assigning a request UUID.
+        // 使用既有存储身份，不打开另一所有者或分配请求 UUID。
+        let key = (root.to_path_buf(), request);
+        ARMED.with(|armed| {
+            // A test must explicitly retire its previous scoped fault before arming another.
+            // 测试必须在启用另一故障之前明确退役先前作用域故障。
+            let mut armed = armed.borrow_mut();
+            assert!(
+                armed.is_none(),
+                "completion observation fault scope overlaps"
+            );
+            *armed = Some(key.clone());
+        });
+        Scope {
+            key,
+            _thread: std::marker::PhantomData,
+        }
+    }
+
+    /// Consume only after the exact original Completed write succeeded, leaving actual bytes intact.
+    /// 仅在精确原 Completed 写入成功之后消费，保持实际字节不变。
+    pub(super) fn consume(root: &Path, request: Uuid, written: bool) -> bool {
+        ARMED.with(|armed| {
+            // Failed real writes never pretend that Completed bytes were persisted.
+            // 真实写入失败绝不假称已持久保存 Completed 字节。
+            let mut armed = armed.borrow_mut();
+            if written
+                && armed
+                    .as_ref()
+                    .is_some_and(|(original, id)| original == root && *id == request)
+            {
+                armed.take();
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Return unavailable only for this immediate indexed readback; later canonical reads execute normally.
+    /// 仅为此次即时索引回读返回不可用；后续规范读取正常执行。
+    pub(super) fn immediate_readback<T>(
+        lost: bool,
+        read: impl FnOnce() -> VulcanPluginStoreResult<T>,
+    ) -> VulcanPluginStoreResult<T> {
+        if lost {
+            Err(Error::new(
+                Code::Storage,
+                "Controlled loss of immediate Completed indexed readback.",
+            ))
+        } else {
+            read()
+        }
     }
 }

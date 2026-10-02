@@ -101,6 +101,7 @@ lua_runtime:
         // 复用既有服务夹具，不修改进程全局配置。
         let mut bridge = test_agent_runtime_bridge();
         bridge.vulcan_plugin_runtime = runtime.clone();
+        bridge.vulcan_plugin_native_mcp_host = runtime.register_native_mcp_host_adapter();
         // This control path only reads the manager; it does not publish an extension generation.
         // 此控制路径仅读取管理器；不发布扩展代次。
         let mut state = test_service_state_with_parent_session(uuid::Uuid::new_v4());

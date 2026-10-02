@@ -2,6 +2,7 @@
 //! settings runtime projection 辅助逻辑。
 
 use super::*;
+use vulcan_agent_runtime::agent_runtime::extension_generation::ExtensionGeneration;
 use vulcan_service_api::{
     LuaSkillsCatalogChangedDelta, LuaSkillsManagedRuntimeProgressChangedDelta,
     LuaSkillsManagedRuntimeProgressSummary, LuaSkillsOperationProgressChangedDelta,
@@ -11,6 +12,7 @@ use vulcan_service_api::{
 
 /// Carries one atomically committed plugin-owned catalog projection and its public RPC response.
 /// 携带一份原子提交的插件所有目录投影及其公开 RPC 响应。
+#[derive(Clone)]
 pub(crate) struct PluginCatalogProjectionUpdate {
     /// Monotonic workbench revision shared by every projected domain.
     /// 所有投影领域共享的工作台单调版本号。
@@ -672,26 +674,57 @@ pub(crate) fn restore_webui_runtime_controls_for_session(
 
 /// Stores provider and MCP runtime changes after a configuration mutation.
 /// 在配置变更后存储 Provider 与 MCP 运行时变化。
+#[cfg(test)]
 pub(crate) fn store_provider_and_mcp_configuration_after_change(
     state: &SharedServiceBridgeState,
     provider_configuration: ProviderConfigurationFile,
     next_mcp_runtime: McpRuntimeAccess,
 ) -> Result<WorkbenchSnapshot, String> {
+    store_provider_and_mcp_configuration_after_change_with_persistence(
+        state,
+        provider_configuration,
+        next_mcp_runtime,
+        |_| Ok(()),
+    )
+}
+
+/// Validate actual Full ownership and persist MCP configuration under the same service lock as its pointer replacement.
+/// 在与指针替换相同服务锁下校验实际 Full 所有权并持久化 MCP 配置。
+/// state/configuration/next_mcp_runtime are the actual prepared mutation; persist performs only synchronous configuration I/O.
+/// state／configuration／next_mcp_runtime 为实际已准备变更；persist 仅执行同步配置 I/O。
+/// Return the committed workbench; ownership rejection happens before persistence, without holding service across an await.
+/// 返回已提交工作台；所有权拒绝发生于持久化之前，不跨 await 持有服务锁。
+pub(crate) fn store_provider_and_mcp_configuration_after_change_with_persistence(
+    state: &SharedServiceBridgeState,
+    provider_configuration: ProviderConfigurationFile,
+    next_mcp_runtime: McpRuntimeAccess,
+    persist: impl FnOnce(&ProviderConfigurationFile) -> Result<(), String>,
+) -> Result<WorkbenchSnapshot, String> {
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // The same lock excludes an update acquiring publication ownership between validation, persistence and commit.
+    // 相同锁排除更新在校验、持久化及提交之间取得发布所有权。
+    crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
+    persist(&provider_configuration)?;
     if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
+        // Capture the actual full pointer under its sole service publication lock.
+        // 在唯一服务发布锁内捕获实际完整指针。
+        let expected = Arc::clone(&agent_runtime.extension_generation);
         // retiredMcpRuntime keeps the replaced user partition addressable only for existing generation owners during drain.
         // retiredMcpRuntime 仅在排空期间为既有代次持有者保留被替换用户分区的可寻址性。
-        let retired_mcp_runtime = agent_runtime.extension_generation.mcp_runtime();
+        let retired_mcp_runtime = expected.mcp_runtime();
         // nextGeneration preserves the exact plugin catalog while atomically publishing the new user MCP partition.
         // nextGeneration 保留精确插件目录，同时原子发布新的用户 MCP 分区。
-        let next_generation = Arc::new(agent_runtime.extension_generation.republish(
-            next_mcp_runtime,
-            agent_runtime.extension_generation.prompt_skill_catalog(),
-        )?);
+        let next_generation =
+            Arc::new(expected.republish(next_mcp_runtime, expected.prompt_skill_catalog())?);
+        ExtensionGeneration::publish_prepared(
+            &mut agent_runtime.extension_generation,
+            &expected,
+            next_generation,
+            |_| {},
+        )?;
         agent_runtime.provider_configuration = provider_configuration.clone();
-        agent_runtime.extension_generation = next_generation;
         retired_mcp_runtime
             .retire_user_partition_after(AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT);
     }
@@ -820,15 +853,26 @@ fn publish_prompt_skill_catalog_generation(
     state: &mut ServiceBridgeState,
     prompt_skill_catalog: Arc<vulcan_prompt_skills::PromptSkillCatalog>,
 ) -> Result<(), String> {
+    // Prompt-only republication still replaces the exact Full Arc retained by unfinished updates.
+    // 仅提示词重新发布仍会替换未完成更新保留的精确 Full Arc。
+    crate::service_state_access::require_plugin_update_full_publication_admission(state, None)?;
     // An uninitialized service has no execution generation to replace.
     // 尚未初始化的服务没有需要替换的执行代次。
     let Some(agent_runtime) = state.agent_runtime.as_mut() else {
         return Ok(());
     };
-    agent_runtime.extension_generation = Arc::new(agent_runtime.extension_generation.republish(
-        agent_runtime.extension_generation.mcp_runtime(),
-        Some(prompt_skill_catalog),
-    )?);
+    // Exact original full identity is captured under the already-held host publication lock.
+    // 在已持有宿主发布锁内捕获精确原完整身份。
+    let expected = Arc::clone(&agent_runtime.extension_generation);
+    // Preparing the whole successor leaves the original untouched on revision exhaustion.
+    // 准备整个后继使修订耗尽时原值保持不变。
+    let next = Arc::new(expected.republish(expected.mcp_runtime(), Some(prompt_skill_catalog))?);
+    ExtensionGeneration::publish_prepared(
+        &mut agent_runtime.extension_generation,
+        &expected,
+        next,
+        |_| {},
+    )?;
     Ok(())
 }
 
@@ -856,15 +900,44 @@ fn agent_skills_catalog_summary_changed(
 pub(crate) async fn refresh_plugin_catalog_local_state(
     state: &SharedServiceBridgeState,
 ) -> Result<PluginCatalogProjectionUpdate, String> {
+    refresh_plugin_catalog_local_state_with_original(state, None).await
+}
+
+/// Project a completed removal through its actual exclusive original borrow without replacing its committed Full.
+/// 通过实际排他原借用投影已完成移除，不替换其已提交完整代次。
+/// state owns the sole bridge; original validates actual map/Full/catalog and records the adjacent real update.
+/// state 拥有唯一桥；original 校验实际映射／完整代次／目录，并记录相邻真实更新。
+/// Returns the same committed projection used by the existing ordinary entry.
+/// 返回既有普通入口使用的相同已提交投影。
+pub(crate) async fn refresh_plugin_catalog_local_state_for_uninstall(
+    state: &SharedServiceBridgeState,
+    original: &mut crate::skills_services::LocalPluginUninstallProjection<'_>,
+) -> Result<PluginCatalogProjectionUpdate, String> {
+    refresh_plugin_catalog_local_state_with_original(state, Some(original)).await
+}
+
+/// Reuse catalog/Task/workbench projection while keeping ordinary Full publication distinct from an actual removal receipt.
+/// 复用目录／任务／工作台投影，同时区分普通完整发布与实际移除回执。
+/// state supplies current authority; original is absent for ordinary callers and is an exclusive live typed removal borrow.
+/// state 提供当前权威；普通调用者 original 缺失，移除调用者为排他存活类型明确借用。
+/// Returns the actual neighboring update; removal records it before service exclusion is released.
+/// 返回实际相邻更新；移除在释放服务互斥之前记录它。
+async fn refresh_plugin_catalog_local_state_with_original(
+    state: &SharedServiceBridgeState,
+    mut original: Option<&mut crate::skills_services::LocalPluginUninstallProjection<'_>>,
+) -> Result<PluginCatalogProjectionUpdate, String> {
     // configuration_transaction orders the complete projection with concurrent settings mutations.
     // configuration_transaction 使完整投影与并发设置变更保持有序。
     let _configuration_transaction = begin_provider_configuration_transaction().await;
     // provider_configuration is the only persisted policy snapshot used by this projection.
     // provider_configuration 是本次投影使用的唯一持久化策略快照。
     let provider_configuration = provider_configuration_from_state(state)?;
-    // plugin_catalog is immutable and supplies every plugin component in this transaction.
-    // plugin_catalog 不可变，并为本次事务提供全部插件组件。
-    let plugin_catalog = service_vulcan_plugin_runtime(state)?.snapshot();
+    // The exact manager supplies routing and its unique live observation maps.
+    // 精确管理器提供路由及其唯一实时观测映射。
+    let plugin_runtime = service_vulcan_plugin_runtime(state)?;
+    // plugin_catalog is immutable and supplies every routing component in this transaction.
+    // plugin_catalog 不可变，并为本次事务提供全部路由组件。
+    let plugin_catalog = plugin_runtime.snapshot();
     // agent_skills projects ordinary and plugin skills against the exact same plugin revision.
     // agent_skills 使用完全相同的插件版本投影普通 Skill 与插件 Skill。
     let agent_skills =
@@ -888,6 +961,30 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // The complete projection replaces plugin routes, so it must share the publisher's actual shutdown admission.
+    // 完整投影替换插件路由，因此必须共用发布器的实际关闭准入。
+    crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
+    // An actual exclusive removal borrow proves registry/Full identity before its coordination exemption.
+    // 实际排他移除借用在协调豁免之前证明注册表／完整代次身份。
+    let original_request = match original.as_ref() {
+        Some(original) => Some(original.validate(&guard, &plugin_catalog)?),
+        None => None,
+    };
+    crate::service_state_access::require_plugin_update_full_publication_admission(
+        &guard,
+        original_request,
+    )?;
+    // An in-progress installation's manager snapshot is private until its own adjacent full commit.
+    // 进行中安装的管理器快照在其自身相邻完整提交之前保持私有。
+    // Observe the actual published catalog under this same slot lock before task or workbench mutations.
+    // 在任务或工作台变更前，于此相同槽锁内观测实际已发布目录。
+    let published_plugin_catalog = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
+    guard
+        .pending_local_plugin_installs
+        .require_catalog_publication(published_plugin_catalog.as_deref(), &plugin_catalog)?;
     // lua_catalog is the committed ordinary LuaSkills snapshot paired with plugin rows.
     // lua_catalog 是与插件行配对的已提交普通 LuaSkills 快照。
     let lua_catalog = cached_luaskills_catalog_from_state(&guard);
@@ -899,23 +996,35 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
         .as_ref()
         .map(|runtime| runtime.extension_generation.mcp_runtime().server_states())
         .unwrap_or_default();
-    // plugins combines ordinary LuaSkills rows and the exact immutable plugin snapshot.
-    // plugins 合并普通 LuaSkills 行与完全一致的不可变插件快照。
+    // Display statistics come from the actual maps without replacing the catalog retained for Full publication.
+    // 展示统计来自实际映射，不替换为 Full 发布保留的目录。
+    let observed_plugin_catalog = plugin_runtime
+        .observe_catalog(plugin_catalog.as_ref())
+        .map_err(|error| error.to_string())?;
+    // plugins combines ordinary LuaSkills rows and explicit live plugin observation.
+    // plugins 合并普通 LuaSkills 行及明确实时插件观测。
     let plugins = plugins_from_catalogs(
         &lua_catalog,
         &provider_configuration,
-        Some(plugin_catalog.as_ref()),
+        Some(&observed_plugin_catalog),
         &mcp_server_states,
     );
     if let Some(runtime) = guard.agent_runtime.as_mut() {
+        // The actual full original stays owned through the adjacent shared pointer tail.
+        // 实际完整原值跨相邻共享指针尾段保持拥有。
+        let expected = Arc::clone(&runtime.extension_generation);
         // Prepare catalog and conversation routing before the first fallible catalog mutation.
         // 在首次可能失败的目录修改前准备目录与会话路由。
         // Explicit catalog refresh retains the existing MCP access surface; connection replacement remains lifecycle-owned.
         // 显式目录刷新保留现有 MCP 访问面；连接替换仍由生命周期流程持有。
-        let next_extension = runtime.prepare_plugin_extension_generation(
-            Arc::clone(&plugin_catalog),
-            runtime.extension_generation.mcp_runtime(),
-        )?;
+        let next_extension = if original.is_none() {
+            Some(runtime.prepare_plugin_extension_generation(
+                Arc::clone(&plugin_catalog),
+                expected.mcp_runtime(),
+            )?)
+        } else {
+            None
+        };
         runtime
             .task_runtime
             .replace_subagent_catalog(subagent_catalog.clone())
@@ -923,7 +1032,14 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
         // subagentCatalog publishes the same immutable generation used by TaskRuntime and subsequent workbench projections.
         // subagentCatalog 发布与 TaskRuntime 及后续工作台投影共同使用的同一不可变代次。
         runtime.subagent_catalog = Arc::new(subagent_catalog);
-        runtime.extension_generation = next_extension;
+        if let Some(next_extension) = next_extension {
+            ExtensionGeneration::publish_prepared(
+                &mut runtime.extension_generation,
+                &expected,
+                next_extension,
+                |_| {},
+            )?;
+        }
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
@@ -931,13 +1047,19 @@ pub(crate) async fn refresh_plugin_catalog_local_state(
     guard.workbench.plugins = plugins.clone();
     guard.workbench.agent_skills = agent_skills.clone();
     guard.workbench.subagent_catalog = subagent_summary.clone();
-    Ok(PluginCatalogProjectionUpdate {
+    // Construct one true neighboring projection after the last fallible Task commit.
+    // 在最后可失败任务提交之后构造单个真实相邻投影。
+    let update = PluginCatalogProjectionUpdate {
         revision: guard.workbench_generation,
         lua_skills,
         plugins,
         agent_skills,
         subagent_catalog: subagent_summary,
-    })
+    };
+    if let Some(original) = original.as_mut() {
+        original.record(update.clone());
+    }
+    Ok(update)
 }
 
 /// Reprojects LuaSkills after a focused tool-registration configuration change.
@@ -966,13 +1088,22 @@ pub(crate) async fn refresh_luaskills_local_state(
         .as_ref()
         .map(|runtime| runtime.extension_generation.mcp_runtime().server_states())
         .unwrap_or_default();
+    // Overlay the actual published catalog for display without preparing or publishing another routing generation.
+    // 为展示覆盖实际已发布目录，不准备或发布另一条路由代次。
+    let observed_plugin_catalog = guard
+        .agent_runtime
+        .as_ref()
+        .zip(vulcan_plugin_catalog.as_ref())
+        .map(|(runtime, catalog)| runtime.vulcan_plugin_runtime.observe_catalog(catalog))
+        .transpose()
+        .map_err(|error| error.to_string())?;
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.lua_skills = lua_skills_catalog_summary(&catalog, &provider_configuration);
     guard.workbench.plugins = plugins_from_catalogs(
         &catalog,
         &provider_configuration,
-        vulcan_plugin_catalog.as_deref(),
+        observed_plugin_catalog.as_ref(),
         &mcp_server_states,
     );
     Ok(LuaSkillsCatalogUpdate {

@@ -1,7 +1,11 @@
 use super::*;
 
 #[cfg(test)]
+mod original_inventory_tests;
+#[cfg(test)]
 pub(super) mod owner_drain_tests;
+#[cfg(test)]
+mod user_admission_tests;
 use crate::mcp::config::runtime_mcp_server_configs;
 use crate::mcp::config::{McpServerSource, McpServerTransportConfig};
 use crate::model::SessionId;
@@ -347,6 +351,9 @@ pub(super) struct OwnerMcpAdmission {
     /// Global starts remain observable after readiness, including ready candidates not yet published by the service.
     /// 全局启动在就绪后仍可观察，包括服务尚未发布的就绪候选。
     pub(super) managed_globals: BTreeMap<String, Vec<McpRuntimeHandle>>,
+    /// Actual initial and replacement user controls survive lost publication without retaining execution resources.
+    /// 实际首次及替换用户控制跨发布丢失保留，不持有执行资源。
+    user_instances: Vec<McpRuntimeHandle>,
 }
 
 /// Observes cleanup without retaining any execution lease or host resource bundle.
@@ -364,13 +371,13 @@ struct OwnerMcpInstance {
 impl OwnerMcpAdmission {
     /// Returns whether this plugin is blocked by a drain or global shutdown.
     /// 返回此插件是否被排空或全局关闭封锁。
-    fn contains(&self, plugin_id: &str) -> bool {
+    pub(super) fn contains(&self, plugin_id: &str) -> bool {
         self.closed || self.blocked.contains(plugin_id)
     }
 
     /// Removes only instances whose original resource owners confirmed release.
     /// 仅移除原资源所有者已经确认释放的实例。
-    fn prune_released(&mut self) {
+    pub(super) fn prune_released(&mut self) {
         self.instances.retain(|_, instances| {
             instances.retain(|instance| !instance.released.is_released());
             !instances.is_empty()
@@ -379,6 +386,8 @@ impl OwnerMcpAdmission {
             runtimes.retain(|runtime| !runtime.is_fully_stopped());
             !runtimes.is_empty()
         });
+        self.user_instances
+            .retain(|runtime| !runtime.is_fully_stopped());
     }
 }
 
@@ -534,13 +543,134 @@ pub struct McpRuntimeAccess {
     owner_replacement_guards: OwnerReplacementGuardRegistry,
 }
 
+/// Original control lineage holds cleanup observations without extending any global or owner execution lease.
+/// 原控制谱系持有清理观察，不延长任何全局或所有者执行租约。
+pub(super) struct McpRuntimeObservationAccess {
+    /// Original pending controls retain independent cleanup evidence until actual retirement.
+    /// 原待处理控制保留独立清理证据，直至实际退役。
+    pub(super) retired_plugin_partitions: RetiredPluginPartitionRegistry,
+    /// Same original admission serializes publication against shutdown and plugin drain.
+    /// 同一原入场将发布与关闭及插件排空串行化。
+    pub(super) blocked_owner_plugins: BlockedOwnerPluginRegistry,
+    /// Weak registry identity prevents historical controls from prolonging session-owned leases.
+    /// 弱注册表身份防止历史控制延长会话拥有的租约。
+    owned_stdio_partitions: std::sync::Weak<
+        Mutex<BTreeMap<McpRuntimeOwnedPartitionKey, Arc<McpRuntimePartitionLease>>>,
+    >,
+    /// Weak original replacement identity participates in complete lineage comparison.
+    /// 弱原替换身份参与完整谱系比较。
+    owner_replacement_guards: std::sync::Weak<Mutex<BTreeMap<String, Arc<AtomicBool>>>>,
+}
+
+/// Explicit source intent fixes whether the existing plugin drain permits this sealed original preparation.
+/// 明确来源用途固定既有插件排空是否允许此密封原准备。
+enum PreparedPluginMcpAdmission {
+    /// Original target handoff may prepare under plugin drain, while application closure still rejects it.
+    /// 原目标交接可在插件排空下准备，但应用关闭仍拒绝它。
+    TargetHandoff,
+    /// Original old restoration may enter a locally drained plugin, but never global shutdown.
+    /// 原旧恢复可以进入本地已排空插件，但绝不进入全局关闭。
+    PredecessorRestoration,
+    /// Ordinary published work requires both application and plugin admission to remain open.
+    /// 普通已发布工作要求应用及插件入场均保持开放。
+    OrdinaryPublished,
+}
+
+impl McpRuntimeObservationAccess {
+    /// Compare every original registry against current without upgrading an execution-owning registry.
+    /// 不提升拥有执行资源的注册表，对照 current 比较每个原注册表。
+    /// Returns true only for this actual original lineage, including owner and replacement registries.
+    /// 仅此实际原谱系返回真，包括所有者及替换注册表。
+    pub(super) fn same_lineage(&self, current: &McpRuntimeAccess) -> bool {
+        Arc::ptr_eq(
+            &self.retired_plugin_partitions,
+            &current.retired_plugin_partitions,
+        ) && Arc::ptr_eq(&self.blocked_owner_plugins, &current.blocked_owner_plugins)
+            && std::sync::Weak::ptr_eq(
+                &self.owned_stdio_partitions,
+                &Arc::downgrade(&current.owned_stdio_partitions),
+            )
+            && std::sync::Weak::ptr_eq(
+                &self.owner_replacement_guards,
+                &Arc::downgrade(&current.owner_replacement_guards),
+            )
+    }
+}
+
 impl McpRuntimeAccess {
+    /// Retain only original observation and admission registries, without owning any execution partition.
+    /// 仅保留原观察及入场注册表，不拥有任何执行分区。
+    /// No inputs; returns a control-only lineage for historical preparation and publication controls.
+    /// 无输入；返回供历史准备及发布控制使用的仅控制谱系。
+    pub(super) fn observation_access(&self) -> McpRuntimeObservationAccess {
+        McpRuntimeObservationAccess {
+            retired_plugin_partitions: Arc::clone(&self.retired_plugin_partitions),
+            blocked_owner_plugins: Arc::clone(&self.blocked_owner_plugins),
+            owned_stdio_partitions: Arc::downgrade(&self.owned_stdio_partitions),
+            owner_replacement_guards: Arc::downgrade(&self.owner_replacement_guards),
+        }
+    }
+
+    /// Compare every original shared registry rather than accepting one equal route or admission field.
+    /// 比较每个原共享注册表，不接受单个相同路由或入场字段。
+    /// other is the candidate access; returns true only for this same actual bootstrap lineage.
+    /// other 为候选访问；仅此同一实际引导谱系返回真。
+    pub(super) fn same_lineage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(
+            &self.retired_plugin_partitions,
+            &other.retired_plugin_partitions,
+        ) && Arc::ptr_eq(&self.owned_stdio_partitions, &other.owned_stdio_partitions)
+            && Arc::ptr_eq(&self.blocked_owner_plugins, &other.blocked_owner_plugins)
+            && Arc::ptr_eq(
+                &self.owner_replacement_guards,
+                &other.owner_replacement_guards,
+            )
+    }
+
+    /// Check the exact actual lease selected by one immutable plugin partition.
+    /// 检查单个不可变插件分区选定的精确实际租约。
+    /// plugin_id and generation fix its key; expected is a non-owning lease identity, never a routing receipt.
+    /// plugin_id 及 generation 固定其键；expected 为非拥有租约身份，绝非路由回执。
+    /// Returns false for an absent or independently allocated lease, including equal configuration values.
+    /// 租约缺失或独立分配时返回假，包括配置值相同的情况。
+    pub(super) fn contains_exact_plugin_lease(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        expected: &std::sync::Weak<McpRuntimePartitionLease>,
+    ) -> bool {
+        self.live_partitions
+            .get(&format!("plugin:{plugin_id}:{generation}"))
+            .is_some_and(|actual| std::sync::Weak::ptr_eq(expected, &Arc::downgrade(actual)))
+    }
+
     /// Builds one stable MCP runtime access surface from configured summary data and one optional live runtime handle.
     /// 根据配置摘要数据与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
     pub(super) fn new(
         configured_overview: McpRuntimeOverview,
         live_partitions: BTreeMap<String, McpRuntimeHandle>,
     ) -> Self {
+        // Construct the original control inventory before sharing its mutex; registration cannot fail later.
+        // 共享互斥锁之前构造原控制清单，避免之后发生登记失败。
+        let mut admission = OwnerMcpAdmission::default();
+        // The source-derived user partition has one original even when all its declarations are disabled.
+        // 从来源派生的用户分区具有单个原实例，即使其全部声明已停用。
+        if let Some(runtime) = live_partitions.get("user") {
+            admission.user_instances.push(runtime.clone());
+        }
+        for runtime in live_partitions.values() {
+            for plugin_id in runtime.plugin_source_ids() {
+                // Route only from the actual immutable source and deduplicate by real runtime identity.
+                // 仅按实际不可变来源归属，并按真实运行时身份去重。
+                let originals = admission.managed_globals.entry(plugin_id).or_default();
+                if !originals
+                    .iter()
+                    .any(|original| original.same_instance(runtime))
+                {
+                    originals.push(runtime.clone());
+                }
+            }
+        }
         Self {
             configured_overview,
             live_partitions: live_partitions
@@ -549,7 +679,7 @@ impl McpRuntimeAccess {
                 .collect(),
             retired_plugin_partitions: Arc::new(Mutex::new(BTreeMap::new())),
             owned_stdio_partitions: Arc::new(Mutex::new(BTreeMap::new())),
-            blocked_owner_plugins: Arc::new(Mutex::new(OwnerMcpAdmission::default())),
+            blocked_owner_plugins: Arc::new(Mutex::new(admission)),
             owner_replacement_guards: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
@@ -576,16 +706,19 @@ impl McpRuntimeAccess {
 
     /// Builds a new access generation by replacing only the user-configured partition.
     /// 仅替换用户配置分区并构建新的访问代次。
+    /// user_overview describes declared configuration; user_lease is the sole original registered before dispatch.
+    /// user_overview 描述已声明配置；user_lease 为派发前登记的唯一原租约。
+    /// Return the successor sharing the same shutdown and original observation lineage.
+    /// 返回共享同一关闭及原观察谱系的后继。
     pub(super) fn with_replaced_user_partition(
         &self,
         user_overview: McpRuntimeOverview,
-        user_runtime: McpRuntimeHandle,
+        user_lease: Arc<McpRuntimePartitionLease>,
     ) -> Self {
+        // Transfer the already registered original lease; a second allocation would split execution identity.
+        // 转交已经登记的原租约；再次分配会分裂执行身份。
         let mut live_partitions = self.live_partitions.clone();
-        live_partitions.insert(
-            String::from("user"),
-            Arc::new(McpRuntimePartitionLease::new(user_runtime)),
-        );
+        live_partitions.insert(String::from("user"), user_lease);
         let configured_overview = merge_mcp_runtime_overviews(
             std::iter::once(user_overview).chain(
                 live_partitions
@@ -604,6 +737,43 @@ impl McpRuntimeAccess {
         )
     }
 
+    /// Register one configured user original under shared admission before native dispatch.
+    /// 在原生派发之前，在共享入场下登记单个已配置用户原实例。
+    /// servers are the validated user declarations; return the sole registered lease or a pre-dispatch error.
+    /// servers 为已校验用户声明；返回唯一已登记租约或派发前错误。
+    pub(super) fn start_user_partition(
+        &self,
+        servers: Vec<McpServerConfig>,
+    ) -> Result<Arc<McpRuntimePartitionLease>, String> {
+        // Configured user work has no plugin resource bundle or sealed plugin source authority.
+        // 已配置用户工作不带插件资源包或密封插件来源权威。
+        let (resources, _) = vulcan_mcp_runtime::McpTransportResources::new(());
+        // Pure allocation cannot start a producer before admission is checked.
+        // 纯分配不能在检查入场之前启动生产者。
+        let prepared = super::handle::prepare_managed_mcp_runtime(servers, resources)?;
+        // Original shutdown and registration serialize on this existing shared lineage.
+        // 原关闭及登记在此既有共享谱系上串行化。
+        let mut admission = self
+            .blocked_owner_plugins
+            .lock()
+            .map_err(|_| String::from("User MCP admission is poisoned."))?;
+        if admission.closed {
+            return Err(String::from("User MCP admission is globally closed."));
+        }
+        // Retain only the actual control in the inventory, never the execution lease or physical resources.
+        // 清单仅保留实际控制，绝不保留执行租约或物理资源。
+        let runtime = prepared.handle();
+        // This exact execution identity is transferred through replacement without reallocation.
+        // 此精确执行身份跨替换转交，不再次分配。
+        let lease = Arc::new(McpRuntimePartitionLease::new(runtime.clone()));
+        admission.prune_released();
+        admission.user_instances.push(runtime);
+        // Both admission and original control are established before any native lifecycle task exists.
+        // 任何原生生命周期任务存在之前，入场及原控制均已建立。
+        prepared.dispatch();
+        Ok(lease)
+    }
+
     /// Builds a new access generation by replacing every prior generation of one plugin partition.
     /// 通过替换单个插件分区的全部旧代次来构建新的访问代次。
     pub(super) fn with_replaced_plugin_partition(
@@ -613,6 +783,7 @@ impl McpRuntimeAccess {
         plugin_overview: McpRuntimeOverview,
         plugin_runtime: McpRuntimeHandle,
     ) -> Self {
+        self.retain_removed_plugin_controls(plugin_id);
         let partition_prefix = format!("plugin:{plugin_id}:");
         let mut live_partitions = self.live_partitions.clone();
         live_partitions.retain(|key, _| !key.starts_with(&partition_prefix));
@@ -641,6 +812,7 @@ impl McpRuntimeAccess {
     /// Builds a new access generation without any live partition owned by one plugin.
     /// 构建一个不包含指定插件任何实时分区的新访问代次。
     pub(super) fn without_plugin_partition(&self, plugin_id: &str) -> Self {
+        self.retain_removed_plugin_controls(plugin_id);
         let partition_prefix = format!("plugin:{plugin_id}:");
         let mut live_partitions = self.live_partitions.clone();
         live_partitions.retain(|key, _| !key.starts_with(&partition_prefix));
@@ -663,12 +835,13 @@ impl McpRuntimeAccess {
     /// 使用调用方当前访问，仅将此目标分区替换为其相同已准备实际租约。
     /// Inputs fix exact plugin and generation; return a new access retaining every unrelated partition.
     /// 输入固定精确插件及代次；返回保留全部无关分区的新访问。
-    pub(super) fn with_prepared_target_lease(
+    pub(super) fn with_prepared_plugin_lease(
         &self,
         plugin_id: &str,
         generation: u64,
         lease: Arc<McpRuntimePartitionLease>,
     ) -> Self {
+        self.retain_removed_plugin_controls(plugin_id);
         // Preserve original lease identity, including its closed gate, rather than wrapping a replacement.
         // 保留原租约身份及其关闭业务门，不包装替代租约。
         let prefix = format!("plugin:{plugin_id}:");
@@ -689,6 +862,45 @@ impl McpRuntimeAccess {
             Arc::clone(&self.blocked_owner_plugins),
             Arc::clone(&self.owner_replacement_guards),
         )
+    }
+
+    /// Retain actual controls for partitions selected for removal before constructing another access generation.
+    /// 构造另一访问代次之前，保留已选定待移除分区的实际控制句柄。
+    /// Plugin_id selects the existing partition namespace; immutable runtime sources supply observation ownership.
+    /// plugin_id 选择既有分区命名空间；不可变运行时来源提供观察归属。
+    /// No execution lease is cloned or revoked; a poisoned registry fails under the existing infallible contract.
+    /// 不克隆或撤销执行租约；注册表锁中毒按既有不可失败契约显式失败。
+    fn retain_removed_plugin_controls(&self, plugin_id: &str) {
+        // These constructors enter without admission or retirement locks; hold only observation storage here.
+        // 这些构造器进入时不持有准入或退役锁；此处仅持有观察存储。
+        let mut registry = self
+            .retired_plugin_partitions
+            .lock()
+            .expect("retired MCP plugin partition registry poisoned");
+        // Existing cleanup observers prune terminal success; registration itself takes no runtime-state locks.
+        // 既有清理观察者清理成功终态；登记本身不取得运行时状态锁。
+        // A publication caller may retain a business guard, so inspecting that gate here would risk lock reentry.
+        // 发布调用方可能保留业务守卫，因此此处检查该门可能导致锁重入。
+        // This is the same canonical namespace selector used by the actual removal below, not parsed provenance.
+        // 这是下方实际移除使用的同一规范命名空间选择器，不是解析所得来源证明。
+        let prefix = format!("plugin:{plugin_id}:");
+        for (_, lease) in self
+            .live_partitions
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+        {
+            for source_plugin_id in lease.runtime.plugin_source_ids() {
+                // Controls contain independent cleanup receipts and never own the native execution scope.
+                // 控制包含独立清理回执，绝不拥有原生执行范围。
+                let originals = registry.entry(source_plugin_id).or_default();
+                if !originals
+                    .iter()
+                    .any(|original| original.same_instance(&lease.runtime))
+                {
+                    originals.push(lease.runtime.clone());
+                }
+            }
+        }
     }
 
     /// Returns one stable MCP runtime overview backed by live runtime state when available, or configured fallback data otherwise.
@@ -840,9 +1052,12 @@ impl McpRuntimeAccess {
         // The returned owner covers the unpublished caller as well as real transport tasks.
         // 返回的所有者覆盖尚未发布的调用者及实际传输任务。
         let (resources, released) = vulcan_mcp_runtime::McpTransportResources::new(());
-        // Creation validates all servers before spawning and contains no asynchronous gap.
-        // 创建在启动前验证全部服务器，且不包含异步间隙。
-        let runtime = super::handle::start_managed_mcp_runtime(servers, resources.clone())?;
+        // Pure preparation validates all servers; original ownership is registered before any lifecycle task can run.
+        // 纯准备验证全部服务器；任何生命周期任务可运行之前登记原所有权。
+        let prepared = super::handle::prepare_managed_mcp_runtime(servers, resources.clone())?;
+        // The registered control is the same allocation dispatched and returned to the owner.
+        // 已登记控制与派发并返回所有者的控制为相同分配。
+        let runtime = prepared.handle();
         admission
             .instances
             .entry(key.clone())
@@ -851,6 +1066,9 @@ impl McpRuntimeAccess {
                 runtime: runtime.clone(),
                 released,
             });
+        // Keep original admission locked through dispatch after its physical observation has been inserted.
+        // 插入其物理观测之后，跨派发保持原准入锁定。
+        prepared.dispatch();
         Ok((runtime, resources))
     }
 
@@ -1202,13 +1420,16 @@ impl McpRuntimeAccess {
             .map_err(|_| String::from("retired MCP plugin partition registry poisoned"))?;
         // Ordinary managed starts carry an empty host bundle through the common constructor.
         // 普通受管启动通过公共构造器携带空宿主资源包。
-        // Both locks remain held until this new original is registered.
-        // 此新原实例登记之前一直持有两把锁。
-        let runtime = if target_preparation {
-            super::handle::start_target_mcp_runtime(servers, resources)?
+        // Pure preparation retains exact input ownership without starting a task.
+        // 纯准备保留精确输入所有权，不启动任务。
+        let prepared = if target_preparation {
+            super::handle::prepare_unproven_target_mcp_runtime(servers, resources)?
         } else {
-            super::handle::start_managed_mcp_runtime(servers, resources)?
+            super::handle::prepare_managed_mcp_runtime(servers, resources)?
         };
+        // Register the same original control before dispatch, without allocating a temporary execution lease.
+        // 派发前登记相同原控制，不分配临时执行租约。
+        let runtime = prepared.handle();
         // Controls do not retain actual execution resources after cancellation.
         // 取消后控制不会保留实际执行资源。
         let originals = registry.entry(plugin_id.to_owned()).or_default();
@@ -1222,7 +1443,127 @@ impl McpRuntimeAccess {
             .entry(plugin_id.to_owned())
             .or_default()
             .push(runtime.clone());
+        // Both admission and original inventory remain locked until the registered work has been dispatched.
+        // 已登记工作完成派发之前，准入及原清单均保持锁定。
+        prepared.dispatch();
         Ok(runtime)
+    }
+
+    /// Register an original proven ordinary control and its sole lease before any lifecycle task starts.
+    /// 在任何生命周期任务启动前登记原已证明普通控制及其唯一租约。
+    /// plugin_id, servers, resources and profile come from sealed materialization; return the same registered lease.
+    /// plugin_id、servers、resources 及 profile 来自密封物化；返回同一已登记租约。
+    /// Ordinary admission rejects both global closure and plugin drain; target preparation keeps its separate contract.
+    /// 普通入场同时拒绝全局关闭及插件排空；目标准备保持其独立契约。
+    pub(super) fn start_published_plugin_partition(
+        &self,
+        plugin_id: &str,
+        servers: Vec<McpServerConfig>,
+        resources: vulcan_mcp_runtime::McpTransportResources,
+        profile: vulcan_plugin_runtime::VulcanPluginPublishedMcpProfile,
+    ) -> Result<Arc<McpRuntimePartitionLease>, String> {
+        // Allocate without effects, then register this original under the explicit ordinary admission policy.
+        // 无副作用分配，然后按明确普通入场策略登记此原实例。
+        let prepared = super::handle::prepare_published_mcp_runtime(servers, resources, profile)?;
+        self.register_prepared_plugin_partition(
+            plugin_id,
+            prepared,
+            PreparedPluginMcpAdmission::OrdinaryPublished,
+        )
+    }
+
+    /// Allocate and register the original sealed target and sole actual lease before any task can exist.
+    /// 在任何任务可能存在前，分配及登记原密封目标与唯一实际租约。
+    /// plugin_id, servers, resources and profile come from sealed materialization; return the registered original lease.
+    /// plugin_id、servers、resources 及 profile 来自密封物化；返回已登记原租约。
+    pub(super) fn start_target_plugin_partition(
+        &self,
+        plugin_id: &str,
+        servers: Vec<McpServerConfig>,
+        resources: vulcan_mcp_runtime::McpTransportResources,
+        profile: vulcan_plugin_runtime::VulcanPluginTargetMcpProfile,
+    ) -> Result<Arc<McpRuntimePartitionLease>, String> {
+        // Target source is fixed before dispatch and never receives ordinary published authority.
+        // 目标来源在派发前固定，绝不获得普通已发布权威。
+        let prepared = super::handle::prepare_target_mcp_runtime(servers, resources, profile)?;
+        self.register_prepared_plugin_partition(
+            plugin_id,
+            prepared,
+            PreparedPluginMcpAdmission::TargetHandoff,
+        )
+    }
+
+    /// Register original old restoration before dispatch while preserving its local drain fence.
+    /// 在派发前登记原旧恢复，同时保留其本地排空屏障。
+    /// plugin_id, servers, resources and profile are sealed old inputs; return the sole actual lease.
+    /// plugin_id、servers、resources 及 profile 为密封旧输入；返回唯一实际租约。
+    pub(super) fn start_predecessor_plugin_partition(
+        &self,
+        plugin_id: &str,
+        servers: Vec<McpServerConfig>,
+        resources: vulcan_mcp_runtime::McpTransportResources,
+        profile: vulcan_plugin_runtime::VulcanPluginPredecessorMcpProfile,
+    ) -> Result<Arc<McpRuntimePartitionLease>, String> {
+        // Reuse actual registration, observation ownership and dispatch without opening business.
+        // 复用实际登记、观察所有权及派发，不打开业务。
+        let prepared = super::handle::prepare_predecessor_mcp_runtime(servers, resources, profile)?;
+        self.register_prepared_plugin_partition(
+            plugin_id,
+            prepared,
+            PreparedPluginMcpAdmission::PredecessorRestoration,
+        )
+    }
+
+    /// Register prepared under admission_policy before dispatch and preserve this actual original across lost returns.
+    /// 按 admission_policy 在派发前登记 prepared，跨返回丢失保留此实际原实例。
+    /// plugin_id selects the original observation slot; return its sole allocated lease or an error before dispatch.
+    /// plugin_id 选择原观察槽；返回其唯一已分配租约或派发前错误。
+    fn register_prepared_plugin_partition(
+        &self,
+        plugin_id: &str,
+        prepared: super::handle::PreparedMcpRuntime,
+        admission_policy: PreparedPluginMcpAdmission,
+    ) -> Result<Arc<McpRuntimePartitionLease>, String> {
+        // Local drain and original registration use the existing single admission lineage.
+        // 本地排空及原登记使用既有单一入场谱系。
+        let mut admission = self
+            .blocked_owner_plugins
+            .lock()
+            .map_err(|_| String::from("Prepared MCP admission is poisoned."))?;
+        if match admission_policy {
+            PreparedPluginMcpAdmission::TargetHandoff
+            | PreparedPluginMcpAdmission::PredecessorRestoration => admission.closed,
+            PreparedPluginMcpAdmission::OrdinaryPublished => admission.contains(plugin_id),
+        } {
+            return Err(String::from("Prepared MCP plugin admission is closed."));
+        }
+        // Acquire the same original observation registry before allocating or dispatching work.
+        // 分配或派发工作前取得同一原观察注册表。
+        let mut registry = self
+            .retired_plugin_partitions
+            .lock()
+            .map_err(|_| String::from("Prepared MCP observation registry is poisoned."))?;
+        // Original control is retained in both existing tables before any producer can lose its return.
+        // 任何生产者可能丢失返回之前，在两个既有表中保留原控制。
+        let runtime = prepared.handle();
+        // One lease is allocated before dispatch; subsequent publication must transfer this exact instance.
+        // 派发前分配单个租约；后续发布必须转交此精确实例。
+        let lease = Arc::new(McpRuntimePartitionLease::new(runtime.clone()));
+        // Registration prunes only confirmed old release, never infers it from failed readiness.
+        // 登记仅清理已确认旧释放，绝不从就绪失败推断释放。
+        let originals = registry.entry(plugin_id.to_owned()).or_default();
+        originals.retain(|original| !original.is_fully_stopped());
+        originals.push(runtime.clone());
+        admission.prune_released();
+        admission
+            .managed_globals
+            .entry(plugin_id.to_owned())
+            .or_default()
+            .push(runtime);
+        // Only now may native tasks exist; even a partial dispatch retains its original drain controls.
+        // 仅此时原生任务才可存在；即使部分派发也保留其原排空控制。
+        prepared.dispatch();
+        Ok(lease)
     }
 
     /// Transfers a successful unpublished global start out of cleanup history under the same registry lock.
@@ -1802,6 +2143,11 @@ impl McpRuntimeAccess {
         for runtime in admission.managed_globals.values().flatten() {
             runtime.shutdown();
         }
+        // User originals may have been replaced or published through a later access while this guard stays armed.
+        // 此守卫保持生效期间，用户原实例可能已被替换或经后续访问发布。
+        for runtime in &admission.user_instances {
+            runtime.shutdown();
+        }
         // Global startup originals may not yet belong to this published access.
         // 原全局启动可能尚未属于此发布访问。
         let originals = self
@@ -1837,6 +2183,53 @@ impl McpRuntimeAccess {
             lease.revoke();
             lease.runtime.shutdown();
         }
+    }
+
+    /// Wait for physical retirement of every original user runtime in this shared shutdown lineage.
+    /// 等待此共享关闭谱系内每个原用户运行时物理退役。
+    /// maximum_wait bounds the whole captured set; no admission lock survives an await.
+    /// maximum_wait 限制整个捕获集合；入场锁不跨 await 存续。
+    /// Return success only after original cleanup and physical release, rejecting unrequested or later live work.
+    /// 仅在原清理及物理释放后返回成功，拒绝未请求关闭或更晚的存活工作。
+    pub async fn wait_user_mcp_drain(&self, maximum_wait: Duration) -> Result<(), String> {
+        // One checked absolute deadline prevents partition count from multiplying the budget.
+        // 单个经检查的绝对期限防止分区数量成倍放大预算。
+        let deadline = tokio::time::Instant::now()
+            .checked_add(maximum_wait)
+            .ok_or_else(|| String::from("User MCP drain deadline is out of range."))?;
+        // Clone non-owning actual controls while registration and shutdown cannot change the inventory.
+        // 在登记及关闭无法改变清单期间，克隆非拥有实际控制。
+        let originals = self
+            .blocked_owner_plugins
+            .lock()
+            .map_err(|_| String::from("User MCP admission is poisoned."))?
+            .user_instances
+            .clone();
+        // Every actual original shares the same total deadline and requires an explicit prior shutdown request.
+        // 每个实际原实例共享同一总期限，并要求此前明确请求关闭。
+        for runtime in originals {
+            if !runtime.shutdown_requested() {
+                return Err(String::from(
+                    "An original user MCP runtime has not entered drain.",
+                ));
+            }
+            runtime.wait_until_drained(deadline).await?;
+        }
+        // Recheck the actual original inventory and preserve every unresolved control across failures.
+        // 重新检查实际原清单，并跨失败保留每个未解决控制。
+        let mut admission = self
+            .blocked_owner_plugins
+            .lock()
+            .map_err(|_| String::from("User MCP admission is poisoned."))?;
+        if admission
+            .user_instances
+            .iter()
+            .any(|runtime| !runtime.is_fully_stopped())
+        {
+            return Err(String::from("User MCP originals changed during drain."));
+        }
+        admission.prune_released();
+        Ok(())
     }
 
     /// Requests only the stable user-configured runtime partition to stop.

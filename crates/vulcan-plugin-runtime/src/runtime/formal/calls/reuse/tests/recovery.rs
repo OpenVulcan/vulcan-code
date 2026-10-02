@@ -731,7 +731,11 @@ async fn hot_reuse_failed_publication_fences_admission_and_retries_original_evid
         tokio::time::sleep(OBSERVATION_INTERVAL).await;
     }
     assert!(
-        fixture.manager.snapshot().plugins["idle-plugin"]
+        fixture
+            .manager
+            .observe_catalog(&fixture.manager.snapshot())
+            .expect("actual reusable shutdown diagnostic projection")
+            .plugins["idle-plugin"]
             .diagnostics
             .iter()
             .any(|message| message.contains("shutdown-marker"))

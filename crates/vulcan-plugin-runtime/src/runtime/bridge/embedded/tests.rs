@@ -380,6 +380,113 @@ fn native_host_binds_identity_deadline_and_revocation() {
     fixture.close();
 }
 
+/// Real configuration reads must observe changed values and same-generation schema files without stale-cache success.
+/// 真实配置读取必须观测变更值及同代 Schema 文件，不允许过期缓存导致成功。
+#[test]
+fn native_host_config_schema_cache_observes_current_values_and_files() {
+    // Reuse the actual native configuration fixture, including its isolated package and public manager.
+    // 复用实际原生配置夹具，包含其隔离插件包及公开管理器。
+    let fixture = Fixture::new();
+    // The real native capability returns structured success or failure inside the original Lua operation.
+    // 真实原生能力在原 Lua 操作内返回结构化成功或失败。
+    let pool = fixture.pool("return {call=function(a) return vulcan.host.call('vulcan.plugin.config.get',vulcan.json.object()) end}");
+    // Capture only actual generation metadata, never a fabricated cache-hit indicator.
+    // 仅捕获实际代次元数据，绝不伪造缓存命中指示。
+    let original = fixture.manager.snapshot().plugins["hook-plugin"].clone();
+    // The package defaults exercise the first real read and compile.
+    // 插件包默认值覆盖首次真实读取及编译。
+    let initial = fixture.call(&pool, json!({})).0;
+    assert_eq!(initial["ok"], true, "{initial}");
+    assert_eq!(initial["value"], json!({"owner":"initial"}));
+    fixture
+        .manager
+        .update_plugin_config("hook-plugin", json!({"owner":"persisted"}))
+        .expect("persist changed configuration");
+    // Reusing compilation must still return the newly persisted value.
+    // 复用编译仍必须返回新持久化值。
+    let changed = fixture.call(&pool, json!({})).0;
+    assert_eq!(changed["ok"], true, "{changed}");
+    assert_eq!(changed["value"], json!({"owner":"persisted"}));
+    // This exact state path is the production helper's sole configuration authority.
+    // 此精确状态路径是生产辅助方法的唯一配置权威。
+    let state_path = crate::runtime::configuration::plugin_config_state_path(
+        &fixture.manager.state.plugin_state_root,
+        &original.id,
+    );
+    fs::write(&state_path, r#"{"owner":9}"#).expect("replace current configuration value");
+    // A formerly valid schema cannot authorize an invalid current configuration or return a prior result.
+    // 先前有效 Schema 不能授权无效当前配置，也不能返回先前结果。
+    let invalid_value = fixture.call(&pool, json!({})).0;
+    assert_eq!(invalid_value["ok"], false, "{invalid_value}");
+    assert!(
+        invalid_value["error"]["message"]
+            .as_str()
+            .expect("native configuration error message")
+            .contains("Invalid plugin configuration:"),
+        "{invalid_value}"
+    );
+    fs::write(&state_path, r#"{"owner":"persisted"}"#).expect("restore current configuration");
+    // Retain the exact declared schema path while changing its real contents without a catalog refresh.
+    // 不刷新目录地变更真实内容期间，保留精确声明的 Schema 路径。
+    let schema_path = original.package_root.join("config.schema.json");
+    // The accepted schema remains sourced from the actual fixture file.
+    // 接受模式仍来自实际夹具文件。
+    let accepted = fs::read_to_string(&schema_path).expect("read original configuration schema");
+    // Changed semantics, malformed JSON and an external reference must each reject before restored reads succeed.
+    // 语义变更、损坏 JSON 及外部引用均必须拒绝，恢复后的读取才可成功。
+    for (contents, expected_error) in [
+        (
+            r#"{"type":"object","properties":{"owner":{"const":"initial"}}}"#,
+            Some("Invalid plugin configuration:"),
+        ),
+        (
+            "{not-json",
+            Some("Failed to decode Vulcan plugin configuration schema"),
+        ),
+        (
+            r#"{"$ref":"https://example.invalid/configuration-schema"}"#,
+            Some("only local fragment references are allowed"),
+        ),
+        (accepted.as_str(), None),
+    ] {
+        fs::write(&schema_path, contents).expect("change current schema file");
+        // Each call uses the original real pool and native config.get participant.
+        // 每次调用使用原真实池及原生 config.get 参与者。
+        let result = fixture.call(&pool, json!({})).0;
+        // Each rejection must expose the production failure category selected by this actual file mutation.
+        // 每次拒绝必须暴露此实际文件变更选定的生产失败类别。
+        if let Some(message) = expected_error {
+            assert_eq!(result["ok"], false, "{result}");
+            assert!(
+                result["error"]["message"]
+                    .as_str()
+                    .expect("native schema failure message")
+                    .contains(message),
+                "{result}"
+            );
+        } else {
+            assert_eq!(result["ok"], true, "{result}");
+            assert_eq!(result["value"], json!({"owner":"persisted"}));
+        }
+        assert_eq!(
+            fixture.manager.snapshot().plugins["hook-plugin"].generation,
+            original.generation
+        );
+    }
+    // This observes actual parent teardown after all successful and rejected native reads completed.
+    // 全部成功及拒绝的原生读取完成后，此处观测实际父级清理。
+    fixture.close();
+    assert_eq!(
+        fixture
+            .host
+            .runtime()
+            .resources()
+            .expect("closed resources")
+            .resident,
+        0
+    );
+}
+
 /// Actual catalog refresh rejects retained old-generation callbacks and stale config writes.
 /// 真实目录刷新拒绝保留旧代次回调及过期配置写入。
 #[test]

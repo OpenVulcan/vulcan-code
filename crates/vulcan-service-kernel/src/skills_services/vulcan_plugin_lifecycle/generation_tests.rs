@@ -4,6 +4,9 @@
 use super::*;
 use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
 
+pub(in crate::skills_services) mod published;
+mod shutdown;
+
 /// Verifies real service publication, settings preservation, and failed preparation isolation.
 /// 验证真实服务发布、设置更新保留及准备失败隔离。
 #[tokio::test]

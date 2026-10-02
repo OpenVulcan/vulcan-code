@@ -2,6 +2,14 @@
 //! 仅在精确原事务已确认后，已准备参与者才接收完成证据。
 
 use super::*;
+mod predecessor;
+pub(in crate::runtime::formal::instances) use predecessor::NoPredecessorHandoffAdapter;
+pub use predecessor::{
+    VulcanPluginActivationPredecessorCompletion,
+    VulcanPluginActivationPredecessorHandoffParticipant,
+    VulcanPluginActivationPredecessorRegistration, VulcanPluginMcpPredecessorHandoffEvidence,
+    VulcanPluginNativeMcpPredecessorHandoffAdapter,
+};
 
 /// Borrowed registration evidence proves the actual manager gate remains held during participant preparation.
 /// 借用注册证据证明参与者准备期间，实际管理器注册门保持持有。

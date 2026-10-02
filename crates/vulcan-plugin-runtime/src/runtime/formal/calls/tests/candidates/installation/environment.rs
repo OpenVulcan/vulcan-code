@@ -3,8 +3,7 @@
 
 use super::*;
 use crate::runtime::environment::{
-    lock_plugin_execution_environment_cleanup, remove_obsolete_plugin_execution_environments,
-    remove_plugin_execution_environment_generation,
+    lock_plugin_execution_environment_cleanup, remove_plugin_execution_environment_generation,
 };
 
 /// Preparation errors after lease acquisition must release original authority without invoking Lua.
@@ -210,16 +209,6 @@ fn formal_candidate_environment_outlives_observer_until_actual_retirement() {
                 .is_err(),
                 "targeted production cleanup must remain excluded"
             );
-            assert!(
-                remove_obsolete_plugin_execution_environments(
-                    &fixture.manager.state,
-                    &plugin.id,
-                    "2.0.0",
-                    "other-generation",
-                )
-                .is_err(),
-                "version cleanup must respect the same lease"
-            );
             assert!(environment.is_dir());
             // Observe authority weakly so the test never extends the lifetime it is measuring.
             // 弱观察权威，使测试绝不延长所测寿命。
@@ -227,7 +216,7 @@ fn formal_candidate_environment_outlives_observer_until_actual_retirement() {
                 // The original formal call is still executing or initializing in its actual pool.
                 // 原正式调用仍在其实际池中执行或初始化。
                 let call = fixture.admitted().await;
-                Arc::downgrade(call.activation.as_ref().expect("original native candidate"))
+                Arc::downgrade(call.source.activation().expect("original native candidate"))
             };
             fixture.events.release();
             fixture

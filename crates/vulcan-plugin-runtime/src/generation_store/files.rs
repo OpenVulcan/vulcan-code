@@ -185,6 +185,46 @@ pub(super) fn write_record(path: &Path, record: &impl Serialize) -> Result<()> {
     write_encoded_record(path, &bytes, MAX_RECORD_BYTES)
 }
 
+/// Verify that the actual pretty-encoded record can publish every declared phase within the sole durable record limit.
+/// 验证实际美化编码记录能够在唯一持久记录上限内发布每个声明阶段。
+/// record/phase/progress are typed actual schema values; returns unit or an error before any metadata or secure effects.
+/// record／phase／progress 为类型化实际结构值；任何元数据或安全效果之前返回空值或错误。
+pub(super) fn validate_record_phase_capacity<P: Serialize>(
+    record: &impl Serialize,
+    phase: &P,
+    progress: &[P],
+) -> Result<()> {
+    // Use the same durable encoding as write_record, rather than the smaller compact retained-inventory representation.
+    // 使用与 write_record 相同持久编码，而非较小紧凑保留清单表示。
+    let bytes = serde_json::to_vec_pretty(record)
+        .map_err(|_| Error::invalid("Cannot encode cleanup record capacity."))?;
+    // Actual phase encodings derive future growth without introducing another numeric record limit.
+    // 实际阶段编码推导未来增长，不引入另一数值记录上限。
+    let current_size = serde_json::to_vec_pretty(phase)
+        .map_err(|_| Error::invalid("Cannot encode cleanup phase capacity."))?
+        .len();
+    // The maximum comes from the sole schema phase list, not a guessed byte allowance.
+    // 最大值来自唯一结构阶段列表，而非猜测字节额度。
+    let largest_size = progress.iter().try_fold(current_size, |size, candidate| {
+        serde_json::to_vec_pretty(candidate)
+            .map(|encoded| size.max(encoded.len()))
+            .map_err(|_| Error::invalid("Cannot encode cleanup progress capacity."))
+    })?;
+    // Checked exact growth reserves publication capacity before a first journal can leave an uncollectable original.
+    // 检查精确增长，在首日志可能留下不可回收原实例之前预留发布容量。
+    let maximum_size = bytes
+        .len()
+        .checked_sub(current_size)
+        .and_then(|size| size.checked_add(largest_size))
+        .ok_or_else(|| Error::invalid("Cleanup record capacity overflow."))?;
+    if maximum_size as u64 > MAX_RECORD_BYTES {
+        return Err(Error::invalid(
+            "Cleanup phase exceeds the durable record byte limit.",
+        ));
+    }
+    Ok(())
+}
+
 /// Publish pre-encoded `bytes` at `path` within `maximum`; errors require exact readback before further mutation.
 /// 在 `maximum` 内向 `path` 发布预编码 `bytes`；错误要求进一步变更前精确回读。
 pub(super) fn write_encoded_record(path: &Path, bytes: &[u8], maximum: u64) -> Result<()> {

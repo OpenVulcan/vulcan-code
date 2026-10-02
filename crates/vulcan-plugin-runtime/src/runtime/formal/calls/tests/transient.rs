@@ -345,7 +345,10 @@ fn formal_transient_disconnect_distinguishes_read_and_mutation() {
             );
             assert!(fixture.manager.admit_action("hook-plugin", 1).is_err());
             assert_eq!(
-                fixture.manager.snapshot().plugins["hook-plugin"].active_session_count,
+                fixture
+                    .manager
+                    .active_session_count("hook-plugin")
+                    .expect("actual live reservation count"),
                 1
             );
             fixture.events.release();
@@ -648,7 +651,10 @@ fn formal_probe_interruption_preserves_ownership_and_warning() {
         fixture.admitted().await
     });
     assert_eq!(
-        fixture.manager.snapshot().plugins["hook-plugin"].active_session_count,
+        fixture
+            .manager
+            .active_session_count("hook-plugin")
+            .expect("actual live reservation count"),
         0
     );
     drop(runtime);
@@ -670,7 +676,11 @@ fn formal_probe_interruption_preserves_ownership_and_warning() {
             .clear_cleanup_diagnostics_if_fully_drained("hook-plugin")
             .expect("inspect real ownership");
         assert!(
-            fixture.manager.snapshot().plugins["hook-plugin"]
+            fixture
+                .manager
+                .observe_catalog(&fixture.manager.snapshot())
+                .expect("actual retained cleanup projection")
+                .plugins["hook-plugin"]
                 .diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.contains(&original.id))
@@ -683,7 +693,11 @@ fn formal_probe_interruption_preserves_ownership_and_warning() {
             .clear_cleanup_diagnostics_if_fully_drained("hook-plugin")
             .expect("clear completed warning");
         assert!(
-            !fixture.manager.snapshot().plugins["hook-plugin"]
+            !fixture
+                .manager
+                .observe_catalog(&fixture.manager.snapshot())
+                .expect("actual cleared cleanup projection")
+                .plugins["hook-plugin"]
                 .diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.contains(&original.id))

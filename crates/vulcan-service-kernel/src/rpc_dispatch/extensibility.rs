@@ -16,13 +16,19 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_poll_luaskill_config_events",
     "service_inspect_local_plugin",
     "service_install_local_plugin",
+    "service_local_plugin_install_requests",
+    "service_recover_local_plugin_install",
     "service_update_local_plugin",
     "service_local_plugin_update_requests",
     "service_resume_local_plugin_update",
     "service_abort_local_plugin_update",
     "service_uninstall_user_plugin",
+    "service_local_plugin_uninstall_requests",
+    "service_resume_local_plugin_uninstall",
     "service_set_plugin_mcp_secret",
     "service_delete_plugin_mcp_secret",
+    "service_plugin_mcp_secret_mutation_requests",
+    "service_recover_plugin_mcp_secret_mutation",
     "service_load_plugin_ui_module",
     "service_read_plugin_text_asset",
     "service_invoke_plugin_action",
@@ -138,6 +144,19 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_local_plugin_install_requests" => rpc_json_result(
+            service_local_plugin_install_requests(state, rpc_required_param(params, "pluginId")?),
+        ),
+        "service_recover_local_plugin_install" => rpc_json_result(
+            service_recover_local_plugin_install(
+                app.clone(),
+                state,
+                rpc_required_param(params, "pluginId")?,
+                rpc_required_param(params, "requestId")?,
+                rpc_required_param(params, "acknowledgeExternalEffects")?,
+            )
+            .await,
+        ),
         "service_update_local_plugin" => rpc_json_result(
             service_update_local_plugin(
                 app.clone(),
@@ -180,6 +199,19 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_local_plugin_uninstall_requests" => {
+            rpc_json_result(service_local_plugin_uninstall_requests(state))
+        }
+        "service_resume_local_plugin_uninstall" => rpc_json_result(
+            service_resume_local_plugin_uninstall(
+                app.clone(),
+                state,
+                rpc_required_param(params, "pluginId")?,
+                rpc_required_param(params, "requestId")?,
+                rpc_optional_param(params, "acknowledgeExternalEffects")?.unwrap_or(false),
+            )
+            .await,
+        ),
         "service_set_plugin_mcp_secret" => rpc_json_result(
             service_set_plugin_mcp_secret(
                 app.clone(),
@@ -198,6 +230,21 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "pluginId")?,
                 rpc_required_param(params, "serverId")?,
                 rpc_required_param(params, "secretKey")?,
+            )
+            .await,
+        ),
+        "service_plugin_mcp_secret_mutation_requests" => {
+            rpc_json_result(service_plugin_mcp_secret_mutation_requests(
+                state,
+                rpc_required_param(params, "pluginId")?,
+            ))
+        }
+        "service_recover_plugin_mcp_secret_mutation" => rpc_json_result(
+            service_recover_plugin_mcp_secret_mutation(
+                app.clone(),
+                state,
+                rpc_required_param(params, "pluginId")?,
+                rpc_required_param(params, "requestId")?,
             )
             .await,
         ),

@@ -38,7 +38,9 @@ fn idle_session_timeout_retires_formal_session() {
         .expect("invoke stateless tool");
     assert_eq!(stateless["accepted"], true);
     assert_eq!(
-        manager.snapshot().plugins["idle-plugin"].active_session_count,
+        manager
+            .active_session_count("idle-plugin")
+            .expect("actual live reservation count"),
         0
     );
     runtime
@@ -50,7 +52,9 @@ fn idle_session_timeout_retires_formal_session() {
         }))
         .expect("open idle session");
     assert_eq!(
-        manager.snapshot().plugins["idle-plugin"].active_session_count,
+        manager
+            .active_session_count("idle-plugin")
+            .expect("actual live reservation count"),
         1
     );
     runtime.block_on(async {
@@ -58,7 +62,10 @@ fn idle_session_timeout_retires_formal_session() {
         // 回收器在一秒截止点启动，而异步关闭在全仓负载下可能稍后才完成。
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if manager.snapshot().plugins["idle-plugin"].active_session_count == 0
+                if manager
+                    .active_session_count("idle-plugin")
+                    .expect("actual live reservation count")
+                    == 0
                     && manager
                         .formal_sessions("owner-1")
                         .expect("retained session registry")
@@ -73,7 +80,9 @@ fn idle_session_timeout_retires_formal_session() {
         .expect("idle session should be reaped within the bounded shutdown window");
     });
     assert_eq!(
-        manager.snapshot().plugins["idle-plugin"].active_session_count,
+        manager
+            .active_session_count("idle-plugin")
+            .expect("actual live reservation count"),
         0
     );
 }
@@ -130,7 +139,9 @@ fn close_tool_retires_stale_generation_session() {
     assert_eq!(closed["closed"], true);
     assert_eq!(closed["result"]["closed_stale_generation"], true);
     assert_eq!(
-        manager.snapshot().plugins["idle-plugin"].active_session_count,
+        manager
+            .active_session_count("idle-plugin")
+            .expect("actual live reservation count"),
         0
     );
 }

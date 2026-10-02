@@ -16,27 +16,42 @@ struct TargetHookObservation {
 }
 
 impl Drop for TargetHookObservation {
-    /// Request original closure on abandonment; never forget the pool or replay its initialization.
-    /// 放弃时请求原关闭；绝不遗忘池或重放初始化。
+    /// Request closure only while this same initializer still owns private work; never cancel a transferred instance.
+    /// 仅此相同初始化方仍拥有私有工作时请求关闭；绝不取消已转交实例。
+    /// No inputs or result; the actual instance state serializes cancellation with publication and transfer.
+    /// 无输入及结果；实际实例状态将取消与发布及转交串行化。
     fn drop(&mut self) {
         if !self.delivered {
-            self.runtime.closing.store(true, Ordering::Release);
+            // Confirm the original private ownership under the same guard held throughout actual transfer.
+            // 在实际转交全程持有的相同守卫下，确认原私有所有权。
+            match self.runtime.lock() {
+                Ok(state) => {
+                    if state.private_origin.is_some() {
+                        self.runtime.closing.store(true, Ordering::Release);
+                    }
+                }
+                // Poison cannot prove that ownership transferred; retain the existing explicit closed behavior.
+                // 锁中毒不能证明所有权已转交；保留既有明确关闭行为。
+                Err(_) => self.runtime.closing.store(true, Ordering::Release),
+            }
         }
     }
 }
 
 /// Publication evidence is locked before the external synchronous publisher, then bound without fallible work.
 /// 外部同步发布器执行前锁定发布证据，随后绑定且不执行可能失败的工作。
-pub(in crate::runtime) struct TargetHookPublication<'a>(std::sync::MutexGuard<'a, PersistentState>);
+pub(in crate::runtime) struct PrivateHookPublication<'a>(
+    std::sync::MutexGuard<'a, PersistentState>,
+);
 
-impl TargetHookPublication<'_> {
+impl PrivateHookPublication<'_> {
     /// Record the same final Arc actually accepted by the extension publisher; no I/O or registration is performed.
     /// 记录扩展发布器实际接受的相同最终 Arc；不执行 I/O 或注册。
     pub(in crate::runtime) fn published(
         mut self,
         catalog: &Arc<crate::VulcanPluginCatalogSnapshot>,
     ) {
-        self.0.target_catalog = Some(Arc::downgrade(catalog));
+        self.0.private_catalog = Some(Arc::downgrade(catalog));
     }
 }
 
@@ -57,17 +72,17 @@ impl PersistentRuntime {
                 .initialization
                 .as_ref()
                 .map(|operation| operation.id().to_owned()),
-            state.private_target.is_some(),
+            state.private_origin.is_some(),
             state.retired,
         )
     }
 
     /// Reserve this original instance's publication checkpoint before the publisher; return a short evidence guard.
     /// 发布器执行前预留此原实例发布检查点；返回短证据守卫。
-    pub(in crate::runtime) fn target_publication_guard(
+    pub(in crate::runtime) fn private_publication_guard(
         &self,
-    ) -> Result<TargetHookPublication<'_>, VulcanPluginRuntimeError> {
-        Ok(TargetHookPublication(self.lock()?))
+    ) -> Result<PrivateHookPublication<'_>, VulcanPluginRuntimeError> {
+        Ok(PrivateHookPublication(self.lock()?))
     }
 }
 
@@ -186,7 +201,7 @@ impl VulcanPluginRuntimeManager {
     pub(super) fn validate_persistent_preparation(
         &self,
         runtime: &PersistentRuntime,
-        private: Option<&Arc<ActivationTargetHookAuthority>>,
+        private: Option<&crate::runtime::private_hooks::PrivateHookOrigin>,
     ) -> Result<(), VulcanPluginRuntimeError> {
         match private {
             Some(authority) => authority.validate(&self.state, &runtime.plugin),
@@ -258,9 +273,13 @@ impl VulcanPluginRuntimeManager {
                 let state = runtime.lock()?;
                 // Retain the exact original instance or authority rather than creating a replacement.
                 // 保留精确原实例或权威，不创建替代物。
-                let original = state.private_target.as_ref().ok_or_else(|| {
-                    instance_error("Existing Hook is not this original private target.")
-                })?;
+                let original = state
+                    .private_origin
+                    .as_ref()
+                    .ok_or_else(|| {
+                        instance_error("Existing Hook is not this original private target.")
+                    })?
+                    .target()?;
                 if original.request_id != authority.request_id
                     || original.target != authority.target
                     || runtime.plugin.generation != authority.plugin.generation
@@ -298,7 +317,9 @@ impl VulcanPluginRuntimeManager {
                     closing: AtomicBool::new(false),
                     state: Mutex::new(PersistentState {
                         preparing: true,
-                        private_target: Some(authority),
+                        private_origin: Some(
+                            crate::runtime::private_hooks::PrivateHookOrigin::Target(authority),
+                        ),
                         target_attempt: Some(attempt),
                         ..PersistentState::default()
                     }),
@@ -307,6 +328,22 @@ impl VulcanPluginRuntimeManager {
                 (runtime, true)
             }
         };
+        self.wait_private_hook_initialization(&runtime, created, expires)
+            .await
+    }
+
+    /// Observe the registered original private runtime without replaying preparation or core initialization.
+    /// 观测已登记原私有运行时，不重放准备或核心初始化。
+    /// runtime/created identify its sole registry admission; expires is the caller's original finite Hook budget.
+    /// runtime／created 标识其唯一注册表入场；expires 为调用方原有限 Hook 预算。
+    /// Returns true only for actual successful core initialization; cancellation requests original physical closure.
+    /// 仅实际核心初始化成功返回 true；取消请求原物理关闭。
+    pub(super) async fn wait_private_hook_initialization(
+        &self,
+        runtime: &Arc<PersistentRuntime>,
+        created: bool,
+        expires: Instant,
+    ) -> Result<bool, VulcanPluginRuntimeError> {
         // Retain the sole formal parent that owns the original native resources.
         // 保留拥有原原生资源的唯一正式父级。
         let owner = self
@@ -315,16 +352,16 @@ impl VulcanPluginRuntimeManager {
         // Tie waiter cancellation to the original registered preparation.
         // 将等待方取消绑定至原已登记准备。
         let mut observation = TargetHookObservation {
-            runtime: Arc::clone(&runtime),
+            runtime: Arc::clone(runtime),
             delivered: false,
         };
         if created {
             // Install interruption ownership before spawning actual preparation.
             // 派发实际准备前安装中断所有权。
-            let preparation = PersistentPreparation(Arc::clone(&runtime));
-            self.spawn_instance_preparation(&owner, &runtime, preparation, expires)?;
+            let preparation = PersistentPreparation(Arc::clone(runtime));
+            self.spawn_instance_preparation(&owner, runtime, preparation, expires)?;
         } else {
-            self.start_instance_monitor(&owner, &runtime)?;
+            self.start_instance_monitor(&owner, runtime)?;
         }
         loop {
             {
@@ -346,7 +383,7 @@ impl VulcanPluginRuntimeManager {
                         if let Some(error) = snapshot.error {
                             return Err(core_error(error));
                         }
-                        self.validate_target_hook_ready(&owner, &runtime, &state)?;
+                        self.validate_private_hook_ready(&owner, runtime, &state)?;
                         observation.delivered = true;
                         return Ok(true);
                     }
@@ -366,7 +403,7 @@ impl VulcanPluginRuntimeManager {
     /// 发布或转交前检查真实初始化及相同原空闲会话。
     /// owner is the sole formal parent; runtime/state retain exact original pool, session and private authority.
     /// owner 为唯一正式父级；runtime／state 保留精确原池、会话及私有权威。
-    fn validate_target_hook_ready(
+    pub(super) fn validate_private_hook_ready(
         &self,
         owner: &ManagedFormalRuntime,
         runtime: &PersistentRuntime,
@@ -375,10 +412,29 @@ impl VulcanPluginRuntimeManager {
         // Retain the original request and full selected target as one private authority.
         // 将原请求及完整已选目标保留为单个私有权威。
         let authority = state
-            .private_target
+            .private_origin
             .as_ref()
             .ok_or_else(|| instance_error("Original private target Hook authority is missing."))?;
         authority.validate(&self.state, &runtime.plugin)?;
+        self.validate_private_hook_actual_ready(owner, runtime, state)
+    }
+
+    /// Validate the same actual private core owners independently of source-specific catalog eligibility.
+    /// 独立于特定来源目录资格，校验相同实际私有核心所有者。
+    /// owner/runtime/state retain the original pool, session and origin; return physical readiness or explicit failure.
+    /// owner／runtime／state 保留原池、会话及来源；返回物理就绪或明确失败。
+    pub(super) fn validate_private_hook_actual_ready(
+        &self,
+        owner: &ManagedFormalRuntime,
+        runtime: &PersistentRuntime,
+        state: &PersistentState,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Pure mechanical readiness still requires this exact retained private origin and its actual domain.
+        // 纯机械就绪仍要求此精确保留私有来源及其实际域。
+        let authority = state
+            .private_origin
+            .as_ref()
+            .ok_or_else(|| instance_error("Original private Hook authority is missing."))?;
         if runtime.kind != VulcanPluginPersistentRuntimeKind::Hook
             || runtime.closing.load(Ordering::Acquire)
             || state.preparing
@@ -412,19 +468,32 @@ impl VulcanPluginRuntimeManager {
             .pool
             .as_ref()
             .ok_or_else(|| instance_error("Original private Hook pool is missing."))?;
-        if !state.target_attempt.as_ref().is_some_and(|attempt| {
-            state.session.as_ref().is_some_and(|session| {
-                attempt.succeeded_for(pool, session, &initialization.operation_id)
-            })
-        }) {
-            return Err(instance_error(
-                "Original private Hook has no confirmed durable initialization success.",
-            ));
+        // Target receipts and predecessor's single consumed source remain distinct authorization branches.
+        // 目标回执与前驱单次已消费来源保持不同授权分支。
+        match authority {
+            crate::runtime::private_hooks::PrivateHookOrigin::Target(_) => {
+                if !state.target_attempt.as_ref().is_some_and(|attempt| {
+                    state.session.as_ref().is_some_and(|session| {
+                        attempt.succeeded_for(pool, session, &initialization.operation_id)
+                    })
+                }) {
+                    return Err(instance_error(
+                        "Original private Hook has no confirmed durable initialization success.",
+                    ));
+                }
+            }
+            crate::runtime::private_hooks::PrivateHookOrigin::Predecessor(_) => {
+                if state.target_attempt.is_some() {
+                    return Err(instance_error(
+                        "Predecessor Hook cannot borrow a target initialization receipt.",
+                    ));
+                }
+            }
         }
         // Address the same original native domain through its restricted weak handle.
         // 通过受限弱句柄指向相同原原生域。
         let handoff = state
-            .target_handoff
+            .private_handoff
             .as_ref()
             .ok_or_else(|| instance_error("Original private Hook domain is missing."))?;
         // Query the same original core session instead of inferring readiness.
@@ -458,6 +527,24 @@ impl VulcanPluginRuntimeManager {
         Ok(())
     }
 
+    /// Require the explicit target origin before validating common actual Ready evidence for target publication.
+    /// 目标发布的共用实际就绪凭据校验前，要求显式目标来源。
+    /// owner/runtime/state address the same registered original; returns a conflict for predecessor authority.
+    /// owner／runtime／state 指向相同已登记原实例；前驱权威返回冲突。
+    fn validate_target_hook_ready(
+        &self,
+        owner: &ManagedFormalRuntime,
+        runtime: &PersistentRuntime,
+        state: &PersistentState,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        state
+            .private_origin
+            .as_ref()
+            .ok_or_else(|| instance_error("Original private target Hook authority is missing."))?
+            .target()?;
+        self.validate_private_hook_ready(owner, runtime, state)
+    }
+
     /// Retain an existing original private target for synchronous publication; no instance is fabricated when absent.
     /// 为同步发布保留既有原私有目标；缺失时不虚构实例。
     pub(in crate::runtime) fn activation_target_hook_for_publication(
@@ -483,9 +570,10 @@ impl VulcanPluginRuntimeManager {
             // Retain the exact original instance or authority rather than creating a replacement.
             // 保留精确原实例或权威，不创建替代物。
             let original = state
-                .private_target
+                .private_origin
                 .as_ref()
-                .expect("validated private target");
+                .expect("validated private target")
+                .target()?;
             if original.request_id != transaction.record().request_id()
                 || &original.target != transaction.record().target()
             {
@@ -681,19 +769,19 @@ impl VulcanPluginRuntimeManager {
         // Retain the explicit private origin until confirmed durable transfer.
         // 保留显式私有来源至已确认持久转交。
         let origin = state
-            .private_target
+            .private_origin
             .as_ref()
             .expect("validated private target");
         // Require the exact successful publisher catalog pointer.
         // 要求精确成功发布器目录指针。
         let published = state
-            .target_catalog
+            .private_catalog
             .as_ref()
             .and_then(Weak::upgrade)
             .ok_or_else(|| {
                 instance_error("Original complete-extension publication evidence is missing.")
             })?;
-        if !Arc::ptr_eq(&published, catalog) || plugin.generation != origin.plugin.generation {
+        if !Arc::ptr_eq(&published, catalog) || plugin.generation != origin.plugin().generation {
             return Err(instance_error(
                 "Original target Hook differs from the actual final extension catalog.",
             ));
@@ -701,7 +789,7 @@ impl VulcanPluginRuntimeManager {
         // Acquire every fallible transfer and rollback guard before the durable completion point.
         // 在持久完成点前取得全部可能失败的转交及回退守卫。
         let domain = state
-            .target_handoff
+            .private_handoff
             .as_ref()
             .expect("validated handoff")
             .retain_domain()
@@ -732,7 +820,7 @@ impl VulcanPluginRuntimeManager {
                 store.complete_activation_target_handoff_owned(
                     transaction,
                     Some((
-                        origin.plugin.generation,
+                        origin.plugin().generation,
                         state.pool.as_deref().expect("validated pool"),
                         state.session.as_deref().expect("validated session"),
                         state
@@ -748,10 +836,10 @@ impl VulcanPluginRuntimeManager {
                 // All remaining operations are infallible memory changes on the same original owners.
                 // 剩余全部操作均为相同原所有者上的不可失败内存变更。
                 transfer.publish();
-                state.private_target.take();
+                state.private_origin.take();
                 state.target_attempt.take();
-                state.target_handoff.take();
-                state.target_catalog.take();
+                state.private_handoff.take();
+                state.private_catalog.take();
                 participant.confirm_completed(&confirmation);
                 Ok(())
             }

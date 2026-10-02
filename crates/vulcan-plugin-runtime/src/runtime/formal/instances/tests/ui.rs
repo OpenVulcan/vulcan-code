@@ -388,6 +388,134 @@ fn formal_ui_state_workspace_history_and_no_implicit_finalizer() {
     });
 }
 
+/// Real same-generation output schema changes must never reuse an obsolete declaration or retain completed work.
+/// 真实同代输出 Schema 变更绝不能复用过时声明或保留已完成工作。
+#[test]
+fn formal_ui_output_schema_cache_observes_current_file_and_releases_work() {
+    // Reuse the production bundle and isolated temporary package, without altering shared policy.
+    // 复用生产包及隔离临时包，不修改共享策略。
+    let fixture = Fixture::ui(1000, false, VulcanPluginRuntimeSettings::default());
+    // Declare the schema in the actual manifest before preparing any UI instance.
+    // 在准备任何 UI 实例前，在实际清单中声明 Schema。
+    let package = fixture.root.path().join("bundled/hook-plugin");
+    // The exact manifest declaration selects this package-owned output file.
+    // 精确清单声明选择此包所属的输出文件。
+    let schema_path = package.join("ui-output.schema.json");
+    // The baseline accepts the real persistent count returned by the fixture's Lua action.
+    // 基线接受夹具 Lua Action 返回的真实持久计数。
+    let accepted =
+        r#"{"type":"object","required":["count"],"properties":{"count":{"type":"integer"}}}"#;
+    std::fs::write(&schema_path, accepted).expect("initial output schema");
+    // Preserve the manifest except for the exact declared output schema on its unique UI export.
+    // 除唯一 UI 导出的精确输出 Schema 声明外，保留清单。
+    let manifest_path = package.join("plugin.yaml");
+    // The existing fixture's sole UI declaration is a verified replacement anchor.
+    // 既有夹具的唯一 UI 声明是经过验证的替换锚点。
+    let manifest = std::fs::read_to_string(&manifest_path).expect("actual manifest");
+    assert_eq!(manifest.matches("function: ui_action").count(), 1);
+    std::fs::write(
+        manifest_path,
+        manifest.replace(
+            "function: ui_action",
+            "function: ui_action\n      output_schema_file: ui-output.schema.json",
+        ),
+    )
+    .expect("declare actual output schema");
+    fixture
+        .manager
+        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+        .expect("publish output schema declaration");
+    // Later file mutations deliberately do not refresh or replace this instance's generation.
+    // 后续文件变更刻意不刷新或替换此实例的代次。
+    let generation = fixture.hook().plugin_generation;
+    // Drive the same public action entry used by real UI requests.
+    // 驱动真实 UI 请求使用的同一公开 Action 入口。
+    let runtime = executor();
+    runtime.block_on(async {
+        // Retain the actual fixed UI owner to prove physical gate release after every result or error.
+        // 保留实际固定 UI 所有者，证明每次结果或错误后物理门均已释放。
+        let original = fixture
+            .manager
+            .ensure_formal_instance(
+                "hook-plugin",
+                generation,
+                VulcanPluginPersistentRuntimeKind::UiAction,
+                Instant::now() + WAIT,
+            )
+            .await
+            .expect("prepare original UI instance");
+        // Success, semantic change, malformed file and external reference are actual on-disk observations.
+        // 成功、语义变化、损坏文件及外部引用均为实际磁盘观测。
+        for (contents, expected_count, expected_error) in [
+            (accepted, Some(100), None),
+            (accepted, Some(200), None),
+            (
+                r#"{"type":"object","properties":{"count":{"maximum":100}}}"#,
+                None,
+                Some("Invalid action output:"),
+            ),
+            (
+                "{not-json",
+                None,
+                Some("Failed to decode Vulcan plugin action output"),
+            ),
+            (accepted, Some(500), None),
+            (
+                r#"{"$ref":"https://example.invalid/output-schema"}"#,
+                None,
+                Some("only local fragment references are allowed"),
+            ),
+            (accepted, Some(700), None),
+        ] {
+            std::fs::write(&schema_path, contents).expect("change current output schema");
+            // Output rejection occurs after real business execution and must not replay or undo its count.
+            // 输出拒绝发生在真实业务执行后，绝不能重放或撤销其计数。
+            let result = fixture
+                .manager
+                .invoke_action(fixture.ui_request(json!({})))
+                .await;
+            match (expected_count, expected_error) {
+                (Some(count), None) => {
+                    assert_eq!(
+                        result.expect("current output declaration accepts")["count"],
+                        count
+                    );
+                }
+                (None, Some(message)) => {
+                    // Preserve the exact production failure category rather than accepting any generic error.
+                    // 保留精确生产失败类别，不接受任意通用错误。
+                    let error = result.expect_err("current output declaration rejects");
+                    assert!(error.to_string().contains(message), "{error}");
+                }
+                _ => unreachable!("each fixture case declares one exact expected outcome"),
+            }
+            assert_eq!(fixture.hook().plugin_generation, generation);
+            assert!(
+                original.operation_gate.try_lock().is_ok(),
+                "completed output validation retained actual UI work"
+            );
+        }
+        fixture
+            .manager
+            .request_formal_runtime_close()
+            .expect("close original parent");
+        // Successful physical close includes the actual UI work and retirement, not merely caller return.
+        // 成功物理关闭包含实际 UI 工作与退役，不仅是调用方返回。
+        let expires = Instant::now() + WAIT;
+        while !fixture
+            .manager
+            .poll_formal_runtime_closed()
+            .expect("original parent physical state")
+        {
+            assert!(
+                Instant::now() < expires,
+                "output validation retained original UI resources"
+            );
+            tokio::time::sleep(OBSERVATION_INTERVAL).await;
+        }
+    });
+}
+
 /// A supervisor dropped before its first poll still completes its record and returns unused capacity.
 /// 监督任务首次轮询前被丢弃时，仍完成记录并归还未使用容量。
 #[test]

@@ -443,6 +443,13 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         mut approved_permissions: Vec<String>,
     ) -> Result<VulcanPluginPermissionPreview, VulcanPluginRuntimeError> {
+        // Retain the real publication gate through ordinary authorization persistence and original selection.
+        // 跨普通授权持久化及原选择保留真实发布门。
+        let registration =
+            self.state.session_registration_gate.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
+            })?;
+        self.require_routing_publication_locked(&registration, None)?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))

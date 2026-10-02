@@ -3,7 +3,9 @@
 
 use super::*;
 use vulcan_plugin_runtime::{
-    VulcanPluginMcpStdioLaunchSpec, VulcanPluginPreparedMcpCandidate, VulcanPluginPreparedMcpTarget,
+    VulcanPluginMcpStdioLaunchSpec, VulcanPluginPreparedMcpCandidate,
+    VulcanPluginPreparedMcpPredecessor, VulcanPluginPreparedMcpTarget,
+    VulcanPluginPreparedPublishedMcp, VulcanPluginRegisteredNativeMcpHostAuthority,
 };
 
 /// A declared source controls launcher resolution and legacy configuration eligibility.
@@ -18,6 +20,19 @@ pub(super) enum PluginMcpMaterializationSource<'a> {
     /// Actual selected target retains exact immutable selections and already checked launchers.
     /// 实际已选目标保留精确不可变选择及已检查启动器。
     Target(&'a VulcanPluginPreparedMcpTarget),
+    /// Restored old declarations retain their own immutable preparation and never read the target.
+    /// 恢复旧声明保留自身不可变准备，绝不读取目标。
+    Predecessor(&'a VulcanPluginPreparedMcpPredecessor),
+    /// Prepared ordinary resources resolve only their original launchers under the same host issuer.
+    /// 已准备普通资源仅在同一宿主签发者下解析其原启动器。
+    PreparedPublished {
+        /// Original physical resources own the complete selected package and credential revision.
+        /// 原物理资源持有完整已选插件包及凭据修订。
+        prepared: &'a VulcanPluginPreparedPublishedMcp,
+        /// This borrowed issuer must be the one that originally prepared those resources.
+        /// 此借用签发者必须是最初准备这些资源的同一个。
+        authority: &'a VulcanPluginRegisteredNativeMcpHostAuthority,
+    },
 }
 
 impl PluginMcpMaterializationSource<'_> {
@@ -41,6 +56,17 @@ impl PluginMcpMaterializationSource<'_> {
                 .stdio_launcher(&server.id)
                 .cloned()
                 .map_err(|error| error.to_string()),
+            Self::Predecessor(predecessor) => predecessor
+                .stdio_launcher(&server.id)
+                .cloned()
+                .map_err(|error| error.to_string()),
+            Self::PreparedPublished {
+                prepared,
+                authority,
+            } => prepared
+                .stdio_launcher(authority, &server.id)
+                .cloned()
+                .map_err(|error| error.to_string()),
         }
     }
 
@@ -51,11 +77,61 @@ impl PluginMcpMaterializationSource<'_> {
     pub(super) fn legacy_configuration(&self, plugin_id: &str) -> Result<Option<Value>, String> {
         match self {
             Self::Published(plugins) => plugin_server_configuration(plugins, plugin_id),
-            Self::Candidate(_) | Self::Target(_) => Err(String::from(
+            Self::Candidate(_) | Self::Target(_) | Self::Predecessor(_) => Err(String::from(
                 "Prepared activation authority is missing its frozen configuration selection.",
+            )),
+            Self::PreparedPublished { .. } => Err(String::from(
+                "Prepared published MCP is missing its frozen configuration selection.",
             )),
         }
     }
+}
+
+/// Sealed old definitions retain their actual original restoration resources until native retirement.
+/// 密封旧定义保留其实际原恢复资源，直至原生退役。
+#[derive(Debug)]
+pub struct PreparedPredecessorPluginMcpConfigs {
+    /// Physical old selection and environment stay attached to every materialized input.
+    /// 物理旧选择及环境始终附着于每个物化输入。
+    predecessor: VulcanPluginPreparedMcpPredecessor,
+    /// Exact global definitions originate only from the retained old manifest.
+    /// 精确全局定义仅源自保留旧清单。
+    servers: Vec<McpServerConfig>,
+}
+
+impl PreparedPredecessorPluginMcpConfigs {
+    /// Consume the sealed pair; no inputs, returning its same owner and definitions together.
+    /// 消费密封组合；无输入，一起返回其相同所有者及定义。
+    pub(in crate::mcp) fn into_runtime_inputs(
+        self,
+    ) -> (VulcanPluginPreparedMcpPredecessor, Vec<McpServerConfig>) {
+        (self.predecessor, self.servers)
+    }
+}
+
+/// Materialize predecessor's exact old global declarations using only its frozen credential binding.
+/// 仅使用 predecessor 固定凭据绑定，物化其精确旧全局声明。
+/// secrets reads that bound revision; return sealed inputs without granting startup or business access.
+/// secrets 读取该绑定修订；返回密封输入，不授予启动或业务访问。
+pub fn predecessor_global_mcp_server_configs(
+    predecessor: VulcanPluginPreparedMcpPredecessor,
+    secrets: &dyn PluginMcpSecretStore,
+) -> Result<PreparedPredecessorPluginMcpConfigs, String> {
+    // Both launchers and values come from the same retained old selection.
+    // 启动器及值均来自同一保留旧选择。
+    let source = PluginMcpMaterializationSource::Predecessor(&predecessor);
+    // Scope is authoritative in that same old declaration.
+    // 作用域在该同一旧声明内具有权威。
+    let servers = predecessor
+        .servers()
+        .iter()
+        .filter(|server| server.manifest.scope == VulcanPluginMcpScopeManifest::Global)
+        .map(|server| plugin_mcp_server_config(&source, server, secrets, None))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PreparedPredecessorPluginMcpConfigs {
+        predecessor,
+        servers,
+    })
 }
 
 /// Packages isolated candidate validation definitions with their original request resource owner.

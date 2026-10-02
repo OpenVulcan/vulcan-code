@@ -309,15 +309,48 @@ impl VulcanPluginGenerationStore {
                 ));
             }
         }
+        // Explicit index recovery may retain its own newly acquired file, but cannot replace another actual terminal owner.
+        // 明确索引恢复可保留自有新取得文件，但不能替换另一实际终态所有者。
+        self.ensure_terminal_original_owners_retired_locked(plugin_id, Some(request_id))
+    }
+
+    /// Reject actual terminal owners in the complete strict inventory, excluding only the explicit `caller` request.
+    /// 拒绝完整严格清单中的实际终态所有者，仅排除显式 `caller` 请求。
+    /// The caller holds namespace exclusion; this single rule serves new writers and every original index recovery.
+    /// 调用方持有命名空间互斥；此唯一规则服务新写入者及每个原索引恢复。
+    fn ensure_terminal_original_owners_retired_locked(
+        &self,
+        plugin_id: &str,
+        caller: Option<Uuid>,
+    ) -> VulcanPluginStoreResult<()> {
+        for request_id in self.transaction_ids_locked(plugin_id)? {
+            // Decode every canonical full body before exclusion; no copied UUID or current pointer can hide corruption.
+            // 排除前解码每个规范完整正文；复制 UUID 或当前指针不能隐藏损坏。
+            let record = self
+                .read_request_locked(plugin_id, request_id)?
+                .ok_or_else(|| Error::invalid("Original terminal inventory record disappeared."))?;
+            if Some(request_id) != caller
+                && record.phase().terminal()
+                && self.terminal_transaction_owner_is_live_locked(plugin_id, request_id)?
+            {
+                return Err(Error::new(
+                    Code::Busy,
+                    "Terminal activation still retains its original live owner.",
+                ));
+            }
+        }
         Ok(())
     }
 
-    /// Reject any unfinished indexed request for `plugin_id`; callers already own its namespace fence.
-    /// 拒绝 `plugin_id` 任何已索引且未完成的请求；调用方已持有命名空间屏障。
+    /// Reject unfinished or actually still-owned terminal originals for `plugin_id` under the caller's namespace fence.
+    /// 在调用方命名空间屏障下，拒绝 `plugin_id` 未完成或实际仍自有的终态原请求。
     pub(in crate::generation_store) fn ensure_no_pending_activation_locked(
         &self,
         plugin_id: &str,
     ) -> VulcanPluginStoreResult<()> {
+        // Original Aborted does not retire its pending private predecessor handoff or still-live transfer guard.
+        // 原 Aborted 不会退役其待处理私有前驱交接或仍存活移交守卫。
+        self.ensure_no_predecessor_handoff_locked(plugin_id)?;
         self.check_unindexed_transaction_records(plugin_id)?;
         if self
             .indexed_request_locked(plugin_id)?
@@ -328,7 +361,9 @@ impl VulcanPluginGenerationStore {
                 "Plugin activation has an unfinished transaction.",
             ));
         }
-        Ok(())
+        // New writers must exclude all actual terminal owners, including strict unindexed historical records.
+        // 新写入者必须排除全部实际终态所有者，包括严格未索引历史记录。
+        self.ensure_terminal_original_owners_retired_locked(plugin_id, None)
     }
 
     /// Protect the exact package `identity` referenced by either side of the pending handoff, including after a crash.
@@ -337,6 +372,9 @@ impl VulcanPluginGenerationStore {
         &self,
         identity: &VulcanPluginGenerationIdentity,
     ) -> VulcanPluginStoreResult<()> {
+        // A terminal target abort cannot make old package bytes collectible while their original handoff is pending.
+        // 原交接仍待处理时，目标终态中止不能使旧包字节变为可回收。
+        self.check_predecessor_handoff_package_retention_locked(identity)?;
         self.check_unindexed_transaction_records(&identity.plugin_id)?;
         if let Some(record) = self.indexed_request_locked(&identity.plugin_id)?
             && !record.phase().terminal()
@@ -360,6 +398,9 @@ impl VulcanPluginGenerationStore {
         plugin_id: &str,
         revision: &VulcanPluginCredentialRevision,
     ) -> VulcanPluginStoreResult<()> {
+        // Pending original predecessor ownership protects the exact old revision after target activation aborts.
+        // 目标激活中止后，待处理原前驱所有权保护精确旧修订。
+        self.check_predecessor_handoff_credential_retention_locked(plugin_id, revision)?;
         self.check_unindexed_transaction_records(plugin_id)?;
         if let Some(record) = self.indexed_request_locked(plugin_id)?
             && !record.phase().terminal()
@@ -468,8 +509,21 @@ impl VulcanPluginGenerationStore {
             let path = entry
                 .map_err(|error| Error::io("Read activation transaction entry", error))?
                 .path();
-            if path.extension() != Some(std::ffi::OsStr::new("json")) {
+            // ASCII aliases may resolve to the same file on Windows; discovery must reject them instead of hiding history.
+            // ASCII 别名在 Windows 可能解析到同一文件；发现时须拒绝，不能隐藏历史。
+            let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
                 continue;
+            };
+            // The declared journal suffix is accepted only in its exact canonical spelling.
+            // 声明日志后缀仅接受精确规范拼写。
+            let canonical_extension = "json";
+            if !extension.eq_ignore_ascii_case(canonical_extension) {
+                continue;
+            }
+            if extension != canonical_extension {
+                return Err(Error::invalid(
+                    "Noncanonical activation transaction extension.",
+                ));
             }
             // Canonical spelling prevents aliases for the original request.
             // 规范拼写防止原请求出现别名。
@@ -503,6 +557,17 @@ impl VulcanPluginGenerationStore {
         // Inventory and index validation must describe the same namespace observation.
         // 清单和索引校验必须描述同一次命名空间观察。
         let _namespace = self.namespace_lock(plugin_id, true)?;
+        self.activation_recovery_records_locked(plugin_id)
+    }
+
+    /// Inspect every original record for plugin_id using the caller's actual retained namespace fence.
+    /// 使用调用方实际保留的命名空间屏障检查 plugin_id 的全部原记录。
+    /// Return the same validated unfinished inventory; never reopen the namespace or omit historical corruption checks.
+    /// 返回相同已校验未完成清单；绝不重开命名空间或省略历史损坏检查。
+    pub(in crate::generation_store) fn activation_recovery_records_locked(
+        &self,
+        plugin_id: &str,
+    ) -> VulcanPluginStoreResult<Vec<VulcanPluginActivationRequestRecord>> {
         // Exact filenames do not grant recovery ownership.
         // 精确文件名不授予恢复所有权。
         let requests = self.transaction_ids_locked(plugin_id)?;

@@ -5,9 +5,21 @@ mod plugin_drain_tests;
 
 mod candidate;
 mod catalog_refresh;
+mod cleanup_receipts;
+#[cfg(test)]
+mod launch_input_tests;
+mod legacy_replacement;
 mod lifecycle_guard;
+pub use legacy_replacement::LegacyPluginMcpReplacement;
+mod published;
 pub use candidate::{CandidatePluginMcpObservation, CandidatePluginMcpRuntime};
+pub use candidate::{PredecessorPluginMcpHandoffGuard, PredecessorPluginMcpRuntime};
 pub use candidate::{TargetPluginMcpHandoffGuard, TargetPluginMcpRuntime};
+use cleanup_receipts::{McpActualCleanupObservation, McpCleanupAdmission};
+pub use published::{
+    PreparedPublishedPluginMcpPublication, PublishedPluginMcpObservation,
+    PublishedPluginMcpPublicationGuard, PublishedPluginMcpRuntime,
+};
 
 /// Explicit runtime intent controls retries without inferring authority from generation numbers.
 /// 显式运行时用途控制重试，不从代次数值推断权威。
@@ -22,6 +34,15 @@ enum McpRuntimePurpose {
     /// Actual selected target prepares once with business admission closed until confirmed handoff.
     /// 实际已选目标仅准备一次，业务入场在确认交接前保持关闭。
     TargetPreparation,
+    /// Aborted old restoration starts once and stays closed until a distinct authorized transfer.
+    /// 中止旧恢复仅启动一次，保持关闭至独立获授权转交。
+    PredecessorPreparation,
+    /// Proven ordinary preparation runs once with business access closed until full publication.
+    /// 已证明普通准备仅运行一次，业务访问在完整发布前保持关闭。
+    PublishedPreparation,
+    /// Raw Legacy replacement remains single-shot and closed until full service publication.
+    /// 原始旧格式替换保持单次尝试及关闭，直至完整服务发布。
+    LegacyPluginPreparation,
 }
 
 /// Business admission for one actual target instance; a closed instance can never reopen.
@@ -47,7 +68,11 @@ impl McpRuntimePurpose {
     fn maximum_attempts(self) -> u8 {
         match self {
             Self::Managed => 5,
-            Self::CandidateReadiness | Self::TargetPreparation => 1,
+            Self::CandidateReadiness
+            | Self::TargetPreparation
+            | Self::PredecessorPreparation
+            | Self::PublishedPreparation
+            | Self::LegacyPluginPreparation => 1,
         }
     }
 }
@@ -63,6 +88,59 @@ fn create_mcp_runtime(
     resources: vulcan_mcp_runtime::McpTransportResources,
     purpose: McpRuntimePurpose,
 ) -> Result<McpRuntimeHandle, String> {
+    prepare_mcp_runtime(
+        servers,
+        resources,
+        purpose,
+        crate::mcp::registry::McpPluginLaunchSource::Unproven,
+    )
+    .map(PreparedMcpRuntime::dispatch)
+}
+
+/// Undispatched work retains actual resources while original controls can be registered before any task exists.
+/// 未派发工作保留实际资源，使原控制可在任何任务存在前登记。
+pub(super) struct PreparedMcpRuntime {
+    /// Source, diagnostic and shutdown state is allocated once without launching native work.
+    /// 一次分配来源、诊断及关闭状态，不启动原生工作。
+    runtime: McpRuntimeHandle,
+    /// Only the preparation or actual tasks retain physical resource authority.
+    /// 仅准备对象或实际任务保留物理资源权威。
+    resources: vulcan_mcp_runtime::McpTransportResources,
+}
+
+impl PreparedMcpRuntime {
+    /// Clone original control for registration; no inputs and no execution resources escape.
+    /// 克隆原控制以供登记；无输入，不泄出执行资源。
+    pub(super) fn handle(&self) -> McpRuntimeHandle {
+        self.runtime.clone()
+    }
+
+    /// Dispatch the prepared tasks exactly once and return their already allocated original control.
+    /// 恰好派发一次已准备任务，并返回其已分配原控制。
+    /// No inputs; original registration must precede this consumption for sealed published and target starts.
+    /// 无输入；对密封已发布及目标启动，原登记必须先于此消费。
+    pub(super) fn dispatch(self) -> McpRuntimeHandle {
+        for server in self.runtime.inner.registry.enabled_servers() {
+            spawn_server_runtime_task(
+                Arc::clone(&self.runtime.inner),
+                server.clone(),
+                self.resources.clone(),
+            );
+        }
+        self.runtime
+    }
+}
+
+/// Allocate immutable inputs and original control before work dispatch with the explicit purpose and source.
+/// 使用显式 purpose 及 source，在工作派发前分配不可变输入及原控制。
+/// servers define one registry and resources own its actual leases; return undispatched work or a pre-effect error.
+/// servers 定义单个注册表，resources 拥有其实际租约；返回未派发工作或副作用前错误。
+fn prepare_mcp_runtime(
+    servers: Vec<McpServerConfig>,
+    resources: vulcan_mcp_runtime::McpTransportResources,
+    purpose: McpRuntimePurpose,
+    source: crate::mcp::registry::McpPluginLaunchSource,
+) -> Result<PreparedMcpRuntime, String> {
     // Reject construction without an active runtime before spawning any lifecycle task.
     // 在启动任何生命周期任务前拒绝没有活动执行器的构造。
     tokio::runtime::Handle::try_current()
@@ -98,13 +176,20 @@ fn create_mcp_runtime(
     let inner = Arc::new(McpRuntimeInner {
         instance_id: uuid::Uuid::new_v4(),
         registry: registry.clone(),
+        launch_source: source,
         purpose,
-        business_gate: RwLock::new(if purpose == McpRuntimePurpose::TargetPreparation {
-            McpBusinessGate::Preparing
-        } else {
-            McpBusinessGate::Open
+        business_gate: RwLock::new(match purpose {
+            McpRuntimePurpose::TargetPreparation
+            | McpRuntimePurpose::PredecessorPreparation
+            | McpRuntimePurpose::PublishedPreparation
+            | McpRuntimePurpose::LegacyPluginPreparation => McpBusinessGate::Preparing,
+            McpRuntimePurpose::Managed | McpRuntimePurpose::CandidateReadiness => {
+                McpBusinessGate::Open
+            }
         }),
         transports: RwLock::new(BTreeMap::new()),
+        launch_inputs: RwLock::new(BTreeMap::new()),
+        cleanup_observations: RwLock::new(BTreeMap::new()),
         resource_releases: RwLock::new(BTreeMap::new()),
         partition_release,
         auth_sessions: AsyncRwLock::new(BTreeMap::new()),
@@ -119,11 +204,79 @@ fn create_mcp_runtime(
         shutdown_tx,
     });
 
-    for server in registry.enabled_servers() {
-        spawn_server_runtime_task(inner.clone(), server.clone(), resources.clone());
-    }
+    Ok(PreparedMcpRuntime {
+        runtime: McpRuntimeHandle { inner },
+        resources,
+    })
+}
 
-    Ok(McpRuntimeHandle { inner })
+/// Allocate configured managed work without starting a native lifecycle task.
+/// 分配已配置受管工作，不启动原生生命周期任务。
+/// servers contain the declared definitions and resources their original ownership scope.
+/// servers 包含已声明定义，resources 包含其原所有权范围。
+/// Return undispatched work so the shared admission can register it before effects.
+/// 返回未派发工作，使共享入场可在副作用之前登记它。
+pub(super) fn prepare_managed_mcp_runtime(
+    servers: Vec<McpServerConfig>,
+    resources: vulcan_mcp_runtime::McpTransportResources,
+) -> Result<PreparedMcpRuntime, String> {
+    prepare_mcp_runtime(
+        servers,
+        resources,
+        McpRuntimePurpose::Managed,
+        crate::mcp::registry::McpPluginLaunchSource::Unproven,
+    )
+}
+
+/// Allocate closed target work with the original pure profile before native dispatch.
+/// 在原生派发前使用原纯 profile 分配关闭目标工作。
+/// servers, resources and profile come from one sealed target; return undispatched work or a pre-effect error.
+/// servers、resources 及 profile 来自单个密封目标；返回未派发工作或副作用前错误。
+pub(super) fn prepare_target_mcp_runtime(
+    servers: Vec<McpServerConfig>,
+    resources: vulcan_mcp_runtime::McpTransportResources,
+    profile: vulcan_plugin_runtime::VulcanPluginTargetMcpProfile,
+) -> Result<PreparedMcpRuntime, String> {
+    prepare_mcp_runtime(
+        servers,
+        resources,
+        McpRuntimePurpose::TargetPreparation,
+        crate::mcp::registry::McpPluginLaunchSource::Target(profile),
+    )
+}
+
+/// Allocate old restored work with its original profile before any native dispatch.
+/// 在任何原生派发前，使用原画像分配旧恢复工作。
+/// servers and resources are sealed old inputs; return one closed undispatched runtime or pre-effect error.
+/// servers 及 resources 为密封旧输入；返回单个关闭未派发运行时或副作用前错误。
+pub(super) fn prepare_predecessor_mcp_runtime(
+    servers: Vec<McpServerConfig>,
+    resources: vulcan_mcp_runtime::McpTransportResources,
+    profile: vulcan_plugin_runtime::VulcanPluginPredecessorMcpProfile,
+) -> Result<PreparedMcpRuntime, String> {
+    prepare_mcp_runtime(
+        servers,
+        resources,
+        McpRuntimePurpose::PredecessorPreparation,
+        crate::mcp::registry::McpPluginLaunchSource::Predecessor(profile),
+    )
+}
+
+/// Allocate proven ordinary work with its original profile before any native dispatch.
+/// 在任何原生派发前，使用原 profile 分配已证明普通工作。
+/// servers and resources are sealed materialization inputs; return one undispatched closed original.
+/// servers 及 resources 为密封物化输入；返回单个未派发且关闭的原实例。
+pub(super) fn prepare_published_mcp_runtime(
+    servers: Vec<McpServerConfig>,
+    resources: vulcan_mcp_runtime::McpTransportResources,
+    profile: vulcan_plugin_runtime::VulcanPluginPublishedMcpProfile,
+) -> Result<PreparedMcpRuntime, String> {
+    prepare_mcp_runtime(
+        servers,
+        resources,
+        McpRuntimePurpose::PublishedPreparation,
+        crate::mcp::registry::McpPluginLaunchSource::Published(profile),
+    )
 }
 
 #[cfg(test)]
@@ -196,9 +349,18 @@ struct McpRuntimeInner {
     /// Runtime registry containing the configured MCP server set.
     /// 包含已配置 MCP 服务器集合的运行时注册表。
     registry: McpServerRegistry,
+    /// Source was fixed before dispatch and is copied directly into every actual native input Arc.
+    /// 来源在派发前固定，并直接复制至每个实际原生输入 Arc。
+    launch_source: crate::mcp::registry::McpPluginLaunchSource,
     /// Mutable transport map keyed by server identifier.
     /// 以服务器标识为键保存的可变传输映射。
     transports: RwLock<BTreeMap<String, Arc<dyn McpTransport>>>,
+    /// Exact launch evidence is bound to a weak original transport, independently of configuration and retry counters.
+    /// 精确启动证据绑定原传输弱引用，独立于配置及重试计数。
+    launch_inputs: RwLock<BTreeMap<String, crate::mcp::registry::McpActualLaunchInputLease>>,
+    /// Sealed original cleanup results distinguish actual retirement from startup and historical diagnostics.
+    /// 密封原清理结果区分实际退役、启动及历史诊断。
+    cleanup_observations: RwLock<BTreeMap<String, McpActualCleanupObservation>>,
     /// Original non-owning release receipts survive initialization failure and observer cancellation.
     /// 原非拥有释放回执在初始化失败及观察取消后继续存在。
     resource_releases: RwLock<BTreeMap<String, vulcan_mcp_runtime::McpResourceRelease>>,
@@ -220,6 +382,136 @@ struct McpRuntimeInner {
 }
 
 impl McpRuntimeHandle {
+    /// Captures exact protected inputs from a currently connected original transport under its live locks.
+    /// 在实时锁内，从当前已连接原传输捕获精确受保护输入。
+    /// Server_id selects the actual live entry; read is a trusted synchronous host closure, never plugin code.
+    /// server_id 选择实际实时条目；read 为可信同步宿主闭包，绝不是插件代码。
+    /// Returns the closure result only for the same recorded original owner, otherwise a value-free explicit rejection.
+    /// 仅对同一有记录原所有者返回闭包结果，否则返回不含值的显式拒绝。
+    #[cfg(test)]
+    pub(crate) fn with_connected_launch_inputs<R>(
+        &self,
+        server_id: &str,
+        read: impl FnOnce(
+            &vulcan_mcp_runtime::McpTransportLaunchSpec,
+            Option<&Arc<McpOAuthSession>>,
+        ) -> R,
+    ) -> Result<R, crate::mcp::registry::McpLaunchInputCaptureError> {
+        self.with_connected_input_lease(server_id, |inputs, transport| {
+            inputs.with_current_transport(transport, read)
+        })
+    }
+
+    /// Borrow protected inputs for the exact original published profile under the same live admission locks.
+    /// 在相同实时入场锁下，为精确原已发布 profile 借用受保护输入。
+    /// server_id selects the real entry and read is a trusted host closure; return its result or explicit rejection.
+    /// server_id 选择真实条目，read 为可信宿主闭包；返回其结果或显式拒绝。
+    pub(crate) fn with_connected_published_launch_inputs<R>(
+        &self,
+        server_id: &str,
+        profile: &vulcan_plugin_runtime::VulcanPluginPublishedMcpProfile,
+        read: impl FnOnce(
+            &vulcan_mcp_runtime::McpTransportLaunchSpec,
+            Option<&Arc<McpOAuthSession>>,
+        ) -> R,
+    ) -> Result<R, crate::mcp::registry::McpLaunchInputCaptureError> {
+        self.with_connected_input_lease(server_id, |inputs, transport| {
+            inputs.with_published_source(transport, profile, read)
+        })
+    }
+
+    /// Borrow original target inputs under the same actual admission, transport, input and status locks.
+    /// 在同一实际入场、传输、输入及状态锁下借用原目标输入。
+    /// server_id selects the actual entry, profile fixes its original source and read receives protected inputs.
+    /// server_id 选择实际条目，profile 固定其原来源，read 接收受保护输入。
+    /// Return read's value or a value-free rejection; no captured lease escapes the synchronous borrow.
+    /// 返回 read 值或不含值的拒绝；捕获租约不逃逸同步借用。
+    pub(crate) fn with_connected_target_launch_inputs<R>(
+        &self,
+        server_id: &str,
+        profile: &vulcan_plugin_runtime::VulcanPluginTargetMcpProfile,
+        read: impl FnOnce(
+            &vulcan_mcp_runtime::McpTransportLaunchSpec,
+            Option<&Arc<McpOAuthSession>>,
+        ) -> R,
+    ) -> Result<R, crate::mcp::registry::McpLaunchInputCaptureError> {
+        self.with_connected_input_lease(server_id, |inputs, transport| {
+            inputs.with_target_source(transport, profile, read)
+        })
+    }
+
+    /// Inspect old actual inputs under the same admission, transport, input and readiness locks.
+    /// 在相同入场、传输、输入及就绪锁下检查旧实际输入。
+    /// server_id selects the actual entry and profile fixes its original source; return read's value or rejection.
+    /// server_id 选择实际条目，profile 固定原来源；返回 read 值或拒绝。
+    pub(crate) fn with_connected_predecessor_launch_inputs<R>(
+        &self,
+        server_id: &str,
+        profile: &vulcan_plugin_runtime::VulcanPluginPredecessorMcpProfile,
+        read: impl FnOnce(
+            &vulcan_mcp_runtime::McpTransportLaunchSpec,
+            Option<&Arc<McpOAuthSession>>,
+        ) -> R,
+    ) -> Result<R, crate::mcp::registry::McpLaunchInputCaptureError> {
+        self.with_connected_input_lease(server_id, |inputs, transport| {
+            inputs.with_predecessor_source(transport, profile, read)
+        })
+    }
+
+    /// Freeze one actual connected input lease and transport for a synchronous trusted inspection.
+    /// 为同步可信检查固定单个实际已连接输入租约及传输。
+    /// server_id selects the original live entry and read validates its lease; no raw lease escapes this borrow.
+    /// server_id 选择原实时条目，read 校验其租约；此借用不泄出原始租约。
+    fn with_connected_input_lease<R>(
+        &self,
+        server_id: &str,
+        read: impl FnOnce(
+            &crate::mcp::registry::McpActualLaunchInputLease,
+            &Arc<dyn McpTransport>,
+        ) -> Result<R, crate::mcp::registry::McpLaunchInputCaptureError>,
+    ) -> Result<R, crate::mcp::registry::McpLaunchInputCaptureError> {
+        use crate::mcp::registry::McpLaunchInputCaptureError;
+        // Admission, transport, evidence and status remain frozen throughout the synchronous borrow.
+        // 同步借用期间，入场、传输、证据及状态保持冻结。
+        let business = self
+            .inner
+            .business_gate
+            .read()
+            .expect("mcp business gate poisoned");
+        if *business == McpBusinessGate::Closed || self.shutdown_requested() {
+            return Err(McpLaunchInputCaptureError::Unavailable);
+        }
+        let transports = self
+            .inner
+            .transports
+            .read()
+            .expect("mcp runtime transport map poisoned");
+        let inputs = self
+            .inner
+            .launch_inputs
+            .read()
+            .expect("MCP actual launch input map poisoned");
+        let snapshot = self
+            .inner
+            .snapshot
+            .read()
+            .expect("mcp runtime snapshot poisoned");
+        if snapshot
+            .servers
+            .get(server_id)
+            .is_none_or(|server| server.status != McpRuntimeServerStatus::Connected)
+        {
+            return Err(McpLaunchInputCaptureError::Unavailable);
+        }
+        let transport = transports
+            .get(server_id)
+            .ok_or(McpLaunchInputCaptureError::Unavailable)?;
+        let inputs = inputs
+            .get(server_id)
+            .ok_or(McpLaunchInputCaptureError::Unavailable)?;
+        read(inputs, transport)
+    }
+
     /// Returns whether this runtime partition owns the exact server identifier.
     /// 返回当前运行时分区是否持有精确服务器标识。
     pub(super) fn contains_server(&self, server_id: &str) -> bool {
@@ -240,6 +532,24 @@ impl McpRuntimeHandle {
     /// 返回供上层运行时表面消费的单份稳定 MCP 运行时概览。
     pub(super) fn overview(&self) -> McpRuntimeOverview {
         self.snapshot().overview()
+    }
+
+    /// Return plugin namespaces declared by this actual runtime's immutable server registry.
+    /// 返回此实际运行时不可变服务器注册表声明的插件命名空间。
+    /// No inputs; the owned set identifies observation routing only, never native package authority.
+    /// 无输入；自有集合仅标识观察路由，绝不证明原生插件包权威。
+    pub(super) fn plugin_source_ids(&self) -> BTreeSet<String> {
+        self.inner
+            .registry
+            .servers()
+            .iter()
+            .filter_map(|server| match &server.source {
+                crate::mcp::config::McpServerSource::UserConfigured => None,
+                crate::mcp::config::McpServerSource::Plugin { plugin_id, .. } => {
+                    Some(plugin_id.clone())
+                }
+            })
+            .collect()
     }
 
     /// Returns structured runtime states for every server owned by this partition.
@@ -625,13 +935,10 @@ impl McpRuntimeHandle {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// Returns whether all servers stopped successfully and the original aggregate resources released.
-    /// 返回全部服务器是否成功停止，且原聚合资源是否已经释放。
+    /// Returns whether latched shutdown has positive original cleanup and physical retirement evidence.
+    /// 返回锁存关闭是否具有正向原清理及物理退役证据。
     pub(super) fn is_fully_stopped(&self) -> bool {
-        self.inner.partition_release.is_released()
-            && self.snapshot().servers.values().all(|server| {
-                server.status == McpRuntimeServerStatus::Stopped && server.last_error.is_none()
-            })
+        matches!(self.cleanup_admission(), McpCleanupAdmission::Complete)
     }
 
     /// Waits for protocol teardown and original physical ownership within the caller's total deadline.
@@ -642,12 +949,10 @@ impl McpRuntimeHandle {
         &self,
         deadline: tokio::time::Instant,
     ) -> Result<(), String> {
+        // The common admission predicate already includes the original aggregate physical release.
+        // 共同准入判定已经包含原聚合物理释放。
         self.wait_until_stopped(deadline.saturating_duration_since(tokio::time::Instant::now()))
-            .await?;
-        tokio::time::timeout_at(deadline, self.inner.partition_release.wait())
             .await
-            .map_err(|_| String::from("MCP partition original resources are still draining."))?
-            .map_err(|error| error.to_string())
     }
 
     /// Waits until every enabled server in this partition has completed initialize and atomic tool discovery.
@@ -716,31 +1021,20 @@ impl McpRuntimeHandle {
     ///
     /// # Returns
     /// 返回值
-    /// Returns success only after every server snapshot reaches the terminal stopped state.
-    /// 仅在每个服务器快照到达终止的已停止状态后返回成功。
+    /// Returns success only for positive original cleanup and physical release; startup diagnostics remain unchanged.
+    /// 仅对正向原清理及物理释放返回成功；启动诊断保持不变。
     async fn wait_until_stopped(&self, maximum_wait: Duration) -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + maximum_wait;
         loop {
-            // snapshot captures one internally consistent teardown observation.
-            // snapshot 捕获一份内部一致的拆除状态观察。
-            let snapshot = self.snapshot();
-            if snapshot
-                .servers
-                .values()
-                .all(|server| server.status == McpRuntimeServerStatus::Stopped)
-            {
-                if let Some(error) = snapshot
-                    .servers
-                    .values()
-                    .find_map(|server| server.last_error.clone())
-                {
-                    return Err(error);
-                }
-                return Ok(());
+            match self.cleanup_admission() {
+                McpCleanupAdmission::Complete => return Ok(()),
+                McpCleanupAdmission::Failed(error) => return Err(error),
+                McpCleanupAdmission::Pending => {}
             }
             if tokio::time::Instant::now() >= deadline {
                 // pending_servers identifies every process whose shutdown could not be confirmed.
                 // pending_servers 标识每个无法确认已关闭的进程。
+                let snapshot = self.snapshot();
                 let pending_servers = snapshot
                     .servers
                     .values()
@@ -785,26 +1079,20 @@ pub(super) async fn bootstrap_mcp_runtime(
     create_mcp_runtime(servers, resources, McpRuntimePurpose::Managed)
 }
 
-/// Starts a managed partition synchronously with the caller's original resource scope.
-/// 使用调用者原资源范围同步启动受管分区。
-/// The caller must register the returned handle before releasing its admission lock.
-/// 调用者必须在释放入场锁之前登记返回句柄。
-pub(super) fn start_managed_mcp_runtime(
+/// Prepare raw target work without source certification or native dispatch.
+/// 准备原始目标工作，不进行来源认证或原生派发。
+/// servers and resources retain the exact caller inputs; return undispatched work with closed business admission.
+/// servers 及 resources 保留精确调用者输入；返回关闭业务入场的未派发工作。
+pub(super) fn prepare_unproven_target_mcp_runtime(
     servers: Vec<McpServerConfig>,
     resources: vulcan_mcp_runtime::McpTransportResources,
-) -> Result<McpRuntimeHandle, String> {
-    create_mcp_runtime(servers, resources, McpRuntimePurpose::Managed)
-}
-
-/// Start one actual selected target with its resource bundle and closed business admission.
-/// 启动带资源包及关闭业务入场的单个实际已选目标。
-/// servers and resources are sealed upstream inputs; return the same single-shot lifecycle handle.
-/// servers 及 resources 为上游密封输入；返回相同单次生命周期句柄。
-pub(super) fn start_target_mcp_runtime(
-    servers: Vec<McpServerConfig>,
-    resources: vulcan_mcp_runtime::McpTransportResources,
-) -> Result<McpRuntimeHandle, String> {
-    create_mcp_runtime(servers, resources, McpRuntimePurpose::TargetPreparation)
+) -> Result<PreparedMcpRuntime, String> {
+    prepare_mcp_runtime(
+        servers,
+        resources,
+        McpRuntimePurpose::TargetPreparation,
+        crate::mcp::registry::McpPluginLaunchSource::Unproven,
+    )
 }
 
 /// Owns unpublished MCP runtimes until their access generation is published.
@@ -864,6 +1152,66 @@ impl Drop for McpRuntimeStartupGuard {
 pub async fn bootstrap_mcp_runtime_access(
     servers: Vec<McpServerConfig>,
 ) -> Result<McpRuntimeAccess, String> {
+    bootstrap_mcp_runtime_access_with_originals(servers, |_| Ok(Vec::new()))
+        .await
+        .map(|(access, _)| access)
+}
+
+/// Bootstrap raw user/legacy declarations and sealed published inputs as one concurrently observed batch.
+/// 将原始用户／旧声明及密封已发布输入作为单个并发观察批次引导。
+/// servers contains no sealed owner; manager and authority are the original host pair; published is consumed once.
+/// servers 不包含密封所有者；manager 及 authority 为原宿主配对；published 仅消费一次。
+/// Return original access and ready closed controls; errors or cancellation close every original without replay.
+/// 返回原访问及就绪关闭控制；错误或取消关闭每个原实例，不重播。
+pub async fn bootstrap_mcp_runtime_access_with_published(
+    servers: Vec<McpServerConfig>,
+    manager: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    authority: &vulcan_plugin_runtime::VulcanPluginRegisteredNativeMcpHostAuthority,
+    published: Vec<crate::mcp::PreparedPublishedPluginMcpConfigs>,
+) -> Result<(McpRuntimeAccess, Vec<PublishedPluginMcpRuntime>), String> {
+    if !authority.matches_manager(manager) {
+        return Err(String::from(
+            "Published MCP bootstrap requires its original manager and host.",
+        ));
+    }
+    // Exactly one declared producer owns each plugin before any actual raw or sealed task starts.
+    // 在任何实际原始或密封任务启动之前，每个插件恰由单个已声明生产者拥有。
+    let mut sealed_owners = BTreeSet::new();
+    for prepared in &published {
+        prepared.validate_original_host(authority)?;
+        if !sealed_owners.insert(prepared.identity().0.to_owned()) {
+            return Err(String::from(
+                "Published MCP bootstrap contains a duplicate sealed owner.",
+            ));
+        }
+    }
+    if servers.iter().any(|server| {
+        matches!(&server.source,
+        crate::mcp::McpServerSource::Plugin { plugin_id, .. } if sealed_owners.contains(plugin_id))
+    }) {
+        return Err(String::from(
+            "MCP bootstrap declares both raw and sealed inputs for one plugin.",
+        ));
+    }
+    bootstrap_mcp_runtime_access_with_originals(servers, |access| {
+        published
+            .into_iter()
+            .map(|prepared| PublishedPluginMcpRuntime::start(access, manager, prepared, authority))
+            .collect()
+    })
+    .await
+}
+
+/// Register initializer's original closed controls after raw construction and before any partition readiness wait.
+/// 在原始构造之后及任何分区就绪等待之前，登记 initializer 原关闭控制。
+/// servers supplies explicit raw declarations; initializer is a trusted internal synchronous factory, never plugin business.
+/// servers 提供明确原始声明；initializer 为可信内部同步工厂，绝不是插件业务。
+/// Return the one access and same ready controls; all actual startup owners remain armed on errors and cancellation.
+/// 返回单个访问及同一就绪控制；错误及取消时全部实际启动所有者保持启用。
+async fn bootstrap_mcp_runtime_access_with_originals(
+    servers: Vec<McpServerConfig>,
+    initializer: impl FnOnce(&McpRuntimeAccess) -> Result<Vec<PublishedPluginMcpRuntime>, String>,
+) -> Result<(McpRuntimeAccess, Vec<PublishedPluginMcpRuntime>), String> {
     let overview = configured_mcp_registry_overview(servers.clone());
     let mut grouped = BTreeMap::<String, Vec<McpServerConfig>>::new();
     for server in servers {
@@ -887,32 +1235,67 @@ pub async fn bootstrap_mcp_runtime_access(
     }
     // plugin_keys lists every plugin partition in stable key order for deterministic reporting.
     // plugin_keys 按稳定键顺序列出全部插件分区，使失败报告顺序确定。
-    let plugin_keys = partitions
+    let mut plugin_keys = partitions
         .keys()
         .filter(|partition_key| partition_key.starts_with("plugin:"))
         .cloned()
         .collect::<Vec<_>>();
+    // Original raw control clones do not extend execution resources; access owns their sole partition leases.
+    // 原原始控制克隆不延长执行资源；访问拥有其唯一分区租约。
+    let access = McpRuntimeAccess::new(overview, partitions.clone());
+    // Sealed originals enter that same actual registry lineage before any readiness await.
+    // 密封原实例在任何就绪 await 之前进入该同一实际注册表谱系。
+    let originals = initializer(&access)?;
+    for native in &originals {
+        // Route metadata only determines stable reporting order; the factory validated actual resource authority.
+        // 路由元数据仅决定稳定报告顺序；工厂已经校验实际资源权威。
+        let observer = native.observer();
+        plugin_keys.push(
+            crate::mcp::McpServerSource::Plugin {
+                plugin_id: observer.identity().0.to_owned(),
+                generation: observer.identity().1,
+            }
+            .partition_key(),
+        );
+    }
     if plugin_keys.is_empty() {
-        let access = McpRuntimeAccess::new(overview, partitions);
         startup_guard.mark_published();
-        return Ok(access);
+        return Ok((access, originals));
     }
     // readiness_waits runs every plugin partition readiness check concurrently so one slow or
     // offline server cannot add its own deadline to the next partition.
     // readiness_waits 并发执行每个插件分区就绪检查，使单个慢或离线服务器
     // 无法把自己的等待时间叠加到下一个分区。
     let mut readiness_waits = tokio::task::JoinSet::new();
-    for partition_key in &plugin_keys {
-        let runtime = partitions
-            .get(partition_key)
-            .expect("bootstrapped plugin partition must exist before its readiness wait")
-            .clone();
+    for (partition_key, runtime) in partitions
+        .iter()
+        .filter(|(key, _)| key.starts_with("plugin:"))
+    {
+        // The same raw control is observed without borrowing another execution partition.
+        // 观察同一原始控制，不借用另一个执行分区。
+        let runtime = runtime.clone();
         let owned_partition_key = partition_key.clone();
         readiness_waits.spawn(async move {
             let readiness = runtime
                 .wait_until_ready(MCP_PARTITION_READINESS_TIMEOUT)
                 .await;
             (owned_partition_key, readiness)
+        });
+    }
+    for native in &originals {
+        // This exact non-owning observer belongs to the already registered actual sealed launch.
+        // 此精确非拥有观察属于已登记实际密封启动。
+        let observer = native.observer();
+        // Canonical source formatting is shared with every actual partition producer.
+        // 规范来源格式与每个实际分区生产者共享。
+        let partition_key = crate::mcp::McpServerSource::Plugin {
+            plugin_id: observer.identity().0.to_owned(),
+            generation: observer.identity().1,
+        }
+        .partition_key();
+        readiness_waits.spawn(async move {
+            let readiness = observer.wait_until_bootstrap_ready().await;
+            (partition_key, readiness)
         });
     }
     // failures keeps every rejection keyed by partition so the first stable key is reported.
@@ -937,9 +1320,8 @@ pub async fn bootstrap_mcp_runtime_access(
     if let Some((_, error)) = failures.into_iter().next() {
         return Err(error);
     }
-    let access = McpRuntimeAccess::new(overview, partitions);
     startup_guard.mark_published();
-    Ok(access)
+    Ok((access, originals))
 }
 
 /// Replaces only the user-configured MCP runtime partition while retaining plugin partitions.
@@ -966,9 +1348,13 @@ pub async fn replace_user_mcp_runtime_partition(
             "The user MCP partition accepts only user-configured server definitions.",
         ));
     }
+    // The declared overview remains separate from the original sole registered execution lease.
+    // 已声明概览与原唯一已登记执行租约保持分离。
     let overview = configured_mcp_registry_overview(servers.clone());
-    let runtime = bootstrap_mcp_runtime(servers).await?;
-    Ok(current.with_replaced_user_partition(overview, runtime))
+    // Shared admission rejects closure and registers this actual original before dispatch.
+    // 共享入场拒绝已关闭状态，并在派发前登记此实际原实例。
+    let lease = current.start_user_partition(servers)?;
+    Ok(current.with_replaced_user_partition(overview, lease))
 }
 
 /// Prepares and atomically projects one plugin MCP partition while retaining user and unrelated plugin partitions.
@@ -1152,20 +1538,46 @@ fn spawn_server_runtime_task(
         // authSession 在有限重试循环内初始化，因为元数据发现可能发生瞬时失败。
         let mut auth_session: Option<Option<Arc<McpOAuthSession>>> = None;
         loop {
+            // A new actual attempt cannot reuse a previous operation's positive cleanup evidence.
+            // 新实际尝试不能复用前次操作的正向清理证据。
+            // Clear before OAuth session construction or any other first external launch effect is allowed.
+            // 在允许 OAuth 会话构造或其他首次外部启动效果之前清除。
+            inner
+                .cleanup_observations
+                .write()
+                .expect("MCP actual cleanup observation map poisoned")
+                .remove(&server.id);
+
+            // This same actual attempt scope covers prelaunch work and is consumed by native launch on success.
+            // 此同一实际尝试范围覆盖启动前工作，并在成功时由原生启动消费。
+            // Registration precedes the initial shutdown check so an unstarted task still proves its original release.
+            // 登记先于初始关闭检查，使未开始工作的任务仍可证明其原释放。
+            let (resources, release) =
+                vulcan_mcp_runtime::McpTransportResources::new(launch_resources.clone());
+            inner
+                .resource_releases
+                .write()
+                .expect("MCP launch release map poisoned")
+                .insert(server.id.clone(), release);
             if *shutdown_rx.borrow() {
+                drop(resources);
                 shutdown_server_runtime_state(&inner, &server.id).await;
                 break;
             }
 
             if auth_session.is_none() {
-                // authSessionResult remains interruptible while remote OAuth metadata and registration are prepared.
-                // authSessionResult 在远端 OAuth 元数据与注册准备期间保持可被关闭信号中断。
+                // Current OAuth initialization constructs owned clients and validates the URL; it starts no detached requests.
+                // 当前 OAuth 初始化构造自有客户端并校验 URL；不会启动分离请求。
+                // Leave the select before cleanup so cancellation has destroyed the complete original session future.
+                // 清理前离开选择表达式，使取消已销毁完整原会话 future。
                 let auth_session_result = tokio::select! {
-                    _ = shutdown_rx.changed() => {
-                        shutdown_server_runtime_state(&inner, &server.id).await;
-                        return;
-                    }
-                    result = build_server_auth_session(&server) => result,
+                    _ = shutdown_rx.changed() => None,
+                    result = build_server_auth_session(&server) => Some(result),
+                };
+                let Some(auth_session_result) = auth_session_result else {
+                    drop(resources);
+                    shutdown_server_runtime_state(&inner, &server.id).await;
+                    return;
                 };
                 match auth_session_result {
                     Ok(session) => {
@@ -1173,6 +1585,9 @@ fn spawn_server_runtime_task(
                         auth_session = Some(session);
                     }
                     Err(error) => {
+                        // The failed session future already ended; release this exact prelaunch owner before observing cleanup.
+                        // 失败会话 future 已结束；观察清理前释放此精确启动前所有者。
+                        drop(resources);
                         if record_server_failure_and_should_stop(
                             &inner,
                             &server,
@@ -1210,24 +1625,16 @@ fn spawn_server_runtime_task(
             // healthy long-lived connections release it before optional capability refresh.
             // 许可覆盖初始化与首次完整 tools/list 校验；健康长连接在可选能力刷新前释放它。
             let startup_permit = tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    shutdown_server_runtime_state(&inner, &server.id).await;
-                    break;
-                }
+                _ = shutdown_rx.changed() => None,
                 permit = mcp_transport_startup_semaphore().acquire() => {
-                    permit.expect("the process-wide MCP startup semaphore is never closed")
+                    Some(permit.expect("the process-wide MCP startup semaphore is never closed"))
                 }
             };
-
-            // Register evidence before initialization can create any actual process or remote work.
-            // 初始化可能创建任何实际进程或远程工作前，先登记证据。
-            let (resources, release) =
-                vulcan_mcp_runtime::McpTransportResources::new(launch_resources.clone());
-            inner
-                .resource_releases
-                .write()
-                .expect("MCP launch release map poisoned")
-                .insert(server.id.clone(), release);
+            let Some(startup_permit) = startup_permit else {
+                drop(resources);
+                shutdown_server_runtime_state(&inner, &server.id).await;
+                break;
+            };
             // Leave the select before cleanup so the cancelled launch future drops all of its references.
             // 清理前先离开选择表达式，使已取消启动 future 释放其全部引用。
             let transport_result = tokio::select! {
@@ -1239,6 +1646,7 @@ fn spawn_server_runtime_task(
                             &server.id,
                             auth_session.as_ref().cloned().flatten(),
                             resources,
+                            inner.launch_source.clone(),
                         ),
                     )
                     .await
@@ -1255,7 +1663,17 @@ fn spawn_server_runtime_task(
                     shutdown_server_runtime_state(&inner, &server.id).await;
                     break;
                 }
-                Some(Ok(transport)) => transport,
+                Some(Ok(launched)) => {
+                    // This matching pair comes from the exact successful native launch, before discovery admission.
+                    // 此匹配对来自精确成功原生启动，先于发现入场。
+                    let (transport, inputs) = launched.into_parts();
+                    inner
+                        .launch_inputs
+                        .write()
+                        .expect("MCP actual launch input map poisoned")
+                        .insert(server.id.clone(), inputs);
+                    transport
+                }
                 Some(Err(error)) => {
                     let should_stop = record_server_failure_and_should_stop(
                         &inner,
@@ -2110,68 +2528,141 @@ async fn remove_and_shutdown_server_transport(
     unpublished_transport: Option<Arc<dyn McpTransport>>,
     primary_error: Option<String>,
 ) -> (Vec<String>, Option<String>) {
-    // Removing admission first prevents a new tool binding while the exact transport is draining.
-    // 先移除入场，防止精确传输排空期间新增工具绑定。
-    let registered_transport = inner
-        .transports
-        .write()
-        .expect("mcp runtime transport map poisoned")
-        .remove(server_id);
-    // The explicit unpublished instance applies only before registration.
-    // 显式未发布实例仅用于注册之前。
-    let transport = registered_transport.or(unpublished_transport);
-    // The independent receipt exists even when initialization never returned a transport.
-    // 即使初始化从未返回传输，独立回执仍存在。
-    let release = inner
-        .resource_releases
-        .read()
-        .expect("MCP launch release map poisoned")
-        .get(server_id)
-        .cloned();
-    if transport.is_none() && release.is_none() {
-        return (Vec::new(), None);
+    /// Actual ownership is either the sole original producer or an observer of that same result.
+    /// 实际所有权为唯一原产出者，或相同结果的观察者。
+    enum CleanupOwnership {
+        /// Observe the same original operation without taking another native resource owner.
+        /// 观察相同原操作，不取得另一个原生资源所有者。
+        Observer(McpActualCleanupObservation),
+        /// Produce one actual protocol and native-resource cleanup result.
+        /// 产出单个实际协议及原生资源清理结果。
+        Original {
+            /// Original registered or unpublished transport is consumed by this producer.
+            /// 此产出者消费原已注册或未发布传输。
+            transport: Option<Arc<dyn McpTransport>>,
+            /// The independent receipt exists even when initialization returned no transport.
+            /// 即使初始化未返回传输，独立回执仍存在。
+            release: Option<vulcan_mcp_runtime::McpResourceRelease>,
+            /// Only this exact producer may publish the original operation's actual final result.
+            /// 只有此精确产出者可以发布原操作实际最终结果。
+            completion: cleanup_receipts::McpCleanupCompletionWriter,
+        },
     }
-    update_server_status(
-        inner,
-        server_id,
-        McpRuntimeServerStatus::Stopping,
-        primary_error,
-        Vec::new(),
-    );
-    update_server_prompt_count(inner, server_id, 0);
-    update_server_resource_count(inner, server_id, 0);
-    // Close errors remain errors; they never grant permission to reclaim still-owned resources.
-    // 关闭错误仍是错误，绝不授予回收仍在使用资源的许可。
-    let recent_logs = if let Some(transport) = transport {
-        let shutdown_error = transport
-            .shutdown_and_wait()
-            .await
-            .err()
-            .map(|error| error.to_string());
-        let recent_logs = transport.recent_logs();
-        // In particular, SSE retains its client in Self; waiting before dropping this Arc would deadlock.
-        // 特别是 SSE 在自身保留客户端；释放此 Arc 前等待会死锁。
-        drop(transport);
-        if shutdown_error.is_some() {
-            return (recent_logs, shutdown_error);
-        }
-        recent_logs
-    } else {
-        Vec::new()
-    };
-    if let Some(release) = release {
-        if let Err(error) = release.wait().await {
-            return (recent_logs, Some(error.to_string()));
-        }
-        // Only this server's lifecycle writer starts attempts, always after its previous cleanup.
-        // 仅此服务器生命周期写入者启动尝试，且始终在前次清理之后。
-        inner
-            .resource_releases
+    // Observers must dispose any duplicate Arc before waiting, especially when SSE owns a client in Self.
+    // 观察者必须在等待前销毁重复 Arc，尤其是 SSE 在自身拥有客户端时。
+    let mut unpublished_transport = unpublished_transport;
+    // Register the original operation under the same live lock order before removing its transport.
+    // 移除传输前，按照相同实时锁顺序登记原操作。
+    let ownership = {
+        let mut transports = inner
+            .transports
             .write()
-            .expect("MCP launch release map poisoned")
-            .remove(server_id);
+            .expect("mcp runtime transport map poisoned");
+        let mut inputs = inner
+            .launch_inputs
+            .write()
+            .expect("MCP actual launch input map poisoned");
+        let releases = inner
+            .resource_releases
+            .read()
+            .expect("MCP launch release map poisoned");
+        let mut observations = inner
+            .cleanup_observations
+            .write()
+            .expect("MCP actual cleanup observation map poisoned");
+        if let Some(observation) = observations.get(server_id) {
+            CleanupOwnership::Observer(observation.clone())
+        } else {
+            let release = releases.get(server_id).cloned();
+            let original_transport = transports
+                .get(server_id)
+                .or(unpublished_transport.as_ref())
+                .map(Arc::downgrade);
+            let (observation, completion) =
+                McpActualCleanupObservation::begin(original_transport, release.clone());
+            observations.insert(server_id.to_owned(), observation);
+            // Removing admission also revokes capture; the sealed original observation is already retained.
+            // 移除入场同时撤销捕获；密封原观察已经保留。
+            let transport = transports
+                .remove(server_id)
+                .or(unpublished_transport.take());
+            inputs.remove(server_id);
+            CleanupOwnership::Original {
+                transport,
+                release,
+                completion,
+            }
+        }
+    };
+    drop(unpublished_transport);
+    let (transport, release, completion) = match ownership {
+        CleanupOwnership::Original {
+            transport,
+            release,
+            completion,
+        } => (transport, release, completion),
+        CleanupOwnership::Observer(observation) => {
+            return match observation.wait().await {
+                Ok(logs) => (logs, None),
+                Err((logs, error)) => (logs, Some(error)),
+            };
+        }
+    };
+    // One result covers protocol shutdown and the same original final native release.
+    // 单个结果覆盖协议关闭及相同原最终原生释放。
+    let actual_result: cleanup_receipts::McpActualCleanupResult = async {
+        if transport.is_none() && release.is_none() {
+            return Err((
+                Vec::new(),
+                String::from("MCP cleanup has no original transport or release receipt."),
+            ));
+        }
+        update_server_status(
+            inner,
+            server_id,
+            McpRuntimeServerStatus::Stopping,
+            primary_error,
+            Vec::new(),
+        );
+        update_server_prompt_count(inner, server_id, 0);
+        update_server_resource_count(inner, server_id, 0);
+        // Close errors stay errors even if native disposal later finishes independently.
+        // 即使原生销毁之后独立完成，关闭错误仍保持错误。
+        let recent_logs = if let Some(transport) = transport {
+            let shutdown_result = transport.shutdown_and_wait().await;
+            let recent_logs = transport.recent_logs();
+            // SSE retains its client in Self; release this original Arc before waiting on native disposal.
+            // SSE 在自身保留客户端；等待原生销毁前释放此原 Arc。
+            drop(transport);
+            if let Err(error) = shutdown_result {
+                return Err((recent_logs, error.to_string()));
+            }
+            recent_logs
+        } else {
+            Vec::new()
+        };
+        if let Some(release) = release {
+            if let Err(error) = release.wait().await {
+                return Err((recent_logs, error.to_string()));
+            }
+            // Only the actual positive original release permits removal of its active receipt.
+            // 仅实际正向原释放允许移除其活动回执。
+            inner
+                .resource_releases
+                .write()
+                .expect("MCP launch release map poisoned")
+                .remove(server_id);
+        }
+        Ok(recent_logs)
     }
-    (recent_logs, None)
+    .await;
+    // This is the sole positive observation writer; no snapshot or missing map entry constructs success.
+    // 此处是唯一正向观察写入点；任何快照或缺失映射条目都不构造成功。
+    completion.complete(actual_result.clone());
+    match actual_result {
+        Ok(logs) => (logs, None),
+        Err((logs, error)) => (logs, Some(error)),
+    }
 }
 
 /// Combines one primary lifecycle error with a later transport shutdown failure without losing either cause.
@@ -3196,9 +3687,14 @@ mod optional_capability_tests {
         Arc::new(McpRuntimeInner {
             instance_id: uuid::Uuid::new_v4(),
             registry: McpServerRegistry::new(Vec::new()),
+            // This fixture has no actual producer or full published source.
+            // 此夹具没有实际生产者或完整已发布来源。
+            launch_source: crate::mcp::registry::McpPluginLaunchSource::Unproven,
             purpose: McpRuntimePurpose::Managed,
             business_gate: RwLock::new(McpBusinessGate::Open),
             transports: RwLock::new(BTreeMap::new()),
+            launch_inputs: RwLock::new(BTreeMap::new()),
+            cleanup_observations: RwLock::new(BTreeMap::new()),
             resource_releases: RwLock::new(BTreeMap::new()),
             // This synthetic registry starts no native lifecycle and therefore has an empty released scope.
             // 此合成注册表不启动原生生命周期，因此拥有已释放的空范围。
@@ -3358,10 +3854,10 @@ mod optional_capability_tests {
         assert!(*future_receiver.borrow());
     }
 
-    /// Verifies a latched shutdown request is not treated as completed transport teardown.
-    /// 验证锁存的关闭请求不会被当作已经完成的传输拆除。
+    /// Verifies latched shutdown cannot replace actual original cleanup and physical resource release.
+    /// 验证锁存关闭不能替代实际原清理及物理资源释放。
     #[tokio::test]
-    async fn mcp_partition_reports_stopped_only_after_terminal_server_state() {
+    async fn mcp_partition_requires_original_cleanup_and_physical_release() {
         let server = McpServerConfig {
             source: crate::mcp::config::McpServerSource::UserConfigured,
             id: String::from("pending"),
@@ -3379,19 +3875,71 @@ mod optional_capability_tests {
         let runtime = bootstrap_mcp_runtime(vec![server])
             .await
             .expect("build disabled test partition");
+        // A real exclusive file lease supplies original physical ownership without replaying any startup.
+        // 真实排他文件租约提供原物理所有权，不重放任何启动。
+        let witness = tempfile::NamedTempFile::new().expect("original physical witness");
+        let lease = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(witness.path())
+            .expect("original exclusive file owner");
+        lease.lock().expect("original file lock");
+        let (actual_owner, release) = vulcan_mcp_runtime::McpTransportResources::new(lease);
+        runtime
+            .inner
+            .resource_releases
+            .write()
+            .expect("original release map")
+            .insert("pending".into(), release);
         runtime.shutdown();
         assert!(
             !runtime.is_fully_stopped(),
             "a shutdown request must not prove server teardown"
         );
-        update_server_status(
-            &runtime.inner,
-            "pending",
-            McpRuntimeServerStatus::Stopped,
-            None,
-            Vec::new(),
+        assert!(
+            runtime
+                .inner
+                .cleanup_observations
+                .read()
+                .expect("cleanup observations")
+                .is_empty()
         );
+        let inner = runtime.inner.clone();
+        let cleanup =
+            tokio::spawn(async move { shutdown_server_runtime_state(&inner, "pending").await });
+        runtime
+            .wait_until_stopped(Duration::from_millis(10))
+            .await
+            .expect_err("real original file ownership still prevents completion");
+        assert!(matches!(
+            witness.as_file().try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        assert!(!runtime.is_fully_stopped());
+        drop(actual_owner);
+        tokio::time::timeout(Duration::from_secs(5), cleanup)
+            .await
+            .expect("original physical release deadline")
+            .expect("original cleanup joined");
+        runtime
+            .wait_until_stopped(Duration::from_millis(10))
+            .await
+            .expect("actual positive original cleanup proof");
         assert!(runtime.is_fully_stopped());
+        witness
+            .as_file()
+            .try_lock()
+            .expect("actual file released before completion");
+        assert_eq!(runtime.snapshot().servers["pending"].last_error, None);
+        assert_eq!(
+            runtime
+                .inner
+                .retry_counts
+                .read()
+                .expect("original retry state")["pending"],
+            0,
+            "cleanup must not replay disabled startup"
+        );
     }
 
     /// Verifies owner bindings reject foreign callers and remain fail-closed after revocation.

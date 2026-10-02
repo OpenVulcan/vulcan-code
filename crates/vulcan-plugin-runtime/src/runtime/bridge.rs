@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 mod embedded;
-pub(in crate::runtime) use embedded::PrivateTargetHookHandoff;
+pub(in crate::runtime) use embedded::PrivateHookHandoff;
 pub use embedded::{VulcanPluginBundlePoolRequest, VulcanPluginEmbeddedHost};
 
 /// Maximum encoded bytes in a plugin-local UI invalidation topic.
