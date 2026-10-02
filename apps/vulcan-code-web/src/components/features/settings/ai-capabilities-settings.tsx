@@ -5,7 +5,6 @@ import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-ca
 import { Button } from "@/components/ui/button";
 import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useI18n } from "@/i18n";
 import { isModelExtensionCapability } from "@/lib/provider-tool-capabilities";
 import { cn } from "@/lib/utils";
@@ -15,6 +14,8 @@ import type {
   PublicAiProviderToolTargetSelection,
   PublicAiSettingsSnapshot,
 } from "@/types";
+
+import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 
 import { ProviderToolSelectionSettingsArea } from "./provider-tool-selection-settings";
 
@@ -127,65 +128,67 @@ export function AiCapabilitiesSettingsArea(props: {
     };
   }, [reloadVersion]);
 
+  // currentTab is the definition behind the selected page tab; only its rows are rendered.
+  // currentTab 是当前页面标签对应的定义；只渲染该标签下的能力行。
+  const currentTab = AI_CAPABILITY_TABS.find((tab) => tab.id === activeTab) ?? AI_CAPABILITY_TABS[0];
+
   return (
     <div className="ai-capabilities-page">
-      <Tabs onValueChange={(value) => setActiveTab(value as AiCapabilityTabId)} value={activeTab}>
-        <TabsList className="ai-capabilities-tabs" variant="line">
-          {AI_CAPABILITY_TABS.map((tab) => (
-            <TabsTrigger key={tab.id} value={tab.id}>
-              {t(tab.labelKey)}
-              <span className="ai-capabilities-tab-count">
-                {snapshot ? tab.items.filter((item) => summarizeCapability(snapshot, item.capability, t).enabled).length : "–"}/{tab.items.length}
-              </span>
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        {AI_CAPABILITY_TABS.map((tab) => (
-          <TabsContent className="ai-capabilities-panel" key={tab.id} value={tab.id}>
-            {error && !snapshot ? (
-              <div className="ai-capabilities-message" role="alert">
-                <p className="settings-error-text">{error}</p>
-                <Button onClick={() => setReloadVersion((value) => value + 1)} size="sm" type="button" variant="outline">
-                  {t("settings.modelExperience.retryLoad")}
-                </Button>
-              </div>
-            ) : (
-              <ul className="ai-capability-list">
-                {tab.items.map((item) => {
-                  const summary = snapshot ? summarizeCapability(snapshot, item.capability, t) : null;
-                  return (
-                    <li className="ai-capability-row" key={item.capability}>
-                      <span className="ai-capability-icon" aria-hidden="true">
-                        <ProviderToolCapabilityIcon capability={item.capability} size={16} />
-                      </span>
-                      <span className="ai-capability-copy">
-                        <strong>{t(item.labelKey)}</strong>
-                        <small>{t(item.descriptionKey)}</small>
-                      </span>
-                      <span className={cn("ai-capability-target", !summary?.target && "empty")}>
-                        {summary ? summary.target ?? t("settings.aiCapabilities.notConfigured") : <InlineStreamPlaceholder label={t("settings.providerTools.loading")} />}
-                      </span>
-                      <span className="ai-capability-status" data-enabled={summary?.enabled ? "true" : "false"}>
-                        {summary?.enabled ? t("settings.aiCapabilities.enabled") : t("settings.aiCapabilities.disabled")}
-                      </span>
-                      <Button
-                        aria-label={`${t("settings.aiCapabilities.configure")} · ${t(item.labelKey)}`}
-                        onClick={() => setEditing(item)}
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                      >
-                        <Settings2 className="size-3.5" />
-                        {t("settings.aiCapabilities.configure")}
-                      </Button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </TabsContent>
-        ))}
-      </Tabs>
+      {/* The shared page tab strip keeps this page consistent with provider management and the other tabbed pages. */}
+      {/* 共享页面标签条让本页与供应商管理等带标签页面保持一致。 */}
+      <PageTabs
+        ariaLabel={t("settings.aiCapabilities")}
+        onValueChange={setActiveTab}
+        options={AI_CAPABILITY_TABS.map((tab) => ({
+          value: tab.id,
+          label: t(tab.labelKey),
+          count: `${snapshot ? tab.items.filter((item) => summarizeCapability(snapshot, item.capability, t).enabled).length : "–"}/${tab.items.length}`,
+        }))}
+        value={activeTab}
+      />
+      <div className="ai-capabilities-panel" key={currentTab.id}>
+        {error && !snapshot ? (
+          <div className="ai-capabilities-message" role="alert">
+            <p className="settings-error-text">{error}</p>
+            <Button onClick={() => setReloadVersion((value) => value + 1)} size="sm" type="button" variant="outline">
+              {t("settings.modelExperience.retryLoad")}
+            </Button>
+          </div>
+        ) : (
+          <ul className="ai-capability-list">
+            {currentTab.items.map((item) => {
+              const summary = snapshot ? summarizeCapability(snapshot, item.capability, t) : null;
+              return (
+                <li className="ai-capability-row" key={item.capability}>
+                  <span className="ai-capability-icon" aria-hidden="true">
+                    <ProviderToolCapabilityIcon capability={item.capability} size={16} />
+                  </span>
+                  <span className="ai-capability-copy">
+                    <strong>{t(item.labelKey)}</strong>
+                    <small>{t(item.descriptionKey)}</small>
+                  </span>
+                  <span className={cn("ai-capability-target", !summary?.target && "empty")}>
+                    {summary ? summary.target ?? t("settings.aiCapabilities.notConfigured") : <InlineStreamPlaceholder label={t("settings.providerTools.loading")} />}
+                  </span>
+                  <span className="ai-capability-status" data-enabled={summary?.enabled ? "true" : "false"}>
+                    {summary?.enabled ? t("settings.aiCapabilities.enabled") : t("settings.aiCapabilities.disabled")}
+                  </span>
+                  <Button
+                    aria-label={`${t("settings.aiCapabilities.configure")} · ${t(item.labelKey)}`}
+                    onClick={() => setEditing(item)}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    <Settings2 className="size-3.5" />
+                    {t("settings.aiCapabilities.configure")}
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
       <Sheet
         onOpenChange={(open) => {
           if (!open) {

@@ -853,27 +853,188 @@
   color: var(--destructive);
 }
 
-.vulcan-plugin-component-details {
-  margin-top: 6px;
+/* Secondary plugin facts are icon chips; their meaning and contributed identifiers live in tooltips. */
+/* 次要插件信息以图标标签呈现；含义与贡献的标识放在 Tooltip 中。 */
+.vulcan-plugin-facts {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.vulcan-plugin-facts > .agent-definition-row-path {
+  margin-right: 4px;
+}
+
+.vulcan-plugin-fact {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--vcn-fill-subtle);
   color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: default;
+  outline: none;
+}
+
+.vulcan-plugin-fact:hover,
+.vulcan-plugin-fact:focus-visible {
+  color: var(--foreground);
+}
+
+.vulcan-plugin-fact:focus-visible {
+  box-shadow: 0 0 0 1px var(--ring);
+}
+
+.vulcan-plugin-fact-tooltip {
+  max-width: 360px;
+}
+
+.vulcan-plugin-fact-items,
+.vulcan-plugin-fact-list {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.vulcan-plugin-fact-list > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.vulcan-plugin-fact-list dt {
+  opacity: 0.7;
+}
+
+.vulcan-plugin-fact-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.vulcan-plugin-log-tooltip {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  font-size: var(--vcn-font-size-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Diagnostics and connection errors need attention, so they are shown directly instead of behind a disclosure. */
+/* 诊断与连接错误需要关注，因此直接展示，而不是藏在折叠区中。 */
+.vulcan-plugin-diagnostics,
+.vulcan-plugin-mcp-error {
+  display: grid;
+  gap: 3px;
+  margin: 2px 0 0;
+  padding: 0;
+  color: var(--vcn-content-warning);
+  font-size: var(--vcn-font-size-sm);
+  line-height: 1.45;
+  list-style: none;
+}
+
+.vulcan-plugin-diagnostics li,
+.vulcan-plugin-mcp-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.vulcan-plugin-diagnostics svg,
+.vulcan-plugin-mcp-error svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.vulcan-plugin-mcp-error {
+  color: var(--destructive);
+}
+
+/* Plugin-owned runtimes (MCP servers, the browser component) sit in one inset panel under the plugin summary. */
+/* 插件自有运行时（MCP 服务器、浏览器组件）放在插件摘要下方的同一个内嵌面板中。 */
+.vulcan-plugin-runtime-panel,
+.vulcan-plugin-mcp {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-md);
+  background: var(--vcn-fill-subtle);
   font-size: var(--vcn-font-size-sm);
 }
 
-.vulcan-plugin-component-details > summary {
-  cursor: pointer;
-  user-select: none;
+.vulcan-plugin-mcp > h4 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 600;
 }
 
-.vulcan-plugin-component-group {
+.vulcan-plugin-mcp-server {
   display: grid;
-  gap: 5px;
-  margin-top: 8px;
+  gap: 6px;
 }
 
-.vulcan-plugin-component-group > div {
+.vulcan-plugin-mcp-server + .vulcan-plugin-mcp-server {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.vulcan-plugin-mcp-server-head {
+  min-width: 0;
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.vulcan-plugin-mcp-server-head > strong {
+  min-width: 0;
+  font-size: var(--vcn-font-size-md);
+  font-weight: 600;
+}
+
+.vulcan-plugin-mcp-server-head [data-slot="badge"] {
+  font-size: var(--vcn-font-size-xs);
+}
+
+.vulcan-plugin-mcp-server-icon {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.vulcan-plugin-mcp-server .vulcan-plugin-fact {
+  background: var(--card);
+}
+
+.vulcan-plugin-mcp-secret {
+  display: grid;
+  grid-template-columns: minmax(96px, max-content) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.vulcan-plugin-mcp-secret-key {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
   gap: 5px;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: var(--vcn-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .vulcan-plugin-install-panel,
 .vulcan-plugin-detail-mount {

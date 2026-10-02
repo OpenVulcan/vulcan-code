@@ -3,10 +3,7 @@ capability: 为编码智能体提供最新且支持版本定位的库文档
 messages:
   errorDetails: 查看错误详情
   navigationLabel: Context7
-  aboutTitle: Context7 是什么？
-  aboutDescription: Context7 会按库和版本为编码智能体检索最新文档，并把与当前任务相关的内容直接提供给智能体，减少因模型知识过时而使用错误 API 的情况。
   allowanceDescription: 未配置 API Key 时使用匿名模式，可调用 200 次；注册并配置免费的 API Key 后，可调用 1000 次，并能在官方控制台查看账户用量。
-  quickLinks: 快捷链接：
   refresh: 刷新
   loading: 正在加载 Context7 设置…
   loadError: 无法加载 Context7 数据。
@@ -17,6 +14,7 @@ messages:
   apiKeyMode: API Key 模式
   configured: 已配置 API Key
   notConfigured: 尚未配置 API Key；请求将使用匿名额度。
+  apiKeyLabel: API Key
   apiKeyPlaceholder: ctx7sk-…
   saveApiKey: 保存 API Key
   replaceApiKey: 替换 API Key
@@ -28,6 +26,7 @@ messages:
   credentialValid: 当前配置的 API Key 已验证成功。
   credentialUntested: 当前配置的 API Key 尚未测试。
   credentialUnknown: 暂无 API Key 验证结果。
+  connectionTitle: 连接测试
   connectionTest: 测试连接
   connectionTestHint: 测试会消耗当前额度中的一次 Context7 请求。
   connectionSuccess: Context7 连接成功。
@@ -35,7 +34,9 @@ messages:
   defaultFastMode: 默认使用快速模式
   defaultFastModeHint: 跳过 Context7 的 LLM 重排序以降低延迟，但相关性可能下降。
   timeout: 请求超时
+  timeoutHint: 单次 Context7 请求等待响应的最长时间。
   retention: 本地统计保留期
+  retentionHint: 超过保留期的本地调用记录会被清理。
   saveSettings: 保存设置
   settingsSaved: Context7 设置已保存。
   usageTitle: 用量与配额

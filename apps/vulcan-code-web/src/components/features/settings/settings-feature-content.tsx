@@ -6,7 +6,6 @@ import "@/styles/settings-preferences.css";
 import "@/styles/settings-shell.css";
 import "@/styles/visual-lab.css";
 import { VisualLabSettingsArea } from "@/components/dev/visual-lab-settings-area";
-import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area";
 import {
   ArchivedRestoreSettingsArea,
   GitCommitSettingsArea,
@@ -67,9 +66,6 @@ export interface SettingsFeatureContentProps {
   // Opens the exact enabled statistics plugin mount, when available.
   // 存在时打开精确的已启用统计插件挂载点。
   onOpenUsageStatistics?: () => void;
-  // Opens the dedicated global diagnostics page from server details.
-  // 从服务器详情打开独立的全局运行诊断页面。
-  onOpenDiagnostics?: () => void;
 }
 
 // SettingsFeatureContent frames every settings page; the feature header shows its title and navigation stays in the sidebar.
@@ -104,9 +100,6 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
   }
   if (props.activeSettingsSubArea === "model-list") {
     return <ModelListSettingsArea />;
-  }
-  if (props.activeSettingsSubArea === "mcp-servers") {
-    return <McpSettingsArea actions={props.actions} logs={props.workbench.logs} modules={props.workbench.modules} servers={props.workbench.mcpServers ?? []} startup={props.startup} onOpenDiagnostics={props.onOpenDiagnostics} />;
   }
   if (props.activeSettingsSubArea === "runtime-diagnostics") {
     return (

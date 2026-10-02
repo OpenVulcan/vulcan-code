@@ -22,63 +22,111 @@ const TIMEOUT_OPTIONS = [10000, 30000, 60000];
 // RETENTION_OPTIONS 列出配置 Schema 接受的全部本地事件保留期。
 const RETENTION_OPTIONS = [30, 90, 180, 365];
 
-// PANEL_STYLE keeps the uncompiled plugin UI theme-aware without adding a package-owned stylesheet.
-// PANEL_STYLE 让未编译插件界面保持主题感知，同时不增加插件自有样式表。
+// PANEL_STYLE stacks the section cards and fixes one body text size, so native and host controls read alike.
+// PANEL_STYLE 纵向排列分区卡片，并固定统一的正文字号，使原生控件与宿主控件观感一致。
 const PANEL_STYLE = {
+  color: "var(--foreground)",
   display: "grid",
-  gap: "12px",
-  padding: "4px 0 20px",
+  fontSize: "var(--vcn-font-size-md)",
+  gap: "16px",
+  lineHeight: 1.5,
+  padding: "0 0 24px",
 };
 
 // CARD_STYLE uses only inherited design tokens so light and dark themes remain readable.
 // CARD_STYLE 仅使用继承的设计 Token，确保浅色与深色主题均可读。
 const CARD_STYLE = {
+  background: "var(--card)",
   border: "1px solid var(--border)",
   borderRadius: "var(--radius)",
-  background: "var(--card)",
   color: "var(--card-foreground)",
   display: "grid",
-  gap: "10px",
-  padding: "14px",
 };
 
-// ROW_STYLE aligns bounded settings controls while allowing narrow layouts to wrap.
-// ROW_STYLE 对齐有界设置控件，并允许窄布局自动换行。
-const ROW_STYLE = {
+// CARD_HEADER_STYLE holds a section title, its status, and trailing section actions.
+// CARD_HEADER_STYLE 容纳分区标题、状态与尾部分区操作。
+const CARD_HEADER_STYLE = {
   alignItems: "center",
   display: "flex",
   flexWrap: "wrap",
-  gap: "8px",
+  gap: "8px 12px",
+  padding: "14px 16px",
 };
 
-// INPUT_STYLE renders a native secret input through inherited host colors.
-// INPUT_STYLE 使用继承的宿主颜色渲染原生密钥输入框。
-const INPUT_STYLE = {
-  background: "var(--background)",
-  border: "1px solid var(--input)",
-  borderRadius: "8px",
-  color: "var(--foreground)",
-  flex: "1 1 260px",
-  minHeight: "36px",
-  minWidth: "180px",
-  padding: "0 10px",
+// TITLE_STYLE is the single section heading size of this panel.
+// TITLE_STYLE 是本面板唯一的分区标题字号。
+const TITLE_STYLE = { fontSize: "var(--vcn-font-size-lg)", fontWeight: 600, lineHeight: 1.4, margin: 0 };
+
+// SETTING_ROW_STYLE puts a setting's name and explanation on the left and its control on the right, wrapping when narrow.
+// SETTING_ROW_STYLE 把设置名称与说明放在左侧、控件放在右侧，窄布局时自动换行。
+const SETTING_ROW_STYLE = {
+  alignItems: "center",
+  borderTop: "1px solid var(--border)",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "10px 24px",
+  justifyContent: "space-between",
+  padding: "12px 16px",
 };
+
+// SETTING_TEXT_STYLE keeps the name and explanation readable before the control takes the remaining width.
+// SETTING_TEXT_STYLE 在控件占用剩余宽度前保证名称与说明的可读宽度。
+const SETTING_TEXT_STYLE = { display: "grid", flex: "1 1 280px", gap: "2px", minWidth: 0 };
+
+// SETTING_LABEL_STYLE names one setting.
+// SETTING_LABEL_STYLE 用于设置名称。
+const SETTING_LABEL_STYLE = { fontWeight: 500 };
+
+// CONTROLS_STYLE aligns one or more controls of a row.
+// CONTROLS_STYLE 对齐一行中的一个或多个控件。
+const CONTROLS_STYLE = { alignItems: "center", display: "flex", flexWrap: "wrap", gap: "8px" };
 
 // MUTED_STYLE renders secondary explanations with the active theme's muted foreground.
 // MUTED_STYLE 使用当前主题的弱化前景色渲染次要说明。
-const MUTED_STYLE = { color: "var(--muted-foreground)", fontSize: "12px", lineHeight: 1.55 };
+const MUTED_STYLE = { color: "var(--muted-foreground)", fontSize: "var(--vcn-font-size-sm)", lineHeight: 1.55, margin: 0 };
+
+// CARD_FOOTER_STYLE closes a card with its commit action or outbound links.
+// CARD_FOOTER_STYLE 以提交操作或外部链接收尾卡片。
+const CARD_FOOTER_STYLE = {
+  alignItems: "center",
+  borderTop: "1px solid var(--border)",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px 16px",
+  justifyContent: "flex-end",
+  padding: "10px 16px",
+};
+
+// USAGE_BODY_STYLE spaces the usage subsections below the usage header.
+// USAGE_BODY_STYLE 为用量标题下方的各个子分区留出间距。
+const USAGE_BODY_STYLE = { display: "grid", gap: "18px", padding: "2px 16px 16px" };
+
+// SUBSECTION_TITLE_STYLE labels one group of metrics.
+// SUBSECTION_TITLE_STYLE 标注一组指标。
+const SUBSECTION_TITLE_STYLE = { alignItems: "center", display: "flex", fontSize: "var(--vcn-font-size-sm)", fontWeight: 600, gap: "4px", margin: 0 };
 
 // GRID_STYLE creates responsive metric columns without relying on build-time utility discovery.
 // GRID_STYLE 创建响应式指标列，不依赖构建期工具类发现。
-const GRID_STYLE = { display: "grid", gap: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" };
+const GRID_STYLE = { display: "grid", gap: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" };
+
+// EMPTY_STYLE marks a metric group that has no data yet without leaving a bare dash.
+// EMPTY_STYLE 标示尚无数据的指标组，而不是只留下一个孤立的破折号。
+const EMPTY_STYLE = {
+  ...MUTED_STYLE,
+  border: "1px dashed var(--border)",
+  borderRadius: "var(--radius)",
+  padding: "14px 16px",
+};
 
 // LINK_STYLE renders host-mediated external navigation as conventional underlined text links.
 // LINK_STYLE 将宿主管理的外部导航渲染为常规带下划线文字链接。
 const LINK_STYLE = {
   color: "var(--primary)",
   cursor: "pointer",
-  fontSize: "13px",
+  fontSize: "var(--vcn-font-size-sm)",
+  fontWeight: 500,
   textDecoration: "underline",
+  textDecorationColor: "color-mix(in srgb, var(--primary) 40%, transparent)",
   textUnderlineOffset: "3px",
 };
 
@@ -111,6 +159,12 @@ export function createPluginPanel(sdk) {
   // StreamPlaceholder is the shared host loading silhouette shown in place of loading sentences.
   // StreamPlaceholder 是共享宿主加载轮廓，用于代替加载文案。
   const StreamPlaceholder = sdk.components.StreamPlaceholder;
+  // Input is the shared host text field used for the secret API key.
+  // Input 是用于密钥 API Key 的共享宿主输入框。
+  const Input = sdk.components.Input;
+  // Switch is the shared host on/off control.
+  // Switch 是共享宿主开关控件。
+  const Switch = sdk.components.Switch;
   // HelpTooltip keeps secondary explanations available without collapsible sections.
   // HelpTooltip 保留次要说明入口，不再使用折叠区块。
   const HelpTooltip = sdk.components.HelpTooltip;
@@ -439,120 +493,164 @@ export function createPluginPanel(sdk) {
     // stats remains absent until a successful local aggregate has been received.
     // stats 在成功接收本地聚合前保持缺失。
     const stats = usage?.localStats ?? null;
+    // dayOptions renders one bounded day list as localized select options.
+    // dayOptions 把一组有界天数渲染为本地化下拉选项。
+    const dayOptions = (values) => values.map((value) => ({ value: String(value), label: interpolate(text("days", "{{days}} days"), { days: value }) }));
+
+    // settingRow renders one setting as name and explanation on the left and its controls on the right.
+    // settingRow 把一项设置渲染为左侧名称与说明、右侧控件。
+    //
+    // label names the setting, description explains it, and controls are the row's interactive elements.
+    // label 是设置名称，description 是说明，controls 是该行的交互元素。
+    // Returns one bordered setting row.
+    // 返回一个带分隔线的设置行。
+    function settingRow(label, description, ...controls) {
+      return h("div", { style: SETTING_ROW_STYLE },
+        h("div", { style: SETTING_TEXT_STYLE },
+          h("span", { style: SETTING_LABEL_STYLE }, label),
+          description ? h("p", { style: MUTED_STYLE }, description) : null,
+        ),
+        h("div", { style: CONTROLS_STYLE }, ...controls),
+      );
+    }
+
+    // metricGroup renders a titled metric grid whose secondary note lives in a help tooltip.
+    // metricGroup 渲染一个带标题的指标网格，其次要说明放在帮助提示中。
+    //
+    // title names the group, note is its tooltip text, and body is the grid or empty state.
+    // title 是分组名称，note 是提示文本，body 是网格或空状态。
+    // Returns one usage subsection.
+    // 返回一个用量子分区。
+    function metricGroup(title, note, body) {
+      return h("section", { style: { display: "grid", gap: "8px" } },
+        h("h4", { style: SUBSECTION_TITLE_STYLE }, title, h(HelpTooltip, { ariaLabel: title, content: note })),
+        body,
+      );
+    }
 
     // The host header already names this page, so the panel opens directly with its content.
     // 宿主标题栏已显示本页名称，因此面板直接从内容开始。
     return h("section", { style: PANEL_STYLE },
-      error ? h("div", { role: "alert", style: CARD_STYLE },
-        h("div", { style: { ...ROW_STYLE, justifyContent: "space-between" } },
-          h("strong", { style: { color: "var(--destructive)", fontSize: "13px" } }, text("loadError", "Context7 data could not be loaded.")),
+      error ? h("div", { role: "alert", style: { ...CARD_STYLE, borderColor: "color-mix(in srgb, var(--destructive) 35%, var(--border))" } },
+        h("div", { style: { ...CARD_HEADER_STYLE, justifyContent: "space-between", padding: "10px 16px" } },
+          h("strong", { style: { color: "var(--destructive)", fontWeight: 600 } }, text("loadError", "Context7 data could not be loaded.")),
           h(Button, { disabled: loading || saving, onClick: () => void loadAll(true), size: "sm", type: "button", variant: "outline" }, text("retry", "Retry")),
         ),
-        h("details", { style: MUTED_STYLE },
+        h("details", { style: { ...MUTED_STYLE, padding: "0 16px 10px" } },
           h("summary", { style: { cursor: "pointer" } }, text("errorDetails", "Error details")),
           h("pre", { style: { margin: "8px 0 0", maxHeight: "160px", overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, error)),
       ) : null,
-      h("nav", { style: ROW_STYLE, "aria-label": text("quickLinks", "Quick links") },
-          h(HelpTooltip, { ariaLabel: text("aboutTitle", "What is Context7?"), content: h("div", { style: { display: "grid", gap: "8px", maxWidth: "360px" } },
-            h("strong", null, text("aboutTitle", "What is Context7?")),
-            h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("aboutDescription", "Context7 retrieves current, version-aware library documentation for coding agents and supplies relevant excerpts directly to the active task.")),
-            h("p", { style: { margin: 0, lineHeight: 1.65 } }, text("allowanceDescription", "Anonymous mode provides 200 requests. A free API key provides 1,000 requests and account usage visibility in the official dashboard.")),
-          ) }),
-          h("span", { style: MUTED_STYLE }, text("quickLinks", "Quick links")),
-          officialLink(CONTEXT7_DASHBOARD_URL, text("dashboardLink", "Context7 dashboard")),
-          officialLink(CONTEXT7_API_KEY_DOCS_URL, text("apiKeyDocsLink", "Get a free API key")),
-          officialLink(CONTEXT7_USAGE_DOCS_URL, text("usageDocsLink", "API and usage documentation")),
-      ),
       h("article", { style: CARD_STYLE },
-        h("div", { style: ROW_STYLE },
-          h("strong", null, text("credentialTitle", "Authentication")),
-          h(Badge, { variant: credential?.configured ? "default" : "outline" }, !credential ? text("loading", "Loading…") : credential.configured ? text("apiKeyMode", "API key mode") : text("anonymousMode", "Anonymous mode")),
+        h("header", { style: { ...CARD_HEADER_STYLE, display: "grid", gap: "4px" } },
+          h("div", { style: CONTROLS_STYLE },
+            h("h3", { style: TITLE_STYLE }, text("credentialTitle", "Authentication")),
+            credential ? h(Badge, { variant: credential.configured ? "default" : "outline" }, credential.configured ? text("apiKeyMode", "API key mode") : text("anonymousMode", "Anonymous mode")) : null,
+          ),
+          credential ? h("p", { style: MUTED_STYLE }, credential.configured ? `${text("configured", "API key configured")} · ${validationMessage}` : text("notConfigured", "No API key configured; requests use the anonymous allowance.")) : null,
         ),
-        credential ? h("p", { style: { ...MUTED_STYLE, margin: 0 } }, credential.configured ? `${text("configured", "API key configured")} · ${validationMessage}` : text("notConfigured", "No API key configured; requests use the anonymous allowance.")) : null,
-        h("div", { style: ROW_STYLE },
-          h("input", {
-            "aria-label": text("apiKeyMode", "API key mode"),
+        settingRow(
+          text("apiKeyLabel", "API key"),
+          text("allowanceDescription", "Anonymous mode provides 200 requests. A free API key provides 1,000 requests and account usage visibility in the official dashboard."),
+          h(Input, {
+            "aria-label": text("apiKeyLabel", "API key"),
             autoComplete: "off",
             disabled: saving || !credential,
             onChange: (event) => setApiKey(event.target.value),
             placeholder: text("apiKeyPlaceholder", "ctx7sk-…"),
             spellCheck: false,
-            style: INPUT_STYLE,
+            style: { width: "260px" },
             type: "password",
             value: apiKey,
           }),
-          h(Button, { disabled: saving || !credential || apiKey.length === 0, onClick: () => void saveCredential(), size: "sm", type: "button" }, credential?.configured ? text("replaceApiKey", "Replace API key") : text("saveApiKey", "Save API key")),
-          credential?.configured ? h(Button, { disabled: saving, onClick: () => void deleteCredential(), size: "sm", type: "button", variant: deleteArmed ? "destructive" : "outline" }, deleteArmed ? text("confirmDeleteApiKey", "Confirm deletion") : text("deleteApiKey", "Delete API key")) : null,
+          h(Button, { disabled: saving || !credential || apiKey.length === 0, onClick: () => void saveCredential(), type: "button" }, credential?.configured ? text("replaceApiKey", "Replace API key") : text("saveApiKey", "Save API key")),
+          credential?.configured ? h(Button, { disabled: saving, onClick: () => void deleteCredential(), type: "button", variant: deleteArmed ? "destructive" : "outline" }, deleteArmed ? text("confirmDeleteApiKey", "Confirm deletion") : text("deleteApiKey", "Delete API key")) : null,
         ),
-        h("div", { style: ROW_STYLE },
-          h(Button, { disabled: saving || !credential, onClick: () => void testConnection(), size: "sm", type: "button", variant: "outline" }, text("connectionTest", "Test connection")),
-          h("span", { style: MUTED_STYLE }, text("connectionTestHint", "Testing consumes one Context7 request from the current allowance.")),
+        settingRow(
+          text("connectionTitle", "Connection test"),
+          text("connectionTestHint", "Testing consumes one Context7 request from the current allowance."),
+          h(Button, { disabled: saving || !credential, onClick: () => void testConnection(), type: "button", variant: "outline" }, text("connectionTest", "Test connection")),
+        ),
+        h("footer", { style: { ...CARD_FOOTER_STYLE, justifyContent: "flex-start" } },
+          officialLink(CONTEXT7_API_KEY_DOCS_URL, text("apiKeyDocsLink", "Get a free API key")),
+          officialLink(CONTEXT7_DASHBOARD_URL, text("dashboardLink", "Context7 dashboard")),
         ),
       ),
       config ? h("article", { style: CARD_STYLE },
-        h("strong", null, text("behaviorTitle", "Request behavior")),
-        h("div", { style: { display: "grid", gap: "16px", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", alignItems: "center" } },
-        h("div", { style: ROW_STYLE },
-          h("label", { style: ROW_STYLE },
-          h("input", { checked: config.defaultFastMode, disabled: saving, onChange: (event) => updateSettings({ ...config, defaultFastMode: event.target.checked }), type: "checkbox" }),
-          h("span", null, text("defaultFastMode", "Fast mode by default")),
-          ),
-          h(HelpTooltip, { ariaLabel: text("defaultFastMode", "Fast mode by default"), content: text("defaultFastModeHint", "Skip Context7 LLM reranking for lower latency and potentially lower relevance.") }),
+        h("header", { style: CARD_HEADER_STYLE }, h("h3", { style: TITLE_STYLE }, text("behaviorTitle", "Request behavior"))),
+        settingRow(
+          text("defaultFastMode", "Fast mode by default"),
+          text("defaultFastModeHint", "Skip Context7 LLM reranking for lower latency and potentially lower relevance."),
+          h(Switch, { "aria-label": text("defaultFastMode", "Fast mode by default"), checked: config.defaultFastMode, disabled: saving, onCheckedChange: (checked) => updateSettings({ ...config, defaultFastMode: checked === true }) }),
         ),
-        h("div", { style: ROW_STYLE },
-          h("span", null, text("timeout", "Request timeout")),
+        settingRow(
+          text("timeout", "Request timeout"),
+          text("timeoutHint", "The longest time one Context7 request waits for a response."),
           h(SelectControl, {
             ariaLabel: text("timeout", "Request timeout"),
+            className: "w-28",
             disabled: saving,
             onValueChange: (value) => updateSettings({ ...config, requestTimeoutMs: Number(value) }),
             options: TIMEOUT_OPTIONS.map((value) => ({ value: String(value), label: `${value / 1000} s` })),
             value: String(config.requestTimeoutMs),
           }),
         ),
-        h("div", { style: ROW_STYLE },
-          h("span", null, text("retention", "Local statistics retention")),
+        settingRow(
+          text("retention", "Local statistics retention"),
+          text("retentionHint", "Local request records older than this period are removed."),
           h(SelectControl, {
             ariaLabel: text("retention", "Local statistics retention"),
+            className: "w-28",
             disabled: saving,
             onValueChange: (value) => updateSettings({ ...config, retentionDays: Number(value) }),
-            options: RETENTION_OPTIONS.map((value) => ({ value: String(value), label: interpolate(text("days", "{{days}} days"), { days: value }) })),
+            options: dayOptions(RETENTION_OPTIONS),
             value: String(config.retentionDays),
           }),
         ),
-        ),
-        h("div", { style: { ...ROW_STYLE, justifyContent: "flex-end" } },
-          h(Button, { disabled: saving || !configDirty.current, onClick: () => void saveSettings(), size: "sm", type: "button" }, saving ? text("saving", "Saving…") : text("saveSettings", "Save settings")),
+        h("footer", { style: CARD_FOOTER_STYLE },
+          h(Button, { disabled: saving || !configDirty.current, onClick: () => void saveSettings(), type: "button" }, saving ? text("saving", "Saving…") : text("saveSettings", "Save settings")),
         ),
       ) : null,
       h("article", { style: CARD_STYLE },
-        h("div", { style: ROW_STYLE },
-          h("strong", null, text("usageTitle", "Usage")),
-          h("span", { style: MUTED_STYLE }, text("usageRange", "Local range")),
-          h(SelectControl, {
-            ariaLabel: text("usageRange", "Local range"),
-            disabled: loading,
-            onValueChange: (value) => setRangeDays(Number(value)),
-            options: RANGE_OPTIONS.map((value) => ({ value: String(value), label: interpolate(text("days", "{{days}} days"), { days: value }) })),
-            value: String(rangeDays),
-          }),
-          h(Button, { disabled: loading || saving, onClick: () => void loadAll(true), size: "sm", type: "button", variant: "outline" }, text("refresh", "Refresh")),
+        h("header", { style: { ...CARD_HEADER_STYLE, justifyContent: "space-between" } },
+          h("h3", { style: TITLE_STYLE }, text("usageTitle", "Usage")),
+          h("div", { style: CONTROLS_STYLE },
+            h(SelectControl, {
+              ariaLabel: text("usageRange", "Local range"),
+              className: "w-28",
+              disabled: loading,
+              onValueChange: (value) => setRangeDays(Number(value)),
+              options: dayOptions(RANGE_OPTIONS),
+              value: String(rangeDays),
+            }),
+            h(Button, { disabled: loading || saving, onClick: () => void loadAll(true), type: "button", variant: "outline" }, text("refresh", "Refresh")),
+          ),
         ),
-        h("strong", { style: { fontSize: "13px" } }, text("localStatsTitle", "Local request statistics")),
-        h("div", { style: GRID_STYLE },
-          h(MetricCard, { label: text("requests", "Requests"), value: stats ? sdk.formatNumber(stats.requests) : "-" }),
-          h(MetricCard, { label: text("successes", "Successful"), value: stats ? sdk.formatNumber(stats.successes) : "-" }),
-          h(MetricCard, { label: text("failures", "Failed"), value: stats ? sdk.formatNumber(stats.failures) : "-" }),
-          h(MetricCard, { label: text("averageDuration", "Average duration"), value: stats && stats.requests > 0 ? `${Math.round(stats.averageDurationMs)} ms` : "-" }),
+        h("div", { style: USAGE_BODY_STYLE },
+          metricGroup(
+            text("localStatsTitle", "Local request statistics"),
+            text("localUsageNotice", "Local statistics include only requests made by this Vulcan Code plugin."),
+            h("div", { style: GRID_STYLE },
+              h(MetricCard, { label: text("requests", "Requests"), value: stats ? sdk.formatNumber(stats.requests) : "—" }),
+              h(MetricCard, { label: text("successes", "Successful"), value: stats ? sdk.formatNumber(stats.successes) : "—" }),
+              h(MetricCard, { label: text("failures", "Failed"), value: stats ? sdk.formatNumber(stats.failures) : "—" }),
+              h(MetricCard, { label: text("averageDuration", "Average duration"), value: stats && stats.requests > 0 ? `${Math.round(stats.averageDurationMs)} ms` : "—" }),
+            ),
+          ),
+          metricGroup(
+            text("quotaTitle", "Latest Context7 quota snapshot"),
+            text("officialUsageNotice", "Complete account usage, billing periods, seats, and cost remain available in the official Context7 dashboard."),
+            quota ? h("div", { style: GRID_STYLE },
+              h(MetricCard, { label: text("quotaTier", "Tier"), value: quota.quotaTier ?? "—" }),
+              h(MetricCard, { label: text("quotaRemaining", "Remaining"), value: typeof quota.quotaRemaining !== "number" ? "—" : sdk.formatNumber(quota.quotaRemaining) }),
+              h(MetricCard, { label: text("quotaLimit", "Limit"), value: typeof quota.quotaLimit !== "number" ? "—" : sdk.formatNumber(quota.quotaLimit) }),
+              h(MetricCard, { label: text("quotaReset", "Reset"), value: typeof quota.quotaResetUnixSec !== "number" ? "—" : formatQuotaResetDate(quota.quotaResetUnixSec) }),
+            ) : h("p", { style: EMPTY_STYLE }, text("noQuota", "No quota response has been observed for the current authentication generation.")),
+          ),
         ),
-        h("p", { style: { ...MUTED_STYLE, margin: 0 } }, text("localUsageNotice", "Local statistics include only requests made by this Vulcan Code plugin.")),
-        h("strong", { style: { fontSize: "13px", marginTop: "4px" } }, text("quotaTitle", "Latest Context7 quota snapshot")),
-        quota ? h("div", { style: GRID_STYLE },
-          h(MetricCard, { label: text("quotaTier", "Tier"), value: quota.quotaTier ?? "—" }),
-          h(MetricCard, { label: text("quotaRemaining", "Remaining"), value: typeof quota.quotaRemaining !== "number" ? "—" : sdk.formatNumber(quota.quotaRemaining) }),
-          h(MetricCard, { label: text("quotaLimit", "Limit"), value: typeof quota.quotaLimit !== "number" ? "—" : sdk.formatNumber(quota.quotaLimit) }),
-          h(MetricCard, { label: text("quotaReset", "Reset"), value: typeof quota.quotaResetUnixSec !== "number" ? "—" : formatQuotaResetDate(quota.quotaResetUnixSec) }),
-        ) : h("span", { title: text("noQuota", "No quota response has been observed for the current authentication generation."), "aria-label": text("noQuota", "No quota response has been observed for the current authentication generation.") }, "—"),
-        h("p", { style: { ...MUTED_STYLE, margin: 0 } }, text("officialUsageNotice", "Complete account usage, billing periods, seats, and cost remain available in the official Context7 dashboard.")),
+        h("footer", { style: { ...CARD_FOOTER_STYLE, justifyContent: "flex-start" } },
+          officialLink(CONTEXT7_DASHBOARD_URL, text("dashboardLink", "Context7 dashboard")),
+          officialLink(CONTEXT7_USAGE_DOCS_URL, text("usageDocsLink", "API and usage documentation")),
+        ),
       ),
     );
   }

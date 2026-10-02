@@ -33,6 +33,10 @@ async function mount(invoke) {
   // plain 和 Button 保留可见标签及原生按钮语义。
   const plain = ({ children, title, label, value }) => React.createElement("div", null, children ?? [title, label, value].filter(Boolean).join(" "));
   const Button = ({ children, variant, size, ...props }) => React.createElement("button", props, children);
+  // Input and Switch keep native field semantics; Switch maps the host checked contract onto a checkbox.
+  // Input 和 Switch 保留原生字段语义；Switch 把宿主 checked 契约映射到复选框。
+  const Input = ({ density, ...props }) => React.createElement("input", props);
+  const Switch = ({ checked, onCheckedChange, ...props }) => React.createElement("input", { ...props, type: "checkbox", checked, onChange: (event) => onCheckedChange(event.currentTarget.checked) });
   // SelectControl forwards the host's exact value-change contract through a native select.
   // SelectControl 通过原生下拉框转发宿主准确的值变更契约。
   const SelectControl = ({ ariaLabel, value, options, onValueChange, disabled }) => React.createElement("select", {
@@ -41,7 +45,7 @@ async function mount(invoke) {
   // sdk supplies no network, credentials or real event bus.
   // sdk 不提供网络、凭据或真实事件总线。
   const sdk = { React, locale: "en-US", invoke, t: (_key, fallback) => fallback, formatNumber: String,
-    components: { Badge: plain, Button, MetricCard: plain, SelectControl, ErrorState: plain, EmptyState: plain, StreamPlaceholder: plain,
+    components: { Badge: plain, Button, Input, Switch, MetricCard: plain, SelectControl, ErrorState: plain, EmptyState: plain, StreamPlaceholder: plain,
       HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }) },
     events: { subscribe: (_name, callback) => { eventHandler = callback; return () => { eventHandler = () => {}; }; } },
     notifications: { success: (message) => notifications.push(message), error: (message) => notifications.push(message) },
@@ -66,7 +70,7 @@ test("partial usage failure keeps authentication visible and secondary explanati
     assert.ok(panel.container.querySelector('input[type="password"]'));
     assert.equal(panel.container.querySelector('input[type="password"]').disabled, false);
     assert.ok([...panel.container.querySelectorAll("button")].find((button) => button.textContent === "Retry"));
-    assert.ok(panel.container.querySelector('[aria-label="What is Context7?"]'));
+    assert.ok(panel.container.querySelector('[aria-label="Local request statistics"]'));
     assert.ok(panel.container.querySelector('[aria-label="Fast mode by default"]'));
   } finally { await panel.close(); }
 });

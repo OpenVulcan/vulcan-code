@@ -108,7 +108,6 @@ import {
 } from "@/components/workspace/workspace-shell/git-summary";
 import {
   WORKSPACE_FEATURE_AREAS,
-  workspaceViewHasNavigationPanel,
   type WorkspaceShellProps,
 } from "@/components/workspace/workspace-shell/types";
 export type { WorkspaceMainView } from "@/components/workspace/workspace-shell/types";
@@ -125,9 +124,6 @@ const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent
 // LazyAgentSkillCategoryMenu defers prompt-skill directory navigation.
 // LazyAgentSkillCategoryMenu 延迟提示词技能目录导航。
 const LazyAgentSkillCategoryMenu = React.lazy(() => import("@/components/features/agent-skills/agent-skills-area").then((module) => ({ default: module.AgentSkillCategoryMenu })));
-// LazyKnowledgeBaseArea keeps knowledge management outside the console-first chunk.
-// LazyKnowledgeBaseArea 将知识库管理保留在控制台优先分块之外。
-const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/knowledge-base-area").then((module) => ({ default: module.KnowledgeBaseArea })));
 // WorkspaceShell renders the shadcn dashboard-like fused sidebar and inset console area.
 // WorkspaceShell 渲染类似 shadcn dashboard 的融合侧栏与 inset 控制台区域。
 // selectEventWindowOwnerSessionId reads the selected V1 owner id with a stable selector identity.
@@ -137,9 +133,6 @@ function selectEventWindowOwnerSessionId(snapshot: ConversationEventWindowContro
 }
 
 export function WorkspaceShell(props: WorkspaceShellProps) {
-  // hasPanel is false for views that show the rail alone, so the panel can never be opened or measured there.
-  // hasPanel 对只显示轨道的视图为 false，使该处面板既不能打开也不参与宽度计算。
-  const hasPanel = workspaceViewHasNavigationPanel(props.mainView);
   // Only the session panel collapses; feature menus stay beside the rail like the settings tree.
   // 只有会话面板可折叠；功能菜单与设置树一样始终位于轨道旁。
   const collapsible = props.mainView === "chat";
@@ -148,7 +141,7 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
       className="console-shell"
       collapsible={collapsible}
       style={navigationShellStyle()}
-      open={hasPanel && (!collapsible || props.sidebarOpen)}
+      open={!collapsible || props.sidebarOpen}
       onOpenChange={props.onSidebarOpenChange}
     >
       <WorkspaceShellContent {...props} />
@@ -1533,6 +1526,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           activeSubArea={props.activeSkillSubArea}
           luaInstallDialogOpen={luaInstallDialogOpen}
           onLuaInstallDialogOpenChange={setLuaInstallDialogOpen}
+          onOpenDiagnostics={props.onOpenRuntimeDiagnostics}
           skillActions={props.luaSkillActions}
           workbench={props.workbench}
         />
@@ -1591,11 +1585,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     headerActions: null,
     title: memoryHeaderMeta.label,
 
-  } : props.mainView === "knowledge" ? {
-    content: <React.Suspense fallback={null}><LazyKnowledgeBaseArea /></React.Suspense>,
-    detail: t("area.knowledge.description"),
-    headerActions: null,
-    title: t("area.knowledge"),
   } : {
     content: (
       <ChatArea
@@ -1717,7 +1706,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     <div className={`workspace-panel-shell${props.mainView === "memory" ? " vmm-workspace-host" : ""}`} ref={shellRef}>
       {featureArea ? (
         <WorkspaceFeaturePanel
-          navigation={workspaceViewHasNavigationPanel(featureArea.id) ? featureNavigation : null}
+          navigation={featureNavigation}
           rail={props.rail}
           title={t(featureArea.label)}
           titlebarDragRegion={props.titlebarDragRegion}

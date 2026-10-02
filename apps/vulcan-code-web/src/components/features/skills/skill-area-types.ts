@@ -1,9 +1,10 @@
 import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
+import type { McpSettingsActionProps } from "@/components/features/settings/mcp-server-dialog"
 import type { LuaSkillConfigDeleteRequest, LuaSkillConfigDeleteResult, LuaSkillConfigDescriptor, LuaSkillConfigEventBatch, LuaSkillConfigSetRequest, LuaSkillConfigSetResult, LuaSkillConfigValidation, LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings, PluginSummary, VulcanPluginInitialSecret, VulcanPluginPermissionPreview } from "@/types"
 
-// SkillActionProps groups service-backed actions used by the skill page.
-// SkillActionProps 分组技能页面使用的服务端动作。
-export interface SkillActionProps {
+// SkillActionProps groups service-backed actions used by the skill page, including the MCP server page it hosts.
+// SkillActionProps 分组技能页面使用的服务端动作，包括其承载的 MCP 服务器页面。
+export interface SkillActionProps extends McpSettingsActionProps {
   // Refreshes the Lua Skills catalog.
   // 刷新 Lua Skills 目录。
   onRefreshLuaSkills: () => Promise<void>
@@ -81,13 +82,17 @@ export interface SkillActionProps {
   onPollLuaSkillConfigEvents: (afterSequence?: string | null) => Promise<LuaSkillConfigEventBatch>
 }
 
+// SkillCatalogActionProps is the LuaSkills and plugin lifecycle subset owned by the project action hook.
+// SkillCatalogActionProps 是项目动作 Hook 持有的 LuaSkills 与插件生命周期子集。
+export type SkillCatalogActionProps = Omit<SkillActionProps, keyof McpSettingsActionProps>
+
 // PluginSkillSubAreaId identifies one exact plugin-owned detail page.
 // PluginSkillSubAreaId 标识一个精确的插件自有详情页。
 export type PluginSkillSubAreaId = `plugin:${string}:${string}`
 
 // SkillSubAreaId identifies the selected skill management category.
 // SkillSubAreaId 标识当前选中的技能管理分类。
-export type SkillSubAreaId = "catalog" | "plugins" | "settings" | "context-engine" | PluginSkillSubAreaId
+export type SkillSubAreaId = "catalog" | "plugins" | "settings" | "mcp-servers" | "context-engine" | "knowledge" | PluginSkillSubAreaId
 
 // PluginDetailMountSelection binds one enabled plugin to one exact detail mount and navigation id.
 // PluginDetailMountSelection 将一个已启用插件绑定到一个精确详情挂载点及导航标识。

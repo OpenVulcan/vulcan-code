@@ -35,8 +35,9 @@ async function renderRail(props: {
   sessionsActive: boolean;
   sessionTree?: React.ReactNode;
   onSelectSessions?: () => void;
+  defaultOpen?: boolean;
 }) {
-  await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><SidebarProvider>
+  await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><TooltipProvider><SidebarProvider defaultOpen={props.defaultOpen ?? true}>
     <ActivityRail
       entries={props.entries}
       onSelectSessions={props.onSelectSessions ?? vi.fn()}
@@ -78,25 +79,45 @@ it("keeps dynamic plugin pages in the overflow menu until the user pins them", a
   expect(openPlugin).toHaveBeenCalledTimes(1);
 });
 
-it("shows the session panel's own tree beside a feature page and returns to the workspace from its footer", async () => {
-  const selectSessions = vi.fn();
+it("shows the session panel's own tree in the collapsed session area and reopens the panel from its footer", async () => {
   // sessionTree stands in for the panel's ProjectSessionTree; the flyout must host it unchanged.
   // sessionTree 代表面板的 ProjectSessionTree；浮层必须原样承载它。
   await renderRail({
-    sessionsActive: false,
-    entries: [{ id: "skills", label: "插件", icon: null, active: true, onSelect: vi.fn() }],
+    sessionsActive: true,
+    defaultOpen: false,
+    entries: [{ id: "skills", label: "插件", icon: null, active: false, onSelect: vi.fn() }],
     sessionTree: <div data-testid="session-tree">Alpha</div>,
-    onSelectSessions: selectSessions,
   });
-  // The session panel is not on screen beside a feature page, so focusing the sessions button opens the flyout.
-  // 功能页旁不显示会话面板，因此聚焦会话按钮即打开浮层。
+  // The session area is open with its panel collapsed, so focusing the sessions button opens the flyout.
+  // 处于会话区域且面板已折叠，因此聚焦会话按钮即打开浮层。
   await act(async () => host.querySelector<HTMLButtonElement>('.activity-rail-button[aria-label="工作台"]')!.focus());
   const flyout = () => host.querySelector<HTMLElement>(".activity-rail-flyout");
   expect(flyout()!.querySelector('[data-testid="session-tree"]')).not.toBeNull();
   const footer = flyout()!.querySelector<HTMLButtonElement>(".activity-rail-flyout-footer button")!;
   await act(async () => footer.click());
-  expect(selectSessions).toHaveBeenCalledTimes(1);
   expect(flyout()).toBeNull();
+  // Reopening the panel ends the collapsed state, so the button no longer offers the flyout.
+  // 重新展开面板后不再处于折叠状态，按钮也不再提供浮层。
+  await act(async () => host.querySelector<HTMLButtonElement>('.activity-rail-button[aria-label="工作台"]')!.focus());
+  expect(flyout()).toBeNull();
+});
+
+it("navigates without a flyout from a feature page", async () => {
+  const selectSessions = vi.fn();
+  await renderRail({
+    sessionsActive: false,
+    defaultOpen: false,
+    entries: [{ id: "skills", label: "插件", icon: null, active: true, onSelect: vi.fn() }],
+    sessionTree: <div data-testid="session-tree">Alpha</div>,
+    onSelectSessions: selectSessions,
+  });
+  // Outside the session area the sessions button only navigates; the flyout waits until the user is there.
+  // 在会话区域之外，会话按钮只负责导航；浮层要等用户进入会话区域后才出现。
+  const button = host.querySelector<HTMLButtonElement>('.activity-rail-button[aria-label="工作台"]')!;
+  await act(async () => button.focus());
+  expect(host.querySelector(".activity-rail-flyout")).toBeNull();
+  await act(async () => button.click());
+  expect(selectSessions).toHaveBeenCalledTimes(1);
 });
 
 it("does not open the flyout while the session panel itself is visible", async () => {

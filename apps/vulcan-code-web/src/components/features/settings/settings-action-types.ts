@@ -154,12 +154,6 @@ export interface SettingsActionProps {
   // Clears only the exact selected session Provider API trace directory.
   // 仅清除当前选中会话的精确 Provider API 追踪目录。
   onClearSelectedProviderApiTraceDirectory: () => Promise<boolean>
-  // Saves one MCP server configuration.
-  // 保存单个 MCP 服务器配置。
-  onSaveMcpServer: (request: McpServerSaveRequest) => Promise<void>
-  // Removes one MCP server configuration.
-  // 移除单个 MCP 服务器配置。
-  onRemoveMcpServer: (serverId: string) => Promise<void>
   // Restores the selected archived conversations in one authoritative batch.
   // 一次权威批量恢复选中的归档会话。
   onRestoreArchivedConversations: (conversationIds: string[]) => Promise<void>

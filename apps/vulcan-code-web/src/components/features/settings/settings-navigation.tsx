@@ -2,7 +2,6 @@ import React from "react";
 import {
   Archive,
   Bell,
-  Blocks,
   Cpu,
   Database,
   GitCommitHorizontal,
@@ -10,12 +9,10 @@ import {
   KeyRound,
   ListTree,
   Palette,
-  Plug,
   ScrollText,
   ServerCog,
   Settings,
   SlidersHorizontal,
-  Sparkles,
   Stethoscope,
   WandSparkles,
 } from "lucide-react";
@@ -126,8 +123,8 @@ export function settingsSubAreas(t: ReturnType<typeof useI18n>["t"]): SettingsSu
   return settingsSubAreaGroups(t).flatMap((group) => group.items);
 }
 
-// settingsSubAreaGroups returns the two-level settings tree: six groups, at most five pages each.
-// settingsSubAreaGroups 返回两级设置树：6 个分组，每组最多 5 个页面。
+// settingsSubAreaGroups returns the two-level settings tree: four groups, at most five pages each.
+// settingsSubAreaGroups 返回两级设置树：4 个分组，每组最多 5 个页面。
 export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): SettingsSubAreaGroup[] {
   return [
     {
@@ -148,22 +145,9 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
         { id: "model-providers", label: t("settings.modelProviders"), icon: <ServerCog size={16} />, description: t("settings.modelProviders.description") },
         { id: "credential-management", label: t("settings.credentialManagement"), icon: <KeyRound size={16} />, description: t("settings.credentialManagement.description") },
         { id: "model-list", label: t("settings.modelList"), icon: <ListTree size={16} />, description: t("settings.modelList.description") },
-      ],
-    },
-    {
-      id: "ai-capabilities",
-      label: t("settings.group.aiCapabilities"),
-      icon: <Sparkles size={16} />,
-      items: [
+        // Multimodal extensions bind search, vision, generation and voice to models, so they live with the models.
+        // 多模态能力扩展把搜索、看图、生成与语音绑定到模型，因此与模型放在同一分组。
         { id: "ai-capabilities", label: t("settings.aiCapabilities"), icon: <WandSparkles size={16} />, description: t("settings.aiCapabilities.description") },
-      ],
-    },
-    {
-      id: "extensions",
-      label: t("settings.group.extensions"),
-      icon: <Blocks size={16} />,
-      items: [
-        { id: "mcp-servers", label: t("settings.mcpServers"), icon: <Plug size={16} />, description: t("settings.mcpServers.description") },
       ],
     },
     {

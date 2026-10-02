@@ -3,10 +3,7 @@ capability: Current, version-aware library documentation for coding agents
 messages:
   errorDetails: Error details
   navigationLabel: Context7
-  aboutTitle: What is Context7?
-  aboutDescription: Context7 retrieves current, version-aware library documentation for coding agents and supplies relevant content directly to the active task, reducing incorrect API usage caused by stale model knowledge.
   allowanceDescription: Anonymous mode provides 200 requests without an API key. Registering and configuring a free API key provides 1,000 requests and account usage visibility in the official dashboard.
-  quickLinks: "Quick links:"
   refresh: Refresh
   loading: Loading Context7 settings…
   loadError: Context7 data could not be loaded.
@@ -17,6 +14,7 @@ messages:
   apiKeyMode: API key mode
   configured: API key configured
   notConfigured: No API key configured; requests use the anonymous allowance.
+  apiKeyLabel: API key
   apiKeyPlaceholder: ctx7sk-…
   saveApiKey: Save API key
   replaceApiKey: Replace API key
@@ -28,6 +26,7 @@ messages:
   credentialValid: The configured API key was validated successfully.
   credentialUntested: The configured API key has not been tested yet.
   credentialUnknown: No API key validation result is available.
+  connectionTitle: Connection test
   connectionTest: Test connection
   connectionTestHint: Testing consumes one Context7 request from the current allowance.
   connectionSuccess: Context7 connection succeeded.
@@ -35,7 +34,9 @@ messages:
   defaultFastMode: Fast mode by default
   defaultFastModeHint: Skip Context7 LLM reranking for lower latency and potentially lower relevance.
   timeout: Request timeout
+  timeoutHint: The longest time one Context7 request waits for a response.
   retention: Local statistics retention
+  retentionHint: Local request records older than this period are removed.
   saveSettings: Save settings
   settingsSaved: Context7 settings saved.
   usageTitle: Usage and quota

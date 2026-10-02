@@ -1,5 +1,5 @@
 import React from "react";
-import { Ellipsis, MessagesSquare, PanelLeftOpen, Pin, Settings, Undo2 } from "lucide-react";
+import { Ellipsis, MessagesSquare, PanelLeftOpen, Pin, Settings } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -63,8 +63,8 @@ export function ActivityRail(props: {
   // Opens the settings area.
   // 打开设置区域。
   onSelectSettings: () => void;
-  // The session panel's own tree, shown in the flyout while the session panel is not on screen.
-  // 会话面板自身的会话树；会话面板不在屏幕上时显示在浮层中。
+  // The session panel's own tree, shown in the flyout while the session area is open with its panel collapsed.
+  // 会话面板自身的会话树；处于会话区域且面板已折叠时显示在浮层中。
   sessionTree: React.ReactNode;
   // Selected conversation; choosing another one inside the flyout closes it.
   // 当前会话；在浮层中选择其他会话时浮层关闭。
@@ -120,9 +120,11 @@ export function ActivityRail(props: {
     navigate(props.onSelectSessions)();
   };
 
-  // sessionFlyoutEnabled shows sessions on hover whenever the session panel itself is not on screen.
-  // sessionFlyoutEnabled 在会话面板本身不在屏幕上时，通过悬停展示会话。
-  const sessionFlyoutEnabled = !sidebar.isMobile && (!props.sessionsActive || sidebar.state === "collapsed");
+  // sessionFlyoutEnabled previews sessions on hover only inside the session area while its panel is collapsed;
+  // on any other page the sessions button simply navigates back to the session area.
+  // sessionFlyoutEnabled 仅在处于会话区域且会话面板已折叠时通过悬停预览会话；
+  // 在其他页面中，会话按钮只负责返回会话区域。
+  const sessionFlyoutEnabled = !sidebar.isMobile && props.sessionsActive && sidebar.state === "collapsed";
   const sessionsButton = (
     <ActivityRailButton
       active={props.sessionsActive}
@@ -147,9 +149,7 @@ export function ActivityRail(props: {
           <ActivityRailFlyout
             content={props.sessionTree}
             dismissKey={props.selectedConversationId}
-            footer={props.sessionsActive
-              ? { label: t("activityRail.showSessionPanel"), icon: <PanelLeftOpen size={15} />, onSelect: () => sidebar.setOpen(true) }
-              : { label: t("settings.backToWorkspace"), icon: <Undo2 size={15} />, onSelect: props.onSelectSessions }}
+            footer={{ label: t("activityRail.showSessionPanel"), icon: <PanelLeftOpen size={15} />, onSelect: () => sidebar.setOpen(true) }}
             title={t("activityRail.conversations")}
           >
             {sessionsButton}

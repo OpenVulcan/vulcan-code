@@ -7,16 +7,14 @@ import { normalizeSettingsSubArea, settingsSubAreaGroups } from "./settings-navi
 const testTranslator = ((key: string) => key) as Parameters<typeof settingsSubAreaGroups>[0];
 
 describe("settingsSubAreaGroups", () => {
-  // Keeps the navigation to six groups of at most five pages each.
-  // 保证导航为 6 个分组且每组最多 5 项。
-  it("keeps six groups with at most five pages each", () => {
+  // Keeps the navigation to four groups of at most five pages each; MCP servers live under plugin management.
+  // 保证导航为 4 个分组且每组最多 5 项；MCP 服务器位于插件管理下。
+  it("keeps four groups with at most five pages each", () => {
     const groups = settingsSubAreaGroups(testTranslator);
 
     expect(groups.map((group) => group.id)).toEqual([
       "general",
       "models",
-      "ai-capabilities",
-      "extensions",
       "data",
       "about",
     ]);
@@ -26,9 +24,9 @@ describe("settingsSubAreaGroups", () => {
     }
   });
 
-  // Keeps providers, credentials and models together under one group.
-  // 将供应商、凭据与模型统一归入同一分组。
-  it("groups providers, credentials and models", () => {
+  // Keeps providers, credentials, models and the merged multimodal extension page together under one group.
+  // 将供应商、凭据、模型与合并后的多模态能力扩展页统一归入同一分组。
+  it("groups providers, credentials, models and multimodal extensions", () => {
     const groups = settingsSubAreaGroups(testTranslator);
     const models = groups.find((group) => group.id === "models");
 
@@ -36,16 +34,8 @@ describe("settingsSubAreaGroups", () => {
       "model-providers",
       "credential-management",
       "model-list",
+      "ai-capabilities",
     ]);
-  });
-
-  // Replaces the fourteen capability pages with one merged page.
-  // 用一个合并页面替代 14 个能力页。
-  it("exposes AI capabilities as one page", () => {
-    const groups = settingsSubAreaGroups(testTranslator);
-    const aiCapabilities = groups.find((group) => group.id === "ai-capabilities");
-
-    expect(aiCapabilities?.items.map((item) => item.id)).toEqual(["ai-capabilities"]);
   });
 
   // Exposes the visible acceptance surface from the about group.

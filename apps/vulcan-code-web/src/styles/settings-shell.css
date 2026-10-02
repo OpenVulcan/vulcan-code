@@ -44,16 +44,9 @@
 
 /* AI capabilities: one row per capability, editing happens in the drawer. */
 /* AI 能力：每项能力一行，编辑在抽屉中完成。 */
-.ai-capabilities-page { display: flex; flex-direction: column; min-height: 0; }
-.ai-capabilities-tabs { flex-shrink: 0; }
-.ai-capabilities-tab-count {
-  margin-left: 6px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-  font-variant-numeric: tabular-nums;
-}
-.ai-capabilities-panel { padding-top: 16px; }
-.ai-capabilities-panel[data-state="active"] { animation: vcn-fade-in var(--vcn-duration-base) var(--vcn-ease-out); }
+.ai-capabilities-page { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+.ai-capabilities-page > .page-tabs { flex-shrink: 0; }
+.ai-capabilities-panel { animation: vcn-fade-in var(--vcn-duration-base) var(--vcn-ease-out); }
 .ai-capability-list {
   margin: 0;
   padding: 0;

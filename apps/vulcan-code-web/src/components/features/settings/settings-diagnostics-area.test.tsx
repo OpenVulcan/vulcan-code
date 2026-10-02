@@ -18,8 +18,6 @@ const SETTINGS_ACTIONS = {
   onSaveProviderRequestTraceSettings: async () => undefined,
   onOpenSelectedProviderApiTraceDirectory: async () => undefined,
   onClearSelectedProviderApiTraceDirectory: async () => false,
-  onSaveMcpServer: async () => undefined,
-  onRemoveMcpServer: async () => undefined,
   onRestoreArchivedConversations: async () => undefined,
   onDeleteArchivedConversations: async () => undefined,
 } satisfies SettingsActionProps;

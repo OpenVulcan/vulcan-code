@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Hammer,
   PanelTopOpen,
+  Plug,
   Puzzle,
   Route,
   ScanSearch,
@@ -302,7 +303,6 @@ const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   skills: <Puzzle size={17} />,
   agents: <Bot size={17} />,
   memory: <MemoryBrainIcon size={17} />,
-  knowledge: <BookMarked size={17} />,
   settings: <Settings size={17} />,
 }
 
@@ -315,7 +315,6 @@ function primaryFeatureAreas(t: ReturnType<typeof useI18n>["t"]): FeatureAreaSum
     { id: "skills", label: t("area.skills"), description: t("area.skills.description"), status: t("feature.status.preview") },
     { id: "agents", label: t("area.agents"), description: t("area.agents.description"), status: t("feature.status.preview") },
     { id: "memory", label: t("area.memory"), description: t("area.memory.description"), status: t("feature.status.preview") },
-    { id: "knowledge", label: t("area.knowledge"), description: t("area.knowledge.description"), status: t("feature.status.available") },
   ]
 }
 
@@ -342,7 +341,9 @@ function featureSidebarRows(
     return [
       { id: "luaskills-catalog", label: t("skills.navigation.list"), detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
       { id: "luaskills-settings", label: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice, icon: <Settings size={16} /> },
+      { id: "mcp-servers", label: t("settings.mcpServers"), detail: t("settings.mcpServers.description"), icon: <Plug size={16} /> },
       { id: "context-engine", label: t("area.contextEngine"), detail: t("area.contextEngine.description"), icon: <ScanSearch size={16} /> },
+      { id: "knowledge", label: t("area.knowledge"), detail: t("area.knowledge.description"), icon: <BookMarked size={16} /> },
       { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin").length }), icon: <Puzzle size={16} /> },
       ...pluginRows,
     ]
@@ -364,11 +365,6 @@ function featureSidebarRows(
       ...localizedVmmManagementSection(section, workbench.vmmMemory.experienceState.deployment, t),
       icon: vmmSectionIcon(section.id),
     }))
-  }
-  if (activeArea === "knowledge") {
-    return [
-      { id: "knowledge-libraries", label: t("area.knowledge"), detail: t("area.knowledge.description"), icon: <BookMarked size={16} /> },
-    ]
   }
   return []
 }
@@ -403,8 +399,8 @@ function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
   if (rowId === "luaskills-plugins") {
     return "plugins"
   }
-  if (rowId === "context-engine") {
-    return "context-engine"
+  if (rowId === "mcp-servers" || rowId === "context-engine" || rowId === "knowledge") {
+    return rowId
   }
   if (rowId.startsWith("plugin:")) {
     return rowId as SkillSubAreaId

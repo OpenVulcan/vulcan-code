@@ -4,7 +4,7 @@ const ACTIVITY_RAIL_PINS_KEY = "vulcan.gui.activity-rail-pins.v1";
 
 // DEFAULT_ACTIVITY_RAIL_PINS is the in-memory product default used until the user changes the rail.
 // DEFAULT_ACTIVITY_RAIL_PINS 是用户修改轨道前使用的内存产品默认值。
-export const DEFAULT_ACTIVITY_RAIL_PINS: readonly string[] = ["skills", "agent-skills", "agents", "memory", "knowledge"];
+export const DEFAULT_ACTIVITY_RAIL_PINS: readonly string[] = ["skills", "agent-skills", "agents", "memory"];
 
 // readActivityRailPins reads the explicit GUI choice, falling back to the default without writing.
 // readActivityRailPins 读取 GUI 的明确选择；未设置或无效时回退默认值，不回写存储。

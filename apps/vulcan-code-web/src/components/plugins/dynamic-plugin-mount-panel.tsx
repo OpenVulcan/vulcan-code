@@ -2,6 +2,8 @@ import * as React from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { StatusPill } from "@/components/shared/status";
@@ -111,6 +113,12 @@ interface PluginUiSdk {
     // Shared host streaming loading silhouette; plugins show it instead of a "Loading…" sentence.
     // 共享宿主流式加载轮廓；插件用它代替「正在加载…」文案。
     StreamPlaceholder: typeof StreamPlaceholder;
+    // Shared host single-line text field, including password inputs.
+    // 共享宿主单行文本输入框，包括密码输入。
+    Input: typeof Input;
+    // Shared host boolean switch for on/off settings.
+    // 共享宿主布尔开关，用于开/关类设置。
+    Switch: typeof Switch;
     // Shared host compact actionable metadata tag.
     // 共享宿主紧凑可操作元数据标签。
     PluginMetadataLink: typeof PluginMetadataLink;
@@ -303,6 +311,8 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       HelpTooltip,
       MetricCard,
       StreamPlaceholder,
+      Input,
+      Switch,
       PluginMetadataLink,
       SelectControl,
       TextDocumentDialog,

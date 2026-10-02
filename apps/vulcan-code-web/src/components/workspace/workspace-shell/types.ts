@@ -41,7 +41,7 @@ import type { NotificationPresentationContext } from "@/notifications/types";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 // WorkspaceMainView identifies the active main surface inside the workbench.
 // WorkspaceMainView 标识工作台内部当前激活的主内容界面。
-export type WorkspaceMainView = "chat" | "agent-skills" | "skills" | "agents" | "memory" | "knowledge";
+export type WorkspaceMainView = "chat" | "agent-skills" | "skills" | "agents" | "memory";
 
 // WorkspaceFeatureView is every workbench view other than the conversation surface.
 // WorkspaceFeatureView 是会话界面以外的所有工作台视图。
@@ -54,18 +54,7 @@ export const WORKSPACE_FEATURE_AREAS: ReadonlyArray<{ id: WorkspaceFeatureView; 
   { id: "agent-skills", label: "area.agentSkills" },
   { id: "agents", label: "area.agents" },
   { id: "memory", label: "area.memory" },
-  { id: "knowledge", label: "area.knowledge" },
 ];
-
-// workspaceViewHasNavigationPanel reports whether a workbench view owns a panel beside the rail.
-// Knowledge selects libraries inside its own page, so it shows the rail alone.
-// workspaceViewHasNavigationPanel 返回工作台视图是否在轨道旁拥有导航面板。
-// 知识库在页面内部选择资料库，因此只显示轨道。
-// Parameters: view is the workbench main view. Returns true when a panel is rendered.
-// 参数：view 为工作台主视图。渲染面板时返回 true。
-export function workspaceViewHasNavigationPanel(view: WorkspaceMainView): boolean {
-  return view !== "knowledge";
-}
 
 // WorkspaceShellProps contains the visible workspace layout state and injected service edges.
 // WorkspaceShellProps 包含可见工作区布局状态和注入的服务边界。
@@ -144,9 +133,12 @@ export interface WorkspaceShellProps {
   // Opens credential management from the VMM first-run prerequisite flow.
   // 从 VMM 首次配置前置流程打开凭据管理。
   onOpenCredentialManagement: () => void;
-  // Opens the knowledge library management area from conversation prompts.
-  // 从会话提示中打开知识库管理区域。
+  // Opens the knowledge library page under plugin management from conversation prompts.
+  // 从会话提示中打开插件管理下的知识库页面。
   onOpenKnowledge: () => void;
+  // Opens the application-wide runtime diagnostics settings page from the MCP server page.
+  // 从 MCP 服务器页面打开应用全局运行诊断设置页。
+  onOpenRuntimeDiagnostics: () => void;
   // Activity rail rendered beside the session panel; it stays visible when the panel collapses.
   // 渲染在会话面板旁的活动轨道；面板折叠时轨道仍保持可见。
   rail: React.ReactNode;

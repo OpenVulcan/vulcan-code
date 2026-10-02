@@ -26,7 +26,7 @@ export function McpSettingsArea(props: {
   actions: McpSettingsActionProps; servers: McpServerSummary[]
   // Legacy host props stay accepted while global diagnostics move to their own page.
   // 保留宿主旧属性接线，全局诊断移至独立页面。
-  logs: LogEntrySummary[]; modules: RuntimeModuleSnapshot[]; startup: StartupSnapshot
+  logs?: LogEntrySummary[]; modules?: RuntimeModuleSnapshot[]; startup?: StartupSnapshot
   // Navigates to the existing application-wide diagnostics surface.
   // 导航至现有应用全局诊断页面。
   onOpenDiagnostics?: () => void

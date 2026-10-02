@@ -4,6 +4,7 @@ import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-c
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
 import { VceProjectSurfaceProvider } from "@/components/features/code-context/vce-project-surface";
 import { VceJobObserverProvider } from "@/components/features/code-context/vce-job-observer-context";
+import type { SkillActionProps } from "@/components/features/skills/skill-area-types";
 import {
   FeatureShell as ExtractedFeatureShell,
   areaIconMap,
@@ -582,11 +583,6 @@ export function WorkbenchLayout(props: {
       setWorkspaceMainView("memory");
       return;
     }
-    if (area === "knowledge") {
-      setActiveArea("chat");
-      setWorkspaceMainView("knowledge");
-      return;
-    }
     setActiveArea(area);
     setWorkspaceMainView("chat");
   }, []);
@@ -602,12 +598,19 @@ export function WorkbenchLayout(props: {
     setActiveArea("chat");
     setWorkspaceMainView("memory");
   }, []);
-  // handleOpenWorkspaceKnowledge opens knowledge library management inside the workbench main panel.
-  // handleOpenWorkspaceKnowledge 在工作台主面板内打开知识库管理。
+  // handleOpenWorkspaceKnowledge opens knowledge library management under plugin management in the workbench main panel.
+  // handleOpenWorkspaceKnowledge 在工作台主面板的插件管理下打开知识库管理。
   const handleOpenWorkspaceKnowledge = React.useCallback(() => {
     setActiveArea("chat");
-    setWorkspaceMainView("knowledge");
+    setWorkspaceMainView("skills");
+    setActiveWorkbenchSkillSubArea("knowledge");
   }, []);
+  // handleOpenRuntimeDiagnostics leaves plugin management for the application-wide runtime diagnostics settings page.
+  // handleOpenRuntimeDiagnostics 从插件管理跳转到应用全局运行诊断设置页。
+  const handleOpenRuntimeDiagnostics = React.useCallback(() => {
+    setActiveSettingsSubArea("runtime-diagnostics");
+    handleSelectTopFeatureArea("settings");
+  }, [handleSelectTopFeatureArea]);
   // handleOpenWorkspaceChat returns the workbench main panel to the conversation surface.
   // handleOpenWorkspaceChat 将工作台主面板切回会话界面。
   const handleOpenWorkspaceChat = React.useCallback(() => {
@@ -696,7 +699,7 @@ export function WorkbenchLayout(props: {
     handleProjectMenuAction,
     handleProjectSettingsVmmSave,
     handleProjectSettingsAgentSkillSave,
-    luaSkillActions,
+    luaSkillActions: luaSkillCatalogActions,
     agentSkillActions,
     agentActions,
     handleProjectIconConfirm,
@@ -727,6 +730,13 @@ export function WorkbenchLayout(props: {
     applySubagentCatalogUpdate,
     handleOpenWorkspaceChat,
   });
+  // luaSkillActions adds the MCP server page hosted by plugin management to the catalog lifecycle actions.
+  // luaSkillActions 在目录生命周期动作之外加入插件管理承载的 MCP 服务器页面动作。
+  const luaSkillActions = React.useMemo<SkillActionProps>(() => ({
+    ...luaSkillCatalogActions,
+    onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
+    onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),
+  }), [applySkillWorkbenchAction, luaSkillCatalogActions]);
   // handleWorkbenchProjectMenuAction owns the UI-only terminal entry before delegating persisted actions.
   // handleWorkbenchProjectMenuAction 在委托持久化动作前处理仅属于界面的终端入口。
   const handleWorkbenchProjectMenuAction = React.useCallback((
@@ -1420,6 +1430,7 @@ export function WorkbenchLayout(props: {
             }}
             onOpenMemory={handleOpenWorkspaceMemory}
             onOpenKnowledge={handleOpenWorkspaceKnowledge}
+            onOpenRuntimeDiagnostics={handleOpenRuntimeDiagnostics}
             onSelectSkillSubArea={setActiveWorkbenchSkillSubArea}
             onSelectMemorySubArea={setActiveWorkbenchMemorySubArea}
             onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
@@ -1524,8 +1535,6 @@ export function WorkbenchLayout(props: {
               },
               onClearSelectedProviderApiTraceDirectory: clearSelectedProviderApiTraceDirectory,
               onSaveProviderRetrySettings: (request) => applySkillWorkbenchAction(async () => (await saveProviderRetrySettings(request)) ?? workbenchStateRef.current),
-              onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
-              onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),
               onRestoreArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await restoreArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
               onDeleteArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await deleteArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
             }}

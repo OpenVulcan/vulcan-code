@@ -238,7 +238,10 @@ function FeatureShell(props: {
         activeSkillSubArea={activeSkillSubArea}
         activeSettingsSubArea={props.activeSettingsSubArea}
         onOpenUsageStatistics={props.onOpenUsageStatistics}
-        onOpenDiagnostics={() => props.onSelectSettingsSubArea("runtime-diagnostics")}
+        onOpenDiagnostics={() => {
+          props.onSelectSettingsSubArea("runtime-diagnostics")
+          props.onSelectArea("settings")
+        }}
         memoryActions={props.memoryActions}
         onOpenCredentialManagement={() => {
           props.onSelectSettingsSubArea("credential-management")
