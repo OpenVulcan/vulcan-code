@@ -3,8 +3,8 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StartupDownloadProgress } from "./startup-download-progress";
-import { LoadingScreen } from "./startup-screen";
-import { BootErrorScreen, BootLoadingScreen } from "@/app/boot-startup-screen";
+import { StartupOverlay } from "./startup-screen";
+import { BootErrorScreen, BootLoadingScreen, STARTUP_SURFACE_FADE_MS } from "@/app/boot-startup-screen";
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("./startup-logo-mark", () => ({ StartupLogoMark: () => null }));
 describe("startup controls", () => {
@@ -43,12 +43,32 @@ describe("startup controls", () => {
     expect(host.textContent).toContain("Completed 1/2 steps");
   });
   it("exposes a failed step ahead of pending steps and releases busy announcements", async () => {
-    await act(async () => root.render(<LoadingScreen startup={{ ready: false, phase: "startup", recentLogs: [], steps: [
+    await act(async () => root.render(<StartupOverlay startup={{ ready: false, phase: "startup", recentLogs: [], steps: [
       { id: "pending", label: "Pending", status: "pending", message: "not started" },
       { id: "failed", label: "Failed", status: "error", message: "synthetic failure" },
     ] }} />));
     expect(host.querySelector('[role="alert"]')?.textContent).toBe("synthetic failure");
     expect(host.querySelector(".startup-progress-panel")?.getAttribute("aria-busy")).toBe("false");
+  });
+  // The surface fades out on hand-off and reports its departure only after the shared fade duration.
+  // 启动层在交接时淡出，并仅在共用淡出时长结束后报告离场。
+  it("fades the startup surface out before reporting that it left", async () => {
+    vi.useFakeTimers();
+    try {
+      // left records the owner's unmount signal.
+      // left 记录持有者的卸载信号。
+      const left = vi.fn();
+      await act(async () => root.render(<BootLoadingScreen onLeft={left} />));
+      expect(host.querySelector(".startup-surface")?.hasAttribute("data-leaving")).toBe(false);
+      await act(async () => root.render(<BootLoadingScreen leaving onLeft={left} />));
+      expect(host.querySelector(".startup-surface")?.getAttribute("aria-hidden")).toBe("true");
+      await act(async () => vi.advanceTimersByTimeAsync(STARTUP_SURFACE_FADE_MS - 1));
+      expect(left).not.toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(left).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("names an unknown-length download without inventing a numeric progress value", async () => {
     await act(async () => root.render(<StartupDownloadProgress label="Download" step={{
@@ -59,11 +79,11 @@ describe("startup controls", () => {
     expect(progress.hasAttribute("aria-valuenow")).toBe(false);
   });
   it("keeps startup progress unknown before a real step percentage arrives", async () => {
-    await act(async () => root.render(<LoadingScreen startup={{ ready: false, phase: "startup", recentLogs: [], steps: [
+    await act(async () => root.render(<StartupOverlay startup={{ ready: false, phase: "startup", recentLogs: [], steps: [
       { id: "done", label: "Done", status: "ready" }, { id: "active", label: "Active", status: "running" },
     ] }} />));
     expect(host.querySelector('[role="progressbar"]')?.hasAttribute("aria-valuenow")).toBe(false);
-    await act(async () => root.render(<LoadingScreen startup={{ ready: false, phase: "startup", recentLogs: [], steps: [
+    await act(async () => root.render(<StartupOverlay startup={{ ready: false, phase: "startup", recentLogs: [], steps: [
       { id: "active", label: "Active", status: "running", progressPercent: 37 },
     ] }} />));
     expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("37");

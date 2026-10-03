@@ -1,5 +1,6 @@
 import type { StartupStepSnapshot } from "@/types";
 import { formatBytes } from "@/lib/display-format";
+import { StartupProgressBar } from "./startup-progress-bar";
 
 // StartupDownloadProgressProps contains the active startup step and localized label.
 // StartupDownloadProgressProps 包含当前启动步骤与本地化标签。
@@ -24,24 +25,12 @@ export function StartupDownloadProgress(props: StartupDownloadProgressProps) {
     return null;
   }
   return (
-    <div className="startup-download-progress" aria-label={props.label}>
+    <div className="startup-download-progress" role="group" aria-label={props.label}>
       <div className="startup-download-progress-heading">
         <span>{props.label}</span>
         <span title={progress.kind === "indeterminate" ? props.step?.message ?? undefined : undefined}>{progress.kind === "determinate" ? `${formatBytes(progress.completedBytes)} / ${formatBytes(progress.totalBytes)}` : props.step?.message}</span>
       </div>
-      <div
-        className="conversation-loading-bar startup-download-progress-bar"
-        role="progressbar"
-        aria-label={props.label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={progress.kind === "determinate" ? Math.round(progress.percent) : undefined}
-      >
-        <div
-          className={`conversation-loading-bar-value${progress.kind === "indeterminate" ? " startup-download-progress-indeterminate" : ""}`}
-          style={progress.kind === "determinate" ? { width: `${progress.percent}%` } : undefined}
-        />
-      </div>
+      <StartupProgressBar percent={progress.kind === "determinate" ? progress.percent : null} label={props.label} compact />
     </div>
   );
 }

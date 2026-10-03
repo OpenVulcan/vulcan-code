@@ -31,9 +31,15 @@ const codeGlyphs: readonly WordmarkGlyph[] = [
   { x: 10152.6, d: "M566.0 -24.0C800.5 -24.0 984.5 115.5 1024.0 318.5H837.5C806.5 213.5 711.5 141.0 567.5 141.0C375.0 141.0 265.0 276.5 257.5 475.0H1041.0V527.0C1041.0 854.0 851.0 1080.0 554.5 1080.0C270.5 1080.0 69.5 847.5 69.5 526.0C69.5 207.5 254.5 -24.0 566.0 -24.0ZM259.5 628.0C277.5 805.0 389.5 916.0 555.5 916.0C722.5 916.0 835.5 805.0 853.0 628.0Z" },
 ];
 
-// VULCAN_WORDMARK_VIEW_BOX is the tight bounds of the locked wordmark master in its own units.
-// VULCAN_WORDMARK_VIEW_BOX 是锁定字标母版在自身单位下的紧边界。
-export const VULCAN_WORDMARK_VIEW_BOX = "0 0 11179.12 1538";
+// wordmarkBounds is the tight [x, y, width, height] box of the locked wordmark master in its own units.
+// wordmarkBounds 是锁定字标母版在自身单位下的紧边界 [x, y, width, height]。
+const wordmarkBounds = [0, 0, 11179.12, 1538] as const;
+// VULCAN_WORDMARK_VIEW_BOX exposes wordmarkBounds as an SVG viewBox.
+// VULCAN_WORDMARK_VIEW_BOX 将 wordmarkBounds 暴露为 SVG viewBox。
+export const VULCAN_WORDMARK_VIEW_BOX = wordmarkBounds.join(" ");
+// VULCAN_WORDMARK_ASPECT is the wordmark width / height ratio derived from wordmarkBounds.
+// VULCAN_WORDMARK_ASPECT 是由 wordmarkBounds 推导的字标宽高比。
+export const VULCAN_WORDMARK_ASPECT = wordmarkBounds[2] / wordmarkBounds[3];
 
 // VulcanWordmarkShapes renders the outlined wordmark without an outer <svg>, so lockups can place it.
 // "Vulcan" follows the current text color and "Code" carries the same flame gradient as the symbol.

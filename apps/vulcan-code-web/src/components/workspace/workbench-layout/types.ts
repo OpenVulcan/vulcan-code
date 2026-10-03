@@ -2,9 +2,9 @@ import type {
   WorkbenchDeltaEnvelope,
 } from "@/types";
 
-// ThemeMode describes the two shadcn default theme modes.
-// ThemeMode 描述 shadcn 默认的两种主题模式。
-export type ThemeMode = "light" | "dark";
+// ThemeMode and initialThemeMode live in the boot-safe theme module so the startup screen can apply the theme early.
+// ThemeMode 与 initialThemeMode 位于启动安全的主题模块中，使启动界面能提前套用主题。
+export { initialThemeMode, type ThemeMode } from "@/lib/theme-mode";
 
 // WorkbenchDeltaSignal wraps the newest partial update with a React-visible sequence.
 // WorkbenchDeltaSignal 使用 React 可见序号包装最新局部更新。
@@ -42,19 +42,6 @@ export type RequestStopConversationRunChoice = (
   // 当前精确会话树报告的运行中子代理。
   agents: StopConversationRunAgentPromptItem[],
 ) => Promise<StopConversationRunChoice | null>;
-
-// initialThemeMode returns the persisted shadcn theme, defaulting to light.
-// initialThemeMode 返回持久化的 shadcn 主题，默认使用亮色。
-export function initialThemeMode(): ThemeMode {
-  try {
-    // Storage may be unavailable in restricted browser contexts; rendering must remain usable.
-    // 受限浏览器环境可能不提供存储权限，界面仍须保持可用。
-    const stored = window.localStorage.getItem("vulcan-webui-theme");
-    return stored === "light" || stored === "dark" ? stored : "light";
-  } catch {
-    return "light";
-  }
-}
 
 // webuiClickTrace emits lightweight browser-console diagnostics for user initiated WebUI actions.
 // webuiClickTrace 为用户触发的 WebUI 操作输出轻量浏览器控制台诊断日志。

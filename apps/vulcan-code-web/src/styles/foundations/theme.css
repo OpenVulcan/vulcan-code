@@ -91,6 +91,10 @@
   /* Brand ink colors the symbol body and the "Vulcan" glyphs: ink black from the light-ground primary master. */
   /* 品牌墨色用于图标主体与「Vulcan」字形：取自主色版浅底母版的墨黑。 */
   --vcn-brand-ink: #0b0d10;
+  /* Brand flame endpoints from the master gradient; identical on both grounds, so .dark does not redefine them. */
+  /* 品牌火焰渐变的两端取自母版渐变；深浅底相同，因此 .dark 不重新定义。 */
+  --vcn-brand-flame-start: #ff6527;
+  --vcn-brand-flame-end: #f44e1c;
 }
 
 .dark {

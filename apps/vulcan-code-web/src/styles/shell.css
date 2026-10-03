@@ -361,118 +361,21 @@ html[data-vulcan-host="electron"] [data-tauri-drag-region] [role="menuitem"] {
   overflow: hidden;
 }
 
+/* In-shell startup blocker shown when the service restarts under a mounted shell. The panel, logo, progress and
+   motion rules live once in boot-styles.css, which loads before this sheet. */
+/* 已挂载外壳下服务重启时显示的壳内启动阻塞层。面板、标志、进度与动效规则统一定义在 boot-styles.css 中，
+   该样式表先于本文件加载。 */
 .startup-overlay {
   position: absolute;
   inset: 0;
   z-index: 30;
-  display: grid;
-  place-items: center;
-  align-content: safe center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   overflow: auto;
   padding: 24px;
   background: color-mix(in srgb, var(--background) 78%, transparent);
   backdrop-filter: blur(10px);
-}
-
-.startup-progress-panel {
-  width: min(420px, 100%);
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  justify-items: center;
-  gap: 72px;
-}
-
-.startup-logo-stage {
-  position: relative;
-  display: grid;
-  place-items: center;
-  isolation: isolate;
-  overflow: visible;
-}
-
-/* The stacked lockup fills the stage box sized by StartupLogoMark; its ink follows the theme's brand ink. */
-/* 竖版组合标志填满由 StartupLogoMark 定尺寸的舞台；墨色跟随主题品牌墨色。 */
-.startup-logo-mark {
-  width: 100%;
-  height: 100%;
-  display: block;
-  color: var(--vcn-brand-ink);
-  filter: drop-shadow(0 14px 30px color-mix(in srgb, var(--foreground) 10%, transparent));
-}
-
-.startup-logo-shine-canvas {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: block;
-  pointer-events: none;
-  opacity: 0.95;
-  mix-blend-mode: screen;
-}
-
-.startup-progress-content {
-  min-width: 0;
-  width: min(420px, 100%);
-  display: grid;
-  gap: 12px;
-}
-
-.startup-progress-heading strong {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: 0.92rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.startup-progress-message {
-  min-height: 18px;
-  margin: 0;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  line-height: 1.45;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.startup-download-progress {
-  display: grid;
-  gap: 7px;
-  margin-top: 8px;
-}
-
-.startup-download-progress-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.startup-download-progress-bar {
-  height: 5px;
-}
-
-.startup-download-progress-indeterminate {
-  width: 34%;
-  min-width: 34%;
-  animation: startup-download-indeterminate 1.15s ease-in-out infinite;
-}
-
-@keyframes startup-download-indeterminate {
-  0% {
-    transform: translateX(-110%);
-  }
-
-  100% {
-    transform: translateX(310%);
-  }
 }
 
 .without-console-sidebar .workspace {

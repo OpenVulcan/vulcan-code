@@ -1,8 +1,5 @@
 import React from "react";
-import {
-  ErrorScreen,
-  LoadingScreen,
-} from "@/components/shell/startup-screen";
+import { ErrorScreen } from "@/components/shell/startup-screen";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -83,6 +80,10 @@ export function WorkbenchApp(props: {
   // Startup snapshot captured before the workbench runtime mounted.
   // 工作台运行时挂载前捕获的启动快照。
   initialStartup: StartupSnapshot;
+  // Reports the startup snapshot the host's persistent startup surface should show while the first workbench
+  // snapshot is pending, and null once this app (or its error screen) owns the screen.
+  // 在首份工作台快照待定期间报告宿主常驻启动层应展示的启动快照；本应用（或其错误界面）接管屏幕后报告 null。
+  onStartupSurfaceChange: (startup: StartupSnapshot | null) => void;
 }) {
   // startup stores the latest startup snapshot.
   // startup 保存最近一次启动快照。
@@ -807,14 +808,25 @@ export function WorkbenchApp(props: {
     ));
   }, []);
 
+  // startupSurface is what the host startup surface shows; null hands the screen to this app.
+  // startupSurface 是宿主启动层展示的内容；null 表示将屏幕交给本应用。
+  const startupSurface = error === null && workbench === null ? startup : null;
+  const { onStartupSurfaceChange } = props;
+  // A layout effect hands over before paint, so the workbench and the start of the surface fade share one frame.
+  // 布局 effect 在绘制前完成交接，使工作台与启动层淡出的起点处于同一帧。
+  React.useLayoutEffect(() => {
+    onStartupSurfaceChange(startupSurface);
+  }, [onStartupSurfaceChange, startupSurface]);
+
   if (error) {
     return <ErrorScreen error={error} />;
   }
 
   if (!workbench) {
+    // The host's persistent startup surface covers this phase; only toasts render here.
+    // 宿主常驻启动层覆盖此阶段；此处只渲染提示。
     return (
       <I18nProvider initialLocale={startup.uiLocale}>
-        <LoadingScreen startup={startup} />
         <Toaster />
       </I18nProvider>
     );

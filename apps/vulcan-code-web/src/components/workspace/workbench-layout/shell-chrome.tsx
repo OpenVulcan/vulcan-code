@@ -7,6 +7,7 @@ import { shellClient } from "@/service/webui-service-runtime";
 import { useI18n, type LocaleCode } from "@/i18n";
 import { toast } from "sonner";
 import type { StartupSnapshot } from "@/types";
+import { applyThemeMode, THEME_STORAGE_KEY } from "@/lib/theme-mode";
 import {
   initialThemeMode,
   type ThemeMode,
@@ -134,8 +135,7 @@ export function useWorkbenchShellChrome({
   }, [showWindowControls, toggleWindowMaximize, reportWindowError]);
 
   React.useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    document.documentElement.style.colorScheme = theme;
+    applyThemeMode(theme);
   }, [theme]);
 
   // toggleTheme persists only the user's explicit selection; denied storage keeps the current session usable.
@@ -146,7 +146,7 @@ export function useWorkbenchShellChrome({
     const nextTheme = theme === "dark" ? "light" : "dark";
     setTheme(nextTheme);
     try {
-      window.localStorage.setItem("vulcan-webui-theme", nextTheme);
+      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
     } catch {
       toast.error(t("appChrome.themeSaveFailed"), { id: "theme-save-failed" });
     }

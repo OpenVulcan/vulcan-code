@@ -776,19 +776,42 @@ body {
   }
 }
 
+/* Startup screens share one column: the loading panel stretches to the full height to pin its logo, while the
+   error panel is centered by the column itself. */
+/* 启动界面共用一条纵列：加载面板撑满全高以固定标志位置，错误面板则由纵列自身居中。 */
 .loading-screen {
   min-height: 0;
   height: 100dvh;
   overflow: auto;
-  display: grid;
-  place-items: center;
-  align-content: safe center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: safe center;
   color: var(--muted-foreground);
   padding: 24px;
 }
 
 .loading-screen.error {
   color: var(--foreground);
+}
+
+/* The persistent startup surface covers the app until the workbench takes over, then fades out above it.
+   --startup-surface-fade is published by BootLoadingScreen from STARTUP_SURFACE_FADE_MS. */
+/* 常驻启动层在工作台接管前覆盖应用，随后在其上方淡出。
+   --startup-surface-fade 由 BootLoadingScreen 根据 STARTUP_SURFACE_FADE_MS 发布。 */
+.startup-surface {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  height: auto;
+  background: var(--background);
+  transition: opacity var(--startup-surface-fade, 0ms) ease, visibility 0s linear var(--startup-surface-fade, 0ms);
+}
+
+.startup-surface[data-leaving] {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* Startup recovery uses the shared theme without importing the workbench button bundle. */
@@ -833,13 +856,10 @@ body {
 
 .startup-error-message {
   margin: 0;
-  line-height: 1.6;
-}
-
-.startup-error-message {
   overflow-wrap: anywhere;
   color: var(--foreground);
   font-size: var(--vcn-font-size-md);
+  line-height: 1.6;
   max-height: min(32dvh, 240px);
   overflow: auto;
   overscroll-behavior: contain;
@@ -853,105 +873,220 @@ body {
 .startup-error-details[open] summary { margin-bottom: 8px; }
 .startup-error-details summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
+/* The loading panel fills the column in three rows: empty space, the logo, then the progress block hanging below.
+   The logo row sits slightly above the middle and never moves when progress rows appear or disappear. */
+/* 加载面板以三行填满纵列：留白、标志、其下悬挂的进度区。标志行略高于正中，进度行出现或消失时都不会移动。 */
 .startup-progress-panel {
-  width: min(420px, 100%);
+  flex: 1 0 auto;
+  width: min(360px, 100%);
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto minmax(max-content, 1.25fr);
   justify-items: center;
-  gap: 72px;
 }
 
+.startup-progress-panel > .startup-logo-stage {
+  grid-row: 2;
+}
+
+/* The stage is sized inline by StartupLogoMark; the lockup fills it and its ink follows the theme's brand ink. */
+/* 舞台尺寸由 StartupLogoMark 内联设定；组合标志填满舞台，墨色跟随主题品牌墨色。 */
 .startup-logo-stage {
   position: relative;
   display: grid;
   place-items: center;
-  isolation: isolate;
-  overflow: visible;
 }
 
-/* The stacked lockup fills the stage box sized by StartupLogoMark; its ink follows the theme's brand ink. */
-/* 竖版组合标志填满由 StartupLogoMark 定尺寸的舞台；墨色跟随主题品牌墨色。 */
 .startup-logo-mark {
   width: 100%;
   height: 100%;
   display: block;
+  overflow: visible;
   color: var(--vcn-brand-ink);
-  filter: drop-shadow(0 14px 30px color-mix(in srgb, var(--foreground) 10%, transparent));
+  /* A neutral black lift: derived from --foreground it would turn into a grey halo on the dark ground. */
+  /* 中性黑色投影：若取自 --foreground，深色底上会变成灰色光晕。 */
+  filter: drop-shadow(0 14px 28px rgb(0 0 0 / 12%));
 }
 
-.startup-logo-shine-canvas {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: block;
-  pointer-events: none;
-  opacity: 0.95;
-  mix-blend-mode: screen;
+/* Living-flame motion. The chevron stays fixed; the flame ignites from its root, then keeps a quiet flicker while its
+   two gradient stops drift through nearby fire tones on unequal periods, so the color never repeats in lockstep.
+   The flicker only shrinks or leans the flame, never enlarges it, so it always stays inside the lockup bounds. */
+/* 活火动效。折角保持固定；火焰自根部点燃，随后保持轻微摇曳，两个渐变色标以不同周期在相近火色间漂移，
+   使颜色不会同步重复。摇曳只收缩或倾斜火焰、从不放大，因此火焰始终位于组合标志边界内。 */
+.startup-logo-mark .vulcan-symbol-flame,
+.startup-logo-mark .vulcan-stacked-wordmark {
+  transform-box: fill-box;
 }
 
+/* The flame root sits at its lower left, so it ignites and sways from there. */
+/* 火焰根部位于左下，因此从该处点燃与摇曳。 */
+.startup-logo-mark .vulcan-symbol-flame {
+  transform-origin: 28% 100%;
+  animation:
+    startup-flame-ignite 680ms cubic-bezier(0.2, 0.8, 0.2, 1) 120ms both,
+    startup-flame-flicker 2.8s ease-in-out 800ms infinite;
+}
+
+.startup-logo-mark .vulcan-flame-stop-start {
+  animation: startup-flame-tone-start 3.4s ease-in-out infinite;
+}
+
+.startup-logo-mark .vulcan-flame-stop-end {
+  animation: startup-flame-tone-end 2.3s ease-in-out infinite;
+}
+
+.startup-logo-mark .vulcan-stacked-wordmark {
+  animation: startup-wordmark-rise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) 420ms both;
+}
+
+@keyframes startup-flame-ignite {
+  from { opacity: 0; transform: scale(0.3); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes startup-flame-flicker {
+  0%, 100% { transform: none; }
+  20% { transform: scale(0.99, 0.975) skewX(1.2deg); }
+  45% { transform: scale(0.995, 0.99) skewX(0.4deg); }
+  70% { transform: scale(0.985, 0.97) skewX(1.6deg); }
+  85% { transform: scale(0.995, 0.985) skewX(0.6deg); }
+}
+
+@keyframes startup-flame-tone-start {
+  0%, 100% { stop-color: #ff6527; }
+  30% { stop-color: #ff8a34; }
+  60% { stop-color: #ff5a22; }
+  80% { stop-color: #ff7a2e; }
+}
+
+@keyframes startup-flame-tone-end {
+  0%, 100% { stop-color: #f44e1c; }
+  35% { stop-color: #e63c17; }
+  70% { stop-color: #ff6326; }
+}
+
+@keyframes startup-wordmark-rise {
+  from { opacity: 0; transform: translateY(40%); }
+  to { opacity: 1; transform: none; }
+}
+
+/* The progress block settles in after the wordmark, so the intro reads logo first, status second. */
+/* 进度区在字标之后入场，使入场顺序先标志、后状态。 */
 .startup-progress-content {
+  grid-row: 3;
+  align-self: start;
+  width: 100%;
   min-width: 0;
-  width: min(420px, 100%);
   display: grid;
-  gap: 12px;
+  gap: 18px;
+  padding-top: 56px;
+  animation: startup-content-in 480ms cubic-bezier(0.2, 0.8, 0.2, 1) 640ms both;
 }
 
-.conversation-loading-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  color: var(--foreground);
-  font-size: 0.92rem;
+@keyframes startup-content-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
 
-.conversation-loading-heading span {
-  color: var(--muted-foreground);
-  font-variant-numeric: tabular-nums;
+/* Status copy: the active step as the title, its live message underneath; each keeps one line so nothing reflows. */
+/* 状态文案：活动步骤为标题，其实时消息在下方；各自保持单行，避免重新排版。 */
+.startup-progress-status {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  text-align: center;
 }
 
-.startup-progress-heading strong {
+.startup-progress-title,
+.startup-progress-message {
   min-width: 0;
   overflow: hidden;
-  color: var(--foreground);
-  font-size: 0.92rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conversation-loading-bar {
-  height: 6px;
-  overflow: hidden;
-  border-radius: var(--vcn-radius-pill);
-  background: color-mix(in srgb, var(--muted) 76%, var(--background));
-}
-
-.conversation-loading-bar-value {
-  height: 100%;
-  min-width: 8px;
-  border-radius: inherit;
-  background: var(--primary);
-  transition: width 180ms ease;
+.startup-progress-title {
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-lg);
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .startup-progress-message {
-  min-height: 18px;
   margin: 0;
-  overflow: hidden;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
   line-height: 1.45;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.startup-progress-message.error {
+  color: var(--destructive);
+}
+
+.startup-progress-meter {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+/* A hairline track filled with the brand flame. Measured progress scales the fill from the left; unknown progress
+   sweeps a short segment across the track. */
+/* 细线轨道以品牌火焰色填充。实测进度自左侧缩放填充；未知进度则让一小段在轨道上扫过。 */
+.startup-progress-track {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--vcn-radius-pill);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+
+.startup-progress-track.compact {
+  height: 3px;
+}
+
+.startup-progress-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--vcn-brand-flame-start), var(--vcn-brand-flame-end));
+  transform-origin: left center;
+  transform: scaleX(var(--startup-progress-ratio, 0));
+  transition: transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.startup-progress-fill.indeterminate {
+  right: auto;
+  width: 32%;
+  transform: none;
+  transition: none;
+  animation: startup-progress-sweep 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@keyframes startup-progress-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(312.5%); }
+}
+
+/* Step count under the left end of the bar, percentage under the right end; the row keeps its height while empty. */
+/* 步骤计数位于进度条左端下方，百分比位于右端下方；该行为空时仍保持高度。 */
+.startup-progress-meta {
+  min-height: 1.4em;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
 }
 
 .startup-download-progress {
   min-width: 0;
   display: grid;
-  gap: 7px;
-  margin-top: 8px;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent);
 }
 
 .startup-download-progress-heading {
@@ -970,32 +1105,22 @@ body {
 .startup-download-progress-heading > span:first-child { flex: none; }
 .startup-download-progress-heading > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.startup-download-progress-bar {
-  height: 5px;
-}
-
-.startup-download-progress-indeterminate {
-  width: 34%;
-  min-width: 34%;
-  animation: startup-download-indeterminate 1.15s ease-in-out infinite;
-}
-
-/* Reduced motion preserves an unknown progress state while stopping decorative movement during boot.
-   减少动态效果时保留未知进度状态，并停止启动阶段的装饰运动。 */
+/* Reduced motion keeps every state readable (finished lockup, measured fill, a static unknown segment) while
+   stopping decorative movement and fades. */
+/* 减少动态效果时保留每个状态的可读性（完整标志、实测填充、静止的未知片段），并停止装饰运动与淡入淡出。 */
 @media (prefers-reduced-motion: reduce) {
-  .startup-progress-bar .conversation-loading-bar-value,
-  .startup-download-progress-bar .conversation-loading-bar-value { transition: none; }
-  .startup-progress-bar .startup-download-progress-indeterminate,
-  .startup-download-progress-bar .startup-download-progress-indeterminate { animation: none; transform: none; }
-}
-
-@keyframes startup-download-indeterminate {
-  0% {
-    transform: translateX(-110%);
+  .startup-logo-mark .vulcan-symbol-flame,
+  .startup-logo-mark .vulcan-flame-stop-start,
+  .startup-logo-mark .vulcan-flame-stop-end,
+  .startup-logo-mark .vulcan-stacked-wordmark,
+  .startup-progress-content,
+  .startup-progress-fill.indeterminate {
+    animation: none;
   }
 
-  100% {
-    transform: translateX(310%);
+  .startup-progress-fill,
+  .startup-surface {
+    transition: none;
   }
 }
 
