@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { VulcanWordmark } from "@/components/shell/vulcan-wordmark";
 import { useI18n } from "@/i18n";
 
 // SidebarBrandMenu renders the panel title strip as one line: the wordmark on the logo's centre line and the current area on the right.
@@ -34,7 +35,7 @@ export function SidebarBrandMenu(props: {
         onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
       >
         <span className="vcn-sidebar-label sidebar-profile-label sidebar-brand-label">
-          <strong className="sidebar-brand-wordmark">Vulcan<span className="sidebar-brand-wordmark-accent">Code</span></strong>
+          <VulcanWordmark className="sidebar-brand-wordmark" label="Vulcan Code" />
           <small>{props.currentLabel}</small>
         </span>
       </div>

@@ -624,7 +624,7 @@
   max-width: none;
   flex: 1 1 auto;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
@@ -634,23 +634,14 @@
   min-width: 0;
 }
 
-/* The wordmark is sized to the 24px logo: its cap height sits on the symbol's centre band, the tight tracking echoes
-   the symbol's solid geometry, and the lighter "Code" keeps the two words readable without a space. */
-/* 字标按 24px 标志定尺寸：大写高度落在标志中段，紧凑字距呼应标志的实心几何形，
-   较轻的「Code」使两个词在无空格时仍易于区分。 */
-.vcn-sidebar-label strong.sidebar-brand-wordmark {
+/* The outlined wordmark is sized to the 24px logo: its 13px cap height sits on the symbol's centre band. The width follows
+   the master aspect ratio, and "Vulcan" shares the rail symbol body color. */
+/* 转曲字标按 24px 标志定尺寸：13px 大写高度落在标志中段。宽度按母版比例推导，「Vulcan」与轨道图标主体同色。 */
+.sidebar-brand-wordmark {
   flex: 0 0 auto;
-  font-family: var(--font-heading);
-  font-size: var(--vcn-font-size-xl);
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.035em;
-  font-kerning: normal;
-  -webkit-font-smoothing: antialiased;
-}
-
-.sidebar-brand-wordmark-accent {
-  margin-left: 0.04em;
-  color: var(--primary);
-  font-weight: 560;
+  align-self: center;
+  width: auto;
+  height: 13px;
+  display: block;
+  color: var(--sidebar-foreground);
 }

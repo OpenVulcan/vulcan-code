@@ -1,41 +1,60 @@
 import { useEffect, useRef } from "react";
 import type { RefObject } from "react";
+import { VULCAN_STACKED_LOGO_ASPECT, VulcanStackedLogo } from "@/components/shell/vulcan-stacked-logo";
 
-// StartupLogoMark renders the startup logo with a Canvas-native scan highlight.
-// StartupLogoMark 渲染带有 Canvas 原生扫光高亮的启动 Logo。
+// STARTUP_LOGO_WIDTH is the single CSS-pixel width of the startup lockup; its height follows the master aspect ratio.
+// STARTUP_LOGO_WIDTH 是启动组合标志唯一的 CSS 像素宽度；高度按母版宽高比推导。
+const STARTUP_LOGO_WIDTH = 232;
+// STARTUP_LOGO_HEIGHT derives from the width so the lockup, its canvas and its mask always share one box.
+// STARTUP_LOGO_HEIGHT 由宽度推导，使组合标志、画布与蒙版始终共用同一尺寸。
+const STARTUP_LOGO_HEIGHT = STARTUP_LOGO_WIDTH / VULCAN_STACKED_LOGO_ASPECT;
+
+// StartupLogoMark renders the stacked brand lockup (symbol, then wordmark) with a Canvas-native scan highlight.
+// StartupLogoMark 渲染竖版品牌组合（图标在上、字标在下），并叠加 Canvas 原生扫光高亮。
 export function StartupLogoMark() {
   // shineCanvasRef stores the transparent canvas layer used for the moving logo highlight.
   // shineCanvasRef 保存用于绘制 Logo 动态高光的透明画布层。
   const shineCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  useStartupLogoScan(shineCanvasRef, "/vulcan-logo-startup.png", 144);
+  // logoRef points at the rendered lockup so the highlight mask uses its exact outlines.
+  // logoRef 指向已渲染的组合标志，使高光蒙版使用其精确轮廓。
+  const logoRef = useRef<SVGSVGElement | null>(null);
+  useStartupLogoScan(shineCanvasRef, logoRef, STARTUP_LOGO_WIDTH, STARTUP_LOGO_HEIGHT);
   return (
-    <div className="startup-logo-stage" aria-hidden="true">
-      <img alt="" className="startup-logo-mark" src="/vulcan-logo-startup.png" />
+    <div className="startup-logo-stage" aria-hidden="true" style={{ width: STARTUP_LOGO_WIDTH, height: STARTUP_LOGO_HEIGHT }}>
+      <VulcanStackedLogo className="startup-logo-mark" ref={logoRef} />
       <canvas ref={shineCanvasRef} className="startup-logo-shine-canvas" />
     </div>
   );
 }
 
 // useStartupLogoScan paints a masked moving highlight into a transparent canvas.
-// useStartupLogoScan 将被 Logo 透明通道裁剪的移动高光绘制到透明画布中。
-// Parameters: canvasRef is the drawing host, logoSrc the image source and logoSize the logical dimensions; returns no value and owns cleanup of its animation and preference listener.
-// 参数：canvasRef 是绘制宿主，logoSrc 是图像来源，logoSize 是逻辑尺寸；不返回值，并负责动画及偏好监听清理。
+// useStartupLogoScan 将被 Logo 轮廓裁剪的移动高光绘制到透明画布中。
+// Parameters: canvasRef is the drawing host, logoRef the rendered lockup used as the mask, logoWidth and logoHeight the
+// CSS pixel box; returns no value and owns cleanup of its animation and preference listener.
+// 参数：canvasRef 是绘制宿主，logoRef 是用作蒙版的已渲染组合标志，logoWidth 与 logoHeight 是 CSS 像素尺寸；
+// 不返回值，并负责动画及偏好监听清理。
 function useStartupLogoScan(
   // Canvas reference that receives the animated highlight layer.
   // 接收动态高光层的画布引用。
   canvasRef: RefObject<HTMLCanvasElement | null>,
-  // Logo source used as the alpha mask for the highlight.
-  // 用作高光 alpha 蒙版的 Logo 资源地址。
-  logoSrc: string,
-  // CSS pixel size of the square logo canvas.
-  // 正方形 Logo 画布的 CSS 像素尺寸。
-  logoSize: number,
+  // Rendered lockup whose outlines become the alpha mask for the highlight.
+  // 其轮廓作为高光 alpha 蒙版的已渲染组合标志。
+  logoRef: RefObject<SVGSVGElement | null>,
+  // CSS pixel width of the logo canvas.
+  // Logo 画布的 CSS 像素宽度。
+  logoWidth: number,
+  // CSS pixel height of the logo canvas.
+  // Logo 画布的 CSS 像素高度。
+  logoHeight: number,
 ) {
   useEffect(() => {
     // canvas is the visible transparent layer placed above the static logo.
     // canvas 是叠放在静态 Logo 之上的可见透明图层。
     const canvas = canvasRef.current;
-    if (!canvas) {
+    // logo is the inline lockup serialized once into the mask image.
+    // logo 是只序列化一次为蒙版图像的内联组合标志。
+    const logo = logoRef.current;
+    if (!canvas || !logo) {
       return;
     }
     // context is required for drawing the highlight and applying the alpha mask.
@@ -47,10 +66,10 @@ function useStartupLogoScan(
     // pixelRatio keeps the canvas sharp on high-DPI WebView2 displays.
     // pixelRatio 确保画布在高 DPI WebView2 屏幕上保持清晰。
     const pixelRatio = Math.max(1, window.devicePixelRatio);
-    canvas.width = Math.round(logoSize * pixelRatio);
-    canvas.height = Math.round(logoSize * pixelRatio);
-    canvas.style.width = `${logoSize}px`;
-    canvas.style.height = `${logoSize}px`;
+    canvas.width = Math.round(logoWidth * pixelRatio);
+    canvas.height = Math.round(logoHeight * pixelRatio);
+    canvas.style.width = `${logoWidth}px`;
+    canvas.style.height = `${logoHeight}px`;
     context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
 
     // maskCanvas stores the logo alpha once so each animation frame can clip the shine cheaply.
@@ -66,11 +85,11 @@ function useStartupLogoScan(
     }
     maskContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
 
-    // logoImage loads the public PNG once; WebView2 can draw same-origin bitmaps into canvas.
-    // logoImage 只加载一次 public PNG；WebView2 可以将同源位图绘制到画布。
+    // logoImage rasterizes the serialized lockup once; only its alpha matters, so currentColor may resolve to black.
+    // logoImage 只栅格化一次序列化的组合标志；只使用其 alpha，currentColor 解析为黑色亦无影响。
     const logoImage = new Image();
     logoImage.decoding = "async";
-    logoImage.src = logoSrc;
+    logoImage.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(logo))}`;
 
     // animationFrame keeps the current requestAnimationFrame handle for cleanup.
     // animationFrame 保存当前 requestAnimationFrame 句柄，便于清理。
@@ -99,7 +118,7 @@ function useStartupLogoScan(
       if (startTimestamp === null) {
         startTimestamp = timestamp - 120;
       }
-      context.clearRect(0, 0, logoSize, logoSize);
+      context.clearRect(0, 0, logoWidth, logoHeight);
       // passMs controls the visible sweep duration.
       // passMs 控制可见扫光经过 Logo 的时长。
       const passMs = 1320;
@@ -113,13 +132,13 @@ function useStartupLogoScan(
         // progress is the normalized visible sweep position.
         // progress 是可见扫光阶段内的归一化位置。
         const progress = cycleElapsed / passMs;
-        // scanX moves the highlight from the logo's left outside edge to the right outside edge.
-        // scanX 将高光从 Logo 左侧外部移动到右侧外部。
-        const scanX = -logoSize * 0.38 + progress * logoSize * 1.76;
+        // scanX moves the highlight from the lockup's left outside edge to the right outside edge.
+        // scanX 将高光从组合标志左侧外部移动到右侧外部。
+        const scanX = -logoHeight * 0.4 + progress * (logoWidth + logoHeight * 0.8);
         context.save();
-        context.translate(logoSize / 2, logoSize / 2);
+        context.translate(logoWidth / 2, logoHeight / 2);
         context.rotate((18 * Math.PI) / 180);
-        context.translate(-logoSize / 2, -logoSize / 2);
+        context.translate(-logoWidth / 2, -logoHeight / 2);
         // gradient creates a bright center with soft transparent edges.
         // gradient 创建中间明亮、两侧柔和透明的扫光带。
         const gradient = context.createLinearGradient(scanX - 42, 0, scanX + 42, 0);
@@ -131,12 +150,12 @@ function useStartupLogoScan(
         context.fillStyle = gradient;
         context.shadowColor = "rgba(56, 189, 248, 0.34)";
         context.shadowBlur = 12;
-        context.fillRect(scanX - 46, -logoSize * 0.65, 92, logoSize * 2.3);
+        context.fillRect(scanX - 46, -logoHeight * 0.65, 92, logoHeight * 2.3);
         context.restore();
         // destination-in clips every drawn pixel to the exact logo alpha, preventing side pollution.
         // destination-in 将所有已绘制像素裁剪到精确 Logo alpha，避免侧边污染块。
         context.globalCompositeOperation = "destination-in";
-        context.drawImage(maskCanvas, 0, 0, logoSize, logoSize);
+        context.drawImage(maskCanvas, 0, 0, logoWidth, logoHeight);
         context.globalCompositeOperation = "source-over";
       }
       animationFrame = window.requestAnimationFrame(drawFrame);
@@ -146,13 +165,13 @@ function useStartupLogoScan(
       if (disposed) {
         return;
       }
-      maskContext.clearRect(0, 0, logoSize, logoSize);
-      maskContext.drawImage(logoImage, 0, 0, logoSize, logoSize);
+      maskContext.clearRect(0, 0, logoWidth, logoHeight);
+      maskContext.drawImage(logoImage, 0, 0, logoWidth, logoHeight);
       maskReady = true;
       if (!reducedMotion.matches) animationFrame = window.requestAnimationFrame(drawFrame);
     };
     logoImage.onerror = () => {
-      context.clearRect(0, 0, logoSize, logoSize);
+      context.clearRect(0, 0, logoWidth, logoHeight);
     };
     // updateMotion stops immediately or resumes one animation loop after a system preference change.
     // updateMotion 在系统偏好变化后立即停止动画或恢复单一动画循环。
@@ -160,7 +179,7 @@ function useStartupLogoScan(
     // 参数：无，读取当前减少动态效果偏好。停止或恢复本实例唯一动画循环后不返回值。
     const updateMotion = () => {
       window.cancelAnimationFrame(animationFrame);
-      context.clearRect(0, 0, logoSize, logoSize);
+      context.clearRect(0, 0, logoWidth, logoHeight);
       startTimestamp = null;
       if (!reducedMotion.matches && maskReady) animationFrame = window.requestAnimationFrame(drawFrame);
     };
@@ -172,7 +191,7 @@ function useStartupLogoScan(
       logoImage.onload = null;
       logoImage.onerror = null;
       window.cancelAnimationFrame(animationFrame);
-      context.clearRect(0, 0, logoSize, logoSize);
+      context.clearRect(0, 0, logoWidth, logoHeight);
     };
-  }, [canvasRef, logoSize, logoSrc]);
+  }, [canvasRef, logoHeight, logoRef, logoWidth]);
 }

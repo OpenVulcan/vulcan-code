@@ -88,10 +88,16 @@
   /* 加载轮廓：安静的墨色色条，上面扫过一道柔和亮带。 */
   --vcn-shimmer-base: rgb(24 22 19 / 7%);
   --vcn-shimmer-highlight: rgb(255 255 255 / 62%);
+  /* Brand ink colors the symbol body and the "Vulcan" glyphs: ink black from the light-ground primary master. */
+  /* 品牌墨色用于图标主体与「Vulcan」字形：取自主色版浅底母版的墨黑。 */
+  --vcn-brand-ink: #0b0d10;
 }
 
 .dark {
   color-scheme: dark;
+  /* Dark-ground primary master: the symbol body and "Vulcan" turn white while the flame stays unchanged. */
+  /* 主色版深底母版：图标主体与「Vulcan」改为白色，火焰保持不变。 */
+  --vcn-brand-ink: #ffffff;
   --vcn-overlay: rgb(4 6 9 / 58%);
   /* Dark elevation leans on a faint top highlight, because shadows alone vanish on near-black pages. */
   /* 深色层级依赖微弱顶部高光，因为在近黑页面上单靠阴影几乎看不见。 */
